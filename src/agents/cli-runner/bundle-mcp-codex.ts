@@ -1,19 +1,29 @@
 /**
  * Codex CLI and app-server bundle MCP projection helpers.
  */
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { normalizeConfiguredMcpServers } from "../../config/mcp-config-normalize.js";
 import type { SessionToolOverrides } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { BundleMcpConfig, BundleMcpServerConfig } from "../../plugins/bundle-mcp.js";
+import { loadMcpToolGrants } from "../../infra/exec-approvals-mcp.js";
+import type { BundleMcpConfig, BundleMcpServerConfig } from "../../plugins/bundle-mcp.types.js";
 import { isValidAgentId, normalizeAgentId } from "../../routing/session-key.js";
+import { acquireSessionMcpRuntime } from "../agent-bundle-mcp-manager-api.js";
+import { releaseSessionMcpRuntime } from "../agent-bundle-mcp-manager-cleanup.js";
+import type { PreparedNativeMcpPolicy } from "../agent-bundle-mcp-types.js";
+import { resolveSessionAgentId } from "../agent-scope.js";
 import { isRecord } from "../bundle-mcp-adapter.js";
 import {
   applyCodexSessionMcpToolDenials,
   buildCodexMcpServersConfig,
   normalizeCodexMcpServerConfig,
 } from "../codex-mcp-config.js";
+import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { requiresMcpBearerProjection, resolveMcpBearerBundleConfig } from "../mcp-auth-profile.js";
 import { partitionMcpServersByConnectionScope } from "../mcp-connection-resolver.js";
+import { applyPreparedNativeMcpPolicy, prepareNativeMcpPolicy } from "../native-mcp-policy.js";
+import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
+import { projectNativeMcpRunContext } from "./native-mcp-context.js";
 import { serializeTomlInlineValue } from "./toml-inline.js";
 
 // Mutable JSON shape structurally compatible with the bundled Codex
@@ -31,41 +41,31 @@ type CodexThreadConfigValue =
 type CodexThreadConfigObject = { [key: string]: CodexThreadConfigValue };
 
 type CodexUserMcpServersProjectionOptions = {
+  preparationOnly?: true;
   agentId?: string;
   agentDir?: string;
   allowLiteralOAuthProjection?: boolean;
   onServerUnavailable?: (serverName: string, error: unknown) => void;
   toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
+  preparedNativeMcpPolicy?: PreparedNativeMcpPolicy;
 };
-
-function normalizeAgentIds(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .filter((entry): entry is string => typeof entry === "string")
-    .map((entry) => entry.trim())
-    .filter((entry) => isValidAgentId(entry))
-    .map((entry) => normalizeAgentId(entry));
-}
-
-function readCodexProjectionConfig(server: BundleMcpServerConfig): Record<string, unknown> {
-  return isRecord(server.codex) ? server.codex : {};
-}
 
 function isCodexMcpServerAllowedForAgent(
   server: BundleMcpServerConfig,
   options: CodexUserMcpServersProjectionOptions | undefined,
 ): boolean {
-  const codex = readCodexProjectionConfig(server);
+  const codex = isRecord(server.codex) ? server.codex : {};
   if (!Object.hasOwn(codex, "agents")) {
     return true;
   }
-  const agentIds = normalizeAgentIds(codex.agents);
-  if (agentIds.length === 0 || !options?.agentId) {
+  if (!options?.agentId) {
     return false;
   }
-  return agentIds.includes(normalizeAgentId(options.agentId));
+  const agentId = normalizeAgentId(options.agentId);
+  return filterStringEntries(codex.agents).some((entry) => {
+    const candidate = entry.trim();
+    return isValidAgentId(candidate) && normalizeAgentId(candidate) === agentId;
+  });
 }
 
 /**
@@ -97,6 +97,39 @@ function readSessionMcpServerOverride(
   return overrides && Object.hasOwn(overrides, name) ? overrides[name] : undefined;
 }
 
+function selectCodexProjectableMcpServers(
+  cfg: OpenClawConfig | undefined,
+  options: CodexUserMcpServersProjectionOptions | undefined,
+): BundleMcpConfig["mcpServers"] {
+  const userServers = normalizeConfiguredMcpServers(cfg?.mcp?.servers);
+  // Fail-closed: requester-scoped servers never enter harness-native MCP config.
+  const { staticServers } = partitionMcpServersByConnectionScope(userServers);
+  return Object.fromEntries(
+    Object.entries(staticServers).filter(([serverName, server]) => {
+      const serverOverride = readSessionMcpServerOverride(options, serverName);
+      const allowed =
+        serverOverride !== false &&
+        (serverOverride === true || server.enabled !== false) &&
+        isCodexMcpServerAllowedForAgent(server as BundleMcpServerConfig, options);
+      if (!allowed) {
+        return false;
+      }
+      // Remote app servers cannot receive OpenClaw-managed bearer credentials.
+      // Omit these servers before catalog discovery can use that credential.
+      if (options?.allowLiteralOAuthProjection === false && requiresMcpBearerProjection(server)) {
+        options.onServerUnavailable?.(
+          serverName,
+          new Error(
+            `MCP OAuth bearer projection is only supported for local app-server connections.`,
+          ),
+        );
+        return false;
+      }
+      return true;
+    }),
+  ) as BundleMcpConfig["mcpServers"];
+}
+
 /** Returns Codex CLI args with TOML MCP server overrides injected. */
 export function injectCodexMcpConfigArgs(
   args: string[] | undefined,
@@ -106,99 +139,27 @@ export function injectCodexMcpConfigArgs(
   return [...(args ?? []), "-c", `mcp_servers=${overrides}`];
 }
 
-/**
- * Codex app-server runtime (extensions/codex) receives its thread config as a
- * JSON object through JSON-RPC `thread/start`/`thread/resume`, not as `-c` CLI
- * args. This returns a thread-config patch projecting user-configured
- * `cfg.mcp.servers` entries into Codex's `mcp_servers` table using the same
- * per-server normalization the CLI path uses, so app-server agents see the
- * same user MCP servers the CLI runtime exposes via `injectCodexMcpConfigArgs`.
- *
- * Only user-configured servers (`cfg.mcp.servers`) are projected. Plugin-
- * curated app-server apps are already attached separately through the codex
- * plugin thread-config `apps` patch, so they must not be re-projected here.
- */
-export function buildCodexUserMcpServersThreadConfigPatch(
-  cfg: OpenClawConfig | undefined,
-  options?: CodexUserMcpServersProjectionOptions,
-): { mcp_servers: CodexThreadConfigObject } | undefined {
-  const userServers = normalizeConfiguredMcpServers(cfg?.mcp?.servers);
-  // Fail-closed: requester-scoped servers never enter harness-native MCP config.
-  const { staticServers } = partitionMcpServersByConnectionScope(userServers);
-  const entries = Object.entries(staticServers);
-  if (entries.length === 0) {
-    return undefined;
-  }
-  // Collected as entries: a server literally named `__proto__` would hit the
-  // prototype setter under plain assignment and vanish from the patch.
-  const projected: [string, CodexThreadConfigObject][] = [];
-  for (const [name, server] of entries) {
-    const serverOverride = readSessionMcpServerOverride(options, name);
-    if (serverOverride === false || (serverOverride !== true && server.enabled === false)) {
-      continue;
-    }
-    if (!isCodexMcpServerAllowedForAgent(server as BundleMcpServerConfig, options)) {
-      continue;
-    }
-    projected.push([
-      name,
-      normalizeCodexMcpServerConfig(
-        name,
-        applyCodexSessionMcpToolDenials(name, server, options?.toolOverrides),
-      ) as CodexThreadConfigObject,
-    ]);
-  }
-  const mcp_servers: CodexThreadConfigObject = Object.fromEntries(projected);
-  if (Object.keys(mcp_servers).length === 0) {
-    return undefined;
-  }
-  return { mcp_servers };
-}
-
 /** Async runtime projection that resolves OpenClaw-managed MCP bearer tokens. */
 export async function buildCodexUserMcpServersThreadConfigPatchForRuntime(
   cfg: OpenClawConfig | undefined,
   options?: CodexUserMcpServersProjectionOptions,
 ): Promise<{ mcp_servers: CodexThreadConfigObject } | undefined> {
-  const userServers = normalizeConfiguredMcpServers(cfg?.mcp?.servers);
-  // Fail-closed: requester-scoped servers never enter harness-native MCP config.
-  const { staticServers } = partitionMcpServersByConnectionScope(userServers);
-  const entries = Object.entries(staticServers);
-  if (entries.length === 0) {
-    return undefined;
+  let allowedServers = selectCodexProjectableMcpServers(cfg, options);
+  if (options?.preparationOnly && Object.values(allowedServers).some(requiresMcpBearerProjection)) {
+    throw new Error(
+      "Native fork preparation cannot resolve MCP bearer credentials. Fork an original imported message instead.",
+    );
   }
-  let allowedServers = Object.fromEntries(
-    entries.filter(([name, server]) => {
-      const serverOverride = readSessionMcpServerOverride(options, name);
-      return (
-        serverOverride !== false &&
-        (serverOverride === true || server.enabled !== false) &&
-        isCodexMcpServerAllowedForAgent(server as BundleMcpServerConfig, options)
-      );
-    }),
-  ) as BundleMcpConfig["mcpServers"];
-  if (Object.keys(allowedServers).length === 0) {
-    return undefined;
-  }
-  if (options?.allowLiteralOAuthProjection === false) {
-    const remoteSafeServers: BundleMcpConfig["mcpServers"] = {};
-    for (const [serverName, server] of Object.entries(allowedServers)) {
-      if (requiresMcpBearerProjection(server)) {
-        options.onServerUnavailable?.(
-          serverName,
-          new Error(
-            `MCP OAuth bearer projection is only supported for local app-server connections.`,
-          ),
-        );
-        continue;
-      }
-      remoteSafeServers[serverName] = server;
-    }
-    allowedServers = remoteSafeServers;
+  if (options?.preparedNativeMcpPolicy) {
+    allowedServers = applyPreparedNativeMcpPolicy(
+      { mcpServers: allowedServers },
+      options.preparedNativeMcpPolicy,
+    ).mcpServers;
   }
   if (Object.keys(allowedServers).length === 0) {
     return undefined;
   }
+  const grants = options?.agentId ? await loadMcpToolGrants(options.agentId) : [];
   const resolvedConfig = await resolveMcpBearerBundleConfig({
     config: { mcpServers: allowedServers },
     cfg,
@@ -213,8 +174,104 @@ export async function buildCodexUserMcpServersThreadConfigPatchForRuntime(
       normalizeCodexMcpServerConfig(
         name,
         applyCodexSessionMcpToolDenials(name, server, options?.toolOverrides),
+        grants,
       ) as CodexThreadConfigObject,
     ]),
   );
   return Object.keys(mcp_servers).length === 0 ? undefined : { mcp_servers };
+}
+
+/** Prepares canonical native MCP policy and projects it into Codex before thread creation. */
+export async function buildCodexUserMcpServersThreadConfigPatchForRun(params: {
+  run:
+    | import("../harness/types.js").AgentHarnessAttemptParams
+    | import("../harness/types.js").AgentHarnessSessionRuntimeParamsV1;
+  cwd: string;
+  agentId?: string;
+  allowLiteralOAuthProjection?: boolean;
+  onServerUnavailable?: (serverName: string, error: unknown) => void;
+  warn?: (message: string) => void;
+}): Promise<{ mcp_servers: CodexThreadConfigObject } | undefined> {
+  const run = params.run;
+  const agentId = params.agentId ?? run.agentId;
+  const scopedToolOverrides = resolveCodexMcpToolOverridesForAgent(run.config, {
+    agentId,
+    toolOverrides: run.toolOverrides,
+  });
+  const policySessionKey = run.sandboxSessionKey ?? run.sessionKey;
+  const policyAgentId = resolveSessionAgentId({
+    config: run.config,
+    sessionKey: policySessionKey,
+    agentId: run.sandboxAgentId,
+    fallbackAgentId: agentId,
+  });
+  const sandboxStatus = resolveSandboxRuntimeStatus({
+    cfg: run.config,
+    sessionKey: policySessionKey,
+    agentId: policyAgentId,
+  });
+  const capabilityProfile = resolveConversationCapabilityProfile({
+    ...projectNativeMcpRunContext(run),
+    config: run.config,
+    sessionKey: policySessionKey,
+    runSessionKey:
+      run.sessionKey && run.sessionKey !== policySessionKey ? run.sessionKey : undefined,
+    agentId: policyAgentId,
+    modelProvider: run.provider,
+    modelId: run.modelId,
+    workspaceDir: run.workspaceDir,
+    cwd: params.cwd,
+    sandboxToolPolicy: sandboxStatus.sandboxed ? sandboxStatus.toolPolicy : undefined,
+    runtimeToolAllowlist: run.toolsAllow,
+    inheritRuntimeToolAllowlist: true,
+    runtimePluginToolGrant: run.runtimePluginToolGrant,
+  });
+  const configuredMcpServers = selectCodexProjectableMcpServers(run.config, {
+    agentId,
+    allowLiteralOAuthProjection: params.allowLiteralOAuthProjection,
+    onServerUnavailable: params.onServerUnavailable,
+    toolOverrides: scopedToolOverrides,
+  });
+  if (Object.keys(configuredMcpServers).length === 0) {
+    return undefined;
+  }
+  const projectionConfig: OpenClawConfig = {
+    ...run.config,
+    mcp: { ...run.config?.mcp, servers: configuredMcpServers },
+  };
+  const acquisition = await acquireSessionMcpRuntime({
+    sessionId: run.sessionId,
+    sessionKey: run.sessionKey,
+    workspaceDir: run.workspaceDir,
+    agentDir: run.agentDir,
+    cfg: projectionConfig,
+    requesterSenderId: run.senderId,
+    agentAccountId: run.agentAccountId,
+    messageChannel: run.messageChannel,
+    toolOverrides: scopedToolOverrides,
+    toolDenylist: capabilityProfile.policy.explicitToolDenylist,
+  });
+  let retainedServerNames: ReadonlySet<string> | undefined;
+  try {
+    const preparedNativeMcpPolicy = await prepareNativeMcpPolicy({
+      runtime: acquisition.runtime,
+      config: run.config,
+      workspaceDir: run.workspaceDir,
+      capabilityProfile,
+      runtimeToolsAllow: run.toolsAllow,
+      warn: params.warn ?? (() => {}),
+    });
+    const prepared = await buildCodexUserMcpServersThreadConfigPatchForRuntime(projectionConfig, {
+      agentId,
+      agentDir: run.agentDir,
+      allowLiteralOAuthProjection: params.allowLiteralOAuthProjection,
+      onServerUnavailable: params.onServerUnavailable,
+      toolOverrides: scopedToolOverrides,
+      preparedNativeMcpPolicy,
+    });
+    retainedServerNames = new Set(Object.keys(prepared?.mcp_servers ?? {}));
+    return prepared;
+  } finally {
+    await releaseSessionMcpRuntime(acquisition, retainedServerNames);
+  }
 }

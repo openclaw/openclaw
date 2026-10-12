@@ -1,0 +1,506 @@
+import { describe, expect, onTestFinished, test, vi } from "vitest";
+import type { ModelChoice } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import * as acpMetadata from "../../acp/runtime/session-meta-readonly.js";
+import * as sessionAccessor from "../../config/sessions/session-accessor.js";
+import * as sessionWorkerReader from "../../config/sessions/session-entry-read-runtime.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  createChatMetadataHarness,
+  createChatMetadataOwner,
+} from "./chat-metadata-runtime.test-support.js";
+import {
+  readPreparedChatMetadata,
+  projectSessionModelCatalog,
+} from "./chat-metadata-session-projection.js";
+
+describe("gateway chat metadata native session ownership", () => {
+  test("projects only ambient worker-owned auth failures as available", () => {
+    const config = {
+      agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } },
+    } satisfies OpenClawConfig;
+    const models = [
+      {
+        provider: "openai",
+        id: "gpt-5.6-sol",
+        name: "Sol",
+        available: false,
+        unavailableReason: "missing-auth",
+      },
+      {
+        provider: "openai",
+        id: "gpt-5.6-luna",
+        name: "Luna",
+        available: false,
+        unavailableReason: "missing-auth",
+      },
+    ] satisfies ModelChoice[];
+    const scope = { agentId: "main", workerInference: "worker" as const };
+
+    expect(projectSessionModelCatalog(scope, models, config, undefined)).toEqual([
+      { provider: "openai", id: "gpt-5.6-sol", name: "Sol" },
+      models[1],
+    ]);
+    expect(
+      projectSessionModelCatalog(
+        scope,
+        [{ ...models[0]!, unavailableReason: "cooldown", unavailableUntil: 123 }],
+        config,
+        undefined,
+      ),
+    ).toEqual([{ ...models[0]!, unavailableReason: "cooldown", unavailableUntil: 123 }]);
+    expect(
+      projectSessionModelCatalog(
+        { ...scope, sessionEntry: { modelOverride: "gpt-5.6-luna" } },
+        models,
+        config,
+        undefined,
+      ),
+    ).toEqual(models);
+    expect(
+      projectSessionModelCatalog(
+        {
+          ...scope,
+          sessionEntry: {
+            authProfileOverride: "openai:personal",
+            authProfileOverrideSource: "user",
+          },
+        },
+        models,
+        config,
+        undefined,
+      ),
+    ).toEqual(models);
+    for (const authProfileOverrideSource of [undefined, "user-link"] as const) {
+      expect(
+        projectSessionModelCatalog(
+          {
+            ...scope,
+            sessionEntry: {
+              authProfileOverride: "openai:personal",
+              ...(authProfileOverrideSource ? { authProfileOverrideSource } : {}),
+            },
+          },
+          models,
+          config,
+          undefined,
+        ),
+      ).toEqual(models);
+    }
+  });
+
+  test.each([false, true])(
+    "keeps runtime-only startup projections scoped to their provider (default model: %s)",
+    async (defaultModel) => {
+      const config: OpenClawConfig = {
+        plugins: { entries: { copilot: { enabled: true } } },
+        agents: {
+          defaults: {
+            model: { primary: "github-copilot/fixture-model" },
+            models: { "github-copilot/fixture-model": { agentRuntime: { id: "openclaw" } } },
+          },
+          entries: { main: {} },
+        },
+      };
+      const harness = createChatMetadataHarness(config, { useDefaultProjection: true });
+      const registry = createEmptyPluginRegistry();
+      registry.agentHarnesses.push({
+        pluginId: "copilot",
+        source: "fixture",
+        harness: {
+          id: "copilot",
+          label: "Copilot",
+          supports: () => ({ supported: true }),
+          async runAttempt() {
+            throw new Error("Chat metadata must not execute a model");
+          },
+        },
+      });
+      const owner = createChatMetadataOwner(config, "fixture-model", {}, "github-copilot");
+      harness.setOwner({
+        ...owner,
+        pluginRegistry: registry,
+        metadataSnapshot: createPluginMetadataSnapshotFixture({
+          plugins: [{ id: "github-copilot", providers: ["github-copilot"] }, { id: "copilot" }],
+        }),
+      });
+      harness.setAuthStore({
+        version: 1,
+        profiles: {
+          "github-copilot:work": {
+            type: "token",
+            provider: "github-copilot",
+            token: "fixture-token",
+          },
+        },
+      });
+      const provider = defaultModel ? {} : { providerOverride: "github-copilot" };
+      const native = { ...provider, agentRuntimeOverride: "copilot" };
+      const host = { ...provider, agentRuntimeOverride: "openclaw" };
+      const otherProvider = { providerOverride: "unrelated", agentRuntimeOverride: "copilot" };
+      try {
+        await harness.runtime.refresh();
+        await expect(
+          harness.runtime.readStartup({
+            agentId: "main",
+            sessionEntry: native,
+            readPolicy: "ready",
+          }),
+        ).resolves.toBeUndefined();
+        const nativeStartup = await harness.runtime.readStartup({
+          agentId: "main",
+          sessionEntry: native,
+        });
+        expect(nativeStartup?.metadata?.models?.[0]?.agentRuntime?.id).toBe("copilot");
+        const hostStartup = await harness.runtime.readStartup({
+          agentId: "main",
+          sessionEntry: host,
+        });
+        expect(hostStartup?.metadata?.models?.[0]?.agentRuntime?.id).toBe("openclaw");
+        const otherStartup = await harness.runtime.readStartup({
+          agentId: "main",
+          sessionEntry: otherProvider,
+        });
+        expect(otherStartup?.metadata?.models?.[0]?.agentRuntime?.id).toBe("openclaw");
+        await expect(
+          harness.runtime.readStartup({
+            agentId: "main",
+            sessionEntry: native,
+            readPolicy: "ready",
+          }),
+        ).resolves.toEqual({
+          sessionModelCatalog: nativeStartup?.sessionModelCatalog,
+          defaultModelCatalog: nativeStartup?.defaultModelCatalog,
+        });
+        expect(
+          (await harness.runtime.read({ agentId: "main", sessionEntry: native })).models?.[0]
+            ?.agentRuntime?.id,
+        ).toBe("copilot");
+      } finally {
+        await harness.runtime.stop();
+      }
+    },
+  );
+
+  test("keeps native-owned model auth scoped across pending and materialized chat metadata", async () => {
+    const config = {
+      agents: {
+        defaults: { model: { primary: "openai/gpt-5.6-sol" } },
+        entries: { main: {} },
+      },
+    } satisfies OpenClawConfig;
+    const harness = createChatMetadataHarness(config);
+    const hostModels = [
+      {
+        id: "gpt-5.6-sol",
+        name: "Sol",
+        provider: "openai",
+        available: false,
+        unavailableReason: "missing-auth",
+      },
+      {
+        id: "gpt-5.6-luna",
+        name: "Luna",
+        provider: "openai",
+        available: false,
+        unavailableReason: "cooldown",
+        unavailableUntil: 123_456,
+      },
+    ];
+    harness.buildProjection.mockResolvedValue({ modelCatalog: hostModels, models: hostModels });
+    const sessionEntry: InternalSessionEntry = {
+      sessionId: "native-metadata-session",
+      updatedAt: 1,
+      agentHarnessId: "test-native",
+      modelSelectionLocked: true,
+    };
+    const request = {
+      agentId: "main",
+      sessionKey: "agent:main:harness:test-native:metadata",
+      sessionEntry,
+    };
+    let boundSessionId = sessionEntry.sessionId;
+    let ownership:
+      | { model: "native"; auth: "native" | "host"; modelRef?: { provider: string; model: string } }
+      | undefined = {
+      model: "native",
+      auth: "native",
+    };
+    const registry = createEmptyPluginRegistry();
+    registry.agentHarnesses.push({
+      pluginId: "test-native",
+      source: "test",
+      harness: {
+        id: "test-native",
+        label: "Native metadata owner",
+        supports: () => ({ supported: true }),
+        runAttempt: async () => {
+          throw new Error("metadata must not start a model turn");
+        },
+        resolveSessionRuntimeOwnership() {
+          throw new Error("Chat metadata must use worker-owned ownership preparation");
+        },
+        resolveSessionRuntimeOwnershipAsync: async (params) => {
+          params.assertCurrent();
+          return params.sessionKey === request.sessionKey && params.sessionId === boundSessionId
+            ? ownership
+            : undefined;
+        },
+      },
+    });
+    setActivePluginRegistry(registry);
+    onTestFinished(resetPluginRuntimeStateForTest);
+    await harness.runtime.refresh();
+    const neutral = await harness.runtime.read({ agentId: "main" });
+    expect(neutral.models).toEqual(hostModels);
+
+    const pending = await harness.runtime.read(request);
+    const acpRead = vi.spyOn(acpMetadata, "readAcpSessionMetaForEntries");
+    try {
+      expect(await harness.runtime.read({ ...request, includeModels: false })).toEqual({
+        commands: [{ name: "command-1-1" }],
+        swarmEnabled: true,
+        revision: expect.any(String),
+      });
+      expect(acpRead).not.toHaveBeenCalled();
+    } finally {
+      acpRead.mockRestore();
+    }
+    expect(pending.runtimeSelectionLocked).toBe(true);
+    expect(pending.models).toEqual([
+      { id: "gpt-5.6-sol", name: "Sol", provider: "openai" },
+      hostModels[1],
+    ]);
+    expect((await harness.runtime.readStartup(request))?.metadata).toEqual(pending);
+    const history = await harness.runtime.readStartup({ ...request, readPolicy: "ready" });
+    expect(history).not.toHaveProperty("metadata");
+    expect(history?.sessionModelCatalog).toBe(hostModels);
+
+    ownership = {
+      model: "native",
+      auth: "native",
+      modelRef: { provider: "openai", model: "gpt-5.6-luna" },
+    };
+    sessionEntry.model = "gpt-5.6-luna";
+    sessionEntry.modelProvider = "openai";
+    const materialized = await harness.runtime.read(request);
+    expect(materialized.models).toEqual([
+      hostModels[0],
+      { id: "gpt-5.6-luna", name: "Luna", provider: "openai" },
+    ]);
+    expect((await harness.runtime.readStartup(request))?.metadata).toEqual(materialized);
+    expect(await harness.runtime.read({ agentId: "main" })).toEqual(neutral);
+    expect(hostModels[0]).toHaveProperty("available", false);
+    expect(hostModels[1]).toHaveProperty("unavailableUntil", 123_456);
+
+    // The same pin can retain native model ownership while requiring host auth.
+    ownership = { ...ownership, auth: "host" };
+    expect((await harness.runtime.read(request)).models).toEqual(hostModels);
+    ownership = { ...ownership, auth: "native" };
+    sessionEntry.pluginOwnerId = "test-native";
+    expect((await harness.runtime.read(request)).models).toEqual(hostModels);
+    delete sessionEntry.pluginOwnerId;
+    boundSessionId = "replacement-session";
+    expect((await harness.runtime.read(request)).models).toEqual(hostModels);
+    boundSessionId = sessionEntry.sessionId;
+    ownership = undefined;
+    expect((await harness.runtime.read(request)).models).toEqual(hostModels);
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    expect((await harness.runtime.read(request)).models).toEqual(hostModels);
+  });
+
+  test.each([
+    { change: "same-id lineage mutation", expectedNative: true },
+    { change: "physical session replacement", expectedNative: false },
+  ])("resolves $change after metadata preparation", async (scenario) => {
+    await withOpenClawTestState({ label: "metadata-native-lineage" }, async (state) => {
+      const config = {
+        agents: {
+          defaults: { model: { primary: "openai/gpt-5.6-sol" } },
+          entries: { main: {} },
+        },
+        session: { store: state.path("alternate", "sessions.json") },
+      } satisfies OpenClawConfig;
+      const harness = createChatMetadataHarness(config);
+      const hostModels = [
+        {
+          id: "gpt-5.6-sol",
+          name: "Sol",
+          provider: "openai",
+          available: false,
+          unavailableReason: "missing-auth",
+        },
+      ];
+      const projection = { modelCatalog: hostModels, models: hostModels };
+      harness.buildProjection.mockResolvedValue(projection);
+      const initialPredecessor =
+        scenario.change === "same-id lineage mutation" ? "old-predecessor" : "new-predecessor";
+      const entry: InternalSessionEntry = {
+        sessionId: "metadata-current",
+        previousSessionId: initialPredecessor,
+        updatedAt: 1,
+        agentHarnessId: "test-native",
+        modelSelectionLocked: true,
+        authProfileOverride: "openai:fixture",
+        authProfileOverrideSource: "user",
+      };
+      const target = {
+        agentId: "main",
+        sessionKey: "agent:main:harness:test-native:lineage",
+        storePath: config.session.store,
+      };
+      const registry = createEmptyPluginRegistry();
+      registry.agentHarnesses.push({
+        pluginId: "test-native",
+        source: "test",
+        harness: {
+          id: "test-native",
+          label: "Native lineage owner",
+          supports: () => ({ supported: true }),
+          runAttempt: async () => {
+            throw new Error("metadata must not start a model turn");
+          },
+          resolveSessionRuntimeOwnershipAsync: async ({ readPreviousSessionId }) =>
+            (await readPreviousSessionId?.()) === "new-predecessor"
+              ? { model: "native", auth: "native" }
+              : undefined,
+        },
+      });
+      const entered = createDeferred();
+      const release = createDeferred();
+      let restoreReadSpy: (() => void) | undefined;
+      let pending: ReturnType<typeof harness.runtime.read> | undefined;
+      try {
+        setActivePluginRegistry(registry);
+        await sessionAccessor.replaceSessionEntry(target, entry);
+        await harness.runtime.refresh();
+        harness.buildProjection.mockImplementationOnce(async () => {
+          entered.resolve();
+          await release.promise;
+          return projection;
+        });
+        const readSpy = vi.spyOn(sessionWorkerReader, "readSessionEntryReadOnlyInWorker");
+        restoreReadSpy = () => readSpy.mockRestore();
+        pending = harness.runtime.read({
+          agentId: target.agentId,
+          sessionKey: target.sessionKey,
+          sessionEntry: entry,
+        });
+        await entered.promise;
+        expect(readSpy).not.toHaveBeenCalled();
+        await sessionAccessor.patchSessionEntryCore(target, () =>
+          scenario.change === "physical session replacement"
+            ? { sessionId: "metadata-replacement" }
+            : { previousSessionId: "new-predecessor" },
+        );
+        release.resolve();
+        const result = await pending;
+        expect(result.models).toEqual(
+          scenario.expectedNative
+            ? [{ id: "gpt-5.6-sol", name: "Sol", provider: "openai" }]
+            : hostModels,
+        );
+        expect(readSpy).toHaveBeenCalledOnce();
+        expect(readSpy).toHaveBeenCalledWith(
+          { ...target, hydrateSkillPromptRefs: false, readConsistency: "latest" },
+          expect.any(Function),
+        );
+        expect(entry.sessionId).toBe("metadata-current");
+        expect(entry.previousSessionId).toBe(initialPredecessor);
+      } finally {
+        release.resolve();
+        await pending?.catch(() => undefined);
+        try {
+          await harness.runtime.stop();
+        } finally {
+          restoreReadSpy?.();
+          resetPluginRuntimeStateForTest();
+        }
+      }
+    });
+  });
+});
+
+describe("required worker inference composer policy", () => {
+  test.each([
+    {
+      name: "required device worker",
+      required: "coding",
+      provider: "device",
+      inference: "worker",
+      expected: "coding",
+    },
+    {
+      name: "optional device worker",
+      required: undefined,
+      provider: "device",
+      inference: "worker",
+      expected: undefined,
+    },
+    {
+      name: "required Gateway inference",
+      required: "coding",
+      provider: "device",
+      inference: "gateway",
+      expected: undefined,
+    },
+    {
+      name: "missing profile",
+      required: "missing",
+      provider: "device",
+      inference: "worker",
+      expected: undefined,
+    },
+    {
+      name: "foreign provider setting",
+      required: "coding",
+      provider: "custom",
+      inference: "worker",
+      expected: undefined,
+    },
+    {
+      name: "invalid device setting",
+      required: "coding",
+      provider: "device",
+      inference: "native",
+      expected: undefined,
+    },
+  ])("projects only current $name policy", ({ required, provider, inference, expected }) => {
+    const config: OpenClawConfig = {
+      cloudWorkers: {
+        requiredProfile: required,
+        profiles: { coding: { provider, settings: { device: "paired-worker", inference } } },
+      },
+    };
+    const params = { agentId: "main", sessionKey: "agent:main:example" };
+    const metadata = { swarmEnabled: false };
+    const owner = createChatMetadataOwner(config, "fixture");
+    const projection = {
+      read: () => ({}),
+      agent: {
+        agentId: "main",
+        owner,
+        authStore: { version: 1, profiles: {} },
+        authModes: {},
+        modelCatalog: owner.modelCatalog,
+        ...metadata,
+      },
+    } satisfies Parameters<typeof readPreparedChatMetadata>[0];
+    const project = (readParams: Parameters<typeof readPreparedChatMetadata>[1]) =>
+      readPreparedChatMetadata(projection, readParams, config, null, undefined);
+    expect(project(params).requiredWorkerInferenceProfileId).toBe(expected);
+    expect(project({ agentId: "main" })).not.toHaveProperty("requiredWorkerInferenceProfileId");
+    expect(
+      project({ ...params, sessionEntry: { agentRuntimeOverride: "codex" } })
+        .requiredWorkerInferenceProfileId,
+    ).toBeUndefined();
+    delete config.cloudWorkers!.requiredProfile;
+    expect(project(params).requiredWorkerInferenceProfileId).toBeUndefined();
+    expect(metadata).toEqual({ swarmEnabled: false });
+  });
+});

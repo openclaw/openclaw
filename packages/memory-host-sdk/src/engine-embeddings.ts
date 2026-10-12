@@ -1,21 +1,6 @@
 // Real workspace contract for memory embedding providers and batch helpers.
 
 export {
-  getMemoryEmbeddingProvider,
-  listMemoryEmbeddingProviders,
-  listRegisteredMemoryEmbeddingProviderAdapters,
-} from "./host/openclaw-runtime-memory.js";
-export type {
-  MemoryEmbeddingBatchChunk,
-  MemoryEmbeddingBatchOptions,
-  MemoryEmbeddingProvider,
-  MemoryEmbeddingProviderAdapter,
-  MemoryEmbeddingProviderCallOptions,
-  MemoryEmbeddingProviderCreateOptions,
-  MemoryEmbeddingProviderCreateResult,
-  MemoryEmbeddingProviderRuntime,
-} from "./host/openclaw-runtime-memory.js";
-export {
   EmbeddingBatchUnavailableError,
   extractBatchErrorMessage,
   formatBatchErrorDetail,
@@ -23,7 +8,7 @@ export {
   isEmbeddingBatchUnavailableError,
 } from "./host/batch-error-utils.js";
 export { postJsonWithRetry } from "./host/batch-http.js";
-export { applyEmbeddingBatchOutputLine, readEmbeddingBatchJsonl } from "./host/batch-output.js";
+export { readEmbeddingBatchJsonl } from "./host/batch-output.js";
 export {
   EMBEDDING_BATCH_ENDPOINT,
   type EmbeddingBatchStatus,
@@ -32,22 +17,16 @@ export {
 export {
   buildEmbeddingBatchGroupOptions,
   runEmbeddingBatchGroups,
+  runEmbeddingBatches,
   type EmbeddingBatchExecutionParams,
 } from "./host/batch-runner.js";
 export {
   resolveBatchCompletionFromStatus,
-  resolveCompletedBatchResult,
-  throwIfBatchCompletionError,
   throwIfBatchTerminalFailure,
-  type BatchCompletionResult,
+  waitForEmbeddingBatch,
 } from "./host/batch-status.js";
 export { uploadBatchJsonlFile } from "./host/batch-upload.js";
-export {
-  buildBatchHeaders,
-  normalizeBatchBaseUrl,
-  type BatchHttpClientConfig,
-} from "./host/batch-utils.js";
-export { enforceEmbeddingMaxInputTokens } from "./host/embedding-chunk-limits.js";
+export { buildBatchHeaders, normalizeBatchBaseUrl } from "./host/batch-utils.js";
 export {
   isMissingEmbeddingApiKeyError,
   mapBatchEmbeddingsByIndex,
@@ -60,22 +39,22 @@ export {
   embeddingProviderOwnsDestination,
   resolveEmbeddingEndpointUrl,
   resolveRemoteEmbeddingBearerClient,
-  type RemoteEmbeddingProviderId,
 } from "./host/embeddings-remote-client.js";
 export {
   createRemoteEmbeddingProvider,
   resolveRemoteEmbeddingClient,
   type RemoteEmbeddingClient,
 } from "./host/embeddings-remote-provider.js";
-export { fetchRemoteEmbeddingVectors } from "./host/embeddings-remote-fetch.js";
 export {
   estimateStructuredEmbeddingInputBytes,
   estimateUtf8Bytes,
 } from "./host/embedding-input-limits.js";
-export { hasNonTextEmbeddingParts, type EmbeddingInput } from "./host/embedding-inputs.js";
-export { buildRemoteBaseUrlPolicy, withRemoteHttpResponse } from "./host/remote-http.js";
 export {
-  buildCaseInsensitiveExtensionGlob,
-  classifyMemoryMultimodalPath,
-  getMemoryMultimodalExtensions,
-} from "./host/multimodal.js";
+  formatEmbeddingModelInput,
+  formatEmbeddingTaskText,
+  hasNonTextEmbeddingParts,
+  resolveEmbeddingInputFormatVersion,
+  type EmbeddingInput,
+} from "./host/embedding-inputs.js";
+export { buildRemoteBaseUrlPolicy, withRemoteHttpResponse } from "./host/remote-http.js";
+export { classifyMemoryMultimodalPath } from "./host/multimodal.js";

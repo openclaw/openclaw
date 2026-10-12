@@ -1,44 +1,29 @@
-// Discord plugin module implements interaction dispatch behavior.
 import { InteractionType, type APIInteraction } from "discord-api-types/v10";
 import {
   type DiscordCommand,
   deferCommandInteractionIfNeeded,
   resolveFocusedCommandOptionAutocompleteHandler,
 } from "./commands.js";
+import type { BaseMessageInteractiveComponent } from "./components.base.js";
+import type { Modal } from "./components.modal.js";
 import {
   AutocompleteInteraction,
   BaseComponentInteraction,
   CommandInteraction,
   ModalInteraction,
   createInteraction,
-  parseComponentInteractionData,
   type RawInteraction,
 } from "./interactions.js";
-
-type DispatchComponent = {
-  defer: boolean | ((interaction: BaseComponentInteraction) => boolean);
-  ephemeral: boolean | ((interaction: BaseComponentInteraction) => boolean);
-  run(interaction: BaseComponentInteraction, data: Record<string, unknown>): unknown;
-  customIdParser(id: string): { data: Record<string, unknown> };
-};
-
-type DispatchModal = {
-  run(interaction: ModalInteraction, data: Record<string, unknown>): unknown;
-  customIdParser(id: string): { data: Record<string, unknown> };
-};
 
 type DispatchClient = Parameters<typeof createInteraction>[0] & {
   commands: DiscordCommand[];
   componentHandler: {
-    resolve(customId: string, options?: { componentType?: number }): DispatchComponent | undefined;
-    resolveOneOffComponent(params: {
-      channelId?: string;
-      customId: string;
-      messageId?: string;
-      values?: string[];
-    }): boolean;
+    resolve(
+      customId: string,
+      options?: { componentType?: number },
+    ): BaseMessageInteractiveComponent | undefined;
   };
-  modalHandler: { resolve(customId: string): DispatchModal | undefined };
+  modalHandler: { resolve(customId: string): Modal | undefined };
 };
 
 export async function dispatchInteraction(
@@ -47,7 +32,7 @@ export async function dispatchInteraction(
 ): Promise<void> {
   const interaction = createInteraction(client, rawData as RawInteraction);
   if (rawData.type === InteractionType.ApplicationCommandAutocomplete) {
-    const command = client.commands.find((entry) => entry.name === readInteractionName(rawData));
+    const command = client.commands.find((entry) => entry.name === rawData.data?.name);
     if (!command) {
       return;
     }
@@ -65,8 +50,23 @@ export async function dispatchInteraction(
     }
     return;
   }
+  try {
+    await dispatchAcknowledgeableInteraction(client, rawData, interaction);
+  } catch (error) {
+    // A handler that throws after deferring leaves Discord showing a spinner
+    // forever, so surface the failure before rethrowing for the caller's log.
+    await reportInteractionFailure(interaction);
+    throw error;
+  }
+}
+
+async function dispatchAcknowledgeableInteraction(
+  client: DispatchClient,
+  rawData: APIInteraction,
+  interaction: ReturnType<typeof createInteraction>,
+): Promise<void> {
   if (rawData.type === InteractionType.ApplicationCommand) {
-    const command = client.commands.find((entry) => entry.name === readInteractionName(rawData));
+    const command = client.commands.find((entry) => entry.name === rawData.data?.name);
     if (command) {
       await deferCommandInteractionIfNeeded(command, interaction as CommandInteraction);
       await command.run(interaction as CommandInteraction);
@@ -74,33 +74,22 @@ export async function dispatchInteraction(
     return;
   }
   if (rawData.type === InteractionType.MessageComponent) {
-    const customId = readCustomId(rawData);
+    const customId = rawData.data?.custom_id;
     if (!customId) {
       return;
     }
     const componentInteraction = interaction as BaseComponentInteraction;
-    if (
-      client.componentHandler.resolveOneOffComponent({
-        channelId: readMessageChannelId(rawData),
-        customId,
-        messageId: readMessageId(rawData),
-        values: readComponentValues(rawData),
-      })
-    ) {
-      await componentInteraction.acknowledge();
-      return;
-    }
     const component = client.componentHandler.resolve(customId, {
-      componentType: (rawData as { data?: { component_type?: number } }).data?.component_type,
+      componentType: rawData.data?.component_type,
     });
     if (component) {
       await deferComponentInteractionIfNeeded(component, componentInteraction);
-      await component.run(componentInteraction, parseComponentInteractionData(component, customId));
+      await component.run(componentInteraction, component.customIdParser(customId).data);
     }
     return;
   }
   if (rawData.type === InteractionType.ModalSubmit) {
-    const customId = readCustomId(rawData);
+    const customId = rawData.data?.custom_id;
     if (!customId) {
       return;
     }
@@ -108,6 +97,30 @@ export async function dispatchInteraction(
     if (modal) {
       await modal.run(interaction as ModalInteraction, modal.customIdParser(customId).data);
     }
+  }
+}
+
+// Exceptions can contain paths, config and provider responses; keep details in Gateway logs.
+const INTERACTION_FAILURE_NOTICE = "Command failed. Check the Gateway logs for details.";
+
+// Only a confirmed deferred reply owns an unanswered spinner. Deferred updates
+// refer to existing channel content; other states must not create a second reply.
+async function reportInteractionFailure(
+  interaction: ReturnType<typeof createInteraction>,
+): Promise<void> {
+  // A follow-up can consume the placeholder; never overwrite its visible output.
+  if (interaction.responseState !== "deferred" || interaction.hasSentFollowUp) {
+    return;
+  }
+  try {
+    // Recheck inside the response queue after in-flight follow-ups settle.
+    // Pin mentions so future notice text cannot introduce channel pings.
+    await interaction.editDeferredPlaceholderIfUnanswered({
+      content: INTERACTION_FAILURE_NOTICE,
+      allowed_mentions: { parse: [] },
+    });
+  } catch {
+    // Ignored: the caller rethrows and logs the original failure.
   }
 }
 
@@ -119,10 +132,7 @@ function resolveConditionalComponentOption(
 }
 
 async function deferComponentInteractionIfNeeded(
-  component: {
-    defer: boolean | ((interaction: BaseComponentInteraction) => boolean);
-    ephemeral: boolean | ((interaction: BaseComponentInteraction) => boolean);
-  },
+  component: BaseMessageInteractiveComponent,
   interaction: BaseComponentInteraction,
 ): Promise<void> {
   if (!resolveConditionalComponentOption(component.defer, interaction)) {
@@ -133,27 +143,4 @@ async function deferComponentInteractionIfNeeded(
     return;
   }
   await interaction.acknowledge();
-}
-
-function readInteractionName(rawData: APIInteraction): string | undefined {
-  return (rawData as { data?: { name?: string } }).data?.name;
-}
-
-function readCustomId(rawData: APIInteraction): string | undefined {
-  return (rawData as { data?: { custom_id?: string } }).data?.custom_id;
-}
-
-function readComponentValues(rawData: APIInteraction): string[] | undefined {
-  const values = (rawData as { data?: { values?: unknown } }).data?.values;
-  return Array.isArray(values) ? values.map(String) : undefined;
-}
-
-function readMessageId(rawData: APIInteraction): string | undefined {
-  const messageId = (rawData as { message?: { id?: unknown } }).message?.id;
-  return typeof messageId === "string" ? messageId : undefined;
-}
-
-function readMessageChannelId(rawData: APIInteraction): string | undefined {
-  const channelId = (rawData as { message?: { channel_id?: unknown } }).message?.channel_id;
-  return typeof channelId === "string" ? channelId : undefined;
 }

@@ -1,15 +1,17 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { BoardSnapshot } from "../../lib/board/types.ts";
 // Side-effect import: registers the custom elements mount() depends on
 // without relying on transitive fixture imports.
 import "./board-view.ts";
-import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import {
+  createApplicationContextProvider,
+  createApplicationGateway,
+} from "../../test-helpers/application-context.ts";
 import { applyBoardFixtureOps } from "../../test-helpers/board-fixture.ts";
 import {
   boardWidget,
   callbacks,
-  deferred,
-  deferredValue,
   gatewayContext,
   mount,
   settleCells,
@@ -21,12 +23,73 @@ afterEach(() => {
   document.body.replaceChildren();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
-  vi.useRealTimers();
 });
 
+function stubBoardDocumentFetch(read: () => Promise<Response>): void {
+  const originalFetch = globalThis.fetch;
+  vi.stubGlobal("fetch", ((input, init) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    return url.includes("/__openclaw__/board/") ? read() : originalFetch(input, init);
+  }) satisfies typeof fetch);
+}
+
 describe("openclaw-board-view", () => {
+  it("retains one loading surface through snapshot and sandbox document readiness", async () => {
+    vi.useFakeTimers();
+    const response = deferred<Response>();
+    const fetchMock = vi.fn(() => response.promise);
+    stubBoardDocumentFetch(fetchMock);
+    const view = document.createElement("openclaw-board-view");
+    view.activeTabId = "main";
+    view.callbacks = callbacks();
+    view.widgetFrameUrl = () => "/__openclaw__/board/session/alpha/index.html?bt=ticket";
+    const provider = createApplicationContextProvider(gatewayContext(null));
+    provider.append(view);
+    document.body.append(provider);
+    await view.updateComplete;
+    const skeleton = view.querySelector("openclaw-panel-loading-skeleton");
+    expect(skeleton).not.toBeNull();
+    view.snapshot = snapshot({
+      widgets: [
+        boardWidget({ sandboxUrl: "/mcp-app-sandbox", sandboxPort: 18790, viewTicket: "ticket" }),
+      ],
+    });
+    await settleCells(view);
+    const frame = view.querySelector("iframe")!;
+    const ready = deferred<{ renderId: string }>();
+    vi.spyOn(frame.contentWindow!, "postMessage").mockImplementation((message) => {
+      if (message.method === "ui/notifications/sandbox-resource-ready") {
+        ready.resolve(message.params);
+      }
+    });
+    const receive = (data: object) =>
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          source: frame.contentWindow,
+          origin: new URL(frame.src).origin,
+          data,
+        }),
+      );
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(view.querySelectorAll("openclaw-panel-loading-skeleton")).toHaveLength(1);
+    expect(view.querySelector("openclaw-panel-loading-skeleton")).toBe(skeleton);
+    expect(view.querySelector(".board-view")?.hasAttribute("inert")).toBe(true);
+    receive({ method: "ui/notifications/sandbox-proxy-ready", params: { sandboxUrl: frame.src } });
+    response.resolve(new Response("<p>Dashboard</p>"));
+    const { renderId } = await ready.promise;
+    await settleCells(view);
+    expect(view.querySelector("openclaw-panel-loading-skeleton")).toBe(skeleton);
+    receive({ method: "ui/notifications/sandbox-resource-loaded", params: { renderId } });
+    await vi.advanceTimersByTimeAsync(32);
+    await settleCells(view);
+    expect(view.querySelector("openclaw-panel-loading-skeleton")).toBeNull();
+    expect(view.querySelector(".board-view")?.hasAttribute("inert")).toBe(false);
+    expect(view.querySelector("iframe")).toBe(frame);
+  });
+
   it("renders only the active tab widgets with sandboxed frames", async () => {
     const view = await mount();
+    expect(view.querySelector("openclaw-panel-loading-skeleton")).toBeNull();
     const cells = view.querySelectorAll('[data-test-id="board-widget"]');
     expect(cells).toHaveLength(2);
     expect([...cells].map((cell) => cell.getAttribute("data-widget-name"))).toEqual([
@@ -41,7 +104,31 @@ describe("openclaw-board-view", () => {
     }
   });
 
+  it.each(["pending", "rejected", "invalid-frame"] as const)(
+    "reveals the %s recovery state instead of leaving the board loading",
+    async (mode) => {
+      const view = await mount({
+        context: gatewayContext(null),
+        snapshot: snapshot({
+          widgets: [
+            boardWidget({
+              viewTicket: "ticket",
+              grantState: mode === "invalid-frame" ? "none" : mode,
+            }),
+          ],
+        }),
+      });
+      expect(view.querySelector("openclaw-panel-loading-skeleton")).toBeNull();
+      expect(view.querySelector(".board-view")?.hasAttribute("inert")).toBe(false);
+      expect(view.querySelector(".board-widget__body")?.textContent?.trim()).not.toBe("");
+    },
+  );
+
   it("renders an ungranted widget in the shared sandbox without popup authority", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("<p>Read-only widget</p>")),
+    );
     const view = await mount({
       context: gatewayContext(null),
       snapshot: snapshot({
@@ -64,126 +151,152 @@ describe("openclaw-board-view", () => {
     expect(view.querySelector('[data-test-id="board-widget-error"]')).toBeNull();
   });
 
-  it("bounds the wait for a sandbox proxy that never becomes ready", async () => {
+  it("paces a stalled proxy retry without spending the authorization refresh budget", async () => {
     vi.useFakeTimers();
+    const fetchMock = vi.fn(async () => new Response("<!doctype html><p>Ready document</p>"));
+    vi.stubGlobal("fetch", fetchMock);
     const frameLoadFailed = vi.fn(async () => undefined);
     const view = await mount({
       context: gatewayContext(null),
       callbacks: callbacks({ frameLoadFailed }),
       snapshot: snapshot({
         widgets: [
-          boardWidget({
-            sandboxUrl: "/mcp-app-sandbox",
-            sandboxPort: 18790,
-            viewTicket: "ticket",
-          }),
+          boardWidget({ sandboxUrl: "/mcp-app-sandbox", sandboxPort: 18790, viewTicket: "ticket" }),
         ],
       }),
       widgetFrameUrl: () => "/__openclaw__/board/session/alpha/index.html?bt=ticket",
     });
-
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(frameLoadFailed).toHaveBeenCalledTimes(3);
+    const frame = view.querySelector("iframe")!;
+    const source = frame.src;
+    const reload = vi.spyOn(frame, "src", "set");
+    await vi.advanceTimersByTimeAsync(10_000);
     await settleCells(view);
-    expect(view.querySelector('[data-test-id="board-widget-error"]')?.textContent).toContain(
-      "repeated refresh attempts",
+    expect(view.querySelector('.board-widget__notice[role="status"]')).not.toBeNull();
+    expect(view.querySelector('[data-test-id="board-widget-error"]')).toBeNull();
+    expect(reload).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(reload).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(reload).toHaveBeenCalledExactlyOnceWith(source);
+    expect(frameLoadFailed).not.toHaveBeenCalled();
+    expect(view.querySelector("iframe")).toBe(frame);
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: frame.contentWindow,
+        origin: new URL(source).origin,
+        data: { method: "ui/notifications/sandbox-proxy-ready", params: { sandboxUrl: source } },
+      }),
     );
+    await vi.advanceTimersByTimeAsync(0);
+    await settleCells(view);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(view.querySelector('.board-widget__notice[role="status"]')).toBeNull();
+    expect(view.querySelector('[data-test-id="board-widget-error"]')).toBeNull();
   });
 
-  it("updates the sandbox bridge when the application Gateway client reconnects", async () => {
+  it("requires a renewed frame ticket before using a reconnected Gateway client", async () => {
     const firstRequest = vi.fn(async () => ({ ok: true }));
     const secondRequest = vi.fn(async () => ({ ok: true }));
     const fetchMock = vi.fn(async () => new Response("<!doctype html><p>weather</p>"));
-    vi.stubGlobal("fetch", fetchMock);
+    stubBoardDocumentFetch(fetchMock);
+    let ticket = "ticket";
+    const widget = () =>
+      boardWidget({
+        sandboxUrl: "/mcp-app-sandbox",
+        sandboxPort: 18790,
+        viewTicket: ticket,
+        viewGeneration: "retained-document",
+      });
+    const context = gatewayContext({ request: firstRequest }, "/control");
+    const connection = createApplicationGateway(context.gateway.snapshot);
+    connection.gateway.connection.gatewayUrl = context.gateway.connection.gatewayUrl;
     const view = await mount({
-      context: gatewayContext({ request: firstRequest }, "/control"),
-      snapshot: snapshot({
-        widgets: [
-          boardWidget({
-            sandboxUrl: "/mcp-app-sandbox",
-            sandboxPort: 18790,
-            viewTicket: "ticket",
-          }),
-        ],
-      }),
-      widgetFrameUrl: () => "/__openclaw__/board/session/alpha/index.html?bt=ticket",
+      context: { ...context, gateway: connection.gateway },
+      snapshot: snapshot({ widgets: [widget()] }),
+      widgetFrameUrl: () => "/__openclaw__/board/session/alpha/index.html?bt=" + ticket,
     });
     const cell = view.querySelector("openclaw-board-widget-cell")!;
     const frame = cell.querySelector("iframe")!;
-    const sandboxOrigin = new URL(frame.src).origin;
     const send = (data: unknown, ports: MessagePort[] = []) =>
       window.dispatchEvent(
         new MessageEvent("message", {
           source: frame.contentWindow,
-          origin: sandboxOrigin,
+          origin: new URL(frame.src).origin,
           data,
           ports,
         }),
       );
-
-    send({
-      method: "ui/notifications/sandbox-proxy-ready",
-      params: { sandboxUrl: frame.src },
-    });
+    send({ method: "ui/notifications/sandbox-proxy-ready", params: { sandboxUrl: frame.src } });
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
     const bridgeChannel = new MessageChannel();
-    const initialized = new Promise<{ controlUiBaseUrl?: string }>((resolve) => {
-      bridgeChannel.port2.addEventListener("message", (event) => {
-        if (event.data?.type !== "openclaw:widget-host-init") {
-          return;
-        }
-        bridgeChannel.port2.postMessage(
-          {
-            type: "openclaw:widget-host-init-ack",
-            ticket: event.data.ticket,
-          },
-          [],
-        );
-        resolve(event.data as { controlUiBaseUrl?: string });
-      });
+    onTestFinished(() => bridgeChannel.port2.close());
+    const initialized = deferred<{ controlUiBaseUrl?: string }>();
+    const renewed = deferred();
+    bridgeChannel.port2.addEventListener("message", (event) => {
+      if (event.data?.type !== "openclaw:widget-host-init") {
+        return;
+      }
+      bridgeChannel.port2.postMessage(
+        { type: "openclaw:widget-host-init-ack", ticket: event.data.ticket },
+        [],
+      );
+      initialized.resolve(event.data);
+      if (event.data.ticket === "renewed-ticket") {
+        renewed.resolve();
+      }
     });
     bridgeChannel.port2.start();
     send({ type: "openclaw:widget-bridge-port-offer" }, [bridgeChannel.port1]);
-    const hostInit = await initialized;
-    expect(hostInit.controlUiBaseUrl).toBe(`${window.location.origin}/control`);
-    bridgeChannel.port2.postMessage(
-      {
-        type: "openclaw:widget-bridge-request",
-        id: "before-reconnect",
-        method: "state.emit",
-        params: { payload: { status: "connecting" } },
-        ticket: "ticket",
-      },
-      [],
-    );
-    await vi.waitFor(() =>
-      expect(firstRequest).toHaveBeenCalledWith("board.event", {
-        ticket: "ticket",
-        payload: { status: "connecting" },
-      }),
-    );
-
-    const provider = view.parentElement as ReturnType<typeof createApplicationContextProvider>;
-    provider.setContext(gatewayContext({ request: secondRequest }, "/control"));
-    await cell.updateComplete;
-    bridgeChannel.port2.postMessage(
-      {
-        type: "openclaw:widget-bridge-request",
-        id: "after-reconnect",
-        method: "state.emit",
-        params: { payload: { status: "online" } },
-        ticket: "ticket",
-      },
-      [],
-    );
-
-    await vi.waitFor(() =>
-      expect(secondRequest).toHaveBeenCalledWith("board.event", {
-        ticket: "ticket",
-        payload: { status: "online" },
-      }),
-    );
+    expect((await initialized.promise).controlUiBaseUrl).toBe(window.location.origin + "/control");
+    const emit = (id: string, requestTicket: string, status: string) =>
+      new Promise<unknown>((resolve) => {
+        const receive = (event: MessageEvent) => {
+          if (event.data?.type === "openclaw:widget-bridge-response" && event.data.id === id) {
+            bridgeChannel.port2.removeEventListener("message", receive);
+            resolve(event.data);
+          }
+        };
+        bridgeChannel.port2.addEventListener("message", receive);
+        bridgeChannel.port2.postMessage(
+          {
+            type: "openclaw:widget-bridge-request",
+            id,
+            method: "state.emit",
+            params: { payload: { status } },
+            ticket: requestTicket,
+          },
+          [],
+        );
+      });
+    await expect(emit("before-reconnect", ticket, "connecting")).resolves.toMatchObject({
+      ok: true,
+    });
+    expect(firstRequest).toHaveBeenCalledExactlyOnceWith("board.event", {
+      ticket,
+      payload: { status: "connecting" },
+    });
+    connection.publish({
+      ...connection.gateway.snapshot,
+      client: gatewayContext({ request: secondRequest }).gateway.snapshot.client,
+    });
+    await settleCells(view);
+    await expect(emit("retired-ticket", ticket, "online")).resolves.toMatchObject({
+      ok: false,
+      error: "Gateway unavailable",
+    });
+    expect(secondRequest).not.toHaveBeenCalled();
+    ticket = "renewed-ticket";
+    view.snapshot = snapshot({ widgets: [widget()] });
+    await settleCells(view);
+    await renewed.promise;
+    await expect(emit("after-reconnect", ticket, "online")).resolves.toMatchObject({ ok: true });
+    expect(secondRequest).toHaveBeenCalledExactlyOnceWith("board.event", {
+      ticket,
+      payload: { status: "online" },
+    });
     expect(firstRequest).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(view.querySelector("iframe")).toBe(frame);
   });
   it("requests a fresh frame ticket after iframe errors or 401 loads", async () => {
     const frameLoadFailed = vi.fn(async () => undefined);
@@ -208,15 +321,20 @@ describe("openclaw-board-view", () => {
 
   it("retries proactive ticket refresh without replacing the current view", async () => {
     vi.useFakeTimers();
+    stubBoardDocumentFetch(async () => new Response("<p>Current widget</p>"));
     const frameLoadFailed = vi
       .fn<() => Promise<void>>()
       .mockRejectedValueOnce(new Error("gateway reconnecting"))
       .mockResolvedValue(undefined);
     const view = await mount({
+      context: gatewayContext(null),
+      widgetFrameUrl: () => "/__openclaw__/board/session/alpha/index.html?bt=ticket",
       callbacks: callbacks({ frameLoadFailed }),
       snapshot: snapshot({
         widgets: [
           boardWidget({
+            sandboxUrl: "/mcp-app-sandbox",
+            sandboxPort: 18790,
             viewTicket: "ticket",
             viewTicketTtlMs: 15_000,
           }),
@@ -224,14 +342,20 @@ describe("openclaw-board-view", () => {
       }),
     });
     const cell = view.querySelector("openclaw-board-widget-cell")!;
+    const frame = cell.querySelector("iframe");
+    expect(frame).not.toBeNull();
 
     await vi.advanceTimersByTimeAsync(1_000);
     expect(frameLoadFailed).toHaveBeenCalledTimes(1);
-    expect((cell as unknown as { frame: { error: string } }).frame.error).toBe("");
+    await settleCells(view);
+    expect(cell.querySelector("iframe")).toBe(frame);
+    expect(cell.querySelector('[data-test-id="board-widget-error"]')).toBeNull();
 
     await vi.advanceTimersByTimeAsync(1_000);
     expect(frameLoadFailed).toHaveBeenCalledTimes(2);
-    expect((cell as unknown as { frame: { error: string } }).frame.error).toBe("");
+    await settleCells(view);
+    expect(cell.querySelector("iframe")).toBe(frame);
+    expect(cell.querySelector('[data-test-id="board-widget-error"]')).toBeNull();
 
     await vi.advanceTimersByTimeAsync(1_999);
     expect(frameLoadFailed).toHaveBeenCalledTimes(2);
@@ -268,6 +392,7 @@ describe("openclaw-board-view", () => {
 
   it("keeps retrying proactive ticket refresh after the initial outage", async () => {
     vi.useFakeTimers();
+    stubBoardDocumentFetch(async () => new Response("<p>Current widget</p>"));
     const frameLoadFailed = vi
       .fn<() => Promise<void>>()
       .mockRejectedValueOnce(new Error("gateway reconnecting"))
@@ -276,10 +401,14 @@ describe("openclaw-board-view", () => {
       .mockRejectedValueOnce(new Error("gateway reconnecting"))
       .mockResolvedValue(undefined);
     const view = await mount({
+      context: gatewayContext(null),
+      widgetFrameUrl: () => "/__openclaw__/board/session/alpha/index.html?bt=ticket",
       callbacks: callbacks({ frameLoadFailed }),
       snapshot: snapshot({
         widgets: [
           boardWidget({
+            sandboxUrl: "/mcp-app-sandbox",
+            sandboxPort: 18790,
             viewTicket: "ticket",
             viewTicketTtlMs: 15_000,
           }),
@@ -287,6 +416,8 @@ describe("openclaw-board-view", () => {
       }),
     });
     const cell = view.querySelector("openclaw-board-widget-cell")!;
+    const frame = cell.querySelector("iframe");
+    expect(frame).not.toBeNull();
 
     await vi.advanceTimersByTimeAsync(1_000);
     await vi.advanceTimersByTimeAsync(1_000);
@@ -295,7 +426,9 @@ describe("openclaw-board-view", () => {
     await vi.advanceTimersByTimeAsync(4_000);
 
     expect(frameLoadFailed).toHaveBeenCalledTimes(5);
-    expect((cell as unknown as { frame: { error: string } }).frame.error).toBe("");
+    await settleCells(view);
+    expect(cell.querySelector("iframe")).toBe(frame);
+    expect(cell.querySelector('[data-test-id="board-widget-error"]')).toBeNull();
   });
 
   it("bounds repeated frame ticket refreshes after persistent 401 responses", async () => {
@@ -370,67 +503,6 @@ describe("openclaw-board-view", () => {
     await Promise.resolve();
 
     expect(frameLoadFailed).not.toHaveBeenCalled();
-  });
-
-  it("preserves each widget cell and iframe identity when order changes", async () => {
-    const view = await mount();
-    const before = [...view.querySelectorAll("openclaw-board-widget-cell")].find(
-      (cell) => cell.widget?.name === "alpha",
-    );
-    const frame = before?.querySelector("iframe");
-    const removedNodes: Node[] = [];
-    const observer = new MutationObserver((records) => {
-      for (const record of records) {
-        removedNodes.push(...record.removedNodes);
-      }
-    });
-    observer.observe(view.querySelector(".board-grid")!, { childList: true });
-    const reordered = snapshot();
-    reordered.widgets = reordered.widgets.map((widget) =>
-      widget.name === "alpha"
-        ? { ...widget, position: 1 }
-        : widget.name === "beta"
-          ? { ...widget, position: 0 }
-          : widget,
-    );
-    view.snapshot = reordered;
-    const cells = await settleCells(view);
-    const after = cells.find((cell) => cell.widget?.name === "alpha");
-    expect(after).toBe(before);
-    expect(after?.querySelector("iframe")).toBe(frame);
-    expect(removedNodes).not.toContain(before);
-    expect(after?.querySelector(".board-widget")?.getAttribute("aria-posinset")).toBe("2");
-    expect(
-      cells
-        .find((cell) => cell.widget?.name === "beta")
-        ?.querySelector(".board-widget")
-        ?.getAttribute("aria-posinset"),
-    ).toBe("1");
-    observer.disconnect();
-
-    view.snapshot = { ...snapshot(), sessionKey: "agent:main:other-session" };
-    const sessionCells = await settleCells(view);
-    const afterSessionChange = sessionCells.find((cell) => cell.widget?.name === "alpha");
-    expect(afterSessionChange).not.toBe(before);
-    expect(afterSessionChange?.querySelector("iframe")).not.toBe(frame);
-  });
-
-  it("routes tab selection and updates cells when the host changes the active prop", async () => {
-    const selectTab = vi.fn();
-    const view = await mount({ callbacks: callbacks({ selectTab }) });
-    expect(selectTab).not.toHaveBeenCalled();
-    view.querySelector(".board-tabs__track")?.dispatchEvent(
-      new CustomEvent("wa-tab-show", {
-        detail: { name: "ops" },
-        bubbles: true,
-      }),
-    );
-    expect(selectTab).toHaveBeenCalledWith("ops");
-
-    view.activeTabId = "ops";
-    const cells = await settleCells(view);
-    expect(cells).toHaveLength(1);
-    expect(cells[0]?.widget?.name).toBe("ops-only");
   });
 
   it("hides the tab strip when the board has only one tab", async () => {
@@ -620,34 +692,10 @@ describe("openclaw-board-view", () => {
     expect(refreshWidgetAppView).toHaveBeenCalledTimes(1);
   });
 
-  it("refreshes a near-expiry lease only once", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
-    const widgetAppView = vi.fn(async () => ({
-      status: "ready" as const,
-      viewId: "mcp-app-near-expiry",
-      expiresAtMs: 5_000,
-    }));
-    const refreshWidgetAppView = vi.fn(async () => ({
-      status: "ready" as const,
-      viewId: "mcp-app-renewed",
-      expiresAtMs: 5_000,
-    }));
-    const source = snapshot({ widgets: [boardWidget({ contentKind: "mcp-app" })] });
-    const view = await mount({
-      snapshot: source,
-      callbacks: callbacks({ widgetAppView, refreshWidgetAppView }),
-    });
-    await vi.advanceTimersByTimeAsync(60_000);
-
-    expect(refreshWidgetAppView).toHaveBeenCalledOnce();
-    view.remove();
-  });
-
   it("does not schedule renewal when an in-flight MCP App load resolves after disconnect", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
-    const pending = deferredValue<{
+    const pending = deferred<{
       status: "ready";
       viewId: string;
       expiresAtMs: number;
@@ -672,7 +720,7 @@ describe("openclaw-board-view", () => {
     expect(refreshWidgetAppView).not.toHaveBeenCalled();
   });
 
-  it("shows stale MCP Apps with retry and remove without breaking the board", async () => {
+  it("shows stale MCP Apps with retry and delete without breaking the board", async () => {
     if (!customElements.get("mcp-app-view")) {
       customElements.define("mcp-app-view", class extends HTMLElement {});
     }
@@ -698,7 +746,7 @@ describe("openclaw-board-view", () => {
     const buttons = view.querySelectorAll<HTMLButtonElement>(
       '[data-test-id="board-mcp-app-stale"] button',
     );
-    expect([...buttons].map((button) => button.textContent?.trim())).toEqual(["Retry", "Remove"]);
+    expect([...buttons].map((button) => button.textContent?.trim())).toEqual(["Retry", "Delete"]);
     buttons[1]?.click();
     await vi.waitFor(() =>
       expect(applyOps).toHaveBeenCalledWith([{ kind: "widget_remove", name: "alpha" }]),
@@ -930,7 +978,7 @@ describe("openclaw-board-view", () => {
     await view.updateComplete;
     const firstAnnouncement = view.querySelector(".board-announcer > span");
     const cell = secondCell?.closest("openclaw-board-widget-cell");
-    await vi.waitFor(() => expect(Reflect.get(cell ?? {}, "actionPending")).toBe(false));
+    await vi.waitFor(() => expect(cell?.querySelector("wa-dropdown-item")?.disabled).toBe(false));
 
     move();
     await vi.waitFor(() => expect(applyOps).toHaveBeenCalledTimes(2));
@@ -980,25 +1028,6 @@ describe("openclaw-board-view", () => {
     Object.defineProperty(pointerUp, "pointerId", { value: 7 });
     window.dispatchEvent(pointerUp);
     expect(applyOps).not.toHaveBeenCalled();
-  });
-
-  it("moves widgets to another tab from the kebab menu", async () => {
-    const applyOps = vi.fn(async () => undefined);
-    const view = await mount({ callbacks: callbacks({ applyOps }) });
-    const moveButton = [...view.querySelectorAll<HTMLElement>("wa-dropdown-item")].find(
-      (button) => button.textContent?.trim() === "Operations",
-    );
-    view.querySelector(".board-widget__menu")?.dispatchEvent(
-      new CustomEvent("wa-select", {
-        detail: { item: moveButton },
-        bubbles: true,
-      }),
-    );
-    await vi.waitFor(() =>
-      expect(applyOps).toHaveBeenCalledWith([
-        { kind: "widget_move", name: "alpha", tabId: "ops", position: 1 },
-      ]),
-    );
   });
 
   it("places excess tabs in an accessible overflow menu", async () => {

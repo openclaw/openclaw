@@ -1,13 +1,10 @@
-// Voice model catalog helpers shared by TTS and realtime voice plugins.
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
-import { normalizeOptionalString as normalizeString } from "@openclaw/normalization-core/string-coerce";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeOptionalLowercaseString as normalizeLowercaseString,
+  normalizeOptionalString as normalizeString,
+} from "@openclaw/normalization-core/string-coerce";
 
-type VoiceModelCapability = "tts" | "realtime_transcription" | "realtime_voice";
-
-/** Capability flags advertised by a voice model catalog entry. */
-export type VoiceModelCapabilities = Partial<Record<VoiceModelCapability, true>>;
-
-/** Provider/model override parsed from config. */
 export type VoiceModelRef = {
   provider: string;
   model: string;
@@ -23,35 +20,10 @@ export type VoiceModelProvider = {
   models?: readonly string[];
 };
 
-/** Synthesized voice model catalog row exposed to provider/model selection. */
-type VoiceModelCatalogEntry = {
-  kind: "voice";
-  provider: string;
-  model: string;
-  source: "static";
-  capabilities: VoiceModelCapabilities;
-  label?: string;
-  default?: boolean;
-  modes?: readonly string[];
-};
-
-/** Ordered provider candidate, optionally with a concrete voice model override. */
 export type VoiceProviderCandidate = {
   provider: string;
   voiceModel?: VoiceModelRef;
 };
-
-type VoiceModelConfig =
-  | string
-  | {
-      primary?: unknown;
-      fallbacks?: unknown;
-      timeoutMs?: unknown;
-    };
-
-function normalizeLowercaseString(value: unknown): string | undefined {
-  return normalizeString(value)?.toLowerCase();
-}
 
 function normalizeTimeoutMs(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0
@@ -64,28 +36,17 @@ function parseVoiceModelRef(value: unknown): VoiceModelRef | undefined {
   return parsed ? { provider: parsed.provider, model: parsed.modelId } : undefined;
 }
 
-function sameProvider(left: string | undefined, right: string | undefined): boolean {
-  const normalizedLeft = normalizeLowercaseString(left);
-  return Boolean(normalizedLeft && normalizedLeft === normalizeLowercaseString(right));
-}
-
 /** Match provider ids case-insensitively across canonical id and aliases. */
 export function providerMatchesId(provider: VoiceModelProvider, providerId?: string): boolean {
-  return (
-    sameProvider(provider.id, providerId) ||
-    (provider.aliases ?? []).some((alias) => sameProvider(alias, providerId))
+  const normalized = normalizeLowercaseString(providerId);
+  return Boolean(
+    normalized &&
+    [provider.id, ...(provider.aliases ?? [])].some(
+      (id) => normalizeLowercaseString(id) === normalized,
+    ),
   );
 }
 
-/** Find the provider metadata for a configured provider id or alias. */
-function findVoiceModelProvider<T extends VoiceModelProvider>(params: {
-  providers: readonly T[];
-  providerId?: string;
-}): T | undefined {
-  return params.providers.find((provider) => providerMatchesId(provider, params.providerId));
-}
-
-/** Return true when a provider advertises the requested model. */
 export function voiceProviderSupportsModel(
   provider: VoiceModelProvider | undefined,
   model: unknown,
@@ -99,14 +60,13 @@ export function voiceProviderSupportsModel(
   );
 }
 
-/** Parse primary/fallback voice model refs from config. */
 export function resolveVoiceModelRefs(config: unknown): VoiceModelRef[] {
-  const voiceModel = config as VoiceModelConfig | undefined;
-  if (typeof voiceModel === "string") {
-    const parsed = parseVoiceModelRef(voiceModel);
+  if (typeof config === "string") {
+    const parsed = parseVoiceModelRef(config);
     return parsed ? [parsed] : [];
   }
-  if (typeof voiceModel !== "object" || voiceModel === null || Array.isArray(voiceModel)) {
+  const voiceModel = asOptionalRecord(config);
+  if (!voiceModel) {
     return [];
   }
   const timeoutMs = normalizeTimeoutMs(voiceModel.timeoutMs);
@@ -126,17 +86,13 @@ export function resolveVoiceModelRefs(config: unknown): VoiceModelRef[] {
   return refs;
 }
 
-/** Resolve configured voice model refs that are supported by known providers. */
 export function resolveSupportedVoiceModelRefs(params: {
   config: unknown;
   providers: readonly VoiceModelProvider[];
   providerId?: string;
 }): VoiceModelRef[] {
   return resolveVoiceModelRefs(params.config).flatMap((ref) => {
-    const provider = findVoiceModelProvider({
-      providers: params.providers,
-      providerId: ref.provider,
-    });
+    const provider = params.providers.find((entry) => providerMatchesId(entry, ref.provider));
     if (!provider || (params.providerId && !providerMatchesId(provider, params.providerId))) {
       return [];
     }
@@ -146,15 +102,14 @@ export function resolveSupportedVoiceModelRefs(params: {
   });
 }
 
-/** Build ordered provider candidates from primary provider plus voice-model fallbacks. */
 export function resolveVoiceProviderCandidates(params: {
   primaryProvider: string;
   providers: readonly VoiceModelProvider[];
   voiceModelConfig?: unknown;
 }): VoiceProviderCandidate[] {
   const primary =
-    findVoiceModelProvider({ providers: params.providers, providerId: params.primaryProvider })
-      ?.id ?? params.primaryProvider;
+    params.providers.find((provider) => providerMatchesId(provider, params.primaryProvider))?.id ??
+    params.primaryProvider;
   const candidates: VoiceProviderCandidate[] = [];
   const seenProviders = new Set<string>();
   const addCandidate = (candidate: VoiceProviderCandidate) => {
@@ -192,8 +147,8 @@ export function resolvePrimaryVoiceProviderCandidate(params: {
   voiceModelConfig?: unknown;
 }): VoiceProviderCandidate {
   const provider =
-    findVoiceModelProvider({ providers: params.providers, providerId: params.primaryProvider })
-      ?.id ?? params.primaryProvider;
+    params.providers.find((entry) => providerMatchesId(entry, params.primaryProvider))?.id ??
+    params.primaryProvider;
   const voiceModel = resolveSupportedVoiceModelRefs({
     config: params.voiceModelConfig,
     providers: params.providers,
@@ -227,42 +182,4 @@ export function getVoiceProviderConfig<TConfig extends Record<string, unknown>>(
     }
   }
   return {} as TConfig;
-}
-
-/** Convert provider metadata into static voice catalog entries. */
-export function synthesizeVoiceModelCatalogEntries(params: {
-  provider: VoiceModelProvider;
-  capabilities: VoiceModelCapabilities;
-  modes?: readonly string[];
-}): VoiceModelCatalogEntry[] {
-  const seen = new Set<string>();
-  const models = [params.provider.defaultModel, ...(params.provider.models ?? [])].flatMap(
-    (entry) => {
-      const model = normalizeString(entry);
-      if (!model || seen.has(model)) {
-        return [];
-      }
-      seen.add(model);
-      return [model];
-    },
-  );
-  return models.map((model) => {
-    const entry: VoiceModelCatalogEntry = {
-      kind: "voice",
-      provider: params.provider.id,
-      model,
-      source: "static",
-      capabilities: params.capabilities,
-    };
-    if (params.provider.label) {
-      entry.label = params.provider.label;
-    }
-    if (model === params.provider.defaultModel) {
-      entry.default = true;
-    }
-    if (params.modes) {
-      entry.modes = params.modes;
-    }
-    return entry;
-  });
 }

@@ -1,34 +1,39 @@
-// Slack plugin module implements auth behavior.
 import {
   type ChannelIngressEventInput,
   type ChannelIngressContextBinding,
-  type ChannelIngressIdentifierKind,
   type ChannelIngressPolicyInput,
   type ChannelIngressStateInput,
-  createChannelIngressResolver,
-  defineStableChannelIngressIdentity,
   readChannelIngressStoreAllowFromForDmPolicy,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeStringEntriesLower } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { collectSlackCursorPages } from "../cursor-pages.js";
-import { parseSlackTarget } from "../target-parsing.js";
+import { getSlackRuntime } from "../runtime.js";
 import {
   allowListMatches,
-  normalizeAllowListLower,
   normalizeSlackAllowOwnerEntry,
-  normalizeSlackSlug,
   resolveSlackUserAllowListForTeam,
 } from "./allow-list.js";
 import { resolveSlackChannelConfig } from "./channel-config.js";
-import { inferSlackChannelType } from "./channel-type.js";
-import { normalizeSlackChannelType, type SlackMonitorContext } from "./context.js";
+import {
+  inferSlackChannelType,
+  normalizeSlackChannelType,
+  parseSlackChannelType,
+  resolveSlackChatType,
+} from "./channel-type.js";
+import type { SlackMonitorContext } from "./context.js";
 import type { SlackEventScope } from "./event-scope.js";
+import {
+  createSlackIngressSubject,
+  slackIngressIdentity,
+  SLACK_USER_NAME_KIND,
+} from "./ingress-identity.js";
 import { isTransientSlackThreadLookupError } from "./thread-resolution.js";
 
 type SlackChannelMembersCacheEntry = {
@@ -45,146 +50,18 @@ const slackChannelMembersCache = new WeakMap<
   SlackMonitorContext,
   Map<string, SlackChannelMembersCacheEntry>
 >();
-const DEFAULT_CHANNEL_MEMBERS_CACHE_TTL_MS = 60_000;
+const CHANNEL_MEMBERS_CACHE_TTL_MS = 60_000;
 const CHANNEL_MEMBERS_CACHE_MAX = 512;
 const SLACK_CHANNEL_ID = "slack";
-const SLACK_USER_NAME_KIND =
-  "plugin:slack-user-name" as const satisfies ChannelIngressIdentifierKind;
-const SLACK_WORKSPACE_USER_ID_KIND =
-  "plugin:slack-workspace-user-id" as const satisfies ChannelIngressIdentifierKind;
-
 export class SlackSystemEventAuthRetryError extends Error {}
-function normalizeSlackUserId(raw?: string | null): string {
-  const value = (raw ?? "").trim().toLowerCase();
-  if (!value) {
-    return "";
-  }
-  const mention = value.match(/^<@([a-z0-9_]+)>$/i);
-  if (mention?.[1]) {
-    return mention[1];
-  }
-  return value.replace(/^(slack:|user:)/, "");
-}
-
-function isSlackStableUserId(value: string): boolean {
-  return /^[ubw][a-z0-9_]+$/i.test(value);
-}
-
-function normalizeSlackWorkspaceUserEntry(entry: string): string | null {
-  const normalized = entry.trim().toLowerCase();
-  if (!normalized) {
-    return null;
-  }
-  try {
-    const target = parseSlackTarget(normalized);
-    if (target?.kind === "user" && target.teamId) {
-      return target.normalized;
-    }
-  } catch {
-    return null;
-  }
-  return null;
-}
-
-function normalizeSlackBareUserEntry(entry: string): string | null {
-  const normalized = entry.trim().toLowerCase();
-  if (!normalized || normalizeSlackWorkspaceUserEntry(normalized)) {
-    return null;
-  }
-  const userId = normalizeSlackUserId(normalized);
-  return isSlackStableUserId(userId) ? userId : null;
-}
-
-function normalizeSlackStableEntry(entry: string): string | null {
-  return normalizeSlackBareUserEntry(entry) ?? normalizeSlackWorkspaceUserEntry(entry);
-}
-
-function normalizeSlackNameEntry(entry: string): string | null {
-  const normalized = entry.trim().toLowerCase();
-  if (!normalized || normalizeSlackStableEntry(normalized)) {
-    return null;
-  }
-  return normalized.replace(/^slack:/, "") || null;
-}
-
-function normalizeSlackNameSubject(value: string): string | null {
-  return value.trim().toLowerCase() || null;
-}
-
-function normalizeSlackNameSlugEntry(entry: string): string | null {
-  const name = normalizeSlackNameEntry(entry);
-  if (!name) {
-    return null;
-  }
-  const slug = normalizeSlackSlug(name);
-  return slug && slug !== name ? slug : null;
-}
-
-const slackIngressIdentity = defineStableChannelIngressIdentity({
-  key: "senderId",
-  kind: "stable-id",
-  normalizeEntry: normalizeSlackBareUserEntry,
-  normalizeSubject: normalizeSlackUserId,
-  sensitivity: "pii",
-  aliases: [
-    {
-      key: "workspaceSenderId",
-      kind: SLACK_WORKSPACE_USER_ID_KIND,
-      normalizeEntry: normalizeSlackWorkspaceUserEntry,
-      normalizeSubject: normalizeSlackWorkspaceUserEntry,
-      sensitivity: "pii",
-    },
-    ...(
-      [
-        ["senderName", normalizeSlackNameEntry],
-        ["senderNameSlug", normalizeSlackNameSlugEntry],
-      ] as const
-    ).map(([key, normalizeEntry]) => ({
-      key,
-      kind: SLACK_USER_NAME_KIND,
-      normalizeEntry,
-      normalizeSubject: normalizeSlackNameSubject,
-      dangerous: true,
-      sensitivity: "pii" as const,
-    })),
-  ],
-});
-
-function createSlackIngressSubject(params: {
-  senderId: string;
-  senderName?: string;
-  teamId?: string;
-}) {
-  const senderId = normalizeSlackUserId(params.senderId);
-  const teamId = normalizeOptionalLowercaseString(params.teamId);
-  const senderName = params.senderName?.trim().toLowerCase();
-  const senderNameSlug = senderName ? normalizeSlackSlug(senderName) : undefined;
-  return {
-    stableId: senderId,
-    aliases: {
-      workspaceSenderId: teamId && senderId ? `team:${teamId}:user:${senderId}` : undefined,
-      senderName,
-      senderNameSlug,
-    },
-  };
-}
 
 function createSlackIngressResolver(ctx: SlackMonitorContext) {
-  return createChannelIngressResolver({
+  return getSlackRuntime().channel.inbound.ingress.createResolver({
     channelId: SLACK_CHANNEL_ID,
     accountId: ctx.accountId,
     identity: slackIngressIdentity,
     cfg: ctx.cfg,
   });
-}
-
-function readSlackCacheTtlMs(envName: string, fallback: number): number {
-  const raw = process.env[envName]?.trim();
-  if (!raw) {
-    return fallback;
-  }
-  const parsed = /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
-  return Number.isSafeInteger(parsed) ? parsed : fallback;
 }
 
 function getChannelMembersCache(
@@ -199,29 +76,12 @@ function getChannelMembersCache(
   return next;
 }
 
-function pruneChannelMembersCache(cache: Map<string, SlackChannelMembersCacheEntry>): void {
-  while (cache.size > CHANNEL_MEMBERS_CACHE_MAX) {
-    const oldest = cache.keys().next();
-    if (oldest.done) {
-      return;
-    }
-    cache.delete(oldest.value);
-  }
-}
-
-function buildBaseAllowFrom(ctx: SlackMonitorContext, teamId?: string): string[] {
-  return resolveSlackUserAllowListForTeam({
-    allowList: ctx.allowFrom,
-    teamId,
-  });
-}
-
 export async function resolveSlackEffectiveAllowFrom(
   ctx: SlackMonitorContext,
   options?: { includePairingStore?: boolean; eventScope?: SlackEventScope },
 ) {
   const teamId = options?.eventScope?.teamId ?? ctx.teamId;
-  const base = buildBaseAllowFrom(ctx, teamId);
+  const base = resolveSlackUserAllowListForTeam({ allowList: ctx.allowFrom, teamId });
   if (options?.includePairingStore !== true) {
     return base;
   }
@@ -255,7 +115,7 @@ async function fetchSlackChannelMemberIds(
         limit: 999,
         ...(cursor ? { cursor } : {}),
       }),
-    collectPageItems: (response) => normalizeAllowListLower(response.members),
+    collectPageItems: (response) => normalizeStringEntriesLower(response.members),
   });
   return new Set(members);
 }
@@ -267,15 +127,11 @@ async function resolveSlackChannelMemberIds(
 ): Promise<Set<string>> {
   const cache = getChannelMembersCache(ctx);
   const key = `${ctx.accountId}:${eventScope ? `${eventScope.teamId}:` : ""}${channelId}`;
-  const ttlMs = readSlackCacheTtlMs(
-    "OPENCLAW_SLACK_CHANNEL_MEMBERS_CACHE_TTL_MS",
-    DEFAULT_CHANNEL_MEMBERS_CACHE_TTL_MS,
-  );
   const rawNowMs = Date.now();
   const nowMs = asDateTimestampMs(rawNowMs);
   const cached = cache.get(key);
   if (cached?.members) {
-    if (ttlMs > 0 && nowMs !== undefined && cached.expiresAtMs >= nowMs) {
+    if (nowMs !== undefined && cached.expiresAtMs >= nowMs) {
       return cached.members;
     }
     cache.delete(key);
@@ -285,22 +141,23 @@ async function resolveSlackChannelMemberIds(
   }
 
   const pending = fetchSlackChannelMemberIds(ctx, channelId, eventScope);
-  const pendingExpiresAtMs =
-    ttlMs > 0 ? resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: rawNowMs }) : undefined;
+  const pendingExpiresAtMs = resolveExpiresAtMsFromDurationMs(CHANNEL_MEMBERS_CACHE_TTL_MS, {
+    nowMs: rawNowMs,
+  });
   cache.set(key, {
     expiresAtMs: pendingExpiresAtMs ?? 0,
     pending,
   });
-  pruneChannelMembersCache(cache);
+  pruneMapToMaxSize(cache, CHANNEL_MEMBERS_CACHE_MAX);
   try {
     const members = await pending;
-    const membersExpiresAtMs = ttlMs > 0 ? resolveExpiresAtMsFromDurationMs(ttlMs) : undefined;
+    const membersExpiresAtMs = resolveExpiresAtMsFromDurationMs(CHANNEL_MEMBERS_CACHE_TTL_MS);
     if (membersExpiresAtMs !== undefined) {
       cache.set(key, {
         expiresAtMs: membersExpiresAtMs,
         members,
       });
-      pruneChannelMembersCache(cache);
+      pruneMapToMaxSize(cache, CHANNEL_MEMBERS_CACHE_MAX);
     } else {
       cache.delete(key);
     }
@@ -333,7 +190,7 @@ export async function authorizeSlackBotRoomMessage(params: {
   allowFromLower: string[];
   eventScope?: SlackEventScope;
 }): Promise<boolean> {
-  const channelUserAllowList = normalizeAllowListLower(params.channelUsers).filter(
+  const channelUserAllowList = normalizeStringEntriesLower(params.channelUsers).filter(
     (entry) => entry !== "*",
   );
   if (
@@ -381,16 +238,11 @@ function wildcardWhenOpen(entries: readonly string[]): string[] {
   return entries.length > 0 ? [...entries] : ["*"];
 }
 
-function slackIngressConversationKind(
-  channelType: SlackIngressChannelType,
-): "direct" | "group" | "channel" {
-  return channelType === "im" ? "direct" : channelType === "mpim" ? "group" : "channel";
-}
-
 export async function resolveSlackCommandIngress(params: {
   ctx: SlackMonitorContext;
   teamId?: string;
   senderId: string;
+  senderAuthentication?: "verified" | "asserted";
   senderName?: string;
   channelType: SlackIngressChannelType;
   channelId: string;
@@ -419,18 +271,19 @@ export async function resolveSlackCommandIngress(params: {
     teamId,
   });
   const channelUsersConfigured =
-    !isDirectMessage && !isGroupDm && normalizeAllowListLower(params.channelUsers).length > 0;
+    !isDirectMessage && !isGroupDm && normalizeStringEntriesLower(params.channelUsers).length > 0;
   // MPIM ingress is group-shaped, but its sender policy is DM-owned. Callers
   // pass configured allowFrom without pairing-store approvals for this path.
   const groupAllowFrom = isGroupDm ? ownerAllowFrom : channelUsersConfigured ? channelUsers : [];
-  const result = await createSlackIngressResolver(params.ctx).message({
+  return await createSlackIngressResolver(params.ctx).message({
     subject: createSlackIngressSubject({
       senderId: params.senderId,
+      senderAuthentication: params.senderAuthentication,
       senderName: params.senderName,
       teamId,
     }),
     conversation: {
-      kind: slackIngressConversationKind(params.channelType),
+      kind: resolveSlackChatType(params.channelType),
       id: params.channelId,
       threadId: params.threadId,
     },
@@ -457,7 +310,6 @@ export async function resolveSlackCommandIngress(params: {
       ...(isDirectMessage ? { commandOwnerAllowFrom: ownerAllowFrom } : {}),
     },
   });
-  return result;
 }
 
 async function decideSlackSystemIngress(params: {
@@ -485,7 +337,7 @@ async function decideSlackSystemIngress(params: {
     teamId,
   });
   const channelUsersConfigured =
-    !isDirectMessage && !isGroupDm && normalizeAllowListLower(params.channelUsers).length > 0;
+    !isDirectMessage && !isGroupDm && normalizeStringEntriesLower(params.channelUsers).length > 0;
   const ownerAllowFrom =
     params.interactiveEvent && channelUsersConfigured
       ? ownerAllowFromLower.filter((entry) => entry !== "*")
@@ -516,7 +368,7 @@ async function decideSlackSystemIngress(params: {
   const input: Parameters<typeof resolver.message>[0] = {
     subject: subject(params.senderName),
     conversation: {
-      kind: slackIngressConversationKind(params.channelType),
+      kind: resolveSlackChatType(params.channelType),
       id: params.channelId ?? "slack-system",
     },
     event: {
@@ -628,16 +480,7 @@ export async function authorizeSlackSystemEventSender(params: {
     // DM-specific authorization.
     if (params.interactiveEvent) {
       const inferredFromId = inferSlackChannelType(channelId);
-      const sourceNormalized =
-        typeof resolvedTypeSource === "string"
-          ? resolvedTypeSource.toLowerCase().trim()
-          : undefined;
-      const sourceIsKnownType =
-        sourceNormalized === "im" ||
-        sourceNormalized === "mpim" ||
-        sourceNormalized === "channel" ||
-        sourceNormalized === "group";
-      if (inferredFromId === undefined && !sourceIsKnownType) {
+      if (inferredFromId === undefined && !parseSlackChannelType(resolvedTypeSource)) {
         return {
           allowed: false,
           reason: "ambiguous-channel-type",

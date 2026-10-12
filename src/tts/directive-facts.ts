@@ -1,81 +1,54 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { AssistantDeliveryTtsFacts } from "../llm/types.js";
-
-type TextRange = {
-  start: number;
-  end: number;
-};
-
-function collectMarkdownCodeRanges(text: string): TextRange[] {
-  const ranges: TextRange[] = [];
-  const addMatches = (regex: RegExp) => {
-    for (const match of text.matchAll(regex)) {
-      if (match.index == null) {
-        continue;
-      }
-      ranges.push({ start: match.index, end: match.index + match[0].length });
-    }
-  };
-
-  addMatches(/```[\s\S]*?```/g);
-  addMatches(/~~~[\s\S]*?~~~/g);
-  addMatches(/^(?: {4}|\t).*(?:\n|$)/gm);
-  addMatches(/`+[^`\n]*`+/g);
-
-  return ranges.toSorted((left, right) => left.start - right.start);
-}
-
-function isInsideRange(index: number, ranges: readonly TextRange[]): boolean {
-  return ranges.some((range) => index >= range.start && index < range.end);
-}
-
-function replaceOutsideMarkdownCode(
-  text: string,
-  regex: RegExp,
-  replace: (match: string, captures: readonly string[]) => string,
-): string {
-  const codeRanges = collectMarkdownCodeRanges(text);
-  return text.replace(regex, (...args: unknown[]) => {
-    const match = String(args[0]);
-    const offset = args.at(-2);
-    if (typeof offset === "number" && isInsideRange(offset, codeRanges)) {
-      return match;
-    }
-    // String.replace passes captures before offset/input; keep the callback
-    // typed without depending on the exact regexp arity for each directive.
-    const captures = args.slice(1, -2).map((capture) => String(capture));
-    return replace(match, captures);
-  });
-}
+import { replaceOutsideCodeRegionParts } from "../utils/directive-tags.js";
 
 /** Extract final-text TTS syntax into persisted facts, leaving markdown code spans unchanged. */
 export function extractTtsDirectiveFacts(text: string): {
   cleanedText: string;
   facts?: AssistantDeliveryTtsFacts;
 } {
-  if (!/\[\[\s*\/?\s*tts(?:\s*:|\s*\]\])/iu.test(text)) {
-    return { cleanedText: text };
+  return expectDefined(extractTtsDirectiveParts([text])[0], "single TTS directive part");
+}
+
+export function extractTtsDirectiveParts(texts: readonly string[]): Array<{
+  cleanedText: string;
+  facts?: AssistantDeliveryTtsFacts;
+}> {
+  const parts: Array<{ cleanedText: string; facts?: AssistantDeliveryTtsFacts }> = texts.map(
+    (cleanedText) => ({ cleanedText }),
+  );
+  if (!/\[\[\s*\/?\s*tts(?:\s*:|\s*\]\])/iu.test(texts.join("\n"))) {
+    return parts;
   }
-  let cleanedText = text;
-  let facts: AssistantDeliveryTtsFacts | undefined;
-  const markTagged = () => {
-    facts ??= { tagged: true };
-    return facts;
+  const replaceStage = (
+    regex: RegExp,
+    replacement: (captures: unknown[], facts: AssistantDeliveryTtsFacts) => string,
+  ) => {
+    const cleanedTexts = replaceOutsideCodeRegionParts(
+      parts.map((part) => part.cleanedText),
+      regex,
+      (_match, captures, _offset, _source, partIndex) => {
+        const part = expectDefined(parts[partIndex], "TTS directive start part");
+        return replacement(captures, (part.facts ??= { tagged: true }));
+      },
+    );
+    cleanedTexts.forEach((cleanedText, index) => {
+      expectDefined(parts[index], "TTS directive result part").cleanedText = cleanedText;
+    });
   };
 
   const blockRegex = /\[\[\s*tts\s*:\s*text\s*\]\]([\s\S]*?)\[\[\s*\/\s*tts\s*:\s*text\s*\]\]/gi;
-  cleanedText = replaceOutsideMarkdownCode(cleanedText, blockRegex, (_match, [inner = ""]) => {
-    const next = markTagged();
+  replaceStage(blockRegex, ([inner], next) => {
     if (next.text == null) {
-      next.text = inner.trim();
+      next.text = String(inner).trim();
     }
     return "";
   });
 
   const plainBlockRegex = /\[\[\s*tts\s*\]\]([\s\S]*?)\[\[\s*\/\s*tts\s*\]\]/gi;
-  cleanedText = replaceOutsideMarkdownCode(cleanedText, plainBlockRegex, (_match, [inner = ""]) => {
-    const next = markTagged();
-    const visible = inner.trim();
+  replaceStage(plainBlockRegex, ([inner], next) => {
+    const visible = String(inner).trim();
     if (next.text == null) {
       next.text = visible;
     }
@@ -83,9 +56,8 @@ export function extractTtsDirectiveFacts(text: string): {
   });
 
   const directiveRegex = /\[\[\s*tts\s*:\s*([^\]]+)\]\]/gi;
-  cleanedText = replaceOutsideMarkdownCode(cleanedText, directiveRegex, (_match, [body = ""]) => {
-    const next = markTagged();
-    const tokens = body.split(/\s+/).filter(Boolean);
+  replaceStage(directiveRegex, ([body], next) => {
+    const tokens = String(body).split(/\s+/).filter(Boolean);
     let provider: string | undefined;
     const values: Record<string, string> = {};
     for (const token of tokens) {
@@ -113,16 +85,10 @@ export function extractTtsDirectiveFacts(text: string): {
   });
 
   const bareTagRegex = /\[\[\s*tts\s*\]\]/gi;
-  cleanedText = replaceOutsideMarkdownCode(cleanedText, bareTagRegex, () => {
-    markTagged();
-    return "";
-  });
+  replaceStage(bareTagRegex, () => "");
 
   const closingTagRegex = /\[\[\s*\/\s*tts(?:\s*:\s*[^\]]*)?\]\]/gi;
-  cleanedText = replaceOutsideMarkdownCode(cleanedText, closingTagRegex, () => {
-    markTagged();
-    return "";
-  });
+  replaceStage(closingTagRegex, () => "");
 
-  return { cleanedText, ...(facts ? { facts } : {}) };
+  return parts;
 }

@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 set -euo pipefail
 
 VERSION=${1:-}
@@ -31,28 +35,40 @@ fi
 extract_version_section() {
   local version=$1
   local file=$2
-  awk -v version="$version" '
-    BEGIN { found=0 }
-    /^## / {
-      if ($0 ~ "^##[[:space:]]+" version "([[:space:]].*|$)") { found=1; next }
-      if (found) { exit }
-    }
-    found { print }
-  ' "$file"
+  node --input-type=module - "$SCRIPT_DIR" "$version" "$file" <<'NODE'
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+const [scriptDir, version, file] = process.argv.slice(2);
+const { findChangelogSection, findReleaseChangelog } = await import(
+  pathToFileURL(path.join(scriptDir, "lib/release-changelog.mjs")).href
+);
+try {
+  const markdown = path.basename(file) === "CHANGELOG.md"
+    ? findReleaseChangelog({ rootDir: path.dirname(path.resolve(file)), version })?.section
+    : readFileSync(file, "utf8");
+  const section = markdown && findChangelogSection(markdown, version);
+  if (section) process.stdout.write(section.replace(/^[^\n]*(?:\n|$)/u, ""));
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exitCode = 1;
+}
+NODE
 }
 
 markdown_to_html() {
-  local text=$1
-  text=$(echo "$text" | sed 's/^##### \(.*\)$/<h5>\1<\/h5>/')
-  text=$(echo "$text" | sed 's/^#### \(.*\)$/<h4>\1<\/h4>/')
-  text=$(echo "$text" | sed 's/^### \(.*\)$/<h3>\1<\/h3>/')
-  text=$(echo "$text" | sed 's/^## \(.*\)$/<h2>\1<\/h2>/')
-  text=$(echo "$text" | sed 's/^- \*\*\([^*]*\)\*\*\(.*\)$/<li><strong>\1<\/strong>\2<\/li>/')
-  text=$(echo "$text" | sed 's/^- \([^*].*\)$/<li>\1<\/li>/')
-  text=$(echo "$text" | sed 's/\*\*\([^*]*\)\*\*/<strong>\1<\/strong>/g')
-  text=$(echo "$text" | sed 's/`\([^`]*\)`/<code>\1<\/code>/g')
-  text=$(echo "$text" | sed 's/\[\([^]]*\)\](\([^)]*\))/<a href="\2">\1<\/a>/g')
-  echo "$text"
+  # Keep substitution order and literal HTML unchanged, but process the whole
+  # section once instead of spawning nine sed processes for every changelog line.
+  sed \
+    -e 's/^##### \(.*\)$/<h5>\1<\/h5>/' \
+    -e 's/^#### \(.*\)$/<h4>\1<\/h4>/' \
+    -e 's/^### \(.*\)$/<h3>\1<\/h3>/' \
+    -e 's/^## \(.*\)$/<h2>\1<\/h2>/' \
+    -e 's/^- \*\*\([^*]*\)\*\*\(.*\)$/<li><strong>\1<\/strong>\2<\/li>/' \
+    -e 's/^- \([^*].*\)$/<li>\1<\/li>/' \
+    -e 's/\*\*\([^*]*\)\*\*/<strong>\1<\/strong>/g' \
+    -e 's/`\([^`]*\)`/<code>\1<\/code>/g' \
+    -e 's/\[\([^]]*\)\](\([^)]*\))/<a href="\2">\1<\/a>/g'
 }
 
 version_content=$(extract_version_section "$VERSION" "$CHANGELOG_FILE")
@@ -65,27 +81,29 @@ fi
 
 echo "<h2>OpenClaw $VERSION</h2>"
 
-in_list=false
-while IFS= read -r line; do
-  if [[ "$line" =~ ^- ]]; then
-    if [[ "$in_list" == false ]]; then
-      echo "<ul>"
-      in_list=true
+{
+  in_list=false
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^- ]]; then
+      if [[ "$in_list" == false ]]; then
+        echo "<ul>"
+        in_list=true
+      fi
+      printf '%s\n' "$line"
+    else
+      if [[ "$in_list" == true ]]; then
+        echo "</ul>"
+        in_list=false
+      fi
+      if [[ -n "$line" ]]; then
+        printf '%s\n' "$line"
+      fi
     fi
-    markdown_to_html "$line"
-  else
-    if [[ "$in_list" == true ]]; then
-      echo "</ul>"
-      in_list=false
-    fi
-    if [[ -n "$line" ]]; then
-      markdown_to_html "$line"
-    fi
-  fi
-done <<< "$version_content"
+  done <<< "$version_content"
 
-if [[ "$in_list" == true ]]; then
-  echo "</ul>"
-fi
+  if [[ "$in_list" == true ]]; then
+    echo "</ul>"
+  fi
+} | markdown_to_html
 
 echo "<p><a href=\"https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md\">View full changelog</a></p>"

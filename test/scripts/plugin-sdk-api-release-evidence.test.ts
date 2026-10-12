@@ -4,7 +4,11 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  createPluginSdkApiDiffSet,
+  expandPluginSdkApiDiffSet,
+  selectPluginSdkApiReleaseEvidence,
   createPluginSdkApiReleaseEvidence,
+  createPluginSdkApiReleaseEvidenceSet,
   validatePluginSdkApiReleaseEvidence,
 } from "../../scripts/plugin-sdk-api-release-evidence.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -33,36 +37,15 @@ function evidence(exports: unknown[] = []) {
 }
 
 describe("Plugin SDK API release evidence", () => {
-  it("preserves the frozen v1 payload digest and receipt bytes", () => {
-    const legacyDiff = diff([{ change: "added", exportName: "send" }]);
-    const receipt = createPluginSdkApiReleaseEvidence({
-      baseRef: "v2026.8.1",
-      baseSha,
-      diff: legacyDiff,
-      headSha,
-      workflowSha,
-    });
-
-    expect(legacyDiff.digest).toBe(
-      "f4b495f34f8c1b72721841242b24d6f8351524c00e34db016af0fd3944f44992",
-    );
-    expect(JSON.stringify(receipt)).toBe(
-      `{"schema":"openclaw.plugin-sdk-api-release-evidence/v1","status":"checked","baseRef":"v2026.8.1","baseSha":"${baseSha}","headSha":"${headSha}","hasChanges":true,"digest":"f4b495f34f8c1b72721841242b24d6f8351524c00e34db016af0fd3944f44992","diff":{"entrypointsAdded":[],"entrypointsRemoved":[],"exports":[{"change":"added","exportName":"send"}],"digest":"f4b495f34f8c1b72721841242b24d6f8351524c00e34db016af0fd3944f44992"},"workflowSha":"${workflowSha}"}`,
-    );
-    expect(
-      validatePluginSdkApiReleaseEvidence({
-        acknowledgement: legacyDiff.digest.slice(0, 8),
-        evidence: receipt,
-        expectedHeadSha: headSha,
-        expectedWorkflowSha: workflowSha,
-      }),
-    ).toMatchObject({ acknowledgement: "f4b495f3", hasChanges: true });
-  });
-
-  it("enforces acknowledgement through the release CLI", () => {
+  it("enforces selectors acknowledgement through the release CLI", () => {
     const receipt = evidence([{ change: "added", exportName: "send" }]);
     const manifestPath = join(tempDirs.make("plugin-sdk-evidence-"), "manifest.json");
-    writeFileSync(manifestPath, JSON.stringify({ pluginSdkApi: receipt }));
+    writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        pluginSdkApi: createPluginSdkApiReleaseEvidenceSet({ beta: evidence(), latest: receipt }),
+      }),
+    );
     const run = (acknowledgement?: string) =>
       spawnSync(
         process.execPath,
@@ -74,43 +57,96 @@ describe("Plugin SDK API release evidence", () => {
           headSha,
           "--workflow-sha",
           workflowSha,
+          "--npm-dist-tag",
+          "latest",
           ...(acknowledgement ? ["--acknowledge", acknowledgement] : []),
         ],
         { cwd: process.cwd(), encoding: "utf8" },
       );
 
-    expect(run().stderr).toContain("require acknowledgement digest");
-    expect(run("deadbeef").stderr).toContain("require acknowledgement digest");
+    for (const acknowledgement of [undefined, "deadbeef"]) {
+      const rejected = run(acknowledgement);
+      expect(rejected.status, rejected.stderr).toBe(1);
+      expect(rejected.stderr).toContain("require acknowledgement digest");
+    }
     const accepted = run(receipt.digest.slice(0, 8));
     expect(accepted.status, accepted.stderr).toBe(0);
     expect(JSON.parse(accepted.stdout)).toMatchObject({ hasChanges: true, status: "checked" });
   });
 
-  it("rejects blank and mismatched acknowledgements before accepting the reported digest", () => {
-    const receipt = evidence([{ change: "added", exportName: "send" }]);
-    const expected = receipt.digest.slice(0, 8);
-    const validate = (acknowledgement: string) =>
-      validatePluginSdkApiReleaseEvidence({
-        acknowledgement,
-        evidence: receipt,
+  it("round-trips oversized shared comparisons under the unchanged 16 MiB file cap", () => {
+    const beta = evidence([{ declaration: "x".repeat(9 * 1024 * 1024) }]);
+    const latest = { ...beta, baseRef: "v2026.7.31", baseSha: "c".repeat(40) };
+    const selectors = { beta, latest };
+    const legacy = { schema: "openclaw.plugin-sdk-api-release-evidence-set/v1", selectors };
+    const compactBytes = JSON.stringify(createPluginSdkApiReleaseEvidenceSet(selectors));
+    const compact = JSON.parse(compactBytes);
+    expect(Buffer.byteLength(JSON.stringify(legacy))).toBeGreaterThan(16 * 1024 * 1024);
+    expect(Buffer.byteLength(compactBytes)).toBeLessThan(16 * 1024 * 1024);
+    expect(Object.keys(compact.diffs)).toEqual([beta.digest]);
+    const report = createPluginSdkApiDiffSet({ beta: beta.diff, latest: latest.diff });
+    const reportBytes = JSON.stringify(report);
+    expect(Buffer.byteLength(reportBytes)).toBeLessThan(16 * 1024 * 1024);
+    expect(expandPluginSdkApiDiffSet(JSON.parse(reportBytes))).toEqual({
+      beta: beta.diff,
+      latest: latest.diff,
+    });
+    for (const npmDistTag of ["beta", "latest"] as const) {
+      expect(selectPluginSdkApiReleaseEvidence({ evidence: compact, npmDistTag })).toEqual(
+        selectors[npmDistTag],
+      );
+      const input = {
+        acknowledgement: beta.digest.slice(0, 8),
         expectedHeadSha: headSha,
         expectedWorkflowSha: workflowSha,
-      });
-
-    expect(() => validate("")).toThrow(`require acknowledgement digest ${expected}`);
-    expect(() => validate("deadbeef")).toThrow(`require acknowledgement digest ${expected}`);
-    expect(validate(expected)).toMatchObject({ acknowledgement: expected, hasChanges: true });
+        npmDistTag,
+      };
+      expect(validatePluginSdkApiReleaseEvidence({ ...input, evidence: compact })).toEqual(
+        validatePluginSdkApiReleaseEvidence({ ...input, evidence: legacy }),
+      );
+    }
   });
 
-  it("accepts a blank acknowledgement when the frozen diff has no changes", () => {
-    expect(
+  it("rejects missing, extra, redirected and modified pooled comparisons", () => {
+    const beta = evidence([{ change: "added", exportName: "betaOnly" }]);
+    const latest = evidence([{ change: "removed", exportName: "latestOnly" }]);
+    const compact = createPluginSdkApiReleaseEvidenceSet({ beta, latest });
+    const validate = (value: unknown) =>
       validatePluginSdkApiReleaseEvidence({
-        acknowledgement: "",
-        evidence: evidence(),
+        acknowledgement: beta.digest.slice(0, 8),
+        evidence: value,
         expectedHeadSha: headSha,
         expectedWorkflowSha: workflowSha,
-      }),
-    ).toMatchObject({ acknowledgement: null, hasChanges: false });
+        npmDistTag: "beta",
+      });
+    for (const mutate of [
+      (value: typeof compact) => {
+        delete value.diffs[beta.digest];
+      },
+      (value: typeof compact) => {
+        value.diffs["f".repeat(64)] = beta.diff;
+      },
+      (value: typeof compact) => {
+        value.selectors.beta.diff = latest.digest;
+      },
+      (value: typeof compact) => {
+        const latestDiff = value.diffs[latest.digest];
+        if (!latestDiff) {
+          throw new Error("Missing latest comparison fixture");
+        }
+        latestDiff.exports.push({ changed: true });
+      },
+    ]) {
+      const changed = structuredClone(compact);
+      mutate(changed);
+      expect(() => validate(changed)).toThrow();
+    }
+    expect(validate(compact)).toMatchObject({ digest: beta.digest });
+    expect(
+      expandPluginSdkApiDiffSet(
+        createPluginSdkApiDiffSet({ beta: beta.diff, latest: latest.diff }),
+      ),
+    ).toEqual({ beta: beta.diff, latest: latest.diff });
   });
 
   it("rejects evidence for another release SHA or a changed diff payload", () => {
@@ -157,6 +193,49 @@ describe("Plugin SDK API release evidence", () => {
     expect(() => validate("v2026.8.2", "c".repeat(40))).toThrow(
       "dist-tag target does not match the release SHA",
     );
+  });
+
+  it("requires the selected channel's predecessor and acknowledgement", () => {
+    const beta = evidence([{ change: "added", exportName: "betaOnly" }]);
+    const latest = createPluginSdkApiReleaseEvidence({
+      baseRef: "v2026.7.31",
+      baseSha: "c".repeat(40),
+      diff: diff([{ change: "removed", exportName: "oldStable" }]),
+      headSha,
+      workflowSha,
+    });
+    const bundle = createPluginSdkApiReleaseEvidenceSet({ beta, latest });
+    const validate = (
+      npmDistTag: string,
+      predecessor = latest,
+      acknowledgement = latest.digest.slice(0, 8),
+    ) =>
+      validatePluginSdkApiReleaseEvidence({
+        acknowledgement,
+        currentSelectorRef: predecessor.baseRef,
+        currentSelectorSha: predecessor.baseSha,
+        evidence: bundle,
+        expectedHeadSha: headSha,
+        expectedWorkflowSha: workflowSha,
+        npmDistTag,
+        targetRef: "v2026.8.2",
+      });
+
+    expect(validate("latest")).toMatchObject({ digest: latest.digest });
+    expect(validate("beta", beta, beta.digest.slice(0, 8))).toMatchObject({ digest: beta.digest });
+    expect(() => validate("latest", beta)).toThrow("predecessor no longer matches");
+    expect(() => validate("latest", latest, beta.digest.slice(0, 8))).toThrow(
+      "require acknowledgement",
+    );
+    expect(() => validate("alpha")).toThrow("beta or latest");
+    expect(() => validate("")).toThrow("beta or latest");
+    expect(() => createPluginSdkApiReleaseEvidenceSet({ beta })).toThrow("bind beta and latest");
+    expect(() =>
+      createPluginSdkApiReleaseEvidenceSet({ beta, latest: { ...latest, headSha: baseSha } }),
+    ).toThrow("one release and tooling SHA");
+    expect(() =>
+      createPluginSdkApiReleaseEvidenceSet({ beta, latest: { ...latest, workflowSha: baseSha } }),
+    ).toThrow("one release and tooling SHA");
   });
 
   it("rejects untrusted tooling and unavailable evidence", () => {

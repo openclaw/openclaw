@@ -1,16 +1,16 @@
-// Runtime gateway RPC helper shared by CLI commands that call the Gateway.
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway, isImplicitLocalGatewayTarget } from "../gateway/call.js";
-import { parseGatewayPortOption } from "./gateway-port-option.js";
+import { assertGatewayCliMessageContext } from "../gateway/operator-cli-message-input.js";
+import { resolveGatewayLocalPortOverride } from "./gateway-port-option.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.types.js";
 import { parseTimeoutMsWithFallback } from "./parse-timeout.js";
 import { withProgress } from "./progress.js";
 
-type CallGatewayFromCliRuntimeExtra = {
+export type GatewayRpcExtraOptions = {
   clientName?: Parameters<typeof callGateway>[0]["clientName"];
   mode?: Parameters<typeof callGateway>[0]["mode"];
   deviceIdentity?: Parameters<typeof callGateway>[0]["deviceIdentity"];
@@ -18,6 +18,10 @@ type CallGatewayFromCliRuntimeExtra = {
   expectFinal?: boolean;
   progress?: boolean;
   scopes?: Parameters<typeof callGateway>[0]["scopes"];
+  sharedStateMode?: Parameters<typeof callGateway>[0]["sharedStateMode"];
+};
+
+type CallGatewayFromCliRuntimeExtra = GatewayRpcExtraOptions & {
   defaultTimeoutMs?: number;
   timeoutMs?: number | null;
   label?: string;
@@ -26,7 +30,6 @@ type CallGatewayFromCliRuntimeExtra = {
     typeof callGateway
   >[0]["requiredStoredDeviceAuthScopes"];
   requireLocalBackendSharedAuth?: boolean;
-  sharedStateMode?: Parameters<typeof callGateway>[0]["sharedStateMode"];
 };
 
 type GatewayCliTransportRpcOpts = Omit<GatewayRpcOpts, "timeout"> & {
@@ -37,31 +40,24 @@ type GatewayCliTransportRpcOpts = Omit<GatewayRpcOpts, "timeout"> & {
 
 const DEFAULT_GATEWAY_RPC_TIMEOUT_MS = 30_000;
 
-function resolveLocalPortOverride(opts: GatewayCliTransportRpcOpts): number | undefined {
-  const port = opts.localPortOverride ?? parseGatewayPortOption(opts.port);
-  if (port !== undefined && typeof opts.url === "string" && opts.url.trim()) {
-    throw new Error("Use either --url or --port, not both.");
-  }
-  return port;
-}
-
 export async function isImplicitLocalGatewayTargetFromCliRuntime(
   opts: GatewayCliTransportRpcOpts,
 ): Promise<boolean> {
   return await isImplicitLocalGatewayTarget({
     config: opts.config,
     url: opts.url,
-    localPortOverride: resolveLocalPortOverride(opts),
+    localPortOverride: resolveGatewayLocalPortOverride(opts),
   });
 }
 
-export async function callGatewayFromCliRuntime(
+export async function callGatewayFromCliRuntime<T = Record<string, unknown>>(
   method: string,
   opts: GatewayCliTransportRpcOpts,
   params?: unknown,
   extra?: CallGatewayFromCliRuntimeExtra,
 ) {
-  const localPortOverride = resolveLocalPortOverride(opts);
+  assertGatewayCliMessageContext(method, params);
+  const localPortOverride = resolveGatewayLocalPortOverride(opts);
   // Progress is disabled for JSON output so stdout stays parseable.
   const showProgress = extra?.progress ?? opts.json !== true;
   const timeoutMs =
@@ -81,9 +77,10 @@ export async function callGatewayFromCliRuntime(
       enabled: showProgress,
     },
     async () =>
-      await callGateway({
+      await callGateway<T>({
         config: opts.config,
         url: opts.url,
+        expectUrl: opts.expectUrl,
         token: opts.token,
         password: opts.password,
         method,
@@ -94,6 +91,7 @@ export async function callGatewayFromCliRuntime(
         useStoredDeviceAuth: extra?.useStoredDeviceAuth,
         requiredStoredDeviceAuthScopes: extra?.requiredStoredDeviceAuthScopes,
         requireLocalBackendSharedAuth: extra?.requireLocalBackendSharedAuth,
+        allowLocalBackendAuthNone: extra?.clientName === undefined && extra?.mode === undefined,
         sharedStateMode: extra?.sharedStateMode,
         signal: extra?.signal,
         timeoutMs,

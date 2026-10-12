@@ -1,12 +1,133 @@
+import { randomUUID } from "node:crypto";
+import os from "node:os";
+import path from "node:path";
+import type {
+  CodexBundleMcpThreadConfig,
+  EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { expect, vi } from "vitest";
-import type { startCodexAttemptThread } from "./attempt-startup.js";
-import { resolveCodexAppServerRuntimeOptions } from "./config.js";
-import { resolveCodexAppServerSpawnIdentity } from "./shared-client.js";
-import { createClientHarness } from "./test-support.js";
+import { startCodexAttemptThread } from "./attempt-startup.js";
+import { withEphemeralCodexAuthStore } from "./auth-start-options.js";
+import type { CodexAppServerPreparedAuth } from "./auth-types.js";
+import { CodexAppServerClient } from "./client.js";
+import {
+  type CodexPluginConfig,
+  resolveCodexAppServerRuntimeOptions,
+  resolveCodexComputerUseConfig,
+} from "./config.js";
+import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
+import { testCodexAppServerBindingStore } from "./session-binding.test-helpers.js";
+import {
+  getLeasedSharedCodexAppServerClient,
+  type CodexAppServerClientFactory,
+} from "./shared-client.js";
+import { resolveCodexAppServerSpawnIdentity } from "./spawn-identity.js";
+import {
+  createClientHarness,
+  createCodexTestModel,
+  createInferenceReadyClientHarness,
+} from "./test-support.js";
 
 export type AttemptClientHarness = ReturnType<typeof createClientHarness>;
-export const HARNESS_REQUEST_TIMEOUT_MS = 15_000;
+const HARNESS_REQUEST_TIMEOUT_MS = 15_000;
+
+export function createAttemptClientHarness(): AttemptClientHarness {
+  return createInferenceReadyClientHarness({
+    onWrite: (line, send) => {
+      const request = JSON.parse(line) as { id: number; method: string };
+      if (request.method === "configRequirements/read") {
+        send({ id: request.id, result: { requirements: null } });
+      }
+    },
+  });
+}
+
+export function createAttemptThreadStarter(
+  tempRoots: Set<string>,
+  pluginConfig: CodexPluginConfig,
+) {
+  return function startThreadWithHarness(
+    startupTimeoutMs: number,
+    signal = new AbortController().signal,
+    overrides?: {
+      pluginConfig?: CodexPluginConfig;
+      startupPreparedAuth?: CodexAppServerPreparedAuth;
+      attemptClientFactory?: (harness: AttemptClientHarness) => CodexAppServerClientFactory;
+      buildAttemptParams?: () => EmbeddedRunAttemptParams;
+      harness?: AttemptClientHarness;
+      paths?: AttemptPaths;
+      skipStartSpy?: boolean;
+      runtimeArtifactRequest?: Parameters<
+        typeof startCodexAttemptThread
+      >[0]["runtimeArtifactRequest"];
+      sandbox?: Parameters<typeof startCodexAttemptThread>[0]["sandbox"];
+      sandboxExecServerEnabled?: boolean;
+      runtime?: Parameters<typeof startCodexAttemptThread>[0]["runtime"];
+      appServer?: Parameters<typeof startCodexAttemptThread>[0]["appServer"];
+    },
+  ) {
+    const harness = overrides?.harness ?? createAttemptClientHarness();
+    const paths = overrides?.paths ?? createAttemptPaths(tempRoots);
+    const startSpy = overrides?.skipStartSpy
+      ? undefined
+      : vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
+    const effectivePluginConfig = overrides?.pluginConfig ?? pluginConfig;
+
+    const run = startCodexAttemptThread({
+      bindingStore: testCodexAppServerBindingStore,
+      runtime: overrides?.runtime,
+      attemptClientFactory:
+        overrides?.attemptClientFactory?.(harness) ?? getLeasedSharedCodexAppServerClient,
+      appServer:
+        overrides?.appServer ??
+        resolveCodexAppServerRuntimeOptions({ pluginConfig: effectivePluginConfig }),
+      pluginConfig: effectivePluginConfig,
+      computerUseConfig: resolveCodexComputerUseConfig({ pluginConfig: effectivePluginConfig }),
+      clientOptions: {
+        ...(overrides?.startupPreparedAuth
+          ? { preparedAuth: overrides.startupPreparedAuth }
+          : { authProfileId: undefined }),
+        authBindingFingerprint: undefined,
+        authRequirement: undefined,
+        ...(overrides?.runtimeArtifactRequest
+          ? {
+              runtimeArtifactMode: "capture",
+              ...(overrides.runtimeArtifactRequest.expected
+                ? { expectedRuntimeArtifact: overrides.runtimeArtifactRequest.expected }
+                : {}),
+            }
+          : {}),
+      },
+      ...(overrides?.runtimeArtifactRequest
+        ? { runtimeArtifactRequest: overrides.runtimeArtifactRequest }
+        : {}),
+      startupAuthAccountCacheKey: undefined,
+      startupEnvApiKeyCacheKey: undefined,
+      agentDir: paths.agentDir,
+      config: undefined,
+      buildAttemptParams: overrides?.buildAttemptParams ?? (() => createAttemptParams(paths)),
+      sessionAgentId: "agent-1",
+      effectiveWorkspace: paths.workspaceDir,
+      effectiveCwd: paths.cwd,
+      dynamicTools: [],
+      webSearchAllowed: false,
+      developerInstructions: undefined,
+      bundleMcpThreadConfig,
+      nativeToolSurfaceEnabled: true,
+      nativeProviderWebSearchSupport: "supported",
+      sandboxExecServerEnabled: overrides?.sandboxExecServerEnabled ?? false,
+      sandbox: overrides?.sandbox ?? null,
+      contextEngineProjection: undefined,
+      startupTimeoutMs,
+      signal,
+      onStartupTimeout: vi.fn(),
+      spawnedBy: undefined,
+    });
+
+    return { harness, run, startSpy };
+  };
+}
 
 export function readHarnessMessages(
   writes: string[],
@@ -31,15 +152,6 @@ export async function answerInitialize(harness: AttemptClientHarness): Promise<v
   });
   const initialize = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
   harness.send({ id: initialize.id, result: { userAgent: "openclaw/0.149.0 (macOS; test)" } });
-}
-
-export async function answerPreparedApiKeyLogin(harness: AttemptClientHarness): Promise<void> {
-  const login = await waitForRequest(harness, "account/login/start");
-  expect(login.params).toEqual({
-    type: "apiKey",
-    apiKey: "prepared-platform-key",
-  });
-  harness.send({ id: login.id, result: { type: "apiKey" } });
 }
 
 export async function waitForRequest(
@@ -69,14 +181,15 @@ export async function captureExpectedRuntimeArtifact(
 ) {
   const { captureCodexAppServerRuntimeArtifactBeforeStart, finalizeCodexAppServerRuntimeArtifact } =
     await import("./runtime-artifact.js");
-  const spawnIdentity = resolveCodexAppServerSpawnIdentity(appServer.start);
+  const startOptions = withEphemeralCodexAuthStore({ startOptions: appServer.start });
+  const spawnIdentity = resolveCodexAppServerSpawnIdentity(startOptions);
   const before = await captureCodexAppServerRuntimeArtifactBeforeStart({
-    startOptions: appServer.start,
+    startOptions,
     spawnIdentity,
   });
   return finalizeCodexAppServerRuntimeArtifact({
     before,
-    startOptions: appServer.start,
+    startOptions,
     spawnIdentity,
     runtimeIdentity: { serverVersion: "0.149.0", userAgent: "openclaw/0.149.0 (macOS; test)" },
   });
@@ -109,3 +222,53 @@ export function createPairedAttemptRuntime() {
     openDuplex,
   };
 }
+
+export type AttemptPaths = {
+  agentDir: string;
+  cwd: string;
+  sessionFile: string;
+  workspaceDir: string;
+};
+
+export function createAttemptPaths(tempRoots: Set<string>): AttemptPaths {
+  const root = path.join(os.tmpdir(), `openclaw-codex-attempt-startup-${randomUUID()}`);
+  tempRoots.add(root);
+  return {
+    agentDir: path.join(root, "agent"),
+    cwd: path.join(root, "workspace"),
+    sessionFile: path.join(root, "session.jsonl"),
+    workspaceDir: path.join(root, "workspace"),
+  };
+}
+
+export function createAttemptParams(paths: AttemptPaths): EmbeddedRunAttemptParams {
+  return {
+    hostCapabilities: createCodexTestHostCapabilities(),
+    prompt: "hello",
+    sessionId: "session-1",
+    sessionKey: "agent:agent-1:session-1",
+    agentDir: paths.agentDir,
+    sessionFile: paths.sessionFile,
+    effectiveCwd: paths.cwd,
+    workspaceDir: paths.workspaceDir,
+    runId: "run-1",
+    provider: "codex",
+    modelId: "gpt-5.4-codex",
+    model: createCodexTestModel("codex"),
+    thinkLevel: "medium",
+    disableTools: true,
+    timeoutMs: 5_000,
+    authStorage: {} as never,
+    authProfileStore: { version: 1, profiles: {} },
+    modelRegistry: {} as never,
+  } as EmbeddedRunAttemptParams;
+}
+
+const bundleMcpThreadConfig = {
+  configPatch: undefined,
+  diagnostics: [],
+  evaluated: false,
+  fingerprint: undefined,
+  staticServerNames: [],
+  userStaticServerNames: [],
+} satisfies CodexBundleMcpThreadConfig;

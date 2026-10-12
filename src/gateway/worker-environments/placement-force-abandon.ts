@@ -1,5 +1,10 @@
-import type { WorkerDispatchPlacementStore } from "./placement-dispatch-failure.js";
-import { placementTurnOwner } from "./placement-record.js";
+import {
+  FORCED_WORKER_ABANDONMENT_ERROR,
+  projectPlacementTurnClaim,
+  type WorkerSessionPlacementIdentity,
+  type WorkerSessionPlacementRecord,
+} from "./placement-record.js";
+import type { PlacementRecoveryDeps } from "./placement-recovery-contract.js";
 import { isCurrentWorkerWorkspacePendingResultOwner } from "./placement-workspace-result.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import {
@@ -9,29 +14,7 @@ import {
   workerWorkspaceResultRef,
 } from "./workspace-result-staging.js";
 
-export const FORCED_WORKER_ABANDONMENT_ERROR =
-  "Worker result abandoned by forced operator teardown";
-
-async function tryResolveWorkspacePath(
-  resolveWorkspacePath: (placement: {
-    sessionId: string;
-    sessionKey: string;
-    agentId: string;
-  }) => Promise<string>,
-  placement: { sessionId: string; sessionKey: string; agentId: string },
-  onCleanupError?: (error: unknown) => void,
-): Promise<string | undefined> {
-  try {
-    return await resolveWorkspacePath(placement);
-  } catch (error) {
-    // Forced teardown is the last-resort state owner. If the session/worktree is
-    // already gone, skip local repair/ref cleanup and still release the claim.
-    reportCleanupError(onCleanupError, error);
-    return undefined;
-  }
-}
-
-function reportCleanupError(
+export function reportWorkerAbandonmentCleanupError(
   onCleanupError: ((error: unknown) => void) | undefined,
   error: unknown,
 ): void {
@@ -42,29 +25,26 @@ function reportCleanupError(
   }
 }
 
-export async function forceAbandonWorkerEnvironment(params: {
-  placements: WorkerDispatchPlacementStore;
-  environmentId: string;
-  resolveWorkspacePath: (placement: {
-    sessionId: string;
-    sessionKey: string;
-    agentId: string;
-  }) => Promise<string>;
-  onCleanupError?: (error: unknown) => void;
-}): Promise<void> {
+export async function forceAbandonWorkerEnvironment(
+  params: Pick<PlacementRecoveryDeps, "placements" | "resolveWorkspace"> & {
+    environmentId: string;
+    onCleanupError?: (error: unknown) => void;
+  },
+): Promise<ReadonlyMap<string, WorkerSessionPlacementRecord>> {
   const { environmentId, placements } = params;
+  const failedPlacements = new Map<string, WorkerSessionPlacementRecord>();
   const recoveryError = FORCED_WORKER_ABANDONMENT_ERROR;
-  const journalOwners = params.placements
-    .listWorkspaceReconciliationOwners()
-    .filter((owner) => owner.environmentId === environmentId);
+  const journalOwners = (await params.placements.listWorkspaceReconciliationOwners()).filter(
+    (owner) => owner.environmentId === environmentId,
+  );
   const journalCleanups: Array<{
     owner: (typeof journalOwners)[number];
-    placement: { sessionId: string; sessionKey: string; agentId: string };
-    journal: NonNullable<ReturnType<typeof placements.loadWorkspaceReconciliation>>;
+    placement: WorkerSessionPlacementIdentity;
+    journal: NonNullable<Awaited<ReturnType<typeof placements.loadWorkspaceReconciliation>>>;
   }> = [];
   const retainedJournalSessions = new Set<string>();
   for (const owner of journalOwners) {
-    const placement = placements.get(owner.sessionId);
+    const placement = await placements.getAsync(owner.sessionId);
     const isCurrentOwner =
       (placement?.state === "active" || placement?.state === "draining") &&
       placement.generation === owner.placementGeneration;
@@ -79,7 +59,7 @@ export async function forceAbandonWorkerEnvironment(params: {
       placement.activeOwnerEpoch === owner.ownerEpoch
     ) {
       try {
-        const journal = placements.loadWorkspaceReconciliation(
+        const journal = await placements.loadWorkspaceReconciliation(
           owner,
           isForceFailedOwner ? { allowFailedOwner: true } : undefined,
         );
@@ -87,47 +67,43 @@ export async function forceAbandonWorkerEnvironment(params: {
           journalCleanups.push({ owner, placement, journal });
         }
       } catch (error) {
-        reportCleanupError(params.onCleanupError, error);
+        reportWorkerAbandonmentCleanupError(params.onCleanupError, error);
         retainedJournalSessions.add(owner.sessionId);
       }
     }
   }
   const stagedResultCleanups: Array<{
-    placement: { sessionId: string; sessionKey: string; agentId: string };
+    placement: WorkerSessionPlacementIdentity;
     refs: string[];
+    repositoryWorkspaceId?: string;
   }> = [];
-  for (const pending of placements.listPendingWorkspaceResults()) {
+  for (const pending of await placements.listPendingWorkspaceResultsAsync()) {
     if (pending.environmentId === environmentId) {
-      const placement = placements.get(pending.sessionId);
+      const placement = await placements.getAsync(pending.sessionId);
       if (isCurrentWorkerWorkspacePendingResultOwner(placement, pending)) {
         const finalRef = pending.stagedResultRef ?? workerWorkspaceResultRef(pending.claimId);
         stagedResultCleanups.push({
           placement,
           refs: [finalRef, preparedWorkerWorkspaceResultRef(finalRef)],
+          repositoryWorkspaceId: pending.repositoryWorkspaceId,
         });
-        const claim = placement.turnClaim;
+        const claim = projectPlacementTurnClaim(placement);
         if (claim && claim.claimId === pending.claimId && claim.runId === pending.runId) {
-          await placements.closeWorkerTurnToolState({
-            sessionId: placement.sessionId,
-            claimId: claim.claimId,
-            runId: claim.runId,
-            placementGeneration: claim.generation,
-            owner: placementTurnOwner(placement),
-          });
+          await placements.closeWorkerTurnToolState(claim);
         }
-        placements.failWorkspaceResultAndReleaseTurn(pending, recoveryError);
+        await placements.failWorkspaceResultAndReleaseTurn(pending, recoveryError);
       } else {
-        placements.abandonWorkspaceResult(pending);
+        await placements.abandonWorkspaceResult(pending);
       }
     }
   }
-  for (const placement of placements.listForReconcile()) {
+  for (const placement of await placements.listForReconcileAsync()) {
     if (placement.environmentId !== environmentId) {
       continue;
     }
-    let current = placements.get(placement.sessionId);
+    let current: WorkerSessionPlacementRecord = placement;
     if (current?.state === "active") {
-      current = placements.startDrain({
+      current = await placements.startDrain({
         sessionId: current.sessionId,
         environmentId: current.environmentId,
         ownerEpoch: current.activeOwnerEpoch,
@@ -135,16 +111,11 @@ export async function forceAbandonWorkerEnvironment(params: {
       });
     }
     if (current?.state === "draining") {
-      if (current.turnClaim) {
-        await placements.closeWorkerTurnToolState({
-          sessionId: current.sessionId,
-          claimId: current.turnClaim.claimId,
-          runId: current.turnClaim.runId,
-          placementGeneration: current.turnClaim.generation,
-          owner: placementTurnOwner(current),
-        });
+      const claim = projectPlacementTurnClaim(current);
+      if (claim) {
+        await placements.closeWorkerTurnToolState(claim);
       }
-      current = placements.startReconcile({
+      current = await placements.startReconcile({
         sessionId: current.sessionId,
         environmentId: current.environmentId,
         ownerEpoch: current.activeOwnerEpoch,
@@ -152,13 +123,14 @@ export async function forceAbandonWorkerEnvironment(params: {
         forceLocalClaim: true,
       });
     }
-    if (current && current.state !== "failed") {
-      placements.fail({
+    if (current && (current.state !== "failed" || current.recoveryError !== recoveryError)) {
+      current = await placements.fail({
         sessionId: current.sessionId,
         expectedGeneration: current.generation,
         recoveryError,
       });
     }
+    failedPlacements.set(current.sessionId, current);
   }
 
   // The durable fence is now closed. Filesystem rollback and ref cleanup are
@@ -168,10 +140,16 @@ export async function forceAbandonWorkerEnvironment(params: {
       continue;
     }
     try {
-      const root = await params.resolveWorkspacePath(cleanup.placement);
-      await recoverWorkerWorkspaceReconciliation({ root, journal: cleanup.journal });
+      const workspace = await params.resolveWorkspace(cleanup.placement);
+      if (workspace.kind !== "local") {
+        throw new Error("Repository workspace cannot own a local rollback journal");
+      }
+      await recoverWorkerWorkspaceReconciliation({
+        root: workspace.path,
+        journal: cleanup.journal,
+      });
     } catch (error) {
-      reportCleanupError(params.onCleanupError, error);
+      reportWorkerAbandonmentCleanupError(params.onCleanupError, error);
       retainedJournalSessions.add(cleanup.owner.sessionId);
     }
   }
@@ -181,25 +159,28 @@ export async function forceAbandonWorkerEnvironment(params: {
     if (retainedJournalSessions.has(owner.sessionId)) {
       continue;
     }
-    placements.abortWorkspaceReconciliation(owner, { force: true });
+    await placements.abortWorkspaceReconciliation(owner, { force: true });
   }
   for (const cleanup of stagedResultCleanups) {
     try {
-      const root = await tryResolveWorkspacePath(
-        params.resolveWorkspacePath,
-        cleanup.placement,
-        params.onCleanupError,
-      );
-      if (!root) {
+      // Repository refs remain the durable session data even when the operator
+      // abandons a worker; only the repository workspace deletion owns them.
+      if (cleanup.repositoryWorkspaceId) {
         continue;
       }
+      const workspace = await params.resolveWorkspace(cleanup.placement);
+      if (workspace.kind === "repository") {
+        continue;
+      }
+      const root = workspace.path;
       for (const stagedResultRef of cleanup.refs) {
         if (await hasWorkerWorkspaceResultRef({ root, stagedResultRef })) {
           await deleteStagedWorkerWorkspaceResult({ root, stagedResultRef });
         }
       }
     } catch (error) {
-      reportCleanupError(params.onCleanupError, error);
+      reportWorkerAbandonmentCleanupError(params.onCleanupError, error);
     }
   }
+  return failedPlacements;
 }

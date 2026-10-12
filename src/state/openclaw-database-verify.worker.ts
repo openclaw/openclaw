@@ -1,10 +1,9 @@
-import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import {
-  assertSqliteIntegrity,
-  isTerminalSqliteIntegrityError,
-} from "../infra/sqlite-integrity.js";
-import { prepareSqliteReadOnlyLocationInProcess } from "../infra/sqlite-readonly-location.js";
-import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db.js";
+import { constants, setPriority } from "node:os";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { formatSqliteErrorCodeSuffix } from "../infra/sqlite-error-diagnostics.js";
+import { serializeSqliteFileGeneration } from "../infra/sqlite-file-generation.js";
+import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
+import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
 
 const DATABASE_VERIFY_CHILD_ARG = "--openclaw-database-verify-child";
 
@@ -12,6 +11,9 @@ export type OpenClawDatabaseVerifyTarget = {
   path: string;
   kind: "agent" | "state";
   label: string;
+  check: "quick" | "full";
+  confirm?: true;
+  identity?: string;
 };
 
 export type OpenClawDatabaseVerifyResult = {
@@ -19,62 +21,86 @@ export type OpenClawDatabaseVerifyResult = {
   ok: boolean;
   error?: string;
   terminal?: boolean;
+  generation?: string;
 };
 
-function isVerifyTarget(value: unknown): value is OpenClawDatabaseVerifyTarget {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return false;
-  }
-  const target = value as Record<string, unknown>;
+function isVerifyTarget(target: unknown): target is OpenClawDatabaseVerifyTarget {
   return (
+    isRecord(target) &&
     typeof target.path === "string" &&
     (target.kind === "agent" || target.kind === "state") &&
-    typeof target.label === "string"
+    typeof target.label === "string" &&
+    (target.check === "quick" || target.check === "full") &&
+    (target.identity === undefined || typeof target.identity === "string") &&
+    (target.confirm === undefined || (target.confirm === true && target.check === "full"))
   );
 }
 
 function formatVerifyError(error: unknown): string {
-  return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  return `${message}${formatSqliteErrorCodeSuffix(error)}`;
 }
 
 async function verifyOpenClawDatabase(
   target: OpenClawDatabaseVerifyTarget,
 ): Promise<OpenClawDatabaseVerifyResult> {
-  let cleanup: (() => boolean) | undefined;
-  let database: import("node:sqlite").DatabaseSync | undefined;
-  let result = await (async (): Promise<OpenClawDatabaseVerifyResult> => {
-    try {
-      const prepared = await prepareSqliteReadOnlyLocationInProcess(target.path);
-      cleanup = prepared.cleanup;
-      database = openNodeSqliteDatabase(prepared.location, {
-        readOnly: true,
-      });
-      database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
-      assertSqliteIntegrity(database, target.label);
-      return { path: target.path, ok: true };
-    } catch (error) {
-      const terminal = error instanceof Error && isTerminalSqliteIntegrityError(error);
+  const [integrity, source] = await Promise.all([
+    import("../infra/sqlite-integrity.js"),
+    import("../infra/sqlite-source-handle.js"),
+  ]);
+  if (target.confirm) {
+    const confirmation = integrity.confirmSqliteFileIntegrity(target.path, target.label);
+    if (confirmation.status === "healthy") {
       return {
         path: target.path,
-        ok: false,
-        error: formatVerifyError(error),
-        terminal,
+        ok: true,
+        generation: serializeSqliteFileGeneration(confirmation.generation),
       };
     }
-  })();
+    return {
+      path: target.path,
+      ok: false,
+      error: formatVerifyError(confirmation.error),
+      terminal: confirmation.terminal,
+      ...(confirmation.terminal
+        ? { generation: serializeSqliteFileGeneration(confirmation.generation) }
+        : {}),
+    };
+  }
+  const failed = (error: unknown): OpenClawDatabaseVerifyResult => ({
+    path: target.path,
+    ok: false,
+    error: formatVerifyError(error),
+    terminal: error instanceof Error && integrity.isTerminalSqliteIntegrityError(error),
+  });
+  let result: OpenClawDatabaseVerifyResult = { path: target.path, ok: true };
   try {
-    database?.close();
+    const assertIdentity = () => {
+      if (target.identity) {
+        assertExistingDatabaseIdentity(target.path, `file:${target.identity}`);
+      }
+    };
+    assertIdentity();
+    source.withSqliteSourceReadDatabase(target.path, "source", (reader) => {
+      try {
+        assertIdentity();
+        reader.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS}; BEGIN;`);
+        integrity.assertSqliteIntegrity(
+          reader,
+          target.label,
+          target.check === "full" ? "integrity_check" : "quick_check",
+        );
+        reader.exec("ROLLBACK;");
+        assertIdentity();
+      } catch (error) {
+        // Preserve the check's classification if the source reader also fails to close.
+        result = failed(error);
+      }
+    });
   } catch (error) {
     if (result.ok) {
-      result = {
-        path: target.path,
-        ok: false,
-        error: formatVerifyError(error),
-        terminal: false,
-      };
+      result = failed(error);
     }
-  } finally {
-    cleanup?.();
   }
   return result;
 }
@@ -99,6 +125,13 @@ if (sendToParent) {
     void (async () => {
       try {
         const targets = Array.isArray(message) ? message.filter(isVerifyTarget) : [];
+        if (targets.some((target) => target.check === "full")) {
+          try {
+            setPriority(process.pid, constants.priority.PRIORITY_LOW);
+          } catch {
+            // Priority is best effort; only this dedicated child changes it.
+          }
+        }
         const results = await verifyOpenClawDatabases(targets);
         await new Promise<void>((resolve, reject) => {
           sendToParent(results, (error) => {
@@ -116,4 +149,16 @@ if (sendToParent) {
       }
     })();
   });
+}
+
+// Synchronous admission waits for native close without opening a source reader in its process.
+if (process.argv[2] === "--openclaw-database-verify-sync" && process.argv[3]) {
+  const pathname = process.argv[3];
+  void verifyOpenClawDatabases([{ path: pathname, kind: "agent", label: pathname, check: "full" }])
+    .then(([result]) => {
+      process.exitCode = result?.ok ? 0 : 1;
+    })
+    .catch(() => {
+      process.exitCode = 1;
+    });
 }

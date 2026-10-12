@@ -1,29 +1,37 @@
-// Diagnostic stability bundle helpers collect stable diagnostic data for comparison.
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import v8 from "node:v8";
+import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { expectDefined } from "@openclaw/normalization-core";
-import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../config/paths.js";
-import type {
-  DiagnosticMemoryPressureEvent,
-  DiagnosticMemoryUsage,
-} from "../infra/diagnostic-events.js";
-import { isMissingPathError } from "../infra/errors.js";
+import {
+  DIAGNOSTIC_MEMORY_PRESSURE_METRICS,
+  type DiagnosticMemoryPressureFields,
+} from "../infra/diagnostic-process-types.js";
+import {
+  collectErrorGraphCandidates,
+  formatErrorMessage,
+  isMissingPathError,
+} from "../infra/errors.js";
 import { registerFatalErrorHook } from "../infra/fatal-error-hooks.js";
-import { replaceFileAtomicSync } from "../infra/replace-file.js";
+import { readMemoryUsage } from "./diagnostic-memory-bundle.js";
+import {
+  assignOptionalFields,
+  readObject,
+  readOptionalPositiveInteger,
+  readRequiredNumber,
+} from "./diagnostic-stability-readers.js";
 import {
   getDiagnosticStabilitySnapshot,
   MAX_DIAGNOSTIC_STABILITY_LIMIT,
   type DiagnosticStabilitySnapshot,
 } from "./diagnostic-stability.js";
 import { redactSensitiveText } from "./redact.js";
+import { formatDiagnosticFilenameTimestamp } from "./timestamps.js";
 
 export const DIAGNOSTIC_STABILITY_BUNDLE_VERSION = 1;
-const DEFAULT_DIAGNOSTIC_STABILITY_BUNDLE_LIMIT = MAX_DIAGNOSTIC_STABILITY_LIMIT;
-const DEFAULT_DIAGNOSTIC_STABILITY_BUNDLE_RETENTION = 20;
+const DIAGNOSTIC_STABILITY_BUNDLE_RETENTION = 20;
 export const MAX_DIAGNOSTIC_STABILITY_BUNDLE_BYTES = 5 * 1024 * 1024;
 
 const SAFE_REASON_CODE = /^[A-Za-z0-9_.:-]{1,120}$/u;
@@ -31,12 +39,8 @@ const BUNDLE_PREFIX = "openclaw-stability-";
 const BUNDLE_SUFFIX = ".json";
 const REDACTED_HOSTNAME = "<redacted-hostname>";
 const MAX_SAFE_ERROR_MESSAGE_LENGTH = 500;
-const MAX_ACTIVE_RESOURCE_TYPES = 25;
-const MAX_SESSION_FILE_RESULTS = 20;
-const MAX_SESSION_SCAN_AGENTS = 100;
-const MAX_SESSION_SCAN_FILES = 5000;
-const CGROUP_V2_MEMORY_FILES = ["current", "max", "high", "peak", "swap.current", "swap.max"];
-const CGROUP_V2_MEMORY_EVENTS = ["events", "events.local"];
+const MAX_SHUTDOWN_ERRORS = 32;
+const MAX_SAFE_ERROR_STACK_LENGTH = 8_000;
 
 type DiagnosticHeapSpaceSummary = {
   spaceName: string;
@@ -74,13 +78,7 @@ type DiagnosticSessionFileSummary = {
   mtimeMs: number;
 };
 
-type DiagnosticMemoryPressureBundleEvidence = {
-  level: DiagnosticMemoryPressureEvent["level"];
-  reason: DiagnosticMemoryPressureEvent["reason"];
-  memory: DiagnosticMemoryUsage;
-  thresholdBytes?: number;
-  rssGrowthBytes?: number;
-  windowMs?: number;
+type DiagnosticMemoryPressureBundleEvidence = Omit<DiagnosticMemoryPressureFields, "type"> & {
   heapStatistics?: DiagnosticHeapStatisticsSummary;
   heapSpaces?: DiagnosticHeapSpaceSummary[];
   cgroup?: DiagnosticCgroupMemorySummary;
@@ -90,6 +88,10 @@ type DiagnosticMemoryPressureBundleEvidence = {
 
 type DiagnosticStabilityBundleEvidence = {
   memoryPressure?: DiagnosticMemoryPressureBundleEvidence;
+  shutdown?: {
+    step: string;
+    errors: Array<NonNullable<DiagnosticStabilityBundle["error"]>>;
+  };
 };
 
 export type DiagnosticStabilityBundle = {
@@ -110,26 +112,17 @@ export type DiagnosticStabilityBundle = {
     name?: string;
     code?: string;
     message?: string;
+    stack?: string;
   };
   evidence?: DiagnosticStabilityBundleEvidence;
   snapshot: DiagnosticStabilitySnapshot;
 };
 
-type WriteDiagnosticStabilityBundleResult =
-  | { status: "written"; path: string; bundle: DiagnosticStabilityBundle }
-  | { status: "skipped"; reason: "empty" }
-  | { status: "failed"; error: unknown };
-
-type WriteDiagnosticStabilityBundleOptions = {
-  reason: string;
-  error?: unknown;
-  includeEmpty?: boolean;
-  limit?: number;
+type WriteDiagnosticStabilityBundleForFailureOptions = {
   now?: Date;
   env?: NodeJS.ProcessEnv;
   stateDir?: string;
-  retention?: number;
-  evidence?: DiagnosticStabilityBundleEvidence;
+  shutdownStep?: string;
 };
 
 type DiagnosticStabilityBundleLocationOptions = {
@@ -149,21 +142,7 @@ export type ReadDiagnosticStabilityBundleResult =
 
 type DiagnosticStabilityBundleFailureWriteOutcome =
   | { status: "written"; message: string; path: string }
-  | { status: "failed"; message: string; error: unknown }
-  | { status: "skipped"; reason: "empty" };
-
-type WriteDiagnosticStabilityBundleForFailureOptions = Omit<
-  WriteDiagnosticStabilityBundleOptions,
-  "error" | "includeEmpty" | "reason"
->;
-
-type WriteDiagnosticMemoryPressureBundleOptions = Omit<
-  WriteDiagnosticStabilityBundleOptions,
-  "reason" | "error" | "evidence" | "includeEmpty"
-> & {
-  pressure: Omit<DiagnosticMemoryPressureEvent, "seq" | "ts" | "type" | "trace">;
-  sessionStorePaths?: string[];
-};
+  | { status: "failed"; message: string; error: unknown };
 
 let fatalHookUnsubscribe: (() => void) | null = null;
 
@@ -171,37 +150,7 @@ function normalizeReason(reason: string): string {
   return SAFE_REASON_CODE.test(reason) ? reason : "unknown";
 }
 
-function formatBundleTimestamp(now: Date): string {
-  return now.toISOString().replace(/[:.]/g, "-");
-}
-
-function readErrorCode(error: unknown): string | undefined {
-  if (!error || typeof error !== "object" || !("code" in error)) {
-    return undefined;
-  }
-  const code = (error as { code?: unknown }).code;
-  if (typeof code === "string" && SAFE_REASON_CODE.test(code)) {
-    return code;
-  }
-  if (typeof code === "number" && Number.isFinite(code)) {
-    return String(code);
-  }
-  return undefined;
-}
-
-function readErrorName(error: unknown): string | undefined {
-  if (!error || typeof error !== "object" || !("name" in error)) {
-    return undefined;
-  }
-  const name = (error as { name?: unknown }).name;
-  return typeof name === "string" && SAFE_REASON_CODE.test(name) ? name : undefined;
-}
-
-function readErrorMessage(error: unknown): string | undefined {
-  if (!error || typeof error !== "object" || !("message" in error)) {
-    return undefined;
-  }
-  const message = (error as { message?: unknown }).message;
+function readErrorMessage(message: unknown): string | undefined {
   if (typeof message !== "string") {
     return undefined;
   }
@@ -215,17 +164,56 @@ function readErrorMessage(error: unknown): string | undefined {
 }
 
 function readSafeErrorMetadata(error: unknown): DiagnosticStabilityBundle["error"] | undefined {
-  const name = readErrorName(error);
-  const code = readErrorCode(error);
-  const message = readErrorMessage(error);
-  if (!name && !code && !message) {
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+  const rawName = "name" in error ? error.name : undefined;
+  const name = typeof rawName === "string" && SAFE_REASON_CODE.test(rawName) ? rawName : undefined;
+  const rawCode = "code" in error ? error.code : undefined;
+  const code =
+    typeof rawCode === "string" && SAFE_REASON_CODE.test(rawCode)
+      ? rawCode
+      : typeof rawCode === "number" && Number.isFinite(rawCode)
+        ? String(rawCode)
+        : undefined;
+  const message = readErrorMessage("message" in error ? error.message : undefined);
+  const stack =
+    "stack" in error && typeof error.stack === "string"
+      ? truncateUtf16Safe(
+          redactSensitiveText(error.stack, { mode: "tools" }),
+          MAX_SAFE_ERROR_STACK_LENGTH,
+        )
+      : undefined;
+  if (!name && !code && !message && !stack) {
     return undefined;
   }
   return {
     ...(name ? { name } : {}),
     ...(code ? { code } : {}),
     ...(message ? { message } : {}),
+    ...(stack ? { stack } : {}),
   };
+}
+
+function readShutdownError(error: unknown) {
+  const normalized =
+    error && typeof error === "object" ? error : { message: formatErrorMessage(error) };
+  return readSafeErrorMetadata(normalized) ?? {};
+}
+
+function collectShutdownErrors(error: unknown) {
+  let remaining = MAX_SHUTDOWN_ERRORS - 1;
+  const candidates = collectErrorGraphCandidates(error, (current) => {
+    const nested: unknown[] = [
+      current.cause,
+      ...(Array.isArray(current.errors) ? current.errors.slice(0, remaining) : []),
+    ]
+      .filter((value) => value !== undefined)
+      .slice(0, remaining);
+    remaining -= nested.length;
+    return nested;
+  });
+  return (candidates.length ? candidates : [error]).map(readShutdownError);
 }
 
 function resolveDiagnosticStabilityBundleDir(
@@ -238,37 +226,8 @@ function resolveDiagnosticStabilityBundleDir(
   );
 }
 
-function buildBundlePath(dir: string, now: Date, reason: string): string {
-  return path.join(
-    dir,
-    `${BUNDLE_PREFIX}${formatBundleTimestamp(now)}-${process.pid}-${normalizeReason(reason)}${BUNDLE_SUFFIX}`,
-  );
-}
-
 function isBundleFile(name: string): boolean {
   return name.startsWith(BUNDLE_PREFIX) && name.endsWith(BUNDLE_SUFFIX);
-}
-
-function readObject(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`Invalid stability bundle: ${label} must be an object`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function readRequiredNumber(value: unknown, label: string): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    throw new Error(`Invalid stability bundle: ${label} must be a finite number`);
-  }
-  return value;
-}
-
-function readOptionalPositiveInteger(value: unknown, label: string): number | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  const parsed = readRequiredNumber(value, label);
-  return parsed >= 0 ? Math.floor(parsed) : undefined;
 }
 
 function readTimestampMs(value: unknown, label: string): number {
@@ -317,149 +276,75 @@ function readOptionalCodeString(value: unknown, label: string): string | undefin
   return SAFE_REASON_CODE.test(code) ? code : undefined;
 }
 
-function assignOptionalNumber(target: object, key: string, value: unknown, label: string): void {
-  const parsed = readOptionalNumber(value, label);
-  if (parsed !== undefined) {
-    (target as Record<string, unknown>)[key] = parsed;
-  }
-}
-
-function assignOptionalPositiveInteger(
-  target: object,
-  key: string,
-  value: unknown,
-  label: string,
-): void {
-  const parsed = readOptionalPositiveInteger(value, label);
-  if (parsed !== undefined) {
-    (target as Record<string, unknown>)[key] = parsed;
-  }
-}
-
-function assignOptionalCodeString(
-  target: object,
-  key: string,
-  value: unknown,
-  label: string,
-): void {
-  const parsed = readOptionalCodeString(value, label);
-  if (parsed !== undefined) {
-    (target as Record<string, unknown>)[key] = parsed;
-  }
-}
-
-function readMemoryUsage(value: unknown, label: string): DiagnosticMemoryUsage {
-  const memory = readObject(value, label);
-  return {
-    rssBytes: readRequiredNumber(memory.rssBytes, `${label}.rssBytes`),
-    heapTotalBytes: readRequiredNumber(memory.heapTotalBytes, `${label}.heapTotalBytes`),
-    heapUsedBytes: readRequiredNumber(memory.heapUsedBytes, `${label}.heapUsedBytes`),
-    externalBytes: readRequiredNumber(memory.externalBytes, `${label}.externalBytes`),
-    arrayBuffersBytes: readRequiredNumber(memory.arrayBuffersBytes, `${label}.arrayBuffersBytes`),
-  };
-}
-
 function readHeapStatistics(value: unknown): DiagnosticHeapStatisticsSummary | undefined {
   if (value === undefined) {
     return undefined;
   }
   const source = readObject(value, "evidence.memoryPressure.heapStatistics");
   const result = {} as DiagnosticHeapStatisticsSummary;
-  assignOptionalPositiveInteger(
+  assignOptionalFields(
     result,
-    "totalHeapSizeBytes",
-    source.totalHeapSizeBytes,
-    "evidence.memoryPressure.heapStatistics.totalHeapSizeBytes",
-  );
-  assignOptionalPositiveInteger(
-    result,
-    "totalHeapSizeExecutableBytes",
-    source.totalHeapSizeExecutableBytes,
-    "evidence.memoryPressure.heapStatistics.totalHeapSizeExecutableBytes",
-  );
-  assignOptionalPositiveInteger(
-    result,
-    "totalPhysicalSizeBytes",
-    source.totalPhysicalSizeBytes,
-    "evidence.memoryPressure.heapStatistics.totalPhysicalSizeBytes",
-  );
-  assignOptionalPositiveInteger(
-    result,
-    "totalAvailableSizeBytes",
-    source.totalAvailableSizeBytes,
-    "evidence.memoryPressure.heapStatistics.totalAvailableSizeBytes",
-  );
-  assignOptionalPositiveInteger(
-    result,
-    "usedHeapSizeBytes",
-    source.usedHeapSizeBytes,
-    "evidence.memoryPressure.heapStatistics.usedHeapSizeBytes",
-  );
-  assignOptionalPositiveInteger(
-    result,
-    "heapSizeLimitBytes",
-    source.heapSizeLimitBytes,
-    "evidence.memoryPressure.heapStatistics.heapSizeLimitBytes",
-  );
-  assignOptionalPositiveInteger(
-    result,
-    "mallocedMemoryBytes",
-    source.mallocedMemoryBytes,
-    "evidence.memoryPressure.heapStatistics.mallocedMemoryBytes",
-  );
-  assignOptionalPositiveInteger(
-    result,
-    "externalMemoryBytes",
-    source.externalMemoryBytes,
-    "evidence.memoryPressure.heapStatistics.externalMemoryBytes",
+    source,
+    "evidence.memoryPressure.heapStatistics",
+    [
+      "totalHeapSizeBytes",
+      "totalHeapSizeExecutableBytes",
+      "totalPhysicalSizeBytes",
+      "totalAvailableSizeBytes",
+      "usedHeapSizeBytes",
+      "heapSizeLimitBytes",
+      "mallocedMemoryBytes",
+      "externalMemoryBytes",
+    ],
+    readOptionalPositiveInteger,
   );
   return Object.keys(result).length > 0 ? result : undefined;
 }
 
-function readHeapSpaces(value: unknown): DiagnosticHeapSpaceSummary[] | undefined {
+function readEvidenceArray<T>(
+  value: unknown,
+  label: string,
+  read: (source: Record<string, unknown>, label: string) => T | undefined,
+): T[] | undefined {
   if (value === undefined) {
     return undefined;
   }
   if (!Array.isArray(value)) {
-    throw new Error(
-      "Invalid stability bundle: evidence.memoryPressure.heapSpaces must be an array",
-    );
+    throw new Error(`Invalid stability bundle: ${label} must be an array`);
   }
-  const spaces: DiagnosticHeapSpaceSummary[] = [];
+  const entries: T[] = [];
   for (const [index, entry] of value.entries()) {
-    const source = readObject(entry, `evidence.memoryPressure.heapSpaces[${index}]`);
-    const spaceName = readOptionalCodeString(
-      source.spaceName,
-      `evidence.memoryPressure.heapSpaces[${index}].spaceName`,
-    );
-    if (!spaceName) {
-      continue;
+    const entryLabel = `${label}[${index}]`;
+    const parsed = read(readObject(entry, entryLabel), entryLabel);
+    if (parsed !== undefined) {
+      entries.push(parsed);
     }
-    spaces.push({
+  }
+  return entries.length > 0 ? entries : undefined;
+}
+
+function readHeapSpaces(value: unknown): DiagnosticHeapSpaceSummary[] | undefined {
+  return readEvidenceArray(value, "evidence.memoryPressure.heapSpaces", (source, label) => {
+    const spaceName = readOptionalCodeString(source.spaceName, `${label}.spaceName`);
+    if (!spaceName) {
+      return undefined;
+    }
+    return {
       spaceName,
       spaceSizeBytes:
-        readOptionalPositiveInteger(
-          source.spaceSizeBytes,
-          `evidence.memoryPressure.heapSpaces[${index}].spaceSizeBytes`,
-        ) ?? 0,
+        readOptionalPositiveInteger(source.spaceSizeBytes, `${label}.spaceSizeBytes`) ?? 0,
       spaceUsedBytes:
-        readOptionalPositiveInteger(
-          source.spaceUsedBytes,
-          `evidence.memoryPressure.heapSpaces[${index}].spaceUsedBytes`,
-        ) ?? 0,
+        readOptionalPositiveInteger(source.spaceUsedBytes, `${label}.spaceUsedBytes`) ?? 0,
       spaceAvailableBytes:
-        readOptionalPositiveInteger(
-          source.spaceAvailableBytes,
-          `evidence.memoryPressure.heapSpaces[${index}].spaceAvailableBytes`,
-        ) ?? 0,
+        readOptionalPositiveInteger(source.spaceAvailableBytes, `${label}.spaceAvailableBytes`) ??
+        0,
       physicalSpaceSizeBytes:
         readOptionalPositiveInteger(
           source.physicalSpaceSizeBytes,
-          `evidence.memoryPressure.heapSpaces[${index}].physicalSpaceSizeBytes`,
+          `${label}.physicalSpaceSizeBytes`,
         ) ?? 0,
-    });
-  }
-  return spaces.length > 0 ? spaces : undefined;
+    };
+  });
 }
 
 function readCgroupMemorySummary(value: unknown): DiagnosticCgroupMemorySummary | undefined {
@@ -467,10 +352,7 @@ function readCgroupMemorySummary(value: unknown): DiagnosticCgroupMemorySummary 
     return undefined;
   }
   const source = readObject(value, "evidence.memoryPressure.cgroup");
-  const version = readCodeString(
-    source.version,
-    "evidence.memoryPressure.cgroup.version",
-  ) as DiagnosticCgroupMemorySummary["version"];
+  const version = readCodeString(source.version, "evidence.memoryPressure.cgroup.version");
   if (version !== "v2") {
     return undefined;
   }
@@ -508,44 +390,22 @@ function readActiveResources(value: unknown): DiagnosticActiveResourceSummary | 
 }
 
 function readSessionFiles(value: unknown): DiagnosticSessionFileSummary[] | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (!Array.isArray(value)) {
-    throw new Error(
-      "Invalid stability bundle: evidence.memoryPressure.topSessionFiles must be an array",
-    );
-  }
-  const files: DiagnosticSessionFileSummary[] = [];
-  for (const [index, entry] of value.entries()) {
-    const source = readObject(entry, `evidence.memoryPressure.topSessionFiles[${index}]`);
-    const relativePath = readRequiredString(
-      source.relativePath,
-      `evidence.memoryPressure.topSessionFiles[${index}].relativePath`,
-    );
+  return readEvidenceArray(value, "evidence.memoryPressure.topSessionFiles", (source, label) => {
+    const relativePath = readRequiredString(source.relativePath, `${label}.relativePath`);
     if (
       path.isAbsolute(relativePath) ||
       relativePath.includes("..") ||
       relativePath.length > 300 ||
       /[\r\n]/u.test(relativePath)
     ) {
-      continue;
+      return undefined;
     }
-    files.push({
+    return {
       relativePath: sanitizeSessionEvidencePath(relativePath),
-      sizeBytes:
-        readOptionalPositiveInteger(
-          source.sizeBytes,
-          `evidence.memoryPressure.topSessionFiles[${index}].sizeBytes`,
-        ) ?? 0,
-      mtimeMs:
-        readOptionalPositiveInteger(
-          source.mtimeMs,
-          `evidence.memoryPressure.topSessionFiles[${index}].mtimeMs`,
-        ) ?? 0,
-    });
-  }
-  return files.length > 0 ? files : undefined;
+      sizeBytes: readOptionalPositiveInteger(source.sizeBytes, `${label}.sizeBytes`) ?? 0,
+      mtimeMs: readOptionalPositiveInteger(source.mtimeMs, `${label}.mtimeMs`) ?? 0,
+    };
+  });
 }
 
 function readMemoryPressureEvidence(
@@ -555,14 +415,8 @@ function readMemoryPressureEvidence(
     return undefined;
   }
   const pressure = readObject(value, "evidence.memoryPressure");
-  const level = readCodeString(
-    pressure.level,
-    "evidence.memoryPressure.level",
-  ) as DiagnosticMemoryPressureEvent["level"];
-  const reason = readCodeString(
-    pressure.reason,
-    "evidence.memoryPressure.reason",
-  ) as DiagnosticMemoryPressureEvent["reason"];
+  const level = readCodeString(pressure.level, "evidence.memoryPressure.level");
+  const reason = readCodeString(pressure.reason, "evidence.memoryPressure.reason");
   if ((level !== "warning" && level !== "critical") || !isMemoryPressureReason(reason)) {
     return undefined;
   }
@@ -571,29 +425,20 @@ function readMemoryPressureEvidence(
   const cgroup = readCgroupMemorySummary(pressure.cgroup);
   const activeResources = readActiveResources(pressure.activeResources);
   const topSessionFiles = readSessionFiles(pressure.topSessionFiles);
-  return {
+  const result: DiagnosticMemoryPressureBundleEvidence = {
     level,
     reason,
     memory: readMemoryUsage(pressure.memory, "evidence.memoryPressure.memory"),
-    ...(pressure.thresholdBytes !== undefined
-      ? {
-          thresholdBytes: readRequiredNumber(
-            pressure.thresholdBytes,
-            "evidence.memoryPressure.thresholdBytes",
-          ),
-        }
-      : {}),
-    ...(pressure.rssGrowthBytes !== undefined
-      ? {
-          rssGrowthBytes: readRequiredNumber(
-            pressure.rssGrowthBytes,
-            "evidence.memoryPressure.rssGrowthBytes",
-          ),
-        }
-      : {}),
-    ...(pressure.windowMs !== undefined
-      ? { windowMs: readRequiredNumber(pressure.windowMs, "evidence.memoryPressure.windowMs") }
-      : {}),
+  };
+  assignOptionalFields(
+    result,
+    pressure,
+    "evidence.memoryPressure",
+    DIAGNOSTIC_MEMORY_PRESSURE_METRICS,
+    readOptionalNumber,
+  );
+  return {
+    ...result,
     ...(heapStatistics ? { heapStatistics } : {}),
     ...(heapSpaces ? { heapSpaces } : {}),
     ...(cgroup ? { cgroup } : {}),
@@ -608,7 +453,20 @@ function readBundleEvidence(value: unknown): DiagnosticStabilityBundleEvidence |
   }
   const source = readObject(value, "evidence");
   const memoryPressure = readMemoryPressureEvidence(source.memoryPressure);
-  return memoryPressure ? { memoryPressure } : undefined;
+  let shutdown: DiagnosticStabilityBundleEvidence["shutdown"];
+  if (source.shutdown !== undefined) {
+    const shutdownSource = readObject(source.shutdown, "evidence.shutdown");
+    if (!Array.isArray(shutdownSource.errors)) {
+      throw new Error("Invalid stability bundle: evidence.shutdown.errors must be an array");
+    }
+    shutdown = {
+      step: readCodeString(shutdownSource.step, "evidence.shutdown.step"),
+      errors: shutdownSource.errors.slice(0, MAX_SHUTDOWN_ERRORS).map(readShutdownError),
+    };
+  }
+  return memoryPressure || shutdown
+    ? { ...(memoryPressure ? { memoryPressure } : {}), ...(shutdown ? { shutdown } : {}) }
+    : undefined;
 }
 
 function readNumberMap(value: unknown, label: string): Record<string, number> {
@@ -623,35 +481,26 @@ function readNumberMap(value: unknown, label: string): Record<string, number> {
   return result;
 }
 
-function readOptionalMemorySummary(
+function readMemorySummary(
   value: unknown,
-): DiagnosticStabilitySnapshot["summary"]["memory"] | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
+): NonNullable<DiagnosticStabilitySnapshot["summary"]["memory"]> {
   const memory = readObject(value, "snapshot.summary.memory");
   const latest =
     memory.latest === undefined
       ? undefined
       : readMemoryUsage(memory.latest, "snapshot.summary.memory.latest");
+  const result: Partial<NonNullable<DiagnosticStabilitySnapshot["summary"]["memory"]>> = latest
+    ? { latest }
+    : {};
+  assignOptionalFields(
+    result,
+    memory,
+    "snapshot.summary.memory",
+    ["maxRssBytes", "maxHeapUsedBytes"],
+    readOptionalNumber,
+  );
   return {
-    ...(latest ? { latest } : {}),
-    ...(memory.maxRssBytes !== undefined
-      ? {
-          maxRssBytes: readRequiredNumber(
-            memory.maxRssBytes,
-            "snapshot.summary.memory.maxRssBytes",
-          ),
-        }
-      : {}),
-    ...(memory.maxHeapUsedBytes !== undefined
-      ? {
-          maxHeapUsedBytes: readRequiredNumber(
-            memory.maxHeapUsedBytes,
-            "snapshot.summary.memory.maxHeapUsedBytes",
-          ),
-        }
-      : {}),
+    ...result,
     pressureCount: readRequiredNumber(
       memory.pressureCount,
       "snapshot.summary.memory.pressureCount",
@@ -659,12 +508,9 @@ function readOptionalMemorySummary(
   };
 }
 
-function readOptionalPayloadLargeSummary(
+function readPayloadLargeSummary(
   value: unknown,
-): DiagnosticStabilitySnapshot["summary"]["payloadLarge"] | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
+): NonNullable<DiagnosticStabilitySnapshot["summary"]["payloadLarge"]> {
   const payloadLarge = readObject(value, "snapshot.summary.payloadLarge");
   return {
     count: readRequiredNumber(payloadLarge.count, "snapshot.summary.payloadLarge.count"),
@@ -692,97 +538,60 @@ function readStabilityEventRecord(
     ) as DiagnosticStabilitySnapshot["events"][number]["type"],
   };
 
-  assignOptionalCodeString(sanitized, "channel", record.channel, `${label}.channel`);
-  assignOptionalCodeString(sanitized, "pluginId", record.pluginId, `${label}.pluginId`);
-  assignOptionalCodeString(sanitized, "source", record.source, `${label}.source`);
-  assignOptionalCodeString(sanitized, "surface", record.surface, `${label}.surface`);
-  assignOptionalCodeString(sanitized, "action", record.action, `${label}.action`);
-  assignOptionalCodeString(sanitized, "reason", record.reason, `${label}.reason`);
-  assignOptionalCodeString(sanitized, "outcome", record.outcome, `${label}.outcome`);
-  assignOptionalCodeString(sanitized, "level", record.level, `${label}.level`);
-  assignOptionalCodeString(sanitized, "phase", record.phase, `${label}.phase`);
-  assignOptionalCodeString(sanitized, "approvalId", record.approvalId, `${label}.approvalId`);
-  assignOptionalCodeString(sanitized, "detector", record.detector, `${label}.detector`);
-  assignOptionalCodeString(sanitized, "toolName", record.toolName, `${label}.toolName`);
-  assignOptionalCodeString(
+  assignOptionalFields(
     sanitized,
-    "activeWorkKind",
-    record.activeWorkKind,
-    `${label}.activeWorkKind`,
+    record,
+    label,
+    [
+      "channel",
+      "pluginId",
+      "source",
+      "surface",
+      "action",
+      "reason",
+      "outcome",
+      "level",
+      "phase",
+      "approvalId",
+      "detector",
+      "toolName",
+      "activeWorkKind",
+      "pairedToolName",
+      "provider",
+      "model",
+    ],
+    readOptionalCodeString,
   );
-  assignOptionalCodeString(
-    sanitized,
-    "pairedToolName",
-    record.pairedToolName,
-    `${label}.pairedToolName`,
-  );
-  assignOptionalCodeString(sanitized, "provider", record.provider, `${label}.provider`);
-  assignOptionalCodeString(sanitized, "model", record.model, `${label}.model`);
 
-  assignOptionalNumber(sanitized, "durationMs", record.durationMs, `${label}.durationMs`);
-  assignOptionalNumber(sanitized, "requestBytes", record.requestBytes, `${label}.requestBytes`);
-  assignOptionalNumber(sanitized, "responseBytes", record.responseBytes, `${label}.responseBytes`);
-  assignOptionalNumber(
+  assignOptionalFields(
     sanitized,
-    "timeToFirstByteMs",
-    record.timeToFirstByteMs,
-    `${label}.timeToFirstByteMs`,
-  );
-  assignOptionalNumber(sanitized, "costUsd", record.costUsd, `${label}.costUsd`);
-  assignOptionalNumber(sanitized, "count", record.count, `${label}.count`);
-  assignOptionalNumber(sanitized, "bytes", record.bytes, `${label}.bytes`);
-  assignOptionalNumber(sanitized, "limitBytes", record.limitBytes, `${label}.limitBytes`);
-  assignOptionalNumber(
-    sanitized,
-    "thresholdBytes",
-    record.thresholdBytes,
-    `${label}.thresholdBytes`,
-  );
-  assignOptionalNumber(
-    sanitized,
-    "rssGrowthBytes",
-    record.rssGrowthBytes,
-    `${label}.rssGrowthBytes`,
-  );
-  assignOptionalNumber(sanitized, "windowMs", record.windowMs, `${label}.windowMs`);
-  assignOptionalNumber(sanitized, "ageMs", record.ageMs, `${label}.ageMs`);
-  assignOptionalNumber(sanitized, "queueDepth", record.queueDepth, `${label}.queueDepth`);
-  assignOptionalNumber(sanitized, "queueSize", record.queueSize, `${label}.queueSize`);
-  assignOptionalNumber(sanitized, "queueLength", record.queueLength, `${label}.queueLength`);
-  assignOptionalNumber(sanitized, "waitMs", record.waitMs, `${label}.waitMs`);
-  assignOptionalNumber(sanitized, "active", record.active, `${label}.active`);
-  assignOptionalNumber(sanitized, "waiting", record.waiting, `${label}.waiting`);
-  assignOptionalNumber(sanitized, "queued", record.queued, `${label}.queued`);
-  assignOptionalNumber(sanitized, "droppedEvents", record.droppedEvents, `${label}.droppedEvents`);
-  assignOptionalNumber(
-    sanitized,
-    "droppedTrustedEvents",
-    record.droppedTrustedEvents,
-    `${label}.droppedTrustedEvents`,
-  );
-  assignOptionalNumber(
-    sanitized,
-    "droppedUntrustedEvents",
-    record.droppedUntrustedEvents,
-    `${label}.droppedUntrustedEvents`,
-  );
-  assignOptionalNumber(
-    sanitized,
-    "droppedPriorityEvents",
-    record.droppedPriorityEvents,
-    `${label}.droppedPriorityEvents`,
-  );
-  assignOptionalNumber(
-    sanitized,
-    "maxQueueLength",
-    record.maxQueueLength,
-    `${label}.maxQueueLength`,
-  );
-  assignOptionalNumber(
-    sanitized,
-    "drainBatchSize",
-    record.drainBatchSize,
-    `${label}.drainBatchSize`,
+    record,
+    label,
+    [
+      "durationMs",
+      "requestBytes",
+      "responseBytes",
+      "timeToFirstByteMs",
+      "costUsd",
+      "count",
+      "bytes",
+      ...DIAGNOSTIC_MEMORY_PRESSURE_METRICS,
+      "ageMs",
+      "queueDepth",
+      "queueSize",
+      "queueLength",
+      "waitMs",
+      "active",
+      "waiting",
+      "queued",
+      "droppedEvents",
+      "droppedTrustedEvents",
+      "droppedUntrustedEvents",
+      "droppedPriorityEvents",
+      "maxQueueLength",
+      "drainBatchSize",
+    ],
+    readOptionalNumber,
   );
 
   if (record.webhooks !== undefined) {
@@ -798,37 +607,25 @@ function readStabilityEventRecord(
   }
   if (record.usage !== undefined) {
     const usage = readObject(record.usage, `${label}.usage`);
-    sanitized.usage = {
-      ...(usage.input !== undefined
-        ? { input: readRequiredNumber(usage.input, `${label}.usage.input`) }
-        : {}),
-      ...(usage.output !== undefined
-        ? { output: readRequiredNumber(usage.output, `${label}.usage.output`) }
-        : {}),
-      ...(usage.cacheRead !== undefined
-        ? { cacheRead: readRequiredNumber(usage.cacheRead, `${label}.usage.cacheRead`) }
-        : {}),
-      ...(usage.cacheWrite !== undefined
-        ? { cacheWrite: readRequiredNumber(usage.cacheWrite, `${label}.usage.cacheWrite`) }
-        : {}),
-      ...(usage.promptTokens !== undefined
-        ? { promptTokens: readRequiredNumber(usage.promptTokens, `${label}.usage.promptTokens`) }
-        : {}),
-      ...(usage.total !== undefined
-        ? { total: readRequiredNumber(usage.total, `${label}.usage.total`) }
-        : {}),
-    };
+    sanitized.usage = {};
+    assignOptionalFields(
+      sanitized.usage,
+      usage,
+      `${label}.usage`,
+      ["input", "output", "cacheRead", "cacheWrite", "promptTokens", "total"],
+      readOptionalNumber,
+    );
   }
   if (record.context !== undefined) {
     const context = readObject(record.context, `${label}.context`);
-    sanitized.context = {
-      ...(context.limit !== undefined
-        ? { limit: readRequiredNumber(context.limit, `${label}.context.limit`) }
-        : {}),
-      ...(context.used !== undefined
-        ? { used: readRequiredNumber(context.used, `${label}.context.used`) }
-        : {}),
-    };
+    sanitized.context = {};
+    assignOptionalFields(
+      sanitized.context,
+      context,
+      `${label}.context`,
+      ["limit", "used"],
+      readOptionalNumber,
+    );
   }
 
   return sanitized;
@@ -859,11 +656,9 @@ function readStabilitySnapshot(value: unknown): DiagnosticStabilitySnapshot {
     events,
     summary: {
       byType: readNumberMap(summary.byType, "snapshot.summary.byType"),
-      ...(summary.memory !== undefined
-        ? { memory: readOptionalMemorySummary(summary.memory) }
-        : {}),
+      ...(summary.memory !== undefined ? { memory: readMemorySummary(summary.memory) } : {}),
       ...(summary.payloadLarge !== undefined
-        ? { payloadLarge: readOptionalPayloadLargeSummary(summary.payloadLarge) }
+        ? { payloadLarge: readPayloadLargeSummary(summary.payloadLarge) }
         : {}),
     },
   };
@@ -898,136 +693,6 @@ function parseDiagnosticStabilityBundle(value: unknown): DiagnosticStabilityBund
   };
 }
 
-function readPositiveMemoryFile(file: string): number | "max" | undefined {
-  try {
-    const raw = fs.readFileSync(file, "utf8").trim();
-    if (raw === "max") {
-      return "max";
-    }
-    return parseStrictNonNegativeInteger(raw);
-  } catch {
-    return undefined;
-  }
-}
-
-function readCgroupEventFile(file: string): Record<string, number> {
-  try {
-    const events: Record<string, number> = {};
-    for (const line of fs.readFileSync(file, "utf8").split(/\r?\n/u)) {
-      const [key, raw] = line.trim().split(/\s+/u);
-      if (!key || !SAFE_REASON_CODE.test(key)) {
-        continue;
-      }
-      const value = parseStrictNonNegativeInteger(raw ?? "");
-      if (value !== undefined) {
-        events[key] = value;
-      }
-    }
-    return events;
-  } catch {
-    return {};
-  }
-}
-
-function resolveCgroupV2MemoryDir(): string | undefined {
-  if (process.platform !== "linux") {
-    return undefined;
-  }
-  try {
-    const line = fs
-      .readFileSync("/proc/self/cgroup", "utf8")
-      .split(/\r?\n/u)
-      .find((entry) => entry.startsWith("0::"));
-    if (!line) {
-      return undefined;
-    }
-    const rawPath = line.slice("0::".length).trim();
-    const relative = rawPath.replace(/^\/+/u, "");
-    return path.join("/sys/fs/cgroup", relative);
-  } catch {
-    return undefined;
-  }
-}
-
-function collectCgroupMemorySummary(): DiagnosticCgroupMemorySummary | undefined {
-  const dir = resolveCgroupV2MemoryDir();
-  if (!dir) {
-    return undefined;
-  }
-  const values: Record<string, number | "max"> = {};
-  for (const name of CGROUP_V2_MEMORY_FILES) {
-    const value = readPositiveMemoryFile(path.join(dir, `memory.${name}`));
-    if (value !== undefined) {
-      values[name] = value;
-    }
-  }
-  const events: Record<string, number> = {};
-  for (const name of CGROUP_V2_MEMORY_EVENTS) {
-    const parsed = readCgroupEventFile(path.join(dir, `memory.${name}`));
-    for (const [key, value] of Object.entries(parsed)) {
-      events[name === "events" ? key : `${name}.${key}`] = value;
-    }
-  }
-  return Object.keys(values).length > 0 || Object.keys(events).length > 0
-    ? { version: "v2", values, events }
-    : undefined;
-}
-
-function collectHeapStatistics(): DiagnosticHeapStatisticsSummary | undefined {
-  try {
-    const stats = v8.getHeapStatistics();
-    return {
-      totalHeapSizeBytes: stats.total_heap_size,
-      totalHeapSizeExecutableBytes: stats.total_heap_size_executable,
-      totalPhysicalSizeBytes: stats.total_physical_size,
-      totalAvailableSizeBytes: stats.total_available_size,
-      usedHeapSizeBytes: stats.used_heap_size,
-      heapSizeLimitBytes: stats.heap_size_limit,
-      mallocedMemoryBytes: stats.malloced_memory,
-      externalMemoryBytes: stats.external_memory,
-    };
-  } catch {
-    return undefined;
-  }
-}
-
-function collectHeapSpaces(): DiagnosticHeapSpaceSummary[] | undefined {
-  try {
-    const spaces = v8.getHeapSpaceStatistics().map((space) => ({
-      spaceName: space.space_name,
-      spaceSizeBytes: space.space_size,
-      spaceUsedBytes: space.space_used_size,
-      spaceAvailableBytes: space.space_available_size,
-      physicalSpaceSizeBytes: space.physical_space_size,
-    }));
-    return spaces.length > 0 ? spaces : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function collectActiveResources(): DiagnosticActiveResourceSummary | undefined {
-  try {
-    if (typeof process.getActiveResourcesInfo !== "function") {
-      return undefined;
-    }
-    const names = process.getActiveResourcesInfo();
-    const byType: Record<string, number> = {};
-    for (const name of names) {
-      if (!SAFE_REASON_CODE.test(name)) {
-        continue;
-      }
-      byType[name] = (byType[name] ?? 0) + 1;
-    }
-    const sorted = Object.entries(byType)
-      .toSorted((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-      .slice(0, MAX_ACTIVE_RESOURCE_TYPES);
-    return { total: names.length, byType: Object.fromEntries(sorted) };
-  } catch {
-    return undefined;
-  }
-}
-
 function sanitizeSessionEvidencePath(relativePath: string): string {
   const parts = relativePath.split("/");
   if (parts.length === 4 && parts[0] === "agents" && parts[2] === "sessions") {
@@ -1052,188 +717,36 @@ function sanitizeSessionEvidenceFileName(fileName: string): string {
   return "<session>";
 }
 
-function visitDirentsBounded(
-  dir: string,
-  maxEntries: number,
-  visitor: (entry: fs.Dirent) => boolean | void,
-): void {
-  if (maxEntries <= 0) {
-    return;
-  }
-  let handle: fs.Dir | undefined;
-  try {
-    handle = fs.opendirSync(dir);
-    for (let count = 0; count < maxEntries; count += 1) {
-      const entry = handle.readSync();
-      if (!entry || visitor(entry) === false) {
-        return;
-      }
-    }
-  } catch {
-    // Best-effort diagnostic evidence only.
-  } finally {
-    try {
-      handle?.closeSync();
-    } catch {
-      // Best-effort diagnostic evidence only.
-    }
-  }
-}
-
-function pushSessionFileSummary(
-  results: DiagnosticSessionFileSummary[],
-  stateDir: string,
-  file: string,
-  relativePathOverride?: string,
-): void {
-  try {
-    const stat = fs.statSync(file);
-    if (!stat.isFile()) {
-      return;
-    }
-    const relativePath = (relativePathOverride ?? path.relative(stateDir, file)).replace(
-      /\\/gu,
-      "/",
-    );
-    if (relativePath.startsWith("../") || path.isAbsolute(relativePath)) {
-      return;
-    }
-    results.push({
-      relativePath: sanitizeSessionEvidencePath(relativePath),
-      sizeBytes: stat.size,
-      mtimeMs: stat.mtimeMs,
-    });
-  } catch {
-    // Best-effort diagnostic evidence only.
-  }
-}
-
-function scanSessionDirectory(params: {
-  results: DiagnosticSessionFileSummary[];
-  stateDir: string;
-  sessionsDir: string;
-  relativePrefix: string;
-  seenDirs: Set<string>;
-  scannedSessionEntries: { count: number };
-}): void {
-  const sessionsDir = path.resolve(params.sessionsDir);
-  if (params.seenDirs.has(sessionsDir)) {
-    return;
-  }
-  params.seenDirs.add(sessionsDir);
-  visitDirentsBounded(
-    sessionsDir,
-    MAX_SESSION_SCAN_FILES - params.scannedSessionEntries.count,
-    (sessionEntry) => {
-      params.scannedSessionEntries.count += 1;
-      if (!sessionEntry.isFile() || !/\.(?:jsonl|json)$/u.test(sessionEntry.name)) {
-        return params.scannedSessionEntries.count < MAX_SESSION_SCAN_FILES;
-      }
-      pushSessionFileSummary(
-        params.results,
-        params.stateDir,
-        path.join(sessionsDir, sessionEntry.name),
-        path.posix.join(params.relativePrefix, sessionEntry.name),
-      );
-      return params.scannedSessionEntries.count < MAX_SESSION_SCAN_FILES;
-    },
+function isMemoryPressureReason(
+  reason: string,
+): reason is DiagnosticMemoryPressureFields["reason"] {
+  return (
+    reason === "rss_threshold" ||
+    reason === "heap_threshold" ||
+    reason === "worker_heap_threshold" ||
+    reason === "rss_growth"
   );
 }
 
-function collectTopSessionFiles(
-  stateDir: string,
-  sessionStorePaths: string[] = [],
-): DiagnosticSessionFileSummary[] | undefined {
-  const results: DiagnosticSessionFileSummary[] = [];
-  const seenDirs = new Set<string>();
-  const scannedSessionEntries = { count: 0 };
-  try {
-    pushSessionFileSummary(results, stateDir, path.join(stateDir, "sessions.json"));
-    const agentsDir = path.join(stateDir, "agents");
-    visitDirentsBounded(agentsDir, MAX_SESSION_SCAN_AGENTS, (agentEntry) => {
-      if (!agentEntry.isDirectory() || scannedSessionEntries.count >= MAX_SESSION_SCAN_FILES) {
-        return;
-      }
-      scanSessionDirectory({
-        results,
-        stateDir,
-        sessionsDir: path.join(agentsDir, agentEntry.name, "sessions"),
-        relativePrefix: path.posix.join("agents", agentEntry.name, "sessions"),
-        seenDirs,
-        scannedSessionEntries,
-      });
-    });
-    for (const storePath of sessionStorePaths) {
-      if (scannedSessionEntries.count >= MAX_SESSION_SCAN_FILES) {
-        break;
-      }
-      const sessionsDir = path.dirname(path.resolve(storePath));
-      scanSessionDirectory({
-        results,
-        stateDir,
-        sessionsDir,
-        relativePrefix: "sessions",
-        seenDirs,
-        scannedSessionEntries,
-      });
-    }
-  } catch {
-    // Best-effort diagnostic evidence only.
-  }
-  const top = results
-    .toSorted((a, b) => b.sizeBytes - a.sizeBytes || a.relativePath.localeCompare(b.relativePath))
-    .slice(0, MAX_SESSION_FILE_RESULTS);
-  return top.length > 0 ? top : undefined;
-}
-
-function buildMemoryPressureEvidence(
-  options: WriteDiagnosticMemoryPressureBundleOptions,
-): DiagnosticStabilityBundleEvidence {
-  const stateDir = options.stateDir ?? resolveStateDir(options.env ?? process.env);
-  const heapStatistics = collectHeapStatistics();
-  const heapSpaces = collectHeapSpaces();
-  const cgroup = collectCgroupMemorySummary();
-  const activeResources = collectActiveResources();
-  const topSessionFiles = collectTopSessionFiles(stateDir, options.sessionStorePaths);
-  return {
-    memoryPressure: {
-      level: options.pressure.level,
-      reason: options.pressure.reason,
-      memory: options.pressure.memory,
-      ...(options.pressure.thresholdBytes !== undefined
-        ? { thresholdBytes: options.pressure.thresholdBytes }
-        : {}),
-      ...(options.pressure.rssGrowthBytes !== undefined
-        ? { rssGrowthBytes: options.pressure.rssGrowthBytes }
-        : {}),
-      ...(options.pressure.windowMs !== undefined ? { windowMs: options.pressure.windowMs } : {}),
-      ...(heapStatistics ? { heapStatistics } : {}),
-      ...(heapSpaces ? { heapSpaces } : {}),
-      ...(cgroup ? { cgroup } : {}),
-      ...(activeResources ? { activeResources } : {}),
-      ...(topSessionFiles ? { topSessionFiles } : {}),
-    },
-  };
-}
-
-function isMemoryPressureReason(reason: string): reason is DiagnosticMemoryPressureEvent["reason"] {
-  return reason === "rss_threshold" || reason === "heap_threshold" || reason === "rss_growth";
-}
-
 function listDiagnosticStabilityBundleFilesSync(
-  options: DiagnosticStabilityBundleLocationOptions = {},
+  dir: string,
+  statFailure: "throw" | "use-zero",
 ): DiagnosticStabilityBundleFile[] {
-  const dir = resolveDiagnosticStabilityBundleDir(options);
   try {
     return fs
       .readdirSync(dir, { withFileTypes: true })
       .filter((entry) => entry.isFile() && isBundleFile(entry.name))
       .map((entry) => {
         const file = path.join(dir, entry.name);
-        return {
-          path: file,
-          mtimeMs: fs.statSync(file).mtimeMs,
-        };
+        let mtimeMs = 0;
+        try {
+          mtimeMs = fs.statSync(file).mtimeMs;
+        } catch (error) {
+          if (statFailure === "throw") {
+            throw error;
+          }
+        }
+        return { path: file, mtimeMs };
       })
       .toSorted((a, b) => b.mtimeMs - a.mtimeMs || b.path.localeCompare(a.path));
   } catch (error) {
@@ -1271,7 +784,10 @@ export function readLatestDiagnosticStabilityBundleSync(
   options: DiagnosticStabilityBundleLocationOptions = {},
 ): ReadDiagnosticStabilityBundleResult {
   try {
-    const latest = listDiagnosticStabilityBundleFilesSync(options)[0];
+    const latest = listDiagnosticStabilityBundleFilesSync(
+      resolveDiagnosticStabilityBundleDir(options),
+      "throw",
+    )[0];
     if (!latest) {
       return {
         status: "missing",
@@ -1284,29 +800,15 @@ export function readLatestDiagnosticStabilityBundleSync(
   }
 }
 
-function pruneOldBundles(dir: string, retention: number): void {
-  if (!Number.isFinite(retention) || retention < 1) {
-    return;
-  }
+function pruneOldBundles(dir: string, retainedFile: string): void {
   try {
-    const entries = fs
-      .readdirSync(dir, { withFileTypes: true })
-      .filter((entry) => entry.isFile() && isBundleFile(entry.name))
-      .map((entry) => {
-        const file = path.join(dir, entry.name);
-        let mtimeMs = 0;
-        try {
-          mtimeMs = fs.statSync(file).mtimeMs;
-        } catch {
-          // Missing files are ignored below.
-        }
-        return { file, mtimeMs };
-      })
-      .toSorted((a, b) => b.mtimeMs - a.mtimeMs || b.file.localeCompare(a.file));
+    const entries = listDiagnosticStabilityBundleFilesSync(dir, "use-zero").filter(
+      (entry) => entry.path !== retainedFile,
+    );
 
-    for (const entry of entries.slice(retention)) {
+    for (const entry of entries.slice(DIAGNOSTIC_STABILITY_BUNDLE_RETENTION - 1)) {
       try {
-        fs.unlinkSync(entry.file);
+        fs.unlinkSync(entry.path);
       } catch {
         // Retention cleanup must not block failure handling.
       }
@@ -1316,24 +818,31 @@ function pruneOldBundles(dir: string, retention: number): void {
   }
 }
 
-export function writeDiagnosticStabilityBundleSync(
-  options: WriteDiagnosticStabilityBundleOptions,
-): WriteDiagnosticStabilityBundleResult {
+export function writeDiagnosticStabilityBundleForFailureSync(
+  reason: string,
+  error?: unknown,
+  options: WriteDiagnosticStabilityBundleForFailureOptions = {},
+): DiagnosticStabilityBundleFailureWriteOutcome {
   try {
     const now = options.now ?? new Date();
     const snapshot = getDiagnosticStabilitySnapshot({
-      limit: options.limit ?? DEFAULT_DIAGNOSTIC_STABILITY_BUNDLE_LIMIT,
+      limit: MAX_DIAGNOSTIC_STABILITY_LIMIT,
     });
-    if (!options.includeEmpty && snapshot.count === 0) {
-      return { status: "skipped", reason: "empty" };
-    }
 
-    const reason = normalizeReason(options.reason);
-    const error = options.error ? readSafeErrorMetadata(options.error) : undefined;
+    const normalizedReason = normalizeReason(reason);
+    const safeError = error ? readSafeErrorMetadata(error) : undefined;
+    const evidence = options.shutdownStep
+      ? {
+          shutdown: {
+            step: readCodeString(options.shutdownStep, "shutdownStep"),
+            errors: collectShutdownErrors(error),
+          },
+        }
+      : undefined;
     const bundle: DiagnosticStabilityBundle = {
       version: DIAGNOSTIC_STABILITY_BUNDLE_VERSION,
       generatedAt: now.toISOString(),
-      reason,
+      reason: normalizedReason,
       process: {
         pid: process.pid,
         platform: process.platform,
@@ -1344,13 +853,16 @@ export function writeDiagnosticStabilityBundleSync(
       host: {
         hostname: REDACTED_HOSTNAME,
       },
-      ...(error ? { error } : {}),
-      ...(options.evidence ? { evidence: options.evidence } : {}),
+      ...(safeError ? { error: safeError } : {}),
+      ...(evidence ? { evidence } : {}),
       snapshot,
     };
 
     const dir = resolveDiagnosticStabilityBundleDir(options);
-    const file = buildBundlePath(dir, now, reason);
+    const file = path.join(
+      dir,
+      `${BUNDLE_PREFIX}${formatDiagnosticFilenameTimestamp(now)}-${process.pid}-${normalizedReason}${BUNDLE_SUFFIX}`,
+    );
     replaceFileAtomicSync({
       filePath: file,
       content: `${JSON.stringify(bundle, null, 2)}\n`,
@@ -1358,50 +870,15 @@ export function writeDiagnosticStabilityBundleSync(
       mode: 0o600,
       tempPrefix: ".openclaw-stability",
     });
-    pruneOldBundles(dir, options.retention ?? DEFAULT_DIAGNOSTIC_STABILITY_BUNDLE_RETENTION);
-    return { status: "written", path: file, bundle };
-  } catch (error) {
-    return { status: "failed", error };
-  }
-}
-
-export function writeDiagnosticMemoryPressureBundleSync(
-  options: WriteDiagnosticMemoryPressureBundleOptions,
-): WriteDiagnosticStabilityBundleResult {
-  return writeDiagnosticStabilityBundleSync({
-    ...options,
-    reason: "diagnostic.memory.pressure.critical",
-    includeEmpty: true,
-    evidence: buildMemoryPressureEvidence(options),
-  });
-}
-
-export function writeDiagnosticStabilityBundleForFailureSync(
-  reason: string,
-  error?: unknown,
-  options: WriteDiagnosticStabilityBundleForFailureOptions = {},
-): DiagnosticStabilityBundleFailureWriteOutcome {
-  const result = writeDiagnosticStabilityBundleSync({
-    ...options,
-    reason,
-    error,
-    includeEmpty: true,
-  });
-  if (result.status === "written") {
-    return {
-      status: "written",
-      path: result.path,
-      message: `wrote stability bundle: ${result.path}`,
-    };
-  }
-  if (result.status === "failed") {
+    pruneOldBundles(dir, file);
+    return { status: "written", path: file, message: `wrote stability bundle: ${file}` };
+  } catch (writeError) {
     return {
       status: "failed",
-      error: result.error,
-      message: `failed to write stability bundle: ${String(result.error)}`,
+      error: writeError,
+      message: `failed to write stability bundle: ${String(writeError)}`,
     };
   }
-  return result;
 }
 
 export function installDiagnosticStabilityFatalHook(
@@ -1412,7 +889,7 @@ export function installDiagnosticStabilityFatalHook(
   }
   fatalHookUnsubscribe = registerFatalErrorHook(({ reason, error }) => {
     const result = writeDiagnosticStabilityBundleForFailureSync(reason, error, options);
-    return "message" in result ? result.message : undefined;
+    return result.message;
   });
 }
 
@@ -1421,7 +898,4 @@ export function uninstallDiagnosticStabilityFatalHook(): void {
   fatalHookUnsubscribe = null;
 }
 
-export function resetDiagnosticStabilityBundleForTest(): void {
-  uninstallDiagnosticStabilityFatalHook();
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

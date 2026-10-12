@@ -19,11 +19,13 @@ const commandResultCache = new Map<string, string | undefined>();
  * - Otherwise checks environment variable first, then treats as literal (not cached)
  */
 export function resolveConfigValue(config: string): string | undefined {
-  if (config.startsWith("!")) {
-    return executeCommand(config);
+  if (!config.startsWith("!")) {
+    return resolveConfigValueUncached(config);
   }
-  const envValue = process.env[config];
-  return envValue || config;
+  if (!commandResultCache.has(config)) {
+    commandResultCache.set(config, executeCommandUncached(config));
+  }
+  return commandResultCache.get(config);
 }
 
 function executeWithConfiguredShell(command: string): {
@@ -44,16 +46,9 @@ function executeWithConfiguredShell(command: string): {
       env: getBashShellEnv(shellConfig.shell),
     });
 
-    if (result.error) {
-      const error = result.error as NodeJS.ErrnoException;
-      if (error.code === "ENOENT") {
-        return { executed: false, value: undefined };
-      }
-      return { executed: true, value: undefined };
-    }
-
-    if (result.status !== 0) {
-      return { executed: true, value: undefined };
+    if (result.error || result.status !== 0) {
+      const error = result.error as NodeJS.ErrnoException | undefined;
+      return { executed: error?.code !== "ENOENT", value: undefined };
     }
 
     const value = (result.stdout ?? "").trim();
@@ -78,35 +73,23 @@ function executeWithDefaultShell(command: string): string | undefined {
 
 function executeCommandUncached(commandConfig: string): string | undefined {
   const command = commandConfig.slice(1);
-  return process.platform === "win32"
-    ? (() => {
-        const configuredResult = executeWithConfiguredShell(command);
-        return configuredResult.executed
-          ? configuredResult.value
-          : executeWithDefaultShell(command);
-      })()
-    : executeWithDefaultShell(command);
-}
-
-function executeCommand(commandConfig: string): string | undefined {
-  if (commandResultCache.has(commandConfig)) {
-    return commandResultCache.get(commandConfig);
+  if (process.platform === "win32") {
+    const configuredResult = executeWithConfiguredShell(command);
+    if (configuredResult.executed) {
+      return configuredResult.value;
+    }
   }
-
-  const result = executeCommandUncached(commandConfig);
-  commandResultCache.set(commandConfig, result);
-  return result;
+  return executeWithDefaultShell(command);
 }
 
-/**
- * Resolve all header values using the same resolution logic as API keys.
- */
 export function resolveConfigValueUncached(config: string): string | undefined {
   if (config.startsWith("!")) {
     return executeCommandUncached(config);
   }
-  const envValue = process.env[config];
-  return envValue || config;
+  if (Object.hasOwn(process.env, config)) {
+    return process.env[config] || undefined;
+  }
+  return config;
 }
 
 export function resolveConfigValueOrThrow(config: string, description: string): string {
@@ -134,9 +117,4 @@ export function resolveHeadersOrThrow(
     resolved[key] = resolveConfigValueOrThrow(value, `${description} header "${key}"`);
   }
   return Object.keys(resolved).length > 0 ? resolved : undefined;
-}
-
-/** Clear the config value command cache. Exported for testing. */
-export function clearConfigValueCache(): void {
-  commandResultCache.clear();
 }

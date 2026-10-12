@@ -9,6 +9,11 @@ title: "Configuration examples"
 
 Examples below are aligned with the current config schema. For the exhaustive reference and per-field notes, see [Configuration](/gateway/configuration).
 
+Doctor migrates legacy `agents.list` arrays and `default` markers into keyed
+`agents.entries` with explicit surface owners. The updater runs this migration
+through its backup flow. After replacing the binary directly, run
+`openclaw doctor --fix` before starting the Gateway.
+
 ## Quick start
 
 ### Absolute minimum
@@ -61,6 +66,8 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
 
 > JSON5 lets you use comments and trailing commas. Regular JSON works too.
 
+This example leaves `agents.defaults.timeoutSeconds` unset, so each model attempt uses the 48-hour default. Set a different per-attempt budget only when your workflow needs one. Configured fallbacks each receive a fresh budget; see [Agent runtime](/concepts/agent-loop#timeouts).
+
 ```json5
 {
   // Environment + shell
@@ -75,7 +82,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
     },
   },
 
-  // Auth profile metadata (secrets live in auth-profiles.json)
+  // Auth profile metadata (secrets live in SQLite auth stores)
   auth: {
     profiles: {
       "anthropic:default": { provider: "anthropic", mode: "api_key" },
@@ -210,8 +217,11 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
 
   // Agent runtime
   agents: {
+    ownership: "explicit",
     defaults: {
       workspace: "~/.openclaw/workspace",
+      systemAgent: { agentId: "main" },
+      sessionStore: { agentId: "main" },
       userTimezone: "America/Chicago",
       model: {
         primary: "anthropic/claude-sonnet-4-6",
@@ -225,7 +235,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
         "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
         "openai/gpt-5.4": { alias: "gpt" },
       },
-      skills: ["github", "weather"], // inherited by agents that omit list[].skills
+      skills: ["github", "weather"], // inherited by agents that omit entries.*.skills
       thinkingDefault: "low",
       verboseDefault: "off",
       toolProgressDetail: "explain",
@@ -244,7 +254,6 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       humanDelay: {
         mode: "natural",
       },
-      timeoutSeconds: 600,
       mediaMaxMb: 5,
       typingIntervalSeconds: 5,
       maxConcurrent: 3,
@@ -275,7 +284,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
     },
     entries: {
       main: {
-        default: true,
+        workspace: "~/.openclaw/workspace",
         identity: {
           name: "Samantha",
           theme: "helpful sloth",
@@ -296,6 +305,14 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       },
     },
   },
+
+  bindings: [
+    { agentId: "main", match: { channel: "discord", accountId: "*" } },
+    { agentId: "main", match: { channel: "slack", accountId: "*" } },
+    { agentId: "main", match: { channel: "telegram", accountId: "*" } },
+    { agentId: "main", match: { channel: "whatsapp", accountId: "*" } },
+  ],
+  talk: { agentId: "main" },
 
   memory: {
     search: {
@@ -345,14 +362,14 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       "custom-proxy": {
         baseUrl: "http://localhost:4000/v1",
         apiKey: "LITELLM_KEY",
-        api: "openai-responses",
+        api: "openai-completions",
         authHeader: true,
         headers: { "X-Proxy-Region": "us-west" },
         models: [
           {
             id: "llama-3.1-8b",
             name: "Llama 3.1 8B",
-            api: "openai-responses",
+            api: "openai-completions",
             reasoning: false,
             input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -384,6 +401,8 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
         action: "agent",
         wakeMode: "now",
         name: "Gmail",
+        // One dispatch per pushed email; templates see the current message.
+        forEach: "messages",
         sessionKey: "hook:gmail:{{messages[0].id}}",
         messageTemplate: "From: {{messages[0].from}}\nSubject: {{messages[0].subject}}",
         textTemplate: "{{messages[0].snippet}}",
@@ -432,8 +451,8 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
   skills: {
     allowBundled: ["gemini", "peekaboo"],
     load: {
-      extraDirs: ["~/Projects/agent-scripts/skills"],
-      allowSymlinkTargets: ["~/Projects/agent-scripts/skills"],
+      extraDirs: ["~/path/to/agent-scripts/skills"],
+      allowSymlinkTargets: ["~/path/to/agent-scripts/skills"],
     },
     install: {
       preferBrew: true,
@@ -455,14 +474,14 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
 ### Symlinked sibling skill repo
 
 Use this when a built-in skill root contains a symlink into a sibling repo, for
-example `~/.agents/skills/manager -> ~/Projects/manager/skills`.
+example `~/.agents/skills/manager -> ~/path/to/skills`.
 
 ```json5
 {
   skills: {
     load: {
-      extraDirs: ["~/Projects/manager/skills"],
-      allowSymlinkTargets: ["~/Projects/manager/skills"],
+      extraDirs: ["~/path/to/skills"],
+      allowSymlinkTargets: ["~/path/to/skills"],
     },
   },
 }
@@ -471,8 +490,8 @@ example `~/.agents/skills/manager -> ~/Projects/manager/skills`.
 - `extraDirs` scans the sibling repo as an explicit skill root.
 - `allowSymlinkTargets` lets symlinked skill folders resolve into that trusted
   real target root without allowing arbitrary symlink escapes.
-- To let Skill Workshop apply write through the same trusted symlink target,
-  set `skills.workshop.allowSymlinkTargetWrites: true`.
+- Skill Workshop does not use these configured symlink targets. It writes only
+  inside the active agent's `<state-dir>/agents/<agentId>/agent/workshop-skills`.
 
 ## Common patterns
 
@@ -481,15 +500,19 @@ example `~/.agents/skills/manager -> ~/Projects/manager/skills`.
 ```json5
 {
   agents: {
+    ownership: "explicit",
     defaults: {
       workspace: "~/.openclaw/workspace",
       skills: ["github", "weather"],
+      heartbeat: { agentId: "main" },
+      systemAgent: { agentId: "main" },
     },
     entries: {
-      main: { default: true },
+      main: { workspace: "~/.openclaw/workspace" },
       docs: { workspace: "~/.openclaw/workspace-docs", skills: ["docs-search"] },
     },
   },
+  talk: { agentId: "main" },
 }
 ```
 

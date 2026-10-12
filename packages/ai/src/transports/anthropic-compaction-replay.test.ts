@@ -1,5 +1,6 @@
 import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
+import { createZeroUsage } from "../usage.test-support.js";
 import {
   buildAnthropicReplayPlan,
   createCompactionCapture,
@@ -26,6 +27,12 @@ const replayOptions = {
   authProfileId: "anthropic:work",
 };
 
+type ReplayOptions = {
+  enabled?: boolean;
+  sessionId?: string;
+  authProfileId?: string;
+};
+
 function assistant(texts: string[]): AssistantMessage {
   return {
     role: "assistant",
@@ -33,14 +40,7 @@ function assistant(texts: string[]): AssistantMessage {
     api: "anthropic-messages",
     provider: "anthropic",
     model: model.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsage(),
     stopReason: "stop",
     timestamp: 1,
   };
@@ -50,16 +50,21 @@ function captureCheckpoint(
   message: AssistantMessage,
   summary: string,
   replayIndex: number,
-  options = replayOptions,
+  options: ReplayOptions = replayOptions,
+  captureModel: Model = model,
 ): void {
-  const capture = createCompactionCapture(message, model, options);
+  const capture = createCompactionCapture(message, captureModel, options);
   capture.begin(0, { type: "compaction", content: summary }, replayIndex);
   capture.complete(0);
 }
 
-function contextWithCheckpoint(summary = "summary of the earlier conversation"): Context {
+function contextWithCheckpoint(
+  summary = "summary of the earlier conversation",
+  options: ReplayOptions = replayOptions,
+  captureModel: Model = model,
+): Context {
   const checkpoint = assistant(["before checkpoint", "after checkpoint"]);
-  captureCheckpoint(checkpoint, summary, 1);
+  captureCheckpoint(checkpoint, summary, 1, options, captureModel);
   return {
     messages: [
       { role: "user", content: "old question", timestamp: 0 },
@@ -70,40 +75,6 @@ function contextWithCheckpoint(summary = "summary of the earlier conversation"):
 }
 
 describe("Anthropic compaction replay", () => {
-  it("captures a route-fenced summary and slices the outbound prefix", () => {
-    const context = contextWithCheckpoint();
-    const checkpoint = context.messages[1];
-
-    expect(checkpoint?.role).toBe("assistant");
-    if (checkpoint?.role !== "assistant") {
-      throw new Error("missing checkpoint assistant");
-    }
-    expect(checkpoint.providerReplay).toMatchObject({
-      v: 1,
-      type: "anthropic-compaction",
-      data: "summary of the earlier conversation",
-      replayIndex: 1,
-      provider: "anthropic",
-      api: "anthropic-messages",
-      model: model.id,
-    });
-    expect(checkpoint.providerReplay?.baseUrlHash).toBeTypeOf("string");
-    expect(checkpoint.providerReplay?.sessionHash).toBeTypeOf("string");
-    expect(checkpoint.providerReplay?.authProfileHash).toBeTypeOf("string");
-
-    const plan = buildAnthropicReplayPlan(context.messages, model, replayOptions);
-
-    expect(plan.compaction).toEqual({
-      type: "compaction",
-      content: "summary of the earlier conversation",
-    });
-    expect(plan.messages.map((message) => message.role)).toEqual(["assistant", "user"]);
-    expect(plan.messages[0]).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "after checkpoint" }],
-    });
-  });
-
   it("uses the newest matching checkpoint", () => {
     const context = contextWithCheckpoint("older summary");
     const newest = assistant(["latest answer"]);
@@ -121,11 +92,21 @@ describe("Anthropic compaction replay", () => {
     expect(plan.messages[0]).toMatchObject({ role: "assistant", content: newest.content });
   });
 
-  it("falls back to full history when the route fence differs", () => {
+  it.each([
+    {
+      name: "session",
+      requestModel: model,
+      requestOptions: { ...replayOptions, sessionId: "session-2" },
+    },
+    {
+      name: "auth profile",
+      requestModel: model,
+      requestOptions: { ...replayOptions, authProfileId: "anthropic:personal" },
+    },
+  ])("falls back to full history when the $name differs", ({ requestModel, requestOptions }) => {
     const context = contextWithCheckpoint();
-    const otherModel = { ...model, id: "claude-opus-5" };
 
-    const plan = buildAnthropicReplayPlan(context.messages, otherModel, replayOptions);
+    const plan = buildAnthropicReplayPlan(context.messages, requestModel, requestOptions);
 
     expect(plan).toEqual({ messages: context.messages });
   });
@@ -133,7 +114,10 @@ describe("Anthropic compaction replay", () => {
   it("uses a matching suppression tombstone to stop replaying a rejected checkpoint", () => {
     const context = contextWithCheckpoint();
     const rejected = assistant([]);
-    suppressAnthropicCompaction(rejected, model, replayOptions);
+    suppressAnthropicCompaction(rejected, model, replayOptions, {
+      type: "compaction",
+      content: "summary of the earlier conversation",
+    });
     context.messages.push(rejected);
 
     const plan = buildAnthropicReplayPlan(context.messages, model, replayOptions);

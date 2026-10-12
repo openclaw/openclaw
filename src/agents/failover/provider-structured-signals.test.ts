@@ -1,31 +1,268 @@
 // Covers provider hook structured failover signals.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../../shared/assistant-error-format.js";
+import { buildApiErrorObservationFields } from "../embedded-agent-error-observation.js";
 import { classifyAssistantFailoverReason } from "../embedded-agent-helpers/assistant-message-failures.js";
+import {
+  formatAssistantErrorText,
+  formatUserFacingAssistantErrorText,
+} from "../embedded-agent-helpers/error-text.js";
 import { classifyProviderRuntimeFailureKind } from "../embedded-agent-helpers/provider-runtime-failure.js";
 import { resolveFailoverReasonFromError } from "../failover-error.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
+import { PROVIDER_SCHEMA_REJECTION_USER_TEXT } from "./assistant-request-failure-copy.js";
 import { classifyFailoverSignal } from "./classify.js";
+import { formatBillingErrorMessage } from "./user-copy.js";
 
-const providerRuntimeMocks = vi.hoisted(() => {
-  const runtime = { classifyProviderFailoverSignalWithPlugin: vi.fn() };
-  return { ...runtime, requireProviderRuntime: vi.fn(() => runtime) };
-});
-
-vi.mock("../../logging/node-require.js", () => ({
-  resolveNodeRequireFromMeta: () => providerRuntimeMocks.requireProviderRuntime,
+const providerRuntimeMocks = vi.hoisted(() => ({
+  classifyProviderFailoverSignalWithPlugin: vi.fn(),
 }));
+
+vi.mock("../../plugins/provider-failover.js", () => providerRuntimeMocks);
 
 describe("provider failover hook structured signals", () => {
   beforeEach(() => {
     providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockReset();
-    providerRuntimeMocks.requireProviderRuntime.mockClear();
+  });
+
+  it("explains a saved misalignment code without newer refusal diagnostics", () => {
+    const message = makeAssistantMessageFixture({
+      errorMessage: "This request was blocked by our safety systems.",
+      errorCode: "misalignment_policy_violation",
+      errorType: "invalid_request_error",
+      errorBody: '{"misalignment":{"detailed_explanation":"PRIVATE_FINDINGS ... [truncated]',
+    });
+    expect(formatUserFacingAssistantErrorText(message)).toBe(
+      "The provider stopped this request as a safety precaution (misalignment).",
+    );
+  });
+
+  it.each([
+    {
+      errorMessage: MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
+      copy: "LLM streaming response contained a malformed fragment. Please try again.",
+      runtimeKind: "unclassified",
+    },
+    {
+      errorMessage: "opaque provider refusal",
+      copy: "⚠️ OpenClaw couldn't finish this reply. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.",
+      runtimeKind: "unclassified",
+    },
+    {
+      errorMessage: "model input limit reached",
+      copy: "⚠️ OpenClaw couldn't finish this reply. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.",
+      runtimeKind: "unclassified",
+    },
+    {
+      errorMessage: "Request size exceeds model context window",
+      copy: "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.",
+      runtimeKind: "unclassified",
+    },
+    {
+      errorMessage: '429 {"error":{"type":"rate_limit_error","message":"Too many requests"}}',
+      copy: "⚠️ The AI service needs a short break. Please try again in a few minutes.",
+      runtimeKind: "rate_limit",
+    },
+  ])(
+    "presents and observes $errorMessage without provider discovery",
+    ({ errorMessage, copy, runtimeKind }) => {
+      const message = makeAssistantMessageFixture({ errorMessage });
+      expect(formatUserFacingAssistantErrorText(message)).toBe(copy);
+      expect
+        .soft(providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin)
+        .not.toHaveBeenCalled();
+      providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockClear();
+      expect(
+        buildApiErrorObservationFields(errorMessage, { provider: message.provider }),
+      ).toMatchObject({
+        providerRuntimeFailureKind: runtimeKind,
+        rawErrorHash: expect.stringMatching(/^sha256:/),
+      });
+      expect(providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["billing", "rate_limit", "context_overflow", "model_not_found", "format"] as const)(
+    "presents prepared %s policy with the full signal and no rediscovery",
+    (reason) => {
+      const classifyFailoverReason = vi.fn(() => reason);
+      const matchesContextOverflowError = vi.fn(() => reason === "context_overflow");
+      const message = makeAssistantMessageFixture({
+        provider: "custom-route",
+        errorMessage: "403 fixture refusal",
+        errorCode: "unknown_parameter",
+        errorType: "PROVIDER_TYPE",
+      });
+      const copies = {
+        billing: formatBillingErrorMessage("custom-route", message.model),
+        rate_limit: "⚠️ The AI service needs a short break. Please try again in a few minutes.",
+        context_overflow:
+          "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.",
+        model_not_found: "This model was not found. Choose another model in the Control UI.",
+        format: "LLM request rejected: fixture refusal",
+      };
+      expect(
+        formatUserFacingAssistantErrorText(message, {
+          provider: "custom-route",
+          providerOwner: {
+            id: "prepared-owner",
+            matchesContextOverflowError,
+            classifyFailoverReason,
+          },
+        }),
+      ).toBe(copies[reason]);
+      expect(matchesContextOverflowError).toHaveBeenCalledWith({
+        provider: "prepared-owner",
+        status: 403,
+        code: "unknown_parameter",
+        errorType: "PROVIDER_TYPE",
+        errorMessage: message.errorMessage,
+      });
+      if (reason === "context_overflow") {
+        expect(classifyFailoverReason).not.toHaveBeenCalled();
+      } else {
+        expect(classifyFailoverReason).toHaveBeenCalledWith(
+          expect.objectContaining({
+            provider: "prepared-owner",
+            status: 403,
+            code: "unknown_parameter",
+            errorType: "PROVIDER_TYPE",
+          }),
+        );
+      }
+      expect(providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    {
+      errorCode: "RESOURCE_EXHAUSTED",
+      copy: "⚠️ The AI service needs a short break. Please try again in a few minutes.",
+    },
+    {
+      errorMessage: '400 {"error":{"type":"invalid_request_error","message":"provider refusal"}}',
+      errorCode: "RESOURCE_EXHAUSTED",
+      copy: "⚠️ The AI service needs a short break. Please try again in a few minutes.",
+    },
+    { errorType: "invalid_request_error", copy: "LLM request rejected: provider refusal" },
+    {
+      errorMessage: undefined,
+      errorCode: "RESOURCE_EXHAUSTED",
+      copy: "⚠️ The AI service needs a short break. Please try again in a few minutes.",
+    },
+    {
+      errorMessage: undefined,
+      errorType: "invalid_request_error",
+      copy: PROVIDER_SCHEMA_REJECTION_USER_TEXT,
+    },
+    {
+      errorMessage:
+        '400 {"error":{"type":"invalid_request_error","message":"max_tokens (100) exceeds maximum output tokens (50)"}}',
+      errorBody: '{"error":{"message":"insufficient credits"}}',
+      copy: formatBillingErrorMessage(),
+    },
+    {
+      errorBody: '{"error":{"message":"Request size exceeds model context window"}}',
+      copy: "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.",
+    },
+    {
+      errorBody: '{"error":{"message":"insufficient credits"}}',
+      copy: formatBillingErrorMessage(),
+    },
+    {
+      errorMessage: '{"error":{"type":"invalid_request_error","message":"provider refusal"}}',
+      errorBody: '{"error":{"message":"insufficient credits"}}',
+      copy: formatBillingErrorMessage(),
+    },
+    {
+      errorMessage: '{"error":{"type":"invalid_request_error","message":"provider refusal"}}',
+      errorCode: "RESOURCE_EXHAUSTED",
+      copy: "⚠️ The AI service needs a short break. Please try again in a few minutes.",
+    },
+  ])(
+    "presents structured signal $errorCode $errorType $errorBody without discovery",
+    ({ copy, ...fields }) => {
+      expect(
+        formatUserFacingAssistantErrorText(
+          makeAssistantMessageFixture({
+            errorMessage: "provider refusal",
+            ...fields,
+          }),
+        ),
+      ).toBe(copy);
+      expect(providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    {
+      errorCode: "DEACTIVATED_WORKSPACE",
+      expected:
+        "⚠️ The AI service isn't accepting your login. Sign in again under Models in the Control UI or run `openclaw configure`.",
+    },
+    {
+      errorType: "upstream_error",
+      expected: "⚠️ The AI service is having trouble. Please try again in a moment.",
+    },
+    {
+      errorBody: '{"error":{"type":"upstream_error"}}',
+      expected: "⚠️ The AI service is having trouble. Please try again in a moment.",
+    },
+    {
+      errorMessage: undefined,
+      errorType: "upstream_error",
+      expected: "⚠️ The AI service is having trouble. Please try again in a moment.",
+    },
+  ])(
+    "carries structured $errorCode $errorType $errorBody into safe composed copy",
+    ({ expected, ...fields }) => {
+      const message = makeAssistantMessageFixture({
+        errorMessage:
+          "RAW_BODY_CANARY Authorization: Bearer secret-canary https://private.invalid/body",
+        ...fields,
+      });
+      const text = formatUserFacingAssistantErrorText(message);
+      expect(text).toBe(expected);
+      if ("errorMessage" in fields && fields.errorMessage === undefined) {
+        expect(formatAssistantErrorText(message)).toBe(expected);
+      }
+      expect(text).not.toMatch(/RAW_BODY_CANARY|Authorization|secret-canary|private\.invalid/);
+      expect(providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
+    },
+  );
+
+  it("carries a prepared owner's structured decision into safe composed copy", () => {
+    const classifyFailoverReason = vi.fn(
+      ({ code, errorType }: { code?: string; errorType?: string }) =>
+        code === "OWNER_CODE" && errorType === "OWNER_TYPE" ? ("server_error" as const) : undefined,
+    );
+    const message = makeAssistantMessageFixture({
+      provider: "custom-route",
+      errorMessage:
+        "403 RAW_BODY_CANARY Authorization: Bearer secret-canary https://private.invalid/body",
+      errorCode: "OWNER_CODE",
+      errorType: "OWNER_TYPE",
+    });
+    const text = formatUserFacingAssistantErrorText(message, {
+      providerOwner: { id: "prepared-owner", classifyFailoverReason },
+    });
+    expect(text).toBe("⚠️ The AI service is having trouble. Please try again in a moment.");
+    expect(text).not.toMatch(/RAW_BODY_CANARY|Authorization|secret-canary|private\.invalid/);
+    expect(classifyFailoverReason).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "prepared-owner",
+        status: 403,
+        code: "OWNER_CODE",
+        errorType: "OWNER_TYPE",
+      }),
+    );
+    expect(providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
   });
 
   it("does not resolve provider runtime for a generic non-ambiguous error", () => {
     expect(
       classifyFailoverSignal({ provider: "demo-provider", message: "503 service unavailable" }),
     ).toEqual({ kind: "reason", reason: "overloaded" });
-    expect(providerRuntimeMocks.requireProviderRuntime).not.toHaveBeenCalled();
     expect(providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
   });
 
@@ -40,9 +277,33 @@ describe("provider failover hook structured signals", () => {
         message: "input exceeds the maximum context window",
       }),
     ).toEqual({ kind: "context_overflow" });
-    expect(providerRuntimeMocks.requireProviderRuntime).toHaveBeenCalledTimes(1);
     expect(providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin).toHaveBeenCalledTimes(1);
   });
+
+  it.each([false, true])(
+    "uses a prepared provider without registry dispatch (overflow=%s)",
+    (overflow) => {
+      const classifyFailoverReason = vi.fn(() => "billing" as const);
+      const matchesContextOverflowError = vi.fn(() => overflow);
+      expect(
+        classifyFailoverSignal(
+          { provider: "custom-route", status: 403, message: "fixture refusal" },
+          {
+            providerPlugin: {
+              id: "prepared-owner",
+              matchesContextOverflowError,
+              classifyFailoverReason,
+            },
+          },
+        ),
+      ).toEqual(overflow ? { kind: "context_overflow" } : { kind: "reason", reason: "billing" });
+      expect(matchesContextOverflowError).toHaveBeenCalledWith(
+        expect.objectContaining({ provider: "prepared-owner", status: 403 }),
+      );
+      expect(classifyFailoverReason).toHaveBeenCalledTimes(overflow ? 0 : 1);
+      expect(providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
+    },
+  );
 
   it("lets provider hooks refine ambiguous auth statuses from stable codes", () => {
     // HTTP 403 is ambiguous; provider-owned stable codes can refine it to
@@ -338,13 +599,11 @@ describe("provider failover hook structured signals", () => {
       });
 
       expect(classifyAssistantFailoverReason(message)).toBe(reason);
-      expect(
-        classifyProviderRuntimeFailureKind({
-          provider: "anthropic",
-          message: "",
-          errorType,
-        }),
-      ).toBe(runtimeKind);
+      const signal = { provider: "anthropic", message: "", errorType };
+      expect(classifyProviderRuntimeFailureKind(signal)).toBe(runtimeKind);
+      expect(classifyProviderRuntimeFailureKind(signal, { providerPlugin: null })).toBe(
+        "unclassified",
+      );
     },
   );
 
@@ -398,5 +657,40 @@ describe("provider failover hook structured signals", () => {
         },
       });
     }
+  });
+
+  it("routes a preserved server_error code to server_error instead of timeout (#117609)", () => {
+    // The OpenAI provider hook maps SERVER_ERROR -> server_error. When the
+    // structured code is preserved at the transport boundary, hasStructuredDescriptor
+    // becomes true, the hook is consulted, and it outranks the prose classifier.
+    // The folded message "server_error: ..." otherwise matches isServerErrorMessage
+    // (ERROR_PATTERNS.serverError includes "server_error") and classifies as timeout
+    // with the hook skipped. Same message, only the preserved code differs.
+    providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockImplementation(
+      ({ context }) =>
+        context.provider === "openai" && context.code === "server_error"
+          ? "server_error"
+          : undefined,
+    );
+
+    // Pre-fix shape: code lost in normalization -> no structured descriptor ->
+    // hook skipped -> prose misclassifies as timeout.
+    expect(
+      classifyFailoverSignal({
+        provider: "openai",
+        message: "server_error: provider failed",
+      }),
+    ).toEqual({ kind: "reason", reason: "timeout" });
+    expect(providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
+
+    // Post-fix shape: code preserved -> hook consulted -> server_error.
+    expect(
+      classifyFailoverSignal({
+        provider: "openai",
+        code: "server_error",
+        message: "server_error: provider failed",
+      }),
+    ).toEqual({ kind: "reason", reason: "server_error" });
+    expect(providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin).toHaveBeenCalledTimes(1);
   });
 });

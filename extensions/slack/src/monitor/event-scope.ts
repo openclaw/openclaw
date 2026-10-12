@@ -1,47 +1,32 @@
-// Slack plugin module validates non-serializable per-event Enterprise Grid scope.
 import type { WebClient, WebClientOptions } from "@slack/web-api";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { getSlackListenerUploadCompletionClient } from "../client.js";
+import { getSlackListenerWriteClient } from "../client.js";
 import type { SlackInstallationIdentity } from "./enterprise-install.js";
 
 export type SlackEventScope = Readonly<{
   teamId: string;
-  // Keep Bolt's exact listener client for ordinary reads and writes.
+  // Keep Bolt's exact listener client for reads and native event identity.
   client: WebClient;
-  // Completion is one-shot, so uploads finalize through a team-scoped client
-  // that cannot inherit Bolt's normal request retries.
-  uploadCompletionClient?: WebClient;
+  // Writes cannot inherit Bolt's retries: Slack may accept a request before
+  // its response is lost. Preserve the listener token, transport and team scope.
+  writeClient?: WebClient;
 }>;
 
-type SlackEventScopeResolution =
-  | { ok: true; scope?: SlackEventScope }
-  | {
-      ok: false;
-      reason:
-        | "enterprise_event_for_workspace_account"
-        | "wrong_app"
-        | "not_enterprise_install"
-        | "missing_enterprise_id"
-        | "wrong_enterprise"
-        | "missing_team_id"
-        | "missing_listener_client";
-    };
+type SlackEventScopeDropReason =
+  | "enterprise_event_for_workspace_account"
+  | "wrong_app"
+  | "not_enterprise_install"
+  | "missing_enterprise_id"
+  | "wrong_enterprise"
+  | "missing_team_id"
+  | "missing_listener_client";
 
-export function resolveSlackListenerEventScope(
-  params: Parameters<typeof resolveSlackEventScope>[0] & {
-    onDrop?: (reason: Extract<SlackEventScopeResolution, { ok: false }>["reason"]) => void;
-  },
-): SlackEventScope | null | undefined {
-  const resolved = resolveSlackEventScope(params);
-  if (!resolved.ok) {
-    params.onDrop?.(resolved.reason);
-    return null;
-  }
-  return resolved.scope;
-}
-
-export function resolveSlackEventScope(params: {
-  identity: SlackInstallationIdentity;
+export function resolveSlackMonitorEventScope(params: {
+  ctx: {
+    installationIdentity: SlackInstallationIdentity;
+    app: { webClientOptions?: WebClientOptions };
+  };
   body: unknown;
   context?: {
     isEnterpriseInstall?: unknown;
@@ -49,48 +34,53 @@ export function resolveSlackEventScope(params: {
     teamId?: unknown;
   };
   client?: WebClient;
-  clientOptions?: WebClientOptions;
-}): SlackEventScopeResolution {
+  onDrop?: (reason: SlackEventScopeDropReason) => void;
+}): SlackEventScope | null | undefined {
+  const identity = params.ctx.installationIdentity;
+  const clientOptions = params.ctx.app.webClientOptions;
+  const onDrop =
+    params.onDrop ?? ((reason) => logVerbose(`slack: drop listener event (${reason})`));
+  const drop = (reason: SlackEventScopeDropReason) => {
+    onDrop(reason);
+    return null;
+  };
   const context = params.context ?? {};
-  if (params.identity.kind !== "enterprise") {
+  if (identity.kind !== "enterprise") {
     return context.isEnterpriseInstall === true
-      ? { ok: false, reason: "enterprise_event_for_workspace_account" }
-      : { ok: true };
+      ? drop("enterprise_event_for_workspace_account")
+      : undefined;
   }
   const body =
     params.body && typeof params.body === "object" ? (params.body as { api_app_id?: unknown }) : {};
   const apiAppId = normalizeOptionalString(body.api_app_id);
-  if (apiAppId && params.identity.apiAppId && apiAppId !== params.identity.apiAppId) {
-    return { ok: false, reason: "wrong_app" };
+  if (apiAppId && identity.apiAppId && apiAppId !== identity.apiAppId) {
+    return drop("wrong_app");
   }
   if (context.isEnterpriseInstall !== true) {
-    return { ok: false, reason: "not_enterprise_install" };
+    return drop("not_enterprise_install");
   }
   const enterpriseId = normalizeOptionalString(context.enterpriseId);
   if (!enterpriseId) {
-    return { ok: false, reason: "missing_enterprise_id" };
+    return drop("missing_enterprise_id");
   }
-  if (enterpriseId !== params.identity.enterpriseId) {
-    return { ok: false, reason: "wrong_enterprise" };
+  if (enterpriseId !== identity.enterpriseId) {
+    return drop("wrong_enterprise");
   }
   const teamId = normalizeOptionalString(context.teamId);
   if (!teamId) {
-    return { ok: false, reason: "missing_team_id" };
+    return drop("missing_team_id");
   }
   if (!params.client) {
-    return { ok: false, reason: "missing_listener_client" };
+    return drop("missing_listener_client");
   }
-  const uploadCompletionClient = getSlackListenerUploadCompletionClient({
+  const writeClient = getSlackListenerWriteClient({
     listenerClient: params.client,
     teamId,
-    clientOptions: params.clientOptions,
+    clientOptions,
   });
   return {
-    ok: true,
-    scope: {
-      teamId,
-      client: params.client,
-      ...(uploadCompletionClient ? { uploadCompletionClient } : {}),
-    },
+    teamId,
+    client: params.client,
+    ...(writeClient ? { writeClient } : {}),
   };
 }

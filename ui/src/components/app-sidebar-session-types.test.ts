@@ -1,35 +1,24 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createStorageMock } from "../test-helpers/storage.ts";
 import {
   loadStoredCollapsedSessionSections,
   loadStoredHiddenSessionCatalogIds,
   loadStoredSidebarSessionSortMode,
   loadStoredSidebarSessionStatusFilter,
+  loadStoredSidebarSessionOwnerFilter,
   loadStoredSidebarSessionsShowPreview,
   setStoredSessionCatalogHidden,
   storeSidebarSessionSortMode,
   storeSidebarSessionStatusFilter,
+  storeSidebarSessionOwnerFilter,
   storeSidebarSessionsShowPreview,
 } from "./app-sidebar-session-types.ts";
 
 // getSafeLocalStorage only accepts an own value property under Vitest, so the
 // jsdom getter-backed localStorage must be replaced with a plain mock.
 let originalLocalStorage: PropertyDescriptor | undefined;
-
-function createStorageMock(): Storage {
-  const values = new Map<string, string>();
-  return {
-    get length() {
-      return values.size;
-    },
-    clear: () => values.clear(),
-    getItem: (key: string) => values.get(key) ?? null,
-    key: (index: number) => [...values.keys()][index] ?? null,
-    removeItem: (key: string) => void values.delete(key),
-    setItem: (key: string, value: string) => void values.set(key, value),
-  };
-}
 
 beforeEach(() => {
   originalLocalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
@@ -54,7 +43,9 @@ describe("sidebar session status preference", () => {
     expect(loadStoredSidebarSessionStatusFilter()).toBe("active");
   });
 
-  it("stores archived and all filters", () => {
+  it("stores snoozed, archived, and all filters", () => {
+    storeSidebarSessionStatusFilter("snoozed");
+    expect(loadStoredSidebarSessionStatusFilter()).toBe("snoozed");
     storeSidebarSessionStatusFilter("archived");
     expect(loadStoredSidebarSessionStatusFilter()).toBe("archived");
     storeSidebarSessionStatusFilter("all");
@@ -62,13 +53,77 @@ describe("sidebar session status preference", () => {
   });
 });
 
-describe("sidebar session sort preference", () => {
-  it("defaults absent and unknown stored values to created", () => {
-    expect(loadStoredSidebarSessionSortMode()).toBe("created");
-    localStorage.setItem("openclaw:sidebar:sessions:sort-mode", "unexpected");
-    expect(loadStoredSidebarSessionSortMode()).toBe("created");
+describe("sidebar session owner preference", () => {
+  it("isolates owner and involving-me filters by gateway and authenticated user", () => {
+    storeSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada", {
+      ownerId: "profile-bob",
+      involvingMe: false,
+    });
+    storeSidebarSessionOwnerFilter("wss://one.example/ws", "profile-grace", {
+      ownerId: null,
+      involvingMe: true,
+    });
+
+    expect(loadStoredSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada")).toEqual({
+      ownerId: "profile-bob",
+      involvingMe: false,
+    });
+    expect(loadStoredSidebarSessionOwnerFilter("wss://one.example/ws", "profile-grace")).toEqual({
+      ownerId: null,
+      involvingMe: true,
+    });
+    expect(loadStoredSidebarSessionOwnerFilter("wss://two.example/ws", "profile-ada")).toEqual({
+      ownerId: "profile-ada",
+      involvingMe: false,
+    });
   });
 
+  it("stores an explicit all-owner choice and rejects malformed stored values", () => {
+    storeSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada", {
+      ownerId: "profile-bob",
+      involvingMe: false,
+    });
+    const key = localStorage.key(0);
+    expect(key).not.toBeNull();
+    localStorage.setItem(key ?? "", "owner:");
+    expect(loadStoredSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada")).toEqual({
+      ownerId: null,
+      involvingMe: false,
+    });
+
+    storeSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada", {
+      ownerId: null,
+      involvingMe: false,
+    });
+    expect(loadStoredSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada")).toEqual({
+      ownerId: null,
+      involvingMe: false,
+    });
+    expect(localStorage.getItem(key ?? "")).toBe("all");
+  });
+
+  it("keeps rendering when browser storage rejects access", () => {
+    localStorage.getItem = () => {
+      throw new Error("storage disabled");
+    };
+    localStorage.setItem = () => {
+      throw new Error("storage disabled");
+    };
+
+    expect(loadStoredSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada")).toEqual({
+      ownerId: "profile-ada",
+      involvingMe: false,
+    });
+    expect(() =>
+      storeSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada", {
+        ownerId: null,
+        involvingMe: true,
+      }),
+    ).not.toThrow();
+  });
+});
+
+describe("sidebar session sort preference", () => {
   it("round-trips updated and people modes", () => {
     expect(storeSidebarSessionSortMode("updated", undefined)).toBe("updated");
     expect(loadStoredSidebarSessionSortMode()).toBe("updated");
@@ -89,8 +144,8 @@ describe("collapsed sidebar sections preference", () => {
 });
 
 describe("sidebar session preview preference", () => {
-  it("defaults to showing previews and round-trips the stored choice", () => {
-    expect(loadStoredSidebarSessionsShowPreview()).toBe(true);
+  it("defaults to hiding previews and round-trips the stored choice", () => {
+    expect(loadStoredSidebarSessionsShowPreview()).toBe(false);
 
     storeSidebarSessionsShowPreview(false);
     expect(loadStoredSidebarSessionsShowPreview()).toBe(false);

@@ -1,4 +1,3 @@
-/** Helper predicates and gates used while streaming agent-runner payloads. */
 import { isAudioFileName } from "@openclaw/media-core/mime";
 import {
   hasOutboundReplyContent,
@@ -9,17 +8,14 @@ import { normalizeVerboseLevel, type VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
-const hasAudioMedia = (urls?: string[]): boolean =>
-  Boolean(urls?.some((url) => isAudioFileName(url)));
-
-/** Returns true when a payload carries audio media. */
 export const isAudioPayload = (payload: ReplyPayload): boolean =>
-  hasAudioMedia(resolveSendableOutboundReplyParts(payload).mediaUrls);
+  resolveSendableOutboundReplyParts(payload).mediaUrls.some(isAudioFileName);
 
 type VerboseGateParams = {
   sessionKey?: string;
   storePath?: string;
   resolvedVerboseLevel: VerboseLevel;
+  verboseLevelOverride?: VerboseLevel;
 };
 
 const VERBOSE_GATE_SESSION_REFRESH_MS = 250;
@@ -38,53 +34,39 @@ function readCurrentVerboseLevel(params: VerboseGateParams): VerboseLevel | unde
       ? normalizeVerboseLevel(entry.verboseLevel)
       : undefined;
   } catch {
-    // ignore store read failures
     return undefined;
   }
-}
-
-function createCurrentVerboseLevelResolver(
-  params: VerboseGateParams,
-): () => VerboseLevel | undefined {
-  let cachedLevel: VerboseLevel | undefined;
-  let cachedAtMs = Number.NEGATIVE_INFINITY;
-  return () => {
-    if (!params.sessionKey || !params.storePath) {
-      return undefined;
-    }
-    const now = Date.now();
-    if (now - cachedAtMs < VERBOSE_GATE_SESSION_REFRESH_MS) {
-      return cachedLevel;
-    }
-    cachedLevel = readCurrentVerboseLevel(params);
-    cachedAtMs = now;
-    return cachedLevel;
-  };
 }
 
 function createVerboseGate(
   params: VerboseGateParams,
   shouldEmit: (level: VerboseLevel) => boolean,
 ): () => boolean {
-  // Normalize verbose values from session store/config so false/"false" still means off.
-  const fallbackVerbose = params.resolvedVerboseLevel;
-  const resolveCurrentVerboseLevel = createCurrentVerboseLevelResolver(params);
+  let cachedLevel: VerboseLevel | undefined;
+  let cachedAtMs = Number.NEGATIVE_INFINITY;
   return () => {
-    return shouldEmit(resolveCurrentVerboseLevel() ?? fallbackVerbose);
+    // Explicit turn hints stay fixed; only inherited settings follow live session changes.
+    if (params.verboseLevelOverride != null) {
+      return shouldEmit(params.verboseLevelOverride);
+    }
+    if (!params.sessionKey || !params.storePath) {
+      return shouldEmit(params.resolvedVerboseLevel);
+    }
+    const now = Date.now();
+    if (now - cachedAtMs >= VERBOSE_GATE_SESSION_REFRESH_MS) {
+      cachedLevel = readCurrentVerboseLevel(params);
+      cachedAtMs = now;
+    }
+    return shouldEmit(cachedLevel ?? params.resolvedVerboseLevel);
   };
 }
 
-/** Creates the visibility gate for tool result summaries. */
-export const createShouldEmitToolResult = (params: VerboseGateParams): (() => boolean) => {
-  return createVerboseGate(params, (level) => level !== "off");
-};
+export const createShouldEmitToolResult = (params: VerboseGateParams): (() => boolean) =>
+  createVerboseGate(params, (level) => level !== "off");
 
-/** Creates the visibility gate for command/tool output streams. */
-export const createShouldEmitToolOutput = (params: VerboseGateParams): (() => boolean) => {
-  return createVerboseGate(params, (level) => level === "full");
-};
+export const createShouldEmitToolOutput = (params: VerboseGateParams): (() => boolean) =>
+  createVerboseGate(params, (level) => level === "full");
 
-/** Sends typing signals for visible text payloads when typing is enabled. */
 export const signalTypingIfNeeded = async (
   payloads: ReplyPayload[],
   typingSignals: TypingSignaler,

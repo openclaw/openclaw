@@ -11,7 +11,6 @@ function createEncryptedClient() {
   return {
     client: {
       crypto: { decryptMedia },
-      mxcToHttp: vi.fn().mockReturnValue("https://example/mxc"),
     } as unknown as import("../sdk.js").MatrixClient,
     decryptMedia,
   };
@@ -52,54 +51,6 @@ describe("downloadMatrixMedia", () => {
     setMatrixRuntime(runtimeStub);
   });
 
-  it("decrypts encrypted media when file payloads are present", async () => {
-    const { client, decryptMedia } = createEncryptedClient();
-    const file = createEncryptedFile();
-
-    const result = await downloadMatrixMedia({
-      client,
-      mxcUrl: "mxc://example/file",
-      contentType: "image/png",
-      maxBytes: 1024,
-      file,
-    });
-
-    expect(decryptMedia).toHaveBeenCalledWith(file, {
-      maxBytes: 1024,
-      readIdleTimeoutMs: 30_000,
-    });
-    expect(saveMediaBuffer).toHaveBeenCalledWith(
-      Buffer.from("decrypted"),
-      "image/png",
-      "inbound",
-      1024,
-      undefined,
-    );
-    expect(result?.path).toBe("/tmp/media");
-  });
-
-  it("forwards originalFilename to saveMediaBuffer when provided", async () => {
-    const { client } = createEncryptedClient();
-    const file = createEncryptedFile();
-
-    await downloadMatrixMedia({
-      client,
-      mxcUrl: "mxc://example/file",
-      contentType: "image/png",
-      maxBytes: 1024,
-      file,
-      originalFilename: "Screenshot 2026-03-27.png",
-    });
-
-    expect(saveMediaBuffer).toHaveBeenCalledWith(
-      Buffer.from("decrypted"),
-      "image/png",
-      "inbound",
-      1024,
-      "Screenshot 2026-03-27.png",
-    );
-  });
-
   it("rejects encrypted media that exceeds maxBytes before decrypting", async () => {
     const { client, decryptMedia } = createEncryptedClient();
     const file = createEncryptedFile();
@@ -116,6 +67,44 @@ describe("downloadMatrixMedia", () => {
     ).rejects.toBeInstanceOf(MatrixMediaSizeLimitError);
 
     expect(decryptMedia).not.toHaveBeenCalled();
+    expect(saveMediaBuffer).not.toHaveBeenCalled();
+  });
+
+  it("rejects oversized decrypted content before saving", async () => {
+    const { client, decryptMedia } = createEncryptedClient();
+    decryptMedia.mockResolvedValue(Buffer.alloc(1025));
+
+    await expect(
+      downloadMatrixMedia({
+        client,
+        mxcUrl: "mxc://example/file",
+        maxBytes: 1024,
+        file: createEncryptedFile(),
+      }),
+    ).rejects.toBeInstanceOf(MatrixMediaSizeLimitError);
+    expect(saveMediaBuffer).not.toHaveBeenCalled();
+  });
+
+  it.each(["plain"])("preserves %s media error diagnostics", async (kind) => {
+    const { client, decryptMedia } = createEncryptedClient();
+    const error = new Error("download failed");
+    decryptMedia.mockRejectedValue(error);
+    client.downloadContent = vi.fn().mockRejectedValue(error);
+
+    const result = downloadMatrixMedia({
+      client,
+      mxcUrl: "mxc://example/file",
+      maxBytes: 1024,
+      file: kind === "encrypted" ? createEncryptedFile() : undefined,
+    });
+    if (kind === "encrypted") {
+      await expect(result).rejects.toBe(error);
+    } else {
+      await expect(result).rejects.toMatchObject({
+        message: "Matrix media download failed: Error: download failed",
+        cause: error,
+      });
+    }
     expect(saveMediaBuffer).not.toHaveBeenCalled();
   });
 

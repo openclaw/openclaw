@@ -12,22 +12,7 @@ extension AppState {
         case remoteToken = "gateway.remote.token"
 
         var remoteKey: String? {
-            switch self {
-            case .mode:
-                nil
-            case .remoteTransport:
-                "transport"
-            case .remoteUrl:
-                "url"
-            case .remoteTarget:
-                "sshTarget"
-            case .remoteIdentity:
-                "sshIdentity"
-            case .remoteHostKeyPolicy:
-                "sshHostKeyPolicy"
-            case .remoteToken:
-                "token"
-            }
+            self == .mode ? nil : self.rawValue.components(separatedBy: ".").last
         }
 
         var displayName: String {
@@ -56,20 +41,6 @@ extension AppState {
         let message: String
     }
 
-    enum GatewayConfigValue: Equatable {
-        case missing
-        case json(Data)
-    }
-
-    struct GatewayConfigSnapshot {
-        static let empty = GatewayConfigSnapshot(values: [:])
-        let values: [GatewayConfigField: GatewayConfigValue]
-
-        subscript(field: GatewayConfigField) -> GatewayConfigValue {
-            self.values[field] ?? .missing
-        }
-    }
-
     struct RemoteGatewayConfigDraft {
         var transport: RemoteTransport
         var remoteUrl: String
@@ -88,6 +59,10 @@ extension AppState {
         var remoteUrl: String
         var remoteToken: String
         var dirtyFields: Set<GatewayConfigField>
+
+        var clearsPrimaryGateway: Bool {
+            self.connectionMode == .unconfigured && self.dirtyFields.contains(.mode)
+        }
     }
 
     struct GatewaySelectionSnapshot: Equatable {
@@ -102,35 +77,33 @@ struct GatewayConfigConflictRecoveryView: View {
     @Bindable var state: AppState
 
     var body: some View {
-        if let conflict = state.gatewayConfigConflict {
+        let conflict = self.state.gatewayConfigConflict
+        if let message = conflict?.message ?? state.gatewayConfigSyncFailure {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange)
                     .accessibilityHidden(true)
 
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(verbatim: conflict.message)
-                        .font(.footnote)
+                    Text(verbatim: message)
                         .fixedSize(horizontal: false, vertical: true)
 
-                    HStack(spacing: 8) {
-                        Button("Use file version") {
-                            self.state.useFileGatewayConfigConflict()
-                        }
-                        .buttonStyle(.bordered)
+                    if conflict != nil {
+                        HStack(spacing: 8) {
+                            Button("Use file version") {
+                                self.state.useFileGatewayConfigConflict()
+                            }
+                            .buttonStyle(.bordered)
 
-                        Button("Keep my edits") {
-                            self.state.keepGatewayConfigEdits()
+                            Button("Keep my edits") {
+                                self.state.keepGatewayConfigEdits()
+                            }
+                            .buttonStyle(.borderedProminent)
                         }
-                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
                     }
-                    .controlSize(.small)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 11)
-            .background(.orange.opacity(0.08))
         }
     }
 }

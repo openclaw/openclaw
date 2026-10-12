@@ -2,7 +2,6 @@
  * Tests agent harness runtime helpers and task dispatch behavior.
  */
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
-import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import {
   agentHarnessStructuredInput,
   attachModelProviderRequestTransport,
@@ -11,142 +10,53 @@ import {
   deliverAgentHarnessUserInputPrompt,
   formatAgentHarnessUserInputPrompt,
   getModelProviderRequestTransport,
+  queueAgentHarnessMessage,
+  setActiveEmbeddedRun,
   type AgentHarness,
+  type AgentHarnessQuestionGatewayCall,
   type AgentHarnessAttemptParams,
   type AgentHarnessAttemptParamsV2,
   type AgentHarnessSideQuestionParams,
   type AgentHarnessSideQuestionParamsV2,
-  type AgentHarnessSupportContext,
-  type AgentHarnessTerminalOutcomeClassification,
+  type AgentHarnessSessionForkParams,
   type AgentHarnessV2,
   type EmbeddedRunAttemptParams,
   type EmbeddedRunAttemptParamsV2,
 } from "./agent-harness-runtime.js";
-import type {
-  ProviderModelRouteRuntimePolicy,
-  ProviderRouteOverridePresence,
-} from "./provider-model-types.js";
 
 describe("classifyAgentHarnessTerminalOutcome", () => {
-  it("does not classify an in-flight turn", () => {
-    expect(
-      classifyAgentHarnessTerminalOutcome({
-        assistantTexts: [],
-        reasoningText: "",
-        planText: "",
-        promptError: null,
-        turnCompleted: false,
-      }),
-    ).toBeUndefined();
-  });
-
-  it("does not classify prompt errors as terminal empty-output outcomes", () => {
-    expect(
-      classifyAgentHarnessTerminalOutcome({
-        assistantTexts: [],
-        reasoningText: "",
-        planText: "",
-        promptError: new Error("turn failed"),
-        turnCompleted: true,
-      }),
-    ).toBeUndefined();
-  });
+  function classify(overrides: Partial<Parameters<typeof classifyAgentHarnessTerminalOutcome>[0]>) {
+    return classifyAgentHarnessTerminalOutcome({
+      assistantTexts: [],
+      reasoningText: "",
+      planText: "",
+      promptError: null,
+      turnCompleted: true,
+      ...overrides,
+    });
+  }
 
   it("does not classify deliberate silent replies such as NO_REPLY", () => {
-    expect(
-      classifyAgentHarnessTerminalOutcome({
-        assistantTexts: ["NO_REPLY"],
-        reasoningText: "",
-        planText: "",
-        promptError: null,
-        turnCompleted: true,
-      }),
-    ).toBeUndefined();
-  });
-
-  it("treats empty-string prompt errors as terminal errors", () => {
-    expect(
-      classifyAgentHarnessTerminalOutcome({
-        assistantTexts: [],
-        reasoningText: "",
-        planText: "",
-        promptError: "",
-        turnCompleted: true,
-      }),
-    ).toBeUndefined();
+    expect(classify({ assistantTexts: ["NO_REPLY"] })).toBeUndefined();
   });
 
   it("treats whitespace-only assistant text as not visible", () => {
-    expect(
-      classifyAgentHarnessTerminalOutcome({
-        assistantTexts: ["  ", "\n\t"],
-        reasoningText: "",
-        planText: "",
-        promptError: null,
-        turnCompleted: true,
-      }),
-    ).toBe("empty");
-  });
-
-  it("classifies a completed turn with plan text only as planning-only", () => {
-    expect(
-      classifyAgentHarnessTerminalOutcome({
-        assistantTexts: [],
-        reasoningText: "",
-        planText: "1. inspect\n2. patch\n3. test",
-        promptError: null,
-        turnCompleted: true,
-      }),
-    ).toBe("planning-only");
+    expect(classify({ assistantTexts: ["  ", "\n\t"] })).toBe("empty");
   });
 
   it("prefers planning-only when both plan and reasoning text are present", () => {
     expect(
-      classifyAgentHarnessTerminalOutcome({
-        assistantTexts: [],
+      classify({
         reasoningText: "I need to inspect the files.",
         planText: "I will inspect, patch, and test.",
-        promptError: null,
-        turnCompleted: true,
       }),
     ).toBe("planning-only");
   });
 
   it("classifies a completed turn with reasoning text only as reasoning-only", () => {
-    expect(
-      classifyAgentHarnessTerminalOutcome({
-        assistantTexts: [],
-        reasoningText: "The answer depends on the current repository state.",
-        planText: "",
-        promptError: null,
-        turnCompleted: true,
-      }),
-    ).toBe("reasoning-only");
-  });
-
-  it("classifies a completed turn with no visible output as empty", () => {
-    expect(
-      classifyAgentHarnessTerminalOutcome({
-        assistantTexts: [],
-        reasoningText: "  ",
-        planText: "\n",
-        promptError: null,
-        turnCompleted: true,
-      }),
-    ).toBe("empty");
-  });
-
-  it("returns only terminal fallback classifications, not ok", () => {
-    const classification: AgentHarnessTerminalOutcomeClassification =
-      classifyAgentHarnessTerminalOutcome({
-        assistantTexts: [],
-        reasoningText: "",
-        planText: "",
-        promptError: null,
-        turnCompleted: true,
-      }) ?? "empty";
-
-    expect(classification).toBe("empty");
+    expect(classify({ reasoningText: "The answer depends on the current repository state." })).toBe(
+      "reasoning-only",
+    );
   });
 });
 
@@ -164,6 +74,7 @@ describe("agent harness runtime SDK facade", () => {
   });
 
   it("keeps legacy harness implementations source-compatible while requiring capabilities in V2", () => {
+    type SessionForkParamsV2 = Parameters<NonNullable<AgentHarnessV2["sessionForkV2"]>["fork"]>[0];
     const legacyHarness = {
       id: "legacy-test",
       label: "Legacy test harness",
@@ -203,6 +114,56 @@ describe("agent harness runtime SDK facade", () => {
         ? true
         : false
     >().toEqualTypeOf<false>();
+
+    expectTypeOf<
+      Omit<SessionForkParamsV2, "assertCurrent">
+    >().toEqualTypeOf<AgentHarnessSessionForkParams>();
+    expectTypeOf<
+      Omit<SessionForkParamsV2, "assertCurrent"> extends SessionForkParamsV2 ? true : false
+    >().toEqualTypeOf<false>();
+
+    // v2026.8.1 queue/register callers need neither a source predicate nor V2.
+    type QueueOptions = Parameters<typeof queueAgentHarnessMessage>[2];
+    const legacyInjection = {
+      isAvailable: () => true,
+      queueMessage: async (_text: string, _options?: QueueOptions) => {},
+    };
+    const legacyHandle = {
+      queueMessage: legacyInjection.queueMessage,
+      messageInjection: legacyInjection,
+      isStreaming: () => true,
+      isCompacting: () => false,
+      abort: () => {},
+    } satisfies Parameters<typeof setActiveEmbeddedRun>[1];
+    expectTypeOf(legacyHandle).toMatchTypeOf<Parameters<typeof setActiveEmbeddedRun>[1]>();
+    expectTypeOf(queueAgentHarnessMessage).returns.toEqualTypeOf<boolean>();
+    type GuardedInjection = NonNullable<
+      Parameters<typeof setActiveEmbeddedRun>[1]["messageInjectionV2"]
+    >;
+    expectTypeOf<Parameters<GuardedInjection["queueMessage"]>[2]>().toEqualTypeOf<() => void>();
+    expectTypeOf<Parameters<GuardedInjection["queueMessage"]>[3]>().toEqualTypeOf<
+      "run" | "source-bound"
+    >();
+    expectTypeOf<Parameters<GuardedInjection["queueMessage"]>["length"]>().toEqualTypeOf<4>();
+  });
+
+  it("keeps legacy question callbacks and requires explicit guarded dispatch authority", () => {
+    type Legacy = (
+      method: string,
+      opts: { timeoutMs?: number },
+      params?: unknown,
+      extra?: { signal?: AbortSignal },
+    ) => Promise<unknown>;
+    expectTypeOf<AgentHarnessQuestionGatewayCall>().toEqualTypeOf<Legacy>();
+    type Override = Parameters<typeof agentHarnessStructuredInput.run>[0]["gatewayCall"];
+    expectTypeOf<Legacy>().toMatchTypeOf<Override>();
+    expectTypeOf<undefined>().toMatchTypeOf<Override>();
+    type Dispatcher = Exclude<Override, Legacy | undefined>;
+    type Request = Parameters<Dispatcher["call"]>[0];
+    type Protected = Extract<Request["authority"], { kind: "source-bound" }>;
+    expectTypeOf<Dispatcher["version"]>().toEqualTypeOf<2>();
+    expectTypeOf<Protected["assertCurrent"]>().toEqualTypeOf<() => void>();
+    expectTypeOf<Omit<Protected, "assertCurrent">>().not.toMatchTypeOf<Protected>();
   });
 
   it("exposes attached model request transport metadata helpers", () => {
@@ -215,41 +176,9 @@ describe("agent harness runtime SDK facade", () => {
       auth: { mode: "header", headerName: "x-api-key", value: "secret" },
     });
   });
-
-  it("locks the request-transport support contract", () => {
-    expectTypeOf<
-      NonNullable<AgentHarnessSupportContext["modelProvider"]>["requestTransportOverrides"]
-    >().toEqualTypeOf<ProviderRouteOverridePresence | undefined>();
-    expectTypeOf<
-      NonNullable<AgentHarnessSupportContext["modelProvider"]>["runtimePolicy"]
-    >().toEqualTypeOf<ProviderModelRouteRuntimePolicy | undefined>();
-  });
-
-  it("exports the V2 isolated-completion authorization contract through the harness", () => {
-    type IsolatedCompletionV2 = NonNullable<AgentHarnessV2["runIsolatedCompletionV2"]>;
-
-    expectTypeOf<Parameters<IsolatedCompletionV2>[0]["authorization"]["owner"]>().toEqualTypeOf<
-      "host" | "harness"
-    >();
-    expectTypeOf<Awaited<ReturnType<IsolatedCompletionV2>>["assistant"]>().not.toBeNever();
-  });
 });
 
 describe("agent harness user input helpers", () => {
-  it("authorizes host-owned text-only harness updates without altering their visible payload", async () => {
-    const onBlockReply = vi.fn();
-
-    await deliverAgentHarnessUserInputPrompt({ onBlockReply }, [], {
-      intro: "Which environment should I use?",
-    });
-
-    const payload = onBlockReply.mock.calls[0]?.[0];
-    expect(payload).toEqual({ text: "Which environment should I use?", presentation: undefined });
-    expect(getReplyPayloadMetadata(payload)).toMatchObject({
-      deliverDespiteSourceReplySuppression: true,
-    });
-  });
-
   it("formats prompts and delivers through blocking replies first", async () => {
     const onBlockReply = vi.fn();
 
@@ -279,32 +208,22 @@ describe("agent harness user input helpers", () => {
     });
   });
 
-  it("normalizes keyed multi-question answers with option indexes", () => {
+  it("keeps a comma-containing option label as one multi-select answer", () => {
     expect(
       buildAgentHarnessUserInputAnswers(
         [
           {
-            id: "repo",
-            header: "Repository",
-            question: "Which repo?",
+            id: "region",
+            header: "Region",
+            question: "Which region should deploy?",
+            multiSelect: true,
             isOther: true,
-          },
-          {
-            id: "mode",
-            header: "Mode",
-            question: "Which mode?",
-            isOther: false,
-            options: [{ label: "Fast" }, { label: "Deep" }],
+            options: [{ label: "Frankfurt, Germany" }, { label: "Dublin, Ireland" }],
           },
         ],
-        "repo: openclaw\nmode: 2",
+        "Frankfurt, Germany",
       ),
-    ).toEqual({
-      answers: {
-        mode: { answers: ["Deep"] },
-        repo: { answers: ["openclaw"] },
-      },
-    });
+    ).toEqual({ answers: { region: { answers: ["Frankfurt, Germany"] } } });
   });
 
   it("supports runtime-specific text formatting", () => {

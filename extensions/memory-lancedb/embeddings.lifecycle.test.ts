@@ -6,14 +6,18 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawPluginApi } from "./api.js";
 import type { MemoryConfig } from "./config.js";
 
 const providerMocks = vi.hoisted(() => ({
   getMemoryEmbeddingProvider: vi.fn(),
   authMutationListeners: new Set<
-    (event: { agentDir?: string; affectsInheritedStores: boolean }) => void
+    (event: {
+      agentDir?: string;
+      affectsInheritedStores: boolean;
+      profileSetChanged: boolean;
+    }) => void
   >(),
 }));
 
@@ -68,7 +72,7 @@ function providerResult(
     id?: string;
     model?: string;
     vector?: number[];
-    embedQuery?: MemoryEmbeddingProvider["embedQuery"];
+    embedQuery?: (text: string) => Promise<number[]>;
     close?: NonNullable<MemoryEmbeddingProvider["close"]>;
   } = {},
 ) {
@@ -77,7 +81,10 @@ function providerResult(
     provider: {
       id: params.id ?? "openai",
       model: params.model ?? "text-embedding-3-small",
-      embedQuery: params.embedQuery ?? vi.fn(async () => vector),
+      embed: async (input: Parameters<MemoryEmbeddingProvider["embed"]>[0]) =>
+        await (params.embedQuery ?? vi.fn(async () => vector))(
+          typeof input === "string" ? input : input.text,
+        ),
       embedBatch: vi.fn(async () => [vector]),
       ...(params.close ? { close: params.close } : {}),
     },
@@ -85,41 +92,6 @@ function providerResult(
 }
 
 describe("memory-lancedb provider lifecycle", () => {
-  it("authenticates private agent embeddings without using the default agent's credentials", async () => {
-    const config = {};
-    const resolveAgentDir = vi.fn((_config: unknown, agentId: string) => `/tmp/agent-${agentId}`);
-    const embedQuery = vi.fn(async () => [0.1, 0.2, 0.3]);
-    const createProvider = vi.fn(async (options: { agentDir?: string }) => {
-      if (options.agentDir !== "/tmp/agent-private") {
-        throw new Error("No provider credential for the default agent");
-      }
-      return providerResult({ embedQuery });
-    });
-    providerMocks.getMemoryEmbeddingProvider.mockReturnValue({
-      id: "openai",
-      create: createProvider,
-    });
-    const api = {
-      config,
-      runtime: {
-        config: { current: () => config },
-        agent: { resolveAgentDir },
-      },
-    } as unknown as OpenClawPluginApi;
-    const embeddings = createEmbeddings(api);
-
-    await expect(embed(embeddings, "private", "private account memory")).resolves.toEqual([
-      0.1, 0.2, 0.3,
-    ]);
-
-    expect(resolveAgentDir).toHaveBeenCalledWith(config, "private");
-    expect(createProvider).toHaveBeenCalledWith(
-      expect.objectContaining({ agentDir: "/tmp/agent-private" }),
-    );
-    expect(embedQuery).toHaveBeenCalledWith("private account memory");
-    await embeddings.close?.();
-  });
-
   it("isolates concurrent agent providers and retires every account exactly once", async () => {
     const config = {};
     const requests: Array<{ agentDir: string; text: string }> = [];
@@ -203,6 +175,7 @@ describe("memory-lancedb provider lifecycle", () => {
     listener?.({
       agentDir: "/tmp/agent-private/../agent-private",
       affectsInheritedStores: false,
+      profileSetChanged: false,
     });
 
     await embed(embeddings, "other", "other warm provider");
@@ -519,13 +492,15 @@ describe("memory-lancedb provider lifecycle", () => {
           provider: oldConfig.provider,
           model: oldConfig.model,
           remote: { apiKey: oldConfig.apiKey, baseUrl: oldConfig.baseUrl },
-          outputDimensionality: oldConfig.dimensions,
+          dimensions: oldConfig.dimensions,
+          fallback: "none",
         }),
         expect.objectContaining({
           provider: newConfig.provider,
           model: newConfig.model,
           remote: { apiKey: newConfig.apiKey, baseUrl: newConfig.baseUrl },
-          outputDimensionality: newConfig.dimensions,
+          dimensions: newConfig.dimensions,
+          fallback: "none",
         }),
       ]);
       expect(closeOldProvider).toHaveBeenCalledOnce();

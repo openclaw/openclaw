@@ -1,13 +1,12 @@
-/**
- * Plans which core, bundle MCP, and bundle LSP tools an attempt should build.
- */
 import { TOOL_NAME_SEPARATOR } from "../../agent-bundle-mcp-names.js";
 import {
   type CoreToolFactoryFamily,
   type OpenClawCodingToolConstructionPlan,
+  listCoreToolFactoryDescriptors,
   resolveCoreToolFactoryFamily,
 } from "../../core-tool-factory-descriptors.js";
-import { isToolAllowedByPolicyName } from "../../tool-policy-match.js";
+import { mayMatchGlobWithPrefix } from "../../glob-pattern.js";
+import { createRuntimeToolMatcher } from "../../tool-policy-match.js";
 import {
   attachToolAllowlistIntersection,
   buildPluginToolGroups,
@@ -19,26 +18,16 @@ import {
   readToolAllowlistIntersection,
 } from "../../tool-policy.js";
 
-const ALL_CODING_TOOL_CONSTRUCTION_PLAN: OpenClawCodingToolConstructionPlan = {
-  includeBaseCodingTools: true,
-  includeShellTools: true,
-  includeChannelTools: true,
-  includeOpenClawTools: true,
-  includePluginTools: true,
-};
-
-const NO_CODING_TOOL_CONSTRUCTION_PLAN: OpenClawCodingToolConstructionPlan = {
-  includeBaseCodingTools: false,
-  includeShellTools: false,
-  includeChannelTools: false,
-  includeOpenClawTools: false,
-  includePluginTools: false,
-};
-
-function cloneCodingToolConstructionPlan(
-  plan: OpenClawCodingToolConstructionPlan,
+function createUniformCodingToolConstructionPlan(
+  include: boolean,
 ): OpenClawCodingToolConstructionPlan {
-  return { ...plan };
+  return {
+    includeBaseCodingTools: include,
+    includeShellTools: include,
+    includeChannelTools: include,
+    includeOpenClawTools: include,
+    includePluginTools: include,
+  };
 }
 
 function isBundleMcpAllowlistName(normalized: string): boolean {
@@ -46,11 +35,7 @@ function isBundleMcpAllowlistName(normalized: string): boolean {
   return normalized === "bundle-mcp" || normalized.includes(TOOL_NAME_SEPARATOR);
 }
 
-function isPluginGroupAllowlistName(normalized: string): boolean {
-  return normalized === "group:plugins";
-}
-
-function hasWildcardToolAllowlist(toolsAllow: string[]): boolean {
+function hasWildcardToolAllowlist(toolsAllow: readonly string[]): boolean {
   return toolsAllow.some((entry) => normalizeToolPolicyName(entry) === "*");
 }
 
@@ -64,6 +49,7 @@ export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
   toolsAllow?: string[],
   options?: {
     toolMeta?: (tool: T) => { pluginId: string } | undefined;
+    toolAliases?: (tool: T) => readonly string[];
   },
 ): T[] {
   if (!toolsAllow) {
@@ -77,13 +63,19 @@ export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
     if (hasWildcardToolAllowlist(restriction)) {
       return currentTools;
     }
+    if (currentTools.length === 0) {
+      return [];
+    }
     const pluginGroups = options?.toolMeta
       ? buildPluginToolGroups({ tools: currentTools, toolMeta: options.toolMeta })
       : undefined;
     const policy = pluginGroups
       ? expandPolicyWithPluginGroups({ allow: restriction }, pluginGroups)
       : { allow: expandShippedCoreToolPolicyNames(restriction) };
-    return currentTools.filter((tool) => isToolAllowedByPolicyName(tool.name, policy));
+    const matches = createRuntimeToolMatcher(policy?.allow);
+    return currentTools.filter(
+      (tool) => matches(tool.name) || options?.toolAliases?.(tool).some(matches),
+    );
   }, tools);
 }
 
@@ -92,72 +84,73 @@ export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
  * undefined allowlists already cover every required tool.
  */
 export function mergeForcedEmbeddedAttemptToolsAllow(
-  toolsAllow: string[] | undefined,
+  toolsAllow: readonly string[] | undefined,
   params: { forceMessageTool?: boolean; forceToolNames?: readonly string[] },
 ): string[] | undefined {
-  if (toolsAllow === undefined || hasWildcardToolAllowlist(toolsAllow)) {
-    return toolsAllow;
+  if (toolsAllow === undefined) {
+    return undefined;
   }
   const required = [
     ...(params.forceMessageTool ? ["message"] : []),
     ...(params.forceToolNames ?? []),
   ];
-  if (required.length === 0) {
-    return toolsAllow;
-  }
-  const normalized = new Set(toolsAllow.map((entry) => normalizeToolPolicyName(entry)));
-  const missing = required.filter((name) => !normalized.has(normalizeToolPolicyName(name)));
-  if (missing.length === 0) {
-    return toolsAllow;
-  }
+  const merge = (allow: readonly string[]) => {
+    const normalized = new Set(allow.map(normalizeToolPolicyName));
+    return [
+      ...allow,
+      ...required.filter((name) => {
+        const key = normalizeToolPolicyName(name);
+        if (normalized.has("*") || normalized.has(key)) {
+          return false;
+        }
+        normalized.add(key);
+        return true;
+      }),
+    ];
+  };
   const restrictions = readToolAllowlistIntersection(toolsAllow);
-  const merged = [...toolsAllow, ...missing];
-  return restrictions
-    ? attachToolAllowlistIntersection(
-        merged,
-        restrictions.map((restriction) => restriction.concat(missing)),
-      )
-    : merged;
+  const merged = merge(toolsAllow);
+  return restrictions ? attachToolAllowlistIntersection(merged, restrictions.map(merge)) : merged;
 }
 
 function resolveCodingToolConstructionPlanForAllowlist(
   toolsAllow?: string[],
 ): OpenClawCodingToolConstructionPlan {
   if (!toolsAllow) {
-    return cloneCodingToolConstructionPlan(ALL_CODING_TOOL_CONSTRUCTION_PLAN);
+    return createUniformCodingToolConstructionPlan(true);
   }
-  if (toolsAllow.length === 0) {
-    return cloneCodingToolConstructionPlan(NO_CODING_TOOL_CONSTRUCTION_PLAN);
+  const restrictions = readToolAllowlistIntersection(toolsAllow);
+  if (!restrictions && toolsAllow.length === 0) {
+    return createUniformCodingToolConstructionPlan(false);
   }
-  if (hasWildcardToolAllowlist(toolsAllow)) {
-    return cloneCodingToolConstructionPlan(ALL_CODING_TOOL_CONSTRUCTION_PLAN);
+  if (!restrictions && hasWildcardToolAllowlist(toolsAllow)) {
+    return createUniformCodingToolConstructionPlan(true);
   }
-  const expanded = expandToolGroups(expandShippedCoreToolPolicyNames(toolsAllow));
+  const constructionEntries = restrictions?.flat() ?? toolsAllow;
+  const expanded = expandToolGroups(expandShippedCoreToolPolicyNames(constructionEntries));
   const normalized = normalizeToolList(expanded);
-  const coreFamilies = new Set<CoreToolFactoryFamily>();
-  let includePluginTools = false;
-  for (const name of normalized) {
-    const family = resolveCoreToolFactoryFamily(name);
-    if (family) {
-      coreFamilies.add(family);
-      continue;
-    }
-    // Plugin ids/tool names are not known to the local factory catalog.
-    if (!isBundleMcpAllowlistName(name)) {
-      includePluginTools = true;
-    }
-  }
-  const includeBaseCodingTools = coreFamilies.has("base-coding");
-  const includeShellTools = coreFamilies.has("shell");
-  const includeOpenClawTools = coreFamilies.has("openclaw");
-  // Channel delivery tools are constructed through plugin-capable runtime setup.
-  const includeChannelTools = includePluginTools;
+  // Construction must not select a shell factory only through write -> apply_patch.
+  const constructionMatchers = (restrictions ?? [toolsAllow]).map((restriction) =>
+    createRuntimeToolMatcher(expandShippedCoreToolPolicyNames(restriction), false),
+  );
+  // Construct every family containing a tool that the final runtime policy can retain.
+  // Otherwise a valid glob can survive filtering after its factory was never run.
+  const coreFamilies = new Set<CoreToolFactoryFamily>(
+    listCoreToolFactoryDescriptors()
+      .filter(({ name }) => constructionMatchers.every((matches) => matches(name)))
+      .map(({ family }) => family),
+  );
+  // Only bundle-mcp is unambiguous; namespaced entries can belong to plugins.
+  const includePluginTools = normalized.some(
+    (name) => !resolveCoreToolFactoryFamily(name) && name !== "bundle-mcp",
+  );
 
   return {
-    includeBaseCodingTools,
-    includeShellTools,
-    includeChannelTools,
-    includeOpenClawTools,
+    includeBaseCodingTools: coreFamilies.has("base-coding"),
+    includeShellTools: coreFamilies.has("shell"),
+    // Channel delivery tools are constructed through plugin-capable runtime setup.
+    includeChannelTools: includePluginTools,
+    includeOpenClawTools: coreFamilies.has("openclaw"),
     includePluginTools,
   };
 }
@@ -189,7 +182,7 @@ export function resolveEmbeddedAttemptToolConstructionPlan(params: {
     return {
       constructTools: false,
       includeCoreTools: false,
-      codingToolConstructionPlan: cloneCodingToolConstructionPlan(NO_CODING_TOOL_CONSTRUCTION_PLAN),
+      codingToolConstructionPlan: createUniformCodingToolConstructionPlan(false),
     };
   }
   const toolsAllow = mergeForcedEmbeddedAttemptToolsAllow(params.toolsAllow, {
@@ -213,13 +206,15 @@ export function resolveEmbeddedAttemptToolConstructionPlan(params: {
   };
 }
 
+type BundleRuntimeParams = {
+  toolsEnabled: boolean;
+  disableTools?: boolean;
+  toolsAllow?: string[];
+};
+
 function shouldCreateBundleRuntimeForAttempt(
-  params: {
-    toolsEnabled: boolean;
-    disableTools?: boolean;
-    toolsAllow?: string[];
-  },
-  matchesAllowlist: (normalizedToolName: string) => boolean,
+  params: BundleRuntimeParams,
+  matchesAllowlist: (normalizedToolNames: string[]) => boolean,
 ): boolean {
   if (!params.toolsEnabled || params.disableTools === true) {
     return false;
@@ -227,41 +222,46 @@ function shouldCreateBundleRuntimeForAttempt(
   if (!params.toolsAllow) {
     return true;
   }
-  if (params.toolsAllow.length === 0) {
-    return false;
-  }
-  if (hasWildcardToolAllowlist(params.toolsAllow)) {
-    return true;
-  }
-  return params.toolsAllow.some((toolName) => matchesAllowlist(normalizeToolPolicyName(toolName)));
+  const restrictions = readToolAllowlistIntersection(params.toolsAllow) ?? [params.toolsAllow];
+  return restrictions.every(
+    (allow) =>
+      allow.length > 0 &&
+      (hasWildcardToolAllowlist(allow) || matchesAllowlist(allow.map(normalizeToolPolicyName))),
+  );
 }
 
 /**
  * Decides whether the bundled MCP runtime is needed for this attempt. Bundle
- * runtime creation follows explicit bundle/plugin allowlist names rather than
- * generic local tool names.
+ * runtime creation follows explicit bundle/plugin names or globs that can reach
+ * a configured server namespace. Final tool policy remains authoritative.
  */
-export function shouldCreateBundleMcpRuntimeForAttempt(params: {
-  toolsEnabled: boolean;
-  disableTools?: boolean;
-  toolsAllow?: string[];
-}): boolean {
-  return shouldCreateBundleRuntimeForAttempt(params, (normalized) => {
-    return isBundleMcpAllowlistName(normalized) || isPluginGroupAllowlistName(normalized);
+export function shouldCreateBundleMcpRuntimeForAttempt(
+  params: BundleRuntimeParams & { resolveConfiguredMcpNamespaces?: () => string[] },
+): boolean {
+  return shouldCreateBundleRuntimeForAttempt(params, (names) => {
+    if (names.some((name) => isBundleMcpAllowlistName(name) || name === "group:plugins")) {
+      return true;
+    }
+    // Discovery can start all enabled static servers, even if a later glob
+    // constraint matches no tool. Only final full-name policy grants tools.
+    const globs = names.filter((name) => name.includes("*"));
+    return (
+      globs.length > 0 &&
+      (params.resolveConfiguredMcpNamespaces?.() ?? []).some((namespace) =>
+        globs.some((glob) => mayMatchGlobWithPrefix(glob, namespace.toLowerCase())),
+      )
+    );
   });
 }
 
-/**
- * Decides whether the bundled LSP runtime is needed for this attempt. LSP tools
- * are enabled by default/wildcard and by allowlist entries with the `lsp_`
- * prefix.
- */
-export function shouldCreateBundleLspRuntimeForAttempt(params: {
-  toolsEnabled: boolean;
-  disableTools?: boolean;
-  toolsAllow?: string[];
-}): boolean {
-  return shouldCreateBundleRuntimeForAttempt(params, (normalized) => {
-    return normalized.startsWith("lsp_");
-  });
+export function shouldCreateBundleLspRuntimeForAttempt(params: BundleRuntimeParams): boolean {
+  return shouldCreateBundleRuntimeForAttempt(params, (names) =>
+    names.some(
+      (name) =>
+        name === "bundle-lsp" ||
+        name === "group:plugins" ||
+        name.startsWith("lsp_") ||
+        mayMatchGlobWithPrefix(name, "lsp_"),
+    ),
+  );
 }

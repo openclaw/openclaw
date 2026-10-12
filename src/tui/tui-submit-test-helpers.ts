@@ -8,13 +8,13 @@ type MockFn = ReturnType<typeof vi.fn>;
 
 type SubmitHarness = {
   editor: {
+    getExpandedText: MockFn;
     setText: MockFn;
     addToHistory: MockFn;
   };
   handleCommand: MockFn;
   sendMessage: MockFn;
   handleBangLine: MockFn;
-  admitMessage: MockFn;
   onBlockedMessageSubmit: MockFn;
   onSubmitError: MockFn;
   onSubmit: (text: string) => void;
@@ -25,6 +25,7 @@ export function createSubmitHarness(params?: {
   admitMessage?: (value: string) => TuiChatSubmitAdmission;
 }): SubmitHarness {
   const editor = {
+    getExpandedText: vi.fn(() => ""),
     setText: vi.fn(),
     addToHistory: vi.fn(),
   };
@@ -48,7 +49,6 @@ export function createSubmitHarness(params?: {
     handleCommand,
     sendMessage,
     handleBangLine,
-    admitMessage,
     onBlockedMessageSubmit,
     onSubmitError,
     onSubmit,

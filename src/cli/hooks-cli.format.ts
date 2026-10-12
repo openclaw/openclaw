@@ -1,102 +1,69 @@
-// Renders the `openclaw hooks` list, info, and check reports.
-// Kept apart from command wiring so each surface stays readable and under the file-size cap.
-
 import {
   decorativeEmoji,
   decorativePrefix,
 } from "../../packages/terminal-core/src/decorative-emoji.js";
-import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { HookStatusEntry, HookStatusReport } from "../hooks/hooks-status.js";
 import { summarizeStringEntries } from "../shared/string-sample.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatCliJsonFailure } from "./failure-output.js";
+import { formatCliRequirements, formatCliStatusTable } from "./skills-hooks-cli.format.js";
 
-export type HooksListOptions = {
+export type HooksReportOptions = {
   agent?: string;
   json?: boolean;
+};
+
+export type HooksListOptions = HooksReportOptions & {
   eligible?: boolean;
   verbose?: boolean;
 };
 
-export type HookInfoOptions = {
-  agent?: string;
-  json?: boolean;
-};
-
-export type HooksCheckOptions = {
-  agent?: string;
-  json?: boolean;
-};
-
-function formatHookStatus(hook: HookStatusEntry): string {
+function formatHookStatus(hook: HookStatusEntry, detailed = false): string {
   if (hook.loadable) {
-    return theme.success("✓ ready");
+    return theme.success(detailed ? "✓ Ready" : "✓ ready");
   }
   if (!hook.enabledByConfig) {
-    return theme.warn(decorativePrefix("⏸", "disabled"));
+    return theme.warn(decorativePrefix("⏸", detailed ? "Disabled" : "disabled"));
   }
-  return theme.error(`✗ ${formatHookBlockedStatusReason(hook)}`);
-}
-
-function formatHookBlockedStatusReason(hook: HookStatusEntry): string {
-  return hook.blockedReason && hook.blockedReason !== "missing requirements"
-    ? hook.blockedReason
-    : "missing";
-}
-
-function formatHookInfoBlockedStatusReason(hook: HookStatusEntry): string {
   const reason =
     hook.blockedReason && hook.blockedReason !== "missing requirements"
       ? hook.blockedReason
-      : "missing requirements";
-  return reason ? `${reason[0]?.toUpperCase() ?? ""}${reason.slice(1)}` : reason;
+      : detailed
+        ? "missing requirements"
+        : "missing";
+  return theme.error(
+    `✗ ${detailed ? `${reason.charAt(0).toUpperCase()}${reason.slice(1)}` : reason}`,
+  );
 }
 
-function formatHookName(hook: HookStatusEntry): string {
-  const emoji = hook.emoji ?? decorativeEmoji("🔗");
-  const name = theme.command(hook.name);
-  return emoji ? `${emoji} ${name}` : name;
-}
+const HOOK_REQUIREMENT_GROUPS = [
+  ["bins", "Binaries"],
+  ["anyBins", "Any binary"],
+  ["env", "Environment"],
+  ["config", "Config"],
+  ["os", "OS"],
+] as const;
 
-function formatHookSource(hook: HookStatusEntry): string {
-  if (!hook.managedByPlugin) {
-    return hook.source;
-  }
-  return `plugin:${hook.pluginId ?? "unknown"}`;
-}
-
-export function formatHookMissingSummary(hook: HookStatusEntry, itemLimit?: number): string {
+function formatHookMissingRequirements(hook: HookStatusEntry, itemLimit?: number): string[] {
   const formatEntries = (entries: string[]) =>
     itemLimit === undefined
       ? entries.join(", ")
       : summarizeStringEntries({ entries, limit: itemLimit });
-  const missing: string[] = [];
+  return HOOK_REQUIREMENT_GROUPS.filter(([key]) => hook.missing[key].length > 0).map(
+    ([key]) => `${key}: ${formatEntries(hook.missing[key])}`,
+  );
+}
+
+export function formatHookMissingSummary(hook: HookStatusEntry, itemLimit?: number): string {
+  const missing = formatHookMissingRequirements(hook, itemLimit);
   if (hook.enabledByConfig && hook.blockedReason && hook.blockedReason !== "missing requirements") {
-    missing.push(hook.blockedReason);
-  }
-  if (hook.missing.bins.length > 0) {
-    missing.push(`bins: ${formatEntries(hook.missing.bins)}`);
-  }
-  if (hook.missing.anyBins.length > 0) {
-    missing.push(`anyBins: ${formatEntries(hook.missing.anyBins)}`);
-  }
-  if (hook.missing.env.length > 0) {
-    missing.push(`env: ${formatEntries(hook.missing.env)}`);
-  }
-  if (hook.missing.config.length > 0) {
-    missing.push(`config: ${formatEntries(hook.missing.config)}`);
-  }
-  if (hook.missing.os.length > 0) {
-    missing.push(`os: ${formatEntries(hook.missing.os)}`);
+    missing.unshift(hook.blockedReason);
   }
   return missing.join("; ");
 }
 
-/**
- * Format the hooks list output
- */
 export function formatHooksList(report: HookStatusReport, opts: HooksListOptions): string {
   const hooks = opts.eligible ? report.hooks.filter((h) => h.loadable) : report.hooks;
 
@@ -127,59 +94,36 @@ export function formatHooksList(report: HookStatusReport, opts: HooksListOptions
   }
 
   if (hooks.length === 0) {
-    const message = opts.eligible
+    return opts.eligible
       ? `No eligible hooks found. Run \`${formatCliCommand("openclaw hooks list")}\` to see all hooks.`
       : "No hooks found.";
-    return message;
   }
 
-  const eligible = hooks.filter((h) => h.loadable);
-  const tableWidth = getTerminalTableWidth();
-  const rows = hooks.map((hook) => {
-    const missing = formatHookMissingSummary(hook);
-    return {
-      Status: formatHookStatus(hook),
-      Hook: formatHookName(hook),
-      Description: theme.muted(hook.description),
-      Source: formatHookSource(hook),
-      Missing: missing ? theme.warn(missing) : "",
-    };
+  return formatCliStatusTable({
+    title: "Hooks",
+    ready: hooks.filter((hook) => hook.loadable).length,
+    nameColumn: { key: "Hook", header: "Hook", minWidth: 18, flex: true },
+    sourceColumn: { key: "Source", header: "Source", minWidth: 12, flex: true },
+    verbose: opts.verbose,
+    rows: hooks.map((hook) => {
+      const emoji = hook.emoji ?? decorativeEmoji("🔗");
+      const name = theme.command(hook.name);
+      return {
+        Status: formatHookStatus(hook),
+        Hook: emoji ? `${emoji} ${name}` : name,
+        Description: theme.muted(hook.description),
+        Source: hook.managedByPlugin ? `plugin:${hook.pluginId ?? "unknown"}` : hook.source,
+        Missing: opts.verbose ? theme.warn(formatHookMissingSummary(hook)) : "",
+      };
+    }),
   });
-
-  const columns = [
-    { key: "Status", header: "Status", minWidth: 10 },
-    { key: "Hook", header: "Hook", minWidth: 18, flex: true },
-    { key: "Description", header: "Description", minWidth: 24, flex: true },
-    { key: "Source", header: "Source", minWidth: 12, flex: true },
-  ];
-  if (opts.verbose) {
-    columns.push({ key: "Missing", header: "Missing", minWidth: 18, flex: true });
-  }
-
-  const lines: string[] = [];
-  lines.push(
-    `${theme.heading("Hooks")} ${theme.muted(`(${eligible.length}/${hooks.length} ready)`)}`,
-  );
-  lines.push(
-    renderTable({
-      width: tableWidth,
-      columns,
-      rows,
-    }).trimEnd(),
-  );
-  return lines.join("\n");
 }
 
-/**
- * Format detailed info for a single hook
- */
 export function formatHookInfo(
-  report: HookStatusReport,
+  hook: HookStatusEntry | undefined,
   hookName: string,
-  opts: HookInfoOptions,
+  opts: HooksReportOptions,
 ): string {
-  const hook = report.hooks.find((h) => h.name === hookName || h.hookKey === hookName);
-
   if (!hook) {
     if (opts.json) {
       const failure = formatCliJsonFailure(`Hook "${hookName}" not found.`);
@@ -200,28 +144,17 @@ export function formatHookInfo(
     );
   }
 
-  const lines: string[] = [];
   const emoji = hook.emoji ?? decorativeEmoji("🔗");
-  const status = hook.loadable
-    ? theme.success("✓ Ready")
-    : !hook.enabledByConfig
-      ? theme.warn(decorativePrefix("⏸", "Disabled"))
-      : theme.error(`✗ ${formatHookInfoBlockedStatusReason(hook)}`);
-
-  lines.push(`${emoji ? `${emoji} ` : ""}${theme.heading(hook.name)} ${status}`);
-  lines.push("");
-  lines.push(hook.description);
-  lines.push("");
-
-  // Details
-  lines.push(theme.heading("Details:"));
-  if (hook.managedByPlugin) {
-    lines.push(`${theme.muted("  Source:")} ${hook.source} (${hook.pluginId ?? "unknown"})`);
-  } else {
-    lines.push(`${theme.muted("  Source:")} ${hook.source}`);
-  }
-  lines.push(`${theme.muted("  Path:")} ${shortenHomePath(hook.filePath)}`);
-  lines.push(`${theme.muted("  Handler:")} ${shortenHomePath(hook.handlerPath)}`);
+  const lines = [
+    `${emoji ? `${emoji} ` : ""}${theme.heading(hook.name)} ${formatHookStatus(hook, true)}`,
+    "",
+    hook.description,
+    "",
+    theme.heading("Details:"),
+    `${theme.muted("  Source:")} ${hook.source}${hook.managedByPlugin ? ` (${hook.pluginId ?? "unknown"})` : ""}`,
+    `${theme.muted("  Path:")} ${shortenHomePath(hook.filePath)}`,
+    `${theme.muted("  Handler:")} ${shortenHomePath(hook.handlerPath)}`,
+  ];
   if (hook.homepage) {
     lines.push(`${theme.muted("  Homepage:")} ${hook.homepage}`);
   }
@@ -242,63 +175,15 @@ export function formatHookInfo(
     lines.push(`${theme.muted("  Blocked reason:")} ${hook.blockedReason}`);
   }
 
-  // Requirements
-  const hasRequirements =
-    hook.requirements.bins.length > 0 ||
-    hook.requirements.anyBins.length > 0 ||
-    hook.requirements.env.length > 0 ||
-    hook.requirements.config.length > 0 ||
-    hook.requirements.os.length > 0;
-
-  if (hasRequirements) {
-    lines.push("");
-    lines.push(theme.heading("Requirements:"));
-    if (hook.requirements.bins.length > 0) {
-      const binsStatus = hook.requirements.bins.map((bin) => {
-        const missing = hook.missing.bins.includes(bin);
-        return missing ? theme.error(`✗ ${bin}`) : theme.success(`✓ ${bin}`);
-      });
-      lines.push(`${theme.muted("  Binaries:")} ${binsStatus.join(", ")}`);
-    }
-    if (hook.requirements.anyBins.length > 0) {
-      const anyBinsStatus =
-        hook.missing.anyBins.length > 0
-          ? theme.error(`✗ (any of: ${hook.requirements.anyBins.join(", ")})`)
-          : theme.success(`✓ (any of: ${hook.requirements.anyBins.join(", ")})`);
-      lines.push(`${theme.muted("  Any binary:")} ${anyBinsStatus}`);
-    }
-    if (hook.requirements.env.length > 0) {
-      const envStatus = hook.requirements.env.map((env) => {
-        const missing = hook.missing.env.includes(env);
-        return missing ? theme.error(`✗ ${env}`) : theme.success(`✓ ${env}`);
-      });
-      lines.push(`${theme.muted("  Environment:")} ${envStatus.join(", ")}`);
-    }
-    if (hook.requirements.config.length > 0) {
-      const configStatus = hook.configChecks.map((check) => {
-        return check.satisfied ? theme.success(`✓ ${check.path}`) : theme.error(`✗ ${check.path}`);
-      });
-      lines.push(`${theme.muted("  Config:")} ${configStatus.join(", ")}`);
-    }
-    if (hook.requirements.os.length > 0) {
-      const osStatus =
-        hook.missing.os.length > 0
-          ? theme.error(`✗ (${hook.requirements.os.join(", ")})`)
-          : theme.success(`✓ (${hook.requirements.os.join(", ")})`);
-      lines.push(`${theme.muted("  OS:")} ${osStatus}`);
-    }
-  }
+  lines.push(...formatCliRequirements(hook, HOOK_REQUIREMENT_GROUPS, hook.configChecks));
 
   return lines.join("\n");
 }
 
-/**
- * Format check output
- */
-export function formatHooksCheck(report: HookStatusReport, opts: HooksCheckOptions): string {
+export function formatHooksCheck(report: HookStatusReport, opts: HooksReportOptions): string {
+  const eligible = report.hooks.filter((h) => h.loadable);
+  const notEligible = report.hooks.filter((h) => !h.loadable);
   if (opts.json) {
-    const eligible = report.hooks.filter((h) => h.loadable);
-    const notEligible = report.hooks.filter((h) => !h.loadable);
     return JSON.stringify(
       {
         total: report.hooks.length,
@@ -318,38 +203,21 @@ export function formatHooksCheck(report: HookStatusReport, opts: HooksCheckOptio
     );
   }
 
-  const eligible = report.hooks.filter((h) => h.loadable);
-  const notEligible = report.hooks.filter((h) => !h.loadable);
-
-  const lines: string[] = [];
-  lines.push(theme.heading("Hooks Status"));
-  lines.push("");
-  lines.push(`${theme.muted("Total hooks:")} ${report.hooks.length}`);
-  lines.push(`${theme.success("Ready:")} ${eligible.length}`);
-  lines.push(`${theme.warn("Not ready:")} ${notEligible.length}`);
+  const lines = [
+    theme.heading("Hooks Status"),
+    "",
+    `${theme.muted("Total hooks:")} ${report.hooks.length}`,
+    `${theme.success("Ready:")} ${eligible.length}`,
+    `${theme.warn("Not ready:")} ${notEligible.length}`,
+  ];
 
   if (notEligible.length > 0) {
     lines.push("");
     lines.push(theme.heading("Hooks not ready:"));
     for (const hook of notEligible) {
-      const reasons = [];
+      const reasons = formatHookMissingRequirements(hook);
       if (hook.blockedReason && hook.blockedReason !== "missing requirements") {
-        reasons.push(hook.blockedReason);
-      }
-      if (hook.missing.bins.length > 0) {
-        reasons.push(`bins: ${hook.missing.bins.join(", ")}`);
-      }
-      if (hook.missing.anyBins.length > 0) {
-        reasons.push(`anyBins: ${hook.missing.anyBins.join(", ")}`);
-      }
-      if (hook.missing.env.length > 0) {
-        reasons.push(`env: ${hook.missing.env.join(", ")}`);
-      }
-      if (hook.missing.config.length > 0) {
-        reasons.push(`config: ${hook.missing.config.join(", ")}`);
-      }
-      if (hook.missing.os.length > 0) {
-        reasons.push(`os: ${hook.missing.os.join(", ")}`);
+        reasons.unshift(hook.blockedReason);
       }
       const emoji = hook.emoji ?? decorativeEmoji("🔗");
       lines.push(`  ${emoji ? `${emoji} ` : ""}${hook.name} - ${reasons.join("; ")}`);

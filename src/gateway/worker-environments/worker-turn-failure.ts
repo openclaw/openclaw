@@ -1,13 +1,14 @@
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { formatErrorMessage } from "../../infra/errors.js";
-import { redactSensitiveText } from "../../logging/redact.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { reportPlacementTransition } from "./placement-record.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerSessionPlacementStore,
   WorkerSessionTurnClaim,
 } from "./placement-store.js";
 import type { WorkerEnvironmentService } from "./service.js";
+import { boundedWorkerError } from "./worker-error.js";
 import { releaseClaimIfOwned } from "./worker-turn-admission.js";
+import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 
 export type WorkerTurnEnvironmentService = Pick<
   WorkerEnvironmentService,
@@ -18,18 +19,28 @@ export type WorkerTurnEnvironmentService = Pick<
   | "startTunnel"
   | "stopTunnel"
 > &
-  Partial<Pick<WorkerEnvironmentService, "resolveSshIdentity">>;
+  Partial<
+    Pick<
+      WorkerEnvironmentService,
+      | "resolveSshIdentity"
+      | "supportsNodePortal"
+      | "prepareComputer"
+      | "readRuntimeRefresh"
+      | "createGatewayTools"
+    >
+  >;
 
 export type ActiveWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "active" }>;
 
 export class WorkerTurnExecutionError extends Error {}
 
-function workerTurnRecoveryError(error: unknown): string {
-  const message = redactSensitiveText(formatErrorMessage(error), { mode: "tools" })
-    .replace(/\s+/gu, " ")
-    .trim();
-  return truncateUtf16Safe(message || "cloud worker turn failed", 1_024);
+export class WorkerWorkspaceReconciliationError extends Error {
+  override name = "WorkerWorkspaceReconciliationError";
 }
+
+// Journal-terminal launches get a short cleanup grace before failure is surfaced.
+// This never limits a live launch or a turn still holding its claim.
+const TERMINAL_WORKER_CLEANUP_GRACE_MS = 30_000;
 
 export async function failHandedOffTurn(params: {
   environments: WorkerTurnEnvironmentService;
@@ -37,18 +48,26 @@ export async function failHandedOffTurn(params: {
   placement: ActiveWorkerPlacement;
   turnClaim: WorkerSessionTurnClaim;
   error: unknown;
+  terminal?: {
+    observedAtMs: number;
+    registerRecovery(recover: (assertCurrent?: () => void) => Promise<string | undefined>): void;
+  };
 }): Promise<void> {
-  const failures = [workerTurnRecoveryError(params.error)];
-  let draining: WorkerSessionPlacementRecord;
+  const failures = [boundedWorkerError(params.error)];
+  let drained: WorkerSessionPlacementRecord;
   try {
-    draining = params.placements.startDrain({
+    drained = await params.placements.startDrain({
       sessionId: params.placement.sessionId,
       environmentId: params.placement.environmentId,
       ownerEpoch: params.placement.activeOwnerEpoch,
       expectedGeneration: params.placement.generation,
+      expectedTurnClaim: params.turnClaim,
     });
-  } catch {
-    const current = params.placements.get(params.placement.sessionId);
+  } catch (error) {
+    if (error instanceof AcceptedWorkspacePublicationIndeterminateError) {
+      throw error;
+    }
+    const current = await params.placements.getAsync(params.placement.sessionId);
     const exactDrainOwner =
       current?.state === "draining" &&
       current.generation === params.placement.generation + 1 &&
@@ -64,39 +83,107 @@ export async function failHandedOffTurn(params: {
     // tear down an environment after losing the exact source-generation CAS.
     return;
   }
-  if (draining.state !== "draining") {
+  if (drained.state !== "draining") {
     return;
   }
+  const draining = drained;
   await releaseClaimIfOwned(params.placements, params.turnClaim);
-  try {
-    await params.environments.stopTunnel(
-      params.placement.environmentId,
-      params.placement.activeOwnerEpoch,
+  const isCurrentDrain = () => {
+    const current = params.placements.get(draining.sessionId);
+    return (
+      current?.state === "draining" &&
+      current.generation === draining.generation &&
+      current.environmentId === draining.environmentId &&
+      current.activeOwnerEpoch === draining.activeOwnerEpoch &&
+      current.turnClaim === null
     );
-  } catch (error) {
-    failures.push(`tunnel stop: ${workerTurnRecoveryError(error)}`);
-  }
-  try {
-    await params.environments.destroy(params.placement.environmentId);
-  } catch (error) {
-    failures.push(`environment destroy: ${workerTurnRecoveryError(error)}`);
-  }
-  try {
-    const reconciling = params.placements.startReconcile({
-      sessionId: draining.sessionId,
-      environmentId: draining.environmentId,
-      ownerEpoch: draining.activeOwnerEpoch,
-      expectedGeneration: draining.generation,
+  };
+  // Cleanup and diagnostic recovery join the same write, including an unknown outcome.
+  let recordingFailure: Promise<string | undefined> | undefined;
+  const recordFailure = (assertCurrent?: () => void): Promise<string | undefined> => {
+    if (recordingFailure) {
+      return recordingFailure;
+    }
+    const operation = recordFailureOnce(assertCurrent);
+    recordingFailure = operation;
+    void operation.then(
+      () => {
+        recordingFailure = undefined;
+      },
+      (error: unknown) => {
+        if (!(error instanceof AcceptedWorkspacePublicationIndeterminateError)) {
+          recordingFailure = undefined;
+        }
+      },
+    );
+    return operation;
+  };
+  const recordFailureOnce = async (assertCurrent?: () => void): Promise<string | undefined> => {
+    if (!isCurrentDrain()) {
+      return undefined;
+    }
+    try {
+      const reconciling = await params.placements.startReconcile(
+        {
+          sessionId: draining.sessionId,
+          environmentId: draining.environmentId,
+          ownerEpoch: draining.activeOwnerEpoch,
+          expectedGeneration: draining.generation,
+        },
+        assertCurrent,
+      );
+      const recoveryError = failures.join("; ");
+      const failed = await params.placements.fail(
+        {
+          sessionId: reconciling.sessionId,
+          expectedGeneration: reconciling.generation,
+          recoveryError,
+        },
+        assertCurrent,
+      );
+      reportPlacementTransition(undefined, failed);
+      return recoveryError;
+    } catch (error) {
+      if (error instanceof AcceptedWorkspacePublicationIndeterminateError) {
+        throw error;
+      }
+      // Leave the durable draining or reconciling row for startup reconciliation.
+      return undefined;
+    }
+  };
+  const terminalRecovery = params.terminal ? createDeferredCore() : undefined;
+  if (params.terminal && terminalRecovery) {
+    const observedAtMs = params.terminal.observedAtMs;
+    params.terminal.registerRecovery(async (assertCurrent) => {
+      if (Date.now() - observedAtMs < TERMINAL_WORKER_CLEANUP_GRACE_MS) {
+        return undefined;
+      }
+      const recorded = await recordFailure(assertCurrent);
+      if (recorded !== undefined) {
+        terminalRecovery.resolve();
+      }
+      return recorded;
     });
-    if (reconciling.state !== "reconciling") {
+  }
+  const waitForCleanup = (operation: Promise<unknown>) =>
+    terminalRecovery ? Promise.race([operation, terminalRecovery.promise]) : operation;
+  for (const [label, cleanup] of [
+    [
+      "tunnel stop",
+      () => params.environments.stopTunnel(draining.environmentId, draining.activeOwnerEpoch),
+    ],
+    ["environment destroy", () => params.environments.destroy(draining.environmentId)],
+  ] as const) {
+    // Recovery or replacement may have closed this drain while cleanup awaited.
+    if (!isCurrentDrain()) {
+      await recordingFailure;
       return;
     }
-    params.placements.fail({
-      sessionId: reconciling.sessionId,
-      expectedGeneration: reconciling.generation,
-      recoveryError: failures.join("; "),
-    });
-  } catch {
-    // Leave the durable draining or reconciling row for startup reconciliation.
+    try {
+      await waitForCleanup(cleanup());
+    } catch (error) {
+      failures.push(`${label}: ${boundedWorkerError(error)}`);
+    }
   }
+  await recordFailure();
 }

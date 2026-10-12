@@ -5,11 +5,8 @@ import type { PluginManifestRegistry } from "../manifest-registry.js";
 import { hasExplicitPluginIdScope } from "../plugin-scope.js";
 import type { PluginRegistry } from "../registry.js";
 import type { PluginLogger } from "../types.js";
-import {
-  buildPluginRuntimeLoadOptions,
-  resolvePluginRuntimeLoadContext,
-  type PluginRuntimeLoadContext,
-} from "./load-context.js";
+import { buildPluginRuntimeLoadOptions, type PluginRuntimeLoadContext } from "./load-context.js";
+import { resolvePluginRuntimeLoadContext } from "./load-context.resolve.js";
 
 /** Loads a non-activated plugin metadata registry snapshot for validation/status callers. */
 export function loadPluginMetadataRegistrySnapshot(options?: {
@@ -20,6 +17,7 @@ export function loadPluginMetadataRegistrySnapshot(options?: {
   workspaceDir?: string;
   onlyPluginIds?: string[];
   loadModules?: boolean;
+  throwOnLoadError?: boolean;
   manifestRegistry?: PluginManifestRegistry;
   runtimeContext?: PluginRuntimeLoadContext;
 }): PluginRegistry {
@@ -34,7 +32,7 @@ export function loadPluginMetadataRegistrySnapshot(options?: {
       ...(options?.workspaceDir !== undefined ? { workspaceDir: options.workspaceDir } : {}),
       ...(options?.env !== undefined ? { env: options.env } : {}),
       ...(options?.logger !== undefined ? { logger: options.logger } : {}),
-      throwOnLoadError: true,
+      throwOnLoadError: options?.throwOnLoadError ?? true,
       cache: false,
       mode: "validate",
       loadModules: options?.loadModules,

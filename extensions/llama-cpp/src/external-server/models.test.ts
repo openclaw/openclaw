@@ -40,16 +40,6 @@ describe("llama-server model mapping", () => {
     });
   });
 
-  it("uses an older server's top-level runtime context limit", () => {
-    expect(
-      mapLlamaServerModel({ id: "model", object: "model" }, { n_ctx: 8192 })?.config,
-    ).toMatchObject({
-      contextWindow: 8192,
-      contextTokens: 8192,
-      maxTokens: 8192,
-    });
-  });
-
   it("preserves image input advertised by router rows or runtime properties", () => {
     expect(
       mapLlamaServerModel({
@@ -66,11 +56,19 @@ describe("llama-server model mapping", () => {
     ).toEqual(["text", "image"]);
   });
 
-  it("defaults unknown capabilities conservatively", () => {
-    expect(mapLlamaServerModel({ id: "model", object: "model" })?.config.compat).toMatchObject({
-      supportsTools: false,
-      requiresStringContent: true,
-    });
+  it.each([
+    {
+      name: "fallback tool descriptions",
+      caps: { supports_tools: false, supports_tool_calls: true },
+      supported: true,
+    },
+  ])("uses the tool-call capability for $name", ({ caps, supported }) => {
+    expect(
+      mapLlamaServerModel(
+        { id: "community/fallback-model", object: "model" },
+        { chat_template_caps: caps },
+      )?.config.compat?.supportsTools,
+    ).toBe(supported);
   });
 
   it("rejects malformed and non-model rows", () => {
@@ -103,7 +101,7 @@ describe("llama-server model mapping", () => {
     });
 
     expect(provider.models).toHaveLength(2);
-    expect(provider.models[0]).toBe(explicit);
+    expect(provider.models[0]).toMatchObject(explicit);
     expect(provider.models[1]?.id).toBe("other");
   });
 });

@@ -1,8 +1,9 @@
-// Google tests cover embedding batch bounded JSON response reads.
-import { createServer } from "node:http";
+import * as embeddingSdk from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runGeminiEmbeddingBatches } from "./embedding-batch.js";
 import type { GeminiEmbeddingClient } from "./embedding-provider.js";
+import { geminiMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 
 // Pass-through so onResponse receives real Response objects (required by
 // readProviderJsonResponse which needs a real .body ReadableStream).
@@ -39,34 +40,6 @@ function fetchInputUrl(input: RequestInfo | URL): string {
   return input.url;
 }
 
-function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  });
-}
-
-async function listenLoopbackServer(server: ReturnType<typeof createServer>): Promise<number> {
-  return await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        reject(new Error("expected loopback TCP address"));
-        return;
-      }
-      resolve(address.port);
-    });
-  });
-}
-
-async function closeServer(server: ReturnType<typeof createServer>): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
-}
-
 function makeGeminiClient(
   baseUrl = "https://generativelanguage.googleapis.com/v1beta",
 ): GeminiEmbeddingClient {
@@ -77,18 +50,6 @@ function makeGeminiClient(
     headers: { "x-goog-api-client": "test-client" },
     apiKeys: ["test-key"],
     ssrfPolicy: undefined,
-  };
-}
-
-function makeGeminiEmbedding2Client(
-  outputDimensionality: number,
-  baseUrl = "https://generativelanguage.googleapis.com/v1beta",
-): GeminiEmbeddingClient {
-  return {
-    ...makeGeminiClient(baseUrl),
-    model: "gemini-embedding-2",
-    modelPath: "models/gemini-embedding-2",
-    outputDimensionality,
   };
 }
 
@@ -130,15 +91,15 @@ function batchStageForUrl(url: string): BatchStage {
 function defaultBatchResponse(stage: BatchStage): Response {
   switch (stage) {
     case "upload":
-      return jsonResponse({ file: { name: "files/f-ok" } });
+      return Response.json({ file: { name: "files/f-ok" } });
     case "create":
-      return jsonResponse({
+      return Response.json({
         name: "batches/b-0",
         done: false,
         metadata: { state: "BATCH_STATE_PENDING" },
       });
     case "status":
-      return jsonResponse({
+      return Response.json({
         name: "batches/b-0",
         done: true,
         metadata: { state: "BATCH_STATE_SUCCEEDED" },
@@ -219,20 +180,58 @@ function makeOversizedResponse(status = 200): {
 }
 
 describe("Google embedding-batch bounded JSON reads", () => {
-  it("rejects async batch embeddings that do not match the requested dimensions", async () => {
-    stubBatchFetch((stage) => {
-      if (stage !== "download") {
-        return undefined;
-      }
-      return new Response(
-        JSON.stringify({ key: "r0", response: { embedding: { values: [1, 0, 0] } } }),
-        { status: 200 },
-      );
-    });
-
-    await expect(runBatch(singleRequest(), makeGeminiEmbedding2Client(768))).rejects.toThrow(
-      "gemini embeddings failed: expected 768 dimensions, received 3",
+  it.each([
+    { label: "missing", valuesJson: undefined, reason: "empty" },
+    { label: "empty", valuesJson: "[]", reason: "empty" },
+    { label: "string", valuesJson: '"bad"', reason: "invalid" },
+    { label: "mixed coordinates", valuesJson: "[1,null]", reason: "invalid" },
+    { label: "positive overflow", valuesJson: "[1,1e400]", reason: "invalid" },
+  ])("rejects downloaded $label vectors before normalization", async ({ valuesJson, reason }) => {
+    stubBatchFetch((stage) =>
+      stage === "download"
+        ? new Response(
+            `{"key":"r0","response":{"embedding":{${valuesJson === undefined ? "" : `"values":${valuesJson}`}}}}\n` +
+              '{"key":"r0","response":{"embedding":{"values":[1,0]}}}',
+          )
+        : undefined,
     );
+
+    await expect(runBatch()).rejects.toThrow(`r0: ${reason} embedding`);
+  });
+
+  it("keeps the first accepted id ahead of duplicate malformed coordinates", async () => {
+    // Leave another submitted id pending so the duplicate is actually parsed.
+    const requests = [
+      batchRequest("r0", "one"),
+      batchRequest("r1", "two"),
+      batchRequest("r2", "three"),
+    ];
+    stubBatchFetch((stage) =>
+      stage === "download"
+        ? new Response(
+            [
+              { key: "r0", response: { embedding: { values: [3, 4] } } },
+              { key: "r0", response: { embedding: { values: [null] } } },
+              { request_id: "r1", embedding: { values: [0, 1] } },
+            ]
+              .map((line) => JSON.stringify(line))
+              .join("\n"),
+          )
+        : undefined,
+    );
+    await expect(runBatch(requests)).rejects.toThrow("missing 1 embedding responses");
+  });
+
+  it("rejects async batch embeddings that do not match the requested dimensions", async () => {
+    stubBatchFetch();
+    await expect(
+      runBatch(singleRequest(), {
+        ...makeGeminiClient(),
+        model: "gemini-embedding-2",
+        modelPath: "models/gemini-embedding-2",
+        outputDimensionality: 768,
+      }),
+    ).rejects.toThrow("gemini embeddings failed: expected 768 dimensions, received 3");
   });
 
   it("stops before polling status after the batch timeout expires", async () => {
@@ -264,43 +263,37 @@ describe("Google embedding-batch bounded JSON reads", () => {
     ).toHaveLength(0);
   });
 
-  it.each([
-    { stage: "upload", label: "gemini.batch-file-upload" },
-    { stage: "create", label: "gemini.batch-create" },
-    { stage: "status", label: "gemini.batch-status" },
-  ] as const)("bounds oversized successful $stage JSON", async ({ stage, label }) => {
-    const streamed = makeOversizedResponse();
-    stubBatchFetch((candidate) => (candidate === stage ? streamed.response : undefined));
+  it.each([{ stage: "status", label: "gemini.batch-status" }] as const)(
+    "bounds oversized successful $stage JSON",
+    async ({ stage, label }) => {
+      const streamed = makeOversizedResponse();
+      stubBatchFetch((candidate) => (candidate === stage ? streamed.response : undefined));
 
-    const error = await captureRejection(runBatch());
+      const error = await captureRejection(runBatch());
 
-    expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toContain(label);
-    expect(streamed.wasCanceled()).toBe(true);
-    expect(streamed.getReadCount()).toBeLessThan(20);
-  });
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain(label);
+      expect(streamed.wasCanceled()).toBe(true);
+      expect(streamed.getReadCount()).toBeLessThan(20);
+    },
+  );
 
-  it.each([
-    { stage: "upload", label: "gemini.batch-file-upload" },
-    { stage: "create", label: "gemini.batch-create" },
-    { stage: "status", label: "gemini.batch-status" },
-    { stage: "download", label: "gemini.batch-file-content" },
-  ] as const)("bounds oversized $stage errors", async ({ stage, label }) => {
+  it("bounds oversized download errors", async () => {
     const streamed = makeOversizedResponse(503);
-    stubBatchFetch((candidate) => (candidate === stage ? streamed.response : undefined));
+    stubBatchFetch((stage) => (stage === "download" ? streamed.response : undefined));
 
     const error = await captureRejection(runBatch());
 
     expect(error).toMatchObject({ name: "ProviderHttpError", status: 503, statusCode: 503 });
-    expect((error as Error).message).toContain(label);
+    expect((error as Error).message).toContain("gemini.batch-file-content");
     expect(streamed.wasCanceled()).toBe(true);
     expect(streamed.getReadCount()).toBeLessThan(20);
   });
 
   it("marks create 404 as unavailable while preserving the structured cause", async () => {
-    const response = jsonResponse(
+    const response = Response.json(
       { error: { code: 404, message: "Input file was not found", status: "NOT_FOUND" } },
-      404,
+      { status: 404 },
     );
     stubBatchFetch((stage) => (stage === "create" ? response : undefined));
 
@@ -321,15 +314,24 @@ describe("Google embedding-batch bounded JSON reads", () => {
     expect(response.bodyUsed).toBe(true);
   });
 
-  it("normalizes raw Google Operations and uses the canonical download route", async () => {
+  it.each([
+    {
+      baseUrl: "https://generativelanguage.googleapis.com/v1alpha/?tenant=remote",
+      version: "v1alpha",
+      query: "tenant=remote&",
+    },
+  ])("uses canonical Google file routes for $baseUrl", async ({ baseUrl, version, query }) => {
     const fetchMock = stubBatchFetch();
 
-    const result = await runBatch();
+    const result = await runBatch(singleRequest(), makeGeminiClient(baseUrl));
 
     expect(result.get("r0")).toEqual([1, 0, 0]);
-    expect(fetchMock.mock.calls.map(([input]) => fetchInputUrl(input))).toContain(
-      "https://generativelanguage.googleapis.com/download/v1beta/files/out-0:download?alt=media",
-    );
+    expect(fetchMock.mock.calls.map(([input]) => fetchInputUrl(input))).toEqual([
+      `https://generativelanguage.googleapis.com/upload/${version}/files?${query}uploadType=multipart`,
+      `https://generativelanguage.googleapis.com/${version}/models/gemini-embedding-001:asyncBatchEmbedContent${query ? `?${query.slice(0, -1)}` : ""}`,
+      `https://generativelanguage.googleapis.com/${version}/batches/b-0${query ? `?${query.slice(0, -1)}` : ""}`,
+      `https://generativelanguage.googleapis.com/download/${version}/files/out-0:download?${query}alt=media`,
+    ]);
     for (const [, init] of fetchMock.mock.calls) {
       expect(new Headers(init?.headers).get("x-goog-api-key")).toBe("test-key");
     }
@@ -341,94 +343,149 @@ describe("Google embedding-batch bounded JSON reads", () => {
     });
   });
 
-  it("preserves a configured gateway prefix for output downloads", async () => {
-    const fetchMock = stubBatchFetch();
-
-    await runBatch(singleRequest(), makeGeminiClient("https://gateway.example/gemini/v1beta"));
-
-    expect(fetchMock.mock.calls.map(([input]) => fetchInputUrl(input))).toContain(
-      "https://gateway.example/gemini/v1beta/files/out-0:download?alt=media",
-    );
-  });
-
-  it("runs the complete batch lifecycle over loopback HTTP", async () => {
-    let createBody: unknown;
-    const authHeaders: Array<string | undefined> = [];
-    const server = createServer((request, response) => {
-      void (async () => {
-        const url = new URL(request.url ?? "/", "http://127.0.0.1");
-        const apiKey = request.headers["x-goog-api-key"];
-        authHeaders.push(Array.isArray(apiKey) ? apiKey.join(", ") : apiKey);
-        const respondJson = (body: unknown) => {
-          response.writeHead(200, { "content-type": "application/json" });
-          response.end(JSON.stringify(body));
-        };
-        if (url.pathname === "/upload/v1beta/files") {
-          request.resume();
-          await new Promise<void>((resolve) => {
-            request.once("end", () => resolve());
-          });
-          respondJson({ file: { name: "files/input-0" } });
-          return;
-        }
-        if (url.pathname.endsWith(":asyncBatchEmbedContent")) {
-          let body = "";
-          request.setEncoding("utf8");
-          for await (const chunk of request) {
-            body += chunk;
-          }
-          createBody = JSON.parse(body) as unknown;
-          respondJson({
-            name: "batches/b-0",
-            done: false,
-            metadata: { state: "BATCH_STATE_PENDING" },
-          });
-          return;
-        }
-        if (url.pathname === "/v1beta/batches/b-0") {
-          respondJson({
-            name: "batches/b-0",
-            done: true,
-            metadata: { state: "BATCH_STATE_SUCCEEDED" },
-            response: { responsesFile: "files/output-0" },
-          });
-          return;
-        }
-        if (url.pathname === "/v1beta/files/output-0:download") {
-          response.writeHead(200, { "content-type": "application/jsonl" });
-          const line = JSON.stringify({
-            key: "r0",
-            response: { embedding: { values: [1, 0, 0] } },
-          });
-          response.write(line.slice(0, 17));
-          response.end(line.slice(17));
-          return;
-        }
-        response.writeHead(404).end();
-      })().catch((error: unknown) => {
-        response.writeHead(500).end(error instanceof Error ? error.message : String(error));
-      });
-    });
-    const port = await listenLoopbackServer(server);
-
-    try {
-      const result = await runBatch(
-        singleRequest(),
-        makeGeminiClient(`http://127.0.0.1:${port}/v1beta`),
+  it.each<{
+    basePath: string;
+    prefix: string;
+    query: string;
+  }>([
+    { basePath: "/gateway/v1beta/", prefix: "/gateway", query: "?tenant=/openai/team/&route=a/" },
+    { basePath: "/gateway/v1beta/openai", prefix: "/gateway", query: "" },
+  ])(
+    "runs the public adapter over HTTP for $basePath with query $query",
+    async ({ basePath, prefix, query }) => {
+      let createBody: unknown;
+      let uploadBody = "";
+      const observedUrls: string[] = [];
+      const authHeaders: Array<string | undefined> = [];
+      const tenantHeaders: Array<string | undefined> = [];
+      const realSdk = await vi.importActual<typeof embeddingSdk>(
+        "openclaw/plugin-sdk/memory-core-host-engine-embeddings",
       );
+      const remoteHttp = vi
+        .spyOn(embeddingSdk, "withRemoteHttpResponse")
+        .mockImplementation(realSdk.withRemoteHttpResponse);
+      try {
+        await withServer(
+          (request, response) => {
+            void (async () => {
+              const url = new URL(request.url ?? "/", "http://127.0.0.1");
+              observedUrls.push(`${request.method} ${url.pathname}${url.search}`);
+              const apiKey = request.headers["x-goog-api-key"];
+              authHeaders.push(Array.isArray(apiKey) ? apiKey.join(", ") : apiKey);
+              const tenant = request.headers["x-proof-tenant"];
+              tenantHeaders.push(Array.isArray(tenant) ? tenant.join(", ") : tenant);
+              for (const [name, value] of new URLSearchParams(query)) {
+                if (url.searchParams.get(name) !== value) {
+                  throw new Error("configured query changed");
+                }
+              }
+              let body = "";
+              request.setEncoding("utf8");
+              for await (const chunk of request) {
+                body += chunk;
+              }
+              const routes = {
+                [`${prefix}/upload/v1beta/files`]: "upload",
+                [`${prefix}/v1beta/models/gemini-embedding-001:asyncBatchEmbedContent`]: "create",
+                [`${prefix}/v1beta/batches/b-0`]: "status",
+                [`${prefix}/v1beta/files/out-0:download`]: "download",
+              } satisfies Record<string, BatchStage>;
+              if (url.pathname === `${prefix}/v1beta/models/gemini-embedding-001:embedContent`) {
+                response.setHeader("content-type", "application/json");
+                response.end(JSON.stringify({ embedding: { values: [1, 0, 0] } }));
+                return;
+              }
+              const stage = routes[url.pathname];
+              if (!stage) {
+                throw new Error(`unexpected fixture route: ${url.pathname}`);
+              }
+              if (stage === "upload") {
+                if (url.searchParams.get("uploadType") !== "multipart") {
+                  throw new Error("missing uploadType");
+                }
+                uploadBody = body;
+              }
+              if (stage === "create") {
+                createBody = JSON.parse(body);
+              }
+              if (stage === "download") {
+                if (url.searchParams.get("alt") !== "media") {
+                  throw new Error("missing alt=media");
+                }
+                response.setHeader("content-type", "application/jsonl");
+                const line = '{"key":"0","response":{"embedding":{"values":[1,0,0]}}}';
+                response.write(line.slice(0, 17));
+                response.end(line.slice(17));
+              } else {
+                response.setHeader("content-type", "application/json");
+                response.end(await defaultBatchResponse(stage).text());
+              }
+            })().catch((error: unknown) => {
+              response.writeHead(500).end(String(error));
+            });
+          },
+          async (baseUrl) => {
+            const adapter = await geminiMemoryEmbeddingProviderAdapter.create({
+              config: {},
+              provider: "gemini",
+              model: "gemini-embedding-001",
+              fallback: "none",
+              remote: {
+                baseUrl: `${baseUrl}${basePath}${query}`,
+                apiKey: "test-key",
+                headers: { "X-Proof-Tenant": "remote" },
+              },
+            });
+            if (!adapter.provider) {
+              throw new Error("Expected a Gemini embedding provider");
+            }
+            await expect(adapter.provider.embed("hello", { inputType: "query" })).resolves.toEqual([
+              1, 0, 0,
+            ]);
+            const result = adapter.runtime?.batchEmbed?.({
+              agentId: "main",
+              chunks: [{ text: "hello" }],
+              wait: true,
+              concurrency: 1,
+              pollIntervalMs: 1,
+              timeoutMs: 5_000,
+              debug: () => {},
+            });
 
-      expect(result).toEqual(new Map([["r0", [1, 0, 0]]]));
-      expect(createBody).toMatchObject({ batch: { inputConfig: { file_name: "files/input-0" } } });
-      expect(authHeaders).toEqual(["test-key", "test-key", "test-key", "test-key"]);
-    } finally {
-      await closeServer(server);
-    }
-  });
+            await expect(result).resolves.toEqual([[1, 0, 0]]);
+            const uploadedRequest = uploadBody.split("\r\n\r\n")[2]?.split("\r\n")[0];
+            expect(JSON.parse(uploadedRequest ?? "null")).toEqual({
+              key: "0",
+              request: {
+                content: { parts: [{ text: "hello" }] },
+                taskType: "RETRIEVAL_DOCUMENT",
+                model: "models/gemini-embedding-001",
+              },
+            });
+            expect(createBody).toMatchObject({
+              batch: { inputConfig: { file_name: "files/f-ok" } },
+            });
+            expect(authHeaders).toEqual(Array(5).fill("test-key"));
+            expect(tenantHeaders).toEqual(Array(5).fill("remote"));
+            expect(observedUrls.map((value) => value.split("?")[0])).toEqual([
+              `POST ${prefix}/v1beta/models/gemini-embedding-001:embedContent`,
+              `POST ${prefix}/upload/v1beta/files`,
+              `POST ${prefix}/v1beta/models/gemini-embedding-001:asyncBatchEmbedContent`,
+              `GET ${prefix}/v1beta/batches/b-0`,
+              `GET ${prefix}/v1beta/files/out-0:download`,
+            ]);
+          },
+        );
+      } finally {
+        remoteHttp.mockRestore();
+      }
+    },
+  );
 
   it("honors terminal LRO fields when metadata is stale", async () => {
     stubBatchFetch((stage) =>
       stage === "create"
-        ? jsonResponse({
+        ? Response.json({
             name: "batches/b-0",
             done: true,
             metadata: { state: "BATCH_STATE_RUNNING" },
@@ -443,7 +500,7 @@ describe("Google embedding-batch bounded JSON reads", () => {
   it("keeps a terminal Operation error ahead of stale success metadata", async () => {
     stubBatchFetch((stage) =>
       stage === "create"
-        ? jsonResponse({
+        ? Response.json({
             name: "batches/b-0",
             done: true,
             metadata: { state: "BATCH_STATE_SUCCEEDED" },
@@ -500,7 +557,7 @@ describe("Google embedding-batch bounded JSON reads", () => {
   ])("surfaces $state Operation failures", async ({ state, normalized }) => {
     stubBatchFetch((stage) =>
       stage === "create"
-        ? jsonResponse({
+        ? Response.json({
             name: "batches/b-0",
             done: true,
             metadata: { state },
@@ -514,7 +571,7 @@ describe("Google embedding-batch bounded JSON reads", () => {
   it("rejects conflicting output files in one Operation", async () => {
     stubBatchFetch((stage) =>
       stage === "create"
-        ? jsonResponse({
+        ? Response.json({
             name: "batches/b-0",
             done: true,
             metadata: {

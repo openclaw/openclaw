@@ -288,7 +288,7 @@ struct ExecHostRequestEvaluatorTests {
     }
 
     @Test func `evaluate requires prompt on allowlist miss without decision`() {
-        let context = Self.makeContext(security: .allowlist, ask: .onMiss, allowlistSatisfied: false, skillAllow: false)
+        let context = Self.makeContext(security: .allowlist, ask: .onMiss, allowlistSatisfied: false)
         let decision = ExecHostRequestEvaluator.evaluate(context: context, approvalDecision: nil)
         switch decision {
         case .requiresPrompt:
@@ -301,11 +301,11 @@ struct ExecHostRequestEvaluatorTests {
     }
 
     @Test func `evaluate allows allow once decision on allowlist miss`() {
-        let context = Self.makeContext(security: .allowlist, ask: .onMiss, allowlistSatisfied: false, skillAllow: false)
+        let context = Self.makeContext(security: .allowlist, ask: .onMiss, allowlistSatisfied: false)
         let decision = ExecHostRequestEvaluator.evaluate(context: context, approvalDecision: .allowOnce)
         switch decision {
-        case let .allow(approvedByAsk):
-            #expect(approvedByAsk)
+        case .allow:
+            break
         case .requiresPrompt:
             Issue.record("expected allow decision")
         case let .deny(error):
@@ -314,7 +314,7 @@ struct ExecHostRequestEvaluatorTests {
     }
 
     @Test func `evaluate denies on explicit deny decision`() {
-        let context = Self.makeContext(security: .full, ask: .off, allowlistSatisfied: true, skillAllow: false)
+        let context = Self.makeContext(security: .full, ask: .off, allowlistSatisfied: true)
         let decision = ExecHostRequestEvaluator.evaluate(context: context, approvalDecision: .deny)
         switch decision {
         case let .deny(error):
@@ -331,15 +331,14 @@ struct ExecHostRequestEvaluatorTests {
             security: .full,
             ask: .always,
             askFallback: .full,
-            allowlistSatisfied: false,
-            skillAllow: false)
+            allowlistSatisfied: false)
         let decision = ExecHostRequestEvaluator.evaluate(
             context: context,
             approvalDecision: nil,
             approvalSource: .askFallback)
         switch decision {
-        case let .allow(approvedByAsk):
-            #expect(!approvedByAsk)
+        case .allow:
+            break
         case .requiresPrompt:
             Issue.record("fallback must not open another prompt")
         case let .deny(error):
@@ -351,16 +350,15 @@ struct ExecHostRequestEvaluatorTests {
         let context = Self.makeContext(
             security: .allowlist,
             ask: .onMiss,
-            allowlistSatisfied: false,
-            skillAllow: false)
+            allowlistSatisfied: false)
         let decision = ExecHostRequestEvaluator.evaluate(
             context: context,
             approvalDecision: nil,
             approvalSource: .autoReview)
 
         switch decision {
-        case let .allow(approvedByAsk):
-            #expect(approvedByAsk)
+        case .allow:
+            break
         case .requiresPrompt:
             Issue.record("auto review should not prompt")
         case let .deny(error):
@@ -372,8 +370,7 @@ struct ExecHostRequestEvaluatorTests {
         let context = Self.makeContext(
             security: .full,
             ask: .always,
-            allowlistSatisfied: false,
-            skillAllow: false)
+            allowlistSatisfied: false)
         let decision = ExecHostRequestEvaluator.evaluate(
             context: context,
             approvalDecision: nil,
@@ -391,8 +388,7 @@ struct ExecHostRequestEvaluatorTests {
         let currentContext = Self.makeContext(
             security: .full,
             ask: .off,
-            allowlistSatisfied: false,
-            skillAllow: false)
+            allowlistSatisfied: false)
         let forwardedSnapshot = ExecApprovalPolicySnapshot(
             security: .allowlist,
             ask: .always,
@@ -433,8 +429,7 @@ struct ExecHostRequestEvaluatorTests {
             security: .full,
             ask: .always,
             askFallback: .full,
-            allowlistSatisfied: false,
-            skillAllow: false)
+            allowlistSatisfied: false)
         let fallback = ExecApprovalExecutionCommit.build(
             context: fallbackContext,
             effectiveSecurity: .full,
@@ -452,8 +447,7 @@ struct ExecHostRequestEvaluatorTests {
         let autoReviewContext = Self.makeContext(
             security: .allowlist,
             ask: .onMiss,
-            allowlistSatisfied: false,
-            skillAllow: false)
+            allowlistSatisfied: false)
         let autoReview = ExecApprovalExecutionCommit.build(
             context: autoReviewContext,
             effectiveSecurity: .allowlist,
@@ -472,7 +466,6 @@ struct ExecHostRequestEvaluatorTests {
             security: .allowlist,
             ask: .onMiss,
             allowlistSatisfied: false,
-            skillAllow: false,
             boundCommand: ["/usr/bin/printf", "ok"],
             allowAlwaysPatterns: [ExecAllowAlwaysPattern(pattern: "/usr/bin/printf", argPattern: "^ok$")])
         let durable = ExecApprovalExecutionCommit.build(
@@ -511,9 +504,8 @@ struct ExecHostRequestEvaluatorTests {
             allowAlwaysPatterns: [],
             allowlistMatches: [entry],
             allowlistAuthorizationSatisfied: true,
-            allowlistSatisfied: false,
             allowlistMatch: nil,
-            skillAllow: false,
+            skillTrust: nil,
             policySnapshot: ExecApprovalPolicySnapshot(
                 security: .full,
                 ask: .off,
@@ -536,7 +528,6 @@ struct ExecHostRequestEvaluatorTests {
         ask: ExecAsk,
         askFallback: ExecSecurity = .deny,
         allowlistSatisfied: Bool,
-        skillAllow: Bool,
         boundCommand: [String]? = nil,
         allowAlwaysPatterns: [ExecAllowAlwaysPattern] = []) -> ExecApprovalEvaluation
     {
@@ -553,9 +544,8 @@ struct ExecHostRequestEvaluatorTests {
             allowAlwaysPatterns: allowAlwaysPatterns,
             allowlistMatches: [],
             allowlistAuthorizationSatisfied: allowlistSatisfied,
-            allowlistSatisfied: allowlistSatisfied,
             allowlistMatch: nil,
-            skillAllow: skillAllow,
+            skillTrust: nil,
             policySnapshot: ExecApprovalPolicySnapshot(
                 security: security,
                 ask: ask,

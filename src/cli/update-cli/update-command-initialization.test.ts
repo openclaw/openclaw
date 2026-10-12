@@ -1,0 +1,261 @@
+import fs from "node:fs";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { preflightOpenClawDatabaseSchemas } from "../../state/openclaw-database-preflight.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { removePreparedWorkerOwnershipColumns } from "../../state/openclaw-state-schema-v17.test-support.js";
+import { execNodeEvalSync } from "../../test-utils/node-process.js";
+
+const mocks = vi.hoisted(() => ({ doctor: vi.fn() }));
+vi.mock("./update-command-package.js", () => ({ runPackageUpdateDoctor: mocks.doctor }));
+
+import {
+  acquireLegacyUpdateInitializationFence,
+  initializeUpdateStateFromTarget,
+  updateStateNeedsInitialization,
+} from "./update-command-initialization.js";
+
+const dirs = useAutoCleanupTempDirTracker(afterEach);
+const targetSchemas = { state: 16, agent: 19 };
+const doctorSuccess = {
+  name: "openclaw doctor",
+  command: "node openclaw.mjs doctor --non-interactive --fix",
+  cwd: "/selected-target",
+  durationMs: 1,
+  exitCode: 0,
+  stdoutTail: "",
+  stderrTail: "",
+};
+
+beforeEach(() => {
+  mocks.doctor.mockReset().mockResolvedValue(doctorSuccess);
+});
+afterEach(() => closeOpenClawStateDatabaseForTest());
+
+function freshEnvironment() {
+  const root = dirs.make("openclaw-update-initialization-");
+  return { HOME: root, OPENCLAW_STATE_DIR: path.join(root, "profile") };
+}
+
+function runIndependentSchemaWriter(env: ReturnType<typeof freshEnvironment>, value: string) {
+  const params = {
+    databasePath: resolveOpenClawStateSqlitePath(env),
+  };
+  return execNodeEvalSync(
+    `import {
+      StateSchemaMutationConflictError,
+      withStateDatabaseSchemaMaintenance,
+    } from ${JSON.stringify(new URL("../../infra/state-database-maintenance.ts", import.meta.url).href)};
+    try {
+      console.log(withStateDatabaseSchemaMaintenance(${JSON.stringify(params)}, () => ${JSON.stringify(value)}));
+    } catch (error) {
+      if (!(error instanceof StateSchemaMutationConflictError)) throw error;
+      console.log(error.message);
+    }`,
+    {
+      imports: ["tsx"],
+      env: {
+        ...env,
+        USERPROFILE: process.env.USERPROFILE,
+        PATH: process.env.PATH,
+        SystemRoot: process.env.SystemRoot,
+      },
+      timeout: 20_000,
+    },
+  ).trim();
+}
+
+function createTargetDatabase() {
+  const env = freshEnvironment();
+  const filename = openOpenClawStateDatabase({ env }).path;
+  closeOpenClawStateDatabaseForTest();
+  const db = new DatabaseSync(filename);
+  try {
+    removePreparedWorkerOwnershipColumns(db);
+    db.exec(
+      "PRAGMA user_version=16; UPDATE schema_meta SET schema_version=16, app_version='2026.9.2'",
+    );
+  } finally {
+    db.close();
+  }
+  return filename;
+}
+
+function publishTargetDatabase(source: string, env: NodeJS.ProcessEnv) {
+  const filename = resolveOpenClawStateSqlitePath(env);
+  fs.mkdirSync(path.dirname(filename), { recursive: true });
+  fs.copyFileSync(source, filename);
+  return filename;
+}
+
+async function checkTargetSchemas(env: NodeJS.ProcessEnv) {
+  const result = await preflightOpenClawDatabaseSchemas({ env, supportedVersions: targetSchemas });
+  if (result.incompatible.length || result.indeterminate.length) {
+    throw new Error("Selected target cannot open the current database schema");
+  }
+}
+
+function initializationOptions(env: NodeJS.ProcessEnv) {
+  return {
+    root: "/selected-target",
+    timeoutMs: 5_000,
+    progress: {},
+    env,
+    assertCurrent() {},
+    checkSchemas: () => checkTargetSchemas(env),
+  };
+}
+
+describe("selected-target state initialization", () => {
+  it("preserves an orphan journal without bootstrapping state", async () => {
+    const env = freshEnvironment();
+    const filename = resolveOpenClawStateSqlitePath(env);
+    fs.mkdirSync(path.dirname(filename), { recursive: true });
+    const sidecar = `${filename}-journal`;
+    fs.writeFileSync(sidecar, "retained database family bytes");
+
+    await expect(
+      initializeUpdateStateFromTarget({
+        ...initializationOptions(env),
+        checkSchemas: async () => undefined,
+      }),
+    ).rejects.toThrow(/sidecar|missing|orphan/i);
+
+    expect(mocks.doctor).not.toHaveBeenCalled();
+    expect(fs.existsSync(filename)).toBe(false);
+    expect(fs.readFileSync(sidecar, "utf8")).toBe("retained database family bytes");
+  });
+
+  it.each([
+    { label: "nonzero exit", completion: { exitCode: 1 } },
+    { label: "zero-exit timeout", completion: { exitCode: 0, termination: "timeout" } },
+    { label: "zero-exit output limit", completion: { exitCode: 0, outputLimitExceeded: true } },
+  ])(
+    "refuses target Doctor $label after staging created a compatible database",
+    async ({ completion }) => {
+      const env = freshEnvironment();
+      const filename = publishTargetDatabase(createTargetDatabase(), env);
+      const before = fs.readFileSync(filename);
+      mocks.doctor.mockResolvedValue({
+        ...doctorSuccess,
+        ...completion,
+        stderrTail: "Invalid config",
+      });
+
+      await expect(initializeUpdateStateFromTarget(initializationOptions(env))).rejects.toThrow(
+        "Invalid config",
+      );
+
+      expect(mocks.doctor).toHaveBeenCalledOnce();
+      expect(fs.readFileSync(filename)).toEqual(before);
+    },
+  );
+
+  it("does not start Doctor when executor authority expires during schema inspection", async () => {
+    const env = freshEnvironment();
+    let current = true;
+    await expect(
+      initializeUpdateStateFromTarget({
+        ...initializationOptions(env),
+        async checkSchemas() {
+          await checkTargetSchemas(env);
+          current = false;
+        },
+        assertCurrent() {
+          if (!current) {
+            throw new Error("Update executor was revoked");
+          }
+        },
+      }),
+    ).rejects.toThrow("Update executor was revoked");
+
+    expect(mocks.doctor).not.toHaveBeenCalled();
+    expect(fs.existsSync(env.OPENCLAW_STATE_DIR)).toBe(false);
+  });
+
+  it.each([
+    { label: "missing entrypoint", result: null },
+    { label: "successful Doctor without a database", result: doctorSuccess },
+  ])("refuses $label instead of letting the parent bootstrap state", async ({ result }) => {
+    const env = freshEnvironment();
+    mocks.doctor.mockResolvedValue(result);
+
+    await expect(initializeUpdateStateFromTarget(initializationOptions(env))).rejects.toThrow();
+
+    expect(fs.existsSync(resolveOpenClawStateSqlitePath(env))).toBe(false);
+  });
+});
+
+describe("initialization schema coordination", () => {
+  it("retains parent read authority while the legacy target creates its database", async () => {
+    const env = freshEnvironment();
+    const databasePath = resolveOpenClawStateSqlitePath(env);
+    const fence = acquireLegacyUpdateInitializationFence({
+      env,
+      targetVersion: "2026.7.1",
+      targetSchemas: { state: 1, agent: 1 },
+    });
+    if (!fence) {
+      throw new Error("Legacy target requires an initialization fence");
+    }
+    try {
+      expect(runIndependentSchemaWriter(env, "Unexpected modern schema writer")).toContain(
+        "another Gateway owns that state directory",
+      );
+      mocks.doctor.mockImplementation(async () => {
+        fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+        const legacy = new DatabaseSync(databasePath);
+        try {
+          legacy.exec(
+            "PRAGMA user_version=1; CREATE TABLE legacy_state(value TEXT); INSERT INTO legacy_state VALUES('target-owned')",
+          );
+        } finally {
+          legacy.close();
+        }
+        return doctorSuccess;
+      });
+      await fence.run(async () => {
+        await Promise.resolve();
+        await initializeUpdateStateFromTarget({
+          ...initializationOptions(env),
+          assertCurrent: fence.assertCurrent,
+          checkSchemas: async () => undefined,
+        });
+      });
+      expect(mocks.doctor).toHaveBeenCalledOnce();
+      await expect(updateStateNeedsInitialization(env)).rejects.toThrow(/offline maintenance/);
+      const reader = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        expect(reader.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
+        expect(reader.prepare("SELECT value FROM legacy_state").get()).toEqual({
+          value: "target-owned",
+        });
+      } finally {
+        reader.close();
+      }
+    } finally {
+      await fence.release();
+    }
+    expect(runIndependentSchemaWriter(env, "released")).toBe("released");
+  });
+
+  it("leaves the modern target free to acquire its own schema fence", async () => {
+    const env = freshEnvironment();
+    const fence = acquireLegacyUpdateInitializationFence({
+      env,
+      targetVersion: "2026.9.2",
+      targetSchemas,
+    });
+    try {
+      expect(runIndependentSchemaWriter(env, "target-owned")).toBe("target-owned");
+    } finally {
+      await fence?.release();
+    }
+  });
+});

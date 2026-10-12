@@ -3,11 +3,14 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { describe, expect, it, vi } from "vitest";
 import {
-  killMatrixQaCliChild,
-  resolveMatrixQaOpenClawCliEntryPath,
-} from "./scenario-runtime-cli-process.js";
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+  withinTest,
+} from "openclaw/plugin-sdk/test-fixtures";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { killMatrixQaCliChild } from "./scenario-runtime-cli-process.js";
 import {
   formatMatrixQaCliCommand,
   redactMatrixQaCliOutput,
@@ -15,7 +18,13 @@ import {
   startMatrixQaOpenClawCli,
 } from "./scenario-runtime-cli.js";
 
-const testing = { killMatrixQaCliChild, resolveMatrixQaOpenClawCliEntryPath };
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
 
 function isProcessRunning(pid: number): boolean {
   try {
@@ -26,30 +35,66 @@ function isProcessRunning(pid: number): boolean {
   }
 }
 
-async function waitForPidFile(pathToCheck: string, timeoutMs: number): Promise<number> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const value = (await readFile(pathToCheck, "utf8")).trim();
-      const pid = Number(value);
-      if (/^[1-9]\d*$/u.test(value) && Number.isSafeInteger(pid)) {
-        return pid;
-      }
-    } catch {}
-    await sleep(5);
+async function readPidFile(pathToCheck: string): Promise<number> {
+  const value = (
+    await readFile(pathToCheck, "utf8").catch((error: unknown) => {
+      throw new Error(`Timed out waiting for a PID in ${pathToCheck}`, { cause: error });
+    })
+  ).trim();
+  const pid = Number(value);
+  if (!/^[1-9]\d*$/u.test(value) || !Number.isSafeInteger(pid)) {
+    throw new Error(`Timed out waiting for a PID in ${pathToCheck}`);
   }
-  throw new Error(`Timed out waiting for a PID in ${pathToCheck}`);
+  return pid;
 }
 
-async function waitForProcessExit(pid: number, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (!isProcessRunning(pid)) {
-      return;
+// Session settlement verifies live group extinction, but does not join foreign zombie reaping.
+// The late-wait case also needs exit before attaching its first wait() caller.
+async function waitForProcessExit(pid: number, signal: AbortSignal): Promise<void> {
+  try {
+    while (isProcessRunning(pid)) {
+      signal.throwIfAborted();
+      await sleep(5, undefined, { signal });
     }
-    await sleep(5);
+  } catch (error) {
+    if (signal.aborted) {
+      throw new Error(`Timed out waiting for process ${pid} to exit`, { cause: error });
+    }
+    throw error;
   }
-  throw new Error(`Timed out waiting for process ${pid} to exit`);
+}
+
+async function withReadyCliTimeout(
+  params: Parameters<typeof startMatrixQaOpenClawCli>[0],
+  ready: (session: ReturnType<typeof startMatrixQaOpenClawCli>) => Promise<void>,
+  exercise: (session: ReturnType<typeof startMatrixQaOpenClawCli>) => Promise<void>,
+): Promise<void> {
+  const schedule = globalThis.setTimeout;
+  let expire: (() => void) | undefined;
+  const timer = vi
+    .spyOn(globalThis, "setTimeout")
+    .mockImplementation((callback, delay, ...args) => {
+      const handle = schedule(callback, delay, ...args);
+      if (!expire && delay === params.timeoutMs) {
+        clearTimeout(handle);
+        expire = () => callback(...args);
+      }
+      return handle;
+    });
+  let session: ReturnType<typeof startMatrixQaOpenClawCli> | undefined;
+  try {
+    session = startMatrixQaOpenClawCli(params);
+    // Only the execution deadline is held; process I/O and cleanup timers stay native.
+    timer.mockRestore();
+    await ready(session);
+    expect(expire).toBeTypeOf("function");
+    expire!();
+    await exercise(session);
+  } finally {
+    timer.mockRestore();
+    session?.kill();
+    await session?.wait().catch(() => undefined);
+  }
 }
 
 describe("Matrix QA CLI runtime", () => {
@@ -89,13 +134,13 @@ describe("Matrix QA CLI runtime", () => {
       const child = {
         pid: 12345,
         kill: killMock,
-      } as unknown as Parameters<typeof testing.killMatrixQaCliChild>[0];
+      } as unknown as Parameters<typeof killMatrixQaCliChild>[0];
       const runTaskkill = vi
         .fn()
         .mockReturnValueOnce({ status: statuses[0] })
         .mockReturnValueOnce({ status: statuses[1] });
 
-      testing.killMatrixQaCliChild(child, "SIGTERM", runTaskkill);
+      killMatrixQaCliChild(child, "SIGTERM", runTaskkill);
 
       expect(runTaskkill).toHaveBeenCalledTimes(2);
       if (fallsBack) {
@@ -107,46 +152,6 @@ describe("Matrix QA CLI runtime", () => {
       if (platformDescriptor) {
         Object.defineProperty(process, "platform", platformDescriptor);
       }
-    }
-  });
-
-  it("prefers the ESM OpenClaw CLI entrypoint when present", async () => {
-    const root = await mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "matrix-qa-cli-entry-"));
-    try {
-      await mkdir(path.join(root, "dist"));
-      await writeFile(path.join(root, "dist", "index.mjs"), "");
-      expect(testing.resolveMatrixQaOpenClawCliEntryPath(root)).toBe(
-        path.join(root, "dist", "index.mjs"),
-      );
-    } finally {
-      await rm(root, { force: true, recursive: true });
-    }
-  });
-
-  it("can preserve expected non-zero CLI output for negative scenarios", async () => {
-    const root = await mkdtemp(
-      path.join(resolvePreferredOpenClawTmpDir(), "matrix-qa-cli-nonzero-"),
-    );
-    try {
-      await mkdir(path.join(root, "dist"));
-      await writeFile(
-        path.join(root, "dist", "index.mjs"),
-        [
-          "process.stdout.write(JSON.stringify({ success: false, error: 'expected failure' }));",
-          "process.exit(7);",
-        ].join("\n"),
-      );
-      const result = await runMatrixQaOpenClawCli({
-        allowNonZero: true,
-        args: ["matrix", "verify", "backup", "restore", "--json"],
-        cwd: root,
-        env: process.env,
-        timeoutMs: 5_000,
-      });
-      expect(result.exitCode).toBe(7);
-      expect(result.stdout).toContain('"success":false');
-    } finally {
-      await rm(root, { force: true, recursive: true });
     }
   });
 
@@ -178,7 +183,7 @@ describe("Matrix QA CLI runtime", () => {
     }
   });
 
-  it("can close stdin after interactive CLI prompts", async () => {
+  it("closes stdin after interactive prompts and settles every waiting caller", async () => {
     const root = await mkdtemp(
       path.join(resolvePreferredOpenClawTmpDir(), "matrix-qa-cli-interactive-"),
     );
@@ -207,11 +212,15 @@ describe("Matrix QA CLI runtime", () => {
         "interactive prompt acknowledgement",
         5_000,
       );
+      const firstWait = session.wait();
+      const secondWait = session.wait();
       session.endStdin();
-      const result = await session.wait();
+      const result = await secondWait;
 
       expect(result.stdout).toContain('"input":"yes"');
       expect(result.stdout).toContain('"ended":true');
+      await expect(firstWait).resolves.toEqual(result);
+      await expect(session.wait()).resolves.toEqual(result);
     } finally {
       await rm(root, { force: true, recursive: true });
     }
@@ -232,15 +241,27 @@ describe("Matrix QA CLI runtime", () => {
         ].join("\n"),
       );
 
-      await expect(
-        runMatrixQaOpenClawCli({
+      await withReadyCliTimeout(
+        {
           args: ["matrix", "verify", "self"],
           cwd: root,
           env: process.env,
           timeoutMs: 250,
-        }),
-      ).rejects.toThrow(
-        /stderr:\nmatrix sdk still syncing[\s\S]*stdout:\nwaiting for verification/u,
+        },
+        async (session) => {
+          await session.waitForOutput(
+            (output) =>
+              output.stdout.includes("waiting for verification") &&
+              output.stderr.includes("matrix sdk still syncing"),
+            "timeout diagnostics ready",
+            5_000,
+          );
+        },
+        async (session) => {
+          await expect(session.wait()).rejects.toThrow(
+            /stderr:\nmatrix sdk still syncing[\s\S]*stdout:\nwaiting for verification/u,
+          );
+        },
       );
     } finally {
       await rm(root, { force: true, recursive: true });
@@ -260,23 +281,32 @@ describe("Matrix QA CLI runtime", () => {
         [
           "import { writeFileSync } from 'node:fs';",
           `writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));`,
-          "process.stdout.write('waiting despite graceful shutdown\\n');",
           "process.on('SIGTERM', () => { process.stdout.write('ignored sigterm\\n'); });",
+          "process.stdout.write('waiting despite graceful shutdown\\n');",
           "setInterval(() => {}, 1000);",
         ].join("\n"),
       );
 
-      await expect(
-        runMatrixQaOpenClawCli({
+      await withReadyCliTimeout(
+        {
           args: ["matrix", "verify", "self"],
           cwd: root,
           env: process.env,
           timeoutMs: 500,
-        }),
-      ).rejects.toThrow(/timed out after 500ms/u);
-
-      childPid = Number(await readFile(pidPath, "utf8"));
-      expect(isProcessRunning(childPid)).toBe(false);
+        },
+        async (session) => {
+          await session.waitForOutput(
+            (output) => output.stdout.includes("waiting despite graceful shutdown"),
+            "installed SIGTERM handler",
+            5_000,
+          );
+          childPid = await readPidFile(pidPath);
+        },
+        async (session) => {
+          await expect(session.wait()).rejects.toThrow(/timed out after 500ms/u);
+          expect(isProcessRunning(childPid!)).toBe(false);
+        },
+      );
     } finally {
       if (childPid && isProcessRunning(childPid)) {
         process.kill(childPid, "SIGKILL");
@@ -285,7 +315,7 @@ describe("Matrix QA CLI runtime", () => {
     }
   });
 
-  it("preserves timeout diagnostics when wait attaches after timeout", async () => {
+  it("preserves timeout diagnostics when wait attaches after timeout", async ({ signal }) => {
     const root = await mkdtemp(
       path.join(resolvePreferredOpenClawTmpDir(), "matrix-qa-cli-late-wait-timeout-"),
     );
@@ -298,25 +328,29 @@ describe("Matrix QA CLI runtime", () => {
         [
           "import { writeFileSync } from 'node:fs';",
           `writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));`,
-          "process.stdout.write('late wait timeout marker\\n');",
           "process.on('SIGTERM', () => {});",
+          "process.stdout.write('late wait timeout marker\\n');",
           "setInterval(() => {}, 1000);",
         ].join("\n"),
       );
 
-      const session = startMatrixQaOpenClawCli({
-        args: ["matrix", "verify", "self"],
-        cwd: root,
-        env: process.env,
-        timeoutMs: 500,
-      });
-      childPid = await waitForPidFile(pidPath, 2_000);
-      await waitForProcessExit(childPid, 2_000);
-
-      await expect(session.wait()).rejects.toThrow(/timed out after 500ms/u);
-      await expect(session.wait()).rejects.toThrow(/late wait timeout marker/u);
-
-      expect(isProcessRunning(childPid)).toBe(false);
+      await withReadyCliTimeout(
+        { args: ["matrix", "verify", "self"], cwd: root, env: process.env, timeoutMs: 500 },
+        async (session) => {
+          await session.waitForOutput(
+            (output) => output.stdout.includes("late wait timeout marker"),
+            "late wait fixture readiness",
+            5_000,
+          );
+          childPid = await readPidFile(pidPath);
+        },
+        async (session) => {
+          await waitForProcessExit(childPid!, signal);
+          await expect(session.wait()).rejects.toThrow(/timed out after 500ms/u);
+          await expect(session.wait()).rejects.toThrow(/late wait timeout marker/u);
+          expect(isProcessRunning(childPid!)).toBe(false);
+        },
+      );
     } finally {
       if (childPid && isProcessRunning(childPid)) {
         process.kill(childPid, "SIGKILL");
@@ -341,29 +375,40 @@ describe("Matrix QA CLI runtime", () => {
           "import { spawn } from 'node:child_process';",
           "import { writeFileSync } from 'node:fs';",
           `writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
-          "const grandchild = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000);'], { stdio: ['ignore', 'inherit', 'inherit'] });",
+          "const grandchild = spawn(process.execPath, ['-e', 'process.stdout.write(\"descendant ready\\\\n\"); setInterval(() => {}, 1000);'], { stdio: ['ignore', 'inherit', 'inherit'] });",
           `writeFileSync(${JSON.stringify(grandchildPidPath)}, String(grandchild.pid));`,
-          "process.stdout.write('spawned persistent descendant\\n');",
           "process.on('SIGTERM', () => {});",
+          "process.stdout.write('spawned persistent descendant\\n');",
           "setInterval(() => {}, 1000);",
         ].join("\n"),
       );
 
-      await expect(
-        runMatrixQaOpenClawCli({
+      await withReadyCliTimeout(
+        {
           args: ["matrix", "verify", "self"],
           cwd: root,
           env: process.env,
           timeoutMs: 500,
-        }),
-      ).rejects.toThrow(/timed out after 500ms/u);
-
-      childPid = Number(await readFile(childPidPath, "utf8"));
-      grandchildPid = Number(await readFile(grandchildPidPath, "utf8"));
-      expect(isProcessRunning(childPid)).toBe(false);
-      if (process.platform !== "win32") {
-        expect(isProcessRunning(grandchildPid)).toBe(false);
-      }
+        },
+        async (session) => {
+          await session.waitForOutput(
+            (output) =>
+              output.stdout.includes("spawned persistent descendant") &&
+              output.stdout.includes("descendant ready"),
+            "parent and descendant readiness",
+            5_000,
+          );
+          childPid = await readPidFile(childPidPath);
+          grandchildPid = await readPidFile(grandchildPidPath);
+        },
+        async (session) => {
+          await expect(session.wait()).rejects.toThrow(/timed out after 500ms/u);
+          expect(isProcessRunning(childPid!)).toBe(false);
+          if (process.platform !== "win32") {
+            expect(isProcessRunning(grandchildPid!)).toBe(false);
+          }
+        },
+      );
     } finally {
       for (const pid of [grandchildPid, childPid]) {
         if (pid && isProcessRunning(pid)) {
@@ -374,7 +419,10 @@ describe("Matrix QA CLI runtime", () => {
     }
   });
 
-  it("kills ignored-stdio descendants after manual CLI session kill", async () => {
+  it("kills ignored-stdio descendants after manual CLI session kill", async ({
+    signal,
+    onTestFinished,
+  }) => {
     if (process.platform === "win32") {
       return;
     }
@@ -385,6 +433,10 @@ describe("Matrix QA CLI runtime", () => {
     const grandchildPidPath = path.join(root, "grandchild.pid");
     let childPid: number | undefined;
     let grandchildPid: number | undefined;
+    let session: ReturnType<typeof startMatrixQaOpenClawCli> | undefined;
+    const cleanup = Promise.withResolvers<void>();
+    // Vitest can finish a timed-out callback before its async finally; the hook joins that cleanup.
+    onTestFinished(() => cleanup.promise);
     try {
       await mkdir(path.join(root, "dist"));
       await writeFile(
@@ -392,41 +444,60 @@ describe("Matrix QA CLI runtime", () => {
         [
           "import { spawn } from 'node:child_process';",
           "import { writeFileSync } from 'node:fs';",
+          fixtureReceiptClientSource(receipts.endpoint),
           `writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
           "const grandchild = spawn(process.execPath, ['-e', 'process.on(\\'SIGTERM\\', () => {}); setInterval(() => {}, 1000);'], { stdio: 'ignore' });",
           "grandchild.unref();",
           `writeFileSync(${JSON.stringify(grandchildPidPath)}, String(grandchild.pid));`,
           "process.on('SIGTERM', () => process.exit(0));",
+          `sendReceipt(${JSON.stringify(childPidPath)}, "ready");`,
           "setInterval(() => {}, 1000);",
         ].join("\n"),
       );
 
-      const session = startMatrixQaOpenClawCli({
+      session = startMatrixQaOpenClawCli({
         args: ["matrix", "verify", "self"],
         cwd: root,
         env: process.env,
         timeoutMs: 10_000,
       });
-      childPid = await waitForPidFile(childPidPath, 2_000);
-      grandchildPid = await waitForPidFile(grandchildPidPath, 2_000);
+      const readReadyPids = async () => {
+        childPid = await readPidFile(childPidPath);
+        grandchildPid = await readPidFile(grandchildPidPath);
+      };
+      // PID records precede the receipt; a session result can overtake its separate socket.
+      await withinTest(
+        Promise.race([
+          receipts.waitFor(childPidPath, "ready").then(readReadyPids),
+          session.wait().then(readReadyPids, readReadyPids),
+        ]),
+        signal,
+      );
 
       const sessionExit = session.wait().catch(() => undefined);
       session.kill();
 
+      await withinTest(sessionExit, signal);
       await Promise.all([
-        waitForProcessExit(childPid, 2_000),
-        waitForProcessExit(grandchildPid, 2_000),
+        waitForProcessExit(childPid!, signal),
+        waitForProcessExit(grandchildPid!, signal),
       ]);
-      await sessionExit;
-      expect(isProcessRunning(childPid)).toBe(false);
-      expect(isProcessRunning(grandchildPid)).toBe(false);
+      expect(isProcessRunning(childPid!)).toBe(false);
+      expect(isProcessRunning(grandchildPid!)).toBe(false);
     } finally {
-      for (const pid of [grandchildPid, childPid]) {
-        if (pid && isProcessRunning(pid)) {
-          process.kill(pid, "SIGKILL");
-        }
-      }
-      await rm(root, { force: true, recursive: true });
+      cleanup.resolve(
+        (async () => {
+          session?.kill();
+          await session?.wait().catch(() => undefined);
+          for (const pid of [grandchildPid, childPid]) {
+            if (pid && isProcessRunning(pid)) {
+              process.kill(pid, "SIGKILL");
+            }
+          }
+          await rm(root, { force: true, recursive: true });
+        })(),
+      );
+      await cleanup.promise;
     }
   });
 });

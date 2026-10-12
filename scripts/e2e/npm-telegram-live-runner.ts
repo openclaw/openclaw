@@ -47,47 +47,29 @@ function resolvePackageTelegramOutputDir(env: NodeJS.ProcessEnv, repoRoot: strin
 }
 
 const DEFAULT_RTT_CHECK_ID = "channel-canary";
-const EXTENDED_STABLE_2026_6_35 = "2026.6.35";
 const LEGACY_CONFIG_CUTOFF = "2026.7.2-beta.4";
 
-function projectExtendedStable2026_6_35QaConfig(cfg: OpenClawConfig): OpenClawConfig {
-  const { entries, ...agents } = cfg.agents ?? {};
-  const { mediaModels, ...defaults } = agents.defaults ?? {};
+type HistoricalPackageConfig = OpenClawConfig & {
+  agents?: {
+    list?: Array<
+      NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>[string] & { id: string }
+    >;
+  };
+};
 
-  return {
-    ...cfg,
-    // The frozen candidate validates the pre-entries config shape. Keep this
-    // projection at the package harness boundary so current runtime stays canonical.
-    memory: { backend: "builtin" },
-    plugins: {
-      ...cfg.plugins,
-      bundledDiscovery: "compat",
-    },
-    agents: {
-      ...agents,
-      defaults: {
-        ...defaults,
-        ...(mediaModels?.image ? { imageGenerationModel: mediaModels.image } : {}),
-      },
-      list: Object.entries(entries ?? {}).map(([id, agent]) => Object.assign({ id }, agent)),
-    },
-  } as OpenClawConfig;
-}
-
-function projectLegacyPackageQaConfig(cfg: OpenClawConfig): OpenClawConfig {
+function projectLegacyPackageQaConfig(cfg: OpenClawConfig): HistoricalPackageConfig {
   const { entries, ...agents } = cfg.agents ?? {};
-  const memory = cfg.memory as
-    | (Record<string, unknown> & {
-        backend?: unknown;
-        citations?: unknown;
-        qmd?: unknown;
-      })
-    | undefined;
+  const { modelPolicy: _modelPolicy, ...legacyDefaults } = agents.defaults ?? {};
+  const memory:
+    | (NonNullable<OpenClawConfig["memory"]> & { backend?: unknown; qmd?: unknown })
+    | undefined = cfg.memory;
+  const legacyMemoryKeys: Array<"backend" | "citations" | "qmd"> = ["backend", "citations", "qmd"];
 
   return {
     ...cfg,
     agents: {
       ...agents,
+      defaults: legacyDefaults,
       ...(entries
         ? {
             list: Object.entries(entries).map(([id, agent]) => Object.assign({}, agent, { id })),
@@ -96,19 +78,16 @@ function projectLegacyPackageQaConfig(cfg: OpenClawConfig): OpenClawConfig {
     },
     memory: memory
       ? Object.fromEntries(
-          ["backend", "citations", "qmd"]
+          legacyMemoryKeys
             .filter((key) => memory[key] !== undefined)
             .map((key) => [key, memory[key]]),
         )
       : memory,
-  } as OpenClawConfig;
+  };
 }
 
 function resolvePackageConfigMutation(env: NodeJS.ProcessEnv = process.env) {
   const packageVersion = env.OPENCLAW_NPM_TELEGRAM_PACKAGE_VERSION?.trim();
-  if (packageVersion === EXTENDED_STABLE_2026_6_35) {
-    return projectExtendedStable2026_6_35QaConfig;
-  }
   const comparison = packageVersion
     ? compareReleaseVersions(packageVersion, LEGACY_CONFIG_CUTOFF)
     : null;
@@ -140,9 +119,15 @@ function resolvePackageTelegramScenarios(
   resolveScenarioIds: (scenarioIds: readonly string[]) => string[],
 ) {
   const selection = resolvePackageTelegramScenarioSelection(env);
+  const omittedDefaultScenarioIds =
+    selection.scenarioIds.length === 0
+      ? new Set(normalizeCsvOrLooseStringList(env.OPENCLAW_NPM_TELEGRAM_OMIT_DEFAULT_SCENARIOS))
+      : new Set<string>();
   return {
     ...selection,
-    resolvedScenarioIds: resolveScenarioIds(selection.scenarioIds),
+    resolvedScenarioIds: resolveScenarioIds(selection.scenarioIds).filter(
+      (scenarioId) => !omittedDefaultScenarioIds.has(scenarioId),
+    ),
   };
 }
 
@@ -174,8 +159,8 @@ function createRoundTripProbe(
     ...options,
     markerPrefix: "QA-TELEGRAM-RTT",
     input: {
-      conversation: { id: "telegram-rtt-room", kind: "group" },
-      senderId: "qa-rtt-driver",
+      fromScenario: true,
+      senderId: "primary",
       senderName: "QA RTT Driver",
     },
     textPrefix: "@openclaw Telegram RTT check. Reply exactly: ",

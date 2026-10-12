@@ -1,18 +1,30 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeNullableString as readNonemptyString } from "@openclaw/normalization-core/string-coerce";
+import { mergeChatStreamMessage } from "./chat-stream-message.js";
 import {
   reduceSessionProjection,
   type SessionProjectionEvent,
-  type SessionProjectionGatewayRunEvent,
-  type SessionProjectionRunTransition,
+  type SessionProjectionRun,
   type SessionProjectionScope,
   type SessionProjectionState,
 } from "./session-projection.js";
 
-function readNonemptyString(value: unknown): string | null {
-  return typeof value === "string" ? value.trim() || null : null;
-}
+export type SessionProjectionGatewayRunEvent = {
+  state?: unknown;
+  yielded?: unknown;
+  seq?: unknown;
+  deltaText?: unknown;
+  replace?: unknown;
+} & Partial<Record<"runId" | "message" | "stopReason" | "errorKind" | "errorMessage", unknown>>;
 
-export function reduceSessionProjectionRunEventImpl(
+export type SessionProjectionRunTransition = {
+  projection: SessionProjectionState;
+  previousRun: SessionProjectionRun | undefined;
+  currentRun: SessionProjectionRun | undefined;
+};
+
+/** Normalizes Gateway run envelopes once for every browser and terminal adapter. */
+export function reduceSessionProjectionRunEvent(
   projection: SessionProjectionState,
   event: SessionProjectionGatewayRunEvent,
   scope: SessionProjectionScope = {},
@@ -25,11 +37,19 @@ export function reduceSessionProjectionRunEventImpl(
   ) {
     return null;
   }
-  const message = event.message;
+  const message =
+    event.state === "delta"
+      ? mergeChatStreamMessage(projection.runs[runId]?.message, event)
+      : event.message;
   const messageStopReason = isRecord(message) ? readNonemptyString(message.stopReason) : null;
   const stopReason = readNonemptyString(event.stopReason) ?? messageStopReason;
   const errorKind = readNonemptyString(event.errorKind);
-  const base = { runId, ...(message === undefined ? {} : { message }), scope };
+  const base = {
+    runId,
+    seq: typeof event.seq === "number" ? event.seq : undefined,
+    ...(message === undefined ? {} : { message }),
+    scope,
+  };
   const action: SessionProjectionEvent =
     event.state === "delta"
       ? { type: "runDelta", ...base }

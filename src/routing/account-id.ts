@@ -1,5 +1,4 @@
-// Routing account id helpers normalize account identifiers for route matching.
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeAgentIdStrict } from "@openclaw/normalization-core/agent-id";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 
@@ -7,47 +6,12 @@ export const DEFAULT_ACCOUNT_ID = "default";
 
 // Account ids are config/session keys, not display names. Normalize them into
 // short lowercase safe keys and reject prototype-like object keys.
-const VALID_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
-const INVALID_CHARS_RE = /[^a-z0-9_-]+/g;
-const LEADING_DASH_RE = /^-+/;
-const TRAILING_DASH_RE = /-+$/;
 const ACCOUNT_ID_CACHE_MAX = 512;
 
-const normalizeAccountIdCache = new Map<string, string>();
-const normalizeOptionalAccountIdCache = new Map<string, string | undefined>();
-
-function canonicalizeAccountId(value: string): string {
-  const normalized = normalizeLowercaseStringOrEmpty(value);
-  if (VALID_ID_RE.test(value)) {
-    return normalized;
-  }
-  return normalized
-    .replace(INVALID_CHARS_RE, "-")
-    .replace(LEADING_DASH_RE, "")
-    .replace(TRAILING_DASH_RE, "")
-    .slice(0, 64);
-}
-
-function normalizeCanonicalAccountId(value: string): string | undefined {
-  const canonical = canonicalizeAccountId(value);
-  if (!canonical || isBlockedObjectKey(canonical)) {
-    return undefined;
-  }
-  return canonical;
-}
+const normalizedAccountIdCache = new Map<string, string | undefined>();
 
 export function normalizeAccountId(value: string | undefined | null): string {
-  const trimmed = (value ?? "").trim();
-  if (!trimmed) {
-    return DEFAULT_ACCOUNT_ID;
-  }
-  const cached = normalizeAccountIdCache.get(trimmed);
-  if (cached) {
-    return cached;
-  }
-  const normalized = normalizeCanonicalAccountId(trimmed) || DEFAULT_ACCOUNT_ID;
-  setNormalizeCache(normalizeAccountIdCache, trimmed, normalized);
-  return normalized;
+  return normalizeOptionalAccountId(value) ?? DEFAULT_ACCOUNT_ID;
 }
 
 // Optional variant for config fields where absence is meaningful. Invalid ids
@@ -57,17 +21,13 @@ export function normalizeOptionalAccountId(value: string | undefined | null): st
   if (!trimmed) {
     return undefined;
   }
-  if (normalizeOptionalAccountIdCache.has(trimmed)) {
-    return normalizeOptionalAccountIdCache.get(trimmed);
+  if (normalizedAccountIdCache.has(trimmed)) {
+    return normalizedAccountIdCache.get(trimmed);
   }
-  const normalized = normalizeCanonicalAccountId(trimmed) || undefined;
-  setNormalizeCache(normalizeOptionalAccountIdCache, trimmed, normalized);
+  const canonical = normalizeAgentIdStrict(trimmed);
+  const normalized =
+    canonical.ok && !isBlockedObjectKey(canonical.value) ? canonical.value : undefined;
+  normalizedAccountIdCache.set(trimmed, normalized);
+  pruneMapToMaxSize(normalizedAccountIdCache, ACCOUNT_ID_CACHE_MAX);
   return normalized;
-}
-
-function setNormalizeCache<T>(cache: Map<string, T>, key: string, value: T): void {
-  cache.set(key, value);
-  // Bounded FIFO-ish cache avoids unbounded growth from user/channel input
-  // while keeping hot account ids cheap during routing.
-  pruneMapToMaxSize(cache, ACCOUNT_ID_CACHE_MAX);
 }

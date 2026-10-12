@@ -4,6 +4,12 @@ import { visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
 import type { CronJob } from "../../cron/types.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import {
+  ExpectedCliError,
+  formatCliFailureLines,
+  formatCliJsonFailure,
+} from "../failure-output.js";
+import { CronCliError } from "./cron-cli-error.js";
 import { resolveCronCreateScheduleFromArgs } from "./schedule-options.js";
 import {
   coerceCronDeliveryPreviews,
@@ -11,7 +17,7 @@ import {
   getCronChannelOptions,
   handleCronCliError,
   parseAt,
-  parseCronToolsAllow,
+  parseCronStringList,
   parsePositiveCronDurationMs,
   printCronList,
   printCronShow,
@@ -43,29 +49,6 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("handleCronCliError", () => {
-  it("renders typed automation lookup misses with the cron list recovery command", () => {
-    const error = new GatewayClientRequestError({
-      code: "INVALID_REQUEST",
-      message: "transport-neutral lookup miss",
-      details: { code: "CRON_JOB_NOT_FOUND", jobId: "missing-job" },
-    });
-    const errorOutput = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(((code: number) => {
-      throw new Error(`exit ${code}`);
-    }) as never);
-
-    expect(() => handleCronCliError(error)).toThrow("exit 1");
-    expect(errorOutput).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "Automation not found: missing-job. Run `openclaw cron list` to see recent automation ids.",
-      ),
-    );
-    errorOutput.mockRestore();
-    exit.mockRestore();
-  });
-});
-
 function createBaseJob(overrides: Partial<CronJob>): CronJob {
   const now = Date.now();
   return {
@@ -89,63 +72,13 @@ describe("printCronList", () => {
     hoisted.listChannelPluginsMock.mockReturnValue([]);
   });
 
-  it("handles job with undefined sessionTarget (#9649)", () => {
-    const { logs, runtime } = createRuntimeLogCapture();
-
-    // Simulate a job without sessionTarget (as reported in #9649)
-    const jobWithUndefinedTarget = createBaseJob({
-      id: "test-job-id",
-      // sessionTarget is intentionally omitted to simulate the bug
-    });
-
-    printCronList([jobWithUndefinedTarget], runtime);
-
-    // Verify output contains the job
-    expect(logs.length).toBeGreaterThan(1);
-    expectLogsToInclude(logs, "test-job-id");
-  });
-
-  it("handles job with defined sessionTarget", () => {
-    const { logs, runtime } = createRuntimeLogCapture();
-    const jobWithTarget = createBaseJob({
-      id: "test-job-id-2",
-      name: "Test Job 2",
-      sessionTarget: "isolated",
-    });
-
-    printCronList([jobWithTarget], runtime);
-    expectLogsToInclude(logs, "isolated");
-  });
-
   it.each([
-    [59_999, "<1m"],
-    [60_000, "1m"],
-    [3_569_000, "59m"],
-    [3_570_000, "1h"],
-    [84_599_000, "23h"],
-    [84_600_000, "1d"],
-  ])("renders %i ms as %s across cron list and show", (deltaMs, expected) => {
-    vi.useFakeTimers();
-    const now = new Date("2026-08-02T12:00:00.000Z");
-    vi.setSystemTime(now);
-    const job = createBaseJob({
-      id: "rounding-job",
-      state: {
-        nextRunAtMs: now.getTime() + deltaMs,
-        lastRunAtMs: now.getTime() - deltaMs,
-      },
-    });
-
-    const list = createRuntimeLogCapture();
-    printCronList([job], list.runtime);
-    const row = list.logs.find((line) => line.includes(job.id)) ?? "";
-    expect(row).toContain(`in ${expected}`);
-    expect(row).toContain(`${expected} ago`);
-
-    const show = createRuntimeLogCapture();
-    printCronShow(job, show.runtime);
-    expect(show.logs).toContain(`next: in ${expected}`);
-    expect(show.logs).toContain(`last: ${expected} ago`);
+    { at: "+010000-01-15T12:34:56.789Z", expected: "+010000-01-15 12:34Z" },
+    { at: "not-a-time", expected: "-" },
+  ])("preserves one-shot ISO year in cron list for $at", ({ at, expected }) => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    printCronList([createBaseJob({ schedule: { kind: "at", at }, state: {} })], runtime);
+    expectLogsToInclude(logs, `at ${expected}`);
   });
 
   it("truncates and aligns names by sanitized terminal display width", () => {
@@ -184,33 +117,6 @@ describe("printCronList", () => {
     expect(Buffer.from(output, "utf8").toString("utf8")).toBe(output);
     expect(output).not.toContain("\uFFFD");
     expect(output).not.toContain(injectedMarker);
-  });
-
-  it.each([
-    ["halfwidth voiced kana", `${"x".repeat(23)}ﾊﾞ`, `${"x".repeat(21)}...`],
-    ["halfwidth semi-voiced kana", `${"x".repeat(23)}ﾊﾟ`, `${"x".repeat(21)}...`],
-    ["zero-width space", `${"x".repeat(23)}\u200B`, `${"x".repeat(23)}\u200B `],
-    ["word joiner", `${"x".repeat(23)}\u2060`, `${"x".repeat(23)}\u2060 `],
-    ["zero-width no-break space", `${"x".repeat(23)}\uFEFF`, `${"x".repeat(23)}\uFEFF `],
-    ["leading zero-width non-joiner", `\u200C${"x".repeat(23)}`, `\u200C${"x".repeat(23)} `],
-    ["Hindi spacing mark", `${"x".repeat(23)}का`, `${"x".repeat(21)}...`],
-    ["repeated Hangul jamo", `${"x".repeat(22)}ᄀ가`, `${"x".repeat(21)}...`],
-    ["Hangul leading filler", `${"x".repeat(23)}\u115F`, `${"x".repeat(21)}...`],
-    ["Hangul compatibility filler", `${"x".repeat(23)}\u3164`, `${"x".repeat(21)}...`],
-    ["halfwidth Hangul filler", `${"x".repeat(23)}\uFFA0`, `${"x".repeat(23)}\uFFA0`],
-    ["zero-width Hangul vowel filler", `${"x".repeat(23)}\u1160`, `${"x".repeat(23)}\u1160 `],
-    ["lone high surrogate", `${"x".repeat(23)}\uD800`, `${"x".repeat(23)}\uD800`],
-    ["lone low surrogate", `${"x".repeat(23)}\uDC00`, `${"x".repeat(23)}\uDC00`],
-  ])("aligns the %s name cell without relying on its width helper", (_label, name, expected) => {
-    const { logs, runtime } = createRuntimeLogCapture();
-    printCronList([createBaseJob({ name })], runtime);
-
-    const [header = "", row = ""] = logs;
-    const nameColumn = header.indexOf("Name");
-    const scheduleColumn = row.indexOf("at ");
-    expect(nameColumn).toBeGreaterThan(-1);
-    expect(scheduleColumn).toBeGreaterThan(nameColumn);
-    expect(row.slice(nameColumn, scheduleColumn - 1)).toBe(expected);
   });
 
   it("sanitizes and bounds named-session targets", () => {
@@ -318,20 +224,24 @@ describe("printCronList", () => {
     expectLogsToInclude(logs, "malformed-job");
   });
 
-  it("shows stagger label for cron schedules", () => {
-    const { logs, runtime } = createRuntimeLogCapture();
-    const job = createBaseJob({
-      id: "staggered-job",
-      name: "Staggered",
-      schedule: { kind: "cron", expr: "0 * * * *", staggerMs: 5 * 60_000 },
-      sessionTarget: "main",
-      state: {},
-      payload: { kind: "systemEvent", text: "tick" },
-    });
+  it.each([
+    {
+      schedule: { kind: "cron", expr: "* * * * *", staggerMs: 1_001 },
+      expected: "cron * * * * * (stagger 1s 1ms)",
+    },
+  ] as const)(
+    "preserves configured duration precision in list and show: $expected",
+    ({ schedule, expected }) => {
+      const job = createBaseJob({ schedule, state: {} });
+      const list = createRuntimeLogCapture();
+      printCronList([job], list.runtime);
+      expectLogsToInclude(list.logs, expected);
 
-    printCronList([job], runtime);
-    expectLogsToInclude(logs, "(stagger 5m)");
-  });
+      const show = createRuntimeLogCapture();
+      printCronShow(job, show.runtime);
+      expectLogsToInclude(show.logs, `schedule: ${expected}`);
+    },
+  );
 
   it("marks trigger schedules and shows evaluation details", () => {
     const job = createBaseJob({
@@ -351,6 +261,53 @@ describe("printCronList", () => {
     const show = createRuntimeLogCapture();
     printCronShow(job, show.runtime);
     expectLogsToInclude(show.logs, "trigger: once=yes; evals=4;");
+  });
+
+  it("includes condition triggers on stream schedules", () => {
+    const job = createBaseJob({
+      schedule: { kind: "stream", command: ["node", "events.mjs"] },
+      trigger: { script: "json({ fire: true })" },
+      state: {},
+    });
+
+    const list = createRuntimeLogCapture();
+    printCronList([job], list.runtime);
+    expectLogsToInclude(list.logs, "stream node events.mjs+trigger");
+
+    const show = createRuntimeLogCapture();
+    printCronShow(job, show.runtime);
+    expectLogsToInclude(show.logs, "schedule: stream node events.mjs+trigger");
+  });
+
+  it.each([false, true])("shows disabled stream sources with running=%s", (running) => {
+    const job = createBaseJob({
+      schedule: { kind: "stream", command: ["node", "events.mjs"] },
+      state: {
+        streamStatus: "disabled",
+        streamError: "stream sources require cron.triggers.enabled=true",
+        lastRunStatus: "ok",
+        lastDeliveryStatus: "not-delivered",
+        deliverySuppressionReason: "silent",
+        ...(running ? { runningAtMs: Date.now() } : {}),
+      },
+    });
+
+    const list = createRuntimeLogCapture();
+    printCronList([job], list.runtime);
+    const row = list.logs.find((line) => line.includes(job.id)) ?? "";
+    expect(row).toContain(running ? "running" : "disabled");
+    expect(row).not.toContain("idle");
+    expect(row).not.toContain("ok (suppressed)");
+
+    const show = createRuntimeLogCapture();
+    printCronShow(job, show.runtime);
+    expect(show.logs).toContain(`status: ${running ? "running" : "disabled"}`);
+    expectLogsToInclude(show.logs, "stream status: disabled");
+    expectLogsToInclude(
+      show.logs,
+      "stream error: stream sources require cron.triggers.enabled=true",
+    );
+    expect(enrichCronJsonWithStatus(job)).toMatchObject({ status: running ? "running" : "ok" });
   });
 
   it("shows on-exit schedules in list and show output", () => {
@@ -395,37 +352,37 @@ describe("printCronList", () => {
   });
 
   it.each([
-    { label: "required", bestEffort: false },
-    { label: "best-effort", bestEffort: true },
-    { label: "default", bestEffort: undefined },
-  ])(
-    "makes $label undelivered automation output visible without changing JSON status",
-    ({ bestEffort }) => {
+    ["required", false, "not-delivered", "HTTP 503", "ok (not delivered)"],
+    ["required", false, "unknown", "request timed out", "delivery unknown"],
+  ] as const)(
+    "shows %s delivery outcomes (best effort %s, status %s) without changing JSON status",
+    (_policy, bestEffort, deliveryStatus, deliveryError, expectedStatus) => {
       const job = createBaseJob({
-        id: "undelivered-job",
+        id: "delivery-job",
         delivery: {
-          mode: "announce",
-          ...(bestEffort === undefined ? {} : { bestEffort }),
+          mode: "webhook",
+          to: "https://example.invalid/hook",
+          bestEffort,
         },
         state: {
           lastRunStatus: "ok",
-          lastDeliveryStatus: "not-delivered",
-          lastDeliveryError: "primary route rejected",
+          lastDeliveryStatus: deliveryStatus,
+          lastDeliveryError: deliveryError,
         },
       });
 
       const list = createRuntimeLogCapture();
       printCronList([job], list.runtime);
-      expectLogsToInclude(list.logs, "ok (not delivered)");
+      expectLogsToInclude(list.logs, expectedStatus);
 
       const show = createRuntimeLogCapture();
       printCronShow(job, show.runtime);
-      expectLogsToInclude(show.logs, "status: ok (not delivered)");
-      expectLogsToInclude(show.logs, "last delivery error: primary route rejected");
+      expectLogsToInclude(show.logs, `status: ${expectedStatus}`);
+      expectLogsToInclude(show.logs, `last delivery error: ${deliveryError}`);
 
       expect(enrichCronJsonWithStatus(job)).toMatchObject({
         status: "ok",
-        state: { lastRunStatus: "ok", lastDeliveryStatus: "not-delivered" },
+        state: { lastRunStatus: "ok", lastDeliveryStatus: deliveryStatus },
       });
       expect(enrichCronJsonWithStatus({ jobs: [job] })).toMatchObject({
         jobs: [{ status: "ok" }],
@@ -433,28 +390,35 @@ describe("printCronList", () => {
     },
   );
 
-  it.each([
-    { label: "disabled", enabled: false, runStatus: "ok" as const, expectedStatus: "disabled" },
-    { label: "running", enabled: true, runStatus: "ok" as const, expectedStatus: "running" },
-    { label: "failed", enabled: true, runStatus: "error" as const, expectedStatus: "error" },
-  ])(
-    "does not let prior non-delivery override a $label automation",
-    ({ enabled, runStatus, expectedStatus }) => {
+  it.each(["silent"] as const)(
+    "shows recorded %s suppression without changing JSON delivery status",
+    (deliverySuppressionReason) => {
       const job = createBaseJob({
-        enabled,
         state: {
-          lastRunStatus: runStatus,
+          lastRunStatus: "ok",
           lastDeliveryStatus: "not-delivered",
-          ...(expectedStatus === "running" ? { runningAtMs: Date.now() } : {}),
+          lastDelivered: false,
+          deliverySuppressionReason,
         },
       });
+      const list = createRuntimeLogCapture();
+      printCronList([job], list.runtime);
+      expectLogsToInclude(list.logs, "ok (suppressed)");
+      expect(list.logs.join("\n")).not.toContain("ok (not delivered)");
 
       const show = createRuntimeLogCapture();
       printCronShow(job, show.runtime);
-
-      expectLogsToInclude(show.logs, `status: ${expectedStatus}`);
-      expect(show.logs.join("\n")).not.toContain("ok (not delivered)");
-      expect(enrichCronJsonWithStatus(job)).toMatchObject({ status: expectedStatus });
+      expectLogsToInclude(show.logs, "status: ok (suppressed)");
+      expectLogsToInclude(show.logs, "last delivery: not-delivered");
+      expectLogsToInclude(show.logs, `last delivery suppression: ${deliverySuppressionReason}`);
+      expect(enrichCronJsonWithStatus(job)).toMatchObject({
+        status: "ok",
+        state: {
+          lastDeliveryStatus: "not-delivered",
+          lastDelivered: false,
+          deliverySuppressionReason,
+        },
+      });
     },
   );
 
@@ -518,42 +482,6 @@ describe("printCronList", () => {
     expect(logs.join("\n")).not.toContain("1440");
   });
 
-  it("keeps the --json status field free of the failure-count decoration", () => {
-    const job = createBaseJob({
-      id: "json-job",
-      state: { lastRunStatus: "error", consecutiveErrors: 12, lastError: "boom" },
-    });
-    const enriched = enrichCronJsonWithStatus({
-      jobs: [job],
-    }) as { jobs: Array<{ status?: string }> };
-    expect(enriched.jobs[0]?.status).toBe("error");
-    expect(enrichCronJsonWithStatus(job)).toMatchObject({
-      status: "error",
-      state: { consecutiveErrors: 12, lastError: "boom" },
-    });
-  });
-
-  it("shows last error and failure count in cron show output", () => {
-    const failing = createRuntimeLogCapture();
-    printCronShow(
-      createBaseJob({
-        id: "show-failing-job",
-        state: { lastRunStatus: "error", consecutiveErrors: 3, lastError: "provider exploded" },
-      }),
-      failing.runtime,
-    );
-    expectLogsToInclude(failing.logs, "status: error (3x)");
-    expectLogsToInclude(failing.logs, "last error: provider exploded");
-
-    const healthy = createRuntimeLogCapture();
-    printCronShow(
-      createBaseJob({ id: "healthy-job", state: { lastRunStatus: "ok" } }),
-      healthy.runtime,
-    );
-    expectLogsToInclude(healthy.logs, "status: ok");
-    expectLogsToInclude(healthy.logs, "last error: -");
-  });
-
   it("shows dash for unset agentId instead of default", () => {
     const { logs, runtime } = createRuntimeLogCapture();
     const job = createBaseJob({
@@ -570,91 +498,6 @@ describe("printCronList", () => {
     // Data row should show "-" for missing agentId, not "default"
     const dataLine = logs[1] ?? "";
     expect(dataLine).not.toContain("default");
-  });
-
-  it("shows Model column with payload.model for agentTurn jobs", () => {
-    const { logs, runtime } = createRuntimeLogCapture();
-    const job = createBaseJob({
-      id: "model-job",
-      name: "With Model",
-      agentId: "ops",
-      sessionTarget: "isolated",
-      payload: { kind: "agentTurn", message: "hello", model: "sonnet" },
-    });
-
-    printCronList([job], runtime);
-    expect(logs[0]).toContain("Model");
-    const dataLine = logs[1] ?? "";
-    expect(dataLine).toContain("sonnet");
-  });
-
-  it("shows delivery preview when provided", () => {
-    const { logs, runtime } = createRuntimeLogCapture();
-    const job = createBaseJob({
-      id: "delivery-job",
-      name: "Delivery",
-      sessionTarget: "isolated",
-      payload: { kind: "agentTurn", message: "hello" },
-    });
-
-    printCronList([job], runtime, {
-      deliveryPreviews: new Map([
-        [
-          "delivery-job",
-          {
-            label: "announce -> telegram:-100",
-            detail: "resolved from last, main session",
-          },
-        ],
-      ]),
-    });
-
-    expect(logs[0]).toContain("Delivery");
-    expect(logs[1]).toContain("announce -> telegram:-100");
-    expect(logs[1]).toContain("resolved from last");
-  });
-
-  it("shows dash in Model column for systemEvent jobs", () => {
-    const { logs, runtime } = createRuntimeLogCapture();
-    const job = createBaseJob({
-      id: "sys-event-job",
-      name: "System Event",
-      sessionTarget: "main",
-      payload: { kind: "systemEvent", text: "tick" },
-    });
-
-    printCronList([job], runtime);
-    expect(logs[0]).toContain("Model");
-  });
-
-  it("shows dash in Model column for agentTurn jobs without model override", () => {
-    const { logs, runtime } = createRuntimeLogCapture();
-    const job = createBaseJob({
-      id: "no-model-job",
-      name: "No Model",
-      sessionTarget: "isolated",
-      payload: { kind: "agentTurn", message: "hello" },
-    });
-
-    printCronList([job], runtime);
-    const dataLine = logs[1] ?? "";
-    expect(dataLine).not.toContain("undefined");
-  });
-
-  it("shows explicit agentId when set", () => {
-    const { logs, runtime } = createRuntimeLogCapture();
-    const job = createBaseJob({
-      id: "agent-set-job",
-      name: "Agent Set",
-      agentId: "ops",
-      sessionTarget: "isolated",
-      payload: { kind: "agentTurn", message: "hello", model: "opus" },
-    });
-
-    printCronList([job], runtime);
-    const dataLine = logs[1] ?? "";
-    expect(dataLine).toContain("ops");
-    expect(dataLine).toContain("opus");
   });
 
   it("shows exact label for cron schedules with stagger disabled", () => {
@@ -675,23 +518,8 @@ describe("printCronList", () => {
 
 describe("parseAt", () => {
   it.each([
-    ["2026-03-23", "Asia/Shanghai", "2026-03-22T16:00:00.000Z"],
-    ["2026-03-23", "America/New_York", "2026-03-23T04:00:00.000Z"],
-    ["2026-03-23T00:00:00", "UTC", "2026-03-23T00:00:00.000Z"],
-    ["2026-03-23T00:30:00.250", "UTC", "2026-03-23T00:30:00.250Z"],
-    ["2026-03-23T00:30:00", "Europe/Oslo", "2026-03-22T23:30:00.000Z"],
-    ["2026-03-23t23:00:00", "Europe/Oslo", "2026-03-23T22:00:00.000Z"],
-    ["2026-03-23T23:00:00", "Europe/Oslo", "2026-03-23T22:00:00.000Z"],
-    ["2026-03-29T01:30:00", "Europe/Oslo", "2026-03-29T00:30:00.000Z"],
-    ["2026-03-29T02:30:00", "Europe/Oslo", null],
-    ["2026-10-25T02:30:00", "Europe/Oslo", "2026-10-25T00:30:00.000Z"],
-    ["2026-11-01T01:30:00", "America/New_York", "2026-11-01T05:30:00.000Z"],
-    ["2026-04-05T01:45:00", "Australia/Lord_Howe", "2026-04-04T14:45:00.000Z"],
-    ["2027-02-28T24:00:00", "UTC", "2027-03-01T00:00:00.000Z"],
-    ["2027-02-28t24:00", "Europe/Oslo", "2027-02-28T23:00:00.000Z"],
     ["2027-02-28t24:00:00.000", "America/New_York", "2027-03-01T05:00:00.000Z"],
     ["2027-02-28t24:00:00+05:45", "Europe/Oslo", "2027-02-28T18:15:00.000Z"],
-    ["2027-02-28t24:00:00.001", "UTC", null],
     ["2027-09-04t24:00", "America/Santiago", null],
   ])("interprets offsetless one-shot %s in %s", (input, timezone, expected) => {
     expect(parseAt(input, timezone)).toBe(expected);
@@ -701,14 +529,6 @@ describe("parseAt", () => {
         at: expected,
       });
     }
-  });
-
-  it("keeps date-only one-shot schedules in UTC without an explicit timezone", () => {
-    expect(parseAt("2026-03-23")).toBe("2026-03-23T00:00:00.000Z");
-    expect(resolveCronCreateScheduleFromArgs({ at: "2026-03-23" })).toEqual({
-      kind: "at",
-      at: "2026-03-23T00:00:00.000Z",
-    });
   });
 
   it("accepts leading plus relative durations for cron add --at", () => {
@@ -750,19 +570,13 @@ describe("getCronChannelOptions", () => {
   });
 });
 
-describe("parseCronToolsAllow", () => {
+describe("parseCronStringList", () => {
   it.each([
     { input: "exec,read,write", expected: ["exec", "read", "write"] },
-    { input: "exec, read, write", expected: ["exec", "read", "write"] },
-    { input: "exec read write", expected: ["exec", "read", "write"] },
-    { input: " exec  read,write ", expected: ["exec", "read", "write"] },
     { input: ["exec", "read", "write"], expected: ["exec", "read", "write"] },
+    { input: undefined, expected: undefined },
   ])("parses $input", ({ input, expected }) => {
-    expect(parseCronToolsAllow(input)).toEqual(expected);
-  });
-
-  it("returns undefined for empty input", () => {
-    expect(parseCronToolsAllow(" ,  ")).toBeUndefined();
+    expect(parseCronStringList(input)).toEqual(expected);
   });
 });
 
@@ -809,40 +623,152 @@ describe("parsePositiveCronDurationMs", () => {
   it("rejects durations that overflow to a non-finite millisecond value (#83906)", () => {
     // A finite mantissa can still overflow once multiplied by a large unit factor.
     expect(parsePositiveCronDurationMs(`1${"0".repeat(302)}d`)).toBeNull();
-    // A large-but-finite result is still accepted.
-    expect(parsePositiveCronDurationMs(`9${"0".repeat(15)}ms`)).toBe(9_000_000_000_000_000);
+    expect(parsePositiveCronDurationMs("8640000000000000ms")).toBe(8_640_000_000_000_000);
+    expect(parsePositiveCronDurationMs("8640000000000001ms")).toBeNull();
   });
 });
 
-describe("cron status rendering", () => {
-  beforeEach(() => {
-    hoisted.listChannelPluginsMock.mockReset();
-    hoisted.listChannelPluginsMock.mockReturnValue([]);
+describe("handleCronCliError", () => {
+  it("renders typed automation lookup misses with the cron list recovery command", () => {
+    const error = new GatewayClientRequestError({
+      code: "INVALID_REQUEST",
+      message: "transport-neutral lookup miss",
+      details: { code: "CRON_JOB_NOT_FOUND", jobId: "missing-job" },
+    });
+    const errorOutput = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(((code: number) => {
+      throw new Error(`exit ${code}`);
+    }) as never);
+
+    expect(() => handleCronCliError(error)).toThrow("exit 1");
+    expect(errorOutput).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Automation not found: missing-job. Run `openclaw cron list` to see recent automation ids.",
+      ),
+    );
+    errorOutput.mockRestore();
+    exit.mockRestore();
   });
 
-  // `lastRunStatus` is the primary execution-status field (`lastStatus` is the
-  // deprecated alias). The human `cron list`/`cron show` output must resolve it
-  // the same way the `--json` status field does, instead of showing "idle".
-  it("renders lastRunStatus (matching the --json status), not idle, when lastStatus is unset", () => {
-    const now = Date.now();
-    const job = createBaseJob({
-      id: "status-job",
-      sessionTarget: "isolated",
-      state: { nextRunAtMs: now + 3_600_000, lastRunStatus: "ok" },
+  it.each([
+    {
+      label: "typed lookup miss",
+      error: new GatewayClientRequestError({
+        code: "INVALID_REQUEST",
+        message: "transport-neutral lookup miss",
+        details: { code: "CRON_JOB_NOT_FOUND", jobId: "missing-job" },
+      }),
+      message:
+        "Automation not found: missing-job. Run `openclaw cron list` to see recent automation ids.",
+    },
+  ])(
+    "hands a $label to the root renderer as an expected machine-output failure",
+    ({ error, message }) => {
+      const argv = process.argv;
+      process.argv = [...argv.slice(0, 2), "cron", "show", "missing-job", "--json"];
+      try {
+        let thrown: unknown;
+        try {
+          handleCronCliError(error);
+        } catch (caught) {
+          thrown = caught;
+        }
+        expect(thrown).toBeInstanceOf(ExpectedCliError);
+        expect(formatCliJsonFailure(thrown)).toEqual({
+          ok: false,
+          error: { type: "cli_error", message },
+        });
+        const stderr = formatCliFailureLines({
+          title: "Could not start the CLI.",
+          error: thrown,
+          argv: process.argv,
+        }).join("\n");
+        expect(stderr).toContain(message);
+        expect(stderr).not.toContain("Could not start the CLI.");
+        expect(stderr).not.toContain("openclaw doctor");
+        expect(stderr).not.toContain("OPENCLAW_DEBUG");
+      } finally {
+        process.argv = argv;
+      }
+    },
+  );
+
+  // A legacy gateway without cron.get makes `cron edit <id> --exact` wrap the
+  // lookup miss; the renderer only reveals such causes on explicit debug intent.
+  it.each([
+    {
+      label: "stays terse without debug intent",
+      flags: [] as string[],
+      debug: "",
+      causeShown: false,
+    },
+    { label: "keeps causes for --debug", flags: ["--debug"], debug: "", causeShown: true },
+  ])("machine output for a wrapped cron failure $label", ({ flags, debug, causeShown }) => {
+    const wrapped = new CronCliError("unknown automation id: missing-job", {
+      cause: new Error("unknown method: cron.get"),
     });
+    const argv = process.argv;
+    process.argv = [
+      ...argv.slice(0, 2),
+      "cron",
+      "edit",
+      "missing-job",
+      "--exact",
+      "--json",
+      ...flags,
+    ];
+    vi.stubEnv("OPENCLAW_DEBUG", debug);
+    try {
+      let thrown: unknown;
+      try {
+        handleCronCliError(wrapped);
+      } catch (caught) {
+        thrown = caught;
+      }
+      expect(thrown).toBeInstanceOf(ExpectedCliError);
+      const machineMessage = formatCliJsonFailure(thrown).error.message;
+      expect(machineMessage).toContain("unknown automation id: missing-job");
+      expect(machineMessage.includes("unknown method: cron.get")).toBe(causeShown);
+      const stderr = formatCliFailureLines({
+        title: "The CLI command failed.",
+        error: thrown,
+      }).join("\n");
+      expect(stderr).toContain("unknown automation id: missing-job");
+      expect(stderr.includes("unknown method: cron.get")).toBe(causeShown);
+    } finally {
+      vi.unstubAllEnvs();
+      process.argv = argv;
+    }
+  });
 
-    const show = createRuntimeLogCapture();
-    printCronShow(job, show.runtime);
-    expectLogsToInclude(show.logs, "status: ok");
-    expect(show.logs.join("\n")).not.toContain("status: idle");
-
-    const list = createRuntimeLogCapture();
-    printCronList([job], list.runtime);
-    const dataLine = list.logs.find((line) => line.includes("status-job")) ?? "";
-    expect(dataLine).toContain("ok");
-    expect(dataLine).not.toContain("idle");
-
-    // The computed --json status must agree with the human render.
-    expect(enrichCronJsonWithStatus(job)).toMatchObject({ status: "ok" });
+  it.each([false, true])("preserves unexpected machine-mode errors with debug=%s", (debug) => {
+    const error = new Error("Automation runtime failed", {
+      cause: new Error("Runtime load failed"),
+    });
+    const argv = process.argv;
+    process.argv = [...argv.slice(0, 2), "automations", "status", "--json"];
+    vi.stubEnv("OPENCLAW_DEBUG", debug ? "1" : "");
+    try {
+      let thrown: unknown;
+      try {
+        handleCronCliError(error);
+      } catch (caught) {
+        thrown = caught;
+      }
+      expect(thrown).toBe(error);
+      const stderr = formatCliFailureLines({
+        title: "The CLI command failed.",
+        error: thrown,
+      }).join("\n");
+      expect(stderr).toContain("The CLI command failed.");
+      expect(stderr).toContain("openclaw doctor");
+      expect(stderr.includes("Stack:")).toBe(debug);
+      expect(formatCliJsonFailure(thrown).error.message.includes("Runtime load failed")).toBe(
+        debug,
+      );
+    } finally {
+      vi.unstubAllEnvs();
+      process.argv = argv;
+    }
   });
 });

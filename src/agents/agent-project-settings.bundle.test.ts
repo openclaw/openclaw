@@ -6,7 +6,6 @@ import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 
 const pluginMetadataSnapshotMocks = vi.hoisted(() => ({
   getCurrentPluginMetadataSnapshot: vi.fn(),
-  isPluginMetadataSnapshotCompatible: vi.fn(),
   loadPluginMetadataSnapshot: vi.fn(),
 }));
 
@@ -79,15 +78,6 @@ const bundleTestDeps = await vi.hoisted(async () => {
   return { fsSync, loadBundleRegistry, loadEmbeddedAgentMcpConfig };
 });
 
-vi.mock("../infra/boundary-file-read.js", () => {
-  return {
-    openRootFileSync: ({ absolutePath }: { absolutePath: string }) => ({
-      ok: true,
-      fd: bundleTestDeps.fsSync.openSync(absolutePath, "r"),
-    }),
-  };
-});
-
 vi.mock("../plugins/manifest-registry-installed.js", () => ({
   loadPluginManifestRegistryForInstalledIndex: bundleTestDeps.loadBundleRegistry,
 }));
@@ -97,12 +87,12 @@ vi.mock("../plugins/plugin-registry.js", () => ({
   loadPluginRegistrySnapshot: () => ({ plugins: [] }),
 }));
 
-vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
   getCurrentPluginMetadataSnapshot: pluginMetadataSnapshotMocks.getCurrentPluginMetadataSnapshot,
 }));
 
 vi.mock("../plugins/plugin-metadata-snapshot.js", () => {
-  pluginMetadataSnapshotMocks.isPluginMetadataSnapshotCompatible.mockImplementation(() => false);
   pluginMetadataSnapshotMocks.loadPluginMetadataSnapshot.mockImplementation(
     (params: { workspaceDir?: string }) => ({
       manifestRegistry: bundleTestDeps.loadBundleRegistry(params),
@@ -110,8 +100,6 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => {
     }),
   );
   return {
-    isPluginMetadataSnapshotCompatible:
-      pluginMetadataSnapshotMocks.isPluginMetadataSnapshotCompatible,
     loadPluginMetadataSnapshot: pluginMetadataSnapshotMocks.loadPluginMetadataSnapshot,
   };
 });
@@ -129,7 +117,6 @@ afterEach(async () => {
   await tempDirs.cleanup();
   pluginMetadataSnapshotMocks.getCurrentPluginMetadataSnapshot.mockReset();
   pluginMetadataSnapshotMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(undefined);
-  pluginMetadataSnapshotMocks.isPluginMetadataSnapshotCompatible.mockClear();
   pluginMetadataSnapshotMocks.loadPluginMetadataSnapshot.mockClear();
 });
 
@@ -151,52 +138,6 @@ async function createWorkspaceBundle(params: {
 }
 
 describe("loadEnabledBundleAgentSettingsSnapshot", () => {
-  it("reuses a compatible plugin metadata snapshot without loading a fresh one", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-workspace-");
-    const pluginRoot = await createWorkspaceBundle({ workspaceDir });
-    const resolvedPluginRoot = await fs.realpath(pluginRoot);
-    await fs.writeFile(
-      path.join(pluginRoot, "settings.json"),
-      JSON.stringify({ hideThinkingBlock: true }),
-      "utf-8",
-    );
-
-    pluginMetadataSnapshotMocks.isPluginMetadataSnapshotCompatible.mockReturnValueOnce(true);
-    pluginMetadataSnapshotMocks.loadPluginMetadataSnapshot.mockClear();
-
-    const snapshot = loadEnabledBundleAgentSettingsSnapshot({
-      cwd: workspaceDir,
-      cfg: {
-        plugins: {
-          entries: {
-            "claude-bundle": { enabled: true },
-          },
-        },
-      },
-      pluginMetadataSnapshot: {
-        manifestRegistry: {
-          diagnostics: [],
-          plugins: [
-            {
-              id: "claude-bundle",
-              origin: "workspace",
-              format: "bundle",
-              bundleFormat: "claude",
-              settingsFiles: ["settings.json"],
-              rootDir: resolvedPluginRoot,
-            },
-          ],
-        },
-        normalizePluginId: (id: string) => id.trim(),
-      } as unknown as Parameters<
-        typeof loadEnabledBundleAgentSettingsSnapshot
-      >[0]["pluginMetadataSnapshot"],
-    });
-
-    expect(snapshot.hideThinkingBlock).toBe(true);
-    expect(pluginMetadataSnapshotMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
-  });
-
   it("treats a supplied lifecycle snapshot as authoritative across workspaces", async () => {
     const workspaceDir = await tempDirs.make("openclaw-workspace-");
     const pluginRoot = await createWorkspaceBundle({ workspaceDir });

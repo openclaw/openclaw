@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Runs Open WebUI against a Dockerized OpenClaw Gateway and verifies the proxied
-# chat path with a real OpenAI-compatible request.
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -10,8 +12,6 @@ IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-openwebui-e2e" OPENCLAW_OPENWEB
 OPENWEBUI_IMAGE="${OPENWEBUI_IMAGE:-ghcr.io/open-webui/open-webui:v0.11.0@sha256:72c0ba641ba75e7aa52655cb242570906ececd09b1140fb736483038a22b3228}"
 MAX_MEMORY_MIB="$(docker_e2e_read_nonnegative_decimal_env OPENCLAW_OPENWEBUI_MAX_MEMORY_MIB 8192)"
 MAX_CPU_PERCENT="$(docker_e2e_read_nonnegative_decimal_env OPENCLAW_OPENWEBUI_MAX_CPU_PERCENT 1600)"
-# Keep the default on the preferred GPT-5 OpenAI model for Open WebUI
-# compatibility smoke. Callers can still override this explicitly.
 MODEL="${OPENCLAW_OPENWEBUI_MODEL:-openai/gpt-5.6-luna}"
 PROMPT_NONCE="OPENWEBUI_DOCKER_E2E_$(date +%s)_$$"
 PROMPT="${OPENCLAW_OPENWEBUI_PROMPT:-Reply with exactly this token and nothing else: ${PROMPT_NONCE}}"

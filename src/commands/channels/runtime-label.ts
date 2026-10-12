@@ -1,4 +1,3 @@
-// Runtime-aware channel label lookup for command output.
 import { getBundledChannelSetupPlugin } from "../../channels/plugins/bundled.js";
 import { getChannelPlugin, getLoadedChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChatChannel } from "./shared.js";

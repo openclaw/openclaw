@@ -2,11 +2,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
-  buildTalkTestProviderConfig,
-  TALK_TEST_PROVIDER_API_KEY_PATH,
-  TALK_TEST_PROVIDER_ID,
-} from "../test-utils/talk-test-provider.js";
-import {
   discoverConfigSecretTargetsByIds,
   resolveConfigSecretTargetByPath,
   resolveSecretPlanTargetByPathCore,
@@ -17,35 +12,37 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
 }));
 
 describe("secret target registry", () => {
-  it("supports filtered discovery by target ids", () => {
+  it("preserves dotted provider header keys during discovery", () => {
     const config = {
-      ...buildTalkTestProviderConfig({ source: "env", provider: "default", id: "TALK_API_KEY" }),
-      gateway: {
-        remote: {
-          token: { source: "env" as const, provider: "default", id: "REMOTE_TOKEN" },
+      models: {
+        providers: {
+          openai: {
+            headers: {
+              "X.Trace": { source: "env", provider: "default", id: "TRACE_HEADER" },
+            },
+            request: {
+              headers: {
+                "X.Request.Trace": {
+                  source: "env",
+                  provider: "default",
+                  id: "REQUEST_TRACE_HEADER",
+                },
+              },
+            },
+          },
         },
       },
-    } satisfies OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
-    const targets = discoverConfigSecretTargetsByIds(config, new Set(["talk.providers.*.apiKey"]));
+    const targets = discoverConfigSecretTargetsByIds(
+      config,
+      new Set(["models.providers.*.headers.*", "models.providers.*.request.headers.*"]),
+    );
 
-    expect(targets).toHaveLength(1);
-    expect(targets[0]?.entry?.id).toBe("talk.providers.*.apiKey");
-    expect(targets[0]?.providerId).toBe(TALK_TEST_PROVIDER_ID);
-    expect(targets[0]?.path).toBe(TALK_TEST_PROVIDER_API_KEY_PATH);
-  });
-
-  it("resolves talk realtime provider api key targets", () => {
-    const target = resolveConfigSecretTargetByPath([
-      "talk",
-      "realtime",
-      "providers",
-      "openai",
-      "apiKey",
+    expect(targets.map(({ path }) => path).toSorted()).toEqual([
+      'models.providers.openai.headers["X.Trace"]',
+      'models.providers.openai.request.headers["X.Request.Trace"]',
     ]);
-
-    expect(target?.entry?.id).toBe("talk.realtime.providers.*.apiKey");
-    expect(target?.providerId).toBe("openai");
   });
 
   it("returns null when no config target path matches", () => {
@@ -53,6 +50,22 @@ describe("secret target registry", () => {
 
     expect(target).toBeNull();
   });
+
+  it.each([{ prefix: [] }, { prefix: ["agents", "entries", "main"] }])(
+    "does not offer string-only memory headers as structured SecretRef apply targets ($prefix)",
+    ({ prefix }) => {
+      expect(
+        resolveConfigSecretTargetByPath([
+          ...prefix,
+          "memory",
+          "search",
+          "remote",
+          "headers",
+          "Authorization",
+        ]),
+      ).toBeNull();
+    },
+  );
 
   it("resolves plan targets by owning config document", () => {
     const configTarget = resolveSecretPlanTargetByPathCore({

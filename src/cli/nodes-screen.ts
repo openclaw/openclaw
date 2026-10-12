@@ -1,25 +1,16 @@
-// Screen-recording payload helpers for node media commands.
 import * as path from "node:path";
 import { extnameFromAnyPath } from "@openclaw/media-core/file-name";
-import {
-  parseScreenSnapshotResult,
-  type ScreenSnapshotResult,
-} from "../plugins/computer-use-contract.js";
-import { writeBase64ToFile } from "./nodes-camera.js";
-import { asRecord, readStringValue, resolveTempPathParts } from "./nodes-media-utils.js";
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+import { resolveTempPathParts } from "./nodes-media-utils.js";
 
-/** Validated payload returned by `nodes screen record` RPC calls. */
-type ScreenRecordPayload = {
-  format: string;
-  base64: string;
-  durationMs?: number;
-  fps?: number;
-  screenIndex?: number;
-  hasAudio?: boolean;
-};
+export {
+  writeBase64ToFile as writeScreenRecordToFile,
+  writeBase64ToFile as writeScreenSnapshotToFile,
+} from "./nodes-camera.js";
 
 /** Validate and normalize an unknown screen-record payload. */
-export function parseScreenRecordPayload(value: unknown): ScreenRecordPayload {
+export function parseScreenRecordPayload(value: unknown) {
   const obj = asRecord(value);
   const format = readStringValue(obj.format);
   const base64 = readStringValue(obj.base64);
@@ -40,21 +31,6 @@ export function parseScreenRecordPayload(value: unknown): ScreenRecordPayload {
 export function screenRecordTempPath(opts: { ext: string; tmpDir?: string; id?: string }) {
   const { tmpDir, id, ext } = resolveTempPathParts(opts);
   return path.join(tmpDir, `openclaw-screen-record-${id}${ext}`);
-}
-
-/** Decode and write a screen recording payload to disk. */
-export async function writeScreenRecordToFile(
-  filePath: string,
-  base64: string,
-  opts?: { maxBytes?: number },
-) {
-  return writeBase64ToFile(filePath, base64, opts);
-}
-
-/** Validated payload returned by `nodes screen snapshot` RPC calls. */
-/** Validate and normalize an unknown screen-snapshot payload. */
-export function parseScreenSnapshotPayload(value: unknown): ScreenSnapshotResult {
-  return parseScreenSnapshotResult(value);
 }
 
 /**
@@ -79,13 +55,4 @@ export function screenSnapshotTempPath(opts: { ext: string; tmpDir?: string; id?
   // is how a JPEG snapshot ends up named `.png`.
   const { tmpDir, id, ext } = resolveTempPathParts(opts);
   return path.join(tmpDir, `openclaw-screen-snapshot-${id}${ext}`);
-}
-
-/** Decode and write a screen snapshot payload to disk. */
-export async function writeScreenSnapshotToFile(
-  filePath: string,
-  base64: string,
-  opts?: { maxBytes?: number },
-) {
-  return writeBase64ToFile(filePath, base64, opts);
 }

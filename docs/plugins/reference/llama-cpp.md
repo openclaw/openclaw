@@ -2,35 +2,42 @@
 summary: "Managed and external llama.cpp servers for GGUF chat and embeddings."
 read_when:
   - You are installing, configuring, or auditing the llama-cpp plugin
-title: "Llama Cpp plugin"
+title: "Llama Cpp plugin reference"
 ---
 
-# Llama Cpp plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
 Managed and external llama.cpp servers for GGUF chat and embeddings.
 
 ## Distribution
 
 - Package: `@openclaw/llama-cpp-provider`
-- Install route: npm; ClawHub
+- Install route: npm or ClawHub: `clawhub:@openclaw/llama-cpp-provider`
 
 ## Surface
 
-providers: `llama-cpp`; contracts: `embeddingProviders`
+- Providers: `llama-cpp`
+- Contracts: `embeddingProviders`
 
 <!-- openclaw-plugin-reference:manual-start -->
 
-## Default text model
+## Managed text models
 
 During interactive setup, OpenClaw installs a pinned, verified `llama-server`
-and offers Gemma 4 E4B IT Q4_K_M as an approximately 5.0 GB download. The model
-offer requires at least 16 GiB of total RAM. Existing cached models are still
-detected on smaller machines.
+and recommends a model for the Gateway host's available memory, GPU, and disk
+space. Recommendations start with Qwen3.5 4B (about 2.7 GB) on eligible 8 GiB
+hosts and scale up as hardware permits. See the current
+[model recommendations](/plugins/llama-cpp#model-recommendations) for sizes and
+selection floors.
 
-To use another model, set `params.modelPath` to any custom GGUF. Custom models
-are not subject to the bundled-download RAM requirement. On machines below the
-requirement, you can also run a smaller model through Ollama or LM Studio, or
-choose a cloud provider.
+To use another model, configure `params.modelPath`, select its `llama-cpp/<id>`
+reference, and rerun managed setup. Setup uses that authored route and offers
+to download it if needed. Custom models are not subject to recommendation
+memory floors. Existing cached GGUFs remain supported; local memory search can
+also use [embedding-only setup](/plugins/llama-cpp#set-up-only-local-embeddings).
 
 <!-- openclaw-plugin-reference:manual-end -->
 

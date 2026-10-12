@@ -1,8 +1,8 @@
-import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 // Operator commands for inspecting and resubmitting failed channel ingress events.
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { createChannelIngressQueue } from "../../channels/message/ingress-queue.js";
+import { parseLogsPositiveInt } from "../../cli/logs-cli.options.js";
 import { formatDurationHuman } from "../../infra/format-time/format-duration.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 
@@ -18,15 +18,12 @@ function resolveScope(options: ChannelsDeadLettersOptions) {
   if (!channelId) {
     throw new Error("--channel is required.");
   }
-  return { channelId, accountId: options.account?.trim() || "default" };
-}
-
-function parseLimit(value: unknown): number {
-  const parsed = parseStrictPositiveInteger(value ?? "100");
-  if (parsed === undefined) {
-    throw new Error("--limit must be a positive integer.");
+  // Only omission selects the default queue; an explicit blank selector must not change scope.
+  const accountId = options.account?.trim() ?? "default";
+  if (!accountId) {
+    throw new Error("--account must not be blank");
   }
-  return parsed;
+  return { channelId, accountId };
 }
 
 /** List retained ingress failures for one channel account. */
@@ -39,7 +36,9 @@ export async function channelsDeadLettersListCommand(
   if (!queue.listFailed) {
     throw new Error("This runtime does not support channel ingress dead-letter inspection.");
   }
-  const deadLetters = await queue.listFailed({ limit: parseLimit(options.limit) });
+  const deadLetters = await queue.listFailed({
+    limit: parseLogsPositiveInt(options.limit ?? undefined, 100, "--limit"),
+  });
   if (options.json) {
     writeRuntimeJson(runtime, { channelId, accountId, deadLetters });
     return;

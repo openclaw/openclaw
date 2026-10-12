@@ -1,13 +1,14 @@
-// Matrix type declarations define plugin contracts.
+import type { CryptoApi, DeviceVerificationStatus } from "matrix-js-sdk/lib/crypto-api/index.js";
 import type * as MatrixSdkTypes from "matrix-js-sdk/lib/types.js";
 import type { MatrixSyncState } from "../sync-state.js";
 import type {
-  MatrixVerificationRequestLike,
+  MatrixVerificationCryptoApi,
   MatrixVerificationSummary,
 } from "./verification-manager.js";
 
 export type MatrixRawEvent = {
   event_id: string;
+  room_id?: string;
   sender: string;
   type: string;
   origin_server_ts: number;
@@ -18,6 +19,8 @@ export type MatrixRawEvent = {
     redacted_because?: unknown;
   };
   state_key?: string;
+  /** Bridge-owned membership evidence; snapshots never establish a new join. */
+  membershipProvenance?: "snapshot" | "transition" | "update";
 };
 
 export type MatrixRelationsPage = {
@@ -90,55 +93,10 @@ export type MatrixGeneratedSecretStorageKey = {
   encodedPrivateKey?: string;
 };
 
-export type MatrixDeviceVerificationStatusLike = {
-  isVerified?: () => boolean;
-  localVerified?: boolean;
-  crossSigningVerified?: boolean;
-  signedByOwner?: boolean;
-};
-
-type MatrixKeyBackupInfo = {
-  algorithm: string;
-  auth_data: Record<string, unknown>;
-  count?: number;
-  etag?: string;
-  version?: string;
-};
-
-type MatrixKeyBackupTrustInfo = {
-  trusted: boolean;
-  matchesDecryptionKey: boolean;
-};
-
-type MatrixRoomKeyBackupRestoreResult = {
-  total: number;
-  imported: number;
-};
-
-type MatrixImportRoomKeyProgress = {
-  stage: string;
-  successes?: number;
-  failures?: number;
-  total?: number;
-};
-
-type MatrixSecretStorageKeyDescription = {
-  passphrase?: unknown;
-  name?: string;
-  [key: string]: unknown;
-};
-
-export type MatrixCryptoCallbacks = {
-  getSecretStorageKey?: (
-    params: { keys: Record<string, MatrixSecretStorageKeyDescription> },
-    name: string,
-  ) => Promise<[string, Uint8Array] | null>;
-  cacheSecretStorageKey?: (
-    keyId: string,
-    keyInfo: MatrixSecretStorageKeyDescription,
-    key: Uint8Array,
-  ) => void;
-};
+export type MatrixDeviceVerificationStatusLike = Pick<
+  DeviceVerificationStatus,
+  "isVerified" | "localVerified" | "crossSigningVerified" | "signedByOwner"
+>;
 
 export type MatrixStoredRecoveryKey = {
   version: 1;
@@ -158,55 +116,45 @@ export type MatrixUiAuthCallback = <T>(
   makeRequest: (authData: MatrixAuthDict | null) => Promise<T>,
 ) => Promise<T>;
 
-export type MatrixCryptoBootstrapApi = {
-  on: (eventName: string, listener: (...args: unknown[]) => void) => void;
-  bootstrapCrossSigning: (opts: {
-    setupNewCrossSigning?: boolean;
-    authUploadDeviceSigningKeys?: MatrixUiAuthCallback;
-  }) => Promise<void>;
-  bootstrapSecretStorage: (opts?: {
-    createSecretStorageKey?: () => Promise<MatrixGeneratedSecretStorageKey>;
-    setupNewSecretStorage?: boolean;
-    setupNewKeyBackup?: boolean;
-  }) => Promise<void>;
-  createRecoveryKeyFromPassphrase?: (password?: string) => Promise<MatrixGeneratedSecretStorageKey>;
-  getSecretStorageStatus?: () => Promise<MatrixSecretStorageStatus>;
-  requestOwnUserVerification: () => Promise<MatrixVerificationRequestLike | null>;
-  findVerificationRequestDMInProgress?: (
-    roomId: string,
-    userId: string,
-  ) => MatrixVerificationRequestLike | undefined;
-  requestDeviceVerification?: (
-    userId: string,
-    deviceId: string,
-  ) => Promise<MatrixVerificationRequestLike>;
-  requestVerificationDM?: (
-    userId: string,
-    roomId: string,
-  ) => Promise<MatrixVerificationRequestLike>;
-  getDeviceVerificationStatus?: (
-    userId: string,
-    deviceId: string,
-  ) => Promise<MatrixDeviceVerificationStatusLike | null>;
-  getSessionBackupPrivateKey?: () => Promise<Uint8Array | null>;
-  loadSessionBackupPrivateKeyFromSecretStorage?: () => Promise<void>;
-  getActiveSessionBackupVersion?: () => Promise<string | null>;
-  getKeyBackupInfo?: () => Promise<MatrixKeyBackupInfo | null>;
-  isKeyBackupTrusted?: (info: MatrixKeyBackupInfo) => Promise<MatrixKeyBackupTrustInfo>;
-  checkKeyBackupAndEnable?: () => Promise<unknown>;
-  restoreKeyBackup?: (opts?: {
-    progressCallback?: (progress: MatrixImportRoomKeyProgress) => void;
-  }) => Promise<MatrixRoomKeyBackupRestoreResult>;
-  setDeviceVerified?: (userId: string, deviceId: string, verified?: boolean) => Promise<void>;
-  crossSignDevice?: (deviceId: string) => Promise<void>;
-  getOwnIdentity?: () => Promise<
-    | {
-        free?: () => void;
-        isVerified?: () => boolean;
-        verify?: () => Promise<unknown>;
-      }
-    | undefined
-  >;
-  isCrossSigningReady?: () => Promise<boolean>;
-  userHasCrossSigningKeys?: (userId?: string, downloadUncached?: boolean) => Promise<boolean>;
-};
+export type MatrixCryptoBootstrapApi = MatrixVerificationCryptoApi &
+  Pick<
+    CryptoApi,
+    | "getSessionBackupPrivateKey"
+    | "loadSessionBackupPrivateKeyFromSecretStorage"
+    | "getActiveSessionBackupVersion"
+    | "getKeyBackupInfo"
+    | "isKeyBackupTrusted"
+    | "checkKeyBackupAndEnable"
+    | "restoreKeyBackup"
+    | "setDeviceVerified"
+    | "crossSignDevice"
+    | "isCrossSigningReady"
+    | "userHasCrossSigningKeys"
+  > & {
+    on: (eventName: string, listener: (...args: unknown[]) => void) => void;
+    bootstrapCrossSigning: (opts: {
+      setupNewCrossSigning?: boolean;
+      authUploadDeviceSigningKeys?: MatrixUiAuthCallback;
+    }) => Promise<void>;
+    bootstrapSecretStorage: (opts?: {
+      createSecretStorageKey?: () => Promise<MatrixGeneratedSecretStorageKey>;
+      setupNewSecretStorage?: boolean;
+      setupNewKeyBackup?: boolean;
+    }) => Promise<void>;
+    createRecoveryKeyFromPassphrase: (
+      password?: string,
+    ) => Promise<MatrixGeneratedSecretStorageKey>;
+    getSecretStorageStatus: () => Promise<MatrixSecretStorageStatus>;
+    getDeviceVerificationStatus: (
+      userId: string,
+      deviceId: string,
+    ) => Promise<MatrixDeviceVerificationStatusLike | null>;
+    getOwnIdentity?: () => Promise<
+      | {
+          free?: () => void;
+          isVerified?: () => boolean;
+          verify?: () => Promise<unknown>;
+        }
+      | undefined
+    >;
+  };

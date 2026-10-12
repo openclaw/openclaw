@@ -1,11 +1,101 @@
-import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
-import { augmentPreparedModelCatalogWithAgentHarness } from "./harness/model-catalog.js";
-import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
+import { captureRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
+import { registryContainsRuntimePluginIds } from "../plugins/active-runtime-registry.js";
+import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
+import { resolveAgentRuntimePluginSelectionOwners } from "./harness/runtime-plugin-load-plan.js";
+import { ownPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 import type {
   PreparedModelRuntimeCatalogMode,
   PreparedModelRuntimeInput,
   PreparedModelRuntimePluginGeneration,
+  PreparedMediaCapabilityProviderAcquisition,
+  PreparedMediaCapabilityProviderSource,
 } from "./prepared-model-runtime.types.js";
+
+/** Retains the original source and checks its captured authority only for new admission. */
+export function acquirePreparedMediaCapabilityProviders(
+  source: PreparedMediaCapabilityProviderSource,
+  providers: PreparedMediaCapabilityProviderAcquisition["providers"],
+  registry: PreparedMediaCapabilityProviderSource["registry"],
+): PreparedMediaCapabilityProviderAcquisition {
+  const isCurrent = capturePluginLifecycleAuthority(source.registry, undefined, {
+    scopedRuntime: true,
+  });
+  let released = false;
+  const assertOpen = () => {
+    if (released || !isCurrent?.()) {
+      throw new Error(
+        "The media provider setup changed before generation started. Retry the request with the current provider setup.",
+      );
+    }
+  };
+  assertOpen();
+  // Execute through the composed view so nested lookups retain adopted donor registrations.
+  const invocations = source.resources.createInvocationScope(registry);
+  const claim = source.resources.retain();
+  const wrapProvider = <T>(provider: T) => invocations.wrap(provider);
+  return {
+    providers: {
+      mediaUnderstandingProviders: providers.mediaUnderstandingProviders?.map(wrapProvider),
+      imageGenerationProviders: providers.imageGenerationProviders?.map(wrapProvider),
+      videoGenerationProviders: providers.videoGenerationProviders?.map(wrapProvider),
+      musicGenerationProviders: providers.musicGenerationProviders?.map(wrapProvider),
+    },
+    assertOpen,
+    release: () => {
+      released = true;
+      invocations.release();
+      return claim.release();
+    },
+  };
+}
+
+// Lineage is cache identity only. Derived generations still require the exact open
+// parent lease at admission; they never become configured publication authority.
+const derivedGenerationBases = new WeakMap<
+  PreparedModelRuntimePluginGeneration,
+  PreparedModelRuntimePluginGeneration
+>();
+
+/** Borrowing may narrow a prepared selection, but cannot acquire a different plugin owner. */
+export function preparedPluginGenerationSupportsSelections(
+  generation: PreparedModelRuntimePluginGeneration,
+  input: PreparedModelRuntimeInput,
+): boolean {
+  if (!input.runtimePluginSelections) {
+    return true;
+  }
+  const registry = generation.pluginRegistry;
+  const selection = resolveAgentRuntimePluginSelectionOwners({
+    config: input.config,
+    workspaceDir:
+      generation.pluginMetadataSnapshot.workspaceDir ?? input.workspaceDir ?? process.cwd(),
+    selections: input.runtimePluginSelections,
+    metadataSnapshot: generation.pluginMetadataSnapshot,
+  });
+  // Failed and disabled loads are recorded generation outcomes, not missing owners.
+  // Borrowing preserves those outcomes; downstream model resolution owns availability.
+  // Shared capabilities retain their admitted outcome, including context-engine fallback.
+  return (
+    registry !== undefined &&
+    selection.pluginIds.every(
+      (id) =>
+        registry.plugins.some(
+          (plugin) =>
+            plugin.id === id && (plugin.status === "error" || plugin.status === "disabled"),
+        ) || registryContainsRuntimePluginIds(registry, [id]),
+    )
+  );
+}
+
+export function preparedPluginGenerationReusesBase(
+  generation: PreparedModelRuntimePluginGeneration | undefined,
+  base: PreparedModelRuntimePluginGeneration,
+): boolean {
+  return (
+    generation === base ||
+    (generation !== undefined && derivedGenerationBases.get(generation) === base)
+  );
+}
 
 export function createPreparedPluginGeneration(params: {
   catalogMode: PreparedModelRuntimeCatalogMode;
@@ -13,6 +103,7 @@ export function createPreparedPluginGeneration(params: {
   inboundPluginRegistry: PreparedModelRuntimePluginGeneration["inboundPluginRegistry"];
   inlineProviderModels: PreparedModelRuntimePluginGeneration["inlineProviderModels"];
   mediaCapabilityProviders: PreparedModelRuntimePluginGeneration["mediaCapabilityProviders"];
+  mediaCapabilityProviderSource?: PreparedModelRuntimePluginGeneration["mediaCapabilityProviderSource"];
   messageToolCatalog: PreparedModelRuntimePluginGeneration["messageToolCatalog"];
   pluginMetadataSnapshot: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"];
   preparedStaticProviderCatalog: PreparedModelRuntimePluginGeneration["preparedStaticProviderCatalog"];
@@ -23,11 +114,29 @@ export function createPreparedPluginGeneration(params: {
 }): PreparedModelRuntimePluginGeneration {
   const reusable = params.reusablePluginGeneration;
   if (reusable) {
-    return params.pluginMetadataSnapshot === reusable.pluginMetadataSnapshot
-      ? reusable
-      : Object.freeze({ ...reusable, pluginMetadataSnapshot: params.pluginMetadataSnapshot });
+    if (
+      params.pluginMetadataSnapshot === reusable.pluginMetadataSnapshot &&
+      params.runtimePluginRegistry === reusable.pluginRegistry
+    ) {
+      return reusable;
+    }
+    const derived = Object.freeze({
+      ...reusable,
+      pluginMetadataSnapshot: params.pluginMetadataSnapshot,
+      pluginRegistry: params.runtimePluginRegistry,
+      mediaCapabilityProviders: params.mediaCapabilityProviders,
+      mediaCapabilityProviderSource: params.mediaCapabilityProviderSource,
+      messageToolCatalog: params.messageToolCatalog,
+      preparedStaticProviderCatalog: params.preparedStaticProviderCatalog,
+    });
+    if (params.pluginMetadataSnapshot === reusable.pluginMetadataSnapshot) {
+      derivedGenerationBases.set(derived, reusable);
+    }
+    ownPreparedPluginGeneration(derived);
+    return derived;
   }
-  return Object.freeze({
+  const generation = Object.freeze({
+    remoteCatalog: captureRemoteModelCatalogSnapshot(),
     pluginMetadataSnapshot: params.pluginMetadataSnapshot,
     inlineProviderModels: Object.freeze([...params.inlineProviderModels]),
     configuredCatalogEntries: Object.freeze([...params.configuredCatalogEntries]),
@@ -40,6 +149,9 @@ export function createPreparedPluginGeneration(params: {
     ...(params.mediaCapabilityProviders
       ? { mediaCapabilityProviders: params.mediaCapabilityProviders }
       : {}),
+    ...(params.mediaCapabilityProviderSource
+      ? { mediaCapabilityProviderSource: params.mediaCapabilityProviderSource }
+      : {}),
     ...(params.preparedStaticProviderCatalog
       ? { preparedStaticProviderCatalog: params.preparedStaticProviderCatalog }
       : {}),
@@ -47,59 +159,6 @@ export function createPreparedPluginGeneration(params: {
       ? { providerStaticModels: Object.freeze([...(params.providerStaticModels ?? [])]) }
       : {}),
   });
-}
-
-export async function buildPreparedPluginModelCatalog(params: {
-  agentFacts: {
-    credentials: Parameters<typeof buildPreparedModelCatalogSnapshot>[0]["authCredentials"];
-    input: PreparedModelRuntimeInput;
-  };
-  catalogMode: PreparedModelRuntimeCatalogMode;
-  modelRegistry: Parameters<typeof buildPreparedModelCatalogSnapshot>[0]["modelRegistry"];
-  pluginGeneration: PreparedModelRuntimePluginGeneration;
-}) {
-  const { credentials, input } = params.agentFacts;
-  return await withPreparedPluginGenerationScope(
-    { input, pluginGeneration: params.pluginGeneration },
-    async (metadataSnapshot) => {
-      const snapshot = await buildPreparedModelCatalogSnapshot({
-        agentDir: input.agentDir,
-        authCredentials: credentials,
-        config: input.config,
-        modelRegistry: params.modelRegistry,
-        metadataSnapshot,
-        includeProviderPluginAugmentation: params.catalogMode === "live",
-        ...(input.env ? { env: input.env } : {}),
-        ...(input.readOnly ? { readOnly: true } : {}),
-        ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-      });
-      return params.catalogMode === "live"
-        ? await augmentPreparedModelCatalogWithAgentHarness({
-            input,
-            snapshot,
-            pluginRegistry: params.pluginGeneration.pluginRegistry,
-          })
-        : snapshot;
-    },
-  );
-}
-
-/** Runs workspace preparation against one exact, reusable plugin generation. */
-export function withPreparedPluginGenerationScope<T>(
-  params: {
-    input: PreparedModelRuntimeInput;
-    pluginGeneration: PreparedModelRuntimePluginGeneration;
-  },
-  run: (metadataSnapshot: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"]) => T,
-): T {
-  const { input, pluginGeneration } = params;
-  const metadataSnapshot = pluginGeneration.pluginMetadataSnapshot;
-  return withPluginRuntimeGenerationScope(
-    {
-      config: input.config,
-      metadataSnapshot,
-      pluginRegistry: pluginGeneration.pluginRegistry,
-    },
-    () => run(metadataSnapshot),
-  );
+  ownPreparedPluginGeneration(generation);
+  return generation;
 }

@@ -1,26 +1,19 @@
-// Qa Lab plugin module implements bus server behavior.
+import { once } from "node:events";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type {
+  QaBusPollInput,
+  QaBusSearchMessagesInput,
+} from "openclaw/plugin-sdk/qa-channel-protocol";
 import {
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
   requestBodyErrorToText,
 } from "openclaw/plugin-sdk/webhook-ingress";
+import { sendHttpRequestRejection } from "openclaw/plugin-sdk/webhook-request-guards";
 import { z } from "zod";
 import { normalizeAccountId, resolveQaBusPollStartCursor } from "./bus-queries.js";
 import type { QaBusState } from "./bus-state.js";
-import type {
-  QaBusCreateThreadInput,
-  QaBusDeleteMessageInput,
-  QaBusEditMessageInput,
-  QaBusInboundMessageInput,
-  QaBusOutboundMessageInput,
-  QaBusPollInput,
-  QaBusReactToMessageInput,
-  QaBusReadMessageInput,
-  QaBusSearchMessagesInput,
-  QaBusWaitForInput,
-} from "./runtime-api.js";
 
 const QA_HTTP_JSON_MAX_BODY_BYTES = 1024 * 1024;
 const QA_HTTP_MEDIA_JSON_MAX_BODY_BYTES = 16 * 1024 * 1024;
@@ -73,100 +66,117 @@ const qaBusMessageOptionalFields = {
   toolCalls: z.array(qaBusToolCallSchema).optional(),
 };
 
-const qaBusRequestBodySchemas = {
-  "/v1/inbound/message": z
-    .object({
-      ...qaBusMessageOptionalFields,
-      conversation: qaBusConversationSchema,
-      senderId: z.string(),
-      text: z.string(),
-      threadTitle: z.string().optional(),
-      nativeCommand: z.object({ name: z.string() }).passthrough().optional(),
-    })
-    .passthrough(),
-  "/v1/outbound/message": z
-    .object({
-      ...qaBusMessageOptionalFields,
-      to: z.string(),
-      senderId: z.string().optional(),
-      text: z.string(),
-      isError: z.boolean().optional(),
-    })
-    .passthrough(),
-  "/v1/actions/thread-create": z
-    .object({
-      accountId: z.string().optional(),
-      conversationId: z.string(),
-      title: z.string(),
-      createdBy: z.string().optional(),
-      timestamp: z.number().optional(),
-    })
-    .passthrough(),
-  "/v1/actions/react": z
-    .object({
-      accountId: z.string().optional(),
-      messageId: z.string(),
-      emoji: z.string(),
-      senderId: z.string().optional(),
-      timestamp: z.number().optional(),
-    })
-    .passthrough(),
-  "/v1/actions/edit": z
-    .object({
-      accountId: z.string().optional(),
-      messageId: z.string(),
-      text: z.string(),
-      timestamp: z.number().optional(),
-    })
-    .passthrough(),
-  "/v1/actions/delete": z
-    .object({
-      accountId: z.string().optional(),
-      messageId: z.string(),
-      timestamp: z.number().optional(),
-    })
-    .passthrough(),
-  "/v1/actions/read": z
-    .object({
-      accountId: z.string().optional(),
-      messageId: z.string(),
-    })
-    .passthrough(),
-  "/v1/wait": z.discriminatedUnion("kind", [
-    z.object({
-      kind: z.literal("event-kind"),
-      eventKind: z.enum([
-        "inbound-message",
-        "outbound-message",
-        "thread-created",
-        "message-edited",
-        "message-deleted",
-        "reaction-added",
-      ]),
-      timeoutMs: z.number().optional(),
-    }),
-    z.object({
-      kind: z.literal("message-text"),
-      textIncludes: z.string(),
-      direction: z.enum(["inbound", "outbound"]).optional(),
-      timeoutMs: z.number().optional(),
-    }),
-    z.object({
-      kind: z.literal("thread-id"),
-      threadId: z.string(),
-      timeoutMs: z.number().optional(),
-    }),
-  ]),
-} satisfies {
-  "/v1/inbound/message": z.ZodType<QaBusInboundMessageInput>;
-  "/v1/outbound/message": z.ZodType<QaBusOutboundMessageInput>;
-  "/v1/actions/thread-create": z.ZodType<QaBusCreateThreadInput>;
-  "/v1/actions/react": z.ZodType<QaBusReactToMessageInput>;
-  "/v1/actions/edit": z.ZodType<QaBusEditMessageInput>;
-  "/v1/actions/delete": z.ZodType<QaBusDeleteMessageInput>;
-  "/v1/actions/read": z.ZodType<QaBusReadMessageInput>;
-  "/v1/wait": z.ZodType<QaBusWaitForInput>;
+function qaBusRequest<T>(schema: z.ZodType<T>, handle: (state: QaBusState, input: T) => unknown) {
+  return (state: QaBusState, body: unknown) => handle(state, schema.parse(body));
+}
+
+const qaBusRequests: Partial<Record<string, (state: QaBusState, body: unknown) => unknown>> = {
+  "/v1/inbound/message": qaBusRequest(
+    z
+      .object({
+        ...qaBusMessageOptionalFields,
+        conversation: qaBusConversationSchema,
+        senderId: z.string(),
+        text: z.string(),
+        threadTitle: z.string().optional(),
+        nativeCommand: z.object({ name: z.string() }).passthrough().optional(),
+      })
+      .passthrough(),
+    (state, input) => ({ message: state.addInboundMessage(input) }),
+  ),
+  "/v1/outbound/message": qaBusRequest(
+    z
+      .object({
+        ...qaBusMessageOptionalFields,
+        to: z.string(),
+        senderId: z.string().optional(),
+        text: z.string(),
+        isError: z.boolean().optional(),
+      })
+      .passthrough(),
+    (state, input) => ({ message: state.addOutboundMessage(input) }),
+  ),
+  "/v1/actions/thread-create": qaBusRequest(
+    z
+      .object({
+        accountId: z.string().optional(),
+        conversationId: z.string(),
+        title: z.string(),
+        createdBy: z.string().optional(),
+        timestamp: z.number().optional(),
+      })
+      .passthrough(),
+    (state, input) => ({ thread: state.createThread(input) }),
+  ),
+  "/v1/actions/react": qaBusRequest(
+    z
+      .object({
+        accountId: z.string().optional(),
+        messageId: z.string(),
+        emoji: z.string(),
+        senderId: z.string().optional(),
+        timestamp: z.number().optional(),
+      })
+      .passthrough(),
+    (state, input) => ({ message: state.reactToMessage(input) }),
+  ),
+  "/v1/actions/edit": qaBusRequest(
+    z
+      .object({
+        accountId: z.string().optional(),
+        messageId: z.string(),
+        text: z.string(),
+        timestamp: z.number().optional(),
+      })
+      .passthrough(),
+    (state, input) => ({ message: state.editMessage(input) }),
+  ),
+  "/v1/actions/delete": qaBusRequest(
+    z
+      .object({
+        accountId: z.string().optional(),
+        messageId: z.string(),
+        timestamp: z.number().optional(),
+      })
+      .passthrough(),
+    (state, input) => ({ message: state.deleteMessage(input) }),
+  ),
+  "/v1/actions/read": qaBusRequest(
+    z
+      .object({
+        accountId: z.string().optional(),
+        messageId: z.string(),
+      })
+      .passthrough(),
+    (state, input) => ({ message: state.readMessage(input) }),
+  ),
 };
+
+const qaBusWaitSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("event-kind"),
+    eventKind: z.enum([
+      "inbound-message",
+      "outbound-message",
+      "thread-created",
+      "message-edited",
+      "message-deleted",
+      "reaction-added",
+    ]),
+    timeoutMs: z.number().optional(),
+  }),
+  z.object({
+    kind: z.literal("message-text"),
+    textIncludes: z.string(),
+    direction: z.enum(["inbound", "outbound"]).optional(),
+    timeoutMs: z.number().optional(),
+  }),
+  z.object({
+    kind: z.literal("thread-id"),
+    threadId: z.string(),
+    timeoutMs: z.number().optional(),
+  }),
+]);
 
 class QaMalformedJsonBodyError extends Error {
   constructor() {
@@ -187,6 +197,8 @@ export async function readQaJsonBody(
     await readRequestBodyWithLimit(req, {
       maxBytes: options?.maxBytes ?? QA_HTTP_JSON_MAX_BODY_BYTES,
       timeoutMs: QA_HTTP_JSON_BODY_TIMEOUT_MS,
+      // Defer destruction so writeQaRequestBodyLimitError can answer before the close.
+      destroyOnLimit: false,
     })
   ).trim();
   if (!text) {
@@ -226,11 +238,21 @@ export function dispatchQaHttpRequest(res: ServerResponse, task: () => Promise<v
   });
 }
 
-export function writeQaRequestBodyLimitError(res: ServerResponse, error: unknown): boolean {
+export async function writeQaRequestBodyLimitError(
+  req: IncomingMessage,
+  res: ServerResponse,
+  error: unknown,
+): Promise<boolean> {
   if (!isRequestBodyLimitError(error)) {
     return false;
   }
-  writeError(res, error.statusCode, requestBodyErrorToText(error.code));
+  await sendHttpRequestRejection(
+    req,
+    res,
+    error.statusCode,
+    JSON.stringify({ error: requestBodyErrorToText(error.code) }),
+    "application/json; charset=utf-8",
+  );
   return true;
 }
 
@@ -256,7 +278,7 @@ function readOptionalIntegerField(
   if (!Number.isSafeInteger(value)) {
     throw new Error(`${opts.label} must be an integer at least ${opts.min}.`);
   }
-  return opts.max === undefined ? value : Math.min(value, opts.max);
+  return value;
 }
 
 function normalizeQaBusPollInput(input: Record<string, unknown>): QaBusPollInput {
@@ -309,10 +331,10 @@ export async function closeQaHttpServer(server: Server, state?: QaBusState): Pro
       server.close((error) => (error ? reject(error) : resolve()));
       state?.reset(true); // Fence first so late request bodies cannot add waiter timers.
       server.closeIdleConnections?.();
+      // Awaited shutdown must keep its deadline alive even when paused sockets cannot wake Node.
       forceCloseTimer = setTimeout(() => {
         server.closeAllConnections?.();
       }, 250);
-      forceCloseTimer.unref();
     });
   } finally {
     if (forceCloseTimer) {
@@ -355,59 +377,15 @@ export async function handleQaBusRequest(params: {
         ? { maxBytes: QA_HTTP_MEDIA_JSON_MAX_BODY_BYTES }
         : undefined,
     )) as Record<string, unknown>;
+    const request = qaBusRequests[url.pathname];
+    if (request) {
+      writeJson(params.res, 200, request(params.state, body));
+      return true;
+    }
     switch (url.pathname) {
       case "/v1/reset":
         params.state.reset();
         writeJson(params.res, 200, { ok: true });
-        return true;
-      case "/v1/inbound/message":
-        writeJson(params.res, 200, {
-          message: params.state.addInboundMessage(
-            qaBusRequestBodySchemas["/v1/inbound/message"].parse(body),
-          ),
-        });
-        return true;
-      case "/v1/outbound/message":
-        writeJson(params.res, 200, {
-          message: params.state.addOutboundMessage(
-            qaBusRequestBodySchemas["/v1/outbound/message"].parse(body),
-          ),
-        });
-        return true;
-      case "/v1/actions/thread-create":
-        writeJson(params.res, 200, {
-          thread: params.state.createThread(
-            qaBusRequestBodySchemas["/v1/actions/thread-create"].parse(body),
-          ),
-        });
-        return true;
-      case "/v1/actions/react":
-        writeJson(params.res, 200, {
-          message: params.state.reactToMessage(
-            qaBusRequestBodySchemas["/v1/actions/react"].parse(body),
-          ),
-        });
-        return true;
-      case "/v1/actions/edit":
-        writeJson(params.res, 200, {
-          message: params.state.editMessage(
-            qaBusRequestBodySchemas["/v1/actions/edit"].parse(body),
-          ),
-        });
-        return true;
-      case "/v1/actions/delete":
-        writeJson(params.res, 200, {
-          message: params.state.deleteMessage(
-            qaBusRequestBodySchemas["/v1/actions/delete"].parse(body),
-          ),
-        });
-        return true;
-      case "/v1/actions/read":
-        writeJson(params.res, 200, {
-          message: params.state.readMessage(
-            qaBusRequestBodySchemas["/v1/actions/read"].parse(body),
-          ),
-        });
         return true;
       case "/v1/actions/search":
         writeJson(params.res, 200, {
@@ -445,7 +423,7 @@ export async function handleQaBusRequest(params: {
       }
       case "/v1/wait":
         writeJson(params.res, 200, {
-          match: await params.state.waitFor(qaBusRequestBodySchemas["/v1/wait"].parse(body)),
+          match: await params.state.waitFor(qaBusWaitSchema.parse(body)),
         });
         return true;
       default:
@@ -453,7 +431,7 @@ export async function handleQaBusRequest(params: {
         return true;
     }
   } catch (error) {
-    if (writeQaRequestBodyLimitError(params.res, error)) {
+    if (await writeQaRequestBodyLimitError(params.req, params.res, error)) {
       return true;
     }
     writeError(params.res, 400, error);
@@ -461,8 +439,9 @@ export async function handleQaBusRequest(params: {
   }
 }
 
-export function createQaBusServer(state: QaBusState): Server {
-  return createServer((req, res) => {
+export async function startQaBusServer(params: { state: QaBusState; port?: number }) {
+  const { state } = params;
+  const server = createServer((req, res) => {
     dispatchQaHttpRequest(res, async () => {
       const handled = await handleQaBusRequest({ req, res, state });
       if (!handled) {
@@ -470,14 +449,7 @@ export function createQaBusServer(state: QaBusState): Server {
       }
     });
   });
-}
-
-export async function startQaBusServer(params: { state: QaBusState; port?: number }) {
-  const server = createQaBusServer(params.state);
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(params.port ?? 0, "127.0.0.1", () => resolve());
-  });
+  await once(server.listen(params.port ?? 0, "127.0.0.1"), "listening");
   const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error("qa-bus failed to bind");

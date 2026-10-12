@@ -1,31 +1,18 @@
-// Prunes omitted bundled plugin files and their unshared runtime dependencies
-// from Docker-oriented production package output.
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { collectRootPackageExcludedExtensionDirs } from "./lib/bundled-plugin-build-entries.mjs";
+import { linkSourcePluginDependencies } from "./lib/bundled-plugin-dependency-links.mjs";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import { removePathIfExists } from "./runtime-postbuild-shared.mjs";
 
 const RUNTIME_DEPENDENCY_FIELDS = ["dependencies", "optionalDependencies"];
 
-function parsePluginList(value) {
+export function parseDockerPluginKeepList(value) {
   if (typeof value !== "string") {
     return new Set();
   }
-  return new Set(
-    value
-      .split(/[\s,]+/u)
-      .map((entry) => entry.trim())
-      .filter(Boolean),
-  );
-}
-
-/**
- * Parses OPENCLAW_EXTENSIONS into the bundled plugin ids that Docker should keep.
- */
-export function parseDockerPluginKeepList(value) {
-  return parsePluginList(value);
+  return new Set(value.split(/[\s,]+/u).filter(Boolean));
 }
 
 function readPackageJson(filePath) {
@@ -195,9 +182,42 @@ function pruneNodeModulesForOmittedPlugins(repoRoot, bundledPluginDir, omittedPl
   return removed;
 }
 
-/**
- * Removes omitted plugin dist trees plus node_modules packages not needed by kept runtime code.
- */
+// Docker compiles selected externally distributed plugins into the unified dist
+// graph, but their dependencies stay plugin-local under the isolated pnpm install
+// instead of the root node_modules that dist/extensions/<id> can reach. Link them
+// under the packaged root, as isolated source checkouts do, and fail closed when a
+// declared dependency still does not resolve from there: the plugin would otherwise
+// ship loadable-looking but be rejected by dependency diagnostics at runtime.
+function linkRetainedPluginDependencies(repoRoot, bundledPluginDir, retainedPluginIds) {
+  const unreachable = [];
+  for (const pluginId of [...retainedPluginIds].toSorted((left, right) =>
+    left.localeCompare(right),
+  )) {
+    const distPluginDir = path.join(repoRoot, "dist", "extensions", pluginId);
+    if (!fs.existsSync(distPluginDir)) {
+      continue;
+    }
+    const pluginDir = path.join(repoRoot, bundledPluginDir, pluginId);
+    const distNodeModules = path.join(distPluginDir, "node_modules");
+    fs.rmSync(distNodeModules, { recursive: true, force: true });
+    linkSourcePluginDependencies(pluginDir, distNodeModules);
+    const packageJson = readPackageJson(path.join(pluginDir, "package.json"));
+    for (const packageName of Object.keys(packageJson?.dependencies ?? {})) {
+      if (
+        !(packageName in (packageJson.optionalDependencies ?? {})) &&
+        !resolveNodeModulePackageDir(distPluginDir, packageName)
+      ) {
+        unreachable.push(`${pluginId}: ${packageName}`);
+      }
+    }
+  }
+  if (unreachable.length > 0) {
+    throw new Error(
+      `plugin dependencies are not reachable from their packaged dist roots:\n${unreachable.join("\n")}`,
+    );
+  }
+}
+
 export function pruneDockerPluginDist(params = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
   const env = params.env ?? process.env;
@@ -232,6 +252,12 @@ export function pruneDockerPluginDist(params = {}) {
       removed.push(path.relative(repoRoot, absolutePluginPath).replaceAll("\\", "/"));
     }
   }
+
+  linkRetainedPluginDependencies(
+    repoRoot,
+    bundledPluginDir,
+    [...excludedPluginIds].filter((pluginId) => keepPluginIds.has(pluginId)),
+  );
 
   return removed;
 }

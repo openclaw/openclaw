@@ -1,0 +1,548 @@
+import type { DatabaseSync } from "node:sqlite";
+import type { BoardOp, BoardSnapshot } from "../../packages/gateway-protocol/src/index.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import {
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  sqliteStringSet,
+} from "../infra/kysely-sync.js";
+import {
+  runSqliteDeferredTransactionSync,
+  runSqliteImmediateTransactionSync,
+} from "../infra/sqlite-transaction.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
+import { ensureOpenClawAgentBoardSchemaInTransaction } from "../state/openclaw-agent-board-schema.js";
+import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
+import type { OpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
+import { applyBoardOps, BoardValidationError, normalizeBoardLayout } from "./board-layout.js";
+import {
+  cloneBoardSnapshot,
+  createBoardWidgetPutResult,
+  createBoardGrantSnapshot,
+  createBoardWidgetPutSnapshot,
+  normalizeBoardWidgetPutParams,
+  type BoardWidgetHtmlViewMetadata,
+  type BoardSnapshotWithHtmlViewMetadata,
+} from "./board-store.js";
+import {
+  createBoardWidgetContentFields,
+  parseDescriptor,
+  parseManifest,
+  parsePluginContent,
+  resolveSqliteBoardWidgetPutParams,
+  rowToTab,
+  rowToHtmlViewMetadata,
+  rowToWidget,
+  rowToBoardWidgetDocument,
+  serializeManifest,
+  updateManifestHeightMode,
+  type SelectedBoardTabRow,
+  type SelectedBoardWidgetSnapshotRow,
+} from "./sqlite-board-codec.js";
+import { getBoardReadQueries } from "./sqlite-board-read-queries.js";
+
+type BoardDatabase = Pick<
+  OpenClawAgentKyselyDatabase,
+  "board_tabs" | "board_widgets" | "session_nodes"
+>;
+type BoardDatabaseHandle = Pick<OpenClawAgentDatabase, "db" | "path">;
+export type BoardSessionIdentity = Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
+
+type StoredBoard = {
+  snapshot: BoardSnapshot;
+  tabRows: SelectedBoardTabRow[];
+  widgetRows: SelectedBoardWidgetSnapshotRow[];
+  htmlViewMetadata: ReadonlyMap<string, BoardWidgetHtmlViewMetadata>;
+};
+
+const ensuredBoardDatabases = new WeakSet<DatabaseSync>();
+const BOARD_WRITE_BATCH_SIZE = 64;
+
+export function ensureBoardSchema(database: BoardDatabaseHandle): void {
+  if (ensuredBoardDatabases.has(database.db)) {
+    return;
+  }
+  if (database.db.isTransaction) {
+    throw new Error("board schema must be ensured before the write transaction starts");
+  }
+  runSqliteImmediateTransactionSync(
+    database.db,
+    () => ensureOpenClawAgentBoardSchemaInTransaction(database.db),
+    {
+      databaseLabel: database.path,
+      operationLabel: "board.ensure-schema",
+    },
+  );
+  // Additive-surface rule: fold this into the next natural schema bump, then delete this lazy ensure.
+  ensuredBoardDatabases.add(database.db);
+}
+
+function readStoredBoard(database: BoardDatabaseHandle, sessionKey: string): StoredBoard {
+  // Write callers already hold an IMMEDIATE transaction; the shared helper nests
+  // this consistent read as a savepoint instead of issuing a second BEGIN.
+  return runSqliteDeferredTransactionSync(
+    database.db,
+    () => {
+      const queries = getBoardReadQueries(database.db);
+      const tabRows = queries.tabs(sessionKey).rows;
+      const selectedWidgetRows = queries.widgets(sessionKey).rows;
+      const parsedWidgetRows = selectedWidgetRows.map((row) => ({
+        row,
+        manifest: parseManifest(row.manifest),
+      }));
+      // Rows without the canonical authority snapshot predate this unreleased contract.
+      // Keep them out of runtime state so they can never mint an interactive lease.
+      const admittedWidgetRows = parsedWidgetRows.filter(({ row, manifest }) => {
+        if (row.content_kind !== "mcp-app") {
+          return true;
+        }
+        return manifest.mcpAppInteractive !== undefined && manifest.mcpAppInstanceId !== undefined;
+      });
+      const htmlViewMetadata = new Map<string, BoardWidgetHtmlViewMetadata>();
+      for (const { row, manifest } of admittedWidgetRows) {
+        const metadata = rowToHtmlViewMetadata(row, manifest);
+        if (metadata) {
+          htmlViewMetadata.set(row.name, metadata);
+        }
+      }
+      const layout = normalizeBoardLayout({
+        tabs: tabRows.map(rowToTab),
+        widgets: admittedWidgetRows.map(({ row, manifest }) => rowToWidget(row, manifest)),
+      });
+      return {
+        snapshot: {
+          sessionKey,
+          // Board existence is row-defined; deleting the last empty tab removes
+          // the board, so a later read starts again at the empty revision.
+          revision: tabRows.reduce((revision, row) => Math.max(revision, row.revision), 0),
+          ...layout,
+        },
+        tabRows,
+        widgetRows: admittedWidgetRows.map(({ row }) => row),
+        htmlViewMetadata,
+      };
+    },
+    { databaseLabel: database.path, operationLabel: "board.read" },
+  );
+}
+
+function upsertTabs(
+  database: BoardDatabaseHandle,
+  previous: StoredBoard,
+  next: BoardSnapshot,
+): void {
+  const db = getNodeSqliteKysely<BoardDatabase>(database.db);
+  const createdBy = new Map(previous.tabRows.map((row) => [row.tab_id, row.created_by]));
+  for (let index = 0; index < next.tabs.length; index += BOARD_WRITE_BATCH_SIZE) {
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .insertInto("board_tabs")
+        .values(
+          next.tabs.slice(index, index + BOARD_WRITE_BATCH_SIZE).map((tab) => ({
+            session_key: next.sessionKey,
+            tab_id: tab.tabId,
+            title: tab.title,
+            position: tab.position,
+            chat_dock: tab.chatDock,
+            created_by: createdBy.get(tab.tabId) ?? "agent",
+            revision: next.revision,
+          })),
+        )
+        .onConflict((conflict) =>
+          conflict.columns(["session_key", "tab_id"]).doUpdateSet({
+            title: (eb) => eb.ref("excluded.title"),
+            position: (eb) => eb.ref("excluded.position"),
+            chat_dock: (eb) => eb.ref("excluded.chat_dock"),
+            revision: (eb) => eb.ref("excluded.revision"),
+          }),
+        ),
+    );
+  }
+  sessionChanges.emit(
+    { sessionKey: next.sessionKey, storePath: database.path, facts: { kind: "unchanged" } },
+    database.db,
+  );
+}
+
+function updateWidgetLayouts(
+  database: BoardDatabaseHandle,
+  previous: StoredBoard,
+  snapshot: BoardSnapshot,
+  updatedAt: number,
+  writtenName?: string,
+): void {
+  const db = getNodeSqliteKysely<BoardDatabase>(database.db);
+  const previousRows = new Map(previous.widgetRows.map((row) => [row.name, row]));
+  for (const widget of snapshot.widgets) {
+    const row = previousRows.get(widget.name);
+    if (
+      widget.name === writtenName ||
+      (row &&
+        row.tab_id === widget.tabId &&
+        row.title === (widget.title ?? null) &&
+        row.size_w === widget.sizeW &&
+        row.size_h === widget.sizeH &&
+        row.position === widget.position)
+    ) {
+      continue;
+    }
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .updateTable("board_widgets")
+        .set({
+          tab_id: widget.tabId,
+          title: widget.title ?? null,
+          size_w: widget.sizeW,
+          size_h: widget.sizeH,
+          position: widget.position,
+          updated_at: updatedAt,
+        })
+        .where("session_key", "=", snapshot.sessionKey)
+        .where("name", "=", widget.name),
+    );
+  }
+}
+
+function updateWidgetHeightModes(
+  database: BoardDatabaseHandle,
+  previous: StoredBoard,
+  ops: readonly BoardOp[],
+): void {
+  const db = getNodeSqliteKysely<BoardDatabase>(database.db);
+  for (const op of ops) {
+    if (op.kind !== "widget_resize") {
+      continue;
+    }
+    const row = previous.widgetRows.find((candidate) => candidate.name === op.name);
+    if (!row) {
+      continue;
+    }
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .updateTable("board_widgets")
+        .set({ manifest: updateManifestHeightMode(row.manifest, op.heightMode ?? "fixed") })
+        .where("session_key", "=", previous.snapshot.sessionKey)
+        .where("name", "=", op.name),
+    );
+  }
+}
+
+function deleteRemovedWidgets(
+  database: BoardDatabaseHandle,
+  previous: StoredBoard,
+  next: BoardSnapshot,
+): void {
+  const db = getNodeSqliteKysely<BoardDatabase>(database.db);
+  const widgetNames = new Set(next.widgets.map((widget) => widget.name));
+  const removed = previous.widgetRows.filter((row) => !widgetNames.has(row.name));
+  for (let index = 0; index < removed.length; index += BOARD_WRITE_BATCH_SIZE) {
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .deleteFrom("board_widgets")
+        .where("session_key", "=", next.sessionKey)
+        .where(
+          "name",
+          "in",
+          removed.slice(index, index + BOARD_WRITE_BATCH_SIZE).map((row) => row.name),
+        ),
+    );
+  }
+}
+
+function deleteRemovedTabs(
+  database: BoardDatabaseHandle,
+  previous: StoredBoard,
+  next: BoardSnapshot,
+): void {
+  const db = getNodeSqliteKysely<BoardDatabase>(database.db);
+  const tabIds = new Set(next.tabs.map((tab) => tab.tabId));
+  const removed = previous.tabRows.filter((row) => !tabIds.has(row.tab_id));
+  for (let index = 0; index < removed.length; index += BOARD_WRITE_BATCH_SIZE) {
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .deleteFrom("board_tabs")
+        .where("session_key", "=", next.sessionKey)
+        .where(
+          "tab_id",
+          "in",
+          removed.slice(index, index + BOARD_WRITE_BATCH_SIZE).map((row) => row.tab_id),
+        ),
+    );
+  }
+}
+
+export function hasBoardSession(
+  database: BoardDatabaseHandle,
+  sessionKey: string,
+  expected?: BoardSessionIdentity,
+): boolean {
+  const row = getBoardReadQueries(database.db).session(sessionKey).rows[0];
+  if (!row) {
+    return false;
+  }
+  try {
+    const entry = JSON.parse(row.entry_json) as unknown;
+    return Boolean(
+      entry &&
+      typeof entry === "object" &&
+      !Array.isArray(entry) &&
+      "sessionId" in entry &&
+      typeof entry.sessionId === "string" &&
+      (!expected ||
+        (entry.sessionId === expected.sessionId &&
+          ("lifecycleRevision" in entry ? entry.lifecycleRevision : undefined) ===
+            expected.lifecycleRevision)),
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function readBoardSessionKeys(
+  database: BoardDatabaseHandle,
+  sessionKeys: readonly string[],
+): Set<string> {
+  // Read-only connections cannot run the lazy DDL; pre-existing v13 databases
+  // have no board tables until their first write.
+  if (sessionKeys.length === 0 || !tableExists(database.db, "board_widgets")) {
+    return new Set();
+  }
+  const db = getNodeSqliteKysely<BoardDatabase>(database.db);
+  const query = db.selectFrom("board_tabs").select("session_key").distinct();
+  // Every persisted widget belongs to a tab.
+  return new Set(
+    executeSqliteQuerySync(
+      database.db,
+      query.where("session_key", "in", sqliteStringSet(sessionKeys)),
+    ).rows.map((row) => row.session_key),
+  );
+}
+
+export function readBoardSnapshotWithHtmlViewMetadata(
+  database: BoardDatabaseHandle,
+  sessionKey: string,
+): BoardSnapshotWithHtmlViewMetadata | undefined {
+  if (!hasBoardSession(database, sessionKey) || !tableExists(database.db, "board_widgets")) {
+    return undefined;
+  }
+  const stored = readStoredBoard(database, sessionKey);
+  return { snapshot: stored.snapshot, htmlViewMetadata: stored.htmlViewMetadata };
+}
+
+export function readBoardWidgetDocument(
+  database: BoardDatabaseHandle,
+  sessionKey: string,
+  name: string,
+  contentKind?: "mcp-app",
+) {
+  if (!hasBoardSession(database, sessionKey) || !tableExists(database.db, "board_widgets")) {
+    return undefined;
+  }
+  const db = getNodeSqliteKysely<BoardDatabase>(database.db);
+  const row = executeSqliteQuerySync(
+    database.db,
+    db
+      .selectFrom("board_widgets")
+      .select([
+        "content_kind",
+        "html",
+        "descriptor_json",
+        "title",
+        "revision",
+        "sha256",
+        "view_generation",
+        "grant_state",
+        "manifest",
+      ])
+      .where("session_key", "=", sessionKey)
+      .where("name", "=", name)
+      .limit(1),
+  ).rows[0];
+  return row && (!contentKind || row.content_kind === contentKind)
+    ? rowToBoardWidgetDocument(row)
+    : undefined;
+}
+
+export function applyBoardOpsToDatabase(
+  database: BoardDatabaseHandle,
+  sessionKey: string,
+  ops: readonly BoardOp[],
+  expectedSession?: BoardSessionIdentity,
+): BoardSnapshot {
+  if (!hasBoardSession(database, sessionKey, expectedSession)) {
+    throw new BoardValidationError(
+      expectedSession ? "invalid_operation" : "not_found",
+      expectedSession ? "board session changed; retry" : `board session not found: ${sessionKey}`,
+    );
+  }
+  const previous = readStoredBoard(database, sessionKey);
+  const layout = applyBoardOps(previous.snapshot, ops);
+  const next: BoardSnapshot = {
+    sessionKey,
+    revision: previous.snapshot.revision + 1,
+    ...layout,
+  };
+  const now = Date.now();
+  upsertTabs(database, previous, next);
+  deleteRemovedWidgets(database, previous, next);
+  updateWidgetLayouts(database, previous, next, now);
+  updateWidgetHeightModes(database, previous, ops);
+  deleteRemovedTabs(database, previous, next);
+  return cloneBoardSnapshot(next);
+}
+
+export function putBoardWidgetInDatabase(
+  database: BoardDatabaseHandle,
+  sessionKey: string,
+  canonicalInput: ReturnType<typeof normalizeBoardWidgetPutParams>,
+  viewGeneration: string,
+  expectedSession?: BoardSessionIdentity,
+) {
+  if (!hasBoardSession(database, sessionKey, expectedSession)) {
+    throw new BoardValidationError(
+      expectedSession ? "invalid_operation" : "not_found",
+      expectedSession ? "board session changed; retry" : `board session not found: ${sessionKey}`,
+    );
+  }
+  const previous = readStoredBoard(database, sessionKey);
+  const canonicalParams = resolveSqliteBoardWidgetPutParams(
+    previous.snapshot,
+    canonicalInput,
+    previous.widgetRows,
+  );
+  const existing = previous.widgetRows.find((row) => row.name === canonicalParams.name);
+  const grantScopeMatches = existing
+    ? existing.content_kind === "html"
+      ? canonicalParams.content.kind === "html"
+      : existing.content_kind === "mcp-app"
+        ? existing.descriptor_json !== null &&
+          canonicalParams.content.kind === "mcp-app" &&
+          parseDescriptor(existing.descriptor_json).serverName ===
+            canonicalParams.content.descriptor.serverName
+        : existing.descriptor_json !== null &&
+          (canonicalParams.content.kind === "plugin" ||
+            canonicalParams.content.kind === "registered") &&
+          parsePluginContent(existing.descriptor_json).pluginKind ===
+            canonicalParams.content.pluginKind
+    : true;
+  const next = createBoardWidgetPutSnapshot(previous.snapshot, canonicalParams, {
+    grantScopeMatches,
+    grantedSha256: existing?.granted_sha ?? undefined,
+    instanceId: viewGeneration,
+  });
+  const widget = next.widgets.find((candidate) => candidate.name === canonicalParams.name)!;
+  const now = Date.now();
+  upsertTabs(database, previous, next);
+  const db = getNodeSqliteKysely<BoardDatabase>(database.db);
+  const fields = createBoardWidgetContentFields(
+    canonicalParams,
+    { presentation: widget.presentation, heightMode: widget.heightMode },
+    widget.revision,
+    widget.grantState,
+    widget.instanceId!,
+    now,
+  );
+  executeSqliteQuerySync(
+    database.db,
+    db
+      .insertInto("board_widgets")
+      .values({
+        session_key: sessionKey,
+        name: canonicalParams.name,
+        tab_id: widget.tabId,
+        title: widget.title ?? null,
+        size_w: widget.sizeW,
+        size_h: widget.sizeH,
+        position: widget.position,
+        created_by: existing?.created_by ?? "agent",
+        created_at: existing?.created_at ?? now,
+        ...fields,
+      })
+      .onConflict((conflict) =>
+        conflict.columns(["session_key", "name"]).doUpdateSet({
+          tab_id: widget.tabId,
+          title: widget.title ?? null,
+          size_w: widget.sizeW,
+          size_h: widget.sizeH,
+          position: widget.position,
+          ...fields,
+        }),
+      ),
+  );
+  updateWidgetLayouts(database, previous, next, now, canonicalParams.name);
+  return createBoardWidgetPutResult(next, canonicalParams.name);
+}
+
+export function grantBoardWidgetInDatabase(
+  database: BoardDatabaseHandle,
+  sessionKey: string,
+  name: string,
+  decision: "granted" | "rejected",
+  revision: number,
+  instanceId?: string,
+  expectedSession?: BoardSessionIdentity,
+): BoardSnapshot {
+  if (!hasBoardSession(database, sessionKey, expectedSession)) {
+    throw new BoardValidationError(
+      expectedSession ? "invalid_operation" : "not_found",
+      expectedSession ? "board session changed; retry" : `board session not found: ${sessionKey}`,
+    );
+  }
+  const previous = readStoredBoard(database, sessionKey);
+  const next = createBoardGrantSnapshot(previous.snapshot, name, decision, revision, instanceId);
+  upsertTabs(database, previous, next);
+  const widget = next.widgets.find((candidate) => candidate.name === name)!;
+  if (!widget.contentOwner) {
+    throw new BoardValidationError(
+      "invalid_operation",
+      `board widget ${name} content ownership is unavailable`,
+    );
+  }
+  const row = previous.widgetRows.find((candidate) => candidate.name === name)!;
+  const manifest = parseManifest(row.manifest);
+  const declared = manifest.declared;
+  const db = getNodeSqliteKysely<BoardDatabase>(database.db);
+  executeSqliteQuerySync(
+    database.db,
+    db
+      .updateTable("board_widgets")
+      .set({
+        grant_state: decision,
+        granted_sha: decision === "granted" ? row.sha256 : null,
+        manifest: serializeManifest(
+          {
+            contentOwner: widget.contentOwner,
+            ...(widget.registeredContentKind
+              ? { registeredContentKind: widget.registeredContentKind }
+              : {}),
+          },
+          declared,
+          decision,
+          manifest.mcpAppInteractive !== undefined && manifest.mcpAppInstanceId
+            ? {
+                kind: "mcp-app" as const,
+                interactive: manifest.mcpAppInteractive,
+                instanceId: manifest.mcpAppInstanceId,
+              }
+            : manifest.registeredInstanceId
+              ? { kind: "registered" as const, instanceId: manifest.registeredInstanceId }
+              : undefined,
+          {
+            presentation: manifest.presentation,
+            heightMode: manifest.heightMode,
+          },
+          manifest.nameIdentity,
+        ),
+        updated_at: Date.now(),
+      })
+      .where("session_key", "=", sessionKey)
+      .where("name", "=", name),
+  );
+  return cloneBoardSnapshot(next);
+}

@@ -14,21 +14,19 @@ export class TokenRateLimiter {
     const active = (this.attempts.get(key) ?? []).filter(
       (timestamp) => timestamp > now - TOKEN_RATE_WINDOW_MS,
     );
-    if (active.length >= TOKEN_RATE_LIMIT) {
-      this.attempts.delete(key);
-      this.attempts.set(key, active);
-      return false;
-    }
-    if (!this.attempts.has(key) && this.attempts.size >= TOKEN_RATE_MAX_KEYS) {
-      const oldestKey = this.attempts.keys().next().value;
-      if (typeof oldestKey === "string") {
-        this.attempts.delete(oldestKey);
+    const allowed = active.length < TOKEN_RATE_LIMIT;
+    if (allowed) {
+      if (!this.attempts.has(key) && this.attempts.size >= TOKEN_RATE_MAX_KEYS) {
+        const oldestKey = this.attempts.keys().next().value;
+        if (typeof oldestKey === "string") {
+          this.attempts.delete(oldestKey);
+        }
       }
+      active.push(now);
     }
-    active.push(now);
     this.attempts.delete(key);
     this.attempts.set(key, active);
-    return true;
+    return allowed;
   }
 
   reserveGlobal(): { at: number } | null {

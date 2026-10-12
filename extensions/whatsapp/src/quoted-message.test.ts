@@ -1,6 +1,6 @@
 // Whatsapp tests cover quoted message plugin behavior.
 import { generateWAMessageFromContent } from "baileys";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildQuotedMessageOptions,
   cacheInboundMessageMeta,
@@ -31,6 +31,28 @@ describe("quoted message metadata cache", () => {
       body: "hello from b",
       fromMe: false,
     });
+  });
+
+  it("evicts the oldest quote before replacing an entry in a full cache", () => {
+    const accountId = "quote-capacity";
+    const remoteJid = "15555550123@s.whatsapp.net";
+    for (let index = 0; index < 500; index += 1) {
+      cacheInboundMessageMeta(accountId, remoteJid, `message-${index}`, {
+        body: `Quote ${index}`,
+      });
+    }
+    expect(lookupInboundMessageMeta(accountId, remoteJid, "message-0")?.body).toBe("Quote 0");
+
+    cacheInboundMessageMeta(accountId, remoteJid, "message-250", { body: "Updated quote" });
+
+    expect(lookupInboundMessageMeta(accountId, remoteJid, "message-0")).toBeUndefined();
+    expect(lookupInboundMessageMeta(accountId, remoteJid, "message-1")?.body).toBe("Quote 1");
+    expect(lookupInboundMessageMeta(accountId, remoteJid, "message-250")?.body).toBe(
+      "Updated quote",
+    );
+
+    cacheInboundMessageMeta(accountId, remoteJid, "message-500", { body: "New quote" });
+    expect(lookupInboundMessageMeta(accountId, remoteJid, "message-1")?.body).toBe("Quote 1");
   });
 
   it("can recover the original remoteJid for a matching direct-chat target", () => {
@@ -241,4 +263,52 @@ describe("quoted message metadata cache", () => {
       ).toBeUndefined();
     },
   );
+
+  it.each([
+    ["auto-reply", lookupInboundMessageMeta],
+    ["outbound", lookupInboundMessageMetaForTarget],
+  ] as const)("sends an expired %s quote as an ordinary message", (name, lookup) => {
+    const accountId = `quote-expiry-${name}`;
+    const remoteJid = "120363000000000000@g.us";
+    const messageId = "expired-inbound";
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    const encodeReply = () => {
+      const cached = lookup(accountId, remoteJid, messageId);
+      return generateWAMessageFromContent(
+        remoteJid,
+        { extendedTextMessage: { text: "Reply remains visible" } },
+        {
+          userJid: "15555550123@s.whatsapp.net",
+          messageId: "outbound-reply",
+          timestamp: new Date(now),
+          ...buildQuotedMessageOptions({
+            messageId,
+            remoteJid,
+            participant: cached?.participant,
+            messageText: cached?.body,
+            media: cached?.media,
+          }),
+        },
+      ).message?.extendedTextMessage;
+    };
+    try {
+      cacheInboundMessageMeta(accountId, remoteJid, messageId, {
+        body: "Original message",
+        participant: "15555550124@s.whatsapp.net",
+      });
+      expect(encodeReply()?.contextInfo).toMatchObject({
+        stanzaId: messageId,
+        quotedMessage: { conversation: "Original message" },
+      });
+
+      clock.mockReturnValue(now + 10 * 60 * 1000 + 1);
+      expect(lookup(accountId, remoteJid, messageId)).toBeUndefined();
+      const expiredReply = encodeReply();
+      expect(expiredReply?.text).toBe("Reply remains visible");
+      expect(expiredReply?.contextInfo).toBeUndefined();
+    } finally {
+      clock.mockRestore();
+    }
+  });
 });

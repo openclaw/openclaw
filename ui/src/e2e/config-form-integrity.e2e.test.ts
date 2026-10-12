@@ -1,7 +1,9 @@
 // Control UI tests cover schema-backed form constraints, draft recovery, and accessible names.
-import { mkdir, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import type { Locator } from "playwright";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -14,13 +16,15 @@ const suite = createControlUiE2eSuite({
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const proofVariant = process.env.OPENCLAW_UI_PROOF_VARIANT ?? "after";
-const uiProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "config-form-integrity",
-  proofVariant,
-);
+let uiProofArtifactDir: string;
+beforeEach(() => {
+  if (captureUiProofEnabled) {
+    uiProofArtifactDir = path.join(
+      createControlUiE2eArtifactDir("config-form-integrity"),
+      proofVariant,
+    );
+  }
+});
 
 function configFormIntegrityMocks() {
   const config = {
@@ -93,6 +97,117 @@ function configFormIntegrityMocks() {
 }
 
 suite.define(() => {
+  it("round-trips Agent List model overrides through the complete Gateway schema", async () => {
+    const { buildConfigSchemaCore } = await import("../../../src/config/schema.ts");
+    const schema = buildConfigSchemaCore();
+    const config = (codeMode?: boolean) => ({
+      agents: {
+        entries: {
+          main: {
+            name: "Form proof",
+            models: {
+              "openai/gpt-5.6-sol": {
+                alias: "coding",
+                params: { temperature: 0.5 },
+                agentRuntime: { id: "openclaw" },
+                streaming: false,
+                ...(codeMode === undefined ? {} : { codeMode }),
+              },
+            },
+            tools: { codeMode: { enabled: "auto", maxOutputBytes: 4096 } },
+          },
+        },
+      },
+      tools: { codeMode: false },
+    });
+    await suite.withPage(
+      {
+        colorScheme: "dark",
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 1000, width: 1440 },
+      },
+      async ({ page }) => {
+        const initial = config();
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "config.get": {
+              appliedConfigHash: "agent-list-initial",
+              config: initial,
+              configRevisionHash: "agent-list-initial",
+              hash: "agent-list-initial",
+              issues: [],
+              raw: JSON.stringify(initial),
+              valid: true,
+            },
+            "config.schema": schema,
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}settings/agents`);
+        await page
+          .getByRole("button", {
+            name: "Agent defaults Defaults every agent inherits unless overridden.",
+          })
+          .click();
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/ai-agents");
+        await page.goto(`${suite.server.baseUrl}settings/ai-agents?section=agents&advanced=1`);
+
+        const reveal = async (control: Locator) => {
+          await expect.poll(() => control.count()).toBe(1);
+          for (const details of await control.locator("xpath=ancestor::details").all()) {
+            if ((await details.getAttribute("open")) === null) {
+              await details.locator(":scope > summary").click();
+            }
+          }
+          await expect.poll(() => control.isVisible()).toBe(true);
+        };
+        const mode = page.locator('select[aria-label="Code Mode"]');
+        await reveal(mode);
+        expect(
+          (await mode.locator("option").allTextContents()).map((label) => label.trim()),
+        ).toEqual(["Default", "On", "Off"]);
+        expect((await mode.locator("option:checked").textContent())?.trim()).toBe("Default");
+        const rawOnly = page.locator(".settings-row").filter({
+          has: page.locator(".settings-row__title").getByText("Agent Code Mode", { exact: true }),
+        });
+        expect(await rawOnly.textContent()).toContain("Unsupported schema node. Use Raw mode.");
+        expect(await rawOnly.locator("input,select,textarea").count()).toBe(0);
+
+        const agentKey = page.locator('input[aria-label="Key: main"]').first();
+        await reveal(agentKey);
+        await agentKey.fill("bad/agent");
+        await agentKey.blur();
+        await expect.poll(() => agentKey.inputValue()).toBe("main");
+
+        for (const [label, value] of [
+          ["On", true],
+          ["Off", false],
+          ["Default", undefined],
+        ] as const) {
+          const before = (await gateway.getRequests("config.set")).length;
+          await gateway.deferNext("config.set");
+          await mode.selectOption({ label });
+          const request = await gateway.waitForRequest("config.set", { after: before });
+          const params = request.params as { raw?: string };
+          expect(JSON.parse(String(params.raw))).toEqual(config(value));
+          await gateway.resolveDeferred("config.set");
+          await expect.poll(() => mode.isEnabled()).toBe(true);
+          expect(await gateway.getRequests("config.set")).toHaveLength(before + 1);
+          await page.reload();
+          await reveal(mode);
+          expect((await mode.locator("option:checked").textContent())?.trim()).toBe(label);
+        }
+        if (captureUiProofEnabled) {
+          await page.screenshot({
+            animations: "disabled",
+            fullPage: true,
+            path: path.join(uiProofArtifactDir, "04-agent-list-model-overrides.png"),
+          });
+        }
+      },
+    );
+  });
+
   it("keeps invalid drafts visible and exposes schema constraints to the browser", async () => {
     await suite.withPage(
       {
@@ -120,7 +235,6 @@ suite.define(() => {
         await metadataEditor.blur();
 
         if (captureUiProofEnabled) {
-          await mkdir(uiProofArtifactDir, { recursive: true });
           await page.locator("#config-section-panel").screenshot({
             animations: "disabled",
             path: path.join(uiProofArtifactDir, "01-invalid-json-draft.png"),
@@ -167,7 +281,7 @@ suite.define(() => {
     );
   });
 
-  it("matches rejected Settings-save errors to visible one-based model rows", async () => {
+  it("explains rejected Settings-save errors and discards the draft", async () => {
     await suite.withPage(
       {
         colorScheme: "dark",
@@ -181,12 +295,7 @@ suite.define(() => {
           models: {
             providers: {
               [providerId]: {
-                models: [
-                  { name: "First" },
-                  { name: "Second" },
-                  { name: "Third" },
-                  { name: "Fourth" },
-                ],
+                models: [{ name: "First" }, { name: "Second" }, { name: "Third" }, {}],
               },
             },
           },
@@ -267,22 +376,24 @@ suite.define(() => {
         };
         await gateway.rejectDeferred("config.set", rejection);
 
-        const status = page.locator('.settings-save-indicator--danger[role="status"]');
-        await expect.poll(() => status.isVisible()).toBe(true);
-        await expect
-          .poll(() => status.getAttribute("title"))
-          .toBe(
-            `GatewayRequestError: invalid config: models.providers.${providerId}.models.#4.name: Invalid model name`,
-          );
-        expect(await status.getAttribute("aria-label")).toContain(
+        const status = page.locator("openclaw-settings-save-indicator").getByRole("status");
+        await expect.poll(() => status.textContent()).toContain("Settings not applied");
+        // Opening the reason blurs the edited field without resubmitting its rejected value.
+        await status.getByText("Show reason", { exact: true }).click();
+        await status
+          .getByText(
+            `invalid config: models.providers.${providerId}.models.#4.name: Invalid model name`,
+            { exact: true },
+          )
+          .waitFor();
+        expect(await gateway.getRequests("config.set")).toHaveLength(1);
+        expect(await status.ariaSnapshot()).toContain(
           `models.providers.${providerId}.models.#4.name`,
         );
-        expect(await status.textContent()).toContain("Save failed");
         expect(issue.path).toBe(`models.providers.${providerId}.models.3.name`);
         expect(rejection.message).toContain(".3.name");
 
         if (captureUiProofEnabled) {
-          await mkdir(uiProofArtifactDir, { recursive: true });
           await page.screenshot({
             animations: "disabled",
             fullPage: true,
@@ -293,6 +404,16 @@ suite.define(() => {
             await status.ariaSnapshot(),
           );
         }
+
+        await status.getByRole("button", { name: "Discard draft and reload", exact: true }).click();
+        await status.waitFor({ state: "hidden" });
+        expect(await panel.getByRole("textbox", { name: "Model name" }).nth(3).inputValue()).toBe(
+          "",
+        );
+        await page.getByRole("button", { name: "Raw", exact: true }).click();
+        const restored = await page.locator(".config-raw-field textarea").inputValue();
+        expect(JSON.parse(restored)).toEqual(config);
+        expect(await gateway.getRequests("config.set")).toHaveLength(1);
       },
     );
   });

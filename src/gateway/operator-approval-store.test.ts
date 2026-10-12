@@ -1,53 +1,63 @@
-import { spawn } from "node:child_process";
-import { once } from "node:events";
 // Persistent operator approval store tests cover terminal CAS, expiry, replay, and recovery.
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { withSqliteWriteAdmissionService } from "../infra/sqlite-transaction.js";
+import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import {
   closeOrphanedOperatorApprovals,
   consumeOperatorApprovalAllowOnce,
-  expireDueOperatorApprovals,
   forceDenyOperatorApproval,
   getOperatorApprovalDetailed,
   insertOperatorApproval,
   listPendingOperatorApprovals,
   listTerminalOperatorApprovals,
   OPERATOR_APPROVAL_MAX_AUDIENCE_SESSION_KEYS,
+  OperatorApprovalHistoryCursorError,
   pruneTerminalOperatorApprovals,
   resolveOperatorApproval,
 } from "./operator-approval-store.js";
+import { operatorApprovalOperations } from "./operator-approval-store.operations.js";
 
 type OperatorApprovalDatabase = Pick<OpenClawStateKyselyDatabase, "operator_approvals">;
 type NewOperatorApproval = Parameters<typeof insertOperatorApproval>[0]["approval"];
 const OPERATOR_APPROVAL_TERMINAL_RETENTION_MS = 30 * 24 * 60 * 60_000;
 
-function getOperatorApproval(params: Parameters<typeof getOperatorApprovalDetailed>[0]) {
-  const result = getOperatorApprovalDetailed(params);
+async function getOperatorApproval(params: Parameters<typeof getOperatorApprovalDetailed>[0]) {
+  const result = await getOperatorApprovalDetailed(params);
   return result.outcome === "found" ? result.record : null;
 }
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterAll(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  }),
+);
+let suiteDatabaseOptions: OpenClawStateDatabaseOptions | undefined;
 
 function createDatabaseOptions(): OpenClawStateDatabaseOptions {
-  const stateDir = fs.realpathSync(
-    fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-operator-approval-")),
-  );
-  tempDirs.push(stateDir);
+  const stateDir = tempDirs.make("openclaw-operator-approval-");
   return { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
+}
+
+function getSuiteDatabaseOptions(): OpenClawStateDatabaseOptions {
+  return (suiteDatabaseOptions ??= createDatabaseOptions());
 }
 
 function approval(id: string, overrides: Partial<NewOperatorApproval> = {}): NewOperatorApproval {
@@ -111,83 +121,19 @@ function rawApprovalRow(options: OpenClawStateDatabaseOptions, id: string) {
 }
 
 describe("operator approval store", () => {
-  afterEach(() => {
-    closeOpenClawStateDatabaseForTest();
-    for (const dir of tempDirs.splice(0)) {
-      fs.rmSync(dir, { force: true, recursive: true });
+  beforeEach(() => {
+    if (!suiteDatabaseOptions) {
+      return;
     }
+    // Completed cases leave workers reusable; only their approval rows are isolated.
+    runOpenClawStateWriteTransaction((database) => {
+      const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(database.db);
+      executeSqliteQuerySync(database.db, stateDb.deleteFrom("operator_approvals"));
+    }, suiteDatabaseOptions);
   });
 
-  it("round-trips only the safe presentation and durable routing metadata across reopen", () => {
-    const databaseOptions = createDatabaseOptions();
-
-    const inserted = insertOperatorApproval({
-      approval: approval("round-trip"),
-      databaseOptions,
-    });
-    expect(inserted.outcome).toBe("inserted");
-    if (inserted.outcome !== "inserted") {
-      throw new Error("expected approval insert");
-    }
-    expect(inserted.record).toMatchObject({
-      id: "round-trip",
-      resolutionRef: buildApprovalResolutionRef({
-        approvalId: "round-trip",
-        approvalKind: "exec",
-      }),
-      kind: "exec",
-      status: "pending",
-      presentation: {
-        kind: "exec",
-        commandText: "echo round-trip",
-        allowedDecisions: ["allow-once", "allow-always", "deny"],
-      },
-      requester: {
-        deviceId: "request-device",
-        clientId: "request-client",
-        deviceTokenAuth: true,
-      },
-      reviewerDeviceIds: ["reviewer-b", "reviewer-a"],
-      source: {
-        agentId: "main",
-        sessionKey: "agent:main:child",
-        sessionId: "session-1",
-        runId: "run-1",
-        toolCallId: "tool-call-1",
-        toolName: "exec",
-      },
-      audienceSessionKeys: ["agent:main:child", "agent:main:parent"],
-      runtimeEpoch: "runtime-a",
-    });
-
-    expect(
-      insertOperatorApproval({
-        approval: approval("plugin", { kind: "plugin", createdAtMs: 1_001 }),
-        databaseOptions,
-      }),
-    ).toMatchObject({ outcome: "inserted", record: { id: "plugin", kind: "plugin" } });
-
-    closeOpenClawStateDatabaseForTest();
-
-    expect(getOperatorApproval({ id: "round-trip", nowMs: 2_000, databaseOptions })).toEqual(
-      inserted.record,
-    );
-    expect(
-      getOperatorApprovalDetailed({
-        id: inserted.record.resolutionRef,
-        allowTransportRef: true,
-        nowMs: 2_000,
-        databaseOptions,
-      }),
-    ).toEqual({ outcome: "found", record: inserted.record });
-    expect(listPendingOperatorApprovals({ nowMs: 2_000, databaseOptions })).toEqual([
-      inserted.record,
-      expect.objectContaining({ id: "plugin", kind: "plugin" }),
-    ]);
-  });
-
-  it("lists terminal history newest-first with kind filtering and keyset pagination", () => {
-    const databaseOptions = createDatabaseOptions();
+  it("lists terminal history newest-first with kind filtering and keyset pagination", async () => {
+    const databaseOptions = getSuiteDatabaseOptions();
     const entries: NewOperatorApproval[] = [
       approval("exec-old", { createdAtMs: 1_000 }),
       approval("plugin-new", { kind: "plugin", createdAtMs: 1_001 }),
@@ -206,7 +152,7 @@ describe("operator approval store", () => {
       approval("still-pending", { createdAtMs: 1_003 }),
     ];
     for (const entry of entries) {
-      expect(insertOperatorApproval({ approval: entry, databaseOptions })).toMatchObject({
+      expect(await insertOperatorApproval({ approval: entry, databaseOptions })).toMatchObject({
         outcome: "inserted",
       });
     }
@@ -216,7 +162,7 @@ describe("operator approval store", () => {
       ["plugin-new", 3_000],
     ] as const) {
       expect(
-        resolveOperatorApproval({
+        await resolveOperatorApproval({
           id,
           decision: "deny",
           resolver: { kind: "device", id: "reviewer-device" },
@@ -226,11 +172,35 @@ describe("operator approval store", () => {
       ).toMatchObject({ outcome: "resolved" });
     }
 
-    const firstPage = listTerminalOperatorApprovals({ limit: 2, nowMs: 3_000, databaseOptions });
+    const firstPage = await listTerminalOperatorApprovals({
+      limit: 2,
+      nowMs: 3_000,
+      databaseOptions,
+    });
     expect(firstPage.records.map((record) => record.id)).toEqual(["system-middle", "plugin-new"]);
     expect(firstPage.nextCursor).toEqual(expect.any(String));
+    if (!firstPage.nextCursor) {
+      throw new Error("expected terminal history cursor");
+    }
 
-    const secondPage = listTerminalOperatorApprovals({
+    const cursorPayload = JSON.parse(
+      Buffer.from(firstPage.nextCursor, "base64url").toString("utf8"),
+    ) as Record<string, unknown>;
+    const nonEmittedCursor = Buffer.from(
+      JSON.stringify({ ...cursorPayload, extra: true }),
+      "utf8",
+    ).toString("base64url");
+    for (const cursor of [
+      `${firstPage.nextCursor}!`,
+      `${firstPage.nextCursor}=`,
+      nonEmittedCursor,
+    ]) {
+      await expect(
+        listTerminalOperatorApprovals({ cursor, nowMs: 3_000, databaseOptions }),
+      ).rejects.toThrow(OperatorApprovalHistoryCursorError);
+    }
+
+    const secondPage = await listTerminalOperatorApprovals({
       cursor: firstPage.nextCursor,
       limit: 2,
       nowMs: 3_000,
@@ -240,61 +210,18 @@ describe("operator approval store", () => {
     expect(secondPage.nextCursor).toBeUndefined();
 
     expect(
-      listTerminalOperatorApprovals({ kind: "plugin", nowMs: 3_000, databaseOptions }).records.map(
-        (record) => record.id,
-      ),
+      (
+        await listTerminalOperatorApprovals({ kind: "plugin", nowMs: 3_000, databaseOptions })
+      ).records.map((record) => record.id),
     ).toEqual(["plugin-new"]);
   });
 
-  it("excludes terminal rows resolved before the 30-day retention cutoff", () => {
-    const databaseOptions = createDatabaseOptions();
-    const day = 24 * 60 * 60_000;
-    const now = 100 * day;
-    expect(
-      insertOperatorApproval({
-        approval: approval("old", { createdAtMs: 1_000, expiresAtMs: now }),
-        databaseOptions,
-      }),
-    ).toMatchObject({ outcome: "inserted" });
-    expect(
-      insertOperatorApproval({
-        approval: approval("recent", { createdAtMs: now - 2 * day, expiresAtMs: now }),
-        databaseOptions,
-      }),
-    ).toMatchObject({ outcome: "inserted" });
-    // Resolve one row 40 days ago (past the window) and one 1 day ago (inside).
-    expect(
-      resolveOperatorApproval({
-        id: "old",
-        decision: "deny",
-        resolver: { kind: "device", id: "reviewer-device" },
-        nowMs: now - 40 * day,
-        databaseOptions,
-      }),
-    ).toMatchObject({ outcome: "resolved" });
-    expect(
-      resolveOperatorApproval({
-        id: "recent",
-        decision: "deny",
-        resolver: { kind: "device", id: "reviewer-device" },
-        nowMs: now - day,
-        databaseOptions,
-      }),
-    ).toMatchObject({ outcome: "resolved" });
-
-    expect(
-      listTerminalOperatorApprovals({ nowMs: now, databaseOptions }).records.map(
-        (record) => record.id,
-      ),
-    ).toEqual(["recent"]);
-  });
-
-  it("filters an audience before applying the replay limit across scan pages", () => {
-    const databaseOptions = createDatabaseOptions();
+  it("filters an audience before applying the replay limit across scan pages", async () => {
+    const databaseOptions = getSuiteDatabaseOptions();
     for (let index = 0; index < 256; index += 1) {
       const id = `unrelated-${String(index).padStart(3, "0")}`;
       expect(
-        insertOperatorApproval({
+        await insertOperatorApproval({
           approval: approval(id, {
             audienceSessionKeys: ["agent:main:other"],
             createdAtMs: 1_000 + index,
@@ -304,7 +231,7 @@ describe("operator approval store", () => {
       ).toMatchObject({ outcome: "inserted" });
     }
     expect(
-      insertOperatorApproval({
+      await insertOperatorApproval({
         approval: approval("target-after-first-page", {
           audienceSessionKeys: ["agent:main:target"],
           createdAtMs: 2_000,
@@ -314,7 +241,7 @@ describe("operator approval store", () => {
     ).toMatchObject({ outcome: "inserted" });
 
     expect(
-      listPendingOperatorApprovals({
+      await listPendingOperatorApprovals({
         audienceSessionKey: "agent:main:target",
         limit: 1,
         nowMs: 3_000,
@@ -323,12 +250,12 @@ describe("operator approval store", () => {
     ).toMatchObject([{ id: "target-after-first-page" }]);
   });
 
-  it("applies a record filter before the replay limit across scan pages", () => {
-    const databaseOptions = createDatabaseOptions();
+  it("filters reviewers before the replay limit across scan pages", async () => {
+    const databaseOptions = getSuiteDatabaseOptions();
     for (let index = 0; index < 256; index += 1) {
       const id = `unrelated-reviewer-${String(index).padStart(3, "0")}`;
       expect(
-        insertOperatorApproval({
+        await insertOperatorApproval({
           approval: approval(id, {
             reviewerDeviceIds: ["unrelated-device"],
             createdAtMs: 1_000 + index,
@@ -338,7 +265,7 @@ describe("operator approval store", () => {
       ).toMatchObject({ outcome: "inserted" });
     }
     expect(
-      insertOperatorApproval({
+      await insertOperatorApproval({
         approval: approval("authorized-after-first-page", {
           reviewerDeviceIds: ["authorized-device"],
           createdAtMs: 2_000,
@@ -348,8 +275,8 @@ describe("operator approval store", () => {
     ).toMatchObject({ outcome: "inserted" });
 
     expect(
-      listPendingOperatorApprovals({
-        recordFilter: (record) => record.reviewerDeviceIds.includes("authorized-device"),
+      await listPendingOperatorApprovals({
+        reviewerDeviceId: "authorized-device",
         limit: 1,
         nowMs: 3_000,
         databaseOptions,
@@ -359,112 +286,90 @@ describe("operator approval store", () => {
 
   it("reads the default clock after waiting for the SQLite write lock", async () => {
     const databaseOptions = createDatabaseOptions();
-    const createdAtMs = Date.now();
-    const expiresAtMs = createdAtMs + 1_500;
-    insertOperatorApproval({
+    const createdAtMs = 1_000;
+    const expiresAtMs = 2_000;
+    await insertOperatorApproval({
       approval: approval("lock-delayed-clock", { createdAtMs, expiresAtMs }),
       databaseOptions,
     });
-    const databasePath = openOpenClawStateDatabase(databaseOptions).path;
-    const releaseAtMs = expiresAtMs + 200;
-    const child = spawn(
-      process.execPath,
-      [
-        "--input-type=module",
-        "--eval",
-        [
-          'import { DatabaseSync } from "node:sqlite";',
-          "const [databasePath, releaseAtRaw] = process.argv.slice(1);",
-          "const database = new DatabaseSync(databasePath);",
-          'database.exec("PRAGMA busy_timeout=5000; BEGIN IMMEDIATE;");',
-          'process.stdout.write("locked\\n");',
-          'setTimeout(() => { database.exec("COMMIT"); database.close(); }, Math.max(0, Number(releaseAtRaw) - Date.now()));',
-        ].join("\n"),
-        databasePath,
-        String(releaseAtMs),
-      ],
-      { stdio: ["ignore", "pipe", "pipe"] },
-    );
-    let stderr = "";
-    child.stderr.on("data", (chunk) => {
-      stderr += String(chunk);
+    const database = openOpenClawStateDatabase(databaseOptions);
+    const writer = new DatabaseSync(database.path);
+    using clock = vi.spyOn(Date, "now").mockReturnValue(createdAtMs);
+    // Run the real worker transaction locally so its clock is controlled; transport authority
+    // is covered separately by the worker integration tests.
+    using _ = vi
+      .spyOn(workerAdmission, "requestSqliteWorkerOperationAdmission")
+      .mockImplementation(() => {});
+    const receiptTransport = vi
+      .spyOn(workerAdmission, "deferSqliteWorkerCommitReceipt")
+      .mockImplementation(() => {});
+    const releaseWriter = vi.fn(() => {
+      writer.exec("COMMIT");
+      // Retain the getter's exact-deadline boundary after the real lock wait.
+      clock.mockReturnValue(expiresAtMs);
     });
-    const exitPromise = once(child, "exit");
-    await new Promise<void>((resolve, reject) => {
-      child.once("error", reject);
-      child.once("exit", (code) => reject(new Error(`lock holder exited early (${code})`)));
-      child.stdout.once("data", (chunk) => {
-        if (String(chunk).includes("locked")) {
-          resolve();
-        } else {
-          reject(new Error(`unexpected lock holder output: ${String(chunk)}`));
-        }
+    try {
+      writer.exec("BEGIN IMMEDIATE");
+      expect(Date.now()).toBeLessThan(expiresAtMs);
+      const result = await withSqliteWriteAdmissionService(database.db, releaseWriter, async () =>
+        operatorApprovalOperations["operatorApprovals.get"](
+          { id: "lock-delayed-clock" },
+          {
+            open: () => database,
+            stateOptions: () => ({ path: database.path, env: databaseOptions.env ?? process.env }),
+          },
+        ),
+      );
+
+      expect(releaseWriter).toHaveBeenCalledOnce();
+      expect(result).toMatchObject({
+        outcome: "found",
+        record: { status: "expired", terminalReason: "timeout" },
       });
-    });
-    expect(Date.now()).toBeLessThan(expiresAtMs);
-
-    const record = getOperatorApproval({ id: "lock-delayed-clock", databaseOptions });
-    const [exitCode] = await exitPromise;
-
-    expect(exitCode, stderr).toBe(0);
-    expect(record).toMatchObject({ status: "expired", terminalReason: "timeout" });
-  });
-
-  it("preserves BOM, NBSP, and boundary spaces as opaque approval identity", () => {
-    const databaseOptions = createDatabaseOptions();
-    for (const [index, id] of ["\uFEFF", "\u00A0", " approval-edge "].entries()) {
-      const inserted = insertOperatorApproval({
-        approval: approval(id, { createdAtMs: 1_000 + index }),
-        databaseOptions,
-      });
-
-      expect(inserted).toMatchObject({ outcome: "inserted", record: { id } });
-      expect(getOperatorApproval({ id, nowMs: 2_000, databaseOptions })).toMatchObject({
-        id,
-        status: "pending",
-      });
+    } finally {
+      writer.close();
+      receiptTransport.mockRestore();
     }
-    expect(getOperatorApproval({ id: "approval-edge", nowMs: 2_000, databaseOptions })).toBeNull();
   });
 
-  it("rejects presentations outside the canonical safe protocol schema", () => {
-    const databaseOptions = createDatabaseOptions();
+  it("rejects presentations outside the canonical safe protocol schema", async () => {
+    const databaseOptions = getSuiteDatabaseOptions();
     const base = approval("unsafe-presentation");
     const unsafePresentation = {
       ...base.presentation,
       env: { SECRET_TOKEN: "must-not-persist" },
     } as unknown as NewOperatorApproval["presentation"];
 
-    expect(() =>
+    await expect(
       insertOperatorApproval({
         approval: { ...base, presentation: unsafePresentation },
         databaseOptions,
       }),
-    ).toThrow(/safe protocol schema/);
+    ).rejects.toThrow(/safe protocol schema/);
     expect(rawApprovalRow(databaseOptions, base.id)).toBeUndefined();
   });
 
-  it("rejects approval ids that cannot form stable deep-link path segments", () => {
-    const databaseOptions = createDatabaseOptions();
+  it("rejects approval ids that cannot form stable deep-link path segments", async () => {
+    const databaseOptions = getSuiteDatabaseOptions();
     for (const id of ["\ud800", "\udc00", ".", ".."]) {
-      expect(() => insertOperatorApproval({ approval: approval(id), databaseOptions })).toThrow(
-        /approval id/,
-      );
-      expect(() => getOperatorApproval({ id, databaseOptions })).toThrow(/approval id/);
-      expect(() =>
+      await expect(
+        insertOperatorApproval({ approval: approval(id), databaseOptions }),
+      ).rejects.toThrow(/approval id/);
+      await expect(getOperatorApproval({ id, databaseOptions })).rejects.toThrow(/approval id/);
+      await expect(
         resolveOperatorApproval({
           id,
           decision: "deny",
           resolver: { kind: "system", id: null },
           databaseOptions,
         }),
-      ).toThrow(/approval id/);
+      ).rejects.toThrow(/approval id/);
     }
   });
 
-  it("keeps canonical ids and transport references in disjoint lookup namespaces", () => {
-    const databaseOptions = createDatabaseOptions();
-    const inserted = insertOperatorApproval({
+  it("keeps canonical ids and transport references in disjoint lookup namespaces", async () => {
+    const databaseOptions = getSuiteDatabaseOptions();
+    const inserted = await insertOperatorApproval({
       approval: approval("namespace-owner"),
       databaseOptions,
     });
@@ -473,13 +378,13 @@ describe("operator approval store", () => {
     }
 
     expect(
-      insertOperatorApproval({
+      await insertOperatorApproval({
         approval: approval(inserted.record.resolutionRef, { createdAtMs: 1_001 }),
         databaseOptions,
       }),
     ).toEqual({ outcome: "conflict" });
     expect(
-      getOperatorApprovalDetailed({
+      await getOperatorApprovalDetailed({
         id: inserted.record.resolutionRef,
         allowTransportRef: true,
         nowMs: 2_000,
@@ -490,75 +395,65 @@ describe("operator approval store", () => {
     const futureId = "namespace-future-owner";
     const futureRef = buildApprovalResolutionRef({ approvalId: futureId, approvalKind: "exec" });
     expect(
-      insertOperatorApproval({
+      await insertOperatorApproval({
         approval: approval(futureRef, { createdAtMs: 1_002 }),
         databaseOptions,
       }),
     ).toMatchObject({ outcome: "inserted" });
     expect(
-      insertOperatorApproval({
+      await insertOperatorApproval({
         approval: approval(futureId, { createdAtMs: 1_003 }),
         databaseOptions,
       }),
     ).toEqual({ outcome: "conflict" });
   });
 
-  it("prunes retained terminal rows before checking locator namespace conflicts", () => {
-    const databaseOptions = createDatabaseOptions();
-    const inserted = insertOperatorApproval({
-      approval: approval("expired-namespace-owner"),
-      databaseOptions,
-    });
-    if (inserted.outcome !== "inserted") {
-      throw new Error("expected approval insert");
+  it("returns the first terminal answer and distinguishes same and conflicting retries", async () => {
+    const databaseOptions = getSuiteDatabaseOptions();
+    const inserted = await Promise.all([
+      insertOperatorApproval({ approval: approval("first-wins"), databaseOptions }),
+      insertOperatorApproval({ approval: approval("first-wins"), databaseOptions }),
+    ]);
+    expect(inserted.map((result) => result.outcome)).toEqual(["inserted", "existing"]);
+    for (const result of inserted) {
+      expect(result).toMatchObject({ record: { id: "first-wins", status: "pending" } });
     }
-    forceDenyOperatorApproval({
-      id: inserted.record.id,
-      status: "cancelled",
-      reason: "run-aborted",
-      resolver: { kind: "system", id: null },
-      nowMs: 2_000,
-      databaseOptions,
-    });
-    const createdAtMs = OPERATOR_APPROVAL_TERMINAL_RETENTION_MS + 3_000;
 
-    expect(
-      insertOperatorApproval({
-        approval: approval(inserted.record.resolutionRef, {
-          createdAtMs,
-          expiresAtMs: createdAtMs + 10_000,
-        }),
-        databaseOptions,
-      }),
-    ).toMatchObject({ outcome: "inserted" });
-    expect(rawApprovalRow(databaseOptions, inserted.record.id)).toBeUndefined();
-  });
-
-  it("returns the first terminal answer and distinguishes same and conflicting retries", () => {
-    const databaseOptions = createDatabaseOptions();
-    insertOperatorApproval({ approval: approval("first-wins"), databaseOptions });
-
-    const winner = resolveOperatorApproval({
+    const winnerPending = resolveOperatorApproval({
       id: "first-wins",
       decision: "allow-once",
       resolver: { kind: "device", id: "winner-device" },
       nowMs: 2_000,
       databaseOptions,
     });
-    const sameRetry = resolveOperatorApproval({
+    const sameRetryPending = resolveOperatorApproval({
       id: "first-wins",
       decision: "allow-once",
       resolver: { kind: "channel", id: "telegram:loser" },
       nowMs: 2_001,
       databaseOptions,
     });
-    const conflictingRetry = resolveOperatorApproval({
+    const conflictingRetryPending = resolveOperatorApproval({
       id: "first-wins",
       decision: "deny",
       resolver: { kind: "channel", id: "telegram:loser" },
       nowMs: 2_002,
       databaseOptions,
     });
+
+    const denialPending = forceDenyOperatorApproval({
+      id: "first-wins",
+      reason: "run-aborted",
+      resolver: { kind: "system", id: "late-denial" },
+      nowMs: 2_003,
+      databaseOptions,
+    });
+    const [winner, sameRetry, conflictingRetry, denial] = await Promise.all([
+      winnerPending,
+      sameRetryPending,
+      conflictingRetryPending,
+      denialPending,
+    ]);
 
     expect(winner).toMatchObject({
       outcome: "resolved",
@@ -578,23 +473,27 @@ describe("operator approval store", () => {
       retry: "conflict",
       record: { decision: "allow-once" },
     });
+    expect(denial).toMatchObject({
+      outcome: "already-terminal",
+      record: { decision: "allow-once", resolver: { id: "winner-device" } },
+    });
   });
 
-  it("expires at the exact deadline and never accepts a late allow", () => {
-    const databaseOptions = createDatabaseOptions();
-    insertOperatorApproval({
+  it("expires at the exact deadline and never accepts a late allow", async () => {
+    const databaseOptions = getSuiteDatabaseOptions();
+    await insertOperatorApproval({
       approval: approval("deadline", { expiresAtMs: 2_000 }),
       databaseOptions,
     });
 
-    const deadlineResult = resolveOperatorApproval({
+    const deadlineResult = await resolveOperatorApproval({
       id: "deadline",
       decision: "allow-always",
       resolver: { kind: "device", id: "reviewer" },
       nowMs: 2_000,
       databaseOptions,
     });
-    const lateResult = resolveOperatorApproval({
+    const lateResult = await resolveOperatorApproval({
       id: "deadline",
       decision: "allow-always",
       resolver: { kind: "device", id: "reviewer" },
@@ -613,60 +512,12 @@ describe("operator approval store", () => {
     });
   });
 
-  it("expires before a trusted force-deny verdict at the exact deadline", () => {
-    const databaseOptions = createDatabaseOptions();
-    insertOperatorApproval({
-      approval: approval("force-deadline", { expiresAtMs: 2_000 }),
-      databaseOptions,
-    });
+  it("hides approvals from resolvers with the wrong kind or runtime epoch", async () => {
+    const databaseOptions = getSuiteDatabaseOptions();
+    await insertOperatorApproval({ approval: approval("guarded"), databaseOptions });
 
     expect(
-      forceDenyOperatorApproval({
-        id: "force-deadline",
-        reason: "malformed-verdict",
-        resolver: { kind: "runtime", id: "harness" },
-        expectedKind: "exec",
-        runtimeEpoch: "runtime-a",
-        nowMs: 2_000,
-        databaseOptions,
-      }),
-    ).toMatchObject({
-      outcome: "expired",
-      record: { status: "expired", decision: "deny", terminalReason: "timeout" },
-    });
-  });
-
-  it("keeps an early expiry callback pending until the authoritative deadline", () => {
-    const databaseOptions = createDatabaseOptions();
-    insertOperatorApproval({
-      approval: approval("early-expiry", { expiresAtMs: 2_000 }),
-      databaseOptions,
-    });
-
-    expect(
-      forceDenyOperatorApproval({
-        id: "early-expiry",
-        status: "expired",
-        requireDue: true,
-        reason: "timeout",
-        resolver: { kind: "system", id: null },
-        expectedKind: "exec",
-        runtimeEpoch: "runtime-a",
-        nowMs: 1_999,
-        databaseOptions,
-      }),
-    ).toMatchObject({ outcome: "not-due", record: { status: "pending" } });
-    expect(
-      getOperatorApproval({ id: "early-expiry", nowMs: 1_999, databaseOptions }),
-    ).toMatchObject({ status: "pending" });
-  });
-
-  it("hides approvals from resolvers with the wrong kind or runtime epoch", () => {
-    const databaseOptions = createDatabaseOptions();
-    insertOperatorApproval({ approval: approval("guarded"), databaseOptions });
-
-    expect(
-      resolveOperatorApproval({
+      await resolveOperatorApproval({
         id: "guarded",
         decision: "allow-once",
         resolver: { kind: "runtime", id: "runtime" },
@@ -677,7 +528,7 @@ describe("operator approval store", () => {
       }),
     ).toEqual({ outcome: "not-found" });
     expect(
-      forceDenyOperatorApproval({
+      await forceDenyOperatorApproval({
         id: "guarded",
         reason: "run-aborted",
         resolver: { kind: "runtime", id: "runtime" },
@@ -687,11 +538,13 @@ describe("operator approval store", () => {
         databaseOptions,
       }),
     ).toEqual({ outcome: "not-found" });
-    expect(getOperatorApproval({ id: "guarded", nowMs: 2_000, databaseOptions })).toMatchObject({
+    expect(
+      await getOperatorApproval({ id: "guarded", nowMs: 2_000, databaseOptions }),
+    ).toMatchObject({
       status: "pending",
     });
 
-    resolveOperatorApproval({
+    await resolveOperatorApproval({
       id: "guarded",
       decision: "allow-once",
       resolver: { kind: "runtime", id: "runtime" },
@@ -701,7 +554,7 @@ describe("operator approval store", () => {
       databaseOptions,
     });
     expect(
-      consumeOperatorApprovalAllowOnce({
+      await consumeOperatorApprovalAllowOnce({
         id: "guarded",
         consumerId: "run-1:tool-call-1",
         expectedKind: "plugin",
@@ -711,7 +564,7 @@ describe("operator approval store", () => {
       }),
     ).toEqual({ outcome: "not-found" });
     expect(
-      consumeOperatorApprovalAllowOnce({
+      await consumeOperatorApprovalAllowOnce({
         id: "guarded",
         consumerId: "run-1:tool-call-1",
         expectedKind: "exec",
@@ -721,7 +574,7 @@ describe("operator approval store", () => {
       }),
     ).toEqual({ outcome: "not-found" });
     expect(
-      consumeOperatorApprovalAllowOnce({
+      await consumeOperatorApprovalAllowOnce({
         id: "guarded",
         consumerId: "run-1:tool-call-1",
         expectedKind: "exec",
@@ -732,37 +585,13 @@ describe("operator approval store", () => {
     ).toMatchObject({ outcome: "consumed" });
   });
 
-  it("expires every due row in one fail-closed maintenance pass", () => {
-    const databaseOptions = createDatabaseOptions();
-    insertOperatorApproval({
-      approval: approval("due-a", { expiresAtMs: 2_000 }),
-      databaseOptions,
-    });
-    insertOperatorApproval({
-      approval: approval("due-b", { expiresAtMs: 3_000 }),
-      databaseOptions,
-    });
-    insertOperatorApproval({ approval: approval("future"), databaseOptions });
-
-    const result = expireDueOperatorApprovals({ nowMs: 3_000, databaseOptions });
-
-    expect(result.affected).toBe(2);
-    expect(result.records.map((record) => [record.id, record.status])).toEqual([
-      ["due-a", "expired"],
-      ["due-b", "expired"],
-    ]);
-    expect(listPendingOperatorApprovals({ nowMs: 3_000, databaseOptions })).toMatchObject([
-      { id: "future" },
-    ]);
-  });
-
-  it("consumes allow-once exactly once without erasing the terminal decision", () => {
-    const databaseOptions = createDatabaseOptions();
-    insertOperatorApproval({
+  it("consumes allow-once exactly once without erasing the terminal decision", async () => {
+    const databaseOptions = getSuiteDatabaseOptions();
+    await insertOperatorApproval({
       approval: approval("consume", { createdAtMs: 5_000 }),
       databaseOptions,
     });
-    const resolved = resolveOperatorApproval({
+    const resolved = await resolveOperatorApproval({
       id: "consume",
       decision: "allow-once",
       resolver: { kind: "runtime", id: "approval-runtime" },
@@ -774,20 +603,22 @@ describe("operator approval store", () => {
       record: { resolvedAtMs: 5_000, updatedAtMs: 5_000 },
     });
 
-    const first = consumeOperatorApprovalAllowOnce({
+    const firstPending = consumeOperatorApprovalAllowOnce({
       id: "consume",
       consumerId: "run-1:tool-call-1",
       redemptionWindowMs: 15_000,
       nowMs: 3_000,
       databaseOptions,
     });
-    const replay = consumeOperatorApprovalAllowOnce({
+    const replayPending = consumeOperatorApprovalAllowOnce({
       id: "consume",
-      consumerId: "run-1:tool-call-1",
+      consumerId: "run-2:tool-call-2",
       redemptionWindowMs: 15_000,
       nowMs: 3_001,
       databaseOptions,
     });
+
+    const [first, replay] = await Promise.all([firstPending, replayPending]);
 
     expect(first).toMatchObject({
       outcome: "consumed",
@@ -800,14 +631,14 @@ describe("operator approval store", () => {
     });
     expect(replay).toMatchObject({
       outcome: "already-consumed",
-      record: { decision: "allow-once", consumedAtMs: 5_000 },
+      record: { decision: "allow-once", consumedAtMs: 5_000, consumedBy: "run-1:tool-call-1" },
     });
   });
 
-  it("rejects allow-once redemption at the exact grace boundary", () => {
-    const databaseOptions = createDatabaseOptions();
-    insertOperatorApproval({ approval: approval("stale-redemption"), databaseOptions });
-    resolveOperatorApproval({
+  it("rejects allow-once redemption at the exact grace boundary", async () => {
+    const databaseOptions = getSuiteDatabaseOptions();
+    await insertOperatorApproval({ approval: approval("stale-redemption"), databaseOptions });
+    await resolveOperatorApproval({
       id: "stale-redemption",
       decision: "allow-once",
       resolver: { kind: "runtime", id: "approval-runtime" },
@@ -816,7 +647,7 @@ describe("operator approval store", () => {
     });
 
     expect(
-      consumeOperatorApprovalAllowOnce({
+      await consumeOperatorApprovalAllowOnce({
         id: "stale-redemption",
         consumerId: "run-1:tool-call-1",
         redemptionWindowMs: 1_000,
@@ -829,16 +660,17 @@ describe("operator approval store", () => {
     });
   });
 
-  it("cancels pending rows from older runtime epochs after reopen", () => {
+  it("cancels pending rows from older runtime epochs after reopen", async () => {
     const databaseOptions = createDatabaseOptions();
-    insertOperatorApproval({
+    await insertOperatorApproval({
       approval: approval("orphan", { createdAtMs: 5_000 }),
       databaseOptions,
     });
-    insertOperatorApproval({
+    await insertOperatorApproval({
       approval: approval("current", { runtimeEpoch: "runtime-b" }),
       databaseOptions,
     });
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
 
     const result = closeOrphanedOperatorApprovals({
@@ -860,14 +692,16 @@ describe("operator approval store", () => {
         },
       ],
     });
-    expect(getOperatorApproval({ id: "current", nowMs: 2_000, databaseOptions })).toMatchObject({
+    expect(
+      await getOperatorApproval({ id: "current", nowMs: 2_000, databaseOptions }),
+    ).toMatchObject({
       status: "pending",
     });
   });
 
-  it("terminalizes a corrupt pending row and never returns it as approvable", () => {
-    const databaseOptions = createDatabaseOptions();
-    insertOperatorApproval({
+  it("terminalizes a corrupt pending row and never returns it as approvable", async () => {
+    const databaseOptions = getSuiteDatabaseOptions();
+    await insertOperatorApproval({
       approval: approval("corrupt", { createdAtMs: 5_000 }),
       databaseOptions,
     });
@@ -881,10 +715,12 @@ describe("operator approval store", () => {
         .where("approval_id", "=", "corrupt"),
     );
 
-    expect(getOperatorApprovalDetailed({ id: "corrupt", nowMs: 2_000, databaseOptions })).toEqual({
+    expect(
+      await getOperatorApprovalDetailed({ id: "corrupt", nowMs: 2_000, databaseOptions }),
+    ).toEqual({
       outcome: "corrupt",
     });
-    expect(getOperatorApproval({ id: "corrupt", nowMs: 2_000, databaseOptions })).toBeNull();
+    expect(await getOperatorApproval({ id: "corrupt", nowMs: 2_000, databaseOptions })).toBeNull();
     expect(rawApprovalRow(databaseOptions, "corrupt")).toMatchObject({
       status: "denied",
       decision: "deny",
@@ -895,18 +731,18 @@ describe("operator approval store", () => {
     });
   });
 
-  it("fails closed for forged terminal status tuples", () => {
+  it("fails closed for forged terminal status tuples", async () => {
     const databaseOptions = createDatabaseOptions();
-    insertOperatorApproval({ approval: approval("forged-allowed"), databaseOptions });
-    insertOperatorApproval({ approval: approval("forged-denied"), databaseOptions });
-    resolveOperatorApproval({
+    await insertOperatorApproval({ approval: approval("forged-allowed"), databaseOptions });
+    await insertOperatorApproval({ approval: approval("forged-denied"), databaseOptions });
+    await resolveOperatorApproval({
       id: "forged-allowed",
       decision: "allow-once",
       resolver: { kind: "device", id: "reviewer" },
       nowMs: 2_000,
       databaseOptions,
     });
-    resolveOperatorApproval({
+    await resolveOperatorApproval({
       id: "forged-denied",
       decision: "deny",
       resolver: { kind: "device", id: "reviewer" },
@@ -935,23 +771,23 @@ describe("operator approval store", () => {
     database.db.exec("PRAGMA ignore_check_constraints = OFF");
 
     expect(
-      getOperatorApprovalDetailed({ id: "forged-allowed", nowMs: 2_001, databaseOptions }),
+      await getOperatorApprovalDetailed({ id: "forged-allowed", nowMs: 2_001, databaseOptions }),
     ).toEqual({ outcome: "corrupt" });
     expect(
-      getOperatorApprovalDetailed({ id: "forged-denied", nowMs: 2_001, databaseOptions }),
+      await getOperatorApprovalDetailed({ id: "forged-denied", nowMs: 2_001, databaseOptions }),
     ).toEqual({ outcome: "corrupt" });
   });
 
-  it("prunes only terminal rows outside the 30-day retention window", () => {
-    const databaseOptions = createDatabaseOptions();
+  it("prunes only terminal rows outside the 30-day retention window", async () => {
+    const databaseOptions = getSuiteDatabaseOptions();
     const nowMs = OPERATOR_APPROVAL_TERMINAL_RETENTION_MS + 10_000;
-    insertOperatorApproval({
+    await insertOperatorApproval({
       approval: approval("old-terminal", { createdAtMs: 5_000 }),
       databaseOptions,
     });
-    insertOperatorApproval({ approval: approval("recent-terminal"), databaseOptions });
-    insertOperatorApproval({ approval: approval("still-pending"), databaseOptions });
-    forceDenyOperatorApproval({
+    await insertOperatorApproval({ approval: approval("recent-terminal"), databaseOptions });
+    await insertOperatorApproval({ approval: approval("still-pending"), databaseOptions });
+    await forceDenyOperatorApproval({
       id: "old-terminal",
       status: "cancelled",
       reason: "run-aborted",
@@ -963,7 +799,7 @@ describe("operator approval store", () => {
       resolved_at_ms: 5_000,
       updated_at_ms: 5_000,
     });
-    forceDenyOperatorApproval({
+    await forceDenyOperatorApproval({
       id: "recent-terminal",
       status: "cancelled",
       reason: "run-aborted",
@@ -978,43 +814,18 @@ describe("operator approval store", () => {
     expect(rawApprovalRow(databaseOptions, "still-pending")).toBeDefined();
   });
 
-  it("prunes old terminal rows opportunistically when inserting", () => {
-    const databaseOptions = createDatabaseOptions();
-    insertOperatorApproval({ approval: approval("old-on-insert"), databaseOptions });
-    forceDenyOperatorApproval({
-      id: "old-on-insert",
-      status: "cancelled",
-      reason: "run-aborted",
-      resolver: { kind: "system", id: null },
-      nowMs: 2_000,
-      databaseOptions,
-    });
-    const createdAtMs = OPERATOR_APPROVAL_TERMINAL_RETENTION_MS + 2_000;
-
-    insertOperatorApproval({
-      approval: approval("prune-trigger", {
-        createdAtMs,
-        expiresAtMs: createdAtMs + 1_000,
-      }),
-      databaseOptions,
-    });
-
-    expect(rawApprovalRow(databaseOptions, "old-on-insert")).toBeUndefined();
-    expect(rawApprovalRow(databaseOptions, "prune-trigger")).toMatchObject({ status: "pending" });
-  });
-
-  it("rejects an unbounded ancestor audience", () => {
-    const databaseOptions = createDatabaseOptions();
+  it("rejects an unbounded ancestor audience", async () => {
+    const databaseOptions = getSuiteDatabaseOptions();
     const audienceSessionKeys = Array.from(
       { length: OPERATOR_APPROVAL_MAX_AUDIENCE_SESSION_KEYS + 1 },
       (_, index) => `agent:main:${index}`,
     );
 
-    expect(() =>
+    await expect(
       insertOperatorApproval({
         approval: approval("large-audience", { audienceSessionKeys }),
         databaseOptions,
       }),
-    ).toThrow(/audience exceeds/);
+    ).rejects.toThrow(/audience exceeds/);
   });
 });

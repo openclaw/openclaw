@@ -1,8 +1,9 @@
-// Exercise Google Chat status-only requests through a real guarded HTTP transport.
+// Exercise Google Chat requests through a real guarded HTTP transport.
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
+import { deleteGoogleChatMessage } from "./api.js";
 
 const proofToken = "googlechat-transport-test-token";
 
@@ -23,6 +24,9 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
     fetchWithSsrFGuard: async (...args: Parameters<typeof actual.fetchWithSsrFGuard>) => {
       fetchWithSsrFGuardMock(...args);
       const [params] = args;
+      if (!loopback.baseUrl || new URL(params.url).origin !== "https://chat.googleapis.com") {
+        throw new Error("Unexpected request in Google Chat transport fixture");
+      }
       const guarded = await actual.fetchWithSsrFGuard({
         ...params,
         url: params.url.replace("https://chat.googleapis.com", loopback.baseUrl),
@@ -59,12 +63,10 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("./auth.js", () => ({
+vi.mock("./auth.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./auth.js")>()),
   getGoogleChatAccessToken: vi.fn(async () => proofToken),
 }));
-
-let deleteGoogleChatMessage: typeof import("./api.js").deleteGoogleChatMessage;
-let sendGoogleChatMessage: typeof import("./api.js").sendGoogleChatMessage;
 
 const account = {
   accountId: "default",
@@ -116,11 +118,7 @@ async function withinDeadline<T>(promise: Promise<T>, timeoutMs = 2_000): Promis
   }
 }
 
-describe("deleteGoogleChatMessage real guarded transport", () => {
-  beforeAll(async () => {
-    ({ deleteGoogleChatMessage, sendGoogleChatMessage } = await import("./api.js"));
-  });
-
+describe("Google Chat real guarded transport", () => {
   beforeEach(() => {
     fetchWithSsrFGuardMock.mockClear();
     loopback.baseUrl = "";
@@ -134,30 +132,84 @@ describe("deleteGoogleChatMessage real guarded transport", () => {
     vi.restoreAllMocks();
   });
 
-  it("rejects malformed UTF-8 JSON through the real guarded transport", async () => {
-    const body = new Uint8Array([
-      ...new TextEncoder().encode('{"name":"spaces/'),
-      0xff,
-      ...new TextEncoder().encode('AAA"}'),
-    ]);
-    const server = createServer((_request, response) => {
-      response.writeHead(200, { "Content-Type": "application/json" });
-      response.end(body);
-    });
+  it("delivers task-list fallback at the default chunk limit through the SDK", async () => {
+    const { withOpenClawTestState } = await import("openclaw/plugin-sdk/test-state");
+    await withOpenClawTestState(
+      { label: "googlechat-markdown-delivery", layout: "state-only" },
+      async () => {
+        const [
+          { sendDurableMessageBatch },
+          { createTestRegistry, withPluginRuntimeRegistryScope },
+          { googlechatPlugin },
+        ] = await Promise.all([
+          import("openclaw/plugin-sdk/channel-outbound"),
+          import("openclaw/plugin-sdk/channel-test-helpers"),
+          import("../api.js"),
+        ]);
+        const requests: Array<{
+          method: string | undefined;
+          path: string | undefined;
+          body: string;
+        }> = [];
+        const server = createServer((request, response) => {
+          let body = "";
+          request.setEncoding("utf8");
+          request.on("data", (chunk: string) => {
+            body += chunk;
+          });
+          request.on("end", () => {
+            requests.push({ method: request.method, path: request.url, body });
+            response.writeHead(200, { "Content-Type": "application/json" });
+            response.end(JSON.stringify({ name: `spaces/AAA/messages/${requests.length}` }));
+          });
+        });
 
-    loopback.baseUrl = await listen(server);
-    try {
-      const outcome = await withinDeadline(
-        sendGoogleChatMessage({ account, space: "spaces/AAA", text: "hello" }).then(
-          () => undefined,
-          (error: unknown) => error,
-        ),
-      );
-      expect(outcome).toBeInstanceOf(Error);
-      expect((outcome as Error).message).toMatch(/malformed JSON response/);
-    } finally {
-      await closeServer(server);
-    }
+        try {
+          loopback.baseUrl = await listen(server);
+          const paragraph = "A".repeat(31_998);
+          const result = await withPluginRuntimeRegistryScope(
+            createTestRegistry([
+              { pluginId: "googlechat", plugin: googlechatPlugin, source: "test" },
+            ]),
+            () =>
+              sendDurableMessageBatch({
+                cfg: {
+                  channels: {
+                    googlechat: {
+                      serviceAccount: {
+                        client_email: "transport@example.test",
+                        private_key: "not-a-real-key",
+                      },
+                    },
+                  },
+                },
+                channel: "googlechat",
+                accountId: "default",
+                to: "spaces/AAA",
+                payloads: [{ text: `**${paragraph}**\n\n- [x] done` }],
+              }),
+          );
+          expect(result).toMatchObject({
+            status: "sent",
+            deliveryIntent: { queuePolicy: "required" },
+            receipt: {
+              platformMessageIds: ["spaces/AAA/messages/1", "spaces/AAA/messages/2"],
+            },
+          });
+          expect(requests.map(({ method, path }) => ({ method, path }))).toEqual([
+            { method: "POST", path: "/v1/spaces/AAA/messages" },
+            { method: "POST", path: "/v1/spaces/AAA/messages" },
+          ]);
+          const messages: Array<{ text: string }> = requests.map(({ body }) => JSON.parse(body));
+          expect(messages).toEqual([{ text: `*${paragraph}*` }, { text: "\n\n[x] done" }]);
+          expect(messages.every(({ text }) => Buffer.byteLength(text, "utf8") <= 32_000)).toBe(
+            true,
+          );
+        } finally {
+          await closeServer(server);
+        }
+      },
+    );
   });
 
   it("cancels a streaming authenticated DELETE before releasing its real dispatcher", async () => {
@@ -218,25 +270,6 @@ describe("deleteGoogleChatMessage real guarded transport", () => {
       expect(loopback.releases).toEqual([{ bodyIsNull: false, bodyUsed: true }]);
       await closeServer(server);
       await vi.waitFor(() => expect(socketClosed).toBe(true), { timeout: 1_000 });
-    } finally {
-      await closeServer(server);
-    }
-  });
-
-  it("releases a successful no-content response without cancelling a missing body", async () => {
-    const server = createServer((_request, response) => {
-      response.writeHead(204);
-      response.end();
-    });
-
-    loopback.baseUrl = await listen(server);
-    try {
-      await expect(
-        withinDeadline(
-          deleteGoogleChatMessage({ account, messageName: "spaces/AAA/messages/EMPTY" }),
-        ),
-      ).resolves.toBeUndefined();
-      expect(loopback.releases).toEqual([{ bodyIsNull: true, bodyUsed: false }]);
     } finally {
       await closeServer(server);
     }

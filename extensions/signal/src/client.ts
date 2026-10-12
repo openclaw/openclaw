@@ -1,16 +1,14 @@
-// Signal plugin module implements client behavior.
 import { Buffer } from "node:buffer";
 import http, { type ClientRequest, type IncomingMessage } from "node:http";
 import https from "node:https";
 import { generateSecureUuid } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
-import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
+import { asPositiveFiniteNumber, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import type { SignalRpcOptions, SignalSseEvent } from "./client-types.js";
+import { signalUnixRpcRequest, streamSignalUnixEvents } from "./client-unix.js";
 
-export type SignalRpcOptions = {
-  baseUrl: string;
-  timeoutMs?: number;
-  maxResponseBytes?: number;
-};
+export type { SignalRpcOptions } from "./client-types.js";
 
 type SignalRpcError = {
   code?: number;
@@ -25,11 +23,15 @@ type SignalRpcResponse<T> = {
   id?: string | number | null;
 };
 
-type SignalSseEvent = {
-  event?: string;
-  data?: string;
-  id?: string;
-};
+/** Thrown when the native SSE endpoint rejects the request with a non-2xx HTTP status. */
+export class SignalSseRejectionError extends Error {
+  constructor(
+    readonly status: number,
+    statusText: string,
+  ) {
+    super(`Signal SSE failed (${status} ${statusText})`);
+  }
+}
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_SIGNAL_HTTP_RESPONSE_MAX_BYTES = 1_048_576;
@@ -38,8 +40,7 @@ const MAX_SIGNAL_SSE_EVENT_DATA_BYTES = 1_048_576;
 
 type SignalHttpResponse = {
   status: number;
-  statusText: string;
-  text: string;
+  body: Buffer;
 };
 
 function createSignalSseAbortError(): Error {
@@ -102,13 +103,6 @@ function assertSignalHttpProtocol(url: URL, label: string): void {
   }
 }
 
-function normalizeSignalHttpResponseMaxBytes(value: number | undefined): number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return DEFAULT_SIGNAL_HTTP_RESPONSE_MAX_BYTES;
-  }
-  return Math.floor(value);
-}
-
 function normalizeSignalSseTimeoutMs(timeoutMs: number): number | null {
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
     return null;
@@ -116,7 +110,7 @@ function normalizeSignalSseTimeoutMs(timeoutMs: number): number | null {
   return resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS);
 }
 
-function requestSignalHttpText(
+function requestSignalHttp(
   url: URL,
   options: {
     method: "GET" | "POST";
@@ -124,11 +118,20 @@ function requestSignalHttpText(
     body?: string;
     timeoutMs: number;
     maxResponseBytes?: number;
+    assertDirectAdapterHandoff?: () => void;
   },
+): Promise<SignalHttpResponse> {
+  return captureEffectAuthority().initiate(() => initiateSignalHttp(url, options));
+}
+
+function initiateSignalHttp(
+  url: URL,
+  options: Parameters<typeof requestSignalHttp>[1],
 ): Promise<SignalHttpResponse> {
   assertSignalHttpProtocol(url, "HTTP");
   const timeoutMs = resolveTimerTimeoutMs(options.timeoutMs, DEFAULT_TIMEOUT_MS);
   const client = url.protocol === "https:" ? https : http;
+  options.assertDirectAdapterHandoff?.();
   return new Promise((resolve, reject) => {
     let settled = false;
     const deadline = setTimeout(() => {
@@ -155,7 +158,9 @@ function requestSignalHttpText(
       cleanup();
       resolve(response);
     };
-    const maxResponseBytes = normalizeSignalHttpResponseMaxBytes(options.maxResponseBytes);
+    const maxResponseBytes = Math.floor(
+      asPositiveFiniteNumber(options.maxResponseBytes) ?? DEFAULT_SIGNAL_HTTP_RESPONSE_MAX_BYTES,
+    );
     const request: ClientRequest | undefined = client.request(
       url,
       {
@@ -181,8 +186,7 @@ function requestSignalHttpText(
         res.on("end", () => {
           resolveOnce({
             status: res.statusCode ?? 0,
-            statusText: res.statusMessage || "error",
-            text: Buffer.concat(chunks).toString("utf8"),
+            body: Buffer.concat(chunks),
           });
         });
       },
@@ -203,6 +207,9 @@ export async function signalRpcRequest<T = unknown>(
   params: Record<string, unknown> | undefined,
   opts: SignalRpcOptions,
 ): Promise<T> {
+  if (opts.baseUrl.trim().startsWith("unix:")) {
+    return signalUnixRpcRequest<T>(method, params, opts);
+  }
   const id = generateSecureUuid();
   const body = JSON.stringify({
     jsonrpc: "2.0",
@@ -210,7 +217,7 @@ export async function signalRpcRequest<T = unknown>(
     params,
     id,
   });
-  const res = await requestSignalHttpText(resolveSignalEndpointUrl(opts.baseUrl, "/api/v1/rpc"), {
+  const res = await requestSignalHttp(resolveSignalEndpointUrl(opts.baseUrl, "/api/v1/rpc"), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -219,14 +226,17 @@ export async function signalRpcRequest<T = unknown>(
     body,
     timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     maxResponseBytes: opts.maxResponseBytes,
+    assertDirectAdapterHandoff: opts.assertDirectAdapterHandoff,
   });
   if (res.status === 201) {
     return undefined as T;
   }
-  if (!res.text) {
+  // Decode JSON bodies here; health checks use status without interpreting their bytes.
+  const text = new TextDecoder("utf-8", { fatal: true }).decode(res.body);
+  if (!text) {
     throw new Error(`Signal RPC empty response (status ${res.status})`);
   }
-  const parsed = parseSignalRpcResponse<T>(res.text, res.status);
+  const parsed = parseSignalRpcResponse<T>(text, res.status);
   if (parsed.error) {
     const code = parsed.error.code ?? "unknown";
     const msg = parsed.error.message ?? "Signal RPC error";
@@ -240,7 +250,11 @@ export async function signalCheck(
   timeoutMs = DEFAULT_TIMEOUT_MS,
 ): Promise<{ ok: boolean; status?: number | null; error?: string | null }> {
   try {
-    const res = await requestSignalHttpText(resolveSignalEndpointUrl(baseUrl, "/api/v1/check"), {
+    if (baseUrl.trim().startsWith("unix:")) {
+      await signalUnixRpcRequest("version", undefined, { baseUrl, timeoutMs });
+      return { ok: true, status: null, error: null };
+    }
+    const res = await requestSignalHttp(resolveSignalEndpointUrl(baseUrl, "/api/v1/check"), {
       method: "GET",
       timeoutMs,
     });
@@ -309,7 +323,7 @@ function openSignalEventStream(
         const status = res.statusCode ?? 0;
         if (status < 200 || status >= 300) {
           res.resume();
-          rejectOnce(new Error(`Signal SSE failed (${status} ${res.statusMessage || "error"})`));
+          rejectOnce(new SignalSseRejectionError(status, res.statusMessage || "error"));
           return;
         }
         if (settled) {
@@ -345,6 +359,9 @@ export async function streamSignalEvents(params: {
   onEvent: (event: SignalSseEvent) => unknown;
   onStreamOpen?: () => void;
 }): Promise<void> {
+  if (params.baseUrl.trim().startsWith("unix:")) {
+    return streamSignalUnixEvents(params);
+  }
   const url = resolveSignalEndpointUrl(params.baseUrl, "/api/v1/events");
   if (params.account) {
     url.searchParams.set("account", params.account);

@@ -1,5 +1,6 @@
+import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
+import type { ChannelOutboundContext } from "openclaw/plugin-sdk/channel-contract";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
-// Mattermost plugin module implements send behavior.
 import {
   createMessageReceiptFromOutboundResults,
   listMessageReceiptPlatformIds,
@@ -10,13 +11,12 @@ import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
-import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { convertMarkdownTables, FormatCapabilityProfile } from "openclaw/plugin-sdk/text-chunking";
-import { getMattermostRuntime } from "../runtime.js";
+import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
+import { getMattermostRuntime, getOptionalMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
   createMattermostClient,
@@ -30,6 +30,7 @@ import {
   parseMattermostApiStatus,
   uploadMattermostFile,
   type MattermostUser,
+  type MattermostClient,
   type CreateDmChannelRetryOptions,
 } from "./client.js";
 import {
@@ -44,7 +45,10 @@ import {
   type MattermostTarget,
 } from "./target-resolution.js";
 
-type MattermostSendOpts = {
+type MattermostSendOpts = Pick<
+  ChannelOutboundContext,
+  "assertDirectAdapterHandoff" | "onPlatformSendDispatch"
+> & {
   cfg: OpenClawConfig;
   botToken?: string;
   baseUrl?: string;
@@ -59,8 +63,6 @@ type MattermostSendOpts = {
   props?: Record<string, unknown>;
   buttons?: Array<unknown>;
   attachmentText?: string;
-  /** Retry options for DM channel creation */
-  dmRetryOptions?: CreateDmChannelRetryOptions;
   /** Report the provider-finalized send before later fallible bookkeeping. */
   onDeliveryResult?: (result: MattermostSendResult) => Promise<void> | void;
 };
@@ -74,21 +76,6 @@ export type MattermostSendResult = {
 
 const MATTERMOST_BOT_USER_CACHE_MAX_ENTRIES = 64;
 const MATTERMOST_TARGET_CACHE_MAX_ENTRIES = 1024;
-const MATTERMOST_FORMAT_PROFILE = FormatCapabilityProfile.define({
-  mechanism: "markdown",
-  chunk: { limit: 16_383, unit: "chars" },
-});
-
-function renderMattermostMarkdown(
-  markdown: string,
-  tableMode: Parameters<typeof convertMarkdownTables>[1],
-): string {
-  // Native tables stay byte-identical; only an explicit operator fallback uses conversion.
-  return tableMode === "off" && MATTERMOST_FORMAT_PROFILE.constructs.table === "native"
-    ? markdown
-    : convertMarkdownTables(markdown, tableMode);
-}
-
 const botUserCache = new Map<string, MattermostUser>();
 const userByNameCache = new Map<string, MattermostUser>();
 const channelByNameCache = new Map<string, string>();
@@ -100,27 +87,6 @@ function cacheOutboundEntry<K, V>(cache: Map<K, V>, key: K, value: V, maxEntries
   cache.delete(key);
   cache.set(key, value);
   pruneMapToMaxSize(cache, maxEntries);
-}
-
-const getCore = () => getMattermostRuntime();
-
-function createMattermostSendReceipt(params: {
-  messageId: string;
-  channelId: string;
-  kind: MessageReceiptPartKind;
-  replyToId?: string;
-}): MessageReceipt {
-  return createMessageReceiptFromOutboundResults({
-    kind: params.kind,
-    ...(params.replyToId ? { replyToId: params.replyToId } : {}),
-    results: [
-      {
-        channel: "mattermost",
-        messageId: params.messageId,
-        channelId: params.channelId,
-      },
-    ],
-  });
 }
 
 function resolveMattermostReceiptKind(params: {
@@ -137,88 +103,46 @@ function resolveMattermostReceiptKind(params: {
   return "text";
 }
 
-function recordMattermostOutboundActivity(accountId: string): void {
-  try {
-    getCore().channel.activity.record({
-      channel: "mattermost",
-      accountId,
-      direction: "outbound",
-    });
-  } catch (error) {
-    if (!(error instanceof Error) || error.message !== "Mattermost runtime not initialized") {
-      throw error;
-    }
-  }
-}
-
 function cacheKey(baseUrl: string, token: string): string {
   return `${baseUrl}::${token}`;
 }
 
-function normalizeMessage(text: string, mediaUrl?: string): string {
-  const trimmed = normalizeOptionalString(text) ?? "";
-  const media = normalizeOptionalString(mediaUrl);
-  return [trimmed, media].filter(Boolean).join("\n");
-}
-
-function isHttpUrl(value: string): boolean {
-  return /^https?:\/\//i.test(value);
-}
-async function resolveBotUser(
-  baseUrl: string,
-  token: string,
-  allowPrivateNetwork?: boolean,
-): Promise<MattermostUser> {
-  const key = cacheKey(baseUrl, token);
+async function resolveBotUser(client: MattermostClient): Promise<MattermostUser> {
+  const key = cacheKey(client.baseUrl, client.token);
   const cached = botUserCache.get(key);
   if (cached) {
     return cached;
   }
-  const client = createMattermostClient({ baseUrl, botToken: token, allowPrivateNetwork });
   const user = await fetchMattermostMe(client);
   cacheOutboundEntry(botUserCache, key, user, MATTERMOST_BOT_USER_CACHE_MAX_ENTRIES);
   return user;
 }
 
 async function resolveUserIdByUsername(params: {
-  baseUrl: string;
-  token: string;
+  client: MattermostClient;
   username: string;
-  allowPrivateNetwork?: boolean;
 }): Promise<string> {
-  const { baseUrl, token, username } = params;
-  const key = `${cacheKey(baseUrl, token)}::${normalizeLowercaseStringOrEmpty(username)}`;
+  const { client, username } = params;
+  const key = `${cacheKey(client.baseUrl, client.token)}::${normalizeLowercaseStringOrEmpty(username)}`;
   const cached = userByNameCache.get(key);
   if (cached?.id) {
     return cached.id;
   }
-  const client = createMattermostClient({
-    baseUrl,
-    botToken: token,
-    allowPrivateNetwork: params.allowPrivateNetwork,
-  });
   const user = await fetchMattermostUserByUsername(client, username);
   cacheOutboundEntry(userByNameCache, key, user, MATTERMOST_TARGET_CACHE_MAX_ENTRIES);
   return user.id;
 }
 
 async function resolveChannelIdByName(params: {
-  baseUrl: string;
-  token: string;
+  client: MattermostClient;
   name: string;
-  allowPrivateNetwork?: boolean;
 }): Promise<string> {
-  const { baseUrl, token, name } = params;
-  const key = `${cacheKey(baseUrl, token)}::channel::${normalizeLowercaseStringOrEmpty(name)}`;
+  const { client, name } = params;
+  const key = `${cacheKey(client.baseUrl, client.token)}::channel::${normalizeLowercaseStringOrEmpty(name)}`;
   const cached = channelByNameCache.get(key);
   if (cached) {
     return cached;
   }
-  const client = createMattermostClient({
-    baseUrl,
-    botToken: token,
-    allowPrivateNetwork: params.allowPrivateNetwork,
-  });
   const me = await fetchMattermostMe(client);
   const teams = await fetchMattermostUserTeams(client, me.id);
   for (const team of teams) {
@@ -244,37 +168,10 @@ async function resolveChannelIdByName(params: {
 
 type ResolveTargetChannelIdParams = {
   target: MattermostTarget;
-  baseUrl: string;
-  token: string;
-  allowPrivateNetwork?: boolean;
+  client: MattermostClient;
   dmRetryOptions?: CreateDmChannelRetryOptions;
   logger?: { debug?: (msg: string) => void; warn?: (msg: string) => void };
 };
-
-function mergeDmRetryOptions(
-  base?: CreateDmChannelRetryOptions,
-  override?: CreateDmChannelRetryOptions,
-): CreateDmChannelRetryOptions | undefined {
-  const merged: CreateDmChannelRetryOptions = {
-    maxRetries: override?.maxRetries ?? base?.maxRetries,
-    initialDelayMs: override?.initialDelayMs ?? base?.initialDelayMs,
-    maxDelayMs: override?.maxDelayMs ?? base?.maxDelayMs,
-    timeoutMs: override?.timeoutMs ?? base?.timeoutMs,
-    onRetry: override?.onRetry,
-  };
-
-  if (
-    merged.maxRetries === undefined &&
-    merged.initialDelayMs === undefined &&
-    merged.maxDelayMs === undefined &&
-    merged.timeoutMs === undefined &&
-    merged.onRetry === undefined
-  ) {
-    return undefined;
-  }
-
-  return merged;
-}
 
 async function resolveTargetChannelId(params: ResolveTargetChannelIdParams): Promise<string> {
   if (params.target.kind === "channel") {
@@ -282,63 +179,41 @@ async function resolveTargetChannelId(params: ResolveTargetChannelIdParams): Pro
   }
   if (params.target.kind === "channel-name") {
     return await resolveChannelIdByName({
-      baseUrl: params.baseUrl,
-      token: params.token,
+      client: params.client,
       name: params.target.name,
-      allowPrivateNetwork: params.allowPrivateNetwork,
     });
   }
   const userId = params.target.id
     ? params.target.id
     : await resolveUserIdByUsername({
-        baseUrl: params.baseUrl,
-        token: params.token,
+        client: params.client,
         username: params.target.username ?? "",
-        allowPrivateNetwork: params.allowPrivateNetwork,
       });
-  const dmKey = `${cacheKey(params.baseUrl, params.token)}::dm::${userId}`;
+  const dmKey = `${cacheKey(params.client.baseUrl, params.client.token)}::dm::${userId}`;
   const cachedDm = dmChannelCache.get(dmKey);
   if (cachedDm) {
     return cachedDm;
   }
-  const botUser = await resolveBotUser(params.baseUrl, params.token, params.allowPrivateNetwork);
-  const client = createMattermostClient({
-    baseUrl: params.baseUrl,
-    botToken: params.token,
-    allowPrivateNetwork: params.allowPrivateNetwork,
-  });
+  const botUser = await resolveBotUser(params.client);
 
-  const channel = await createMattermostDirectChannelWithRetry(client, [botUser.id, userId], {
-    ...params.dmRetryOptions,
-    onRetry: (attempt, delayMs, error) => {
-      // Call user's onRetry if provided
-      params.dmRetryOptions?.onRetry?.(attempt, delayMs, error);
-      // Log if verbose mode is enabled
-      if (params.logger) {
-        params.logger.warn?.(
+  const channel = await createMattermostDirectChannelWithRetry(
+    params.client,
+    [botUser.id, userId],
+    {
+      ...params.dmRetryOptions,
+      onRetry: (attempt, delayMs, error) => {
+        params.logger?.warn?.(
           `DM channel creation retry ${attempt} after ${delayMs}ms: ${error.message}`,
         );
-      }
+      },
     },
-  });
+  );
   cacheOutboundEntry(dmChannelCache, dmKey, channel.id, MATTERMOST_TARGET_CACHE_MAX_ENTRIES);
   return channel.id;
 }
 
-type MattermostSendContext = {
-  cfg: OpenClawConfig;
-  accountId: string;
-  token: string;
-  baseUrl: string;
-  channelId: string;
-  allowPrivateNetwork?: boolean;
-};
-
-async function resolveMattermostSendContext(
-  to: string,
-  opts: MattermostSendOpts,
-): Promise<MattermostSendContext> {
-  const core = getCore();
+async function resolveMattermostSendContext(to: string, opts: MattermostSendOpts) {
+  const core = getMattermostRuntime();
   const logger = core.logging.getChildLogger({ module: "mattermost" });
   if (!opts?.cfg) {
     throw new Error(
@@ -363,46 +238,52 @@ async function resolveMattermostSendContext(
     );
   }
 
-  const trimmedTo = normalizeOptionalString(to) ?? "";
-  const opaqueTarget = await resolveMattermostOpaqueTarget({
-    input: trimmedTo,
-    token,
+  // Keep lookup, DM creation, and delivery on the same account transport policy.
+  const client = createMattermostClient({
     baseUrl,
+    botToken: token,
+    allowPrivateNetwork: account.config.network?.dangerouslyAllowPrivateNetwork === true,
+    assertRequestCurrent: opts.assertDirectAdapterHandoff,
   });
-  const target =
-    opaqueTarget?.kind === "user"
-      ? { kind: "user" as const, id: opaqueTarget.id }
-      : opaqueTarget?.kind === "channel"
-        ? { kind: "channel" as const, id: opaqueTarget.id }
-        : parseMattermostTarget(trimmedTo);
-  // Build retry options from account config, allowing opts to override
-  const accountRetryConfig: CreateDmChannelRetryOptions | undefined = account.config.dmChannelRetry
-    ? {
-        maxRetries: account.config.dmChannelRetry.maxRetries,
-        initialDelayMs: account.config.dmChannelRetry.initialDelayMs,
-        maxDelayMs: account.config.dmChannelRetry.maxDelayMs,
-        timeoutMs: account.config.dmChannelRetry.timeoutMs,
-      }
-    : undefined;
-  const dmRetryOptions = mergeDmRetryOptions(accountRetryConfig, opts.dmRetryOptions);
+  const retry = account.config.dmChannelRetry;
+  const dmRetryOptions = retry && {
+    // Snapshot before the user lookup can yield.
+    maxRetries: retry.maxRetries,
+    initialDelayMs: retry.initialDelayMs,
+    maxDelayMs: retry.maxDelayMs,
+    timeoutMs: retry.timeoutMs,
+  };
 
-  const allowPrivateNetwork = isPrivateNetworkOptInEnabled(account.config);
-  const channelId = await resolveTargetChannelId({
-    target,
-    baseUrl,
-    token,
-    allowPrivateNetwork,
-    dmRetryOptions,
-    logger: core.logging.shouldLogVerbose() ? logger : undefined,
-  });
+  let channelId: string;
+  try {
+    const trimmedTo = normalizeOptionalString(to) ?? "";
+    const opaqueTarget = await resolveMattermostOpaqueTarget({
+      input: trimmedTo,
+      client,
+    });
+    channelId = await resolveTargetChannelId({
+      target: parseMattermostTarget(opaqueTarget?.to ?? trimmedTo),
+      client,
+      dmRetryOptions,
+      logger: core.logging.shouldLogVerbose() ? logger : undefined,
+    });
+  } catch (error) {
+    // Target preparation cannot have posted a message. Recheck outside its
+    // retry history before returning the failure to delivery settlement.
+    client.assertRequestCurrent?.();
+    throw error;
+  }
 
   return {
     cfg,
     accountId: account.accountId,
-    token,
-    baseUrl,
+    client,
     channelId,
-    allowPrivateNetwork,
+    mediaMaxBytes: resolveChannelMediaMaxBytes({
+      cfg,
+      accountId: account.accountId,
+      resolveChannelLimitMb: () => account.config.mediaMaxMb,
+    }),
   };
 }
 
@@ -411,15 +292,17 @@ export async function sendMessageMattermost(
   text: string,
   opts: MattermostSendOpts,
 ): Promise<MattermostSendResult> {
-  const core = getCore();
+  const core = getMattermostRuntime();
   const logger = core.logging.getChildLogger({ module: "mattermost" });
-  const { cfg, accountId, token, baseUrl, channelId, allowPrivateNetwork } =
-    await resolveMattermostSendContext(to, opts);
+  const { cfg, accountId, client, channelId, mediaMaxBytes } = await resolveMattermostSendContext(
+    to,
+    opts,
+  );
+  client.assertRequestCurrent?.();
 
-  const client = createMattermostClient({ baseUrl, botToken: token, allowPrivateNetwork });
   let props = opts.props;
   if (!props && Array.isArray(opts.buttons) && opts.buttons.length > 0) {
-    setInteractionSecret(accountId, token);
+    setInteractionSecret(accountId, client.token);
     props = buildButtonProps({
       callbackUrl: resolveInteractionCallbackUrl(accountId, {
         gateway: cfg.gateway,
@@ -441,6 +324,7 @@ export async function sendMessageMattermost(
   if (mediaUrl) {
     try {
       const media = await loadOutboundMediaFromUrl(mediaUrl, {
+        maxBytes: mediaMaxBytes,
         mediaLocalRoots: opts.mediaLocalRoots,
         mediaReadFile: opts.mediaReadFile,
         workspaceDir: opts.workspaceDir,
@@ -453,8 +337,10 @@ export async function sendMessageMattermost(
       });
       fileIds = [fileInfo.id];
     } catch (err) {
+      client.assertRequestCurrent?.();
       uploadError = err instanceof Error ? err : new Error(String(err));
-      if (opts.requireMediaUpload) {
+      // An unchecked URL fallback would bypass an explicit operator media cap.
+      if (opts.requireMediaUpload || mediaMaxBytes !== undefined) {
         throw new Error(`Mattermost media upload failed: ${uploadError.message}`, {
           cause: err,
         });
@@ -464,7 +350,9 @@ export async function sendMessageMattermost(
           `mattermost send: media upload failed, falling back to URL text: ${String(err)}`,
         );
       }
-      message = normalizeMessage(message, isHttpUrl(mediaUrl) ? mediaUrl : "");
+      message = [message, /^https?:\/\//i.test(mediaUrl) ? mediaUrl : ""]
+        .filter(Boolean)
+        .join("\n");
     }
   }
 
@@ -474,7 +362,7 @@ export async function sendMessageMattermost(
       channel: "mattermost",
       accountId,
     });
-    message = renderMattermostMarkdown(message, tableMode);
+    message = convertMarkdownTables(message, tableMode);
   }
 
   if (!message && (!fileIds || fileIds.length === 0)) {
@@ -486,6 +374,13 @@ export async function sendMessageMattermost(
     throw new Error("Mattermost message is empty");
   }
 
+  client.assertRequestCurrent?.();
+  try {
+    await opts.onPlatformSendDispatch?.();
+  } catch (error) {
+    client.assertRequestCurrent?.();
+    throw error;
+  }
   const post = await createMattermostPost(client, {
     channelId,
     message,
@@ -495,15 +390,14 @@ export async function sendMessageMattermost(
   });
 
   const messageId = post.id;
-  const receipt = createMattermostSendReceipt({
-    messageId,
-    channelId,
+  const receipt = createMessageReceiptFromOutboundResults({
+    results: [{ channel: "mattermost", messageId, channelId }],
     kind: resolveMattermostReceiptKind({
       fileIds,
       buttons: opts.buttons,
       props,
     }),
-    replyToId: opts.replyToId,
+    ...(opts.replyToId ? { replyToId: opts.replyToId } : {}),
   });
   const result: MattermostSendResult = {
     messageId,
@@ -515,7 +409,11 @@ export async function sendMessageMattermost(
     // Core must learn the provider identity before local bookkeeping can fail;
     // preserve the receipt if either post-send step rejects to prevent a duplicate retry.
     await opts.onDeliveryResult?.(result);
-    recordMattermostOutboundActivity(accountId);
+    getOptionalMattermostRuntime()?.channel.activity.record({
+      channel: "mattermost",
+      accountId,
+      direction: "outbound",
+    });
   } catch (error: unknown) {
     // The provider post is already durable. Preserve its identity so callers do not
     // retry and duplicate the visible message when local bookkeeping fails afterward.

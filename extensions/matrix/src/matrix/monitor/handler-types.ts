@@ -1,5 +1,7 @@
 import type { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
-import type { createChannelInboundEnvelopeBuilder } from "openclaw/plugin-sdk/channel-inbound";
+import type { createChannelInboundEnvelopeBuilderAsync } from "openclaw/plugin-sdk/channel-inbound";
+import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import type { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import type {
   CoreConfig,
@@ -13,8 +15,8 @@ import type {
   resolveMatrixMonitorLiveUserAllowlist,
   MatrixResolvedAllowlistEntry,
 } from "./config.js";
+import type { createDirectRoomTracker } from "./direct.js";
 import type { MatrixInboundEventDeduper } from "./inbound-dedupe.js";
-import type { PluginRuntime, RuntimeEnv, RuntimeLogger } from "./runtime-api.js";
 
 export type MatrixMonitorHandlerParams = {
   client: MatrixClient;
@@ -44,20 +46,12 @@ export type MatrixMonitorHandlerParams = {
   blockStreamingEnabled: boolean;
   dmEnabled: boolean;
   dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
-  textLimit: number;
   mediaMaxBytes: number;
   historyLimit: number;
   startupMs: number;
-  startupGraceMs: number;
   dropPreStartupMessages: boolean;
   inboundDeduper?: Pick<MatrixInboundEventDeduper, "claim">;
-  directTracker: {
-    isDirectMessage: (params: {
-      roomId: string;
-      senderId: string;
-      selfUserId: string;
-    }) => Promise<boolean>;
-  };
+  directTracker: Pick<ReturnType<typeof createDirectRoomTracker>, "isDirectMessage">;
   getRoomInfo: (
     roomId: string,
     opts?: { includeAliases?: boolean },
@@ -66,7 +60,7 @@ export type MatrixMonitorHandlerParams = {
   needsRoomAliasesForConfig: boolean;
   resolveLiveUserAllowlist?: typeof resolveMatrixMonitorLiveUserAllowlist;
   resolveStorePath?: typeof resolveStorePath;
-  createChannelInboundEnvelopeBuilder?: typeof createChannelInboundEnvelopeBuilder;
+  createChannelInboundEnvelopeBuilderAsync?: typeof createChannelInboundEnvelopeBuilderAsync;
   finalizeInboundContext?: (ctx: Record<string, unknown>) => unknown;
   resolveHumanDelayConfig?: typeof resolveHumanDelayConfig;
 };
@@ -77,6 +71,6 @@ export type MatrixHandlerRuntimeConfig = MatrixMonitorHandlerParams & {
   configuredBotUserIds: ReadonlySet<string>;
   resolveLiveUserAllowlist: typeof resolveMatrixMonitorLiveUserAllowlist;
   resolveStorePath: typeof resolveStorePath;
-  createChannelInboundEnvelopeBuilder: typeof createChannelInboundEnvelopeBuilder;
+  createChannelInboundEnvelopeBuilderAsync: typeof createChannelInboundEnvelopeBuilderAsync;
   resolveHumanDelayConfig: typeof resolveHumanDelayConfig;
 };

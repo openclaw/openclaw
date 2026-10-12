@@ -1,11 +1,9 @@
 #!/usr/bin/env node
-// Resolves and delegates to the repo-local or PATH crabbox binary.
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { spawnSync, type ChildProcess } from "node:child_process";
 import {
   accessSync,
   chmodSync,
   constants,
-  cpSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -20,24 +18,65 @@ import {
 } from "node:fs";
 import type { PathLike } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { delimiter, dirname, extname, isAbsolute, relative, resolve } from "node:path";
+import {
+  delimiter,
+  dirname,
+  extname,
+  isAbsolute,
+  join as joinPath,
+  relative,
+  resolve,
+} from "node:path";
+import { addAbortSignal } from "node:stream";
+import { buffer as consumeStream } from "node:stream/consumers";
 import { StringDecoder } from "node:string_decoder";
+import { setImmediate as yieldToSignals } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { sanitizeForLog, stripAnsi } from "@openclaw/terminal-core/ansi";
+import {
+  ensureManagedCrabboxBinary,
+  findCrabboxBinary,
+  type CrabboxBinary,
+} from "../extensions/crabbox/cli-runtime-api.js";
+import { redactSupportString } from "../src/logging/diagnostic-support-redaction.js";
 import { crabboxProviderChain, normalizeCrabboxWorkload } from "./crabbox-routing-policy.mts";
+import {
+  prepareCrabboxSourceCapsule,
+  type CrabboxSourceCapsule,
+} from "./crabbox-source-capsule.mts";
+import { remoteSourceBootstrap } from "./crabbox-source-receiver.mts";
+import { preserveCrabboxArtifacts } from "./crabbox-staging-artifacts.mts";
+import { captureClaimNamespace } from "./crabbox-staging-claims.mts";
+import {
+  createStaging,
+  discoverStaging,
+  recoverDiscoveredStaging,
+  type StagingHandle,
+} from "./crabbox-staging.mts";
 import {
   canonicalProviderName,
   isProviderAdvertised,
   parseProvidersFromHelp,
 } from "./crabbox-wrapper-providers.mts";
 import {
+  finalizeManagedChild,
+  hasUnjoinedWork,
+  loadManagedChildSpawner,
+} from "./lib/managed-child-process.mts";
+import {
+  claimManagedCleanup,
+  failManagedCleanup,
+  ManagedCleanupCancelled,
+} from "./lib/managed-cleanup-handoff.mts";
+import {
   prepareTestboxLeaseFreshness,
   recordTestboxLeaseFreshness,
 } from "./testbox-lease-freshness.mts";
 import { resolvePathEnvKey, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
-type RunOption = { index: number; value: string };
-type RunInvocation = ReturnType<typeof parseRunInvocation>;
+type CommandOption = { index: number; value: string };
+type CommandInvocation = ReturnType<typeof parseCommandInvocation>;
 type CommandNormalizeOptions = { canShimIgnoreEnvironment?: boolean };
 type TargetContext = ReturnType<typeof effectiveTargetContext>;
 type ProcessEnv = NodeJS.ProcessEnv;
@@ -49,38 +88,56 @@ type RunFacts = ReturnType<typeof analyzeRemoteCommand>;
 type AwsMacosScriptRequirements = ReturnType<typeof awsMacosScriptBootstrapRequirements>;
 type FullCheckout = ReturnType<typeof prepareFullCheckoutForSync>;
 type KeepaliveOptions = { intervalMs?: number; onMissing?: () => void };
-type DoctorCheck = { status: string; check: string; details?: Record<string, string> };
+type DoctorCheck = {
+  status: string;
+  check: string;
+  message?: string;
+  details?: Record<string, string>;
+};
 type DoctorResult = { ok: boolean; provider: string; checks: DoctorCheck[] };
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const CRABBOX_METADATA_PROBE_TIMEOUT_MS = 5_000;
-const MAX_TIMING_JSON_LINE_CHARS = 1024 * 1024;
-const REMOTE_CHANGED_GATE_BUNDLE_FILE = ".openclaw-crabbox-changed-gate.bundle";
-// A cold Crabbox (first call after an upgrade, or one on a loaded machine) can
-// exceed the snappy default probe timeout while it renders `run --help` or does
-// first-run init. Retry the metadata probes once with this generous timeout so a
-// single slow probe does not hard-fail the wrapper and block all remote validation.
-const CRABBOX_METADATA_PROBE_RETRY_TIMEOUT_MS = 20_000;
-const ignoreRepoBinary = process.env.OPENCLAW_CRABBOX_WRAPPER_IGNORE_REPO_BINARY === "1";
-const repoLocal = ignoreRepoBinary ? null : resolveCrabboxBinary(process.platform);
-const pathLocal = resolvePathBinary("crabbox", process.env, process.platform);
-const binary =
-  repoLocal ??
-  pathLocal ??
-  resolveGitCommonCrabboxBinary(process.env, process.platform) ??
-  "crabbox";
 const args = process.argv.slice(2);
-
 if (args[0] === "--") {
   args.shift();
 }
-const workloadOption = isWorkloadRoutedCommand(args)
-  ? extractWrapperValueOption(args, "--workload")
-  : undefined;
-const userArgStart = args[0] === "actions" && args[1] === "hydrate" ? 2 : 1;
-if (args[userArgStart] === "--") {
-  args.splice(userArgStart, 1);
+if (args[0] === "staging") {
+  const { runStagingCommand } = await import("./crabbox-staging.mts");
+  process.exit(
+    await runStagingCommand(args.slice(1), fullCheckoutSyncRoot(false), {
+      cwd: repoRoot,
+      binary:
+        findCrabboxBinary({
+          openclawRoot:
+            process.env.OPENCLAW_CRABBOX_WRAPPER_IGNORE_REPO_BINARY === "1" ? undefined : repoRoot,
+          pathEnv: process.env[resolvePathEnvKey(process.env)],
+        }) ?? "crabbox",
+    }),
+  );
 }
+const CRABBOX_METADATA_PROBE_TIMEOUT_MS = 5_000;
+const MAX_TIMING_JSON_LINE_CHARS = 1024 * 1024;
+// Cold help rendering can exceed the normal metadata deadline.
+const CRABBOX_METADATA_PROBE_RETRY_TIMEOUT_MS = 20_000;
+const ignoreRepoBinary = process.env.OPENCLAW_CRABBOX_WRAPPER_IGNORE_REPO_BINARY === "1";
+const candidateBinary =
+  findCrabboxBinary({
+    openclawRoot: ignoreRepoBinary ? undefined : repoRoot,
+    pathEnv: process.env[resolvePathEnvKey(process.env)],
+  }) ??
+  resolveGitCommonCrabboxBinary(process.env, process.platform) ??
+  "crabbox";
+let cli: CrabboxBinary;
+try {
+  cli = await ensureManagedCrabboxBinary({ binary: candidateBinary });
+} catch (error) {
+  console.error(`[crabbox] ${error instanceof Error ? error.message : String(error)}`);
+  process.exit(2);
+}
+const { binary, version } = cli;
+const workloadCommand = isWorkloadRoutedCommand(args);
+const workloadOption = workloadCommand ? extractWrapperValueOption(args, "--workload") : undefined;
+const userArgStart = commandUserArgStart(args);
 
 function extractWrapperValueOption(commandArgs: string[], name: string) {
   const equalsPrefix = `${name}=`;
@@ -113,6 +170,10 @@ function isWorkloadRoutedCommand(commandArgs: string[]) {
   );
 }
 
+function commandUserArgStart(commandArgs: string[]) {
+  return commandArgs[0] === "actions" && commandArgs[1] === "hydrate" ? 2 : 1;
+}
+
 function commandCandidates(command: string, platform: Platform) {
   if (platform !== "win32") {
     return [command];
@@ -121,16 +182,6 @@ function commandCandidates(command: string, platform: Platform) {
     return [command];
   }
   return [`${command}.exe`, `${command}.cmd`, `${command}.bat`, `${command}.com`, command];
-}
-
-function resolveCrabboxBinary(platform: Platform) {
-  const base = resolve(repoRoot, "../crabbox/bin/crabbox");
-  for (const candidate of commandCandidates(base, platform)) {
-    if (isExecutableFile(candidate, platform)) {
-      return candidate;
-    }
-  }
-  return null;
 }
 
 function resolvePathBinary(command: string, env: ProcessEnv, platform: Platform) {
@@ -165,13 +216,10 @@ function resolveGitCommonCrabboxBinary(env: ProcessEnv, platform: Platform) {
   const absoluteGitCommonDir = isAbsolute(gitCommonDir)
     ? gitCommonDir
     : resolve(repoRoot, gitCommonDir);
-  const base = resolve(absoluteGitCommonDir, "../..", "crabbox/bin/crabbox");
-  for (const candidate of commandCandidates(base, platform)) {
-    if (isExecutableFile(candidate, platform)) {
-      return candidate;
-    }
-  }
-  return null;
+  return findCrabboxBinary({
+    openclawRoot: resolve(absoluteGitCommonDir, ".."),
+    platform,
+  });
 }
 
 function isExecutableFile(path: PathLike, platform: Platform) {
@@ -275,7 +323,7 @@ const jsRuntimeEntrypoints = new Set([
 ]);
 const awsMacosCorepackEntrypoints = new Set(["pnpm", "yarn", "corepack"]);
 const awsMacosBunEntrypoints = new Set(["bun", "bunx"]);
-const awsMacosBunVersion = "1.4.0";
+const awsMacosBunVersion = "1.4.2";
 const awsMacosSwiftEntrypoints = new Set(["swift", "xcodebuild"]);
 const awsMacosSwiftScriptTargets = new Set([
   "mac:package",
@@ -290,8 +338,6 @@ const awsMacosPackageManagerScriptTargets = new Set([
   "scripts/package-mac-dist.sh",
   "scripts/restart-mac.sh",
 ]);
-const minimumBlacksmithCrabboxVersion = [0, 22, 0];
-const minimumBrokeredDaytonaCrabboxVersion = [0, 40, 0];
 const shellControlCommandPrefixes = new Set([
   "if",
   "while",
@@ -452,6 +498,7 @@ function checkedOutput(
     status: timedOut ? 124 : (result.status ?? 1),
     text: `${result.stdout ?? ""}${result.stderr ?? ""}`.trim(),
     stdout: (result.stdout ?? "").trim(),
+    stderr: (result.stderr ?? "").trim(),
   };
 }
 
@@ -470,72 +517,12 @@ function recoveryCommandArgument(value: string) {
   return `'${text.replaceAll("'", "'\\''")}'`;
 }
 
-// Probe Crabbox metadata (`--version` / `run --help`) with one generous retry.
-// A cold Crabbox can be SIGKILLed by the snappy default timeout or emit nothing
-// on the first call, then be instant and clean on the next. Retrying keeps the
-// warm path fast (one ~instant probe) while stopping a single slow probe from
-// tripping the sanity/provider-list guards and blocking all remote validation.
-function probeCrabboxMetadata(command: string, commandArgs: string[]) {
+function probeCrabboxHelp(command: string, commandArgs: string[]) {
   const first = checkedOutput(command, commandArgs);
   if (first.status === 0 && first.text.length > 0) {
     return first;
   }
   return checkedOutput(command, commandArgs, CRABBOX_METADATA_PROBE_RETRY_TIMEOUT_MS);
-}
-
-function parseCrabboxVersion(value: string) {
-  const match = value.match(/\bv?(\d+)\.(\d+)\.(\d+)(?:-([^\s+]+))?(?:\+[^\s]+)?\b/u);
-  if (!match) {
-    return null;
-  }
-  const major = parseVersionTuplePart(match[1] ?? "");
-  const minor = parseVersionTuplePart(match[2] ?? "");
-  const patch = parseVersionTuplePart(match[3] ?? "");
-  if (major === null || minor === null || patch === null) {
-    return null;
-  }
-  return {
-    tuple: [major, minor, patch],
-    suffix: match[4] ?? "",
-  };
-}
-
-function parseVersionTuplePart(value: string) {
-  if (!/^\d+$/u.test(value)) {
-    return null;
-  }
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) ? parsed : null;
-}
-
-function compareVersionTuples(left: readonly number[], right: readonly number[]) {
-  for (let index = 0; index < 3; index += 1) {
-    const diff = (left[index] ?? 0) - (right[index] ?? 0);
-    if (diff !== 0) {
-      return diff;
-    }
-  }
-  return 0;
-}
-
-function formatVersionTuple(version: readonly number[]) {
-  return version.join(".");
-}
-
-function isPostReleaseDescribeSuffix(suffix: string) {
-  return /^\d+-g[0-9a-f]+(?:-dirty)?$/iu.test(suffix);
-}
-
-function satisfiesMinimumCrabboxVersion(version: string, minimum: number[]) {
-  const parsed = parseCrabboxVersion(version);
-  if (!parsed) {
-    return false;
-  }
-  const comparison = compareVersionTuples(parsed.tuple, minimum);
-  if (comparison !== 0) {
-    return comparison > 0;
-  }
-  return !parsed.suffix || isPostReleaseDescribeSuffix(parsed.suffix);
 }
 
 function gitOutput(commandArgs: string[], extraEnv: ProcessEnv = {}) {
@@ -618,9 +605,9 @@ function effectiveTargetContext(commandArgs: string[]) {
   };
 }
 
-let runValueOptionsFromHelp: Set<string>;
+let commandValueOptionsFromHelp: Set<string>;
 
-function parseRunValueOptionsFromHelp(text: string) {
+function parseCommandValueOptionsFromHelp(text: string) {
   const names = new Set<string>();
   for (const line of text.split(/\r?\n/u)) {
     const match = line.match(
@@ -633,44 +620,47 @@ function parseRunValueOptionsFromHelp(text: string) {
   return names;
 }
 
-function runOptionName(arg: string) {
+function commandOptionName(arg: string) {
   return arg.replace(/^-+/u, "").split("=", 1)[0] ?? "";
 }
 
-function parseRunInvocation(helpText: string, commandArgs: string[]) {
-  runValueOptionsFromHelp ??= parseRunValueOptionsFromHelp(helpText);
+function parseCommandInvocation(helpText: string, commandArgs: string[]) {
+  commandValueOptionsFromHelp ??= parseCommandValueOptionsFromHelp(helpText);
+  const routedCommand = isWorkloadRoutedCommand(commandArgs);
+  const optionStart = routedCommand ? commandUserArgStart(commandArgs) : 0;
   let start = -1;
-  let optionEnd = commandArgs.indexOf("--");
+  // A leaf value may itself be --; only unconsumed tokens end its option prefix.
+  let optionEnd = routedCommand ? commandArgs.length : commandArgs.indexOf("--");
   optionEnd = optionEnd < 0 ? commandArgs.length : optionEnd;
-  if (commandArgs[0] === "run") {
-    for (let index = 1; index < commandArgs.length; index += 1) {
+  if (routedCommand) {
+    for (let index = optionStart; index < commandArgs.length; index += 1) {
       const arg = commandArgs[index] ?? "";
       if (arg === "--") {
         start = index + 1;
         optionEnd = index;
         break;
       }
-      if (!arg.startsWith("-")) {
+      if (arg === "-" || !arg.startsWith("-")) {
         start = index;
         optionEnd = index;
         break;
       }
-      if (!arg.includes("=") && runValueOptionsFromHelp.has(runOptionName(arg))) {
+      if (!arg.includes("=") && commandValueOptionsFromHelp.has(commandOptionName(arg))) {
         index += 1;
       }
     }
   }
 
-  const optionEntries: Array<RunOption & { name: string }> = [];
-  const options = new Map<string, RunOption>();
-  for (let index = commandArgs[0] === "run" ? 1 : 0; index < optionEnd; index += 1) {
+  const optionEntries: Array<CommandOption & { name: string }> = [];
+  const options = new Map<string, CommandOption>();
+  for (let index = optionStart; index < optionEnd; index += 1) {
     const arg = commandArgs[index] ?? "";
     if (!arg.startsWith("-")) {
       continue;
     }
-    const name = runOptionName(arg);
+    const name = commandOptionName(arg);
     const assigned = arg.indexOf("=");
-    const consumesValue = commandArgs[0] !== "run" || runValueOptionsFromHelp.has(name);
+    const consumesValue = !routedCommand || commandValueOptionsFromHelp.has(name);
     const entry = {
       index,
       value:
@@ -684,13 +674,39 @@ function parseRunInvocation(helpText: string, commandArgs: string[]) {
     if (!options.has(name)) {
       options.set(name, entry);
     }
-    if (commandArgs[0] === "run" && assigned < 0 && consumesValue) {
+    if (routedCommand && assigned < 0 && consumesValue) {
       index += 1;
     }
   }
 
+  const fileScript = optionEntries.findLast(({ name }) => name === "script");
+  const stdinScript = optionEntries.findLast(({ name }) => name === "script-stdin");
+  // Go stops at any invalid boolean; loadRunScript rejects two active sources.
+  // Preserve those errors without reading or normalizing either input locally.
+  const invalidStdin = optionEntries.some(
+    ({ name, index, value }) =>
+      name === "script-stdin" &&
+      commandArgs[index]?.includes("=") &&
+      !/^(?:1|t|T|true|TRUE|True|0|f|F|false|FALSE|False)$/u.test(value),
+  );
+  const stdinEnabled = Boolean(
+    stdinScript &&
+    (!commandArgs[stdinScript.index]?.includes("=") ||
+      /^(?:1|t|T|true|TRUE|True)$/u.test(stdinScript.value)),
+  );
+  const scriptRequested = !invalidStdin && Boolean(fileScript?.value || stdinEnabled);
+  const script =
+    invalidStdin || (fileScript?.value && stdinEnabled)
+      ? undefined
+      : fileScript?.value
+        ? fileScript
+        : stdinEnabled
+          ? stdinScript
+          : undefined;
   return {
     args: commandArgs,
+    scriptRequested,
+    script,
     commandArgs: start >= 0 ? commandArgs.slice(start) : [],
     optionEntries,
     options,
@@ -703,11 +719,7 @@ function commandProvider(commandArgsInput: string[]) {
   return optionValue(commandArgsInput, "--provider");
 }
 
-function selectedProvider(
-  commandArgs: string[],
-  advertisedProviders: string[] = [],
-  versionText = "",
-) {
+function selectedProvider(commandArgs: string[], advertisedProviders: string[] = []) {
   const targetContext = effectiveTargetContext(commandArgs);
   if (workloadOption === null) {
     return {
@@ -804,7 +816,7 @@ function selectedProvider(
   const readiness = new Map<string, ProviderReadiness>();
   let selectedProviderName = "";
   for (const candidate of chain) {
-    const status = crabboxProviderReadiness(candidate, versionText, targetContext);
+    const status = crabboxProviderReadiness(candidate, targetContext);
     readiness.set(candidate, status);
     if (status.ready) {
       selectedProviderName = candidate;
@@ -841,28 +853,8 @@ function requestedWorkload(commandArgs: string[]) {
   return normalizeCrabboxWorkload(raw);
 }
 
-function crabboxProviderReadiness(provider: string, version: string, context: TargetContext) {
+function crabboxProviderReadiness(provider: string, context: TargetContext) {
   const canonicalProvider = canonicalProviderName(provider);
-  if (
-    canonicalProvider === "blacksmith-testbox" &&
-    !satisfiesMinimumCrabboxVersion(version, minimumBlacksmithCrabboxVersion)
-  ) {
-    return {
-      ready: false,
-      reason: `requires Crabbox >= ${formatVersionTuple(minimumBlacksmithCrabboxVersion)} for Blacksmith Testbox`,
-      recovery: "update Crabbox, then retry",
-    };
-  }
-  if (
-    canonicalProvider === "daytona" &&
-    !satisfiesMinimumCrabboxVersion(version, minimumBrokeredDaytonaCrabboxVersion)
-  ) {
-    return {
-      ready: false,
-      reason: `requires Crabbox >= ${formatVersionTuple(minimumBrokeredDaytonaCrabboxVersion)} for brokered Daytona`,
-      recovery: "update Crabbox, then retry",
-    };
-  }
   const doctorArgs = ["doctor", "--provider", canonicalProvider];
   if (context.target) {
     doctorArgs.push("--target", context.target);
@@ -882,14 +874,18 @@ function crabboxProviderReadiness(provider: string, version: string, context: Ta
       (check) => check.status === "failed" && check.details?.class === "broker_auth",
     ) === true;
   const ready = result?.ok === true && brokerReady;
-  const diagnostic = compactDiagnosticText(doctor.text);
+  // The JSON report is on stdout; stderr can contain bracket-prefixed CLI errors.
+  const cliError = doctor.stderr || (/^[[{]/u.test(doctor.stdout) ? "" : doctor.stdout);
+  const diagnostic = result
+    ? doctorFailureDiagnostic(result, brokerReady)
+    : compactDiagnosticText(cliError);
   return {
     ready,
     reason: ready
       ? "doctor-ready"
       : result
         ? `doctor exited ${doctor.status}${diagnostic ? `: ${diagnostic}` : ""}`
-        : `invalid doctor JSON${diagnostic ? `: ${diagnostic}` : ""}`,
+        : `invalid doctor JSON (exit ${doctor.status})${diagnostic ? `: ${diagnostic}` : ""}`,
     ...(ready ? {} : { recovery: `run \`${recoveryCommand(doctorArgs)}\`` }),
     brokerReady,
     brokerAuthFailure,
@@ -903,6 +899,7 @@ function isDoctorCheck(value: unknown): value is DoctorCheck {
     Boolean(value.status) &&
     typeof value.check === "string" &&
     Boolean(value.check) &&
+    (value.message === undefined || typeof value.message === "string") &&
     (value.details === undefined ||
       (isRecord(value.details) &&
         Object.values(value.details).every((detail) => typeof detail === "string")))
@@ -936,11 +933,43 @@ function parseDoctorResult(value: string, provider: string, status: number): Doc
 }
 
 function compactDiagnosticText(value: string, maxLength = 500) {
-  const compact = value.replace(/\s+/gu, " ").trim();
-  if (compact.length <= maxLength) {
-    return compact;
+  const plain = stripAnsi(value)
+    .split(/\r\n?|\n/u)
+    .map(sanitizeForLog)
+    .join("\n");
+  // Redact the complete value before compaction or truncation can split a credential.
+  const redacted = redactSupportString(
+    plain,
+    { env: process.env, stateDir: "" },
+    { maxLength: Number.MAX_SAFE_INTEGER },
+  );
+  const compact = redacted.replace(/\s+/gu, " ").trim();
+  return compact.length <= maxLength ? compact : `${compact.slice(0, maxLength - 3)}...`;
+}
+
+function doctorFailureDiagnostic(result: DoctorResult, brokerReady: boolean) {
+  const failed = result.checks.filter((check) =>
+    ["failed", "missing"].includes(check.status.trim().toLowerCase()),
+  );
+  // Project only failure fields; successful checks and arbitrary provider details
+  // can contain configuration, identities, and response payloads.
+  const summaries = failed.slice(0, 4).map((check) => {
+    const reason = [
+      ...["class", "hint"].flatMap((key) => {
+        const value = check.details?.[key];
+        return value ? [`${key}=${compactDiagnosticText(value, 80)}`] : [];
+      }),
+      ...(check.message ? [compactDiagnosticText(check.message, 160)] : []),
+    ].join(" ");
+    return `${compactDiagnosticText(check.check, 60)} (${check.status.trim().toLowerCase()})${reason ? `: ${reason}` : ""}`;
+  });
+  if (failed.length > summaries.length) {
+    summaries.push(`${failed.length - summaries.length} more failed checks omitted`);
   }
-  return `${compact.slice(0, Math.max(0, maxLength - 3))}...`;
+  if (!brokerReady && !failed.some((check) => check.check === "broker")) {
+    summaries.push("broker: required ok check missing");
+  }
+  return summaries.join("; ");
 }
 
 function formatProviderReadiness(readiness: ReadonlyMap<string, ProviderReadiness>) {
@@ -987,30 +1016,6 @@ function directCloudOverrideEnabled(providerName: string) {
   );
 }
 
-function enforceBrokeredDaytonaVersion(
-  commandArgs: string[],
-  providerName: string,
-  versionText: string,
-  explicitProviderRequested: boolean | undefined,
-) {
-  if (
-    canonicalProviderName(providerName) !== "daytona" ||
-    !shouldRequireBrokeredCloud(commandArgs, providerName, explicitProviderRequested) ||
-    satisfiesMinimumCrabboxVersion(versionText, minimumBrokeredDaytonaCrabboxVersion)
-  ) {
-    return;
-  }
-  console.error(
-    [
-      `[crabbox] provider=daytona requires Crabbox >= ${formatVersionTuple(minimumBrokeredDaytonaCrabboxVersion)} for brokered execution.`,
-      `[crabbox] selected binary reported version=${versionText || "unknown"}.`,
-      "[crabbox] update Crabbox before brokered Daytona execution.",
-      "[crabbox] direct Daytona debugging requires an original `--provider daytona`, no `--workload`, and OPENCLAW_CRABBOX_ALLOW_DIRECT_CLOUD=1.",
-    ].join("\n"),
-  );
-  process.exit(2);
-}
-
 function enforceBrokeredCloud(
   commandArgs: string[],
   provider: string,
@@ -1023,10 +1028,11 @@ function enforceBrokeredCloud(
   const canonicalProvider = canonicalProviderName(provider);
   const readiness =
     routedReadiness ??
-    crabboxProviderReadiness(canonicalProvider, version.text, effectiveTargetContext(commandArgs));
+    crabboxProviderReadiness(canonicalProvider, effectiveTargetContext(commandArgs));
   if ("brokerAuthFailure" in readiness && readiness.brokerAuthFailure) {
     const instructions = [
       `[crabbox] provider=${canonicalProvider} requires managed Crabbox broker authentication for OpenClaw proof.`,
+      `[crabbox] ${readiness.reason}.`,
       `[crabbox] run \`${recoveryCommand(["login", "--url", "https://crabbox.openclaw.ai"])}\`, then retry.`,
     ];
     if (canonicalProvider !== "aws") {
@@ -1050,16 +1056,17 @@ function enforceBrokeredCloud(
 
 function optionValue(commandArgsInput: string[], name: string) {
   return (
-    parseRunInvocation(help.text, commandArgsInput).options.get(runOptionName(name))?.value ?? ""
+    parseCommandInvocation(help.text, commandArgsInput).options.get(commandOptionName(name))
+      ?.value ?? ""
   );
 }
 
 function hasOption(commandArgsInput: string[], name: string) {
-  return parseRunInvocation(help.text, commandArgsInput).options.has(runOptionName(name));
+  return parseCommandInvocation(help.text, commandArgsInput).options.has(commandOptionName(name));
 }
 
 function commandOptionEnd(commandArgs: string[]) {
-  return parseRunInvocation(help.text, commandArgs).optionEnd;
+  return parseCommandInvocation(help.text, commandArgs).optionEnd;
 }
 
 function shouldPreferAzureForWindows(commandArgs: string[], advertisedProviders: string[] = []) {
@@ -1129,27 +1136,24 @@ function ensureNativeWindowsHydrateJob(commandArgs: string[]) {
     return commandArgs;
   }
 
-  const currentJob = optionValue(commandArgs, "--job");
-  if (currentJob && currentJob !== "hydrate") {
+  const invocation = parseCommandInvocation(help.text, commandArgs);
+  const job = invocation.options.get("job");
+  if (job?.value && job.value !== "hydrate") {
     return commandArgs;
   }
 
   const normalizedArgs = [...commandArgs];
   const replacementJob = "hydrate-windows-daemon";
-  const optionEnd = commandOptionEnd(normalizedArgs);
-  for (let index = 0; index < optionEnd; index += 1) {
-    const arg = normalizedArgs[index] ?? "";
-    if (arg === "--job" || arg === "-job") {
-      normalizedArgs[index + 1] = replacementJob;
-      return normalizedArgs;
+  if (job) {
+    const arg = normalizedArgs[job.index] ?? "";
+    if (arg.includes("=")) {
+      normalizedArgs[job.index] = `${arg.slice(0, arg.indexOf("=") + 1)}${replacementJob}`;
+    } else {
+      normalizedArgs[job.index + 1] = replacementJob;
     }
-    if (arg.startsWith("--job=") || arg.startsWith("-job=")) {
-      normalizedArgs[index] = `${arg.slice(0, arg.indexOf("=") + 1)}${replacementJob}`;
-      return normalizedArgs;
-    }
+  } else {
+    normalizedArgs.splice(invocation.optionEnd, 0, "--job", replacementJob);
   }
-
-  normalizedArgs.splice(optionEnd, 0, "--job", replacementJob);
   return normalizedArgs;
 }
 
@@ -1184,7 +1188,7 @@ function absolutizeLocalRunPaths(commandArgs: string[]) {
   }
 
   const normalizedArgs = [...commandArgs];
-  const invocation = parseRunInvocation(help.text, normalizedArgs);
+  const invocation = parseCommandInvocation(help.text, normalizedArgs);
   for (const { index, name: optionName } of invocation.optionEntries) {
     const arg = normalizedArgs[index] ?? "";
     const absolutize = optionName === "download" ? repoRelativeDownload : repoRelativePath;
@@ -1229,17 +1233,27 @@ function userDisplayPath(path: string) {
 }
 
 function blacksmithTestboxPrivateKeyPath(id: string) {
-  return resolve(crabboxConfigDir(), "testboxes", id, "id_ed25519");
+  const stateRoot = process.env.XDG_STATE_HOME;
+  if (
+    stateRoot &&
+    !(process.platform === "win32"
+      ? /^(?:[a-z]:[\\/]|[\\/]{2}|[\\/]\?\?[\\/][^\\/]+[\\/])/iu.test(stateRoot)
+      : isAbsolute(stateRoot))
+  ) {
+    console.error("[crabbox] XDG_STATE_HOME must be absolute for generated lease SSH material");
+    process.exit(2);
+  }
+  const root = stateRoot ? joinPath(stateRoot, "crabbox") : crabboxConfigDir();
+  return joinPath(root, "testboxes", id, "id_ed25519");
 }
 
-// Crabbox claims bind raw Testbox ids to one repo before remote execution.
-// Check the same sidecar so a dependency exit bug cannot make refusal green.
-function blacksmithTestboxClaimPath(id: string) {
-  return resolve(blacksmithTestboxClaimsDir(), `${id}.json`);
+// Crabbox claims bind retained leases to the physical checkout running the CLI.
+function crabboxLeaseClaimPath(id: string) {
+  return resolve(crabboxLeaseClaimsDir(), `${id}.json`);
 }
 
-function blacksmithTestboxClaimsDir() {
-  const configuredStateRoot = process.env.XDG_STATE_HOME?.trim();
+function crabboxLeaseClaimsDir() {
+  const configuredStateRoot = process.env.XDG_STATE_HOME;
   const stateDir = configuredStateRoot
     ? resolve(configuredStateRoot, "crabbox")
     : resolve(crabboxConfigDir(), "state");
@@ -1247,7 +1261,7 @@ function blacksmithTestboxClaimsDir() {
 }
 
 function blacksmithTestboxClaimRepoRoot(id: string) {
-  const claimPath = blacksmithTestboxClaimPath(id);
+  const claimPath = crabboxLeaseClaimPath(id);
   if (!pathExists(claimPath)) {
     return "";
   }
@@ -1272,7 +1286,7 @@ function enforceCrabboxOwnedBlacksmithLease(commandArgs: string[]) {
     console.error(
       [
         `[crabbox] provider=blacksmith-testbox --id ${id} has no Crabbox SSH key at ${userDisplayPath(keyPath)}.`,
-        "[crabbox] create reusable Testboxes through Crabbox before reusing them: node scripts/crabbox-wrapper.mjs warmup --provider blacksmith-testbox --idle-timeout 90m",
+        "[crabbox] create reusable Testboxes through Crabbox before reusing them: node scripts/crabbox-wrapper.mjs warmup --provider blacksmith-testbox --idle-timeout 15m",
         "[crabbox] direct `blacksmith testbox warmup` leases can be used with `blacksmith testbox run`, but Crabbox cannot sync or run them by id.",
       ].join("\n"),
     );
@@ -1288,7 +1302,7 @@ function enforceCrabboxOwnedBlacksmithLease(commandArgs: string[]) {
   }
 }
 
-function restoreTemporaryBlacksmithTestboxClaimPath(claimPath: string) {
+function restoreTemporaryLeaseClaimPath(claimPath: string) {
   const original = readFileSync(claimPath, "utf8");
   const claim = JSON.parse(original);
   if (!claim || typeof claim !== "object" || claim.repoRoot !== childCwd) {
@@ -1301,62 +1315,77 @@ function restoreTemporaryBlacksmithTestboxClaimPath(claimPath: string) {
       encoding: "utf8",
       mode: 0o600,
     });
-    if (readFileSync(claimPath, "utf8") !== original) {
-      return;
-    }
     renameSync(temporaryPath, claimPath);
   } finally {
     rmSync(temporaryPath, { force: true });
   }
 }
 
-function restoreTemporaryBlacksmithTestboxClaim(commandArgs: string[], capturedLeaseId: string) {
+function restoreTemporaryLeaseClaim(commandArgs: string[], capturedLeaseId: string) {
   if (childCwd === repoRoot) {
-    return;
+    return true;
   }
 
-  const explicitLeaseId = commandArgs[0] === "run" ? optionValue(commandArgs, "--id") : "";
+  const requestedLeaseId =
+    commandArgs[0] === "run"
+      ? optionValue(commandArgs, "--id") || optionValue(commandArgs, "--lease-id")
+      : "";
+  // Brokered AWS also accepts lease slugs; those are not claim filenames.
+  const explicitLeaseId =
+    canonicalProvider === "aws" && !/^cbx_[a-f0-9]{12}$/u.test(requestedLeaseId)
+      ? ""
+      : requestedLeaseId;
   const exactLeaseId = explicitLeaseId || capturedLeaseId;
   const canCreateRetainedLease =
     commandArgs[0] === "warmup" ||
     (commandArgs[0] === "run" &&
-      (hasOption(commandArgs, "--keep") || hasOption(commandArgs, "--keep-on-failure")));
+      (canonicalProvider === "aws" ||
+        requestedLeaseId ||
+        hasOption(commandArgs, "--keep") ||
+        hasOption(commandArgs, "--keep-on-failure")));
   let claimPaths: string[] = [];
   if (exactLeaseId) {
-    claimPaths = [blacksmithTestboxClaimPath(exactLeaseId)];
+    claimPaths = [crabboxLeaseClaimPath(exactLeaseId)];
   } else if (canCreateRetainedLease) {
     try {
-      const claimsDir = blacksmithTestboxClaimsDir();
+      const claimsDir = crabboxLeaseClaimsDir();
       if (pathExists(claimsDir)) {
         claimPaths = readdirSync(claimsDir)
-          .filter((entry) => entry.endsWith(".json"))
+          .filter(
+            (entry) =>
+              entry.endsWith(".json") &&
+              (canonicalProvider !== "aws" || /^cbx_[a-f0-9]{12}\.json$/u.test(entry)),
+          )
           .map((entry) => resolve(claimsDir, entry));
       }
     } catch (error) {
       console.error(
-        `[crabbox] warning: failed to inspect temporary Testbox claims: ${error instanceof Error ? error.message : String(error)}`,
+        `[crabbox] warning: failed to inspect temporary lease claims: ${error instanceof Error ? error.message : String(error)}`,
       );
-      return;
+      return false;
     }
   } else {
-    return;
+    return true;
   }
 
+  let restored = true;
   for (const claimPath of claimPaths) {
     if (!pathExists(claimPath)) {
       continue;
     }
     try {
-      restoreTemporaryBlacksmithTestboxClaimPath(claimPath);
+      restoreTemporaryLeaseClaimPath(claimPath);
     } catch (error) {
+      restored = false;
       console.error(
-        `[crabbox] warning: failed to restore temporary Testbox claim: ${error instanceof Error ? error.message : String(error)}`,
+        `[crabbox] warning: failed to restore temporary lease claim: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
   }
+  return restored;
 }
 
-function observeBlacksmithTimingJSONLine(line: string) {
+function observeLeaseTimingJSONLine(line: string) {
   const value = line.trim();
   if (!value.startsWith("{") || !value.endsWith("}")) {
     return;
@@ -1364,41 +1393,16 @@ function observeBlacksmithTimingJSONLine(line: string) {
   try {
     const report = JSON.parse(value);
     if (
-      canonicalProviderName(report?.provider) === "blacksmith-testbox" &&
+      canonicalProviderName(report?.provider) === canonicalProvider &&
       typeof report.leaseId === "string" &&
-      report.leaseId.startsWith("tbx_")
+      (canonicalProvider === "aws"
+        ? /^cbx_[a-f0-9]{12}$/u.test(report.leaseId)
+        : /^tbx_[a-zA-Z0-9_-]+$/u.test(report.leaseId))
     ) {
-      capturedBlacksmithLeaseId = report.leaseId;
+      capturedLeaseId = report.leaseId;
     }
   } catch {
     // Human stderr may contain brace-delimited non-JSON lines.
-  }
-}
-
-function preserveTemporaryCrabboxRuns() {
-  if (childCwd === repoRoot) {
-    return;
-  }
-
-  const sourceRuns = resolve(childCwd, ".crabbox", "runs");
-  if (!pathExists(sourceRuns)) {
-    return;
-  }
-
-  const targetRuns = resolve(repoRoot, ".crabbox", "runs");
-  mkdirSync(targetRuns, { recursive: true });
-  let preserved = 0;
-  for (const entry of readdirSync(sourceRuns)) {
-    cpSync(resolve(sourceRuns, entry), resolve(targetRuns, entry), {
-      recursive: true,
-      force: true,
-    });
-    preserved += 1;
-  }
-  if (preserved > 0) {
-    console.error(
-      `[crabbox] preserved ${preserved} temporary run artifact ${preserved === 1 ? "directory" : "directories"} under ${relative(repoRoot, targetRuns)}`,
-    );
   }
 }
 
@@ -1436,24 +1440,24 @@ function isLocalContainerProvider(providerName: string) {
   return ["local-container", "docker", "container", "local-docker"].includes(providerName);
 }
 
-function replaceRunPayload(invocation: RunInvocation, payload: string[]) {
+function replaceRunPayload(invocation: CommandInvocation, payload: string[]) {
   const normalizedArgs = [...invocation.args];
   normalizedArgs.splice(invocation.start, normalizedArgs.length - invocation.start, ...payload);
   return normalizedArgs;
 }
 
-function renderRunShellCommand(invocation: RunInvocation, join = shellJoin) {
+function renderRunShellCommand(invocation: CommandInvocation, join = shellJoin) {
   return invocation.options.has("shell") && invocation.commandArgs.length === 1
     ? invocation.commandArgs[0]
     : join(invocation.commandArgs);
 }
 
-function replaceRunCommandWithShell(initialInvocation: RunInvocation, shellCommand: string) {
+function replaceRunCommandWithShell(initialInvocation: CommandInvocation, shellCommand: string) {
   let invocation = initialInvocation;
   if (!invocation.options.has("shell")) {
     const normalizedArgs = [...invocation.args];
     normalizedArgs.splice(invocation.optionEnd, 0, "--shell");
-    invocation = parseRunInvocation(help.text, normalizedArgs);
+    invocation = parseCommandInvocation(help.text, normalizedArgs);
   }
   return replaceRunPayload(invocation, [shellCommand]);
 }
@@ -1563,11 +1567,11 @@ function commandWordsNeedAwsMacosSwiftToolchain(wordsInput: string[]): boolean {
     }
   }
 
-  if (isAwsMacosSwiftScriptTarget(words[0])) {
+  if (isScriptTarget(words[0], awsMacosSwiftScriptTargets)) {
     return true;
   }
 
-  if (commandWordsRunAwsMacosSwiftScript(words)) {
+  if (commandWordsRunScriptTarget(words, awsMacosSwiftScriptTargets)) {
     return true;
   }
 
@@ -1599,11 +1603,11 @@ function commandWordsNeedAwsMacosPackageManager(
     }
   }
 
-  if (isAwsMacosPackageManagerScriptTarget(words[0])) {
+  if (isScriptTarget(words[0], awsMacosPackageManagerScriptTargets)) {
     return true;
   }
 
-  if (commandWordsRunAwsMacosPackageManagerScript(words)) {
+  if (commandWordsRunScriptTarget(words, awsMacosPackageManagerScriptTargets)) {
     return true;
   }
 
@@ -1616,29 +1620,15 @@ function commandWordsNeedAwsMacosPackageManager(
   );
 }
 
-function isAwsMacosSwiftScriptTarget(word: string | undefined) {
+function isScriptTarget(word: string | undefined, targets: ReadonlySet<string>) {
   if (!word) {
     return false;
   }
   const normalized = word.replace(/^\.\//u, "");
-  return (
-    awsMacosSwiftScriptTargets.has(normalized) ||
-    awsMacosSwiftScriptTargets.has(normalized.split("/").pop() ?? "")
-  );
+  return targets.has(normalized) || targets.has(normalized.split("/").pop() ?? "");
 }
 
-function isAwsMacosPackageManagerScriptTarget(word: string | undefined) {
-  if (!word) {
-    return false;
-  }
-  const normalized = word.replace(/^\.\//u, "");
-  return (
-    awsMacosPackageManagerScriptTargets.has(normalized) ||
-    awsMacosPackageManagerScriptTargets.has(normalized.split("/").pop() ?? "")
-  );
-}
-
-function commandWordsRunScriptTarget(words: string[], isScriptTarget: (word: string) => boolean) {
+function commandWordsRunScriptTarget(words: string[], targets: ReadonlySet<string>) {
   const first = (words[0] ?? "").split("/").pop() ?? "";
   if (!shellInlineCommandInterpreters.has(first)) {
     return false;
@@ -1662,17 +1652,9 @@ function commandWordsRunScriptTarget(words: string[], isScriptTarget: (word: str
     if (word.startsWith("-") || word.startsWith("+")) {
       continue;
     }
-    return isScriptTarget(word);
+    return isScriptTarget(word, targets);
   }
   return false;
-}
-
-function commandWordsRunAwsMacosSwiftScript(words: string[]) {
-  return commandWordsRunScriptTarget(words, isAwsMacosSwiftScriptTarget);
-}
-
-function commandWordsRunAwsMacosPackageManagerScript(words: string[]) {
-  return commandWordsRunScriptTarget(words, isAwsMacosPackageManagerScriptTarget);
 }
 
 function commandNeedsEntrypoint(
@@ -1742,7 +1724,7 @@ function changedGateBasesFromWords(
   options: CommandNormalizeOptions = {},
 ): string[] {
   const words = normalizeExecutableWords(wordsInput, options);
-  if (isChangedGateWords(words)) {
+  if (isCheckGateWords(words)) {
     for (let index = 0; index < words.length; index += 1) {
       const word = words[index] ?? "";
       if (word === "--base") {
@@ -1794,6 +1776,21 @@ function isChangedGateWords(wordsInput: string[]) {
     (words[0] === "pnpm" && words[1] === "check:changed") ||
     (words[0] === "pnpm" && words[1] === "run" && words[2] === "check:changed") ||
     nodeScriptWord(words)?.endsWith("scripts/check-changed.mjs")
+  );
+}
+
+function isCheckGateWords(wordsInput: string[]) {
+  if (isChangedGateWords(wordsInput)) {
+    return true;
+  }
+  const words = normalizeExecutableWords(wordsInput);
+  if (words[0] === "corepack") {
+    words.shift();
+  }
+  return (
+    (words[0] === "pnpm" && words[1] === "check") ||
+    (words[0] === "pnpm" && words[1] === "run" && words[2] === "check") ||
+    nodeScriptWord(words)?.endsWith("scripts/check.mts")
   );
 }
 
@@ -2484,16 +2481,20 @@ function changedGateBaseForCommand(commandArgs: string[]) {
   }
   const explicitBase = requestedBases[0] ?? "origin/main";
   const remoteAlias = remoteAliasForChangedGateBase(explicitBase);
-  if (explicitBase !== "origin/main" && !remoteAlias) {
+  const immutableBase = /^[a-f0-9]{40}$/u.test(explicitBase);
+  if (explicitBase !== "origin/main" && !remoteAlias && !immutableBase) {
     throw new Error(
-      `remote changed-gate sync requires an exact origin/<branch> base; received: ${explicitBase}`,
+      `remote changed-gate sync requires an exact origin/<branch> or full commit SHA base; received: ${explicitBase}`,
     );
   }
-  // Only exact remote-tracking refs can be recreated under their original name
-  // after the remote raw-sync checkout initializes fresh Git metadata.
+  // The receiver recreates named remote refs and fetches the exact capsule base.
+  // A literal commit must itself be the fork base, not merely resolve to one.
   const requestedBase = explicitBase;
   const base = gitOutput(["merge-base", requestedBase, "HEAD"]);
   if (base.status === 0 && base.stdout) {
+    if (immutableBase && base.stdout !== requestedBase) {
+      throw new Error(`explicit changed-gate commit must be an ancestor of HEAD: ${requestedBase}`);
+    }
     return {
       remoteAlias,
       resolvedBase: base.stdout,
@@ -2513,37 +2514,7 @@ function remoteAliasForChangedGateBase(base: string) {
   return gitOutput(["check-ref-format", alias]).status === 0 ? alias : "";
 }
 
-function remoteGitBootstrapForChangedGate(changedGateBase: string, changedGateAlias: string) {
-  const quotedBase = shellQuote(changedGateBase);
-  const quotedAlias = shellQuote(changedGateAlias);
-  const quotedBundleFile = shellQuote(REMOTE_CHANGED_GATE_BUNDLE_FILE);
-  return [
-    `openclaw_changed_gate_base=${quotedBase};`,
-    `openclaw_changed_gate_alias=${quotedAlias};`,
-    'if ! command -v git >/dev/null 2>&1; then echo "git is required for OpenClaw remote changed-gate sync" >&2; exit 2; fi;',
-    `openclaw_changed_gate_bundle=${quotedBundleFile};`,
-    'if [ ! -f "$openclaw_changed_gate_bundle" ]; then echo "missing changed-gate bundle: $openclaw_changed_gate_bundle" >&2; exit 2; fi;',
-    'openclaw_changed_gate_bundle_tmp="$(mktemp /tmp/openclaw-changed-gate.XXXXXX)" || exit 2;',
-    "trap 'rm -f \"$openclaw_changed_gate_bundle_tmp\"' EXIT HUP INT TERM;",
-    'cp "$openclaw_changed_gate_bundle" "$openclaw_changed_gate_bundle_tmp" || exit 2;',
-    // Interrupted rsync leaves bundle.XXXXXX beside the destination; never expose transport residue to lane classification.
-    'rm -rf -- "$openclaw_changed_gate_bundle" "$openclaw_changed_gate_bundle".* || exit 2;',
-    "rm -rf .git || exit 2;",
-    "git init -q || exit 2;",
-    "git remote add origin https://github.com/openclaw/openclaw.git 2>/dev/null || git remote set-url origin https://github.com/openclaw/openclaw.git || exit 2;",
-    'git fetch -q --depth=2 origin "$openclaw_changed_gate_base:refs/remotes/origin/main" || exit 2;',
-    'if [ -n "$openclaw_changed_gate_alias" ]; then git update-ref "$openclaw_changed_gate_alias" refs/remotes/origin/main || exit 2; fi;',
-    'if [ ! -f "$openclaw_changed_gate_bundle_tmp" ]; then echo "changed-gate bundle disappeared before import" >&2; exit 2; fi;',
-    "openclaw_changed_gate_target=refs/remotes/origin/main;",
-    'if [ -s "$openclaw_changed_gate_bundle_tmp" ]; then git fetch -q "$openclaw_changed_gate_bundle_tmp" HEAD:refs/heads/openclaw-changed-gate-tree || exit 2; openclaw_changed_gate_tree="$(git rev-parse refs/heads/openclaw-changed-gate-tree^{tree})" || exit 2; openclaw_changed_gate_head="$(git -c user.name=OpenClaw -c user.email=ci@openclaw.local commit-tree "$openclaw_changed_gate_tree" -p refs/remotes/origin/main -m remote-changed-gate-tree)" || exit 2; git update-ref refs/heads/openclaw-changed-gate-head "$openclaw_changed_gate_head" || exit 2; openclaw_changed_gate_target=refs/heads/openclaw-changed-gate-head; fi;',
-    'rm -f "$openclaw_changed_gate_bundle_tmp" || exit 2;',
-    "trap - EXIT HUP INT TERM;",
-    'git reset --hard --quiet "$openclaw_changed_gate_target" || exit 2;',
-    "git clean -fd -q || exit 2",
-  ].join(" ");
-}
-
-function injectRemoteChangedGateEnvironment(invocation: RunInvocation, facts: RunFacts) {
+function injectRemoteChangedGateEnvironment(invocation: CommandInvocation, facts: RunFacts) {
   if (invocation.args[0] !== "run" || isNativeWindowsRemoteTarget(invocation.args)) {
     return invocation.args;
   }
@@ -2652,14 +2623,8 @@ function remoteWindowsHydratedNodeModulesBootstrap() {
   ].join("; ");
 }
 
-function remotePosixHydratedNodeModulesBootstrap() {
-  // Knip and other non-pnpm tools walk node_modules, while hydrated boxes keep it external.
-  // Without this link, dead-code scans silently lose consumer edges and report false positives.
-  return 'openclaw_modules_dir="${CRABBOX_PNPM_MODULES_DIR:-${PNPM_CONFIG_MODULES_DIR:-}}"; if [ -n "$openclaw_modules_dir" ] && [ -d "$openclaw_modules_dir" ] && [ ! -e node_modules ]; then ln -s "$openclaw_modules_dir" node_modules; fi;';
-}
-
 function injectRemoteWindowsHydratedNodeModulesBootstrap(
-  invocation: RunInvocation,
+  invocation: CommandInvocation,
   facts: RunFacts,
   providerName: string,
 ) {
@@ -2683,45 +2648,17 @@ function injectRemoteWindowsHydratedNodeModulesBootstrap(
   );
 }
 
-function injectRemotePosixHydratedNodeModulesBootstrap(invocation: RunInvocation) {
-  if (
-    invocation.args[0] !== "run" ||
-    isWindowsRemoteTarget(invocation.args) ||
-    invocation.options.has("script") ||
-    invocation.options.has("script-stdin") ||
-    invocation.start < 0
-  ) {
-    return invocation.args;
-  }
-
-  return replaceRunCommandWithShell(
-    invocation,
-    `${remotePosixHydratedNodeModulesBootstrap()} ${renderRunShellCommand(invocation)}`,
-  );
-}
-
-function injectRemoteChangedGateGitBootstrap(
-  commandArgs: string[],
-  changedGateBase: string,
-  changedGateAlias: string,
-) {
-  if (!changedGateBase || commandArgs[0] !== "run" || isWindowsRemoteTarget(commandArgs)) {
-    return commandArgs;
-  }
-
-  const invocation = parseRunInvocation(help.text, commandArgs);
-  if (invocation.start < 0) {
-    return commandArgs;
-  }
-
-  return replaceRunCommandWithShell(
-    invocation,
-    `${remoteGitBootstrapForChangedGate(changedGateBase, changedGateAlias)} && ${renderRunShellCommand(invocation)}`,
-  );
-}
-
-function remotePosixJsEnvBootstrap() {
+function remotePosixJsEnvBootstrap(packageManager = false) {
   return [
+    ...(packageManager
+      ? [
+          'export COREPACK_HOME="${COREPACK_HOME:-$tool_root/corepack}";',
+          'export PNPM_HOME="${PNPM_HOME:-$tool_root/pnpm-home}";',
+          'mkdir -p "$COREPACK_HOME" "$PNPM_HOME" || return 1;',
+          'export PATH="$PNPM_HOME:$PATH";',
+          'corepack enable --install-directory "$PNPM_HOME" || return 1;',
+        ]
+      : []),
     "openclaw_crabbox_env() {",
     "openclaw_env_args=();",
     "openclaw_env_ignore=0;",
@@ -2745,8 +2682,12 @@ function remotePosixJsEnvBootstrap() {
   ];
 }
 
-function remoteAwsMacosJsBootstrap({ packageManager = false, bun = false } = {}) {
-  const nodeVersion = process.env.OPENCLAW_CRABBOX_MACOS_NODE_VERSION?.trim() || "24.19.0";
+function remoteAwsMacosJsBootstrap({
+  packageManager = false,
+  bun = false,
+  sourceBootstrap = "",
+} = {}) {
+  const nodeVersion = process.env.OPENCLAW_CRABBOX_MACOS_NODE_VERSION?.trim() || "24.21.0";
   const bootstrap = [
     "openclaw_crabbox_bootstrap_macos_js() {",
     'tool_root="${OPENCLAW_CRABBOX_MACOS_TOOLCHAIN_DIR:-$HOME/.openclaw-crabbox-toolchain}";',
@@ -2796,17 +2737,11 @@ function remoteAwsMacosJsBootstrap({ packageManager = false, bun = false } = {})
     "release_install_lock;",
     "fi;",
     "node --version >&2 || return 1;",
-    ...remotePosixJsEnvBootstrap(),
+    ...remotePosixJsEnvBootstrap(packageManager),
+    ...(sourceBootstrap ? [`${sourceBootstrap} || return $?;`] : []),
   ];
   if (packageManager) {
-    bootstrap.push(
-      'export COREPACK_HOME="${COREPACK_HOME:-$tool_root/corepack}";',
-      'export PNPM_HOME="${PNPM_HOME:-$tool_root/pnpm-home}";',
-      'mkdir -p "$COREPACK_HOME" "$PNPM_HOME" || return 1;',
-      'export PATH="$PNPM_HOME:$PATH";',
-      'corepack enable --install-directory "$PNPM_HOME" || return 1;',
-      "pnpm --version >&2;",
-    );
+    bootstrap.push("pnpm --version >&2;");
   }
   // Raw AWS macOS boxes skip setup-node-env, so Bun needs its own user-local pin.
   if (bun) {
@@ -2849,8 +2784,8 @@ function remoteAwsMacosJsBootstrap({ packageManager = false, bun = false } = {})
   return bootstrap.join(" ");
 }
 
-function remoteWsl2JsBootstrap({ packageManager = false } = {}) {
-  const nodeVersion = process.env.OPENCLAW_CRABBOX_WSL2_NODE_VERSION?.trim() || "24.19.0";
+function remoteWsl2JsBootstrap({ packageManager = false, sourceBootstrap = "" } = {}) {
+  const nodeVersion = process.env.OPENCLAW_CRABBOX_WSL2_NODE_VERSION?.trim() || "24.21.0";
   const bootstrap = [
     "openclaw_crabbox_bootstrap_wsl2_js() {",
     'tool_root="${OPENCLAW_CRABBOX_WSL2_TOOLCHAIN_DIR:-$HOME/.openclaw-crabbox-toolchain}";',
@@ -2896,17 +2831,17 @@ function remoteWsl2JsBootstrap({ packageManager = false } = {}) {
     "release_install_lock;",
     "fi;",
     "node --version >&2 || return 1;",
-    ...remotePosixJsEnvBootstrap(),
+    ...remotePosixJsEnvBootstrap(packageManager),
+    ...(sourceBootstrap ? [`${sourceBootstrap} || return $?;`] : []),
   ];
   if (packageManager) {
     bootstrap.push(
-      'export COREPACK_HOME="${COREPACK_HOME:-$tool_root/corepack}";',
-      'export PNPM_HOME="${PNPM_HOME:-$tool_root/pnpm-home}";',
-      'mkdir -p "$COREPACK_HOME" "$PNPM_HOME" || return 1;',
-      'export PATH="$PNPM_HOME:$PATH";',
-      'corepack enable --install-directory "$PNPM_HOME" || return 1;',
       "pnpm --version >&2;",
-      "if [ -f pnpm-lock.yaml ] && [ ! -f node_modules/.modules.yaml ]; then pnpm install --frozen-lockfile || return 1; fi;",
+      ...(sourceBootstrap
+        ? []
+        : [
+            "if [ -f pnpm-lock.yaml ] && [ ! -f node_modules/.modules.yaml ]; then pnpm install --frozen-lockfile || return 1; fi;",
+          ]),
     );
   }
   bootstrap.push('export OPENCLAW_CRABBOX_BOOTSTRAP_PATH="$PATH";');
@@ -3170,7 +3105,7 @@ function readLeadingShellWord(command: string, start: number) {
   return word ? { word, end: command.length } : null;
 }
 
-function analyzeRemoteCommand(invocation: RunInvocation) {
+function analyzeRemoteCommand(invocation: CommandInvocation) {
   const runArgs = invocation.commandArgs;
   const directScopedEnvCommand = invocation.options.has("shell")
     ? null
@@ -3199,11 +3134,10 @@ function analyzeRemoteCommand(invocation: RunInvocation) {
 }
 
 function prepareRemoteWsl2JsBootstrapScript(
-  run: RunInvocation,
+  run: CommandInvocation,
   facts: RunFacts,
   provider: string,
-  changedGateBase: string,
-  changedGateAlias: string,
+  sourceBootstrap: string,
 ) {
   const runtimeEntrypoint = awsMacosBunEntrypoints.has(facts.runtimeEntrypoint)
     ? ""
@@ -3220,31 +3154,38 @@ function prepareRemoteWsl2JsBootstrapScript(
   }
 
   const scriptRoot = mkdtempSync(resolve(tmpdir(), "openclaw-crabbox-wsl2-script-"));
-  const scriptPath = resolve(scriptRoot, "script.sh");
-  const originalShellCommand = facts.scopedEnvCommand?.shellCommand ?? renderRunShellCommand(run);
-  const script = `${remoteWsl2JsBootstrap({
-    packageManager: facts.packageManager,
-  })} || exit $?\n${facts.changedGate && changedGateBase ? `${remoteGitBootstrapForChangedGate(changedGateBase, changedGateAlias)} || exit $?\n` : ""}{ ${originalShellCommand}\n}\n`;
-  writeFileSync(scriptPath, script, "utf8");
-  chmodSync(scriptPath, 0o700);
+  const cleanup = () => rmSync(scriptRoot, { recursive: true, force: true });
+  try {
+    const scriptPath = resolve(scriptRoot, "script.sh");
+    const originalShellCommand = facts.scopedEnvCommand?.shellCommand ?? renderRunShellCommand(run);
+    const script = `${remoteWsl2JsBootstrap({
+      packageManager: facts.packageManager,
+      sourceBootstrap,
+    })} || exit $?\n{ ${originalShellCommand}\n}\n`;
+    writeFileSync(scriptPath, script, "utf8");
+    chmodSync(scriptPath, 0o700);
 
-  const normalizedArgs = run.args.slice(0, run.optionEnd);
-  if (!run.options.has("no-hydrate")) {
-    normalizedArgs.push("--no-hydrate");
+    const normalizedArgs = run.args.slice(0, run.optionEnd);
+    if (!run.options.has("no-hydrate")) {
+      normalizedArgs.push("--no-hydrate");
+    }
+    normalizedArgs.push("--script", scriptPath);
+    return { args: normalizedArgs, cleanup, prepared: true };
+  } catch (error) {
+    cleanup();
+    throw error;
   }
-  normalizedArgs.push("--script", scriptPath);
-
-  return {
-    args: normalizedArgs,
-    cleanup: () => rmSync(scriptRoot, { recursive: true, force: true }),
-    prepared: true,
-  };
 }
 
-function injectRemoteAwsMacosJsBootstrap(run: RunInvocation, facts: RunFacts, provider: string) {
+function injectRemoteAwsMacosJsBootstrap(
+  run: CommandInvocation,
+  facts: RunFacts,
+  provider: string,
+  sourceBootstrap: string,
+) {
   if (
     !isAwsMacosRemoteTarget(run.args, provider) ||
-    (!facts.runtimeEntrypoint && !facts.packageManager && !facts.bun)
+    (!facts.runtimeEntrypoint && !facts.packageManager && !facts.bun && !sourceBootstrap)
   ) {
     return run.args;
   }
@@ -3257,6 +3198,7 @@ function injectRemoteAwsMacosJsBootstrap(run: RunInvocation, facts: RunFacts, pr
   const shellCommand = `${remoteAwsMacosJsBootstrap({
     packageManager: facts.packageManager,
     bun: facts.bun,
+    sourceBootstrap,
   })} && { ${originalShellCommand}\n}`;
   return replaceRunCommandWithShell(run, shellCommand);
 }
@@ -3289,7 +3231,7 @@ function remoteAwsMacosSwiftBootstrap() {
 }
 
 function injectRemoteAwsMacosSwiftBootstrap(
-  invocation: RunInvocation,
+  invocation: CommandInvocation,
   facts: RunFacts,
   providerName: string,
   force = false,
@@ -3308,47 +3250,59 @@ function injectRemoteAwsMacosSwiftBootstrap(
   );
 }
 
-function replaceRunFlagWithScript(commandArgs: string[], flagName: string, scriptPath: string) {
-  const invocation = parseRunInvocation(help.text, commandArgs);
-  const normalizedName = runOptionName(flagName);
-  const normalizedArgs = [...commandArgs];
-  for (const { index, name } of invocation.optionEntries) {
-    if (name === normalizedName) {
-      normalizedArgs.splice(index, 1, "--script", scriptPath);
-      return normalizedArgs;
+function replaceRunScript(invocation: CommandInvocation, scriptPath: string) {
+  const normalizedArgs = invocation.args.slice(0, invocation.optionEnd);
+  // One generated file replaces all valid source flags: a later empty file or
+  // an earlier true stdin flag must not override/conflict with the verifier.
+  for (const { name, index } of invocation.optionEntries.toReversed()) {
+    if (name === "script" || name === "script-stdin") {
+      normalizedArgs.splice(
+        index,
+        name === "script" && !invocation.args[index]?.includes("=") ? 2 : 1,
+      );
     }
   }
-  return normalizedArgs;
+  return [
+    ...normalizedArgs,
+    "--script",
+    scriptPath,
+    ...invocation.args.slice(invocation.optionEnd),
+  ];
 }
 
-function prepareAwsMacosScriptStdinBootstrap(commandArgs: string[], providerName: string) {
-  if (
-    !isAwsMacosRemoteTarget(commandArgs, providerName) ||
-    !parseRunInvocation(help.text, commandArgs).options.has("script-stdin")
-  ) {
+async function prepareAwsMacosScriptStdinBootstrap(commandArgs: string[], providerName: string) {
+  const invocation = parseCommandInvocation(help.text, commandArgs);
+  const scriptOption = invocation.script;
+  if (!isAwsMacosRemoteTarget(commandArgs, providerName) || scriptOption?.name !== "script-stdin") {
     return { args: commandArgs, cleanup: () => {}, prepared: false };
   }
 
+  const script = await readScriptStdin();
   const scriptRoot = mkdtempSync(resolve(tmpdir(), "openclaw-crabbox-macos-script-"));
-  const scriptPath = resolve(scriptRoot, "script.sh");
-  const script = readFileSync(0, "utf8");
-  writeFileSync(scriptPath, createAwsMacosScriptStdinWrapper(script), "utf8");
-  chmodSync(scriptPath, 0o700);
-  return {
-    args: replaceRunFlagWithScript(commandArgs, "--script-stdin", scriptPath),
-    cleanup: () => rmSync(scriptRoot, { recursive: true, force: true }),
-    prepared: true,
-  };
+  const cleanup = () => rmSync(scriptRoot, { recursive: true, force: true });
+  try {
+    const scriptPath = resolve(scriptRoot, "script.sh");
+    writeFileSync(scriptPath, createAwsMacosScriptStdinWrapper(script), "utf8");
+    chmodSync(scriptPath, 0o700);
+    return { args: replaceRunScript(invocation, scriptPath), cleanup, prepared: true };
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
 }
 
 function createAwsMacosScriptStdinWrapper(script: string) {
   const requirements = awsMacosScriptBootstrapRequirements(script);
+  return wrapRemoteScript(script, remoteAwsMacosScriptBootstrap(requirements));
+}
+
+function wrapRemoteScript(script: string, bootstrap: string) {
   if (!script.startsWith("#!")) {
-    return `${remoteAwsMacosScriptBootstrap(requirements)} || exit $?\n${script}`;
+    return `${bootstrap} || exit $?\n${script}`;
   }
   const delimiterValue = uniqueHereDocDelimiter(script);
   return [
-    `${remoteAwsMacosScriptBootstrap(requirements)} || exit $?`,
+    `${bootstrap} || exit $?`,
     'tmp_script="$(mktemp "${TMPDIR:-/tmp}/openclaw-crabbox-script.XXXXXX")" || exit $?',
     'cleanup_openclaw_crabbox_script() { rm -f "$tmp_script"; }',
     "trap cleanup_openclaw_crabbox_script EXIT",
@@ -3416,18 +3370,47 @@ function isWorktreeClean() {
   return status.status === 0 && status.stdout === "";
 }
 
-function shouldUseFullCheckoutForRemoteSync(commandArgs: string[], _providerName: string) {
+function needsSourceCapsule(commandArgs: string[], providerName: string) {
+  const provider = canonicalProviderName(providerName);
+  const invocation = parseCommandInvocation(help.text, commandArgs);
+  const noHydrate = invocation.optionEntries.findLast(({ name }) => name === "no-hydrate");
+  const hydrationDisabled = Boolean(
+    noHydrate &&
+    (!commandArgs[noHydrate.index]?.includes("=") ||
+      /^(?:1|t|T|true|TRUE|True)$/u.test(noHydrate.value)),
+  );
+  return (
+    commandArgs[0] === "run" &&
+    !hasOption(commandArgs, "--no-sync") &&
+    !hasOption(commandArgs, "--fresh-pr") &&
+    !isNativeWindowsRemoteTarget(commandArgs) &&
+    (provider === "blacksmith-testbox" ||
+      // Ordinary Linux sync can omit Git. Explicit raw bootstrap commands must keep
+      // native ownership because the source receiver itself requires Node.
+      (provider === "aws" &&
+        ["", "linux", "ubuntu"].includes(effectiveTargetContext(commandArgs).target) &&
+        !hydrationDisabled &&
+        !hasOption(commandArgs, "--sync-only")) ||
+      analyzeRemoteCommand(invocation).changedGate)
+  );
+}
+
+function shouldUseFullCheckoutForRemoteSync(commandArgs: string[], providerName: string) {
   if (commandArgs[0] !== "run") {
     return false;
   }
-  if (hasOption(commandArgs, "--no-sync")) {
+  // Native fresh-PR checkout owns the source and reads any local patch from this cwd.
+  // A local capsule or detached sparse staging checkout must not replace either input.
+  if (hasOption(commandArgs, "--no-sync") || hasOption(commandArgs, "--fresh-pr")) {
     return false;
   }
 
-  const changedGate = isChangedGateCommand(parseRunInvocation(help.text, commandArgs).commandArgs);
-  if (changedGate && !isNativeWindowsRemoteTarget(commandArgs)) {
+  if (needsSourceCapsule(commandArgs, providerName)) {
     return true;
   }
+  const changedGate = isChangedGateCommand(
+    parseCommandInvocation(help.text, commandArgs).commandArgs,
+  );
   return isWorktreeClean() && (isSparseCheckout() || changedGate);
 }
 
@@ -3439,10 +3422,12 @@ function defaultFullCheckoutSyncRoot() {
   return resolve(tmpdir(), "openclaw-crabbox-sync");
 }
 
-function fullCheckoutSyncRoot() {
+function fullCheckoutSyncRoot(create = true) {
   const configured = process.env.OPENCLAW_CRABBOX_SYNC_TMPDIR?.trim();
   const root = configured ? resolve(configured) : defaultFullCheckoutSyncRoot();
-  mkdirSync(root, { recursive: true });
+  if (create) {
+    mkdirSync(root, { recursive: true });
+  }
   return root;
 }
 
@@ -3502,120 +3487,39 @@ function assertFullCheckoutSyncDisk(root: string) {
   );
 }
 
-function currentWorktreeTree(syncRoot: string) {
-  const indexDir = mkdtempSync(resolve(syncRoot, "openclaw-crabbox-index-"));
-  const indexPath = resolve(indexDir, "index");
-  const indexEnv = { GIT_INDEX_FILE: indexPath };
-  try {
-    const read = gitOutput(["read-tree", "HEAD"], indexEnv);
-    const add = gitOutput(["add", "-A", "--", "."], indexEnv);
-    const tree = gitOutput(["write-tree"], indexEnv);
-    if (read.status !== 0 || add.status !== 0 || tree.status !== 0 || !tree.stdout) {
-      throw new Error(read.text || add.text || tree.text || "git write-tree failed");
-    }
-    return tree.stdout;
-  } finally {
-    rmSync(indexDir, { recursive: true, force: true });
-  }
-}
-
-function prepareFullCheckoutForSync(options: { changedGateBase?: string } = {}) {
+function prepareFullCheckoutForSync() {
   const syncRoot = fullCheckoutSyncRoot();
   assertFullCheckoutSyncDisk(syncRoot);
-  const changedGateTree = options.changedGateBase ? currentWorktreeTree(syncRoot) : "";
-  const dir = mkdtempSync(resolve(syncRoot, "openclaw-crabbox-sync-"));
+  const staging = createStaging(syncRoot, repoRoot, "worktree");
+  const dir = resolve(staging.payload, "source");
   let active = false;
-  let resolvedChangedGateBase = options.changedGateBase ?? "";
 
   function create() {
-    const add = gitOutput(["worktree", "add", "--detach", dir, "HEAD"]);
-    if (add.status !== 0) {
-      rmSync(dir, { recursive: true, force: true });
-      throw new Error(`git worktree add failed: ${add.text}`);
-    }
+    // Even an interrupted add can have registered this exact owned worktree.
     active = true;
-
-    const disableSparse = gitOutput(["-C", dir, "sparse-checkout", "disable"]);
-    if (disableSparse.status !== 0) {
-      cleanupFullCheckout(dir, active);
-      active = false;
-      throw new Error(`git sparse-checkout disable failed: ${disableSparse.text}`);
-    }
-
-    if (options.changedGateBase) {
-      const bundlePath = resolve(dir, REMOTE_CHANGED_GATE_BUNDLE_FILE);
-      let bundleTempDir;
+    try {
+      const add = gitOutput(["worktree", "add", "--detach", dir, "HEAD"]);
+      if (add.status !== 0) {
+        throw new Error(`git worktree add failed: ${add.text}`);
+      }
+      const disableSparse = gitOutput(["-C", dir, "sparse-checkout", "disable"]);
+      if (disableSparse.status !== 0) {
+        throw new Error(`git sparse-checkout disable failed: ${disableSparse.text}`);
+      }
+    } catch (error) {
       try {
-        bundleTempDir = mkdtempSync(resolve(syncRoot, "openclaw-crabbox-bundle-"));
-        const bundleTempPath = resolve(bundleTempDir, "changed-gate.bundle");
-        const base = gitOutput(["-C", dir, "rev-parse", options.changedGateBase]);
-        const baseTree = gitOutput(["-C", dir, "rev-parse", `${options.changedGateBase}^{tree}`]);
-        if (base.status !== 0 || baseTree.status !== 0 || !base.stdout || !baseTree.stdout) {
-          throw new Error(`git rev-parse failed: ${base.text || baseTree.text}`);
-        }
-        resolvedChangedGateBase = base.stdout;
-        if (changedGateTree === baseTree.stdout) {
-          writeFileSync(bundleTempPath, "", "utf8");
-        } else {
-          // A parentless carrier makes the bundle self-contained while sending
-          // only the final tree. The remote attaches the fetched base as parent.
-          const transportCommit = gitOutput([
-            "-C",
-            dir,
-            "-c",
-            "user.name=OpenClaw",
-            "-c",
-            "user.email=ci@openclaw.local",
-            "commit-tree",
-            changedGateTree,
-            "-m",
-            "remote-changed-gate-tree",
-          ]);
-          if (transportCommit.status !== 0 || !transportCommit.stdout) {
-            throw new Error(transportCommit.text || "git commit-tree failed");
-          }
-          const updateHead = gitOutput(["-C", dir, "update-ref", "HEAD", transportCommit.stdout]);
-          if (updateHead.status !== 0) {
-            throw new Error(updateHead.text || "git update-ref HEAD failed");
-          }
-          const bundle = gitOutput(["-C", dir, "bundle", "create", bundleTempPath, "HEAD"]);
-          if (bundle.status !== 0) {
-            throw new Error(bundle.text || `git bundle exited with status ${bundle.status}`);
-          }
-        }
-        // HEAD controls this checkout path and may make it a symlink. Remove the
-        // entry, then atomically install the private temp file without following it.
-        rmSync(bundlePath, { recursive: true, force: true });
-        renameSync(bundleTempPath, bundlePath);
-      } catch (error) {
         cleanupFullCheckout(dir, active);
         active = false;
-        const message = error instanceof Error ? error.message : String(error);
-        throw new Error(`git bundle for changed-gate sync failed: ${message}`, { cause: error });
-      } finally {
-        if (bundleTempDir) {
-          rmSync(bundleTempDir, { recursive: true, force: true });
-        }
+        staging.dispose();
+      } catch (cleanupError) {
+        staging.hold("registration");
+        throw new AggregateError(
+          [error, cleanupError],
+          "Full checkout preparation failed; staging retained at " + staging.root,
+          { cause: cleanupError },
+        );
       }
-      const reset = gitOutput(["-C", dir, "reset", "--mixed", "--quiet", options.changedGateBase]);
-      if (reset.status !== 0) {
-        cleanupFullCheckout(dir, active);
-        active = false;
-        throw new Error(`git reset for changed-gate sync failed: ${reset.text}`);
-      }
-      const stageBundle = gitOutput([
-        "-C",
-        dir,
-        "add",
-        "-f",
-        "--",
-        REMOTE_CHANGED_GATE_BUNDLE_FILE,
-      ]);
-      if (stageBundle.status !== 0) {
-        cleanupFullCheckout(dir, active);
-        active = false;
-        throw new Error(`git add for changed-gate bundle failed: ${stageBundle.text}`);
-      }
+      throw error;
     }
   }
 
@@ -3623,7 +3527,7 @@ function prepareFullCheckoutForSync(options: { changedGateBase?: string } = {}) 
 
   return {
     dir,
-    changedGateBase: resolvedChangedGateBase,
+    staging,
     restoreIfMissing() {
       try {
         if (statSync(dir).isDirectory()) {
@@ -3637,7 +3541,10 @@ function prepareFullCheckoutForSync(options: { changedGateBase?: string } = {}) 
       if (active) {
         const remove = gitOutput(["worktree", "remove", "--force", dir]);
         if (remove.status !== 0) {
-          console.error(`[crabbox] warning: git worktree remove failed for ${dir}: ${remove.text}`);
+          staging.hold("registration");
+          throw new Error(
+            `git worktree remove failed for ${dir}; registration cleanup incomplete; remaining staging retained: ${remove.text}`,
+          );
         }
         active = false;
       }
@@ -3653,8 +3560,14 @@ function prepareFullCheckoutForSync(options: { changedGateBase?: string } = {}) 
       }
     },
     cleanup() {
-      cleanupFullCheckout(dir, active);
+      try {
+        cleanupFullCheckout(dir, active);
+      } catch (error) {
+        staging.hold("registration");
+        throw error;
+      }
       active = false;
+      staging.dispose();
     },
   };
 }
@@ -3710,7 +3623,9 @@ function cleanupFullCheckout(dir: string, active: boolean) {
     if (remove.status === 0) {
       return;
     }
-    console.error(`[crabbox] warning: git worktree remove failed for ${dir}: ${remove.text}`);
+    throw new Error(
+      `git worktree remove failed for ${dir}; registration cleanup incomplete; remaining staging retained: ${remove.text}`,
+    );
   }
   rmSync(dir, { recursive: true, force: true });
 }
@@ -3743,97 +3658,159 @@ function injectFullCheckoutLeaseReclaim(commandArgs: string[]) {
   return normalizedArgs;
 }
 
-function injectRemoteTestboxBootstrap(commandArgs: string[], providerName: string) {
+function injectRemoteTestboxCi(commandArgs: string[], providerName: string) {
   if (commandArgs[0] !== "run" || canonicalProviderName(providerName) !== "blacksmith-testbox") {
     return commandArgs;
   }
-  const invocation = parseRunInvocation(help.text, commandArgs);
+  const invocation = parseCommandInvocation(help.text, commandArgs);
   if (invocation.start < 0) {
     return commandArgs;
   }
-  const snapshot = hasOption(commandArgs, "--no-sync")
-    ? ""
-    : `if [ -n "$(git status --porcelain=v1)" ]; then git add -A && git -c user.name=OpenClaw -c user.email=ci@openclaw.local -c commit.gpgsign=false commit --no-verify -qm remote-testbox-sync || exit $?; fi; `;
   return replaceRunCommandWithShell(
     invocation,
-    `${snapshot}export CI=true; ${renderRunShellCommand(invocation)}`,
+    `export CI=true; ${renderRunShellCommand(invocation)}`,
   );
 }
 
-function applyRunTransforms(
-  initialInvocation: RunInvocation,
+async function applyRunTransforms(
+  initialInvocation: CommandInvocation,
   initialFacts: RunFacts,
   options: {
     changedGateAlias: string;
-    changedGateBase: string;
+    capsule: CrabboxSourceCapsule | null;
     childCwd: string;
     provider: string;
   },
 ) {
+  const testboxWorkspace = canonicalProviderName(options.provider) === "blacksmith-testbox";
+  const sourceBootstrap = options.capsule
+    ? remoteSourceBootstrap(options.capsule, options.changedGateAlias, testboxWorkspace)
+    : "";
   const markedArgs = injectRemoteChangedGateEnvironment(initialInvocation, initialFacts);
   const localArgs =
     options.childCwd === repoRoot ? markedArgs : absolutizeLocalRunPaths(markedArgs);
-  let invocation = parseRunInvocation(help.text, localArgs);
+  let invocation = parseCommandInvocation(help.text, localArgs);
   const facts = analyzeRemoteCommand(invocation);
+  // Materializing a capsule runs its installer before the caller's command.
+  facts.packageManager ||= Boolean(options.capsule);
 
   const wsl2ScriptBootstrap = prepareRemoteWsl2JsBootstrapScript(
     invocation,
     facts,
     options.provider,
-    options.changedGateBase,
-    options.changedGateAlias,
+    sourceBootstrap,
   );
   let transformedArgs = wsl2ScriptBootstrap.args;
-  invocation = parseRunInvocation(help.text, transformedArgs);
-  transformedArgs = injectRemoteAwsMacosJsBootstrap(invocation, facts, options.provider);
-  invocation = parseRunInvocation(help.text, transformedArgs);
-  transformedArgs = injectRemoteAwsMacosSwiftBootstrap(
-    invocation,
-    facts,
-    options.provider,
-    facts.swift,
-  );
-  invocation = parseRunInvocation(help.text, transformedArgs);
-  transformedArgs = injectRemoteWindowsHydratedNodeModulesBootstrap(
-    invocation,
-    facts,
-    options.provider,
-  );
-  if (options.childCwd !== repoRoot) {
-    transformedArgs = injectRemoteChangedGateGitBootstrap(
-      transformedArgs,
-      options.changedGateBase,
-      options.changedGateAlias,
+  let sourceScriptCleanup = () => {};
+  try {
+    if (sourceBootstrap && !wsl2ScriptBootstrap.prepared) {
+      invocation = parseCommandInvocation(help.text, transformedArgs);
+      const scriptOption = invocation.script;
+      if (scriptOption) {
+        const script =
+          scriptOption.name === "script"
+            ? readFileSync(resolve(repoRoot, scriptOption.value), "utf8")
+            : await readScriptStdin();
+        const scriptRoot = mkdtempSync(resolve(tmpdir(), "openclaw-crabbox-source-script-"));
+        const scriptPath = resolve(scriptRoot, "script.sh");
+        sourceScriptCleanup = () => rmSync(scriptRoot, { recursive: true, force: true });
+        writeFileSync(
+          scriptPath,
+          wrapRemoteScript(script, `${sourceBootstrap} || exit $?\nexport CI=true`),
+        );
+        chmodSync(scriptPath, 0o700);
+        transformedArgs = replaceRunScript(invocation, scriptPath);
+      } else if (
+        invocation.start >= 0 &&
+        !isAwsMacosRemoteTarget(transformedArgs, options.provider)
+      ) {
+        transformedArgs = replaceRunCommandWithShell(
+          invocation,
+          `${sourceBootstrap} || exit $?; ${renderRunShellCommand(invocation)}`,
+        );
+      }
+    }
+    invocation = parseCommandInvocation(help.text, transformedArgs);
+    transformedArgs = injectRemoteAwsMacosJsBootstrap(
+      invocation,
+      facts,
+      options.provider,
+      sourceBootstrap,
     );
+    invocation = parseCommandInvocation(help.text, transformedArgs);
+    transformedArgs = injectRemoteAwsMacosSwiftBootstrap(
+      invocation,
+      facts,
+      options.provider,
+      facts.swift,
+    );
+    invocation = parseCommandInvocation(help.text, transformedArgs);
+    transformedArgs = injectRemoteWindowsHydratedNodeModulesBootstrap(
+      invocation,
+      facts,
+      options.provider,
+    );
+    return {
+      args: injectRemoteTestboxCi(transformedArgs, options.provider),
+      wsl2ScriptBootstrap: {
+        ...wsl2ScriptBootstrap,
+        cleanup() {
+          wsl2ScriptBootstrap.cleanup();
+          sourceScriptCleanup();
+        },
+      },
+    };
+  } catch (error) {
+    wsl2ScriptBootstrap.cleanup();
+    sourceScriptCleanup();
+    throw error;
   }
-  invocation = parseRunInvocation(help.text, transformedArgs);
-  transformedArgs = injectRemotePosixHydratedNodeModulesBootstrap(invocation);
-  return {
-    args: injectRemoteTestboxBootstrap(transformedArgs, options.provider),
-    wsl2ScriptBootstrap,
-  };
 }
 
-const version = probeCrabboxMetadata(binary, ["--version"]);
-const help = probeCrabboxMetadata(binary, ["run", "--help"]);
+const helpCommand = workloadCommand ? args.slice(0, userArgStart) : ["run"];
+const help = probeCrabboxHelp(binary, [...helpCommand, "--help"]);
 const providers = parseProvidersFromHelp(help.text);
-runValueOptionsFromHelp = parseRunValueOptionsFromHelp(help.text);
+commandValueOptionsFromHelp = parseCommandValueOptionsFromHelp(help.text);
 const displayBinary = binary === "crabbox" ? "crabbox" : relative(repoRoot, binary);
 
-if (
-  version.status !== 0 ||
-  version.text.length === 0 ||
-  help.status !== 0 ||
-  runValueOptionsFromHelp.size === 0
-) {
+if (help.status !== 0 || commandValueOptionsFromHelp.size === 0) {
   console.error(
-    `[crabbox] bin=${displayBinary} version=${version.text || "unknown"} providers=${providers.join(",") || "unknown"}`,
+    `[crabbox] bin=${displayBinary} version=${version} providers=${providers.join(",") || "unknown"}`,
   );
-  console.error("[crabbox] selected binary failed basic --version/--help sanity checks");
+  console.error("[crabbox] selected binary failed --help sanity checks");
   process.exit(2);
 }
 
-const providerSelection = selectedProvider(args, providers, version.text);
+// Classify help before removing the wrapper separator or preparing execution.
+// Only the leaf's option prefix counts; payloads and flag values stay gated.
+// Upstream's `help <command> ...` alias appends --help, so extra payload is not safe.
+const helpFlags = new Set(["--help", "-h"]);
+const invocationOptions = workloadCommand ? parseCommandInvocation(help.text, args).options : null;
+if (
+  helpFlags.has(args[0] ?? "") ||
+  helpFlags.has(args[userArgStart] ?? "") ||
+  (args[0] === "help" && args.length <= commandUserArgStart(args.slice(1)) + 1) ||
+  (["run", "warmup"].includes(args[0] ?? "") && args[1] === "help") ||
+  invocationOptions?.has("help") ||
+  invocationOptions?.has("h")
+) {
+  const invocation = spawnInvocation(binary, args, process.env, process.platform);
+  const result = spawnSync(invocation.command, invocation.args, {
+    cwd: repoRoot,
+    stdio: "inherit",
+    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+  });
+  if (result.error) {
+    console.error(`[crabbox] ${result.error.message}`);
+  }
+  process.exit(result.status ?? 1);
+}
+
+if (args[userArgStart] === "--") {
+  args.splice(userArgStart, 1);
+}
+
+const providerSelection = selectedProvider(args, providers);
 if (providerSelection.error) {
   console.error(`[crabbox] ${providerSelection.error}`);
   if (providerSelection.readiness) {
@@ -3858,7 +3835,7 @@ let normalizedArgs = ensureAwsMacOnDemandMarket(
 );
 
 console.error(
-  `[crabbox] bin=${displayBinary} version=${version.text || "unknown"} provider=${provider || "unknown"} providers=${providers.join(",") || "unknown"}`,
+  `[crabbox] bin=${displayBinary} version=${version} provider=${provider || "unknown"} providers=${providers.join(",") || "unknown"}`,
 );
 if (providerSelection.source === "policy") {
   console.error(
@@ -3874,12 +3851,43 @@ if (provider && !isProviderAdvertised(provider, providers)) {
     process.exit(2);
   }
   console.error(
-    `[crabbox] selected binary does not advertise provider ${provider}; update Crabbox or choose a supported provider`,
+    `[crabbox] selected binary does not advertise provider ${provider}; choose a supported provider`,
   );
   process.exit(2);
 }
 
 if (canonicalProvider === "blacksmith-testbox") {
+  if (["run", "warmup"].includes(normalizedArgs[0] ?? "")) {
+    const workflowRef = parseCommandInvocation(help.text, normalizedArgs).optionEntries.findLast(
+      ({ name }) => name === "blacksmith-ref",
+    );
+    if (workflowRef && workflowRef.value !== "main") {
+      console.error(
+        "[crabbox] Testbox workflow ref must be main so allocations use current spending limits. Omit --blacksmith-ref; the source capsule preserves the checkout being tested.",
+      );
+      process.exit(2);
+    }
+    // Override config/environment refs before binding the allocation receipt.
+    normalizedArgs.splice(commandOptionEnd(normalizedArgs), 0, "--blacksmith-ref=main");
+  }
+  // The delegated provider rejects uploaded scripts before acquiring a lease.
+  if (
+    normalizedArgs[0] === "run" &&
+    parseCommandInvocation(help.text, normalizedArgs).scriptRequested
+  ) {
+    console.error(
+      "[crabbox] provider=blacksmith-testbox does not support --script or --script-stdin. Run a synced script as trailing argv, use --shell, or choose an SSH provider for uploaded scripts.",
+    );
+    process.exit(2);
+  }
+  // Testbox owns sync; reject before lease or checkout side effects.
+  if (normalizedArgs[0] === "run" && hasOption(normalizedArgs, "--no-sync")) {
+    console.error(
+      "[crabbox] provider=blacksmith-testbox does not support --no-sync. Omit the flag only when source synchronization is intended.",
+    );
+    process.exit(2);
+  }
+
   if (isWindowsRemoteTarget(normalizedArgs)) {
     console.error(
       [
@@ -3889,21 +3897,9 @@ if (canonicalProvider === "blacksmith-testbox") {
     );
     process.exit(2);
   }
-
-  if (!satisfiesMinimumCrabboxVersion(version.text, minimumBlacksmithCrabboxVersion)) {
-    console.error(
-      [
-        `[crabbox] provider=blacksmith-testbox requires Crabbox >= ${formatVersionTuple(minimumBlacksmithCrabboxVersion)} for current Testbox sync, queue, and cleanup behavior.`,
-        `[crabbox] selected binary reported version=${version.text || "unknown"}.`,
-        "[crabbox] if using ../crabbox, rebuild it: version=$(git -C ../crabbox describe --tags --always --dirty | sed 's/^v//') && go build -C ../crabbox -trimpath -ldflags \"-s -w -X github.com/openclaw/crabbox/internal/cli.version=${version}\" -o bin/crabbox ./cmd/crabbox",
-      ].join("\n"),
-    );
-    process.exit(2);
-  }
 }
 
 const explicitProviderRequested = Boolean(commandProviderValue);
-enforceBrokeredDaytonaVersion(normalizedArgs, provider, version.text, explicitProviderRequested);
 enforceBrokeredCloud(
   normalizedArgs,
   provider,
@@ -3932,14 +3928,39 @@ if (canonicalProvider === "blacksmith-testbox") {
   enforceCrabboxOwnedBlacksmithLease(normalizedArgs);
 }
 
-let testboxLeaseFreshness;
+let testboxLeaseFreshness: ReturnType<typeof prepareTestboxLeaseFreshness>;
 try {
   testboxLeaseFreshness = prepareTestboxLeaseFreshness({
-    args: normalizedArgs,
+    // Reuse the native-help parser's boundary; payload flags are never lease
+    // options. Equals form preserves option-looking values and Go's last value.
+    args: [
+      normalizedArgs[0] ?? "",
+      ...parseCommandInvocation(help.text, normalizedArgs).optionEntries.map(
+        ({ name, value, index }) =>
+          normalizedArgs[index]?.includes("=") || commandValueOptionsFromHelp.has(name)
+            ? `--${name}=${value}`
+            : `--${name}`,
+      ),
+    ],
+    command: normalizedArgs,
     env: { ...process.env, CI: process.env.CI || "true" },
     provider: canonicalProvider,
     repoRoot,
   });
+  if (testboxLeaseFreshness) {
+    // Native timing carries the allocated id for warmup as well as run. Capture
+    // it so reuse can require an allocation receipt instead of adopting a lease.
+    // Go flags use the last value. An earlier explicit false must not disable
+    // the allocation receipt after a retained lease has already been created.
+    normalizedArgs.splice(commandOptionEnd(normalizedArgs), 0, "--timing-json");
+    console.error(
+      JSON.stringify({
+        event: "testbox-admission",
+        ...testboxLeaseFreshness.attribution,
+        leaseId: testboxLeaseFreshness.id || undefined,
+      }),
+    );
+  }
 } catch (error) {
   console.error(`[crabbox] ${error instanceof Error ? error.message : String(error)}`);
   process.exit(2);
@@ -3947,63 +3968,269 @@ try {
 
 let childCwd = repoRoot;
 let cleanupChildCwd = () => {};
-let fullCheckout = null;
+let fullCheckout: FullCheckout | null = null;
 let stopFullCheckoutKeepalive = () => {};
-let cleanupDone = false;
-let remoteChangedGateBase = "";
+let cleanupSucceeded: boolean | undefined;
+let sourceCapsule: CrabboxSourceCapsule | null = null;
+let sourceStaging: StagingHandle | undefined;
 let remoteChangedGateAlias = "";
-let capturedBlacksmithLeaseId = "";
-const scriptBootstrap = prepareAwsMacosScriptStdinBootstrap(normalizedArgs, provider);
-normalizedArgs = scriptBootstrap.args;
-const scriptStdinPrepared = scriptBootstrap.prepared;
+let capturedLeaseId = "";
+let scriptBootstrap = { args: normalizedArgs, cleanup: () => {}, prepared: false };
 let wsl2ScriptBootstrap = { args: normalizedArgs, cleanup: () => {}, prepared: false };
+const preparationAbort = new AbortController();
+const childKillGraceMs = resolveChildKillGraceMs(process.env);
+let runningChild: ChildProcess | undefined;
+let childTreeSettled = true;
+let childTreeShutdownStarted = false;
+let childSettlement: Promise<boolean> | undefined;
+let cancellationSignal: Signal | undefined;
+const signalExitCodes = new Map<Signal, number>([
+  ["SIGHUP", 129],
+  ["SIGINT", 130],
+  ["SIGTERM", 143],
+]);
+for (const signal of signalExitCodes.keys()) {
+  process.on(signal, () => {
+    cancellationSignal ??= signal;
+    if (runningChild) {
+      void exitAfterChildTreeTermination(
+        runningChild,
+        signal,
+        signalExitCodes.get(cancellationSignal) ?? 1,
+      );
+    } else {
+      preparationAbort.abort();
+    }
+  });
+}
+process.once("exit", cleanupOnce);
+
+function transfersSource(commandArgs: string[]) {
+  if (
+    hasOption(commandArgs, "--help") ||
+    hasOption(commandArgs, "-h") ||
+    hasOption(commandArgs, "--dry-run") ||
+    hasOption(commandArgs, "--no-sync")
+  ) {
+    return false;
+  }
+  const [command, operation] = commandArgs;
+  if (["run", "watch", "shard"].includes(command ?? "")) {
+    return true;
+  }
+  if ((command === "job" || command === "bench") && operation === "run") {
+    return true;
+  }
+  if (command === "capsule" && operation === "replay") {
+    return true;
+  }
+  if (command === "checkpoint" && operation === "fork") {
+    const separator = commandArgs.indexOf("--");
+    return separator >= 0 && separator + 1 < commandArgs.length;
+  }
+  if (command === "actions" && operation === "hydrate") {
+    return true;
+  }
+  return command === "prewarm" && !hasOption(commandArgs, "--no-hydrate");
+}
+
+const sourceTransfer = transfersSource(normalizedArgs);
+let discoveredStaging: ReturnType<typeof discoverStaging> | undefined;
+if (sourceTransfer) {
+  try {
+    discoveredStaging = discoverStaging(fullCheckoutSyncRoot(false));
+    if (discoveredStaging.entries.length || discoveredStaging.incomplete) {
+      const count = (status: string) =>
+        discoveredStaging!.entries.filter((entry) => entry.status === status).length;
+      console.error(
+        `[crabbox] staging discovery: ${count("active")} active, ${count("protected")} protected, ${count("candidate")} candidates${discoveredStaging.incomplete ? "; scan will continue on later runs" : ""}. Use staging inspect for reasons.`,
+      );
+    }
+  } catch (error) {
+    console.error(
+      "[crabbox] staging discovery unavailable: " +
+        (error instanceof Error ? error.message : String(error)),
+    );
+  }
+}
+
+async function readScriptStdin() {
+  return (await consumeStream(addAbortSignal(preparationAbort.signal, process.stdin))).toString(
+    "utf8",
+  );
+}
+
+async function preparationCheckpoint(preparationError?: unknown) {
+  // The first immediate can run in the current check phase. Complete another
+  // poll cycle so signals queued during synchronous preparation are delivered.
+  await yieldToSignals();
+  await yieldToSignals();
+  if (cancellationSignal) {
+    if (preparationError !== undefined) {
+      const message =
+        preparationError instanceof Error
+          ? preparationError.message
+          : typeof preparationError === "string"
+            ? preparationError
+            : "unknown preparation error";
+      console.error(`[crabbox] preparation interrupted: ${message}`);
+    }
+    cleanupOnce();
+    process.exit(signalExitCodes.get(cancellationSignal) ?? 1);
+  }
+}
+
 try {
+  scriptBootstrap = await prepareAwsMacosScriptStdinBootstrap(normalizedArgs, provider);
+  normalizedArgs = scriptBootstrap.args;
   if (shouldUseFullCheckoutForRemoteSync(normalizedArgs, provider)) {
-    const invocation = parseRunInvocation(help.text, normalizedArgs);
+    const invocation = parseCommandInvocation(help.text, normalizedArgs);
     const facts = analyzeRemoteCommand(invocation);
-    const changedGate = facts.changedGate ? changedGateBaseForCommand(facts.commandArgs) : null;
-    const changedGateBase = changedGate?.resolvedBase ?? "";
-    const checkout = prepareFullCheckoutForSync({ changedGateBase });
+    const checkGate = changedGateBaseForCommand(facts.commandArgs);
+    const needsCapsule = needsSourceCapsule(normalizedArgs, provider);
+    if (needsCapsule) {
+      const syncRoot = fullCheckoutSyncRoot();
+      assertFullCheckoutSyncDisk(syncRoot);
+      sourceCapsule = prepareCrabboxSourceCapsule({
+        repoRoot,
+        syncRoot,
+        reuseMirror: canonicalProvider === "blacksmith-testbox",
+        syncPlan: spawnInvocation(
+          binary,
+          ["sync-plan", "--json", "--limit", "2147483647"],
+          process.env,
+          process.platform,
+        ),
+        base: checkGate.resolvedBase,
+      });
+      sourceStaging = sourceCapsule.staging;
+    }
+    const capsule = sourceCapsule;
+    const checkout = capsule
+      ? {
+          dir: capsule.directory,
+          staging: capsule.staging,
+          cleanup: capsule.cleanup,
+          exists: () => pathExists(capsule.directory),
+          restoreIfMissing() {
+            if (!pathExists(capsule.directory)) {
+              throw new Error("frozen source checkout disappeared; rerun from the local candidate");
+            }
+            return false;
+          },
+        }
+      : prepareFullCheckoutForSync();
     fullCheckout = checkout;
+    sourceStaging = checkout.staging;
+    cleanupChildCwd = () => checkout.cleanup();
+    childCwd = checkout.dir;
     normalizedArgs = injectFullCheckoutLeaseReclaim(normalizedArgs);
     // Crabbox claims Git's physical top-level. Match it so macOS /var aliases
     // restore to the invoking repository instead of the disposable checkout.
     childCwd = realpathSync(checkout.dir);
-    cleanupChildCwd = () => checkout.cleanup();
-    remoteChangedGateBase = checkout.changedGateBase;
-    remoteChangedGateAlias = changedGate?.remoteAlias ?? "";
+    remoteChangedGateAlias = checkGate.remoteAlias;
     console.error(
       `[crabbox] isolated checkout sync; syncing from temporary full checkout ${checkout.dir}`,
     );
-    if (checkout.changedGateBase) {
+    if (facts.changedGate && capsule) {
       console.error(
-        `[crabbox] remote changed gate detected; overlaying the local worktree as changes from ${checkout.changedGateBase}`,
+        `[crabbox] remote changed gate detected; overlaying the local worktree as changes from ${capsule.baseSha}`,
       );
     }
   }
 } catch (error) {
-  scriptBootstrap.cleanup();
+  await preparationCheckpoint(error);
+  cleanupOnce();
   throw error;
 }
 
 function cleanupOnce() {
-  if (cleanupDone) {
-    return;
+  if (cleanupSucceeded !== undefined) {
+    return cleanupSucceeded;
   }
-  cleanupDone = true;
-  stopFullCheckoutKeepalive();
-  wsl2ScriptBootstrap.cleanup();
-  scriptBootstrap.cleanup();
-  if (canonicalProvider === "blacksmith-testbox") {
-    // Crabbox stamps claims with its cwd. Delegated runs use a throwaway sync checkout,
-    // so restore the real repo or every later reuse needs --reclaim.
-    restoreTemporaryBlacksmithTestboxClaim(normalizedArgs, capturedBlacksmithLeaseId);
+  cleanupSucceeded = false;
+  if (!childTreeSettled) {
+    failManagedCleanup();
+    try {
+      sourceStaging?.hold("writers");
+    } catch {
+      // The earlier admission receipt remains fail-closed if this update fails.
+    }
+    console.error(
+      childCwd === repoRoot
+        ? "[crabbox] child cleanup is unverified; local inputs remain in place"
+        : `[crabbox] child cleanup is unverified; temporary source retained at ${childCwd}`,
+    );
+    process.exitCode ||= 1;
+    return false;
   }
-  preserveTemporaryCrabboxRuns();
-  cleanupChildCwd();
+  let succeeded = true;
+  let claimsRestored = true;
+  for (const [label, cleanup] of [
+    ["checkout keepalive", stopFullCheckoutKeepalive],
+    ["remote script", wsl2ScriptBootstrap.cleanup],
+    ["script stdin", scriptBootstrap.cleanup],
+  ] as const) {
+    try {
+      cleanup();
+    } catch (error) {
+      succeeded = false;
+      console.error(
+        `[crabbox] ${label} cleanup failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+  if (canonicalProvider === "blacksmith-testbox" || canonicalProvider === "aws") {
+    // Crabbox stamps claims with its cwd; retained leases belong to the caller.
+    claimsRestored = restoreTemporaryLeaseClaim(normalizedArgs, capturedLeaseId);
+    succeeded = claimsRestored && succeeded;
+  }
+  try {
+    const artifacts = preserveCrabboxArtifacts(childCwd, repoRoot);
+    if (artifacts) {
+      sourceStaging?.preserved(artifacts);
+    }
+  } catch (error) {
+    try {
+      sourceStaging?.hold("artifacts");
+    } catch {
+      // No successful preservation receipt was recorded.
+    }
+    console.error(
+      `[crabbox] artifact preservation failed: ${error instanceof Error ? error.message : String(error)}; temporary checkout retained at ${childCwd}. Recover .crabbox/runs and .crabbox/captures from this checkout before removing it.`,
+    );
+    process.exitCode ||= 1;
+    return false;
+  }
+  if (!claimsRestored) {
+    try {
+      sourceStaging?.hold("claims");
+    } catch {
+      // Settled staging still requires a fresh native claim inventory.
+    }
+    console.error(
+      `[crabbox] lease ownership restoration failed; temporary checkout retained at ${childCwd}. Restore the retained lease to ${repoRoot} or stop it before removing this checkout.`,
+    );
+    process.exitCode ||= 1;
+    return false;
+  }
+  try {
+    cleanupChildCwd();
+  } catch (error) {
+    succeeded = false;
+    console.error(
+      `[crabbox] temporary checkout cleanup failed at ${childCwd}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  cleanupSucceeded = succeeded;
+  if (!succeeded) {
+    process.exitCode ||= 1;
+  }
+  return succeeded;
 }
 
-const invocation = parseRunInvocation(help.text, normalizedArgs);
+const scriptStdinPrepared = scriptBootstrap.prepared;
+const invocation = parseCommandInvocation(help.text, normalizedArgs);
 const commandFacts = analyzeRemoteCommand(invocation);
 const runtimeEntrypoint = commandFacts.runtimeEntrypoint;
 if (
@@ -4037,6 +4264,9 @@ if (normalizedArgs[0] === "run" && isBrokeredWsl2RemoteTarget(normalizedArgs, pr
 }
 
 const childEnv = { ...process.env };
+if (sourceCapsule?.configPath) {
+  childEnv.CRABBOX_CONFIG = sourceCapsule.configPath;
+}
 if (canonicalProvider === "blacksmith-testbox" && !childEnv.CI) {
   childEnv.CI = "true";
 }
@@ -4063,15 +4293,16 @@ if (
 }
 
 try {
-  const transformed = applyRunTransforms(invocation, commandFacts, {
+  const transformed = await applyRunTransforms(invocation, commandFacts, {
     changedGateAlias: remoteChangedGateAlias,
-    changedGateBase: remoteChangedGateBase,
+    capsule: sourceCapsule,
     childCwd,
     provider,
   });
   wsl2ScriptBootstrap = transformed.wsl2ScriptBootstrap;
   normalizedArgs = transformed.args;
 } catch (error) {
+  await preparationCheckpoint(error);
   cleanupOnce();
   throw error;
 }
@@ -4086,20 +4317,57 @@ if (fullCheckout) {
   }
 }
 const childInvocation = spawnInvocation(binary, childArgs, childEnv, process.platform);
-const captureBlacksmithTimingJSON =
-  canonicalProvider === "blacksmith-testbox" && hasOption(normalizedArgs, "--timing-json");
+const captureLeaseTimingJSON =
+  (canonicalProvider === "blacksmith-testbox" || canonicalProvider === "aws") &&
+  hasOption(normalizedArgs, "--timing-json");
 // Fast-fail hint context: run --id reuse dies in under a second when the
 // lease hit its idle timeout, with only a bare nonzero exit from the binary.
 const reusedRunLeaseId = normalizedArgs[0] === "run" ? optionValue(normalizedArgs, "--id") : "";
 const childStartedAtMs = Date.now();
 const FAST_FAIL_HINT_WINDOW_MS = 15_000;
-const child = spawn(childInvocation.command, childInvocation.args, {
+const spawnManagedChild = await loadManagedChildSpawner();
+await preparationCheckpoint();
+try {
+  // Verify the allocation still belongs to this caller before native Testbox I/O.
+  testboxLeaseFreshness?.assertCurrent();
+} catch (error) {
+  cleanupOnce();
+  throw error;
+}
+// Persist admission before the child can observe or mutate the staged source.
+if (sourceStaging?.recorded) {
+  let namespace;
+  try {
+    namespace = captureClaimNamespace(childCwd, childEnv);
+  } catch (error) {
+    console.error(
+      "[crabbox] staging claim namespace unavailable; orphan recovery will remain protected: " +
+        (error instanceof Error ? error.message : String(error)),
+    );
+  }
+  const leaseId = optionValue(normalizedArgs, "--id");
+  sourceStaging.admitted(namespace, leaseId ? [leaseId] : undefined);
+}
+try {
+  await claimManagedCleanup();
+  await preparationCheckpoint();
+} catch (error) {
+  if (error instanceof ManagedCleanupCancelled) {
+    cancellationSignal ??= error.signal;
+  }
+  await preparationCheckpoint(error);
+  cleanupOnce();
+  throw error;
+}
+const child = spawnManagedChild(childInvocation.command, childInvocation.args, {
   cwd: childCwd,
-  stdio: ["inherit", "inherit", captureBlacksmithTimingJSON ? "pipe" : "inherit"],
+  stdio: ["inherit", "inherit", captureLeaseTimingJSON ? "pipe" : "inherit"],
   detached: process.platform !== "win32",
   env: childEnv,
   windowsVerbatimArguments: childInvocation.windowsVerbatimArguments,
 });
+runningChild = child;
+childTreeSettled = false;
 const childStderr = child.stderr;
 if (childStderr) {
   const decoder = new StringDecoder("utf8");
@@ -4121,7 +4389,7 @@ if (childStderr) {
         return;
       }
       if (!discardingOversizedLine) {
-        observeBlacksmithTimingJSONLine(pending);
+        observeLeaseTimingJSONLine(pending);
       }
       pending = "";
       discardingOversizedLine = false;
@@ -4139,53 +4407,27 @@ if (childStderr) {
   childStderr.on("end", () => {
     observeText(decoder.end());
     if (pending && !discardingOversizedLine) {
-      observeBlacksmithTimingJSONLine(pending);
+      observeLeaseTimingJSONLine(pending);
     }
   });
 }
-const childKillGraceMs = resolveChildKillGraceMs(process.env);
-let childForceKillTimer: ReturnType<typeof setTimeout> | undefined;
-let childTreeShutdownStarted = false;
-if (fullCheckout) {
-  try {
-    stopFullCheckoutKeepalive = startFullCheckoutKeepalive(fullCheckout, {
-      intervalMs: fullCheckoutKeepaliveIntervalMsValue,
-      onMissing: () => {
-        void exitAfterChildTreeTermination(child, "SIGTERM", 1);
-      },
-    });
-  } catch (error) {
-    signalChildProcessTree(child, "SIGTERM");
-    cleanupOnce();
-    throw error;
-  }
-}
-
-const signalExitCodes = new Map<Signal, number>([
-  ["SIGHUP", 129],
-  ["SIGINT", 130],
-  ["SIGTERM", 143],
-]);
-for (const signal of signalExitCodes.keys()) {
-  process.on(signal, () => {
-    void exitAfterChildTreeTermination(child, signal, signalExitCodes.get(signal) ?? 1);
-  });
-}
-process.once("exit", cleanupOnce);
 
 child.on("exit", (code, signal) => {
-  clearChildForceKillTimer();
   if (childTreeShutdownStarted) {
     return;
   }
+  childTreeShutdownStarted = true;
+  void finishChildExit(code, signal);
+});
+
+async function finishChildExit(code: number | null, signal: Signal | null) {
+  const settled = await settleChildTree(child, signal ?? undefined);
   let exitCode = code;
-  let fullCheckoutAvailable = true;
-  if (fullCheckout) {
-    fullCheckoutAvailable = assertFullCheckoutAvailableBeforeExit(fullCheckout.dir);
-  }
-  if (!signal && code === 0) {
+  const fullCheckoutAvailable =
+    !fullCheckout || assertFullCheckoutAvailableBeforeExit(fullCheckout.dir);
+  if (settled && !signal && (code === 0 || capturedLeaseId)) {
     try {
-      recordTestboxLeaseFreshness(testboxLeaseFreshness);
+      recordTestboxLeaseFreshness(testboxLeaseFreshness, capturedLeaseId, code ?? 1);
     } catch (error) {
       console.error(
         `[crabbox] failed to record Testbox lease freshness: ${error instanceof Error ? error.message : String(error)}`,
@@ -4193,12 +4435,48 @@ child.on("exit", (code, signal) => {
       exitCode = 2;
     }
   }
-  cleanupOnce();
-  if (signal) {
-    process.exit(signalExitCodes.get(signal) ?? 1);
-    return;
+  const cleaned = cleanupOnce();
+  const finalExitCode = (exitCode ?? 1) || (settled && fullCheckoutAvailable && cleaned ? 0 : 1);
+  if (testboxLeaseFreshness) {
+    console.error(
+      JSON.stringify({
+        event: "testbox-completion",
+        ...testboxLeaseFreshness.attribution,
+        leaseId: capturedLeaseId || testboxLeaseFreshness.id || undefined,
+        sourceTree: sourceCapsule?.tree,
+        elapsedMs: Date.now() - childStartedAtMs,
+        exitCode:
+          cancellationSignal || signal
+            ? (signalExitCodes.get(cancellationSignal ?? signal!) ?? 1)
+            : finalExitCode,
+        signal: cancellationSignal || signal,
+        settled,
+      }),
+    );
   }
-  const finalExitCode = fullCheckoutAvailable ? (exitCode ?? 1) : 1;
+  if (cancellationSignal || signal) {
+    process.exit(signalExitCodes.get(cancellationSignal ?? signal!) ?? 1);
+  }
+  if (finalExitCode === 0 && discoveredStaging && !cancellationSignal && !signal) {
+    try {
+      const recovered = await recoverDiscoveredStaging(
+        fullCheckoutSyncRoot(false),
+        discoveredStaging,
+        { binary, cwd: repoRoot, signal: preparationAbort.signal },
+      );
+      if (recovered) {
+        console.error(`[crabbox] staging ${recovered.id}: ${recovered.reason}`);
+      }
+    } catch (error) {
+      console.error(
+        "[crabbox] deferred staging recovery retained its inputs: " +
+          (error instanceof Error ? error.message : String(error)),
+      );
+    }
+  }
+  if (cancellationSignal) {
+    process.exit(signalExitCodes.get(cancellationSignal) ?? 1);
+  }
   if (
     finalExitCode !== 0 &&
     reusedRunLeaseId &&
@@ -4209,20 +4487,78 @@ child.on("exit", (code, signal) => {
     );
   }
   process.exit(finalExitCode);
-});
+}
 
 child.on("error", (error) => {
-  clearChildForceKillTimer();
   if (childTreeShutdownStarted) {
     return;
   }
-  if (fullCheckout) {
-    assertFullCheckoutAvailableBeforeExit(fullCheckout.dir);
-  }
-  cleanupOnce();
+  childTreeShutdownStarted = true;
   console.error(`[crabbox] failed to execute ${displayBinary}: ${error.message}`);
-  process.exit(2);
+  void (async () => {
+    if (child.pid) {
+      await settleChildTree(child, "SIGTERM");
+    } else {
+      childTreeSettled = true;
+    }
+    cleanupOnce();
+    process.exit(2);
+  })();
 });
+
+if (fullCheckout) {
+  try {
+    stopFullCheckoutKeepalive = startFullCheckoutKeepalive(fullCheckout, {
+      intervalMs: fullCheckoutKeepaliveIntervalMsValue,
+      onMissing: () => {
+        void exitAfterChildTreeTermination(child, "SIGTERM", 1);
+      },
+    });
+  } catch (error) {
+    await settleChildTree(child, "SIGTERM");
+    cleanupOnce();
+    throw error;
+  }
+}
+
+function settleChildTree(childProcess: ChildProcess, signal?: Signal): Promise<boolean> {
+  return (childSettlement ??= finalizeManagedChild(childProcess, signal, {
+    platform: process.platform,
+    runTaskkill: spawnSync,
+    forceKillDelayMs: childKillGraceMs,
+    drainTimeoutMs: childKillGraceMs,
+    onTerminated: () => {
+      // Only the existing finalizer can certify writer/group/output closure.
+      // A failed receipt write keeps future recovery conservative; the live
+      // owner still completes its already-authorized normal cleanup.
+      try {
+        sourceStaging?.settled(capturedLeaseId ? [capturedLeaseId] : undefined);
+      } catch (error) {
+        console.error(
+          "[crabbox] staging settlement receipt failed: " +
+            (error instanceof Error ? error.message : String(error)),
+        );
+      }
+    },
+  }).then(
+    () => {
+      childTreeSettled = true;
+      runningChild = undefined;
+      return true;
+    },
+    (error: unknown) => {
+      childTreeSettled = !hasUnjoinedWork(error);
+      if (childTreeSettled) {
+        runningChild = undefined;
+      }
+      console.error(
+        `[crabbox] child cleanup failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      process.exitCode ||= 1;
+      return false;
+    },
+  ));
+}
 
 async function exitAfterChildTreeTermination(
   childProcess: ChildProcess,
@@ -4230,80 +4566,14 @@ async function exitAfterChildTreeTermination(
   exitCode: number,
 ) {
   if (childTreeShutdownStarted) {
-    signalChildProcessTree(childProcess, "SIGKILL");
+    // Package-manager/terminal teardown can follow one interrupt with SIGHUP.
+    // Keep the existing finalizer's grace instead of force-killing its writers.
     return;
   }
   childTreeShutdownStarted = true;
-  signalChildProcessTree(childProcess, signal);
-  await waitForChildTreeExit(childProcess, childKillGraceMs);
-  if (childProcessTreeIsAlive(childProcess)) {
-    signalChildProcessTree(childProcess, "SIGKILL");
-  }
-  await waitForChildTreeExit(childProcess, childKillGraceMs);
+  await settleChildTree(childProcess, signal);
   cleanupOnce();
   process.exit(exitCode);
-}
-
-function signalChildProcessTree(childProcess: ChildProcess, signal: Signal) {
-  if (
-    process.platform === "win32" &&
-    (childProcess.exitCode !== null || childProcess.signalCode !== null)
-  ) {
-    return;
-  }
-  try {
-    if (process.platform !== "win32" && typeof childProcess.pid === "number") {
-      process.kill(-childProcess.pid, signal);
-    } else {
-      childProcess.kill(signal);
-    }
-  } catch (error) {
-    if (!(error instanceof Error && "code" in error && error.code === "ESRCH")) {
-      try {
-        childProcess.kill(signal);
-      } catch {}
-    }
-  }
-  if (signal !== "SIGKILL" && !childForceKillTimer) {
-    childForceKillTimer = setTimeout(() => {
-      childForceKillTimer = undefined;
-      signalChildProcessTree(childProcess, "SIGKILL");
-    }, childKillGraceMs);
-    childForceKillTimer.unref?.();
-  }
-}
-
-function clearChildForceKillTimer() {
-  if (childForceKillTimer) {
-    clearTimeout(childForceKillTimer);
-    childForceKillTimer = undefined;
-  }
-}
-
-function childProcessTreeIsAlive(childProcess: ChildProcess) {
-  if (process.platform === "win32" || typeof childProcess.pid !== "number") {
-    return childProcess.exitCode === null && childProcess.signalCode === null;
-  }
-  try {
-    process.kill(-childProcess.pid, 0);
-    return true;
-  } catch (error) {
-    return error instanceof Error && "code" in error && error.code === "EPERM";
-  }
-}
-
-async function waitForChildTreeExit(childProcess: ChildProcess, timeoutMs: number) {
-  const started = Date.now();
-  while (Date.now() - started < timeoutMs) {
-    if (!childProcessTreeIsAlive(childProcess)) {
-      clearChildForceKillTimer();
-      return true;
-    }
-    await new Promise((done) => {
-      setTimeout(done, 50);
-    });
-  }
-  return !childProcessTreeIsAlive(childProcess);
 }
 
 function resolveChildKillGraceMs(env: ProcessEnv) {

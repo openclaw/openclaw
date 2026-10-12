@@ -1,24 +1,31 @@
-/** Prepares the guarded stream runtime before prompt execution and settlement. */
 import {
   bindOwnedSessionTranscriptWrites,
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
+import { withGuardedFetchRequestAuthority } from "../../../infra/net/fetch-request-authority.js";
 import { createDiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
+import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import {
   mergeAgentRunAttemptTerminal,
   projectAgentRunAttemptTerminal,
   type AgentRunAttemptTerminal,
 } from "../../agent-run-terminal-outcome.js";
+import { agentSessionSetContextReplacementHook } from "../../sessions/agent-session-compaction.js";
 import { log } from "../logger.js";
+import { declarePromptHistoryRewrite } from "../prompt-cache-observability.js";
 import type { EmbeddedAgentQueueHandle } from "../runs.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import { abortable as abortableWithSignal } from "./abortable.js";
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
-import { createEmbeddedAttemptRunAbort } from "./attempt-finalize.js";
-import { prepareEmbeddedAttemptHistory } from "./attempt-history.js";
+import {
+  createEmbeddedAttemptIdleInterruption,
+  createEmbeddedAttemptRunAbort,
+} from "./attempt-finalize.js";
+import { prepareEmbeddedAttemptHistory } from "./attempt-history-prepare.js";
 import { runEmbeddedAttemptSettledPhase } from "./attempt-settle.js";
 import { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
 import { installEmbeddedAttemptStreamGuards } from "./attempt-stream.js";
+import { cleanupEmbeddedAttemptResources } from "./attempt-subscription-cleanup.js";
 import { prepareEmbeddedAttemptTimeout } from "./attempt-timeout-prepare.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
@@ -26,38 +33,25 @@ export async function runEmbeddedAttemptExecutionPhase(
   input: EmbeddedAttemptExecutionPhaseInput,
 ): Promise<EmbeddedRunAttemptResult> {
   const { attempt, state } = input;
-  const { sessionRuntime, systemPrompt, toolBase, toolCatalog } = input.prepared;
+  const { sessionRuntime, systemPrompt, toolBase } = input.prepared;
   const {
-    agentSession: {
-      activeSession,
-      allCustomTools,
-      builtinToolNames,
-      coreBuiltinToolNames,
-      clientToolCallSlots,
-      hasDeliveredSourceReply,
-      hookRunner,
-      markSourceReplyDelivered,
-      replaySafeToolNames,
-      replaySafeTools,
-      sideEffectToolOwners,
-      setActiveSessionSystemPrompt,
-      settingsManager,
-    },
-    anthropicPayloadLogger,
-    cacheTrace,
-    isOpenAIResponsesApi,
-    sessionManager,
+    agentSession: { activeSession, replaySafeTools },
     settleTracker: { abortActiveSession, trackPromptSettlePromise },
-    state: sessionRuntimeState,
-    transcriptPolicy,
-    transport: { effectiveAgentTransport, providerTextTransforms },
   } = sessionRuntime;
-  const { orphanRepair } = sessionRuntime.boundary;
-  const { capabilityToolNames, liveAllowedToolNames, replayAllowedToolNames } =
-    toolCatalog.toolSearchRunPlan;
-  const { runtimeChannel } = systemPrompt;
-  const { toolSearchTargetTranscriptProjections } = toolBase;
-  const hookAgentId = input.setup.sessionAgentId;
+  // Preparation can retire admission; never install an unfenced memory compactor.
+  const assertActive = resolveAdmittedRunActiveAssertion(
+    attempt.admittedRunContext,
+    input.runAbortController.signal,
+  );
+  if (!assertActive) {
+    input.runAbortController.signal.throwIfAborted();
+    throw new Error("embedded attempt requires an active admitted run");
+  }
+  activeSession[agentSessionSetContextReplacementHook]((tokensAfter) => {
+    declarePromptHistoryRewrite({ ...attempt, reason: "compaction" });
+    toolBase.skillInstructionDeliveryCache.clear();
+    attempt.onContextAccountingEvent?.({ kind: "compaction", tokensAfter });
+  }, assertActive);
   let repairedRejectedProviderReplay = false;
   const diagnosticOwner = createDiagnosticEmbeddedRunOwner({
     sessionId: attempt.sessionId,
@@ -69,62 +63,28 @@ export async function runEmbeddedAttemptExecutionPhase(
   };
 
   const idleTimeoutTriggerRef: { current?: (error: Error) => void } = {};
-  const { cacheObservabilityEnabled, promptCacheTools } = installEmbeddedAttemptStreamGuards({
-    attempt,
-    session: activeSession,
-    sessionManager,
-    sessionAgentId: input.setup.sessionAgentId,
-    cacheTrace,
-    allCustomTools,
-    systemPromptText: sessionRuntimeState.systemPromptText,
-    transcriptPolicy,
-    isOpenAIResponsesApi,
-    replayAllowedToolNames,
-    liveAllowedToolNames,
-    anthropicPayloadLogger,
-    effectiveAgentTransport,
-    providerTextTransforms,
-    runTrace: input.diagnostics.runTrace,
-    isYieldDetected: () => input.lifecycle.readYieldState().yieldDetected,
-    onRejectedProviderReplayRepaired: () => {
-      repairedRejectedProviderReplay = true;
-    },
-    onIdleTimeout: (error) => idleTimeoutTriggerRef.current?.(error),
-    abortSignal: input.runAbortController.signal,
-    diagnosticOwner,
-  });
+  const { onModelRequest, onModelUsage, getPromptCacheObservation, isModelCallActive } =
+    installEmbeddedAttemptStreamGuards(input, {
+      onRejectedProviderReplayRepaired: () => {
+        repairedRejectedProviderReplay = true;
+      },
+      onIdleTimeout: (error) => idleTimeoutTriggerRef.current?.(error),
+      diagnosticOwner,
+    });
   input.setup.prepStages.mark("stream-setup");
   input.setup.emitPrepStageSummary("stream-ready");
 
   let preparedHistory: Awaited<ReturnType<typeof prepareEmbeddedAttemptHistory>>;
   try {
-    preparedHistory = await prepareEmbeddedAttemptHistory({
-      attempt,
-      activeSession,
-      sessionManager,
-      ...(input.activeContextEngine ? { activeContextEngine: input.activeContextEngine } : {}),
-      cacheTrace,
-      capabilityToolNames,
-      effectiveWorkspace: input.setup.effectiveWorkspace,
-      isOpenAIResponsesApi,
-      isRawModelRun: input.isRawModelRun,
-      ...(orphanRepair ? { orphanRepair } : {}),
-      replayAllowedToolNames,
-      sandboxed: input.setup.sandbox?.enabled === true,
-      sessionAgentId: input.setup.sessionAgentId,
-      settingsManager,
-      systemPromptText: sessionRuntimeState.systemPromptText,
-      transcriptPolicy,
-      setActiveSessionSystemPrompt,
-    });
+    preparedHistory = await prepareEmbeddedAttemptHistory(input, assertActive);
   } catch (error) {
-    await flushPendingToolResultsAfterIdle({
-      agent: activeSession.agent,
-      sessionManager,
-      // An already-aborted setup must dispose immediately without orphaning tool calls.
-      ...(attempt.abortSignal?.aborted ? { timeoutMs: 0 } : {}),
+    await cleanupEmbeddedAttemptResources({
+      flushPendingToolResultsAfterIdle,
+      session: activeSession,
+      sessionManager: sessionRuntime.sessionManager,
+      aborted: attempt.abortSignal?.aborted,
+      abortSignal: attempt.abortSignal,
     });
-    activeSession.dispose();
     throw error;
   }
 
@@ -138,21 +98,16 @@ export async function runEmbeddedAttemptExecutionPhase(
     isProbeSession,
     log,
     runAbortController: input.runAbortController,
-    state: input.abortState,
+    state: input.state,
   });
   input.externalAbortController.setRunAbort(abortRun);
-  idleTimeoutTriggerRef.current = (error) => {
-    // Caller cancellation owns the terminal outcome when it beats a late watchdog callback.
-    if (input.runAbortController.signal.aborted) {
-      return;
-    }
-    mergeTerminal({
-      kind: "timeout",
-      phase: activeSession.isCompacting ? "compaction" : "prompt",
-      source: "idle",
-    });
-    abortRun(true, error);
-  };
+  const interruptIdleRequest = createEmbeddedAttemptIdleInterruption({
+    runAbortController: input.runAbortController,
+    activeSession,
+    state,
+    abortRun,
+  });
+  idleTimeoutTriggerRef.current = interruptIdleRequest;
   const abortable = <T>(promise: Promise<T>): Promise<T> =>
     abortableWithSignal(input.runAbortController.signal, promise);
   const promptActiveSession = (
@@ -165,26 +120,36 @@ export async function runEmbeddedAttemptExecutionPhase(
       if (input.runAbortController.signal.aborted) {
         return abortable(Promise.resolve());
       }
-      return abortable(trackPromptSettlePromise(activeSession.prompt(prompt, options)));
+      const runPrompt = () => activeSession.prompt(prompt, options);
+      return abortable(
+        trackPromptSettlePromise(
+          input.sessionLock.assertCronRootCurrent
+            ? withGuardedFetchRequestAuthority(input.sessionLock.assertCronRootCurrent, runPrompt)
+            : runPrompt(),
+        ),
+      );
     });
-  const onBlockReply = attempt.onBlockReply
-    ? bindOwnedSessionTranscriptWrites(
-        input.sessionLock.ownedTranscriptWriteContext,
-        attempt.onBlockReply,
-      )
-    : undefined;
-  const onBlockReplyFlush = attempt.onBlockReplyFlush
-    ? bindOwnedSessionTranscriptWrites(
-        input.sessionLock.ownedTranscriptWriteContext,
-        attempt.onBlockReplyFlush,
-      )
-    : undefined;
+  const bindTranscriptCallback = <TArgs extends unknown[], TResult>(
+    callback: ((...args: TArgs) => TResult) | undefined,
+  ) =>
+    callback
+      ? bindOwnedSessionTranscriptWrites(input.sessionLock.ownedTranscriptWriteContext, callback)
+      : undefined;
+  const onBlockReply = bindTranscriptCallback(attempt.onBlockReply);
+  const onBlockReplyFlush = bindTranscriptCallback(attempt.onBlockReplyFlush);
   const preparedStream = prepareEmbeddedAttemptStream({
     attempt,
-    activeSession,
+    agentSession: sessionRuntime.agentSession,
+    onModelUsage,
+    applyPermissionMode: input.lifecycle.applyPermissionMode,
     runAbortController: input.runAbortController,
     abortRun,
     markExternalAbort: () => mergeTerminal({ kind: "aborted", source: "external" }),
+    recoverStalledModelCall: () =>
+      isModelCallActive() &&
+      interruptIdleRequest(
+        new Error("LLM idle timeout (diagnostic stuck recovery): no response from model"),
+      ),
     getRunState: () => {
       const terminal = projectAgentRunAttemptTerminal(state.terminal);
       return {
@@ -196,22 +161,15 @@ export async function runEmbeddedAttemptExecutionPhase(
     },
     onBlockReply,
     onBlockReplyFlush,
-    runtimeChannel,
-    hookRunner,
-    hookAgentId,
+    runtimeChannel: systemPrompt.runtimeChannel,
+    hookAgentId: input.setup.sessionAgentId,
     diagnosticTrace: input.diagnostics.diagnosticTrace,
-    clientToolCallSlots,
-    toolSearchTargetTranscriptProjections,
+    nestedToolActivityState: toolBase.nestedToolActivityState,
     isReplaySafeTool: (tool) => replaySafeTools.has(tool as never),
-    hasDeliveredSourceReply,
-    markSourceReplyDelivered,
-    sandboxSessionKey: input.setup.sandboxSessionKey,
-    builtinToolNames,
-    coreBuiltinToolNames,
-    replaySafeToolNames,
-    sideEffectToolOwners,
     diagnosticOwner,
+    trajectoryRecorder: sessionRuntime.trajectoryRecorder,
   });
+  state.deferredLifecycleOwner = preparedStream.deferredLifecycleOwner;
   input.lifecycle.setToolSearchCatalogExecutor(preparedStream.toolSearchCatalogExecutor);
   input.externalAbortController.setCompactionState({
     isPendingOrRetrying: preparedStream.subscription.isCompacting,
@@ -222,6 +180,7 @@ export async function runEmbeddedAttemptExecutionPhase(
   const attemptTimeout = prepareEmbeddedAttemptTimeout({
     attempt,
     activeSession,
+    runAbortSignal: input.runAbortController.signal,
     compactionState: preparedStream.subscription,
     compactionTimeoutMs: input.sessionLock.compactionTimeoutMs,
     isProbeSession,
@@ -235,8 +194,8 @@ export async function runEmbeddedAttemptExecutionPhase(
   const preparedStreamRuntime = {
     abortable,
     cache: {
-      observabilityEnabled: cacheObservabilityEnabled,
-      promptTools: promptCacheTools,
+      onModelRequest,
+      getObservation: getPromptCacheObservation,
     },
     history: preparedHistory,
     isProbeSession,

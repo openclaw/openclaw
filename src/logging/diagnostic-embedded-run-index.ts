@@ -1,29 +1,12 @@
-type EmbeddedRunActivity<TRun extends { runId: string }> = {
-  activeEmbeddedRuns: Map<string, TRun>;
-};
-
-export function createDiagnosticEmbeddedRunIndex<
-  TRun extends { runId: string },
-  TActivity extends EmbeddedRunActivity<TRun>,
->(runIdIndex: Map<string, TActivity>) {
-  const remove = (activity: TActivity, workKey: string): TRun | undefined => {
-    const embeddedRun = activity.activeEmbeddedRuns.get(workKey);
-    if (!embeddedRun) {
-      return undefined;
+// Re-arming a work key can advance its sequence without changing Map iteration order.
+export function resolveCurrentDiagnosticRunId(
+  owners: Iterable<{ runId: string; sequence: number }>,
+): string | undefined {
+  let currentOwner: { runId: string; sequence: number } | undefined;
+  for (const owner of owners) {
+    if (!currentOwner || owner.sequence > currentOwner.sequence) {
+      currentOwner = owner;
     }
-    activity.activeEmbeddedRuns.delete(workKey);
-    const runIdStillActive = Array.from(activity.activeEmbeddedRuns.values()).some(
-      (candidate) => candidate.runId === embeddedRun.runId,
-    );
-    if (!runIdStillActive && runIdIndex.get(embeddedRun.runId) === activity) {
-      runIdIndex.delete(embeddedRun.runId);
-    }
-    return embeddedRun;
-  };
-  const clear = (activity: TActivity): void => {
-    for (const workKey of Array.from(activity.activeEmbeddedRuns.keys())) {
-      remove(activity, workKey);
-    }
-  };
-  return { clear, remove };
+  }
+  return currentOwner?.runId;
 }

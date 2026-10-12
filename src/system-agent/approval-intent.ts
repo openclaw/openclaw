@@ -1,9 +1,11 @@
 // Classifies whether a user's chat message approves a pending OpenClaw proposal.
 import { extractEmbeddedAssistantText } from "../agents/embedded-agent-utils.js";
 import {
+  acquireSimpleCompletionModelForAgent,
   completeWithPreparedSimpleCompletionModel,
-  prepareSimpleCompletionModelForAgent,
 } from "../agents/simple-completion-runtime.js";
+import { AsyncWorkScope, captureAsyncWorkTracker } from "../shared/async-work-scope.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   classifySystemAgentApprovalText,
   type SystemAgentApprovalIntent,
@@ -43,12 +45,6 @@ const APPROVAL_INTENT_SYSTEM_PROMPT = [
   "Only classify consent for the pending change itself. A message asking to change the proposal is not approval.",
 ].join("\n");
 
-export type SystemAgentApprovalIntentDeps = {
-  resolveVerifiedInferenceRoute?: typeof resolveSystemAgentVerifiedInferenceRoute;
-  prepareSimpleCompletionModelForAgent?: typeof prepareSimpleCompletionModelForAgent;
-  completeWithPreparedSimpleCompletionModel?: typeof completeWithPreparedSimpleCompletionModel;
-};
-
 /**
  * Judge whether a message approves the pending proposal. Closed-list answers
  * short-circuit so a literal "yes" cannot be reinterpreted by the conversation
@@ -56,22 +52,17 @@ export type SystemAgentApprovalIntentDeps = {
  * CLI-harness routes do not spawn a second harness for that check, so their
  * ambiguous replies stay "other" and the conversation asks for a clear yes.
  */
-export async function classifySystemAgentApprovalIntent(
-  params: {
-    message: string;
-    proposal?: string;
-    verifiedInference: SystemAgentVerifiedInferenceBinding;
-  },
-  deps: SystemAgentApprovalIntentDeps = {},
-): Promise<SystemAgentApprovalIntent> {
+export async function classifySystemAgentApprovalIntent(params: {
+  message: string;
+  proposal?: string;
+  verifiedInference: SystemAgentVerifiedInferenceBinding;
+}): Promise<SystemAgentApprovalIntent> {
   const textIntent = classifySystemAgentApprovalText(params.message);
   if (textIntent !== "other") {
     return textIntent;
   }
   try {
-    const resolveVerifiedRoute =
-      deps.resolveVerifiedInferenceRoute ?? resolveSystemAgentVerifiedInferenceRoute;
-    const route = await resolveVerifiedRoute(params.verifiedInference);
+    const route = await resolveSystemAgentVerifiedInferenceRoute(params.verifiedInference);
     // A second direct completion would bypass CLI and plugin-harness execution
     // ownership. Those routes require an exact closed-list approval instead.
     if (!route || route.runner !== "embedded" || route.agentHarnessRuntimeOverride !== "openclaw") {
@@ -80,70 +71,89 @@ export async function classifySystemAgentApprovalIntent(
     const modelRef = route.authProfileId
       ? `${route.modelLabel}@${route.authProfileId}`
       : route.modelLabel;
-    const prepared = await (
-      deps.prepareSimpleCompletionModelForAgent ?? prepareSimpleCompletionModelForAgent
-    )({
-      cfg: route.runConfig,
-      agentId: route.agentId,
-      agentDir: route.agentDir,
-      modelRef,
-      ...(route.authProfileId ? { preferredProfile: route.authProfileId } : {}),
-      allowMissingApiKeyModes: ["aws-sdk"],
-      bindAuthOwner: true,
-    });
-    if ("error" in prepared) {
-      return "other";
-    }
-    const preparedProvider = prepared.selection.runtimeProvider ?? prepared.selection.provider;
-    if (
-      preparedProvider !== route.provider ||
-      prepared.selection.modelId !== route.model ||
-      prepared.selection.agentDir !== route.agentDir ||
-      prepared.selection.profileId !== route.authProfileId ||
-      prepared.auth.profileId !== route.authProfileId ||
-      !params.verifiedInference.auth.authFingerprint ||
-      prepared.sourceAuthFingerprint !== params.verifiedInference.auth.authFingerprint
-    ) {
-      return "other";
-    }
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), APPROVAL_INTENT_TIMEOUT_MS);
-    try {
-      const response = await (
-        deps.completeWithPreparedSimpleCompletionModel ?? completeWithPreparedSimpleCompletionModel
-      )({
-        model: prepared.model,
-        auth: prepared.auth,
+    const callerResult = createDeferredCore<SystemAgentApprovalIntent>();
+    const trackOwner = captureAsyncWorkTracker();
+    // Reporting a verdict does not settle response callbacks or cancellation work.
+    void trackOwner(async () => {
+      const prepared = await acquireSimpleCompletionModelForAgent({
         cfg: route.runConfig,
-        context: {
-          systemPrompt: APPROVAL_INTENT_SYSTEM_PROMPT,
-          messages: [
-            {
-              role: "user",
-              content: [
-                `Pending change: ${params.proposal ?? "a configuration change proposed in this conversation"}`,
-                `User message: ${params.message}`,
-              ].join("\n"),
-              timestamp: Date.now(),
-            },
-          ],
-        },
-        options: {
-          maxTokens: APPROVAL_INTENT_MAX_TOKENS,
-          signal: controller.signal,
-        },
+        agentId: route.agentId,
+        agentDir: route.agentDir,
+        modelRef,
+        ...(route.authProfileId ? { preferredProfile: route.authProfileId } : {}),
+        allowMissingApiKeyModes: ["aws-sdk"],
+        bindAuthOwner: true,
       });
-      if (!(await resolveVerifiedRoute(params.verifiedInference))) {
-        return "other";
+      if ("error" in prepared) {
+        callerResult.resolve("other");
+        return;
       }
-      const verdict = extractEmbeddedAssistantText(response)?.trim().toLowerCase().split(/\s+/)[0];
-      if (verdict === "approve" || verdict === "decline") {
-        return verdict;
+      const work = new AsyncWorkScope();
+      try {
+        callerResult.resolve(
+          await work.track(async () => {
+            const preparedProvider =
+              prepared.selection.runtimeProvider ?? prepared.selection.provider;
+            if (
+              preparedProvider !== route.provider ||
+              prepared.selection.modelId !== route.model ||
+              prepared.selection.agentDir !== route.agentDir ||
+              prepared.selection.profileId !== route.authProfileId ||
+              prepared.auth.profileId !== route.authProfileId ||
+              !params.verifiedInference.auth.authFingerprint ||
+              prepared.sourceAuthFingerprint !== params.verifiedInference.auth.authFingerprint
+            ) {
+              return "other";
+            }
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), APPROVAL_INTENT_TIMEOUT_MS);
+            try {
+              const response = await completeWithPreparedSimpleCompletionModel({
+                model: prepared.model,
+                auth: prepared.auth,
+                cfg: route.runConfig,
+                context: {
+                  systemPrompt: APPROVAL_INTENT_SYSTEM_PROMPT,
+                  messages: [
+                    {
+                      role: "user",
+                      content: [
+                        `Pending change: ${params.proposal ?? "a configuration change proposed in this conversation"}`,
+                        `User message: ${params.message}`,
+                      ].join("\n"),
+                      timestamp: Date.now(),
+                    },
+                  ],
+                },
+                options: {
+                  maxTokens: APPROVAL_INTENT_MAX_TOKENS,
+                  signal: controller.signal,
+                },
+              });
+              if (!(await resolveSystemAgentVerifiedInferenceRoute(params.verifiedInference))) {
+                return "other";
+              }
+              const verdict = extractEmbeddedAssistantText(response)
+                ?.trim()
+                .toLowerCase()
+                .split(/\s+/)[0];
+              if (verdict === "approve" || verdict === "decline") {
+                return verdict;
+              }
+              return "other";
+            } finally {
+              clearTimeout(timer);
+            }
+          }),
+        );
+      } catch {
+        callerResult.resolve("other");
+      } finally {
+        await work.drain();
+        await prepared[Symbol.asyncDispose]();
       }
-      return "other";
-    } finally {
-      clearTimeout(timer);
-    }
+    }).catch(() => callerResult.resolve("other"));
+    return await callerResult.promise;
   } catch {
     // Approval must fail closed: an unreachable model means no arming.
     return "other";

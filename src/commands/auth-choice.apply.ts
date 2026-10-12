@@ -6,97 +6,55 @@ import type {
   ApplyAuthChoiceResult,
   PreparedAuthChoiceResult,
 } from "./auth-choice.apply.types.js";
-import type { AuthChoice } from "./onboard-types.js";
-
-async function normalizeLegacyChoice(
-  authChoice: AuthChoice | undefined,
-  params: Pick<ApplyAuthChoiceParams, "config" | "env" | "workspaceDir">,
-): Promise<AuthChoice | undefined> {
-  if (authChoice === "oauth") {
-    return "setup-token";
-  }
-  if (typeof authChoice !== "string") {
-    return authChoice;
-  }
-  const { normalizeLegacyOnboardAuthChoice } = await import("./auth-choice-legacy.js");
-  return normalizeLegacyOnboardAuthChoice(authChoice, params);
-}
-
-async function normalizeTokenProviderChoice(params: {
-  authChoice: AuthChoice;
-  source: ApplyAuthChoiceParams;
-}): Promise<AuthChoice> {
-  if (!params.source.opts?.tokenProvider) {
-    return params.authChoice;
-  }
-  if (
-    params.authChoice !== "apiKey" &&
-    params.authChoice !== "token" &&
-    params.authChoice !== "setup-token"
-  ) {
-    return params.authChoice;
-  }
-  const { normalizeApiKeyTokenProviderAuthChoice } =
-    await import("./auth-choice.apply.api-providers.js");
-  return normalizeApiKeyTokenProviderAuthChoice({
-    authChoice: params.authChoice,
-    tokenProvider: params.source.opts.tokenProvider,
-    config: params.source.config,
-    workspaceDir: params.source.workspaceDir,
-    env: params.source.env,
-  });
-}
-
-async function formatDeprecatedProviderChoiceError(
-  authChoice: AuthChoice | undefined,
-  params: Pick<ApplyAuthChoiceParams, "config" | "env" | "workspaceDir">,
-): Promise<string | undefined> {
-  if (typeof authChoice !== "string") {
-    return undefined;
-  }
-  const { resolveManifestDeprecatedProviderAuthChoice } =
-    await import("../plugins/provider-auth-choices.js");
-  const deprecatedChoice = resolveManifestDeprecatedProviderAuthChoice(authChoice, params);
-  if (deprecatedChoice) {
-    return `Auth choice ${JSON.stringify(authChoice)} is no longer supported. Use ${JSON.stringify(deprecatedChoice.choiceId)} instead, or run ${formatCliCommand("openclaw onboard")} to choose interactively.`;
-  }
-  const { resolveDeprecatedProviderInstallCatalogEntry } =
-    await import("../plugins/provider-install-catalog.js");
-  const externalDeprecatedChoice = resolveDeprecatedProviderInstallCatalogEntry(authChoice, {
-    ...params,
-    includeUntrustedWorkspacePlugins: false,
-  });
-  if (!externalDeprecatedChoice) {
-    return undefined;
-  }
-  return `Auth choice ${JSON.stringify(authChoice)} is no longer supported. Use ${JSON.stringify(externalDeprecatedChoice.choiceId)} instead, or run ${formatCliCommand("openclaw onboard")} to choose interactively.`;
-}
 
 /** Prepare a selected auth choice without writing its returned provider profiles. */
 export async function prepareAuthChoice(
   params: ApplyAuthChoiceParams,
 ): Promise<PreparedAuthChoiceResult> {
-  const normalizedAuthChoice =
-    (await normalizeLegacyChoice(params.authChoice, params)) ?? params.authChoice;
-  const normalizedProviderAuthChoice = await normalizeTokenProviderChoice({
-    authChoice: normalizedAuthChoice,
-    source: params,
-  });
-  const normalizedParams =
-    normalizedProviderAuthChoice === params.authChoice
-      ? params
-      : { ...params, authChoice: normalizedProviderAuthChoice };
-  const result = await prepareAuthChoiceLoadedPluginProvider(normalizedParams);
+  let authChoice = params.authChoice;
+  if (authChoice === "oauth") {
+    authChoice = "setup-token";
+  } else {
+    const { resolveLegacyOnboardAuthChoice } = await import("./auth-choice-legacy.js");
+    authChoice = resolveLegacyOnboardAuthChoice(authChoice, params).authChoice ?? authChoice;
+  }
+  if (
+    params.opts?.tokenProvider &&
+    (authChoice === "apiKey" || authChoice === "token" || authChoice === "setup-token")
+  ) {
+    const { normalizeApiKeyTokenProviderAuthChoice } =
+      await import("./auth-choice.apply.api-providers.js");
+    authChoice = normalizeApiKeyTokenProviderAuthChoice({
+      authChoice,
+      tokenProvider: params.opts.tokenProvider,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+    });
+  }
+  const normalizedParams = authChoice === params.authChoice ? params : { ...params, authChoice };
+  const result = await prepareAuthChoiceLoadedPluginProvider(
+    normalizedParams,
+    (prepared) => prepared,
+  );
   if (result) {
     return result;
   }
 
-  const deprecatedProviderChoiceError = await formatDeprecatedProviderChoiceError(
-    normalizedParams.authChoice,
-    normalizedParams,
-  );
-  if (deprecatedProviderChoiceError) {
-    throw new Error(deprecatedProviderChoiceError);
+  const { resolveManifestDeprecatedProviderAuthChoice } =
+    await import("../plugins/provider-auth-choices.js");
+  const deprecatedChoice =
+    resolveManifestDeprecatedProviderAuthChoice(authChoice, normalizedParams) ??
+    (
+      await import("../plugins/provider-install-catalog.js")
+    ).resolveDeprecatedProviderInstallCatalogEntry(authChoice, {
+      ...normalizedParams,
+      includeUntrustedWorkspacePlugins: false,
+    });
+  if (deprecatedChoice) {
+    throw new Error(
+      `Auth choice ${JSON.stringify(authChoice)} is no longer supported. Use ${JSON.stringify(deprecatedChoice.choiceId)} instead, or run ${formatCliCommand("openclaw onboard")} to choose interactively.`,
+    );
   }
 
   if (normalizedParams.authChoice === "token" || normalizedParams.authChoice === "setup-token") {
@@ -129,6 +87,9 @@ export async function applyAuthChoice(
   await prepared.persistAuthProfiles();
   return {
     config: prepared.config,
+    ...(prepared.utilityModelOverride
+      ? { utilityModelOverride: prepared.utilityModelOverride, modelTarget: prepared.modelTarget }
+      : {}),
     ...(prepared.agentModelOverride ? { agentModelOverride: prepared.agentModelOverride } : {}),
     ...(prepared.retrySelection ? { retrySelection: true } : {}),
   };

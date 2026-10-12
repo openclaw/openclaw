@@ -1,36 +1,46 @@
 // Built-in OpenClaw harness tests cover logical thinking-mode boundaries.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 
 const runEmbeddedAttempt = vi.hoisted(() => vi.fn());
 const completeWithPreparedSimpleCompletionModel = vi.hoisted(() => vi.fn());
 
 vi.mock("../embedded-agent-runner/run/attempt.js", () => ({ runEmbeddedAttempt }));
-vi.mock("../simple-completion-runtime.js", () => ({ completeWithPreparedSimpleCompletionModel }));
+vi.mock("../simple-completion-execution.js", () => ({ completeWithPreparedSimpleCompletionModel }));
 
 import { createOpenClawAgentHarness, isBuiltInOpenClawAgentHarness } from "./builtin-openclaw.js";
 
 describe("createOpenClawAgentHarness", () => {
   beforeEach(() => {
     runEmbeddedAttempt.mockReset();
-    runEmbeddedAttempt.mockResolvedValue({
-      terminal: { kind: "ok" },
-      sessionIdUsed: "session-1",
-      messagesSnapshot: [],
-      assistantTexts: ["done"],
-      toolMetas: [],
-      lastAssistant: undefined,
-      currentAttemptCompletedAssistant: {
-        role: "assistant",
-        content: [{ type: "text", text: "done" }],
-        stopReason: "stop",
-      },
-      didSendViaMessagingTool: false,
-      messagingToolSentTexts: [],
-      messagingToolSentMediaUrls: [],
-      messagingToolSentTargets: [],
-      cloudCodeAssistFormatError: false,
-      replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-      itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
+    runEmbeddedAttempt.mockImplementation(async (params: EmbeddedRunAttemptParams) => {
+      params.onAttemptDeadlineChanged?.({ kind: "bounded", deadlineAtMs: 123_456 });
+      params.onAttemptTimeoutArmed?.();
+      await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
+      await params.onAgentEvent?.({
+        stream: "lifecycle",
+        data: { phase: params.deferTerminalLifecycle ? "finishing" : "end" },
+      });
+      return {
+        terminal: { kind: "ok" },
+        sessionIdUsed: "session-1",
+        messagesSnapshot: [],
+        assistantTexts: ["done"],
+        toolMetas: [],
+        lastAssistant: undefined,
+        currentAttemptCompletedAssistant: {
+          role: "assistant",
+          content: [{ type: "text", text: "done" }],
+          stopReason: "stop",
+        },
+        didSendViaMessagingTool: false,
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: [],
+        messagingToolSentTargets: [],
+        cloudCodeAssistFormatError: false,
+        replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+        itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
+      };
     });
     completeWithPreparedSimpleCompletionModel.mockReset();
     completeWithPreparedSimpleCompletionModel.mockResolvedValue({
@@ -59,12 +69,29 @@ describe("createOpenClawAgentHarness", () => {
 
     await createOpenClawAgentHarness().runAttempt(params);
 
-    expect(runEmbeddedAttempt).toHaveBeenCalledWith(params);
+    expect(runEmbeddedAttempt).toHaveBeenCalledWith({
+      thinkLevel: "ultra",
+      supportsTurnScopedToolRestrictions: true,
+    });
   });
 
-  it("enforces a tool-free settled-turn finalization", async () => {
+  it("carries only explicit live harness support", async () => {
+    const harness = createOpenClawAgentHarness();
+    harness.supportsTurnScopedToolRestrictions = false;
+    await harness.runAttempt({ supportsTurnScopedToolRestrictions: true } as never);
+    expect(runEmbeddedAttempt).toHaveBeenCalledWith({ supportsTurnScopedToolRestrictions: false });
+  });
+
+  it("enforces tool-free finalization while forwarding execution and lifecycle notifications", async () => {
+    const sessionManager = { owner: "host" };
+    const prepareAssistantTranscriptMessage = vi.fn();
+    const onAttemptDeadlineChanged = vi.fn();
+    const onAttemptTimeoutArmed = vi.fn();
+    const onAgentEvent = vi.fn<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>();
     const attempt = {
       prompt: "finalize",
+      sessionManager,
+      sessionPersistence: "detached",
       disableTools: false,
       extraSystemPrompt: "ambient system context",
       skillsSnapshot: { prompt: "ambient skills" },
@@ -72,20 +99,37 @@ describe("createOpenClawAgentHarness", () => {
       internalEvents: [{ type: "ambient-event" }],
       trigger: "heartbeat",
       onPartialReply: vi.fn(),
+      onAttemptDeadlineChanged,
+      onAttemptTimeoutArmed,
+      onAgentEvent,
+      deferTerminalLifecycle: true,
+      prepareAssistantTranscriptMessage,
     } as never;
     const harness = createOpenClawAgentHarness();
 
     await harness.finalizeSettledTurn?.({ attempt, settledAttempt: {} as never });
 
+    expect(onAttemptDeadlineChanged).toHaveBeenCalledExactlyOnceWith({
+      kind: "bounded",
+      deadlineAtMs: 123_456,
+    });
+    expect(onAttemptTimeoutArmed).toHaveBeenCalledOnce();
+    expect(onAgentEvent.mock.calls).toEqual([
+      [{ stream: "lifecycle", data: { phase: "start" } }],
+      [{ stream: "lifecycle", data: { phase: "finishing" } }],
+    ]);
     expect(runEmbeddedAttempt).toHaveBeenCalledWith(
       expect.objectContaining({
         prompt: "finalize",
+        sessionManager,
+        sessionPersistence: "detached",
         disableTools: true,
         disableTrajectory: true,
         skipPreparedUserTurnMessage: true,
         suppressNextUserMessagePersistence: true,
         initialReplayState: { replayInvalid: false, hadPotentialSideEffects: false },
         operation: "settled-tool-finalization",
+        prepareAssistantTranscriptMessage,
       }),
     );
     const finalizationAttempt = runEmbeddedAttempt.mock.calls[0]?.[0] as Record<string, unknown>;
@@ -113,6 +157,7 @@ describe("createOpenClawAgentHarness", () => {
       agentId: "main",
       agentDir: "/tmp/agent",
       workspaceDir: "/tmp/workspace",
+      outputTextPolicy: "strict-visible",
     } as unknown as Parameters<
       NonNullable<ReturnType<typeof createOpenClawAgentHarness>["runIsolatedCompletionV2"]>
     >[0];
@@ -124,6 +169,7 @@ describe("createOpenClawAgentHarness", () => {
       expect.objectContaining({
         model: expect.objectContaining({ provider: "openai", id: "gpt-test" }),
         auth: expect.objectContaining({ apiKey: "secret", mode: "api-key" }),
+        options: expect.objectContaining({ strictReasoningTags: true }),
         context: {
           systemPrompt: "system",
           messages: [expect.objectContaining({ role: "user", content: "user" })],

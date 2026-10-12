@@ -1,4 +1,3 @@
-// Deepseek plugin entrypoint registers its OpenClaw integration.
 import { readConfiguredProviderCatalogEntries } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
@@ -22,6 +21,7 @@ export default defineSingleProviderPluginEntry({
     docsPath: "/providers/deepseek",
     manifestAuth: { applyConfig: applyDeepSeekConfig },
     catalog: {
+      discoveryMode: "strict",
       buildProvider: buildDeepSeekProvider,
       buildStaticProvider: buildDeepSeekProvider,
       liveModelDiscovery: true,
@@ -42,9 +42,11 @@ export default defineSingleProviderPluginEntry({
     resolveThinkingProfile: ({ modelId }) => resolveDeepSeekV4ThinkingProfile(modelId),
     isModernModelRef: ({ modelId }) => Boolean(resolveDeepSeekV4ThinkingProfile(modelId)),
     resolveUsageAuth: async (ctx) => {
-      const apiKey = ctx.resolveApiKeyFromConfigAndStore({
-        envDirect: [ctx.env.DEEPSEEK_API_KEY],
-      });
+      const apiKey = (
+        await ctx.resolveApiKeyCandidatesFromConfigAndStore?.({
+          envDirect: [ctx.env.DEEPSEEK_API_KEY],
+        })
+      )?.[0];
       return apiKey ? { token: apiKey } : null;
     },
     fetchUsageSnapshot: async (ctx) =>

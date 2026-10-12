@@ -1,78 +1,18 @@
-// Core gateway method descriptors keep handler names, auth scopes, startup availability, and write policy in one table.
-import type { OperatorScope } from "../operator-scopes.js";
-import { isSessionProfileDependentMethod } from "../session-sharing-target-input.js";
-import {
-  DYNAMIC_GATEWAY_METHOD_SCOPE,
-  NODE_GATEWAY_METHOD_SCOPE,
-  type GatewayMethodDescriptorInput,
-  type GatewayMethodHandler,
-  type GatewayMethodScope,
-} from "./descriptor.js";
+import type { CoreGatewayMethodSpecRow } from "./core-descriptor-types.js";
+import { cronListShareKey, modelsListShareKey, operatorReadShareKey } from "./read-share-keys.js";
 
-type CoreGatewayMethodSpec = {
-  name: string;
-  family?: string;
-  scope: GatewayMethodScope;
-  since?: string;
-  advertise?: false;
-  startup?: true;
-  controlPlaneWrite?: true;
-  compatibilityRestored?: true;
-  description?: string;
-};
-
-type CoreGatewayMethodMetadata = Pick<CoreGatewayMethodSpec, "name" | "scope" | "since">;
-type CoreGatewayMethodPolicy = Pick<
-  CoreGatewayMethodSpec,
-  "advertise" | "startup" | "controlPlaneWrite" | "compatibilityRestored" | "description"
->;
-type CoreGatewayMethodSpecRow = readonly [
-  name: string,
-  family: string | null,
-  scope: GatewayMethodScope,
-  since: string,
-  policy?: CoreGatewayMethodPolicy,
-];
-
-const PROFILE_DEPENDENT_CORE_METHODS = new Set([
-  "agent.wait",
-  "ui.command",
-  "users.linkEmail",
-  "users.setAvatar",
-  "users.setDisplayName",
-  "users.setRole",
-]);
-const PROFILE_DEPENDENT_CORE_PREFIXES = [
-  "artifacts.",
-  "chat.",
-  "conversations.",
-  "controlUi.session",
-  "mcp.app.",
-  "openclaw.approval.",
-  "openclaw.chat",
-  "progressCard.",
-  "projects.",
-  "secrets.",
-  "session.",
-  "sessions.",
-  "taskSuggestions.",
-  "tasks.",
-  "terminal.",
-  "users.prefs.",
-] as const;
-
-/** Classifies core methods whose behavior reads or mutates durable user/session ownership. */
-function isCoreGatewayMethodProfileDependent(method: string): boolean {
-  return (
-    isSessionProfileDependentMethod(method) ||
-    PROFILE_DEPENDENT_CORE_METHODS.has(method) ||
-    PROFILE_DEPENDENT_CORE_PREFIXES.some((prefix) => method.startsWith(prefix))
-  );
-}
+// Canonical append-only method table; derived lookup and dispatch policy lives in core-method-policy.ts.
+const CONTROL_PLANE_WRITE = { controlPlaneWrite: true } as const;
+const SIDECAR_CONTROL_PLANE_WRITE = { startup: true, controlPlaneWrite: true } as const;
+const OBSERVATION = { lifetime: "observation" } as const;
+const SESSION_WRITE = { sessionAccess: { mode: "write" } } as const;
+const PORTAL_SESSION_WRITE = {
+  sessionAccess: { mode: "write", allowOwnSessionScope: true, requiredTool: "portal" },
+} as const;
 
 // This is the canonical core method policy table: every core handler must appear here so
 // listing, authorization, startup availability, and write throttling stay in sync.
-const CORE_GATEWAY_METHOD_SPECS = [
+export const CORE_GATEWAY_METHOD_SPECS = [
   ["health", "health", "operator.read", "<=2026.7"],
   ["diagnostics.stability", "diagnostics", "operator.read", "<=2026.7"],
   ["doctor.memory.status", "doctor", "operator.read", "<=2026.7"],
@@ -100,8 +40,8 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["tts.setPersona", "tts", "operator.write", "<=2026.7"],
   ["config.get", "config", "operator.read", "<=2026.7"],
   ["config.set", "config", "operator.admin", "<=2026.7"],
-  ["config.apply", "config", "operator.admin", "<=2026.7", { controlPlaneWrite: true }],
-  ["config.patch", "config", "operator.admin", "<=2026.7", { controlPlaneWrite: true }],
+  ["config.apply", "config", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
+  ["config.patch", "config", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
   ["config.schema", "config", "operator.read", "<=2026.7"],
   ["config.schema.lookup", "config", "operator.read", "<=2026.7"],
   ["exec.approvals.get", "exec-approvals", "operator.admin", "<=2026.7"],
@@ -111,27 +51,30 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["exec.approval.get", null, "operator.approvals", "<=2026.7"],
   ["exec.approval.list", null, "operator.approvals", "<=2026.7"],
   ["exec.approval.request", null, "operator.approvals", "<=2026.7"],
-  ["exec.approval.waitDecision", null, "operator.approvals", "<=2026.7"],
+  ["exec.approval.waitDecision", null, "operator.approvals", "<=2026.7", OBSERVATION],
   ["exec.approval.resolve", null, "operator.approvals", "<=2026.7"],
+  ["exec.approval.grants.list", null, "operator.approvals", "2026.8"],
+  ["exec.approval.grants.revoke", null, "operator.approvals", "2026.8"],
   ["question.request", null, "operator.questions", "2026.7"],
-  ["question.waitAnswer", null, "operator.questions", "2026.7"],
+  ["question.waitAnswer", null, "operator.questions", "2026.7", OBSERVATION],
   ["question.resolve", null, "operator.questions", "2026.7"],
   ["question.get", null, "operator.questions", "2026.7"],
   ["question.list", null, "operator.questions", "2026.7"],
   ["plugin.approval.list", null, "operator.approvals", "<=2026.7"],
   ["plugin.approval.request", null, "operator.approvals", "<=2026.7"],
-  ["plugin.approval.waitDecision", null, "operator.approvals", "<=2026.7"],
+  ["plugin.approval.waitDecision", null, "operator.approvals", "<=2026.7", OBSERVATION],
   ["plugin.approval.resolve", null, "operator.approvals", "<=2026.7"],
   ["plugins.uiDescriptors", "plugin-host-hooks", "operator.read", "<=2026.7"],
   ["plugins.sessionAction", "plugin-host-hooks", "dynamic", "<=2026.7"],
   ["openclaw.chat", "system-agent", "operator.admin", "<=2026.7"],
   ["openclaw.chat.history", "system-agent", "operator.admin", "2026.7"],
   ["openclaw.changes.list", "system-changes", "operator.admin", "<=2026.7"],
-  ["openclaw.approval.list", "system-agent", "operator.approvals", "<=2026.7"],
+  ["openclaw.approval.list", "system-agent-approvals", "operator.approvals", "<=2026.7"],
   ["openclaw.setup.detect", "system-agent", "operator.admin", "<=2026.7"],
   // Failed activation candidates are non-mutating probes. Keep this admin-only
   // without the shared three-write budget so the automatic ladder can finish.
   ["openclaw.setup.activate", "system-agent", "operator.admin", "<=2026.7"],
+  ["openclaw.setup.activate.start", "system-agent", "operator.admin", "2026.8"],
   ["openclaw.setup.auth.start", "system-agent", "operator.admin", "<=2026.7"],
   ["openclaw.setup.prepare.start", "system-agent", "operator.admin", "<=2026.7"],
   ["wizard.start", "wizard", "operator.admin", "<=2026.7"],
@@ -154,17 +97,22 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["talk.session.steer", "talk", "operator.talk", "<=2026.7"],
   ["talk.session.close", "talk", "operator.talk", "<=2026.7"],
   ["talk.speak", "talk", "operator.talk", "<=2026.7"],
-  ["talk.mode", "talk", "operator.talk", "<=2026.7"],
+  ["talk.mode", "talk-mode", "operator.talk", "<=2026.7"],
   ["commands.list", "commands", "operator.read", "<=2026.7"],
-  ["models.list", "models", "operator.read", "<=2026.7", { startup: true }],
-  ["models.authStatus", "models-auth-status", "operator.read", "<=2026.7"],
   [
-    "models.authLogout",
-    "models-auth-status",
-    "operator.admin",
+    "models.list",
+    "models",
+    "operator.read",
     "<=2026.7",
-    { controlPlaneWrite: true },
+    {
+      startup: true,
+      shareKey: modelsListShareKey,
+      shareMaxAgeMs: 1_000,
+      shareInvalidationEvents: ["chat.metadata.changed", "sessions.changed"],
+    },
   ],
+  ["models.authStatus", "models-auth-status", "operator.read", "<=2026.7"],
+  ["models.authLogout", "models-auth-status", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
   ["tools.catalog", "tools-catalog", "operator.read", "<=2026.7"],
   ["tools.effective", "tools-effective", "operator.read", "<=2026.7", { startup: true }],
   ["tools.invoke", "tools-invoke", "operator.write", "<=2026.7"],
@@ -184,19 +132,26 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["audit.list", "audit", "operator.read", "2026.7"],
   ["audit.activity.list", "audit", "operator.read", "2026.7"],
   ["users.list", "users", "operator.read", "<=2026.7"],
-  ["users.self", "users", "operator.write", "<=2026.7"],
+  ["users.self", "users", "operator.read", "<=2026.7"],
   ["users.linkEmail", "users", "operator.admin", "<=2026.7"],
   ["users.setDisplayName", "users", "operator.write", "<=2026.7"],
   ["users.setAvatar", "users", "operator.write", "<=2026.7"],
   ["users.setRole", "users", "operator.admin", "2026.8"],
-  ["tasks.list", "tasks", "operator.read", "<=2026.7"],
-  ["tasks.get", "tasks", "operator.read", "<=2026.7"],
-  ["tasks.cancel", "tasks", "operator.write", "<=2026.7"],
+  ["users.listAuthLinks", "users", "operator.read", "2026.8"],
+  ["users.listModelAccounts", "users", "operator.read", "2026.8"],
+  ["users.selectModelAccount", "users", "operator.write", "2026.8"],
+  ["users.linkAuthProfile", "users", "operator.admin", "2026.8"],
+  ["users.unlinkAuthProfile", "users", "operator.write", "2026.8"],
+  ["users.authConnect.start", "users", "operator.write", "2026.8"],
+  ["users.authConnect.answer", "users", "operator.write", "2026.8"],
+  ["users.authConnect.status", "users", "operator.write", "2026.8"],
+  ["users.authConnect.cancel", "users", "operator.write", "2026.8"],
+  ["users.authConnect.catalog", "users", "operator.write", "2026.8"],
   ["taskSuggestions.list", "task-suggestions", "operator.read", "<=2026.7"],
   ["taskSuggestions.create", "task-suggestions", "operator.write", "<=2026.7"],
   ["taskSuggestions.accept", "task-suggestions", "operator.admin", "<=2026.7"],
   ["taskSuggestions.dismiss", "task-suggestions", "operator.write", "<=2026.7"],
-  ["environments.list", "environments", "operator.read", "2026.7"],
+  ["environments.list", "environments", "dynamic", "2026.7"],
   ["environments.status", "environments", "operator.read", "2026.7"],
   ["worktrees.list", "worktrees", "operator.read", "2026.7"],
   // Read-only git probe, but it accepts arbitrary host paths; keep it at the
@@ -205,10 +160,10 @@ const CORE_GATEWAY_METHOD_SPECS = [
   // Params-aware: Gateway paths start at write scope and are containment-checked
   // by the handler; node browsing remains admin-only.
   ["fs.listDir", "fs", "dynamic", "<=2026.7"],
-  ["worktrees.create", "worktrees", "operator.write", "2026.7", { controlPlaneWrite: true }],
-  ["worktrees.remove", "worktrees", "operator.admin", "2026.7", { controlPlaneWrite: true }],
-  ["worktrees.restore", "worktrees", "operator.admin", "2026.7", { controlPlaneWrite: true }],
-  ["worktrees.gc", "worktrees", "operator.admin", "2026.7", { controlPlaneWrite: true }],
+  ["worktrees.create", "worktrees", "operator.write", "2026.7", CONTROL_PLANE_WRITE],
+  ["worktrees.remove", "worktrees", "operator.admin", "2026.7", CONTROL_PLANE_WRITE],
+  ["worktrees.restore", "worktrees", "operator.admin", "2026.7", CONTROL_PLANE_WRITE],
+  ["worktrees.gc", "worktrees", "operator.admin", "2026.7", CONTROL_PLANE_WRITE],
   ["agents.list", "agents", "operator.read", "<=2026.7"],
   ["agents.create", "agents", "operator.admin", "<=2026.7"],
   ["agents.update", "agents", "operator.admin", "<=2026.7"],
@@ -225,6 +180,13 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["artifacts.get", "artifacts", "operator.read", "<=2026.7"],
   ["artifacts.download", "artifacts", "operator.read", "<=2026.7"],
   ["skills.status", "skills", "operator.read", "<=2026.7"],
+  ["skills.library.list", "skills", "operator.read", "2026.8"],
+  ["skills.library.read", "skills", "operator.read", "2026.8"],
+  ["skills.library.save", "skills", "operator.write", "2026.8"],
+  ["skills.library.mutate", "skills", "operator.write", "2026.8"],
+  ["skills.library.activate", "skills", "operator.write", "2026.8"],
+  ["skills.library.import", "skills", "operator.write", "2026.8"],
+  ["skills.library.upload", "skills", "operator.write", "2026.8"],
   ["skills.search", "skills", "operator.read", "<=2026.7"],
   ["skills.detail", "skills", "operator.read", "<=2026.7"],
   ["skills.securityVerdicts", "skills", "operator.read", "<=2026.7"],
@@ -251,22 +213,30 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["skills.proposals.reject", "skills", "operator.admin", "<=2026.7"],
   ["skills.proposals.quarantine", "skills", "operator.admin", "<=2026.7"],
   ["update.status", "update", "operator.admin", "<=2026.7"],
-  ["update.run", "update", "operator.admin", "<=2026.7", { controlPlaneWrite: true }],
+  ["update.run", "update", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
   ["voicewake.get", "voicewake", "operator.read", "<=2026.7"],
   ["voicewake.set", "voicewake", "operator.write", "<=2026.7"],
   ["secrets.reload", null, "operator.admin", "<=2026.7"],
   ["secrets.resolve", null, "operator.admin", "<=2026.7"],
   ["voicewake.routing.get", "voicewake-routing", "operator.read", "<=2026.7"],
-  ["sessions.list", "sessions-read", "operator.read", "<=2026.7", { startup: true }],
-  ["sessions.subscribe", "sessions-subscriptions", "operator.read", "<=2026.7"],
+  [
+    "sessions.list",
+    "sessions-read",
+    "operator.read",
+    "<=2026.7",
+    {
+      startup: true,
+      shareKey: operatorReadShareKey,
+      shareMaxAgeMs: 1_000,
+      shareInvalidationEvents: ["sessions.changed", "chat.metadata.changed"],
+    },
+  ],
+  ["sessions.subscribe", "sessions-subscriptions", "operator.read", "<=2026.7", { startup: true }],
   ["sessions.messages.subscribe", "sessions-subscriptions", "operator.read", "<=2026.7"],
   ["sessions.messages.unsubscribe", "sessions-subscriptions", "operator.read", "<=2026.7"],
   ["sessions.viewers.set", "sessions-subscriptions", "operator.read", "2026.7"],
   ["sessions.preview", "sessions-read", "operator.read", "<=2026.7"],
-  ["sessions.describe", "sessions-read", "operator.read", "<=2026.7"],
-  ["sessions.compaction.list", "sessions-compaction-queries", "operator.read", "<=2026.7"],
-  ["sessions.compaction.branch", "sessions-compaction-checkpoints", "operator.write", "<=2026.7"],
-  ["sessions.compaction.restore", "sessions-compaction-checkpoints", "operator.admin", "<=2026.7"],
+  ["sessions.describe", "sessions-read", "operator.read", "<=2026.7", { lifetime: "observation" }],
   ["sessions.branches.list", "sessions-rewind", "operator.read", "<=2026.7"],
   ["sessions.branches.switch", "sessions-rewind", "operator.admin", "<=2026.7"],
   ["sessions.rewind", "sessions-rewind", "operator.admin", "<=2026.7"],
@@ -281,6 +251,8 @@ const CORE_GATEWAY_METHOD_SPECS = [
   // in shared/session-method-scopes.ts. The admin-only sticky configured-default
   // persistence guard lives in server-methods/sessions-mutations.ts.
   ["sessions.patch", "sessions-mutations", "dynamic", "<=2026.7"],
+  ["sessions.goal.update", "sessions-goal", "operator.write", "2026.8"],
+  ["sessions.goal.clear", "sessions-goal", "operator.write", "2026.8"],
   ["sessions.pluginPatch", "sessions-mutations", "operator.admin", "<=2026.7"],
   ["sessions.cleanup", "sessions-read", "operator.admin", "<=2026.7"],
   ["sessions.reset", "sessions-mutations", "operator.admin", "<=2026.7"],
@@ -340,14 +312,34 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["node.invoke.result", "nodes", "node", "<=2026.7"],
   ["node.event", "nodes", "node", "<=2026.7"],
   ["cron.get", "cron", "operator.read", "<=2026.7"],
-  ["cron.list", "cron", "operator.read", "<=2026.7"],
-  ["cron.status", "cron", "operator.read", "<=2026.7"],
+  [
+    "cron.list",
+    "cron",
+    "operator.read",
+    "<=2026.7",
+    {
+      shareKey: cronListShareKey,
+      shareMaxAgeMs: 1_000,
+      shareInvalidationEvents: ["cron", "sessions.changed"],
+    },
+  ],
+  [
+    "cron.status",
+    "cron",
+    "operator.read",
+    "<=2026.7",
+    {
+      shareKey: operatorReadShareKey,
+      shareMaxAgeMs: 1_000,
+      shareInvalidationEvents: ["cron"],
+    },
+  ],
   ["cron.scratch.get", "cron", "operator.admin", "2026.7"],
   ["cron.scratch.set", "cron", "operator.admin", "2026.7"],
-  ["cron.add", "cron", "operator.admin", "<=2026.7", { controlPlaneWrite: true }],
-  ["cron.update", "cron", "operator.admin", "<=2026.7", { controlPlaneWrite: true }],
-  ["cron.remove", "cron", "operator.admin", "<=2026.7", { controlPlaneWrite: true }],
-  ["cron.run", "cron", "operator.admin", "<=2026.7", { controlPlaneWrite: true }],
+  ["cron.add", "cron", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
+  ["cron.update", "cron", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
+  ["cron.remove", "cron", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
+  ["cron.run", "cron", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
   ["cron.runs", "cron", "operator.read", "<=2026.7"],
   ["gateway.identity.get", "system", "operator.read", "<=2026.7"],
   // Deprecated read-only compatibility preview; new restart flows request the
@@ -359,7 +351,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
     "<=2026.7",
     { compatibilityRestored: true },
   ],
-  ["gateway.restart.request", "restart", "operator.admin", "<=2026.7", { controlPlaneWrite: true }],
+  ["gateway.restart.request", "restart", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
   ["system-presence", "system", "operator.read", "<=2026.7"],
   ["system-event", "system", "operator.admin", "<=2026.7"],
   ["message.action", "send", "operator.write", "<=2026.7"],
@@ -370,13 +362,24 @@ const CORE_GATEWAY_METHOD_SPECS = [
   // Params-aware: ordinary turns need write; /new and /reset mutate lifecycle state as admin.
   ["agent", "agent", "dynamic", "<=2026.7", { startup: true }],
   ["agent.identity.get", "agent-identity", "operator.read", "<=2026.7"],
-  ["agent.wait", "agent", "operator.write", "<=2026.7", { startup: true }],
+  ["agent.wait", "agent", "operator.write", "<=2026.7", { startup: true, lifetime: "observation" }],
   ["chat.history", "chat", "operator.read", "<=2026.7", { startup: true }],
   ["chat.startup", "chat", "operator.read", "<=2026.7", { startup: true }],
-  ["chat.metadata", "chat", "operator.read", "<=2026.7", { startup: true }],
+  [
+    "chat.metadata",
+    "chat",
+    "operator.read",
+    "<=2026.7",
+    {
+      startup: true,
+      shareKey: operatorReadShareKey,
+      shareMaxAgeMs: 1_000,
+      shareInvalidationEvents: ["chat.metadata.changed", "sessions.changed"],
+    },
+  ],
   ["chat.message.get", "chat", "operator.read", "<=2026.7", { startup: true }],
-  ["chat.abort", "chat", "operator.write", "<=2026.7"],
-  ["chat.send", "chat", "operator.write", "<=2026.7", { startup: true }],
+  ["chat.abort", "chat-abort", "operator.write", "<=2026.7"],
+  ["chat.send", "chat-send", "operator.write", "<=2026.7", { startup: true }],
   // Operator terminal: admin-only PTY surface. Appended to the advertised block
   // so existing advertised method indices stay stable for older clients.
   ["terminal.open", "terminal", "operator.admin", "2026.7"],
@@ -389,7 +392,13 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["channels.pairing.approve", "channel-pairing", "dynamic", "2026.7"],
   ["channels.pairing.dismiss", "channel-pairing", "operator.pairing", "2026.7"],
   ["assistant.media.get", null, "operator.read", "<=2026.7", { advertise: false }],
-  ["sessions.get", "sessions-read", "operator.read", "<=2026.7", { advertise: false }],
+  [
+    "sessions.get",
+    "sessions-read",
+    "operator.read",
+    "<=2026.7",
+    { advertise: false, lifetime: "observation" },
+  ],
   ["sessions.resolve", "sessions-read", "operator.read", "<=2026.7", { advertise: false }],
   ["sessions.usage", "usage", "operator.read", "<=2026.7", { advertise: false }],
   ["sessions.usage.timeseries", "usage", "operator.read", "<=2026.7", { advertise: false }],
@@ -407,12 +416,14 @@ const CORE_GATEWAY_METHOD_SPECS = [
     },
   ],
   ["push.test", "push", "operator.write", "<=2026.7", { advertise: false }],
-  ["attach.grant", "attach", "operator.admin", "<=2026.7", { controlPlaneWrite: true }],
+  ["attach.grant", "attach", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
   ["attach.revoke", "attach", "operator.admin", "<=2026.7"],
   ["push.web.vapidPublicKey", "push", "operator.write", "<=2026.7", { advertise: false }],
   ["push.web.subscribe", "push", "operator.write", "<=2026.7", { advertise: false }],
   ["push.web.unsubscribe", "push", "operator.write", "<=2026.7", { advertise: false }],
   ["push.web.test", "push", "operator.write", "<=2026.7", { advertise: false }],
+  ["push.web.preferences.get", "push", "operator.read", "2026.8"],
+  ["push.web.preferences.set", "push", "operator.write", "2026.8"],
   ["config.openFile", "config", "operator.admin", "<=2026.7", { advertise: false }],
   ["connect", "connect", "operator.admin", "<=2026.7", { advertise: false }],
   ["chat.inject", "chat", "operator.admin", "<=2026.7", { advertise: false }],
@@ -424,7 +435,6 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["terminal.attach", "terminal", "operator.admin", "2026.7"],
   ["terminal.list", "terminal", "operator.admin", "2026.7"],
   ["controlUi.githubPreview", "control-ui", "operator.read", "<=2026.7"],
-  // Additive discovery methods append here so older clients keep stable indices.
   ["system.info", "system", "operator.read", "<=2026.7"],
   // Workspace contents stay in the documented trusted operator domain, like session and log
   // reads. Strong user/tenant isolation requires separate Gateways; see operator-scopes.md.
@@ -433,21 +443,15 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["tts.speak", "tts", "operator.write", "2026.7"],
   ["plugins.list", "plugins", "operator.read", "<=2026.7"],
   ["plugins.search", "plugins", "operator.read", "<=2026.7"],
-  ["plugins.install", "plugins", "operator.admin", "<=2026.7", { controlPlaneWrite: true }],
-  ["plugins.setEnabled", "plugins", "operator.admin", "<=2026.7", { controlPlaneWrite: true }],
-  ["plugins.uninstall", "plugins", "operator.admin", "<=2026.7", { controlPlaneWrite: true }],
-  ["plugins.refresh", "plugins", "operator.admin", "<=2026.7", { controlPlaneWrite: true }],
+  ["plugins.install", "plugins-mutations", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
+  ["plugins.setEnabled", "plugins-mutations", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
+  ["plugins.uninstall", "plugins-mutations", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
+  ["plugins.refresh", "plugins-mutations", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
   // Session PR chips read the session's own checkout metadata, matching the
   // sessions.files.* trusted-operator read domain.
   ["controlUi.sessionPullRequests.subscribe", "control-ui", "operator.read", "2026.7"],
   ["controlUi.sessionPreview", "control-ui", "operator.read", "2026.8"],
-  [
-    "gateway.suspend.prepare",
-    "suspend",
-    "operator.admin",
-    "2026.7",
-    { startup: true, controlPlaneWrite: true },
-  ],
+  ["gateway.suspend.prepare", "suspend", "operator.admin", "2026.7", SIDECAR_CONTROL_PLANE_WRITE],
   ["gateway.suspend.status", "suspend", "operator.read", "2026.7"],
   // Resume is the safety escape hatch and must not sit behind write-rate limiting.
   ["gateway.suspend.resume", "suspend", "operator.admin", "2026.7"],
@@ -457,24 +461,11 @@ const CORE_GATEWAY_METHOD_SPECS = [
   // Session checkout diff reads the session's own git worktree, matching the
   // sessions.files.* trusted-operator read domain.
   ["sessions.diff", "sessions-diff", "operator.read", "<=2026.7"],
-  // Additive protocol methods append here to preserve existing advertised indices.
   ["openclaw.setup.verify", "system-agent", "operator.admin", "<=2026.7"],
   // Cloud-worker mutations depend on the loaded provider registry and owned
   // reconciler, so advertise them early but gate dispatch until sidecars are ready.
-  [
-    "environments.create",
-    "environments",
-    "operator.admin",
-    "2026.7",
-    { startup: true, controlPlaneWrite: true },
-  ],
-  [
-    "environments.destroy",
-    "environments",
-    "operator.admin",
-    "2026.7",
-    { startup: true, controlPlaneWrite: true },
-  ],
+  ["environments.create", "environments", "operator.admin", "2026.7", SIDECAR_CONTROL_PLANE_WRITE],
+  ["environments.destroy", "environments", "operator.admin", "2026.7", SIDECAR_CONTROL_PLANE_WRITE],
   ["sessions.catalog.list", "session-catalog", "operator.read", "2026.7"],
   ["sessions.catalog.read", "session-catalog", "operator.read", "2026.7"],
   ["terminal.upload", "terminal", "operator.admin", "2026.7"],
@@ -483,30 +474,18 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["approval.get", null, "operator.approvals", "2026.7"],
   ["approval.resolve", null, "operator.approvals", "2026.7"],
   ["sessions.search", "sessions-read", "operator.read", "<=2026.7"],
-  [
-    "sessions.dispatch",
-    "sessions-dispatch",
-    "dynamic",
-    "2026.7",
-    { startup: true, controlPlaneWrite: true },
-  ],
+  ["sessions.dispatch", "sessions-dispatch", "dynamic", "2026.7", SIDECAR_CONTROL_PLANE_WRITE],
   [
     "sessions.reclaim",
     "sessions-dispatch",
     "operator.write",
     "2026.7",
-    { startup: true, controlPlaneWrite: true },
+    SIDECAR_CONTROL_PLANE_WRITE,
   ],
   ["models.probe", "models-probe", "operator.admin", "<=2026.7"],
   // Memory migration reads host assistant state and writes agent workspaces.
   ["migrations.memory.plan", "migrations", "operator.admin", "2026.7"],
-  [
-    "migrations.memory.apply",
-    "migrations",
-    "operator.admin",
-    "2026.7",
-    { controlPlaneWrite: true },
-  ],
+  ["migrations.memory.apply", "migrations", "operator.admin", "2026.7", CONTROL_PLANE_WRITE],
   ["ui.command", "ui-command", "operator.write", "2026.7"],
   ["approval.history", null, "operator.approvals", "2026.7"],
   ["plugin.surface.refresh", "nodes", "operator.read", "<=2026.7"],
@@ -517,7 +496,6 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["board.data.read", "board", "operator.read", "2026.7"],
   ["board.action", "board", "operator.write", "2026.7"],
   ["sessions.observer.visibility", "session-observer-rpc", "operator.read", "2026.7"],
-  // Additive phase-2 collaboration methods append so older advertised indices stay stable.
   ["session.visibility.set", "sessions-sharing", "operator.write", "2026.7"],
   ["session.members.list", "sessions-sharing", "operator.read", "2026.7"],
   ["session.members.add", "sessions-sharing", "operator.write", "2026.7"],
@@ -525,6 +503,8 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["session.suggestions.add", "sessions-suggestions", "operator.write", "2026.7"],
   ["session.suggestions.list", "sessions-suggestions", "operator.read", "2026.7"],
   ["session.suggestions.resolve", "sessions-suggestions", "operator.write", "2026.7"],
+  ["session.reactions.set", "sessions-reactions", "operator.write", "2026.9"],
+  ["session.reactions.list", "sessions-reactions", "operator.read", "2026.9"],
   ["session.typing", "sessions-suggestions", "operator.write", "2026.7"],
   // Companion state is process-local and its runner is hard-restricted to
   // read-only workspace and exact-session tools.
@@ -535,38 +515,29 @@ const CORE_GATEWAY_METHOD_SPECS = [
     "session-companion-rpc",
     "operator.write",
     "2026.7",
-    { controlPlaneWrite: true },
+    CONTROL_PLANE_WRITE,
   ],
   ["memory.search", "memory-search", "operator.read", "2026.7"],
-  // Additive Skill Workshop methods append so older advertised indices stay stable.
   ["skills.proposals.events.list", "skills", "operator.read", "2026.7"],
-  ["skills.proposals.evaluate", "skills", "operator.admin", "2026.7", { controlPlaneWrite: true }],
-  // Additive hook status RPC appends so older advertised method indices stay stable.
+  ["skills.proposals.evaluate", "skills", "operator.admin", "2026.7", CONTROL_PLANE_WRITE],
   ["hooks.status", "hooks-status", "operator.read", "2026.7"],
-  // Additive task recovery RPCs append so older advertised method indices stay stable.
-  ["tasks.retry", "tasks", "operator.write", "2026.7"],
-  ["tasks.dismiss", "tasks", "operator.write", "2026.7"],
-  // Additive audit inspection appends so older advertised method indices stay stable.
   ["audit.run.inspect", "audit", "operator.read", "2026.7"],
   ["sessions.patchMany", "sessions-mutations", "dynamic", "2026.8"],
   // Update campaign mutations share update.run's admin and control-plane write policy.
-  ["update.hold", "update", "operator.admin", "2026.8", { controlPlaneWrite: true }],
-  // Additive catalog terminal start appends so older advertised indices stay stable.
+  ["update.hold", "update", "operator.admin", "2026.8", CONTROL_PLANE_WRITE],
   ["sessions.catalog.startTerminal", "session-catalog", "operator.admin", "2026.8"],
   ["worker.desktop.observe", "environments", "operator.admin", "2026.8", { startup: true }],
-  // First-class project RPCs append so every older advertised index remains stable.
   ["projects.list", "projects", "operator.read", "2026.8"],
   ["projects.register", "projects", "operator.admin", "2026.8"],
   ["projects.remove", "projects", "operator.admin", "2026.8"],
   ["worker.desktop.launch", "environments", "operator.admin", "2026.8", { startup: true }],
   // Store CRUD shares the auxiliary secrets runtime owner and appends for stable indices.
   ["secrets.store.list", null, "operator.admin", "2026.8"],
-  ["secrets.store.set", null, "operator.admin", "2026.8", { controlPlaneWrite: true }],
-  ["secrets.store.delete", null, "operator.admin", "2026.8", { controlPlaneWrite: true }],
-  // Self-scoped preferences append so every older advertised index remains stable.
+  ["secrets.store.set", null, "operator.admin", "2026.8", CONTROL_PLANE_WRITE],
+  ["secrets.store.delete", null, "operator.admin", "2026.8", CONTROL_PLANE_WRITE],
   ["users.prefs.get", "users", "operator.read", "2026.8"],
   ["users.prefs.set", "users", "operator.write", "2026.8"],
-  ["projects.add", "projects", "operator.write", "2026.8", { controlPlaneWrite: true }],
+  ["projects.add", "projects", "operator.write", "2026.8", CONTROL_PLANE_WRITE],
   [
     "projects.searchRemote",
     "projects",
@@ -576,191 +547,188 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ],
   ["desktop.observe", "environments", "operator.admin", "2026.8", { startup: true }],
   ["desktop.launch", "environments", "operator.admin", "2026.8", { startup: true }],
-  // Live device scope upgrades are additive so every older advertised index stays stable.
   ["device.scopes.requestUpgrade", "devices", "operator.read", "2026.8"],
-  ["device.scopes.waitUpgrade", "devices", "operator.read", "2026.8"],
+  ["device.scopes.waitUpgrade", "devices", "operator.read", "2026.8", OBSERVATION],
   ["portal.list", "portals", "operator.read", "2026.8"],
-  ["portal.open", "portals", "operator.write", "2026.8", { controlPlaneWrite: true }],
-  ["portal.close", "portals", "operator.write", "2026.8", { controlPlaneWrite: true }],
-  [
-    "sessions.move",
-    "sessions-dispatch",
-    "dynamic",
-    "2026.8",
-    { startup: true, controlPlaneWrite: true },
-  ],
+  ["portal.open", "portals", "operator.write", "2026.8", CONTROL_PLANE_WRITE],
+  ["portal.close", "portals", "operator.write", "2026.8", CONTROL_PLANE_WRITE],
+  ["sessions.move", "sessions-dispatch", "dynamic", "2026.8", SIDECAR_CONTROL_PLANE_WRITE],
   ["sessions.assignOwner", "sessions-mutations", "operator.write", "2026.8"],
   ["progressCard.get", "progress-card", "operator.read", "2026.8"],
   ["progressCard.put", "progress-card", "operator.write", "2026.8"],
   ["tools.github.status", "tools-github", "operator.read", "2026.8"],
-  [
-    "tools.github.configure",
-    "tools-github",
-    "operator.admin",
-    "2026.8",
-    { controlPlaneWrite: true },
-  ],
-  [
-    "tools.github.authorize.start",
-    "tools-github",
-    "operator.admin",
-    "2026.8",
-    { controlPlaneWrite: true },
-  ],
-  [
-    "tools.github.authorize.poll",
-    "tools-github",
-    "operator.admin",
-    "2026.8",
-    { controlPlaneWrite: true },
-  ],
+  ["tools.github.configure", "tools-github", "operator.admin", "2026.8", CONTROL_PLANE_WRITE],
+  ["tools.github.authorize.start", "tools-github", "operator.admin", "2026.8", CONTROL_PLANE_WRITE],
+  ["tools.github.authorize.poll", "tools-github", "operator.admin", "2026.8", CONTROL_PLANE_WRITE],
   [
     "tools.github.authorize.cancel",
     "tools-github",
     "operator.admin",
     "2026.8",
-    { controlPlaneWrite: true },
+    CONTROL_PLANE_WRITE,
   ],
   [
     "sessions.github.publish",
     "sessions-github",
-    "operator.write",
+    "operator.sessions.write",
     "2026.8",
-    { controlPlaneWrite: true },
+    CONTROL_PLANE_WRITE,
   ],
   ["diagnostics.lanes", "diagnostics", "operator.read", "2026.8"],
+  // Evidence-aware member projection is additive so legacy method indices and
+  // its required `addedBy` response contract remain unchanged.
+  ["session.members.listEvidence", "sessions-sharing", "operator.read", "2026.8"],
+  ["plugins.inspect", "plugins", "operator.read", "2026.8"],
+  ["users.github.status", "users", "operator.read", "2026.8", { startup: true }],
+  ["users.github.authorize.start", "users", "operator.read", "2026.8", SIDECAR_CONTROL_PLANE_WRITE],
+  ["users.github.authorize.poll", "users", "operator.read", "2026.8", SIDECAR_CONTROL_PLANE_WRITE],
+  [
+    "users.github.authorize.cancel",
+    "users",
+    "operator.read",
+    "2026.8",
+    SIDECAR_CONTROL_PLANE_WRITE,
+  ],
+  ["users.github.disconnect", "users", "operator.read", "2026.8", SIDECAR_CONTROL_PLANE_WRITE],
+  ["sessions.github.options", "sessions-github", "operator.read", "2026.8", { startup: true }],
+  ["sessions.github.status", "sessions-github", "operator.read", "2026.8", { startup: true }],
+  [
+    "sessions.github.confirm",
+    "sessions-github",
+    "operator.write",
+    "2026.8",
+    SIDECAR_CONTROL_PLANE_WRITE,
+  ],
+  ["sessions.title.prepare", "sessions-title", "operator.write", "2026.8", CONTROL_PLANE_WRITE],
+  ["users.mentionable", "users-mentionable", "operator.read", "2026.8", { startup: true }],
+  ["mentions.list", "mentions", "operator.read", "2026.8", { startup: true }],
+  // Dismissal only changes the caller's temporary Inbox, not session or shared state.
+  ["mentions.dismiss", "mentions", "operator.read", "2026.8", { startup: true }],
+  // Meeting notes share the trusted operator domain, like workspace/session reads.
+  // Strong user/tenant isolation requires separate Gateways; see operator-scopes.md.
+  ["transcripts.list", "transcripts", "operator.read", "2026.8"],
+  ["transcripts.get", "transcripts", "operator.read", "2026.8"],
+  ["models.authOrderSet", "models-auth-order", "operator.admin", "2026.8", CONTROL_PLANE_WRITE],
+  ["canvas.document.view", "canvas", "operator.read", "2026.9"],
+  ["plugins.controlUi.list", "plugins-control-ui", "operator.read", "2026.9"],
+  [
+    "plugins.controlUi.reload",
+    "plugins-control-ui",
+    "operator.admin",
+    "2026.9",
+    CONTROL_PLANE_WRITE,
+  ],
+  ["plugins.controlUi.report", "plugins-control-ui", "operator.read", "2026.9"],
+  ["plugins.controlUi.status", "plugins-control-ui", "operator.admin", "2026.9"],
+  ["update.runs.get", "update", "operator.admin", "2026.9"],
+  ["update.runs.list", "update", "operator.admin", "2026.9"],
+  ["gateway.suspend.handoff", "suspend", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["transcripts.export", "transcripts", "operator.read", "2026.9"],
+  ["transcripts.status", "transcripts", "operator.read", "2026.9"],
+  ["update.report", "update", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["skills.workshop.read", "skills", "operator.read", "2026.9"],
+  ["session.publicShare.set", "sessions-sharing", "operator.write", "2026.9"],
+  ["claws.monitors", "claws-monitors", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["plugins.catalog.browse", "plugins", "operator.read", "2026.9"],
+  ["plugins.catalog.categories", "plugins", "operator.read", "2026.9"],
+  ["plugins.catalog.get", "plugins", "operator.read", "2026.9"],
+  ["environments.prepare", "environments", "operator.admin", "2026.9", SIDECAR_CONTROL_PLANE_WRITE],
+  ["models.authRefresh", "models-auth-status", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["models.authLogin", "models-auth-login", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["models.authSetApiKey", "models-auth-status", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["sessions.storage.status", "sessions-read", "operator.admin", "2026.9"],
+  ["sessions.storage.run", "sessions-read", "operator.admin", "2026.9"],
+  ["plugins.reload", "plugins-mutations", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["claws.packages.remove", "claws-packages", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  [
+    "claws.removalJournal",
+    "claws-removal-journal",
+    "operator.admin",
+    "2026.9",
+    CONTROL_PLANE_WRITE,
+  ],
+  ["canvas.document.preview", "canvas", "operator.read", "2026.9"],
+  ["computer.status", "computer", "operator.read", "2026.9"],
+  ["computer.invoke", "computer", "operator.write", "2026.9"],
+  ["sessions.activitySummary.ensure", "session-activity-summary", "operator.write", "2026.9"],
+  ["controlUi.sessionPullRequests.checks", "control-ui", "operator.read", "2026.9"],
+  ["diagnostics.cpuProfile", "diagnostics", "operator.admin", "2026.9"],
+  ["talk.voice.get", "talk", "operator.talk", "2026.9"],
+  ["talk.voice.set", "talk", "operator.talk", "2026.9"],
+  ["talk.voice.complete", "talk", "operator.talk", "2026.9"],
+  ["plugins.credentials.inspect", "plugins", "operator.admin", "2026.9"],
+  ["plugins.skills.read", "plugins", "operator.read", "2026.9"],
+  ["diagnostics.heapProfile", "diagnostics", "operator.admin", "2026.9"],
+  ["desktop.release", "environments", "operator.admin", "2026.9", { startup: true }],
+  ["mcp.authLogin", "mcp-auth-login", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["environments.session.status", "environments", "operator.read", "2026.9"],
+  ["environments.session.create", "environments", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["environments.session.destroy", "environments", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["environments.session.exec", "environments", "operator.admin", "2026.9"],
+  ["sessions.setInvolvement", "sessions-mutations", "operator.read", "2026.9"],
+  ["transcripts.summarize", "transcripts", "operator.write", "2026.9"],
+  ["controlUi.linkPreview", "control-ui", "operator.read", "2026.9"],
+  ["themes.list", "themes", "operator.read", "2026.9"],
+  ["themes.get", "themes", "operator.read", "2026.9"],
+  ["themes.set", "themes", "operator.write", "2026.9"],
+  ["themes.import", "themes", "operator.write", "2026.9"],
+  ["controlUi.githubDetail", "control-ui", "operator.read", "2026.9"],
+  ["progressCard.refresh", "progress-card", "operator.write", "2026.9"],
+  ["webSearch.status", "web-search", "operator.read", "2026.9"],
+  ["webSearch.test", "web-search", "operator.admin", "2026.9"],
+  ["sessions.providerReview.continue", "sessions-provider-review", "operator.write", "2026.9"],
+  ["users.linkChannelIdentity", "users", "operator.admin", "2026.9"],
+  ["users.unlinkChannelIdentity", "users", "operator.admin", "2026.9"],
+  ["users.listChannelIdentities", "users", "operator.admin", "2026.9"],
+  // Self-service personal instructions never authorize shared workspace writes.
+  ["users.personalFile.get", "users", "operator.read", "2026.9"],
+  ["users.personalFile.set", "users", "operator.read", "2026.9"],
+  ["portal.session.list", "portals", "operator.write", "2026.9", PORTAL_SESSION_WRITE],
+  ["portal.session.open", "portals", "operator.write", "2026.9", PORTAL_SESSION_WRITE],
+  ["portal.session.close", "portals", "operator.write", "2026.9", PORTAL_SESSION_WRITE],
+  ["cron.history", "cron", "operator.read", "2026.9"],
+  ["presence.activity", "system", "operator.read", "2026.9"],
+  ["presence.query", "presence", "operator.read", "2026.9"],
+  ["users.merge", "users", "operator.admin", "2026.9"],
+  ["gateway.stop.request", "restart", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["diagnostics.heapSnapshot", "diagnostics", "operator.admin", "2026.9"],
+  ["sessions.catalog.import", "session-catalog", "operator.write", "2026.9"],
+  ["backup.status", "backup", "operator.read", "2026.9"],
+  ["backup.recordOutcome", "backup", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["storage.locations.list", "storage", "operator.read", "2026.9"],
+  ["storage.locations.probe", "storage", "operator.read", "2026.9"],
+  ["mcp.app.onboard", "mcp-app-onboarding", "operator.write", "2026.9", SESSION_WRITE],
+  ["mcp.app.discover", "mcp-app-extensions", "operator.write", "2026.9", SESSION_WRITE],
+  ["mcp.app.launch", "mcp-app-extensions", "operator.write", "2026.9", SESSION_WRITE],
+  ["mcp.app.settings", "mcp-app-extensions", "operator.write", "2026.9", SESSION_WRITE],
+  ["mcp.app.mention", "mcp-app-extensions", "operator.write", "2026.9", SESSION_WRITE],
+  ["mcp.app.formResource", "mcp-app", "operator.write", "2026.9"],
+  ["mcp.app.modelContext", "mcp-app", "operator.read", "2026.9"],
+  ["mcp.app.removeModelContext", "mcp-app", "operator.write", "2026.9"],
+  ["mcp.app.writeResource", "mcp-app", "operator.write", "2026.9"],
+  ["mcp.app.subscribeResource", "mcp-app", "operator.read", "2026.9"],
+  ["mcp.app.unsubscribeResource", "mcp-app", "operator.read", "2026.9"],
+  ["mcp.app.openFile", "mcp-app", "operator.read", "2026.9"],
+  // Provider-neutral reads append without changing legacy method indices or payloads.
+  ["memory.get", "memory-search", "operator.read", "2026.9"],
+  ["memory.status", "memory-search", "operator.read", "2026.9"],
+  ["sessions.files.assets", "sessions-files", "operator.read", "2026.9"],
+  ["worktrees.recoverRemoval", "worktrees", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["worktrees.retireSnapshot", "worktrees", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["sessions.processes.list", "session-processes", "operator.read", "2026.9", OBSERVATION],
+  ["sessions.processes.stop", "session-processes", "operator.write", "2026.9"],
+  ["catalog.browse", "plugins", "operator.read", "2026.9"],
+  ["catalog.searchKeywords", "plugins", "operator.read", "2026.9"],
+  ["skills.workshop.list", "skills", "operator.read", "2026.9"],
+  ["skills.workshop.changes", "skills", "operator.read", "2026.9"],
+  ["skills.workshop.archive", "skills", "operator.admin", "2026.9"],
+  ["skills.workshop.restore", "skills", "operator.admin", "2026.9"],
+  ["skills.workshop.undo", "skills", "operator.admin", "2026.9"],
+  ["memory.search.owner", "memory-search", "operator.admin", "2026.9"],
+  ["secrets.store.import", null, "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["secrets.store.allowedHosts", null, "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["users.background.get", "users", "operator.read", "2026.9"],
+  ["users.background.upload", "users", "operator.write", "2026.9"],
+  ["users.background.remove", "users", "operator.write", "2026.9"],
+  ["debugProxy.capture", "debug-proxy", "operator.admin", "2026.9"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
-
-export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;
-
-const CORE_GATEWAY_METHOD_SPEC_LIST: readonly CoreGatewayMethodSpec[] =
-  CORE_GATEWAY_METHOD_SPECS.map(([name, family, scope, since, policy]) => {
-    const spec: CoreGatewayMethodSpec = { name, scope, since };
-    const normalizedPolicy: CoreGatewayMethodPolicy | undefined = policy;
-    if (family) {
-      spec.family = family;
-    }
-    if (normalizedPolicy?.advertise === false) {
-      spec.advertise = false;
-    }
-    if (normalizedPolicy?.startup === true) {
-      spec.startup = true;
-    }
-    if (normalizedPolicy?.controlPlaneWrite === true) {
-      spec.controlPlaneWrite = true;
-    }
-    if (normalizedPolicy?.compatibilityRestored === true) {
-      spec.compatibilityRestored = true;
-    }
-    if (normalizedPolicy?.description) {
-      spec.description = normalizedPolicy.description;
-    }
-    return spec;
-  });
-
-const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(
-  CORE_GATEWAY_METHOD_SPEC_LIST.map((spec) => [spec.name, spec]),
-);
-
-/** Core methods that are listed early but return retryable unavailable until sidecars are ready. */
-export const STARTUP_UNAVAILABLE_GATEWAY_METHODS = CORE_GATEWAY_METHOD_SPEC_LIST.filter(
-  (spec) => spec.startup === true,
-).map((spec) => spec.name);
-
-/** Returns the core methods that should be advertised to external gateway clients. */
-export function listCoreAdvertisedGatewayMethodNames(): string[] {
-  return CORE_GATEWAY_METHOD_SPEC_LIST.filter((spec) => spec.advertise !== false).map(
-    (spec) => spec.name,
-  );
-}
-
-/** Returns all registered core method names, including hidden/internal compatibility methods. */
-export function listCoreGatewayMethodNames(): string[] {
-  return listCoreGatewayMethodMetadata().map((spec) => spec.name);
-}
-
-/** Returns the public metadata emitted for every core gateway method. */
-export function listCoreGatewayMethodMetadata(): readonly CoreGatewayMethodMetadata[] {
-  return CORE_GATEWAY_METHOD_SPEC_LIST.map(({ name, scope, since }) => ({ name, scope, since }));
-}
-
-/** Groups lazy-owned core methods by the module family that dispatches them. */
-export function listCoreGatewayHandlerMethodNames(): ReadonlyMap<
-  CoreGatewayHandlerFamily,
-  readonly string[]
-> {
-  const methodsByFamily = new Map<CoreGatewayHandlerFamily, string[]>();
-  for (const spec of CORE_GATEWAY_METHOD_SPEC_LIST) {
-    if (!spec.family) {
-      continue;
-    }
-    const family = spec.family as CoreGatewayHandlerFamily;
-    const methods = methodsByFamily.get(family) ?? [];
-    methods.push(spec.name);
-    methodsByFamily.set(family, methods);
-  }
-  return methodsByFamily;
-}
-
-/** Looks up the raw core method scope, including node and dynamic sentinel scopes. */
-function resolveCoreGatewayMethodScope(method: string): GatewayMethodScope | undefined {
-  return CORE_GATEWAY_METHOD_SPEC_BY_NAME.get(method)?.scope;
-}
-
-/** Looks up an operator-only core method scope, excluding node and dynamic methods. */
-export function resolveCoreOperatorGatewayMethodScope(method: string): OperatorScope | undefined {
-  const scope = resolveCoreGatewayMethodScope(method);
-  return scope === NODE_GATEWAY_METHOD_SCOPE || scope === DYNAMIC_GATEWAY_METHOD_SCOPE
-    ? undefined
-    : scope;
-}
-
-/** Returns true for core methods reserved for authenticated node clients. */
-export function isCoreNodeGatewayMethod(method: string): boolean {
-  return resolveCoreGatewayMethodScope(method) === NODE_GATEWAY_METHOD_SCOPE;
-}
-
-/** Returns true for core methods whose required operator scope is resolved by the handler. */
-export function isDynamicOperatorGatewayMethod(method: string): boolean {
-  return resolveCoreGatewayMethodScope(method) === DYNAMIC_GATEWAY_METHOD_SCOPE;
-}
-
-/** Returns true when a method name has an explicit core policy entry. */
-export function isCoreGatewayMethodClassified(method: string): boolean {
-  return CORE_GATEWAY_METHOD_SPEC_BY_NAME.has(method);
-}
-
-/** Creates dispatch descriptors for core handlers and fails if any handler lacks policy. */
-export function createCoreGatewayMethodDescriptors(
-  handlers: Record<string, GatewayMethodHandler>,
-): GatewayMethodDescriptorInput[] {
-  const descriptors: GatewayMethodDescriptorInput[] = [];
-  const specNames = new Set<string>();
-  for (const spec of CORE_GATEWAY_METHOD_SPEC_LIST) {
-    specNames.add(spec.name);
-    const handler = handlers[spec.name];
-    if (!handler) {
-      continue;
-    }
-    descriptors.push({
-      name: spec.name,
-      handler,
-      owner: { kind: "core", area: "gateway" },
-      scope: spec.scope,
-      profileAccess: isCoreGatewayMethodProfileDependent(spec.name) ? "required" : "independent",
-      ...(spec.since ? { since: spec.since } : {}),
-      ...(spec.advertise === false ? { advertise: false } : {}),
-      ...(spec.startup === true ? { startup: "unavailable-until-sidecars" } : {}),
-      ...(spec.controlPlaneWrite === true ? { controlPlaneWrite: true } : {}),
-      ...(spec.description ? { description: spec.description } : {}),
-    });
-  }
-  for (const name of Object.keys(handlers)) {
-    if (!specNames.has(name)) {
-      // Unclassified core handlers would bypass scope/startup/write metadata, so fail before the
-      // dispatcher can expose a method with missing policy.
-      throw new Error(`gateway method handler is missing a descriptor: ${name}`);
-    }
-  }
-  return descriptors;
-}

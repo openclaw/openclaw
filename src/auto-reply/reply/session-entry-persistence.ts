@@ -1,4 +1,3 @@
-// Atomic persistence for broad auto-reply session snapshots.
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
@@ -6,6 +5,11 @@ import {
   mergeSessionSnapshotChanges,
   sessionSnapshotTouchedFieldsConflict,
 } from "../../config/sessions/session-snapshot-merge.js";
+import {
+  sessionEntryCommitGuardOptions,
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 
 type PersistReplySessionEntryParams = {
   allowCreate?: boolean;
@@ -17,12 +21,20 @@ type PersistReplySessionEntryParams = {
   skipMaintenance?: boolean;
   storePath: string;
   touchedFields?: ReadonlyArray<keyof SessionEntry>;
+  commitGuard?: SessionSourceAssertion;
+  /** Released SDK validators retain their synchronous native transaction contract. */
+  nativeCommitValidation?: true;
+  /** Prepared model/account checks only; session source checks travel in commitGuard. */
+  validateCommit?: () => string | undefined;
 };
 
 type PersistReplySessionEntryResult =
   | { status: "current"; entry: SessionEntry }
   | { status: "model-selection-locked"; entry: SessionEntry }
+  | { status: "commit-rejected"; error: string; entry: SessionEntry }
   | { status: "lifecycle-invalidated"; error: string; entry?: SessionEntry };
+
+class SessionCommitRejectedError extends Error {}
 
 /** Persists reply-owned state without reverting concurrent session management. */
 export async function persistReplySessionEntry(
@@ -31,57 +43,75 @@ export async function persistReplySessionEntry(
   let lifecycleError: string | undefined;
   let lifecycleEntry: SessionEntry | undefined;
   let lockedEntry: SessionEntry | undefined;
-  const persisted = await patchSessionEntryCore(
-    { sessionKey: params.sessionKey, storePath: params.storePath },
-    (_entry, context) => {
-      if (!context.existingEntry) {
-        if (params.allowCreate !== true) {
-          lifecycleError = resolveSessionWorkStartError(params.sessionKey, undefined, {
-            expectedSessionId: params.initialEntry.sessionId,
-          });
+  let commitEntry = params.initialEntry;
+  let persisted: SessionEntry | null;
+  const commitGuard = composeSessionSourceAssertion([params.commitGuard], (assertSource) => {
+    try {
+      assertSource();
+    } catch (error) {
+      throw new SessionCommitRejectedError(error instanceof Error ? error.message : String(error), {
+        cause: error,
+      });
+    }
+    const error = params.validateCommit?.();
+    if (error) {
+      throw new SessionCommitRejectedError(error);
+    }
+  });
+  try {
+    persisted = await patchSessionEntryCore(
+      { sessionKey: params.sessionKey, storePath: params.storePath },
+      (_entry, { existingEntry }) => {
+        commitEntry = existingEntry ?? params.initialEntry;
+        if (!existingEntry && params.allowCreate === true) {
+          return params.entry;
+        }
+        lifecycleError = resolveSessionWorkStartError(params.sessionKey, existingEntry, {
+          expectedSessionId: params.initialEntry.sessionId,
+        });
+        if (!existingEntry) {
           return null;
         }
-        return params.entry;
-      }
-      lifecycleError = resolveSessionWorkStartError(params.sessionKey, context.existingEntry, {
-        expectedSessionId: params.initialEntry.sessionId,
-      });
-      if (lifecycleError) {
-        lifecycleEntry = context.existingEntry;
-        return null;
-      }
-      if (
-        params.requireModelSelectionUnlocked === true &&
-        context.existingEntry.modelSelectionLocked === true
-      ) {
-        lockedEntry = context.existingEntry;
-        return null;
-      }
-      if (
-        sessionSnapshotTouchedFieldsConflict({
+        if (lifecycleError) {
+          lifecycleEntry = existingEntry;
+          return null;
+        }
+        if (
+          params.requireModelSelectionUnlocked === true &&
+          existingEntry.modelSelectionLocked === true
+        ) {
+          lockedEntry = existingEntry;
+          return null;
+        }
+        const changes = {
           initial: params.initialEntry,
           next: params.entry,
-          current: context.existingEntry,
+          current: existingEntry,
           touchedFields: params.touchedFields,
-        })
-      ) {
-        return null;
-      }
-      // Reply flows persist broad snapshots. Project only reply-owned changes
-      // so concurrent lifecycle, policy, and privacy updates remain authoritative.
-      return mergeSessionSnapshotChanges({
-        initial: params.initialEntry,
-        next: params.entry,
-        current: context.existingEntry,
-        reassertLiveModelSwitchPending: params.reassertLiveModelSwitchPending,
-      });
-    },
-    {
-      fallbackEntry: params.entry,
-      replaceEntry: true,
-      skipMaintenance: params.skipMaintenance,
-    },
-  );
+          reassertLiveModelSwitchPending: params.reassertLiveModelSwitchPending,
+        };
+        if (sessionSnapshotTouchedFieldsConflict(changes)) {
+          return null;
+        }
+        // Reply flows persist broad snapshots. Project only reply-owned changes
+        // so concurrent lifecycle, policy, and privacy updates remain authoritative.
+        return mergeSessionSnapshotChanges(changes);
+      },
+      {
+        fallbackEntry: params.entry,
+        replaceEntry: true,
+        skipMaintenance: params.skipMaintenance,
+        ...(params.nativeCommitValidation
+          ? { assertCommitAllowed: commitGuard }
+          : sessionEntryCommitGuardOptions(commitGuard)),
+      },
+    );
+  } catch (error) {
+    if (error instanceof SessionCommitRejectedError) {
+      return { status: "commit-rejected", error: error.message, entry: commitEntry };
+    }
+    throw error;
+  }
   if (lifecycleError) {
     return {
       status: "lifecycle-invalidated",

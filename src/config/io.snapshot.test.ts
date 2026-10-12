@@ -2,12 +2,17 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as doctorLegacy from "../commands/doctor/shared/legacy-config-issues.js";
+import * as channelPresence from "../plugins/channel-presence-policy.js";
+import * as manifestRegistry from "../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createConfigIoContext } from "./io.context.js";
+import { createConfigReadError } from "./io.invalid-config.js";
 import {
   readConfigFileSnapshotFromContext,
   readConfigFileSnapshotWithPluginMetadataFromContext,
+  readBestEffortConfigSnapshotFromContext,
 } from "./io.snapshot.js";
 import {
   cloneConfigWithResolutionFacts,
@@ -18,12 +23,12 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
+  vi.restoreAllMocks();
   clearPluginMetadataLifecycleCaches();
   closeOpenClawStateDatabaseForTest();
 });
 
-function createContext(root: string) {
-  const configPath = path.join(root, "openclaw.json");
+function createContext(root: string, configPath = path.join(root, "openclaw.json")) {
   const env: NodeJS.ProcessEnv = {
     HOME: root,
     USERPROFILE: root,
@@ -41,6 +46,180 @@ function createContext(root: string) {
 }
 
 describe("config snapshot plugin metadata", () => {
+  it.each(["file", "includes", "validate"])(
+    "preserves the original %s read failure without serializing its cause",
+    async (phase) => {
+      const root = tempDirs.make("openclaw-config-read-cause-");
+      const context = createContext(root);
+      const raw = '{"gateway":{"mode":"local"}}';
+      fs.writeFileSync(context.configPath, raw);
+      const cause = Object.assign(new Error("config read fixture failed"), {
+        diagnosticContext: "private-cause-context",
+      });
+      context.deps.measure = async (name, run) => {
+        if (name === `config.snapshot.read.${phase}`) {
+          throw cause;
+        }
+        return await run();
+      };
+
+      const snapshot = await readConfigFileSnapshotFromContext(context);
+
+      expect(snapshot.valid).toBe(false);
+      expect(snapshot.issues[0]).toHaveProperty("cause", cause);
+      expect(snapshot.issues[0]?.message).toContain(context.configPath);
+      const failure = createConfigReadError(snapshot);
+      expect(failure.cause).toBe(cause);
+      expect(failure.cause).toHaveProperty("stack", cause.stack);
+      expect(failure.message).toContain(context.configPath);
+      expect(snapshot.readError).toEqual(phase === "file" ? { code: null } : undefined);
+      expect(JSON.stringify(snapshot)).not.toContain("private-cause-context");
+      expect(JSON.stringify(snapshot)).not.toContain('"cause"');
+      expect(fs.readFileSync(context.configPath, "utf8")).toBe(raw);
+    },
+  );
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "retains an inaccessible config parent as a read failure rather than a missing config",
+    async () => {
+      const root = tempDirs.make("openclaw-config-inaccessible-parent-");
+      const parent = path.join(root, "restricted");
+      fs.mkdirSync(parent);
+      const configPath = path.join(parent, "openclaw.json");
+      const source = '{"gateway":{"mode":"local"}}';
+      fs.writeFileSync(configPath, source);
+      const context = createContext(root, configPath);
+      context.options.pluginValidation = "core-only";
+      fs.chmodSync(parent, 0);
+      try {
+        expect(fs.existsSync(configPath)).toBe(false);
+        const snapshot = await readConfigFileSnapshotFromContext(context);
+        expect(snapshot).toMatchObject({
+          valid: false,
+          raw: null,
+          readError: { code: "EACCES" },
+          issues: [{ errorCode: "CONFIG_READ_FAILED" }],
+        });
+      } finally {
+        fs.chmodSync(parent, 0o700);
+      }
+      expect(fs.readFileSync(configPath, "utf8")).toBe(source);
+    },
+  );
+
+  it("preserves source paths across core-only and prepared plugin reads with a Windows home", async () => {
+    const root = tempDirs.make("openclaw-config-windows-paths-");
+    const context = createContext(root);
+    const windowsHome = "C:\\Users\\fixture";
+    const resolve = path.resolve;
+    const resolveWindows = path.win32.resolve;
+    vi.spyOn(path, "resolve").mockImplementation((...segments) =>
+      segments.some((segment) => segment.startsWith(windowsHome))
+        ? resolveWindows(...segments)
+        : resolve(...segments),
+    );
+    context.pathResolution = { env: {}, homedir: () => windowsHome };
+    const plugins = {
+      enabled: false,
+      entries: { wiki: { config: { store: { path: "~/.openclaw/wiki" } } } },
+    };
+    fs.writeFileSync(context.configPath, JSON.stringify({ plugins }));
+    context.options.pluginValidation = "core-only";
+    const core = await readConfigFileSnapshotFromContext(context);
+    context.options.pluginValidation = "full";
+    const { snapshot: full } = await readConfigFileSnapshotWithPluginMetadataFromContext(context, {
+      prepareValidation: "runtime",
+    });
+
+    expect(core.valid).toBe(true);
+    expect(full.valid).toBe(true);
+    expect(core.sourceConfig).toEqual(full.sourceConfig);
+    for (const snapshot of [core, full]) {
+      expect(snapshot.authoredConfig?.plugins).toEqual(plugins);
+      expect(snapshot.sourceConfig.plugins).toEqual(plugins);
+      expect(snapshot.sourceConfigBeforeMigrations?.plugins).toEqual(plugins);
+      expect(snapshot.runtimeConfig.plugins?.entries?.wiki?.config).toEqual({
+        store: { path: "C:\\Users\\fixture\\.openclaw\\wiki" },
+      });
+    }
+  });
+
+  it("leaves legacy roster repair to Doctor during full validation", async () => {
+    const root = tempDirs.make("openclaw-config-roster-metadata-");
+    const context = createContext(root);
+    context.options.pluginValidation = "full";
+    const agents = { list: [{ id: "primary", default: true }, { id: "secondary" }] };
+    fs.writeFileSync(
+      context.configPath,
+      JSON.stringify({
+        agents,
+        channels: { discord: { enabled: false } },
+      }),
+    );
+    const discovery = vi.spyOn(channelPresence, "listChannelIdsForOwnershipMigration");
+    const snapshot = await readConfigFileSnapshotFromContext(context);
+    expect(snapshot.valid).toBe(false);
+    expect(snapshot.sourceConfig.agents).toEqual(agents);
+    expect(snapshot.issues).toContainEqual(
+      expect.objectContaining({
+        path: "agents.list",
+        message: expect.stringContaining("doctor --fix"),
+      }),
+    );
+    expect(discovery).not.toHaveBeenCalled();
+  });
+
+  it("keeps invalid snapshot Doctor contracts owned by core-only validation", async () => {
+    const root = tempDirs.make("openclaw-config-invalid-metadata-");
+    const context = createContext(root);
+    context.options.pluginValidation = "core-only";
+    fs.writeFileSync(
+      context.configPath,
+      JSON.stringify({
+        nodeHost: { browserProxy: { enabled: "invalid" } },
+        channels: { discord: {} },
+        session: { typingMode: "thinking" },
+      }),
+    );
+    const doctor = vi.spyOn(doctorLegacy, "findDoctorLegacyConfigIssues");
+    const snapshot = await readConfigFileSnapshotFromContext(context);
+    expect(snapshot.valid).toBe(false);
+    expect(snapshot.issues).toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: "nodeHost.browserProxy.enabled" })]),
+    );
+    expect(snapshot.legacyIssues).toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: "session.typingMode" })]),
+    );
+    expect(doctor).not.toHaveBeenCalled();
+  });
+
+  it("keeps best-effort core-only materialization independent of plugin metadata", async () => {
+    const root = tempDirs.make("openclaw-config-best-effort-metadata-");
+    const context = createContext(root);
+    context.options.pluginValidation = "core-only";
+    fs.writeFileSync(
+      context.configPath,
+      JSON.stringify({
+        models: {
+          providers: {
+            "fixture-external": {
+              baseUrl: "https://example.test/v1",
+              api: "openai-completions",
+              models: [],
+            },
+          },
+        },
+      }),
+    );
+    const discovery = vi.spyOn(manifestRegistry, "loadPluginManifestRegistryCore");
+    const result = await readBestEffortConfigSnapshotFromContext(context);
+    expect(result.configDiagnostics).toBeNull();
+    expect(result.config.models?.providers?.["fixture-external"]?.baseUrl).toBe(
+      "https://example.test/v1",
+    );
+    expect(result.config.agents?.defaults?.compaction?.mode).toBe("safeguard");
+    expect(discovery).not.toHaveBeenCalled();
+  });
   it("records only genuinely missing substitutions as private facts", async () => {
     const root = tempDirs.make("openclaw-config-snapshot-env-facts-");
     const context = createContext(root);
@@ -94,12 +273,14 @@ describe("config snapshot plugin metadata", () => {
     const plainSnapshot = await readConfigFileSnapshotFromContext(context);
 
     expect(plainSnapshot).toMatchObject({ exists: false, valid: true });
-    expect(loader).not.toHaveBeenCalled();
+    expect(loader.mock.results.every(({ value }) => value.getSnapshot() === undefined)).toBe(true);
 
     const result = await readConfigFileSnapshotWithPluginMetadataFromContext(context);
 
     expect(result.snapshot).toMatchObject({ exists: false, valid: true });
-    expect(loader).toHaveBeenCalledOnce();
+    expect(structuredClone(result.pluginMetadataSnapshot?.manifestRegistry)).toEqual(
+      result.pluginMetadataSnapshot?.manifestRegistry,
+    );
     expect(result.pluginMetadataSnapshot?.configFingerprint).toMatch(/^[a-f0-9]{64}$/u);
     expect(result.pluginMetadataSnapshot?.index).toMatchObject({
       version: 1,
@@ -117,6 +298,7 @@ describe("config snapshot plugin metadata", () => {
     const result = await readConfigFileSnapshotWithPluginMetadataFromContext(context);
 
     expect(result.snapshot.valid).toBe(false);
+    expect(result.snapshot.authoredConfig).toBeUndefined();
     expect(result.pluginMetadataSnapshot).toBeUndefined();
     expect(loader).not.toHaveBeenCalled();
   });

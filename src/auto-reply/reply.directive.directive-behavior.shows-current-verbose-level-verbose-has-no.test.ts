@@ -4,8 +4,8 @@ import { runEmbeddedAgentMock } from "./reply.directive.directive-behavior.e2e-m
 import { describe, expect, it } from "vitest";
 import type { ModelAliasIndex } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { installDirectiveBehaviorE2EHooks } from "./reply.directive.directive-behavior.e2e-harness.js";
 /** Tests directive behavior when /verbose has no explicit value. */
 import { handleDirectiveOnly } from "./reply/directive-handling.impl.js";
@@ -48,7 +48,8 @@ async function runDirectiveStatus(
     ...restOverrides
   } = overrides;
   const result = await handleDirectiveOnly({
-    cfg: migratePersistedImplicitMainRoster(overrideCfg ?? cfg).config as OpenClawConfig,
+    cfg: createCanonicalAgentConfigFixture(overrideCfg ?? cfg).config,
+    agentId: "main",
     directives: parseInlineSessionDirectives(body),
     sessionEntry: effectiveSessionEntry,
     sessionStore: effectiveSessionStore,
@@ -92,7 +93,7 @@ describe("directive behavior", () => {
       } as OpenClawConfig,
     });
     expect(fastText).toContain("Current fast mode: auto (30 sec) (default: model)");
-    expect(fastText).toContain("Options: on, off, auto (30 sec), default, status.");
+    expect(fastText).toContain("Options: on, off, ultrafast, auto (30 sec), default, status.");
 
     const { text: verboseText } = await runDirectiveStatus("/verbose", {
       currentVerboseLevel: "on",
@@ -164,6 +165,7 @@ describe("directive behavior", () => {
   it("enforces per-agent elevated restrictions and status visibility", async () => {
     const { text: deniedText } = await runDirectiveStatus("/elevated on", {
       sessionKey: "agent:restricted:main",
+      agentId: "restricted",
       elevatedEnabled: false,
       elevatedAllowed: false,
       elevatedFailures: [
@@ -180,6 +182,7 @@ describe("directive behavior", () => {
   it("applies per-agent allowlist requirements before allowing elevated", async () => {
     const { text: deniedText } = await runDirectiveStatus("/elevated on", {
       sessionKey: "agent:work:main",
+      agentId: "work",
       elevatedEnabled: true,
       elevatedAllowed: false,
       elevatedFailures: [
@@ -193,6 +196,7 @@ describe("directive behavior", () => {
 
     const { text: allowedText } = await runDirectiveStatus("/elevated on", {
       sessionKey: "agent:work:main",
+      agentId: "work",
       elevatedEnabled: true,
       elevatedAllowed: true,
     });

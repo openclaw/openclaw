@@ -1,18 +1,13 @@
+import { classifyAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { isContextOverflowError } from "../../agents/embedded-agent-helpers.js";
 import { hasCompletedSourceReplyDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import {
   PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
   renderControlUiAgentFailureCopy,
 } from "../../agents/failover/user-copy.js";
-import {
-  createAgentRunRestartAbortError,
-  isAgentRunRestartAbortReason,
-} from "../../agents/run-termination.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { buildContextOverflowRecoveryText } from "./agent-runner-context-recovery.js";
 import { resolveSourceReplyPolicy } from "./agent-runner-core.js";
 import { markAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
@@ -23,10 +18,7 @@ import type {
 } from "./agent-runner-fallback-cycle.types.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { classifyPrivateMessageToolFinal } from "./private-message-tool-final.js";
-import {
-  isReplyOperationRestartAbort,
-  isReplyOperationUserAbort,
-} from "./reply-operation-abort.js";
+import { resolveReplyOperationAbortReason } from "./reply-operation-abort.js";
 
 /** Settles abort, lifecycle, and terminal failure state after fallback execution. */
 export async function settleAgentFallbackCycle(params: {
@@ -42,37 +34,34 @@ export async function settleAgentFallbackCycle(params: {
   // run-entry owns the canonical reply/receipt facts. Carry them through the
   // fallback backstop so downstream waiters never have to rederive them.
   const terminalMetadata = fallbackResult.terminal.metadata;
+  const terminalOutcome = fallbackResult.terminal.outcome;
   const settledLifecycleTerminal =
     cycle.state.pendingLifecycleTerminal?.provider === fallbackProvider &&
     cycle.state.pendingLifecycleTerminal.model === fallbackModel
       ? cycle.state.pendingLifecycleTerminal.backstop
       : undefined;
   cycle.state.pendingLifecycleTerminal = undefined;
-  if (turn.isRestartRecoveryArmed?.()) {
+  if (
+    !resolveReplyOperationAbortReason(turn.replyOperation) &&
+    (await turn.isRestartRecoveryArmed?.())
+  ) {
     turn.replyOperation?.abortForRestart();
   }
-  if (isReplyOperationRestartAbort(turn.replyOperation)) {
-    settledLifecycleTerminal?.emit("end", runResult, terminalMetadata);
-    throw isAgentRunRestartAbortReason(cycle.runAbortSignal?.reason)
-      ? cycle.runAbortSignal?.reason
-      : createAgentRunRestartAbortError();
-  }
-  if (isReplyOperationUserAbort(turn.replyOperation)) {
+  const abortReason = resolveReplyOperationAbortReason(turn.replyOperation);
+  if (abortReason) {
     settledLifecycleTerminal?.emit("end", runResult, terminalMetadata);
     await drainPendingToolTasks({ tasks: turn.pendingToolTasks, onTimeout: logVerbose });
-    return { kind: "final", payload: { text: SILENT_REPLY_TOKEN } };
+    return { kind: "aborted", reason: abortReason };
   }
   cycle.commitTerminalOutcome();
-  const fallbackAttempts = Array.isArray(fallbackResult.attempts)
-    ? fallbackResult.attempts.map((attempt) => ({
-        provider: attempt.provider,
-        model: attempt.model,
-        error: attempt.error,
-        reason: attempt.reason ?? "unknown",
-        status: typeof attempt.status === "number" ? attempt.status : undefined,
-        code: attempt.code || undefined,
-      }))
-    : [];
+  const fallbackAttempts = fallbackResult.attempts.map((attempt) => ({
+    provider: attempt.provider,
+    model: attempt.model,
+    error: attempt.error,
+    reason: attempt.reason ?? "unknown",
+    status: typeof attempt.status === "number" ? attempt.status : undefined,
+    code: attempt.code || undefined,
+  }));
   if (!fallbackExhausted) {
     await fallbackResult.settleSessionOverride();
   }
@@ -81,9 +70,10 @@ export async function settleAgentFallbackCycle(params: {
   const userFacingErrorPayload = runResult.payloads?.find(
     (payload) => payload.isError === true && typeof payload.text === "string",
   )?.text;
+  // The timeout owner distinguishes its diagnostic from earlier tool failures.
   const terminalErrorMessage =
     deferredLifecycleError ??
-    userFacingErrorPayload ??
+    (terminalOutcome.status === "timeout" ? terminalOutcome.error : userFacingErrorPayload) ??
     (embeddedError ? "Agent run failed" : undefined);
   const emitSettledLifecycleError = (error: Error, extraData?: Record<string, unknown>) => {
     if (settledLifecycleTerminal) {
@@ -95,20 +85,26 @@ export async function settleAgentFallbackCycle(params: {
       lifecycleGeneration: cycle.state.lifecycleGeneration,
       ...(turn.sessionKey ? { sessionKey: turn.sessionKey } : {}),
       stream: "lifecycle",
-      data: { phase: "error", error: error.message, endedAt: Date.now(), ...extraData },
+      data: {
+        phase: "error",
+        error: error.message,
+        endedAt: Date.now(),
+        ...extraData,
+        executionSettled: true,
+      },
     });
   };
-  if (embeddedError && isContextOverflowError(embeddedError.message)) {
+  const isCompactionFailure = embeddedError && isContextOverflowError(embeddedError.message);
+  if (isCompactionFailure || embeddedError?.kind === "role_ordering") {
     emitSettledLifecycleError(new Error(terminalErrorMessage ?? "Agent run failed"));
-    defaultRuntime.error(
-      `Auto-compaction failed (${embeddedError.message}). Preserving existing session mapping for ${turn.sessionKey ?? turn.followupRun.run.sessionId}.`,
-    );
+    if (isCompactionFailure) {
+      defaultRuntime.error(
+        `Auto-compaction failed (${embeddedError.message}). Preserving existing session mapping for ${turn.sessionKey ?? turn.followupRun.run.sessionId}.`,
+      );
+    }
     turn.replyOperation?.fail("run_failed", embeddedError);
-    return {
-      kind: "final",
-      payload: markAgentRunFailureReplyPayload({
-        text: buildContextOverflowRecoveryText({
-          preserveSessionMapping: true,
+    const text = isCompactionFailure
+      ? buildContextOverflowRecoveryText({
           cfg: cycle.runtimeConfig,
           agentId: turn.followupRun.run.agentId,
           primaryProvider: turn.followupRun.run.provider,
@@ -116,21 +112,14 @@ export async function settleAgentFallbackCycle(params: {
           runtimeProvider: cycle.state.attemptedRuntimeProvider,
           runtimeModel: cycle.state.attemptedRuntimeModel,
           activeSessionEntry: turn.getActiveSessionEntry(),
-        }),
-      }),
-    };
-  }
-  if (embeddedError?.kind === "role_ordering") {
-    emitSettledLifecycleError(new Error(terminalErrorMessage ?? "Agent run failed"));
-    turn.replyOperation?.fail("run_failed", embeddedError);
-    const embeddedErrorText = formatErrorMessage(embeddedError);
+        })
+      : cycle.shouldSurfaceToControlUi
+        ? renderControlUiAgentFailureCopy()
+        : PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE;
     return {
       kind: "final",
-      payload: markAgentRunFailureReplyPayload({
-        text: cycle.shouldSurfaceToControlUi
-          ? renderControlUiAgentFailureCopy(embeddedErrorText)
-          : PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
-      }),
+      payload: markAgentRunFailureReplyPayload({ text }),
+      postCompactionModelFailure: cycle.state.postCompactionModelAttempted || undefined,
     };
   }
   const sourceReplyPolicy = turn.sessionKey
@@ -159,25 +148,25 @@ export async function settleAgentFallbackCycle(params: {
     }) === "short"
       ? ({ disposition: "empty", code: "message-tool-not-called" } as const)
       : undefined;
-  let terminalRunFailed = false;
-  if (fallbackExhausted) {
-    const exhaustionError = new Error(
-      terminalErrorMessage ?? "All model fallback candidates failed",
+  const terminalRunFailed =
+    fallbackExhausted ||
+    Boolean(
+      deferredLifecycleError ||
+      embeddedError ||
+      terminalOutcome.status === "timeout" ||
+      classifyAgentRunTerminalOutcome(terminalOutcome) === "failure",
     );
-    terminalRunFailed = true;
-    if (cycle.modelPatch.captureFallbackFailure(fallbackAttempts) === undefined) {
-      cycle.modelPatch.captureFailure(embeddedError ?? exhaustionError);
+  if (terminalRunFailed) {
+    const terminalError = new Error(
+      terminalErrorMessage ??
+        (fallbackExhausted ? "All model fallback candidates failed" : "Agent run failed"),
+    );
+    if (
+      !fallbackExhausted ||
+      cycle.modelPatch.captureFallbackFailure(fallbackAttempts) === undefined
+    ) {
+      cycle.modelPatch.captureFailure(embeddedError ?? terminalError);
     }
-    emitSettledLifecycleError(exhaustionError, {
-      ...terminalMetadata,
-      fallbackExhaustedFailure: true,
-    });
-    turn.replyOperation?.retainFailureUntilComplete();
-    turn.replyOperation?.fail("run_failed", exhaustionError);
-  } else if (deferredLifecycleError || embeddedError) {
-    const terminalError = new Error(terminalErrorMessage ?? "Agent run failed");
-    terminalRunFailed = true;
-    cycle.modelPatch.captureFailure(embeddedError ?? terminalError);
     emitSettledLifecycleError(terminalError, terminalMetadata);
     turn.replyOperation?.retainFailureUntilComplete();
     turn.replyOperation?.fail("run_failed", terminalError);

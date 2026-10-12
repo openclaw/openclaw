@@ -1,56 +1,50 @@
-/**
- * Tags Code Mode exec/wait control tools and normalizes hook params for the
- * exec-compatible before-tool-call surface.
- */
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { isPlainObject } from "../utils.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
-/** Model-visible Code Mode exec tool name. */
 export const CODE_MODE_EXEC_TOOL_NAME = "exec";
-/** Model-visible Code Mode wait tool name. */
 export const CODE_MODE_WAIT_TOOL_NAME = "wait";
-/** Hook metadata kind for Code Mode exec tools. */
 const CODE_MODE_EXEC_TOOL_KIND = "code_mode_exec";
 
-/** Hook metadata kind type for Code Mode exec tools. */
-type CodeModeExecToolKind = typeof CODE_MODE_EXEC_TOOL_KIND;
-/** Source language accepted by the Code Mode exec tool. */
-type CodeModeExecToolInputKind = "javascript" | "typescript";
-/** Metadata attached to before-tool-call events for Code Mode exec. */
+type CodeModeExecToolInputKind = "javascript";
 type CodeModeExecHookMetadata = {
-  toolKind: CodeModeExecToolKind;
+  toolKind: typeof CODE_MODE_EXEC_TOOL_KIND;
   toolInputKind?: CodeModeExecToolInputKind;
 };
 
 const codeModeControlTools = new WeakSet<object>();
 type CodeModeExecDescriptionTarget = Pick<AnyAgentTool, "description">;
+type CodeModeExecDescriptionState = {
+  description: string;
+  targets: Set<WeakRef<CodeModeExecDescriptionTarget>>;
+};
 const codeModeExecDescriptionTargets = new WeakMap<
   object,
-  { description: string; targets: Set<CodeModeExecDescriptionTarget> }
+  { state: CodeModeExecDescriptionState; reference: WeakRef<CodeModeExecDescriptionTarget> }
 >();
 
-/** Mark a tool as owned by code mode control flow. */
 export function markCodeModeControlTool<T extends AnyAgentTool>(tool: T): T {
   codeModeControlTools.add(tool);
   return tool;
 }
 
-/** Replicate code-mode identity from an original tool object to a wrapper. */
 export function copyCodeModeControlToolIdentity(
   original: object,
   wrapper: CodeModeExecDescriptionTarget,
 ): void {
   if (codeModeControlTools.has(original)) {
     codeModeControlTools.add(wrapper);
-    const descriptionState = codeModeExecDescriptionTargets.get(original);
+    const descriptionState = codeModeExecDescriptionTargets.get(original)?.state;
     if (descriptionState && descriptionState.targets.size > 0) {
       // Registry refresh recreates wrappers from retained definitions; every
       // live copy must reflect the current authorized catalog.
       wrapper.description = descriptionState.description;
-      descriptionState.targets.add(wrapper);
-      codeModeExecDescriptionTargets.set(wrapper, descriptionState);
+      // Reuse target identity across observers so duplicate copies still update once.
+      const reference =
+        codeModeExecDescriptionTargets.get(wrapper)?.reference ?? new WeakRef(wrapper);
+      descriptionState.targets.add(reference);
+      codeModeExecDescriptionTargets.set(wrapper, { state: descriptionState, reference });
     }
   }
 }
@@ -60,42 +54,46 @@ export function createCodeModeExecDescriptionUpdater(tool: AnyAgentTool): {
   update: (description: string) => void;
   dispose: () => void;
 } {
-  const state = { description: tool.description, targets: new Set([tool]) };
-  codeModeExecDescriptionTargets.set(tool, state);
+  const initialDescription = tool.description;
+  const toolReference = codeModeExecDescriptionTargets.get(tool)?.reference ?? new WeakRef(tool);
+  const state = { description: initialDescription, targets: new Set([toolReference]) };
+  codeModeExecDescriptionTargets.set(tool, { state, reference: toolReference });
   return {
     update(description) {
       state.description = description;
-      for (const target of state.targets) {
-        target.description = description;
+      // Obsolete registry wrappers retain their old extension runner. Keep live
+      // copies synchronized without extending either lifetime until catalog disposal.
+      for (const reference of state.targets) {
+        const target = reference.deref();
+        if (target) {
+          target.description = description;
+        } else {
+          state.targets.delete(reference);
+        }
       }
     },
     dispose: () => state.targets.clear(),
   };
 }
 
-/** Return whether a tool was marked as code-mode owned. */
 export function isCodeModeControlTool(tool: object): boolean {
   return codeModeControlTools.has(tool);
 }
 
-function isCodeModeExecTool(tool: AnyAgentTool): boolean {
+/** Return whether a tool is the marked Code Mode `exec` control tool (not a plain shell exec). */
+export function isCodeModeExecTool(tool: AnyAgentTool): boolean {
   return (
     isCodeModeControlTool(tool) && normalizeToolPolicyName(tool.name) === CODE_MODE_EXEC_TOOL_NAME
   );
 }
 
-function resolveCodeModeExecToolInputKind(params: unknown): CodeModeExecToolInputKind | undefined {
+export function resolveCodeModeExecToolInputKind(
+  params: unknown,
+): CodeModeExecToolInputKind | undefined {
   if (!isPlainObject(params)) {
     return undefined;
   }
-  const language = params.language;
-  if (language === undefined || language === "javascript") {
-    return "javascript";
-  }
-  if (language === "typescript") {
-    return "typescript";
-  }
-  return undefined;
+  return params.language === undefined && params.typecheck === undefined ? "javascript" : undefined;
 }
 
 function normalizeCodeModeExecParams(params: unknown): unknown {
@@ -115,7 +113,6 @@ function normalizeCodeModeExecParams(params: unknown): unknown {
   return params;
 }
 
-/** Build before-tool-call metadata for a marked code-mode exec tool. */
 export function getCodeModeExecBeforeHookMetadata(params: {
   tool: AnyAgentTool;
   params: unknown;
@@ -123,14 +120,12 @@ export function getCodeModeExecBeforeHookMetadata(params: {
   if (!isCodeModeExecTool(params.tool)) {
     return undefined;
   }
-  const toolInputKind = resolveCodeModeExecToolInputKind(params.params);
-  return {
+  return getCodeModeExecBeforeHookMetadataForToolKind({
     toolKind: CODE_MODE_EXEC_TOOL_KIND,
-    ...(toolInputKind && { toolInputKind }),
-  };
+    params: params.params,
+  });
 }
 
-/** Build before-tool-call metadata when only the tool kind is available. */
 export function getCodeModeExecBeforeHookMetadataForToolKind(params: {
   toolKind: unknown;
   params: unknown;
@@ -145,7 +140,6 @@ export function getCodeModeExecBeforeHookMetadataForToolKind(params: {
   };
 }
 
-/** Normalize before-hook params for a marked code-mode exec tool. */
 export function normalizeCodeModeExecBeforeHookParams(params: {
   tool: AnyAgentTool;
   params: unknown;
@@ -204,8 +198,5 @@ export function reconcileCodeModeExecBeforeHookParams(params: {
   if (adjustedCodeChanged) {
     return { ...params.adjustedParams, command: adjustedCode };
   }
-  if (adjustedCommandChanged) {
-    return { ...params.adjustedParams, code: adjustedCommand };
-  }
-  return params.adjustedParams;
+  return { ...params.adjustedParams, code: adjustedCommand };
 }

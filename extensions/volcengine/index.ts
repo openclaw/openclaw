@@ -1,4 +1,3 @@
-// Volcengine plugin entrypoint registers its OpenClaw integration.
 import { buildOpenAICompatibleProviderFamilyCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { readManifestProviderDefaultModelRef } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
@@ -29,6 +28,7 @@ export default defineSingleProviderPluginEntry({
         ensureModelAllowlistEntry({ cfg, modelRef: VOLCENGINE_DEFAULT_MODEL_REF }),
     },
     ...buildOpenAICompatibleProviderFamilyCatalog({
+      discoveryMode: "strict",
       credentialProviderId: PROVIDER_ID,
       entries: VOLCENGINE_PROVIDER_CATALOG.entries,
       staticCatalog: VOLCENGINE_PROVIDER_CATALOG.staticCatalog,

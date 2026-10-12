@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { applyClawAddPlan } from "./add.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { parseClawManifest } from "./schema.js";
@@ -12,8 +12,12 @@ import { buildClawUpdatePlan } from "./update-plan.js";
 import { applyClawWorkspaceUpdate } from "./workspace-update.js";
 import { readClawWorkspaceFiles } from "./workspace.js";
 
-afterEach(() => closeOpenClawStateDatabaseForTest());
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeStateDatabaseForTest();
+    cleanup();
+  }),
+);
 
 describe("applyClawWorkspaceUpdate", () => {
   it("applies add/change/remove actions and can roll them back with provenance", async () => {
@@ -77,13 +81,16 @@ describe("applyClawWorkspaceUpdate", () => {
       context: { workspace },
     });
     let config: OpenClawConfig = {};
-    await applyClawAddPlan(currentAddPlan, {
+    const added = await applyClawAddPlan(currentAddPlan, {
       env,
+      nowMs: 10,
       consentPlanIntegrity: currentAddPlan.planIntegrity,
       commitConfig: async (transform) => {
         config = transform(config);
       },
     });
+    expect(added).toMatchObject({ status: "complete" });
+    const originalFiles = readClawWorkspaceFiles("worker", { env });
     const updatePlan = await buildClawUpdatePlan({
       agentId: "worker",
       targetManifest: targetParsed.manifest,
@@ -119,10 +126,7 @@ describe("applyClawWorkspaceUpdate", () => {
     await expect(readFile(join(workspace, "SOUL.md"), "utf8")).resolves.toBe("current soul\n");
     await expect(readFile(join(workspace, "OLD.md"), "utf8")).resolves.toBe("old\n");
     await expect(access(join(workspace, "NEW.md"))).rejects.toThrow();
-    expect(readClawWorkspaceFiles("worker", { env }).map((record) => record.path)).toEqual([
-      "OLD.md",
-      "SOUL.md",
-    ]);
+    expect(readClawWorkspaceFiles("worker", { env })).toEqual(originalFiles);
 
     await rm(join(workspace, "OLD.md"));
     await expect(

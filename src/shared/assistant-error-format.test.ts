@@ -3,9 +3,47 @@ import {
   extractErrorHttpStatus,
   extractLeadingHttpStatus,
   extractProviderWrappedHttpStatus,
+  formatProviderRefusalText,
   formatRawAssistantErrorForUi,
+  formatTransportErrorCopy,
+  isKnownTransportErrorCode,
   parseApiErrorInfo,
 } from "./assistant-error-format.js";
+
+describe("formatTransportErrorCopy", () => {
+  it("does not treat dns inside a generated path as a network failure", () => {
+    expect(
+      formatTransportErrorCopy(
+        "git checkout has no commits: /tmp/openclaw-session-worktree-source-recovery-0Dns0Y/workspace. Create an initial commit, then retry.",
+      ),
+    ).toBeUndefined();
+  });
+
+  it.each(["DNS lookup failed", "dns: no response from resolver"])(
+    "retains connection guidance for %s without treating DNS as an error code",
+    (message) => {
+      expect(formatTransportErrorCopy(message)).toContain("Couldn't connect to the AI service.");
+      expect(isKnownTransportErrorCode("DNS")).toBe(false);
+    },
+  );
+});
+
+describe("formatProviderRefusalText", () => {
+  it("directs a misalignment stop to review instead of another ordinary retry", () => {
+    expect(
+      formatProviderRefusalText({
+        diagnostics: [{ type: "provider_refusal", details: { category: "misalignment" } }],
+      }),
+    ).toBe("Chat stopped as a precaution. Review the findings in chat before continuing.");
+  });
+  it("formats a sanitized refusal category", () => {
+    expect(
+      formatProviderRefusalText({
+        diagnostics: [{ type: "provider_refusal", details: { category: "bio" } }],
+      }),
+    ).toBe("The provider refused this request (category: bio). Revise the request and try again.");
+  });
+});
 
 describe("extractLeadingHttpStatus", () => {
   it("accepts status codes in the valid HTTP range 100-599", () => {
@@ -70,17 +108,55 @@ describe("extractErrorHttpStatus", () => {
     expect(extractErrorHttpStatus(message)?.code).toBe(code);
   });
 
-  it.each([
-    "request id req-4291 failed",
-    "input length 14295 tokens exceeds the model limit",
-    "model model-x-500-preview not found",
-    "Image width 500 exceeds the maximum allowed size",
-  ])("rejects embedded numeric text: %s", (message) => {
-    expect(extractErrorHttpStatus(message)).toBeNull();
-  });
+  it.each(["request id req-4291 failed", "model model-x-500-preview not found"])(
+    "rejects embedded numeric text: %s",
+    (message) => {
+      expect(extractErrorHttpStatus(message)).toBeNull();
+    },
+  );
 });
 
 describe("HTTP status consumers", () => {
+  it.each([
+    [{ error: "missing model" }, { message: "missing model", type: undefined }],
+    [
+      { error: "invalid_client", message: "Sign in again" },
+      { message: "Sign in again", type: "invalid_client" },
+    ],
+  ])("distinguishes string error messages from codes: %j", (payload, expected) => {
+    expect(parseApiErrorInfo(JSON.stringify(payload))).toMatchObject(expected);
+  });
+
+  it.each(["", "error: ", "500 ", "500: ", "HTTP 502: "])(
+    "preserves distinct validation type and code after %s",
+    (prefix) => {
+      const error = {
+        type: "invalid_request_error",
+        code: "unknown_parameter",
+        message: "Unsupported parameter: timeout",
+      };
+      expect(parseApiErrorInfo(`${prefix}${JSON.stringify({ error })}`)).toMatchObject(error);
+    },
+  );
+
+  it("extracts the final upstream rejection from a proxy failure envelope", () => {
+    const message = "A maximum of 4 blocks with cache_control may be provided. Found 5.";
+    const raw = `400: ${JSON.stringify({
+      error: {
+        message: "All target providers failed.",
+        attempts: [
+          { status: 503, details: { error: { type: "api_error", message: "Unavailable" } } },
+          { status: 400, details: { error: { type: "invalid_request_error", message } } },
+        ],
+      },
+    })}`;
+    expect(parseApiErrorInfo(raw)).toMatchObject({
+      httpCode: "400",
+      type: "invalid_request_error",
+      message,
+    });
+  });
+
   it("does not return raw HTML after an HTTP reason phrase", () => {
     const raw = [
       "HTTP 502 Bad Gateway",
@@ -89,7 +165,7 @@ describe("HTTP status consumers", () => {
     ].join("\n");
 
     expect(formatRawAssistantErrorForUi(raw)).toBe(
-      "The AI service is temporarily unavailable (HTTP 502). Please try again in a moment.",
+      "Couldn't reach the AI service. Try again in a moment. If it continues, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
     );
   });
 

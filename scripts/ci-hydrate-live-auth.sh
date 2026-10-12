@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 set -euo pipefail
 
 profile_path="${1:-${RUNNER_TEMP:-/tmp}/openclaw-live.profile}"
@@ -61,6 +65,24 @@ activate_claude_oauth_access_token() {
 activate_claude_oauth_access_token
 
 for env_key in \
+  AZURE_SPEECH_KEY \
+  AZURE_SPEECH_REGION \
+  BASETEN_API_KEY \
+  OPENCLAW_LIVE_R2_ACCOUNT_ID \
+  OPENCLAW_LIVE_R2_BUCKET \
+  OPENCLAW_LIVE_R2_ACCESS_KEY_ID \
+  OPENCLAW_LIVE_R2_SECRET_ACCESS_KEY \
+  ELEVENLABS_API_KEY \
+  FEATHERLESS_API_KEY \
+  OPENCLAW_LIVE_GITHUB_COPILOT_TOKEN \
+  OPENCLAW_GOOGLE_MEET_LIVE_MEETING \
+  OPENCLAW_GOOGLE_MEET_CLIENT_ID \
+  OPENCLAW_GOOGLE_MEET_CLIENT_SECRET \
+  OPENCLAW_GOOGLE_MEET_REFRESH_TOKEN \
+  GRADIUM_API_KEY \
+  INWORLD_API_KEY \
+  MODEL_API_KEY \
+  VOLCENGINE_TTS_API_KEY \
   OPENAI_API_KEY \
   OPENAI_BASE_URL \
   ANTHROPIC_OAUTH_TOKEN \
@@ -70,13 +92,16 @@ for env_key in \
   BYTEPLUS_API_KEY \
   CEREBRAS_API_KEY \
   DEEPINFRA_API_KEY \
+  DEEPSEEK_API_KEY \
   DASHSCOPE_API_KEY \
   GROQ_API_KEY \
+  KIE_API_KEY \
   KIMI_API_KEY \
   MODELSTUDIO_API_KEY \
   MOONSHOT_API_KEY \
   MISTRAL_API_KEY \
   MINIMAX_API_KEY \
+  NOVITA_API_KEY \
   OPENCODE_API_KEY \
   OPENCODE_ZEN_API_KEY \
   OPENCLAW_LIVE_BROWSER_CDP_URL \
@@ -88,6 +113,7 @@ for env_key in \
   GEMINI_API_KEY \
   GOOGLE_API_KEY \
   OPENROUTER_API_KEY \
+  PIXVERSE_API_KEY \
   QWEN_API_KEY \
   FAL_KEY \
   RUNWAY_API_KEY \

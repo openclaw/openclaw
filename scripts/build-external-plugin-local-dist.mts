@@ -4,14 +4,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
-import { DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV } from "./lib/bundled-plugin-build-entries.mjs";
-import { shouldBuildBundledCluster } from "./lib/optional-bundled-clusters.mjs";
+import { collectSourceCheckoutPluginBuildEntries } from "./lib/bundled-plugin-build-entries.mjs";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
-import {
-  buildPluginNpmRuntime,
-  listPublishablePluginPackageDirs,
-  type PluginPackageJson,
-} from "./lib/plugin-npm-runtime-build.mts";
+import { buildPluginNpmRuntime } from "./lib/plugin-npm-runtime-build.mts";
 
 type ExternalPluginLocalDistParams = {
   repoRoot?: string;
@@ -19,29 +14,17 @@ type ExternalPluginLocalDistParams = {
   logLevel?: "silent" | "warn";
 };
 
-function readPluginPackageJson(repoRoot: string, packageDir: string): PluginPackageJson {
-  return JSON.parse(fs.readFileSync(path.join(repoRoot, packageDir, "package.json"), "utf8"));
-}
-
 /** Lists external first-party packages that need source-checkout dist output. */
 export function listExternalPluginLocalDistPackageDirs(
   params: Pick<ExternalPluginLocalDistParams, "repoRoot" | "env"> = {},
 ): string[] {
   const repoRoot = path.resolve(params.repoRoot ?? ".");
-  const env = params.env ?? process.env;
-  if (env[DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]?.trim()) {
-    return [];
-  }
-  return listPublishablePluginPackageDirs({ repoRoot }).filter((packageDir) => {
-    const packageJson = readPluginPackageJson(repoRoot, packageDir);
-    return (
-      packageJson.openclaw?.build?.bundledDist === false &&
-      shouldBuildBundledCluster(path.basename(packageDir), env, { packageJson })
-    );
-  });
+  return collectSourceCheckoutPluginBuildEntries({ cwd: repoRoot, env: params.env })
+    .filter(({ isolated }) => isolated)
+    .map(({ id }) => `extensions/${id}`);
 }
 
-/** Builds isolated plugin graphs, then stages every output below its excluded root dist path. */
+/** Builds isolated plugin graphs and stages their Node runtime output. */
 export async function buildExternalPluginLocalDist(
   params: ExternalPluginLocalDistParams = {},
 ): Promise<{ durationMs: number; pluginDirs: string[] }> {
@@ -67,9 +50,20 @@ export async function buildExternalPluginLocalDist(
     const targetDir = path.join(repoRoot, "dist", "extensions", result.pluginDir);
     assertRealOutputRoot(targetDir);
     fs.rmSync(targetDir, { recursive: true, force: true });
-    fs.mkdirSync(path.dirname(targetDir), { recursive: true });
-    fs.cpSync(result.outDir, targetDir, { recursive: true });
-    fs.rmSync(result.outDir, { recursive: true, force: true });
+    fs.mkdirSync(targetDir, { recursive: true });
+    for (const entry of fs.readdirSync(result.outDir)) {
+      // Source-discovered plugins serve these assets in place; plugins:assets:copy
+      // also stages them at their manifest-relative path, without flattening dist/.
+      if (entry === "control-ui") {
+        continue;
+      }
+      const source = path.join(result.outDir, entry);
+      fs.cpSync(source, path.join(targetDir, entry), { recursive: true });
+      fs.rmSync(source, { recursive: true, force: true });
+    }
+    if (fs.readdirSync(result.outDir).length === 0) {
+      fs.rmdirSync(result.outDir);
+    }
     pluginDirs.push(result.pluginDir);
   }
 

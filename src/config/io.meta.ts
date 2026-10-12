@@ -1,120 +1,88 @@
-import { writeConfigMachineState } from "../state/config-machine-state.js";
-import { isRecord } from "../utils.js";
+import { isDeepStrictEqual } from "node:util";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { writeConfigMachineStateAsync } from "../state/config-machine-state-async.js";
 // Maintains config metadata fields written alongside user config.
 import { VERSION } from "../version.js";
-import {
-  computeModelPolicyAllowlist,
-  hasModelPolicyAllowlistMigrationMarker,
-  isExplicitModelPolicy,
-} from "./model-policy-allowlist-migration.js";
+import { getConfigValueAtPath, unsetConfigValueAtPath } from "./config-paths.js";
+import { materializeModelPolicyAllowlist } from "./model-policy-allowlist-migration.js";
+import { cloneConfigWithResolutionFacts } from "./resolution-facts.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
+import { materializeUtilityModelSeparation } from "./utility-model-separation-migration.js";
 
 /** Metadata keys automatically stamped on config writes. */
-const AUTO_MANAGED_CONFIG_META_FIELDS = {
-  lastTouchedVersion: "lastTouchedVersion",
-  lastTouchedAt: "lastTouchedAt",
-} as const;
-
 export const AUTO_MANAGED_CONFIG_META_PATHS = [
-  ["meta", AUTO_MANAGED_CONFIG_META_FIELDS.lastTouchedVersion],
+  ["meta", "lastTouchedVersion"],
   ["meta", "migrations", "modelPolicyAllowlist"],
+  ["meta", "migrations", "utilityModelSeparation"],
 ] as const;
 
-function defaultModelScope(value: unknown): Record<string, unknown> | null {
-  if (!isRecord(value) || !isRecord(value.agents) || !isRecord(value.agents.defaults)) {
-    return null;
-  }
-  return value.agents.defaults;
+export function hasWebhookMigrationProgress(
+  previous: OpenClawConfig,
+  next: OpenClawConfig,
+): boolean {
+  const before = previous.meta?.migrations?.webhookListeners;
+  const after = next.meta?.migrations?.webhookListeners;
+  return before !== true && after !== undefined && !isDeepStrictEqual(before, after);
 }
 
-function collectLegacyDefaultModelAllow(value: unknown): string[] | null {
-  const defaults = defaultModelScope(value);
-  if (!defaults) {
-    return null;
+/** Publish migration pins beside includes so the root marker and pins roll back together. */
+export function projectWebhookMigrationIncludeWrite(
+  previous: OpenClawConfig,
+  next: OpenClawConfig,
+) {
+  if (!hasWebhookMigrationProgress(previous, next)) {
+    return undefined;
   }
-  return computeModelPolicyAllowlist({
-    root: value,
-    defaults,
-  });
-}
-
-function withDefaultModelAllow(cfg: OpenClawConfig, allow: string[]): OpenClawConfig {
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        modelPolicy: {
-          ...cfg.agents?.defaults?.modelPolicy,
-          allow,
-        },
-      },
-    },
-  };
-}
-
-function withModelPolicyAllowlistMigrationMarker(
-  cfg: OpenClawConfig,
-  params: {
-    defaultAllow?: string[];
-  } = {},
-): OpenClawConfig {
-  const withDefault = params.defaultAllow ? withDefaultModelAllow(cfg, params.defaultAllow) : cfg;
-  return {
-    ...withDefault,
-    meta: {
-      ...withDefault.meta,
-      migrations: {
-        ...withDefault.meta?.migrations,
-        modelPolicyAllowlist: true,
-      },
-    },
-  };
-}
-
-function stampModelPolicyAllowlistMigrationForWrite(
-  cfg: OpenClawConfig,
-  previousConfig: unknown,
-): OpenClawConfig {
-  const previousDefaultAllow = collectLegacyDefaultModelAllow(previousConfig);
-  const defaultAllow = isExplicitModelPolicy(cfg.agents?.defaults?.modelPolicy)
-    ? undefined
-    : (previousDefaultAllow ?? undefined);
-  if (defaultAllow) {
-    return withModelPolicyAllowlistMigrationMarker(cfg, { defaultAllow });
+  const completed = next.meta?.migrations?.webhookListeners;
+  const before = previous.meta?.migrations?.webhookListeners;
+  const paths = Object.entries(completed === true ? {} : (completed ?? {})).flatMap(
+    ([channelId, fields]) =>
+      typeof before === "object" && Object.hasOwn(before, channelId)
+        ? []
+        : fields.filter((field) => {
+            const value = getConfigValueAtPath(next, field);
+            return (
+              field[0] === "channels" &&
+              field[1] === channelId &&
+              (field.length === 3 || (field.length === 5 && field[2] === "accounts")) &&
+              getConfigValueAtPath(previous, field) === undefined &&
+              (field.at(-1) === "legacyWebhook"
+                ? asNullableRecord(value) !== null
+                : field.at(-1) === "enabled" && value === true)
+            );
+          }),
+  );
+  const config = cloneConfigWithResolutionFacts(next);
+  for (const field of paths) {
+    unsetConfigValueAtPath(config, field, previous);
   }
-  if (hasModelPolicyAllowlistMigrationMarker(cfg)) {
-    return cfg;
-  }
-  // The pre-write snapshot distinguishes a legacy restriction from a model map
-  // created under the new metadata-only semantics before the general version stamp changes.
-  return withModelPolicyAllowlistMigrationMarker(cfg);
+  return { config, paths };
 }
 
 export function stampConfigWriteMetadata(
   cfg: OpenClawConfig,
-  _now: string = new Date().toISOString(),
   version: string = VERSION,
   previousConfig?: unknown,
 ): OpenClawConfig {
   const migrationStamped =
     previousConfig === undefined
       ? cfg
-      : stampModelPolicyAllowlistMigrationForWrite(cfg, previousConfig);
+      : materializeUtilityModelSeparation(
+          materializeModelPolicyAllowlist(cfg, previousConfig).config,
+          previousConfig,
+        ).config;
   return {
     ...migrationStamped,
     meta: {
       ...migrationStamped.meta,
-      [AUTO_MANAGED_CONFIG_META_FIELDS.lastTouchedVersion]: version,
+      lastTouchedVersion: version,
     },
   };
 }
 
 /** Persist machine-owned metadata only after the matching config file commit succeeds. */
-export function recordConfigWriteMetadata(
+export async function recordConfigWriteMetadata(
   now: string = new Date().toISOString(),
-  _version: string = VERSION,
-): void {
-  writeConfigMachineState("config.lastTouchedAt", now);
+): Promise<void> {
+  await writeConfigMachineStateAsync("config.lastTouchedAt", now);
 }

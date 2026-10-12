@@ -1,51 +1,52 @@
-import { getActiveBackgroundExecSessionCount } from "../agents/bash-process-registry.js";
-import { getActiveEmbeddedRunCount } from "../agents/embedded-agent-runner/run-state.js";
-import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
+import { performance } from "node:perf_hooks";
 import { isRestartEnabled } from "../config/commands.flags.js";
 import {
   collectConfigRuntimeEnvOwnership,
   initializePublishedConfigRuntimeEnv,
   prepareConfigRuntimeEnv,
 } from "../config/config-env-vars.js";
+import { resolveControlUiAllowedOrigins } from "../config/gateway-control-ui-origins.js";
 import { assertGatewayConfigEnvSelectionUnchanged } from "../config/gateway-env-selection.js";
 import {
   getRuntimeConfigSourceSnapshot,
-  readConfigFileSnapshot,
+  readConfigFileSnapshotWithPluginMetadata,
   setAppliedRuntimeConfigSnapshot,
 } from "../config/io.js";
 import { normalizeStateDirEnv } from "../config/paths.js";
-import {
-  copyConfigResolutionFacts,
-  copyConfigResolutionFactsExcept,
-} from "../config/resolution-facts.js";
+import { copyConfigResolutionFacts } from "../config/resolution-facts.js";
 import { captureConfigOverrideApplier } from "../config/runtime-overrides.js";
 import { resolveSystemMainSessionTarget } from "../config/sessions.js";
+import { publishSystemEventStoreConfig } from "../config/sessions/session-store-path.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
-import { getActiveCronJobCount } from "../cron/active-jobs.js";
 import {
   isDiagnosticsEnabled,
   setDiagnosticsEnabledForProcess,
 } from "../infra/diagnostic-events.js";
 import { isVitestRuntimeEnv, logAcceptedEnvOption } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { createGatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
 import { prepareGatewayAgentCliShim } from "../infra/openclaw-cli-shim.js";
 import { readGatewayRestartHandoffSync } from "../infra/restart-handoff.js";
-import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
+import { setGatewayRestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
+import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { withSystemEventOwner } from "../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { applyLoggingConfig } from "../logging/logger.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
-import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
-import { completePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { getTotalQueueSize } from "../process/command-queue.js";
-import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
-import { createLazyPromise } from "../shared/lazy-runtime.js";
+import { setGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import {
+  getGatewayPluginMetadataSnapshot,
+  selectCurrentPluginMetadataCache,
+} from "../plugins/current-plugin-metadata-state.js";
+import { getPluginMetadataSnapshotCache } from "../plugins/plugin-cache.js";
+import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../state/openclaw-state-ownership.js";
+import { mergeGatewayAuthConfig } from "./auth-resolve.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
-import { listCoreGatewayMethodNames } from "./methods/core-descriptors.js";
+import { listCoreGatewayMethodNames } from "./methods/core-method-policy.js";
 import {
   mergeActivationSectionsIntoRuntimeConfig,
   resolveGatewayReloadPluginActivationCandidate,
@@ -56,20 +57,12 @@ import {
 } from "./restart-trace.js";
 import type { GatewayServerOptions } from "./server-public.js";
 import { createGatewayStartupTrace } from "./server-startup-trace.js";
-import { mergeGatewayAuthConfig, mergeGatewayTailscaleConfig } from "./startup-auth.js";
 import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-origins.js";
 
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
 type WorkerEnvironmentStartupLoader = () => Promise<
   typeof import("./server-worker-environment-startup.js")
 >;
-
-function publishGatewayPluginRuntimeConfigAtStartup(params: {
-  runtimeConfig: OpenClawConfig;
-  sourceConfig: OpenClawConfig;
-}): void {
-  setAppliedRuntimeConfigSnapshot(params.runtimeConfig, params.sourceConfig);
-}
 
 export async function prepareGatewayServerBootstrap(input: {
   port: number;
@@ -80,63 +73,114 @@ export async function prepareGatewayServerBootstrap(input: {
   formatRuntimeGatewayAuthTokenWarning: () => string;
 }) {
   const { port, opts, log, logSecrets, loadWorkerEnvironmentStartupModule } = input;
+  const { assertConfiguredWorkspaceStateReady } = await import("../agents/workspace-state-dirs.js");
+  // Derive defaults and admit exactly the snapshot that bootstrap will consume.
+  process.env.OPENCLAW_GATEWAY_PORT = String(port);
+  const envBeforeStartupConfigLoad = { ...process.env };
   const formatRuntimeGatewayAuthTokenWarning = input.formatRuntimeGatewayAuthTokenWarning;
-  normalizeStateDirEnv(process.env);
-  await assertOpenClawStateWriteAllowedAtPath({
-    databasePath: resolveOpenClawStateSqlitePath(process.env),
-    env: process.env,
+  const traceOriginAt = opts.processStartedAt ?? opts.startupStartedAt;
+  const startupElapsedMs =
+    typeof traceOriginAt === "number" ? Math.max(0, Date.now() - traceOriginAt) : 0;
+  const startupTrace = createGatewayStartupTrace(
+    log,
+    performance.now() - startupElapsedMs,
+    opts.updateCanary,
+  );
+  using startupTraceOwner = {
+    transferred: false,
+    [Symbol.dispose]() {
+      if (!this.transferred) {
+        startupTrace.close();
+      }
+    },
+  };
+  if (startupElapsedMs > 0) {
+    startupTrace.mark("process.bootstrap");
+  }
+  const startupConfigSnapshotRead = await withArtifactPreservingStateReads(async () => {
+    if (!resumeGatewayRestartTraceFromEnv(process.env, [["source", "env"]])) {
+      const restartHandoff = readGatewayRestartHandoffSync();
+      resumeGatewayRestartTraceFromHandoff(restartHandoff?.restartTrace, [
+        ["source", restartHandoff?.source],
+        ["restartKind", restartHandoff?.restartKind],
+        ["supervisorMode", restartHandoff?.supervisorMode],
+      ]);
+    }
+    const read =
+      opts.startupConfigSnapshotRead ??
+      (await startupTrace.measure("config.snapshot.read", () =>
+        readConfigFileSnapshotWithPluginMetadata({
+          observe: false,
+          measure: (name, run) => startupTrace.measure(name, run),
+        }),
+      ));
+    await assertConfiguredWorkspaceStateReady({
+      cfg: captureConfigOverrideApplier()(read.snapshot.config),
+    });
+    return read;
   });
-  const [
-    {
+  const inspectStateOwnership = async (signal?: AbortSignal) => {
+    normalizeStateDirEnv(process.env);
+    await assertOpenClawStateWriteAllowedAtPath({
+      databasePath: resolveOpenClawStateSqlitePath(process.env),
+      env: process.env,
+      signal,
+    });
+  };
+  // Reuse child imports while each check still acquires a fresh source snapshot.
+  // Join the worker before starting any network or plugin runtime.
+  await withSqliteReadOnlyWorkerScope(async () => {
+    await startupTrace.measure("state.ownership", () =>
+      opts.startupOperation
+        ? opts.startupOperation(inspectStateOwnership)
+        : inspectStateOwnership(),
+    );
+    const {
       OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
       OpenClawDatabaseSchemaPreflightError,
       preflightOpenClawDatabaseSchemas,
-    },
-    agentDatabase,
-    stateDatabase,
-  ] = await Promise.all([
-    import("../state/openclaw-database-preflight.js"),
-    import("../state/openclaw-agent-db.js"),
-    import("../state/openclaw-state-db.js"),
-  ]);
-  const databaseSchemas = preflightOpenClawDatabaseSchemas({
-    env: process.env,
-    supportedVersions: {
-      state: stateDatabase.OPENCLAW_STATE_SCHEMA_VERSION,
-      agent: agentDatabase.OPENCLAW_AGENT_SCHEMA_VERSION,
-    },
-  });
-  if (databaseSchemas.incompatible.length > 0) {
-    for (const database of databaseSchemas.incompatible) {
-      log.error("database schema preflight rejected newer schema", {
+    } = await startupTrace.measure(
+      "state.runtime-imports",
+      () => import("../state/openclaw-database-preflight.js"),
+    );
+    const inspectDatabaseSchemas = (signal?: AbortSignal) =>
+      preflightOpenClawDatabaseSchemas({
+        signal,
+        env: process.env,
+        reuseStartupSchemaPreparation: true,
+        agentAdmissionConfig: captureConfigOverrideApplier()(
+          startupConfigSnapshotRead.snapshot.config,
+        ),
+        onAgentInspection: (stats) =>
+          startupTrace.detail("state.schema-preflight", Object.entries(stats)),
+      });
+    const databaseSchemas = await startupTrace.measure("state.schema-preflight", () =>
+      opts.startupOperation
+        ? opts.startupOperation(inspectDatabaseSchemas)
+        : inspectDatabaseSchemas(),
+    );
+    if (databaseSchemas.incompatible.length > 0) {
+      throw new OpenClawDatabaseSchemaPreflightError(databaseSchemas.incompatible);
+    }
+    for (const database of databaseSchemas.indeterminate) {
+      log.warn("database schema preflight could not inspect database; continuing to real open", {
         kind: database.kind,
         path: database.path,
-        ...(database.agentId ? { agentId: database.agentId } : {}),
-        foundVersion: database.foundVersion,
-        supportedVersion: database.supportedVersion,
-        writerAppVersion: database.writerAppVersion ?? "unknown",
+        reason: database.reason,
         docsUrl: OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
       });
     }
-    throw new OpenClawDatabaseSchemaPreflightError(databaseSchemas.incompatible);
-  }
-  for (const database of databaseSchemas.indeterminate) {
-    log.warn("database schema preflight could not inspect database; continuing to real open", {
-      kind: database.kind,
-      path: database.path,
-      reason: database.reason,
-      docsUrl: OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
-    });
-  }
-  const { bootstrapGatewayNetworkRuntime } = await import("./server-network-runtime.js");
-  bootstrapGatewayNetworkRuntime();
+  });
+  const { ensureGlobalUndiciEnvProxyDispatcher } = await startupTrace.measure(
+    "runtime.network-imports",
+    () => import("../infra/net/undici-global-dispatcher.js"),
+  );
+  await startupTrace.measure("runtime.network-bootstrap", ensureGlobalUndiciEnvProxyDispatcher);
 
   const minimalTestGateway =
     isVitestRuntimeEnv() && process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1";
   const ambientEnvTriggers = opts.ambientEnvTriggers ?? "suppress";
 
-  // Ensure all default port derivations (browser/canvas) see the actual runtime port.
-  process.env.OPENCLAW_GATEWAY_PORT = String(port);
   logAcceptedEnvOption({
     key: "OPENCLAW_RAW_STREAM",
     description: "raw stream logging enabled",
@@ -145,33 +189,23 @@ export async function prepareGatewayServerBootstrap(input: {
     key: "OPENCLAW_RAW_STREAM_PATH",
     description: "raw stream log path override",
   });
-  if (!resumeGatewayRestartTraceFromEnv(process.env, [["source", "env"]])) {
-    const restartHandoff = readGatewayRestartHandoffSync();
-    resumeGatewayRestartTraceFromHandoff(restartHandoff?.restartTrace, [
-      ["source", restartHandoff?.source],
-      ["restartKind", restartHandoff?.restartKind],
-      ["supervisorMode", restartHandoff?.supervisorMode],
-    ]);
-  }
-  const startupTrace = createGatewayStartupTrace(log);
-  if (!minimalTestGateway) {
+  if (!minimalTestGateway && !opts.updateCanary) {
     await startupTrace.measure("runtime.agent-cli", () => prepareGatewayAgentCliShim());
   }
-  const startupConfigModulePromise = import("./server-startup-config.js");
-  const loadStartupPluginsModule = createLazyPromise(() => import("./server-startup-plugins.js"), {
-    cacheRejections: true,
-  });
-  const { loadGatewayStartupConfigSnapshot } = await startupConfigModulePromise;
+  const startupConfigModulePromise = startupTrace.measure(
+    "config.runtime-imports",
+    () => import("./server-startup-config.js"),
+  );
+  const { applyGatewayAuthOverridesForStartupPreflight, loadGatewayStartupConfigSnapshot } =
+    await startupConfigModulePromise;
 
-  const envBeforeStartupConfigLoad = { ...process.env };
   const startupConfigLoad = await startupTrace.measure("config.snapshot", () =>
     loadGatewayStartupConfigSnapshot({
       minimalTestGateway,
+      ambientEnvTriggers,
       log,
       measure: (name, run) => startupTrace.measure(name, run),
-      ...(opts.startupConfigSnapshotRead
-        ? { initialSnapshotRead: opts.startupConfigSnapshotRead }
-        : {}),
+      initialSnapshotRead: startupConfigSnapshotRead,
     }),
   );
   const configSnapshot = startupConfigLoad.snapshot;
@@ -220,17 +254,19 @@ export async function prepareGatewayServerBootstrap(input: {
   const activateRuntimeSecrets = createRuntimeSecretsActivator({
     logSecrets,
     emitStateEvent: emitSecretsStateEvent,
-    channelAutostartSuppression: opts.channelAutostartSuppression,
+    beforeSnapshotPublication: async (config) => {
+      const { publishCanonicalUserChannelPolicy } =
+        await import("../state/user-channel-identity-operations.js");
+      await publishCanonicalUserChannelPolicy(config?.gateway, config?.commands?.ownerAllowFrom);
+    },
     ...(startupConfigLoad.pluginMetadataSnapshot
       ? { pluginMetadataSnapshot: startupConfigLoad.pluginMetadataSnapshot }
       : {}),
   });
-  let startupInternalWriteHash: string | null = null;
-  let startupLastGoodSnapshot = configSnapshot;
   const startupActivationSourceConfig = configSnapshot.sourceConfig;
   const startupRuntimeConfig = captureConfigOverrideApplier()(startupConfigSnapshot.config);
   startupTrace.setConfig(startupRuntimeConfig);
-  const { prepareGatewayStartupConfig } = await startupConfigModulePromise;
+  const { prepareGatewayStartupConfig } = await import("./server-startup-config-helpers.js");
   const authBootstrap = await startupTrace.measure(
     "config.auth",
     () =>
@@ -246,18 +282,22 @@ export async function prepareGatewayServerBootstrap(input: {
   );
   const cfgAtStart = authBootstrap.cfg;
   startupTrace.setConfig(cfgAtStart);
-  try {
-    const { cleanupRetiredManagedGitHubProfiles } =
-      await import("../agents/github-tool-profile-cleanup.js");
-    const cleanup = await cleanupRetiredManagedGitHubProfiles({
-      config: cfgAtStart,
-      env: process.env,
-    });
-    for (const warning of cleanup.warnings) {
-      log.warn(`managed GitHub profile cleanup: ${warning}`);
+  if (!opts.updateCanary) {
+    try {
+      const cleanup = await startupTrace.measure("agents.github-profile-cleanup", async () => {
+        const { cleanupRetiredManagedGitHubProfiles } =
+          await import("../agents/github-tool-profile-cleanup.js");
+        return await cleanupRetiredManagedGitHubProfiles({
+          config: cfgAtStart,
+          env: process.env,
+        });
+      });
+      for (const warning of cleanup.warnings) {
+        log.warn(`managed GitHub profile cleanup: ${warning}`);
+      }
+    } catch (error) {
+      log.warn(`managed GitHub profile cleanup failed: ${formatErrorMessage(error)}`);
     }
-  } catch (error) {
-    log.warn(`managed GitHub profile cleanup failed: ${formatErrorMessage(error)}`);
   }
   if (authBootstrap.generatedToken) {
     log.warn(formatRuntimeGatewayAuthTokenWarning());
@@ -271,122 +311,80 @@ export async function prepareGatewayServerBootstrap(input: {
     trustedProxyDeviceAutoApprove.scopes?.some((scope) => scope.trim() === ADMIN_SCOPE)
   ) {
     log.warn(
-      "SECURITY WARNING: gateway.auth.trustedProxy.deviceAutoApprove.scopes includes operator.admin; every proxy-authenticated user can auto-approve a new browser device with full admin, and requests without scopes receive full admin automatically. Remove operator.admin to require manual approval until per-identity roles are available.",
+      "SECURITY WARNING: gateway.auth.trustedProxy.deviceAutoApprove.scopes includes operator.admin; every proxy-authenticated user can auto-approve a new operator device with full admin, and requests without scopes receive full admin automatically. Remove operator.admin and grant admin per identity via gateway.auth.identityScopes instead.",
     );
   }
-  const resolvedStartupAuthOverride = startupAuthOverride
-    ? (Object.fromEntries(
-        (
-          [
-            "mode",
-            "token",
-            "password",
-            "allowTailscale",
-            "rateLimit",
-            "trustedProxy",
-          ] as const satisfies readonly (keyof GatewayAuthConfig)[]
-        ).flatMap((key) => {
-          if (startupAuthOverride[key] === undefined) {
-            return [];
-          }
-          if ((key === "token" || key === "password") && isSecretRef(startupAuthOverride[key])) {
-            return [];
-          }
-          const resolvedValue = cfgAtStart.gateway?.auth?.[key];
-          return resolvedValue === undefined ? [] : [[key, structuredClone(resolvedValue)]];
-        }),
-      ) as GatewayAuthConfig)
-    : undefined;
-  const startupAuthSecretRefOverride = startupAuthOverride
-    ? {
-        ...(isSecretRef(startupAuthOverride.token)
-          ? { token: structuredClone(startupAuthOverride.token) }
-          : {}),
-        ...(isSecretRef(startupAuthOverride.password)
-          ? { password: structuredClone(startupAuthOverride.password) }
-          : {}),
+  let resolvedStartupAuthOverride: GatewayAuthConfig | undefined;
+  let startupAuthSecretRefOverride: GatewayAuthConfig | undefined;
+  if (startupAuthOverride) {
+    resolvedStartupAuthOverride = {};
+    startupAuthSecretRefOverride = {};
+    for (const key of [
+      "mode",
+      "token",
+      "password",
+      "allowTailscale",
+      "rateLimit",
+      "trustedProxy",
+    ] as const) {
+      const override = startupAuthOverride[key];
+      if (override === undefined) {
+        continue;
       }
-    : undefined;
+      if ((key === "token" || key === "password") && isSecretRef(override)) {
+        startupAuthSecretRefOverride[key] = structuredClone(override);
+        continue;
+      }
+      const resolvedValue = cfgAtStart.gateway?.auth?.[key];
+      if (resolvedValue !== undefined) {
+        Object.assign(resolvedStartupAuthOverride, { [key]: structuredClone(resolvedValue) });
+      }
+    }
+  }
   const reloadAuthOverride = authBootstrap.generatedToken
     ? mergeGatewayAuthConfig(resolvedStartupAuthOverride, { token: authBootstrap.generatedToken })
     : resolvedStartupAuthOverride;
-  const diagnosticsEnabled = isDiagnosticsEnabled(cfgAtStart);
-  setDiagnosticsEnabledForProcess(diagnosticsEnabled);
-  setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(cfgAtStart) });
-  const activeTaskCount = { get: () => 0 };
-  setPreRestartDeferralCheck(
-    () =>
-      getTotalQueueSize() +
-      getTotalPendingReplies() +
-      getActiveEmbeddedRunCount() +
-      getActiveCronJobCount() +
-      getActiveBackgroundExecSessionCount() +
-      getActiveGatewayRootWorkCount({ excludeCurrent: true }) +
-      activeTaskCount.get(),
-  );
+  setDiagnosticsEnabledForProcess(isDiagnosticsEnabled(cfgAtStart));
+  setGatewayRestartPolicy({ allowExternal: isRestartEnabled(cfgAtStart) });
+  setPreRestartDeferralCheck(() => createGatewayActiveWorkSnapshot().counts.totalActive);
   const seededControlUiAllowedOrigins = controlUiSeed.seededAllowedOrigins
     ? cfgAtStart.gateway?.controlUi?.allowedOrigins
     : undefined;
   const applyFixedGatewayOverlays = (config: OpenClawConfig): OpenClawConfig => {
-    let runtimeConfig = config;
-    if (reloadAuthOverride || startupTailscaleOverride) {
-      runtimeConfig = {
-        ...runtimeConfig,
-        gateway: {
-          ...runtimeConfig.gateway,
-          ...(reloadAuthOverride
-            ? { auth: mergeGatewayAuthConfig(runtimeConfig.gateway?.auth, reloadAuthOverride) }
-            : {}),
-          ...(startupTailscaleOverride
-            ? {
-                tailscale: mergeGatewayTailscaleConfig(
-                  runtimeConfig.gateway?.tailscale,
-                  startupTailscaleOverride,
-                ),
-              }
-            : {}),
-        },
-      };
-    }
+    const runtimeConfig = applyGatewayAuthOverridesForStartupPreflight(config, {
+      auth:
+        authBootstrap.generatedToken && config.gateway?.auth?.mode === undefined
+          ? { mode: authBootstrap.auth.mode, ...reloadAuthOverride }
+          : reloadAuthOverride,
+      tailscale: startupTailscaleOverride,
+    });
     if (
-      seededControlUiAllowedOrigins &&
-      runtimeConfig.gateway?.controlUi?.allowedOrigins === undefined
+      !seededControlUiAllowedOrigins ||
+      runtimeConfig.gateway?.controlUi?.allowedOrigins !== undefined ||
+      resolveControlUiAllowedOrigins(runtimeConfig).length > 0
     ) {
-      runtimeConfig = {
-        ...runtimeConfig,
-        gateway: {
-          ...runtimeConfig.gateway,
-          controlUi: {
-            ...runtimeConfig.gateway?.controlUi,
-            allowedOrigins: seededControlUiAllowedOrigins,
-          },
-        },
-      };
+      return runtimeConfig;
     }
-    copyConfigResolutionFactsExcept(config, runtimeConfig, [
-      ...(reloadAuthOverride?.token !== undefined ? ["gateway.auth.token"] : []),
-      ...(reloadAuthOverride?.password !== undefined ? ["gateway.auth.password"] : []),
-    ]);
-    return runtimeConfig;
-  };
-  const applyReloadableGatewayAuthRefs = (config: OpenClawConfig): OpenClawConfig => {
-    if (!startupAuthSecretRefOverride?.token && !startupAuthSecretRefOverride?.password) {
-      return config;
-    }
-    const next = {
-      ...config,
+    const withOrigins = {
+      ...runtimeConfig,
       gateway: {
-        ...config.gateway,
-        auth: mergeGatewayAuthConfig(config.gateway?.auth, startupAuthSecretRefOverride),
+        ...runtimeConfig.gateway,
+        controlUi: {
+          ...runtimeConfig.gateway?.controlUi,
+          allowedOrigins: seededControlUiAllowedOrigins,
+        },
       },
     };
-    copyConfigResolutionFactsExcept(config, next, [
-      ...(startupAuthSecretRefOverride.token !== undefined ? ["gateway.auth.token"] : []),
-      ...(startupAuthSecretRefOverride.password !== undefined ? ["gateway.auth.password"] : []),
-    ]);
-    return next;
+    copyConfigResolutionFacts(runtimeConfig, withOrigins);
+    return withOrigins;
   };
-  const prepareReloadCandidate = (params: {
+  const applyReloadableGatewayAuthRefs = (config: OpenClawConfig): OpenClawConfig =>
+    startupAuthSecretRefOverride?.token || startupAuthSecretRefOverride?.password
+      ? applyGatewayAuthOverridesForStartupPreflight(config, {
+          auth: startupAuthSecretRefOverride,
+        })
+      : config;
+  const prepareReloadCandidate = async (params: {
     runtimeConfig: OpenClawConfig;
     sourceConfig: OpenClawConfig;
     previousSourceConfig?: OpenClawConfig;
@@ -394,17 +392,17 @@ export async function prepareGatewayServerBootstrap(input: {
     const previousSourceConfig =
       params.previousSourceConfig ??
       getRuntimeConfigSourceSnapshot() ??
-      startupLastGoodSnapshot.sourceConfig;
+      configSnapshot.sourceConfig;
     assertGatewayConfigEnvSelectionUnchanged(previousSourceConfig, params.sourceConfig);
     const runtimeEnv = prepareConfigRuntimeEnv({
       previousConfig: previousSourceConfig,
       nextConfig: params.sourceConfig,
     });
     const metadata = startupConfigLoad.pluginMetadataSnapshot;
-    const pluginCandidate = minimalTestGateway
-      ? { runtimeConfig: params.runtimeConfig, compareConfig: params.sourceConfig }
+    const activationConfig = minimalTestGateway
+      ? params.sourceConfig
       : resolveGatewayReloadPluginActivationCandidate({
-          ...params,
+          sourceConfig: params.sourceConfig,
           env: runtimeEnv.env,
           ...(metadata?.manifestRegistry ? { manifestRegistry: metadata.manifestRegistry } : {}),
           discovery: metadata?.discovery,
@@ -415,7 +413,7 @@ export async function prepareGatewayServerBootstrap(input: {
       const applied = applyCandidateOverrides(
         mergeActivationSectionsIntoRuntimeConfig({
           runtimeConfig: config,
-          activationConfig: pluginCandidate.compareConfig,
+          activationConfig,
         }),
       );
       copyConfigResolutionFacts(config, applied);
@@ -423,55 +421,77 @@ export async function prepareGatewayServerBootstrap(input: {
     };
     const reapplyRuntimeOverlays = (config: OpenClawConfig): OpenClawConfig =>
       applyFixedGatewayOverlays(applyReloadableGatewayAuthRefs(reapplyCompareOverlays(config)));
+    const runtimeConfig = reapplyRuntimeOverlays(params.runtimeConfig);
+    // Both managed writes and watcher reloads must reject unmigrated workspaces
+    // before persistence or publication, using the candidate's final config and env.
+    await assertConfiguredWorkspaceStateReady({ cfg: runtimeConfig, env: runtimeEnv.env });
     return {
-      runtimeConfig: reapplyRuntimeOverlays(params.runtimeConfig),
+      runtimeConfig,
       compareConfig: reapplyCompareOverlays(params.sourceConfig),
       runtimeEnv,
       reapplyRuntimeOverlays,
       reapplyCompareOverlays,
     };
   };
-  // Keep the old startup-write suppression path intact for compatibility with
-  // callers that may still report a write, but startup itself no longer mutates config.
-  if (startupConfigLoad.wroteConfig || authBootstrap.persistedGeneratedToken) {
-    const startupSnapshot = await startupTrace.measure("config.final-snapshot", () =>
-      readConfigFileSnapshot(),
-    );
-    startupInternalWriteHash = startupSnapshot.hash ?? null;
-    startupLastGoodSnapshot = startupSnapshot;
-  }
-  setAppliedRuntimeConfigSnapshot(cfgAtStart, startupLastGoodSnapshot.sourceConfig);
+  setAppliedRuntimeConfigSnapshot(cfgAtStart, configSnapshot.sourceConfig);
   applyLoggingConfig(cfgAtStart.logging);
-  initializePublishedConfigRuntimeEnv(startupLastGoodSnapshot.sourceConfig, {
+  initializePublishedConfigRuntimeEnv(configSnapshot.sourceConfig, {
     ownedEnv: collectConfigRuntimeEnvOwnership(
-      startupLastGoodSnapshot.sourceConfig,
+      configSnapshot.sourceConfig,
       envBeforeStartupConfigLoad,
       process.env,
     ),
     preserveExistingOwnership: true,
   });
-  const workerEnvironmentStartup = minimalTestGateway
-    ? undefined
-    : await startupTrace.measure("worker-environments.store-import", async () => {
-        const workerModule = await loadWorkerEnvironmentStartupModule();
-        return await workerModule.loadGatewayWorkerEnvironmentStartupState();
+  const preparations = [
+    minimalTestGateway || opts.updateCanary
+      ? Promise.resolve(undefined)
+      : startupTrace.measure("worker-environments.store-import", async () => {
+          const workerModule = await loadWorkerEnvironmentStartupModule();
+          return await workerModule.loadGatewayWorkerEnvironmentStartupState();
+        }),
+    (async () => {
+      if (opts.updateCanary) {
+        log.warn("candidate gateway: session catalogs and maintenance deferred until activation");
+      }
+      if (minimalTestGateway || opts.updateCanary) {
+        return [];
+      }
+      await startupTrace.measure("state.desktop-approval-admission", async () => {
+        const { migrateLegacyDesktopStreamOptOuts } =
+          await import("../infra/device-pairing-node-desktop-migration.js");
+        const retired = await migrateLegacyDesktopStreamOptOuts(cfgAtStart);
+        if (retired > 0) {
+          log.warn(
+            `Preserved disabled desktop access for ${retired} paired node(s); approve their updated desktop capability to enable sharing.`,
+          );
+        }
       });
-  const { prepareGatewayPluginBootstrap, runGatewayStartupMaintenance } =
-    await loadStartupPluginsModule();
+      return startupTrace.measure("sessions.admission", async () => {
+        const { prepareGatewayStartupSessions } =
+          await import("./server-startup-session-migration.js");
+        return prepareGatewayStartupSessions({ cfg: cfgAtStart, env: process.env, log });
+      });
+    })(),
+    startupTrace.measure("plugins.bootstrap-imports", () => import("./server-startup-plugins.js")),
+  ] as const;
+  // These owners share admitted state, but no preparation consumes another's result.
+  // Join every owner before startup failure can close their database resources.
+  await Promise.allSettled(preparations);
+  const [workerEnvironmentStartup, startupSessionDatabases, { prepareGatewayPluginBootstrap }] =
+    await Promise.all(preparations);
   const pluginGatewayContext: {
     current: import("./server-methods/types.js").GatewayRequestContext | undefined;
   } = { current: undefined };
   const resolvePluginGatewayContext = () => pluginGatewayContext.current;
-  await startupTrace.measure("startup.maintenance", () =>
-    runGatewayStartupMaintenance({
-      cfgAtStart,
-      startupRuntimeConfig,
-      minimalTestGateway,
-      log,
-    }),
-  );
-  const pluginBootstrap = await startupTrace.measure("plugins.bootstrap", () =>
-    prepareGatewayPluginBootstrap({
+  publishSystemEventStoreConfig(cfgAtStart);
+  const pluginBootstrap = await startupTrace.measure("plugins.bootstrap", async () => {
+    if (!opts.updateCanary) {
+      const { initSubagentRegistry } =
+        await import("../agents/subagents/registry/subagent-registry.js");
+      await initSubagentRegistry();
+    }
+    return prepareGatewayPluginBootstrap({
       cfgAtStart,
       activationSourceConfig: startupActivationSourceConfig,
       pluginMetadataSnapshot: startupConfigLoad.pluginMetadataSnapshot,
@@ -479,8 +499,8 @@ export async function prepareGatewayServerBootstrap(input: {
       minimalTestGateway,
       ambientEnvTriggers,
       log,
-    }),
-  );
+    });
+  });
   const {
     gatewayPluginConfigAtStart,
     defaultWorkspaceDir,
@@ -496,23 +516,22 @@ export async function prepareGatewayServerBootstrap(input: {
   // prepared owners are created so request-time exact-owner lookups cannot see the pre-activation
   // snapshot and reject the Gateway's own model catalog.
   copyConfigResolutionFacts(cfgAtStart, gatewayPluginConfigAtStart);
-  publishGatewayPluginRuntimeConfigAtStartup({
-    runtimeConfig: gatewayPluginConfigAtStart,
-    sourceConfig: startupLastGoodSnapshot.sourceConfig,
-  });
+  setAppliedRuntimeConfigSnapshot(gatewayPluginConfigAtStart, configSnapshot.sourceConfig);
   const coreGatewayMethodNames = listCoreGatewayMethodNames();
-  const currentPluginMetadataSnapshot = completePluginMetadataSnapshot({
-    snapshot: pluginMetadataSnapshot,
-    config: startupActivationSourceConfig,
-    env: process.env,
-    workspaceDir: defaultWorkspaceDir,
-  });
-  setCurrentPluginMetadataSnapshot(currentPluginMetadataSnapshot, {
-    config: startupActivationSourceConfig,
-    compatibleConfigs: [startupRuntimeConfig, cfgAtStart, gatewayPluginConfigAtStart],
-    env: process.env,
-    workspaceDir: pluginWorkspaceDir,
-  });
+  const existingPluginMetadataSnapshot = getGatewayPluginMetadataSnapshot();
+  const currentPluginMetadataSnapshot = existingPluginMetadataSnapshot ?? pluginMetadataSnapshot;
+  if (existingPluginMetadataSnapshot) {
+    selectCurrentPluginMetadataCache(
+      getPluginMetadataSnapshotCache(existingPluginMetadataSnapshot),
+    );
+  } else {
+    setGatewayPluginMetadataSnapshot(currentPluginMetadataSnapshot, {
+      config: startupActivationSourceConfig,
+      compatibleConfigs: [startupRuntimeConfig, cfgAtStart, gatewayPluginConfigAtStart],
+      env: process.env,
+      workspaceDir: pluginWorkspaceDir,
+    });
+  }
   if (pluginLookUpTable) {
     const metrics = pluginLookUpTable.metrics;
     startupTrace.detail("plugins.lookup-table", [
@@ -530,26 +549,23 @@ export async function prepareGatewayServerBootstrap(input: {
     ]);
   }
 
+  startupTraceOwner.transferred = true;
   return {
     opts,
     minimalTestGateway,
     ambientEnvTriggers,
     startupTrace,
-    loadStartupPluginsModule,
     configSnapshot,
     startupConfigLoad,
     startupActivationSourceConfig,
     startupRuntimeConfig,
+    startupSessionDatabases,
     cfgAtStart,
     generatedStartupAuthToken: authBootstrap.generatedToken !== undefined,
     resolvedStartupAuthOverride,
     startupTailscaleOverride,
-    diagnosticsEnabled,
-    activeTaskCount,
     applyFixedGatewayOverlays,
     prepareReloadCandidate,
-    startupInternalWriteHash,
-    startupLastGoodSnapshot,
     workerEnvironmentStartup,
     pluginGatewayContext,
     resolvePluginGatewayContext,
@@ -567,7 +583,3 @@ export async function prepareGatewayServerBootstrap(input: {
     activateRuntimeSecrets,
   };
 }
-
-export const testing = {
-  publishGatewayPluginRuntimeConfigAtStartup,
-};

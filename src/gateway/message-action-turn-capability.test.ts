@@ -1,12 +1,74 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { createMessageToolTurnAuthority } from "../agents/tools/message-tool-turn-authority.js";
 import {
   isTrustedMessageActionTurnIngress,
   mintMessageActionTurnCapability,
+  resolveMessageActionTurnAuthorization,
   resolveMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
 } from "./message-action-turn-capability.js";
 
 describe("message action turn capability", () => {
+  it("keeps a delivery-only restriction private without granting channel context", async () => {
+    const identity = {
+      agentId: "main",
+      runId: "legacy-cron",
+      sessionKey: "agent:main:cron:legacy",
+    };
+    const assertCurrent = vi.fn();
+    const beforeAttempt = vi.fn(async () => {
+      revokeMessageActionTurnCapability(token);
+    });
+    const token = mintMessageActionTurnCapability({
+      ...identity,
+      deliveryAttempt: { beforeAttempt, assertCurrent },
+    });
+    const lookup = { ...identity, token };
+    const authorization = resolveMessageActionTurnAuthorization(lookup);
+    const restriction = authorization?.deliveryAttempt;
+    try {
+      expect(resolveMessageActionTurnCapability(lookup)).not.toHaveProperty("deliveryAttempt");
+      expect(authorization?.scheduled).toBeUndefined();
+      expect(authorization?.toolContext).toBeUndefined();
+      expect(authorization?.requesterAccountId).toBeUndefined();
+      const authority = createMessageToolTurnAuthority({ ...lookup, getConfig: () => ({}) });
+      expect(authority.beginInvocation("send").hasChannelTurnContext).toBe(false);
+      expect(restriction).toBeDefined();
+      await expect(restriction!.beforeAttempt()).rejects.toThrow(
+        "turn capability is no longer active",
+      );
+      expect(beforeAttempt).toHaveBeenCalledOnce();
+      expect(assertCurrent).toHaveBeenCalledOnce();
+      expect(restriction!.assertCurrent).toThrow("turn capability is no longer active");
+      expect(beforeAttempt).toHaveBeenCalledOnce();
+    } finally {
+      revokeMessageActionTurnCapability(token);
+    }
+  });
+
+  it("keeps dashboard permission private and rejects a retained grant after revocation", () => {
+    const assertSourceCurrent = vi.fn();
+    const identity = { agentId: "main", runId: "dashboard-run", sessionKey: "agent:main:main" };
+    const token = mintMessageActionTurnCapability({
+      ...identity,
+      assertDashboardReadCurrent: assertSourceCurrent,
+    });
+    const lookup = { ...identity, token };
+    const authorization = resolveMessageActionTurnAuthorization(lookup);
+    const assertCurrent = authorization?.assertDashboardReadCurrent;
+    expect(resolveMessageActionTurnCapability(lookup)).not.toHaveProperty(
+      "assertDashboardReadCurrent",
+    );
+    expect(authorization?.toolContext).toBeUndefined();
+    expect(authorization?.scheduled).toBeUndefined();
+    expect(assertCurrent).toBeTypeOf("function");
+    assertCurrent?.();
+    expect(assertSourceCurrent).toHaveBeenCalledOnce();
+    revokeMessageActionTurnCapability(token);
+    expect(assertCurrent).toThrow("turn capability is no longer active");
+    expect(assertSourceCurrent).toHaveBeenCalledOnce();
+  });
+
   it("admits channel ingress but rejects Gateway and internal run sources", () => {
     expect(isTrustedMessageActionTurnIngress("whatsapp")).toBe(true);
     expect(isTrustedMessageActionTurnIngress("matrix")).toBe(true);

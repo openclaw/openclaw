@@ -1,9 +1,10 @@
-import { mkdir } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import type { Locator, Page } from "playwright";
 import { expect } from "vitest";
-import type { GatewaySessionRow } from "../api/types.ts";
+import { createRequireRecord } from "../../../test/helpers/record.js";
+import type { SessionCapability } from "../lib/sessions/session-capability.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionPath,
   controlUiSessionUrl,
@@ -19,12 +20,6 @@ export { controlUiSessionPath, controlUiSessionUrl, installMockGateway, waitForC
 
 export const collapsedSessionSectionsStorageKey = "openclaw:sidebar:sessions:collapsed-sections";
 export const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-export const uiProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "thread-management",
-);
 
 export function createSessionManagementE2eSuite(source = false) {
   return createControlUiE2eSuite({
@@ -35,45 +30,43 @@ export function createSessionManagementE2eSuite(source = false) {
   });
 }
 
-export function sessionRow(
-  key: string,
-  label: string,
-  updatedAt: number,
-  options: {
-    archived?: boolean;
-    sessionId?: string;
-    category?: string;
-    pinned?: boolean;
-    pinnedAt?: number;
-    hasActiveRun?: boolean;
-    hasAutomation?: GatewaySessionRow["hasAutomation"];
-    incognito?: GatewaySessionRow["incognito"];
-    unread?: boolean;
-    status?: string;
-    spawnedBy?: string;
-    startedAt?: number;
-    endedAt?: number;
-    childSessions?: string[];
-    execNode?: string;
-    forkSource?: { sessionKey: string; sessionId: string; entryId?: string };
-    worktree?: { id?: string; branch?: string; repoRoot?: string };
-  } = {},
-) {
-  return {
-    contextTokens: null,
-    displayName: label,
-    hasActiveRun: false,
-    key,
-    sessionId: `session:${key}`,
-    kind: "direct",
-    label,
-    model: "gpt-5.5",
-    modelProvider: "openai",
-    status: "done",
-    totalTokens: 0,
-    updatedAt,
-    ...options,
-  };
+/** Drawer visibility precedes the transform settling, which affects measured target bounds. */
+export async function waitForMobileSidebarDrawerOpen(page: Page): Promise<void> {
+  const drawer = page.locator(".shell--mobile-nav.shell--nav-drawer-open > .shell-nav");
+  await drawer.waitFor({ state: "visible" });
+  await drawer.evaluate(async (element) => {
+    await Promise.all(element.getAnimations().map((animation) => animation.finished));
+  });
+}
+
+/** Foreground chat startup admits the canonical roster after document load. */
+export async function waitForSessionRosterHydration(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    await customElements.whenDefined("openclaw-app");
+    const app = document.querySelector("openclaw-app") as HTMLElement & {
+      runtime: { context: { sessions: SessionCapability } };
+    };
+    const sessions = app.runtime.context.sessions;
+    const ready = () =>
+      sessions.canonicalListRevision > 0 &&
+      sessions.presentation.result !== null &&
+      !sessions.presentation.resultCached;
+    if (ready()) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      const unsubscribe = sessions.subscribe(() => {
+        if (ready()) {
+          unsubscribe();
+          resolve();
+        }
+      });
+      if (ready()) {
+        unsubscribe();
+        resolve();
+      }
+    });
+  });
 }
 
 export function sessionsListResponse(
@@ -167,51 +160,20 @@ export function actionPointerEvents(button: Locator): Promise<string> {
   return button.evaluate((element) => globalThis.getComputedStyle(element).pointerEvents);
 }
 
-function measureMarqueeLabel(
-  label: Locator,
-): Promise<{ scrollWidth: number; viewportWidth: number }> {
-  return label.evaluate((element) => {
-    const viewport = element.parentElement;
-    if (!(viewport instanceof HTMLElement)) {
-      throw new Error("Marquee label must have an HTMLElement viewport");
-    }
-    const style = getComputedStyle(viewport);
-    return {
-      scrollWidth: element.scrollWidth,
-      viewportWidth:
-        viewport.clientWidth -
-        (Number.parseFloat(style.paddingLeft) || 0) -
-        (Number.parseFloat(style.paddingRight) || 0),
-    };
-  });
-}
-
-export async function expectHoverMarqueeAfterActionsAppear(row: Locator): Promise<void> {
-  const label = row.locator(".sidebar-recent-session__name");
-  const resting = await measureMarqueeLabel(label);
-  expect(resting.scrollWidth, JSON.stringify(resting)).toBeLessThanOrEqual(resting.viewportWidth);
-  await row.hover();
-  const hovered = await measureMarqueeLabel(label);
-  expect(hovered.scrollWidth, JSON.stringify(hovered)).toBeGreaterThan(hovered.viewportWidth);
-  await expect
-    .poll(() => label.evaluate((element) => element.classList.value), { timeout: 1_500 })
-    .toContain("hover-marquee--scrolling");
-}
-
 /**
  * Opens a session-menu submenu through the keyboard path. Submenu ARIA is ready
  * before Web Awesome finishes opening the dropdown, so hovering alone races the
  * menu; waiting on its focus contract first keeps navigation keys in order.
  */
 export async function openSessionMenuSubmenu(page: Page, name: string): Promise<void> {
-  const parent = page.getByRole("menuitem", { name });
+  const parent = page.getByRole("menuitem", { name, exact: true });
   await expect.poll(() => parent.getAttribute("aria-haspopup")).toBe("menu");
   const index = await parent.evaluate((element) =>
     [...(element.parentElement?.children ?? [])]
       .filter(
         (item) =>
           item.localName === "wa-dropdown-item" &&
-          item.getAttribute("slot") !== "submenu" &&
+          item.getAttribute("slot") === element.getAttribute("slot") &&
           !(item as HTMLElement & { disabled?: boolean }).disabled,
       )
       .indexOf(element),
@@ -219,9 +181,13 @@ export async function openSessionMenuSubmenu(page: Page, name: string): Promise<
   expect(index).toBeGreaterThanOrEqual(0);
   await expect
     .poll(() =>
-      page.locator("openclaw-session-menu > wa-dropdown > wa-dropdown-item:focus").count(),
+      parent.evaluate((element) =>
+        [...(element.parentElement?.children ?? [])].some(
+          (item) => item.localName === "wa-dropdown-item" && item === document.activeElement,
+        ),
+      ),
     )
-    .toBe(1);
+    .toBe(true);
   await page.keyboard.press("Home");
   for (let step = 0; step < index; step += 1) {
     await page.keyboard.press("ArrowDown");
@@ -242,16 +208,27 @@ export async function submitInputDialog(page: Page, value: string): Promise<void
   await field.waitFor({ state: "detached" });
 }
 
-export async function captureUiProof(page: Page, fileName: string) {
+export async function captureUiProof(
+  owner: { readonly artifactDir: string },
+  page: Page,
+  fileName: string,
+  surface: Locator = page.locator(".shell"),
+  content: readonly Locator[] = [surface],
+) {
   if (!captureUiProofEnabled) {
     return;
   }
-  await mkdir(uiProofArtifactDir, { recursive: true });
-  // Dialogs and menus fade in, so an undisabled capture can land mid-transition
-  // and prove nothing about the state it was taken for.
+  if (page.video()) {
+    await writeFile(
+      path.join(owner.artifactDir, fileName),
+      await takeControlUiViewportScreenshot(page, surface, content),
+    );
+    return;
+  }
+  // Nonrecording proof keeps its existing full-document framing.
   await page.screenshot({
     animations: "disabled",
     fullPage: true,
-    path: path.join(uiProofArtifactDir, fileName),
+    path: path.join(owner.artifactDir, fileName),
   });
 }

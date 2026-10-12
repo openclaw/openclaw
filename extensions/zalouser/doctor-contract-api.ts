@@ -1,4 +1,3 @@
-// Zalouser API module exposes the plugin public contract.
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -26,7 +25,7 @@ import {
   type StoredZaloCredentials,
 } from "./src/session-state.js";
 
-export { normalizeCompatibilityConfig, legacyConfigRules } from "./src/doctor-contract.js";
+export { normalizeCompatibilityConfig, legacyConfigRules } from "./config-doctor-api.js";
 
 type LegacyZalouserCredentialSource = {
   filePath: string;
@@ -83,14 +82,12 @@ async function collectLegacyZalouserDmEntries(
   env: NodeJS.ProcessEnv,
   options: { readOnly?: boolean } = {},
 ): Promise<LegacyZalouserDmEntry[]> {
+  const { listAgentIds } = await import("openclaw/plugin-sdk/agent-scope-runtime");
   const { deliveryContextFromSession, listSessionEntries, resolveStorePath } =
     await import("openclaw/plugin-sdk/session-store-runtime");
   const entries = new Map<string, LegacyZalouserDmEntry>();
   const fallbackAccountId = config.channels?.zalouser?.defaultAccount?.trim() || "default";
-  const agentIds = new Set([
-    "main",
-    ...(config.agents?.list ?? []).flatMap(({ id }) => (id?.trim() ? [id.trim()] : [])),
-  ]);
+  const agentIds = new Set(["main", ...listAgentIds(config)]);
   for (const agentId of agentIds) {
     const storePath = resolveStorePath(config.session?.store, { agentId, env });
     const storedEntries = listSessionEntries({

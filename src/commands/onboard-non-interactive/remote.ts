@@ -12,11 +12,9 @@ import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { createGatewayEnvSecretRef } from "../../secrets/ref-contract.js";
 import { applySkipBootstrapConfig } from "../onboard-config.js";
 import { applyWizardMetadata } from "../onboard-helpers.js";
-import { enableDefaultOnboardingInternalHooks } from "../onboard-hooks.js";
 import type { OnboardOptions } from "../onboard-types.js";
 import { commitNonInteractiveOnboardConfig } from "./config-write.js";
 
-/** Runs non-interactive setup for clients that connect to an existing remote gateway. */
 export async function runNonInteractiveRemoteSetup(params: {
   opts: OnboardOptions;
   runtime: RuntimeEnv;
@@ -27,32 +25,8 @@ export async function runNonInteractiveRemoteSetup(params: {
   const mode = "remote" as const;
 
   const remoteUrl = normalizeOptionalString(opts.remoteUrl);
-  if (!remoteUrl) {
-    // Remote mode cannot infer a target gateway; fail before writing partial
-    // remote config that would leave status/agent commands misconfigured.
-    runtime.error(
-      `Missing --remote-url for remote mode. Example: ${formatCliCommand("openclaw onboard --non-interactive --mode remote --remote-url ws://127.0.0.1:3000")}.`,
-    );
-    runtime.exit(1);
-    return;
-  }
   const remoteToken = normalizeOptionalString(opts.remoteToken);
   const remotePassword = normalizeOptionalString(opts.remotePassword);
-  for (const [flag, input, normalized] of [
-    ["--remote-token", opts.remoteToken, remoteToken],
-    ["--remote-password", opts.remotePassword, remotePassword],
-  ] as const) {
-    if (input !== undefined && !normalized) {
-      runtime.error(`Invalid ${flag}: value cannot be empty.`);
-      runtime.exit(1);
-      return;
-    }
-  }
-  if (remoteToken && remotePassword) {
-    runtime.error("Use either --remote-token or --remote-password, not both.");
-    runtime.exit(1);
-    return;
-  }
   const existingRemote = baseConfig.gateway?.remote;
   const remoteUrlChanged = normalizeOptionalString(existingRemote?.url) !== remoteUrl;
   // A remote block belongs to one endpoint. Reusing it for a different URL can
@@ -64,43 +38,32 @@ export async function runNonInteractiveRemoteSetup(params: {
   if (remotePassword) {
     delete preservedRemote.token;
   }
+  const remote = { ...preservedRemote, url: remoteUrl };
+  for (const [field, value, envName] of [
+    ["token", remoteToken, "OPENCLAW_GATEWAY_TOKEN"],
+    ["password", remotePassword, "OPENCLAW_GATEWAY_PASSWORD"],
+  ] as const) {
+    if (value) {
+      remote[field] =
+        opts.secretInputMode === "ref" ? createGatewayEnvSecretRef(baseConfig, envName) : value;
+    }
+  }
 
   let nextConfig: OpenClawConfig = {
     ...baseConfig,
     gateway: {
       ...baseConfig.gateway,
       mode: "remote",
-      remote: {
-        ...preservedRemote,
-        url: remoteUrl,
-        ...(remoteToken
-          ? {
-              token:
-                opts.secretInputMode === "ref"
-                  ? createGatewayEnvSecretRef(baseConfig, "OPENCLAW_GATEWAY_TOKEN")
-                  : remoteToken,
-            }
-          : {}),
-        ...(remotePassword
-          ? {
-              password:
-                opts.secretInputMode === "ref"
-                  ? createGatewayEnvSecretRef(baseConfig, "OPENCLAW_GATEWAY_PASSWORD")
-                  : remotePassword,
-            }
-          : {}),
-      },
+      remote,
     },
   };
   if (opts.skipBootstrap) {
     nextConfig = applySkipBootstrapConfig(nextConfig);
   }
-  if (!opts.skipHooks) {
-    nextConfig = enableDefaultOnboardingInternalHooks(nextConfig);
-  }
   nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });
   await commitNonInteractiveOnboardConfig({
     nextConfig,
+    baseConfig,
     baseHash,
     reset: opts.reset,
   });

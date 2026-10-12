@@ -1,9 +1,12 @@
-// Plugin Npm Release script supports OpenClaw repository automation.
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { expectDefined } from "../../packages/normalization-core/src/expect.js";
+import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
+import { runTasksWithConcurrency } from "../../src/utils/run-with-concurrency.js";
+import { resolveNpmJsonString } from "./npm-json-output.mts";
+import { fetchNpmRegistryPackumentWithRetry } from "./npm-publish-plan.mjs";
 import {
   collectExtensionPackageJsonCandidates,
   hasPluginNpmReleaseAuthorityChanges,
@@ -24,38 +27,11 @@ export {
 } from "./plugin-publication-collector.ts";
 export type { PublishablePluginPackage } from "./plugin-publication-collector.ts";
 
-type PluginReleasePlanItem = PublishablePluginPackage & {
-  alreadyPublished: boolean;
-};
-
-type PluginReleasePlan = {
-  all: PluginReleasePlanItem[];
-  candidates: PluginReleasePlanItem[];
-  skippedPublished: PluginReleasePlanItem[];
-};
-
 export type PluginReleaseSelectionMode = "selected" | "all-publishable";
 
 export type GitRangeSelection = {
   baseRef: string;
   headRef: string;
-};
-
-type PluginNpmGitRangeSelection = {
-  authorityChanged: boolean;
-  changedExtensionIds: string[];
-};
-
-type ParsedPluginReleaseArgs = {
-  selection: string[];
-  selectionMode?: PluginReleaseSelectionMode;
-  pluginsFlagProvided: boolean;
-  baseRef?: string;
-  headRef?: string;
-};
-
-type ParsedPluginNpmReleaseArgs = ParsedPluginReleaseArgs & {
-  npmDistTag?: "extended-stable";
 };
 
 function parsePluginNpmDistTagOverride(value: string | undefined): "extended-stable" | undefined {
@@ -69,13 +45,11 @@ function parsePluginNpmDistTagOverride(value: string | undefined): "extended-sta
 }
 
 const PLUGIN_NPM_VIEW_TIMEOUT_MS = 60_000;
+// Match ClawHub's bounded registry fanout without serial npm process startup for every package.
+const PLUGIN_NPM_RELEASE_PLAN_CONCURRENCY = 8;
 
 function readPluginPackageJson(path: string): unknown {
   return JSON.parse(readFileSync(path, "utf8"));
-}
-
-function normalizeGitDiffPath(path: string): string {
-  return path.trim().replaceAll("\\", "/");
 }
 
 export function parsePluginReleaseSelection(value: string | undefined): string[] {
@@ -105,7 +79,7 @@ export function parsePluginReleaseSelectionMode(
   );
 }
 
-export function parsePluginReleaseArgs(argv: string[]): ParsedPluginReleaseArgs {
+export function parsePluginReleaseArgs(argv: string[]) {
   let selection: string[] = [];
   let selectionMode: PluginReleaseSelectionMode | undefined;
   let pluginsFlagProvided = false;
@@ -162,7 +136,7 @@ export function parsePluginReleaseArgs(argv: string[]): ParsedPluginReleaseArgs 
   return { selection, selectionMode, pluginsFlagProvided, baseRef, headRef };
 }
 
-export function parsePluginNpmReleaseArgs(argv: string[]): ParsedPluginNpmReleaseArgs {
+export function parsePluginNpmReleaseArgs(argv: string[]) {
   const baseArgs: string[] = [];
   let npmDistTag: "extended-stable" | undefined;
   for (let index = 0; index < argv.length; index += 1) {
@@ -319,15 +293,14 @@ export function collectChangedPathsFromGitRange(params: {
     },
   )
     .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((path) => normalizeGitDiffPath(path));
+    .map((line) => line.trim().replaceAll("\\", "/"))
+    .filter(Boolean);
 }
 
 export function collectPluginNpmGitRangeSelection(params: {
   rootDir?: string;
   gitRange: GitRangeSelection;
-}): PluginNpmGitRangeSelection {
+}) {
   const changedPaths = collectChangedPathsFromGitRange({
     rootDir: params.rootDir,
     gitRange: params.gitRange,
@@ -388,24 +361,22 @@ function runNpmView(args: string[]): string {
   writeFileSync(userconfigPath, "");
 
   try {
-    try {
-      return execFileSync("npm", ["view", ...args, "--userconfig", userconfigPath], {
-        encoding: "utf8",
-        killSignal: "SIGKILL",
-        stdio: ["ignore", "pipe", "pipe"],
-        timeout: PLUGIN_NPM_VIEW_TIMEOUT_MS,
-      }).trim();
-    } catch (error) {
-      if (isNpmViewTimeoutError(error)) {
-        throw Object.assign(
-          new Error(`npm view timed out after ${PLUGIN_NPM_VIEW_TIMEOUT_MS}ms.`, {
-            cause: error,
-          }),
-          { code: "ETIMEDOUT" as const },
-        );
-      }
-      throw error;
+    return execFileSync("npm", ["view", ...args, "--userconfig", userconfigPath], {
+      encoding: "utf8",
+      killSignal: "SIGKILL",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: PLUGIN_NPM_VIEW_TIMEOUT_MS,
+    }).trim();
+  } catch (error) {
+    if (isNpmViewTimeoutError(error)) {
+      throw Object.assign(
+        new Error(`npm view timed out after ${PLUGIN_NPM_VIEW_TIMEOUT_MS}ms.`, {
+          cause: error,
+        }),
+        { code: "ETIMEDOUT" as const },
+      );
     }
+    throw error;
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -413,21 +384,21 @@ function runNpmView(args: string[]): string {
 
 function resolveNpmLatestVersion(packageName: string): string {
   const raw = runNpmView([packageName, "dist-tags.latest", "--json"]);
-  const parsed = JSON.parse(raw) as unknown;
-  if (typeof parsed !== "string" || !parsed.trim()) {
+  const version = resolveNpmJsonString(JSON.parse(raw));
+  if (!version) {
     throw new Error(`npm returned an invalid latest dist-tag for ${packageName}.`);
   }
-  return parsed.trim();
+  return version;
 }
 
-export function collectPluginReleaseDependencyFreshnessErrors(
+function collectPluginReleaseDependencyFreshnessWarnings(
   plugins: readonly PublishablePluginPackage[],
   resolveLatestVersion: NpmLatestVersionResolver = resolveNpmLatestVersion,
 ): string[] {
-  // Only plugin-owned opt-ins use this strict gate. It prevents release branches
-  // from silently carrying old executable pins while leaving normal dependencies alone.
+  // Release validation owns pin compatibility. A moving npm dist-tag must not
+  // invalidate a frozen, tested candidate, including when the lookup is unavailable.
   const latestVersions = new Map<string, string>();
-  const errors: string[] = [];
+  const warnings: string[] = [];
 
   for (const plugin of plugins) {
     for (const dependency of plugin.requiredLatestDependencies ?? []) {
@@ -437,58 +408,86 @@ export function collectPluginReleaseDependencyFreshnessErrors(
           latestVersion = resolveLatestVersion(dependency.packageName);
           latestVersions.set(dependency.packageName, latestVersion);
         } catch (error) {
-          errors.push(
-            `${plugin.packageName}@${plugin.version}: could not resolve npm latest for ${dependency.packageName}: ${error instanceof Error ? error.message : String(error)}`,
+          warnings.push(
+            `${plugin.packageName}@${plugin.version}: could not resolve npm latest for ${dependency.packageName} (pinned "${dependency.version}"); freshness is advisory: ${error instanceof Error ? error.message : String(error)}`,
           );
           continue;
         }
       }
       if (dependency.version !== latestVersion) {
-        errors.push(
-          `${plugin.packageName}@${plugin.version}: ${dependency.packageName} must match npm latest for release; found "${dependency.version}", latest is "${latestVersion}".`,
+        warnings.push(
+          `${plugin.packageName}@${plugin.version}: ${dependency.packageName} pinned "${dependency.version}", npm latest is "${latestVersion}". Freshness is advisory; retain the release-validated pin.`,
         );
       }
     }
   }
 
-  return errors;
+  return warnings;
 }
 
 export function assertPluginReleaseDependencyFreshness(
   plugins: readonly PublishablePluginPackage[],
   label: string,
   resolveLatestVersion: NpmLatestVersionResolver = resolveNpmLatestVersion,
-): void {
-  const errors = collectPluginReleaseDependencyFreshnessErrors(plugins, resolveLatestVersion);
-  if (errors.length === 0) {
-    return;
+): string[] {
+  const warnings = collectPluginReleaseDependencyFreshnessWarnings(plugins, resolveLatestVersion);
+  for (const warning of warnings) {
+    console.warn(`${label}: warning: ${warning}`);
   }
-  throw new Error(
-    `${label} rejected stale required release dependencies:\n${errors
-      .map((error) => `- ${error}`)
-      .join("\n")}`,
-  );
+  return warnings;
 }
 
-function isPluginVersionPublished(packageName: string, version: string): boolean {
-  try {
-    runNpmView([`${packageName}@${version}`, "version"]);
-    return true;
-  } catch (error) {
-    if (isNpmViewTimeoutError(error)) {
-      throw error;
-    }
-    return false;
-  }
+async function isPluginVersionPublished(packageName: string, version: string): Promise<boolean> {
+  return (
+    await observeNpmPackage({
+      packageName,
+      version,
+      packageUrl: `https://registry.npmjs.org/${encodeURIComponent(packageName)}`,
+    })
+  ).selectedVersionExists;
 }
 
-export function collectPluginReleasePlan(params?: {
+export async function observeNpmPackage(
+  params: Parameters<typeof fetchNpmRegistryPackumentWithRetry>[0] & { version?: string },
+) {
+  const result = await fetchNpmRegistryPackumentWithRetry(params);
+  if (result.status === 404) {
+    return {
+      packageExists: false,
+      hasVersionHistory: false,
+      selectedVersionExists: false,
+      latestVersion: null,
+    };
+  }
+  if (!result.ok) {
+    throw new Error(`${params.packageName}: npm registry returned HTTP ${result.status}.`);
+  }
+  if (!isRecord(result.packument) || !isRecord(result.packument.versions)) {
+    throw new Error(`${params.packageName}: npm registry returned an invalid versions map.`);
+  }
+  const tags = result.packument["dist-tags"];
+  const latest = isRecord(tags) ? tags.latest : undefined;
+  return {
+    packageExists: true,
+    hasVersionHistory: Object.keys(result.packument.versions).length > 0,
+    selectedVersionExists:
+      params.version !== undefined && Object.hasOwn(result.packument.versions, params.version),
+    latestVersion:
+      typeof latest === "string" && latest.length <= 128 && /^[0-9A-Za-z.+-]+$/u.test(latest)
+        ? latest
+        : null,
+  };
+}
+
+export async function collectPluginReleasePlan(params?: {
   rootDir?: string;
   selection?: string[];
   selectionMode?: PluginReleaseSelectionMode;
   gitRange?: GitRangeSelection;
   npmDistTag?: "extended-stable";
-}): PluginReleasePlan {
+  resolvePublishedVersion?: (packageName: string, version: string) => Promise<boolean>;
+  resolveLatestVersion?: NpmLatestVersionResolver;
+}) {
   const gitRangeSelection = params?.gitRange
     ? collectPluginNpmGitRangeSelection({
         rootDir: params.rootDir,
@@ -513,30 +512,38 @@ export function collectPluginReleasePlan(params?: {
             plugins: allPublishable,
             selection: params.selection,
           })
-        : gitRangeSelection
-          ? gitRangeSelection.authorityChanged
-            ? allPublishable
-            : resolveChangedPublishablePluginPackages({
-                plugins: allPublishable,
-                changedExtensionIds: gitRangeSelection.changedExtensionIds,
-              })
-          : allPublishable;
+        : allPublishable;
 
   const explicitPublishSelection =
     params?.selectionMode !== undefined || (params?.selection?.length ?? 0) > 0;
   if (explicitPublishSelection) {
     assertPluginReleaseVersionFloors(selectedPublishable, "Plugin NPM release plan");
   }
-  assertPluginReleaseDependencyFreshness(selectedPublishable, "Plugin NPM release plan");
-
-  const all = selectedPublishable.map((plugin) =>
-    Object.assign({}, plugin, {
-      alreadyPublished: isPluginVersionPublished(plugin.packageName, plugin.version),
-    }),
+  const warnings = assertPluginReleaseDependencyFreshness(
+    selectedPublishable,
+    "Plugin NPM release plan",
+    params?.resolveLatestVersion,
   );
+
+  const plan = await runTasksWithConcurrency({
+    tasks: selectedPublishable.map((plugin) => async () => ({
+      ...plugin,
+      alreadyPublished: await (params?.resolvePublishedVersion ?? isPluginVersionPublished)(
+        plugin.packageName,
+        plugin.version,
+      ),
+    })),
+    limit: PLUGIN_NPM_RELEASE_PLAN_CONCURRENCY,
+    errorMode: "stop",
+  });
+  if (plan.hasError) {
+    throw plan.firstError;
+  }
+  const all = plan.results;
 
   return {
     all,
+    warnings,
     candidates: all.filter((plugin) => !plugin.alreadyPublished),
     skippedPublished: all.filter((plugin) => plugin.alreadyPublished),
   };

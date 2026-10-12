@@ -1,4 +1,3 @@
-// Nextcloud Talk plugin module implements channel behavior.
 import { describeWebhookAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { createLoggedPairingApprovalNotifier } from "openclaw/plugin-sdk/channel-pairing";
@@ -12,7 +11,7 @@ import {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
-import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
+import { isNextcloudTalkAccountConfigured, type ResolvedNextcloudTalkAccount } from "./accounts.js";
 import { nextcloudTalkApprovalAuth } from "./approval-auth.js";
 import { probeNextcloudTalkBotResponseFeature } from "./bot-preflight.js";
 import { buildChannelConfigSchema, DEFAULT_ACCOUNT_ID, type ChannelPlugin } from "./channel-api.js";
@@ -76,7 +75,7 @@ const collectNextcloudTalkSecurityWarnings =
 const collectNextcloudTalkOpenGroupFindings = createConditionalWarningCollector.findings({
   collectWarnings: collectNextcloudTalkSecurityWarnings,
   checkId: "channels.nextcloud-talk.groups.open",
-  severity: "critical",
+  severity: "warn",
   title: "Nextcloud Talk security warning",
 });
 
@@ -98,12 +97,11 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
       configSchema: buildChannelConfigSchema(NextcloudTalkConfigSchema),
       config: {
         ...nextcloudTalkConfigAdapter,
-        isConfigured: (account) =>
-          Boolean(account.tokenStatus !== "missing" && account.baseUrl?.trim()),
+        isConfigured: isNextcloudTalkAccountConfigured,
         describeAccount: (account) =>
           describeWebhookAccountSnapshot({
             account,
-            configured: Boolean(account.tokenStatus !== "missing" && account.baseUrl?.trim()),
+            configured: isNextcloudTalkAccountConfigured(account),
             extra: {
               secretSource: account.secretSource,
               tokenStatus: account.tokenStatus,
@@ -123,7 +121,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
         normalizeTarget: normalizeNextcloudTalkMessagingTarget,
         inferTargetChatType: ({ to }) =>
           normalizeNextcloudTalkMessagingTarget(to) ? "group" : undefined,
-        resolveOutboundSessionRoute: (params) => resolveNextcloudTalkOutboundSessionRoute(params),
+        resolveOutboundSessionRoute: resolveNextcloudTalkOutboundSessionRoute,
         targetResolver: {
           looksLikeId: looksLikeNextcloudTalkTargetId,
           hint: "<roomToken>",
@@ -169,7 +167,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
           accountId: account.accountId,
           name: account.name,
           enabled: account.enabled,
-          configured: Boolean(account.tokenStatus !== "missing" && account.baseUrl?.trim()),
+          configured: isNextcloudTalkAccountConfigured(account),
           extra: {
             secretSource: account.secretSource,
             tokenStatus: account.tokenStatus,
@@ -206,22 +204,12 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
       },
       attachedResults: {
         channel: "nextcloud-talk",
-        sendText: async ({ cfg, to, text, accountId, replyToId }) =>
-          await nextcloudTalkMessageAdapter.send.text({
-            cfg,
-            to,
-            text,
-            accountId,
-            replyToId,
-          }),
-        sendMedia: async ({ cfg, to, text, mediaUrl, accountId, replyToId }) =>
-          await nextcloudTalkMessageAdapter.send.media({
-            cfg,
-            to,
-            text,
-            mediaUrl: mediaUrl ?? "",
-            accountId,
-            replyToId,
+        sendText: nextcloudTalkMessageAdapter.send.text,
+        sendMedia: (ctx) =>
+          nextcloudTalkMessageAdapter.send.media({
+            ...ctx,
+            mediaUrl: ctx.mediaUrl ?? "",
+            onDeliveryResult: undefined,
           }),
       },
     },

@@ -18,8 +18,8 @@ read_when:
 | Direct CLI flag | `--fireworks-api-key <key>`                         |
 | API             | OpenAI-compatible (`openai-completions`)            |
 | Base URL        | `https://api.fireworks.ai/inference/v1`             |
-| Default model   | `fireworks/accounts/fireworks/routers/glm-5p2-fast` |
-| Default alias   | `GLM 5.2 Fast`                                      |
+| Default model   | `fireworks/accounts/fireworks/routers/glm-5p3-fast` |
+| Default alias   | `GLM 5.3 Fast`                                      |
 
 ## Getting started
 
@@ -48,7 +48,7 @@ export FIREWORKS_API_KEY=fw-...
 
     </CodeGroup>
 
-    Onboarding stores the key against the `fireworks` provider in your auth profiles and sets Fireworks' current [Fire Pass](https://docs.fireworks.ai/firepass) GLM 5.2 Fast router as the default model.
+    Onboarding stores the key against the `fireworks` provider in your auth profiles and sets Fireworks' current [Fire Pass](https://docs.fireworks.ai/firepass) GLM 5.3 Fast router as the default model.
 
   </Step>
   <Step title="Verify the model is available">
@@ -56,7 +56,7 @@ export FIREWORKS_API_KEY=fw-...
     openclaw models list --provider fireworks
     ```
 
-    The list should include `GLM 5.2 Fast`, `Kimi K2.6`, and `Kimi K2.6 Fast`. If `FIREWORKS_API_KEY` is unresolved, `openclaw models status --json` reports the missing credential under `auth.unusableProfiles`.
+    The list should include `GLM 5.3 Fast`, `Kimi K2.6`, and `Kimi K2.6 Fast`. If `FIREWORKS_API_KEY` is unresolved, `openclaw models status --json` reports the missing credential under `auth.unusableProfiles`.
 
   </Step>
 </Steps>
@@ -74,21 +74,48 @@ openclaw onboard --non-interactive \
   --accept-risk
 ```
 
+`--mode` defaults to `local`, so this is the same run as the **Direct flag**
+command above. Run it on the Gateway host: remote-client onboarding
+(`--mode remote`) only configures the local client connection and does not set
+up provider credentials on the server.
+
 ## Built-in catalog
+
+Setup saves connection settings and aliases without copying generated catalog rows into your config.
+Explicit `models.mode: "replace"` keeps catalog seeding enabled; custom model rows stay intact.
 
 | Model ref                                              | Name           | Input        | Context | Max output | Thinking     |
 | ------------------------------------------------------ | -------------- | ------------ | ------- | ---------- | ------------ |
-| `fireworks/accounts/fireworks/routers/glm-5p2-fast`    | GLM 5.2 Fast   | text + image | 256,000 | 256,000    | On (default) |
+| `fireworks/accounts/fireworks/routers/glm-5p3-fast`    | GLM 5.3 Fast   | text         | 256,000 | 256,000    | On (default) |
 | `fireworks/accounts/fireworks/models/kimi-k2p6`        | Kimi K2.6      | text + image | 262,144 | 262,144    | Forced off   |
 | `fireworks/accounts/fireworks/routers/kimi-k2p6-turbo` | Kimi K2.6 Fast | text + image | 262,144 | 256,000    | Forced off   |
+
+OpenClaw keeps conservative 256,000-token context and output caps for GLM 5.3 Fast.
+Fireworks documents a larger [native context window](https://fireworks.ai/models/fireworks/glm-5p3);
+[Fast mode](https://docs.fireworks.ai/serverless/serverless-modes) serves the same model at higher speed.
+The catalog uses the [Fast pricing](https://docs.fireworks.ai/serverless/pricing), not the standard rate.
 
 <Note>
   OpenClaw pins all Fireworks Kimi models to `thinking: off` because Kimi on Fireworks can leak chain-of-thought into the visible reply unless the request explicitly disables thinking. Routing the same model through [Moonshot](/providers/moonshot) directly preserves Kimi reasoning output. See [thinking modes](/tools/thinking) for switching between providers.
 </Note>
 
+## Prompt caching
+
+Fireworks enables [prefix caching](https://docs.fireworks.ai/guides/prompt-caching)
+automatically. For its native OpenAI-compatible endpoint, OpenClaw sends the existing
+prompt-cache key or session id as `prompt_cache_key` so repeated turns can reach the
+same replica. Fireworks owns cache retention; `cacheRetention: "none"` suppresses
+OpenClaw's affinity hint but does not disable Fireworks' automatic cache.
+
+Cache usage comes from the response body's `prompt_tokens_details.cached_tokens`.
+For dedicated deployments that report caching only in response headers, OpenClaw
+uses `fireworks-cached-prompt-tokens` when `fireworks-prompt-tokens` matches the body
+usage. Body cache counters take precedence, including an explicit zero. Custom proxy
+endpoints retain their configured cache behavior.
+
 ## Custom Fireworks model ids
 
-OpenClaw accepts any Fireworks model or router id at runtime. Use the exact id shown by Fireworks and prefix it with `fireworks/`. Dynamic resolution clones the Fire Pass template (text + image input and the OpenAI-compatible API) and disables thinking automatically when the id matches the Kimi pattern. GLM dynamic ids are marked text-only unless you configure a custom model entry with image input.
+OpenClaw accepts any Fireworks model or router id at runtime. Use the exact id shown by Fireworks and prefix it with `fireworks/`. Dynamic resolution uses the Fire Pass template's OpenAI-compatible API and marks GLM ids as text-only; other dynamic ids advertise text + image input. Thinking is disabled automatically when the id matches the Kimi pattern. For a model with different capabilities, configure a custom model entry with its supported input types.
 
 ```json5
 {

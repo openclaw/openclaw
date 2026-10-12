@@ -1,7 +1,6 @@
 // Defines gateway lifecycle ownership shared by service, restart, and update paths.
 import { isDefaultInstallIdentity, resolveNativeServiceProfileConflict } from "../config/paths.js";
 import { resolveGatewayNativeServiceIdentityConflict } from "../daemon/constants.js";
-import { isContainerEnvironment } from "./container-environment.js";
 
 const GATEWAY_SUPERVISOR_MODE_ENV = "OPENCLAW_SUPERVISOR_MODE";
 export const EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON = "external-supervisor-update-required";
@@ -10,11 +9,6 @@ export const NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON =
 
 export function isGatewayExternallySupervised(env: NodeJS.ProcessEnv = process.env): boolean {
   return env[GATEWAY_SUPERVISOR_MODE_ENV]?.trim().toLowerCase() === "external";
-}
-
-export function isGatewayHostServiceEnvironment(env: NodeJS.ProcessEnv = process.env): boolean {
-  const { KUBERNETES_SERVICE_HOST: host, KUBERNETES_SERVICE_PORT: port } = env;
-  return !isContainerEnvironment() && !(host?.trim() && port?.trim());
 }
 
 export function formatExternalSupervisorActionRequired(action: string): string {
@@ -60,7 +54,7 @@ export function assertGatewayServiceMutationAllowed(
   }
   if (!isDefaultInstallIdentity(env)) {
     throw new Error(
-      `${NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON}. Rerun with HOME set to the OS account home, without OPENCLAW_HOME, and with OPENCLAW_STATE_DIR and OPENCLAW_CONFIG_PATH either unset or pointing at the canonical paths for that account home and profile to ${action}.`,
+      `${NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON}. Rerun with HOME set to the OS account home, OPENCLAW_HOME either unset or pointing at that same home, and OPENCLAW_STATE_DIR and OPENCLAW_CONFIG_PATH either unset or pointing at the canonical paths for that account home and profile to ${action}.`,
     );
   }
 }

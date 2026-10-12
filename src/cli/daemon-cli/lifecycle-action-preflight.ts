@@ -13,25 +13,16 @@ type ServiceActionPreflightFailure = {
   hints?: string[];
 };
 
-const ACTION_PROSE: Record<DaemonServiceAction, string> = {
-  start: "start the gateway service",
-  restart: "restart the gateway service",
-  stop: "stop the gateway service",
-  uninstall: "uninstall the gateway service",
-};
-
-function formatPluginPackagingRuntimeOutputRecoveryHints(): string[] {
-  return formatPluginPackagingRuntimeOutputRecoveryHint().split("\n");
-}
-
-/** Best-effort validation before a service action mutates runtime state. */
+/** Startup admission, or a diagnostic to report after recovery actions. */
 export async function getServiceActionPreflightFailure(
   action: DaemonServiceAction,
 ): Promise<ServiceActionPreflightFailure | null> {
   let snapshot: ConfigFileSnapshot;
   try {
-    snapshot = await readConfigFileSnapshot({ observe: false });
-    if (snapshot.exists && !snapshot.valid) {
+    snapshot = await readConfigFileSnapshot({
+      observe: false,
+    });
+    if (!snapshot.valid) {
       const message =
         snapshot.issues.length > 0
           ? renderConfigValidationIssueLines(snapshot, "").join("\n")
@@ -39,7 +30,7 @@ export async function getServiceActionPreflightFailure(
       return {
         message,
         ...(isPluginPackagingRuntimeOutputInvalidConfigSnapshot(snapshot)
-          ? { hints: formatPluginPackagingRuntimeOutputRecoveryHints() }
+          ? { hints: formatPluginPackagingRuntimeOutputRecoveryHint().split("\n") }
           : {}),
       };
     }
@@ -47,9 +38,18 @@ export async function getServiceActionPreflightFailure(
     return null;
   }
 
-  const futureBlock = resolveFutureConfigActionBlock({ action: ACTION_PROSE[action], snapshot });
+  const futureBlock = resolveFutureConfigActionBlock({
+    action: `${action} the gateway service`,
+    snapshot,
+  });
   if (futureBlock) {
-    return { message: futureBlock.message, hints: futureBlock.hints };
+    return {
+      message:
+        action === "start"
+          ? futureBlock.message
+          : `Config was last written by OpenClaw ${futureBlock.touchedVersion}; this binary is ${futureBlock.currentVersion}.`,
+      hints: futureBlock.hints,
+    };
   }
   return null;
 }

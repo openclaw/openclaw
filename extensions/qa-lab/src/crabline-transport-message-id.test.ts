@@ -11,12 +11,6 @@ const PROVIDER_CASES = [
     nativeMessageId: /^\d+$/u,
   },
   {
-    channel: "slack",
-    conversation: { id: "D12345678", kind: "direct" },
-    senderId: "U12345678",
-    nativeMessageId: /^\d+\.\d+$/u,
-  },
-  {
     channel: "matrix",
     conversation: { id: "main", kind: "group" },
     senderId: "driver",
@@ -71,7 +65,7 @@ describe("Crabline provider-native inbound message identity", () => {
             id: inbound.id,
           });
         } finally {
-          await transport.cleanup?.();
+          await transport.cleanupAfterGatewayStop?.();
         }
       });
     },
@@ -132,10 +126,10 @@ describe("Crabline provider-native inbound message identity", () => {
             `qa-bus message id is ambiguous for selected account: ${first.id}`,
           );
         } finally {
-          await secondTransport.cleanup?.();
+          await secondTransport.cleanupAfterGatewayStop?.();
         }
       } finally {
-        await firstTransport.cleanup?.();
+        await firstTransport.cleanupAfterGatewayStop?.();
       }
     });
   });

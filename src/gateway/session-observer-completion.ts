@@ -1,12 +1,15 @@
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import {
   buildSessionObserverPrompt,
   normalizeSessionObserverModelOutput,
-  SESSION_OBSERVER_MODEL_MAX_TOKENS,
+  sanitizeSessionObserverModelText,
   SESSION_OBSERVER_SYSTEM_PROMPT,
 } from "./session-observer-model.js";
 import type { SessionObserverDeps, SessionObserverState } from "./session-observer-model.js";
 
-const MODEL_TIMEOUT_MS = 10_000;
+// CLI-backed utility models (for example claude-cli Haiku) take 9-16s per call.
+const SESSION_OBSERVER_MODEL_TIMEOUT_MS = 30_000;
+const REJECTED_OUTPUT_MAX_CHARS = 160;
 
 type PrepareModel = NonNullable<SessionObserverDeps["prepareModel"]>;
 type CompleteModel = NonNullable<SessionObserverDeps["completeModel"]>;
@@ -15,7 +18,6 @@ export function createSessionObserverCompletion(params: {
   getConfig: SessionObserverDeps["getConfig"];
   prepareModel: PrepareModel;
   completeModel: CompleteModel;
-  now: () => number;
   setTimeoutFn: typeof setTimeout;
   clearTimeoutFn: typeof clearTimeout;
   isCurrent: (state: SessionObserverState) => boolean;
@@ -25,79 +27,71 @@ export function createSessionObserverCompletion(params: {
     if (!modelRef) {
       throw new Error("session observer utility model is unavailable");
     }
-    state.preparedPromise ??= params.prepareModel({
+    const preparedPromise = (state.preparedPromise ??= params.prepareModel({
       cfg: params.getConfig(),
       agentId: state.agentId,
       modelRef,
       useUtilityModel: true,
-      allowMissingApiKeyModes: ["aws-sdk"],
-    });
-    return await state.preparedPromise;
+    }));
+    let reusable = false;
+    try {
+      const prepared = await preparedPromise;
+      reusable = !prepared.agentHarnessRuntimeOverride;
+      return prepared;
+    } finally {
+      // Share pending work and successful native routes. Failed or borrowed routes
+      // re-prepare next digest so newly available credentials can restore HTTP.
+      if (!reusable && state.preparedPromise === preparedPromise) {
+        state.preparedPromise = undefined;
+      }
+    }
   };
 
   return async (state: SessionObserverState, notes: readonly string[]) => {
     const controller = new AbortController();
     state.activeController = controller;
-    const timeout = params.setTimeoutFn(() => controller.abort(), MODEL_TIMEOUT_MS);
-    const aborted = new Promise<never>((_resolve, reject) => {
-      controller.signal.addEventListener(
-        "abort",
-        () => reject(new Error("session observer model call timed out or was cancelled")),
-        { once: true },
-      );
-    });
+    const timeout = params.setTimeoutFn(
+      () => controller.abort(),
+      SESSION_OBSERVER_MODEL_TIMEOUT_MS,
+    );
     try {
       const execute = async () => {
         const prepared = await ensurePrepared(state);
-        if (!params.isCurrent(state) || controller.signal.aborted) {
-          throw new Error("session observer state is no longer active");
-        }
-        if ("error" in prepared) {
-          throw new Error(prepared.error);
-        }
+        let lastRejectedText = "";
         for (let attempt = 0; attempt < 2; attempt += 1) {
           if (!params.isCurrent(state) || controller.signal.aborted) {
             throw new Error("session observer state is no longer active");
           }
           const result = await params.completeModel({
-            model: prepared.model,
-            auth: prepared.auth,
-            cfg: params.getConfig(),
-            context: {
-              systemPrompt: SESSION_OBSERVER_SYSTEM_PROMPT,
-              messages: [
-                {
-                  role: "user",
-                  content: buildSessionObserverPrompt(state, notes),
-                  timestamp: params.now(),
-                },
-              ],
-            },
-            options: {
-              maxTokens: Math.min(
-                SESSION_OBSERVER_MODEL_MAX_TOKENS,
-                Math.floor(prepared.model.maxTokens),
-              ),
-              temperature: 0.2,
-              signal: controller.signal,
-            },
+            ...prepared,
+            purpose: "session-observer",
+            config: params.getConfig(),
+            systemPrompt: SESSION_OBSERVER_SYSTEM_PROMPT,
+            prompt: buildSessionObserverPrompt(state, notes),
+            timeoutMs: SESSION_OBSERVER_MODEL_TIMEOUT_MS,
+            abortSignal: controller.signal,
+            answerTokenBudget: 300,
+            streamParams: { temperature: 0.2 },
           });
-          if (result.stopReason === "error") {
-            throw new Error(result.errorMessage?.trim() || "session observer completion failed");
-          }
-          const text = result.content
-            .filter((block): block is { type: "text"; text: string } => block.type === "text")
-            .map((block) => block.text)
-            .join("")
-            .trim();
-          const parsed = normalizeSessionObserverModelOutput(text);
+          const parsed = normalizeSessionObserverModelOutput(result.text);
           if (parsed) {
             return parsed;
           }
+          lastRejectedText = result.text;
         }
-        throw new Error("session observer returned invalid JSON twice");
+        const prefix = sanitizeSessionObserverModelText(
+          lastRejectedText,
+          REJECTED_OUTPUT_MAX_CHARS,
+        );
+        throw new Error(
+          `session observer returned invalid JSON twice; last rejected output: ${prefix}`,
+        );
       };
-      return await Promise.race([execute(), aborted]);
+      return await racePromiseWithAbortSignal(
+        execute(),
+        controller.signal,
+        () => new Error("session observer model call timed out or was cancelled"),
+      );
     } finally {
       params.clearTimeoutFn(timeout);
       if (state.activeController === controller) {

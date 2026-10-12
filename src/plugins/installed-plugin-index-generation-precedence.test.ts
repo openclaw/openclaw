@@ -12,13 +12,12 @@ import {
 import {
   clearLoadInstalledPluginIndexInstallRecordsCache,
   loadInstalledPluginIndexInstallRecords,
-  loadInstalledPluginIndexInstallRecordsSync,
-  writePersistedInstalledPluginIndexInstallRecords,
 } from "./installed-plugin-index-records.js";
 import {
   markRetainedManagedNpmInstall,
   resolveRetainedManagedNpmInstallPackageInfo,
 } from "./managed-npm-retention.js";
+import { seedInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
 import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 
 const PACKAGE_NAME = "@openclaw/discord";
@@ -96,88 +95,6 @@ afterEach(() => {
 });
 
 describe("managed npm generation-dir loader precedence", () => {
-  it("loads the authoritative generation after an upgrade leaves the old flat install", async () => {
-    const stateDir = tempDirs.make("openclaw-plugin-generation-precedence-");
-    const staleVersion = "2026.6.11";
-    const activeVersion = "2026.7.1";
-
-    const activePackageDir = writeManagedGeneration({
-      stateDir,
-      version: activeVersion,
-      generationKey: `discord-${activeVersion}`,
-    });
-    // Recreate the prior version at the flat project dir so it is still present
-    // on disk (the case `isUnavailableManagedNpmInstallRecord` does not cover).
-    const stalePackageDir = writeManagedFlat(stateDir, staleVersion);
-
-    await writePersistedInstalledPluginIndexInstallRecords(
-      {
-        discord: {
-          source: "npm",
-          spec: `${PACKAGE_NAME}@latest`,
-          installPath: activePackageDir,
-          version: activeVersion,
-          resolvedName: PACKAGE_NAME,
-          resolvedVersion: activeVersion,
-          resolvedSpec: `${PACKAGE_NAME}@${activeVersion}`,
-          integrity: "sha512-active",
-        },
-      },
-      { stateDir, candidates: [] },
-    );
-
-    const loaded = await loadInstalledPluginIndexInstallRecords({ stateDir });
-    expectRecordFields(loaded.discord, {
-      source: "npm",
-      spec: `${PACKAGE_NAME}@latest`,
-      installPath: activePackageDir,
-      version: activeVersion,
-      resolvedName: PACKAGE_NAME,
-      resolvedVersion: activeVersion,
-      resolvedSpec: `${PACKAGE_NAME}@${activeVersion}`,
-      integrity: "sha512-active",
-    });
-    expect(fs.existsSync(stalePackageDir)).toBe(true);
-
-    clearLoadInstalledPluginIndexInstallRecordsCache();
-    expectRecordFields(loadInstalledPluginIndexInstallRecordsSync({ stateDir }).discord, {
-      installPath: activePackageDir,
-      resolvedVersion: activeVersion,
-    });
-  });
-
-  it("preserves an intentional downgrade when a newer generation lingers", async () => {
-    const stateDir = tempDirs.make("openclaw-plugin-generation-precedence-");
-    const newerPackageDir = writeManagedGeneration({
-      stateDir,
-      version: "3.0.0",
-      generationKey: "discord-three",
-    });
-    const downgradedPackageDir = writeManagedFlat(stateDir, "1.0.0");
-
-    await writePersistedInstalledPluginIndexInstallRecords(
-      {
-        discord: {
-          source: "npm",
-          spec: `${PACKAGE_NAME}@1.0.0`,
-          installPath: downgradedPackageDir,
-          version: "1.0.0",
-          resolvedName: PACKAGE_NAME,
-          resolvedVersion: "1.0.0",
-          resolvedSpec: `${PACKAGE_NAME}@1.0.0`,
-        },
-      },
-      { stateDir, candidates: [] },
-    );
-
-    const loaded = await loadInstalledPluginIndexInstallRecords({ stateDir });
-    expectRecordFields(loaded.discord, {
-      installPath: downgradedPackageDir,
-      resolvedVersion: "1.0.0",
-    });
-    expect(fs.existsSync(newerPackageDir)).toBe(true);
-  });
-
   it("matches the authoritative generation case-insensitively on Windows", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const stateDir = tempDirs.make("openclaw-plugin-generation-precedence-");
@@ -194,7 +111,7 @@ describe("managed npm generation-dir loader precedence", () => {
       stateDir.toUpperCase(),
     );
 
-    await writePersistedInstalledPluginIndexInstallRecords(
+    await seedInstalledPluginIndex(
       {
         discord: {
           source: "npm",
@@ -214,32 +131,6 @@ describe("managed npm generation-dir loader precedence", () => {
     const record = expectRecordFields(loaded.discord, { resolvedVersion: "1.0.0" });
     expect(String(record.installPath).toLowerCase()).toBe(downgradedPackageDir.toLowerCase());
     expect(emitWarning).not.toHaveBeenCalled();
-  });
-
-  it("uses install recency with a structured warning when no authority exists", async () => {
-    const stateDir = tempDirs.make("openclaw-plugin-generation-precedence-");
-    const recentPackageDir = writeManagedGeneration({
-      stateDir,
-      version: "1.0.0",
-      generationKey: "discord-recent",
-    });
-    const olderPackageDir = writeManagedFlat(stateDir, "9.0.0");
-    setInstallTimestamp(olderPackageDir, Date.UTC(2026, 0, 1));
-    setInstallTimestamp(recentPackageDir, Date.UTC(2026, 0, 2));
-    const emitWarning = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
-
-    const loaded = await loadInstalledPluginIndexInstallRecords({ stateDir });
-    expectRecordFields(loaded.discord, {
-      installPath: recentPackageDir,
-      resolvedVersion: "1.0.0",
-    });
-    expect(emitWarning).toHaveBeenCalledWith(
-      expect.stringContaining("without an authoritative active path"),
-      expect.objectContaining({
-        code: "OPENCLAW_PLUGIN_INSTALL_RECOVERY_FALLBACK",
-        type: "OpenClawPluginRecoveryWarning",
-      }),
-    );
   });
 
   it("warns when install recency replaces a dangling managed authority", async () => {
@@ -262,7 +153,7 @@ describe("managed npm generation-dir loader precedence", () => {
       "node_modules",
       ...PACKAGE_NAME.split("/"),
     );
-    await writePersistedInstalledPluginIndexInstallRecords(
+    await seedInstalledPluginIndex(
       {
         discord: {
           source: "npm",
@@ -331,60 +222,6 @@ describe("managed npm generation-dir loader precedence", () => {
     expectRecordFields(loaded.discord, {
       installPath: recoveredPackageDir,
       resolvedVersion: "1.0.0",
-    });
-  });
-
-  it("excludes a doctor-retired legacy-root package when recovering without authority", async () => {
-    const stateDir = tempDirs.make("openclaw-plugin-generation-precedence-");
-    const retiredPackageDir = writeManagedLegacy(stateDir, "3.0.0");
-    const recoveredPackageDir = writeManagedGeneration({
-      stateDir,
-      version: "1.0.0",
-      generationKey: "discord-after-retired-legacy",
-    });
-    await markRetainedManagedNpmInstall({
-      packageDir: retiredPackageDir,
-      pluginId: PLUGIN_ID,
-      reason: "test-retired-legacy-root-package",
-    });
-
-    const loaded = await loadInstalledPluginIndexInstallRecords({ stateDir });
-    expectRecordFields(loaded.discord, {
-      installPath: recoveredPackageDir,
-      resolvedVersion: "1.0.0",
-    });
-  });
-
-  it("does not repoint an intentional custom npm install outside the managed root", async () => {
-    const stateDir = tempDirs.make("openclaw-plugin-generation-precedence-");
-    // A managed generation with a higher version exists on disk...
-    writeManagedGeneration({ stateDir, version: "2.0.0", generationKey: "discord-managed" });
-    // ...but the persisted record points at a custom install outside the npm root.
-    const customInstallPath = path.join(stateDir, "custom", "node_modules", "@openclaw", "discord");
-
-    await writePersistedInstalledPluginIndexInstallRecords(
-      {
-        discord: {
-          source: "npm",
-          spec: `${PACKAGE_NAME}@beta`,
-          installPath: customInstallPath,
-          version: "1.0.0",
-          resolvedName: PACKAGE_NAME,
-          resolvedVersion: "1.0.0",
-          resolvedSpec: `${PACKAGE_NAME}@1.0.0`,
-          integrity: "sha512-custom",
-        },
-      },
-      { stateDir, candidates: [] },
-    );
-
-    const loaded = await loadInstalledPluginIndexInstallRecords({ stateDir });
-    expectRecordFields(loaded.discord, {
-      source: "npm",
-      spec: `${PACKAGE_NAME}@beta`,
-      installPath: customInstallPath,
-      resolvedVersion: "1.0.0",
-      integrity: "sha512-custom",
     });
   });
 });

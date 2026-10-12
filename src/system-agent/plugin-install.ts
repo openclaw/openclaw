@@ -19,26 +19,26 @@ export async function executePluginInstall(
   if (validationError) {
     throw new Error(validationError);
   }
-  const result = await applyPersistentOperation({
+  const { runPluginInstallCommand } = await import("../cli/plugins-install-command.js");
+  return await applyPersistentOperation({
     auditOperation: "plugin.install",
     operation,
     runtime,
     opts,
     run: async (ctx) => {
-      await ctx.commit(async () => {
-        const { runPluginInstallCommand } = await import("../cli/plugins-install-command.js");
-        await runPluginInstallCommand({
+      await ctx.commit(() =>
+        runPluginInstallCommand({
           raw: operation.spec,
           opts: {},
           runtime: createNoExitRuntime(ctx.runtime),
           allowInstallPolicyWarningPrompt: false,
-        });
-      });
+          applyRuntime: ctx.deps?.applyPluginRuntime,
+          ...(ctx.assertPersistentApply
+            ? { beforePersistentApply: ctx.assertPersistentApply }
+            : {}),
+        }),
+      );
       return { summary: `Installed plugin ${operation.spec}`, details: { spec: operation.spec } };
     },
   });
-  if (result.applied) {
-    runtime.log("Restart the Gateway to apply installed plugin changes.");
-  }
-  return result;
 }

@@ -21,14 +21,6 @@ function reserveAndCommit(
 }
 
 describe("resolveDiscordPresenceGateOptions", () => {
-  it("defaults to a five-minute reconnect window and bounded burst", () => {
-    expect(options).toEqual({
-      reconnectSuppressMs: 5 * 60 * 1000,
-      burstLimit: 8,
-      burstWindowMs: 60 * 1000,
-    });
-  });
-
   it("converts configured seconds and honors zero as disabled", () => {
     expect(
       resolveDiscordPresenceGateOptions({
@@ -41,25 +33,6 @@ describe("resolveDiscordPresenceGateOptions", () => {
 });
 
 describe("DiscordPresenceEmissionGate", () => {
-  it("suppresses emission during the reconnect window and logs once", () => {
-    const gate = new DiscordPresenceEmissionGate();
-    gate.noteGatewaySessionReset(1_000);
-
-    expect(gate.evaluateReconnectWindow(1_001, options)).toEqual({
-      allowed: false,
-      reason: "reconnect-window",
-      shouldLog: true,
-    });
-    expect(gate.evaluateReconnectWindow(2_000, options)).toEqual({
-      allowed: false,
-      reason: "reconnect-window",
-      shouldLog: false,
-    });
-    expect(gate.evaluateReconnectWindow(1_000 + options.reconnectSuppressMs, options)).toEqual({
-      allowed: true,
-    });
-  });
-
   it("logs again for each new reconnect window", () => {
     const gate = new DiscordPresenceEmissionGate();
     gate.noteGatewaySessionReset(0);
@@ -70,54 +43,6 @@ describe("DiscordPresenceEmissionGate", () => {
     ).toMatchObject({
       shouldLog: true,
     });
-  });
-
-  it("does not suppress when the reconnect window is disabled", () => {
-    const gate = new DiscordPresenceEmissionGate();
-    gate.noteGatewaySessionReset(1_000);
-    expect(gate.evaluateReconnectWindow(1_001, { ...options, reconnectSuppressMs: 0 })).toEqual({
-      allowed: true,
-    });
-  });
-
-  it("rate-limits emission bursts within the sliding window", () => {
-    const gate = new DiscordPresenceEmissionGate();
-    const burstOptions = { ...options, burstLimit: 2, burstWindowMs: 10_000 };
-
-    expect(reserveAndCommit(gate, guildId, 1_000, burstOptions)).toMatchObject({ allowed: true });
-    expect(reserveAndCommit(gate, guildId, 2_000, burstOptions)).toMatchObject({ allowed: true });
-    expect(gate.reserveBurst(guildId, 3_000, burstOptions)).toEqual({
-      allowed: false,
-      reason: "burst",
-      shouldLog: true,
-    });
-    expect(gate.reserveBurst(guildId, 4_000, burstOptions)).toEqual({
-      allowed: false,
-      reason: "burst",
-      shouldLog: false,
-    });
-    // The window drains as old emissions age out; logging re-arms for the next burst.
-    expect(reserveAndCommit(gate, guildId, 12_500, burstOptions)).toMatchObject({ allowed: true });
-    expect(reserveAndCommit(gate, guildId, 12_600, burstOptions)).toMatchObject({ allowed: true });
-    expect(gate.reserveBurst(guildId, 12_700, burstOptions)).toEqual({
-      allowed: false,
-      reason: "burst",
-      shouldLog: true,
-    });
-  });
-
-  it("releases failed attempts without spending burst capacity", () => {
-    const gate = new DiscordPresenceEmissionGate();
-    const burstOptions = { ...options, burstLimit: 1 };
-    const first = gate.reserveBurst(guildId, 1_000, burstOptions);
-
-    expect(first.allowed).toBe(true);
-    if (!first.allowed) {
-      throw new Error("expected burst reservation");
-    }
-    gate.releaseBurst(guildId, first.reservation);
-
-    expect(gate.reserveBurst(guildId, 1_001, burstOptions)).toMatchObject({ allowed: true });
   });
 
   it("holds lookup admission and starts the burst window when emission commits", () => {

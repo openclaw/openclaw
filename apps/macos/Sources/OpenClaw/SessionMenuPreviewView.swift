@@ -1,6 +1,5 @@
 import OpenClawChatUI
 import OpenClawKit
-import OpenClawProtocol
 import OSLog
 import SwiftUI
 
@@ -31,40 +30,39 @@ enum PreviewRole: String {
 actor SessionPreviewCache {
     static let shared = SessionPreviewCache()
 
-    private struct CacheEntry {
-        let snapshot: SessionMenuPreviewSnapshot
-        let updatedAt: Date
-    }
+    private var entries: [String: (
+        snapshot: SessionMenuPreviewSnapshot, updatedAt: Date, lease: GatewayConnection.ServerLease)] = [:]
 
-    private var entries: [String: CacheEntry] = [:]
-
-    func cachedSnapshot(for sessionKey: String, maxAge: TimeInterval) -> SessionMenuPreviewSnapshot? {
+    func cachedSnapshot(
+        for sessionKey: String,
+        gateway: GatewayConnection,
+        maxAge: TimeInterval? = nil) -> (snapshot: SessionMenuPreviewSnapshot, lease: GatewayConnection.ServerLease)?
+    {
         guard let entry = self.entries[sessionKey] else { return nil }
-        guard Date().timeIntervalSince(entry.updatedAt) < maxAge else { return nil }
-        return entry.snapshot
+        guard gateway.serverLeaseMatchesCurrentRoute(entry.lease),
+              maxAge.map({ Date().timeIntervalSince(entry.updatedAt) < $0 }) ?? true else { return nil }
+        return (entry.snapshot, entry.lease)
     }
 
-    func store(snapshot: SessionMenuPreviewSnapshot, for sessionKey: String) {
-        self.entries[sessionKey] = CacheEntry(snapshot: snapshot, updatedAt: Date())
-    }
-
-    func lastSnapshot(for sessionKey: String) -> SessionMenuPreviewSnapshot? {
-        self.entries[sessionKey]?.snapshot
+    func store(
+        snapshot: SessionMenuPreviewSnapshot,
+        for sessionKey: String,
+        gateway: GatewayConnection,
+        lease: GatewayConnection.ServerLease)
+    {
+        guard gateway.serverLeaseMatchesCurrentRoute(lease) else { return }
+        self.entries[sessionKey] = (snapshot, Date(), lease)
     }
 }
 
 actor SessionPreviewLimiter {
     static let shared = SessionPreviewLimiter(maxConcurrent: 2)
 
-    private let maxConcurrent: Int
     private var available: Int
-    private var waitQueue: [UUID] = []
-    private var waiters: [UUID: CheckedContinuation<Void, Never>] = [:]
+    private var waiters: [CheckedContinuation<Void, Never>] = []
 
     init(maxConcurrent: Int) {
-        let normalized = max(1, maxConcurrent)
-        self.maxConcurrent = normalized
-        self.available = normalized
+        self.available = max(1, maxConcurrent)
     }
 
     func withPermit<T>(_ operation: () async throws -> T) async throws -> T {
@@ -79,40 +77,19 @@ actor SessionPreviewLimiter {
             self.available -= 1
             return
         }
-        let id = UUID()
         await withCheckedContinuation { cont in
-            self.waitQueue.append(id)
-            self.waiters[id] = cont
+            self.waiters.append(cont)
         }
     }
 
     private func release() {
-        if let id = self.waitQueue.first {
-            self.waitQueue.removeFirst()
-            if let cont = self.waiters.removeValue(forKey: id) {
-                cont.resume()
-            }
+        if !self.waiters.isEmpty {
+            self.waiters.removeFirst().resume()
             return
         }
-        self.available = min(self.available + 1, self.maxConcurrent)
+        self.available += 1
     }
 }
-
-#if DEBUG
-extension SessionPreviewCache {
-    func _testSet(
-        snapshot: SessionMenuPreviewSnapshot,
-        for sessionKey: String,
-        updatedAt: Date = Date())
-    {
-        self.entries[sessionKey] = CacheEntry(snapshot: snapshot, updatedAt: updatedAt)
-    }
-
-    func _testReset() {
-        self.entries = [:]
-    }
-}
-#endif
 
 struct SessionMenuPreviewSnapshot {
     let items: [SessionPreviewItem]
@@ -120,7 +97,6 @@ struct SessionMenuPreviewSnapshot {
 }
 
 struct SessionMenuPreviewView: View {
-    let width: CGFloat
     let maxLines: Int
     let title: String
     let items: [SessionPreviewItem]
@@ -180,7 +156,7 @@ struct SessionMenuPreviewView: View {
         .padding(.vertical, 6)
         .padding(.leading, 16)
         .padding(.trailing, 11)
-        .frame(width: max(1, self.width), alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func previewRow(_ item: SessionPreviewItem) -> some View {
@@ -230,14 +206,25 @@ enum SessionMenuPreviewLoader {
         }
     }
 
-    static func prewarm(sessionKeys: [String], maxItems: Int) async {
-        let keys = self.uniqueKeys(sessionKeys)
+    static func prewarm(
+        sessionKeys: [String],
+        maxItems: Int,
+        gateway: GatewayConnection = .shared) async
+    {
+        var seen = Set<String>()
+        let keys = sessionKeys.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && seen.insert($0).inserted }
         guard !keys.isEmpty else { return }
         do {
-            let payload = try await self.requestPreview(keys: keys, maxItems: maxItems)
-            await self.cache(payload: payload, maxItems: maxItems)
+            let (payload, lease) = try await self.requestPreview(keys: keys, maxItems: maxItems, gateway: gateway)
+            for entry in payload.previews {
+                await SessionPreviewCache.shared.store(
+                    snapshot: self.snapshot(from: entry, maxItems: maxItems),
+                    for: entry.key,
+                    gateway: gateway,
+                    lease: lease)
+            }
         } catch {
-            if self.isUnknownMethodError(error) { return }
             let errorDescription = String(describing: error)
             Self.logger.debug(
                 "Session preview prewarm failed count=\(keys.count, privacy: .public) " +
@@ -245,23 +232,36 @@ enum SessionMenuPreviewLoader {
         }
     }
 
-    static func load(sessionKey: String, maxItems: Int) async -> SessionMenuPreviewSnapshot {
+    static func load(
+        sessionKey: String,
+        maxItems: Int,
+        gateway: GatewayConnection = .shared) async -> SessionMenuPreviewSnapshot
+    {
         if let cached = await SessionPreviewCache.shared.cachedSnapshot(
             for: sessionKey,
-            maxAge: cacheMaxAgeSeconds)
+            gateway: gateway,
+            maxAge: cacheMaxAgeSeconds),
+            gateway.serverLeaseMatchesCurrentRoute(cached.lease)
         {
-            return cached
+            return cached.snapshot
         }
 
         do {
-            let snapshot = try await self.fetchSnapshot(sessionKey: sessionKey, maxItems: maxItems)
-            await SessionPreviewCache.shared.store(snapshot: snapshot, for: sessionKey)
+            let (payload, lease) = try await self.requestPreview(
+                keys: [sessionKey], maxItems: maxItems, gateway: gateway)
+            let entry = payload.previews.first(where: { $0.key == sessionKey }) ?? payload.previews.first
+            let snapshot = entry.map { self.snapshot(from: $0, maxItems: maxItems) }
+                ?? SessionMenuPreviewSnapshot(items: [], status: .error("Preview unavailable"))
+            await SessionPreviewCache.shared.store(snapshot: snapshot, for: sessionKey, gateway: gateway, lease: lease)
+            guard gateway.serverLeaseMatchesCurrentRoute(lease) else { throw CancellationError() }
             return snapshot
         } catch is CancellationError {
             return SessionMenuPreviewSnapshot(items: [], status: .loading)
         } catch {
-            if let fallback = await SessionPreviewCache.shared.lastSnapshot(for: sessionKey) {
-                return fallback
+            if let fallback = await SessionPreviewCache.shared.cachedSnapshot(for: sessionKey, gateway: gateway),
+               gateway.serverLeaseMatchesCurrentRoute(fallback.lease)
+            {
+                return fallback.snapshot
             }
             let errorDescription = String(describing: error)
             Self.logger.warning(
@@ -271,24 +271,10 @@ enum SessionMenuPreviewLoader {
         }
     }
 
-    private static func fetchSnapshot(sessionKey: String, maxItems: Int) async throws -> SessionMenuPreviewSnapshot {
-        do {
-            let payload = try await self.requestPreview(keys: [sessionKey], maxItems: maxItems)
-            if let entry = payload.previews.first(where: { $0.key == sessionKey }) ?? payload.previews.first {
-                return self.snapshot(from: entry, maxItems: maxItems)
-            }
-            return SessionMenuPreviewSnapshot(items: [], status: .error("Preview unavailable"))
-        } catch {
-            if self.isUnknownMethodError(error) {
-                return try await self.fetchHistorySnapshot(sessionKey: sessionKey, maxItems: maxItems)
-            }
-            throw error
-        }
-    }
-
     private static func requestPreview(
         keys: [String],
-        maxItems: Int) async throws -> OpenClawSessionsPreviewPayload
+        maxItems: Int,
+        gateway: GatewayConnection) async throws -> (OpenClawSessionsPreviewPayload, GatewayConnection.ServerLease)
     {
         let boundedItems = self.normalizeMaxItems(maxItems)
         let timeoutMs = Int(self.previewTimeoutSeconds * 1000)
@@ -297,37 +283,20 @@ enum SessionMenuPreviewLoader {
                 seconds: self.previewTimeoutSeconds,
                 onTimeout: { PreviewTimeoutError() },
                 operation: {
-                    try await GatewayConnection.shared.sessionsPreview(
+                    let lease: GatewayConnection.ServerLease = if let connected = await gateway.captureServerLease() {
+                        connected
+                    } else {
+                        try await gateway.acquireServerLease()
+                    }
+                    let payload = try await gateway.sessionsPreview(
                         keys: keys,
                         limit: boundedItems,
                         maxChars: self.previewMaxChars,
-                        timeoutMs: timeoutMs)
+                        timeoutMs: timeoutMs,
+                        ifCurrentServerLease: lease)
+                    return (payload, lease)
                 })
         }
-    }
-
-    private static func fetchHistorySnapshot(
-        sessionKey: String,
-        maxItems: Int) async throws -> SessionMenuPreviewSnapshot
-    {
-        let timeoutMs = Int(self.previewTimeoutSeconds * 1000)
-        let payload = try await SessionPreviewLimiter.shared.withPermit {
-            try await AsyncTimeout.withTimeout(
-                seconds: self.previewTimeoutSeconds,
-                onTimeout: { PreviewTimeoutError() },
-                operation: {
-                    try await GatewayConnection.shared.chatHistory(
-                        sessionKey: sessionKey,
-                        limit: self.previewLimit(for: maxItems),
-                        timeoutMs: timeoutMs)
-                })
-        }
-        let built = Self.previewItems(from: payload, maxItems: maxItems)
-        return Self.snapshot(from: built)
-    }
-
-    private static func snapshot(from items: [SessionPreviewItem]) -> SessionMenuPreviewSnapshot {
-        SessionMenuPreviewSnapshot(items: items, status: items.isEmpty ? .empty : .ready)
     }
 
     private static func snapshot(
@@ -336,28 +305,14 @@ enum SessionMenuPreviewLoader {
     {
         let items = self.previewItems(from: entry, maxItems: maxItems)
         let normalized = entry.status.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        switch normalized {
-        case "ok":
-            return SessionMenuPreviewSnapshot(items: items, status: items.isEmpty ? .empty : .ready)
-        case "empty":
-            return SessionMenuPreviewSnapshot(items: items, status: .empty)
-        case "missing":
-            return SessionMenuPreviewSnapshot(items: items, status: .error("Thread missing"))
-        default:
-            return SessionMenuPreviewSnapshot(items: items, status: .error("Preview unavailable"))
+        let status: SessionMenuPreviewView.LoadStatus = switch normalized {
+        case "ok": items.isEmpty ? .empty : .ready
+        case "empty": .empty
+        case "missing": .error("Thread missing")
+        case "cold": .error("History archived; open chat to restore")
+        default: .error("Preview unavailable")
         }
-    }
-
-    private static func cache(payload: OpenClawSessionsPreviewPayload, maxItems: Int) async {
-        for entry in payload.previews {
-            let snapshot = self.snapshot(from: entry, maxItems: maxItems)
-            await SessionPreviewCache.shared.store(snapshot: snapshot, for: entry.key)
-        }
-    }
-
-    private static func previewLimit(for maxItems: Int) -> Int {
-        let boundedItems = self.normalizeMaxItems(maxItems)
-        return min(max(boundedItems * 3, 20), 120)
+        return SessionMenuPreviewSnapshot(items: normalized == "cold" ? [] : items, status: status)
     }
 
     private static func normalizeMaxItems(_ maxItems: Int) -> Int {
@@ -372,124 +327,11 @@ enum SessionMenuPreviewLoader {
         let built: [SessionPreviewItem] = entry.items.enumerated().compactMap { index, item in
             let text = item.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { return nil }
-            let role = self.previewRoleFromRaw(item.role)
+            let role = PreviewRole(rawValue: item.role.lowercased()) ?? .other
             return SessionPreviewItem(id: "\(entry.key)-\(index)", role: role, text: text)
         }
 
         let trimmed = built.suffix(boundedItems)
         return Array(trimmed.reversed())
-    }
-
-    private static func previewItems(
-        from payload: OpenClawChatHistoryPayload,
-        maxItems: Int) -> [SessionPreviewItem]
-    {
-        let boundedItems = self.normalizeMaxItems(maxItems)
-        let raw: [OpenClawKit.AnyCodable] = payload.messages ?? []
-        let messages = self.decodeMessages(raw)
-        let built = messages.compactMap { message -> SessionPreviewItem? in
-            guard let text = self.previewText(for: message) else { return nil }
-            let isTool = self.isToolCall(message)
-            let role = self.previewRole(message.role, isTool: isTool)
-            let id = "\(message.timestamp ?? 0)-\(UUID().uuidString)"
-            return SessionPreviewItem(id: id, role: role, text: text)
-        }
-
-        let trimmed = built.suffix(boundedItems)
-        return Array(trimmed.reversed())
-    }
-
-    private static func decodeMessages(_ raw: [OpenClawKit.AnyCodable]) -> [OpenClawChatMessage] {
-        raw.compactMap { item in
-            guard let data = try? JSONEncoder().encode(item) else { return nil }
-            return try? JSONDecoder().decode(OpenClawChatMessage.self, from: data)
-        }
-    }
-
-    private static func previewRole(_ raw: String, isTool: Bool) -> PreviewRole {
-        if isTool { return .tool }
-        return self.previewRoleFromRaw(raw)
-    }
-
-    private static func previewRoleFromRaw(_ raw: String) -> PreviewRole {
-        switch raw.lowercased() {
-        case "user": .user
-        case "assistant": .assistant
-        case "system": .system
-        case "tool": .tool
-        default: .other
-        }
-    }
-
-    private static func previewText(for message: OpenClawChatMessage) -> String? {
-        let text = message.content.compactMap(\.text).joined(separator: "\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if !text.isEmpty { return text }
-
-        let toolNames = self.toolNames(for: message)
-        if !toolNames.isEmpty {
-            let shown = toolNames.prefix(2)
-            let overflow = toolNames.count - shown.count
-            var label = "call \(shown.joined(separator: ", "))"
-            if overflow > 0 { label += " +\(overflow)" }
-            return label
-        }
-
-        if let media = self.mediaSummary(for: message) {
-            return media
-        }
-
-        return nil
-    }
-
-    private static func isToolCall(_ message: OpenClawChatMessage) -> Bool {
-        if message.toolName?.nonEmpty != nil { return true }
-        return message.content.contains { $0.name?.nonEmpty != nil || $0.type?.lowercased() == "toolcall" }
-    }
-
-    private static func toolNames(for message: OpenClawChatMessage) -> [String] {
-        var names: [String] = []
-        for content in message.content {
-            if let name = content.name?.nonEmpty {
-                names.append(name)
-            }
-        }
-        if let toolName = message.toolName?.nonEmpty {
-            names.append(toolName)
-        }
-        return Self.dedupePreservingOrder(names)
-    }
-
-    private static func mediaSummary(for message: OpenClawChatMessage) -> String? {
-        let types = message.content.compactMap { content -> String? in
-            let raw = content.type?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            guard let raw, !raw.isEmpty else { return nil }
-            if raw == "text" || raw == "toolcall" { return nil }
-            return raw
-        }
-        guard let first = types.first else { return nil }
-        return "[\(first)]"
-    }
-
-    private static func dedupePreservingOrder(_ values: [String]) -> [String] {
-        var seen = Set<String>()
-        var result: [String] = []
-        for value in values where !seen.contains(value) {
-            seen.insert(value)
-            result.append(value)
-        }
-        return result
-    }
-
-    private static func uniqueKeys(_ keys: [String]) -> [String] {
-        let trimmed = keys.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-        return self.dedupePreservingOrder(trimmed.filter { !$0.isEmpty })
-    }
-
-    private static func isUnknownMethodError(_ error: Error) -> Bool {
-        guard let response = error as? GatewayResponseError else { return false }
-        guard response.code == ErrorCode.invalidRequest.rawValue else { return false }
-        let message = response.message.lowercased()
-        return message.contains("unknown method")
     }
 }

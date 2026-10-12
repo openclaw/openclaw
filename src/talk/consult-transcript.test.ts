@@ -20,17 +20,36 @@ describe("realtime voice consult transcript classification", () => {
     expect(classifySkippableRealtimeVoiceConsultTranscript("ship it so")).toBe("trailing-fragment");
   });
 
-  it("skips non-actionable closings unless phrased as a question", () => {
-    expect(classifySkippableRealtimeVoiceConsultTranscript("I'll be right back")).toBe(
-      "non-actionable-closing",
-    );
-    expect(classifySkippableRealtimeVoiceConsultTranscript("goodbye for now")).toBe(
-      "non-actionable-closing",
-    );
-    expect(classifySkippableRealtimeVoiceConsultTranscript("can you say goodbye?")).toBeUndefined();
+  it.each([
+    "I'll be right back. See you guys. Bye-bye.",
+    "Thanks and goodbye.",
+    "All right, thanks and goodbye.",
+    "Goodbye, take care",
+    "Thank you very much and goodbye.",
+    "Okay, goodbye and have a nice weekend.",
+    "Bye for now, folks.",
+    "See you next week.",
+    "See you on Monday.",
+    "I'll be right back in a minute.",
+    "I will be back in a few minutes.",
+    "I’ll be right back. Bye.",
+    "Good bye.",
+    "Good-bye.",
+  ])("skips complete closing: %s", (text) => {
+    expect(classifySkippableRealtimeVoiceConsultTranscript(text)).toBe("non-actionable-closing");
   });
 
-  it("keeps actionable transcripts", () => {
-    expect(classifySkippableRealtimeVoiceConsultTranscript("what changed in CI?")).toBeUndefined();
+  it.each([
+    "Write a goodbye email to Sam",
+    "I'll be right back, please check the build.",
+    'Explain the code `print("goodbye")`.',
+    "can you say goodbye?",
+    "what changed in CI?",
+    "Goodbye, everyone, please check the build.",
+    "Thanks, goodbye. Send me the report.",
+    'Translate "goodbye" into French.',
+    "Thank you.",
+  ])("keeps actionable transcript: %s", (text) => {
+    expect(classifySkippableRealtimeVoiceConsultTranscript(text)).toBeUndefined();
   });
 });

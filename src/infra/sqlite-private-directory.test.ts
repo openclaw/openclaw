@@ -1,44 +1,19 @@
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEnv } from "../test-utils/env.js";
-
-const childProcess = vi.hoisted(() => ({
-  execFile: vi.fn(),
-  execFileSync: vi.fn(),
-}));
-
-vi.mock("node:child_process", () => childProcess);
-vi.mock("./resolve-system-bin.js", () => ({
-  resolveSystemBin: () => "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
-}));
-vi.mock("./windows-encoding.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./windows-encoding.js")>();
-  return {
-    ...actual,
-    decodeWindowsOutputBuffer: (params: { buffer: Buffer }) =>
-      actual.decodeWindowsOutputBuffer({ ...params, platform: "win32", windowsEncoding: "gbk" }),
-  };
-});
-
-import {
-  createPrivateSqliteDirectory,
-  createPrivateSqliteTempDirectorySync,
-  resolvePrivateSqliteSnapshotStagingRoot,
-} from "./sqlite-private-directory.js";
+import { isPrivateDirectoryCreationRefused } from "./private-directory-creation.js";
+import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import * as tmpOpenClawDir from "./tmp-openclaw-dir.js";
+import {
+  createPrivateWindowsDirectory,
+  createPrivateWindowsFile,
+} from "./windows-private-directory.js";
 
-function errorCause(error: unknown): Error {
-  expect(error).toBeInstanceOf(Error);
-  const cause = (error as Error & { cause?: unknown }).cause;
-  expect(cause).toBeInstanceOf(Error);
-  return cause as Error;
-}
-
-describe("private Windows SQLite directory diagnostics", () => {
+describe("private SQLite snapshot staging root", () => {
   afterEach(() => {
     vi.restoreAllMocks();
-    childProcess.execFile.mockReset();
-    childProcess.execFileSync.mockReset();
   });
 
   it.each([
@@ -96,82 +71,79 @@ describe("private Windows SQLite directory diagnostics", () => {
       expect(resolveTempRoot.mock.calls[0]?.[0]?.tmpdir?.()).toBe(expectedRoot);
     },
   );
+});
 
-  it("reports bounded async stderr without retaining the child-process error", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const original = Object.assign(
-      new Error("Command failed: powershell -EncodedCommand secret-payload"),
-      {
-        cmd: "powershell -EncodedCommand secret-payload",
-        code: 7,
-        killed: true,
-        signal: "SIGTERM",
-      },
-    );
-    childProcess.execFile.mockImplementation((_file, _args, _options, callback) => {
-      callback(
-        original,
-        Buffer.from("stdout fallback"),
-        Buffer.concat([
-          Buffer.from([0xb2, 0xe2, 0xca, 0xd4]),
-          Buffer.from(
-            ` useful stderr\n-EncodedCommand secret\nbenign after redaction ${"tail ".repeat(250)}`,
-          ),
-        ]),
-      );
-    });
+describe.skipIf(process.platform === "win32")("private creation adapter on the native host", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  afterEach(() => vi.restoreAllMocks());
 
-    const error = await createPrivateSqliteDirectory("C:\\private").catch(
-      (cause: unknown) => cause,
-    );
-    const cause = errorCause(error);
-    expect(cause.message).toContain("exit=7, killed=true, signal=SIGTERM");
-    expect(cause.message).toContain("测试");
-    expect(cause.message).toContain("stderr: 测试 useful stderr");
-    expect(cause.message).toContain("benign after redaction");
-    expect(cause.message).not.toContain("stdout fallback");
-    expect(cause.message).not.toContain("EncodedCommand");
-    expect(cause.message.length).toBeLessThanOrEqual(1100);
-    expect(cause).not.toBe(original);
-    expect((cause as Error & { cause?: unknown; cmd?: unknown }).cause).toBeUndefined();
-    expect((cause as Error & { cmd?: unknown }).cmd).toBeUndefined();
-  });
-
-  it("reports sync status and string codes from sanitized stderr", () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    childProcess.execFileSync.mockImplementation(() => {
-      throw Object.assign(new Error("powershell -EncodedCommand secret"), {
-        code: "ETIMEDOUT",
-        status: 1,
-        stderr: Buffer.from("native directory creation failed"),
-        stdout: Buffer.from("stdout fallback"),
+  it.each(["parent-file", "existing-directory"] as const)(
+    "preserves the semantic %s error and records a confirmed refusal",
+    (kind) => {
+      const root = tempDirs.make("openclaw-private-preflight-");
+      const parent = path.join(root, "parent");
+      const directory = kind === "parent-file" ? path.join(parent, "child") : parent;
+      if (kind === "parent-file") {
+        fs.writeFileSync(parent, "preserved");
+      } else {
+        fs.mkdirSync(parent);
+      }
+      let failure: unknown;
+      try {
+        createPrivateWindowsDirectory(directory);
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toMatchObject({
+        code: kind === "parent-file" ? "not-file" : "already-exists",
       });
-    });
+      expect(isPrivateDirectoryCreationRefused(failure)).toBe(true);
+      if (kind === "parent-file") {
+        expect(fs.readFileSync(parent, "utf8")).toBe("preserved");
+      } else {
+        expect(fs.statSync(parent).isDirectory()).toBe(true);
+      }
+    },
+  );
 
-    let error: unknown;
+  it("does not call a failed dispatched creation a confirmed refusal", () => {
+    const root = tempDirs.make("openclaw-private-dispatched-");
+    const directory = path.join(root, "created");
+    const failure = new Error("creation lost its completion receipt");
+    const mkdir = fs.mkdirSync;
+    vi.spyOn(fs, "mkdirSync").mockImplementation((target, options) => {
+      const result = mkdir(target, options);
+      if (String(target) === directory) {
+        throw failure;
+      }
+      return result;
+    });
+    let thrown: unknown;
     try {
-      createPrivateSqliteTempDirectorySync("C:\\root", "stage-");
-    } catch (cause) {
-      error = cause;
+      createPrivateWindowsDirectory(directory);
+    } catch (error) {
+      thrown = error;
     }
-    expect(errorCause(error).message).toBe(
-      "PowerShell failed (status=1, code=ETIMEDOUT); stderr: native directory creation failed",
-    );
+    expect(thrown).toBe(failure);
+    expect(isPrivateDirectoryCreationRefused(thrown)).toBe(false);
+    expect(fs.statSync(directory).isDirectory()).toBe(true);
   });
 
-  it("preserves the EEXIST contract from child output", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    childProcess.execFile.mockImplementation((_file, _args, _options, callback) => {
-      callback(new Error("failed"), "", "OPENCLAW_SQLITE_DIRECTORY_EXISTS");
-    });
-
-    const error = await createPrivateSqliteDirectory("C:\\existing").catch(
-      (cause: unknown) => cause,
+  it("returns an owned private descriptor and preserves an existing file", () => {
+    const root = tempDirs.make("openclaw-private-owner-");
+    const file = path.join(root, "private");
+    const owner = createPrivateWindowsFile(file);
+    try {
+      expect(fs.fstatSync(owner.fd).mode & 0o777).toBe(0o600);
+      fs.writeSync(owner.fd, "winner");
+    } finally {
+      owner.close();
+      owner.close();
+    }
+    expect(() => createPrivateWindowsFile(file)).toThrow(
+      expect.objectContaining({ code: "already-exists" }),
     );
-    expect(error).toMatchObject({
-      code: "EEXIST",
-      message: "Private SQLite directory already exists: C:\\existing",
-    });
-    expect((error as Error & { cause?: unknown }).cause).toBeUndefined();
+    expect(fs.readFileSync(file, "utf8")).toBe("winner");
+    expect(fs.statSync(file).nlink).toBe(1);
   });
 });

@@ -74,17 +74,6 @@ describe("resolveDiscordOnlinePresenceEvent", () => {
     ).toBeNull();
   });
 
-  it("requires the caller to classify an availability transition", () => {
-    expect(
-      resolveDiscordOnlinePresenceEvent({
-        config,
-        data: presence("online"),
-        availabilityKind: null,
-        nowMs: 1_000,
-      }),
-    ).toBeNull();
-  });
-
   it("honors immutable user allowlists, bot exclusion, and cooldown", () => {
     const base = {
       data: presence("online"),

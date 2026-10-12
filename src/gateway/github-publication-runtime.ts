@@ -1,5 +1,9 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { createGitHubPublicationTranscriptReporter } from "./github-publication-transcript.js";
+import { createGitHubPublicationWorkerScope } from "../state/github-publication-worker.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { requirePersonalGitHubPublicationConfirmationAsync } from "./github-publication-store-async.js";
+import { reportGitHubPublicationTranscript } from "./github-publication-transcript.js";
 import { createGitHubPublicationCoordinator } from "./github-publication.js";
 import type {
   WorkerSessionPlacementStore,
@@ -8,19 +12,27 @@ import type {
 
 export function createGitHubPublicationRuntime(params: {
   placements: WorkerSessionPlacementStore;
-  loadSessionRuntime: Parameters<typeof createGitHubPublicationTranscriptReporter>[0];
+  getCommittedRuntimeConfig: () => OpenClawConfig;
+  loadSessionRuntime: Parameters<typeof reportGitHubPublicationTranscript>[0];
   warn: (message: string) => void;
 }) {
-  const coordinator = createGitHubPublicationCoordinator({ placements: params.placements });
-  const report = createGitHubPublicationTranscriptReporter(params.loadSessionRuntime, coordinator);
-  const reportDeferred = async (publication: {
-    sessionId: string;
-    sessionKey: string;
-    agentId: string;
-    result: Parameters<typeof report>[0]["result"];
-  }) => {
+  const scope = createGitHubPublicationWorkerScope(captureOpenClawStateWorkerContext());
+  const coordinator = createGitHubPublicationCoordinator({
+    ...params,
+    assertCurrent: scope.assertCurrent,
+    signal: scope.signal,
+  });
+  const ready = requirePersonalGitHubPublicationConfirmationAsync(
+    params.placements.workspaceResultInstanceId(),
+    scope.assertCurrent,
+  );
+  // Startup and every runtime operation join the same failure; avoid an unhandled early rejection.
+  void ready.catch(() => {});
+  const reportDeferred = async (
+    publication: Parameters<typeof reportGitHubPublicationTranscript>[2],
+  ) => {
     try {
-      await report(publication);
+      await reportGitHubPublicationTranscript(params.loadSessionRuntime, coordinator, publication);
     } catch (error) {
       params.warn(
         `GitHub publication result reporting deferred for ${publication.sessionId}: ${formatErrorMessage(error)}`,
@@ -28,14 +40,16 @@ export function createGitHubPublicationRuntime(params: {
     }
   };
   const prepareAcceptedWorkspacePublication = async (claim: WorkerSessionTurnClaim) => {
+    await ready;
     try {
       await coordinator.prepareClaimWorkspace(claim);
-    } catch (error) {
-      coordinator.failClaimPreparation(claim, error);
+    } catch {
+      await coordinator.deferClaimPreparationAsync(claim);
     }
   };
   const publishAcceptedWorkspace = async (claim: WorkerSessionTurnClaim) => {
-    const placement = params.placements.get(claim.sessionId);
+    await ready;
+    const placement = await params.placements.getAsync(claim.sessionId);
     if (!placement) {
       params.warn(`GitHub publication deferred because placement ${claim.sessionId} disappeared.`);
       return;
@@ -50,6 +64,9 @@ export function createGitHubPublicationRuntime(params: {
       throw error;
     }
     for (const result of results) {
+      if (result.status !== "published" && result.status !== "failed") {
+        continue;
+      }
       await reportDeferred({
         sessionId: placement.sessionId,
         sessionKey: placement.sessionKey,
@@ -59,23 +76,20 @@ export function createGitHubPublicationRuntime(params: {
     }
   };
   const reconcilePublications = async () => {
+    await ready;
     try {
-      await coordinator.resumeLocalRequests();
+      await coordinator.deferOrphanedRequestsAsync();
+      await coordinator.resumeSessionRequests();
     } catch (error) {
       params.warn(`GitHub publication recovery deferred: ${formatErrorMessage(error)}`);
     }
-    const attempted = new Set<string>();
-    for (const publication of coordinator.failOrphanedRequests()) {
-      attempted.add(publication.result.requestId);
+    for (const publication of await coordinator.listUnreportedResultsAsync()) {
       await reportDeferred(publication);
-    }
-    for (const publication of coordinator.listUnreportedResults()) {
-      if (!attempted.has(publication.result.requestId)) {
-        await reportDeferred(publication);
-      }
     }
   };
   return {
+    ready,
+    close: () => scope.close(),
     coordinator,
     prepareAcceptedWorkspacePublication,
     publishAcceptedWorkspace,

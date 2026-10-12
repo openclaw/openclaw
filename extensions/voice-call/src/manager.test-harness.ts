@@ -1,12 +1,19 @@
 // Voice Call plugin module implements manager harness behavior.
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  createPluginStateSyncKeyedStoreForTests,
+  createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseByPathAsync,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { onTestFinished } from "vitest";
 import { VoiceCallConfigSchema } from "./config.js";
 import { CallManager } from "./manager.js";
 import type { CallManagerContext } from "./manager/context.js";
@@ -81,17 +88,21 @@ export class FakeProvider implements VoiceCallProvider {
 }
 
 export function createTestStorePath(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-voice-call-test-"));
+  const storePath = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-voice-call-test-"));
+  // Registered before managers: LIFO cleanup joins their work before retiring
+  // this store's workers, without closing another live fixture's database.
+  onTestFinished(async () => {
+    await closeOpenClawStateDatabaseByPathAsync(path.join(storePath, "state", "openclaw.sqlite"));
+    fs.rmSync(storePath, { recursive: true, force: true });
+  });
+  return storePath;
 }
 
-function createVoiceCallStateRuntimeForTests(): VoiceCallStateRuntime["state"] {
+export function createVoiceCallStateRuntimeForTests(): VoiceCallStateRuntime["state"] {
   return {
     resolveStateDir: () => "",
-    openKeyedStore: (() => {
-      throw new Error("openKeyedStore is not used by voice-call manager tests");
-    }) as VoiceCallStateRuntime["state"]["openKeyedStore"],
-    openSyncKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
-      createPluginStateSyncKeyedStoreForTests<T>("voice-call", options),
+    openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) =>
+      createPluginStateKeyedStoreForTests<T>("voice-call", options),
     openChannelIngressQueue: (() => {
       throw new Error("openChannelIngressQueue is not used by voice-call manager tests");
     }) as VoiceCallStateRuntime["state"]["openChannelIngressQueue"],
@@ -101,8 +112,44 @@ function createVoiceCallStateRuntimeForTests(): VoiceCallStateRuntime["state"] {
   };
 }
 
-function installVoiceCallStateRuntimeForTests(): void {
+export function installVoiceCallStateRuntimeForTests(): void {
   setVoiceCallStateRuntime({ state: createVoiceCallStateRuntimeForTests() });
+}
+
+export async function finalizeTestManagerCalls(manager: CallManager): Promise<void> {
+  const errors: unknown[] = [];
+  for (const call of manager.getActiveCalls()) {
+    try {
+      // Synthetic carrier completion retires fixture timers/waiters even when
+      // its fake hangup deliberately fails. Provider work must be joined first.
+      await manager.processEvent({
+        id: randomUUID(),
+        type: "call.ended",
+        callId: call.callId,
+        providerCallId: call.providerCallId,
+        timestamp: Date.now(),
+        reason: "hangup-user",
+      });
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length > 0) {
+    throw new AggregateError(errors, "Failed to finalize fixture calls");
+  }
+}
+
+export function registerTestManagerCleanup(manager: CallManager): CallManager {
+  // Register before initialize can fail. Store/runtime owners must outlive this
+  // LIFO finish hook; this fixture does not reset shared stores or runtimes.
+  onTestFinished(async () => {
+    try {
+      await finalizeTestManagerCalls(manager);
+    } finally {
+      await manager.stop();
+    }
+  });
+  return manager;
 }
 
 export async function createManagerHarness(
@@ -111,6 +158,7 @@ export async function createManagerHarness(
 ): Promise<{
   manager: CallManager;
   provider: FakeProvider;
+  storePath: string;
 }> {
   const config = VoiceCallConfigSchema.parse({
     enabled: true,
@@ -119,13 +167,18 @@ export async function createManagerHarness(
     ...configOverrides,
   });
   installVoiceCallStateRuntimeForTests();
-  const manager = new CallManager(config, createTestStorePath());
+  const storePath = createTestStorePath();
+  const manager = registerTestManagerCleanup(new CallManager(config, storePath));
   await manager.initialize(provider, "https://example.com/voice/webhook");
-  return { manager, provider };
+  return { manager, provider, storePath };
 }
 
-export function markCallAnswered(manager: CallManager, callId: string, eventId: string): void {
-  manager.processEvent({
+export async function markCallAnswered(
+  manager: CallManager,
+  callId: string,
+  eventId: string,
+): Promise<void> {
+  await manager.processEvent({
     id: eventId,
     type: "call.answered",
     callId,
@@ -134,18 +187,14 @@ export function markCallAnswered(manager: CallManager, callId: string, eventId: 
   });
 }
 
-export function writeCallsToStore(storePath: string, calls: Record<string, unknown>[]): void {
+export async function writeCallsToStore(
+  storePath: string,
+  calls: Record<string, unknown>[],
+): Promise<void> {
   fs.mkdirSync(storePath, { recursive: true });
   for (const call of calls) {
-    persistCallRecord(storePath, CallRecordSchema.parse(call));
+    await persistCallRecord(storePath, CallRecordSchema.parse(call));
   }
-}
-
-export function writeLegacyCallsJsonl(storePath: string, calls: Record<string, unknown>[]): void {
-  fs.mkdirSync(storePath, { recursive: true });
-  const logPath = path.join(storePath, "calls.jsonl");
-  const lines = calls.map((c) => JSON.stringify(c)).join("\n") + "\n";
-  fs.writeFileSync(logPath, lines);
 }
 
 export function makePersistedCall(
@@ -156,6 +205,7 @@ export function makePersistedCall(
     providerCallId: `prov-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     provider: "plivo",
     direction: "outbound",
+    agentId: "main",
     state: "answered",
     from: "+15550000000",
     to: "+15550000001",
@@ -171,19 +221,17 @@ export const EVENT_MANAGER_REPLAY_KEY_LIMIT = 10_000;
 
 export function createEventManagerHarness() {
   const contexts: CallManagerContext[] = [];
+  const pendingWork = new Set<Promise<unknown>>();
 
   function installStateRuntime(shouldFail?: () => boolean): void {
     setVoiceCallStateRuntime({
       state: {
         resolveStateDir: () => "",
-        openKeyedStore: (() => {
-          throw new Error("openKeyedStore is not used by voice-call event tests");
-        }) as never,
-        openSyncKeyedStore: (options: OpenKeyedStoreOptions) => {
+        openKeyedStore: (options: OpenAsyncKeyedStoreOptions) => {
           if (shouldFail?.()) {
             throw new Error("synthetic SQLite persistence failure");
           }
-          return createPluginStateSyncKeyedStoreForTests("voice-call", options);
+          return createPluginStateKeyedStoreForTests("voice-call", options);
         },
         openChannelIngressQueue: (() => {
           throw new Error("openChannelIngressQueue is not used by voice-call event tests");
@@ -200,16 +248,28 @@ export function createEventManagerHarness() {
     installStateRuntime();
   }
 
-  function cleanup(): void {
-    for (const ctx of contexts.splice(0)) {
+  async function cleanup(): Promise<void> {
+    const ownedContexts = contexts.splice(0);
+    for (const ctx of ownedContexts) {
       for (const timer of ctx.maxDurationTimers.values()) {
         clearTimeout(timer);
       }
       ctx.maxDurationTimers.clear();
+      for (const timer of ctx.notifyHangupTimers.values()) {
+        clearTimeout(timer);
+      }
+      ctx.notifyHangupTimers.clear();
       for (const waiter of ctx.transcriptWaiters.values()) {
         clearTimeout(waiter.timeout);
+        waiter.reject(new Error("Voice-call test finished"));
       }
       ctx.transcriptWaiters.clear();
+    }
+    while (pendingWork.size > 0) {
+      await Promise.allSettled(pendingWork);
+    }
+    await closeOpenClawStateDatabaseAsync();
+    for (const ctx of ownedContexts) {
       fs.rmSync(ctx.storePath, { recursive: true, force: true });
     }
     resetPluginStateStoreForTests();
@@ -221,7 +281,7 @@ export function createEventManagerHarness() {
       activeCalls: new Map(),
       providerCallIdMap: new Map(),
       processedEventIds: new Set(),
-      rejectedProviderCallIds: new Map(),
+      rejectedProviderCallIds: new Set(),
       provider: null,
       config: VoiceCallConfigSchema.parse({
         enabled: true,
@@ -235,6 +295,15 @@ export function createEventManagerHarness() {
       transcriptWaiters: new Map(),
       maxDurationTimers: new Map(),
       initialMessageInFlight: new Set(),
+      notifyHangupTimers: new Map(),
+      isStopping: () => false,
+      mutationQueue: new KeyedAsyncQueue(),
+      pendingCallAdmissions: new Set(),
+      trackCallWork(work) {
+        pendingWork.add(work);
+        const remove = () => pendingWork.delete(work);
+        void work.then(remove, remove);
+      },
       ...overrides,
     };
     contexts.push(ctx);

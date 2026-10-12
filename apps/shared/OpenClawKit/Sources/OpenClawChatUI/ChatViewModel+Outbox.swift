@@ -178,18 +178,23 @@ extension OpenClawChatViewModel {
 
     @discardableResult
     func reconcileOutboxBranchScope(
-        _ session: SessionSnapshot,
+        _ scope: OpenClawChatOutboxScope?,
         branches: [OpenClawChatSessionBranch],
         previousState: OpenClawChatOutboxBranchState?,
-        connectionGeneration: UInt64) async -> Bool
+        capturedSession: SessionSnapshot? = nil) async -> Bool
     {
-        guard let outbox, let scope = self.outboxBranchScope(for: session), let previousState,
-              connectionGeneration == self.outboxBranchConnectionGeneration
-        else { return self.outbox == nil }
+        guard let outbox, let scope, let previousState else { return self.outbox == nil }
         let activeLeaf: String? = branches.isEmpty ? nil : Self.activeBranchLeafEntryID(in: branches)
         guard branches.isEmpty || activeLeaf != nil else { return false }
         let leaves = Set(branches.map(\.leafEntryId).filter { !$0.isEmpty })
-        let activeTranscriptEntryIDs = self.isCurrentSession(session)
+        // Bootstrap pins one presentation; background replay follows a matching visible scope.
+        func visibleSession() -> SessionSnapshot? {
+            let session = capturedSession ?? self.currentSessionSnapshot()
+            let isVisible = capturedSession.map(self.isCurrentSession)
+                ?? (self.outboxBranchScope(for: session) == scope)
+            return isVisible ? session : nil
+        }
+        let activeTranscriptEntryIDs = visibleSession() != nil
             ? Set(self.messages.compactMap(\.transcriptMessageID))
             : []
         guard let commands = await outbox.reconcileBranchScope(
@@ -201,7 +206,7 @@ extension OpenClawChatViewModel {
             lastError: "Session branch changed; review and retry this message.")
         else { return false }
         self.reconciledOutboxBranchScopes.insert(scope)
-        if self.isCurrentSession(session) {
+        if let session = visibleSession() {
             self.presentOutboxCommands(commands.filter { self.commandMatchesTarget($0, session: session) })
         }
         return true
@@ -228,28 +233,10 @@ extension OpenClawChatViewModel {
                     let response = try await self.requestSessionBranchListing(
                         sessionKey: command.deliverySessionKey,
                         agentID: command.agentID)
-                    let activeLeaf: String? = response.branches.isEmpty ? nil : Self
-                        .activeBranchLeafEntryID(in: response.branches)
-                    guard response.branches.isEmpty || activeLeaf != nil else { continue }
-                    let leaves = Set(response.branches.map(\.leafEntryId).filter { !$0.isEmpty })
-                    let activeTranscriptEntryIDs = self.outboxBranchScope(for: self.currentSessionSnapshot()) == scope
-                        ? Set(self.messages.compactMap(\.transcriptMessageID))
-                        : []
-                    guard let reconciled = await outbox.reconcileBranchScope(
+                    _ = await self.reconcileOutboxBranchScope(
                         scope,
-                        previousState: state,
-                        activeLeafEntryID: activeLeaf,
-                        branchLeafEntryIDs: leaves,
-                        activeTranscriptEntryIDs: activeTranscriptEntryIDs,
-                        lastError: "Session branch changed; review and retry this message.")
-                    else { continue }
-                    self.reconciledOutboxBranchScopes.insert(scope)
-                    let visible = self.currentSessionSnapshot()
-                    if self.outboxBranchScope(for: visible) == scope {
-                        self
-                            .presentOutboxCommands(reconciled
-                                .filter { self.commandMatchesTarget($0, session: visible) })
-                    }
+                        branches: response.branches,
+                        previousState: state)
                 } catch {
                     if Self.branchListingIsUnsupported(error) {
                         self.reconciledOutboxBranchScopes.insert(scope)
@@ -263,12 +250,6 @@ extension OpenClawChatViewModel {
     func invalidateOutboxBranchReconciliation() {
         self.outboxBranchConnectionGeneration &+= 1
         self.reconciledOutboxBranchScopes.removeAll()
-        self.reconcilingOutboxBranchScopes.removeAll()
-        for task in self.outboxBranchReconcileRetryTasks.values {
-            task.cancel()
-        }
-        self.outboxBranchReconcileRetryTasks.removeAll()
-        self.outboxBranchReconcileRetryAttempts.removeAll()
     }
 
     /// Tap-to-retry for a failed command: reset attempts, refresh createdAt
@@ -294,6 +275,7 @@ extension OpenClawChatViewModel {
                 self.errorText = "Reconnect to verify this message's delivery target before retrying."
                 return
             }
+            let expectedSessionSettings = self.durableSessionSettingsExpectation()
             let result = await outbox.markCommandRetriedIfPresent(
                 id: commandID,
                 expectation: OpenClawChatOutboxRetryExpectation(
@@ -303,6 +285,7 @@ extension OpenClawChatViewModel {
                 agentID: agentID,
                 deliverySessionKey: deliverySessionKey,
                 routingContract: routingContract,
+                expectedSessionSettings: expectedSessionSettings,
                 replacementID: UUID().uuidString)
             if result == .updated {
                 // Durable work is gateway-global. Flush even when the visible
@@ -400,12 +383,17 @@ extension OpenClawChatViewModel {
         }
         // Capture the effective value only after model selection settles. Raw
         // preferences can outlive this process, when model metadata is absent.
-        await self.waitForPendingSessionSettings(
+        if let settingsError = await self.waitForCapabilitySettingsBarrier(
             in: session.key,
             canonicalSessionKey: deliverySessionKey,
             agentID: agentID,
             sessionRoutingContract: routingContract)
+        {
+            self.errorText = settingsError
+            return false
+        }
         guard self.isCurrentSession(session) else { return false }
+        let expectedSessionSettings = self.durableSessionSettingsExpectation()
         let thinking = self.effectiveThinkingLevelForSend(
             self.preferredThinkingLevel,
             sessionKey: session.key,
@@ -428,11 +416,15 @@ extension OpenClawChatViewModel {
                     durationSeconds: $0.durationSeconds)
             },
             thinking: thinking,
+            expectedSessionSettings: expectedSessionSettings,
             createdAt: Date().timeIntervalSince1970,
             status: .queued,
             retryCount: 0,
             lastError: nil)
         await self.waitForBootstrapOutboxBranchCapture(for: session)
+        // Recheck restored or stale drafts before durable admission; an oversized
+        // row would otherwise retry the same connection-closing frame after reconnect.
+        guard await self.validateAttachmentBudgetForSend(draftAttachments, session: session) else { return false }
         let accepted = await outbox.enqueueCommand(command)
         guard accepted else {
             if self.isCurrentSession(session) {
@@ -471,6 +463,7 @@ extension OpenClawChatViewModel {
         thinking: String,
         messageID: UUID,
         session: SessionSnapshot,
+        expectedSessionSettings: OpenClawChatSessionSettingsExpectation,
         deliveryIsAmbiguous: Bool) async -> Bool
     {
         guard let outbox else { return false }
@@ -487,6 +480,7 @@ extension OpenClawChatViewModel {
             agentID: agentID,
             text: text,
             thinking: thinking,
+            expectedSessionSettings: expectedSessionSettings,
             createdAt: Date().timeIntervalSince1970,
             status: deliveryIsAmbiguous ? .failed : .queued,
             retryCount: 0,
@@ -521,11 +515,12 @@ extension OpenClawChatViewModel {
 
     /// Re-adopts or re-appends queued bubbles for the visible session after
     /// cold open, session switches, and wholesale history replacement.
-    func restoreOutboxMessages(session: SessionSnapshot) {
-        guard let outbox else { return }
-        Task { [weak self] in
+    @discardableResult
+    func restoreOutboxMessages(session: SessionSnapshot) -> Task<Void, Never>? {
+        guard !self.usesWebConversation, let outbox else { return nil }
+        return Task { [weak self] in
             guard let self else { return }
-            guard await self.recoverInterruptedOutboxSendsIfNeeded() else { return }
+            guard await outbox.recoverInterruptedSends() else { return }
             while self.isCurrentSession(session) {
                 let presentationGeneration = self.outboxPresentationGeneration
                 guard let commands = await outbox.loadCommandsIfAvailable() else { return }
@@ -561,7 +556,7 @@ extension OpenClawChatViewModel {
     func confirmOutboxCommandsNow(in messages: [OpenClawChatMessage]) async {
         self.observeCanonicalOutboxMessageKeys(in: messages)
         guard let outbox else { return }
-        let confirmedKeys = Set(messages.compactMap { Self.normalizedIdempotencyKey($0.idempotencyKey) })
+        let confirmedKeys = Set(messages.compactMap { ChatPayloadDecoding.trimmedNonEmptyString($0.idempotencyKey) })
         guard !confirmedKeys.isEmpty else { return }
         let commands = await outbox.loadCommands().filter { command in
             // Command UUIDs are gateway-global. Match the durable identity,
@@ -570,7 +565,7 @@ extension OpenClawChatViewModel {
         }
         for command in commands {
             if let canonicalMessage = messages.first(where: {
-                Self.normalizedIdempotencyKey($0.idempotencyKey) ==
+                ChatPayloadDecoding.trimmedNonEmptyString($0.idempotencyKey) ==
                     Self.outboxUserIdempotencyKey(command.id)
             }) {
                 await self.persistCanonicalOutboxEvidence(canonicalMessage, for: command)
@@ -586,7 +581,7 @@ extension OpenClawChatViewModel {
         _ message: OpenClawChatMessage,
         for command: OpenClawChatOutboxCommand) async
     {
-        guard let transcriptCache = transcriptCache as? any OpenClawChatCanonicalTranscriptMerging else { return }
+        guard let transcriptCache = transcriptCache as? OpenClawChatSQLiteTranscriptCache else { return }
         let sessionKey = command.sessionKey
         let cacheAgentID = Self.transcriptCacheAgentID(
             sessionKey: sessionKey,
@@ -624,6 +619,9 @@ extension OpenClawChatViewModel {
     /// that already carry the command's user idempotency key from an earlier
     /// restore, and refreshes their display states.
     private func presentOutboxCommands(_ commands: [OpenClawChatOutboxCommand]) {
+        // Queue custody is Gateway-wide; a web pane only retires this window's
+        // native transcript projection, not delivery for other conversations.
+        guard !self.usesWebConversation else { return }
         self.pruneOutboxMappings()
         guard !commands.isEmpty else { return }
         var next = self.messages
@@ -643,19 +641,14 @@ extension OpenClawChatViewModel {
 
     private static func outboxUserMessage(for command: OpenClawChatOutboxCommand) -> OpenClawChatMessage {
         var content = [
-            OpenClawChatMessageContent(
-                type: "text",
-                text: command.text,
-                mimeType: nil,
-                fileName: nil,
-                content: nil),
+            OpenClawChatMessageContent(type: "text", text: command.text),
         ]
         content.append(contentsOf: command.attachments.map { attachment in
             OpenClawChatMessageContent(
                 type: attachment.type,
-                text: nil,
                 mimeType: attachment.mimeType,
                 fileName: attachment.fileName,
+                sizeBytes: attachment.data.count,
                 durationSeconds: attachment.durationSeconds,
                 content: AnyCodable(attachment.data.base64EncodedString()))
         })
@@ -719,6 +712,11 @@ extension OpenClawChatViewModel {
     func applyTransportHealth(_ ok: Bool, refreshSessionsOnReconnect: Bool = true) {
         let wasHealthy = self.healthOK
         self.healthOK = ok
+        if !ok {
+            self.resetSessionReactions()
+        } else if !wasHealthy {
+            self.syncSessionReactions(refreshMetadata: refreshSessionsOnReconnect)
+        }
         if !ok, wasHealthy || self.hasCurrentSessionMetadata {
             self.invalidateSessionMetadataReadiness()
         }
@@ -740,18 +738,17 @@ extension OpenClawChatViewModel {
         // Health is intentionally established before sessions.list. Replays
         // need the current connection's model/runtime metadata first.
         guard self.hasCurrentSessionMetadata else { return }
-        guard !self.isFlushingOutbox else {
+        guard self.outboxFlushTask == nil else {
             // Coalesce triggers that land mid-pass (tap-to-retry, enqueue
             // race) so their commands are not stranded until the next
             // health transition.
             self.isOutboxFlushRequestedWhileActive = true
             return
         }
-        self.isFlushingOutbox = true
-        Task { [weak self] in
+        self.outboxFlushTask = Task { [weak self] in
             await self?.performOutboxFlush()
             guard let self else { return }
-            self.isFlushingOutbox = false
+            self.outboxFlushTask = nil
             if self.isOutboxFlushRequestedWhileActive {
                 self.isOutboxFlushRequestedWhileActive = false
                 self.flushOutboxIfNeeded()
@@ -798,7 +795,7 @@ extension OpenClawChatViewModel {
             self.applyTransportHealth(false)
             return
         }
-        guard await self.recoverInterruptedOutboxSendsIfNeeded() else {
+        guard await outbox.recoverInterruptedSends() else {
             self.applyTransportHealth(false)
             return
         }
@@ -826,28 +823,21 @@ extension OpenClawChatViewModel {
                 break
             }
             guard next.branchEpoch == next.scopeBranchEpoch else {
-                _ = await outbox.markCommandFailedIfPresent(
-                    id: next.id,
-                    attemptVersion: next.attemptVersion,
+                _ = await self.failOutboxCommand(
+                    next,
+                    outbox: outbox,
                     retryCount: next.retryCount,
-                    lastError: "Session branch changed; review and retry this message.")
+                    reason: "Session branch changed; review and retry this message.")
                 continue
             }
             if self.transport.outboxRequiresSessionRoutingContract,
                next.routingContract != routeLease.sessionRoutingContract
             {
-                guard await self.parkOutboxCommandForChangedTarget(next, outbox: outbox) else { break }
+                guard await self.parkOutboxCommand(
+                    next, outbox: outbox, reason: OpenClawChatSQLiteTranscriptCache.outboxChangedTargetError)
+                else { break }
                 continue
             }
-            // Same ordering contract as the live send path: a run must not
-            // start with stale model or thinking state while a settings patch
-            // for its session is still in flight.
-            await self.waitForPendingSessionSettings(
-                in: next.sessionKey,
-                canonicalSessionKey: next.deliverySessionKey,
-                agentID: next.agentID,
-                sessionRoutingContract: next.routingContract)
-            self.setOutboxState(.sending, forCommandID: next.id)
             switch await self.deliverOutboxCommand(next, outbox: outbox, routeLease: routeLease) {
             case .continueFlush:
                 continue
@@ -873,10 +863,48 @@ extension OpenClawChatViewModel {
         outbox: any OpenClawChatCommandOutbox,
         routeLease: OpenClawChatTransportRouteLease) async -> OutboxFlushDisposition
     {
+        // A failed capability mutation must not release a queued message under
+        // the previous, broader authority. Return the claim to the queue until
+        // the operator successfully saves new settings or changes sessions.
+        if let settingsError = await self.waitForCapabilitySettingsBarrier(
+            in: command.sessionKey,
+            canonicalSessionKey: command.deliverySessionKey,
+            agentID: command.agentID,
+            sessionRoutingContract: command.routingContract)
+        {
+            _ = await self.failOutboxCommand(
+                command,
+                outbox: outbox,
+                retryCount: command.retryCount,
+                reason: settingsError)
+            self.errorText = settingsError
+            return .stop
+        }
+        let settingsFailure: String? = if self.transport.outboxRequiresSessionRoutingContract,
+                                          !routeLease.supportsSessionSettingsCAS
+        {
+            OpenClawChatSQLiteTranscriptCache.outboxSettingsGatewayUpgradeRequiredError
+        } else if routeLease.supportsSessionSettingsCAS, command.expectedSessionSettings == nil {
+            OpenClawChatSQLiteTranscriptCache.outboxSettingsReviewRequiredError
+        } else {
+            nil
+        }
+        if let reason = settingsFailure {
+            let message = OpenClawChatSQLiteTranscriptCache.outboxDisplayError(reason)
+            let update = await self.failOutboxCommand(
+                command,
+                outbox: outbox,
+                retryCount: command.retryCount,
+                reason: reason)
+            self.errorText = message
+            return update == .unavailable ? .stop : .continueFlush
+        }
+        self.setOutboxState(.sending, forCommandID: command.id)
         do {
             let response = try await routeLease.sendMessage(
                 sessionKey: command.deliverySessionKey,
                 agentID: command.agentID,
+                expectedSessionSettings: command.expectedSessionSettings,
                 message: command.text,
                 // Preserve the queued level when supported, but never send an
                 // explicit unsupported level after the gate changes.
@@ -906,7 +934,7 @@ extension OpenClawChatViewModel {
         } catch is OpenClawChatTransportSendError {
             // The transport proved this payload never reached its request
             // channel, so it is safe to retry automatically.
-            await outbox.markCommandQueued(
+            _ = await outbox.markCommandQueued(
                 id: command.id,
                 attemptVersion: command.attemptVersion,
                 retryCount: command.retryCount,
@@ -920,7 +948,13 @@ extension OpenClawChatViewModel {
             return await self.stopAfterUnconfirmedDelivery(command, outbox: outbox)
         } catch let error as GatewayResponseError {
             if error.detailsReason == OpenClawChatSessionRoutingContract.changedErrorReason {
-                let parked = await self.parkOutboxCommandForChangedTarget(command, outbox: outbox)
+                let parked = await self.parkOutboxCommand(
+                    command, outbox: outbox, reason: OpenClawChatSQLiteTranscriptCache.outboxChangedTargetError)
+                return parked ? .continueFlush : .stop
+            }
+            if error.detailsReason == OpenClawChatSessionSettingsContract.changedErrorReason {
+                let parked = await self.parkOutboxCommand(
+                    command, outbox: outbox, reason: OpenClawChatSQLiteTranscriptCache.outboxSettingsChangedError)
                 return parked ? .continueFlush : .stop
             }
             // A response error proves the gateway rejected the request; unlike
@@ -966,23 +1000,15 @@ extension OpenClawChatViewModel {
         return .continueAndReconcile(Self.deliveryTarget(for: command))
     }
 
-    private func outboxRejectionDisposition(
-        _ command: OpenClawChatOutboxCommand,
-        outbox: any OpenClawChatCommandOutbox,
-        reason: String) async -> OutboxFlushDisposition
-    {
-        let canContinue = await self.recordOutboxRejection(
-            of: command,
-            outbox: outbox,
-            reason: reason)
-        return canContinue ? .continueFlush : .stop
-    }
-
     private func stopAfterUnconfirmedDelivery(
         _ command: OpenClawChatOutboxCommand,
         outbox: any OpenClawChatCommandOutbox) async -> OutboxFlushDisposition
     {
-        let update = await self.parkOutboxCommandWithUnconfirmedDelivery(command, outbox: outbox)
+        let update = await self.failOutboxCommand(
+            command,
+            outbox: outbox,
+            retryCount: command.retryCount,
+            reason: OpenClawChatSQLiteTranscriptCache.outboxUnconfirmedError)
         self.applyTransportHealth(false)
         guard update == .updated else { return .stop }
         return .stopAndReconcile(Self.deliveryTarget(for: command))
@@ -1001,23 +1027,29 @@ extension OpenClawChatViewModel {
             agentID: command.agentID)
     }
 
-    private func parkOutboxCommandWithUnconfirmedDelivery(
+    private func failOutboxCommand(
         _ command: OpenClawChatOutboxCommand,
-        outbox: any OpenClawChatCommandOutbox) async -> OpenClawChatOutboxUpdateResult
+        outbox: any OpenClawChatCommandOutbox,
+        retryCount: Int,
+        reason: String) async -> OpenClawChatOutboxUpdateResult
     {
         let update = await outbox.markCommandFailedIfPresent(
             id: command.id,
             attemptVersion: command.attemptVersion,
-            retryCount: command.retryCount,
-            lastError: OpenClawChatSQLiteTranscriptCache.outboxUnconfirmedError)
+            retryCount: retryCount,
+            lastError: reason)
         switch update {
         case .updated:
-            self.setOutboxState(
-                .failed(reason: OpenClawChatSQLiteTranscriptCache.outboxUnconfirmedError),
-                forCommandID: command.id)
-        case .missing, .confirmed:
-            self.clearOutboxState(forCommandID: command.id)
-        case .superseded:
+            if let messageID = self.outboxMessageIDsByCommandID[command.id] {
+                // The retry action needs the same failed version as its badge;
+                // history may stay unavailable after this durable transition.
+                var failed = command
+                failed.status = .failed
+                failed.retryCount = retryCount
+                failed.lastError = reason
+                self.mapOutboxCommand(failed, to: messageID)
+            }
+        case .missing, .confirmed, .superseded:
             self.clearOutboxState(forCommandID: command.id)
         case .unavailable:
             self.applyTransportHealth(false)
@@ -1025,58 +1057,36 @@ extension OpenClawChatViewModel {
         return update
     }
 
-    private func parkOutboxCommandForChangedTarget(
+    private func parkOutboxCommand(
         _ command: OpenClawChatOutboxCommand,
-        outbox: any OpenClawChatCommandOutbox) async -> Bool
+        outbox: any OpenClawChatCommandOutbox,
+        reason: String) async -> Bool
     {
-        let update = await outbox.markCommandFailedIfPresent(
-            id: command.id,
-            attemptVersion: command.attemptVersion,
+        await self.failOutboxCommand(
+            command,
+            outbox: outbox,
             retryCount: command.retryCount,
-            lastError: OpenClawChatSQLiteTranscriptCache.outboxChangedTargetError)
-        guard update != .unavailable else {
-            self.applyTransportHealth(false)
-            return false
-        }
-        if update == .updated {
-            let reason = "Gateway session routing changed; review and retry this message."
-            self.setOutboxState(.failed(reason: reason), forCommandID: command.id)
-        } else {
-            self.clearOutboxState(forCommandID: command.id)
-        }
-        return true
+            reason: reason) != .unavailable
     }
 
     /// Gateway rejections ("error"/"timeout" send acks) burn a retry attempt
-    /// and become terminally 'failed' after `maxOutboxSendAttempts`. Returns
-    /// true when the flush pass may continue with younger commands.
-    private func recordOutboxRejection(
-        of command: OpenClawChatOutboxCommand,
+    /// and become terminally 'failed' after `maxOutboxSendAttempts`.
+    private func outboxRejectionDisposition(
+        _ command: OpenClawChatOutboxCommand,
         outbox: any OpenClawChatCommandOutbox,
-        reason: String) async -> Bool
+        reason: String) async -> OutboxFlushDisposition
     {
         outboxLogger.error("outbox flush send rejected \(reason, privacy: .public)")
         let attempts = command.retryCount + 1
         if attempts >= Self.maxOutboxSendAttempts {
-            let update = await outbox.markCommandFailedIfPresent(
-                id: command.id,
-                attemptVersion: command.attemptVersion,
-                retryCount: attempts,
-                lastError: reason)
-            guard update != .unavailable else {
-                self.applyTransportHealth(false)
-                return false
-            }
-            if update == .updated {
-                self.setOutboxState(.failed(reason: reason), forCommandID: command.id)
-            } else {
-                // Canonical history may have removed the claimed row while
-                // the rejection was in flight.
-                self.clearOutboxState(forCommandID: command.id)
-            }
             // Terminal failure needs user action; let younger commands
             // flush instead of blocking behind it forever.
-            return true
+            let update = await self.failOutboxCommand(
+                command,
+                outbox: outbox,
+                retryCount: attempts,
+                reason: reason)
+            return update == .unavailable ? .stop : .continueFlush
         }
         _ = await outbox.markCommandQueued(
             id: command.id,
@@ -1087,42 +1097,27 @@ extension OpenClawChatViewModel {
         // Strict createdAt ordering: never skip ahead of a command that
         // still has retries left.
         self.scheduleOutboxRetry(afterAttempts: attempts)
-        return false
+        return .stop
     }
 
     private func scheduleOutboxRetry(afterAttempts attempts: Int) {
         let delays = self.outboxRetryDelaysMs
-        guard !delays.isEmpty else {
-            self.outboxRetryTask?.cancel()
-            self.outboxRetryTask = Task { [weak self] in
-                await Task.yield()
-                self?.flushOutboxIfNeeded()
-            }
-            return
-        }
-        let delayMs = delays[min(max(attempts - 1, 0), delays.count - 1)]
+        let delayMs = delays.isEmpty ? nil : delays[min(max(attempts - 1, 0), delays.count - 1)]
         self.outboxRetryTask?.cancel()
         self.outboxRetryTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: delayMs * 1_000_000)
-            guard !Task.isCancelled else { return }
+            if let delayMs {
+                try? await Task.sleep(nanoseconds: delayMs * 1_000_000)
+                guard !Task.isCancelled else { return }
+            } else {
+                await Task.yield()
+            }
             self?.flushOutboxIfNeeded()
         }
     }
 
-    private func recoverInterruptedOutboxSendsIfNeeded() async -> Bool {
-        guard let outbox else { return false }
-        // The store owns the once-per-process gate so overlapping/replacement
-        // view models cannot reset another active sender's claim.
-        return await outbox.recoverInterruptedSends()
-    }
-
     func outboxAgentID(for session: SessionSnapshot) -> String? {
-        guard self.transport.outboxRequiresSessionRoutingContract else { return nil }
-        if session.key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "unknown" {
-            return nil
-        }
-        let normalized = session.deliveryAgentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return normalized?.isEmpty == false ? normalized : nil
+        guard self.outboxRequiresAgentID(for: session) else { return nil }
+        return ChatPayloadDecoding.trimmedNonEmptyString(session.deliveryAgentID)?.lowercased()
     }
 
     private func outboxRequiresAgentID(for session: SessionSnapshot) -> Bool {
@@ -1134,9 +1129,7 @@ extension OpenClawChatViewModel {
         if !self.transport.outboxRequiresSessionRoutingContract {
             return OpenClawChatOutboxCommand.legacyUnboundRoutingContract
         }
-        let normalized = session.sessionRoutingContract?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return normalized?.isEmpty == false ? normalized : nil
+        return ChatPayloadDecoding.trimmedNonEmptyString(session.sessionRoutingContract)
     }
 
     /// Resolve once, before persistence. Re-resolving a presentation alias
@@ -1212,9 +1205,10 @@ extension OpenClawChatViewModel {
             self.clearOutboxState(forCommandID: commandID)
         case let .invalidated(_, scope):
             let session = self.currentSessionSnapshot()
-            guard self.outboxBranchScope(for: session) == scope else { return }
+            guard self.usesWebConversation || self.outboxBranchScope(for: session) == scope else { return }
             self.reconciledOutboxBranchScopes.remove(scope)
             self.restoreOutboxMessages(session: session)
+            if self.usesWebConversation { self.reconcilePendingOutboxBranchScopes() }
         }
     }
 
@@ -1235,6 +1229,8 @@ extension OpenClawChatViewModel {
             .sending
         case .awaitingConfirmation:
             .confirming
+        case .failed where command.lastError == OpenClawChatSQLiteTranscriptCache.outboxChangedTargetError:
+            .failed(reason: "Gateway session routing changed; review and retry this message.")
         case .failed:
             .failed(reason: OpenClawChatSQLiteTranscriptCache.outboxDisplayError(command.lastError))
         }

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { Dispatcher } from "undici";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { hasProviderTransportDispatcherPool } from "../../agents/provider-runtime-lifecycle.js";
@@ -37,14 +38,12 @@ describe("PinnedDispatcherPool", () => {
 
     const first = pool.acquire({
       key: "origin-a/pin-a",
-      groupKey: "origin-a",
       createDispatcher: create,
     });
     expect(first?.reused).toBe(false);
     await first?.release();
     const second = pool.acquire({
       key: "origin-a/pin-a",
-      groupKey: "origin-a",
       createDispatcher: create,
     });
 
@@ -58,18 +57,16 @@ describe("PinnedDispatcherPool", () => {
     expect(created.close).toHaveBeenCalledOnce();
   });
 
-  it("retires a changed pin without closing its active lease and owns it through shutdown", async () => {
+  it("keeps separate active pins open through shutdown", async () => {
     const pool = new PinnedDispatcherPool({ maxEntries: 2, idleTtlMs: 60_000 });
     const oldDispatcher = createDispatcher();
     const nextDispatcher = createDispatcher();
     const oldLease = pool.acquire({
       key: "origin-a/pin-a",
-      groupKey: "origin-a",
       createDispatcher: () => oldDispatcher.dispatcher,
     });
     const nextLease = pool.acquire({
       key: "origin-a/pin-b",
-      groupKey: "origin-a",
       createDispatcher: () => nextDispatcher.dispatcher,
     });
 
@@ -90,14 +87,12 @@ describe("PinnedDispatcherPool", () => {
     const firstDispatcher = createDispatcher();
     const first = pool.acquire({
       key: "origin-a/pin-a",
-      groupKey: "origin-a",
       createDispatcher: () => firstDispatcher.dispatcher,
     });
     const secondFactory = vi.fn(() => createDispatcher().dispatcher);
 
     const second = pool.acquire({
       key: "origin-b/pin-b",
-      groupKey: "origin-b",
       createDispatcher: secondFactory,
     });
 
@@ -114,7 +109,6 @@ describe("PinnedDispatcherPool", () => {
     const created = createDispatcher();
     const lease = pool.acquire({
       key: "origin-a/pin-a",
-      groupKey: "origin-a",
       createDispatcher: () => created.dispatcher,
     });
     await lease?.release();
@@ -127,14 +121,54 @@ describe("PinnedDispatcherPool", () => {
     await pool.closeAll();
   });
 
+  it.each(["expiry", "shutdown"] as const)(
+    "keeps request contexts out of pool-owned %s cleanup",
+    async (reason) => {
+      const requestScope = new AsyncLocalStorage<object>();
+      const sessionScope = new AsyncLocalStorage<object>();
+      const request = {};
+      const session = {};
+      const closed = createDeferredCore<[object | undefined, object | undefined]>();
+      const close = vi.fn(async () => {
+        closed.resolve([requestScope.getStore(), sessionScope.getStore()]);
+      });
+      let pool: PinnedDispatcherPool | undefined;
+      try {
+        await requestScope.run(request, () =>
+          sessionScope.run(session, async () => {
+            pool = new PinnedDispatcherPool({ maxEntries: 1, idleTtlMs: 5 });
+            const lease = pool.acquire({
+              key: "origin-a/pin-a",
+              createDispatcher: () => {
+                expect(requestScope.getStore()).toBe(request);
+                expect(sessionScope.getStore()).toBe(session);
+                return { close } as unknown as Dispatcher;
+              },
+            });
+            expect(lease).toBeDefined();
+            if (reason === "shutdown") {
+              await pool.closeAll();
+            } else {
+              await lease!.release();
+            }
+            expect(requestScope.getStore()).toBe(request);
+            expect(sessionScope.getStore()).toBe(session);
+          }),
+        );
+        expect(await closed.promise).toEqual([undefined, undefined]);
+        expect(close).toHaveBeenCalledOnce();
+      } finally {
+        await pool?.closeAll();
+      }
+    },
+  );
+
   it("fences a closed generation from later acquisition", async () => {
     const pool = new PinnedDispatcherPool({ maxEntries: 1, idleTtlMs: 60_000 });
     await pool.closeAll();
 
     const create = vi.fn(() => createDispatcher().dispatcher);
-    expect(
-      pool.acquire({ key: "origin-a/pin-a", groupKey: "origin-a", createDispatcher: create }),
-    ).toBeUndefined();
+    expect(pool.acquire({ key: "origin-a/pin-a", createDispatcher: create })).toBeUndefined();
     expect(create).not.toHaveBeenCalled();
   });
 
@@ -143,7 +177,6 @@ describe("PinnedDispatcherPool", () => {
     const pool = getProviderTransportDispatcherPool();
     const lease = pool.acquire({
       key: "origin-a/pin-a",
-      groupKey: "origin-a",
       createDispatcher: () => ({ close: vi.fn(() => close.promise) }) as unknown as Dispatcher,
     });
 
@@ -153,7 +186,6 @@ describe("PinnedDispatcherPool", () => {
       expect(
         pool.acquire({
           key: "origin-b/pin-b",
-          groupKey: "origin-b",
           createDispatcher: () => createDispatcher().dispatcher,
         }),
       ).toBeUndefined();

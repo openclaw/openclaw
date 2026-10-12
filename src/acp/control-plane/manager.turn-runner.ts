@@ -1,69 +1,64 @@
-/** Runs ACP turns, failover, timeout cleanup, and detached-task progress mirroring. */
 import type { AcpRuntime, AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
+import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { expectDefined } from "@openclaw/normalization-core";
-import { logVerbose } from "../../globals.js";
 import {
-  recordSessionHumanDirectMessage,
-  recordSubagentTerminalState,
-} from "../../sessions/session-state-events.js";
+  assertOperatorModelAllowed,
+  bindOperatorModelExecution,
+  readAdmittedRunOperatorAuthority,
+  resolveAdmittedRunActiveAssertion,
+} from "../../agents/admitted-run-context.js";
+import { normalizeModelRef } from "../../agents/model-ref-shared.js";
+import { logVerbose } from "../../globals.js";
+import { getProcessGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-state.js";
+import { recordSessionHumanDirectMessage } from "../../sessions/session-state-events.js";
+import { recordSubagentTerminalState } from "../../sessions/subagent-terminal-state.js";
 import { AcpRuntimeError, formatAcpErrorChain, toAcpRuntimeError } from "../runtime/errors.js";
-import { clearAcpTurnActive, markAcpTurnActive } from "./active-turns.js";
+import { markAcpTurnActive } from "./active-turns.js";
+import type { AcceptedTurnState } from "./manager.accepted-turns.js";
 import {
   isFailoverWorthyBackendError,
   resolveBackendCandidatePlan,
-  shouldAttemptBackendFailover,
   type BackendAttempt,
 } from "./manager.backend-failover.js";
-import {
-  appendBackgroundTaskProgressSummary,
-  bindBackgroundTaskExecution,
-  createBackgroundTaskRecord,
-  markBackgroundTaskRunning,
-  markBackgroundTaskTerminal,
-  resolveBackgroundTaskContext,
-  resolveBackgroundTaskFailureStatus,
-  resolveBackgroundTaskTerminalResult,
-} from "./manager.background-task.js";
+import { cancelManagerActiveTurn } from "./manager.cancel-session.js";
+import { applyManagerRuntimeControls } from "./manager.runtime-controls.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
+import { isAcpOwnerRepairRequired } from "./manager.runtime-owner.js";
 import { prepareFreshManagerRuntimeHandleRetry } from "./manager.runtime-resume-state.js";
 import { consumeAcpTurnStream } from "./manager.turn-stream.js";
 import {
+  ACP_TURN_TIMEOUT_DETAIL_CODE,
   awaitTurnWithTimeout,
   cleanupTimedOutTurn,
   resolveTurnTimeoutMs,
 } from "./manager.turn-timeout.js";
 import type {
   AcpRunTurnInput,
-  AcpSessionManagerDeps,
   ActiveTurnState,
   EnsureManagerRuntimeHandle,
   ReconcileManagerRuntimeSessionIdentifiers,
-  ResolveManagerSession,
-  SetManagerSessionState,
+  ResolveManagerSessionAsync,
   SessionAcpMeta,
+  SetManagerSessionState,
   WriteManagerSessionMeta,
 } from "./manager.types.js";
-import { normalizeActorKey, requireReadySessionMeta } from "./manager.utils.js";
+import {
+  assertCurrentAcpActor,
+  acpSessionActorKey,
+  requireReadySessionMeta,
+} from "./manager.utils.js";
 
 const ACP_TURN_TIMEOUT_GRACE_MS = 1_000;
 
-type ApplyRuntimeControls = (params: {
-  sessionKey: string;
-  runtime: AcpRuntime;
-  handle: AcpRuntimeHandle;
-  meta: SessionAcpMeta;
-}) => Promise<void>;
-
-/** Executes one ACP prompt turn against the selected backend and records terminal state. */
 export async function runManagerTurn(params: {
   input: AcpRunTurnInput;
+  acceptedTurn: AcceptedTurnState;
   sessionKey: string;
-  deps: AcpSessionManagerDeps;
+  agentId: string;
   runtimeHandles: ManagerRuntimeHandleCache;
   activeTurnBySession: Map<string, ActiveTurnState>;
-  resolveSession: ResolveManagerSession;
+  resolveSession: ResolveManagerSessionAsync;
   ensureRuntimeHandle: EnsureManagerRuntimeHandle;
-  applyRuntimeControls: ApplyRuntimeControls;
   setSessionState: SetManagerSessionState;
   recordTurnCompletion: (params: {
     startedAt: number;
@@ -71,111 +66,187 @@ export async function runManagerTurn(params: {
   }) => void;
   reconcileRuntimeSessionIdentifiers: ReconcileManagerRuntimeSessionIdentifiers;
   writeSessionMeta: WriteManagerSessionMeta;
+  isCurrentActor: () => boolean;
 }): Promise<void> {
-  const { input, sessionKey } = params;
+  const { input, sessionKey, agentId } = params;
+  const operatorAuthority = readAdmittedRunOperatorAuthority(input.admittedRunContext);
+  const manifestPlugins = getProcessGatewayPluginMetadataSnapshot() ?? [];
+  const resolveModelRef = (model: string | undefined) => {
+    const ref = model ? parseModelCatalogRef(model) : undefined;
+    return ref
+      ? normalizeModelRef(ref.provider, ref.modelId, {
+          allowPluginNormalization: false,
+          manifestPlugins,
+        })
+      : undefined;
+  };
+  const assertModelAllowed = (model: string | undefined) =>
+    assertOperatorModelAllowed(operatorAuthority, resolveModelRef(model));
   if (input.admittedRunContext.operationalRunInstance.runId !== input.requestId) {
     throw new Error("ACP operational run instance disagrees with the admitted request");
   }
   const turnStartedAt = Date.now();
-  const actorKey = normalizeActorKey(sessionKey);
-  const taskContext =
-    input.mode === "prompt"
-      ? resolveBackgroundTaskContext({
-          deps: params.deps,
-          cfg: input.cfg,
-          sessionKey,
-          requestId: input.requestId,
-          text: input.text,
-        })
-      : null;
-  const taskRecord = taskContext
-    ? createBackgroundTaskRecord(taskContext, turnStartedAt)
-    : undefined;
-  let taskExecutionBound = false;
-  let taskProgressSummary = "";
-  const initialResolution = params.resolveSession({
-    cfg: input.cfg,
-    sessionKey,
-  });
-  const initialMeta = requireReadySessionMeta(initialResolution);
-  recordSessionHumanDirectMessage({
-    sessionKey,
-    entry: initialResolution.kind === "ready" ? initialResolution.entry : undefined,
-    actor: { actorType: input.provenance },
-    channel: "acp",
-    runId: input.requestId,
-  });
-  // ACP children bypass the subagent registry; terminal outcomes are projected into
-  // the signal log here so changesSince histories are not spawn-only for ACP runs.
-  const spawnedByWatcher =
-    initialResolution.kind === "ready"
-      ? (initialResolution.entry?.spawnedBy ?? initialResolution.entry?.parentSessionKey)
-      : undefined;
-  const { candidateBackends, describeBackendCandidate } = resolveBackendCandidatePlan({
-    configuredPrimaryBackend: input.cfg.acp?.backend,
-    resolvedPrimaryBackend: initialMeta.backend,
-    fallbackBackends: input.cfg.acp?.fallbacks,
-  });
-  const backendAttempts: BackendAttempt[] = [];
-  const recordBackendFailure = async (error: AcpRuntimeError) => {
-    const failedBackends = backendAttempts
-      .map((attempt) => `${attempt.backend}: ${attempt.error}`)
-      .join(" | ");
-    const errorToRecord =
-      backendAttempts.length > 1
-        ? new AcpRuntimeError(
-            error.code,
-            `All ACP backends failed (${backendAttempts.length}): ${failedBackends}`,
-            { detailCode: error.detailCode },
-          )
-        : error;
-    params.recordTurnCompletion({
-      startedAt: turnStartedAt,
-      errorCode: errorToRecord.code,
-    });
-    if (taskContext) {
-      const failureStatus = resolveBackgroundTaskFailureStatus(errorToRecord);
-      markBackgroundTaskTerminal(taskContext.runId, {
-        sessionKey,
-        status: failureStatus,
-        endedAt: Date.now(),
-        lastEventAt: Date.now(),
-        error: formatAcpErrorChain(errorToRecord),
-        progressSummary: taskProgressSummary || null,
-        terminalSummary: null,
-      });
-      if (spawnedByWatcher) {
-        recordSubagentTerminalState({
-          childSessionKey: sessionKey,
-          runId: taskContext.runId,
-          requesterSessionKey: spawnedByWatcher,
-          outcomeStatus: failureStatus === "timed_out" ? "timeout" : "error",
-        });
-      }
+  const actorKey = acpSessionActorKey(params);
+  const assertSignalAdmission = resolveAdmittedRunActiveAssertion(
+    input.admittedRunContext,
+    input.signal,
+  );
+  const assertActorCurrent = () => {
+    assertCurrentAcpActor(params.isCurrentActor(), sessionKey);
+  };
+  const assertCancellationCurrent = () => {
+    assertActorCurrent();
+    params.acceptedTurn.assertCancelCurrent?.();
+  };
+  const assertCancellationPublicationCurrent = () => {
+    assertActorCurrent();
+    params.acceptedTurn.assertCancelCurrent?.("publication");
+  };
+  const assertSignalCurrent = () => {
+    assertActorCurrent();
+    input.signal?.throwIfAborted();
+    assertSignalAdmission?.();
+  };
+  assertSignalCurrent();
+  // Metadata reads and signal preparation also hold restart-drain custody.
+  // Each release is fenced so a retired actor cannot erase its successor.
+  let releaseActiveTurn = markAcpTurnActive(params);
+  let spawnedByWatcher: string | undefined;
+  const recordTerminalState = async (
+    outcomeStatus: Parameters<typeof recordSubagentTerminalState>[0]["outcomeStatus"],
+    cancelling: boolean,
+  ) => {
+    if (cancelling) {
+      await params.acceptedTurn.revalidateCancel?.("publication");
+      assertCancellationPublicationCurrent();
     }
-    await params.setSessionState({
-      cfg: input.cfg,
-      sessionKey,
-      state: "error",
-      lastError: formatAcpErrorChain(errorToRecord),
-    });
-    throw errorToRecord;
+    if (spawnedByWatcher) {
+      await recordSubagentTerminalState(
+        {
+          childSessionKey: sessionKey,
+          runId: input.requestId,
+          requesterSessionKey: spawnedByWatcher,
+          outcomeStatus,
+        },
+        cancelling ? assertCancellationPublicationCurrent : assertActorCurrent,
+        cancelling ? params.acceptedTurn.cancelConstraint : undefined,
+      );
+    }
   };
 
-  let acpTurnMarkedActive = false;
-  // Liveness spans the whole task, not one attempt: mark once before the backend loop
-  // (after the ready-meta check, so a pre-loop throw cannot leak it) and clear on every
-  // runTurn exit, including unexpected retry/cleanup failures before terminal task writes.
-  if (taskContext) {
-    markAcpTurnActive(sessionKey);
-    acpTurnMarkedActive = true;
-  }
-
   try {
+    let initialResolution: Awaited<ReturnType<ResolveManagerSessionAsync>>;
+    let initialMeta: SessionAcpMeta;
+    try {
+      initialResolution = await params.resolveSession({
+        cfg: input.cfg,
+        sessionKey,
+        agentId,
+        assertCurrent: assertSignalCurrent,
+      });
+      assertSignalCurrent();
+      initialMeta = requireReadySessionMeta(initialResolution);
+      // ACP children bypass the subagent registry; retain their requester for
+      // terminal signals and admission once the native metadata read completes.
+      spawnedByWatcher =
+        initialResolution.kind === "ready"
+          ? (initialResolution.entry?.spawnedBy ?? initialResolution.entry?.parentSessionKey)
+          : undefined;
+      if (spawnedByWatcher) {
+        releaseActiveTurn = markAcpTurnActive({ ...params, ownerSessionKey: spawnedByWatcher });
+      }
+      await recordSessionHumanDirectMessage(
+        {
+          sessionKey,
+          agentId,
+          entry: initialResolution.kind === "ready" ? initialResolution.entry : undefined,
+          actor: { actorType: input.provenance },
+          channel: "acp",
+          runId: input.requestId,
+        },
+        { assertCurrent: assertSignalCurrent },
+      );
+      assertSignalCurrent();
+    } catch (error) {
+      const cancelled = input.signal?.aborted === true;
+      const acpError = toAcpRuntimeError({
+        error,
+        fallbackCode: cancelled ? "ACP_TURN_FAILED" : "ACP_SESSION_INIT_FAILED",
+        fallbackMessage: cancelled
+          ? "ACP operation aborted."
+          : "Could not prepare ACP session runtime.",
+      });
+      params.recordTurnCompletion({
+        startedAt: turnStartedAt,
+        ...(cancelled ? {} : { errorCode: acpError.code }),
+      });
+      if (spawnedByWatcher && params.isCurrentActor()) {
+        await recordTerminalState(
+          cancelled
+            ? "cancelled"
+            : acpError.detailCode === ACP_TURN_TIMEOUT_DETAIL_CODE
+              ? "timeout"
+              : "error",
+          cancelled,
+        );
+      }
+      throw acpError;
+    }
+    const { candidateBackends, describeBackendCandidate } = resolveBackendCandidatePlan({
+      configuredPrimaryBackend: input.cfg.acp?.backend,
+      resolvedPrimaryBackend: initialMeta.backend,
+      fallbackBackends: input.cfg.acp?.fallbacks,
+    });
+    const backendAttempts: BackendAttempt[] = [];
+    const recordBackendFailure = async (error: AcpRuntimeError) => {
+      assertActorCurrent();
+      const failedBackends = backendAttempts
+        .map((attempt) => `${attempt.backend}: ${attempt.error}`)
+        .join(" | ");
+      const errorToRecord =
+        backendAttempts.length > 1
+          ? new AcpRuntimeError(
+              error.code,
+              `All ACP backends failed (${backendAttempts.length}): ${failedBackends}`,
+              { detailCode: error.detailCode },
+            )
+          : error;
+      params.recordTurnCompletion({
+        startedAt: turnStartedAt,
+        errorCode: errorToRecord.code,
+      });
+      const cancelling = params.acceptedTurn.abortController.signal.aborted;
+      if (cancelling || spawnedByWatcher) {
+        await recordTerminalState(
+          errorToRecord.detailCode === ACP_TURN_TIMEOUT_DETAIL_CODE ? "timeout" : "error",
+          cancelling,
+        );
+      }
+      if (spawnedByWatcher) {
+        assertActorCurrent();
+      }
+      await params.setSessionState({
+        cfg: input.cfg,
+        sessionKey,
+        agentId,
+        isCurrentActor: params.isCurrentActor,
+        state: "error",
+        lastError: formatAcpErrorChain(errorToRecord),
+        ...(cancelling
+          ? {
+              assertCurrent: assertCancellationPublicationCurrent,
+              acpControl: params.acceptedTurn.cancelConstraint,
+            }
+          : {}),
+      });
+      throw errorToRecord;
+    };
+
     for (const [backendIdx, currentBackend] of candidateBackends.entries()) {
       if (backendIdx > 0) {
         await params.runtimeHandles.close({
           sessionKey,
+          agentId,
           reason: "backend-failover",
         });
         logVerbose(
@@ -192,67 +263,110 @@ export async function runManagerTurn(params: {
         const resolution =
           backendIdx === 0 && attempt === 0
             ? initialResolution
-            : params.resolveSession({
+            : await params.resolveSession({
                 cfg: input.cfg,
                 sessionKey,
+                agentId,
+                assertCurrent: assertSignalCurrent,
               });
+        assertSignalCurrent();
         const resolvedMeta = requireReadySessionMeta(resolution);
+        assertModelAllowed(resolvedMeta.runtimeOptions?.model);
         let runtime: AcpRuntime | undefined;
         let handle: AcpRuntimeHandle | undefined;
         let meta: SessionAcpMeta | undefined;
         let activeTurn: ActiveTurnState | undefined;
-        let internalAbortController: AbortController | undefined;
-        let onCallerAbort: (() => void) | undefined;
         let activeTurnStarted = false;
         let promptStarted = false;
         let sawTurnOutput = false;
         let retryFreshHandle = false;
         let skipPostTurnCleanup = false;
+        let modelExecution: ReturnType<typeof bindOperatorModelExecution>;
+        const onModelRevoked = () =>
+          params.acceptedTurn.abortController.abort(modelExecution?.signal.reason);
         try {
           const ensured = await params.ensureRuntimeHandle({
+            readAcpControl: () => params.acceptedTurn.cancelConstraint,
+            assertMetadataCommitAllowed: (locator) => {
+              params.acceptedTurn.assertCancelCurrent?.("publication", locator);
+            },
             cfg: input.cfg,
             sessionKey,
+            agentId,
             meta: resolvedMeta,
             selectedBackend: currentBackend,
+            isCurrentActor: params.isCurrentActor,
           });
+          assertActorCurrent();
           runtime = ensured.runtime;
           handle = ensured.handle;
+          // Retain the actual handle through policy failure and final identity publication.
+          params.acceptedTurn.runtimeHandle = handle;
           meta = ensured.meta;
-          await params.applyRuntimeControls({
-            sessionKey,
+          let appliedModel = handle.appliedModel
+            ? handle.appliedModel.kind === "applied"
+              ? handle.appliedModel.model
+              : undefined
+            : meta.runtimeOptions?.model;
+          assertModelAllowed(appliedModel);
+          activeTurn = {
+            requestId: input.requestId,
+            instanceId: input.admittedRunContext.operationalRunInstance.instanceId,
             runtime,
             handle,
-            meta,
-          });
-
-          await params.setSessionState({
-            cfg: input.cfg,
-            sessionKey,
-            state: "running",
-            clearLastError: true,
-          });
-
-          internalAbortController = new AbortController();
-          onCallerAbort = () => {
-            internalAbortController?.abort();
+            abortController: params.acceptedTurn.abortController,
           };
-          if (input.signal?.aborted) {
-            internalAbortController.abort();
-          } else if (input.signal) {
-            input.signal.addEventListener("abort", onCallerAbort, { once: true });
+          // Publish custody before controls or state persistence can yield. A setup
+          // cancellation must cancel this exact late handle before reporting done.
+          params.acceptedTurn.activeTurn = activeTurn;
+          params.activeTurnBySession.set(actorKey, activeTurn);
+          if (!input.signal?.aborted) {
+            await applyManagerRuntimeControls({
+              sessionKey,
+              runtime,
+              handle,
+              meta,
+              isCurrentActor: params.isCurrentActor,
+              getCachedRuntimeState: () => params.runtimeHandles.get(params),
+              onModelApplied: (model) => {
+                appliedModel = model;
+                assertModelAllowed(appliedModel);
+              },
+              onOptionsChanged: async (runtimeOptions) => {
+                await params.writeSessionMeta({
+                  cfg: input.cfg,
+                  sessionKey,
+                  agentId,
+                  isCurrentActor: params.isCurrentActor,
+                  mutate: (current) => (current ? { ...current, runtimeOptions } : null),
+                  failOnError: true,
+                });
+                meta = { ...ensured.meta, runtimeOptions };
+              },
+            });
           }
 
-          activeTurn = {
-            runtime,
-            handle,
-            abortController: internalAbortController,
-          };
-          params.activeTurnBySession.set(actorKey, activeTurn);
-          activeTurnStarted = true;
+          modelExecution = bindOperatorModelExecution(
+            operatorAuthority,
+            resolveModelRef(appliedModel),
+          );
+          modelExecution?.signal.addEventListener("abort", onModelRevoked, { once: true });
+          modelExecution?.assertCurrent();
 
-          const combinedSignal = input.signal
-            ? AbortSignal.any([input.signal, internalAbortController.signal])
-            : internalAbortController.signal;
+          if (!input.signal?.aborted) {
+            await params.setSessionState({
+              cfg: input.cfg,
+              sessionKey,
+              agentId,
+              isCurrentActor: params.isCurrentActor,
+              state: "running",
+              clearLastError: true,
+            });
+          }
+
+          assertActorCurrent();
+          activeTurnStarted = true;
+          const turnToCancel = activeTurn;
           const eventGate = { open: true };
           const turnPromise = consumeAcpTurnStream({
             runtime,
@@ -262,16 +376,32 @@ export async function runManagerTurn(params: {
               attachments: input.attachments,
               mode: input.mode,
               requestId: input.requestId,
-              signal: combinedSignal,
+              signal: input.signal,
               onElicitation: input.onElicitation,
             },
             eventGate,
-            onBeforePrompt: input.onBeforePrompt,
+            onBeforePrompt: async () => {
+              await input.onBeforePrompt?.();
+              modelExecution?.assertCurrent();
+            },
+            onCancellation: () =>
+              cancelManagerActiveTurn({
+                activeTurn: turnToCancel,
+                reason: params.acceptedTurn.cancelReason,
+                revalidate: params.acceptedTurn.revalidateCancel,
+                assertCurrent: assertCancellationCurrent,
+              }),
             onPromptStarted: async ({ authoritative }) => {
+              if (!params.isCurrentActor()) {
+                return;
+              }
               promptStarted = authoritative;
-              if (authoritative && taskRecord && !taskExecutionBound) {
-                taskExecutionBound = true;
-                bindBackgroundTaskExecution(taskRecord, input.admittedRunContext);
+              if (authoritative) {
+                const assertAdmitted = resolveAdmittedRunActiveAssertion(input.admittedRunContext);
+                if (!assertAdmitted) {
+                  throw new Error("ACP execution authority closed before prompt submission");
+                }
+                assertAdmitted();
               }
               try {
                 await input.onLifecycle?.({
@@ -284,23 +414,19 @@ export async function runManagerTurn(params: {
                 );
               }
             },
-            onOutputEvent: (event) => {
-              sawTurnOutput = true;
-              if (event.type === "text_delta" && event.stream !== "thought" && event.text) {
-                taskProgressSummary = appendBackgroundTaskProgressSummary(
-                  taskProgressSummary,
-                  event.text,
-                );
+            onOutputEvent: () => {
+              modelExecution?.signal.throwIfAborted();
+              if (!params.isCurrentActor()) {
+                return;
               }
-              if (taskContext) {
-                markBackgroundTaskRunning(taskContext.runId, {
-                  sessionKey,
-                  lastEventAt: Date.now(),
-                  progressSummary: taskProgressSummary || null,
-                });
+              sawTurnOutput = true;
+            },
+            onEvent: async (event) => {
+              modelExecution?.signal.throwIfAborted();
+              if (params.isCurrentActor()) {
+                await input.onEvent?.(event);
               }
             },
-            onEvent: input.onEvent,
           });
           const turnTimeoutMs = resolveTurnTimeoutMs({
             cfg: input.cfg,
@@ -323,14 +449,20 @@ export async function runManagerTurn(params: {
                 activeTurn,
                 mode: sessionMode,
                 clearCachedRuntimeStateIfHandleMatches: (turn) => {
+                  if (!params.isCurrentActor()) {
+                    return;
+                  }
                   params.runtimeHandles.clearIfHandleMatches({
                     sessionKey,
+                    agentId,
                     handle: turn.handle,
                   });
                 },
               });
             },
           });
+          assertActorCurrent();
+          modelExecution?.assertCurrent();
           if (!turnOutcome.terminalStatus) {
             throw new AcpRuntimeError(
               "ACP_TURN_FAILED",
@@ -340,32 +472,27 @@ export async function runManagerTurn(params: {
           params.recordTurnCompletion({
             startedAt: turnStartedAt,
           });
-          if (taskContext) {
-            const terminalResult = resolveBackgroundTaskTerminalResult(taskProgressSummary);
-            markBackgroundTaskTerminal(taskContext.runId, {
-              sessionKey,
-              status: turnOutcome.terminalStatus === "cancelled" ? "cancelled" : "succeeded",
-              endedAt: Date.now(),
-              lastEventAt: Date.now(),
-              error: undefined,
-              progressSummary: taskProgressSummary || null,
-              terminalSummary: terminalResult.terminalSummary ?? null,
-              terminalOutcome: terminalResult.terminalOutcome,
-            });
-            if (spawnedByWatcher) {
-              recordSubagentTerminalState({
-                childSessionKey: sessionKey,
-                runId: taskContext.runId,
-                requesterSessionKey: spawnedByWatcher,
-                outcomeStatus: turnOutcome.terminalStatus === "cancelled" ? "cancelled" : "ok",
-              });
-            }
+          const cancelled = turnOutcome.terminalStatus === "cancelled";
+          const cancelling = cancelled || params.acceptedTurn.abortController.signal.aborted;
+          if (cancelling || spawnedByWatcher) {
+            await recordTerminalState(cancelled ? "cancelled" : "ok", cancelling);
+          }
+          if (spawnedByWatcher) {
+            assertActorCurrent();
           }
           await params.setSessionState({
             cfg: input.cfg,
             sessionKey,
+            agentId,
+            isCurrentActor: params.isCurrentActor,
             state: "idle",
             clearLastError: true,
+            ...(cancelling
+              ? {
+                  assertCurrent: assertCancellationPublicationCurrent,
+                  acpControl: params.acceptedTurn.cancelConstraint,
+                }
+              : {}),
           });
           return;
         } catch (error) {
@@ -376,10 +503,12 @@ export async function runManagerTurn(params: {
               ? "ACP turn failed before completion."
               : "Could not initialize ACP session runtime.",
           });
+          assertActorCurrent();
           retryFreshHandle = await prepareFreshManagerRuntimeHandleRetry({
             attempt,
             cfg: input.cfg,
             sessionKey,
+            agentId,
             error: acpError,
             promptStarted,
             sawTurnOutput,
@@ -387,7 +516,9 @@ export async function runManagerTurn(params: {
             meta,
             runtimeHandles: params.runtimeHandles,
             writeSessionMeta: params.writeSessionMeta,
+            isCurrentActor: params.isCurrentActor,
           });
+          assertActorCurrent();
           if (retryFreshHandle) {
             continue;
           }
@@ -401,30 +532,43 @@ export async function runManagerTurn(params: {
           };
           backendAttempts.push(backendAttempt);
           if (
+            isAcpOwnerRepairRequired(acpError) ||
             !isFailoverWorthyBackendError(backendAttempt) ||
-            !shouldAttemptBackendFailover({
-              backendIndex: backendIdx,
-              candidateBackends,
-            })
+            backendIdx >= candidateBackends.length - 1
           ) {
             await recordBackendFailure(acpError);
           }
           break;
         } finally {
-          if (input.signal && onCallerAbort) {
-            input.signal.removeEventListener("abort", onCallerAbort);
+          // A producer terminal does not release actor custody while cancellation is still active.
+          await activeTurn?.cancelPromise?.catch(() => {});
+          modelExecution?.signal.removeEventListener("abort", onModelRevoked);
+          modelExecution?.release();
+          if (params.acceptedTurn.activeTurn === activeTurn) {
+            params.acceptedTurn.activeTurn = undefined;
           }
           if (activeTurn && params.activeTurnBySession.get(actorKey) === activeTurn) {
             params.activeTurnBySession.delete(actorKey);
           }
-          if (!retryFreshHandle && !skipPostTurnCleanup && runtime && handle && meta) {
+          if (
+            !retryFreshHandle &&
+            !skipPostTurnCleanup &&
+            runtime &&
+            handle &&
+            meta &&
+            params.isCurrentActor()
+          ) {
             ({ handle, meta } = await params.reconcileRuntimeSessionIdentifiers({
               cfg: input.cfg,
               sessionKey,
+              agentId,
               runtime,
               handle,
               meta,
               failOnStatusError: false,
+              isCurrentActor: params.isCurrentActor,
+              revalidateControl: () => params.acceptedTurn.revalidateCancel?.("publication"),
+              assertCurrent: () => params.acceptedTurn.assertCancelCurrent?.("publication"),
             }));
           }
           if (
@@ -433,6 +577,7 @@ export async function runManagerTurn(params: {
             runtime &&
             handle &&
             meta &&
+            params.isCurrentActor() &&
             meta.mode === "oneshot"
           ) {
             try {
@@ -445,18 +590,15 @@ export async function runManagerTurn(params: {
                 `acp-manager: ACP oneshot close failed for ${sessionKey}: ${String(error)}`,
               );
             } finally {
-              params.runtimeHandles.clear(sessionKey);
+              if (params.isCurrentActor()) {
+                params.runtimeHandles.clearIfHandleMatches({ ...params, handle });
+              }
             }
           }
-        }
-        if (retryFreshHandle) {
-          continue;
         }
       }
     }
   } finally {
-    if (acpTurnMarkedActive) {
-      clearAcpTurnActive(sessionKey);
-    }
+    releaseActiveTurn?.();
   }
 }

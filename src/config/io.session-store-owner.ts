@@ -1,7 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "../utils.js";
 import { getConfigValueAtPath, unsetConfigValueAtPath } from "./config-paths.js";
-import { isSameFixedSessionStoreConfig } from "./sessions/session-store-config.js";
+import {
+  isPerAgentSessionStoreConfig,
+  isSameSessionStoreConfig,
+} from "./sessions/session-store-config.js";
 import type { OpenClawConfig } from "./types.js";
 
 const SESSION_STORE_OWNER_PATH = ["agents", "defaults", "sessionStore", "agentId"] as const;
@@ -14,12 +17,14 @@ export function prepareSessionStoreOwnershipForWrite(params: {
   env: NodeJS.ProcessEnv;
   explicitSetPaths?: readonly (readonly string[])[];
   explicitSetValueSource?: OpenClawConfig;
-}): { config: OpenClawConfig; sameFixedSessionStore: boolean } {
-  const sameFixedSessionStore = isSameFixedSessionStoreConfig(
+}): { config: OpenClawConfig; sameFixedSessionStore: boolean; ownershipPaths: string[][] } {
+  const sameSessionStore = isSameSessionStoreConfig(
     params.currentStore,
     params.targetConfig.session?.store,
     params.env,
   );
+  const sameFixedSessionStore =
+    sameSessionStore && !isPerAgentSessionStoreConfig(params.currentStore);
   const previousOwner = params.currentConfig.agents?.defaults?.sessionStore?.agentId;
   const explicitSessionStore = getConfigValueAtPath(
     (params.explicitSetValueSource ?? params.targetConfig) as Record<string, unknown>,
@@ -34,12 +39,16 @@ export function prepareSessionStoreOwnershipForWrite(params: {
         isDeepStrictEqual(entry, SESSION_STORE_OWNER_PATH),
     ),
   );
-  // A compatibility owner belongs to one physical fixed store. Copied runtime config must not
-  // carry it to another store; only an owner-specific authored path establishes the new owner.
-  if (sameFixedSessionStore || !previousOwner || suppliesDestinationOwner) {
-    return { config: params.targetConfig, sameFixedSessionStore };
+  // Per-agent stores also retain this owner for retired-main migration. Clear a copied owner
+  // only on a store transition; an owner-specific authored path establishes the new owner.
+  if (sameSessionStore || !previousOwner || suppliesDestinationOwner) {
+    return { config: params.targetConfig, sameFixedSessionStore, ownershipPaths: [] };
   }
   const agents = structuredClone(params.targetConfig.agents ?? {});
   unsetConfigValueAtPath(agents as Record<string, unknown>, SESSION_STORE_OWNER_PATH.slice(1));
-  return { config: { ...params.targetConfig, agents }, sameFixedSessionStore };
+  return {
+    config: { ...params.targetConfig, agents },
+    sameFixedSessionStore,
+    ownershipPaths: [[...SESSION_STORE_OWNER_PATH]],
+  };
 }

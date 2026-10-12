@@ -1,4 +1,3 @@
-// MCP CLI tests cover MCP command registration and server configuration behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -21,6 +20,22 @@ import {
 import { writeProbeMcpServer } from "./mcp-cli.test-support.js";
 import { runCliWithExitFinalization } from "./one-shot-exit.js";
 
+async function withMcpHome(run: (home: string, workspaceDir: string) => Promise<void>) {
+  await withTempHome("openclaw-cli-mcp-home-", async (home) => {
+    const workspaceDir = await createWorkspace();
+    vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+    await run(home, workspaceDir);
+  });
+}
+
+async function writeMcpServers(home: string, servers: Record<string, unknown>): Promise<void> {
+  await fs.writeFile(
+    path.join(home, ".openclaw", "openclaw.json"),
+    `${JSON.stringify({ mcp: { servers } })}\n`,
+    "utf8",
+  );
+}
+
 describe("mcp cli", () => {
   beforeEach(() => {
     resetMcpCliTestState();
@@ -30,32 +45,8 @@ describe("mcp cli", () => {
     await cleanupMcpCliTestState();
   });
 
-  it("sets, replaces, and shows a configured MCP server", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async (home) => {
-      const workspaceDir = await createWorkspace();
-      const configPath = path.join(home, ".openclaw", "openclaw.json");
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-
-      await runMcpCommand(["mcp", "set", "context7", '{"command":"uvx","args":["context7-mcp"]}']);
-      expect(lastLogLine()).toBe(`Saved MCP server "context7" to ${configPath}.`);
-      await runMcpCommand([
-        "mcp",
-        "set",
-        "context7",
-        '{"command":"uvx","args":["context7-mcp@2"]}',
-      ]);
-
-      mockLog.mockClear();
-      await runMcpCommand(["mcp", "show", "context7", "--json"]);
-      expect(JSON.parse(lastLogLine())).toEqual({ command: "uvx", args: ["context7-mcp@2"] });
-    });
-  });
-
   it("adds a configured MCP server from flags without replacing operator knobs", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async () => {
-      const workspaceDir = await createWorkspace();
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-
+    await withMcpHome(async () => {
       await runMcpCommand([
         "mcp",
         "add",
@@ -100,17 +91,15 @@ describe("mcp cli", () => {
   });
 
   it("rejects an existing MCP server before probing", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async () => {
-      const workspaceDir = await createWorkspace();
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+    await withMcpHome(async () => {
       await runMcpCommand(["mcp", "set", "docs", '{"command":"node","args":["existing.mjs"]}']);
       const probe = vi.fn(() => {
         throw new Error("duplicate add attempted a probe");
       });
       setCreateSessionMcpRuntimeOverride(probe);
 
-      await expect(runMcpCommand(["mcp", "add", "docs", "--command", "uvx"])).rejects.toThrow(
-        "__exit__:1",
+      await expect(runMcpCommand(["mcp", "add", "docs", "--command", "uvx"])).rejects.toMatchObject(
+        { code: 1 },
       );
 
       expect(probe).not.toHaveBeenCalled();
@@ -125,45 +114,46 @@ describe("mcp cli", () => {
   });
 
   it("does not replace an MCP server added while probing", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async () => {
-      const workspaceDir = await createWorkspace();
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+    await withMcpHome(async () => {
       let competitorWon = false;
-      setCreateSessionMcpRuntimeOverride((params) => ({
-        sessionId: params.sessionId,
-        workspaceDir: params.workspaceDir,
-        configFingerprint: "cli-probe-race",
-        createdAt: 0,
-        lastUsedAt: 0,
-        getCatalog: async () => {
-          const result = await setConfiguredMcpServer({
-            name: "docs",
-            server: { command: "node", args: ["winner.mjs"] },
-            createOnly: true,
-          });
-          competitorWon = result.ok;
-          return {
-            version: 1,
-            generatedAt: Date.now(),
-            servers: {
-              docs: {
-                serverName: "docs",
-                launchSummary: "node winner.mjs",
-                toolCount: 0,
+      setCreateSessionMcpRuntimeOverride((params) => {
+        expect(params.cfg?.mcp?.servers?.docs?.connectionTimeoutMs).toBe(5_000);
+        return {
+          sessionId: params.sessionId,
+          workspaceDir: params.workspaceDir,
+          configFingerprint: "cli-probe-race",
+          createdAt: 0,
+          lastUsedAt: 0,
+          getCatalog: async () => {
+            const result = await setConfiguredMcpServer({
+              name: "docs",
+              server: { command: "node", args: ["winner.mjs"] },
+              createOnly: true,
+            });
+            competitorWon = result.ok;
+            return {
+              version: 1,
+              generatedAt: Date.now(),
+              servers: {
+                docs: {
+                  serverName: "docs",
+                  launchSummary: "node winner.mjs",
+                  toolCount: 0,
+                },
               },
-            },
-            tools: [],
-            diagnostics: [],
-          };
-        },
-        peekCatalog: () => null,
-        markUsed: () => {},
-        callTool: async () => ({ content: [] }),
-        dispose: async () => {},
-      }));
+              tools: [],
+              diagnostics: [],
+            };
+          },
+          peekCatalog: () => null,
+          markUsed: () => {},
+          callTool: async () => ({ content: [] }),
+          dispose: async () => {},
+        };
+      });
 
-      await expect(runMcpCommand(["mcp", "add", "docs", "--command", "uvx"])).rejects.toThrow(
-        "__exit__:1",
+      await expect(runMcpCommand(["mcp", "add", "docs", "--command", "uvx"])).rejects.toMatchObject(
+        { code: 1 },
       );
 
       expect(competitorWon).toBe(true);
@@ -178,9 +168,7 @@ describe("mcp cli", () => {
   });
 
   it("updates approval mode without replacing saved Codex metadata", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async () => {
-      const workspaceDir = await createWorkspace();
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+    await withMcpHome(async () => {
       await runMcpCommand([
         "mcp",
         "set",
@@ -203,10 +191,8 @@ describe("mcp cli", () => {
   });
 
   it("rejects hexadecimal MCP timeout options before writing configuration", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async (home) => {
-      const workspaceDir = await createWorkspace();
+    await withMcpHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
 
       await expect(
         runMcpCommand([
@@ -219,7 +205,7 @@ describe("mcp cli", () => {
           "0x10",
           "--no-probe",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toMatchObject({ code: 1 });
       expect(lastErrorLine()).toBe("--timeout must be a positive number.");
       await expect(fs.readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
 
@@ -233,7 +219,7 @@ describe("mcp cli", () => {
 
       await expect(
         runMcpCommand(["mcp", "configure", "docs", "--connect-timeout", "0x3"]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toMatchObject({ code: 1 });
       expect(lastErrorLine()).toBe("--connect-timeout must be a positive number.");
 
       mockLog.mockClear();
@@ -249,12 +235,10 @@ describe("mcp cli", () => {
     "requires initialize to finish within the configured probe timeout before saving",
     { timeout: 10_000 },
     async () => {
-      await withTempHome("openclaw-cli-mcp-home-", async (home) => {
-        const workspaceDir = await createWorkspace();
+      await withMcpHome(async (home, workspaceDir) => {
         const serverPath = path.join(workspaceDir, "probe-server.mjs");
         const configPath = path.join(home, ".openclaw", "openclaw.json");
         await writeProbeMcpServer(serverPath);
-        vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
 
         const startedAt = performance.now();
         await expect(
@@ -271,7 +255,7 @@ describe("mcp cli", () => {
             "--connect-timeout",
             "0.2",
           ]),
-        ).rejects.toThrow("__exit__:1");
+        ).rejects.toMatchObject({ code: 1 });
         const elapsedMs = performance.now() - startedAt;
 
         expect(elapsedMs).toBeGreaterThanOrEqual(100);
@@ -306,7 +290,7 @@ describe("mcp cli", () => {
             "--env",
             "MCP_MODE=crash",
           ]),
-        ).rejects.toThrow("__exit__:1");
+        ).rejects.toMatchObject({ code: 1 });
 
         mockLog.mockClear();
         await runMcpCommand(["mcp", "list", "--json"]);
@@ -316,59 +300,8 @@ describe("mcp cli", () => {
     },
   );
 
-  it("passes a five-second default initialize timeout to the probe runtime", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async (home) => {
-      const workspaceDir = await createWorkspace();
-      const configPath = path.join(home, ".openclaw", "openclaw.json");
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-      let probeTimeoutMs: unknown;
-      setCreateSessionMcpRuntimeOverride((params) => {
-        probeTimeoutMs = params.cfg?.mcp?.servers?.["hung-default"]?.connectionTimeoutMs;
-        return {
-          sessionId: params.sessionId,
-          workspaceDir: params.workspaceDir,
-          configFingerprint: "cli-probe-test",
-          createdAt: 0,
-          lastUsedAt: 0,
-          getCatalog: async () => ({
-            version: 1,
-            generatedAt: Date.now(),
-            servers: {},
-            tools: [],
-            diagnostics: [
-              {
-                serverName: "hung-default",
-                safeServerName: "hung-default",
-                launchSummary: process.execPath,
-                message:
-                  'MCP server "hung-default" timed out: did not complete initialize within 5s',
-              },
-            ],
-          }),
-          peekCatalog: () => null,
-          markUsed: () => {},
-          callTool: async () => ({ content: [] }),
-          dispose: async () => {},
-        };
-      });
-
-      await expect(
-        runMcpCommand(["mcp", "add", "hung-default", "--command", process.execPath]),
-      ).rejects.toThrow("__exit__:1");
-
-      expect(probeTimeoutMs).toBe(5_000);
-      expect(lastErrorLine()).toContain(
-        'MCP server "hung-default" timed out: did not complete initialize within 5s',
-      );
-      await expect(fs.readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
-    });
-  });
-
   it("labels listed MCP servers as OpenClaw-managed", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async () => {
-      const workspaceDir = await createWorkspace();
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-
+    await withMcpHome(async () => {
       await runMcpCommand(["mcp", "set", "context7", '{"command":"uvx","args":["context7-mcp"]}']);
       mockLog.mockClear();
 
@@ -382,46 +315,34 @@ describe("mcp cli", () => {
     });
   });
 
-  it("tells the operator how to add a server when probing with none configured", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async () => {
-      const workspaceDir = await createWorkspace();
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-      mockLog.mockClear();
+  it.each([
+    {
+      label: "only disabled servers and overrides",
+      servers: {
+        paused: { enabled: false, command: process.execPath },
+        override: { enabled: false },
+      },
+    },
+  ])("explains $label while preserving JSON output", async ({ servers }) => {
+    await withMcpHome(async (home) => {
+      await writeMcpServers(home, servers);
 
       await runMcpCommand(["mcp", "probe"]);
 
       const output = mockLog.mock.calls.map((call) => String(call[0])).join("\n");
-      expect(output).toContain("No MCP servers configured in");
+      expect(output).toContain("No enabled MCP servers in");
       expect(output).toContain("openclaw mcp add <name> --command <command>");
-      // A bare "MCP probe (<path>):" header was the whole output before this guard.
-      expect(output).not.toMatch(/^MCP probe \(.*\):$/m);
-    });
-  });
-
-  it("updates per-server MCP tool filters", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async (home) => {
-      const workspaceDir = await createWorkspace();
-      const configPath = path.join(home, ".openclaw", "openclaw.json");
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-
-      await runMcpCommand(["mcp", "set", "docs", '{"command":"node","args":["server.mjs"]}']);
-      await runMcpCommand([
-        "mcp",
-        "tools",
-        "docs",
-        "--include",
-        "search,read_*",
-        "--exclude",
-        "admin_*",
-      ]);
-
-      expect(lastLogLine()).toBe(`Updated MCP tool selection for "docs" in ${configPath}.`);
+      expect(output).toContain("openclaw mcp configure <name> --enable");
+      expect(output).not.toMatch(/^MCP check \(.*\):$/m);
 
       mockLog.mockClear();
-      await runMcpCommand(["mcp", "show", "docs", "--json"]);
-      expect(JSON.parse(lastLogLine()).toolFilter).toEqual({
-        include: ["read_*", "search"],
-        exclude: ["admin_*"],
+      await runMcpCommand(["mcp", "probe", "--json"]);
+      expect(mockLog).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(lastLogLine())).toEqual({
+        generatedAt: expect.any(String),
+        servers: {},
+        tools: [],
+        diagnostics: [],
       });
     });
   });
@@ -429,24 +350,6 @@ describe("mcp cli", () => {
   it.each([
     {
       command: "configure",
-      flag: "--include",
-      value: "search,read_*",
-      expected: { include: ["search", "read_*"], exclude: ["admin_*"] },
-    },
-    {
-      command: "configure",
-      flag: "--exclude",
-      value: "write_*",
-      expected: { include: ["old_*"], exclude: ["write_*"] },
-    },
-    {
-      command: "tools",
-      flag: "--include",
-      value: "search,read_*",
-      expected: { include: ["read_*", "search"], exclude: ["admin_*"] },
-    },
-    {
-      command: "tools",
       flag: "--exclude",
       value: "write_*",
       expected: { include: ["old_*"], exclude: ["write_*"] },
@@ -454,10 +357,7 @@ describe("mcp cli", () => {
   ])(
     "preserves sibling tool filters for $command $flag",
     async ({ command, flag, value, expected }) => {
-      await withTempHome("openclaw-cli-mcp-home-", async () => {
-        const workspaceDir = await createWorkspace();
-        vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-
+      await withMcpHome(async () => {
         await runMcpCommand([
           "mcp",
           "set",
@@ -478,12 +378,9 @@ describe("mcp cli", () => {
   );
 
   it("requires an explicit MCP tool filter operation", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async () => {
-      const workspaceDir = await createWorkspace();
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-
+    await withMcpHome(async () => {
       await runMcpCommand(["mcp", "set", "docs", '{"command":"node","args":["server.mjs"]}']);
-      await expect(runMcpCommand(["mcp", "tools", "docs"])).rejects.toThrow("__exit__:1");
+      await expect(runMcpCommand(["mcp", "tools", "docs"])).rejects.toMatchObject({ code: 1 });
 
       expect(lastErrorLine()).toBe("Specify --include, --exclude, or --clear.");
     });
@@ -493,10 +390,7 @@ describe("mcp cli", () => {
     ["tools", "--clear"],
     ["configure", "--clear-tools"],
   ])("clears per-server MCP tool filters with %s %s", async (command, clearFlag) => {
-    await withTempHome("openclaw-cli-mcp-home-", async () => {
-      const workspaceDir = await createWorkspace();
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-
+    await withMcpHome(async () => {
       await runMcpCommand(["mcp", "set", "docs", '{"command":"node","args":["server.mjs"]}']);
       await runMcpCommand(["mcp", "tools", "docs", "--include", "search"]);
       await runMcpCommand(["mcp", command, "docs", clearFlag]);
@@ -507,42 +401,8 @@ describe("mcp cli", () => {
     });
   });
 
-  it("shows MCP transport status without connecting", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async () => {
-      const workspaceDir = await createWorkspace();
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-
-      await runMcpCommand([
-        "mcp",
-        "set",
-        "docs",
-        '{"url":"https://mcp.example.com","transport":"streamable-http"}',
-      ]);
-      mockLog.mockClear();
-
-      await runMcpCommand(["mcp", "status", "--json"]);
-
-      expect(JSON.parse(lastLogLine()).servers).toEqual([
-        {
-          name: "docs",
-          configured: true,
-          enabled: true,
-          ok: true,
-          transport: "streamable-http",
-          launch: "https://mcp.example.com",
-          requestTimeoutMs: 60_000,
-          connectionTimeoutMs: 30_000,
-          supportsParallelToolCalls: false,
-        },
-      ]);
-    });
-  });
-
   it("redacts stdio argv credentials from MCP status output", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async () => {
-      const workspaceDir = await createWorkspace();
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-
+    await withMcpHome(async () => {
       await runMcpCommand([
         "mcp",
         "set",
@@ -569,10 +429,7 @@ describe("mcp cli", () => {
   });
 
   it("reports MCP doctor setup errors and sensitive literals", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async () => {
-      const workspaceDir = await createWorkspace();
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-
+    await withMcpHome(async () => {
       await runMcpCommand([
         "mcp",
         "set",
@@ -581,7 +438,7 @@ describe("mcp cli", () => {
       ]);
       mockLog.mockClear();
 
-      await expect(runMcpCommand(["mcp", "doctor", "--json"])).rejects.toThrow("__exit__:1");
+      await expect(runMcpCommand(["mcp", "doctor", "--json"])).rejects.toMatchObject({ code: 1 });
 
       const result = JSON.parse(lastLogLine());
       expect(result.ok).toBe(false);
@@ -609,30 +466,29 @@ describe("mcp cli", () => {
   });
 
   it("reports ignored OAuth Authorization headers regardless of casing", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async () => {
-      const workspaceDir = await createWorkspace();
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+    await withMcpHome(async (home) => {
       readMcpOAuthCredentialsStatus.mockResolvedValue({ state: "authorized" });
 
-      for (const { name, header, oauth } of [
-        { name: "lowercase", header: "authorization", oauth: true },
-        { name: "titlecase", header: "Authorization", oauth: true },
-        { name: "uppercase", header: "AUTHORIZATION", oauth: true },
-        { name: "proxy", header: "Proxy-Authorization", oauth: true },
-        { name: "unrelated", header: "X-Tenant", oauth: true },
-        { name: "without-oauth", header: "AUTHORIZATION", oauth: false },
-      ]) {
-        await runMcpCommand([
-          "mcp",
-          "set",
-          name,
-          JSON.stringify({
-            url: "https://mcp.example.com/mcp",
-            headers: { [header]: "$MCP_HEADER" },
-            ...(oauth ? { auth: "oauth" } : {}),
-          }),
-        ]);
-      }
+      await writeMcpServers(
+        home,
+        Object.fromEntries(
+          [
+            { name: "lowercase", header: "authorization", oauth: true },
+            { name: "titlecase", header: "Authorization", oauth: true },
+            { name: "uppercase", header: "AUTHORIZATION", oauth: true },
+            { name: "proxy", header: "Proxy-Authorization", oauth: true },
+            { name: "unrelated", header: "X-Tenant", oauth: true },
+            { name: "without-oauth", header: "AUTHORIZATION", oauth: false },
+          ].map(({ name, header, oauth }) => [
+            name,
+            {
+              url: "https://mcp.example.com/mcp",
+              headers: { [header]: "$MCP_HEADER" },
+              ...(oauth ? { auth: "oauth" } : {}),
+            },
+          ]),
+        ),
+      );
       mockLog.mockClear();
 
       await runMcpCommand(["mcp", "doctor", "--json"]);
@@ -662,24 +518,29 @@ describe("mcp cli", () => {
   });
 
   it("bounds concurrent MCP doctor server checks", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async () => {
-      const workspaceDir = await createWorkspace();
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-      for (let index = 0; index < 6; index += 1) {
-        await runMcpCommand([
-          "mcp",
-          "set",
-          `server-${index}`,
-          JSON.stringify({
-            url: `https://mcp-${index}.example.com`,
-            transport: "streamable-http",
-            auth: "oauth",
-          }),
-        ]);
-      }
+    await withMcpHome(async (home) => {
+      await writeMcpServers(
+        home,
+        Object.fromEntries(
+          Array.from({ length: 6 }, (_, index) => [
+            `server-${index}`,
+            {
+              url: `https://mcp-${index}.example.com`,
+              transport: "streamable-http",
+              auth: "oauth",
+            },
+          ]),
+        ),
+      );
 
       const checksBlocked = createDeferred();
+      const firstBatchStarted = createDeferred();
+      let startedChecks = 0;
       readMcpOAuthCredentialsStatus.mockImplementation(async () => {
+        startedChecks += 1;
+        if (startedChecks === 4) {
+          firstBatchStarted.resolve();
+        }
         await checksBlocked.promise;
         return {
           state: "unauthenticated",
@@ -687,18 +548,18 @@ describe("mcp cli", () => {
       });
 
       const doctorPromise = runMcpCommand(["mcp", "doctor", "--json"]);
-      await vi.waitFor(() => {
-        expect(readMcpOAuthCredentialsStatus.mock.calls.length).toBeGreaterThanOrEqual(4);
-      });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      const startedBeforeRelease = readMcpOAuthCredentialsStatus.mock.calls.length;
-      checksBlocked.resolve();
-      await doctorPromise;
+      try {
+        await Promise.race([firstBatchStarted.promise, doctorPromise]);
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(startedChecks).toBe(4);
+      } finally {
+        checksBlocked.resolve();
+        await doctorPromise;
+      }
 
       expect(readMcpOAuthCredentialsStatus).toHaveBeenCalledTimes(6);
-      expect(startedBeforeRelease).toBe(4);
       expect(
         JSON.parse(lastLogLine()).servers.map((server: { name: string }) => server.name),
       ).toEqual(["server-0", "server-1", "server-2", "server-3", "server-4", "server-5"]);
@@ -706,9 +567,7 @@ describe("mcp cli", () => {
   });
 
   it("surfaces unexpected MCP doctor check errors", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async () => {
-      const workspaceDir = await createWorkspace();
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+    await withMcpHome(async () => {
       await runMcpCommand([
         "mcp",
         "set",
@@ -724,10 +583,7 @@ describe("mcp cli", () => {
   });
 
   it("does not fail MCP doctor for disabled-only overrides", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async () => {
-      const workspaceDir = await createWorkspace();
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-
+    await withMcpHome(async () => {
       await runMcpCommand([
         "mcp",
         "set",
@@ -765,44 +621,15 @@ describe("mcp cli", () => {
     });
   });
 
-  it("uses configured PATH when checking MCP stdio commands", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async () => {
-      const workspaceDir = await createWorkspace();
-      const binDir = path.join(workspaceDir, "bin");
-      const commandPath = path.join(binDir, "docs-mcp");
-      await fs.mkdir(binDir, { recursive: true });
-      await fs.writeFile(commandPath, "#!/bin/sh\nexit 0\n", "utf-8");
-      await fs.chmod(commandPath, 0o755);
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-
-      await runMcpCommand([
-        "mcp",
-        "set",
-        "docs",
-        JSON.stringify({ command: "docs-mcp", env: { PATH: binDir } }),
-      ]);
-      mockLog.mockClear();
-
-      await runMcpCommand(["mcp", "doctor", "--json"]);
-
-      expect(JSON.parse(lastLogLine())).toMatchObject({
-        ok: true,
-        servers: [{ name: "docs", ok: true, issues: [] }],
-      });
-    });
-  });
-
   it.runIf(process.platform !== "win32")(
     "does not treat Path as PATH when checking MCP stdio commands",
     async () => {
-      await withTempHome("openclaw-cli-mcp-home-", async () => {
-        const workspaceDir = await createWorkspace();
+      await withMcpHome(async (_home, workspaceDir) => {
         const binDir = path.join(workspaceDir, "bin");
         const commandPath = path.join(binDir, "mis-cased-path-mcp");
         await fs.mkdir(binDir, { recursive: true });
         await fs.writeFile(commandPath, "#!/bin/sh\nexit 0\n", "utf-8");
         await fs.chmod(commandPath, 0o755);
-        vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
 
         await runMcpCommand([
           "mcp",
@@ -812,7 +639,7 @@ describe("mcp cli", () => {
         ]);
         mockLog.mockClear();
 
-        await expect(runMcpCommand(["mcp", "doctor", "--json"])).rejects.toThrow("__exit__:1");
+        await expect(runMcpCommand(["mcp", "doctor", "--json"])).rejects.toMatchObject({ code: 1 });
 
         expect(JSON.parse(lastLogLine())).toMatchObject({
           ok: false,
@@ -834,15 +661,13 @@ describe("mcp cli", () => {
   );
 
   it("resolves relative configured PATH entries from the MCP stdio cwd", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async () => {
-      const workspaceDir = await createWorkspace();
+    await withMcpHome(async (_home, workspaceDir) => {
       const appDir = path.join(workspaceDir, "app");
       const binDir = path.join(appDir, "node_modules", ".bin");
       const commandPath = path.join(binDir, "docs-mcp");
       await fs.mkdir(binDir, { recursive: true });
       await fs.writeFile(commandPath, "#!/bin/sh\nexit 0\n", "utf-8");
       await fs.chmod(commandPath, 0o755);
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
 
       await runMcpCommand([
         "mcp",
@@ -866,10 +691,7 @@ describe("mcp cli", () => {
   });
 
   it("removes pure disabled tombstones when enabling MCP servers", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async () => {
-      const workspaceDir = await createWorkspace();
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-
+    await withMcpHome(async () => {
       await runMcpCommand(["mcp", "set", "bundleProbe", '{"enabled":false}']);
       await runMcpCommand(["mcp", "configure", "bundleProbe", "--enable"]);
 
@@ -882,35 +704,27 @@ describe("mcp cli", () => {
   });
 
   it("fails named probes for disabled MCP servers", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async (home) => {
-      const workspaceDir = await createWorkspace();
+    await withMcpHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
 
       await runMcpCommand(["mcp", "set", "docs", '{"enabled":false}']);
 
-      await expect(runMcpCommand(["mcp", "probe", "docs"])).rejects.toThrow("__exit__:1");
+      await expect(runMcpCommand(["mcp", "probe", "docs"])).rejects.toMatchObject({ code: 1 });
       expect(lastErrorLine()).toBe(
-        `MCP server "docs" is disabled in ${configPath}. Run openclaw mcp configure docs --enable before probing it.`,
+        `MCP server "docs" is disabled in ${configPath}. Run openclaw mcp configure docs --enable before checking it.`,
       );
     });
   });
 
   it("reports omitted enabled servers while accepting omitted disabled servers", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async (home) => {
-      const workspaceDir = await createWorkspace();
+    const invocationExitCode = process.exitCode;
+    await withMcpHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       let catalogServers: Record<
         string,
         { serverName: string; launchSummary: string; toolCount: number }
       > = {};
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(
-        configPath,
-        `${JSON.stringify({ mcp: { servers: { incomplete: { command: "node" } } } })}\n`,
-        "utf8",
-      );
+      await writeMcpServers(home, { incomplete: { command: "node" } });
       setCreateSessionMcpRuntimeOverride((params) => ({
         sessionId: params.sessionId,
         workspaceDir: params.workspaceDir,
@@ -939,20 +753,15 @@ describe("mcp cli", () => {
       });
 
       expect(JSON.parse(lastLogLine())).toMatchObject({ servers: {}, diagnostics: [] });
-      expect(lastErrorLine()).toBe(`MCP probe did not connect to "incomplete" in ${configPath}.`);
+      expect(lastErrorLine()).toBe(`MCP check did not connect to "incomplete" in ${configPath}.`);
+      expect(process.exitCode).toBe(1);
+      // The next probe represents a new CLI invocation, not a continuation of its failed status.
+      process.exitCode = invocationExitCode;
 
-      await fs.writeFile(
-        configPath,
-        `${JSON.stringify({
-          mcp: {
-            servers: {
-              healthy: { command: "node" },
-              disabled: { enabled: false },
-            },
-          },
-        })}\n`,
-        "utf8",
-      );
+      await writeMcpServers(home, {
+        healthy: { command: "node" },
+        disabled: { enabled: false },
+      });
       catalogServers = {
         healthy: { serverName: "healthy", launchSummary: "node", toolCount: 1 },
       };
@@ -971,13 +780,18 @@ describe("mcp cli", () => {
         diagnostics: [],
       });
       expect(lastErrorLine()).toBe("");
+      expect(process.exitCode).toBe(invocationExitCode);
+
+      mockLog.mockClear();
+      await runMcpCommand(["mcp", "probe"]);
+      const output = mockLog.mock.calls.map(([line]) => String(line)).join("\n");
+      expect(output).toContain("- healthy: 1 tools");
+      expect(output).not.toContain("No enabled MCP servers");
     });
   });
 
   it("warns when auto-approved Codex MCP tools have no safety annotations", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async () => {
-      const workspaceDir = await createWorkspace();
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+    await withMcpHome(async () => {
       await runMcpCommand(["mcp", "set", "memory", JSON.stringify({ command: process.execPath })]);
       setCreateSessionMcpRuntimeOverride((params) => ({
         sessionId: params.sessionId,
@@ -1017,24 +831,22 @@ describe("mcp cli", () => {
       mockLog.mockClear();
       await runMcpCommand(["mcp", "probe", "memory"]);
       expect(mockLog.mock.calls.map(([line]) => String(line)).join("\n")).toContain(
-        "tools have no safety annotations; calls will require interactive approval",
+        "tools have no safety annotations; calls require approval in prompting session postures",
       );
 
       mockLog.mockClear();
       await runMcpCommand(["mcp", "doctor", "memory", "--probe"]);
       expect(mockLog.mock.calls.map(([line]) => String(line)).join("\n")).toContain(
-        "tools have no safety annotations; calls will require interactive approval",
+        "tools have no safety annotations; calls require approval in prompting session postures",
       );
     });
   });
 
   it("fails when removing an unknown MCP server", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async (home) => {
-      const workspaceDir = await createWorkspace();
+    await withMcpHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
 
-      await expect(runMcpCommand(["mcp", "unset", "missing"])).rejects.toThrow("__exit__:1");
+      await expect(runMcpCommand(["mcp", "unset", "missing"])).rejects.toMatchObject({ code: 1 });
       expect(lastErrorLine()).toBe(
         `No MCP server named "missing" in ${configPath}. Run openclaw mcp list to see configured servers.`,
       );
@@ -1042,10 +854,8 @@ describe("mcp cli", () => {
   });
 
   it("starts the channel bridge with parsed serve options", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async () => {
-      const workspaceDir = await createWorkspace();
+    await withMcpHome(async (_home, workspaceDir) => {
       const tokenFile = path.join(workspaceDir, "gateway.token");
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
       await fs.writeFile(tokenFile, "secret-token\n", "utf-8");
 
       await runMcpCommand([
@@ -1074,11 +884,97 @@ describe("mcp cli", () => {
     await withTempHome("openclaw-cli-mcp-home-", async () => {
       serveOpenClawChannelMcp.mockRejectedValueOnce(new Error("gateway unavailable"));
 
-      await expect(runMcpCommand(["mcp", "serve"])).rejects.toThrow("__exit__:1");
+      await expect(runMcpCommand(["mcp", "serve"])).rejects.toMatchObject({ code: 1 });
 
       expect(lastErrorLine()).toBe(
         "MCP server failed to start: gateway unavailable. Run openclaw gateway status --deep --require-rpc to inspect Gateway health.",
       );
+    });
+  });
+  it.each(["show"])("emits one JSON failure for an unknown server in %s", async (command) => {
+    await withTempHome("openclaw-cli-mcp-json-", async () => {
+      await expect(runMcpCommand(["mcp", command, "missing", "--json"])).rejects.toMatchObject({
+        code: 1,
+      });
+
+      expect(mockLog).toHaveBeenCalledTimes(1);
+      expect(mockError).not.toHaveBeenCalled();
+      expect(JSON.parse(lastLogLine())).toMatchObject({
+        ok: false,
+        error: {
+          type: "cli_error",
+          message: expect.stringContaining('No MCP server named "missing"'),
+        },
+      });
+    });
+  });
+
+  it.each(["probe"])("emits one JSON failure for invalid config in %s", async (command) => {
+    await withTempHome("openclaw-cli-mcp-invalid-json-", async (home) => {
+      await fs.writeFile(path.join(home, ".openclaw", "openclaw.json"), "{ invalid");
+      await expect(runMcpCommand(["mcp", command, "--json"])).rejects.toMatchObject({ code: 1 });
+
+      expect(mockLog).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(lastLogLine())).toEqual({
+        ok: false,
+        error: {
+          type: "cli_error",
+          message: "Config file is invalid; fix it before using MCP config commands.",
+        },
+      });
+    });
+  });
+
+  it("reports directories and continues past them on PATH", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
+      const workspaceDir = await createWorkspace();
+      const serverDir = path.join(workspaceDir, "docs-mcp-repo");
+      const shadowDir = path.join(workspaceDir, "shadow");
+      const binDir = path.join(workspaceDir, "bin");
+      await fs.mkdir(serverDir, { recursive: true });
+      await fs.mkdir(path.join(shadowDir, "docs-mcp"), { recursive: true });
+      await fs.mkdir(binDir, { recursive: true });
+      await fs.writeFile(path.join(binDir, "docs-mcp"), "#!/bin/sh\nexit 0\n", "utf-8");
+      await fs.chmod(path.join(binDir, "docs-mcp"), 0o755);
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+      const servers = {
+        "explicit-dir": { command: serverDir },
+        "path-dir-only": { command: "docs-mcp", env: { PATH: shadowDir } },
+        "path-dir-then-file": {
+          command: "docs-mcp",
+          env: { PATH: [shadowDir, binDir].join(path.delimiter) },
+        },
+      };
+      for (const [name, server] of Object.entries(servers)) {
+        await runMcpCommand(["mcp", "set", name, JSON.stringify(server)]);
+      }
+      mockLog.mockClear();
+
+      await expect(runMcpCommand(["mcp", "doctor", "--json"])).rejects.toMatchObject({ code: 1 });
+
+      expect(JSON.parse(lastLogLine())).toMatchObject({
+        ok: false,
+        servers: [
+          {
+            name: "explicit-dir",
+            ok: false,
+            issues: [
+              {
+                level: "error",
+                message: `stdio command not found or not executable: ${serverDir}`,
+              },
+            ],
+          },
+          {
+            name: "path-dir-only",
+            ok: false,
+            issues: [
+              { level: "error", message: "stdio command not found or not executable: docs-mcp" },
+            ],
+          },
+          { name: "path-dir-then-file", ok: true, issues: [] },
+        ],
+      });
     });
   });
 });

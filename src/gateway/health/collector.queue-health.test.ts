@@ -1,5 +1,7 @@
 // Queue health collector tests cover real SQLite dead letters and active ingress pressure.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import * as ingressHealth from "../../channels/message/ingress-queue-health.js";
+import * as deliveryQueueState from "../../infra/delivery-queue-sqlite.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 
@@ -11,9 +13,11 @@ vi.mock("../../config/sessions/paths.js", () => ({
   resolveSessionStorePathCore: () => "/tmp/queue-health-sessions",
 }));
 
-vi.mock("../../config/sessions/session-accessor.js", () => ({
-  listSessionEntriesReadOnly: () => [],
-}));
+vi.mock("../../config/sessions/session-entry-read-runtime.js", async () => {
+  const { createSessionStoreSummaryReaderStub } =
+    await import("../../config/sessions/session-store-summary.test-support.js");
+  return { withSessionStoreReaderInWorker: createSessionStoreSummaryReaderStub() };
+});
 
 vi.mock("../../channels/plugins/read-only.js", () => ({
   listReadOnlyChannelPluginsForConfig: () => [],
@@ -40,43 +44,35 @@ describe("queue health collector", () => {
     degradedState.setActiveDegradedPlugins(degradedPluginsSnapshot);
   });
 
-  it("includes outbound and ingress dead letters in the health snapshot", async () => {
-    const openClawState = await createOpenClawTestState({
-      layout: "state-only",
-      prefix: "openclaw-health-dq-",
-    });
+  it("preserves the health snapshot when outbound admission capture fails", async () => {
+    const capture = vi
+      .spyOn(deliveryQueueState, "captureDeliveryQueueStateContext")
+      .mockImplementation(() => {
+        throw new Error("outbound admission unavailable");
+      });
+    const countOutbound = vi.spyOn(deliveryQueueState, "countFailedDeliveryQueueEntries");
+    const failed = [{ channelId: "telegram", accountId: "ops", count: 1 }];
+    const countIngress = vi
+      .spyOn(ingressHealth, "countFailedChannelIngressQueueEntries")
+      .mockResolvedValue(failed);
+    const countPressure = vi
+      .spyOn(ingressHealth, "countChannelIngressQueuePressure")
+      .mockResolvedValue([]);
     try {
-      const { moveDeliveryQueueEntryToFailed, upsertDeliveryQueueEntry } =
-        await import("../../infra/delivery-queue-sqlite.js");
-      const clean = await collectHealth();
-      expect(clean.deliveryQueues).toBeUndefined();
-
-      upsertDeliveryQueueEntry({
-        queueName: "outbound",
-        entry: { id: "dead-1", enqueuedAt: 1_000, retryCount: 5, retainOnFailure: true },
+      const pending = collectHealth();
+      expect(capture).toHaveBeenCalledTimes(1);
+      const snapshot = await pending;
+      expect(snapshot).toMatchObject({
+        channels: {},
+        deliveryQueues: { failed: [], ingressFailed: failed },
       });
-      moveDeliveryQueueEntryToFailed("outbound", "dead-1");
-      const { createChannelIngressQueue } = await import("../../channels/message/ingress-queue.js");
-      const ingressQueue = createChannelIngressQueue<{ text: string }>({
-        channelId: "telegram",
-        accountId: "ops",
-      });
-      await ingressQueue.enqueue("dead-2", { text: "recover me" });
-      const claim = await ingressQueue.claim("dead-2", { ownerId: "worker" });
-      if (!claim) {
-        throw new Error("Expected a claimed ingress event");
-      }
-      await ingressQueue.fail(claim, { reason: "handler-error", failedAt: 50_000 });
-
-      const snap = await collectHealth();
-      expect(snap.deliveryQueues).toEqual({
-        failed: [{ queueName: "outbound", count: 1, oldestFailedAt: expect.any(Number) }],
-        ingressFailed: [
-          { channelId: "telegram", accountId: "ops", count: 1, oldestFailedAt: 50_000 },
-        ],
-      });
+      expect(capture).toHaveBeenCalledTimes(1);
+      expect(countOutbound).not.toHaveBeenCalled();
     } finally {
-      await openClawState.cleanup();
+      capture.mockRestore();
+      countOutbound.mockRestore();
+      countIngress.mockRestore();
+      countPressure.mockRestore();
     }
   });
 

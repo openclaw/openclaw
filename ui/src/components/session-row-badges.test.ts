@@ -25,7 +25,6 @@ function renderBadges(
 ) {
   render(
     renderSessionRowBadges({
-      hasAutomation: false,
       placementState,
       workspaceConflictCount,
       diskSpaceStatus,
@@ -42,10 +41,28 @@ function expectTooltipText(badge: Element | null | undefined, text: string) {
 }
 
 describe("session row placement badges", () => {
+  it("names the service, profile, and machine without losing conflict or disk attention", () => {
+    render(
+      renderSessionRowBadges({
+        placementState: "active",
+        placementProviderId: "machine0",
+        placementProfileId: "team",
+        placementMachine: { class: "medium", os: "linux", osLabel: "Linux", cpu: 4, memoryGb: 16 },
+        workspaceConflictCount: 2,
+        diskSpaceStatus: "warning",
+      }),
+      container,
+    );
+    const label =
+      "machine0 · team · Linux · medium · 4 vCPU · 16 GB · active · 2 workspace conflicts · Cloud session disk space is low";
+    const badge = container.querySelector(".session-row-badge--cloud");
+    expect(badge?.getAttribute("aria-label")).toBe(label);
+    expectTooltipText(badge, label);
+  });
+
   it("renders the incognito indicator", () => {
     render(
       renderSessionRowBadges({
-        hasAutomation: false,
         incognito: true,
       }),
       container,
@@ -59,7 +76,6 @@ describe("session row placement badges", () => {
   it("renders outbox attention and stays quiet when empty", () => {
     render(
       renderSessionRowBadges({
-        hasAutomation: false,
         hasApproval: true,
         outboxAttentionCount: 3,
       }),
@@ -74,12 +90,12 @@ describe("session row placement badges", () => {
     const approvalIcon = container.querySelector(".session-row-badge--approval svg");
     expect(attentionIcon?.isEqualNode(approvalIcon ?? null)).toBe(true);
 
-    render(renderSessionRowBadges({ hasAutomation: false, outboxAttentionCount: 1 }), container);
+    render(renderSessionRowBadges({ outboxAttentionCount: 1 }), container);
     expect(
       container.querySelector(".session-row-badge--attention")?.getAttribute("aria-label"),
     ).toBe("1 message needs attention");
 
-    render(renderSessionRowBadges({ hasAutomation: false, outboxAttentionCount: 0 }), container);
+    render(renderSessionRowBadges({ outboxAttentionCount: 0 }), container);
     expect(container.querySelector(".session-row-badges")).toBeNull();
   });
 
@@ -92,16 +108,8 @@ describe("session row placement badges", () => {
     },
   );
 
-  it.each([
-    "requested",
-    "provisioning",
-    "syncing",
-    "starting",
-    "active",
-    "draining",
-    "reconciling",
-    "failed",
-  ] satisfies SessionPlacementState[])("renders %s as a cloud-worker globe", (placementState) => {
+  it("renders a cloud-worker placement as a globe", () => {
+    const placementState = "active";
     renderBadges(placementState);
 
     const badge = container.querySelector<HTMLElement>(".session-row-badge--cloud");
@@ -112,24 +120,9 @@ describe("session row placement badges", () => {
     expect(badge?.querySelector("rect")).toBeNull();
   });
 
-  it("keeps unrelated badges while omitting local placement", () => {
-    render(
-      renderSessionRowBadges({
-        hasAutomation: true,
-        placementState: "local",
-      }),
-      container,
-    );
-
-    expect(container.querySelectorAll(".session-row-badge")).toHaveLength(1);
-    expectTooltipText(container.querySelector(".session-row-badge"), "Automation attached");
-    expect(container.querySelector(".session-row-badge--cloud")).toBeNull();
-  });
-
   it("renders a green open-pull-request indicator", () => {
     render(
       renderSessionRowBadges({
-        hasAutomation: false,
         pullRequest: { numbers: [111532], state: "open" },
       }),
       container,
@@ -148,7 +141,6 @@ describe("session row placement badges", () => {
   ])("renders catalog pull request metadata for $state threads", ({ state, label }) => {
     render(
       renderSessionRowBadges({
-        hasAutomation: false,
         pullRequest: {
           numbers: state === "draft" ? [107302] : [111751, 111772],
           state,
@@ -167,7 +159,6 @@ describe("session row placement badges", () => {
     render(
       renderSessionRowBadges({
         hasApproval: true,
-        hasAutomation: false,
       }),
       container,
     );
@@ -178,11 +169,10 @@ describe("session row placement badges", () => {
     expect(badge?.querySelector("svg")).not.toBeNull();
   });
 
-  it("keeps child-only automation and placement badges hidden while showing PR and approval", () => {
+  it("keeps child placement badges hidden while showing PR and approval", () => {
     render(
       renderSessionRowBadges({
         isChild: true,
-        hasAutomation: true,
         pullRequest: { numbers: [111532], state: "open" },
         hasApproval: true,
         placementState: "active",
@@ -200,7 +190,6 @@ describe("session row placement badges", () => {
     render(
       renderSessionRowBadges({
         isChild: true,
-        hasAutomation: false,
         placementState: "reclaimed",
         workspaceConflictCount: 2,
       }),

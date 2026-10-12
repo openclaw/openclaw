@@ -1,14 +1,15 @@
-// Tests /steer target capture, accepted delivery, and visible fallback.
+// Tests /steer target capture, prepared-path continuation, and visible fallback.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearActiveEmbeddedRun,
+  setActiveEmbeddedRun,
+} from "../../agents/embedded-agent-runner/runs.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
 import type { ReplyBackendQueueMessageOptions, ReplyOperation } from "./reply-run-registry.js";
 import { createReplyOperation } from "./reply-run-registry.js";
-import {
-  createFollowupRunToolAuthorityProjector,
-  resolveFollowupRunToolAuthorityFingerprint,
-} from "./reply-tool-authority.js";
+import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 import { createMockFollowupRun } from "./test-helpers.js";
 
 const { handleSteerCommand } = await import("./commands-steer.js");
@@ -29,7 +30,6 @@ function buildParams(commandBody: string) {
 function beginActiveOperation(
   sessionKey: string,
   sessionId = "session-active",
-  taskSuggestionDeliveryMode?: "gateway",
   authorityRun = createMockFollowupRun({ run: { sessionId, sessionKey } }),
 ) {
   const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
@@ -37,18 +37,12 @@ function beginActiveOperation(
     provider: authorityRun.run.provider,
     model: authorityRun.run.model,
   };
-  const toolAuthorityFingerprint = resolveFollowupRunToolAuthorityFingerprint(
-    authorityRun,
-    authorityRoute,
-  );
-  operation.bindToolAuthorityProjector(createFollowupRunToolAuthorityProjector(authorityRun));
-  operation.bindToolAuthorityRoute(authorityRoute);
-  operation.bindToolAuthorityFingerprint(toolAuthorityFingerprint);
+  operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(authorityRun));
+  const toolAuthorityFingerprint = operation.bindToolAuthorityRoute(authorityRoute);
   operation.setPhase("running");
   operation.attachBackend({
     kind: "embedded",
     cancel: vi.fn(),
-    taskSuggestionDeliveryMode,
     messageInjection: { isAvailable: () => true, queueMessage },
   });
   operations.push(operation);
@@ -104,63 +98,26 @@ describe("handleSteerCommand", () => {
     }
   });
 
-  it("matching authority /steer injects into the captured operation", async () => {
-    const params = buildParams("/steer keep going");
+  it("routes an active /steer through the prepared reply path without a premature ack", async () => {
+    const message = "stop the deploy\nand revert the migration first";
+    const params = buildParams(`/steer ${message}`);
     params.opts = { toolsAllow: ["read"] };
     const { toolAuthorityFingerprint } = beginActiveOperation(
       "agent:main:main",
       "session-active",
-      undefined,
       createCommandAuthorityRun(params),
     );
 
     const result = await handleSteerCommand(params, true);
 
-    expect(result).toEqual({
-      shouldContinue: false,
-      reply: { text: "steered current session." },
-    });
-    expect(queueMessage).toHaveBeenCalledWith("keep going", {
-      steeringMode: "all",
-      isInboundUserMessage: true,
-      toolAuthorityFingerprint,
-      debounceMs: 0,
-      taskSuggestionDeliveryMode: undefined,
-      onQueueAccepted: expect.any(Function),
-    });
-  });
-
-  it("authorized sender with mismatched tool authority cannot inject via /steer", async () => {
-    const activeParams = buildParams("/steer keep going");
-    activeParams.opts = { toolsAllow: ["exec"] };
-    beginActiveOperation(
-      "agent:main:main",
-      "session-active",
-      undefined,
-      createCommandAuthorityRun(activeParams),
-    );
-    const params = buildParams("/steer keep going");
-    params.opts = { toolsAllow: ["read"] };
-
-    const result = await handleSteerCommand(params, true);
-
-    expect(result).toEqual({ shouldContinue: true });
-    expect(params.ctx.BodyForAgent).toBe("keep going");
-    expect(params.command.commandBodyNormalized).toBe("keep going");
+    expect(toolAuthorityFingerprint).toEqual(expect.any(String));
+    expect(result).toEqual({ shouldContinue: true, queueModeOverride: "steer" });
+    expect(params.ctx.Body).toBe(message);
+    expect(params.ctx.BodyForAgent).toBe(message);
+    expect(params.command.commandBodyNormalized).toBe(message);
+    // Injection now happens only after the normal path has prepared durable
+    // transcript, identity, media, cancellation, and adoption ownership.
     expect(queueMessage).not.toHaveBeenCalled();
-  });
-
-  it("passes the initiating surface task capability into steering", async () => {
-    beginActiveOperation("agent:main:main", "session-active", "gateway");
-    const params = buildParams("/steer keep going");
-    params.opts = { taskSuggestionDeliveryMode: "gateway" };
-
-    await handleSteerCommand(params, true);
-
-    expect(queueMessage).toHaveBeenCalledWith(
-      "keep going",
-      expect.objectContaining({ taskSuggestionDeliveryMode: "gateway" }),
-    );
   });
 
   it("prefers the native command target over the slash-command source", async () => {
@@ -172,11 +129,9 @@ describe("handleSteerCommand", () => {
 
     const result = await handleSteerCommand(params, true);
 
-    expect(result).toEqual({
-      shouldContinue: false,
-      reply: { text: "steered current session." },
-    });
-    expect(queueMessage).toHaveBeenCalledWith("check the target", expect.any(Object));
+    expect(result).toEqual({ shouldContinue: true, queueModeOverride: "steer" });
+    expect(params.ctx.BodyForAgent).toBe("check the target");
+    expect(queueMessage).not.toHaveBeenCalled();
   });
 
   it("maps a text slash source lane to its active direct conversation", async () => {
@@ -184,9 +139,35 @@ describe("handleSteerCommand", () => {
     const params = buildParams("/steer use the active direct lane");
     params.sessionKey = "agent:main:telegram:slash:123";
 
-    await handleSteerCommand(params, true);
+    const result = await handleSteerCommand(params, true);
 
-    expect(queueMessage).toHaveBeenCalledWith("use the active direct lane", expect.any(Object));
+    expect(result).toEqual({ shouldContinue: true, queueModeOverride: "steer" });
+    expect(params.ctx.BodyForAgent).toBe("use the active direct lane");
+    expect(queueMessage).not.toHaveBeenCalled();
+  });
+
+  it("maps a text slash source lane after its active embedded owner's operation clears", async () => {
+    const sessionId = "session-direct-active";
+    const sessionKey = "agent:main:telegram:direct:123";
+    const handle = {
+      kind: "embedded" as const,
+      queueMessage: vi.fn(),
+      isStreaming: () => true,
+      isCompacting: () => false,
+      abort: vi.fn(),
+    };
+    setActiveEmbeddedRun(sessionId, handle, sessionKey);
+    try {
+      const params = buildParams("/steer use the active direct lane");
+      params.sessionKey = "agent:main:telegram:slash:123";
+
+      const result = await handleSteerCommand(params, true);
+
+      expect(result).toEqual({ shouldContinue: true, queueModeOverride: "steer" });
+      expect(params.ctx.BodyForAgent).toBe("use the active direct lane");
+    } finally {
+      clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+    }
   });
 
   it("returns usage for an empty steer command", async () => {
@@ -208,17 +189,5 @@ describe("handleSteerCommand", () => {
     expect(params.ctx.BodyForAgent).toBe("keep going");
     expect(params.command.commandBodyNormalized).toBe("keep going");
     expect(queueMessage).not.toHaveBeenCalled();
-  });
-
-  it("continues visibly as a normal prompt when captured injection rejects", async () => {
-    beginActiveOperation("agent:main:main");
-    queueMessage.mockRejectedValueOnce(new Error("runtime rejected"));
-    const params = buildParams("/steer keep going");
-
-    const result = await handleSteerCommand(params, true);
-
-    expect(result).toEqual({ shouldContinue: true });
-    expect(params.ctx.BodyForAgent).toBe("keep going");
-    expect(params.command.commandBodyNormalized).toBe("keep going");
   });
 });

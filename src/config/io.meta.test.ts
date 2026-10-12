@@ -1,311 +1,90 @@
-// Verifies config IO metadata for persisted and generated settings.
 import { describe, expect, it } from "vitest";
-import { AUTO_MANAGED_CONFIG_META_PATHS, stampConfigWriteMetadata } from "./io.meta.js";
+import { stampConfigWriteMetadata } from "./io.meta.js";
 import { computeModelPolicyAllowlist } from "./model-policy-allowlist-migration.js";
+import type { AgentModelEntryConfig, AgentModelPolicyConfig } from "./types.agent-defaults.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
+import { validateConfigObjectRaw } from "./validation-core.js";
+
+const models = { "openai/gpt-5.5": {} };
+const marker = { migrations: { modelPolicyAllowlist: true as const } };
+const withModels = (
+  entries: Record<string, AgentModelEntryConfig>,
+  modelPolicy?: AgentModelPolicyConfig,
+): OpenClawConfig => ({
+  agents: {
+    defaults: { models: entries, ...(modelPolicy ? { modelPolicy } : {}) },
+    entries: { main: {} },
+  },
+});
+const legacy = withModels(models);
+const restricted = withModels(models, { allow: Object.keys(models) });
+const perAgent: OpenClawConfig = {
+  agents: {
+    defaults: legacy.agents?.defaults,
+    entries: { worker: { models: { "anthropic/claude-sonnet-4-6": {} } } },
+  },
+};
 
 describe("config write metadata stamping", () => {
-  it("stamps every declared auto-managed meta path", () => {
-    const stamped = stampConfigWriteMetadata({}, undefined, undefined, {});
-
-    expect(AUTO_MANAGED_CONFIG_META_PATHS).toEqual([
-      ["meta", "lastTouchedVersion"],
-      ["meta", "migrations", "modelPolicyAllowlist"],
-    ]);
-
-    expect(typeof stamped.meta?.lastTouchedVersion).toBe("string");
+  const cases: Array<
+    [string, OpenClawConfig | null, OpenClawConfig, AgentModelPolicyConfig | undefined]
+  > = [
+    ["retains restrictions after removing metadata", legacy, {}, { allow: Object.keys(models) }],
+    ["materializes only default restrictions", perAgent, perAgent, { allow: Object.keys(models) }],
+    [
+      "does not trust candidate markers",
+      withModels({ "demo/previous": {} }),
+      { ...legacy, meta: marker },
+      { allow: ["demo/previous"] },
+    ],
+    ["leaves new maps unrestricted", null, legacy, undefined],
+    [
+      "does not restore removed marked policies",
+      { ...restricted, meta: marker },
+      legacy,
+      undefined,
+    ],
+    ["does not restore removed pre-marker policies", restricted, legacy, undefined],
+    ["honors explicit allow-any", legacy, withModels(models, {}), {}],
+  ];
+  it.each(cases)("%s", (_name, previous, next, policy) => {
+    const original = structuredClone({ previous, next });
+    const stamped = stampConfigWriteMetadata(next, "2026.7.2", previous);
+    expect(stamped.agents?.defaults?.modelPolicy).toEqual(policy);
+    expect(stamped.agents?.entries).toEqual(next.agents?.entries);
     expect(stamped.meta?.migrations?.modelPolicyAllowlist).toBe(true);
+    expect(stamped.meta?.lastTouchedVersion).toBe("2026.7.2");
+    expect({ previous, next }).toEqual(original);
   });
 
-  it("preserves a legacy model restriction before an unrelated write updates version metadata", () => {
-    const previous = {
-      meta: { lastTouchedVersion: "2026.7.1" },
-      agents: {
-        defaults: {
-          models: {
-            "openai/*": {},
-            "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
-          },
-        },
-      },
+  it("preserves a restriction containing wildcard, alias and selector refs", () => {
+    const modelMap = {
+      "openai/*": {},
+      approved: {},
+      "demo/model": { alias: "approved" },
+      "demo/namespace/*": {},
+      "openrouter:auto": {},
+      "openrouter:free": {},
     };
-
-    const stamped = stampConfigWriteMetadata(
-      previous,
-      "2026-07-18T00:00:00.000Z",
-      "2026.7.2",
-      previous,
-    );
-
-    expect(stamped.agents?.defaults?.modelPolicy?.allow).toEqual([
-      "openai/*",
-      "anthropic/claude-sonnet-4-6",
-    ]);
+    const previous = withModels(modelMap);
+    const stamped = stampConfigWriteMetadata(previous, undefined, previous);
+    expect(stamped.agents?.defaults?.modelPolicy?.allow).toEqual(Object.keys(modelMap));
     expect(stamped.meta?.migrations?.modelPolicyAllowlist).toBe(true);
+    expect(validateConfigObjectRaw(stamped)).toEqual({ ok: true, config: expect.anything() });
   });
 
-  it("honors an explicit empty default model policy added on the first write", () => {
-    const previous = {
-      agents: {
-        defaults: {
-          models: { "openai/gpt-5.5": {} },
-        },
-      },
-    };
-    const next = {
-      agents: {
-        defaults: {
-          ...previous.agents.defaults,
-          modelPolicy: {},
-        },
-      },
-    };
-
-    const stamped = stampConfigWriteMetadata(
-      next,
-      "2026-07-18T00:00:00.000Z",
-      "2026.7.2",
-      previous,
-    );
-
-    expect(stamped.agents?.defaults?.modelPolicy).toEqual({});
-    expect(stamped.meta?.migrations?.modelPolicyAllowlist).toBe(true);
-  });
-
-  it("marks a model-map-free write so later model metadata stays unrestricted", () => {
-    const stamped = stampConfigWriteMetadata({}, "2026-07-18T00:00:00.000Z", "2026.7.2", {});
-    const edited = {
-      ...stamped,
-      agents: {
-        defaults: {
-          models: { "custom/private-model": { alias: "private" } },
-        },
-      },
-    };
-
-    expect(stamped.meta?.migrations?.modelPolicyAllowlist).toBe(true);
-    expect(
-      computeModelPolicyAllowlist({
-        root: edited,
-        defaults: edited.agents.defaults,
-      }),
-    ).toBeNull();
-  });
-
-  it("does not widen a legacy restriction from model metadata added by the first write", () => {
-    const previous = {
-      agents: { defaults: { models: { "openai/gpt-5.5": {} } } },
-    };
-    const stamped = stampConfigWriteMetadata(
-      {
-        agents: {
-          defaults: {
-            models: {
-              "openai/gpt-5.5": {},
-              "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
-            },
-          },
-        },
-      },
-      "2026-07-18T00:00:00.000Z",
-      "2026.7.2",
-      previous,
-    );
-
-    expect(stamped.agents?.defaults?.modelPolicy?.allow).toEqual(["openai/gpt-5.5"]);
-    expect(stamped.meta?.migrations?.modelPolicyAllowlist).toBe(true);
-  });
-
-  it("does not drop a legacy restriction when the first write removes model metadata", () => {
-    const stamped = stampConfigWriteMetadata({}, "2026-07-18T00:00:00.000Z", "2026.7.2", {
-      agents: { defaults: { models: { "openai/gpt-5.5": {} } } },
-    });
-
-    expect(stamped.agents?.defaults?.modelPolicy?.allow).toEqual(["openai/gpt-5.5"]);
-    expect(stamped.meta?.migrations?.modelPolicyAllowlist).toBe(true);
-  });
-
-  it("does not materialize per-agent model metadata as policy before stamping", () => {
-    const previous = {
-      agents: {
-        list: [{ id: "worker", models: { "anthropic/claude-sonnet-4-6": {} } }],
-      },
-    };
-
-    const stamped = stampConfigWriteMetadata(
-      previous,
-      "2026-07-18T00:00:00.000Z",
-      "2026.7.2",
-      previous,
-    );
-
-    expect(stamped.agents?.list?.[0]?.modelPolicy).toBeUndefined();
-    expect(stamped.meta?.migrations?.modelPolicyAllowlist).toBe(true);
-  });
-
-  it("keeps per-agent model metadata policy-free when the candidate already has the marker", () => {
-    const previous = {
-      agents: {
-        list: [{ id: "worker", models: { "anthropic/claude-sonnet-4-6": {} } }],
-      },
-    };
-
-    const stamped = stampConfigWriteMetadata(
-      { ...previous, meta: { migrations: { modelPolicyAllowlist: true as const } } },
-      "2026-07-18T00:00:00.000Z",
-      "2026.7.2",
-      previous,
-    );
-
-    expect(stamped.agents?.list?.[0]?.modelPolicy).toBeUndefined();
-    expect(stamped.meta?.migrations?.modelPolicyAllowlist).toBe(true);
-  });
-
-  it("materializes only the default restriction when per-agent metadata is present", () => {
-    const previous = {
-      agents: {
-        defaults: { models: { "openai/gpt-5.5": {} } },
-        list: [{ id: "worker", models: { "anthropic/claude-sonnet-4-6": {} } }],
-      },
-    };
-
-    const stamped = stampConfigWriteMetadata(
-      previous,
-      "2026-07-18T00:00:00.000Z",
-      "2026.7.2",
-      previous,
-    );
-
-    expect(stamped.agents?.defaults?.modelPolicy?.allow).toEqual(["openai/gpt-5.5"]);
-    expect(stamped.agents?.list?.[0]?.modelPolicy).toBeUndefined();
-    expect(stamped.meta?.migrations?.modelPolicyAllowlist).toBe(true);
-  });
-
-  it("does not widen an explicit per-agent policy with newly added metadata", () => {
-    const previous = {
-      agents: {
-        list: [
-          {
-            id: "worker",
-            models: { "anthropic/claude-sonnet-4-6": {} },
-            modelPolicy: { allow: ["anthropic/claude-sonnet-4-6"] },
-          },
-        ],
-      },
-    };
-    const next = {
-      agents: {
-        list: [
-          {
-            id: "worker",
-            models: {
-              "anthropic/claude-sonnet-4-6": {},
-              "openai/gpt-5.5": {},
-            },
-            modelPolicy: { allow: ["anthropic/claude-sonnet-4-6"] },
-          },
-        ],
-      },
-    };
-
-    const stamped = stampConfigWriteMetadata(
-      next,
-      "2026-07-18T00:00:00.000Z",
-      "2026.7.2",
-      previous,
-    );
-
-    expect(stamped.agents?.list?.[0]?.modelPolicy?.allow).toEqual(["anthropic/claude-sonnet-4-6"]);
-    expect(stamped.meta?.migrations?.modelPolicyAllowlist).toBe(true);
-  });
-
-  it("marks a replacement agent's new model map as metadata-only", () => {
-    const previous = {
-      agents: {
-        list: [{ id: "legacy", models: { "anthropic/claude-sonnet-4-6": {} } }],
-      },
-    };
-    const next = {
-      agents: {
-        list: [{ id: "replacement", models: { "openai/gpt-5.5": {} } }],
-      },
-    };
-
-    const stamped = stampConfigWriteMetadata(
-      next,
-      "2026-07-18T00:00:00.000Z",
-      "2026.7.2",
-      previous,
-    );
-
-    expect(stamped.agents?.list?.[0]?.modelPolicy).toBeUndefined();
-    expect(stamped.meta?.migrations?.modelPolicyAllowlist).toBe(true);
-  });
-
-  it("does not trust a candidate marker over an unmarked legacy snapshot", () => {
-    const stamped = stampConfigWriteMetadata(
-      {
-        meta: { migrations: { modelPolicyAllowlist: true } },
-        agents: { defaults: { models: { "openai/gpt-5.5": {} } } },
-      },
-      "2026-07-18T00:00:00.000Z",
-      "2026.7.2",
-      {
-        agents: { defaults: { models: { "anthropic/claude-sonnet-4-6": {} } } },
-      },
-    );
-
-    expect(stamped.agents?.defaults?.modelPolicy?.allow).toEqual(["anthropic/claude-sonnet-4-6"]);
-    expect(stamped.meta?.migrations?.modelPolicyAllowlist).toBe(true);
-  });
-
-  it("marks a newly created metadata model map without restricting it", () => {
-    const stamped = stampConfigWriteMetadata(
-      { agents: { defaults: { models: { "openai/gpt-5.5": {} } } } },
-      "2026-07-18T00:00:00.000Z",
-      "2026.7.2",
-      null,
-    );
-
-    expect(stamped.agents?.defaults?.modelPolicy).toBeUndefined();
-    expect(stamped.meta?.migrations?.modelPolicyAllowlist).toBe(true);
-  });
-
-  it("does not restore a removed allow list after the migration marker exists", () => {
-    const stamped = stampConfigWriteMetadata(
-      { agents: { defaults: { models: { "openai/gpt-5.5": {} } } } },
-      "2026-07-18T00:00:00.000Z",
-      "2026.7.2",
-      {
-        meta: { migrations: { modelPolicyAllowlist: true } },
-        agents: {
-          defaults: {
-            models: { "openai/gpt-5.5": {} },
-            modelPolicy: { allow: ["openai/gpt-5.5"] },
-          },
-        },
-      },
-    );
-
-    expect(stamped.agents?.defaults?.modelPolicy).toBeUndefined();
-    expect(stamped.meta?.migrations?.modelPolicyAllowlist).toBe(true);
-  });
-
-  it("does not restore a removed explicit allow list from a pre-marker config", () => {
-    const stamped = stampConfigWriteMetadata(
-      { agents: { defaults: { models: { "openai/gpt-5.5": {} } } } },
-      "2026-07-18T00:00:00.000Z",
-      "2026.7.2",
-      {
-        agents: {
-          defaults: {
-            models: { "openai/gpt-5.5": {} },
-            modelPolicy: { allow: ["openai/gpt-5.5"] },
-          },
-        },
-      },
-    );
-
-    expect(stamped.agents?.defaults?.modelPolicy).toBeUndefined();
-    expect(stamped.meta?.migrations?.modelPolicyAllowlist).toBe(true);
-  });
+  it.each([false, true])(
+    "defers unresolved restrictions despite candidate marker %s",
+    (candidateMarker) => {
+      const previous = withModels({ bare: {} });
+      const next = { ...previous, ...(candidateMarker ? { meta: marker } : {}) };
+      const stamped = stampConfigWriteMetadata(next, undefined, previous);
+      expect(stamped.agents).toEqual(next.agents);
+      expect(stamped.meta?.migrations?.modelPolicyAllowlist).toBeUndefined();
+      expect(validateConfigObjectRaw(stamped)).toEqual({ ok: true, config: expect.anything() });
+      expect(
+        computeModelPolicyAllowlist({ root: stamped, defaults: stamped.agents?.defaults }),
+      ).toEqual(["bare"]);
+    },
+  );
 });

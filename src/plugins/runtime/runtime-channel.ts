@@ -1,4 +1,3 @@
-// Runtime channel helpers adapt channel plugin APIs into core channel send and reply flows.
 import { convertMarkdownTables } from "../../../packages/markdown-core/src/tables.js";
 import { resolveEffectiveMessagesConfig, resolveHumanDelayConfig } from "../../agents/identity.js";
 import {
@@ -16,20 +15,21 @@ import {
   shouldComputeCommandAuthorized,
 } from "../../auto-reply/command-detection.js";
 import { shouldHandleTextCommands } from "../../auto-reply/commands-registry.js";
-import { settleReplyDispatcher, withReplyDispatcher } from "../../auto-reply/dispatch.js";
+import {
+  settleReplyDispatcher,
+  withReplyDispatcher,
+} from "../../auto-reply/dispatch-dispatcher.js";
 import { formatAgentEnvelope, resolveEnvelopeFormatOptions } from "../../auto-reply/envelope.js";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "../../auto-reply/inbound-debounce.js";
-import { dispatchReplyFromConfig } from "../../auto-reply/reply/dispatch-from-config.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import {
   buildMentionRegexes,
   matchesMentionPatterns,
   matchesMentionWithExplicit,
 } from "../../auto-reply/reply/mentions.js";
-import { dispatchReplyWithBufferedBlockDispatcherCore } from "../../auto-reply/reply/provider-dispatcher.js";
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
 import {
   createAckReactionHandle,
@@ -44,29 +44,38 @@ import {
   resolveInboundMentionDecision,
 } from "../../channels/mention-gating.js";
 import {
+  createChannelIngressPolicyResolver,
+  resolveChannelIngressPolicy,
+  resolveStableChannelIngressPolicy,
+} from "../../channels/message-access/runtime.js";
+import {
   setChannelConversationBindingIdleTimeoutBySessionKey,
+  setChannelConversationBindingIdleTimeoutBySessionKeyAsync,
   setChannelConversationBindingMaxAgeBySessionKey,
+  setChannelConversationBindingMaxAgeBySessionKeyAsync,
 } from "../../channels/plugins/conversation-bindings.js";
 import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.js";
 import { recordInboundSession } from "../../channels/session.js";
-import { runPreparedChannelTurn } from "../../channels/turn/execution.js";
-import {
-  dispatchAssembledChannelTurn,
-  dispatchRoutedChannelTurn,
-} from "../../channels/turn/lifecycle.js";
-import { runChannelTurn } from "../../channels/turn/run-channel-turn.js";
+import type {
+  ChannelTurnDeliveryAdapter,
+  ChannelTurnResult,
+  RunChannelTurnParams,
+} from "../../channels/turn/types.js";
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
 } from "../../config/group-policy.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
 import { resolveSessionStorePathCore } from "../../config/sessions.js";
-import { resolveSessionEntryResetFreshness } from "../../config/sessions/entry-freshness.js";
+import {
+  resolveSessionEntryResetFreshness,
+  resolveSessionEntryResetFreshnessAsync,
+} from "../../config/sessions/entry-freshness.js";
 import {
   readSessionUpdatedAtCore,
   recordInboundSessionMeta,
-  updateSessionLastRoute,
 } from "../../config/sessions/session-accessor.js";
+import { readSessionUpdatedAtInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { getChannelActivity, recordChannelActivity } from "../../infra/channel-activity.js";
 import { readRemoteMediaBuffer, saveRemoteMedia, saveResponseMedia } from "../../media/fetch.js";
 import { saveMediaBuffer } from "../../media/store.js";
@@ -76,29 +85,91 @@ import {
   removeChannelAllowFromStoreEntry,
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
+import {
+  publicChannelTurn,
+  publicChannelTurnParams,
+  type PublicChannelTurnParams,
+} from "../../plugin-sdk/reply-options.js";
+import {
+  updateLastRoute,
+  updateLastRouteWithAuthority,
+} from "../../plugin-sdk/session-store-runtime.js";
 import { buildAgentSessionKey, resolveAgentRoute } from "../../routing/resolve-route.js";
+import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { createChannelRuntimeContextRegistry } from "./channel-runtime-contexts.js";
 import type { PluginRuntime } from "./types.js";
 
+// Text and registration helpers must not initialize the agent dispatch graph.
+const dispatchLowLevelChannelReplyFromConfig = createLazyRuntimeMethod(
+  createLazyRuntimeModule(() => import("../../auto-reply/reply/dispatch-from-config.js")),
+  (runtime) => runtime.dispatchLowLevelChannelReplyFromConfig,
+);
+const dispatchReplyWithBufferedBlockDispatcherCore = createLazyRuntimeMethod(
+  createLazyRuntimeModule(() => import("../../auto-reply/reply/provider-dispatcher.js")),
+  (runtime) => runtime.dispatchReplyWithBufferedBlockDispatcherCore,
+);
+const loadChannelTurnLifecycle = createLazyRuntimeModule(
+  () => import("../../channels/turn/lifecycle.js"),
+);
+const dispatchAssembledChannelTurn = createLazyRuntimeMethod(
+  loadChannelTurnLifecycle,
+  (runtime) => runtime.dispatchAssembledChannelTurn,
+);
+const loadPreparedChannelTurn = createLazyRuntimeModule(
+  () => import("../../channels/turn/execution.js"),
+);
+const runPreparedChannelTurn: PluginRuntime["channel"]["inbound"]["runPreparedReply"] = async (
+  params,
+) => (await loadPreparedChannelTurn()).runPreparedChannelTurn(params);
+const runChannelTurn = createLazyRuntimeMethod(
+  createLazyRuntimeModule(() => import("../../channels/turn/run-channel-turn.js")),
+  (runtime) => runtime.runChannelTurn,
+  // SAFETY: Forwarding async overloads unchanged preserves the raw-event and dispatch-result generics.
+) as typeof import("../../channels/turn/run-channel-turn.js").runChannelTurn;
+
 export function createRuntimeChannel(options?: {
-  dispatchReplyFromConfig?: PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"];
+  dispatchReplyFromConfig?: typeof dispatchLowLevelChannelReplyFromConfig;
 }): PluginRuntime["channel"] {
-  const dispatchInbound: typeof dispatchRoutedChannelTurn = (params) =>
-    dispatchRoutedChannelTurn({
-      ...params,
+  const runInbound = <TRaw, TResult>(
+    params: PublicChannelTurnParams<TRaw, TResult, ChannelTurnDeliveryAdapter>,
+  ): Promise<ChannelTurnResult<TResult>> => {
+    // SAFETY: Core's implementation handles both delivery adapters while preserving the result type.
+    const run = runChannelTurn as (
+      value: RunChannelTurnParams<TRaw, TResult, ChannelTurnDeliveryAdapter>,
+    ) => Promise<ChannelTurnResult<TResult>>;
+    return run(publicChannelTurnParams(params));
+  };
+  const dispatchInbound: PluginRuntime["channel"]["inbound"]["dispatch"] = async (params) =>
+    (await loadChannelTurnLifecycle()).dispatchRoutedChannelTurn({
+      ...publicChannelTurn(params),
       ...(options?.dispatchReplyFromConfig
         ? { dispatchReplyFromConfig: options.dispatchReplyFromConfig }
         : {}),
     });
+  const inboundRuntime = {
+    ingress: {
+      createResolver: createChannelIngressPolicyResolver,
+      resolve: resolveChannelIngressPolicy,
+      resolveStable: resolveStableChannelIngressPolicy,
+    },
+    buildContext: buildChannelInboundEventContext,
+    run: runInbound,
+    runPreparedReply: runPreparedChannelTurn,
+    dispatch: dispatchInbound,
+    dispatchReply: (params) => dispatchAssembledChannelTurn(publicChannelTurn(params)),
+  } satisfies PluginRuntime["channel"]["inbound"];
   const sessionRuntime = {
     resolveStorePath: resolveSessionStorePathCore,
     readSessionUpdatedAt: readSessionUpdatedAtCore,
+    readSessionUpdatedAtAsync: readSessionUpdatedAtInWorker,
     // Plugin runtime property names are a shipped contract; the implementations
     // route through the session accessor boundary.
     recordSessionMetaFromInbound: recordInboundSessionMeta,
     recordInboundSession,
-    updateLastRoute: updateSessionLastRoute,
+    updateLastRoute,
+    updateLastRouteWithAuthority,
     resolveEntryResetFreshness: resolveSessionEntryResetFreshness,
+    resolveEntryResetFreshnessAsync: resolveSessionEntryResetFreshnessAsync,
   };
   const channelRuntime = {
     text: {
@@ -114,11 +185,15 @@ export function createRuntimeChannel(options?: {
       convertMarkdownTables,
     },
     reply: {
-      dispatchReplyWithBufferedBlockDispatcher: dispatchReplyWithBufferedBlockDispatcherCore,
+      dispatchReplyWithBufferedBlockDispatcher: (params) =>
+        dispatchReplyWithBufferedBlockDispatcherCore(publicChannelTurn(params)),
       createReplyDispatcherWithTyping,
       resolveEffectiveMessagesConfig,
       resolveHumanDelayConfig,
-      dispatchReplyFromConfig: options?.dispatchReplyFromConfig ?? dispatchReplyFromConfig,
+      dispatchReplyFromConfig: (params) =>
+        (options?.dispatchReplyFromConfig ?? dispatchLowLevelChannelReplyFromConfig)(
+          publicChannelTurn(params),
+        ),
       withReplyDispatcher,
       settleReplyDispatcher,
       finalizeInboundContext,
@@ -141,15 +216,7 @@ export function createRuntimeChannel(options?: {
           env,
           pairingAdapter,
         }),
-      upsertPairingRequest: ({ channel, id, accountId, meta, env, pairingAdapter }) =>
-        upsertChannelPairingRequest({
-          channel,
-          id,
-          accountId,
-          meta,
-          env,
-          pairingAdapter,
-        }),
+      upsertPairingRequest: upsertChannelPairingRequest,
     },
     media: {
       readRemoteMediaBuffer,
@@ -193,31 +260,16 @@ export function createRuntimeChannel(options?: {
     outbound: {
       loadAdapter: loadChannelOutboundAdapter,
     },
-    inbound: {
-      buildContext: buildChannelInboundEventContext,
-      run: runChannelTurn,
-      runPreparedReply: runPreparedChannelTurn,
-      dispatch: dispatchInbound,
-      dispatchReply: dispatchAssembledChannelTurn,
-    },
+    inbound: inboundRuntime,
+    turn: inboundRuntime,
     threadBindings: {
-      setIdleTimeoutBySessionKey: ({ channelId, targetSessionKey, accountId, idleTimeoutMs }) =>
-        setChannelConversationBindingIdleTimeoutBySessionKey({
-          channelId,
-          targetSessionKey,
-          accountId,
-          idleTimeoutMs,
-        }),
-      setMaxAgeBySessionKey: ({ channelId, targetSessionKey, accountId, maxAgeMs }) =>
-        setChannelConversationBindingMaxAgeBySessionKey({
-          channelId,
-          targetSessionKey,
-          accountId,
-          maxAgeMs,
-        }),
+      setIdleTimeoutBySessionKeyAsync: setChannelConversationBindingIdleTimeoutBySessionKeyAsync,
+      setMaxAgeBySessionKeyAsync: setChannelConversationBindingMaxAgeBySessionKeyAsync,
+      setIdleTimeoutBySessionKey: setChannelConversationBindingIdleTimeoutBySessionKey,
+      setMaxAgeBySessionKey: setChannelConversationBindingMaxAgeBySessionKey,
     },
     runtimeContexts: createChannelRuntimeContextRegistry(),
   } satisfies PluginRuntime["channel"];
 
-  return channelRuntime as PluginRuntime["channel"];
+  return channelRuntime;
 }

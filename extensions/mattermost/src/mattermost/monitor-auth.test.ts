@@ -1,5 +1,7 @@
 // Mattermost tests cover monitor auth plugin behavior.
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { setMattermostRuntime } from "../runtime.js";
 
 const isDangerousNameMatchingEnabled = vi.hoisted(() => vi.fn());
 const resolveAllowlistMatchSimple = vi.hoisted(() => vi.fn());
@@ -13,7 +15,7 @@ describe("mattermost monitor auth", () => {
   let authorizeMattermostCommandInvocation: typeof import("./monitor-auth.js").authorizeMattermostCommandInvocation;
   let formatMattermostDirectMessageDropLog: typeof import("./monitor-auth.js").formatMattermostDirectMessageDropLog;
   let isMattermostSenderAllowed: typeof import("./monitor-auth.js").isMattermostSenderAllowed;
-  let normalizeMattermostAllowEntry: typeof import("./monitor-auth.js").normalizeMattermostAllowEntry;
+  let normalizeMattermostAllowEntry: typeof import("./ingress-identity.js").normalizeMattermostAllowEntry;
   let normalizeMattermostAllowList: typeof import("./monitor-auth.js").normalizeMattermostAllowList;
 
   beforeAll(async () => {
@@ -21,12 +23,13 @@ describe("mattermost monitor auth", () => {
       authorizeMattermostCommandInvocation,
       formatMattermostDirectMessageDropLog,
       isMattermostSenderAllowed,
-      normalizeMattermostAllowEntry,
       normalizeMattermostAllowList,
     } = await import("./monitor-auth.js"));
+    ({ normalizeMattermostAllowEntry } = await import("./ingress-identity.js"));
   });
 
   beforeEach(() => {
+    setMattermostRuntime(createPluginRuntimeMock());
     isDangerousNameMatchingEnabled.mockReset();
     resolveAllowlistMatchSimple.mockReset();
   });

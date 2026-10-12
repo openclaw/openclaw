@@ -4,13 +4,21 @@ import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
+  takeControlUiElementScreenshot,
+  takeControlUiViewportScreenshot,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
+import {
+  controlUiBundledSettingsStorageKey,
   controlUiSessionPath,
   controlUiSessionUrl,
   installMockGateway,
   waitForControlUiRoute,
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
+import { workboardUi } from "../test-helpers/control-ui-workboard-fixture.ts";
+import { compactCronJobFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { openSidebarPages, openSidebarPinMenu } from "./sidebar-customization.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI sidebar customization mocked Gateway E2E",
@@ -21,12 +29,6 @@ const suite = createControlUiE2eSuite({
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const hiddenSessionCatalogsStorageKey = "openclaw:sidebar:sessions:hidden-catalogs";
-const uiProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "sidebar-customization",
-);
 
 async function trimmedTextContents(locator: Locator): Promise<string[]> {
   return (await locator.allTextContents()).map((text) => text.trim());
@@ -40,40 +42,22 @@ function visibleDrawerButton(page: Page) {
   return page.locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible").first();
 }
 
-async function expectLobsterOnFooterLedge(sidebar: Locator) {
-  const footer = sidebar.locator(".sidebar-shell__footer");
-  const sprite = footer.locator(".lobster-pet:not(.lobster-pet--passer)").first();
-  await sprite.waitFor();
-
-  await expect
-    .poll(async () => {
-      const [footerBox, spriteBox, borderTopWidth] = await Promise.all([
-        footer.boundingBox(),
-        sprite.boundingBox(),
-        footer.evaluate((element) =>
-          Number.parseFloat(window.getComputedStyle(element).borderTopWidth),
-        ),
-      ]);
-      if (!footerBox || !spriteBox) {
-        return null;
-      }
-      return {
-        bottomOverlap: Math.round(spriteBox.y + spriteBox.height - footerBox.y - borderTopWidth),
-        isAboveFooter: spriteBox.y < footerBox.y,
-      };
-    })
-    .toEqual({ bottomOverlap: 3, isAboveFooter: true });
-}
-
-async function captureUiProof(page: Page, fileName: string) {
+async function captureUiProof(page: Page, fileName: string, surface = page.locator(".shell")) {
   if (!captureUiProofEnabled) {
     return;
   }
-  await mkdir(uiProofArtifactDir, { recursive: true });
+  await mkdir(path.join(suite.artifactDir, "sidebar-customization"), { recursive: true });
+  if (page.video()) {
+    await writeFile(
+      path.join(suite.artifactDir, "sidebar-customization", fileName),
+      await takeControlUiViewportScreenshot(page, surface, [surface]),
+    );
+    return;
+  }
   await page.screenshot({
     animations: "disabled",
     fullPage: true,
-    path: path.join(uiProofArtifactDir, fileName),
+    path: path.join(path.join(suite.artifactDir, "sidebar-customization"), fileName),
   });
 }
 
@@ -81,11 +65,11 @@ async function captureSettingsSidebarProof(sidebar: Locator, fileName: string) {
   if (!captureUiProofEnabled) {
     return;
   }
-  await mkdir(uiProofArtifactDir, { recursive: true });
-  await sidebar.screenshot({
-    animations: "disabled",
-    path: path.join(uiProofArtifactDir, fileName),
-  });
+  await mkdir(path.join(suite.artifactDir, "sidebar-customization"), { recursive: true });
+  await writeFile(
+    path.join(suite.artifactDir, "sidebar-customization", fileName),
+    await takeControlUiElementScreenshot(sidebar.page(), sidebar, [sidebar.locator("input")]),
+  );
 }
 
 async function holdUiProof(page: Page, durationMs = 600) {
@@ -107,20 +91,133 @@ async function setThemeMode(page: Page, mode: "dark" | "light") {
   await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(mode);
 }
 
-async function openSidebarTestPage() {
-  const context = await suite.browser.newContext({
-    locale: "en-US",
-    serviceWorkers: "block",
-    viewport: { height: 900, width: 1440 },
-  });
-  const page = await context.newPage();
-  await installMockGateway(page);
-  await page.goto(`${suite.server.baseUrl}chat`);
-  await page.waitForFunction(() => Boolean(customElements.get("openclaw-lobster-pet")));
-  return { context, page };
-}
-
 suite.define(() => {
+  it.each(
+    [1440, 390].flatMap((width) => [
+      { width, entry: "route:systems", label: "Systems", route: "chat" },
+      { width, entry: "plugin:workboard/workboard", label: "Workboard", route: "workboard/ops" },
+    ]),
+  )(
+    "keeps $label nav controls aligned and separated at $width px",
+    async ({ width, entry, label, route }) => {
+      await suite.withPage(
+        { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width } },
+        async ({ page }) => {
+          const boards = [
+            { id: "default", total: 0, active: 0, archived: 0, byStatus: {} },
+            { id: "ops", name: "Operations", total: 0, active: 0, archived: 0, byStatus: {} },
+          ];
+          await installMockGateway(page, {
+            ...workboardUi,
+            methodResponses: {
+              "workboard.boards.list": { boards },
+              "workboard.cards.list": { boards, cards: [], statuses: ["todo", "done"] },
+            },
+          });
+          await page.addInitScript(
+            ({ key, leadEntry }) =>
+              localStorage.setItem(
+                key,
+                JSON.stringify({
+                  sidebarAgentsMode: "roster",
+                  sidebarEntries: ["route:agents-home", leadEntry, "route:cron"],
+                }),
+              ),
+            { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), leadEntry: entry },
+          );
+          await page.goto(`${suite.server.baseUrl}${route}`);
+          if (label === "Workboard") {
+            await page.locator(".workboard-page-title", { hasText: "Operations" }).waitFor();
+          }
+          if (width < 900) {
+            await visibleDrawerButton(page).click();
+          }
+          const sidebar = page.locator("openclaw-app-sidebar");
+          const row = sidebar.locator('.sidebar-rail__pin[data-sidebar-entry="' + entry + '"]');
+          await row.waitFor();
+          expect(await row.locator(".nav-item--child").count()).toBe(0);
+          const originalBox = await row.boundingBox();
+          expect(originalBox).not.toBeNull();
+          const order = () =>
+            sidebar
+              .locator(".sidebar-rail__pin")
+              .evaluateAll((pins) => pins.map((pin) => pin.getAttribute("data-sidebar-entry")));
+          const expected = await order();
+          const index = expected.indexOf(entry);
+          expect(index).toBeGreaterThan(0);
+          [expected[index - 1], expected[index]] = [expected[index]!, expected[index - 1]!];
+          const navLink = row.locator(".nav-item").first();
+          await navLink.click({ button: "right" });
+          await page.getByRole("menuitem", { name: "Move up", exact: true }).click();
+          await expect.poll(order).toEqual(expected);
+          const [iconBox, rowBox, linkBox] = await Promise.all([
+            row.locator(".nav-item__icon").first().boundingBox(),
+            row.boundingBox(),
+            navLink.boundingBox(),
+          ]);
+          expect(iconBox).not.toBeNull();
+          expect(rowBox).not.toBeNull();
+          expect(linkBox).not.toBeNull();
+          expect(rowBox!.height).toBe(originalBox!.height);
+          expect(rowBox!.height).toBe(linkBox!.height);
+          expect(
+            Math.abs(iconBox!.x + iconBox!.width / 2 - (linkBox!.x + linkBox!.width / 2)),
+          ).toBeLessThanOrEqual(1);
+          expect(await row.locator(".sidebar-reorder-trigger").count()).toBe(0);
+          if (label === "Workboard") {
+            const pages = await openSidebarPages(page);
+            const operationsEntry = pages.locator(
+              '[data-sidebar-entry="plugin:workboard/board-ops"]',
+            );
+            await operationsEntry.getByRole("link", { name: "Operations", exact: true }).waitFor();
+            if (captureUiProofEnabled && width === 1440) {
+              await writeFile(
+                path.join(suite.artifactDir, "workboard-pages.png"),
+                await takeControlUiElementScreenshot(page, pages, [operationsEntry]),
+              );
+            }
+            // Pages owns a flat entry for every registration, including plugin children.
+            expect(await pages.getByRole("link", { name: "Operations", exact: true }).count()).toBe(
+              1,
+            );
+            expect(
+              await pages
+                .locator('[data-sidebar-entry^="plugin:workboard/"] a')
+                .evaluateAll((links) =>
+                  links
+                    .map((link) => link.getAttribute("href"))
+                    .toSorted((left, right) => (left ?? "").localeCompare(right ?? "")),
+                ),
+            ).toEqual(["/workboard", "/workboard/default", "/workboard/ops"]);
+            expect(await pages.locator(".nav-item--child").count()).toBe(0);
+            expect(await row.locator(".nav-item--child").count()).toBe(0);
+            if (width === 1440) {
+              const operationsPage = pages.locator(".sidebar-pages__entry").filter({
+                has: page.locator('[data-sidebar-entry="plugin:workboard/board-ops"]'),
+              });
+              await operationsPage.getByRole("button", { name: "Pin", exact: true }).click();
+              const shortcut = sidebar.locator(
+                '.sidebar-rail__pin[data-sidebar-entry="plugin:workboard/board-ops"]',
+              );
+              await shortcut.getByRole("link", { name: "Operations", exact: true }).waitFor();
+              await pages.locator('a[href="/workboard/default"]').click();
+              await expect.poll(() => new URL(page.url()).pathname).toBe("/workboard/default");
+              await shortcut.getByRole("link", { name: "Operations", exact: true }).click();
+              await expect.poll(() => new URL(page.url()).pathname).toBe("/workboard/ops");
+              await openSidebarPages(page);
+              await pages.getByRole("link", { name: "Workboard", exact: true }).click();
+              await expect.poll(() => new URL(page.url()).pathname).toBe("/workboard");
+              await operationsPage.getByRole("button", { name: "Unpin", exact: true }).click();
+              await expect.poll(() => shortcut.count()).toBe(0);
+              expect(await operationsEntry.getByRole("link").count()).toBe(1);
+            }
+          }
+          await captureUiProof(page, "lead-" + label + "-" + width + ".png");
+        },
+      );
+    },
+  );
+
   it("uses catalog labels in the hidden-section recovery rows", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
@@ -151,7 +248,10 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}settings/appearance`);
       await waitForControlUiSettingsTakeover(page);
-      await gateway.waitForRequest("sessions.catalog.list");
+      const labelsRequest = await gateway.waitForRequest("sessions.catalog.list", {
+        match: { metadataOnly: true },
+      });
+      expect(labelsRequest.params).not.toHaveProperty("limitPerHost");
       const sidebarSettings = page.locator("#settings-appearance-sidebar");
       await sidebarSettings.getByRole("heading", { name: "Hidden session sections" }).waitFor();
       const recovery = sidebarSettings.locator(".settings-group", { hasText: "offline-catalog" });
@@ -161,17 +261,23 @@ suite.define(() => {
       expect(await recovery.getByText("claude", { exact: true }).count()).toBe(0);
 
       if (captureUiProofEnabled) {
-        await mkdir(uiProofArtifactDir, { recursive: true });
+        await mkdir(path.join(suite.artifactDir, "sidebar-customization"), { recursive: true });
         await recovery.scrollIntoViewIfNeeded();
         for (const theme of ["light", "dark"] as const) {
           await setThemeMode(page, theme);
           await page.screenshot({
             animations: "disabled",
-            path: path.join(uiProofArtifactDir, `after-${theme}-context.png`),
+            path: path.join(
+              path.join(suite.artifactDir, "sidebar-customization"),
+              `after-${theme}-context.png`,
+            ),
           });
           await recovery.screenshot({
             animations: "disabled",
-            path: path.join(uiProofArtifactDir, `after-${theme}-rows.png`),
+            path: path.join(
+              path.join(suite.artifactDir, "sidebar-customization"),
+              `after-${theme}-rows.png`,
+            ),
           });
         }
       }
@@ -186,14 +292,17 @@ suite.define(() => {
     }
   });
 
-  it("pins routes, restores defaults, and persists navigation state across reloads", async () => {
+  it("pins and unpins routes and persists navigation state across reloads", async () => {
     if (captureUiProofEnabled) {
-      await mkdir(uiProofArtifactDir, { recursive: true });
+      await mkdir(path.join(suite.artifactDir, "sidebar-customization"), { recursive: true });
     }
     const context = await suite.browser.newContext({
       locale: "en-US",
       recordVideo: captureUiProofEnabled
-        ? { dir: path.join(uiProofArtifactDir, "video"), size: { height: 900, width: 1300 } }
+        ? {
+            dir: path.join(path.join(suite.artifactDir, "sidebar-customization"), "video"),
+            size: { height: 900, width: 1300 },
+          }
         : undefined,
       serviceWorkers: "block",
       viewport: { height: 900, width: 1440 },
@@ -245,16 +354,15 @@ suite.define(() => {
 
       const sidebar = page.locator("openclaw-app-sidebar");
       const pinnedItems = sidebar.locator(
-        '.sidebar-zone-entry[data-sidebar-entry^="route:"] > .nav-item',
+        '.sidebar-rail__pin[data-sidebar-entry^="route:"] .nav-item',
       );
-      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Automations", "Plugins"]);
-      await expect.poll(() => sidebar.locator(".sidebar-brand").count()).toBe(1);
+      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual([]);
       // Desktop renders no topbar row: the sidebar owns navigation.
       await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
       const shellNav = page.locator(".shell-nav");
       const sidebarResizer = page.getByRole("separator", { name: "Resize sidebar" });
-      await expect.poll(() => roundedWidth(shellNav)).toBe(258);
-      await expect.poll(() => sidebarResizer.getAttribute("aria-valuetext")).toBe("258 pixels");
+      await expect.poll(() => roundedWidth(shellNav)).toBe(310);
+      await expect.poll(() => sidebarResizer.getAttribute("aria-valuetext")).toBe("310 pixels");
       await captureUiProof(page, "00-sidebar-default-width.png");
 
       const resizerBounds = await sidebarResizer.boundingBox();
@@ -276,21 +384,21 @@ suite.define(() => {
       await expect.poll(() => sidebarResizer.getAttribute("class")).toContain("dragging");
       await page.mouse.move(resizerX + 100, resizerY);
       await page.mouse.up();
-      await expect.poll(() => roundedWidth(shellNav)).toBe(358);
-      await expect.poll(() => sidebarResizer.getAttribute("aria-valuetext")).toBe("358 pixels");
+      await expect.poll(() => roundedWidth(shellNav)).toBe(410);
+      await expect.poll(() => sidebarResizer.getAttribute("aria-valuetext")).toBe("410 pixels");
       await captureUiProof(page, "00-sidebar-resized.png");
 
       await page.reload();
-      await expect.poll(() => roundedWidth(shellNav)).toBe(358);
+      await expect.poll(() => roundedWidth(shellNav)).toBe(410);
       // Persisted shell width is restored before the reloaded chat route commits.
       await waitForControlUiRoute(page, { pathnamePrefix: "/chat", routeId: "chat" });
       await page.setViewportSize({ height: 900, width: 1300 });
-      await expect.poll(() => roundedWidth(shellNav)).toBe(358);
+      await expect.poll(() => roundedWidth(shellNav)).toBe(410);
       await sidebarResizer.focus();
       await page.keyboard.press("Home");
-      await expect.poll(() => roundedWidth(shellNav)).toBe(240);
+      await expect.poll(() => roundedWidth(shellNav)).toBe(292);
       await page.keyboard.press("End");
-      await expect.poll(() => roundedWidth(shellNav)).toBe(400);
+      await expect.poll(() => roundedWidth(shellNav)).toBe(452);
       // Settings takes over the whole app: the regular sidebar yields to the
       // settings sidebar until "Back to app" (or Escape) exits. Settings opens
       // through the footer identity card's account utility menu.
@@ -314,7 +422,7 @@ suite.define(() => {
             .getAttribute("aria-current"),
         )
         .toBe("page");
-      await captureUiProof(page, "01a-settings-takeover.png");
+      await captureUiProof(page, "01a-settings-takeover.png", settingsSidebar);
       await captureSettingsSidebarProof(settingsSidebar, "01a-settings-search-initial.png");
       await holdUiProof(page);
       const settingsLinks = settingsSidebar.locator(".settings-sidebar__item");
@@ -364,11 +472,13 @@ suite.define(() => {
           "Ask OpenClaw",
           "Approvals",
           "Infrastructure",
+          "Labs",
           "Advanced",
           "Debug",
           "Logs",
           "Updates",
           "About",
+          "Profile",
           "Appearance",
           "Notifications",
           "Gateway",
@@ -436,7 +546,10 @@ suite.define(() => {
         .toContain("No matching settings.");
       if (captureUiProofEnabled) {
         await writeFile(
-          path.join(uiProofArtifactDir, "settings-search-accessibility.yml"),
+          path.join(
+            path.join(suite.artifactDir, "sidebar-customization"),
+            "settings-search-accessibility.yml",
+          ),
           await settingsSidebar.ariaSnapshot(),
           "utf8",
         );
@@ -471,9 +584,15 @@ suite.define(() => {
       await settingsSearch.fill("channel");
       await captureSettingsSidebarProof(settingsSidebar, "01e-settings-search-route.png");
       await holdUiProof(page);
-      await settingsSidebar.getByRole("link", { name: "Channels" }).first().click();
+      const channelsResult = settingsSidebar.getByRole("link", { name: "Channels" }).first();
+      await channelsResult.click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/channels");
       await expect.poll(() => settingsSearch.inputValue()).toBe("channel");
+      await captureSettingsSidebarProof(
+        settingsSidebar,
+        `settings-navigation-${process.env.OPENCLAW_UI_PROOF_LABEL ?? "current"}.png`,
+      );
+      await expect.poll(() => channelsResult.getAttribute("aria-current")).toBe("page");
       await captureSettingsSidebarProof(settingsSidebar, "01f-settings-search-navigated.png");
       await holdUiProof(page);
       await page.keyboard.press("Escape");
@@ -497,86 +616,45 @@ suite.define(() => {
         .poll(() => page.getByRole("button", { name: "Exit setup" }).isVisible())
         .toBe(false);
       await page.goto(`${suite.server.baseUrl}chat`);
-      await captureUiProof(page, "01-default-pinned.png");
+      await captureUiProof(page, "01-default-clean.png");
 
-      const moreButton = sidebar.locator(".sidebar-nav__head-action");
-      const moreMenu = sidebar.locator("wa-dropdown.sidebar-more-menu");
-      await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("false");
-      await moreButton.click();
-      await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("true");
-      // Enabled plugin tabs render directly in the sidebar body (#111995),
-      // not inside the More menu.
-      await expect
-        .poll(() => trimmedTextContents(moreMenu.getByRole("menuitem")))
-        .not.toContain("Logbook");
-      await expect
-        .poll(() => trimmedTextContents(sidebar.locator(".nav-item__text")))
-        .toContain("Logbook");
-      await expect.poll(() => trimmedTextContents(pinnedItems)).not.toContain("Logbook");
-      // Workboard ships disabled, so it stays hidden from navigation entirely.
-      await expect
-        .poll(() => trimmedTextContents(moreMenu.getByRole("menuitem")))
-        .not.toContain("Workboard");
-
-      await moreMenu.getByRole("menuitem", { name: "Edit pinned items" }).click();
-      const menu = sidebar.locator(
-        "wa-dropdown.sidebar-customize-menu:not(.sidebar-more-menu):not(.sidebar-agent-menu)",
+      const pagesButton = sidebar.getByRole("button", { name: "Pages", exact: true });
+      let pages = await openSidebarPages(page);
+      expect(await pages.getByRole("link", { name: "Logbook", exact: true }).isVisible()).toBe(
+        true,
       );
-      // The pin editor replaces the More menu in place.
-      await expect.poll(() => moreMenu.count()).toBe(0);
-      await expect
-        .poll(() => trimmedTextContents(menu.getByRole("menuitemcheckbox")))
-        .not.toContain("Workboard");
-      const tasksItem = menu.getByRole("menuitemcheckbox", { name: "Tasks" });
-      await expect.poll(() => tasksItem.getAttribute("aria-checked")).toBe("false");
-      // Ask OpenClaw moved to Settings (#111686): custodian is not a sidebar
-      // nav route anymore, so the pin editor does not offer it.
-      await expect
-        .poll(() => menu.getByRole("menuitemcheckbox", { name: "OpenClaw" }).count())
-        .toBe(0);
-      await captureUiProof(page, "02-customize-menu.png");
-
-      await tasksItem.click();
-      await expect
-        .poll(() => trimmedTextContents(pinnedItems))
-        .toEqual(["Automations", "Plugins", "Tasks"]);
+      await expect.poll(() => trimmedTextContents(pinnedItems)).not.toContain("Logbook");
+      expect(await pages.getByRole("link", { name: "Workboard", exact: true }).count()).toBe(0);
+      expect(await pages.getByRole("link", { name: "OpenClaw", exact: true }).count()).toBe(0);
+      const usage = pages
+        .locator(".sidebar-pages__entry")
+        .filter({ has: page.getByRole("link", { name: "Usage", exact: true }) });
+      await usage.getByRole("button", { name: "Pin", exact: true }).click();
+      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Usage"]);
+      await captureUiProof(page, "02-personal-pin.png");
       await page.reload();
-      await expect
-        .poll(() => trimmedTextContents(pinnedItems))
-        .toEqual(["Automations", "Plugins", "Tasks"]);
-      // The More menu is transient: closed after reload, unpinned routes inside.
-      await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("false");
-      await moreButton.click();
-      await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("true");
-      const editPersistedPinnedItems = moreMenu.getByRole("menuitem", {
-        name: "Edit pinned items",
-      });
-      await expect.poll(() => editPersistedPinnedItems.isVisible()).toBe(true);
-      await expect
-        .poll(() => trimmedTextContents(moreMenu.getByRole("menuitem")))
-        .not.toContain("Tasks");
+      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Usage"]);
+      // The transient selected view resets, but saved personal pins do not.
+      await expect.poll(() => pagesButton.getAttribute("aria-pressed")).toBe("false");
+      pages = await openSidebarPages(page);
+      expect(await pages.getByRole("link", { name: "Usage", exact: true }).isVisible()).toBe(true);
       await captureUiProof(page, "03-persisted-customization.png");
+      const pinMenu = await openSidebarPinMenu(page, "route:usage");
+      await pinMenu.getByRole("menuitem", { name: "Unpin", exact: true }).click();
+      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual([]);
+      expect(await pages.getByRole("link", { name: "Usage", exact: true }).isVisible()).toBe(true);
 
-      await editPersistedPinnedItems.click();
-      await menu.getByRole("menuitem", { name: "Reset pinned items" }).click();
-      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Automations", "Plugins"]);
-
-      // The shell chrome search button is the command palette entry point.
-      const searchButton = page.locator(".shell-chrome-controls__search");
+      // The rail search button is the command palette entry point.
+      const searchButton = page.locator(".sidebar-brand__search");
       await searchButton.click();
       const paletteInput = page.locator("#cmd-palette-input");
       await expect.poll(() => paletteInput.isVisible()).toBe(true);
       await page.keyboard.press("Escape");
       await expect.poll(() => paletteInput.isVisible()).toBe(false);
 
-      // The shell chrome toggle stays visible while the desktop sidebar
-      // collapses and expands (there is no icon rail).
-      const collapseButton = page.getByRole("button", { name: "Collapse sidebar" });
-      await expect
-        .poll(() =>
-          collapseButton.evaluate((element) => Boolean(element.closest(".shell-chrome-controls"))),
-        )
-        .toBe(true);
+      // Collapsing the list retains the personal icon rail; the content chrome
+      // provides the matching expand control.
+      const collapseButton = page.locator('[data-navigation-view][aria-pressed="true"]');
       await collapseButton.click();
       await expect
         .poll(() => page.locator(".shell").getAttribute("class"))
@@ -587,22 +665,22 @@ suite.define(() => {
             .locator(".shell")
             .evaluate((element) => getComputedStyle(element).getPropertyValue("--shell-nav-width")),
         )
-        .toBe("0px");
+        .toBe("52px");
       await expect.poll(() => sidebarResizer.count()).toBe(0);
-      await expect.poll(() => sidebar.isVisible()).toBe(false);
+      await expect.poll(() => sidebar.isVisible()).toBe(true);
+      await expect.poll(() => sidebar.locator(".sidebar-shell").isVisible()).toBe(false);
+      await expect.poll(() => sidebar.locator(".sidebar-rail").isVisible()).toBe(true);
       const navExpand = page.locator(".shell-chrome-controls__nav-toggle");
       await expect.poll(() => navExpand.isVisible()).toBe(true);
       await page.reload();
       // Sidebar visibility is tab-local and intentionally not persisted; width is.
-      await expect
-        .poll(() => page.locator(".shell-chrome-controls__nav-toggle").isVisible())
-        .toBe(true);
+      await expect.poll(() => collapseButton.isVisible()).toBe(true);
       await expect
         .poll(() => page.locator(".shell").getAttribute("class"))
         .not.toContain("shell--nav-collapsed");
       await expect.poll(() => sidebar.isVisible()).toBe(true);
-      await expect.poll(() => roundedWidth(shellNav)).toBe(400);
-      await expect.poll(() => sidebarResizer.getAttribute("aria-valuetext")).toBe("400 pixels");
+      await expect.poll(() => roundedWidth(shellNav)).toBe(452);
+      await expect.poll(() => sidebarResizer.getAttribute("aria-valuetext")).toBe("452 pixels");
       await captureUiProof(page, "04-visibility-not-persisted.png");
       await collapseButton.click();
       await expect
@@ -616,7 +694,7 @@ suite.define(() => {
       await expect
         .poll(() => page.locator(".shell").getAttribute("class"))
         .toContain("shell--nav-drawer-open");
-      await expect.poll(() => moreButton.isVisible()).toBe(true);
+      await expect.poll(() => pagesButton.isVisible()).toBe(true);
       await expect.poll(() => sidebarResizer.isVisible()).toBe(false);
       await expect
         .poll(() =>
@@ -637,7 +715,7 @@ suite.define(() => {
       // Widening with the drawer open must not leave its stale state blocking
       // the desktop collapse control.
       await page.setViewportSize({ height: 900, width: 1440 });
-      await page.locator(".shell-chrome-controls__nav-toggle").click();
+      await collapseButton.click();
       await expect
         .poll(() => page.locator(".shell").getAttribute("class"))
         .toContain("shell--nav-collapsed");
@@ -666,7 +744,12 @@ suite.define(() => {
     } finally {
       await context.close();
       if (video) {
-        await video.saveAs(path.join(uiProofArtifactDir, "settings-search-flow.webm"));
+        await video.saveAs(
+          path.join(
+            path.join(suite.artifactDir, "sidebar-customization"),
+            "settings-search-flow.webm",
+          ),
+        );
       }
     }
   });
@@ -682,7 +765,9 @@ suite.define(() => {
         await installMockGateway(page);
 
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:work"));
-        await page.locator("openclaw-app-sidebar .sidebar-brand__new-thread").click();
+        await page
+          .locator("openclaw-app-sidebar .sidebar-session-toolbar .sidebar-new-session")
+          .click();
 
         await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
         await expect.poll(() => new URL(page.url()).searchParams.get("agent")).toBe("main");
@@ -693,7 +778,7 @@ suite.define(() => {
     );
   });
 
-  it("moves Home activity clear of the aligned Pages editor", async () => {
+  it("keeps Home activity and unsent attention stable while rail controls appear", async () => {
     await suite.withPage(
       {
         locale: "en-US",
@@ -727,56 +812,74 @@ suite.define(() => {
 
         await page.goto(`${suite.server.baseUrl}chat`);
         const sidebar = page.locator("openclaw-app-sidebar");
-        const home = sidebar.locator(".nav-item--home");
+        const pages = await openSidebarPages(page);
+        await pages
+          .locator(".sidebar-pages__entry")
+          .filter({ has: page.getByRole("link", { name: "Agents", exact: true }) })
+          .getByRole("button", { name: "Pin", exact: true })
+          .click();
+        await sidebar.getByRole("button", { name: "Sessions", exact: true }).click();
+        const home = sidebar.locator(".sidebar-footer-bar__home");
         await expect.poll(() => home.isVisible()).toBe(true);
         await sidebar.evaluate(async (element) => {
           const host = element as HTMLElement & {
             requestUpdate(): void;
             updateComplete: Promise<unknown>;
           };
-          // The shell refreshes this callback whenever its lazy outbox runtime
+          // The shell refreshes this snapshot whenever its lazy outbox runtime
           // loads. Keep the warning fixture stable until geometry is measured.
-          Object.defineProperty(host, "outboxAttentionCountForSession", {
+          const storedOutboxes = {
+            total: 1,
+            attentionCountForSession: () => 1,
+            hasSessionDraft: () => false,
+          };
+          Object.defineProperty(host, "storedOutboxes", {
             configurable: true,
-            get: () => () => 1,
+            get: () => storedOutboxes,
             set: () => undefined,
           });
           host.requestUpdate();
           await host.updateComplete;
         });
 
-        const activity = home.locator(".sidebar-home-session-states");
-        const editor = sidebar.locator(".sidebar-nav__head-action");
-        await expect.poll(() => activity.locator(".session-run-spinner").count()).toBe(1);
-        await expect.poll(() => activity.locator(".session-row-badge--attention").count()).toBe(1);
+        const activity = home.locator(".session-glyph");
+        const shortcut = sidebar
+          .locator('.sidebar-rail__pin[data-sidebar-entry="route:agents-home"]')
+          .getByRole("link", { name: "Agents", exact: true });
+        await expect
+          .poll(() => home.locator(".session-glyph--running .session-glyph__ring").count())
+          .toBe(1);
+        await expect.poll(() => home.locator(".session-row-badge--attention").count()).toBe(1);
 
         await page.mouse.move(900, 400);
         const restingActivity = await activity.boundingBox();
         expect(restingActivity).not.toBeNull();
-        await sidebar.locator(".sidebar-nav").hover();
-        await expect
-          .poll(() => editor.evaluate((element) => getComputedStyle(element).opacity))
-          .toBe("1");
+        await shortcut.focus();
+        await page.keyboard.press("Shift+F10");
+        await page
+          .locator(".sidebar-rail-pin-menu")
+          .getByRole("menuitem", { name: "Unpin", exact: true })
+          .waitFor();
         await expect
           .poll(async () => {
-            const [homeBox, activityBox, editorBox] = await Promise.all([
+            const [homeBox, activityBox, shortcutBox] = await Promise.all([
               home.boundingBox(),
               activity.boundingBox(),
-              editor.boundingBox(),
+              shortcut.boundingBox(),
             ]);
-            if (!homeBox || !activityBox || !editorBox || !restingActivity) {
+            if (!homeBox || !activityBox || !shortcutBox || !restingActivity) {
               return null;
             }
             return {
               activityShift: Math.round(restingActivity.x - activityBox.x),
               centerDelta: Math.abs(
-                editorBox.y + editorBox.height / 2 - (homeBox.y + homeBox.height / 2),
+                activityBox.x + activityBox.width / 2 - (homeBox.x + homeBox.width / 2),
               ),
-              gap: Math.round(editorBox.x - (activityBox.x + activityBox.width)),
+              clearOfShortcut: shortcutBox.y + shortcutBox.height < homeBox.y,
             };
           })
-          .toEqual({ activityShift: 25, centerDelta: 0, gap: 4 });
-        await captureUiProof(page, "07-home-activity-editor.png");
+          .toEqual({ activityShift: 0, centerDelta: 0, clearOfShortcut: true });
+        await captureUiProof(page, "07-home-activity-rail.png");
       },
     );
   });
@@ -793,7 +896,7 @@ suite.define(() => {
           methodResponses: {
             "cron.list": {
               jobs: [
-                {
+                compactCronJobFixture({
                   id: "release-digest",
                   name: "Release digest",
                   enabled: true,
@@ -807,7 +910,7 @@ suite.define(() => {
                     lastRunStatus: "error",
                     lastError: "Provider request failed",
                   },
-                },
+                }),
               ],
               snapshotRevision: "sidebar-mobile-attention",
               total: 1,
@@ -850,7 +953,7 @@ suite.define(() => {
           'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
         );
         const sidebarAutomation = sidebar.locator('[data-attention-kind="cronFailed"]');
-        await expect.poll(() => sidebar.locator(".sidebar-footer-update").count()).toBe(1);
+        await expect.poll(() => sidebar.locator(".sidebar-issues-button__count").count()).toBe(1);
         await sidebar.locator(".sidebar-issues-button").click();
         await expect.poll(() => sidebarUpdate.count()).toBe(1);
         await expect.poll(() => sidebarAutomation.count()).toBe(1);
@@ -886,119 +989,5 @@ suite.define(() => {
         expect(floatingKinds).toEqual([]);
       },
     );
-  });
-
-  it("passes failed run outcomes through the desktop and drawer sidebar", async () => {
-    await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1440 },
-      },
-      async ({ page }) => {
-        await installMockGateway(page, {
-          methodResponses: {
-            "sessions.list": {
-              count: 1,
-              defaults: {
-                contextTokens: null,
-                model: "gpt-5.5",
-                modelProvider: "openai",
-              },
-              path: "",
-              sessions: [
-                {
-                  endedAt: 100,
-                  key: "main",
-                  kind: "direct",
-                  status: "failed",
-                  updatedAt: 100,
-                },
-              ],
-              ts: 100,
-            },
-          },
-        });
-
-        const outcome = (locator: Locator) =>
-          locator.evaluate(
-            (element) => (element as HTMLElement & { runOutcome: string }).runOutcome,
-          );
-
-        await page.goto(`${suite.server.baseUrl}chat`);
-        const sidebar = page.locator("openclaw-app-sidebar");
-        const pet = sidebar.locator(".sidebar-shell openclaw-lobster-pet");
-        await expect.poll(() => pet.count()).toBe(1);
-        await expect.poll(() => outcome(pet)).toBe("error");
-        await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
-
-        await page.setViewportSize({ height: 900, width: 900 });
-        const drawerButton = visibleDrawerButton(page);
-        await expect.poll(() => drawerButton.isVisible()).toBe(true);
-        await drawerButton.click();
-        await expect.poll(() => sidebar.isVisible()).toBe(true);
-        await expect.poll(() => pet.count()).toBe(1);
-        await expect.poll(() => outcome(pet)).toBe("error");
-      },
-    );
-  });
-
-  it("keeps the lobster on the footer ledge across desktop and drawer layouts", async () => {
-    const { context, page } = await openSidebarTestPage();
-
-    try {
-      const sidebar = page.locator("openclaw-app-sidebar");
-      const pet = sidebar.locator("openclaw-lobster-pet");
-      const movement = await pet.evaluate(async (element) => {
-        const lobster = element as HTMLElement & {
-          anchor: "bar";
-          mode: "offline";
-          performAct(act: "scuttle"): void;
-          requestUpdate(): void;
-          updateComplete: Promise<unknown>;
-        };
-        lobster.mode = "offline";
-        await lobster.updateComplete;
-        lobster.anchor = "bar";
-        lobster.setAttribute("data-spot", "bar");
-        lobster.requestUpdate();
-        await lobster.updateComplete;
-
-        const sprite = lobster.querySelector<HTMLElement>(".lobster-pet:not(.lobster-pet--passer)");
-        const before = sprite?.style.getPropertyValue("--lob-x") ?? "";
-        lobster.performAct("scuttle");
-        await lobster.updateComplete;
-        const after = sprite?.style.getPropertyValue("--lob-x") ?? "";
-        return { after, before, spot: lobster.getAttribute("data-spot") };
-      });
-
-      expect(movement.spot).toBe("bar");
-      expect(movement.after).not.toBe(movement.before);
-      expect(Number.parseFloat(movement.after)).toBeGreaterThanOrEqual(18);
-      expect(Number.parseFloat(movement.after)).toBeLessThanOrEqual(50);
-      await expectLobsterOnFooterLedge(sidebar);
-      // startle clears itself after LOBSTER_PET_ACT_DURATION_MS.startle (750ms), so
-      // poking over one round trip and then polling for the class over another can
-      // straddle the entire window on a loaded runner and never observe it. Poke and
-      // read the resulting class in a single in-page step, as the unit test does.
-      const startleClasses = await pet.evaluate(async (element) => {
-        const lobster = element as HTMLElement & { updateComplete: Promise<unknown> };
-        const target = lobster.querySelector<HTMLElement>(".lobster-pet:not(.lobster-pet--passer)");
-        target?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
-        target?.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
-        await lobster.updateComplete;
-        return target?.getAttribute("class") ?? "";
-      });
-      expect(startleClasses).toContain("lobster-pet--act-startle");
-      await captureUiProof(page, "08-lobster-footer-ledge-desktop.png");
-
-      await page.setViewportSize({ height: 900, width: 900 });
-      await visibleDrawerButton(page).click();
-      await expect.poll(() => sidebar.isVisible()).toBe(true);
-      await expectLobsterOnFooterLedge(sidebar);
-      await captureUiProof(page, "09-lobster-footer-ledge-drawer.png");
-    } finally {
-      await context.close();
-    }
   });
 });

@@ -1,54 +1,52 @@
 import type { SystemChangeEntry } from "@openclaw/gateway-protocol";
 import { html, nothing } from "lit";
+import { renderSettingsLoadingSkeleton } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
+import "../../styles/settings.css";
 
-function changeSourceLabel(source: SystemChangeEntry["source"]): string {
-  switch (source) {
-    case "system-agent":
-      return t("custodian.history.sources.systemAgent");
-    case "doctor":
-      return t("custodian.history.sources.doctor");
-    case "config-rpc":
-      return t("custodian.history.sources.settings");
-    case "external":
-      return t("custodian.history.sources.manualEdit");
-    case "cli":
-      return t("custodian.history.sources.cli");
-    case "plugin-install":
-      return t("custodian.history.sources.pluginInstall");
-    case "unknown":
-      return t("custodian.history.sources.unknown");
-  }
-  return source satisfies never;
-}
+const CHANGE_SOURCE_LABELS = {
+  "system-agent": "custodian.history.sources.systemAgent",
+  doctor: "custodian.history.sources.doctor",
+  "config-rpc": "custodian.history.sources.settings",
+  external: "custodian.history.sources.manualEdit",
+  cli: "custodian.history.sources.cli",
+  "plugin-install": "custodian.history.sources.pluginInstall",
+  unknown: "custodian.history.sources.unknown",
+} satisfies Record<SystemChangeEntry["source"], string>;
 
 function renderHistoryCard(entry: SystemChangeEntry) {
   return html`
     <article class="custodian__change-card ${entry.invalid ? "is-invalid" : ""}">
       <div class="custodian__change-meta">
-        <span class="custodian__change-source">${changeSourceLabel(entry.source)}</span>
+        <span class="custodian__change-source">${t(CHANGE_SOURCE_LABELS[entry.source])}</span>
         <time datetime=${new Date(entry.at).toISOString()}
           >${formatRelativeTimestamp(entry.at)}</time
         >
       </div>
       <div class="custodian__change-summary">${entry.summary}</div>
-      ${entry.invalid
-        ? html`<div class="custodian__change-warning">${t("custodian.history.invalidEdit")}</div>`
-        : nothing}
-      ${entry.opaqueChange
-        ? html`<div class="custodian__change-note">${t("custodian.history.opaqueChange")}</div>`
-        : nothing}
-      ${entry.changedPaths?.length
-        ? html`<details class="custodian__change-paths">
-            <summary>
-              ${t("custodian.history.changedPaths", { count: String(entry.changedPaths.length) })}
-            </summary>
-            <ul>
-              ${entry.changedPaths.map((path) => html`<li><code>${path}</code></li>`)}
-            </ul>
-          </details>`
-        : nothing}
+      ${
+        entry.invalid
+          ? html`<div class="custodian__change-warning">${t("custodian.history.invalidEdit")}</div>`
+          : nothing
+      }
+      ${
+        entry.opaqueChange
+          ? html`<div class="custodian__change-note">${t("custodian.history.opaqueChange")}</div>`
+          : nothing
+      }
+      ${
+        entry.changedPaths?.length
+          ? html`<details class="custodian__change-paths">
+              <summary>
+                ${t("custodian.history.changedPaths", { count: String(entry.changedPaths.length) })}
+              </summary>
+              <ul>
+                ${entry.changedPaths.map((path) => html`<li><code>${path}</code></li>`)}
+              </ul>
+            </details>`
+          : nothing
+      }
     </article>
   `;
 }
@@ -68,38 +66,52 @@ export function renderCustodianChangeHistory(params: {
         <strong>${t("custodian.history.title")}</strong>
         <span>${t("custodian.history.description")}</span>
       </div>
-      ${params.error
-        ? html`<div class="custodian__history-error" role="alert">
-            <span>${params.error}</span>
-            <button class="btn btn--sm" type="button" @click=${() => params.onLoad(true)}>
-              ${t("common.retry")}
-            </button>
-          </div>`
-        : nothing}
-      <div class="custodian__change-list">
-        ${params.entries.map(renderHistoryCard)}
-        ${params.loading
-          ? html`<div class="custodian__history-state" role="status">
-              ${t("custodian.history.loading")}
+      ${
+        params.error
+          ? html`<div class="custodian__history-error" role="alert">
+              <span>${params.error}</span>
+              <button class="btn btn--sm" type="button" @click=${() => params.onLoad(true)}>
+                ${t("common.retry")}
+              </button>
             </div>`
-          : params.loaded && params.entries.length === 0 && !params.error
-            ? html`<div class="custodian__history-state" role="status">
-                ${t("custodian.history.empty")}
-              </div>`
-            : nothing}
-      </div>
-      ${params.nextCursor
-        ? html`<button
-            class="btn btn--ghost custodian__history-more"
-            type="button"
-            ?disabled=${params.loadingMore}
-            @click=${() => params.onLoad(false)}
-          >
-            ${params.loadingMore
-              ? t("custodian.history.loadingMore")
-              : t("custodian.history.loadMore")}
-          </button>`
-        : nothing}
+          : nothing
+      }
+      ${
+        params.loading && params.entries.length === 0
+          ? renderSettingsLoadingSkeleton({ label: t("custodian.history.loading") })
+          : html`<div class="custodian__change-list">
+              ${params.entries.map(renderHistoryCard)}
+              ${
+                params.loading
+                  ? html`<div
+                      class="custodian__history-state"
+                      role="status"
+                      aria-label=${t("custodian.history.loading")}
+                    >
+                      <span class="custodian__history-spinner" aria-hidden="true"></span>
+                    </div>`
+                  : params.loaded && params.entries.length === 0 && !params.error
+                    ? html`<div class="custodian__history-state" role="status">
+                        ${t("custodian.history.empty")}
+                      </div>`
+                    : nothing
+              }
+            </div>`
+      }
+      ${
+        params.nextCursor
+          ? html`<button
+              class="btn btn--ghost custodian__history-more"
+              type="button"
+              ?disabled=${params.loadingMore}
+              @click=${() => params.onLoad(false)}
+            >
+              ${t(
+                params.loadingMore ? "custodian.history.loadingMore" : "custodian.history.loadMore",
+              )}
+            </button>`
+          : nothing
+      }
     </section>
   `;
 }

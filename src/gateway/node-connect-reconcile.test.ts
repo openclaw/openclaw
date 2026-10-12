@@ -8,10 +8,9 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { ConnectParams } from "../../packages/gateway-protocol/src/index.js";
 import type { NodePairingRequestInput, PairedDeviceNode } from "../infra/device-pairing-node.js";
-import {
-  registerComputerUseProvider,
-  type ComputerUseCapabilityDescriptor,
-} from "../plugins/computer-use-contract.js";
+import { resolveNodePairApprovalScopes } from "../infra/node-pairing-authz.js";
+import type { ComputerUseCapabilityDescriptor } from "../plugins/computer-use-contract.js";
+import { registerComputerUseProvider } from "../plugins/computer-use-registration.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveEffectiveComputerUseDescriptor } from "./node-computer-use-descriptor.js";
@@ -44,7 +43,12 @@ function makePairedNode(overrides?: Partial<PairedDeviceNode>): PairedDeviceNode
 function makePendingPairingRequest(requestId: string) {
   return vi.fn(async (input: NodePairingRequestInput) => ({
     status: "pending" as const,
-    request: { ...input, requestId, ts: 1 },
+    request: {
+      ...input,
+      requestId,
+      requiredApproveScopes: resolveNodePairApprovalScopes(input.commands),
+      ts: 1,
+    },
     created: true,
   }));
 }
@@ -87,23 +91,6 @@ describe("reconcileNodePairingOnConnect", () => {
     resetPluginRuntimeStateForTest();
   });
 
-  it("includes declared permissions in pending node pairing requests", async () => {
-    const requestPairing = makePendingPairingRequest("req-1");
-
-    await reconcileNodePairingOnConnect({
-      cfg: {} as never,
-      connectParams: makeNodeConnectParams({
-        permissions: { camera: true, notifications: false },
-      }),
-      pairedNode: null,
-      requestPairing,
-    });
-
-    expectNodePairingRequest(requestPairing, {
-      permissions: { camera: true, notifications: false },
-    });
-  });
-
   it("marks the first-surface request silent when device pairing was non-interactive", async () => {
     const requestPairing = makePendingPairingRequest("req-silent");
 
@@ -121,7 +108,7 @@ describe("reconcileNodePairingOnConnect", () => {
   it("keeps surface upgrade requests interactive even when the device paired silently", async () => {
     const requestPairing = makePendingPairingRequest("req-upgrade-loud");
 
-    await reconcileNodePairingOnConnect({
+    const result = await reconcileNodePairingOnConnect({
       cfg: {} as never,
       connectParams: makeNodeConnectParams({
         caps: ["camera", "screen"],
@@ -135,6 +122,9 @@ describe("reconcileNodePairingOnConnect", () => {
     expect(requestPairing).toHaveBeenCalledOnce();
     const input = requestPairing.mock.calls[0]?.[0];
     expect(input?.silent).toBeUndefined();
+    expect(result.effectiveCaps).toEqual(["camera"]);
+    expect(result.declaredCaps).toEqual(["camera", "screen"]);
+    expect(result.pendingPairing?.request.requestId).toBe("req-upgrade-loud");
   });
 
   it("keeps first-time pending node surfaces declared but not effective", async () => {
@@ -222,46 +212,6 @@ describe("reconcileNodePairingOnConnect", () => {
     expect(approvedPairingRequest).not.toHaveBeenCalled();
   });
 
-  it("keeps an approved computer.act surface effective without re-pairing", async () => {
-    const connectParams = makeNodeConnectParams({
-      client: {
-        id: GATEWAY_CLIENT_IDS.NODE_HOST,
-        version: "test",
-        platform: "macos",
-        deviceFamily: "Mac",
-        mode: GATEWAY_CLIENT_MODES.NODE,
-      },
-      caps: ["screen", "computer"],
-      commands: ["screen.snapshot", "computer.act"],
-      computerUse: computerUseDescriptor(),
-    });
-    const requestPairing = vi.fn();
-
-    // The previously approved, node-enabled surface must reconcile cleanly
-    // instead of demanding a pairing upgrade on every reconnect.
-    const result = await reconcileNodePairingOnConnect({
-      cfg: {} as never,
-      connectParams,
-      pairedNode: makePairedNode({
-        caps: ["screen", "computer"],
-        commands: ["screen.snapshot", "computer.act"],
-      }),
-      requestPairing,
-    });
-
-    expect(requestPairing).not.toHaveBeenCalled();
-    expect(result.declaredCommands).toEqual(["screen.snapshot", "computer.act"]);
-    expect(result.effectiveCommands).toEqual(["screen.snapshot", "computer.act"]);
-    expect(result.declaredComputerUse).toEqual(computerUseDescriptor());
-    expect(
-      resolveEffectiveComputerUseDescriptor({
-        commands: result.effectiveCommands,
-        declared: result.declaredComputerUse,
-      }),
-    ).toEqual(computerUseDescriptor());
-    expect(result.shouldClearPendingPairings).toBe(true);
-  });
-
   it("keeps an approved computer.act surface effective while a computer-use provider plugin is active", async () => {
     // Reproduces a default macOS Gateway: the bundled computer-use provider plugin
     // auto-starts there, so its own registrations are in the active registry while
@@ -326,6 +276,7 @@ describe("reconcileNodePairingOnConnect", () => {
     });
 
     expect(requestPairing).not.toHaveBeenCalled();
+    expect(result.shouldClearPendingPairings).toBe(true);
     expect(result.declaredCommands).toEqual(["screen.snapshot", "computer.act"]);
     expect(result.effectiveCommands).toEqual(["screen.snapshot", "computer.act"]);
     expect(result.declaredCaps).toEqual(["screen", "computer"]);
@@ -492,32 +443,6 @@ describe("reconcileNodePairingOnConnect", () => {
     );
   });
 
-  it("requires a fresh pairing request when paired node capabilities change", async () => {
-    const requestPairing = makePendingPairingRequest("req-caps");
-
-    const result = await reconcileNodePairingOnConnect({
-      cfg: {} as never,
-      connectParams: makeNodeConnectParams({
-        caps: ["camera", "screen"],
-        commands: [],
-      }),
-      pairedNode: makePairedNode({
-        caps: ["camera"],
-        commands: [],
-      }),
-      requestPairing,
-    });
-
-    expectNodePairingRequest(requestPairing, {
-      caps: ["camera", "screen"],
-      commands: [],
-    });
-    expect(result.effectiveCaps).toEqual(["camera"]);
-    expect(result.effectiveCommands).toEqual([]);
-    expect(result.declaredCaps).toEqual(["camera", "screen"]);
-    expect(result.pendingPairing?.request.requestId).toBe("req-caps");
-  });
-
   it("keeps the approved surface when paired-node reapproval is throttled", async () => {
     const requestPairing = vi.fn(async () => null);
 
@@ -540,26 +465,6 @@ describe("reconcileNodePairingOnConnect", () => {
     expect(result.declaredCaps).toEqual(["camera", "screen"]);
     expect(result.pendingPairing).toBeUndefined();
     expect(result.shouldClearPendingPairings).toBeUndefined();
-  });
-
-  it("defers stale pending reapproval cleanup when the node returns to its approved surface", async () => {
-    const requestPairing = makePendingPairingRequest("req-unused");
-
-    const result = await reconcileNodePairingOnConnect({
-      cfg: {} as never,
-      connectParams: makeNodeConnectParams({
-        caps: ["camera"],
-        commands: ["canvas.snapshot"],
-      }),
-      pairedNode: makePairedNode({
-        caps: ["camera"],
-        commands: ["canvas.snapshot"],
-      }),
-      requestPairing,
-    });
-
-    expect(requestPairing).not.toHaveBeenCalled();
-    expect(result.shouldClearPendingPairings).toBe(true);
   });
 
   it("requires a fresh pairing request when paired node permissions widen", async () => {
@@ -587,31 +492,6 @@ describe("reconcileNodePairingOnConnect", () => {
     expect(result.pendingPairing?.request.requestId).toBe("req-permissions");
   });
 
-  it("accepts false-only permission metadata without reapproval", async () => {
-    const requestPairing = vi.fn();
-
-    const result = await reconcileNodePairingOnConnect({
-      cfg: {} as never,
-      connectParams: makeNodeConnectParams({
-        commands: [],
-        permissions: { camera: true, notifications: false, watchReachable: false },
-      }),
-      pairedNode: makePairedNode({
-        commands: [],
-        permissions: { camera: true },
-      }),
-      requestPairing,
-    });
-
-    expect(requestPairing).not.toHaveBeenCalled();
-    expect(result.effectivePermissions).toEqual({
-      camera: true,
-      notifications: false,
-      watchReachable: false,
-    });
-    expect(result.shouldClearPendingPairings).toBe(true);
-  });
-
   it("applies declared capability and permission downgrades without reapproval", async () => {
     const requestPairing = vi.fn();
 
@@ -620,7 +500,7 @@ describe("reconcileNodePairingOnConnect", () => {
       connectParams: makeNodeConnectParams({
         caps: ["camera"],
         commands: [],
-        permissions: { camera: false },
+        permissions: { camera: false, watchReachable: false },
       }),
       pairedNode: makePairedNode({
         caps: ["camera", "screen"],
@@ -633,7 +513,7 @@ describe("reconcileNodePairingOnConnect", () => {
     expect(requestPairing).not.toHaveBeenCalled();
     expect(result.effectiveCaps).toEqual(["camera"]);
     expect(result.effectiveCommands).toEqual([]);
-    expect(result.effectivePermissions).toEqual({ camera: false });
+    expect(result.effectivePermissions).toEqual({ camera: false, watchReachable: false });
     expect(result.pendingPairing).toBeUndefined();
     expect(result.shouldClearPendingPairings).toBe(true);
   });

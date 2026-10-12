@@ -13,10 +13,20 @@ import { MessageActionDeniedError } from "../../infra/outbound/message-action-de
 import { sourceDeliveryTargetsMatch } from "../../infra/outbound/source-delivery-plan.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
-import { normalizeMessageChannel } from "../../utils/message-channel.js";
+import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { channelTargetSchema, stringEnum } from "../schema/typebox.js";
 import { readToolStringParam } from "./common.js";
 import { normalizeEscapedLineBreaksForVisibleText } from "./message-tool-visible-content.js";
+
+export function resolveSourceReplySinkDeliveryMode(
+  provider: string | undefined,
+  configuredMode: SourceReplyDeliveryMode | undefined,
+): SourceReplyDeliveryMode | undefined {
+  // Internal tool sends use the private sink; the run's final answer stays automatic.
+  return normalizeMessageChannel(provider) === INTERNAL_MESSAGE_CHANNEL
+    ? "message_tool_only"
+    : configuredMode;
+}
 
 function sourceReplyPolicyError(message: string): MessageActionDeniedError {
   return new MessageActionDeniedError(
@@ -42,17 +52,11 @@ const SOURCE_REPLY_ONLY_RUNTIME_ARG_NAMES = new Set(["to", "channelId", "final"]
 const SOURCE_REPLY_FINAL_PROPERTY = Type.Optional(
   Type.Boolean({
     description:
-      "Set false for progress. Set true, or omit, for the completed current-source reply.",
+      "For source replies, set false for progress; set true, or omit, for a completed send. For react, set true only when the user explicitly requested the reaction to the current source message as the complete response; omit or set false for acknowledgements or reactions followed by more work.",
   }),
 );
 
-export function addSourceReplyFinalControl<T extends TObject>(
-  schema: T,
-  sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined,
-): T | TObject {
-  if (sourceReplyDeliveryMode !== "message_tool_only") {
-    return schema;
-  }
+export function addSourceReplyFinalControl(schema: TObject): TObject {
   return Type.Object({ ...schema.properties, final: SOURCE_REPLY_FINAL_PROPERTY });
 }
 

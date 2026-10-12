@@ -4,9 +4,6 @@ import {
   type WorkboardAttemptStatus,
   type WorkboardCard,
   type WorkboardDiagnostic,
-  type WorkboardDiagnosticAction,
-  type WorkboardDiagnosticKind,
-  type WorkboardDiagnosticSeverity,
   type WorkboardEvent,
   type WorkboardExecution,
   type WorkboardMetadata,
@@ -15,17 +12,21 @@ import {
   type WorkboardStatus,
 } from "@openclaw/workboard-contract";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { definedFields } from "../record-fields.js";
 import {
   BLOCKED_TOO_LONG_MS,
   MAX_CARD_ATTEMPTS,
+  MAX_CARD_COMMENTS,
   MAX_CARD_EVENTS,
+  MAX_WORKER_CONTEXT_PARENTS,
+  MAX_WORKER_CONTEXT_RECENT_CARDS,
   READY_STRANDED_MS,
   RUNNING_HEARTBEAT_STALE_MS,
 } from "./store-constants.js";
 import type { WorkboardMutationScope } from "./store-inputs.js";
 import {
+  capText,
   metadataIsEmpty,
   normalizeEvents,
   normalizeTimestamp,
@@ -101,7 +102,7 @@ export function syncExecutionAttemptMetadata(
   }
   const previousFailed =
     existingAttempt?.status === "blocked" || existingAttempt?.status === "failed";
-  const attemptFailed = attemptStatus === "blocked" || attemptStatus === "failed";
+  const attemptFailed = attemptStatus === "blocked";
   const failureCount = attemptFailed
     ? previousFailed
       ? metadata.failureCount
@@ -131,6 +132,18 @@ export function appendEvent(
   ].slice(-MAX_CARD_EVENTS);
 }
 
+export function appendComment(
+  comments: WorkboardMetadata["comments"],
+  body: string | undefined,
+  now?: number,
+): WorkboardMetadata["comments"] {
+  return body
+    ? [...(comments ?? []), { id: randomUUID(), body, createdAt: now ?? Date.now() }].slice(
+        -MAX_CARD_COMMENTS,
+      )
+    : comments;
+}
+
 function metadataEntriesChanged(
   existing: WorkboardCard,
   next: WorkboardCard,
@@ -153,17 +166,10 @@ function metadataEntriesChanged(
 }
 
 export function lifecycleStatusSourceUpdatedAtFromPatch(metadata: unknown): number | undefined {
-  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+  if (!isRecord(metadata) || !Object.hasOwn(metadata, "lifecycleStatusSourceUpdatedAt")) {
     return undefined;
   }
-  if (!Object.hasOwn(metadata, "lifecycleStatusSourceUpdatedAt")) {
-    return undefined;
-  }
-  const sourceUpdatedAt = normalizeTimestamp(
-    (metadata as Record<string, unknown>).lifecycleStatusSourceUpdatedAt,
-    0,
-  );
-  return sourceUpdatedAt;
+  return normalizeTimestamp(metadata.lifecycleStatusSourceUpdatedAt, 0);
 }
 
 function latestStatusTransitionAt(card: WorkboardCard): number | undefined {
@@ -248,21 +254,16 @@ export function updateEvent(
     const existingAttempts = existing.metadata?.attempts ?? [];
     const nextAttempts = next.metadata?.attempts ?? [];
     const latestAttempt = nextAttempts.at(-1);
-    if (nextAttempts.length > existingAttempts.length) {
+    const attemptStarted = nextAttempts.length > existingAttempts.length;
+    const previousAttempt =
+      !attemptStarted && latestAttempt
+        ? existingAttempts.find((attempt) => attempt.id === latestAttempt.id)
+        : undefined;
+    if (attemptStarted || (latestAttempt && previousAttempt?.status !== latestAttempt.status)) {
       return {
-        kind: "attempt_started",
+        kind: attemptStarted ? "attempt_started" : "attempt_updated",
         ...(latestAttempt?.sessionKey ? { sessionKey: latestAttempt.sessionKey } : {}),
         ...(latestAttempt?.runId ? { runId: latestAttempt.runId } : {}),
-      };
-    }
-    const previousAttempt = latestAttempt
-      ? existingAttempts.find((attempt) => attempt.id === latestAttempt.id)
-      : undefined;
-    if (latestAttempt && previousAttempt?.status !== latestAttempt.status) {
-      return {
-        kind: "attempt_updated",
-        ...(latestAttempt.sessionKey ? { sessionKey: latestAttempt.sessionKey } : {}),
-        ...(latestAttempt.runId ? { runId: latestAttempt.runId } : {}),
       };
     }
     return {
@@ -286,10 +287,10 @@ export function updateEvent(
       ? { kind: "attachment_added" }
       : { kind: "edited" };
   }
-  if (existing.metadata?.workerProtocol?.state !== next.metadata?.workerProtocol?.state) {
-    return { kind: "orchestration" };
-  }
-  if (metadataEntriesChanged(existing, next, "workerLogs")) {
+  if (
+    existing.metadata?.workerProtocol?.state !== next.metadata?.workerProtocol?.state ||
+    metadataEntriesChanged(existing, next, "workerLogs")
+  ) {
     return { kind: "orchestration" };
   }
   if ((existing.metadata?.diagnostics?.length ?? 0) !== (next.metadata?.diagnostics?.length ?? 0)) {
@@ -317,23 +318,7 @@ export function updateEvent(
 }
 
 export function removeUndefinedCardFields(card: WorkboardCard): WorkboardCard {
-  const next = { ...card };
-  for (const key of [
-    "notes",
-    "agentId",
-    "sessionKey",
-    "runId",
-    "taskId",
-    "sourceUrl",
-    "execution",
-    "startedAt",
-    "completedAt",
-    "metadata",
-  ] as const) {
-    if (next[key] === undefined) {
-      delete next[key];
-    }
-  }
+  const next = definedFields({ ...card });
   if (metadataIsEmpty(next.metadata)) {
     delete next.metadata;
   }
@@ -363,24 +348,6 @@ export function retryBudgetExhausted(card: WorkboardCard): boolean {
   return Boolean(maxRetries && (card.metadata?.failureCount ?? 0) > maxRetries);
 }
 
-function diagnostic(
-  params: {
-    kind: WorkboardDiagnosticKind;
-    severity: WorkboardDiagnosticSeverity;
-    title: string;
-    detail: string;
-    actions: WorkboardDiagnosticAction[];
-  },
-  now: number,
-): WorkboardDiagnostic {
-  return {
-    ...params,
-    firstSeenAt: now,
-    lastSeenAt: now,
-    count: 1,
-  };
-}
-
 export function mergeDiagnostics(
   previous: readonly WorkboardDiagnostic[] | undefined,
   next: WorkboardDiagnostic[],
@@ -399,26 +366,26 @@ export function mergeDiagnostics(
 }
 
 export function computeCardDiagnostics(card: WorkboardCard, now: number): WorkboardDiagnostic[] {
+  const diagnostics: WorkboardDiagnostic[] = [];
+  const addDiagnostic = (
+    params: Omit<WorkboardDiagnostic, "firstSeenAt" | "lastSeenAt" | "count">,
+  ): void => {
+    diagnostics.push({ ...params, firstSeenAt: now, lastSeenAt: now, count: 1 });
+  };
   if (card.metadata?.archivedAt) {
     // Archived cards intentionally skip automation. Keep nonterminal cards
     // visible as a transient diagnostic without rewriting archived metadata.
     if (card.status !== "done") {
-      return [
-        diagnostic(
-          {
-            kind: "archived_but_active",
-            severity: "warning",
-            title: "Archived card is still in an active status",
-            detail: `Card status is "${card.status}" but it is archived, so it is excluded from dispatch without any start failure or error. Unarchive it or move it to "done" to stop the silent skip.`,
-            actions: [],
-          },
-          now,
-        ),
-      ];
+      addDiagnostic({
+        kind: "archived_but_active",
+        severity: "warning",
+        title: "Archived card is still in an active status",
+        detail: `Card status is "${card.status}" but it is archived, so it is excluded from dispatch without any start failure or error. Unarchive it or move it to "done" to stop the silent skip.`,
+        actions: [],
+      });
     }
-    return [];
+    return diagnostics;
   }
-  const diagnostics: WorkboardDiagnostic[] = [];
   const claim = card.metadata?.claim;
   const lastHeartbeatAt = claim?.lastHeartbeatAt ?? card.execution?.updatedAt ?? card.updatedAt;
   if (
@@ -426,63 +393,43 @@ export function computeCardDiagnostics(card: WorkboardCard, now: number): Workbo
     card.agentId &&
     now - card.updatedAt > READY_STRANDED_MS
   ) {
-    diagnostics.push(
-      diagnostic(
-        {
-          kind: "stranded_ready",
-          severity: "warning",
-          title: "Assigned card is waiting",
-          detail: "The card has an assigned agent but has not been claimed recently.",
-          actions: [{ kind: "claim", label: "Claim card" }],
-        },
-        now,
-      ),
-    );
+    addDiagnostic({
+      kind: "stranded_ready",
+      severity: "warning",
+      title: "Assigned card is waiting",
+      detail: "The card has an assigned agent but has not been claimed recently.",
+      actions: [{ kind: "claim", label: "Claim card" }],
+    });
   }
   if (card.status === "running" && now - lastHeartbeatAt > RUNNING_HEARTBEAT_STALE_MS) {
-    diagnostics.push(
-      diagnostic(
-        {
-          kind: "running_without_heartbeat",
-          severity: "error",
-          title: "Running card has no recent heartbeat",
-          detail: "The linked run or claim has not reported recent activity.",
-          actions: [
-            { kind: "open_session", label: "Open session" },
-            { kind: "reassign", label: "Reassign card" },
-          ],
-        },
-        now,
-      ),
-    );
+    addDiagnostic({
+      kind: "running_without_heartbeat",
+      severity: "error",
+      title: "Running card has no recent heartbeat",
+      detail: "The linked run or claim has not reported recent activity.",
+      actions: [
+        { kind: "open_session", label: "Open session" },
+        { kind: "reassign", label: "Reassign card" },
+      ],
+    });
   }
   if (card.status === "blocked" && now - card.updatedAt > BLOCKED_TOO_LONG_MS) {
-    diagnostics.push(
-      diagnostic(
-        {
-          kind: "blocked_too_long",
-          severity: "warning",
-          title: "Blocked card needs attention",
-          detail: "The card has been blocked for more than a day.",
-          actions: [{ kind: "unblock", label: "Move to todo" }],
-        },
-        now,
-      ),
-    );
+    addDiagnostic({
+      kind: "blocked_too_long",
+      severity: "warning",
+      title: "Blocked card needs attention",
+      detail: "The card has been blocked for more than a day.",
+      actions: [{ kind: "unblock", label: "Move to todo" }],
+    });
   }
   if ((card.metadata?.failureCount ?? 0) >= 2) {
-    diagnostics.push(
-      diagnostic(
-        {
-          kind: "repeated_failures",
-          severity: "error",
-          title: "Repeated run failures",
-          detail: "Multiple attempts failed or blocked on this card.",
-          actions: [{ kind: "reassign", label: "Reassign card" }],
-        },
-        now,
-      ),
-    );
+    addDiagnostic({
+      kind: "repeated_failures",
+      severity: "error",
+      title: "Repeated run failures",
+      detail: "Multiple attempts failed or blocked on this card.",
+      actions: [{ kind: "reassign", label: "Reassign card" }],
+    });
   }
   if (
     card.status === "done" &&
@@ -492,41 +439,24 @@ export function computeCardDiagnostics(card: WorkboardCard, now: number): Workbo
       card.metadata?.attachments?.length
     )
   ) {
-    diagnostics.push(
-      diagnostic(
-        {
-          kind: "missing_proof",
-          severity: "warning",
-          title: "Done card has no proof",
-          detail: "The card is marked done without proof or an attached artifact.",
-          actions: [{ kind: "add_proof", label: "Add proof" }],
-        },
-        now,
-      ),
-    );
+    addDiagnostic({
+      kind: "missing_proof",
+      severity: "warning",
+      title: "Done card has no proof",
+      detail: "The card is marked done without proof or an attached artifact.",
+      actions: [{ kind: "add_proof", label: "Add proof" }],
+    });
   }
   if (card.sessionKey && !card.execution && card.status === "running") {
-    diagnostics.push(
-      diagnostic(
-        {
-          kind: "orphaned_session",
-          severity: "warning",
-          title: "Running card has only a loose session link",
-          detail: "The card is running but has no execution record for lifecycle handoff.",
-          actions: [{ kind: "open_session", label: "Open session" }],
-        },
-        now,
-      ),
-    );
+    addDiagnostic({
+      kind: "orphaned_session",
+      severity: "warning",
+      title: "Running card has only a loose session link",
+      detail: "The card is running but has no execution record for lifecycle handoff.",
+      actions: [{ kind: "open_session", label: "Open session" }],
+    });
   }
   return diagnostics;
-}
-
-export function capText(value: string | undefined, max: number): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  return value.length <= max ? value : `${truncateUtf16Safe(value, Math.max(0, max - 1))}…`;
 }
 
 export function cardBoardId(card: WorkboardCard): string {
@@ -624,7 +554,7 @@ export function buildWorkerContext(
   const parentResults = cardParentIds(card)
     .map((parentId) => cardsById.get(parentId))
     .filter((parent): parent is WorkboardCard => parent !== undefined && parent.status === "done")
-    .slice(-6);
+    .slice(-MAX_WORKER_CONTEXT_PARENTS);
   appendWorkerContextSection(
     lines,
     "Parent results",
@@ -643,7 +573,7 @@ export function buildWorkerContext(
               entry.status === "done",
           )
           .toSorted((a, b) => b.updatedAt - a.updatedAt)
-          .slice(0, 5)
+          .slice(0, MAX_WORKER_CONTEXT_RECENT_CARDS)
       : [];
   appendWorkerContextSection(
     lines,
@@ -683,18 +613,19 @@ export function buildWorkerContext(
   return lines.join("\n");
 }
 
-export function cardParentIds(card: WorkboardCard): string[] {
+function cardDependencyIds(card: WorkboardCard, type: "parent" | "child"): string[] {
   return (card.metadata?.links ?? [])
-    .filter((link) => link.type === "parent" && link.targetCardId)
+    .filter((link) => link.type === type && link.targetCardId)
     .map((link) => link.targetCardId!)
     .filter((id, index, ids) => ids.indexOf(id) === index);
 }
 
+export function cardParentIds(card: WorkboardCard): string[] {
+  return cardDependencyIds(card, "parent");
+}
+
 export function cardChildIds(card: WorkboardCard): string[] {
-  return (card.metadata?.links ?? [])
-    .filter((link) => link.type === "child" && link.targetCardId)
-    .map((link) => link.targetCardId!)
-    .filter((id, index, ids) => ids.indexOf(id) === index);
+  return cardDependencyIds(card, "child");
 }
 
 export function latestRunningAttempt(card: WorkboardCard): WorkboardRunAttempt | undefined {
@@ -762,4 +693,3 @@ export function compareNotifications(a: WorkboardNotification, b: WorkboardNotif
   }
   return a.id.localeCompare(b.id);
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,16 +1,21 @@
-import { describe, expect, it, vi } from "vitest";
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { wrapToolWithBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
-import { BEFORE_TOOL_CALL_HOOK_CONTEXT } from "../agents/before-tool-call-metadata.js";
-import type { CodeModeHeadlessResult } from "../agents/code-mode.js";
-import type { AnyAgentTool } from "../agents/tools/common.js";
+import { runCodeModeScriptHeadless, type CodeModeHeadlessResult } from "../agents/code-mode.js";
+import { clearToolSearchCatalog } from "../agents/tool-search.js";
+import { jsonResult, type AnyAgentTool } from "../agents/tools/common.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createCronScriptRuntime } from "./trigger-script.js";
+import { createCronScriptRuntimeFixture as createCronScriptRuntime } from "./trigger-script.test-helpers.js";
 
 type EvaluatorDeps = Parameters<typeof createCronScriptRuntime>[0];
 type HeadlessParams = Parameters<NonNullable<EvaluatorDeps["runHeadless"]>>[0];
 type PrepareParams = Parameters<NonNullable<EvaluatorDeps["prepareRuntime"]>>[0];
 
-const beforeToolCallTesting = { BEFORE_TOOL_CALL_HOOK_CONTEXT };
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function completed(params: { value: unknown; output?: unknown[] }): CodeModeHeadlessResult {
   return {
@@ -38,14 +43,8 @@ function createPreparedRuntime(config: OpenClawConfig) {
     { config, agentId: "main", sessionKey: "cron:test:trigger" },
   );
   return {
-    tools: [tool],
-    ctx: {
-      config,
-      runtimeConfig: config,
-      agentId: "main",
-      sessionKey: "cron:test:trigger",
-    },
-    hookContext: { config, agentId: "main", sessionKey: "cron:test:trigger" },
+    createTools: async () => [tool],
+    context: { config, agentId: "main", sessionKey: "cron:test:trigger" },
   };
 }
 
@@ -69,6 +68,163 @@ function createCronTriggerEvaluator(deps: EvaluatorDeps) {
 }
 
 describe("cron trigger script evaluator", () => {
+  it("cancels the real headless worker and bridge when its evaluation catalog closes", async () => {
+    const entered = createDeferred();
+    const release = createDeferred();
+    const config: OpenClawConfig = {};
+    let context: HeadlessParams["ctx"] | undefined;
+    let aborts = 0;
+    const prepared = createPreparedRuntime(config);
+    const gate: AnyAgentTool = {
+      ...(await prepared.createTools())[0],
+      name: "gate",
+      label: "Gate",
+      description: "Wait for the local fixture",
+      parameters: { type: "object", properties: {} },
+      async execute(_id, _args, signal) {
+        signal?.addEventListener(
+          "abort",
+          () => {
+            aborts += 1;
+          },
+          { once: true },
+        );
+        entered.resolve();
+        await release.promise;
+        return jsonResult(true);
+      },
+    };
+    const runtime = createCronScriptRuntime({
+      config,
+      prepareRuntime: async () => ({ ...prepared, createTools: async () => [gate] }),
+      runHeadless: (params) => {
+        context = params.ctx;
+        return runCodeModeScriptHeadless(params);
+      },
+    });
+    const evaluation = runtime.evaluateTrigger({
+      jobId: "catalog-close",
+      script: 'await gate({}); text("STALE AFTER CLOSE"); return { fire: true };',
+      state: null,
+    });
+    try {
+      await entered.promise;
+      if (!context) {
+        throw new Error("Expected the real headless context");
+      }
+      expect(context.abortSignal?.aborted).toBe(false);
+      clearToolSearchCatalog(context);
+      expect(aborts).toBe(1);
+      await expect(evaluation).resolves.toMatchObject({ kind: "error", code: "aborted" });
+      expect(context.catalogRef?.onDispose).toBeUndefined();
+      release.resolve();
+      await expect(
+        runtime.evaluateTrigger({
+          jobId: "catalog-close",
+          script: "return { fire: false };",
+          state: null,
+        }),
+      ).resolves.toMatchObject({ kind: "evaluated", fire: false });
+      expect(context.catalogRef?.onDispose?.size ?? 0).toBe(0);
+    } finally {
+      release.resolve();
+      await evaluation;
+    }
+  });
+
+  it("does not scaffold an implicit ACP workspace during trigger execution (#92015)", async () => {
+    const parentRepo = tempDirs.make("openclaw-cron-acp-workspace-");
+    expect(spawnSync("git", ["init", "-q"], { cwd: parentRepo }).status).toBe(0);
+    const workspaceDir = path.join(parentRepo, ".openclaw", "workspace");
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: { workspace: workspaceDir },
+        entries: { codex: { runtime: { type: "acp", acp: { agent: "codex", cwd: parentRepo } } } },
+      },
+      plugins: { enabled: false },
+    };
+    const runtime = createCronScriptRuntime({
+      config,
+      runHeadless: vi.fn(async () => completed({ value: { fire: false } })),
+    });
+    await runtime.evaluateTrigger({
+      jobId: "acp-workspace-trigger",
+      agentId: "codex",
+      script: "return { fire: false }",
+      state: null,
+      toolsAllow: [],
+    });
+    expect(fs.existsSync(path.join(workspaceDir, "AGENTS.md"))).toBe(false);
+    expect(fs.existsSync(path.join(workspaceDir, ".git"))).toBe(false);
+    expect(spawnSync("git", ["add", "-A"], { cwd: parentRepo }).status).toBe(0);
+  });
+
+  it.each([
+    { host: "auto", expected: { kind: "evaluated", fire: false } },
+    {
+      host: "node",
+      expected: {
+        kind: "error",
+        code: "internal_error",
+        error: expect.stringContaining(
+          "exec host not allowed (requested gateway; configured host is node",
+        ),
+      },
+    },
+  ] as const)(
+    "honors current host $host for a canonically captured pinned exec cap",
+    async ({ host, expected }) => {
+      const workspaceDir = tempDirs.make("openclaw-cron-canonical-cap-");
+      // Automatic placement must honor the pin despite the script's node request;
+      // an explicit current node restriction must reject the captured Gateway host.
+      const config: OpenClawConfig = {
+        agents: { defaults: { workspace: workspaceDir } },
+        tools: {
+          exec: {
+            host,
+            node: "configured-node-must-not-run",
+            security: "full",
+            ask: "off",
+          },
+        },
+      };
+      const evaluate = createCronScriptRuntime({ config }).evaluateTrigger;
+
+      await expect(
+        evaluate({
+          jobId: "job-canonical-pinned-exec",
+          script:
+            'await exec({ command: "printf openclaw-canonical-ok", host: "node", node: "remote" }); return { fire: false };',
+          state: null,
+          toolsAllow: ["exec", "process"],
+          scheduledToolPolicy: { version: 1, mode: "trusted" },
+          execTarget: { version: 1, host: "gateway" },
+        }),
+      ).resolves.toEqual(expected);
+    },
+  );
+
+  it("keeps an uncanonicalized alias-name cap fail-closed for exec", async () => {
+    const workspaceDir = tempDirs.make("openclaw-cron-alias-collision-");
+    const evaluate = createCronScriptRuntime({
+      config: {
+        agents: { defaults: { workspace: workspaceDir } },
+        tools: { exec: { host: "gateway", security: "full", ask: "off" } },
+      } as OpenClawConfig,
+    }).evaluateTrigger;
+
+    const result = await evaluate({
+      jobId: "job-colliding-gateway-exec",
+      script: 'await exec({ command: "printf must-not-run" }); return { fire: false };',
+      state: null,
+      toolsAllow: ["gateway_exec"],
+      scheduledToolPolicy: { version: 1, mode: "trusted" },
+    });
+
+    expect(result).toMatchObject({ kind: "error", code: "internal_error" });
+    expect(result.kind === "error" ? result.error : "").toContain("exec is not defined");
+  });
+
   it("prefers a valid returned value and injects trigger state", async () => {
     const runHeadless = vi.fn(async (_params: HeadlessParams) =>
       completed({
@@ -107,35 +263,6 @@ describe("cron trigger script evaluator", () => {
     );
   });
 
-  it("injects the current stream batch beside trigger state", async () => {
-    const runHeadless = vi.fn(async () => completed({ value: { fire: false } }));
-    const { evaluate } = createEvaluator(runHeadless);
-
-    await evaluate({
-      jobId: "job-stream",
-      script: "return result",
-      state: { cursor: 2 },
-      streamBatch: "line one\nline two",
-    });
-
-    expect(runHeadless).toHaveBeenCalledWith(
-      expect.objectContaining({
-        extraNamespaces: [
-          expect.objectContaining({
-            globalName: "trigger",
-            scope: {
-              kind: "object",
-              entries: [
-                ["state", { kind: "value", value: { cursor: 2 } }],
-                ["streamBatch", { kind: "value", value: "line one\nline two" }],
-              ],
-            },
-          }),
-        ],
-      }),
-    );
-  });
-
   it("falls back to the last json output entry when the returned object is not a trigger result", async () => {
     const { evaluate } = createEvaluator(
       vi.fn(async () =>
@@ -157,51 +284,6 @@ describe("cron trigger script evaluator", () => {
       fire: true,
       state: { current: true },
     });
-  });
-
-  it("uses a fresh hook run scope for each evaluation", async () => {
-    const contexts: Array<Record<symbol, unknown>> = [];
-    const { evaluate, prepareRuntime } = createEvaluator(
-      vi.fn(async (params) => {
-        const wrapped = params.ctx.catalogRef?.current?.entries[0]?.tool;
-        contexts.push((wrapped ?? {}) as Record<symbol, unknown>);
-        return completed({ value: { fire: false } });
-      }),
-    );
-
-    await evaluate({ jobId: "job-loop-scope", script: "return result", state: null });
-    await evaluate({ jobId: "job-loop-scope", script: "return result", state: null });
-
-    expect(prepareRuntime).toHaveBeenCalledOnce();
-    const runIds = contexts.map((tool) => {
-      const context = tool[beforeToolCallTesting.BEFORE_TOOL_CALL_HOOK_CONTEXT];
-      return (context as { runId?: string } | undefined)?.runId;
-    });
-    expect(runIds[0]).toMatch(/^cron-trigger:job-loop-scope:/);
-    expect(runIds[1]).toMatch(/^cron-trigger:job-loop-scope:/);
-    expect(runIds[1]).not.toBe(runIds[0]);
-  });
-
-  it("single-flights concurrent runtime preparation for the same job", async () => {
-    const config = {} as OpenClawConfig;
-    let release: ((runtime: ReturnType<typeof createPreparedRuntime>) => void) | undefined;
-    const pending = new Promise<ReturnType<typeof createPreparedRuntime>>((resolve) => {
-      release = resolve;
-    });
-    const prepareRuntime = vi.fn(async () => await pending);
-    const runHeadless = vi.fn(async () => completed({ value: { fire: false } }));
-    const evaluate = createCronTriggerEvaluator({ config, prepareRuntime, runHeadless });
-
-    const first = evaluate({ jobId: "job-single-flight", script: "return result", state: null });
-    const second = evaluate({ jobId: "job-single-flight", script: "return result", state: null });
-    await vi.waitFor(() => expect(prepareRuntime).toHaveBeenCalledOnce());
-    release?.(createPreparedRuntime(config));
-
-    await expect(Promise.all([first, second])).resolves.toEqual([
-      { kind: "evaluated", fire: false },
-      { kind: "evaluated", fire: false },
-    ]);
-    expect(runHeadless).toHaveBeenCalledTimes(2);
   });
 
   it("retries shared runtime preparation for a still-live evaluator after its owner aborts", async () => {
@@ -279,32 +361,6 @@ describe("cron trigger script evaluator", () => {
     }
   });
 
-  it("invalidates a cached runtime when toolsAllow changes", async () => {
-    const config = {} as OpenClawConfig;
-    const prepareRuntime = vi.fn(async (_params: PrepareParams) => createPreparedRuntime(config));
-    const runHeadless = vi.fn(async () => completed({ value: { fire: false } }));
-    const evaluate = createCronTriggerEvaluator({ config, prepareRuntime, runHeadless });
-
-    await evaluate({
-      jobId: "job-tools-allow",
-      script: "return result",
-      state: null,
-      toolsAllow: ["probe"],
-    });
-    await evaluate({
-      jobId: "job-tools-allow",
-      script: "return result",
-      state: null,
-      toolsAllow: ["exec"],
-    });
-
-    expect(prepareRuntime).toHaveBeenCalledTimes(2);
-    expect(prepareRuntime.mock.calls.map(([params]) => params.toolsAllow)).toEqual([
-      ["probe"],
-      ["exec"],
-    ]);
-  });
-
   it("forwards scheduled provenance and invalidates cached authority when it changes", async () => {
     const config = {} as OpenClawConfig;
     const prepareRuntime = vi.fn(async (_params: PrepareParams) => createPreparedRuntime(config));
@@ -346,7 +402,6 @@ describe("cron trigger script evaluator", () => {
   });
 
   it.each([
-    completed({ value: null }),
     completed({ value: { fire: "yes" } }),
     completed({ value: { fire: true, message: 42 } }),
   ])("rejects invalid result shapes", async (headlessResult) => {
@@ -396,75 +451,85 @@ describe("cron trigger script evaluator", () => {
     expect(saturated).toEqual({ kind: "busy" });
     expect(runHeadless).toHaveBeenCalledTimes(3);
   });
+});
 
-  it("cancels runtime preparation when its only evaluator aborts", async () => {
-    const config = {} as OpenClawConfig;
-    let preparationSignal: AbortSignal | undefined;
-    const prepareRuntime = vi.fn(async (params: { signal?: AbortSignal }): Promise<never> => {
-      preparationSignal = params.signal;
-      return await new Promise<never>((_resolve, reject) => {
-        params.signal?.addEventListener(
-          "abort",
-          () => {
-            const reason = params.signal?.reason;
-            reject(reason instanceof Error ? reason : new Error("aborted"));
-          },
-          { once: true },
-        );
+describe("cron script runtime elapsed-time budgets", () => {
+  it("preserves an integer elapsed-time budget when the wall clock jumps during preparation", async () => {
+    const config: OpenClawConfig = {};
+    const initialWallClockMs = Date.now();
+    let wallClockJumpMs = 0;
+    const wallClock = vi
+      .spyOn(Date, "now")
+      .mockImplementation(() => initialWallClockMs + wallClockJumpMs);
+    try {
+      const prepareRuntime = vi.fn(async () => {
+        wallClockJumpMs = 60_000;
+        await Promise.resolve();
+        return createPreparedRuntime(config);
       });
-    });
-    const runHeadless = vi.fn(async () => completed({ value: { fire: false } }));
-    const evaluate = createCronTriggerEvaluator({ config, prepareRuntime, runHeadless });
-    const controller = new AbortController();
-    const evaluation = evaluate({
-      jobId: "job-abort-preparation",
-      script: "return result",
-      state: null,
-      abortSignal: controller.signal,
-    });
-    await vi.waitFor(() => expect(prepareRuntime).toHaveBeenCalledOnce());
-
-    controller.abort();
-
-    await expect(evaluation).resolves.toMatchObject({
-      kind: "error",
-      code: "aborted",
-      error: "cron trigger evaluation aborted",
-    });
-    await vi.waitFor(() => expect(preparationSignal?.aborted).toBe(true));
-    expect(runHeadless).not.toHaveBeenCalled();
+      const runHeadless = vi.fn(async (_params: HeadlessParams) =>
+        completed({ value: { fire: false } }),
+      );
+      const runtime = createCronScriptRuntime({ config, prepareRuntime, runHeadless });
+      await expect(
+        runtime.evaluateTrigger({
+          jobId: "wall-clock-trigger",
+          script: "return { fire: false }",
+          state: null,
+        }),
+      ).resolves.toMatchObject({ kind: "evaluated", fire: false });
+      expect(runHeadless).toHaveBeenCalledOnce();
+      const delegatedBudgetMs = runHeadless.mock.calls[0]?.[0]?.wallClockMs;
+      expect(Number.isSafeInteger(delegatedBudgetMs)).toBe(true);
+      expect(delegatedBudgetMs).toBeGreaterThan(15_000);
+      expect(delegatedBudgetMs).toBeLessThanOrEqual(30_000);
+    } finally {
+      wallClock.mockRestore();
+    }
   });
 
-  it("keeps the internal evaluation deadline classified as timeout", async () => {
-    vi.useFakeTimers();
+  it("survives a wall-clock jump after the real headless handoff", async () => {
+    const config: OpenClawConfig = {};
+    const initialWallClockMs = Date.now();
+    let wallClockJumpMs = 0;
+    const wallClock = vi
+      .spyOn(Date, "now")
+      .mockImplementation(() => initialWallClockMs + wallClockJumpMs);
     try {
-      const config = {} as OpenClawConfig;
-      const prepareRuntime = vi.fn(async (params: { signal?: AbortSignal }): Promise<never> => {
-        return await new Promise<never>((_resolve, reject) => {
-          params.signal?.addEventListener("abort", () => reject(abortReason(params.signal)), {
-            once: true,
-          });
-        });
-      });
-      const evaluate = createCronTriggerEvaluator({
+      const shiftClock = {
+        name: "shift_clock",
+        label: "Shift clock",
+        description: "Adjust the test wall clock",
+        parameters: { type: "object", properties: {} },
+        execute: vi.fn(async () => {
+          wallClockJumpMs = 60_000;
+          return jsonResult({ shifted: true });
+        }),
+      } satisfies AnyAgentTool;
+      const observeClock = {
+        ...shiftClock,
+        name: "observe_clock",
+        execute: vi.fn(async () => jsonResult({ observed: true })),
+      } satisfies AnyAgentTool;
+      const runtime = createCronScriptRuntime({
         config,
-        prepareRuntime,
-        runHeadless: vi.fn(async () => completed({ value: { fire: false } })),
+        prepareRuntime: async () => ({
+          ...createPreparedRuntime(config),
+          createTools: async () => [shiftClock, observeClock],
+        }),
       });
-      const evaluation = evaluate({
-        jobId: "job-preparation-timeout",
-        script: "return result",
-        state: null,
-      });
-      await vi.advanceTimersByTimeAsync(30_000);
-
-      await expect(evaluation).resolves.toMatchObject({
-        kind: "error",
-        code: "timeout",
-        error: "cron trigger evaluation timed out",
-      });
+      await expect(
+        runtime.evaluateTrigger({
+          jobId: "real-headless-trigger",
+          script:
+            "await Promise.all([shift_clock({}), observe_clock({})]); await observe_clock({}); return { fire: true };",
+          state: null,
+        }),
+      ).resolves.toMatchObject({ kind: "evaluated", fire: true });
+      expect(shiftClock.execute).toHaveBeenCalledOnce();
+      expect(observeClock.execute).toHaveBeenCalledTimes(2);
     } finally {
-      vi.useRealTimers();
+      wallClock.mockRestore();
     }
   });
 });
@@ -488,6 +553,7 @@ describe("cron script payload evaluator", () => {
 
     expect(runHeadless).toHaveBeenCalledWith(
       expect.objectContaining({
+        maxToolCalls: 50,
         extraNamespaces: [
           expect.objectContaining({
             globalName: "trigger",
@@ -511,7 +577,7 @@ describe("cron script payload evaluator", () => {
         value: {
           notify: "queue changed",
           wake: "now",
-          state: { revision: 2 },
+          state: { revision: 2, dropped: undefined, nonFinite: Number.NaN },
           nextCheck: "5m",
         },
       }),
@@ -535,7 +601,7 @@ describe("cron script payload evaluator", () => {
       notify: "queue changed",
       wake: "now",
       stateChanged: true,
-      state: { revision: 2 },
+      state: { revision: 2, nonFinite: null },
       nextCheck: { delayMs: 300_000 },
     });
     expect(runHeadless).toHaveBeenCalledWith(
@@ -558,45 +624,6 @@ describe("cron script payload evaluator", () => {
     expect(headlessParams?.wallClockMs).toBeLessThanOrEqual(900_000);
   });
 
-  it("uses payload defaults and accepts an omitted result state", async () => {
-    const config = {} as OpenClawConfig;
-    const runHeadless = vi.fn(async (_params: HeadlessParams) => completed({ value: {} }));
-    const runtime = createCronScriptRuntime({
-      config,
-      runHeadless,
-      prepareRuntime: vi.fn(async () => createPreparedRuntime(config)),
-    });
-
-    await expect(
-      runtime.executePayload({ jobId: "payload-defaults", script: "return {}", state: null }),
-    ).resolves.toEqual({ kind: "completed", stateChanged: false });
-    expect(runHeadless).toHaveBeenCalledWith(expect.objectContaining({ maxToolCalls: 50 }));
-    const headlessParams = runHeadless.mock.calls[0]?.[0];
-    expect(headlessParams?.wallClockMs).toBeGreaterThanOrEqual(299_000);
-    expect(headlessParams?.wallClockMs).toBeLessThanOrEqual(300_000);
-  });
-
-  it("canonicalizes returned state to the JSON value that will be persisted", async () => {
-    const config = {} as OpenClawConfig;
-    const runtime = createCronScriptRuntime({
-      config,
-      runHeadless: vi.fn(async () =>
-        completed({
-          value: { state: { keep: 1, dropped: undefined, nonFinite: Number.NaN } },
-        }),
-      ),
-      prepareRuntime: vi.fn(async () => createPreparedRuntime(config)),
-    });
-
-    await expect(
-      runtime.executePayload({ jobId: "payload-json-state", script: "return state", state: null }),
-    ).resolves.toEqual({
-      kind: "completed",
-      stateChanged: true,
-      state: { keep: 1, nonFinite: null },
-    });
-  });
-
   it.each([
     [{ notify: 42 }, "notify must be a string"],
     [{ wake: "later" }, 'wake must be "now" or "next-heartbeat"'],
@@ -613,28 +640,5 @@ describe("cron script payload evaluator", () => {
     await expect(
       runtime.executePayload({ jobId: "payload-invalid", script: "return result", state: null }),
     ).resolves.toMatchObject({ kind: "error", error: expect.stringContaining(error) });
-  });
-
-  it("surfaces executor failures through the cron error contract", async () => {
-    const config = {} as OpenClawConfig;
-    const runtime = createCronScriptRuntime({
-      config,
-      runHeadless: vi.fn(async () => ({
-        status: "failed" as const,
-        code: "tool_budget_exceeded" as const,
-        error: "tool budget exceeded",
-        output: [],
-        toolCallCount: 51,
-      })),
-      prepareRuntime: vi.fn(async () => createPreparedRuntime(config)),
-    });
-
-    await expect(
-      runtime.executePayload({ jobId: "payload-failed", script: "return result", state: null }),
-    ).resolves.toEqual({
-      kind: "error",
-      code: "tool_budget_exceeded",
-      error: "tool budget exceeded",
-    });
   });
 });

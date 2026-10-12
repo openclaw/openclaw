@@ -1,5 +1,4 @@
-/** Cache state helper for plugin loader registries, in-flight loads, and warning suppression. */
-import { PluginLruCache } from "./plugin-cache-primitives.js";
+import { LruCache } from "../infra/lru-cache.js";
 
 /** Error thrown when one plugin registry cache key attempts nested loading. */
 class PluginLoadReentryError extends Error {
@@ -14,12 +13,16 @@ class PluginLoadReentryError extends Error {
 
 /** Small registry cache with reentry detection and per-key warning memory. */
 export class PluginLoaderCacheState<T> {
-  readonly #registryCache: PluginLruCache<T>;
+  readonly #registryCache: LruCache<T>;
   readonly #inFlightLoads = new Set<string>();
-  readonly #openAllowlistWarningCache = new Set<string>();
+  readonly #openAllowlistWarningCache: LruCache<true>;
 
-  constructor(defaultMaxEntries: number) {
-    this.#registryCache = new PluginLruCache<T>(defaultMaxEntries);
+  constructor(
+    defaultMaxEntries: number,
+    private readonly onCache?: (state: T) => void,
+  ) {
+    this.#registryCache = new LruCache<T>(defaultMaxEntries);
+    this.#openAllowlistWarningCache = new LruCache<true>(defaultMaxEntries);
   }
 
   clear(): void {
@@ -39,6 +42,11 @@ export class PluginLoaderCacheState<T> {
 
   set(cacheKey: string, state: T): void {
     this.#registryCache.set(cacheKey, state);
+    this.onCache?.(state);
+  }
+
+  deleteValue(state: T): void {
+    this.#registryCache.deleteValue(state);
   }
 
   isLoadInFlight(cacheKey: string): boolean {
@@ -57,10 +65,10 @@ export class PluginLoaderCacheState<T> {
   }
 
   hasOpenAllowlistWarning(cacheKey: string): boolean {
-    return this.#openAllowlistWarningCache.has(cacheKey);
+    return this.#openAllowlistWarningCache.get(cacheKey) === true;
   }
 
   recordOpenAllowlistWarning(cacheKey: string): void {
-    this.#openAllowlistWarningCache.add(cacheKey);
+    this.#openAllowlistWarningCache.set(cacheKey, true);
   }
 }

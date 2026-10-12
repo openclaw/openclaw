@@ -1,0 +1,91 @@
+import { resolveGatewayRunOptions } from "../cli/gateway-cli/run-options.js";
+import { getGatewayRunRuntimeHooks } from "../cli/gateway-cli/runtime-hooks.js";
+import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
+import { resolveGatewayCredentialsWithSecretInputs } from "../gateway/credentials-secret-inputs.js";
+import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
+import type { RuntimeEnv } from "../runtime.js";
+import { createQuickstartNotePrompter } from "../system-agent/setup-apply.js";
+import { t } from "../wizard/i18n/index.js";
+import { resolveGatewayStartupTiming } from "./gateway-startup-timing.js";
+import {
+  resolveOnboardingDashboardTarget,
+  runBrowserHatchHandoff,
+} from "./onboard-browser-handoff.js";
+import { resolveLocalControlUiProbeLinks, waitForGatewayReachable } from "./onboard-helpers.js";
+
+/** Start the foreground Gateway with fresh plugin facts after onboarding installs. */
+export async function runQuickstartForegroundGateway(params: {
+  runtime: RuntimeEnv;
+  suppressTokenOutput?: boolean;
+  agentId?: string;
+}): Promise<void> {
+  return await withPluginCache(createPluginCache(), async () => {
+    const { runtime } = params;
+    const { config } = await readConfigFileSnapshot();
+    const links = resolveLocalControlUiProbeLinks({
+      bind: config.gateway?.bind,
+      port: resolveGatewayPort(config),
+      customBindHost: config.gateway?.customBindHost,
+      basePath: config.gateway?.controlUi?.basePath,
+      tlsEnabled: config.gateway?.tls?.enabled === true,
+    });
+    const credentials = await resolveGatewayCredentialsWithSecretInputs({
+      config,
+      modeOverride: "local",
+    });
+    const authMode = config.gateway?.auth?.mode ?? (credentials.password ? "password" : "token");
+    const { runGatewayCommand } = await import("../cli/gateway-cli/run.js");
+    const gateway = runGatewayCommand(resolveGatewayRunOptions({}), getGatewayRunRuntimeHooks());
+    const stopped = gateway.then(() => null);
+    const reachable = await Promise.race([
+      stopped,
+      waitForGatewayReachable({
+        url: links.wsUrl,
+        token: authMode === "token" ? credentials.token : undefined,
+        password:
+          authMode === "password" || authMode === "trusted-proxy"
+            ? credentials.password
+            : undefined,
+        ...resolveGatewayStartupTiming(),
+      }),
+    ]);
+    if (!reachable) {
+      return;
+    }
+    if (reachable.ok) {
+      // Browser failure must not end the process that now owns the Gateway.
+      const handoff = await Promise.race([
+        stopped,
+        runBrowserHatchHandoff({
+          config,
+          prompter: createQuickstartNotePrompter(runtime),
+          suppressTokenOutput: params.suppressTokenOutput,
+          ...(params.agentId ? { agentId: params.agentId } : {}),
+        }).catch(() => ({ handedOff: false })),
+      ]);
+      if (!handoff) {
+        return;
+      }
+      if (!handoff.handedOff) {
+        runtime.log(t("wizard.guided.quickstartBrowserUnavailable"));
+      }
+    } else {
+      runtime.log(t("wizard.guided.quickstartGatewayPending"));
+    }
+    const { url: dashboardUrl, setupOnly } = await resolveOnboardingDashboardTarget(
+      links.httpUrl,
+      config,
+      params.agentId,
+    );
+    runtime.log(t("wizard.guided.quickstartDashboard", { url: dashboardUrl.toString() }));
+    runtime.log(t("wizard.guided.quickstartForeground"));
+    runtime.log(t("wizard.guided.quickstartBackground"));
+    runtime.log(t("wizard.guided.quickstartReopen"));
+    if (setupOnly) {
+      runtime.log(
+        "Use openclaw setup for the setup assistant. Choose a primary model with openclaw onboard before regular agent chat.",
+      );
+    }
+    await gateway;
+  });
+}

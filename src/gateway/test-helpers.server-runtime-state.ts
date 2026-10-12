@@ -1,6 +1,9 @@
 // Server runtime-state test helper builds minimal gateway runtime state with a
 // configurable plugin registry.
+import { randomUUID } from "node:crypto";
+import { onTestFinished } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import { createGatewayHttpTransport } from "./server-runtime-state.js";
 
@@ -15,6 +18,7 @@ export async function createGatewayRuntimeStateForTest(
   overrides: Partial<GatewayRuntimeStateParams> = {},
 ) {
   const params = {
+    scheduler: createTestGatewayScheduler(),
     cfg: {},
     bindHost: "127.0.0.1",
     port: 0,
@@ -34,10 +38,25 @@ export async function createGatewayRuntimeStateForTest(
     logPlugins: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } as never,
     ...overrides,
   };
-  const connectionState = createGatewayConnectionState(params);
+  const connectionState = createGatewayConnectionState({ ...params, bootId: randomUUID() });
+  onTestFinished(async () => {
+    await connectionState.mentionInbox.dispose();
+    await params.scheduler.stop();
+  });
   const httpTransport = await createGatewayHttpTransport({
     ...params,
     clients: connectionState.clients,
+  });
+  onTestFinished(async () => {
+    await Promise.all(
+      httpTransport.httpServers.map(
+        (server) =>
+          new Promise<void>((resolve) => {
+            server.close(() => resolve());
+            server.closeAllConnections();
+          }),
+      ),
+    );
   });
   return { ...httpTransport, ...connectionState };
 }

@@ -1,10 +1,16 @@
-// Shared schedule option resolver for cron create/edit commands.
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import {
+  normalizeOptionalString,
+  readNonBlankString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { CronSchedule } from "../../cron/types.js";
+import { CronCliError } from "./cron-cli-error.js";
 import {
   parseAt,
   parseCronStaggerMs,
   parseCronStreamCommandArgv,
+  parseCronTimezoneOption,
   parsePositiveCronDurationMs,
 } from "./shared.js";
 
@@ -25,28 +31,7 @@ type ScheduleOptionInput = {
   tz?: unknown;
 };
 
-type PositionalScheduleInput = {
-  positionalSchedule?: unknown;
-};
-
-type NormalizedScheduleOptions = {
-  at: string;
-  cronExpr: string;
-  every: string;
-  onExitCommand: string;
-  onExitCwd: string | undefined;
-  streamCommand: string[] | undefined;
-  streamCwd: string | undefined;
-  streamCwdSupplied: boolean;
-  streamMode: "line" | "match";
-  streamModeSupplied: boolean;
-  streamMatch: string | undefined;
-  streamMatchSupplied: boolean;
-  streamBatchMs: number | undefined;
-  streamMaxBatchBytes: number | undefined;
-  requestedStaggerMs: number | undefined;
-  tz: string | undefined;
-};
+type NormalizedScheduleOptions = ReturnType<typeof normalizeScheduleOptions>;
 
 /** Normalized schedule edit request, including patch-only updates for cron metadata. */
 type CronEditScheduleRequest =
@@ -62,52 +47,33 @@ type CronEditScheduleRequest =
     }
   | { kind: "none" };
 
-/** Resolve explicit `--at`, `--every`, or `--cron` options for cron creation. */
-function resolveCronCreateSchedule(options: ScheduleOptionInput): CronSchedule {
+/** Resolve cron creation schedule from either a positional shorthand or explicit flags. */
+export function resolveCronCreateScheduleFromArgs(
+  options: ScheduleOptionInput & { positionalSchedule?: unknown },
+): CronSchedule {
+  const positionalSchedule = normalizeOptionalString(options.positionalSchedule);
   const normalized = normalizeScheduleOptions(options);
+  if (positionalSchedule) {
+    if (countChosenSchedules(normalized) > 0) {
+      throw new CronCliError(
+        "Choose a positional schedule or one of --at, --every, --cron, --on-exit, or --stream-command.",
+      );
+    }
+    normalized.every = /^every\s+(.+)$/iu.exec(positionalSchedule)?.[1]?.trim() ?? "";
+    const fields = positionalSchedule.split(/\s+/u).length;
+    normalized.cronExpr = fields === 5 || fields === 6 ? positionalSchedule : "";
+    normalized.at = normalized.every || normalized.cronExpr ? "" : positionalSchedule;
+  }
   if (normalized.onExitCwd && !normalized.onExitCommand) {
-    throw new Error("--on-exit-cwd requires --on-exit.");
+    throw new CronCliError("--on-exit-cwd requires --on-exit.");
   }
   const chosen = countChosenSchedules(normalized);
   if (chosen !== 1) {
-    throw new Error(
+    throw new CronCliError(
       "Choose exactly one schedule: --at, --every, --cron, --on-exit, or --stream-command",
     );
   }
-  const schedule = resolveDirectSchedule(normalized);
-  if (!schedule) {
-    throw new Error(
-      "Choose exactly one schedule: --at, --every, --cron, --on-exit, or --stream-command",
-    );
-  }
-  return schedule;
-}
-
-/** Resolve cron creation schedule from either a positional shorthand or explicit flags. */
-export function resolveCronCreateScheduleFromArgs(
-  options: ScheduleOptionInput & PositionalScheduleInput,
-): CronSchedule {
-  const positionalSchedule = normalizeOptionalString(options.positionalSchedule);
-  if (!positionalSchedule) {
-    return resolveCronCreateSchedule(options);
-  }
-  const normalized = normalizeScheduleOptions(options);
-  if (countChosenSchedules(normalized) > 0) {
-    throw new Error(
-      "Choose a positional schedule or one of --at, --every, --cron, --on-exit, or --stream-command.",
-    );
-  }
-  const every = parseEverySchedule(positionalSchedule);
-  return resolveCronCreateSchedule({
-    ...options,
-    at: every
-      ? undefined
-      : looksLikeCronExpression(positionalSchedule)
-        ? undefined
-        : positionalSchedule,
-    cron: looksLikeCronExpression(positionalSchedule) ? positionalSchedule : undefined,
-    every,
-  });
+  return expectDefined(resolveDirectSchedule(normalized), "created cron schedule");
 }
 
 /** Resolve a cron edit request, allowing at most one direct schedule replacement. */
@@ -119,10 +85,10 @@ export function resolveCronEditScheduleRequest(
   const streamPatchRequested = hasStreamSchedulePatch(normalized);
   if (streamPatchRequested && !normalized.streamCommand) {
     if (normalized.tz !== undefined || normalized.requestedStaggerMs !== undefined) {
-      throw new Error("--tz/--stagger/--exact are not valid with stream schedule edits");
+      throw new CronCliError("--tz/--stagger/--exact are not valid with stream schedule edits");
     }
     if (chosen > 0) {
-      throw new Error("Choose at most one schedule change");
+      throw new CronCliError("Choose at most one schedule change");
     }
     return {
       kind: "patch-existing-stream",
@@ -134,7 +100,7 @@ export function resolveCronEditScheduleRequest(
     };
   }
   if (chosen > 1) {
-    throw new Error("Choose at most one schedule change");
+    throw new CronCliError("Choose at most one schedule change");
   }
   const schedule = resolveDirectSchedule(normalized, { deferStreamMetadataValidation: true });
   if (schedule) {
@@ -143,7 +109,7 @@ export function resolveCronEditScheduleRequest(
   if (normalized.requestedStaggerMs !== undefined || normalized.tz !== undefined) {
     return {
       kind: "patch-existing-cron",
-      tz: normalized.tz,
+      tz: parseCronTimezoneOption(normalized.tz),
       staggerMs: normalized.requestedStaggerMs,
     };
   }
@@ -156,16 +122,18 @@ export function applyExistingStreamSchedulePatch(
   request: Extract<CronEditScheduleRequest, { kind: "patch-existing-stream" }>,
 ): CronSchedule {
   if (existingSchedule.kind !== "stream") {
-    throw new Error("Current job is not a stream schedule; use --stream-command to convert first");
+    throw new CronCliError(
+      "Current job is not a stream schedule; use --stream-command to convert first",
+    );
   }
   const mode = request.mode ?? existingSchedule.mode ?? "line";
   const requestedMatch =
     request.match === undefined ? existingSchedule.match : (request.match ?? undefined);
   if (mode === "match" && !requestedMatch) {
-    throw new Error("--stream-match is required when --stream-mode=match");
+    throw new CronCliError("--stream-match is required when --stream-mode=match");
   }
   if (mode === "line" && request.match) {
-    throw new Error("--stream-match requires --stream-mode=match");
+    throw new CronCliError("--stream-match requires --stream-mode=match");
   }
   return {
     ...existingSchedule,
@@ -183,10 +151,10 @@ export function validateStreamScheduleMetadata(
 ): void {
   const mode = schedule.mode ?? "line";
   if (mode === "match" && !schedule.match) {
-    throw new Error("--stream-match is required when --stream-mode=match");
+    throw new CronCliError("--stream-match is required when --stream-mode=match");
   }
   if (mode === "line" && schedule.match) {
-    throw new Error("--stream-match requires --stream-mode=match");
+    throw new CronCliError("--stream-match requires --stream-mode=match");
   }
 }
 
@@ -196,7 +164,7 @@ export function applyExistingCronSchedulePatch(
   request: Extract<CronEditScheduleRequest, { kind: "patch-existing-cron" }>,
 ): CronSchedule {
   if (existingSchedule.kind !== "cron") {
-    throw new Error("Current job is not a cron schedule; use --cron to convert first");
+    throw new CronCliError("Current job is not a cron schedule; use --cron to convert first");
   }
   return {
     kind: "cron",
@@ -206,35 +174,32 @@ export function applyExistingCronSchedulePatch(
   };
 }
 
-function normalizeScheduleOptions(options: ScheduleOptionInput): NormalizedScheduleOptions {
+function normalizeScheduleOptions(options: ScheduleOptionInput) {
+  for (const value of [options.at, options.every, options.cron, options.onExit]) {
+    if (typeof value === "string" && !value.trim()) {
+      throw new CronCliError("Schedule values must not be blank");
+    }
+  }
   const staggerRaw = normalizeOptionalString(options.stagger) ?? "";
   const useExact = Boolean(options.exact);
   if (staggerRaw && useExact) {
-    throw new Error("Choose either --stagger or --exact, not both");
+    throw new CronCliError("Choose either --stagger or --exact, not both");
   }
   const streamModeSupplied = options.streamMode !== undefined;
-  const suppliedStreamMode = normalizeOptionalString(options.streamMode);
-  if (streamModeSupplied && !suppliedStreamMode) {
-    throw new Error("--stream-mode must be line or match");
-  }
-  const streamModeRaw = suppliedStreamMode ?? "line";
+  const streamModeRaw =
+    normalizeOptionalString(options.streamMode) ?? (streamModeSupplied ? undefined : "line");
   if (streamModeRaw !== "line" && streamModeRaw !== "match") {
-    throw new Error("--stream-mode must be line or match");
+    throw new CronCliError("--stream-mode must be line or match");
   }
+  const streamMode: "line" | "match" = streamModeRaw;
   const parsePositiveInteger = (value: unknown, flag: string): number | undefined => {
-    if (value === undefined) {
-      return undefined;
-    }
-    if (typeof value !== "string" && typeof value !== "number") {
-      throw new Error(`${flag} must be a positive integer`);
-    }
-    const text = String(value).trim();
-    if (!/^\d+$/u.test(text)) {
-      throw new Error(`${flag} must be a positive integer`);
-    }
-    const parsed = Number(text);
-    if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-      throw new Error(`${flag} must be a positive integer`);
+    const parsed =
+      (typeof value === "string" || typeof value === "number") &&
+      /^\d+$/u.test(String(value).trim())
+        ? parseStrictPositiveInteger(value)
+        : undefined;
+    if (value !== undefined && parsed === undefined) {
+      throw new CronCliError(`${flag} must be a positive integer`);
     }
     return parsed;
   };
@@ -242,12 +207,12 @@ function normalizeScheduleOptions(options: ScheduleOptionInput): NormalizedSched
     at: normalizeOptionalString(options.at) ?? "",
     every: normalizeOptionalString(options.every) ?? "",
     cronExpr: normalizeOptionalString(options.cron) ?? "",
-    onExitCommand: normalizeOptionalString(options.onExit) ?? "",
+    onExitCommand: readNonBlankString(options.onExit) ?? "",
     onExitCwd: normalizeOptionalString(options.onExitCwd),
     streamCommand: parseCronStreamCommandArgv(options.streamCommand),
     streamCwd: normalizeOptionalString(options.streamCwd),
     streamCwdSupplied: options.streamCwd !== undefined,
-    streamMode: streamModeRaw,
+    streamMode,
     streamModeSupplied,
     streamMatch: normalizeOptionalString(options.streamMatch),
     streamMatchSupplied: options.streamMatch !== undefined,
@@ -273,22 +238,12 @@ function hasStreamSchedulePatch(options: NormalizedScheduleOptions): boolean {
 
 function countChosenSchedules(options: NormalizedScheduleOptions): number {
   return [
-    Boolean(options.at),
-    Boolean(options.every),
-    Boolean(options.cronExpr),
-    Boolean(options.onExitCommand),
-    Boolean(options.streamCommand),
+    options.at,
+    options.every,
+    options.cronExpr,
+    options.onExitCommand,
+    options.streamCommand,
   ].filter(Boolean).length;
-}
-
-function parseEverySchedule(value: string): string | undefined {
-  const match = /^every\s+(.+)$/iu.exec(value.trim());
-  return match?.[1]?.trim() || undefined;
-}
-
-function looksLikeCronExpression(value: string): boolean {
-  const parts = value.trim().split(/\s+/u);
-  return parts.length === 5 || parts.length === 6;
 }
 
 function resolveDirectSchedule(
@@ -296,28 +251,28 @@ function resolveDirectSchedule(
   behavior: { deferStreamMetadataValidation?: boolean } = {},
 ): CronSchedule | undefined {
   if (options.onExitCwd && !options.onExitCommand) {
-    throw new Error("--on-exit-cwd requires --on-exit.");
+    throw new CronCliError("--on-exit-cwd requires --on-exit.");
   }
   if (hasStreamSchedulePatch(options) && !options.streamCommand) {
-    throw new Error("Stream options require --stream-command.");
+    throw new CronCliError("Stream options require --stream-command.");
   }
   if (options.tz && options.every) {
-    throw new Error("--tz is only valid with --cron or offset-less --at");
+    throw new CronCliError("--tz is only valid with --cron or offset-less --at");
   }
   if (options.requestedStaggerMs !== undefined && (options.at || options.every)) {
-    throw new Error("--stagger/--exact are only valid for cron schedules");
+    throw new CronCliError("--stagger/--exact are only valid for cron schedules");
   }
   if (options.at) {
     const atIso = parseAt(options.at, options.tz);
     if (!atIso) {
-      throw new Error("Invalid --at. Use an ISO timestamp or a duration like 20m.");
+      throw new CronCliError("Invalid --at. Use an ISO timestamp or a duration like 20m.");
     }
     return { kind: "at", at: atIso };
   }
   if (options.every) {
     const everyMs = parsePositiveCronDurationMs(options.every);
     if (!everyMs) {
-      throw new Error("Invalid --every. Use a duration like 10m, 1h, or 1d.");
+      throw new CronCliError("Invalid --every. Use a duration like 10m, 1h, or 1d.");
     }
     return { kind: "every", everyMs };
   }
@@ -325,13 +280,13 @@ function resolveDirectSchedule(
     return {
       kind: "cron",
       expr: options.cronExpr,
-      tz: options.tz,
+      tz: parseCronTimezoneOption(options.tz),
       staggerMs: options.requestedStaggerMs,
     };
   }
   if (options.onExitCommand) {
     if (options.tz || options.requestedStaggerMs !== undefined) {
-      throw new Error("--tz/--stagger/--exact are not valid with --on-exit");
+      throw new CronCliError("--tz/--stagger/--exact are not valid with --on-exit");
     }
     return {
       kind: "on-exit",
@@ -341,7 +296,7 @@ function resolveDirectSchedule(
   }
   if (options.streamCommand) {
     if (options.tz || options.requestedStaggerMs !== undefined) {
-      throw new Error("--tz/--stagger/--exact are not valid with --stream-command");
+      throw new CronCliError("--tz/--stagger/--exact are not valid with --stream-command");
     }
     const schedule: Extract<CronSchedule, { kind: "stream" }> = {
       kind: "stream",

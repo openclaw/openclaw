@@ -1,23 +1,25 @@
-/**
- * Bundled Codex plugin entry: app-server harness, media understanding,
- * migration provider, CLI-session commands, and binding hooks.
- */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
 import {
   normalizePluginsConfig,
   resolveEffectiveEnableState,
   resolveLivePluginConfigObject,
 } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  PluginStateKeyedStore,
+  PluginStateSyncKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import { registerCodexCliMetadata } from "./cli-metadata.js";
 import {
   createCodexAppServerAgentHarness,
   createCodexAppServerNativeCompaction,
 } from "./harness.js";
 import { buildCodexMediaUnderstandingProvider } from "./media-understanding-provider.js";
-import { readCodexPluginConfig } from "./src/app-server/config.js";
+import codexProviderDiscovery from "./provider-discovery.js";
+import { registerCodexAccountUsage } from "./src/account-usage.js";
+import { createCodexAuthProfileSelection } from "./src/app-server/auth-profile-selection.js";
+import { createCodexAppServerConfig } from "./src/app-server/config-options.js";
+import { readCodexPluginConfig } from "./src/app-server/config-parsing.js";
 import { createCodexAppServerConnectionHealthService } from "./src/app-server/connection-health.js";
 import { createCodexDesktopGenerationService } from "./src/app-server/desktop-generation.js";
 import { setManagedCodexPluginRoot } from "./src/app-server/managed-binary.js";
@@ -32,10 +34,15 @@ import {
   createLazyCodexAppServerBindingStore,
   type StoredCodexAppServerBinding,
 } from "./src/app-server/session-binding-store.js";
-import { retireSharedCodexAppServerClientsBeforeDesktopGeneration } from "./src/app-server/shared-client.js";
-import type { CodexPluginsConfigBlock } from "./src/command-plugins-management.js";
+import { retireSharedCodexAppServerClientsBeforeDesktopGeneration } from "./src/app-server/shared-client-lifecycle.js";
+import { createCodexAppServerProcessReaperService } from "./src/app-server/transport-process-registration.js";
+import { codexNativeProfileRecoveryService } from "./src/auth-profile-health.js";
+import type { CodexPluginsConfigBlock } from "./src/command-plugin-config.js";
 import { createCodexCommand } from "./src/commands.js";
-import { codexConversationBindingRuntime } from "./src/conversation-binding.js";
+import {
+  handleCodexConversationBindingResolved,
+  handleCodexConversationInboundClaim,
+} from "./src/conversation-binding-hooks.js";
 import { buildCodexMigrationProvider } from "./src/migration/provider.js";
 import { createCodexPluginsTool } from "./src/native-plugin-tool.js";
 import { createCodexThreadsTool } from "./src/native-thread-tool.js";
@@ -51,10 +58,15 @@ import {
   createCodexNodeExecServerInvokePolicy,
 } from "./src/node-exec-server.js";
 import {
+  CODEX_CATALOG_STATE_NAMESPACE,
+  type StoredCodexCatalogEntry,
+} from "./src/session-catalog-index-state.js";
+import { CODEX_CATALOG_MAX_ROWS } from "./src/session-catalog-limits.js";
+import {
   createCodexSessionCatalogControl,
   createCodexSessionCatalogNodeHostCommands,
   createCodexSessionCatalogNodeInvokePolicies,
-  codexSessionCatalogRuntime,
+  registerCodexSessionCatalog,
 } from "./src/session-catalog.js";
 import {
   CODEX_SUPERVISION_COMPAT_TOOL_NAMES,
@@ -62,22 +74,22 @@ import {
 } from "./src/supervision-tools.js";
 import { createCodexWebSearchProvider } from "./src/web-search-provider.js";
 
-const ENDED_SESSION_REASONS: ReadonlySet<string> = new Set([
-  "new",
-  "reset",
-  "idle",
-  "daily",
-  "deleted",
-]);
+const ENDED_SESSION_REASONS: ReadonlySet<string> = new Set(["new", "reset", "idle", "daily"]);
 
 export default definePluginEntry({
   id: "codex",
   name: "Codex",
   description: "Codex app-server harness and native session supervision.",
+  reload: {
+    noopPrefixes: ["plugins.entries.codex.config.codexPlugins"],
+  },
   register(api) {
+    registerCodexAccountUsage(api);
+    api.registerService(codexNativeProfileRecoveryService);
     // Bundled modules may execute from a shared dist chunk, so import.meta.url
     // cannot identify the owning plugin package or its pinned dependencies.
     setManagedCodexPluginRoot(api.rootDir);
+    api.registerProvider(codexProviderDiscovery);
     const resolveCurrentConfig = () =>
       api.runtime.config?.current ? (api.runtime.config.current() as OpenClawConfig) : undefined;
     const resolvePluginConfig = (resolveConfig: () => OpenClawConfig | undefined) => {
@@ -101,13 +113,10 @@ export default definePluginEntry({
         // codex config block, so a live block is the plugin-side default. Gating
         // on a feature flag (supervision) here would silently drop unrelated
         // harness settings such as appServer.homeScope; feature gates belong in
-        // the feature's own surface (see requireSupervisionEnabled).
+        // the feature's own surface (see requireLiveToolPolicy).
         enabledByDefault: livePluginConfig !== undefined,
       }).enabled;
-      if (!enabled) {
-        return undefined;
-      }
-      return livePluginConfig;
+      return enabled ? livePluginConfig : undefined;
     };
     const resolveCurrentPluginConfig = () => resolvePluginConfig(resolveCurrentConfig);
     const appServerConfig = readCodexPluginConfig(resolveCurrentPluginConfig()).appServer;
@@ -116,6 +125,7 @@ export default definePluginEntry({
         onGenerationChange: retireSharedCodexAppServerClientsBeforeDesktopGeneration,
       }),
     );
+    api.registerService(createCodexAppServerProcessReaperService());
     if (appServerConfig?.transport === "websocket") {
       api.registerService(
         createCodexAppServerConnectionHealthService({
@@ -125,38 +135,45 @@ export default definePluginEntry({
       );
     }
     let bindingStateStore: PluginStateSyncKeyedStore<StoredCodexAppServerBinding> | undefined;
-    let managedThreadStateStore: PluginStateSyncKeyedStore<StoredCodexManagedThread> | undefined;
+    let bindingMutationStore: PluginStateKeyedStore<StoredCodexAppServerBinding, 2> | undefined;
+    let managedThreadStateStore: PluginStateKeyedStore<StoredCodexManagedThread, 2> | undefined;
+    const bindingStateOptions = {
+      namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
+      maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
+      overflowPolicy: "reject-new" as const,
+    };
     const openBindingStateStore = () =>
-      (bindingStateStore ??= api.runtime.state.openSyncKeyedStore<StoredCodexAppServerBinding>({
-        namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
-        maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
-        overflowPolicy: "reject-new",
-      }));
+      (bindingStateStore ??=
+        api.runtime.state.openSyncKeyedStore<StoredCodexAppServerBinding>(bindingStateOptions));
+    const openBindingMutationStore = () =>
+      (bindingMutationStore ??=
+        api.runtime.state.openKeyedStoreV2<StoredCodexAppServerBinding>(bindingStateOptions));
     // The base registration runtime deliberately rejects state access. Open the
     // store only when a proxied runtime performs the first binding operation.
-    const lazyBindingStateStore: Pick<
-      PluginStateSyncKeyedStore<StoredCodexAppServerBinding>,
-      "delete" | "entries" | "lookup" | "update"
-    > = {
-      delete: (key) => openBindingStateStore().delete(key),
-      entries: () => openBindingStateStore().entries(),
+    const lazyBindingStateStore: Parameters<typeof createLazyCodexAppServerBindingStore>[0] = {
+      // Final effect guards still see raw SDK revocations until the next SDK major.
       lookup: (key) => openBindingStateStore().lookup(key),
-      get update() {
-        const store = openBindingStateStore();
-        return store.update?.bind(store);
+      asyncReads: {
+        lookup: (key) => openBindingMutationStore().lookup(key),
+        lookupMany: (keys) => openBindingMutationStore().lookupMany(keys),
+        entries: () => openBindingMutationStore().entries(),
       },
+      withCurrent: (authority) =>
+        api.runtime.state.openKeyedStoreV2<StoredCodexAppServerBinding>(
+          bindingStateOptions,
+          authority,
+        ),
     };
     const openManagedThreadStateStore = () =>
-      (managedThreadStateStore ??= api.runtime.state.openSyncKeyedStore<StoredCodexManagedThread>({
+      (managedThreadStateStore ??= api.runtime.state.openKeyedStoreV2<StoredCodexManagedThread>({
         namespace: CODEX_MANAGED_THREAD_NAMESPACE,
         maxEntries: CODEX_MANAGED_THREAD_MAX_ENTRIES,
         // Catalog-only ownership may evict its oldest row. Modern rollouts/transcripts are
         // rediscovered from provenance; very old markerless sessions may reappear after eviction.
         overflowPolicy: "evict-oldest",
       }));
-    const lazyManagedThreadStateStore: Pick<
-      PluginStateSyncKeyedStore<StoredCodexManagedThread>,
-      "entries" | "registerIfAbsent"
+    const lazyManagedThreadStateStore: NonNullable<
+      Parameters<typeof createLazyCodexAppServerBindingStore>[1]
     > = {
       entries: () => openManagedThreadStateStore().entries(),
       registerIfAbsent: (key, value) => openManagedThreadStateStore().registerIfAbsent(key, value),
@@ -166,16 +183,33 @@ export default definePluginEntry({
       lazyManagedThreadStateStore,
     );
     registerCodexCliMetadata(api);
+    const { resolveCodexSupervisionAppServerRuntimeOptions } = createCodexAppServerConfig(
+      api.runtime.modelAuth,
+    );
     const sessionCatalogControlFactory = createCodexSessionCatalogControl({
+      resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
+      managedThreads: bindingStore.managedThreads,
       config: api.config as OpenClawConfig,
       getPluginConfig: resolveCurrentPluginConfig,
       getRuntimeConfig: resolveCurrentConfig,
+      openResidentState: (homeId) =>
+        api.runtime.state.openKeyedStoreV2<StoredCodexCatalogEntry>({
+          namespace: `${CODEX_CATALOG_STATE_NAMESPACE}.${homeId.replaceAll(":", "-")}`,
+          maxEntries: CODEX_CATALOG_MAX_ROWS + 1,
+          overflowPolicy: "reject-new",
+        }),
     });
     const sessionCatalogEnabled =
       readCodexPluginConfig(resolveCurrentPluginConfig()).sessionCatalog?.enabled !== false;
+    api.registerService({
+      id: "codex-session-catalog",
+      start: () => (sessionCatalogEnabled ? sessionCatalogControlFactory.start() : undefined),
+      stop: () => sessionCatalogControlFactory.stop(),
+    });
     if (sessionCatalogEnabled) {
-      codexSessionCatalogRuntime.register({
+      registerCodexSessionCatalog({
         api,
+        resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
         bindingStore,
         control: sessionCatalogControlFactory,
         getPluginConfig: resolveCurrentPluginConfig,
@@ -183,10 +217,6 @@ export default definePluginEntry({
       });
       for (const command of createCodexSessionCatalogNodeHostCommands(
         sessionCatalogControlFactory,
-        {
-          getPluginConfig: resolveCurrentPluginConfig,
-          getRuntimeConfig: () => resolveCurrentConfig() ?? (api.config as OpenClawConfig),
-        },
         bindingStore,
       )) {
         api.registerNodeHostCommand(command);
@@ -196,21 +226,32 @@ export default definePluginEntry({
       api.registerNodeInvokePolicy(policy);
     }
     if (readCodexPluginConfig(resolveCurrentPluginConfig()).supervision?.enabled === true) {
+      const {
+        resolveCodexAppServerAuthProfileIdForAgent,
+        resolveCodexAppServerAuthProfileIdAtEffect,
+      } = createCodexAuthProfileSelection(api.runtime.modelAuth);
       api.registerTool(
-        (context) => {
-          if (context.senderIsOwner !== true) {
-            return [];
-          }
-          const resolveToolRuntimeConfig = () =>
-            context.getRuntimeConfig?.() ??
-            context.runtimeConfig ??
-            context.config ??
-            resolveCurrentConfig();
-          return createCodexSupervisionTools({
-            getPluginConfig: () => resolvePluginConfig(resolveToolRuntimeConfig),
-            getRuntimeConfig: resolveToolRuntimeConfig,
-            senderIsOwner: context.senderIsOwner,
-          });
+        {
+          contextVersion: 2,
+          create: (context) => {
+            if (context.senderIsOwner !== true) {
+              return [];
+            }
+            const resolveToolRuntimeConfig = () =>
+              context.getRuntimeConfig?.() ??
+              context.runtimeConfig ??
+              context.config ??
+              resolveCurrentConfig();
+            return createCodexSupervisionTools({
+              getPluginConfig: () => resolvePluginConfig(resolveToolRuntimeConfig),
+              getRuntimeConfig: resolveToolRuntimeConfig,
+              resolveAuthProfileId: resolveCodexAppServerAuthProfileIdForAgent,
+              resolveAuthProfileIdAtEffect: resolveCodexAppServerAuthProfileIdAtEffect,
+              resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
+              senderIsOwner: context.senderIsOwner,
+              assertInvocationCurrent: context.assertInvocationCurrent,
+            });
+          },
         },
         { names: [...CODEX_SUPERVISION_COMPAT_TOOL_NAMES] },
       );
@@ -233,13 +274,16 @@ export default definePluginEntry({
     );
     api.registerMigrationProvider(buildCodexMigrationProvider({ runtime: api.runtime }));
     api.registerTool(
-      (context) =>
-        createCodexThreadsTool({
-          bindingStore,
-          context,
-          runtime: api.runtime,
-          getPluginConfig: resolveCurrentPluginConfig,
-        }),
+      {
+        contextVersion: 2,
+        create: (context) =>
+          createCodexThreadsTool({
+            bindingStore,
+            context,
+            runtime: api.runtime,
+            getPluginConfig: resolveCurrentPluginConfig,
+          }),
+      },
       { name: "codex_threads" },
     );
     api.registerToolMetadata({
@@ -250,12 +294,15 @@ export default definePluginEntry({
       tags: ["codex", "sessions"],
     });
     api.registerTool(
-      (context) =>
-        createCodexPluginsTool({
-          bindingStore,
-          context,
-          getPluginConfig: resolveCurrentPluginConfig,
-        }),
+      {
+        contextVersion: 2,
+        create: (context) =>
+          createCodexPluginsTool({
+            bindingStore,
+            context,
+            getPluginConfig: resolveCurrentPluginConfig,
+          }),
+      },
       { name: "codex_plugins" },
     );
     api.registerToolMetadata({
@@ -265,7 +312,9 @@ export default definePluginEntry({
       risk: "low",
       tags: ["codex", "plugins", "discovery"],
     });
-    for (const command of createCodexCliSessionNodeHostCommands()) {
+    for (const command of createCodexCliSessionNodeHostCommands((agentId) =>
+      sessionCatalogControlFactory.forNode(agentId),
+    )) {
       api.registerNodeHostCommand(command);
     }
     for (const policy of createCodexCliSessionNodeInvokePolicies()) {
@@ -285,56 +334,32 @@ export default definePluginEntry({
             resolveCodexCliSessionForBindingOnNode({ runtime: api.runtime, ...params }),
           codexPluginsManagementIo: {
             readConfig: () => {
-              const current = (api.runtime.config?.current?.() ?? {}) as OpenClawConfig;
-              const plugins = (current as Record<string, unknown>).plugins;
-              if (!plugins || typeof plugins !== "object") {
-                return Promise.resolve({});
-              }
-              const entries = (plugins as Record<string, unknown>).entries;
-              if (!entries || typeof entries !== "object") {
-                return Promise.resolve({});
-              }
-              const codexEntry = (entries as Record<string, unknown>).codex;
-              if (!codexEntry || typeof codexEntry !== "object") {
-                return Promise.resolve({});
-              }
-              const config = (codexEntry as Record<string, unknown>).config;
-              if (!config || typeof config !== "object") {
-                return Promise.resolve({});
-              }
-              const codexPlugins = (config as Record<string, unknown>).codexPlugins;
+              const codexPlugins =
+                resolveCurrentConfig()?.plugins?.entries?.codex?.config?.codexPlugins;
               if (!codexPlugins || typeof codexPlugins !== "object") {
                 return Promise.resolve({});
               }
-              const declared = (codexPlugins as Record<string, unknown>).plugins;
-              if (!declared || typeof declared !== "object") {
-                return Promise.resolve({
-                  enabled: (codexPlugins as Record<string, unknown>).enabled === true,
-                });
-              }
+              const enabled = "enabled" in codexPlugins && codexPlugins.enabled === true;
+              const declared = "plugins" in codexPlugins ? codexPlugins.plugins : undefined;
               return Promise.resolve({
-                enabled: (codexPlugins as Record<string, unknown>).enabled === true,
-                plugins: declared as Record<string, never>,
+                enabled,
+                ...(declared && typeof declared === "object"
+                  ? { plugins: declared as CodexPluginsConfigBlock["plugins"] }
+                  : {}),
               });
             },
-            mutate: async (update) => {
+            mutate: async (update, assertCurrent) => {
+              const { mutateConfigFile } = await import("openclaw/plugin-sdk/config-mutation");
               await mutateConfigFile({
+                writeOptions: { assertCurrent },
                 mutate: (draft) => {
-                  // Create the nested plugin config path on demand so codex
-                  // plugin commands can enable/update Codex-managed plugins.
-                  const root = draft as Record<string, unknown>;
-                  root.plugins = (root.plugins ?? {}) as Record<string, unknown>;
-                  const pluginsBlock = root.plugins as Record<string, unknown>;
-                  pluginsBlock.entries = (pluginsBlock.entries ?? {}) as Record<string, unknown>;
-                  const entries = pluginsBlock.entries as Record<string, unknown>;
-                  entries.codex = (entries.codex ?? {}) as Record<string, unknown>;
-                  const codexEntry = entries.codex as Record<string, unknown>;
-                  codexEntry.config = (codexEntry.config ?? {}) as Record<string, unknown>;
-                  const config = codexEntry.config as Record<string, unknown>;
-                  config.codexPlugins = (config.codexPlugins ?? {}) as Record<string, unknown>;
-                  const codexPlugins = config.codexPlugins as Record<string, unknown>;
-                  codexPlugins.plugins = (codexPlugins.plugins ?? {}) as Record<string, unknown>;
-                  update(codexPlugins as CodexPluginsConfigBlock);
+                  draft.plugins ??= {};
+                  draft.plugins.entries ??= {};
+                  const entry = (draft.plugins.entries.codex ??= {});
+                  const config = (entry.config ??= {});
+                  const codexPlugins = (config.codexPlugins ??= {}) as CodexPluginsConfigBlock;
+                  codexPlugins.plugins ??= {};
+                  update(codexPlugins);
                 },
               });
             },
@@ -343,7 +368,7 @@ export default definePluginEntry({
       }),
     );
     api.on("inbound_claim", (event, ctx) =>
-      codexConversationBindingRuntime.handleInboundClaim(event, ctx, {
+      handleCodexConversationInboundClaim(event, ctx, {
         bindingStore,
         pluginConfig: resolveCurrentPluginConfig(),
         config: resolveCurrentConfig(),
@@ -352,30 +377,8 @@ export default definePluginEntry({
       }),
     );
     api.onConversationBindingResolved?.((event) =>
-      codexConversationBindingRuntime.handleBindingResolved(event, { bindingStore }),
+      handleCodexConversationBindingResolved(event, { bindingStore }),
     );
-    api.on("after_compaction", async (event, ctx) => {
-      const previousSessionId = event.previousSessionId?.trim();
-      const sessionId = ctx.sessionId?.trim();
-      if (!previousSessionId || !sessionId || previousSessionId === sessionId) {
-        return;
-      }
-      const config = resolveCurrentConfig();
-      const sessionKey = ctx.sessionKey?.trim();
-      const { sessionBindingIdentity } = await import("./src/app-server/session-binding.js");
-      const identity = sessionBindingIdentity({
-        sessionId,
-        ...(sessionKey ? { sessionKey } : {}),
-        ...(ctx.agentId ? { agentId: ctx.agentId } : {}),
-        ...(config ? { config } : {}),
-      });
-      const adopted = await bindingStore.adoptSessionGeneration(identity, previousSessionId);
-      if (adopted === "conflict") {
-        api.logger.warn?.(
-          `codex: could not adopt compacted session generation ${sessionId} (${adopted}); secondary native compaction will skip`,
-        );
-      }
-    });
     api.on("session_end", async (event, ctx) => {
       if (!event.reason || !ENDED_SESSION_REASONS.has(event.reason)) {
         return;
@@ -389,7 +392,7 @@ export default definePluginEntry({
       // under a different session key. The only cross-key emitter (gateway child
       // creation) keeps the parent row live; same-key rollovers omit or repeat
       // the key and still retire, as do unknown-current-key ends (no provable
-      // handoff) and later idle/daily/deleted ends. See #106778.
+      // handoff) and later idle/daily ends. See #106778.
       const endedSessionKey = sessionKey?.trim();
       const nextSessionKey = event.nextSessionKey?.trim();
       if (endedSessionKey && nextSessionKey && nextSessionKey !== endedSessionKey) {

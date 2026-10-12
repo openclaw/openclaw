@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { OPENCLAW_TAB_GROUP_TITLE } from "./relay-core.js";
 import { createTabAccessPolicy } from "./tab-access.js";
 import { tabEligibility } from "./tab-eligibility.js";
 
@@ -108,6 +109,17 @@ describe("tab eligibility", () => {
     });
   });
 
+  it("rejects discarded tabs until Chrome reloads them", () => {
+    expect(tabEligibility({ id: 1, url: "https://example.com", discarded: true })).toEqual({
+      eligible: false,
+      reason: "discarded",
+    });
+    expect(tabEligibility({ id: 1, url: "https://example.com", discarded: false })).toEqual({
+      eligible: true,
+      reason: null,
+    });
+  });
+
   it("treats a pending destination as an additional eligibility restriction", () => {
     expect(
       tabEligibility({
@@ -177,6 +189,20 @@ describe("tab access policy", () => {
     harness.policy.setMode("selected");
     await expect(harness.policy.requireTab(1)).rejects.toThrow("restricted or unavailable");
     await expect(harness.policy.requireTab(2)).rejects.toThrow("incognito");
+  });
+
+  it("withholds discarded tabs until Chrome reloads them", async () => {
+    const harness = createHarness({
+      tabs: [
+        { id: 1, url: "https://live.example", groupId: 7 },
+        { id: 2, url: "https://discarded.example", discarded: true, groupId: 7 },
+      ],
+    });
+    await harness.policy.initialize("all", true);
+    await expect(harness.policy.listAccessibleTabs()).resolves.toEqual([
+      expect.objectContaining({ id: 1 }),
+    ]);
+    await expect(harness.policy.requireTab(2)).rejects.toThrow("discarded by Chrome");
   });
 
   it("invalidates captured authority across mode and per-tab deny changes", async () => {
@@ -287,6 +313,30 @@ describe("tab access policy", () => {
     await policy.initialize("selected", true);
 
     await expect(policy.requireTab(1)).rejects.toThrow("access was revoked");
+    expect(isSelectedTab).toHaveBeenCalledTimes(2);
+  });
+
+  it("restarts an in-flight discovery when an OpenClaw group becomes eligible", async () => {
+    const harness = createHarness({
+      tabs: [{ id: 1, url: "https://one.example", groupId: 7 }],
+    });
+    let releaseFirst = (_selected: boolean) => {};
+    const firstSelection = new Promise<boolean>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const isSelectedTab = vi
+      .fn()
+      .mockImplementationOnce(async () => await firstSelection)
+      .mockResolvedValue(true);
+    const policy = createTabAccessPolicy({ chromeApi: harness.chromeApi, isSelectedTab });
+    await policy.initialize("selected", true);
+
+    const listing = policy.listAccessibleTabs();
+    await vi.waitFor(() => expect(isSelectedTab).toHaveBeenCalledOnce());
+    policy.invalidateGroup({ id: 7, title: OPENCLAW_TAB_GROUP_TITLE });
+    releaseFirst(false);
+
+    await expect(listing).resolves.toEqual([{ id: 1, url: "https://one.example", groupId: 7 }]);
     expect(isSelectedTab).toHaveBeenCalledTimes(2);
   });
 

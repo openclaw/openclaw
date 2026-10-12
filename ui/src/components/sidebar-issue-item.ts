@@ -1,4 +1,6 @@
 import { html, nothing } from "lit";
+import { keyed } from "lit/directives/keyed.js";
+import type { MentionInboxItem } from "../../../packages/gateway-protocol/src/index.js";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
@@ -6,67 +8,108 @@ import type { ScopeUpgradeState } from "../app/device-scope-upgrade-availability
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../app/exec-approval.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
 import { t } from "../i18n/index.ts";
+import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import type { PresenceViewer } from "../lib/presence-users.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { renderSidebarApprovalRow } from "./exec-approval-card.ts";
 import { icons } from "./icons.ts";
-import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
-import type { SidebarAttentionItem } from "./sidebar-attention-items.ts";
+import type { SidebarAttentionItem } from "./sidebar-attention-entries.ts";
+import {
+  renderSidebarDismissButton,
+  renderSidebarNotificationCard,
+} from "./sidebar-notification-card.ts";
+import { askBrandLabel } from "./theme-brand-label.ts";
 import "./sidebar-update-card.ts";
+import "./viewer-facepile.ts";
+
+registerSidebarAttentionEnglish();
 
 type SidebarIssueItemHandlers = {
   basePath: string;
-  onDismiss: (item: SidebarAttentionItem) => void;
+  onDismiss?: () => void;
   onNavigate: (routeId: NavigationRouteId) => void;
   onOpen: (item: SidebarAttentionItem) => void;
 };
 
-export function renderSidebarAskOpenClawButton(params: {
-  count: number;
-  severity: "error" | "warning" | null;
-  snapshot: ApplicationContext["gateway"]["snapshot"] | undefined;
+export function renderSidebarMentionItem(params: {
+  mention: MentionInboxItem;
+  context: Pick<ApplicationContext, "basePath">;
+  dismissing: boolean;
+  onDismiss: () => void;
+  onNavigate: ApplicationContext["navigate"];
 }) {
-  if (!canCallGatewayMethod(params.snapshot, "openclaw.chat", "operator.admin")) {
-    return nothing;
-  }
-  const label = params.count
-    ? t(params.count === 1 ? "attention.custodianAlertAria" : "attention.custodianAlertsAria", {
-        count: String(params.count),
-      })
-    : t("nav.askOpenClaw");
-  return html`<openclaw-tooltip .content=${label}>
-    <button
-      type="button"
-      class="sidebar-brand__icon sidebar-footer-bar__custodian sidebar-issues-panel__ask"
-      aria-label=${label}
-      @click=${() => window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT))}
-    >
-      <span class="sidebar-footer-bar__custodian-glyph">
-        ${icons.lobster}
-        ${params.count
-          ? html`<span
-              class="session-glyph__badge sidebar-footer-bar__custodian-badge sidebar-footer-bar__custodian-badge--${params.severity ??
-              "warning"}"
-              aria-hidden="true"
-            ></span>`
-          : nothing}
-      </span>
-    </button>
-  </openclaw-tooltip>`;
+  const { mention, context } = params;
+  const sender: PresenceViewer = {
+    id: mention.senderProfileId,
+    identity: { type: "profile", id: mention.senderProfileId },
+    name: mention.senderLabel,
+    avatarUrl: mention.senderAvatarUrl,
+    watchedSessions: [],
+  };
+  const label = t("attention.mentions.from", { sender: mention.senderLabel });
+  const target = sessionNavigationTarget({
+    face: "chat",
+    sessionKey: mention.sessionKey,
+    fallbackAgentId: mention.agentId,
+    basePath: context.basePath,
+    row: { key: mention.sessionKey, displayName: mention.sessionTitle },
+    exactKey: true,
+  });
+  return html`<article
+    class="sidebar-mention-row"
+    data-attention-kind="mention"
+    data-mention-id=${mention.id}
+    aria-label=${label}
+  >
+    ${keyed(
+      mention.id,
+      renderSidebarNotificationCard({
+        title: mention.sessionTitle,
+        detail: label,
+        timestampMs: mention.createdAt,
+        icon: html`<openclaw-viewer-avatar
+          .user=${sender}
+          .markAsViewer=${false}
+          variant="footer"
+        ></openclaw-viewer-avatar>`,
+        onDismiss: params.onDismiss,
+        dismissing: params.dismissing,
+        body: html`
+          ${
+            mention.excerpt
+              ? html`<p class="sidebar-mention-row__excerpt">${mention.excerpt}</p>`
+              : nothing
+          }
+          <div class="sidebar-issues-panel__actions sidebar-mention-row__actions">
+            <a
+              class="sidebar-issues-panel__action sidebar-issues-panel__action--primary"
+              href=${target.href}
+              @click=${(event: MouseEvent) => {
+                if (!shouldHandleNavigationClick(event)) {
+                  return;
+                }
+                event.preventDefault();
+                params.onNavigate("chat", target.options);
+              }}
+              >${t("attention.mentions.open")}</a
+            >
+          </div>
+        `,
+      }),
+    )}
+  </article>`;
 }
 
 export function renderSidebarApprovalItem(params: {
   approval: ExecApprovalRequest;
-  context: ApplicationContext | undefined;
-  onClosePanel: () => void;
+  context: ApplicationContext;
+  onNavigate: ApplicationContext["navigate"];
   onDecision: (event: Event, approvalId: string, decision: ExecApprovalDecision) => void;
 }) {
   const context = params.context;
-  if (!context) {
-    return nothing;
-  }
   const snapshot = context.overlays.snapshot;
   const sessionKey = params.approval.request.sessionKey?.trim();
   const session = sessionKey
@@ -91,24 +134,19 @@ export function renderSidebarApprovalItem(params: {
             return;
           }
           event.preventDefault();
-          params.onClosePanel();
-          context.navigate("chat", sessionTarget.options);
+          params.onNavigate("chat", sessionTarget.options);
         }
       : undefined,
   });
 }
 
 export function renderSidebarUpdateSurface(params: {
-  context: ApplicationContext | undefined;
+  context: Pick<ApplicationContext, "gateway" | "overlays">;
   onDismiss?: () => void;
   onNavigate: () => void;
-  visible: boolean;
   watchUpdateProgress: ((listener: (progress: UpdateProgress) => void) => () => void) | undefined;
 }) {
   const context = params.context;
-  if (!params.visible || !context) {
-    return nothing;
-  }
   const snapshot = context.overlays.snapshot;
   const gateway = context.gateway.snapshot;
   return html`<openclaw-sidebar-update-card
@@ -119,6 +157,11 @@ export function renderSidebarUpdateSurface(params: {
     .updateSchedule=${snapshot.updateSchedule}
     .heldUpdateCampaignId=${snapshot.heldUpdateCampaignId}
     .updateBusy=${snapshot.updateRunning || snapshot.updateReconciliationPending}
+    .updateRun=${snapshot.updateRun}
+    .updateRunAcknowledged=${snapshot.updateRunAcknowledged}
+    .connected=${gateway.phase === "connected"}
+    .onAcknowledge=${() => context.overlays.acknowledgeUpdateRun()}
+    .onCheckStatus=${() => context.overlays.refreshUpdateStatus()}
     .statusBanner=${snapshot.updateStatusBanner}
     .watchUpdateProgress=${params.watchUpdateProgress}
     .canUpdate=${canCallGatewayMethod(gateway, "update.run", "operator.admin")}
@@ -128,7 +171,6 @@ export function renderSidebarUpdateSurface(params: {
     .onHoldUpdate=${() => context.overlays.holdUpdate()}
     .onReviewUpdate=${params.onNavigate}
     .onDismiss=${params.onDismiss}
-    .recoverNativeDecline=${false}
   ></openclaw-sidebar-update-card>`;
 }
 
@@ -141,7 +183,9 @@ function scopeUpgradeText(state: Exclude<ScopeUpgradeState, { phase: "hidden" }>
     case "requesting":
       return t("connection.scopeUpgrade.requesting");
     case "pending":
-      return t("connection.scopeUpgrade.pending");
+      return t("connection.scopeUpgrade.pending", {
+        command: `openclaw devices approve ${state.requestId}`,
+      });
     case "rejected":
       return t(
         state.expired ? "connection.scopeUpgrade.expired" : "connection.scopeUpgrade.rejected",
@@ -152,29 +196,23 @@ function scopeUpgradeText(state: Exclude<ScopeUpgradeState, { phase: "hidden" }>
   return state satisfies never;
 }
 
-function scopeUpgradeSummaryText(state: Exclude<ScopeUpgradeState, { phase: "hidden" }>): string {
-  return state.phase === "guidance" || state.phase === "available"
-    ? t("connection.scopeUpgrade.inboxState")
-    : scopeUpgradeText(state);
-}
-
 export function renderSidebarScopeUpgradeItem(params: {
-  state: ScopeUpgradeState;
+  state: Exclude<ScopeUpgradeState, { phase: "hidden" }>;
   onCancel: () => void;
+  onDismiss?: () => void;
   onRequest: () => void;
   onRetry: () => void;
 }) {
-  if (params.state.phase === "hidden") {
-    return nothing;
-  }
   const text = scopeUpgradeText(params.state);
-  const summary = scopeUpgradeSummaryText(params.state);
-  const retryable = ["pending", "rejected", "error"].includes(params.state.phase);
+  const summary = t("connection.scopeUpgrade.inboxState");
+  const retryable =
+    params.state.phase === "error"
+      ? params.state.retryable
+      : params.state.phase === "pending" || params.state.phase === "rejected";
   return html`<details
-    class="sidebar-issues-panel__details sidebar-issues-panel__details--${params.state.phase ===
-      "error" || params.state.phase === "rejected"
-      ? "error"
-      : "warning"}"
+    class="sidebar-issues-panel__details sidebar-issues-panel__details--${
+      params.state.phase === "error" || params.state.phase === "rejected" ? "error" : "warning"
+    }"
     data-attention-kind="scopeUpgrade"
   >
     <summary class="sidebar-issues-panel__summary" data-issue-row-focus>
@@ -183,39 +221,36 @@ export function renderSidebarScopeUpgradeItem(params: {
         <span class="sidebar-issues-panel__entity">${t("connection.scopeUpgrade.status")}</span>
         <span class="sidebar-issues-panel__state" title=${summary}>${summary}</span>
       </span>
+      ${renderSidebarDismissButton(t("connection.scopeUpgrade.status"), params.onDismiss)}
       <span class="sidebar-issues-panel__chevron" aria-hidden="true">${icons.chevronRight}</span>
     </summary>
     <div class="sidebar-issues-panel__body" role="status" aria-live="polite">
       <div>${text}</div>
-      ${params.state.phase === "available"
-        ? html`<div class="sidebar-issues-panel__actions">
-            <button
-              type="button"
-              class="sidebar-issues-panel__action sidebar-issues-panel__action--primary"
-              @click=${params.onRequest}
-            >
-              ${t("connection.scopeUpgrade.request")}
-            </button>
-          </div>`
-        : params.state.phase === "requesting"
+      ${
+        params.state.phase === "available" || params.state.phase === "requesting"
           ? html`<div class="sidebar-issues-panel__actions">
               <button
                 type="button"
                 class="sidebar-issues-panel__action sidebar-issues-panel__action--primary"
-                disabled
+                ?disabled=${params.state.phase === "requesting"}
+                @click=${params.state.phase === "available" ? params.onRequest : nothing}
               >
-                ${t("connection.scopeUpgrade.requestingAction")}
+                ${t(params.state.phase === "available" ? "connection.scopeUpgrade.request" : "connection.scopeUpgrade.requestingAction")}
               </button>
             </div>`
-          : retryable
+          : retryable || params.state.phase === "error"
             ? html`<div class="sidebar-issues-panel__actions">
-                <button
-                  type="button"
-                  class="sidebar-issues-panel__action sidebar-issues-panel__action--primary"
-                  @click=${params.onRetry}
-                >
-                  ${t("connection.scopeUpgrade.retry")}
-                </button>
+                ${
+                  retryable
+                    ? html`<button
+                        type="button"
+                        class="sidebar-issues-panel__action sidebar-issues-panel__action--primary"
+                        @click=${params.onRetry}
+                      >
+                        ${t("connection.scopeUpgrade.retry")}
+                      </button>`
+                    : nothing
+                }
                 <button
                   type="button"
                   class="sidebar-issues-panel__action"
@@ -224,7 +259,8 @@ export function renderSidebarScopeUpgradeItem(params: {
                   ${t("connection.scopeUpgrade.cancel")}
                 </button>
               </div>`
-            : nothing}
+            : nothing
+      }
     </div>
   </details>`;
 }
@@ -236,124 +272,102 @@ function renderItemMeta(item: SidebarAttentionItem) {
     >`;
   }
   return html`<span class="sidebar-issues-panel__state-row" title=${item.detail}>
-    ${item.meta.context
-      ? html`<span class="sidebar-issues-panel__meta-context">${item.meta.context}</span>
-          <span aria-hidden="true">·</span>`
-      : nothing}
+    ${
+      item.meta.context
+        ? html`<span class="sidebar-issues-panel__meta-context">${item.meta.context}</span>
+            <span aria-hidden="true">·</span>`
+        : nothing
+    }
     <span class="sidebar-issues-panel__meta-status">${item.meta.status}</span>
     <span aria-hidden="true">·</span>
     <span class="sidebar-issues-panel__meta-time">${item.meta.time}</span>
   </span>`;
 }
 
-function renderNavigationItem(item: SidebarAttentionItem, handlers: SidebarIssueItemHandlers) {
-  if (item.action.kind !== "navigate") {
-    return nothing;
-  }
-  const routeId = item.action.routeId;
-  return html`<div
-    class="sidebar-issues-panel__details sidebar-issues-panel__details--${item.severity}"
-    data-attention-kind=${item.kind}
-  >
-    <div class="sidebar-issues-panel__summary sidebar-issues-panel__summary--navigation">
-      <a
-        class="sidebar-issues-panel__navigation-link"
-        href=${pathForRoute(routeId, handlers.basePath)}
-        data-issue-row-focus
-        @click=${(event: MouseEvent) => {
-          if (!shouldHandleNavigationClick(event)) {
-            return;
-          }
-          event.preventDefault();
-          handlers.onNavigate(routeId);
-        }}
-      >
-        <span class="sidebar-issues-panel__icon" aria-hidden="true">${icons[item.icon]}</span>
-        <span class="sidebar-issues-panel__content">
-          <span class="sidebar-issues-panel__entity" title=${item.label}>${item.label}</span>
-          ${renderItemMeta(item)}
-        </span>
-      </a>
-      <button
-        type="button"
-        class="sidebar-issues-panel__dismiss"
-        aria-label=${t("attention.dismissItem", { item: item.label })}
-        title=${t("attention.dismissItem", { item: item.label })}
-        @click=${() => handlers.onDismiss(item)}
-      >
-        ${icons.x}
-      </button>
-      <span class="sidebar-issues-panel__chevron" aria-hidden="true">${icons.chevronRight}</span>
-    </div>
-  </div>`;
-}
-
 export function renderSidebarIssueItem(
   item: SidebarAttentionItem,
   handlers: SidebarIssueItemHandlers,
 ) {
+  const navigation = item.action.kind === "navigate";
+  const content = html`
+    <span
+      class=${
+        navigation
+          ? "sidebar-issues-panel__icon"
+          : `sidebar-issues-panel__icon ${item.kind === "modelAuthExpired" ? "sidebar-issues-panel__icon--critical" : ""}`
+      }
+      aria-hidden="true"
+      >${icons[item.icon]}</span
+    >
+    <span class="sidebar-issues-panel__content">
+      <span class="sidebar-issues-panel__entity" title=${item.label}>${item.label}</span>
+      ${renderItemMeta(item)}
+    </span>
+  `;
   if (item.action.kind === "navigate") {
-    return renderNavigationItem(item, handlers);
+    const routeId = item.action.routeId;
+    return html`<div
+      class="sidebar-issues-panel__details sidebar-issues-panel__details--${item.severity}"
+      data-attention-kind=${item.kind}
+    >
+      <div class="sidebar-issues-panel__summary sidebar-issues-panel__summary--navigation">
+        <a
+          class="sidebar-issues-panel__navigation-link"
+          href=${pathForRoute(routeId, handlers.basePath)}
+          data-issue-row-focus
+          @click=${(event: MouseEvent) => {
+            if (!shouldHandleNavigationClick(event)) {
+              return;
+            }
+            event.preventDefault();
+            handlers.onNavigate(routeId);
+          }}
+        >
+          ${content}
+        </a>
+        ${renderSidebarDismissButton(item.label, handlers.onDismiss)}
+        <span class="sidebar-issues-panel__chevron" aria-hidden="true">${icons.chevronRight}</span>
+      </div>
+    </div>`;
   }
-  const facts = item.action.kind === "askCustodian" ? item.action.alert.facts : [];
-  const visibleFacts = facts.filter((fact) => fact !== item.label);
-  const actionLabel = item.action.kind === "askCustodian" ? t("nav.askOpenClaw") : item.label;
+  const visibleFacts = item.action.alert.facts.filter((fact) => fact !== item.label);
   const inlineAction = item.inlineAction;
   return html`<details
     class="sidebar-issues-panel__details sidebar-issues-panel__details--${item.severity}"
     data-attention-kind=${item.kind}
   >
     <summary class="sidebar-issues-panel__summary" data-issue-row-focus>
-      <span
-        class="sidebar-issues-panel__icon ${item.kind === "modelAuthExpired"
-          ? "sidebar-issues-panel__icon--critical"
-          : ""}"
-        aria-hidden="true"
-        >${icons[item.icon]}</span
-      >
-      <span class="sidebar-issues-panel__content">
-        <span class="sidebar-issues-panel__entity" title=${item.label}>${item.label}</span>
-        ${renderItemMeta(item)}
-      </span>
-      <button
-        type="button"
-        class="sidebar-issues-panel__dismiss"
-        aria-label=${t("attention.dismissItem", { item: item.label })}
-        title=${t("attention.dismissItem", { item: item.label })}
-        @click=${(event: Event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          handlers.onDismiss(item);
-        }}
-      >
-        ${icons.x}
-      </button>
+      ${content} ${renderSidebarDismissButton(item.label, handlers.onDismiss)}
       <span class="sidebar-issues-panel__chevron" aria-hidden="true">${icons.chevronRight}</span>
     </summary>
     <div class="sidebar-issues-panel__body">
-      ${visibleFacts.length
-        ? html`<ul class="sidebar-issues-panel__facts">
-            ${visibleFacts.map((fact) => html`<li>${fact}</li>`)}
-          </ul>`
-        : nothing}
+      ${
+        visibleFacts.length
+          ? html`<ul class="sidebar-issues-panel__facts">
+              ${visibleFacts.map((fact) => html`<li>${fact}</li>`)}
+            </ul>`
+          : nothing
+      }
       <div class="sidebar-issues-panel__actions">
-        ${inlineAction
-          ? html`<button
-              type="button"
-              class="sidebar-issues-panel__action sidebar-issues-panel__action--primary"
-              @click=${() => handlers.onNavigate(inlineAction.routeId)}
-            >
-              ${inlineAction.label}
-            </button>`
-          : nothing}
+        ${
+          inlineAction
+            ? html`<button
+                type="button"
+                class="sidebar-issues-panel__action sidebar-issues-panel__action--primary"
+                @click=${() => handlers.onNavigate(inlineAction.routeId)}
+              >
+                ${inlineAction.label}
+              </button>`
+            : nothing
+        }
         <button
           type="button"
-          class="sidebar-issues-panel__action ${inlineAction
-            ? ""
-            : "sidebar-issues-panel__action--primary"}"
+          class="sidebar-issues-panel__action ${
+            inlineAction ? "" : "sidebar-issues-panel__action--primary"
+          }"
           @click=${() => handlers.onOpen(item)}
         >
-          ${actionLabel}
+          ${askBrandLabel()}
         </button>
       </div>
     </div>

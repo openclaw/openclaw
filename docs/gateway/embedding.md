@@ -13,7 +13,7 @@ replaceable runtime. This keeps process ownership, readiness, failure recovery,
 and upgrades explicit without depending on OpenClaw's private state layout.
 
 For client authentication and reconnect state, read
-[Building a Gateway client](https://docs.openclaw.ai/gateway/clients).
+[Building a Gateway client](/gateway/clients).
 
 ## Start the child with an embedding preset
 
@@ -109,8 +109,8 @@ policy, then reconnect.
 ## Interpret restart and shutdown
 
 Before an orderly close, the Gateway broadcasts a `shutdown` event with `reason`
-and `restartExpectedMs`. A non-null `restartExpectedMs` means an in-process or
-supervised restart is expected; `null` means a terminal shutdown.
+and optional `restartExpectedMs`. A numeric `restartExpectedMs` means an in-process
+or supervised restart is expected; an absent or null value means a terminal shutdown.
 
 The subsequent WebSocket close code is `1012` for both cases. The ordinary client
 close reason is also `service restart` in both cases, so neither the close code nor
@@ -118,6 +118,12 @@ the reason distinguishes restart from shutdown. Preserve the preceding `shutdown
 payload when it arrives, and combine it with the host's own stop intent and the
 child exit status. If the connection disappears without the event, use normal
 bounded reconnect and child-supervision policy.
+
+An accepted agent response acknowledges the request before its command and cleanup
+finish. Shutdown retains that work through cancellation and final cleanup. If
+shutdown or failed-startup cleanup cannot finish, the child exits unsuccessfully
+instead of starting another Gateway generation in the same process. Wait for the
+child to exit before replacing it.
 
 ## Use RPC instead of state files
 
@@ -155,7 +161,7 @@ bundle, or vendor selected extension files.
 
 ## Related
 
-- [Building a Gateway client](https://docs.openclaw.ai/gateway/clients)
-- [Gateway protocol](https://docs.openclaw.ai/gateway/protocol)
-- [Gateway CLI](https://docs.openclaw.ai/cli/gateway)
-- [Gateway integrations for external apps](https://docs.openclaw.ai/gateway/external-apps)
+- [Building a Gateway client](/gateway/clients)
+- [Gateway protocol](/gateway/protocol)
+- [Gateway CLI](/cli/gateway)
+- [Gateway integrations for external apps](/gateway/external-apps)

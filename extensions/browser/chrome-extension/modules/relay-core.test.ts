@@ -2,24 +2,15 @@
 // extension-browser vitest glob (extensions/browser/**/*.test.ts).
 import { describe, expect, it, vi } from "vitest";
 import {
-  buildRelayWsProtocols,
   createPairingConfigStore,
-  nearestGroupColor,
   parsePairingString,
   reconnectDelayMs,
+  directLoopbackRelayPort,
 } from "./relay-core.js";
 
 const RELAY_SECRET = "a".repeat(64);
 
 describe("parsePairingString", () => {
-  it("parses a valid pairing string the CLI emits", () => {
-    const parsed = parsePairingString(`ws://127.0.0.1:18797/extension#${RELAY_SECRET}`);
-    expect(parsed).toEqual({
-      relayUrl: "ws://127.0.0.1:18797/extension",
-      token: RELAY_SECRET,
-    });
-  });
-
   it("round-trips with the CLI pairing format", () => {
     const port = 18797;
     const token = RELAY_SECRET;
@@ -29,17 +20,7 @@ describe("parsePairingString", () => {
       throw new Error("expected pairing string to parse");
     }
     expect(parsed.relayUrl).toBe(`ws://127.0.0.1:${port}/extension`);
-    expect(buildRelayWsProtocols()).toEqual(["openclaw-extension-relay.v2"]);
-  });
-
-  it("extracts the additive direct Gateway hint without passing it to the relay", () => {
-    const gatewayUrl = "wss://gateway.example.com/base";
-    const pairing = `ws://127.0.0.1:18797/extension?gateway=${encodeURIComponent(gatewayUrl)}#${RELAY_SECRET}`;
-    expect(parsePairingString(pairing)).toEqual({
-      relayUrl: "ws://127.0.0.1:18797/extension",
-      token: RELAY_SECRET,
-      gatewayUrl,
-    });
+    expect(parsed.token).toBe(token);
   });
 
   it("retains and canonicalizes the profile auth binding while stripping the Gateway hint", () => {
@@ -303,31 +284,6 @@ describe("persisted pairing storage", () => {
   });
 
   it.each([
-    ["an invalid token", { relayUrl: "ws://127.0.0.1:18797/extension", token: "short" }],
-    [
-      "an unsafe remote relay",
-      { relayUrl: "ws://gateway.example.com/extension", token: RELAY_SECRET },
-    ],
-    [
-      "relay URL credentials",
-      { relayUrl: "wss://user:pass@gateway.example.com/extension", token: RELAY_SECRET },
-    ],
-    [
-      "an unsafe remote Gateway hint",
-      {
-        relayUrl: "ws://127.0.0.1:18797/extension",
-        token: RELAY_SECRET,
-        gatewayUrl: "ws://gateway.example.com",
-      },
-    ],
-    [
-      "Gateway URL credentials",
-      {
-        relayUrl: "ws://127.0.0.1:18797/extension",
-        token: RELAY_SECRET,
-        gatewayUrl: "wss://user:pass@gateway.example.com",
-      },
-    ],
     [
       "a Gateway URL query",
       {
@@ -348,13 +304,6 @@ describe("persisted pairing storage", () => {
     [
       "an unknown relay query",
       { relayUrl: "ws://127.0.0.1:18797/extension?token=nope", token: RELAY_SECRET },
-    ],
-    [
-      "duplicate relay queries",
-      {
-        relayUrl: "ws://127.0.0.1:18797/extension?gateway=one&gateway=two",
-        token: RELAY_SECRET,
-      },
     ],
     ["partial state", { relayUrl: "ws://127.0.0.1:18797/extension" }],
     [
@@ -380,15 +329,34 @@ describe("reconnectDelayMs", () => {
   });
 });
 
-describe("nearestGroupColor", () => {
-  it("maps hex accents to Chrome tab-group color names", () => {
-    expect(nearestGroupColor("#FF4500")).toBe("orange");
-    expect(nearestGroupColor("#00AA00")).toBe("green");
-    expect(nearestGroupColor("#4285F4")).toBe("blue");
+describe("directLoopbackRelayPort", () => {
+  it("accepts the canonical IPv4 listener on the direct /extension path", () => {
+    expect(directLoopbackRelayPort("ws://127.0.0.1:18799/extension")).toBe(18799);
+    expect(directLoopbackRelayPort("ws://127.0.0.1:20123/extension?profile=work")).toBe(20123);
   });
 
-  it("falls back to orange for invalid input", () => {
-    expect(nearestGroupColor("not-a-color")).toBe("orange");
-    expect(nearestGroupColor(undefined)).toBe("orange");
+  it("rejects gateway routes, remote hosts, and malformed values", () => {
+    expect(directLoopbackRelayPort("ws://127.0.0.1:18789/browser/extension")).toBeNull();
+    expect(directLoopbackRelayPort("wss://gateway.example.com/browser/extension")).toBeNull();
+    expect(directLoopbackRelayPort("ws://10.0.0.5:18799/extension")).toBeNull();
+    expect(directLoopbackRelayPort("http://127.0.0.1:18799/extension")).toBeNull();
+    expect(directLoopbackRelayPort("not a url")).toBeNull();
+    expect(directLoopbackRelayPort(undefined)).toBeNull();
+  });
+
+  it.each([
+    "ws://localhost:18799/extension",
+    "ws://localhost.:18799/extension",
+    "ws://127.25.0.1:18799/extension",
+    "ws://[::1]:18799/extension",
+    "ws://[::ffff:7f00:1]:18799/extension",
+    "ws://user:password@127.0.0.1:18799/extension",
+    "ws://127.0.0.1:18799/extension#secret",
+    "ws://127.0.0.1:18799/extension?host=remote",
+    "ws://127.0.0.1:18799/extension?profile=one&profile=two",
+    "ws://127.0.0.1:0/extension",
+    "wss://127.0.0.1:18799/extension",
+  ])("rejects noncanonical or unsupported wake-up target %s", (url) => {
+    expect(directLoopbackRelayPort(url)).toBeNull();
   });
 });

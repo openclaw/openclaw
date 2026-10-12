@@ -1,5 +1,5 @@
-// Matches plugin config contracts against config paths and values.
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { appendConfigPathSegment } from "../shared/dot-path.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { isRecord } from "../utils.js";
 
@@ -8,22 +8,42 @@ type PluginConfigContractMatch = {
   path: string;
   /** Config value stored at the matched path. */
   value: unknown;
+  /** Exact matched container and key so assignments update the original location directly. */
+  parent: Record<string, unknown> | unknown[];
+  key: string;
 };
 
 type TraversalState = {
-  segments: string[];
+  segments: Array<string | number>;
   value: unknown;
+  parent?: Record<string, unknown> | unknown[];
 };
 
 function normalizePathPattern(pathPattern: string): string[] {
   return normalizeStringEntries(pathPattern.split("."));
 }
 
-function appendPathSegment(path: string, segment: string): string {
-  if (!path) {
-    return segment;
-  }
-  return /^\d+$/.test(segment) ? `${path}[${segment}]` : `${path}.${segment}`;
+/** Match declared migration sources without widening a scoped config edit. */
+export function hasPluginConfigMigrationSource(params: {
+  root: unknown;
+  pathPatterns?: readonly string[];
+  touchedPaths?: ReadonlyArray<ReadonlyArray<string>>;
+}): boolean {
+  return (
+    params.pathPatterns?.some((pathPattern) => {
+      const pattern = normalizePathPattern(pathPattern);
+      const touched =
+        !params.touchedPaths ||
+        params.touchedPaths.some((parts) =>
+          pattern
+            .slice(0, parts.length)
+            .every((segment, index) => segment === "*" || segment === parts[index]),
+        );
+      return (
+        touched && collectPluginConfigContractMatches({ root: params.root, pathPattern }).length > 0
+      );
+    }) ?? false
+  );
 }
 
 function parseCanonicalArrayIndex(segment: string, length: number): number | null {
@@ -47,20 +67,15 @@ export function collectPluginConfigContractMatches(params: {
     for (const state of states) {
       if (segment === "*") {
         // Wildcards fan out across arrays and records so contracts can cover account maps/lists.
-        if (Array.isArray(state.value)) {
-          for (const [index, value] of state.value.entries()) {
-            nextStates.push({
-              segments: [...state.segments, String(index)],
-              value,
-            });
-          }
-          continue;
-        }
-        if (isRecord(state.value)) {
-          for (const [key, value] of Object.entries(state.value)) {
+        if (Array.isArray(state.value) || isRecord(state.value)) {
+          const entries = Array.isArray(state.value)
+            ? state.value.entries()
+            : Object.entries(state.value);
+          for (const [key, value] of entries) {
             nextStates.push({
               segments: [...state.segments, key],
               value,
+              parent: state.value,
             });
           }
         }
@@ -70,8 +85,9 @@ export function collectPluginConfigContractMatches(params: {
         const index = parseCanonicalArrayIndex(segment, state.value.length);
         if (index !== null) {
           nextStates.push({
-            segments: [...state.segments, segment],
+            segments: [...state.segments, index],
             value: state.value[index],
+            parent: state.value,
           });
         }
         continue;
@@ -82,6 +98,7 @@ export function collectPluginConfigContractMatches(params: {
       nextStates.push({
         segments: [...state.segments, segment],
         value: state.value[segment],
+        parent: state.value,
       });
     }
     states = nextStates;
@@ -91,7 +108,9 @@ export function collectPluginConfigContractMatches(params: {
   }
 
   return states.map((state) => ({
-    path: state.segments.reduce(appendPathSegment, ""),
+    path: state.segments.reduce(appendConfigPathSegment, ""),
     value: state.value,
+    parent: state.parent!,
+    key: String(state.segments.at(-1)!),
   }));
 }

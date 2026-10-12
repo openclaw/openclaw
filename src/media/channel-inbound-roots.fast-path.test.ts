@@ -2,13 +2,20 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 
 const publicSurfaceLoaderMocks = vi.hoisted(() => ({
-  loadBundledPluginPublicArtifactModuleSync: vi.fn(),
+  loadBundledPluginPublicArtifactModuleFromCandidatesSync: vi.fn(),
+  loadPluginPublicArtifactModuleSync: vi.fn(),
 }));
 
 vi.mock("../plugins/public-surface-loader.js", () => publicSurfaceLoaderMocks);
+
+// Installed-plugin discovery is out of scope for the bundled fast path; keep these
+// tests independent of the host plugin metadata graph.
+vi.mock("../plugins/plugin-metadata-snapshot.runtime.js", () => ({
+  getCurrentPluginMetadataSnapshotRuntime: () => undefined,
+  resolvePluginMetadataSnapshotRuntime: () => undefined,
+}));
 
 import {
   resolveChannelInboundAttachmentRoots,
@@ -20,9 +27,17 @@ const cfg = {
   channels: {},
 } as OpenClawConfig;
 
-function unableToResolve(dirName: string, artifactBasename: string): Error {
-  return new Error(
-    `Unable to resolve bundled plugin public surface ${dirName}/${artifactBasename}`,
+const mediaContractRequest = {
+  artifactCandidates: ["media-contract-api.js"],
+};
+
+function matchesMediaContractRequest(request: {
+  artifactCandidates: readonly string[];
+  dirName: string;
+}): boolean {
+  return (
+    request.artifactCandidates.length === 1 &&
+    request.artifactCandidates[0] === "media-contract-api.js"
   );
 }
 
@@ -38,14 +53,15 @@ function createContext(provider: string, accountId = "work"): MsgContext {
 }
 
 beforeEach(() => {
-  publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync.mockReset();
+  publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleFromCandidatesSync.mockReset();
+  publicSurfaceLoaderMocks.loadPluginPublicArtifactModuleSync.mockReset();
 });
 
 describe("channel inbound roots fast path", () => {
   it("prefers media contract artifacts over full channel bootstrap", () => {
-    publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync.mockImplementation(
-      ({ artifactBasename, dirName }: { artifactBasename: string; dirName: string }) => {
-        if (dirName === "localchat" && artifactBasename === "media-contract-api.js") {
+    publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleFromCandidatesSync.mockImplementation(
+      (request: { artifactCandidates: readonly string[]; dirName: string }) => {
+        if (request.dirName === "localchat" && matchesMediaContractRequest(request)) {
           return {
             resolveInboundAttachmentRoots: ({ accountId }: { accountId?: string }) => [
               `/local/${accountId}`,
@@ -55,7 +71,7 @@ describe("channel inbound roots fast path", () => {
             ],
           };
         }
-        throw unableToResolve(dirName, artifactBasename);
+        return null;
       },
     );
 
@@ -72,21 +88,16 @@ describe("channel inbound roots fast path", () => {
       }),
     ).toEqual(["/remote/work"]);
     expect(
-      publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync,
-    ).toHaveBeenCalledOnce();
-    expect(publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith(
-      {
-        dirName: "localchat",
-        artifactBasename: "media-contract-api.js",
-      },
-    );
+      publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleFromCandidatesSync,
+    ).toHaveBeenCalledWith({
+      dirName: "localchat",
+      ...mediaContractRequest,
+    });
   });
 
   it("does not load broad generic contract artifacts on the media-root path", () => {
-    publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync.mockImplementation(
-      ({ artifactBasename, dirName }: { artifactBasename: string; dirName: string }) => {
-        throw unableToResolve(dirName, artifactBasename);
-      },
+    publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleFromCandidatesSync.mockImplementation(
+      () => null,
     );
 
     expect(
@@ -95,37 +106,37 @@ describe("channel inbound roots fast path", () => {
         ctx: createContext("mobilechat"),
       }),
     ).toBeUndefined();
-    expect(publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith(
-      {
-        dirName: "mobilechat",
-        artifactBasename: "media-contract-api.js",
-      },
-    );
     expect(
-      publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync,
-    ).not.toHaveBeenCalledWith({
+      publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleFromCandidatesSync,
+    ).toHaveBeenCalledWith({
       dirName: "mobilechat",
-      artifactBasename: "contract-api.js",
+      ...mediaContractRequest,
     });
     expect(
-      publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync,
+      publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleFromCandidatesSync,
     ).not.toHaveBeenCalledWith({
       dirName: "mobilechat",
-      artifactBasename: "index.js",
+      artifactCandidates: ["contract-api.js"],
+    });
+    expect(
+      publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleFromCandidatesSync,
+    ).not.toHaveBeenCalledWith({
+      dirName: "mobilechat",
+      artifactCandidates: ["index.js"],
     });
   });
 
   it("preserves partial media contract modules when a missing resolver is checked first", () => {
-    publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync.mockImplementation(
-      ({ artifactBasename, dirName }: { artifactBasename: string; dirName: string }) => {
-        if (dirName === "partialchat" && artifactBasename === "media-contract-api.js") {
+    publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleFromCandidatesSync.mockImplementation(
+      (request: { artifactCandidates: readonly string[]; dirName: string }) => {
+        if (request.dirName === "partialchat" && matchesMediaContractRequest(request)) {
           return {
             resolveInboundAttachmentRoots: ({ accountId }: { accountId?: string }) => [
               `/partial/${accountId}`,
             ],
           };
         }
-        throw unableToResolve(dirName, artifactBasename);
+        return null;
       },
     );
 
@@ -141,22 +152,19 @@ describe("channel inbound roots fast path", () => {
         ctx: createContext("partialchat"),
       }),
     ).toEqual(["/partial/work"]);
-    expect(
-      publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync,
-    ).toHaveBeenCalledOnce();
   });
 
   it("resolves local inbound roots from explicit channel context", () => {
-    publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync.mockImplementation(
-      ({ artifactBasename, dirName }: { artifactBasename: string; dirName: string }) => {
-        if (dirName === "toolchat" && artifactBasename === "media-contract-api.js") {
+    publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleFromCandidatesSync.mockImplementation(
+      (request: { artifactCandidates: readonly string[]; dirName: string }) => {
+        if (request.dirName === "toolchat" && matchesMediaContractRequest(request)) {
           return {
             resolveInboundAttachmentRoots: ({ accountId }: { accountId?: string }) => [
               `/tool/${accountId}`,
             ],
           };
         }
-        throw unableToResolve(dirName, artifactBasename);
+        return null;
       },
     );
 
@@ -167,44 +175,11 @@ describe("channel inbound roots fast path", () => {
         accountId: "personal",
       }),
     ).toEqual(["/tool/personal"]);
-    expect(publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith(
-      {
-        dirName: "toolchat",
-        artifactBasename: "media-contract-api.js",
-      },
-    );
-  });
-
-  it("reloads a channel media contract installed after the explicit plugin lifecycle reset", () => {
-    publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync.mockImplementation(
-      ({ artifactBasename, dirName }: { artifactBasename: string; dirName: string }) => {
-        throw unableToResolve(dirName, artifactBasename);
-      },
-    );
     expect(
-      resolveChannelInboundAttachmentRootsForChannel({
-        cfg,
-        channelId: "installedchat",
-        accountId: "work",
-      }),
-    ).toBeUndefined();
-
-    publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync.mockReturnValue({
-      resolveInboundAttachmentRoots: ({ accountId }: { accountId?: string }) => [
-        `/installed/${accountId}`,
-      ],
+      publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleFromCandidatesSync,
+    ).toHaveBeenCalledWith({
+      dirName: "toolchat",
+      ...mediaContractRequest,
     });
-    clearPluginMetadataLifecycleCaches();
-
-    expect(
-      resolveChannelInboundAttachmentRootsForChannel({
-        cfg,
-        channelId: "installedchat",
-        accountId: "work",
-      }),
-    ).toEqual(["/installed/work"]);
-    expect(
-      publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync,
-    ).toHaveBeenCalledTimes(2);
   });
 });

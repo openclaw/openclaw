@@ -6,13 +6,12 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
-  getRuntimeAuthProfileStoreCredentialsRevision,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "../agents/auth-profiles/runtime-snapshots.js";
-import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/web-provider-types.js";
 import {
+  createOAuthAuthProfileStore,
   createWebSearchTestProvider,
   type WebSearchTestProviderParams,
 } from "../test-utils/web-provider-runtime.test-helpers.js";
@@ -121,26 +120,6 @@ function createGoogleSearchProvider(
   });
 }
 
-function createOAuthAuthProfileStore(params: {
-  provider: string;
-  profileId: string;
-  access: string;
-  refresh: string;
-}): AuthProfileStore {
-  return {
-    version: 1,
-    profiles: {
-      [params.profileId]: {
-        type: "oauth",
-        provider: params.provider,
-        access: params.access,
-        refresh: params.refresh,
-        expires: Date.now() + 3_600_000,
-      },
-    },
-  };
-}
-
 const requireRecord = createRequireRecord("record", "expected-non-array-record");
 
 function mockCallParam(mock: ReturnType<typeof vi.fn>, index = 0): Record<string, unknown> {
@@ -163,18 +142,12 @@ function createDuckDuckGoSearchProvider(
 describe("web search runtime", () => {
   let hasUsableWebSearchProvider: typeof import("./runtime.js").hasUsableWebSearchProvider;
   let runWebSearch: typeof import("./runtime.js").runWebSearch;
-  let activateSecretsRuntimeSnapshot: typeof import("../secrets/runtime.js").activateSecretsRuntimeSnapshot;
-  let clearSecretsRuntimeSnapshot: typeof import("../secrets/runtime.js").clearSecretsRuntimeSnapshot;
   let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
-  let setRuntimeConfigSnapshot: typeof import("../config/config.js").setRuntimeConfigSnapshot;
   const tempDirs: string[] = [];
 
   beforeAll(async () => {
     ({ hasUsableWebSearchProvider, runWebSearch } = await import("./runtime.js"));
-    ({ activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } =
-      await import("../secrets/runtime.js"));
-    ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
-      await import("../config/config.js"));
+    ({ clearRuntimeConfigSnapshot } = await import("../config/config.js"));
   });
 
   beforeEach(() => {
@@ -189,7 +162,6 @@ describe("web search runtime", () => {
 
   afterEach(() => {
     clearRuntimeConfigSnapshot();
-    clearSecretsRuntimeSnapshot();
     clearRuntimeAuthProfileStoreSnapshots();
     for (const tempDir of tempDirs.splice(0)) {
       rmSync(tempDir, { recursive: true, force: true });
@@ -223,9 +195,9 @@ describe("web search runtime", () => {
     });
   });
 
-  it("accepts the prepared provider selection without rediscovering providers", () => {
+  it("accepts the prepared provider selection without rediscovering providers", async () => {
     expect(
-      hasUsableWebSearchProvider({
+      await hasUsableWebSearchProvider({
         config: {},
         runtimeWebSearch: {
           providerSource: "auto-detect",
@@ -454,7 +426,7 @@ describe("web search runtime", () => {
       runWebSearch({
         config: {
           agents: {
-            list: [{ id: "main", default: true, agentDir }],
+            entries: { main: { agentDir } },
           },
         },
         args: { query: "oauth-backed web search" },
@@ -494,15 +466,16 @@ describe("web search runtime", () => {
     ]);
     const config = {
       agents: {
-        list: [
-          { id: "main", default: true, agentDir: defaultAgentDir },
-          { id: "side", agentDir: activeAgentDir },
-        ],
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: {
+          main: { agentDir: defaultAgentDir },
+          side: { agentDir: activeAgentDir },
+        },
       },
     } satisfies OpenClawConfig;
 
     expect(
-      hasUsableWebSearchProvider({
+      await hasUsableWebSearchProvider({
         agentDir: activeAgentDir,
         config,
         preferRuntimeProviders: true,
@@ -556,100 +529,6 @@ describe("web search runtime", () => {
     ).resolves.toEqual({
       provider: "custom",
       result: { query: "active-agent tool context", agentDir: activeAgentDir },
-    });
-  });
-
-  it("uses the active resolved runtime config for matching source config callers", async () => {
-    const provider = createCustomSearchProvider({
-      createTool: ({ config }) => ({
-        description: "custom",
-        parameters: {},
-        execute: async (args) => ({
-          ...args,
-          apiKey: getCustomSearchApiKey(config),
-        }),
-      }),
-    });
-    resolveRuntimeWebSearchProvidersMock.mockReturnValue([provider]);
-    resolvePluginWebSearchProvidersMock.mockReturnValue([provider]);
-
-    const sourceConfig = createCustomSearchConfig({
-      source: "exec",
-      provider: "mockexec",
-      id: "custom-search/api-key",
-    });
-    const resolvedConfig = createCustomSearchConfig("resolved-custom-key");
-
-    activateSecretsRuntimeSnapshot({
-      sourceConfig,
-      config: resolvedConfig,
-      authStores: [],
-      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-      warnings: [],
-      webTools: {
-        search: {
-          providerSource: "auto-detect",
-          selectedProvider: "custom",
-          diagnostics: [],
-        },
-        fetch: {
-          providerSource: "none",
-          diagnostics: [],
-        },
-        diagnostics: [],
-      },
-    });
-
-    await expect(
-      runWebSearch({
-        config: structuredClone(sourceConfig),
-        args: { query: "runtime-source" },
-      }),
-    ).resolves.toEqual({
-      provider: "custom",
-      result: {
-        query: "runtime-source",
-        apiKey: "resolved-custom-key",
-      },
-    });
-  });
-
-  it("can prefer an explicitly resolved input config over a pinned config snapshot", async () => {
-    const provider = createCustomSearchProvider({
-      createTool: ({ config }) => ({
-        description: "custom",
-        parameters: {},
-        execute: async (args) => ({
-          ...args,
-          apiKey: getCustomSearchApiKey(config),
-        }),
-      }),
-    });
-    resolveRuntimeWebSearchProvidersMock.mockReturnValue([provider]);
-    resolvePluginWebSearchProvidersMock.mockReturnValue([provider]);
-
-    setRuntimeConfigSnapshot(
-      createCustomSearchConfig({
-        source: "env",
-        provider: "default",
-        id: "CUSTOM_SEARCH_API_KEY",
-      }),
-    );
-
-    await expect(
-      runWebSearch({
-        config: createCustomSearchConfig("resolved-custom-key"),
-        preferInputConfig: true,
-        providerId: "custom",
-        preferRuntimeProviders: false,
-        args: { query: "resolved-input" },
-      }),
-    ).resolves.toEqual({
-      provider: "custom",
-      result: {
-        query: "resolved-input",
-        apiKey: "resolved-custom-key",
-      },
     });
   });
 
@@ -717,160 +596,6 @@ describe("web search runtime", () => {
       provider: "duckduckgo",
       result: { query: "explicit-keyless", provider: "duckduckgo" },
     });
-  });
-
-  it("prefers the active runtime-selected provider when callers omit runtime metadata", async () => {
-    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
-      createWebSearchTestProvider({
-        pluginId: "alpha-search",
-        id: "alpha",
-        credentialPath: "tools.web.search.alpha.apiKey",
-        autoDetectOrder: 1,
-        getConfiguredCredentialValue: () => "alpha-configured",
-        getCredentialValue: () => "alpha-configured",
-        createTool: ({ runtimeMetadata }) => ({
-          description: "alpha",
-          parameters: {},
-          execute: async (args) => ({
-            ...args,
-            provider: "alpha",
-            runtimeSelectedProvider: runtimeMetadata?.selectedProvider,
-          }),
-        }),
-      }),
-      createWebSearchTestProvider({
-        pluginId: "beta-search",
-        id: "beta",
-        credentialPath: "tools.web.search.beta.apiKey",
-        autoDetectOrder: 2,
-        getConfiguredCredentialValue: () => "beta-configured",
-        getCredentialValue: () => "beta-configured",
-        createTool: ({ runtimeMetadata }) => ({
-          description: "beta",
-          parameters: {},
-          execute: async (args) => ({
-            ...args,
-            provider: "beta",
-            runtimeSelectedProvider: runtimeMetadata?.selectedProvider,
-          }),
-        }),
-      }),
-    ]);
-
-    activateSecretsRuntimeSnapshot({
-      sourceConfig: {},
-      config: {},
-      authStores: [],
-      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-      warnings: [],
-      webTools: {
-        search: {
-          providerSource: "auto-detect",
-          selectedProvider: "beta",
-          diagnostics: [],
-        },
-        fetch: {
-          providerSource: "none",
-          diagnostics: [],
-        },
-        diagnostics: [],
-      },
-    });
-
-    await expect(
-      runWebSearch({
-        config: {},
-        args: { query: "runtime" },
-      }),
-    ).resolves.toEqual({
-      provider: "beta",
-      result: { query: "runtime", provider: "beta", runtimeSelectedProvider: "beta" },
-    });
-  });
-
-  it("ignores auto-detected keyless runtime metadata when no provider is configured", async () => {
-    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
-      createWebSearchTestProvider({
-        pluginId: "parallel",
-        id: "parallel-free",
-        credentialPath: "",
-        autoDetectOrder: 76,
-        requiresCredential: false,
-      }),
-    ]);
-
-    activateSecretsRuntimeSnapshot({
-      sourceConfig: {},
-      config: {},
-      authStores: [],
-      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-      warnings: [],
-      webTools: {
-        search: {
-          providerSource: "auto-detect",
-          selectedProvider: "parallel-free",
-          diagnostics: [],
-        },
-        fetch: {
-          providerSource: "none",
-          diagnostics: [],
-        },
-        diagnostics: [],
-      },
-    });
-
-    await expect(
-      runWebSearch({
-        config: {},
-        args: { query: "stale-keyless-runtime" },
-      }),
-    ).rejects.toThrow("web_search is disabled or no provider is available.");
-  });
-
-  it("ignores auto-detected runtime metadata after config names an unknown provider", async () => {
-    const createTool = vi.fn(() => createCustomSearchTool());
-    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
-      createGoogleSearchProvider({
-        createTool,
-      }),
-    ]);
-    const config = {
-      tools: {
-        web: {
-          search: {
-            provider: "missing-id",
-          },
-        },
-      },
-    };
-
-    activateSecretsRuntimeSnapshot({
-      sourceConfig: config,
-      config: structuredClone(config),
-      authStores: [],
-      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-      warnings: [],
-      webTools: {
-        search: {
-          providerSource: "auto-detect",
-          selectedProvider: "google",
-          diagnostics: [],
-        },
-        fetch: {
-          providerSource: "none",
-          diagnostics: [],
-        },
-        diagnostics: [],
-      },
-    });
-
-    await expect(
-      runWebSearch({
-        config: structuredClone(config),
-        args: { query: "runtime-config-typo" },
-      }),
-    ).rejects.toThrow("web_search is disabled or no provider is available.");
-    expect(createTool).not.toHaveBeenCalled();
   });
 
   it("falls back to another provider when auto-selected search execution fails", async () => {
@@ -1274,4 +999,3 @@ describe("web search runtime", () => {
     ).rejects.toThrow("web_search is enabled but no provider is currently available.");
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

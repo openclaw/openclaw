@@ -1,7 +1,9 @@
 export function shouldBypassConfiguredAcpEnsure(commandName: string): boolean {
   // Recovery slash commands still need configured ACP readiness so stale dead
   // bindings are recreated before /new or /reset dispatches through them.
-  return commandName.trim().toLowerCase() === "acp";
+  // Status renders stored route/session facts and must not prepare external sessions.
+  const command = commandName.trim().toLowerCase();
+  return command === "acp" || command === "status";
 }
 
 export function shouldBypassConfiguredAcpGuildGuards(commandName: string): boolean {

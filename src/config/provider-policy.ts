@@ -1,4 +1,3 @@
-// Resolves provider policy settings from config and plugin metadata.
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { resolveBundledProviderPolicySurface } from "../plugins/provider-public-artifacts.js";
 import type { ModelProviderConfig, OpenClawConfig } from "./types.js";
@@ -17,7 +16,7 @@ export function normalizeProviderConfigForConfigDefaults(params: {
   });
   // Preserve object identity when the provider policy declines to change config; defaults callers
   // use identity to avoid unnecessary config rewrites.
-  return normalized && normalized !== params.providerConfig ? normalized : params.providerConfig;
+  return normalized || params.providerConfig;
 }
 
 /** Applies bundled provider-owned defaults to the full config when that provider has policy. */
@@ -26,10 +25,12 @@ export function applyProviderConfigDefaultsForConfig(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+  loadManifestRegistry?: () => Pick<PluginManifestRegistry, "plugins"> | undefined;
 }): OpenClawConfig {
   return (
     resolveBundledProviderPolicySurface(params.provider, {
       manifestRegistry: params.manifestRegistry,
+      loadManifestRegistry: params.loadManifestRegistry,
     })?.applyConfigDefaults?.({
       provider: params.provider,
       config: params.config,

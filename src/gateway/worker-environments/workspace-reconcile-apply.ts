@@ -1,11 +1,16 @@
 import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
-import { isAcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
+import { isDeepStrictEqual } from "node:util";
+import { root as openFsSafeRoot } from "../../infra/fs-safe.js";
 import {
-  activeWorkspaceHashContext,
-  withWorkspaceHashContext,
-  withWorkspaceHashMemo,
-} from "./workspace-hash-memo.js";
+  createStagedInputPathMatcher,
+  stagedInputDirectoriesFromEntries,
+  stagedInputPathDirectory,
+} from "../../media/staged-inputs.js";
+import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
+import { withWorkspaceHashContext } from "./workspace-hash-memo.js";
+import { sameEntry } from "./workspace-manifest-comparison.js";
+import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import {
   MAX_RECONCILIATION_ENTRIES,
   type WorkerWorkspaceManifest,
@@ -13,22 +18,20 @@ import {
   type WorkerWorkspaceReconciliationJournal,
   type WorkerWorkspaceReconciliationJournalAdapter,
 } from "./workspace-manifest.js";
+import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import {
   applyWorkspaceDirectoryChanges,
   assertActualWorkspaceManifest,
-  changedPaths,
   ConcurrentWorkspacePathError,
-  hasReplacedBaseEntryAncestor,
+  createWorkspaceManifestVerifier,
   manifestNodes,
   preflightWorkspaceApply,
-  readActualWorkspaceManifest,
   retainedConflictPaths,
   type WorkerWorkspaceApplyResult,
 } from "./workspace-reconcile-core.js";
 import {
   prepareNonDirectoryTargets,
   reconciliationDirectories,
-  reconciliationEntries,
 } from "./workspace-reconcile-derived-paths.js";
 import { entryMatches } from "./workspace-reconcile-fs.js";
 import {
@@ -45,198 +48,248 @@ export async function applyStagedWorkerWorkspace(params: {
   base: WorkerWorkspaceManifest;
   current: WorkerWorkspaceManifest;
   journal: WorkerWorkspaceReconciliationJournalAdapter;
-  publishAcceptedManifest?: (accepted: {
-    manifestRef: string;
-    manifest: WorkerWorkspaceManifest;
-    conflictPaths: string[];
-  }) => Promise<void>;
+  assertCurrent?: () => void;
+  acceptance:
+    | {
+        kind: "reconcile";
+        publish?: (accepted: {
+          manifestRef: string;
+          manifest: WorkerWorkspaceManifest;
+          conflictPaths: string[];
+        }) => Promise<void>;
+      }
+    | { kind: "exact-target"; verify: () => Promise<void> };
 }): Promise<WorkerWorkspaceApplyResult> {
-  return await withWorkspaceHashContext(
-    async () => await applyStagedWorkerWorkspaceWithMemo(params),
-  );
-}
-
-async function applyStagedWorkerWorkspaceWithMemo(
-  params: Parameters<typeof applyStagedWorkerWorkspace>[0],
-): Promise<WorkerWorkspaceApplyResult> {
-  const { memo: hashMemo, metrics } = activeWorkspaceHashContext()!;
-  const root = await fs.realpath(params.root);
-  const preserveDirectories = new Set(reconciliationDirectories(params.current.directories));
-  // Git workspaces must keep the eligibility boundary established at dispatch.
-  // Local-only ignored files are outside both manifests and must never enter the accepted state.
-  const includePaths = params.current.baseCommit
-    ? new Set([...manifestNodes(params.base).keys(), ...manifestNodes(params.current).keys()])
-    : undefined;
-  const createApplyResult = (
-    actual: Awaited<ReturnType<typeof readActualWorkspaceManifest>>,
-    conflictPaths: string[],
-  ): WorkerWorkspaceApplyResult => ({
-    ...actual,
-    conflictPaths,
-    verifyLocalStable: async () =>
-      await withWorkspaceHashMemo(
-        hashMemo,
-        async () =>
-          await assertActualWorkspaceManifest({
-            root,
-            expectedRef: actual.manifestRef,
-            baseCommit: actual.manifest.baseCommit,
-            preserveDirectories,
-            includePaths,
-          }),
-        metrics,
+  return await withWorkspaceHashContext(async (): Promise<WorkerWorkspaceApplyResult> => {
+    const root = await fs.realpath(params.root);
+    const stagedInputDirectories = stagedInputDirectoriesFromEntries(params.current.entries);
+    const baseNodes = manifestNodes(params.base);
+    const currentNodes = manifestNodes(params.current);
+    const changed = new Set(
+      [...baseNodes.keys(), ...currentNodes.keys()].filter(
+        (entryPath) => !sameEntry(baseNodes.get(entryPath), currentNodes.get(entryPath)),
       ),
-  });
-  const preflight = await preflightWorkspaceApply({
-    root,
-    base: params.base,
-    current: params.current,
-  });
-  const changed = changedPaths(params.base, params.current);
-  if (changed.size === 0) {
-    const actual = await readActualWorkspaceManifest({
-      root,
-      baseCommit: params.current.baseCommit,
-      preserveDirectories,
-      includePaths,
-    });
-    await assertActualWorkspaceManifest({
-      root,
-      expectedRef: actual.manifestRef,
-      baseCommit: actual.manifest.baseCommit,
-      preserveDirectories,
-      includePaths,
-    });
-    const conflictPaths = retainedConflictPaths(preflight, preflight.applyPaths);
-    await params.publishAcceptedManifest?.({ ...actual, conflictPaths });
-    params.journal.commit(actual.manifestRef);
-    return createApplyResult(actual, conflictPaths);
-  }
-  const baseByPath = new Map(
-    reconciliationEntries(params.base.entries).map((entry) => [entry.path, entry]),
-  );
-  const currentByPath = new Map(
-    reconciliationEntries(params.current.entries).map((entry) => [entry.path, entry]),
-  );
-  const baseNodes = manifestNodes(params.base);
-  const currentNodes = manifestNodes(params.current);
-  const baseEntries = reconciliationEntries(params.base.entries).filter(
-    (entry) => changed.has(entry.path) && preflight.applyPaths.has(entry.path),
-  );
-  const appliedEntries: WorkerWorkspaceManifestEntry[] = [];
-  for (const entry of reconciliationEntries(params.current.entries)) {
-    if (!changed.has(entry.path) || !preflight.applyPaths.has(entry.path)) {
-      continue;
+    );
+    const acceptance = params.acceptance;
+    const acceptExactTarget = async (
+      verify: () => Promise<void>,
+    ): Promise<WorkerWorkspaceApplyResult> => {
+      await verify();
+      params.assertCurrent?.();
+      await params.journal.commit(params.currentManifestRef);
+      return {
+        manifest: params.current,
+        manifestRef: params.currentManifestRef,
+        conflictPaths: [],
+        verifyLocalStable: verify,
+      };
+    };
+    const assertInputOwnership = async () => {
+      if (stagedInputDirectories.size === 0) {
+        return;
+      }
+      const workspaceRoot = await openFsSafeRoot(root);
+      const isRetainedInput = createStagedInputPathMatcher(workspaceRoot);
+      const unownedInputDirectories = new Set<string>();
+      for (const directory of stagedInputDirectories) {
+        if ((await workspaceRoot.exists(directory)) && !(await isRetainedInput(directory))) {
+          unownedInputDirectories.add(directory);
+        }
+      }
+      // Worker ownership cannot enroll local project data. Preserve ordinary entries
+      // already shared at dispatch, but reject marker changes and newly selected local
+      // paths before accepted publication can return their private conflict bytes.
+      for (const entryPath of currentNodes.keys()) {
+        const directory = stagedInputPathDirectory(entryPath);
+        if (!directory || !unownedInputDirectories.has(directory)) {
+          continue;
+        }
+        const changesMarker = entryPath === `${directory}/.gitignore` && changed.has(entryPath);
+        const selectsLocalPath =
+          !baseNodes.has(entryPath) && (await workspaceRoot.exists(entryPath));
+        if (changesMarker || selectsLocalPath) {
+          throw new ConcurrentWorkspacePathError(
+            `Cloud input conflicts with an unowned Gateway directory: ${directory}. Keep the project directory unchanged and reattach the input.`,
+          );
+        }
+      }
+    };
+    await assertInputOwnership();
+    const preserveDirectories = new Set(
+      reconciliationDirectories(params.current.directories, stagedInputDirectories),
+    );
+    // Git workspaces must keep the eligibility boundary established at dispatch.
+    // Local-only ignored files are outside both manifests and must never enter the accepted state.
+    const includePaths = params.current.baseCommit
+      ? new Set([...baseNodes.keys(), ...currentNodes.keys()])
+      : undefined;
+    const inspectPaths = () =>
+      preflightWorkspaceApply({ root, base: params.base, current: params.current });
+    const preflight = await inspectPaths();
+    const acceptReconciled = async (
+      reconcile: Extract<typeof acceptance, { kind: "reconcile" }>,
+      preparedPreflight?: Awaited<ReturnType<typeof inspectPaths>>,
+    ) => {
+      const actual = await captureWorkspaceManifest({
+        root,
+        baseCommit: params.current.baseCommit,
+        preserveDirectories,
+        includePaths,
+      });
+      const finalPreflight = preparedPreflight ?? (await inspectPaths());
+      await assertActualWorkspaceManifest({
+        root,
+        expectedRef: actual.manifestRef,
+        baseCommit: actual.manifest.baseCommit,
+        preserveDirectories,
+        includePaths,
+      });
+      const conflictPaths = retainedConflictPaths(finalPreflight, preflight.applyPaths);
+      params.assertCurrent?.();
+      await reconcile.publish?.({ ...actual, conflictPaths });
+      params.assertCurrent?.();
+      await params.journal.commit(actual.manifestRef);
+      return {
+        ...actual,
+        conflictPaths,
+        verifyLocalStable: createWorkspaceManifestVerifier({
+          root,
+          expectedRef: actual.manifestRef,
+          baseCommit: actual.manifest.baseCommit,
+          preserveDirectories,
+          includePaths,
+        }),
+      };
+    };
+    if (changed.size === 0) {
+      return acceptance.kind === "exact-target"
+        ? await acceptExactTarget(acceptance.verify)
+        : await acceptReconciled(acceptance, preflight);
     }
+    const baseEntries = [...baseNodes.values()].filter(
+      (entry): entry is WorkerWorkspaceManifestEntry =>
+        entry.type !== "directory" &&
+        changed.has(entry.path) &&
+        preflight.applyPaths.has(entry.path),
+    );
+    const appliedEntries: WorkerWorkspaceManifestEntry[] = [];
+    for (const entry of currentNodes.values()) {
+      if (
+        entry.type === "directory" ||
+        !changed.has(entry.path) ||
+        !preflight.applyPaths.has(entry.path)
+      ) {
+        continue;
+      }
+      const base = baseNodes.get(entry.path);
+      if (
+        (!base || base.type === "directory") &&
+        ![...workspacePathAncestors(entry.path)].some((ancestor) => {
+          const previous = baseNodes.get(ancestor);
+          return (
+            previous &&
+            previous.type !== "directory" &&
+            !sameEntry(previous, currentNodes.get(ancestor))
+          );
+        }) &&
+        (await entryMatches(root, entry))
+      ) {
+        continue;
+      }
+      appliedEntries.push(entry);
+    }
+    const baseDirectories = [...preflight.applyPaths]
+      .filter((entryPath) => baseNodes.get(entryPath)?.type === "directory")
+      .toSorted();
+    const appliedDirectories = [...preflight.applyPaths]
+      .filter((entryPath) => currentNodes.get(entryPath)?.type === "directory")
+      .toSorted();
     if (
-      !baseByPath.has(entry.path) &&
-      !hasReplacedBaseEntryAncestor(entry.path, baseByPath, currentByPath) &&
-      (await entryMatches(root, entry))
+      baseEntries.length +
+        appliedEntries.length +
+        baseDirectories.length +
+        appliedDirectories.length >
+      MAX_RECONCILIATION_ENTRIES
     ) {
-      continue;
+      throw new Error(
+        `Cloud workspace reconciliation exceeds the ${MAX_RECONCILIATION_ENTRIES} entry limit`,
+      );
     }
-    appliedEntries.push(entry);
-  }
-  const baseDirectories = [...preflight.applyPaths]
-    .filter((entryPath) => baseNodes.get(entryPath)?.type === "directory")
-    .toSorted();
-  const appliedDirectories = [...preflight.applyPaths]
-    .filter((entryPath) => currentNodes.get(entryPath)?.type === "directory")
-    .toSorted();
-  if (
-    baseEntries.length +
-      appliedEntries.length +
-      baseDirectories.length +
-      appliedDirectories.length >
-    MAX_RECONCILIATION_ENTRIES
-  ) {
-    throw new Error(
-      `Cloud workspace reconciliation exceeds the ${MAX_RECONCILIATION_ENTRIES} entry limit`,
-    );
-  }
-  const snapshot = await createWorkspacePatch({
-    root,
-    stagingRoot: params.stagingRoot,
-    baseEntries,
-    appliedEntries,
-  });
-  const confirmedPreflight = await preflightWorkspaceApply({
-    root,
-    base: params.base,
-    current: params.current,
-  });
-  if (
-    JSON.stringify([...confirmedPreflight.applyPaths].toSorted()) !==
-      JSON.stringify([...preflight.applyPaths].toSorted()) ||
-    JSON.stringify(confirmedPreflight.conflictPaths) !== JSON.stringify(preflight.conflictPaths) ||
-    JSON.stringify(confirmedPreflight.blockingConflictPaths) !==
-      JSON.stringify(preflight.blockingConflictPaths)
-  ) {
-    throw new ConcurrentWorkspacePathError(
-      "Gateway workspace changed while cloud reconciliation was being prepared",
-    );
-  }
-  const journal: WorkerWorkspaceReconciliationJournal = {
-    version: 1,
-    temporaryNonce: randomBytes(16).toString("hex"),
-    baseManifestRef: params.baseManifestRef,
-    currentManifestRef: params.currentManifestRef,
-    baseEntries,
-    appliedEntries,
-    baseDirectories,
-    appliedDirectories,
-    baseTree: snapshot.baseTree,
-    basePackSha256: createHash("sha256").update(snapshot.basePack).digest("hex"),
-    basePack: snapshot.basePack,
-  };
-  params.journal.begin(journal);
-  try {
-    await prepareNonDirectoryTargets(root, appliedEntries);
-    await applyWorkspacePatch({ root, patch: snapshot.patch });
-    await applyWorkspaceDirectoryChanges({
+    const snapshot = await createWorkspacePatch({
       root,
-      base: params.base,
-      current: params.current,
-      applyPaths: preflight.applyPaths,
+      stagingRoot: params.stagingRoot,
+      baseEntries,
+      appliedEntries,
     });
-    const actual = await readActualWorkspaceManifest({
-      root,
-      baseCommit: params.current.baseCommit,
-      preserveDirectories,
-      includePaths,
-    });
-    const finalPreflight = await preflightWorkspaceApply({
-      root,
-      base: params.base,
-      current: params.current,
-    });
-    await assertActualWorkspaceManifest({
-      root,
-      expectedRef: actual.manifestRef,
-      baseCommit: actual.manifest.baseCommit,
-      preserveDirectories,
-      includePaths,
-    });
-    const conflictPaths = retainedConflictPaths(finalPreflight, preflight.applyPaths);
-    await params.publishAcceptedManifest?.({ ...actual, conflictPaths });
-    params.journal.commit(actual.manifestRef);
-    return createApplyResult(actual, conflictPaths);
-  } catch (error) {
-    // Transport or settlement timeouts are observation evidence, never authority
-    // for an inverse operation; recovery owns restoring both sides.
-    if (isAcceptedWorkspacePublicationIndeterminateError(error)) {
+    const confirmedPreflight = await inspectPaths();
+    if (!isDeepStrictEqual(confirmedPreflight, preflight)) {
+      throw new ConcurrentWorkspacePathError(
+        "Gateway workspace changed while cloud reconciliation was being prepared",
+      );
+    }
+    // Revalidate before mutation, not after applying our own newly admitted paths.
+    await assertInputOwnership();
+    const journal: WorkerWorkspaceReconciliationJournal = {
+      version: 1,
+      temporaryNonce: randomBytes(16).toString("hex"),
+      baseManifestRef: params.baseManifestRef,
+      currentManifestRef: params.currentManifestRef,
+      baseEntries,
+      appliedEntries,
+      baseDirectories,
+      appliedDirectories,
+      baseTree: snapshot.baseTree,
+      basePackSha256: createHash("sha256").update(snapshot.basePack).digest("hex"),
+      basePack: snapshot.basePack,
+    };
+    params.assertCurrent?.();
+    await params.journal.begin(journal);
+    try {
+      await prepareNonDirectoryTargets(root, appliedEntries, undefined, params.assertCurrent);
+      await applyWorkspacePatch({
+        root,
+        patch: snapshot.patch,
+        assertCurrent: params.assertCurrent,
+      });
+      await applyWorkspaceDirectoryChanges({
+        root,
+        base: params.base,
+        current: params.current,
+        applyPaths: preflight.applyPaths,
+        assertCurrent: params.assertCurrent,
+      });
+      if (acceptance.kind === "exact-target") {
+        await inspectPaths();
+      } else {
+        return await acceptReconciled(acceptance);
+      }
+    } catch (error) {
+      // Transport or settlement timeouts are observation evidence, never authority
+      // for an inverse operation; recovery owns restoring both sides.
+      if (error instanceof AcceptedWorkspacePublicationIndeterminateError) {
+        throw error;
+      }
+      // A revoked owner cannot authorize an inverse mutation or consume the journal.
+      params.assertCurrent?.();
+      try {
+        await recoverWorkerWorkspaceReconciliation({
+          root,
+          journal,
+          assertCurrent: params.assertCurrent,
+        });
+        params.assertCurrent?.();
+        await params.journal.abort();
+      } catch (rollbackError) {
+        const recoveryError = new Error("Cloud reconciliation failed and rollback needs recovery", {
+          cause: error,
+        });
+        Object.defineProperty(recoveryError, "rollbackError", { value: rollbackError });
+        throw recoveryError;
+      }
       throw error;
     }
-    try {
-      await recoverWorkerWorkspaceReconciliation({ root, journal });
-      params.journal.abort();
-    } catch (rollbackError) {
-      const recoveryError = new Error("Cloud reconciliation failed and rollback needs recovery", {
-        cause: error,
-      });
-      Object.defineProperty(recoveryError, "rollbackError", { value: rollbackError });
-      throw recoveryError;
-    }
-    throw error;
-  }
+    // A late exact-target fence failure leaves the prepared owner's mutation pending.
+    // It is not evidence permitting rollback or reopening that binding.
+    return await acceptExactTarget(acceptance.verify);
+  });
 }

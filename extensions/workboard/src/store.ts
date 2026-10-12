@@ -1,7 +1,6 @@
-// Workboard plugin module implements store behavior.
-import { randomUUID } from "node:crypto";
 import type {
   WorkboardAttachment,
+  WorkboardBoardMetadata,
   WorkboardCard,
   WorkboardDiagnostic,
   WorkboardExecution,
@@ -11,21 +10,15 @@ import type {
   WorkboardStaleState,
   WorkboardStatus,
 } from "@openclaw/workboard-contract";
-import type {
-  PersistedWorkboardAttachment,
-  PersistedWorkboardBoard,
-  PersistedWorkboardNotificationSubscription,
-  WorkboardKeyedStore,
-} from "./persistence-types.js";
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
 import {
   buildWorkerContext,
   assertCanMutateClaimedCard,
-  capText,
   cardBoardId,
+  cardParentIds,
   cardRunId,
   cardSessionKey,
-  closeRunningAttempts,
   computeCardDiagnostics,
   isDependencyPromotableStatus,
   latestRunningAttempt,
@@ -34,13 +27,7 @@ import {
   shouldSkipPersistedLifecycleStatusUpdate,
   shouldSyncWorkboardLifecycleStatus,
 } from "./store-card-helpers.js";
-import {
-  isWorkboardClaimReclaimable,
-  MAX_ATTACHMENT_ENTRIES,
-  MAX_CARDS,
-  MAX_CARD_NOTIFICATIONS,
-  secondsToDurationMs,
-} from "./store-constants.js";
+import { isWorkboardClaimReclaimable, secondsToDurationMs } from "./store-constants.js";
 import type {
   WorkboardBulkInput,
   WorkboardCardPatch,
@@ -49,8 +36,9 @@ import type {
   WorkboardDispatchResult,
   WorkboardMutationScope,
 } from "./store-inputs.js";
-import { normalizeBoardId, normalizeTimestamp } from "./store-normalizers.js";
+import { capText, normalizeBoardId, normalizeTimestamp } from "./store-normalizers.js";
 import { WorkboardNotificationStore } from "./store-notifications.js";
+import { readCards } from "./store-read.js";
 
 export type { WorkboardDispatchResult } from "./store-inputs.js";
 export { WorkboardCardConflictError } from "./store-core.js";
@@ -196,7 +184,7 @@ function lifecycleExecution(params: {
   };
 }
 
-// Capability layers split review boundaries only; the core still owns persistence and mutation order.
+// Capability layers share persistence handles and the runtime's mutation ordering.
 export class WorkboardStore extends WorkboardNotificationStore {
   async prepareExecutionLaunch(
     id: string,
@@ -204,6 +192,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
       requestedSessionKey: string;
       now: number;
       scope: WorkboardMutationScope;
+      assertOwnerCurrent?: () => void;
     },
   ): Promise<{ card: WorkboardCard; launch: WorkboardPreparedLaunch }> {
     return await this.enqueueMutation(async () => {
@@ -244,7 +233,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
         throw new Error("prepared Workboard launch was not persisted");
       }
       return { card: result.card, launch };
-    });
+    }, input.assertOwnerCurrent);
   }
 
   async acceptExecutionLaunch(
@@ -427,20 +416,31 @@ export class WorkboardStore extends WorkboardNotificationStore {
     });
   }
 
-  async prepareStart(id: string, now = Date.now()): Promise<WorkboardCard> {
-    return await this.enqueueMutation(async () => await this.promoteDependencyReady(id, now));
+  async prepareStart(
+    id: string,
+    now = Date.now(),
+    assertOwnerCurrent?: () => void,
+  ): Promise<WorkboardCard> {
+    return await this.enqueueMutation(
+      async () => await this.promoteDependencyReady(id, now),
+      assertOwnerCurrent,
+    );
   }
 
-  private async shouldAutoOrchestrate(card: WorkboardCard): Promise<boolean> {
+  private async getAutoOrchestrationBoard(
+    card: WorkboardCard,
+  ): Promise<WorkboardBoardMetadata | undefined> {
     if (
       card.status !== "triage" ||
       card.metadata?.archivedAt ||
       card.metadata?.workerProtocol?.state === "idle"
     ) {
-      return false;
+      return undefined;
     }
     const board = await this.boardStore.lookup(cardBoardId(card));
-    return board?.version === 1 && board.board.orchestration?.autoDecompose === true;
+    return board?.version === 1 && board.board.orchestration?.autoDecompose === true
+      ? board.board
+      : undefined;
   }
 
   async dispatch(
@@ -448,7 +448,11 @@ export class WorkboardStore extends WorkboardNotificationStore {
   ): Promise<WorkboardDispatchResult> {
     const now = typeof input === "number" ? input : normalizeTimestamp(input.now, Date.now());
     const boardId = typeof input === "number" ? undefined : normalizeBoardId(input.boardId);
+    const assertOwnerCurrent = typeof input === "number" ? undefined : input.assertOwnerCurrent;
     return await this.enqueueMutation(async () => {
+      if (boardId) {
+        await this.assertCardsBoard(boardId);
+      }
       const promoted: WorkboardCard[] = [];
       const reclaimed: WorkboardCard[] = [];
       const blocked: WorkboardCard[] = [];
@@ -459,92 +463,73 @@ export class WorkboardStore extends WorkboardNotificationStore {
         if (card.metadata?.archivedAt) {
           continue;
         }
-        let latest = await this.promoteDependencyReady(card.id, now);
-        const wasPromoted = latest.status !== card.status;
-        const claim = latest.metadata?.claim;
-        const latestAttempt = latestRunningAttempt(latest);
-        const maxRuntimeSeconds = latest.metadata?.automation?.maxRuntimeSeconds;
-        const runtimeStartedAt = latestAttempt?.startedAt ?? claim?.claimedAt ?? latest.startedAt;
-        const timedOut =
-          Boolean(maxRuntimeSeconds && runtimeStartedAt) &&
-          now - runtimeStartedAt! > secondsToDurationMs(maxRuntimeSeconds!);
-        const claimExpired = isWorkboardClaimReclaimable(claim, now);
-        const retriesExhausted = retryBudgetExhausted(latest);
-        if (latest.status === "running" && (timedOut || claimExpired)) {
-          const reason = timedOut
-            ? "Run exceeded the card max runtime."
-            : "Claim expired without a recent heartbeat.";
-          const execution =
-            latest.execution?.status === "running"
-              ? { ...latest.execution, status: "blocked" as const, updatedAt: now }
-              : latest.execution;
-          latest = await this.updateCard(latest.id, {
-            status: "blocked",
-            ...(execution ? { execution } : {}),
-            metadata: {
-              ...latest.metadata,
-              claim: undefined,
-              attempts: closeRunningAttempts(latest.metadata?.attempts, now, "blocked", reason),
-              failureCount: (latest.metadata?.failureCount ?? 0) + 1,
-              notifications: [
-                ...(latest.metadata?.notifications ?? []),
-                {
-                  id: randomUUID(),
-                  kind: "failed" as const,
-                  createdAt: now,
-                  sequence: this.nextNotificationSequence(now),
+        // Keep the batch FIFO, but accepted work on one card cannot admit the next.
+        await this.withMutationAuthority(async () => {
+          let latest = await this.promoteDependencyReady(card.id, now);
+          const wasPromoted = latest.status !== card.status;
+          const claim = latest.metadata?.claim;
+          const latestAttempt = latestRunningAttempt(latest);
+          const maxRuntimeSeconds = latest.metadata?.automation?.maxRuntimeSeconds;
+          const runtimeStartedAt = latestAttempt?.startedAt ?? claim?.claimedAt ?? latest.startedAt;
+          const timedOut =
+            Boolean(maxRuntimeSeconds && runtimeStartedAt) &&
+            now - runtimeStartedAt! > secondsToDurationMs(maxRuntimeSeconds!);
+          const claimExpired = isWorkboardClaimReclaimable(claim, now);
+          const retriesExhausted = retryBudgetExhausted(latest);
+          if (latest.status === "running" && (timedOut || claimExpired)) {
+            const reason = timedOut
+              ? "Run exceeded the card max runtime."
+              : "Claim expired without a recent heartbeat.";
+            const finished = this.finishRun(latest, "blocked", now, reason);
+            latest = await this.updateCard(await this.requireCard(latest.id), {
+              ...finished,
+              metadata: {
+                ...finished.metadata,
+                notifications: this.appendNotification(latest.metadata, now, {
+                  kind: "failed",
                   message: reason,
-                },
-              ].slice(-MAX_CARD_NOTIFICATIONS),
-            },
-          });
-          blocked.push(latest);
-        } else if (claimExpired) {
-          latest = await this.updateCard(latest.id, {
-            metadata: { ...latest.metadata, claim: undefined },
-          });
-          reclaimed.push(latest);
-        }
-        if (
-          !latest.metadata?.claim &&
-          retriesExhausted &&
-          isDependencyPromotableStatus(latest.status)
-        ) {
-          latest = await this.updateCard(latest.id, {
-            status: "blocked",
-            metadata: {
-              ...latest.metadata,
-              notifications: [
-                ...(latest.metadata?.notifications ?? []),
-                {
-                  id: randomUUID(),
-                  kind: "failed" as const,
-                  createdAt: now,
-                  sequence: this.nextNotificationSequence(now),
-                  message: "Card exhausted its retry budget.",
-                },
-              ].slice(-MAX_CARD_NOTIFICATIONS),
-            },
-          });
-          blocked.push(latest);
-        }
-        if (latest.status === "ready" && !latest.metadata?.archivedAt) {
-          latest = await this.recordDispatch(latest, now);
-        }
-        if (await this.shouldAutoOrchestrate(latest)) {
-          const latestBoardId = cardBoardId(latest);
-          const board = await this.boardStore.lookup(latestBoardId);
-          const cap = board?.board.orchestration?.autoDecomposePerDispatch ?? 3;
-          const boardCount = orchestratedByBoard.get(latestBoardId) ?? 0;
-          if (boardCount < cap) {
-            latest = await this.recordOrchestrationCandidate(latest, now);
-            orchestrated.push(latest);
-            orchestratedByBoard.set(latestBoardId, boardCount + 1);
+                }),
+              },
+            });
+            blocked.push(latest);
+          } else if (claimExpired) {
+            latest = await this.updateCard(await this.requireCard(latest.id), {
+              metadata: { ...latest.metadata, claim: undefined },
+            });
+            reclaimed.push(latest);
           }
-        }
-        if (wasPromoted && latest.status !== "blocked") {
-          promoted.push(latest);
-        }
+          if (
+            !latest.metadata?.claim &&
+            retriesExhausted &&
+            isDependencyPromotableStatus(latest.status)
+          ) {
+            latest = await this.updateCard(await this.requireCard(latest.id), {
+              status: "blocked",
+              metadata: {
+                ...latest.metadata,
+                notifications: this.appendNotification(latest.metadata, now, {
+                  kind: "failed",
+                  message: "Card exhausted its retry budget.",
+                }),
+              },
+            });
+            blocked.push(latest);
+          }
+          const orchestrationBoard = await this.getAutoOrchestrationBoard(latest);
+          if (orchestrationBoard) {
+            const latestBoardId = cardBoardId(latest);
+            const cap = orchestrationBoard.orchestration?.autoDecomposePerDispatch ?? 3;
+            const boardCount = orchestratedByBoard.get(latestBoardId) ?? 0;
+            if (boardCount < cap) {
+              latest = await this.recordOrchestrationCandidate(latest, now);
+              orchestrated.push(latest);
+              orchestratedByBoard.set(latestBoardId, boardCount + 1);
+            }
+          }
+          if (wasPromoted && latest.status !== "blocked") {
+            promoted.push(latest);
+          }
+        }, assertOwnerCurrent);
       }
       return {
         promoted,
@@ -563,10 +548,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
     if (ids.length === 0) {
       throw new Error("ids are required.");
     }
-    const patch =
-      input.patch && typeof input.patch === "object" && !Array.isArray(input.patch)
-        ? (input.patch as WorkboardCardPatch)
-        : {};
+    const patch = asNonArrayRecord(input.patch);
     const cards: WorkboardCard[] = [];
     for (const id of ids) {
       const updated =
@@ -578,12 +560,20 @@ export class WorkboardStore extends WorkboardNotificationStore {
     return { cards };
   }
 
-  async archive(id: string, archived: unknown): Promise<WorkboardCard> {
+  async archive(
+    id: string,
+    archived: unknown,
+    options: { expectedUpdatedAt?: number } = {},
+  ): Promise<WorkboardCard> {
     const shouldArchive = archived !== false;
-    return await this.updateMetadata(id, (existing) => ({
-      ...existing.metadata,
-      archivedAt: shouldArchive ? Date.now() : 0,
-    }));
+    return await this.updateMetadata(
+      id,
+      (existing) => ({
+        ...existing.metadata,
+        archivedAt: shouldArchive ? Date.now() : 0,
+      }),
+      options,
+    );
   }
 
   async exportCards(): Promise<{
@@ -639,48 +629,21 @@ export class WorkboardStore extends WorkboardNotificationStore {
   }
 
   async buildWorkerContext(id: string): Promise<string> {
-    const card = await this.get(id);
-    if (!card) {
-      throw new Error(`card not found: ${id}`);
-    }
-    return buildWorkerContext(card, await this.list());
-  }
-
-  static open(
-    openKeyedStore: (options: {
-      namespace: string;
-      maxEntries: number;
-    }) => WorkboardKeyedStore<unknown>,
-  ) {
-    return new WorkboardStore(
-      openKeyedStore({
-        namespace: "workboard.cards",
-        maxEntries: MAX_CARDS,
-      }) as WorkboardKeyedStore,
-      {
-        boards: openKeyedStore({
-          namespace: "workboard.boards",
-          maxEntries: 200,
-        }) as WorkboardKeyedStore<PersistedWorkboardBoard>,
-        subscriptions: openKeyedStore({
-          namespace: "workboard.notify",
-          maxEntries: 2000,
-        }) as WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>,
-        attachments: openKeyedStore({
-          namespace: "workboard.attachments",
-          maxEntries: MAX_ATTACHMENT_ENTRIES,
-        }) as WorkboardKeyedStore<PersistedWorkboardAttachment>,
-      },
+    const card = await this.requireCard(id);
+    return buildWorkerContext(
+      card,
+      await readCards(this.store, {
+        kind: "worker-context",
+        cardId: card.id,
+        boardId: cardBoardId(card),
+        agentId: card.agentId,
+        parentIds: cardParentIds(card),
+      }),
     );
   }
 
-  static openSqlite() {
-    const stores = createWorkboardSqliteStores();
-    return new WorkboardStore(stores.cards, {
-      boards: stores.boards,
-      subscriptions: stores.subscriptions,
-      attachments: stores.attachments,
-      dataVersion: stores.dataVersion,
-    });
+  static openSqlite(workerModuleUrl: URL) {
+    const stores = createWorkboardSqliteStores({ workerModuleUrl });
+    return new WorkboardStore(stores.cards, stores);
   }
 }

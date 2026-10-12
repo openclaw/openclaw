@@ -1,162 +1,178 @@
-// Single-message lookup applies the same visibility and display projection as chat.history.
-import {
-  ErrorCodes,
-  errorShape,
-  validateChatMessageGetParams,
-} from "../../../packages/gateway-protocol/src/index.js";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { validateChatMessageGetParams } from "../../../packages/gateway-protocol/src/index.js";
+import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
+import { getCliSessionBinding } from "../../config/sessions/cli-session-binding.js";
+import { readSessionPendingInput } from "../../config/sessions/session-accessor.js";
+import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
+import { prepareForwardedMessageCronJobNameResolver } from "../chat-display-projection.history.js";
 import {
   augmentChatHistoryWithCanvasBlocks,
-  dropPreSessionStartAnnouncePairs,
   projectChatDisplayMessage,
 } from "../chat-display-projection.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
+import { projectOperatorModelRead } from "../operator-model-presentation.js";
 import { MAX_PAYLOAD_BYTES } from "../server-constants.js";
-import { readSessionMessagesAroundIdWithStatsAsync } from "../session-transcript-anchor-reader.js";
-import { readSessionMessageByIdAsync } from "../session-transcript-readers.js";
-import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
-import { readChatHistoryMessageId } from "./chat-history-pages.js";
-import { resolveRequestedChatAgentId, validateChatSelectedAgent } from "./chat-origin-routing.js";
-import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
+import { withReadySessionRows } from "../session-row-prepared-read.js";
+import { resolveSessionModelRef } from "../session-utils.js";
+import { readChatHistoryMessageById } from "./chat-history-pages.js";
+import { prepareChatHistorySessionRead } from "./chat-history-session-read.js";
+import { projectPendingInputMessage } from "./chat-pending-inputs.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-async function isChatMessageIdVisibleAfterHistoryFilters(params: {
-  sessionId: string;
-  storePath: string | undefined;
-  sessionEntry?: { sessionFile?: string; sessionId?: string };
-  sessionKey: string;
-  agentId?: string;
-  messageId: string;
-  sessionStartedAt?: number;
-  allowResetArchiveFallback?: boolean;
-}): Promise<boolean> {
-  if (params.sessionStartedAt === undefined) {
-    return true;
-  }
-  // The anchored reader includes the immediately preceding row, which is the
-  // complete context needed to hide a stale announce and its paired reply.
-  const { messages } = await readSessionMessagesAroundIdWithStatsAsync(
-    {
-      agentId: params.agentId,
-      sessionEntry: params.sessionEntry,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-    },
-    {
-      maxMessages: 1,
-      messageId: params.messageId,
-      ...(params.allowResetArchiveFallback === true ? { allowResetArchiveFallback: true } : {}),
-    },
-  );
-  return dropPreSessionStartAnnouncePairs(messages, params.sessionStartedAt).some(
-    (message) => readChatHistoryMessageId(message) === params.messageId,
-  );
-}
-
 export const chatMessageGetHandlers: GatewayRequestHandlers = {
-  "chat.message.get": async ({ params, respond, context }) => {
+  "chat.message.get": async ({
+    params,
+    respond,
+    context,
+    client,
+    sessionMutationAuthorization,
+    signal,
+  }) => {
     if (!assertValidParams(params, validateChatMessageGetParams, "chat.message.get", respond)) {
       return;
     }
-    const { sessionKey, messageId, maxChars } = params as {
-      sessionKey: string;
-      agentId?: string;
-      messageId: string;
-      maxChars?: number;
-    };
-    const agentIdOverride = normalizeOptionalText((params as { agentId?: string }).agentId);
-    const requestedAgent = resolveRequestedChatAgentId({
-      cfg: (context as { getRuntimeConfig?: () => OpenClawConfig }).getRuntimeConfig?.(),
-      requestedSessionKey: sessionKey,
-      agentId: agentIdOverride,
-    });
-    if (!requestedAgent.ok) {
-      respond(false, undefined, requestedAgent.error);
-      return;
-    }
-    const requestedAgentId = requestedAgent.agentId;
-    const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
-    const { cfg, storePath, entry } = loadGatewaySessionEntryReadOnly(
+    const { sessionKey, messageId, maxChars, sessionId: requestedSessionId } = params;
+    const agentIdOverride = normalizeOptionalString(params.agentId);
+    const selection = await prepareChatHistorySessionRead({
+      context,
+      client,
+      respond,
+      sessionMutationAuthorization,
+      signal,
+      method: "chat.message.get",
       sessionKey,
-      sessionLoadOptions,
-    );
-    const selectedAgent = validateChatSelectedAgent({
-      cfg,
-      requestedSessionKey: sessionKey,
-      explicitAgentId: agentIdOverride,
+      agentIdOverride,
+      requestedSessionId,
     });
-    if (!selectedAgent.ok) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selectedAgent.error));
+    if (!selection) {
       return;
     }
-    const sessionId = entry?.sessionId;
-    if (!sessionId) {
-      respond(true, { ok: false, unavailableReason: "not_found" });
-      return;
-    }
-
-    const sessionAgentId = resolveSessionAgentId({
-      sessionKey,
-      config: cfg,
-      agentId: selectedAgent.agentId,
-    });
-    const resolved = await readSessionMessageByIdAsync(
-      {
-        agentId: sessionAgentId,
-        sessionEntry: entry,
+    try {
+      const { selectedSession, entry, queries, readCurrentSharing, rowProjection } = selection;
+      const { cfg, agentId: sessionAgentId, storePath, canonicalKey } = selectedSession;
+      const sessionId = requestedSessionId ?? entry?.sessionId;
+      const historyEntry =
+        requestedSessionId && requestedSessionId !== entry?.sessionId ? undefined : entry;
+      const withCurrentSession = <T>(consume: () => T) =>
+        withReadySessionRows(rowProjection, queries, (read) => {
+          signal?.throwIfAborted();
+          return readCurrentSharing(read) ? consume() : undefined;
+        });
+      const respondNotFound = () => respond(true, { ok: false, unavailableReason: "not_found" });
+      const respondMessage = (message: unknown, applyModelPolicy = false) => {
+        if (!message) {
+          respond(true, { ok: false, unavailableReason: "not_visible" });
+          return;
+        }
+        // maxChars bounds individual fields; structured content must also fit the transport.
+        respond(
+          true,
+          jsonUtf8Bytes(message) > MAX_PAYLOAD_BYTES - 1024
+            ? { ok: false, unavailableReason: "oversized" }
+            : applyModelPolicy
+              ? projectOperatorModelRead(
+                  { context, client, agentId: sessionAgentId },
+                  { ok: true, message },
+                )
+              : { ok: true, message },
+        );
+      };
+      if (!sessionId) {
+        await withCurrentSession(respondNotFound);
+        return;
+      }
+      const effectiveMaxChars = maxChars ?? Math.min(MAX_PAYLOAD_BYTES, 1_000_000);
+      if (messageId.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX)) {
+        // Pending IDs have their own owner. A transcript miss must never widen
+        // into pending custody or an archived physical session.
+        if (sessionId !== entry?.sessionId) {
+          await withCurrentSession(respondNotFound);
+          return;
+        }
+        const pending = await readSessionPendingInput(
+          {
+            agentId: sessionAgentId,
+            sessionKey: canonicalKey,
+            sessionId,
+            storePath,
+          },
+          messageId.slice(CHAT_PENDING_INPUT_MESSAGE_PREFIX.length),
+        );
+        if (!(await withCurrentSession(() => true))) {
+          return;
+        }
+        if (!pending) {
+          await withCurrentSession(respondNotFound);
+          return;
+        }
+        const resolveCronJobName = await prepareForwardedMessageCronJobNameResolver(
+          [pending.message],
+          context.cronStorePath,
+        );
+        await withCurrentSession(() => {
+          const message = projectPendingInputMessage(
+            pending,
+            effectiveMaxChars,
+            undefined,
+            resolveCronJobName,
+          );
+          respondMessage(message);
+        });
+        return;
+      }
+      const resolved = await readChatHistoryMessageById({
+        entry: historyEntry,
+        provider: getCliSessionBinding(historyEntry, "claude-cli")?.sessionId
+          ? resolveSessionModelRef(cfg, historyEntry, sessionAgentId, {
+              allowPluginNormalization: false,
+            }).provider
+          : undefined,
+        sessionAgentId,
         sessionId,
-        sessionKey,
+        canonicalKey,
         storePath,
-      },
-      messageId,
-      { allowResetArchiveFallback: true },
-    );
-    if (!resolved.found) {
-      respond(true, { ok: false, unavailableReason: "not_found" });
-      return;
+        messageId,
+        max: 1,
+        maxHistoryBytes: MAX_PAYLOAD_BYTES,
+        effectiveMaxChars,
+        offset: undefined,
+      });
+      // Async transcript/archive reads cannot publish under a stale sharing or
+      // physical-session snapshot.
+      if (!(await withCurrentSession(() => true))) {
+        return;
+      }
+      if (!resolved.found) {
+        await withCurrentSession(respondNotFound);
+        return;
+      }
+      if (resolved.oversized) {
+        await withCurrentSession(() =>
+          respond(true, { ok: false, unavailableReason: "oversized" }),
+        );
+        return;
+      }
+      const resolveCronJobName = await prepareForwardedMessageCronJobNameResolver(
+        [resolved.message],
+        context.cronStorePath,
+      );
+      await withCurrentSession(() => {
+        const projectedMessage = resolved.message
+          ? projectChatDisplayMessage(resolved.message, {
+              includeCommentaryFallbacks: true,
+              maxChars: effectiveMaxChars,
+              resolveCurrentUserProfileDisplay,
+              resolveCronJobName,
+            })
+          : undefined;
+        const projected = projectedMessage
+          ? augmentChatHistoryWithCanvasBlocks([projectedMessage])[0]
+          : undefined;
+        respondMessage(projected, true);
+      });
+    } finally {
+      selection.release();
     }
-    const visible = await isChatMessageIdVisibleAfterHistoryFilters({
-      sessionId,
-      storePath,
-      sessionEntry: entry,
-      sessionKey,
-      agentId: sessionAgentId,
-      messageId,
-      sessionStartedAt:
-        typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
-      allowResetArchiveFallback: true,
-    });
-    if (!visible) {
-      respond(true, { ok: false, unavailableReason: "not_found" });
-      return;
-    }
-    if (resolved.oversized) {
-      respond(true, { ok: false, unavailableReason: "oversized" });
-      return;
-    }
-
-    const effectiveMaxChars =
-      typeof maxChars === "number" ? maxChars : Math.min(MAX_PAYLOAD_BYTES, 1_000_000);
-    const projectedMessage = resolved.message
-      ? projectChatDisplayMessage(resolved.message, {
-          maxChars: effectiveMaxChars,
-          resolveCurrentUserProfileDisplay,
-        })
-      : undefined;
-    const projected = projectedMessage
-      ? augmentChatHistoryWithCanvasBlocks([projectedMessage])[0]
-      : undefined;
-    if (!projected) {
-      respond(true, { ok: false, unavailableReason: "not_visible" });
-      return;
-    }
-
-    respond(true, {
-      ok: true,
-      message: projected,
-    });
   },
 };

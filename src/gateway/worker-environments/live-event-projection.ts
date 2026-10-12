@@ -6,14 +6,12 @@ import {
   sanitizeToolResult,
 } from "../../agents/embedded-agent-tool-results.js";
 import { normalizeToolPolicyName } from "../../agents/tool-policy.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createTrajectoryRuntimeRecorder } from "../../trajectory/runtime.js";
+import type { WorkerTurnTranscriptSource } from "./placement-turn-claim-events.js";
 
-export type WorkerLiveTrajectoryTarget = {
-  agentId?: string;
-  sessionId: string;
-  sessionKey: string;
-  storePath: string;
-};
+const log = createSubsystemLogger("gateway/worker-trajectory");
 
 export type WorkerLiveTrajectoryRecorder = ReturnType<typeof createTrajectoryRuntimeRecorder>;
 
@@ -47,75 +45,76 @@ export function isDefinitiveWorkerTerminalEvent(event: WorkerLiveEventParams["ev
 
 export function createWorkerLiveTrajectoryRecorder(params: {
   runId: string;
-  target: WorkerLiveTrajectoryTarget;
+  source: WorkerTurnTranscriptSource;
 }): WorkerLiveTrajectoryRecorder {
+  const target = params.source.sessionTarget;
   return createTrajectoryRuntimeRecorder({
+    // Capture policy stays current; storage routing belongs to the admitted turn.
+    env: { ...target.env, OPENCLAW_TRAJECTORY: process.env.OPENCLAW_TRAJECTORY },
     runId: params.runId,
-    sessionId: params.target.sessionId,
-    sessionKey: params.target.sessionKey,
-    sessionTarget: {
-      agentId: params.target.agentId ?? "main",
-      sessionId: params.target.sessionId,
-      sessionKey: params.target.sessionKey,
-      storePath: params.target.storePath,
-    },
+    sessionId: target.sessionId,
+    sessionKey: target.sessionKey,
+    sessionTarget: target,
+    assertCommitAllowed: params.source.receiptAuthority,
+  }).catch((error: unknown) => {
+    log.warn(`Trajectory preparation failed for run ${params.runId}: ${formatErrorMessage(error)}`);
+    return null;
   });
 }
 
-export function recordWorkerLiveTrajectoryEvent(
-  recorder: WorkerLiveTrajectoryRecorder,
+export async function recordWorkerLiveTrajectoryEvent(
+  preparingRecorder: WorkerLiveTrajectoryRecorder,
   event: WorkerLiveEventParams["event"],
-): void {
+): Promise<void> {
+  const recorder = await preparingRecorder;
   if (!recorder) {
-    return;
+    return undefined;
   }
-  const data = prepareWorkerLiveEventData(event);
-  let recorded = false;
+  // Live listeners can mutate their copy; prepare independent diagnostics only
+  // for phases that the trajectory records.
   if (event.kind === "tool") {
     if (event.payload.phase === "start") {
-      recorder.recordEvent("tool.call", data);
-      recorded = true;
+      recorder.recordEvent("tool.call", prepareWorkerLiveEventData(event));
     } else if (event.payload.phase === "result") {
       recorder.recordEvent("tool.result", {
-        ...data,
+        ...prepareWorkerLiveEventData(event),
         success: !event.payload.isError,
       });
-      recorded = true;
+    } else {
+      return undefined;
     }
   } else if (event.kind === "approval") {
-    recorder.recordEvent(`approval.${event.payload.phase}`, data);
-    recorded = true;
+    recorder.recordEvent(`approval.${event.payload.phase}`, prepareWorkerLiveEventData(event));
   } else if (event.kind === "lifecycle") {
     if (event.payload.phase === "start") {
-      recorder.recordEvent("session.started", { ...data, backend: "cloud-worker" });
-      recorded = true;
-    } else if (event.payload.phase === "fallback_step") {
-      recorder.recordEvent("model.fallback_step", data);
-      recorded = true;
-    } else if (event.payload.phase === "finishing") {
-      recorder.recordEvent("model.finishing", data);
-      recorded = true;
+      recorder.recordEvent("session.started", {
+        ...prepareWorkerLiveEventData(event),
+        backend: "cloud-worker",
+      });
+    } else if (event.payload.phase === "fallback_step" || event.payload.phase === "finishing") {
+      recorder.recordEvent(`model.${event.payload.phase}`, prepareWorkerLiveEventData(event));
     } else if (
       (event.payload.phase === "end" || event.payload.phase === "error") &&
       isDefinitiveWorkerTerminalEvent(event)
     ) {
+      const data = prepareWorkerLiveEventData(event);
       const failed = event.payload.phase === "error";
       const interrupted = event.payload.aborted === true;
       recorder.recordEvent("model.completed", {
         ...data,
-        ...(failed ? { promptError: event.payload.error } : {}),
+        ...(event.payload.phase === "error" ? { promptError: event.payload.error } : {}),
       });
       recorder.recordEvent("session.ended", {
         ...data,
         status: interrupted ? "interrupted" : failed ? "error" : "success",
       });
-      recorded = true;
+    } else {
+      return undefined;
     }
-  }
-  if (!recorded) {
-    return;
+  } else {
+    return undefined;
   }
   // Live delivery is authoritative; trajectory diagnostics must never reject a
-  // worker event. SQLite flushing begins synchronously and failures stay isolated.
-  void recorder.flush().catch(() => undefined);
+  // worker event, but its acknowledgment still owns the accepted write through settlement.
+  return recorder.flush().catch(() => undefined);
 }

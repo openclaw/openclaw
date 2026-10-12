@@ -3,60 +3,147 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../agents/internal-runtime-context.js";
+import { isOpenClawRuntimeContextCustomMessage } from "../agents/internal-runtime-context.js";
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
+import { prepareCronJobNameResolver } from "../cron/store/job-name.js";
 import {
+  isCompletionReportInputProvenance,
+  isSubagentCoordinationInputProvenance,
   INTER_SESSION_PROMPT_PREFIX_BASE,
   normalizeInputProvenance,
   stripInterSessionPromptPrefixForDisplay,
 } from "../sessions/input-provenance.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import { readSessionTranscriptRunId } from "../sessions/transcript-events.js";
+import { buildRunUserTurnIdempotencyKey } from "../sessions/user-turn-transcript.metadata.js";
+import { projectAssistantDisplayContent } from "../shared/assistant-display-content.js";
+import { extractAssistantPhaseText } from "../shared/chat-message-content.js";
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
 import { extractChatHistoryBlockText } from "./chat-display-projection.canvas.js";
 import {
   asRoleContentMessage,
   extractProjectedText,
   hasAssistantNonTextContent,
+  hasAssistantDisplayableNonTextContent,
   hasTranscriptMediaFacts,
   isEmptyTextOnlyContent,
-  isProjectedSessionsSendForwardedMessage,
-  isSessionsSendInterSessionUserMessage,
+  isProjectedForwardedMessage,
+  isForwardedUserMessage,
+  isCronRunMessage,
   type RoleContentMessage,
 } from "./chat-display-projection.helpers.js";
+import { mapChatDisplayMessages } from "./chat-display-projection.map.js";
+import type { SubagentCoordinationDisplayResolver } from "./session-transcript-read.types.js";
 
-function digestTtsSupplementText(text: string): string {
-  return createHash("sha256").update(text.trim()).digest("hex");
+type TtsSupplementMarker = { textSha256?: string; spokenText?: string };
+
+export function isSubagentCoordinationHistoryInput(
+  message: Record<string, unknown>,
+  isSubagentSession?: SubagentCoordinationDisplayResolver["isSubagentSession"],
+): boolean {
+  if (message.role !== "user") {
+    return false;
+  }
+  const provenance = normalizeInputProvenance(message.provenance);
+  if (isSubagentCoordinationInputProvenance(provenance)) {
+    return true;
+  }
+  return Boolean(
+    provenance?.kind === "inter_session" &&
+    provenance.sourceTool === "sessions_send" &&
+    provenance.sourceSessionKey &&
+    isSubagentSession?.(provenance.sourceSessionKey),
+  );
+}
+
+/** Keep coordination in the model transcript while projecting only human-facing outcomes. */
+export function createSubagentCoordinationHistoryProjection(
+  resolver?: SubagentCoordinationDisplayResolver,
+  state: {
+    hiddenInputKeys: { add: (key: string) => unknown; has: (key: string) => boolean };
+    visibleInputKeys: { add: (key: string) => unknown; has: (key: string) => boolean };
+    visibleSteerRunIds: { add: (key: string) => unknown; has: (key: string) => boolean };
+  } = {
+    hiddenInputKeys: new Set<string>(),
+    visibleInputKeys: new Set<string>(),
+    visibleSteerRunIds: new Set<string>(),
+  },
+) {
+  const { hiddenInputKeys, visibleInputKeys, visibleSteerRunIds } = state;
+  return (messages: unknown[]): unknown[] => {
+    resolver?.assertCurrent?.();
+    const projected = messages.map((message) => {
+      const record = readRecord(message);
+      if (!record) {
+        return message;
+      }
+      const metadata = readRecord(record["__openclaw"]);
+      if (isSubagentCoordinationHistoryInput(record, resolver?.isSubagentSession)) {
+        const inputKey = record.idempotencyKey ?? metadata?.idempotencyKey;
+        // Steering belongs to an already-running turn, not the sender's requested run.
+        if (typeof inputKey === "string" && !metadata?.steerTargetRunId) {
+          hiddenInputKeys.add(inputKey);
+        }
+        return record.display === false ? record : { ...record, display: false };
+      }
+      const runId = readSessionTranscriptRunId(record);
+      if (record.role === "user") {
+        const inputKey = record.idempotencyKey ?? metadata?.idempotencyKey;
+        if (typeof inputKey === "string") {
+          visibleInputKeys.add(inputKey);
+        }
+        const steerTargetRunId = metadata?.steerTargetRunId ?? runId;
+        if (typeof steerTargetRunId === "string") {
+          visibleSteerRunIds.add(steerTargetRunId);
+        }
+        return message;
+      }
+      if (record.display === false) {
+        return message;
+      }
+      if (
+        (record.role === "assistant" || record.role === "toolResult" || record.role === "custom") &&
+        runId &&
+        !visibleSteerRunIds.has(runId) &&
+        (hiddenInputKeys.has(buildRunUserTurnIdempotencyKey(runId)) ||
+          (!visibleInputKeys.has(buildRunUserTurnIdempotencyKey(runId)) &&
+            resolver?.isSubagentRunMessage(
+              runId,
+              typeof metadata?.seq === "number" ? metadata.seq : undefined,
+            )))
+      ) {
+        return { ...record, display: false };
+      }
+      return message;
+    });
+    resolver?.assertCurrent?.();
+    return projected;
+  };
 }
 
 function readTtsSupplementMarker(
   message: Record<string, unknown>,
-): { textSha256?: string; spokenText?: string } | undefined {
+): TtsSupplementMarker | undefined {
   const marker = readRecord(message.openclawTtsSupplement);
   if (!marker) {
     return undefined;
   }
-  const textSha256 =
-    typeof marker.textSha256 === "string" && marker.textSha256.trim()
-      ? marker.textSha256.trim()
-      : undefined;
-  const spokenText =
-    typeof marker.spokenText === "string" && marker.spokenText.trim()
-      ? marker.spokenText.trim()
-      : undefined;
+  const textSha256 = normalizeOptionalString(marker.textSha256);
+  const spokenText = normalizeOptionalString(marker.spokenText);
   return textSha256 || spokenText ? { textSha256, spokenText } : undefined;
 }
 
-function isAssistantTtsSupplementMessage(message: Record<string, unknown>): boolean {
-  if (asRoleContentMessage(message)?.role !== "assistant") {
-    return false;
-  }
-  if (!readTtsSupplementMarker(message)) {
-    return false;
+function readAssistantTtsSupplementMarker(
+  message: Record<string, unknown>,
+): TtsSupplementMarker | undefined {
+  const marker = readTtsSupplementMarker(message);
+  if (!marker || asRoleContentMessage(message)?.role !== "assistant") {
+    return undefined;
   }
   const content = message.content;
   if (!Array.isArray(content)) {
-    return false;
+    return undefined;
   }
   let hasSupplementBlock = false;
   for (const block of content) {
@@ -70,33 +157,27 @@ function isAssistantTtsSupplementMessage(message: Record<string, unknown>): bool
     }
     const text = typeof record.text === "string" ? record.text.trim() : "";
     if (text && text !== "Audio reply") {
-      return false;
+      return undefined;
     }
   }
-  return hasSupplementBlock;
+  return hasSupplementBlock ? marker : undefined;
 }
 
-function ttsSupplementMatchesAssistant(
-  marker: { textSha256?: string; spokenText?: string },
-  message: Record<string, unknown>,
-): boolean {
-  if (asRoleContentMessage(message)?.role !== "assistant") {
-    return false;
-  }
-  if (isProjectedSessionsSendForwardedMessage(message)) {
-    return false;
-  }
-  if (readTtsSupplementMarker(message)) {
-    return false;
-  }
-  const text = extractProjectedText(message.content ?? message.text).trim();
-  if (!text) {
-    return false;
-  }
-  if (marker.textSha256 && digestTtsSupplementText(text) === marker.textSha256) {
-    return true;
-  }
-  return Boolean(marker.spokenText && text === marker.spokenText);
+/** Recognize stored supplements using the same display content as full history. */
+export function isAssistantTtsSupplementMessage(message: unknown): boolean {
+  const record = readRecord(message);
+  return (
+    record !== undefined &&
+    readAssistantTtsSupplementMarker(projectAssistantDisplayContent(record)) !== undefined
+  );
+}
+
+function readTtsSupplementTargetText(message: Record<string, unknown>): string {
+  return asRoleContentMessage(message)?.role === "assistant" &&
+    !isProjectedForwardedMessage(message) &&
+    !readTtsSupplementMarker(message)
+    ? extractProjectedText(message.content ?? message.text).trim()
+    : "";
 }
 
 function mergeTtsSupplementContent(
@@ -126,18 +207,30 @@ function mergeTtsSupplementContent(
 export function mergeTtsSupplementMessages(
   messages: Array<Record<string, unknown>>,
 ): Array<Record<string, unknown>> {
-  if (!messages.some(isAssistantTtsSupplementMessage)) {
+  if (!messages.some(readAssistantTtsSupplementMarker)) {
     return messages;
   }
+  const targetTexts: Array<string | undefined> = [];
+  const targetHashes: Array<string | undefined> = [];
   const merged: Array<Record<string, unknown>> = [];
   let changed = false;
   for (const message of messages) {
-    const marker = readTtsSupplementMarker(message);
-    if (marker && isAssistantTtsSupplementMessage(message)) {
+    const marker = readAssistantTtsSupplementMarker(message);
+    if (marker) {
       let targetIndex = -1;
       for (let i = merged.length - 1; i >= 0; i--) {
         const candidate = merged[i];
-        if (candidate && ttsSupplementMatchesAssistant(marker, candidate)) {
+        if (!candidate) {
+          continue;
+        }
+        const text = (targetTexts[i] ??= readTtsSupplementTargetText(candidate));
+        if (
+          text &&
+          ((marker.textSha256 &&
+            (targetHashes[i] ??= createHash("sha256").update(text).digest("hex")) ===
+              marker.textSha256) ||
+            (marker.spokenText && text === marker.spokenText))
+        ) {
           targetIndex = i;
           break;
         }
@@ -147,6 +240,9 @@ export function mergeTtsSupplementMessages(
           expectDefined(merged[targetIndex], "merged entry at target index"),
           message,
         );
+        // Appended media can carry text. Only this replaced position loses its
+        // prepared facts; other positions still refer to their original messages.
+        targetTexts[targetIndex] = targetHashes[targetIndex] = undefined;
         changed = true;
         continue;
       }
@@ -156,14 +252,22 @@ export function mergeTtsSupplementMessages(
   return changed ? merged : messages;
 }
 
-function isSubagentAnnounceInterSessionUserMessage(message: Record<string, unknown>): boolean {
+function isSubagentAnnounceInterSessionUserMessage(
+  message: Record<string, unknown>,
+  readText?: (message: Record<string, unknown>) => string | undefined,
+): boolean {
   const provenance = normalizeInputProvenance(message.provenance);
-  if (provenance?.kind === "inter_session" && provenance.sourceTool === "subagent_announce") {
+  if (
+    provenance?.kind === "inter_session" &&
+    (provenance.sourceTool === "subagent_announce" || provenance.sourceTool === "subagent_settle")
+  ) {
     return true;
   }
-  const text = extractProjectedText(message.content ?? message.text);
+  const text = readText ? readText(message) : extractProjectedText(message.content ?? message.text);
   return (
-    text.includes(INTER_SESSION_PROMPT_PREFIX_BASE) && text.includes("sourceTool=subagent_announce")
+    typeof text === "string" &&
+    text.includes(INTER_SESSION_PROMPT_PREFIX_BASE) &&
+    text.includes("sourceTool=subagent_announce")
   );
 }
 
@@ -172,78 +276,92 @@ function readChatHistoryRecordTimestampMs(message: unknown): number | undefined 
   return asFiniteNumber(meta?.recordTimestampMs) ?? asFiniteNumber(readRecord(message)?.timestamp);
 }
 
-function isSubagentAnnounceInterSessionUserChatHistoryMessage(message: unknown): boolean {
-  const record = readRecord(message);
-  if (!record || record.role !== "user") {
-    return false;
-  }
-  const provenance = normalizeInputProvenance(record.provenance);
-  if (provenance?.kind === "inter_session" && provenance.sourceTool === "subagent_announce") {
-    return true;
-  }
-  const text = extractChatHistoryBlockText(record);
+export function isPreSessionStartAssistantMessage(
+  message: unknown,
+  sessionStartedAt: number | undefined,
+): boolean {
+  const timestamp = readChatHistoryRecordTimestampMs(message);
   return (
-    typeof text === "string" &&
-    text.includes(INTER_SESSION_PROMPT_PREFIX_BASE) &&
-    text.includes("sourceTool=subagent_announce")
+    sessionStartedAt !== undefined &&
+    readRecord(message)?.role === "assistant" &&
+    timestamp !== undefined &&
+    timestamp < sessionStartedAt
   );
 }
 
-function isChatHistoryAssistantMessage(message: unknown): boolean {
-  return readRecord(message)?.role === "assistant";
+export function createPreSessionStartAnnouncePairFilter(sessionStartedAt: number | undefined) {
+  let precedingAnnounce = false;
+  return (messages: unknown[]): unknown[] => {
+    if (sessionStartedAt === undefined || messages.length === 0) {
+      return messages;
+    }
+    let changed = false;
+    const kept: unknown[] = [];
+    for (const current of messages) {
+      if (precedingAnnounce) {
+        precedingAnnounce = false;
+        if (isPreSessionStartAssistantMessage(current, sessionStartedAt)) {
+          changed = true;
+          continue;
+        }
+      }
+      const record = readRecord(current);
+      if (
+        record?.role === "user" &&
+        isSubagentAnnounceInterSessionUserMessage(record, extractChatHistoryBlockText)
+      ) {
+        const ts = readChatHistoryRecordTimestampMs(current);
+        if (typeof ts === "number" && ts < sessionStartedAt) {
+          // The adjacent assistant may arrive in the next appended chunk.
+          precedingAnnounce = true;
+          changed = true;
+          continue;
+        }
+      }
+      kept.push(current);
+    }
+    return changed ? kept : messages;
+  };
 }
 
 export function dropPreSessionStartAnnouncePairs(
   messages: unknown[],
   sessionStartedAt: number | undefined,
 ): unknown[] {
-  if (sessionStartedAt === undefined || messages.length === 0) {
-    return messages;
-  }
-  let changed = false;
-  const kept: unknown[] = [];
-  for (let i = 0; i < messages.length; i++) {
-    const current = messages[i];
-    if (isSubagentAnnounceInterSessionUserChatHistoryMessage(current)) {
-      const ts = readChatHistoryRecordTimestampMs(current);
-      if (typeof ts === "number" && ts < sessionStartedAt) {
-        const next = messages[i + 1];
-        const nextTs = readChatHistoryRecordTimestampMs(next);
-        if (
-          isChatHistoryAssistantMessage(next) &&
-          typeof nextTs === "number" &&
-          nextTs < sessionStartedAt
-        ) {
-          // Skip only an assistant reply that is also pre-session-start; recent
-          // or timestampless assistants may be real fresh-session context.
-          i++;
-        }
-        changed = true;
-        continue;
-      }
-    }
-    kept.push(current);
-  }
-  return changed ? kept : messages;
+  return createPreSessionStartAnnouncePairFilter(sessionStartedAt)(messages);
 }
 
 function isDisplayHiddenProjectedMessage(message: Record<string, unknown>): boolean {
   if (message.display === false) {
     return true;
   }
-  return message.role === "custom" && message.customType === OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE;
+  return isOpenClawRuntimeContextCustomMessage(message);
 }
 
-function shouldHideProjectedHistoryMessage(message: Record<string, unknown>): boolean {
+function shouldHideProjectedHistoryMessage(
+  message: Record<string, unknown>,
+  roleContent: RoleContentMessage | null,
+  heartbeatUser: boolean,
+): boolean {
   if (isDisplayHiddenProjectedMessage(message)) {
     return true;
   }
-  if (isProjectedSessionsSendForwardedMessage(message)) {
+  if (isProjectedForwardedMessage(message)) {
     return false;
   }
-  const roleContent = asRoleContentMessage(message);
   if (!roleContent) {
     return false;
+  }
+  const provenance = normalizeInputProvenance(message.provenance);
+  if (
+    roleContent.role === "user" &&
+    provenance?.kind === "internal_system" &&
+    provenance.sourceTool === "exec"
+  ) {
+    return true;
+  }
+  if (roleContent.role === "user" && isCompletionReportInputProvenance(message.provenance)) {
+    return true;
   }
   if (roleContent.role === "user" && isSubagentAnnounceInterSessionUserMessage(message)) {
     return true;
@@ -258,16 +376,13 @@ function shouldHideProjectedHistoryMessage(message: Record<string, unknown>): bo
   if (roleContent.role === "assistant" && isEmptyTextOnlyContent(message.content ?? message.text)) {
     return false;
   }
-  if (isHeartbeatUserMessage(roleContent, HEARTBEAT_PROMPT)) {
-    return true;
-  }
-  return isHeartbeatOkResponse(roleContent);
+  return heartbeatUser || isHeartbeatOkResponse(roleContent);
 }
 
 /** Identifies the hidden native input that starts a heartbeat-driven turn. */
 export function isHeartbeatHistoryTurnBoundaryMessage(message: unknown): boolean {
   const record = readRecord(message);
-  if (!record || isSessionsSendInterSessionUserMessage(record)) {
+  if (!record || isForwardedUserMessage(record)) {
     return false;
   }
   const roleContent = asRoleContentMessage(record);
@@ -300,55 +415,51 @@ function openclawAssistantModel(message: Record<string, unknown>): string | unde
     : undefined;
 }
 
-export function displayTextForDuplicateCheck(message: Record<string, unknown>): string | undefined {
+function displayTextForDuplicateCheck(message: Record<string, unknown>): string | undefined {
   const text = extractProjectedText(message.content ?? message.text).trim();
   return text ? text : undefined;
 }
 
-function isDuplicateAcpGatewayInjectedMessage(
+function isDuplicateAssistantDelivery(
   current: Record<string, unknown>,
   previousVisible: Record<string, unknown> | undefined,
 ): boolean {
   if (!previousVisible) {
     return false;
   }
-  if (
-    openclawAssistantModel(previousVisible) !== "acp-runtime" ||
-    openclawAssistantModel(current) !== "gateway-injected"
-  ) {
-    return false;
-  }
-  if (hasAssistantNonTextContent(previousVisible) || hasAssistantNonTextContent(current)) {
-    return false;
-  }
-  const previousText = displayTextForDuplicateCheck(previousVisible);
-  const currentText = displayTextForDuplicateCheck(current);
-  return Boolean(previousText && currentText && previousText === currentText);
-}
-
-function isDuplicateChannelFinalDeliveryMirror(
-  current: Record<string, unknown>,
-  previousVisible: Record<string, unknown> | undefined,
-): boolean {
-  if (!previousVisible || !isOpenClawDeliveryMirrorAssistantMessage(current)) {
-    return false;
-  }
-  const deliveryMirror = readRecord(current.openclawDeliveryMirror);
-  if (deliveryMirror?.kind !== "channel-final") {
-    return false;
-  }
-  if (asRoleContentMessage(previousVisible)?.role !== "assistant") {
-    return false;
-  }
-  if (isOpenClawDeliveryMirrorAssistantMessage(previousVisible)) {
-    return false;
-  }
-  if (isProjectedSessionsSendForwardedMessage(previousVisible)) {
-    return false;
-  }
-  const previousMeta = readRecord(previousVisible["__openclaw"]);
-  if (typeof previousMeta?.mirrorIdentity !== "string" || !previousMeta.mirrorIdentity.trim()) {
-    return false;
+  const acpInjection =
+    openclawAssistantModel(previousVisible) === "acp-runtime" &&
+    openclawAssistantModel(current) === "gateway-injected";
+  if (!acpInjection) {
+    const deliveryMirror = readRecord(current.openclawDeliveryMirror);
+    if (
+      !isOpenClawDeliveryMirrorAssistantMessage(current) ||
+      deliveryMirror?.kind !== "channel-final" ||
+      asRoleContentMessage(previousVisible)?.role !== "assistant" ||
+      isOpenClawDeliveryMirrorAssistantMessage(previousVisible) ||
+      isProjectedForwardedMessage(previousVisible)
+    ) {
+      return false;
+    }
+    const previousMeta = readRecord(previousVisible["__openclaw"]);
+    if (typeof deliveryMirror.sourceAssistantMessageId === "string") {
+      if (
+        !deliveryMirror.sourceAssistantMessageId ||
+        deliveryMirror.sourceAssistantMessageId !== previousMeta?.id ||
+        hasAssistantDisplayableNonTextContent(previousVisible) ||
+        hasAssistantNonTextContent(current) ||
+        hasTranscriptMediaFacts(previousVisible) ||
+        hasTranscriptMediaFacts(current)
+      ) {
+        return false;
+      }
+      const previousText = extractAssistantPhaseText(previousVisible)?.trim();
+      const currentText = extractAssistantPhaseText(current)?.trim();
+      return Boolean(previousText && currentText && previousText === currentText);
+    }
+    if (typeof previousMeta?.mirrorIdentity !== "string" || !previousMeta.mirrorIdentity.trim()) {
+      return false;
+    }
   }
   if (hasAssistantNonTextContent(previousVisible) || hasAssistantNonTextContent(current)) {
     return false;
@@ -359,10 +470,10 @@ function isDuplicateChannelFinalDeliveryMirror(
 }
 
 export function toProjectedMessages(messages: unknown[]): Array<Record<string, unknown>> {
-  return messages.filter(
-    (message): message is Record<string, unknown> =>
-      Boolean(message) && typeof message === "object" && !Array.isArray(message),
-  );
+  return messages.flatMap((message) => {
+    const record = readRecord(message);
+    return record ? [projectAssistantDisplayContent(record)] : [];
+  });
 }
 
 export function filterVisibleProjectedHistoryMessages(
@@ -378,36 +489,38 @@ export function filterVisibleProjectedHistoryMessages(
   let pendingTurnBoundary = turnBoundaryPending;
   let changed = false;
   const visible: Array<Record<string, unknown>> = [];
+  const assistantSources = new Map<string, Record<string, unknown>>();
   for (let i = 0; i < messages.length; i++) {
     const current = messages[i];
     if (!current) {
       continue;
     }
     const currentRoleContent = asRoleContentMessage(current);
-    const next = messages[i + 1];
+    const heartbeatUser = Boolean(
+      currentRoleContent && isHeartbeatUserMessage(currentRoleContent, HEARTBEAT_PROMPT),
+    );
+    const next = heartbeatUser ? messages[i + 1] : undefined;
     const nextRoleContent = next ? asRoleContentMessage(next) : null;
     if (
-      currentRoleContent &&
       next &&
       nextRoleContent &&
-      isHeartbeatUserMessage(currentRoleContent, HEARTBEAT_PROMPT) &&
       isHeartbeatOkResponse(nextRoleContent) &&
-      !isProjectedSessionsSendForwardedMessage(next)
+      !isProjectedForwardedMessage(next)
     ) {
       changed = true;
       pendingTurnBoundary = true;
       i++;
       continue;
     }
-    if (shouldHideProjectedHistoryMessage(current)) {
+    if (shouldHideProjectedHistoryMessage(current, currentRoleContent, heartbeatUser)) {
       changed = true;
-      pendingTurnBoundary ||= isHeartbeatHistoryTurnBoundaryMessage(current);
+      pendingTurnBoundary ||= heartbeatUser && !isForwardedUserMessage(current);
       continue;
     }
-    if (
-      isDuplicateAcpGatewayInjectedMessage(current, visible.at(-1)) ||
-      isDuplicateChannelFinalDeliveryMirror(current, messages[i - 1])
-    ) {
+    const mirrorSourceId = readRecord(current.openclawDeliveryMirror)?.sourceAssistantMessageId;
+    const source =
+      typeof mirrorSourceId === "string" ? assistantSources.get(mirrorSourceId) : messages[i - 1];
+    if (isDuplicateAssistantDelivery(current, source)) {
       changed = true;
       continue;
     }
@@ -418,6 +531,10 @@ export function filterVisibleProjectedHistoryMessages(
     } else {
       visible.push(current);
     }
+    const sourceId = readRecord(current["__openclaw"])?.id;
+    if (currentRoleContent?.role === "assistant" && typeof sourceId === "string") {
+      assistantSources.set(sourceId, current);
+    }
   }
   return {
     messages: changed ? visible : messages,
@@ -425,9 +542,9 @@ export function filterVisibleProjectedHistoryMessages(
   };
 }
 
-function stripInterSessionPromptPrefixFromContent(content: unknown): unknown {
+function stripPromptPrefixFromContent(content: unknown, strip: (text: string) => string): unknown {
   if (typeof content === "string") {
-    return stripInterSessionPromptPrefixForDisplay(content);
+    return strip(content);
   }
   if (!Array.isArray(content)) {
     return content;
@@ -440,53 +557,108 @@ function stripInterSessionPromptPrefixFromContent(content: unknown): unknown {
     if (typeof record.text !== "string") {
       return block;
     }
-    const stripped = stripInterSessionPromptPrefixForDisplay(record.text);
+    const stripped = strip(record.text);
     return stripped === record.text ? block : { ...record, text: stripped };
   });
 }
 
-function extractPromptPrefixField(text: string, field: string): string | undefined {
-  const prefixIndex = text.indexOf(INTER_SESSION_PROMPT_PREFIX_BASE);
-  if (prefixIndex === -1) {
-    return undefined;
-  }
-  const lineEnd = text.indexOf("\n", prefixIndex);
-  const header = lineEnd === -1 ? text.slice(prefixIndex) : text.slice(prefixIndex, lineEnd);
-  const escapedField = field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = new RegExp(`(?:^|\\s)${escapedField}=([^\\s]+)`).exec(header);
-  return normalizeOptionalString(match?.[1]);
-}
-
-function resolveSessionsSendForwardedSenderLabel(message: Record<string, unknown>): string {
+function readForwardedSender(message: Record<string, unknown>) {
+  // Only structured provenance identifies the sender; prompt headers are display text.
   const provenance = normalizeInputProvenance(message.provenance);
-  const text = extractProjectedText(message.content ?? message.text);
-  const sourceSessionKey =
-    provenance?.sourceSessionKey ?? extractPromptPrefixField(text, "sourceSession");
-  const agentId = parseAgentSessionKey(sourceSessionKey)?.agentId;
-  return agentId ? `Forwarded from ${agentId}` : "Forwarded agent message";
+  const sourceSessionKey = provenance?.sourceSessionKey;
+  const parsed = parseAgentSessionKey(sourceSessionKey);
+  const agentId = parsed?.agentId;
+  const jobId = isCronRunMessage(message)
+    ? provenance?.jobId
+    : parsed?.rest.match(/^cron:([^:]+):run:[^:]+$/u)?.[1];
+  return { sourceSessionKey, agentId, jobId };
 }
 
-export function projectSessionsSendInterSessionMessages(
+function resolveForwardedSenderSession(
+  message: Record<string, unknown>,
+  resolveCronJobName: (jobId: string) => string | undefined,
+): { sessionKey?: string; agentId?: string; label?: string } | undefined {
+  const { sourceSessionKey, agentId, jobId } = readForwardedSender(message);
+  const label = jobId ? (resolveCronJobName(jobId) ?? "Automation") : undefined;
+  return sourceSessionKey
+    ? { sessionKey: sourceSessionKey, ...(agentId ? { agentId } : {}), ...(label ? { label } : {}) }
+    : undefined;
+}
+
+export function readForwardedCronJobIds(messages: readonly unknown[]) {
+  return messages.flatMap((value) => {
+    const message = readRecord(value);
+    if (!message || (!isForwardedUserMessage(message) && !isProjectedForwardedMessage(message))) {
+      return [];
+    }
+    const jobId = readForwardedSender(message).jobId;
+    return jobId ? [jobId] : [];
+  });
+}
+
+export async function prepareForwardedMessageCronJobNameResolver(
+  messages: readonly unknown[],
+  storePath?: string,
+) {
+  return await prepareCronJobNameResolver(readForwardedCronJobIds(messages), storePath);
+}
+
+export function projectForwardedMessages(
   messages: Array<Record<string, unknown>>,
+  resolveCronJobName?: (jobId: string) => string | undefined,
 ): Array<Record<string, unknown>> {
-  let changed = false;
-  const projected = messages.map((message) => {
-    if (!isSessionsSendInterSessionUserMessage(message)) {
+  const resolve =
+    resolveCronJobName ??
+    (() => {
+      throw new Error("Cron job names must be prepared before projecting forwarded messages");
+    });
+  const names = new Map<string, string | undefined>();
+  const resolveName = (jobId: string) => {
+    if (!names.has(jobId)) {
+      names.set(jobId, resolve(jobId));
+    }
+    return names.get(jobId);
+  };
+  return mapChatDisplayMessages(messages, (message) => {
+    if (!isForwardedUserMessage(message) && !isProjectedForwardedMessage(message)) {
       return message;
     }
-    changed = true;
+    const senderSession = resolveForwardedSenderSession(message, resolveName);
+    if (message.role === "assistant") {
+      const previous = readRecord(message.senderSession);
+      if (previous?.label === senderSession?.label) {
+        return message;
+      }
+      return {
+        ...message,
+        senderSession,
+        senderLabel: `Forwarded from ${senderSession?.label ?? senderSession?.agentId}`,
+      };
+    }
+    const cronRun = isCronRunMessage(message);
+    const prefix = normalizeInputProvenance(message.provenance)?.sourcePromptPrefix;
+    const strip = cronRun
+      ? (text: string) =>
+          prefix && text.startsWith(prefix) ? text.slice(prefix.length).replace(/^ /u, "") : text
+      : stripInterSessionPromptPrefixForDisplay;
     const next: Record<string, unknown> = {
       ...message,
       role: "assistant",
-      senderLabel: resolveSessionsSendForwardedSenderLabel(message),
+      ...(cronRun
+        ? { __openclaw: { ...readRecord(message["__openclaw"]), turnBoundary: true } }
+        : {}),
+      senderLabel:
+        senderSession?.label || senderSession?.agentId
+          ? `Forwarded from ${senderSession.label ?? senderSession.agentId}`
+          : "Forwarded agent message",
+      ...(senderSession ? { senderSession } : {}),
     };
     if ("content" in next) {
-      next.content = stripInterSessionPromptPrefixFromContent(next.content);
+      next.content = stripPromptPrefixFromContent(next.content, strip);
     }
     if (typeof next.text === "string") {
-      next.text = stripInterSessionPromptPrefixForDisplay(next.text);
+      next.text = strip(next.text);
     }
     return next;
   });
-  return changed ? projected : messages;
 }

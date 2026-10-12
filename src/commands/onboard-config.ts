@@ -1,4 +1,3 @@
-/** Shared config mutations used by interactive and non-interactive onboarding. */
 import fs from "node:fs";
 import path from "node:path";
 import { listAgentEntries } from "../agents/agent-scope-config.js";
@@ -9,8 +8,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ToolProfileId } from "../config/types.tools.js";
 import { resolveUserPath } from "../utils.js";
 
-/** Default tool profile selected during local onboarding. */
-const ONBOARDING_DEFAULT_TOOLS_PROFILE: ToolProfileId = "coding";
+const ONBOARDING_DEFAULT_TOOLS_PROFILE: ToolProfileId = "full";
 
 export type OnboardingWorkspaceConflict = {
   currentWorkspaceDir: string;
@@ -38,7 +36,6 @@ function hasExistingAgentState(env: NodeJS.ProcessEnv): boolean {
   });
 }
 
-/** Detects a workspace change that could remap an existing agent fleet. */
 export function resolveOnboardingWorkspaceConflict(
   baseConfig: OpenClawConfig,
   requestedWorkspaceDir: string,
@@ -64,7 +61,6 @@ export function resolveOnboardingWorkspaceConflict(
   };
 }
 
-/** Applies local gateway/workspace defaults without overwriting explicit user defaults. */
 // Deliberately writes no session.dmScope: the schema default "main" (one rolling
 // personal-agent session across channels) is the product default. Multi-user DM
 // isolation is opt-in; `openclaw security audit` nudges it when traffic warrants.
@@ -110,7 +106,6 @@ export function applyLocalSetupWorkspaceConfig(
   };
 }
 
-/** Marks default agents to skip bootstrap file creation. */
 export function applySkipBootstrapConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = structuredClone(cfg);
   setConfigValueAtPath(

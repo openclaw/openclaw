@@ -1,51 +1,102 @@
-import { createHash } from "node:crypto";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { onAgentEventForRun } from "../../infra/agent-events.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   buildDashboardSessionTitleSource,
   isDashboardSessionTitleCandidate,
   maybeGenerateDashboardSessionTitle,
 } from "../dashboard-session-title.js";
-import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestContext } from "./types.js";
 
-export function resolveWebchatPromptCacheKey(params: {
-  agentId: string;
-  model: string;
-  provider: string;
-  sessionKey: string;
-}): string {
-  const digest = createHash("sha256")
-    .update(
-      [
-        "v1",
-        params.provider.trim().toLowerCase(),
-        params.model.trim(),
-        normalizeAgentId(params.agentId),
-        params.sessionKey,
-      ].join("\0"),
-      "utf8",
-    )
-    .digest("hex")
-    .slice(0, 32);
-  return `openclaw-webchat-${digest}`;
-}
-
-export function scheduleChatDashboardSessionTitle(params: {
+type DashboardSessionTitleRequest = {
   admittedSessionId: string;
   agentId: string;
   cfg: OpenClawConfig;
   context: GatewayRequestContext;
   request: Pick<NormalizedChatSendRequest, "normalizedAttachments" | "rawMessage">;
   sessionKey: string;
-  sessionLoadOptions: Parameters<typeof loadSessionEntry>[1];
   storePath: string;
-}): void {
+};
+
+/** Reply gate for chat-turn naming; `released` reports whether its turn was still running. */
+type DashboardSessionTitleTurn = {
+  released: Promise<boolean>;
+  settled: Promise<void>;
+};
+
+export function createChatSendTitleTurn() {
+  const ready = createDeferredCore<boolean>();
+  const settled = createDeferredCore();
+  let waiting = true;
+  let stop: (() => void) | undefined;
+  // The first release wins, including empty, rejected, and interrupted turns.
+  const release = (duringTurn: boolean) => {
+    stop?.();
+    stop = undefined;
+    waiting = false;
+    ready.resolve(duringTurn);
+  };
+  return {
+    released: ready.promise,
+    settled: settled.promise,
+    onAgentRunStart(runId: string) {
+      if (waiting) {
+        stop?.();
+        stop = onAgentEventForRun(runId, (event) => {
+          if (
+            event.stream === "assistant" ||
+            event.stream === "item" ||
+            event.stream === "tool" ||
+            event.stream === "thinking" ||
+            event.stream === "approval"
+          ) {
+            release(true);
+          }
+        });
+      }
+    },
+    finish() {
+      release(false);
+      settled.resolve();
+    },
+  };
+}
+
+export function scheduleCreatedDashboardSessionTitle(
+  created: {
+    key: string;
+    agentId: string;
+    entry: SessionEntry;
+    storePath: string;
+    isNew: boolean;
+  },
+  cfg: OpenClawConfig,
+  context: GatewayRequestContext,
+  titleSource?: string,
+): void {
+  if (!created.isNew || created.entry.incognito || !titleSource) {
+    return;
+  }
+  scheduleChatDashboardSessionTitle({
+    admittedSessionId: created.entry.sessionId,
+    agentId: created.agentId,
+    cfg,
+    context,
+    request: { rawMessage: titleSource, normalizedAttachments: [] },
+    sessionKey: created.key,
+    storePath: created.storePath,
+  });
+}
+
+export function scheduleChatDashboardSessionTitle(
+  params: DashboardSessionTitleRequest,
+  turn?: DashboardSessionTitleTurn,
+): void {
   const titleSource = buildDashboardSessionTitleSource({
     message: params.request.rawMessage,
     attachments: params.request.normalizedAttachments,
@@ -56,39 +107,31 @@ export function scheduleChatDashboardSessionTitle(params: {
     return;
   }
   void runWithGatewayIndependentRootWorkContinuation(async () => {
-    const admission = await beginSessionWorkAdmission({
-      scope: params.storePath,
-      identities: [params.sessionKey, params.admittedSessionId],
-      assertAllowed: () => {},
+    // Naming only patches metadata under the title writer's session identity check.
+    // It must not hold a turn admission while waiting on a model.
+    const retryAfter = turn && (await turn.released) ? turn.settled : undefined;
+    const updated = await maybeGenerateDashboardSessionTitle({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      sessionId: params.admittedSessionId,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+      currentUserMessage: params.request.rawMessage,
+      userMessage: titleSource,
+      ...(retryAfter ? { retryAfter } : {}),
+      onFallback: () =>
+        params.context.logGateway.warn(
+          "dashboard session title generation exhausted; using a crustacean fallback name",
+        ),
     });
-    try {
-      await admission.run(async () => {
-        const titleEntry = loadSessionEntry(params.sessionKey, params.sessionLoadOptions).entry;
-        if (titleEntry?.sessionId !== params.admittedSessionId) {
-          return;
-        }
-        const updated = await maybeGenerateDashboardSessionTitle({
-          cfg: params.cfg,
-          agentId: params.agentId,
-          entry: titleEntry,
-          sessionId: params.admittedSessionId,
-          sessionKey: params.sessionKey,
-          storePath: params.storePath,
-          currentUserMessage: params.request.rawMessage,
-          userMessage: titleSource,
-        });
-        if (updated) {
-          emitSessionsChanged(params.context, {
-            sessionKey: params.sessionKey,
-            agentId: params.agentId,
-            reason: "chat.title",
-          });
-        }
+    if (updated) {
+      emitSessionsChanged(params.context, {
+        sessionKey: params.sessionKey,
+        agentId: params.agentId,
+        reason: "chat.title",
       });
-    } finally {
-      admission.release();
     }
-  }).catch((err: unknown) => {
+  }, "chat-send:background").catch((err: unknown) => {
     params.context.logGateway.warn(
       `dashboard session title generation failed: ${formatForLog(err)}`,
     );

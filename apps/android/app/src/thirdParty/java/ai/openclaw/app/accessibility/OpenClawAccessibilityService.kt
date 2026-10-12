@@ -25,6 +25,7 @@ class OpenClawAccessibilityService : AccessibilityService() {
       AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED,
       AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED,
       -> advanceUiEpoch()
+
       else -> Unit
     }
   }
@@ -65,9 +66,6 @@ class OpenClawAccessibilityService : AccessibilityService() {
 
     val uiEpoch: Long
       get() = uiEpochCounter.get()
-
-    val connectionGeneration: Long
-      get() = connectionState.connection.value.generation
 
     internal fun advanceUiEpoch(): Long = uiEpochCounter.incrementAndGet()
   }

@@ -29,21 +29,12 @@ const HeartbeatResponseToolSchema = Type.Object(
     nextCheck: Type.Optional(Type.String()),
     scratch: Type.Optional(
       Type.String({
-        description:
-          "Complete replacement for heartbeat monitor prose. Recurring schedules belong in automations, not scratch.",
+        description: "Complete replacement for heartbeat monitor prose; not a recurring schedule.",
       }),
     ),
   },
   { additionalProperties: false },
 );
-
-function readRequiredBoolean(params: Record<string, unknown>, key: string): boolean {
-  const raw = readSnakeCaseParamRaw(params, key);
-  if (typeof raw !== "boolean") {
-    throw new ToolInputError(`${key} required`);
-  }
-  return raw;
-}
 
 /** Creates the one-shot heartbeat response tool for an auto-reply turn. */
 export function createHeartbeatResponseTool(): AnyAgentTool {
@@ -56,13 +47,15 @@ export function createHeartbeatResponseTool(): AnyAgentTool {
     catalogMode: "direct-only",
     displaySummary: "Accept heartbeat outcome/notify choice.",
     description:
-      "Accept heartbeat result for post-turn handling. `notify=false` no visible send. `notify=true` needs concise notificationText. Scratch is monitor prose only; manage recurring tasks with cron.",
+      "Accept heartbeat result for post-turn handling. `notify=false` no visible send. `notify=true` needs concise notificationText. Scratch is monitor prose only.",
     parameters: HeartbeatResponseToolSchema,
     execute: async (_toolCallId, args) => {
       if (!isRecord(args)) {
         throw new ToolInputError("Heartbeat response arguments required");
       }
-      readRequiredBoolean(args, "notify");
+      if (typeof readSnakeCaseParamRaw(args, "notify") !== "boolean") {
+        throw new ToolInputError("notify required");
+      }
       if (typeof args.scratch === "string") {
         try {
           assertCronJobScratchContent(args.scratch);

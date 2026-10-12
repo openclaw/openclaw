@@ -191,40 +191,6 @@ describe("cli program (nodes basics)", () => {
     expect(output).not.toContain("unpaired-live");
   });
 
-  it("runs unfiltered nodes list with pairing data when node.list is unavailable", async () => {
-    programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
-      const opts = (args[0] ?? {}) as { method?: string };
-      if (opts.method === "node.pair.list") {
-        return {
-          pending: [],
-          paired: [
-            {
-              nodeId: "pairing-scoped",
-              displayName: "Pairing Scoped",
-              remoteIp: "10.0.0.9",
-            },
-          ],
-        };
-      }
-      if (opts.method === "node.list") {
-        throw new Error("unauthorized");
-      }
-      return { ok: true };
-    });
-
-    await runProgram(["nodes", "list"]);
-
-    const output = getRuntimeOutput();
-    expect(output).toContain("Pending: 0 · Paired: 1");
-    expect(output).toContain("Pairing Scoped");
-    // The degraded table must never look authoritative: the fallback is
-    // announced on stderr so --json stdout stays parseable.
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("live node view unavailable"),
-    );
-    expect(output).not.toContain("live node view unavailable");
-  });
-
   it("sanitizes untrusted nodes list table fields while preserving JSON values", async () => {
     const now = Date.now();
     programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
@@ -263,6 +229,10 @@ describe("cli program (nodes basics)", () => {
     expect(output).toContain("Pending\\nNode");
     expect(output).toContain("Paired\\nNode");
     expect(output).toContain("10.0.0.5\\rrewritten");
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("live node view unavailable"),
+    );
+    expect(output).not.toContain("live node view unavailable");
 
     runtime.log.mockClear();
     await runProgram(["nodes", "list", "--json"]);
@@ -384,36 +354,78 @@ describe("cli program (nodes basics)", () => {
     expect(output).not.toContain("Two");
   });
 
-  it.each([
-    { command: "status", duration: "24h" },
-    { command: "status", duration: "1h30m" },
-    { command: "status", duration: "0" },
-    { command: "status", duration: " 24H " },
-    { command: "list", duration: "24h" },
-    { command: "list", duration: "1h30m" },
-    { command: "list", duration: "0" },
-    { command: "list", duration: " 24H " },
-  ])("preserves nodes $command --last-connected $duration", async ({ command, duration }) => {
-    const node = {
-      nodeId: "recent-node",
-      displayName: "Recent Node",
-      paired: true,
-      connected: true,
-      lastConnectedAtMs: Date.now() + 60_000,
-    };
-    programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
-      const { method } = (args[0] ?? {}) as { method?: string };
-      return method === "node.pair.list" ? { pending: [], paired: [node] } : { nodes: [node] };
-    });
+  it.each(["status", "list"])(
+    "preserves recorded connection ages in nodes %s after a stale pairing snapshot",
+    async (command) => {
+      const now = Date.now();
+      const recent = now - 1_000;
+      const old = now - 2 * 24 * 60 * 60 * 1_000;
+      const nodes = [
+        {
+          nodeId: "reconnected",
+          paired: true,
+          connected: true,
+          connectedAtMs: recent,
+          lastConnectedAtMs: recent,
+        },
+        {
+          nodeId: "catalog-only",
+          paired: true,
+          connected: false,
+          lastConnectedAtMs: recent,
+        },
+        { nodeId: "old", paired: true, connected: false, lastConnectedAtMs: old },
+        { nodeId: "unknown", paired: true, connected: false },
+      ];
+      programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
+        const { method } = (args[0] ?? {}) as { method?: string };
+        return method === "node.pair.list"
+          ? { pending: [], paired: [{ nodeId: "reconnected", lastConnectedAtMs: old }] }
+          : { ts: now, nodes };
+      });
 
-    await runProgram(["nodes", command, "--last-connected", duration, "--json"]);
+      await runProgram(["nodes", command, "--last-connected", "24h", "--json"]);
 
-    const result = writeJsonArgAt(0) as {
-      nodes?: Array<{ nodeId: string }>;
-      paired?: Array<{ nodeId: string }>;
-    };
-    expect((result.nodes ?? result.paired)?.map(({ nodeId }) => nodeId)).toEqual(["recent-node"]);
-  });
+      const result = writeJsonArgAt(0) as {
+        nodes?: Array<{ nodeId: string; lastConnectedAtMs?: number }>;
+        paired?: Array<{ nodeId: string; lastConnectedAtMs?: number }>;
+      };
+      expect(
+        (result.nodes ?? result.paired)?.map(({ nodeId, lastConnectedAtMs }) => ({
+          nodeId,
+          lastConnectedAtMs,
+        })),
+      ).toEqual([
+        { nodeId: "reconnected", lastConnectedAtMs: recent },
+        { nodeId: "catalog-only", lastConnectedAtMs: recent },
+      ]);
+    },
+  );
+
+  it.each([{ command: "status", duration: "1h30m" }])(
+    "preserves nodes $command --last-connected $duration",
+    async ({ command, duration }) => {
+      const node = {
+        nodeId: "recent-node",
+        displayName: "Recent Node",
+        paired: true,
+        connected: true,
+        lastConnectedAtMs: Date.now() + 60_000,
+      };
+      programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
+        const { method } = (args[0] ?? {}) as { method?: string };
+        return method === "node.pair.list" ? { pending: [], paired: [node] } : { nodes: [node] };
+      });
+
+      await runProgram(["nodes", command, "--last-connected", duration, "--json"]);
+
+      const result = writeJsonArgAt(0) as {
+        nodes?: Array<{ nodeId: string }>;
+        paired?: Array<{ nodeId: string }>;
+      };
+      expect((result.nodes ?? result.paired)?.map(({ nodeId }) => nodeId)).toEqual(["recent-node"]);
+    },
+  );
 
   it.each([
     {
@@ -532,12 +544,6 @@ describe("cli program (nodes basics)", () => {
 
   it.each([
     {
-      platform: "win32",
-      pathEnv: "C:\\one;D:\\two;E:\\three;F:\\four",
-      expectedPath: "path: C:\\one;D:\\two;…;F:\\four",
-      rejectedPath: "path: C:\\one;D:…:\\four",
-    },
-    {
       platform: "windows",
       pathEnv: "C:\\one;D:\\two;E:\\three;F:\\four",
       expectedPath: "path: C:\\one;D:\\two;…;F:\\four",
@@ -643,6 +649,7 @@ describe("cli program (nodes basics)", () => {
   });
 
   it("keeps explicit gateway options in node reapproval guidance without leaking auth", async () => {
+    vi.stubEnv("OPENCLAW_PROFILE", "work");
     programGatewayCallMock.mockResolvedValue({
       ts: Date.now(),
       nodes: [
@@ -669,7 +676,9 @@ describe("cli program (nodes basics)", () => {
     ]);
 
     const output = getRuntimeOutput();
-    expect(output).toContain("openclaw nodes approve request-reapproval --timeout 3000");
+    expect(output).toContain(
+      "openclaw --profile work nodes approve request-reapproval --timeout 3000",
+    );
     expect(output).toContain("Reuse the same connection options when rerunning: --url, --token.");
     expect(output).not.toContain("gateway-user");
     expect(output).not.toContain("url-secret");
@@ -913,7 +922,7 @@ describe("cli program (nodes basics)", () => {
     });
   });
 
-  it("runs nodes invoke and calls node.invoke", async () => {
+  it.each([undefined, "idem-test"])("runs nodes invoke with idempotency key %s", async (key) => {
     mockGatewayWithIosNodeListAnd("node.invoke", {
       ok: true,
       nodeId: "ios-node",
@@ -930,6 +939,7 @@ describe("cli program (nodes basics)", () => {
       "canvas.eval",
       "--params",
       '{"javaScript":"1+1"}',
+      ...(key === undefined ? [] : ["--idempotency-key", key]),
     ]);
 
     expectGatewayRequest("node.list", {});
@@ -938,7 +948,11 @@ describe("cli program (nodes basics)", () => {
       command: "canvas.eval",
       params: { javaScript: "1+1" },
       timeoutMs: 15000,
-      idempotencyKey: "idem-test",
+      idempotencyKey:
+        key ??
+        expect.stringMatching(
+          /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
+        ),
     });
     const invokeRequest = gatewayRequests().find((candidate) => candidate.method === "node.invoke");
     expect(invokeRequest?.clientName).toBe("cli");

@@ -1,9 +1,15 @@
 // Provider entry tests cover provider plugin entry contracts and catalog integration.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { capturePluginRegistration } from "../plugins/captured-registration.js";
 import type { ProviderCatalogContext } from "../plugins/types.js";
 import { defineSingleProviderPluginEntry } from "./provider-entry.js";
+
+const demoPlugin = {
+  id: "demo",
+  name: "Demo Provider",
+  description: "Demo provider plugin",
+};
 
 function createModel(id: string, name: string): ModelDefinitionConfig {
   return {
@@ -86,13 +92,60 @@ async function captureProviderEntry(params: {
 }
 
 describe("defineSingleProviderPluginEntry", () => {
-  it("derives API-key auth and static and live model catalogs from the provider manifest", async () => {
-    const manifest = createProviderManifest();
+  it("keeps static catalog registration independent of live discovery", async () => {
+    const liveCatalog = {
+      provider: { baseUrl: "https://api.demo.test/v1", models: [createModel("live", "Live")] },
+    };
+    const buildLiveCatalog = vi.fn(async () => liveCatalog);
+    const loadLiveCatalog = vi.fn(() => ({
+      buildOpenAICompatibleProviderCatalog: buildLiveCatalog,
+    }));
+    vi.doMock("../agents/provider-attribution.js", () => {
+      throw new Error("Static provider entry loaded transport policy");
+    });
+    vi.doMock("./provider-catalog-live-runtime.js", loadLiveCatalog);
+    vi.resetModules();
+    try {
+      const { defineSingleProviderPluginEntry: defineColdEntry } =
+        await import("./provider-entry.js");
+      const entry = defineColdEntry({
+        ...demoPlugin,
+        manifest: createProviderManifest(),
+        provider: {
+          label: "Demo",
+          docsPath: "/providers/demo",
+          aliases: ["demo-alias"],
+          catalog: { liveModelDiscovery: true },
+        },
+      });
+      const provider = capturePluginRegistration(entry).providers[0];
+      const context = createCatalogContext();
+      await expect(provider?.staticCatalog?.run(context)).resolves.toMatchObject({
+        provider: { models: [createModel("default", "Default")] },
+      });
+      await expect(provider?.catalog?.run({ ...context, providerIds: [] })).resolves.toBeNull();
+      expect(loadLiveCatalog).not.toHaveBeenCalled();
+
+      const scopedContext = { ...context, providerIds: ["demo-alias"] };
+      await expect(provider?.catalog?.run(scopedContext)).resolves.toBe(liveCatalog);
+      expect(buildLiveCatalog).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          ctx: scopedContext,
+          providerId: "demo",
+          providerAliases: ["demo-alias"],
+        }),
+      );
+    } finally {
+      vi.doUnmock("../agents/provider-attribution.js");
+      vi.doUnmock("./provider-catalog-live-runtime.js");
+      vi.resetModules();
+    }
+  });
+
+  it("gates generated catalogs by canonical and alias provider identities before auth", async () => {
     const entry = defineSingleProviderPluginEntry({
-      id: "demo",
-      name: "Demo Provider",
-      description: "Demo provider plugin",
-      manifest,
+      ...demoPlugin,
+      manifest: createProviderManifest(),
       provider: {
         label: "Demo",
         docsPath: "/providers/demo",
@@ -100,79 +153,55 @@ describe("defineSingleProviderPluginEntry", () => {
         catalog: {},
       },
     });
+    const provider = capturePluginRegistration(entry).providers[0];
+    let resolveProviderApiKeyCalls = 0;
+    const resolveProviderApiKey = () => {
+      resolveProviderApiKeyCalls += 1;
+      return { apiKey: "test-key" };
+    };
+    const context = { ...createCatalogContext(), resolveProviderApiKey };
 
-    const { provider, catalog, staticCatalog, unifiedCatalog, unifiedStaticCatalog } =
-      await captureProviderEntry({ entry });
+    await expect(
+      provider?.catalog?.run({ ...context, providerIds: ["demo-alias"] }),
+    ).resolves.toMatchObject({ provider: { apiKey: "test-key" } });
 
-    expect(provider).toMatchObject({
-      id: "demo",
-      label: "Demo",
-      aliases: ["demo-alias"],
-      envVars: ["DEMO_API_KEY"],
-    });
-    expect(provider?.auth[0]).toMatchObject({
-      id: "api-key",
-      label: "Demo API key",
-      hint: "Manifest-owned key",
-      starterModel: "demo/default",
-      wizard: {
-        choiceId: "demo-api-key",
-        choiceLabel: "Demo API key",
-        choiceHint: "Manifest-owned key",
-        groupId: "demo-group",
-        groupLabel: "Demo providers",
-        groupHint: "Manifest-owned setup",
-        methodId: "api-key",
-      },
-    });
-    const { defaultModel, ...manifestProvider } = manifest.modelCatalog.providers.demo;
-    expect(defaultModel).toBe("default");
-    expect(catalog).toEqual({ provider: { ...manifestProvider, apiKey: "test-key" } });
-    expect(staticCatalog).toEqual({ provider: manifestProvider });
-    expect(unifiedCatalog).toEqual([
-      { kind: "text", provider: "demo", model: "default", label: "Default", source: "live" },
-    ]);
-    expect(unifiedStaticCatalog).toEqual([
-      { kind: "text", provider: "demo", model: "default", label: "Default", source: "static" },
-    ]);
+    resolveProviderApiKeyCalls = 0;
+    await expect(
+      provider?.catalog?.run({ ...context, providerIds: ["other"] }),
+    ).resolves.toBeNull();
+    await expect(provider?.catalog?.run({ ...context, providerIds: [] })).resolves.toBeNull();
+    expect(resolveProviderApiKeyCalls).toBe(0);
   });
 
-  it("preserves manifest-owned onboarding scope and assistant metadata", () => {
-    const manifest = createProviderManifest();
+  it("accepts an alias scope for generated live model discovery", async () => {
     const entry = defineSingleProviderPluginEntry({
-      id: "demo",
-      name: "Demo Provider",
-      description: "Demo provider plugin",
-      manifest: {
-        ...manifest,
-        providerAuthChoices: [
-          {
-            ...manifest.providerAuthChoices[0]!,
-            assistantPriority: 4,
-            assistantVisibility: "manual-only",
-            onboardingFeatured: true,
-            onboardingScopes: ["text-inference", "music-generation"],
-          },
-        ],
+      ...demoPlugin,
+      provider: {
+        label: "Demo",
+        docsPath: "/providers/demo",
+        aliases: ["demo-alias"],
+        catalog: {
+          liveModelDiscovery: true,
+          buildProvider: () => ({
+            baseUrl: "not-a-url",
+            api: "openai-completions",
+            models: [],
+          }),
+        },
       },
-      provider: { label: "Demo", docsPath: "/providers/demo", catalog: {} },
     });
+    const provider = capturePluginRegistration(entry).providers[0];
 
-    expect(capturePluginRegistration(entry).providers[0]?.auth[0]?.wizard).toMatchObject({
-      assistantPriority: 4,
-      assistantVisibility: "manual-only",
-      onboardingFeatured: true,
-      onboardingScopes: ["text-inference", "music-generation"],
-    });
+    await expect(
+      provider?.catalog?.run({ ...createCatalogContext(), providerIds: ["demo-alias"] }),
+    ).resolves.toMatchObject({ provider: { apiKey: "test-key" } });
   });
 
   it("creates registration-scoped provider state for provider factories", () => {
     let registrations = 0;
     const registrationApis: unknown[] = [];
     const entry = defineSingleProviderPluginEntry({
-      id: "demo",
-      name: "Demo Provider",
-      description: "Demo provider plugin",
+      ...demoPlugin,
       manifest: createProviderManifest(),
       provider(api) {
         registrationApis.push(api);
@@ -200,21 +229,19 @@ describe("defineSingleProviderPluginEntry", () => {
 
   it("merges manifest onboarding metadata with provider-owned wizard model policies", () => {
     const manifest = createProviderManifest();
+    const manifestChoice = {
+      ...manifest.providerAuthChoices[0]!,
+      assistantPriority: 4,
+      modelTarget: "utility",
+      assistantVisibility: "manual-only",
+      onboardingFeatured: true,
+      onboardingScopes: ["text-inference", "music-generation"],
+    };
     const entry = defineSingleProviderPluginEntry({
-      id: "demo",
-      name: "Demo Provider",
-      description: "Demo provider plugin",
+      ...demoPlugin,
       manifest: {
         ...manifest,
-        providerAuthChoices: [
-          {
-            ...manifest.providerAuthChoices[0]!,
-            assistantPriority: 4,
-            assistantVisibility: "manual-only",
-            onboardingFeatured: true,
-            onboardingScopes: ["text-inference", "music-generation"],
-          },
-        ],
+        providerAuthChoices: [manifestChoice],
       },
       provider: {
         label: "Demo",
@@ -237,6 +264,7 @@ describe("defineSingleProviderPluginEntry", () => {
       groupLabel: "Demo providers",
       groupHint: "Manifest-owned setup",
       assistantPriority: 4,
+      modelTarget: "utility",
       assistantVisibility: "manual-only",
       onboardingFeatured: true,
       onboardingScopes: ["text-inference", "music-generation"],
@@ -248,9 +276,7 @@ describe("defineSingleProviderPluginEntry", () => {
 
   it("allows provider-owned manifest auth to disable the onboarding wizard", () => {
     const entry = defineSingleProviderPluginEntry({
-      id: "demo",
-      name: "Demo Provider",
-      description: "Demo provider plugin",
+      ...demoPlugin,
       manifest: createProviderManifest(),
       provider: {
         label: "Demo",
@@ -265,9 +291,7 @@ describe("defineSingleProviderPluginEntry", () => {
 
   it("honors explicit base URLs and provider-owned manifest auth overrides", async () => {
     const entry = defineSingleProviderPluginEntry({
-      id: "demo",
-      name: "Demo Provider",
-      description: "Demo provider plugin",
+      ...demoPlugin,
       manifest: createProviderManifest(),
       provider: {
         label: "Demo",
@@ -299,9 +323,7 @@ describe("defineSingleProviderPluginEntry", () => {
   it("rejects manifest API-key metadata without its declared credential source", () => {
     const manifest = createProviderManifest();
     const entry = defineSingleProviderPluginEntry({
-      id: "demo",
-      name: "Demo Provider",
-      description: "Demo provider plugin",
+      ...demoPlugin,
       manifest: { ...manifest, setup: { providers: [] } },
       provider: { label: "Demo", docsPath: "/providers/demo", catalog: {} },
     });
@@ -313,102 +335,11 @@ describe("defineSingleProviderPluginEntry", () => {
 
   it("rejects a provider catalog without a manifest catalog or explicit builder", () => {
     const entry = defineSingleProviderPluginEntry({
-      id: "demo",
-      name: "Demo Provider",
-      description: "Demo provider plugin",
+      ...demoPlugin,
       provider: { label: "Demo", docsPath: "/providers/demo", catalog: {} },
     });
 
     expect(() => capturePluginRegistration(entry)).toThrow("Missing modelCatalog.providers.demo");
-  });
-
-  it("registers a single provider with default wizard metadata", async () => {
-    const entry = defineSingleProviderPluginEntry({
-      id: "demo",
-      name: "Demo Provider",
-      description: "Demo provider plugin",
-      provider: {
-        label: "Demo",
-        docsPath: "/providers/demo",
-        auth: [
-          {
-            methodId: "api-key",
-            label: "Demo API key",
-            hint: "Shared key",
-            optionKey: "demoApiKey",
-            flagName: "--demo-api-key",
-            envVar: "DEMO_API_KEY",
-            promptMessage: "Enter Demo API key",
-            defaultModel: "demo/default",
-          },
-        ],
-        catalog: {
-          buildProvider: () => ({
-            api: "openai-completions",
-            baseUrl: "https://api.demo.test/v1",
-            models: [createModel("default", "Default")],
-          }),
-          buildStaticProvider: () => ({
-            api: "openai-completions",
-            baseUrl: "https://api.demo.test/v1",
-            models: [createModel("default", "Default")],
-          }),
-        },
-      },
-    });
-
-    const { captured, provider, catalog, staticCatalog, unifiedCatalog, unifiedStaticCatalog } =
-      await captureProviderEntry({ entry });
-    expect(captured.providers).toHaveLength(1);
-    expect(captured.modelCatalogProviders).toHaveLength(1);
-    expect(provider?.id).toBe("demo");
-    expect(provider?.label).toBe("Demo");
-    expect(provider?.docsPath).toBe("/providers/demo");
-    expect(provider?.envVars).toEqual(["DEMO_API_KEY"]);
-    expect(provider?.auth).toHaveLength(1);
-    expect(provider?.auth[0]?.id).toBe("api-key");
-    expect(provider?.auth[0]?.label).toBe("Demo API key");
-    expect(provider?.auth[0]?.hint).toBe("Shared key");
-    expect(provider?.auth[0]?.wizard?.choiceId).toBe("demo-api-key");
-    expect(provider?.auth[0]?.wizard?.choiceLabel).toBe("Demo API key");
-    expect(provider?.auth[0]?.wizard?.groupId).toBe("demo");
-    expect(provider?.auth[0]?.wizard?.groupLabel).toBe("Demo");
-    expect(provider?.auth[0]?.wizard?.groupHint).toBe("Shared key");
-    expect(provider?.auth[0]?.wizard?.methodId).toBe("api-key");
-
-    expect(catalog).toEqual({
-      provider: {
-        api: "openai-completions",
-        apiKey: "test-key",
-        baseUrl: "https://api.demo.test/v1",
-        models: [createModel("default", "Default")],
-      },
-    });
-    expect(staticCatalog).toEqual({
-      provider: {
-        api: "openai-completions",
-        baseUrl: "https://api.demo.test/v1",
-        models: [createModel("default", "Default")],
-      },
-    });
-    expect(unifiedCatalog).toEqual([
-      {
-        kind: "text",
-        provider: "demo",
-        model: "default",
-        label: "Default",
-        source: "live",
-      },
-    ]);
-    expect(unifiedStaticCatalog).toEqual([
-      {
-        kind: "text",
-        provider: "demo",
-        model: "default",
-        label: "Default",
-        source: "static",
-      },
-    ]);
   });
 
   it("supports provider overrides, explicit env vars, and extra registration", async () => {
@@ -504,55 +435,30 @@ describe("defineSingleProviderPluginEntry", () => {
     });
   });
 
-  it("skips unreadable provider catalog entries while preserving healthy siblings", async () => {
-    const providers = Object.defineProperty(
+  it("skips unreadable provider catalog model rows while preserving healthy siblings", async () => {
+    const unreadableModel = Object.defineProperty(
+      createModel("broken-model", "Broken Model"),
+      "id",
       {
-        mockplugin: {
-          api: "openai-completions" as const,
-          baseUrl: "https://mockplugin.test/v1",
-          models: [createModel("mock-model", "Mock Model")],
-        },
-      },
-      "fuzzplugin",
-      {
-        enumerable: true,
         get() {
-          throw new Error("fuzzplugin provider catalog entry read failed");
+          throw new Error("fuzzplugin model id read failed");
         },
       },
     );
-    const entry = defineSingleProviderPluginEntry({
-      id: "mockplugin",
-      name: "Mock Provider",
-      description: "Synthetic provider plugin",
-      provider: {
-        label: "Mock",
-        docsPath: "/providers/mockplugin",
-        catalog: {
-          run: async () => ({ providers }),
+    const models = Object.defineProperty(
+      [
+        createModel("mock-model", "Mock Model"),
+        { id: "id-only" } as ModelDefinitionConfig,
+        unreadableModel,
+      ],
+      "3",
+      {
+        enumerable: true,
+        get() {
+          throw new Error("fuzzplugin provider model row read failed");
         },
       },
-    });
-
-    const { unifiedCatalog } = await captureProviderEntry({ entry });
-    expect(unifiedCatalog).toEqual([
-      {
-        kind: "text",
-        provider: "mockplugin",
-        model: "mock-model",
-        label: "Mock Model",
-        source: "live",
-      },
-    ]);
-  });
-
-  it("skips unreadable provider catalog model rows while preserving healthy siblings", async () => {
-    const models = Object.defineProperty([createModel("mock-model", "Mock Model")], "1", {
-      enumerable: true,
-      get() {
-        throw new Error("fuzzplugin provider model row read failed");
-      },
-    });
+    );
     const entry = defineSingleProviderPluginEntry({
       id: "mockplugin",
       name: "Mock Provider",
@@ -581,6 +487,13 @@ describe("defineSingleProviderPluginEntry", () => {
         provider: "mockplugin",
         model: "mock-model",
         label: "Mock Model",
+        source: "live",
+      },
+      {
+        kind: "text",
+        provider: "mockplugin",
+        model: "id-only",
+        label: "id-only",
         source: "live",
       },
     ]);
@@ -635,56 +548,5 @@ describe("defineSingleProviderPluginEntry", () => {
     const { provider } = await captureProviderEntry({ entry });
     expect(provider?.envVars).toEqual(["MOCK_API_KEY"]);
     expect(provider?.auth.map((method) => method.id)).toEqual(["mock-api-key"]);
-  });
-
-  it("registers extra non-api-key auth methods", async () => {
-    const entry = defineSingleProviderPluginEntry({
-      id: "demo",
-      name: "Demo Provider",
-      description: "Demo provider plugin",
-      provider: {
-        label: "Demo",
-        docsPath: "/providers/demo",
-        auth: [
-          {
-            methodId: "api-key",
-            label: "Demo API key",
-            hint: "Shared key",
-            optionKey: "demoApiKey",
-            flagName: "--demo-api-key",
-            envVar: "DEMO_API_KEY",
-            promptMessage: "Enter Demo API key",
-            defaultModel: "demo/default",
-          },
-        ],
-        extraAuth: [
-          {
-            id: "oauth",
-            label: "Demo OAuth",
-            hint: "OAuth",
-            kind: "oauth",
-            wizard: {
-              choiceId: "demo-oauth",
-              choiceLabel: "Demo OAuth",
-              groupId: "demo",
-              groupLabel: "Demo",
-              methodId: "oauth",
-            },
-            run: async () => ({ profiles: [] }),
-          },
-        ],
-        catalog: {
-          buildProvider: () => ({
-            api: "openai-completions",
-            baseUrl: "https://api.demo.test/v1",
-            models: [createModel("default", "Default")],
-          }),
-        },
-      },
-    });
-
-    const { provider } = await captureProviderEntry({ entry });
-    expect(provider?.auth.map((method) => method.id)).toEqual(["api-key", "oauth"]);
-    expect(provider?.auth[1]?.wizard?.choiceId).toBe("demo-oauth");
   });
 });

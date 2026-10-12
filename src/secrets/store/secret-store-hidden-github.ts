@@ -1,5 +1,5 @@
+import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
-import { hasErrnoCode } from "../../infra/errno.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -14,10 +14,9 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
-import {
-  SECRET_STORE_VALUE_MAX_BYTES,
-  SecretStoreValidationError,
-} from "./secret-store-validation-error.js";
+import { withMissingSecretStoreFallback } from "./secret-store-sqlite.js";
+import { SecretStoreValidationError } from "./secret-store-validation-error.js";
+import { assertSecretStoreValueLength } from "./secret-store-value.js";
 
 type HiddenGitHubStoreDatabase = Pick<OpenClawStateKyselyDatabase, "secret_store_entries">;
 type HiddenGitHubStoreRow = Selectable<OpenClawStateKyselyDatabase["secret_store_entries"]>;
@@ -58,28 +57,100 @@ function hiddenGitHubStoreKindFromPrefix(prefix: HiddenGitHubStorePrefix): Hidde
   );
 }
 
-function isMissingSecretStoreTableError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    hasErrnoCode(error, "ERR_SQLITE_ERROR") &&
-    error.message === "no such table: secret_store_entries"
-  );
+export class PersonalGitHubStateError extends Error {
+  constructor() {
+    super("Personal GitHub state is invalid; disconnect and reconnect My GitHub.");
+  }
 }
 
-function validateHiddenGitHubSecretValue(value: string): void {
-  const bytes = Buffer.byteLength(value, "utf8");
-  if (bytes > SECRET_STORE_VALUE_MAX_BYTES) {
-    throw new SecretStoreValidationError(
-      "SECRET_STORE_VALUE_TOO_LARGE",
-      `Secret store value exceeds ${SECRET_STORE_VALUE_MAX_BYTES} UTF-8 bytes.`,
+/** Private GitHub aggregate only; identity secrets have no generic reader or projection. */
+export function readPersonalGitHubSecret(db: DatabaseSync, profileId: string): string | undefined {
+  return withMissingSecretStoreFallback(() => {
+    const row = executeSqliteQueryTakeFirstSync(
+      db,
+      getNodeSqliteKysely<HiddenGitHubStoreDatabase>(db)
+        .selectFrom("secret_store_entries")
+        .select(["value", "kind", "allowed_hosts"])
+        .where("scope_kind", "=", "identity")
+        .where("scope_id", "=", profileId)
+        .where("name", "=", "github-connection")
+        .where("deleted_at_ms", "is", null),
     );
-  }
-  if (value.length === 0) {
-    throw new SecretStoreValidationError(
-      "SECRET_STORE_VALUE_EMPTY",
-      "Secret store value is empty. Secret entries require a value; check the command that produced it.",
+    if (row) {
+      if (row.kind !== "secret" || row.allowed_hosts !== null) {
+        throw new PersonalGitHubStateError();
+      }
+      try {
+        assertSecretStoreValueLength(row.value, "secret");
+      } catch (error) {
+        if (error instanceof SecretStoreValidationError) {
+          throw new PersonalGitHubStateError();
+        }
+        throw error;
+      }
+      registerSecretValueForRedaction(row.value);
+    }
+    return row?.value;
+  }, undefined);
+}
+
+/** The caller owns the synchronous profile/connection transaction and its preconditions. */
+export function writePersonalGitHubSecret(
+  db: DatabaseSync,
+  profileId: string,
+  value: string | null,
+): void {
+  const query = getNodeSqliteKysely<HiddenGitHubStoreDatabase>(db);
+  if (value === null) {
+    executeSqliteQuerySync(
+      db,
+      query
+        .deleteFrom("secret_store_entries")
+        .where("scope_kind", "=", "identity")
+        .where("scope_id", "=", profileId)
+        .where("name", "=", "github-connection"),
     );
+    return;
   }
+  assertSecretStoreValueLength(value, "secret");
+  ensureSecretStoreSchema(db);
+  const now = Date.now();
+  upsertHiddenGitHubSecret(
+    db,
+    {
+      scope_kind: "identity",
+      scope_id: profileId,
+      name: "github-connection",
+      value,
+      updated_by: null,
+    },
+    now,
+  );
+  registerSecretValueForRedaction(value);
+}
+
+function upsertHiddenGitHubSecret(
+  db: DatabaseSync,
+  entry: Pick<HiddenGitHubStoreRow, "scope_kind" | "scope_id" | "name" | "value" | "updated_by">,
+  now: number,
+): void {
+  const values = {
+    value: entry.value,
+    updated_by: entry.updated_by,
+    kind: "secret",
+    allowed_hosts: null,
+    deleted_at_ms: null,
+    updated_at_ms: now,
+  };
+  executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<HiddenGitHubStoreDatabase>(db)
+      .insertInto("secret_store_entries")
+      .values({ ...entry, ...values, created_at_ms: now })
+      .onConflict((conflict) =>
+        conflict.columns(["scope_kind", "scope_id", "name"]).doUpdateSet(values),
+      ),
+  );
 }
 
 function isLiveHiddenGitHubStoreRow(
@@ -97,6 +168,17 @@ function isLiveHiddenGitHubStoreRow(
   );
 }
 
+function selectHiddenGitHubSecretRecords(sqlite: DatabaseSync) {
+  return getNodeSqliteKysely<HiddenGitHubStoreDatabase>(sqlite)
+    .selectFrom("secret_store_entries")
+    .select(["name", "value", "created_at_ms", "updated_at_ms"])
+    .where("scope_kind", "=", "team")
+    .where("scope_id", "=", "")
+    .where("kind", "=", "secret")
+    .where("allowed_hosts", "is", null)
+    .where("deleted_at_ms", "is", null);
+}
+
 /** Writes one hidden GitHub authorization record without exposing a generic mutation path. */
 export function writeHiddenGitHubSecretRecord(params: {
   name: string;
@@ -105,38 +187,21 @@ export function writeHiddenGitHubSecretRecord(params: {
   database?: OpenClawStateDatabaseOptions;
 }): void {
   assertHiddenGitHubSecretRecordName(params.name);
-  validateHiddenGitHubSecretValue(params.value);
+  assertSecretStoreValueLength(params.value, "secret");
   const now = Date.now();
   runOpenClawStateWriteTransaction(
     ({ db: sqlite }) => {
       ensureSecretStoreSchema(sqlite);
-      const db = getNodeSqliteKysely<HiddenGitHubStoreDatabase>(sqlite);
-      executeSqliteQuerySync(
+      upsertHiddenGitHubSecret(
         sqlite,
-        db
-          .insertInto("secret_store_entries")
-          .values({
-            scope_kind: "team",
-            scope_id: "",
-            name: params.name,
-            value: params.value,
-            kind: "secret",
-            created_at_ms: now,
-            updated_at_ms: now,
-            updated_by: params.updatedBy ?? null,
-            deleted_at_ms: null,
-            allowed_hosts: null,
-          })
-          .onConflict((conflict) =>
-            conflict.columns(["scope_kind", "scope_id", "name"]).doUpdateSet({
-              value: params.value,
-              kind: "secret",
-              updated_at_ms: now,
-              updated_by: params.updatedBy ?? null,
-              deleted_at_ms: null,
-              allowed_hosts: null,
-            }),
-          ),
+        {
+          scope_kind: "team",
+          scope_id: "",
+          name: params.name,
+          value: params.value,
+          updated_by: params.updatedBy ?? null,
+        },
+        now,
       );
     },
     params.database,
@@ -151,20 +216,11 @@ export function readHiddenGitHubSecretRecord(params: {
   database?: OpenClawStateDatabaseOptions;
 }): string | undefined {
   const kind = assertHiddenGitHubSecretRecordName(params.name);
-  try {
+  return withMissingSecretStoreFallback(() => {
     const row = withExistingOpenClawStateDatabaseReadOnly(({ db: sqlite }) => {
-      const db = getNodeSqliteKysely<HiddenGitHubStoreDatabase>(sqlite);
       return executeSqliteQueryTakeFirstSync(
         sqlite,
-        db
-          .selectFrom("secret_store_entries")
-          .select(["name", "value", "created_at_ms", "updated_at_ms"])
-          .where("scope_kind", "=", "team")
-          .where("scope_id", "=", "")
-          .where("name", "=", params.name)
-          .where("kind", "=", "secret")
-          .where("allowed_hosts", "is", null)
-          .where("deleted_at_ms", "is", null),
+        selectHiddenGitHubSecretRecords(sqlite).where("name", "=", params.name),
       );
     }, params.database ?? {});
     if (!row || !isLiveHiddenGitHubStoreRow(row, kind, Date.now())) {
@@ -172,12 +228,7 @@ export function readHiddenGitHubSecretRecord(params: {
     }
     registerSecretValueForRedaction(row.value);
     return row.value;
-  } catch (error) {
-    if (isMissingSecretStoreTableError(error)) {
-      return undefined;
-    }
-    throw error;
-  }
+  }, undefined);
 }
 
 /** Lists live hidden GitHub authorization records of one exact class. */
@@ -185,22 +236,17 @@ export function listHiddenGitHubSecretRecordNames(params: {
   prefix: HiddenGitHubStorePrefix;
   database?: OpenClawStateDatabaseOptions;
 }): string[] {
-  try {
+  return withMissingSecretStoreFallback(() => {
     const now = Date.now();
     const kind = hiddenGitHubStoreKindFromPrefix(params.prefix);
     return (
       withExistingOpenClawStateDatabaseReadOnly(({ db: sqlite }) => {
-        const db = getNodeSqliteKysely<HiddenGitHubStoreDatabase>(sqlite);
         const rows = executeSqliteQuerySync(
           sqlite,
-          db
-            .selectFrom("secret_store_entries")
-            .select(["name", "value", "created_at_ms", "updated_at_ms"])
-            .where("scope_kind", "=", "team")
-            .where("scope_id", "=", "")
-            .where("kind", "=", "secret")
-            .where("allowed_hosts", "is", null)
-            .where("deleted_at_ms", "is", null)
+          selectHiddenGitHubSecretRecords(sqlite)
+            // Bound the existing name index before materializing values; the classifier stays exact.
+            .where("name", ">=", `${params.prefix}-`)
+            .where("name", "<", `${params.prefix}.`)
             .orderBy("name", "asc"),
         ).rows;
         return rows.flatMap((row) => {
@@ -215,12 +261,7 @@ export function listHiddenGitHubSecretRecordNames(params: {
         });
       }, params.database ?? {}) ?? []
     );
-  } catch (error) {
-    if (isMissingSecretStoreTableError(error)) {
-      return [];
-    }
-    throw error;
-  }
+  }, []);
 }
 
 /** Hard-deletes one exact hidden GitHub authorization record. */
@@ -229,7 +270,7 @@ export function deleteHiddenGitHubSecretRecord(params: {
   database?: OpenClawStateDatabaseOptions;
 }): void {
   assertHiddenGitHubSecretRecordName(params.name);
-  try {
+  return withMissingSecretStoreFallback(() => {
     runOpenClawStateWriteTransaction(
       ({ db: sqlite }) => {
         const db = getNodeSqliteKysely<HiddenGitHubStoreDatabase>(sqlite);
@@ -245,9 +286,5 @@ export function deleteHiddenGitHubSecretRecord(params: {
       params.database,
       { operationLabel: "secrets.store.delete-hidden-github" },
     );
-  } catch (error) {
-    if (!isMissingSecretStoreTableError(error)) {
-      throw error;
-    }
-  }
+  }, undefined);
 }

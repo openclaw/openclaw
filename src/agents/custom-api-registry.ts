@@ -2,22 +2,11 @@
  * Registers caller-supplied custom API stream functions with the LLM registry.
  */
 import type { ApiRegistry } from "@openclaw/ai";
-import type { StreamFn } from "@openclaw/llm-core";
-import type {
-  Api,
-  AssistantMessageEventStreamContract,
-  Model,
-  StreamOptions,
-} from "../llm/types.js";
+import type { StreamFn, StreamFunction } from "@openclaw/llm-core";
+import type { Api, AssistantMessageEventStreamContract, Model } from "../llm/types.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
+import { runPluginStreamConsumer } from "../plugins/plugin-instance-scope.js";
 import { buildStreamErrorAssistantMessage } from "./stream-message-shared.js";
-
-const CUSTOM_API_SOURCE_PREFIX = "openclaw-custom-api:";
-
-/** Returns the registry source id used for a custom API stream function. */
-function getCustomApiRegistrySourceId(api: Api): string {
-  return `${CUSTOM_API_SOURCE_PREFIX}${api}`;
-}
 
 function adaptCustomStream(
   model: Model,
@@ -32,11 +21,13 @@ function adaptCustomStream(
     try {
       // Registry providers must return a stream immediately, while plugin
       // hooks may resolve one lazily. Bridge that lifecycle at the boundary.
-      const resolved = await stream;
-      for await (const event of resolved) {
-        adapted.push(event);
-      }
-      adapted.end(await resolved.result());
+      await runPluginStreamConsumer(stream, async () => {
+        const resolved = await stream;
+        for await (const event of resolved) {
+          adapted.push(event);
+        }
+        adapted.end(await resolved.result());
+      });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       const message = buildStreamErrorAssistantMessage({ model, errorMessage });
@@ -56,15 +47,8 @@ export function ensureCustomApiRegistered(
     return false;
   }
 
-  registry.registerApiProvider(
-    {
-      api,
-      stream: (model, context, options) =>
-        adaptCustomStream(model, streamFn(model, context, options)),
-      streamSimple: (model, context, options) =>
-        adaptCustomStream(model, streamFn(model, context, options as StreamOptions)),
-    },
-    getCustomApiRegistrySourceId(api),
-  );
+  const stream: StreamFunction = (model, context, options) =>
+    adaptCustomStream(model, streamFn(model, context, options));
+  registry.registerApiProvider({ api, stream, streamSimple: stream }, `openclaw-custom-api:${api}`);
   return true;
 }

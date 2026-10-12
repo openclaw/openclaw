@@ -1,5 +1,6 @@
 import AVFAudio
 import OpenClawChatUI
+import OpenClawKit
 import OpenClawProtocol
 import SwiftUI
 
@@ -27,120 +28,58 @@ struct ChatProTab: View {
         let fileURL: URL
     }
 
-    private struct SessionDashboardPresentation: Identifiable {
-        let id = UUID()
-        let sessionKey: String
+    private enum PendingChatAction {
+        case exportTranscript
+        case gatewaySettings
+        case newSessionOptions
     }
 
     @Environment(NodeAppModel.self) private var appModel
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(GatewayConnectionController.self) private var gatewayController
     @AppStorage("openclaw.webchat.showAssistantTrace")
     private var showsAssistantTrace = true
-    @State private var viewModel: OpenClawChatViewModel?
-    @State private var viewModelOwnerID = ""
+    private var viewModel: OpenClawChatViewModel? {
+        self.appModel.chatPresentation.viewModel
+    }
+
     @State private var transcriptShareItem: TranscriptShareItem?
     @State private var showsTranscriptExportError = false
-    @State private var showsBackgroundTasks = false
-    @State private var showsSessions = false
     @State private var showsNewSessionOptions = false
-    @State private var sessionDashboardPresentation: SessionDashboardPresentation?
-    // Transport can start unscoped while the UI uses its "main" fallback.
-    // Track the real agent so gateway metadata replaces the captured transport.
-    @State private var viewModelTransportAgentID = ""
-    @State private var viewModelRoutingContract = ""
-    @State private var viewModelPresentationAgentID = "main"
-    @State private var viewModelPresentationAgentName = "Main"
-    @State private var viewModelPresentationAgentBadge = "M"
-    @State private var viewModelHasVerifiedOfflineRoutingIdentity = false
+    @State private var showsChatActions = false
+    @State private var pendingChatAction: PendingChatAction?
     @State private var speech: OpenClawChatSpeechController?
     @State private var isGatewayStatusManuallyExpanded = false
     let headerSidebarAction: OpenClawSidebarHeaderAction?
-    let headerTitle: String?
-    let showsAgentBadge: Bool
-    let ownsNavigationStack: Bool
-    let openSettings: (() -> Void)?
-
-    init(
-        headerSidebarAction: OpenClawSidebarHeaderAction? = nil,
-        headerTitle: String? = nil,
-        showsAgentBadge: Bool = true,
-        ownsNavigationStack: Bool = true,
-        openSettings: (() -> Void)? = nil)
-    {
-        self.headerSidebarAction = headerSidebarAction
-        self.headerTitle = headerTitle
-        self.showsAgentBadge = showsAgentBadge
-        self.ownsNavigationStack = ownsNavigationStack
-        self.openSettings = openSettings
-    }
+    let openSettings: () -> Void
 
     var body: some View {
-        Group {
-            if self.ownsNavigationStack {
-                NavigationStack {
-                    self.content
-                }
-            } else {
-                // Phone and iPad hosts already provide a NavigationStack. Keep
-                // one native bar so embedded Chat never grows duplicate chrome.
-                self.content
-            }
-        }
-        .task {
-            await self.appModel.restoreChatSessionRoutingIdentityIfNeeded()
-            self.syncChatViewModel()
-            await self.handleNewChatRequest(self.appModel.newChatRequestID)
-            if self.speech == nil {
-                let gateway = self.appModel.operatorSession
-                self.speech = OpenClawChatSpeechController { text in
-                    try await ChatMessageSpeechClient.synthesize(text: text, gateway: gateway)
+        self.content
+            .disabled(self.isGatewayTransitionPending)
+            .task {
+                if self.speech == nil {
+                    let gateway = self.appModel.operatorSession
+                    self.speech = OpenClawChatSpeechController { text in
+                        try await ChatMessageSpeechClient.synthesize(text: text, gateway: gateway)
+                    }
                 }
             }
-        }
-        .onChange(of: self.appModel.chatSessionKey) { _, _ in
-            self.syncChatViewModel()
-        }
-        .onChange(of: self.appModel.chatViewModelOwnerID) { _, _ in
-            self.syncChatViewModel()
-        }
-        .onChange(of: self.appModel.chatAgentId) { _, _ in
-            self.syncChatViewModel()
-        }
-        .onChange(of: self.appModel.gatewayDefaultAgentId) { _, _ in
-            self.syncChatViewModel()
-        }
-        .onChange(of: self.appModel.chatSessionRoutingContract) { _, _ in
-            self.syncChatViewModel()
-        }
-        .onChange(of: self.appModel.voiceNoteRecorder.ownsPendingChatAttachment) { _, _ in
-            self.viewModel?.attachmentOwnerActivityChanged()
-            self.syncChatViewModel()
-        }
-        .onChange(of: self.viewModel?.isAttachmentOwnerPinned) { _, pinned in
-            guard pinned == false else { return }
-            self.syncChatViewModel()
-        }
-        .onChange(of: self.appModel.isAppleReviewDemoModeEnabled) { _, _ in
-            self.syncChatViewModel()
-            self.viewModel?.refresh()
-        }
-        .onChange(of: self.appModel.isScreenshotFixtureModeEnabled) { _, _ in
-            self.syncChatViewModel()
-            self.viewModel?.refresh()
-        }
-        .onChange(of: self.appModel.isOperatorGatewayConnected) { _, connected in
-            guard connected else { return }
-            self.syncChatViewModel()
-            self.viewModel?.refresh()
-        }
-        .onChange(of: self.appModel.newChatRequestID) { _, requestID in
-            Task { await self.handleNewChatRequest(requestID) }
-        }
+    }
+
+    private var isGatewayTransitionPending: Bool {
+        self.appModel.isGatewayPickerRequestInFlight ||
+            self.gatewayController.hasPendingConnectionHandoff ||
+            // Route commitment precedes SwiftUI applying the new presentation.
+            // A deliberately pinned attachment owner keeps its existing controls
+            // so the user can remove/finish it rather than becoming stuck.
+            (!self.isAttachmentOwnerPinned && self.appModel.chatPresentation.ownerID != self.appModel
+                .chatViewModelOwnerID)
     }
 
     private var content: some View {
         self.chatSurface
             .modifier(ChatScrollEdgeTreatment())
-            .navigationTitle(self.showsAgentBadge ? "" : self.headerDisplayTitle)
+            .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 if let headerSidebarAction {
@@ -148,36 +87,29 @@ struct ChatProTab: View {
                         action: headerSidebarAction,
                         placement: .topBarLeading)
                 }
-                if self.showsAgentBadge {
-                    if #available(iOS 26.0, *) {
-                        ToolbarItem(placement: .topBarLeading) {
-                            self.headerAgentIdentity
-                        }
-                        .sharedBackgroundVisibility(.hidden)
-                    } else {
-                        ToolbarItem(placement: .topBarLeading) {
-                            self.headerAgentIdentity
-                        }
+                if #available(iOS 26.0, *) {
+                    ToolbarItem(placement: .topBarLeading) {
+                        self.headerAgentIdentity
                     }
+                    .sharedBackgroundVisibility(.hidden)
                 } else {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        self.headerGatewayStatus
+                    ToolbarItem(placement: .topBarLeading) {
+                        self.headerAgentIdentity
                     }
                 }
-                ToolbarItem(placement: .topBarTrailing) {
-                    self.chatActionsMenu
+                if #available(iOS 26.0, *) {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        self.chatActionsMenu
+                    }
+                    .sharedBackgroundVisibility(.hidden)
+                } else {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        self.chatActionsMenu
+                    }
                 }
             }
             .sheet(item: self.$transcriptShareItem) { item in
-                ChatTranscriptShareSheet(fileURL: item.fileURL)
-            }
-            .sheet(isPresented: self.$showsBackgroundTasks) {
-                BackgroundTasksScreen(agentID: self.currentAgentID)
-            }
-            .sheet(isPresented: self.$showsSessions) {
-                if let viewModel {
-                    ChatSessionsSheet(viewModel: viewModel)
-                }
+                OpenClawChatFileShareSheet(fileURL: item.fileURL)
             }
             .sheet(isPresented: self.$showsNewSessionOptions) {
                 if let viewModel {
@@ -186,11 +118,6 @@ struct ChatProTab: View {
                     }
                     .presentationDetents([.medium])
                     .presentationDragIndicator(.visible)
-                }
-            }
-            .sheet(item: self.$sessionDashboardPresentation) { presentation in
-                NavigationStack {
-                    SessionDashboardScreen(sessionKey: presentation.sessionKey)
                 }
             }
             .alert(
@@ -210,8 +137,11 @@ struct ChatProTab: View {
     @ViewBuilder
     private var chatSurface: some View {
         if let viewModel {
+            let owner = self.appModel.chatPresentation
+            let presentationID = owner.presentationID
             OpenClawChatView(
                 viewModel: viewModel,
+                resolveComposerModel: owner.composerModelResolver(),
                 drawsBackground: true,
                 showsSessionSwitcher: false,
                 userAccent: self.chatUserAccent,
@@ -219,7 +149,8 @@ struct ChatProTab: View {
                 assistantName: self.agentDisplayName,
                 assistantAvatarText: self.agentBadge,
                 assistantAvatarTint: OpenClawBrand.accent,
-                showsAssistantAvatars: false,
+                // Narrow layouts drop the avatar column, as the web chat does at phone widths.
+                showsAssistantAvatars: self.horizontalSizeClass != .compact,
                 composerChrome: .clean,
                 isComposerEnabled: self.gatewayConnected || self.canQueueOffline,
                 isAttachmentInputEnabled: self.gatewayConnected || self.canQueueOffline,
@@ -243,7 +174,11 @@ struct ChatProTab: View {
                 })
                 // iMessage-style grey bubbles for agent replies in the clean chrome.
                 .environment(\.openClawAssistantBubblesInCleanChrome, true)
-                .id(ObjectIdentifier(viewModel))
+                .environment(
+                    \.openClawEmbeddedBrowserUnavailableReason,
+                    self.appModel.activeGatewayConnectConfig?.ingressAuthorization == nil ? nil :
+                        "This widget needs browser access. Use native chat or open Gateway settings.")
+                .id(presentationID)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         } else {
             ContentUnavailableView(
@@ -298,68 +233,50 @@ struct ChatProTab: View {
             .animation(.snappy(duration: 0.24), value: self.showsExpandedGatewayStatus)
     }
 
-    @ViewBuilder
-    private var headerGatewayStatus: some View {
-        if self.gatewayStatusIsHealthy || self.openSettings != nil {
-            Button(action: self.handleHeaderAgentIdentityTap) {
-                self.headerGatewayStatusLabel
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(Text(verbatim: self.gatewayAccessibilityLabel))
-            .accessibilityHint(self.gatewayStatusAccessibilityHint)
-            .accessibilityIdentifier("chat-gateway-status")
-        } else {
-            self.headerGatewayStatusLabel
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(Text(verbatim: self.gatewayAccessibilityLabel))
-                .accessibilityIdentifier("chat-gateway-status")
-        }
-    }
-
-    private var headerGatewayStatusLabel: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(self.gatewayStatusColor)
-                .frame(width: 10, height: 10)
-            if self.showsExpandedGatewayStatus {
-                self.expandedGatewayStatusLabel
-            }
-        }
-        .frame(minHeight: 44)
-        .animation(.snappy(duration: 0.24), value: self.showsExpandedGatewayStatus)
-    }
-
-    @ViewBuilder
     private var headerAgentIdentityControl: some View {
-        if self.gatewayStatusIsHealthy || self.openSettings != nil {
-            Button(action: self.handleHeaderAgentIdentityTap) {
-                self.headerAgentIdentityLabel
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(Text(verbatim: self.headerAgentAccessibilityLabel))
-            .accessibilityValue(self.showsExpandedGatewayStatus ? "Expanded" : "Collapsed")
-            .accessibilityHint(self.gatewayStatusAccessibilityHint)
-            .accessibilityIdentifier("chat-gateway-status")
-        } else {
+        Button(action: self.handleHeaderAgentIdentityTap) {
             self.headerAgentIdentityLabel
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(Text(verbatim: self.headerAgentAccessibilityLabel))
-                .accessibilityIdentifier("chat-gateway-status")
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text(verbatim: self.headerAgentAccessibilityLabel))
+        .accessibilityValue(self.showsExpandedGatewayStatus ? "Expanded" : "Collapsed")
+        .accessibilityHint(self.gatewayStatusAccessibilityHint)
+        .accessibilityIdentifier("chat-gateway-status")
     }
 
     private var headerAgentIdentityLabel: some View {
         HStack(spacing: 7) {
             self.headerIdentityBadge
-            if self.showsExpandedGatewayStatus {
-                self.expandedGatewayStatusLabel
-                    .transition(.opacity.combined(with: .move(edge: .leading)))
-            } else {
-                Text(self.agentDisplayName)
-                    .font(OpenClawType.headline)
-                    .lineLimit(1)
-                    .transition(.opacity)
+            VStack(alignment: .leading, spacing: 2) {
+                if self.showsExpandedGatewayStatus {
+                    self.expandedGatewayStatusLabel
+                        .transition(.opacity.combined(with: .move(edge: .leading)))
+                } else {
+                    Text(self.agentDisplayName)
+                        .font(OpenClawType.headline)
+                        .lineLimit(1)
+                        .transition(.opacity)
+                }
+                if let session = self.coloredHeaderSession {
+                    self.headerSessionTitle(session)
+                }
             }
+        }
+    }
+
+    private var coloredHeaderSession: OpenClawChatSessionEntry? {
+        guard let session = viewModel?.currentSessionEntry(),
+              OpenClawSessionColor(name: session.color) != nil
+        else { return nil }
+        return session
+    }
+
+    private func headerSessionTitle(_ session: OpenClawChatSessionEntry) -> some View {
+        HStack(spacing: 5) {
+            OpenClawSessionColorDot(color: session.color)
+            Text(verbatim: CommandCenterTab.sessionTitle(session))
+                .font(OpenClawType.captionMedium)
+                .lineLimit(1)
         }
     }
 
@@ -370,7 +287,9 @@ struct ChatProTab: View {
     }
 
     private var headerAgentAccessibilityLabel: String {
-        "\(self.voiceAvatarAccessibilityLabel). \(self.gatewayAccessibilityLabel)"
+        let identity = "\(voiceAvatarAccessibilityLabel). \(gatewayAccessibilityLabel)"
+        guard let session = coloredHeaderSession else { return identity }
+        return "\(identity). \(CommandCenterTab.sessionTitle(session))"
     }
 
     private func handleHeaderAgentIdentityTap() {
@@ -379,7 +298,7 @@ struct ChatProTab: View {
                 self.isGatewayStatusManuallyExpanded.toggle()
             }
         } else {
-            self.openSettings?()
+            self.openSettings()
         }
     }
 
@@ -434,98 +353,6 @@ struct ChatProTab: View {
         return "\(self.agentDisplayName), \(state)"
     }
 
-    private func syncChatViewModel() {
-        let sessionKey = self.appModel.chatSessionKey
-        // Includes the cache gateway identity so switching paired gateways
-        // rebuilds the view model even while the transport mode stays the same.
-        let ownerID = self.appModel.chatViewModelOwnerID
-        let deliveryAgentID = self.appModel.chatDeliveryAgentId
-        let transportAgentID = Self.transportAgentID(deliveryAgentID)
-        let routingContract = self.appModel.chatSessionRoutingContract ?? ""
-        guard let viewModel else {
-            self.viewModelOwnerID = ownerID
-            self.viewModelTransportAgentID = transportAgentID
-            self.viewModelRoutingContract = routingContract
-            self.captureCurrentPresentationIdentity()
-            self.viewModel = self.makeChatViewModel(sessionKey: sessionKey)
-            return
-        }
-        if Self.requiresViewModelRebuild(
-            currentOwnerID: self.viewModelOwnerID,
-            nextOwnerID: ownerID,
-            currentTransportAgentID: self.viewModelTransportAgentID,
-            nextTransportAgentID: transportAgentID)
-        {
-            // Keep recording, staging, and delivery on their captured route.
-            // The pin-change observer replays this rebuild with latest state.
-            guard !viewModel.isAttachmentOwnerPinned else { return }
-            viewModel.endPendingToolActivities()
-            self.viewModelOwnerID = ownerID
-            self.viewModelTransportAgentID = transportAgentID
-            self.viewModelRoutingContract = routingContract
-            self.captureCurrentPresentationIdentity()
-            self.viewModel = self.makeChatViewModel(sessionKey: sessionKey)
-            return
-        }
-        if self.viewModelRoutingContract != routingContract {
-            self.viewModelRoutingContract = routingContract
-            viewModel.syncSessionRoutingContract(self.appModel.chatSessionRoutingContract)
-        }
-        viewModel.syncSession(to: sessionKey)
-        if !viewModel.isAttachmentOwnerPinned {
-            self.captureCurrentPresentationIdentity()
-        }
-    }
-
-    private func handleNewChatRequest(_ requestID: Int) async {
-        guard let viewModel,
-              self.appModel.consumeNewChatRequest(requestID)
-        else { return }
-        _ = await viewModel.startNewSession()
-    }
-
-    private func captureCurrentPresentationIdentity() {
-        self.viewModelPresentationAgentID = self.currentAgentID
-        self.viewModelPresentationAgentName = self.currentAgentDisplayName
-        self.viewModelPresentationAgentBadge = self.currentAgentBadge
-        self.viewModelHasVerifiedOfflineRoutingIdentity = self.appModel.hasVerifiedChatOfflineRoutingIdentity
-    }
-
-    private func makeChatViewModel(sessionKey: String) -> OpenClawChatViewModel {
-        // One gateway facade backs both seams while routing cache and outbox
-        // operations to their separate installation-wide databases.
-        let offlineStore = self.appModel.makeChatOfflineStore()
-        let voiceNoteRecorder = self.appModel.voiceNoteRecorder
-        return OpenClawChatViewModel(
-            sessionKey: sessionKey,
-            // Bind durable rows and their transport lease to the exact same
-            // gateway owner even if app state switches between these calls.
-            transport: self.appModel.makeChatTransport(outboxGatewayID: offlineStore?.gatewayID),
-            activeAgentId: self.appModel.chatDeliveryAgentId,
-            sessionRoutingContract: self.appModel.chatSessionRoutingContract,
-            attachmentOwnerIsActive: { voiceNoteRecorder.ownsPendingChatAttachment },
-            transcriptCache: offlineStore,
-            outbox: offlineStore,
-            onSessionChanged: { sessionKey in
-                self.appModel.focusChatSession(sessionKey)
-            },
-            onToolActivity: { id, name, isActive, toolSessionKey in
-                if isActive {
-                    LiveActivityManager.shared.showTool(
-                        id: id,
-                        name: name,
-                        agentName: self.agentDisplayName,
-                        agentBadge: self.agentBadge,
-                        sessionKey: toolSessionKey)
-                } else {
-                    LiveActivityManager.shared.endTool(id: id, sessionKey: toolSessionKey)
-                }
-            },
-            diagnosticsLog: { message in
-                GatewayDiagnostics.log(message)
-            })
-    }
-
     private var talkControl: OpenClawChatTalkControl {
         OpenClawChatTalkControl(
             isEnabled: self.appModel.talkMode.isEnabled,
@@ -565,8 +392,10 @@ struct ChatProTab: View {
 
     private var dictationControl: OpenClawChatDictationControl {
         OpenClawChatDictationControl(
-            isActive: self.appModel.isChatDictationActive,
-            isAvailable: !self.appModel.isTalkCaptureActive || self.appModel.isChatDictationActive,
+            phase: self.appModel.chatDictationPhase,
+            isAvailable: !self.appModel.isTalkCaptureActive || self.appModel.chatDictationPhase != .idle,
+            partialTranscript: self.appModel.chatDictationPartialTranscript,
+            level: self.appModel.chatDictationLevel,
             start: {
                 try await self.appModel.transcribeChatDraft()
             },
@@ -595,126 +424,112 @@ struct ChatProTab: View {
     }
 
     private var chatActionsMenu: some View {
-        Menu {
-            Button {
-                Task { await self.viewModel?.startNewSession() }
-            } label: {
-                Label {
-                    Text("New Chat")
-                        .font(OpenClawType.body)
-                } icon: {
-                    Image(systemName: "plus.bubble")
+        Button {
+            self.showsChatActions.toggle()
+        } label: {
+            Image(systemName: "ellipsis.circle")
+                .foregroundStyle(OpenClawBrand.accent)
+        }
+        .frame(width: 44, height: 44)
+        .contentShape(Rectangle())
+        .buttonStyle(.plain)
+        .accessibilityLabel("Chat actions")
+        .popover(isPresented: self.$showsChatActions, attachmentAnchor: .rect(.bounds), arrowEdge: .top) {
+            self.chatActionsPopover
+                .onDisappear {
+                    self.performPendingChatAction()
                 }
-            }
-            .disabled(self.viewModel == nil || !self.gatewayConnected || self.isAttachmentOwnerPinned)
+                .presentationCompactAdaptation(.popover)
+        }
+    }
 
-            if self.activeAgent?.workspacegit == true {
+    private var chatActionsPopover: some View {
+        ScrollView {
+            VStack(spacing: 0) {
+                if self.activeAgent?.workspacegit == true {
+                    self.chatActionButton(
+                        title: "New chat in worktree",
+                        systemImage: "arrow.triangle.branch",
+                        disabled: self.viewModel == nil || !self.gatewayConnected || self.isAttachmentOwnerPinned)
+                    {
+                        Task { await self.viewModel?.startNewSession(worktree: true) }
+                    }
+                }
+
+                self.chatActionButton(
+                    title: "New session options…",
+                    systemImage: "slider.horizontal.3",
+                    disabled: self.viewModel == nil || !self.gatewayConnected || self.isAttachmentOwnerPinned)
+                {
+                    self.pendingChatAction = .newSessionOptions
+                }
+                if let viewModel {
+                    ChatModelControlsMenuItems(
+                        viewModel: viewModel,
+                        agentModelReference: self.activeAgentModelReference)
+                    {
+                        self.showsChatActions = false
+                    }
+                }
+
                 Button {
-                    Task { await self.viewModel?.startNewSession(worktree: true) }
+                    self.showsAssistantTrace.toggle()
                 } label: {
-                    Label {
-                        Text("New Chat in Worktree")
-                            .font(OpenClawType.body)
-                    } icon: {
-                        Image(systemName: "arrow.triangle.branch")
-                    }
+                    ChatActionSystemRow(
+                        title: String(localized: "Show reasoning & tool activity"),
+                        systemImage: "brain.head.profile",
+                        isSelected: self.showsAssistantTrace)
                 }
-                .disabled(self.viewModel == nil || !self.gatewayConnected || self.isAttachmentOwnerPinned)
-            }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(self.showsAssistantTrace ? .isSelected : [])
+                .accessibilityIdentifier("chat-show-reasoning-toggle")
 
-            Button {
-                self.showsNewSessionOptions = true
-            } label: {
-                Label {
-                    Text("New Session Options…")
-                        .font(OpenClawType.body)
-                } icon: {
-                    Image(systemName: "slider.horizontal.3")
+                self.chatActionButton(
+                    title: "Export transcript",
+                    systemImage: "square.and.arrow.up",
+                    disabled: self.viewModel == nil)
+                {
+                    self.pendingChatAction = .exportTranscript
                 }
-            }
-            .disabled(self.viewModel == nil || !self.gatewayConnected || self.isAttachmentOwnerPinned)
 
-            Button {
-                self.showsSessions = true
-            } label: {
-                Label {
-                    Text(String(localized: "Sessions…"))
-                        .font(OpenClawType.body)
-                } icon: {
-                    Image(systemName: "rectangle.stack")
-                }
-            }
-
-            Button {
-                guard let sessionKey = self.viewModel?.sessionKey else { return }
-                self.sessionDashboardPresentation = SessionDashboardPresentation(sessionKey: sessionKey)
-            } label: {
-                Label {
-                    Text("Dashboard")
-                        .font(OpenClawType.body)
-                } icon: {
-                    Image(systemName: "rectangle.grid.2x2")
-                }
-            }
-            .disabled(self.viewModel == nil)
-
-            Divider()
-
-            if let viewModel {
-                ChatModelControlsMenuItems(viewModel: viewModel)
-                Divider()
-            }
-
-            Button {
-                self.showsBackgroundTasks = true
-            } label: {
-                Label {
-                    Text("Background Tasks")
-                        .font(OpenClawType.body)
-                } icon: {
-                    Image(systemName: "clock.arrow.circlepath")
-                }
-            }
-            .disabled(!self.appModel.isOperatorGatewayConnected)
-
-            Button {
-                self.exportTranscript()
-            } label: {
-                Label {
-                    Text("Export Transcript")
-                        .font(OpenClawType.body)
-                } icon: {
-                    Image(systemName: "square.and.arrow.up")
-                }
-            }
-            .disabled(self.viewModel == nil)
-
-            if let openSettings {
-                Divider()
-
-                Button(action: openSettings) {
-                    Label {
-                        Text("Gateway Settings")
-                            .font(OpenClawType.body)
-                    } icon: {
-                        Image(systemName: "network")
-                    }
+                self.chatActionButton(title: "Gateway settings", systemImage: "network") {
+                    self.pendingChatAction = .gatewaySettings
                 }
                 .accessibilityIdentifier("chat-gateway-settings")
             }
-
-            Toggle(isOn: self.$showsAssistantTrace) {
-                Label {
-                    Text(String(localized: "Show reasoning & tool activity"))
-                        .font(OpenClawType.body)
-                } icon: {
-                    Image(systemName: "brain.head.profile")
-                }
-            }
-        } label: {
-            Image(systemName: "ellipsis.circle")
+            .padding(.vertical, 8)
         }
-        .accessibilityLabel("Chat actions")
+        .frame(width: 286, height: 560)
+        .accessibilityIdentifier("chat-actions-popover")
+    }
+
+    private func chatActionButton(
+        title: String,
+        systemImage: String,
+        disabled: Bool = false,
+        action: @escaping @MainActor () -> Void) -> some View
+    {
+        Button {
+            action()
+            self.showsChatActions = false
+        } label: {
+            ChatActionSystemRow(title: title, systemImage: systemImage)
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+    }
+
+    private func performPendingChatAction() {
+        guard let pendingChatAction else { return }
+        self.pendingChatAction = nil
+        switch pendingChatAction {
+        case .exportTranscript:
+            self.exportTranscript()
+        case .gatewaySettings:
+            self.openSettings()
+        case .newSessionOptions:
+            self.showsNewSessionOptions = true
+        }
     }
 
     private func exportTranscript() {
@@ -747,7 +562,7 @@ struct ChatProTab: View {
         Self.presentationGatewayState(
             current: GatewayStatusBuilder.build(appModel: self.appModel),
             isAttachmentOwnerPinned: self.isAttachmentOwnerPinned,
-            capturedOwnerID: self.viewModelOwnerID,
+            capturedOwnerID: self.appModel.chatPresentation.ownerID,
             currentOwnerID: self.appModel.chatViewModelOwnerID)
     }
 
@@ -843,17 +658,8 @@ struct ChatProTab: View {
     private var canQueueOffline: Bool {
         self.viewModel?.supportsOfflineTextOutbox == true &&
             (self.isAttachmentOwnerPinned
-                ? self.viewModelHasVerifiedOfflineRoutingIdentity
+                ? self.appModel.chatPresentation.hasVerifiedOfflineRoutingIdentity
                 : self.appModel.hasVerifiedChatOfflineRoutingIdentity)
-    }
-
-    private var headerDisplayTitle: String {
-        self.normalized(self.headerTitle)
-            ?? Self.defaultHeaderTitle(showsAgentBadge: self.showsAgentBadge, agentDisplayName: self.agentDisplayName)
-    }
-
-    nonisolated static func defaultHeaderTitle(showsAgentBadge: Bool, agentDisplayName: String) -> String {
-        showsAgentBadge ? agentDisplayName : "Chat"
     }
 
     private var chatUserAccent: Color {
@@ -865,7 +671,7 @@ struct ChatProTab: View {
     }
 
     private var currentAgentID: String {
-        self.normalized(self.appModel.chatAgentId) ?? "main"
+        self.appModel.chatAgentId.trimmedNonEmpty ?? "main"
     }
 
     private var currentActiveAgent: AgentSummary? {
@@ -873,54 +679,37 @@ struct ChatProTab: View {
     }
 
     private var activeAgentID: String {
-        self.isAttachmentOwnerPinned ? self.viewModelPresentationAgentID : self.currentAgentID
+        self.isAttachmentOwnerPinned ? self.appModel.chatPresentation.presentationAgentID : self.currentAgentID
     }
 
     private var activeAgent: AgentSummary? {
         self.appModel.gatewayAgents.first { $0.id == self.activeAgentID }
     }
 
+    private var activeAgentModelReference: String? {
+        guard let activeAgent else { return nil }
+        let modelID = RootSidebar.agentModelLabel(activeAgent)
+        let providerID = activeAgent.model?["provider"]?.value as? String
+        return ChatModelMenuPresentation.qualifiedModelReference(modelID: modelID, providerID: providerID)
+    }
+
     private var currentAgentDisplayName: String {
-        self.normalized(self.currentActiveAgent?.name) ?? self.appModel.chatAgentName
+        self.currentActiveAgent?.name?.trimmedNonEmpty ?? self.appModel.chatAgentName
     }
 
     private var agentDisplayName: String {
-        self.isAttachmentOwnerPinned ? self.viewModelPresentationAgentName : self.currentAgentDisplayName
+        self.isAttachmentOwnerPinned ? self.appModel.chatPresentation.presentationAgentName : self
+            .currentAgentDisplayName
     }
 
     private var currentAgentBadge: String {
-        if let identity = currentActiveAgent?.identity,
-           let emoji = identity["emoji"]?.value as? String,
-           let normalizedEmoji = Self.normalizedBadgeEmoji(emoji)
-        {
-            return normalizedEmoji
-        }
-        return Self.initialsBadge(for: self.currentAgentDisplayName)
+        AgentIdentityPresentation.badge(
+            avatarText: self.currentActiveAgent?.identity?["emoji"]?.value as? String,
+            displayName: self.currentAgentDisplayName)
     }
 
     private var agentBadge: String {
-        self.isAttachmentOwnerPinned ? self.viewModelPresentationAgentBadge : self.currentAgentBadge
-    }
-
-    nonisolated static func initialsBadge(for displayName: String) -> String {
-        AgentIdentityPresentation.initialsBadge(for: displayName)
-    }
-
-    nonisolated static func normalizedBadgeEmoji(_ value: String?) -> String? {
-        AgentIdentityPresentation.normalizedBadgeEmoji(value)
-    }
-
-    nonisolated static func transportAgentID(_ value: String?) -> String {
-        value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-    }
-
-    nonisolated static func requiresViewModelRebuild(
-        currentOwnerID: String,
-        nextOwnerID: String,
-        currentTransportAgentID: String,
-        nextTransportAgentID: String) -> Bool
-    {
-        currentOwnerID != nextOwnerID || currentTransportAgentID != nextTransportAgentID
+        self.isAttachmentOwnerPinned ? self.appModel.chatPresentation.presentationAgentBadge : self.currentAgentBadge
     }
 
     nonisolated static let emptyAssistantPrompts: [OpenClawChatView.StarterPrompt] = [
@@ -937,10 +726,4 @@ struct ChatProTab: View {
             title: String(localized: "Help me start voice chat"),
             prompt: String(localized: "Help me start a realtime voice session from this phone.")),
     ]
-
-    private func normalized(_ value: String?) -> String? {
-        guard let value else { return nil }
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
 }

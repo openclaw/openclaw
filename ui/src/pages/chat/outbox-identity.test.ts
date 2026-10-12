@@ -1,0 +1,595 @@
+// @vitest-environment node
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { outboxStorageScope } from "../../lib/chat/outbox-payload-store.runtime.ts";
+import {
+  captureChatOutboxRecoveryDestination,
+  readChatOutboxRecovery,
+  restoreChatOutboxRecovery,
+} from "../../lib/chat/outbox-recovery.ts";
+import {
+  captureChatOutboxAdmission,
+  storageTargetForComposer,
+  storageTargetForGateway,
+  subscribeStoredChatOutboxChanges,
+} from "../../lib/chat/outbox-store.ts";
+import { createStorageMock } from "../../test-helpers/storage.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
+import { readQueuedMessageById, removeQueuedMessage, updateQueuedMessage } from "./chat-queue.ts";
+import {
+  admitStoredChatComposerQueueItem,
+  listStoredChatOutboxes,
+  loadChatComposerState,
+  persistChatComposerState,
+  updateStoredChatComposerQueueItems,
+  removeStoredChatComposerQueueItem,
+} from "./composer-persistence.ts";
+
+const gatewayUrl = "ws://outbox.test";
+const state = {
+  settings: { gatewayUrl },
+  connected: true,
+  client: { recoveryScope: "credential", recoveryScopeReady: true },
+  assistantAgentId: "selected",
+  agentsList: { defaultId: "default", mainKey: "workspace", scope: "per-sender" },
+  sessionKey: "agent:default:workspace",
+  chatMessage: "draft",
+  chatQueue: [],
+};
+
+function seed(version: 1 | 2 | 3, sessions: Record<string, unknown>) {
+  const key = `openclaw.control.chatComposer.v${version}:${encodeURIComponent(gatewayUrl)}`;
+  const raw = JSON.stringify({ version, gatewayOwner: gatewayUrl, sessions });
+  sessionStorage.setItem(key, raw);
+  return { key, raw };
+}
+
+function captureDefaultDestination() {
+  return captureChatOutboxRecoveryDestination(state, {
+    sessionKey: state.sessionKey,
+    agentId: "default",
+  })!;
+}
+
+beforeEach(() => vi.stubGlobal("sessionStorage", createStorageMock()));
+afterEach(() => vi.unstubAllGlobals());
+
+describe("outbox submission handoff", () => {
+  function admittedSubmission(options = { inline: true, isCurrent: () => true }) {
+    const host = { ...state, hello: null, chatQueue: new Array<ChatQueueItem>() };
+    expect(
+      admitStoredChatComposerQueueItem(host, captureChatOutboxAdmission(host, host.sessionKey), {
+        id: "submitted",
+        text: "@Alex review this",
+        mentions: [{ profileId: "first-recipient", start: 0, end: 5 }],
+        createdAt: 1,
+        sendRunId: "submitted-run",
+        sendAttempts: 0,
+        sendState: "waiting-idle",
+      }),
+    ).toBe(true);
+    const stored = listStoredChatOutboxes(host)[0]!.queue[0]!;
+    const owner = chatOutboxOwner(host);
+    const submission = owner.beginSubmission(host, stored.id, options);
+    expect(submission).toBeDefined();
+    return { host, stored, owner, submission: submission! };
+  }
+
+  it("holds a queued foreground row only while its captured owner is current", () => {
+    let current = true;
+    const { host, stored, owner, submission } = admittedSubmission({
+      inline: false,
+      isCurrent: () => current,
+    });
+    const scope = listStoredChatOutboxes(host)[0]!;
+    expect(owner.hasPendingSubmission(scope, stored)).toBe(true);
+    expect(readQueuedMessageById(host, stored.id)).toEqual(stored);
+    current = false;
+    expect(owner.hasPendingSubmission(scope, stored)).toBe(false);
+    expect(listStoredChatOutboxes(host)[0]?.queue).toEqual([stored]);
+    submission.release();
+    expect(readQueuedMessageById(host, stored.id)).toEqual(stored);
+  });
+
+  it.each(["delivery advances", "navigation"] as const)(
+    "releases a submission after %s without losing durable custody",
+    (change) => {
+      const { host, stored, submission } = admittedSubmission();
+      expect(readQueuedMessageById(host, stored.id)?.sendState).toBe("submitting");
+      expect(listStoredChatOutboxes(host)[0]?.queue).toEqual([stored]);
+      if (change === "delivery advances") {
+        expect(
+          updateQueuedMessage(host, stored.id, (item) => ({
+            ...item,
+            sendState: "sending",
+            sendAttempts: 1,
+          })),
+        ).toMatchObject({ sendState: "sending", sendAttempts: 1 });
+      } else {
+        host.sessionKey = "agent:default:other";
+      }
+      submission.release();
+      if (change === "navigation") {
+        expect(host.chatQueue).toEqual([]);
+        expect(listStoredChatOutboxes(host)[0]?.queue).toEqual([stored]);
+        host.sessionKey = stored.sessionKey!;
+        expect(readQueuedMessageById(host, stored.id)).toEqual(stored);
+      } else {
+        expect(readQueuedMessageById(host, stored.id)).toMatchObject({
+          sendState: "sending",
+          sendAttempts: 1,
+        });
+        expect(listStoredChatOutboxes(host)[0]?.queue[0]).toMatchObject({
+          sendState: "waiting-reconnect",
+          sendAttempts: 1,
+        });
+      }
+    },
+  );
+
+  it.each(["recipient", "position"] as const)(
+    "exposes a canonical %s replacement and lets a peer remove it",
+    (change) => {
+      const { host, stored, submission } = admittedSubmission();
+      const peer = { ...host, chatQueue: [...host.chatQueue] };
+      const replacement = {
+        ...stored,
+        ...(change === "recipient"
+          ? { mentions: [{ profileId: "new-recipient", start: 0, end: 5 }] }
+          : { orderKey: 2 }),
+      };
+      expect(
+        updateStoredChatComposerQueueItems(
+          host,
+          host.sessionKey,
+          [{ expected: stored, next: replacement }],
+          stored.agentId,
+        ),
+      ).toBe(true);
+      expect(readQueuedMessageById(peer, stored.id)).toEqual(replacement);
+      expect(removeQueuedMessage(peer, stored.id)).toBe("removed");
+      submission.release();
+      expect(readQueuedMessageById(host, stored.id)).toBeNull();
+    },
+  );
+});
+
+describe("outbox destination identity", () => {
+  it.each([
+    ["main", "agent:default:workspace", "default"],
+    ["agent:other:main", "agent:other:workspace", "other"],
+    ["global", "global", "selected"],
+    ["agent:bad agent:notes", "agent:bad agent:notes", "bad-agent"],
+  ])(
+    "retains %s through admission, reload, and a selected-agent change",
+    (input, sessionKey, agentId) => {
+      const host = { ...state, sessionKey: input };
+      expect(persistChatComposerState(host)).toBe(true);
+      expect(
+        admitStoredChatComposerQueueItem(host, captureChatOutboxAdmission(host, input), {
+          id: "queued",
+          text: "follow up",
+          createdAt: 1,
+          sendState: "waiting-idle",
+        }),
+      ).toBe(true);
+      const reloaded = { ...state, assistantAgentId: "different" };
+      expect(listStoredChatOutboxes(reloaded)).toEqual([
+        {
+          sessionKey,
+          agentId,
+          queue: [
+            {
+              id: "queued",
+              storageScope: outboxStorageScope(host),
+              text: "follow up",
+              createdAt: 1,
+              sendState: "waiting-idle",
+              sessionKey,
+              agentId,
+            },
+          ],
+        },
+      ]);
+      expect(loadChatComposerState(reloaded, sessionKey, agentId).snapshot?.draft).toBe("draft");
+    },
+  );
+
+  it("never restores a sole global agent draft into unresolved main", () => {
+    expect(persistChatComposerState({ ...state, sessionKey: "global" })).toBe(true);
+    expect(
+      loadChatComposerState(
+        { settings: { gatewayUrl }, connected: true, client: state.client },
+        "main",
+      ).snapshot,
+    ).toBeNull();
+  });
+});
+
+describe("outbox browser-state transfer", () => {
+  const queue = Array.from({ length: 60 }, (_, i) => ({
+    id: `saved-${i}`,
+    text: `message ${i}`,
+    createdAt: i + 1,
+    sendRunId: `attempt-${i}`,
+    sendAttempts: i === 0 ? 1 : 0,
+    sendState: i === 0 ? "unconfirmed" : "waiting-reconnect",
+    attachments: [
+      { id: `attachment-${i}`, mimeType: "text/plain", dataUrl: "data:text/plain;base64,YQ==" },
+    ],
+  }));
+  const legacy = {
+    draft: "saved objective",
+    goalMode: { action: "start" },
+    draftRevision: 42,
+    updatedAt: 50,
+    queue,
+  };
+
+  it("retains v1 literal global for review separately from qualified main, including IDs and attachments", () => {
+    const source = seed(1, {
+      "global\u0000agent:selected": legacy,
+      "agent:selected:main\u0000agent:selected": { ...legacy, queue: [queue[0]] },
+    });
+    expect(listStoredChatOutboxes(state)).toEqual([]);
+    expect(loadChatComposerState(state, "global", "selected").snapshot).toBeNull();
+    const entries = readChatOutboxRecovery(state).entries;
+    expect(entries).toHaveLength(2);
+    expect(entries.map((entry) => entry.sourceScopeKey).toSorted()).toEqual([
+      "agent:selected:main\u0000agent:selected",
+      "global\u0000agent:selected",
+    ]);
+    expect(
+      entries.find((entry) => entry.sourceScopeKey === "global\u0000agent:selected")?.session,
+    ).toEqual({
+      ...legacy,
+      queue: queue.map((item) => ({ ...item, sessionKey: "global", agentId: "selected" })),
+    });
+    expect(
+      entries.find((entry) => entry.sourceScopeKey === "agent:selected:main\u0000agent:selected")
+        ?.session.queue,
+    ).toEqual([{ ...queue[0], sessionKey: "agent:selected:main", agentId: "selected" }]);
+    expect(sessionStorage.getItem(source.key)).toBeNull();
+    expect(sessionStorage.getItem(storageTargetForComposer(state).key)).toBeNull();
+    expect(
+      JSON.parse(sessionStorage.getItem(storageTargetForGateway(gatewayUrl).key)!).sessions[
+        "global\u0000agent:selected"
+      ].draftRevision,
+    ).toBe(42);
+  });
+
+  it("retains every collapsed entry unsent and restores it only into an explicitly confirmed empty destination", () => {
+    const source = seed(2, { "global\u0000agent:selected": legacy });
+    const [entry] = readChatOutboxRecovery(state).entries;
+    expect(entry?.session).toEqual(legacy);
+    expect(listStoredChatOutboxes(state)).toEqual([]);
+    const destination = captureChatOutboxRecoveryDestination(state, {
+      sessionKey: "agent:selected:review",
+      agentId: "selected",
+    })!;
+    expect(restoreChatOutboxRecovery(state, entry!, destination)).toBe("restored");
+    expect(readChatOutboxRecovery(state).entries).toEqual([]);
+    const restored = listStoredChatOutboxes(state)[0]!;
+    expect(restored.queue).toHaveLength(60);
+    expect(
+      restored.queue.map((item) => [item.id, item.sendRunId, item.sendAttempts, item.attachments]),
+    ).toEqual(queue.map((item) => [item.id, item.sendRunId, item.sendAttempts, item.attachments]));
+    expect(restored.queue[0]?.sendState).toBe("unconfirmed");
+    expect(restored.queue.slice(1).every((item) => item.sendState === "failed")).toBe(true);
+    expect(loadChatComposerState(state, restored.sessionKey).snapshot?.goalMode).toEqual({
+      action: "start",
+    });
+    expect(sessionStorage.getItem(source.key)).toBeNull();
+    expect(restoreChatOutboxRecovery(state, entry!, destination)).toBe("conflict");
+  });
+
+  it.each([
+    { version: 2, failure: "quota" },
+    { version: 3, failure: "noop" },
+  ] as const)(
+    "keeps v$version source bytes when migration writes $failure",
+    ({ version, failure }) => {
+      const source = seed(version, { "main\u0000agent:selected": legacy });
+      const write = vi.spyOn(sessionStorage, "setItem").mockImplementation(() => {
+        if (failure === "quota") {
+          throw new DOMException("quota", "QuotaExceededError");
+        }
+      });
+      expect(readChatOutboxRecovery(state).entries[0]?.session.queue).toHaveLength(60);
+      expect(sessionStorage.getItem(source.key)).toBe(source.raw);
+      expect(listStoredChatOutboxes(state)).toEqual([]);
+      write.mockRestore();
+      expect(readChatOutboxRecovery(state).entries).toHaveLength(1);
+      expect(sessionStorage.getItem(source.key)).toBeNull();
+    },
+  );
+
+  it.each(["newer text", "quote-only"] as const)(
+    "preserves a %s destination and its recoverable source",
+    (input) => {
+      seed(2, { "global\u0000agent:selected": legacy });
+      const entry = readChatOutboxRecovery(state).entries[0]!;
+      const before = captureDefaultDestination();
+      const replyTarget = { messageId: "selected-message", text: "Keep this quote" };
+      const next =
+        input === "newer text"
+          ? { ...state, chatMessage: "newer input" }
+          : { ...state, chatMessage: "", chatReplyTarget: replyTarget };
+      expect(persistChatComposerState(next)).toBe(true);
+      const destination = input === "newer text" ? before : captureDefaultDestination();
+      expect(restoreChatOutboxRecovery(state, entry, destination)).toBe("conflict");
+      const stored = loadChatComposerState(state, state.sessionKey).snapshot;
+      if (input === "newer text") {
+        expect(stored?.draft).toBe("newer input");
+      } else {
+        expect(stored?.replyTarget).toEqual(replyTarget);
+      }
+      expect(readChatOutboxRecovery(state).entries[0]).toEqual(entry);
+    },
+  );
+
+  it("retains later legacy writes for review after the current namespace exists", () => {
+    const version = 1;
+    const source = seed(version, { "main\u0000agent:selected": legacy });
+    const first = readChatOutboxRecovery(state).entries[0]!;
+    const later = { ...legacy, draft: "written after downgrade", draftRevision: 99 };
+    seed(version, { "main\u0000agent:selected": later });
+    const entries = readChatOutboxRecovery(state).entries;
+    expect(entries.map((entry) => entry.session.draft)).toEqual([
+      first.session.draft,
+      "written after downgrade",
+    ]);
+    expect(listStoredChatOutboxes(state)).toEqual([]);
+    expect(sessionStorage.getItem(source.key)).toBeNull();
+  });
+
+  it("does not reimport an acknowledged source when legacy deletion failed", () => {
+    const version = 3;
+    const source = seed(version, { "main\u0000agent:selected": legacy });
+    const remove = vi.spyOn(sessionStorage, "removeItem").mockImplementation(() => {});
+    const entry = readChatOutboxRecovery(state).entries[0]!;
+    const destination = captureDefaultDestination();
+    expect(restoreChatOutboxRecovery(state, entry, destination)).toBe("restored");
+    expect(sessionStorage.getItem(source.key) || null).toBeNull();
+    expect(readChatOutboxRecovery(state).entries).toEqual([]);
+    expect(listStoredChatOutboxes(state)[0]?.queue).toHaveLength(60);
+    remove.mockRestore();
+  });
+
+  it("keeps full recovery usable while a later source waits intact for space", () => {
+    const target = storageTargetForGateway(gatewayUrl);
+    sessionStorage.setItem(
+      target.key,
+      JSON.stringify({
+        version: 4,
+        gatewayOwner: gatewayUrl,
+        sessions: {},
+        recovery: Object.fromEntries(
+          Array.from({ length: 80 }, (_, i) => [
+            `old-${i}`,
+            {
+              sourceVersion: 2,
+              sourceScopeKey: `old-${i}`,
+              session: { draft: `draft ${i}`, draftRevision: i + 1, updatedAt: i + 1 },
+            },
+          ]),
+        ),
+      }),
+    );
+    const source = seed(2, { "global\u0000agent:selected": legacy });
+    const recovery = readChatOutboxRecovery(state);
+    expect(recovery.entries).toHaveLength(80);
+    expect(sessionStorage.getItem(source.key)).toBe(source.raw);
+    const destination = captureDefaultDestination();
+    expect(restoreChatOutboxRecovery(state, recovery.entries[0]!, destination)).toBe("restored");
+    const resumed = readChatOutboxRecovery(state);
+    expect(resumed.blocked).toBe(false);
+    expect(resumed.entries).toHaveLength(80);
+    expect(resumed.entries.at(-1)?.session).toEqual(legacy);
+    expect(loadChatComposerState(state, state.sessionKey).snapshot?.draft).toBe("draft 0");
+    expect(sessionStorage.getItem(source.key)).toBeNull();
+    expect(recovery.blocked).toBe(true);
+  });
+});
+
+describe("partially preserved legacy identity", () => {
+  it("retains independently targeted legacy items for review alongside the ambiguous bucket draft", () => {
+    seed(2, {
+      "global\u0000agent:selected": {
+        draft: "ambiguous draft",
+        updatedAt: 1,
+        queue: [
+          {
+            id: "exact",
+            text: "qualified",
+            createdAt: 1,
+            sessionKey: "agent:other:thread",
+            agentId: "other",
+            sendAttempts: 1,
+            sendRunId: "original",
+            sendState: "unconfirmed",
+          },
+          { id: "ambiguous", text: "collapsed", createdAt: 2, sessionKey: "global" },
+        ],
+      },
+    });
+    expect(listStoredChatOutboxes(state)).toEqual([]);
+    expect(loadChatComposerState(state, "agent:other:thread").snapshot).toBeNull();
+    const entries = readChatOutboxRecovery(state).entries;
+    expect(entries).toHaveLength(2);
+    const exact = entries.find((entry) => entry.session.queue?.[0]?.id === "exact")!;
+    expect(exact.session.queue).toMatchObject([
+      {
+        id: "exact",
+        sessionKey: "agent:other:thread",
+        agentId: "other",
+        sendRunId: "original",
+        sendAttempts: 1,
+        sendState: "unconfirmed",
+      },
+    ]);
+    expect(entries.find((entry) => entry !== exact)?.session).toMatchObject({
+      draft: "ambiguous draft",
+      queue: [{ id: "ambiguous" }],
+    });
+    const destination = captureChatOutboxRecoveryDestination(state, {
+      sessionKey: "agent:other:thread",
+      agentId: "other",
+    });
+    expect(destination).not.toBeNull();
+    expect(restoreChatOutboxRecovery(state, exact, destination!)).toBe("restored");
+    expect(listStoredChatOutboxes(state)[0]).toMatchObject({
+      sessionKey: "agent:other:thread",
+      agentId: "other",
+      queue: [
+        {
+          id: "exact",
+          sendRunId: "original",
+          sendAttempts: 1,
+          sendState: "unconfirmed",
+          storageScope: outboxStorageScope(state),
+        },
+      ],
+    });
+    expect(readChatOutboxRecovery(state).entries).toHaveLength(1);
+  });
+});
+
+describe("captured outbox scope review regressions", () => {
+  it("keeps only row data when a durable row becomes a local model wait", () => {
+    const host = { ...state, hello: null };
+    const admission = captureChatOutboxAdmission(host, host.sessionKey);
+    const item = { id: "model-wait", text: "keep target", createdAt: 1 };
+    expect(admitStoredChatComposerQueueItem(host, admission, item)).toBe(true);
+    const stored = listStoredChatOutboxes(host)[0]!.queue[0]!;
+
+    updateQueuedMessage(host, item.id, (current) => ({ ...current, sendState: "waiting-model" }));
+
+    expect(readQueuedMessageById(host, item.id)).toEqual({ ...stored, sendState: "waiting-model" });
+    expect(removeQueuedMessage(host, item.id)).toBe("removed");
+    expect(host.chatQueue).toEqual([]);
+    expect(readQueuedMessageById(host, item.id)).toBeNull();
+  });
+  it("verifies the admitted queue target when a notification changes defaults", () => {
+    const host = { ...state, agentsList: { ...state.agentsList } };
+    const unsubscribe = subscribeStoredChatOutboxChanges(() => {
+      host.agentsList.mainKey = "changed";
+    });
+    try {
+      const item = { id: "captured-admission", text: "keep target", createdAt: 1 };
+      const admitted = admitStoredChatComposerQueueItem(
+        host,
+        captureChatOutboxAdmission(host, "main"),
+        item,
+      );
+      expect(listStoredChatOutboxes(host)).toEqual([
+        {
+          sessionKey: state.sessionKey,
+          agentId: "default",
+          queue: [
+            {
+              ...item,
+              storageScope: outboxStorageScope(host),
+              sessionKey: state.sessionKey,
+              agentId: "default",
+            },
+          ],
+        },
+      ]);
+      expect(admitted).toBe(true);
+    } finally {
+      unsubscribe();
+    }
+  });
+  it("updates and removes an enumerated captured scope after mainKey changes", () => {
+    const initial = {
+      ...state,
+      sessionKey: "agent:main:main",
+      agentsList: { defaultId: "main", mainKey: "main", scope: "per-sender" },
+    };
+    expect(
+      admitStoredChatComposerQueueItem(
+        initial,
+        captureChatOutboxAdmission(initial, initial.sessionKey),
+        {
+          id: "captured",
+          text: "keep target",
+          createdAt: 1,
+        },
+      ),
+    ).toBe(true);
+    const changed = { ...initial, agentsList: { ...initial.agentsList, mainKey: "workspace" } };
+    const original = listStoredChatOutboxes(changed)[0]!;
+    const item = original.queue[0]!;
+    const next = {
+      ...item,
+      sendState: "unconfirmed" as const,
+      sendAttempts: 1,
+      sendRunId: "captured-attempt",
+    };
+    expect(
+      updateStoredChatComposerQueueItems(
+        changed,
+        original.sessionKey,
+        [{ expected: item, next }],
+        "other",
+      ),
+    ).toBe(false);
+    removeStoredChatComposerQueueItem(changed, original.sessionKey, item.id, item, "other");
+    expect(listStoredChatOutboxes(changed)).toEqual([original]);
+    expect(
+      updateStoredChatComposerQueueItems(
+        changed,
+        original.sessionKey,
+        [{ expected: item, next }],
+        original.agentId,
+      ),
+    ).toBe(true);
+    expect(listStoredChatOutboxes(changed)[0]).toMatchObject({
+      sessionKey: initial.sessionKey,
+      queue: [next],
+    });
+    expect(
+      removeStoredChatComposerQueueItem(
+        changed,
+        original.sessionKey,
+        item.id,
+        next,
+        original.agentId,
+      ),
+    ).toBe(true);
+    expect(listStoredChatOutboxes(changed)).toEqual([]);
+  });
+  it.each(["bucket", "item"])(
+    "quarantines conflicting %s agent facts in legacy state",
+    (conflict) => {
+      const scopeKey = `agent:main:notes\u0000agent:${conflict === "bucket" ? "work" : "main"}`;
+      sessionStorage.setItem(
+        storageTargetForGateway(gatewayUrl).legacyKey,
+        JSON.stringify({
+          version: 1,
+          sessions: {
+            [scopeKey]: {
+              updatedAt: 1,
+              queue: [
+                {
+                  id: "conflicting",
+                  text: "preserve me",
+                  createdAt: 1,
+                  sessionKey: "agent:main:notes",
+                  agentId: "work",
+                },
+              ],
+            },
+          },
+        }),
+      );
+      expect(listStoredChatOutboxes(state)).toEqual([]);
+      expect(readChatOutboxRecovery(state).entries[0]?.session.queue?.[0]).toMatchObject({
+        id: "conflicting",
+        agentId: "work",
+        sessionKey: "agent:main:notes",
+      });
+    },
+  );
+});

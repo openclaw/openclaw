@@ -2,7 +2,7 @@ import { accessSync, constants, statSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { resolveAcpSessionAvailability } from "openclaw/plugin-sdk/acp-runtime";
-import { resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveNodeHostExecutable } from "openclaw/plugin-sdk/node-host";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
@@ -169,7 +169,7 @@ async function createAdoptedOpenCodeSession(params: {
     key: sessionCatalogAdoptedSessionKey(OPENCODE_ADOPTED_SESSION_KEY_PREFIX, params.threadId),
     agentId: params.agentId,
     recoverMatchingInitialEntry: true,
-    ...(params.session.name ? { label: params.session.name } : {}),
+    ...(params.session.name ? { displayName: params.session.name } : {}),
     ...(params.session.cwd ? { spawnedCwd: params.session.cwd } : {}),
     initialEntry: {
       acpBackendId: ACPX_BACKEND_ID,
@@ -183,8 +183,8 @@ async function createAdoptedOpenCodeSession(params: {
       await importSessionCatalogHistory({
         catalogId: "opencode",
         threadId: params.threadId,
-        read: async ({ cursor, limit }) =>
-          await readLocalOpenCodeTranscriptPage({
+        read: ({ cursor, limit }) =>
+          readLocalOpenCodeTranscriptPage({
             threadId: params.threadId,
             limit,
             ...(cursor ? { cursor } : {}),
@@ -211,12 +211,13 @@ function createOpenCodeNodeHostBindings(api: OpenClawPluginApi) {
     terminalCommand: OPENCODE_TERMINAL_RESUME_COMMAND,
     sessionIdPattern: SESSION_ID_PATTERN,
     executable: "opencode",
+    hasActiveWork: () => false,
     args: (threadId) => ["--session", threadId],
     listAvailable: available,
     terminalAvailable: available,
     parseParams: parseNodeParams,
-    list: async (params) =>
-      await listLocalOpenCodeSessionPage(params, {
+    list: (params) =>
+      listLocalOpenCodeSessionPage(params, {
         configIdentity: currentOpenCodeCatalogConfig(api),
       }),
     read: readLocalOpenCodeTranscriptPage,
@@ -245,8 +246,8 @@ export function registerOpenCodeSessionCatalog(api: OpenClawPluginApi): void {
             pathEnv: process.env.PATH ?? "",
             strategy: "fallback",
           }) !== undefined,
-        list: async (query) =>
-          await listLocalOpenCodeSessionPage(
+        list: (query) =>
+          listLocalOpenCodeSessionPage(
             {
               limit: query.limitPerHost,
               ...(query.search ? { searchTerm: query.search } : {}),
@@ -254,8 +255,8 @@ export function registerOpenCodeSessionCatalog(api: OpenClawPluginApi): void {
             },
             { configIdentity: currentOpenCodeCatalogConfig(api) },
           ),
-        read: async (request) =>
-          await readLocalOpenCodeTranscriptPage({
+        read: (request) =>
+          readLocalOpenCodeTranscriptPage({
             threadId: request.threadId,
             ...(request.limit ? { limit: request.limit } : {}),
             ...(request.cursor !== undefined ? { cursor: request.cursor } : {}),
@@ -302,7 +303,7 @@ export function registerOpenCodeSessionCatalog(api: OpenClawPluginApi): void {
       },
       continuation: {
         resolveAgentId: (agentId) =>
-          resolveSessionAgentIds({ config: api.config, agentId }).sessionAgentId,
+          resolveSessionAgentIdsStrict({ config: api.config, agentId }).sessionAgentId,
         availability: () =>
           resolveAcpSessionAvailability({
             config: currentOpenCodeCatalogConfig(api),
@@ -311,15 +312,16 @@ export function registerOpenCodeSessionCatalog(api: OpenClawPluginApi): void {
           }),
         listAdopted: (agentId, sessionEntries) =>
           listAdoptedOpenCodeSessions(api, agentId, sessionEntries),
-        loadSession: async (threadId) => await loadContinuableOpenCodeSession(api, threadId),
+        loadSession: (threadId) => loadContinuableOpenCodeSession(api, threadId),
         validateSession: () => undefined,
-        create: async (params) => await createAdoptedOpenCodeSession({ api, ...params }),
-        complete: async (continued, threadId) =>
-          await linkContinuedOpenCodeSession(continued.sessionKey, threadId),
+        create: (params) => createAdoptedOpenCodeSession({ api, ...params }),
+        complete: (continued, threadId) =>
+          linkContinuedOpenCodeSession(continued.sessionKey, threadId),
         nodeReadOnlyMessage: "paired-node OpenCode session rows are view-only",
       },
       terminal: {
         executable: "opencode",
+        uploadPathStyle: "native",
         args: (threadId) => ["--session", threadId],
         title: (threadId) => `opencode --session ${threadId.slice(0, 12)}…`,
         requireLocalSession: requireLocalOpenCodeSession,

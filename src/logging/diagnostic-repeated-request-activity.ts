@@ -1,30 +1,16 @@
-// Mechanical request retries stay continuous for one run owner. Only typed
-// semantic progress or owner teardown can clear the clock that recovery reads.
+import { resolveCurrentDiagnosticRunId } from "./diagnostic-embedded-run-index.js";
+
+// The first retry starts the clock; one long initial request is not a loop.
+// Later retries share that clock until semantic progress or owner teardown.
 type RepeatedRequestOwner = { runId: string; sequence: number };
 
 export type DiagnosticRepeatedRequestActivity = {
   repeatedRequestOwnerRunId?: string;
   repeatedRequestFirstStartedAt?: number;
-  repeatedRequestCount?: number;
   repeatedRequestMutationSequence?: number;
 };
 
 let mutationSequence = 0;
-
-function nextMutationSequence(): number {
-  mutationSequence += 1;
-  return mutationSequence;
-}
-
-function currentOwner(owners: Iterable<RepeatedRequestOwner>): RepeatedRequestOwner | undefined {
-  let current: RepeatedRequestOwner | undefined;
-  for (const owner of owners) {
-    if (!current || owner.sequence > current.sequence) {
-      current = owner;
-    }
-  }
-  return current;
-}
 
 export function recordRepeatedRequestObservation(
   activity: DiagnosticRepeatedRequestActivity,
@@ -38,19 +24,18 @@ export function recordRepeatedRequestObservation(
   if (params.observationUnit === "turn") {
     return;
   }
-  const owner = currentOwner(owners);
+  const currentOwnerRunId = resolveCurrentDiagnosticRunId(owners);
   const runId = params.runId?.trim();
-  if (!owner || !runId || owner.runId !== runId) {
+  if (currentOwnerRunId === undefined || !runId || currentOwnerRunId !== runId) {
     return;
   }
   if (activity.repeatedRequestOwnerRunId !== runId) {
     activity.repeatedRequestOwnerRunId = runId;
-    activity.repeatedRequestFirstStartedAt = params.now ?? Date.now();
-    activity.repeatedRequestCount = 1;
+    activity.repeatedRequestFirstStartedAt = undefined;
   } else {
-    activity.repeatedRequestCount = (activity.repeatedRequestCount ?? 0) + 1;
+    activity.repeatedRequestFirstStartedAt ??= params.now ?? Date.now();
   }
-  activity.repeatedRequestMutationSequence = nextMutationSequence();
+  activity.repeatedRequestMutationSequence = ++mutationSequence;
 }
 
 export function clearRepeatedRequestActivity(
@@ -64,14 +49,13 @@ export function clearRepeatedRequestActivity(
   ) {
     return false;
   }
-  const cleared = activity.repeatedRequestCount !== undefined;
+  const cleared = activity.repeatedRequestOwnerRunId !== undefined;
   if (!cleared && params.runId !== undefined) {
     return false;
   }
   activity.repeatedRequestOwnerRunId = undefined;
   activity.repeatedRequestFirstStartedAt = undefined;
-  activity.repeatedRequestCount = undefined;
-  activity.repeatedRequestMutationSequence = nextMutationSequence();
+  activity.repeatedRequestMutationSequence = ++mutationSequence;
   return cleared;
 }
 
@@ -87,20 +71,17 @@ export function mergeRepeatedRequestActivity(
   }
   target.repeatedRequestOwnerRunId = source.repeatedRequestOwnerRunId;
   target.repeatedRequestFirstStartedAt = source.repeatedRequestFirstStartedAt;
-  target.repeatedRequestCount = source.repeatedRequestCount;
   target.repeatedRequestMutationSequence = source.repeatedRequestMutationSequence;
 }
 
 export function resolveRepeatedRequestNoProgressAgeMs(
   activity: DiagnosticRepeatedRequestActivity,
-  owners: Iterable<RepeatedRequestOwner>,
+  currentOwnerRunId: string | undefined,
   now: number,
 ): number | undefined {
-  const owner = currentOwner(owners);
   if (
-    !owner ||
-    owner.runId !== activity.repeatedRequestOwnerRunId ||
-    (activity.repeatedRequestCount ?? 0) < 2 ||
+    currentOwnerRunId === undefined ||
+    currentOwnerRunId !== activity.repeatedRequestOwnerRunId ||
     activity.repeatedRequestFirstStartedAt === undefined
   ) {
     return undefined;

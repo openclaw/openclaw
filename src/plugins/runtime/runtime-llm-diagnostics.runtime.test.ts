@@ -9,13 +9,16 @@ import { markTrustedOtelDiagnosticListener } from "../../infra/diagnostic-otel-l
 import { createRuntimeLlm } from "./runtime-llm.runtime.js";
 
 const hoisted = vi.hoisted(() => ({
-  prepareSimpleCompletionModelForAgent: vi.fn(),
+  acquireSimpleCompletionModelForAgent:
+    vi.fn<
+      typeof import("../../agents/simple-completion-runtime.js").acquireSimpleCompletionModelForAgent
+    >(),
   completeWithPreparedSimpleCompletionModel: vi.fn(),
   resolveSimpleCompletionSelectionForAgent: vi.fn(),
 }));
 
 vi.mock("../../agents/simple-completion-runtime.js", () => ({
-  prepareSimpleCompletionModelForAgent: hoisted.prepareSimpleCompletionModelForAgent,
+  acquireSimpleCompletionModelForAgent: hoisted.acquireSimpleCompletionModelForAgent,
   completeWithPreparedSimpleCompletionModel: hoisted.completeWithPreparedSimpleCompletionModel,
   resolveSimpleCompletionSelectionForAgent: hoisted.resolveSimpleCompletionSelectionForAgent,
 }));
@@ -29,6 +32,7 @@ const cfg = {
 } satisfies OpenClawConfig;
 
 const preparedModel = {
+  async [Symbol.asyncDispose]() {},
   selection: {
     provider: "openai",
     modelId: "gpt-5.5",
@@ -38,7 +42,8 @@ const preparedModel = {
     provider: "openai",
     id: "gpt-5.5",
     name: "gpt-5.5",
-    api: "openai",
+    api: "openai-completions",
+    baseUrl: "https://fixture.invalid/v1",
     input: ["text"],
     reasoning: false,
     contextWindow: 128_000,
@@ -50,7 +55,10 @@ const preparedModel = {
     source: "test",
     mode: "api-key",
   },
-};
+} satisfies Extract<
+  Awaited<ReturnType<typeof hoisted.acquireSimpleCompletionModelForAgent>>,
+  { model: unknown }
+>;
 
 function captureUsageEvents() {
   const events: Array<{
@@ -77,10 +85,10 @@ function captureUsageEvents() {
 describe("runtime.llm.complete diagnostics", () => {
   beforeEach(() => {
     resetDiagnosticEventsForTest();
-    hoisted.prepareSimpleCompletionModelForAgent.mockReset();
+    hoisted.acquireSimpleCompletionModelForAgent.mockReset();
     hoisted.completeWithPreparedSimpleCompletionModel.mockReset();
     hoisted.resolveSimpleCompletionSelectionForAgent.mockReset();
-    hoisted.prepareSimpleCompletionModelForAgent.mockResolvedValue(preparedModel);
+    hoisted.acquireSimpleCompletionModelForAgent.mockResolvedValue(preparedModel);
     hoisted.resolveSimpleCompletionSelectionForAgent.mockReturnValue(preparedModel.selection);
     hoisted.completeWithPreparedSimpleCompletionModel.mockResolvedValue({
       content: [{ type: "text", text: "done" }],
@@ -151,6 +159,64 @@ describe("runtime.llm.complete diagnostics", () => {
       },
     ]);
   });
+
+  it.each([
+    { name: "unpriced adapter zero", cost: { total: 0 }, expected: undefined },
+    { name: "authored free price", cost: { total: 0 }, free: true, expected: 0 },
+    {
+      name: "provider-billed zero",
+      cost: { total: 0, totalOrigin: "provider-billed" },
+      expected: 0,
+    },
+    { name: "zero with recorded components", cost: { total: 0, input: 0.25 }, expected: 0 },
+    { name: "legacy numeric zero", cost: 0, expected: 0 },
+    { name: "legacy USD zero", cost: { totalUsd: 0, total: 1 }, expected: 0 },
+  ])(
+    "preserves cost evidence without inventing prices: $name",
+    async ({ cost, free, expected }) => {
+      const prepared = {
+        ...preparedModel,
+        selection: { ...preparedModel.selection, provider: "pricing-fixture", modelId: "unpriced" },
+        model: { ...preparedModel.model, provider: "pricing-fixture", id: "unpriced" },
+      };
+      hoisted.acquireSimpleCompletionModelForAgent.mockResolvedValue(prepared);
+      hoisted.resolveSimpleCompletionSelectionForAgent.mockReturnValue(prepared.selection);
+      hoisted.completeWithPreparedSimpleCompletionModel.mockResolvedValue({
+        content: [{ type: "text", text: "done" }],
+        stopReason: "stop",
+        usage: { input: 1_000, output: 500, cost },
+      });
+      const config: OpenClawConfig = {
+        ...cfg,
+        ...(free
+          ? {
+              models: {
+                providers: {
+                  "pricing-fixture": {
+                    baseUrl: "https://pricing.invalid",
+                    models: [
+                      {
+                        ...prepared.model,
+                        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                      },
+                    ],
+                  },
+                },
+              },
+            }
+          : {}),
+      };
+      const llm = createRuntimeLlm({
+        getConfig: () => config,
+        authority: { allowComplete: true, allowModelOverride: true },
+      });
+      const result = await llm.complete({
+        model: "pricing-fixture/unpriced",
+        messages: [{ role: "user", content: "Ping" }],
+      });
+      expect(result.usage?.costUsd).toBe(expected);
+    },
+  );
 
   it.each([
     ["absent", undefined, true, undefined, undefined],
@@ -229,7 +295,6 @@ describe("runtime.llm.complete diagnostics", () => {
 
   it.each([
     ["resolved provider error", "error", [{ type: "text", text: "partial" }], "partial"],
-    ["resolved provider abort", "aborted", [{ type: "text", text: "partial" }], "partial"],
     ["thinking-only completion", "stop", [{ type: "thinking", thinking: "hidden" }], ""],
   ] as const)("keeps %s usage silent", async (_name, stopReason, content, expectedText) => {
     hoisted.completeWithPreparedSimpleCompletionModel.mockResolvedValueOnce({

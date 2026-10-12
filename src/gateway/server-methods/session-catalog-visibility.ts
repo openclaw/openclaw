@@ -1,33 +1,39 @@
-import type {
-  SessionCatalogHost,
-  SessionCatalogSession,
+import {
+  GATEWAY_OWNER_PROFILE_ID,
+  type SessionCatalogHost,
+  type SessionCatalogSession,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
-  SessionCatalogEntrySnapshot,
   SessionCatalogListProviderParams,
   SessionCatalogProvider,
 } from "../../plugins/session-catalog.js";
-import { isIncognitoSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import { readUserProfileAliases } from "../../state/user-profile-list.js";
 import { hasMultipleSessionSharingIdentities } from "../../state/user-profiles.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import { operatorSessionCap } from "../operator-role-policy.js";
-import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
+import { prepareSessionCreatorProfile } from "../session-creator.js";
+import { requireSessionRowProjection } from "../session-row-projection-access.js";
 import { resolveSessionSharingRole, resolveSessionSharingTarget } from "../session-sharing.js";
-import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import { createSessionCatalogRequestEntrySnapshot } from "./session-catalog-entry-snapshot.js";
-import type { GatewayClient } from "./types.js";
+import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
-type SessionCatalogVisibility =
-  | { cacheKey: string; kind: "unrestricted" }
-  | { cacheKey: string; kind: "restricted-unprofiled" }
-  | { cacheKey: string; kind: "restricted-owner"; ownerProfileId: string }
+type SessionCatalogVisibility = { cacheKey: string } & (
+  | { kind: "unrestricted" }
+  | { kind: "restricted-unprofiled" }
   | {
-      cacheKey: string;
+      kind: "restricted-owner";
+      others: "none" | undefined;
+      isCreator: ReturnType<typeof prepareSessionCreatorProfile>;
+    }
+  | {
       kind: "restricted-shared";
       others: "view" | "suggest" | "write";
-      ownerProfileId: string;
-    };
+      isCreator: ReturnType<typeof prepareSessionCreatorProfile>;
+    }
+);
 
 export function resolveSessionCatalogVisibility(
   client: GatewayClient | null,
@@ -35,13 +41,16 @@ export function resolveSessionCatalogVisibility(
 ): SessionCatalogVisibility {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   const admin = authorizeOperatorScopesForRequiredScope(ADMIN_SCOPE, scopes).allowed;
-  const multipleIdentities = hasMultipleSessionSharingIdentities();
-  const profileId = client?.authenticatedUserProfile?.profileId;
+  const multipleIdentities = !admin && hasMultipleSessionSharingIdentities();
+  const attachedProfileId = client?.authenticatedUserProfile?.profileId;
+  const profileId = attachedProfileId === GATEWAY_OWNER_PROFILE_ID ? undefined : attachedProfileId;
   const others = admin ? undefined : operatorSessionCap(client, config);
+  const profileAliases = profileId ? readUserProfileAliases(profileId) : undefined;
   const cacheKey = JSON.stringify({
     admin,
     multipleIdentities,
     profileId: profileId ?? null,
+    profileAliases: profileAliases ? [...profileAliases].toSorted() : [],
     others: others ?? null,
   });
   if (admin || (!multipleIdentities && !others)) {
@@ -50,94 +59,106 @@ export function resolveSessionCatalogVisibility(
   if (!profileId) {
     return { cacheKey, kind: "restricted-unprofiled" };
   }
+  // The cache key and this synchronous publication use the same identity facts.
+  const isCreator = prepareSessionCreatorProfile(profileId, profileAliases);
   return others && others !== "none"
-    ? { cacheKey, kind: "restricted-shared", others, ownerProfileId: profileId }
-    : { cacheKey, kind: "restricted-owner", ownerProfileId: profileId };
+    ? { cacheKey, kind: "restricted-shared", others, isCreator }
+    : { cacheKey, kind: "restricted-owner", others, isCreator };
 }
 
-function isSharedCatalogSessionVisible(params: {
-  config: OpenClawConfig;
-  fallbackAgentId: string;
+export function isPublishedCatalogVisible(visibility: SessionCatalogVisibility): boolean {
+  // No role cap keeps adopted catalogs owner-only, but does not restrict publications.
+  return (
+    visibility.kind === "unrestricted" ||
+    visibility.kind === "restricted-shared" ||
+    (visibility.kind === "restricted-owner" && visibility.others === undefined)
+  );
+}
+
+function visibleCatalogSessionEntry(params: {
   session: SessionCatalogSession;
-  sessionEntries: SessionCatalogEntrySnapshot;
-  visibility: Extract<SessionCatalogVisibility, { kind: "restricted-shared" }>;
-}): boolean {
-  if (params.session.createdActor?.id === params.visibility.ownerProfileId) {
-    return true;
-  }
+  requestEntries: ReturnType<typeof createSessionCatalogRequestEntrySnapshot>;
+  visibility: Extract<SessionCatalogVisibility, { kind: "restricted-shared" | "restricted-owner" }>;
+}): SessionEntry | undefined {
   const sessionKey = params.session.sessionKey;
   if (!params.session.createdActor?.id || !sessionKey || isIncognitoSessionKey(sessionKey)) {
-    return false;
+    return undefined;
   }
-  const agentId = resolveAgentIdFromSessionKey(
-    sessionKey,
-    tryResolveSessionCompatibilityOwnerAgentId(params.config, sessionKey) ?? params.fallbackAgentId,
-  );
-  const canonicalKey = resolveStoredSessionKeyForAgentStore({
-    cfg: params.config,
-    agentId,
-    sessionKey,
-  });
-  const entry = params.sessionEntries
-    .entriesForAgent(agentId)
-    .find(
-      (candidate) => candidate.sessionKey === sessionKey || candidate.sessionKey === canonicalKey,
-    )?.entry;
+  const entry = params.requestEntries.entryForSession(sessionKey);
   // Provider rows omit privacy flags; only the request-owned canonical session snapshot can
   // prove a foreign adopted thread is neither a draft nor incognito.
-  return entry !== undefined && entry.visibility !== "draft" && entry.incognito !== true;
+  return entry !== undefined &&
+    entry.incognito !== true &&
+    (params.visibility.isCreator(entry.createdActor) ||
+      (params.visibility.kind === "restricted-shared" && entry.visibility !== "draft"))
+    ? entry
+    : undefined;
 }
 
 export function filterSessionCatalogHost(
   host: SessionCatalogHost,
   visibility: SessionCatalogVisibility,
   params: {
-    config: OpenClawConfig;
-    fallbackAgentId: string;
-    sessionEntries: SessionCatalogEntrySnapshot;
+    audience?: SessionCatalogProvider["audience"];
+    requestEntries: ReturnType<typeof createSessionCatalogRequestEntrySnapshot>;
   },
 ): SessionCatalogHost {
-  if (visibility.kind === "unrestricted") {
+  if (visibility.kind === "unrestricted" || params.audience === "gateway-operators") {
     return host;
+  }
+  if (params.audience === "session-viewers") {
+    return isPublishedCatalogVisible(visibility) ? host : { ...host, sessions: [] };
   }
   if (visibility.kind === "restricted-unprofiled") {
     return { ...host, sessions: [] };
   }
   return {
     ...host,
-    sessions: host.sessions.filter((session) => {
-      // No sessionKey means the provider cannot link this host-owned CLI row to an adopted
-      // OpenClaw session. Keep it private from non-admin callers on multi-identity Gateways.
-      return visibility.kind === "restricted-shared"
-        ? isSharedCatalogSessionVisible({ ...params, session, visibility })
-        : session.createdActor?.id === visibility.ownerProfileId;
-    }),
+    sessions: host.sessions.filter(
+      (session) => visibleCatalogSessionEntry({ ...params, session, visibility }) !== undefined,
+    ),
   };
 }
 
-export async function isSessionCatalogThreadVisible(params: {
+export type SessionCatalogThreadVisibility = {
+  visibility: SessionCatalogVisibility;
+  source?: { sessionKey: string; entry: SessionEntry };
+};
+
+export async function resolveSessionCatalogThreadVisibility(params: {
   access: "read" | "mutate";
   allowProcessHomeFallback: boolean;
+  audience?: SessionCatalogProvider["audience"];
   client: GatewayClient | null;
-  config: OpenClawConfig;
+  context: GatewayRequestContext;
   fallbackAgentId: string;
   hostId: string;
   list: SessionCatalogProvider["list"];
   listNodes: NonNullable<SessionCatalogListProviderParams["listNodes"]>;
   sourceHomeId?: string;
   threadId: string;
-  visibility: SessionCatalogVisibility;
-}): Promise<boolean> {
-  if (params.visibility.kind === "unrestricted") {
-    return true;
+}): Promise<SessionCatalogThreadVisibility | null> {
+  const projection = requireSessionRowProjection(params.context);
+  while (projection.needsSelectionPreparation()) {
+    await projection.prepareSelection();
   }
-  if (params.visibility.kind === "restricted-unprofiled") {
-    return false;
+  let config = params.context.getRuntimeConfig();
+  let visibility = resolveSessionCatalogVisibility(params.client, config);
+  if (visibility.kind === "unrestricted") {
+    return { visibility };
   }
-  const requestEntries = createSessionCatalogRequestEntrySnapshot({
-    cfg: params.config,
+  if (params.audience === "session-viewers" && params.access === "read") {
+    return isPublishedCatalogVisible(visibility) ? { visibility } : null;
+  }
+  if (visibility.kind === "restricted-unprofiled" && params.audience !== "gateway-operators") {
+    return null;
+  }
+  const planningEntries = createSessionCatalogRequestEntrySnapshot({
+    cfg: config,
     fallbackAgentId: params.fallbackAgentId,
+    projection,
   });
+  planningEntries.freeze();
   const seenCursors = new Set<string>();
   let cursor: string | undefined;
   while (true) {
@@ -146,53 +167,74 @@ export async function isSessionCatalogThreadVisible(params: {
       allowProcessHomeFallback: params.allowProcessHomeFallback,
       hostIds: [params.hostId],
       ...(cursor ? { cursors: { [params.hostId]: cursor } } : {}),
-      sessionEntries: requestEntries.sessionEntries,
+      sessionEntries: planningEntries.sessionEntries,
       listNodes: params.listNodes,
     });
     const host = hosts.find((candidate) => candidate.hostId === params.hostId);
     if (!host) {
-      return false;
+      return null;
     }
-    const projected = requestEntries.projectHostCreatedActors(host);
+    // Providers may populate planning entries before awaiting IO. Re-read privacy and caller
+    // policy after enumeration, before granting read or mutation authority.
+    while (projection.needsSelectionPreparation()) {
+      await projection.prepareSelection();
+    }
+    config = params.context.getRuntimeConfig();
+    visibility = resolveSessionCatalogVisibility(params.client, config);
+    if (visibility.kind === "unrestricted") {
+      return { visibility };
+    }
+    if (visibility.kind === "restricted-unprofiled" && params.audience !== "gateway-operators") {
+      return null;
+    }
+    const requestEntries = createSessionCatalogRequestEntrySnapshot({
+      cfg: config,
+      fallbackAgentId: params.fallbackAgentId,
+      projection,
+      sessionKeys: host.sessions.flatMap(({ sessionKey }) => (sessionKey ? [sessionKey] : [])),
+    });
+    const instances = new Map();
+    planningEntries.captureHostInstances(host, instances);
+    const projected = requestEntries.projectHostSessions(host, instances, params.audience);
     const session = projected.sessions.find(
       (candidate) =>
         candidate.threadId === params.threadId &&
         (!params.sourceHomeId || candidate.sourceHomeId === params.sourceHomeId),
     );
     if (session) {
-      if (params.visibility.kind === "restricted-owner") {
-        return session.createdActor?.id === params.visibility.ownerProfileId;
+      // Gateway-hosted catalogs already live inside this Gateway's trust domain.
+      // Method scopes and creation policy remain the read/mutation authority.
+      if (params.audience === "gateway-operators") {
+        return { visibility };
       }
-      if (
-        !isSharedCatalogSessionVisible({
-          config: params.config,
-          fallbackAgentId: params.fallbackAgentId,
-          session,
-          sessionEntries: requestEntries.sessionEntries,
-          visibility: params.visibility,
-        })
-      ) {
-        return false;
+      if (visibility.kind === "restricted-unprofiled") {
+        return null;
+      }
+      const visibleEntry = visibleCatalogSessionEntry({
+        session,
+        requestEntries,
+        visibility,
+      });
+      if (!visibleEntry || !session.sessionKey) {
+        return null;
       }
       if (
         params.access === "read" ||
-        params.visibility.others === "write" ||
-        session.createdActor?.id === params.visibility.ownerProfileId
+        visibility.kind === "restricted-owner" ||
+        visibility.others === "write" ||
+        visibility.isCreator(visibleEntry.createdActor)
       ) {
-        return true;
+        return { visibility, source: { sessionKey: session.sessionKey, entry: visibleEntry } };
       }
-      const target = session.sessionKey
-        ? resolveSessionSharingTarget({ cfg: params.config, sessionKey: session.sessionKey })
+      const target = resolveSessionSharingTarget({ cfg: config, sessionKey: session.sessionKey });
+      return target !== null &&
+        resolveSessionSharingRole({ cfg: config, client: params.client, target }) === "member"
+        ? { visibility, source: { sessionKey: target.canonicalKey, entry: visibleEntry } }
         : null;
-      return (
-        target !== null &&
-        resolveSessionSharingRole({ cfg: params.config, client: params.client, target }) ===
-          "member"
-      );
     }
     const nextCursor = host.nextCursor;
     if (!nextCursor || seenCursors.has(nextCursor)) {
-      return false;
+      return null;
     }
     seenCursors.add(nextCursor);
     cursor = nextCursor;

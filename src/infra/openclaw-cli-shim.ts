@@ -2,8 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { normalizeProfileName } from "../cli/profile-utils.js";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { resolveStateDir } from "../config/paths.js";
 import { quoteCmdScriptArg } from "../daemon/cmd-argv.js";
+import { renderCmdSetAssignment } from "../daemon/cmd-set.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { writeTextAtomic } from "./json-files.js";
 import {
@@ -21,21 +23,32 @@ const gatewayAgentCliState = resolveGlobalSingleton(
   },
 );
 
-function quotePosixArgument(value: string): string {
-  return /^[A-Za-z0-9_@%+=:,./-]+$/u.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
-}
-
-function renderPosixShim(invocation: OpenClawCliInvocation, profile: string | null): string {
+function renderCliShim(
+  invocation: OpenClawCliInvocation,
+  profile: string | null,
+  windows: boolean,
+): string {
   const args = [...invocation.args, ...(profile ? ["--profile", profile] : [])];
+  const context = { delayedExpansion: false };
+  const environment = Object.entries(invocation.env ?? {}).map(([key, value]) =>
+    windows ? renderCmdSetAssignment(key, value, context) : `export ${key}=${quoteCliArg(value)}`,
+  );
+  if (windows) {
+    const command = [invocation.command, ...args].map((arg) => quoteCmdScriptArg(arg, context));
+    // Own expansion before assigning source paths or forwarding literal user bangs.
+    return [
+      "@echo off",
+      "setlocal DisableDelayedExpansion",
+      ...environment,
+      `${command.join(" ")} %*`,
+      "",
+    ].join("\r\n");
+  }
   return `#!/bin/sh
 set -eu
-exec ${[invocation.command, ...args].map(quotePosixArgument).join(" ")} "$@"
+${environment.join("\n")}
+exec ${[invocation.command, ...args].map(quoteCliArg).join(" ")} "$@"
 `;
-}
-
-function renderWindowsShim(invocation: OpenClawCliInvocation, profile: string | null): string {
-  const args = [...invocation.args, ...(profile ? ["--profile", profile] : [])];
-  return `@echo off\r\n${[invocation.command, ...args].map(quoteCmdScriptArg).join(" ")} %*\r\n`;
 }
 
 /**
@@ -56,10 +69,7 @@ export async function prepareGatewayAgentCliShim(
   const profile = normalizeProfileName(env.OPENCLAW_PROFILE);
   const binDir = path.join(options.stateDir ?? resolveStateDir(env), AGENT_CLI_BIN_DIR);
   const executablePath = path.join(binDir, platform === "win32" ? "openclaw.cmd" : "openclaw");
-  const content =
-    platform === "win32"
-      ? renderWindowsShim(invocation, profile)
-      : renderPosixShim(invocation, profile);
+  const content = renderCliShim(invocation, profile, platform === "win32");
 
   await fs.mkdir(binDir, { recursive: true, mode: 0o700 });
   await fs.chmod(binDir, 0o700).catch(() => undefined);
@@ -84,4 +94,10 @@ export function mergeGatewayAgentCliPath(configured?: string[]): string[] | unde
     ...(configured ?? []),
   ]);
   return merged.length > 0 ? merged : undefined;
+}
+
+/** Drop the Gateway-local CLI shim, e.g. before judging operator PATH entries for remote hosts. */
+export function omitGatewayAgentCliPath(entries: readonly string[]): string[] {
+  const binDir = gatewayAgentCliState.binDir;
+  return entries.filter((entry) => entry !== binDir);
 }

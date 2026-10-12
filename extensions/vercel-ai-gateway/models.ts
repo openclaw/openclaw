@@ -1,10 +1,13 @@
-// Vercel Ai Gateway plugin module implements models behavior.
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import { parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import { buildLiveModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalObjectRecord,
+  asPositiveSafeInteger,
+  isRecord,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const VERCEL_AI_GATEWAY_PROVIDER_ID = "vercel-ai-gateway";
 export const VERCEL_AI_GATEWAY_BASE_URL = "https://ai-gateway.vercel.sh";
@@ -20,22 +23,6 @@ export const VERCEL_AI_GATEWAY_DEFAULT_COST = {
 
 const VERCEL_AI_GATEWAY_DISCOVERY_CACHE_TTL_MS = 60_000;
 const VERCEL_AI_GATEWAY_DISCOVERY_TIMEOUT_MS = 5000;
-
-type VercelPricingShape = {
-  input?: number | string;
-  output?: number | string;
-  input_cache_read?: number | string;
-  input_cache_write?: number | string;
-};
-
-type VercelGatewayModelShape = {
-  id?: string;
-  name?: string;
-  context_window?: number;
-  max_tokens?: number;
-  tags?: string[];
-  pricing?: VercelPricingShape;
-};
 
 type StaticVercelGatewayModel = Omit<ModelDefinitionConfig, "cost"> & {
   cost?: Partial<ModelDefinitionConfig["cost"]>;
@@ -97,20 +84,13 @@ const STATIC_VERCEL_AI_GATEWAY_MODEL_CATALOG: readonly StaticVercelGatewayModel[
   },
 ] as const;
 
-function toPerMillionCost(value: number | string | undefined): number {
-  const numeric =
-    typeof value === "number"
-      ? value
-      : typeof value === "string"
-        ? parseStrictFiniteNumber(value)
-        : undefined;
-  if (numeric === undefined || numeric < 0) {
-    return 0;
-  }
-  return numeric * 1_000_000;
+function toPerMillionCost(value: unknown): number {
+  const price = (parseStrictFiniteNumber(value) ?? 0) * 1_000_000;
+  return Number.isFinite(price) && price >= 0 ? price : 0;
 }
 
-function normalizeCost(pricing?: VercelPricingShape): ModelDefinitionConfig["cost"] {
+function normalizeCost(value: unknown): ModelDefinitionConfig["cost"] {
+  const pricing = asOptionalObjectRecord(value);
   return {
     input: toPerMillionCost(pricing?.input),
     output: toPerMillionCost(pricing?.output),
@@ -121,12 +101,7 @@ function normalizeCost(pricing?: VercelPricingShape): ModelDefinitionConfig["cos
 
 function buildStaticModelDefinition(model: StaticVercelGatewayModel): ModelDefinitionConfig {
   return {
-    id: model.id,
-    name: model.name,
-    reasoning: model.reasoning,
-    input: model.input,
-    contextWindow: model.contextWindow,
-    maxTokens: model.maxTokens,
+    ...model,
     cost: {
       ...VERCEL_AI_GATEWAY_DEFAULT_COST,
       ...model.cost,
@@ -158,11 +133,13 @@ export function getStaticVercelAiGatewayModelCatalog(): ModelDefinitionConfig[] 
   return STATIC_VERCEL_AI_GATEWAY_MODEL_CATALOG.map(buildStaticModelDefinition);
 }
 
-function buildDiscoveredModelDefinition(
-  model: VercelGatewayModelShape,
-): ModelDefinitionConfig | null {
+function buildDiscoveredModelDefinition(value: unknown): ModelDefinitionConfig | null {
+  if (!isRecord(value)) {
+    throw new Error("Vercel AI Gateway model list: malformed JSON response");
+  }
+  const model = value;
   const id = typeof model.id === "string" ? model.id.trim() : "";
-  if (!id) {
+  if (!id || (model.type !== undefined && model.type !== "language")) {
     return null;
   }
 
@@ -201,19 +178,11 @@ function buildDiscoveredModelDefinition(
   };
 }
 
-function asVercelGatewayModelShape(value: unknown): VercelGatewayModelShape {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error("Vercel AI Gateway model list: malformed JSON response");
-  }
-  return value as VercelGatewayModelShape;
-}
-
-export async function discoverVercelAiGatewayModels(): Promise<ModelDefinitionConfig[]> {
-  if (process.env.VITEST || process.env.NODE_ENV === "test") {
-    return getStaticVercelAiGatewayModelCatalog();
-  }
-
+export async function discoverVercelAiGatewayModels(
+  options: { discoveryMode?: "strict" } = {},
+): Promise<ModelDefinitionConfig[]> {
   const provider = await buildLiveModelProviderConfig({
+    ...options,
     providerId: VERCEL_AI_GATEWAY_PROVIDER_ID,
     endpoint: `${VERCEL_AI_GATEWAY_BASE_URL}/v1/models`,
     providerConfig: {
@@ -227,7 +196,6 @@ export async function discoverVercelAiGatewayModels(): Promise<ModelDefinitionCo
     fetchGuard: (params) => fetchWithSsrFGuard(withTrustedEnvProxyGuardedFetchMode(params)),
     projectRows: (rows) =>
       rows
-        .map(asVercelGatewayModelShape)
         .map(buildDiscoveredModelDefinition)
         .filter((entry): entry is ModelDefinitionConfig => entry !== null),
   });

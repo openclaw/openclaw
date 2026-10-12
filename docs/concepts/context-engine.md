@@ -86,6 +86,18 @@ Every time OpenClaw runs a model prompt, the context engine participates at four
 
 Engines can also implement an optional `maintain()` method for transcript maintenance (safe rewrites via `runtimeContext.rewriteTranscriptEntries()`) after bootstrap, a successful turn, or compaction. Set `info.turnMaintenanceMode: "background"` to run it as deferred work instead of blocking the reply.
 
+When queued budget compaction accepts background maintenance, it keeps the prepared
+runtime alive through maintenance, coalesced reruns, and engine disposal. Acceptance
+does not mean cleanup has finished. Return asynchronous work from engine methods
+and `dispose()` so the host can join it before releasing their resources.
+
+A logical turn also retains its managed supplying registry through engine disposal.
+When that registry copied a runtime engine from another inspection, its recorded
+donor dependency can keep the engine usable after the donor inspection retires.
+Retiring the supplying registry still refuses new logical turns; existing engine
+work keeps its physical resources until cleanup finishes. Raw registrations keep
+their caller-owned lifetime.
+
 For the bundled non-ACP Codex harness, OpenClaw applies the same lifecycle by projecting assembled context into Codex developer instructions and the current turn prompt. Codex still owns its native thread history and native compactor.
 
 ### Subagent lifecycle (optional)
@@ -116,12 +128,25 @@ The legacy engine does not register tools or provide a `systemPromptAddition`.
 
 When no `plugins.slots.contextEngine` is set (or it's set to `"legacy"`), this engine is used automatically.
 
+Disabling or denying the selected plugin preserves the slot preference but uses
+`legacy` normally when the engine's registered owner identifies the plugin, or
+when the engine ID matches the plugin ID. After a cold start with no registration,
+a distinct engine ID does not identify its owning plugin: resolution still reports
+the missing engine. Global plugin disablement uses `legacy` regardless of this
+owner mapping. Re-enabling the plugin restores the retained selection when its
+runtime registration is available. An enabled selection that is missing or fails
+still follows the failure-isolation behavior below.
+
 ## Plugin engines
 
 A plugin can register a context engine using the plugin API:
 
 ```ts
 import { buildMemorySystemPromptAddition } from "openclaw/plugin-sdk/core";
+
+// `buildContext`, `countTokens`, and `commitAcceptedTurn` below are your own
+// plugin's helpers to implement. They are not part of the plugin SDK.
+// `buildMemorySystemPromptAddition` is real SDK surface, imported above.
 
 export default function register(api) {
   api.registerContextEngine("my-engine", (ctx) => ({
@@ -215,11 +240,13 @@ Required members:
 
 Set `info.acceptedHostParams` to restrict the host-added lifecycle fields the
 engine receives. Current keys are `sessionKey`, `prompt`, `runtimeSettings`,
-`sessionTarget`, and `runtimeContext`. OpenClaw intersects the declaration with
-the fields available for each lifecycle method, so undeclared or unknown keys
-are never injected. Engines without this declaration receive every current
-host field; declare an explicit list, including `[]`, when the engine validates
-a narrower input shape.
+`sessionTarget`, `runtimeContext`, and `abortSignal`. OpenClaw intersects the
+declaration with the fields available for each lifecycle method, so undeclared
+or unknown keys are never injected. `abortSignal` governs optional cooperative
+cancellation for `maintain()`; the existing compact-operation abort signal is
+always preserved. Engines without this declaration receive every current host
+field; declare an explicit list, including `[]`, when the engine validates a
+narrower input shape.
 
 For durable admitted turns, declare both transcript semantics:
 
@@ -238,6 +265,39 @@ then see the exact transcript prefix before the admitted user message. The host
 calls `commitTurn` only for the accepted successful turn; failed or aborted
 turns do not advance context-engine state.
 
+Confirming which running turn consumed a steered message preserves that turn's
+admission. Only its private steering correlation changes: live transcript updates
+publish the correction, but delta cursors do not replay it. Content, provenance,
+branch changes, and transcript replacement still invalidate old admissions.
+
+The logical-turn owner removes unaccepted admissions when the run ends, including
+when it exits before reporting a terminal transcript boundary. Recovery after a
+Gateway interruption also removes admissions without host acceptance and logs
+the skipped advancement; it never infers success from later transcript entries.
+Accepted work remains queued until the engine acknowledges it. No migration or
+configuration change is required for existing outbox rows.
+
+After accepted-turn finalization acknowledges `committed` or `duplicate`, the host
+also offers `maintain()` through the same maintenance scheduler. Engines declaring
+`turnMaintenanceMode: "background"` run deferred maintenance. Background work
+retains the logical turn's engine and supplying resources until it settles, without
+making reply completion wait for maintenance. Engines declaring `"foreground"` or
+omitting the mode run maintenance inline: accepted-turn finalization and reply
+completion wait for it to settle. Inline maintenance receives the committed
+session target, provider/model/token budget, LLM capability, and transcript rewrite
+capability, without background compaction permission. Transcript rewrites reopen
+the durable target rather than requiring a live session manager.
+Failed commits remain queued and do
+not trigger this handoff. Pre-run outbox recovery reconciles ingestion before
+bootstrap and assembly; it does not start concurrent background maintenance.
+Maintenance is best effort, not a crash-durable job for every committed turn, and
+one invocation does not guarantee that an engine drains all pending compaction.
+
+For these admitted turns, embedded tool-loop `assemble()` receives the history
+before the current turn, with a token budget that reserves space for pending user
+and tool messages. The host appends those pending messages to the assembled history before
+the next model request, so they remain visible without entering the engine's store.
+
 Without the full declaration and method, OpenClaw uses the legacy context path
 for the whole logical turn, including retries. The configured context-engine
 slot is not changed, and OpenClaw tries the configured engine again on the next
@@ -251,23 +311,19 @@ already crossed by a transcript cursor.
   The ordered messages to send to the model.
 </ParamField>
 <ParamField path="estimatedTokens" type="number" required>
-  The engine's estimate of total tokens in the assembled context. OpenClaw uses this for compaction threshold decisions and diagnostic reporting.
+  The engine's estimate of total tokens in the assembled context. OpenClaw uses this for compaction threshold decisions and diagnostic reporting, but not to decide whether to send a provider request.
 </ParamField>
 <ParamField path="systemPromptAddition" type="string">
   Prepended to the system prompt.
 </ParamField>
 <ParamField path="promptAuthority" type='"assembled" | "preassembly_may_overflow"'>
-  Controls which token estimate the runner uses for preemptive overflow
-  prechecks. Defaults to `"assembled"`, which means only the assembled
-  prompt's estimate is checked for engines that do not own compaction.
-  Engines that set `ownsCompaction: true` manage their own prompt admission,
-  so OpenClaw skips the generic pre-prompt precheck by default. Set
-  `"preassembly_may_overflow"` only when your assembled view can hide overflow
-  risk in the underlying transcript; the runner then keeps the generic
-  precheck active and takes the maximum of the assembled estimate and the
-  pre-assembly (unwindowed) session-history estimate when deciding whether to
-  preemptively compact. Either way, the messages you return are still what the
-  model sees - `promptAuthority` only affects the precheck.
+  Controls the history included in host token-pressure diagnostics. Defaults to
+  `"assembled"`. Set `"preassembly_may_overflow"` when the assembled view can hide
+  pressure in the underlying transcript; diagnostics then report the maximum of
+  the host's assembled and pre-assembly (unwindowed) history estimates. That
+  diagnostic maximum does not block a fitting outgoing request. The returned
+  messages remain the model context, and this field does not disable host
+  request admission checks for engines that own compaction.
 </ParamField>
 <ParamField path="contextProjection" type="ContextEngineProjection">
   Optional projection lifecycle for hosts with persistent backend threads (for example Codex app-server). `mode: "thread_bootstrap"` with a stable `epoch` asks the host to inject the assembled context once per epoch and reuse the backend thread until the epoch changes, instead of re-projecting every turn. Omit this field for normal per-turn projection.
@@ -288,7 +344,22 @@ Optional members:
 | `afterTurn(params)`            | Method | Post-run lifecycle work (persist state, trigger background compaction).                                                                      |
 | `prepareSubagentSpawn(params)` | Method | Set up shared state for a child session before it starts.                                                                                    |
 | `onSubagentEnded(params)`      | Method | Clean up after a subagent ends.                                                                                                              |
-| `dispose()`                    | Method | Release resources. Called during gateway shutdown or plugin reload - not per-session.                                                        |
+| `dispose()`                    | Method | Release engine-instance resources when the owning operation ends, after any retained work finishes.                                          |
+
+The host also disposes instances resolved for standalone compaction, Doctor
+inspection, and subagent lifecycle hooks. A queued subagent spawn keeps its
+instance until dispatch succeeds or preparation is rolled back; returning a
+queued acceptance does not end that lifetime. Timed-out compaction keeps its
+instance until the underlying plugin work settles.
+Gateway shutdown releases queued instances without rolling back their preparation,
+so persisted queued work can resume after restart. Explicit cancellation still
+rolls back the preparation.
+
+Foreground engine disposal shares the agent cleanup deadline: 10 seconds by
+default, adjustable with `OPENCLAW_AGENT_CLEANUP_TIMEOUT_MS`. A stalled cleanup
+logs a warning and lets the completed reply return; it does not cancel the
+plugin's pending disposal. Cleanup failures and timeouts retain the existing
+one-shot CLI cleanup-failure outcome; they do not certify resource closure.
 
 ### Runtime settings
 
@@ -349,6 +420,12 @@ built-in `legacy` engine. The error is logged with the failed operation so the
 operator can repair, update, or disable the plugin without the agent going
 silent.
 
+Host admission and resource-ownership failures before factory entry propagate
+without quarantining the engine. Factory rejections caused by cancellation of
+the caller's work also propagate without quarantine or fallback. Completion
+cleanup owns an independent async lifetime, so a closed caller scope does not
+prevent its factory from running.
+
 Host requirement failures are different: when an engine declares that a runtime
 lacks a required capability, OpenClaw fails closed before starting the run. That
 protects engines that would corrupt state if they ran in an unsupported host.
@@ -359,7 +436,16 @@ protects engines that would corrupt state if they ran in an unsupported host.
 
 <AccordionGroup>
   <Accordion title="ownsCompaction: true">
-    The engine owns compaction behavior. OpenClaw disables OpenClaw runtime's built-in auto-compaction and generic pre-prompt overflow precheck for that run, and the engine's `compact()` implementation is responsible for `/compact`, provider overflow recovery compaction, and any proactive compaction it wants to do in `afterTurn()`. OpenClaw still runs the pre-prompt overflow safeguard when the engine returns `promptAuthority: "preassembly_may_overflow"` from `assemble()`.
+    The engine owns compaction behavior. OpenClaw disables the runtime's built-in auto-compaction, and the engine's `compact()` implementation is responsible for `/compact`, overflow recovery compaction, and any proactive compaction it wants to do in `afterTurn()`.
+
+    The embedded runtime still checks every outgoing provider request, including
+    the first, before sending it. When a request extends a matching measured
+    prefix from the current run, the host anchors its estimate to that provider
+    usage and counts the appended content. Otherwise, it estimates the actual system
+    prompt, messages, and tools afresh. Requests that exceed the host's prompt
+    budget enter recovery before reaching the provider. The engine's
+    `estimatedTokens` does not control this decision.
+
   </Accordion>
   <Accordion title="ownsCompaction: false or unset">
     OpenClaw runtime's built-in auto-compaction may still run during prompt execution, but the active engine's `compact()` method is still called for `/compact` and overflow recovery.
@@ -430,6 +516,9 @@ The slot is exclusive at run time - only one registered context engine is resolv
 
 - [Compaction](/concepts/compaction) - summarizing long conversations
 - [Context](/concepts/context) - how context is built for agent turns
+- [Honcho memory](/concepts/memory-honcho) - a memory plugin a context engine can draw on
 - [Plugin Architecture](/plugins/architecture) - registering context engine plugins
 - [Plugin manifest](/plugins/manifest) - plugin manifest fields
 - [Plugins](/tools/plugin) - plugin overview
+- [Session management deep dive](/reference/session-management-compaction) - the session store, transcript events, and auto-compaction internals
+- [System prompt](/concepts/system-prompt) - what OpenClaw assembles into the system prompt for every agent run, and the layers it renders from

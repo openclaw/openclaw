@@ -1,12 +1,8 @@
-// Hook frontmatter helpers parse metadata blocks from hook files.
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
-import { parseFrontmatterBlock } from "../../packages/markdown-core/src/frontmatter.js";
+import { normalizeCsvOrLooseStringList } from "@openclaw/normalization-core/string-normalization";
 import {
   applyOpenClawManifestInstallCommonFields,
-  getFrontmatterString,
-  normalizeStringList,
   parseOpenClawManifestInstallBase,
-  parseFrontmatterBool,
   resolveOpenClawManifestBlock,
   resolveOpenClawManifestInstall,
   resolveOpenClawManifestOs,
@@ -16,14 +12,10 @@ import type {
   OpenClawHookMetadata,
   HookEntry,
   HookInstallSpec,
-  HookInvocationPolicy,
   ParsedHookFrontmatter,
 } from "./types.js";
 
-/** Parse HOOK.md frontmatter into the generic hook frontmatter record. */
-export function parseHookFrontmatter(content: string): ParsedHookFrontmatter {
-  return parseFrontmatterBlock(content);
-}
+export { parseFrontmatterBlock as parseHookFrontmatter } from "../../packages/markdown-core/src/frontmatter.js";
 
 function parseInstallSpec(input: unknown): HookInstallSpec | undefined {
   const parsed = parseOpenClawManifestInstallBase(input, ["bundled", "npm", "git"]);
@@ -47,7 +39,6 @@ function parseInstallSpec(input: unknown): HookInstallSpec | undefined {
   return spec;
 }
 
-/** Resolve OpenClaw hook metadata from the manifest block in HOOK.md frontmatter. */
 export function resolveHookManifestMetadata(
   frontmatter: ParsedHookFrontmatter,
 ): OpenClawHookMetadata | undefined {
@@ -58,7 +49,6 @@ export function resolveHookManifestMetadata(
   const requires = resolveOpenClawManifestRequires(metadataObj);
   const install = resolveOpenClawManifestInstall(metadataObj, parseInstallSpec);
   const osRaw = resolveOpenClawManifestOs(metadataObj);
-  const eventsRaw = normalizeStringList(metadataObj.events);
   return {
     always: typeof metadataObj.always === "boolean" ? metadataObj.always : undefined,
     emoji: readStringValue(metadataObj.emoji),
@@ -66,22 +56,12 @@ export function resolveHookManifestMetadata(
     hookKey: readStringValue(metadataObj.hookKey),
     export: readStringValue(metadataObj.export),
     os: osRaw.length > 0 ? osRaw : undefined,
-    events: eventsRaw.length > 0 ? eventsRaw : [],
+    events: normalizeCsvOrLooseStringList(metadataObj.events),
     requires,
     install: install.length > 0 ? install : undefined,
   };
 }
 
-/** Resolve invocation policy from top-level hook frontmatter flags. */
-export function resolveHookInvocationPolicy(
-  frontmatter: ParsedHookFrontmatter,
-): HookInvocationPolicy {
-  return {
-    enabled: parseFrontmatterBool(getFrontmatterString(frontmatter, "enabled"), true),
-  };
-}
-
-/** Resolve the config key for a hook, honoring metadata hookKey overrides. */
-export function resolveHookKey(hookName: string, entry?: HookEntry): string {
+export function resolveHookKey(hookName: string, entry?: Pick<HookEntry, "metadata">): string {
   return entry?.metadata?.hookKey ?? hookName;
 }

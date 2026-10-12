@@ -1,4 +1,4 @@
-// DeepInfra proxy tests cover the live model discovery transport policy.
+import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -10,42 +10,53 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
 
 import { discoverDeepInfraModels } from "./provider-models.js";
 
-const ORIGINAL_VITEST = process.env.VITEST;
-const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
-
-function restoreEnv(key: "VITEST" | "NODE_ENV", value: string | undefined) {
-  if (value === undefined) {
-    delete process.env[key];
-  } else {
-    process.env[key] = value;
-  }
-}
-
 afterEach(() => {
-  restoreEnv("VITEST", ORIGINAL_VITEST);
-  restoreEnv("NODE_ENV", ORIGINAL_NODE_ENV);
+  clearLiveCatalogCacheForTests();
   fetchWithSsrFGuardMock.mockReset();
   vi.restoreAllMocks();
 });
 
 describe("DeepInfra model discovery proxy policy", () => {
-  it("allows the guarded official catalog request to use an eligible HTTP proxy", async () => {
-    delete process.env.VITEST;
-    process.env.NODE_ENV = "development";
-    const release = vi.fn(async () => undefined);
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response("unavailable", { status: 503 }),
-      release,
+  it("pairs both anonymous guarded requests with release", async () => {
+    const releases: ReturnType<typeof vi.fn>[] = [];
+    fetchWithSsrFGuardMock.mockImplementation(async ({ url }) => {
+      const release = vi.fn(async () => undefined);
+      releases.push(release);
+      const body = url.endsWith("/models/list")
+        ? [
+            {
+              model_name: "fixture/chat",
+              pricing: {
+                type: "tokens",
+                cents_per_input_token: 0.0002,
+                cents_per_output_token: 0.001,
+              },
+            },
+          ]
+        : { data: [{ id: "fixture/chat", metadata: { tags: ["chat"] } }] };
+      return {
+        finalUrl: url,
+        response: Response.json(body),
+        release,
+      };
     });
-
-    await discoverDeepInfraModels({ hasApiKey: true });
-
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        mode: "trusted_env_proxy",
-        url: "https://api.deepinfra.com/v1/openai/models?sort_by=openclaw&filter=with_meta",
-      }),
+    const acquisition = discoverDeepInfraModels({ hasApiKey: true, env: {} });
+    await expect(acquisition).resolves.toMatchObject([{ id: "fixture/chat" }]);
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
+    expect(new Set(fetchWithSsrFGuardMock.mock.calls.map(([request]) => request.url))).toEqual(
+      new Set([
+        "https://api.deepinfra.com/models/list",
+        "https://api.deepinfra.com/v1/openai/models?sort_by=openclaw&filter=with_meta",
+      ]),
     );
-    expect(release).toHaveBeenCalledOnce();
+    for (const [request] of fetchWithSsrFGuardMock.mock.calls) {
+      expect(request.mode).toBe("trusted_env_proxy");
+      expect(new Headers(request.init.headers).has("authorization")).toBe(false);
+      expect(request.timeoutMs).toBeLessThanOrEqual(5000);
+    }
+    expect(releases).toHaveLength(2);
+    for (const release of releases) {
+      expect(release).toHaveBeenCalledOnce();
+    }
   });
 });

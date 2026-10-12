@@ -4,15 +4,51 @@
  * Agent execution uses this to choose a model/provider-specific runtime policy
  * from agent entries, model catalog config, provider config, or QA overrides.
  */
-import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+import {
+  parseModelCatalogRef,
+  type ProviderModelRef,
+} from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
+import {
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshotMetadata,
+} from "../config/runtime-snapshot.js";
 import type { AgentModelEntryConfig } from "../config/types.agent-defaults.js";
 import type { AgentRuntimePolicyConfig } from "../config/types.agents-shared.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeAgentId } from "../routing/session-key.js";
-import { listAgentEntries, resolveSessionAgentIds } from "./agent-scope.js";
+import type { ProviderResolveModelRoutesContext } from "../plugin-sdk/provider-model-types.js";
+import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
+import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
+import { resolveAgentEntry, resolveNativeModelPrimary } from "./agent-scope-config.js";
+import { resolveSessionAgentIds } from "./agent-scope.js";
+import { resolveProviderModelAuthPolicy } from "./model-auth-policy.js";
+import { splitTrailingAuthProfile } from "./model-ref-profile.js";
+
+/** A stored-row owner is already selected; request hints still require normal admission. */
+export type AgentRuntimePolicyScope = { sessionKey?: string } & (
+  | { agentId?: string; agentScope?: never }
+  | { agentId?: never; agentScope: { kind: "prepared"; agentId: string } }
+);
+
+/** Resolve request hints; prepared owner facts never re-admit a canonical sentinel. */
+export function resolveAgentRuntimePolicyAgentId(
+  params: AgentRuntimePolicyScope & { config?: OpenClawConfig },
+): string | undefined {
+  if (params.agentScope?.kind === "prepared") {
+    return params.agentScope.agentId;
+  }
+  return params.config && (params.agentId?.trim() || params.sessionKey?.trim())
+    ? resolveSessionAgentIds({
+        config: params.config,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+      }).sessionAgentId
+    : params.agentId;
+}
 
 /** Config surface that supplied a resolved model runtime policy. */
 type ModelRuntimePolicySource = "model" | "provider";
@@ -22,6 +58,7 @@ type ResolvedModelRuntimePolicy = {
   policy?: AgentRuntimePolicyConfig;
   source?: ModelRuntimePolicySource;
   matchedProvider?: string;
+  forcedByEnvironment?: true;
 };
 
 type ModelEntryMatchKind = "none" | "exact" | "provider-wildcard";
@@ -35,29 +72,54 @@ type AgentModelRuntimePolicyResolution = ResolvedModelRuntimePolicy & {
   ambiguous?: true;
 };
 
-function hasRuntimePolicy(value: AgentRuntimePolicyConfig | undefined): boolean {
-  return Boolean(value?.id?.trim());
-}
+type IndexedAgentModelPolicy = AgentModelRuntimePolicyMatch & { entryId: string };
+const agentModelPolicyIndexes = new WeakMap<
+  Record<string, AgentModelEntryConfig>,
+  {
+    publication: ReturnType<typeof getRuntimeConfigSnapshotMetadata>;
+    index: Map<string, IndexedAgentModelPolicy[]>;
+  }
+>();
 
-function resolveProviderConfig(
-  config: OpenClawConfig | undefined,
-  provider: string | undefined,
-): ModelProviderConfig | undefined {
-  if (!config?.models?.providers || !provider?.trim()) {
-    return undefined;
+function readAgentModelPolicyIndex(
+  models: Record<string, AgentModelEntryConfig>,
+  config: OpenClawConfig,
+) {
+  const publication =
+    config === getRuntimeConfigSnapshot() ? getRuntimeConfigSnapshotMetadata() : null;
+  const cacheable = publication !== null || isDeeplyFrozenPlainData(models);
+  const cached = agentModelPolicyIndexes.get(models);
+  if (cacheable && cached && cached.publication === publication) {
+    return cached.index;
   }
-  const providers = config.models.providers;
-  const direct = providers[provider];
-  if (direct) {
-    return direct;
-  }
-  const normalizedProvider = normalizeProviderId(provider);
-  for (const [candidateProvider, providerConfig] of Object.entries(providers)) {
-    if (normalizeProviderId(candidateProvider) === normalizedProvider) {
-      return providerConfig;
+  const index = new Map<string, IndexedAgentModelPolicy[]>();
+  for (const [entryId, entry] of Object.entries(models)) {
+    const policy = entry?.agentRuntime;
+    if (!hasRuntimePolicy(policy)) {
+      continue;
+    }
+    const parsed = parseModelCatalogRef(entryId.trim());
+    const match = { entryId, provider: parsed?.provider ?? "", policy };
+    for (const key of parsed ? [entryId.trim(), parsed.modelId] : [entryId.trim()]) {
+      const matches = index.get(key);
+      if (matches) {
+        matches.push(match);
+      } else {
+        index.set(key, [match]);
+      }
     }
   }
-  return undefined;
+  // Published revisions and immutable captures own these facts; unbound mutable callers rebuild.
+  if (cacheable) {
+    agentModelPolicyIndexes.set(models, { publication, index });
+  }
+  return index;
+}
+
+function hasRuntimePolicy(
+  value: AgentRuntimePolicyConfig | undefined,
+): value is AgentRuntimePolicyConfig {
+  return Boolean(value?.id?.trim());
 }
 
 function normalizeModelIdForProvider(
@@ -116,11 +178,11 @@ function resolvePolicyMatch(
 }
 
 function modelEntryMatchKind(params: {
-  entry: Pick<ModelDefinitionConfig, "id">;
+  entryId: string;
   provider: string | undefined;
   modelId: string;
 }): ModelEntryMatchKind {
-  const entryId = params.entry.id.trim();
+  const entryId = params.entryId.trim();
   if (entryId === params.modelId) {
     return "exact";
   }
@@ -146,24 +208,15 @@ function resolveAgentModelEntryRuntimePolicy(params: {
   provider?: string;
   modelId?: string;
   agentId?: string;
-  sessionKey?: string;
   matchKind: Exclude<ModelEntryMatchKind, "none">;
 }): AgentModelRuntimePolicyResolution {
   const modelId = normalizeModelIdForProvider(params.provider, params.modelId);
   if (!params.config || (!modelId && params.matchKind !== "provider-wildcard")) {
     return {};
   }
-  const hasSessionScope = Boolean(params.agentId?.trim() || params.sessionKey?.trim());
-  const sessionAgentId = hasSessionScope
-    ? resolveSessionAgentIds({
-        config: params.config,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-      }).sessionAgentId
-    : tryResolveLegacyCompatibilityAgentId(params.config);
-  const agentEntry = sessionAgentId
-    ? listAgentEntries(params.config).find((entry) => normalizeAgentId(entry.id) === sessionAgentId)
-    : undefined;
+  // Point lookup: projecting the whole roster per model ref made runtime
+  // collection O(agents² × models) on large fleets (#135743).
+  const agentEntry = params.agentId ? resolveAgentEntry(params.config, params.agentId) : undefined;
   const modelMaps: Array<Record<string, AgentModelEntryConfig> | undefined> = [
     agentEntry?.models,
     params.config.agents?.defaults?.models,
@@ -171,18 +224,21 @@ function resolveAgentModelEntryRuntimePolicy(params: {
   const callerProvider = normalizeProviderId(params.provider ?? "");
   for (const models of modelMaps) {
     const scopeMatches: AgentModelRuntimePolicyMatch[] = [];
-    for (const [key, entry] of Object.entries(models ?? {})) {
+    if (!models) {
+      continue;
+    }
+    const key = params.matchKind === "provider-wildcard" ? "*" : (modelId ?? "");
+    for (const match of readAgentModelPolicyIndex(models, params.config).get(key) ?? []) {
       const matches =
         modelEntryMatchKind({
-          entry: { id: key },
+          entryId: match.entryId,
           provider: params.provider,
           modelId: modelId ?? "",
         }) === params.matchKind;
-      const policy = entry?.agentRuntime;
-      if (!matches || !policy || !hasRuntimePolicy(policy)) {
+      if (!matches) {
         continue;
       }
-      scopeMatches.push({ provider: parseModelCatalogRef(key)?.provider ?? "", policy });
+      scopeMatches.push(match);
     }
     // Unqualified model ids can match multiple provider-qualified entries; avoid
     // choosing an arbitrary runtime when the provider is unknown.
@@ -203,31 +259,45 @@ function resolveModelConfig(params: {
   if (!modelId || !Array.isArray(params.providerConfig?.models)) {
     return undefined;
   }
-  return params.providerConfig.models.find(
-    (entry) => modelEntryMatchKind({ entry, provider: params.provider, modelId }) === "exact",
-  );
+  // Catalog projection resolves every row against its provider's authored rows, so this scan
+  // runs rows² times. An exact match ends with the model id; skip parsing rows that cannot match.
+  return params.providerConfig.models.find((entry) => {
+    const entryId = entry.id.trim();
+    return (
+      entryId === modelId ||
+      (entryId.endsWith(modelId) &&
+        modelEntryMatchKind({ entryId, provider: params.provider, modelId }) === "exact")
+    );
+  });
 }
 
 /** Resolves the effective runtime policy for an agent/model/provider selection. */
-export function resolveModelRuntimePolicy(params: {
-  config?: OpenClawConfig;
-  provider?: string;
-  modelId?: string;
-  agentId?: string;
-  sessionKey?: string;
-}): ResolvedModelRuntimePolicy {
+export function resolveModelRuntimePolicy(
+  params: {
+    config?: OpenClawConfig;
+    provider?: string;
+    modelId?: string;
+  } & AgentRuntimePolicyScope,
+): ResolvedModelRuntimePolicy {
   const callerProvider = normalizeProviderId(params.provider ?? "");
   const effectiveProvider = resolveEffectiveProvider(params.provider, params.modelId);
   const inferredMatchedProvider = callerProvider ? undefined : effectiveProvider;
   if (process.env.OPENCLAW_BUILD_PRIVATE_QA === "1") {
     const forcedRuntime = process.env.OPENCLAW_QA_FORCE_RUNTIME?.trim().toLowerCase();
     if (forcedRuntime === "openclaw" || forcedRuntime === "codex") {
-      return { policy: { id: forcedRuntime }, source: "model" };
+      return { policy: { id: forcedRuntime }, source: "model", forcedByEnvironment: true };
     }
   }
 
+  const hasAgentScope = Boolean(
+    params.agentScope || params.agentId?.trim() || params.sessionKey?.trim(),
+  );
+  const agentId = hasAgentScope
+    ? resolveAgentRuntimePolicyAgentId(params)
+    : params.config && tryResolveLegacyCompatibilityAgentId(params.config);
   const agentModelPolicy = resolveAgentModelEntryRuntimePolicy({
     ...params,
+    agentId,
     provider: effectiveProvider,
     matchKind: "exact",
   });
@@ -237,7 +307,9 @@ export function resolveModelRuntimePolicy(params: {
   if (agentModelPolicy.policy) {
     return agentModelPolicy;
   }
-  const providerConfig = resolveProviderConfig(params.config, effectiveProvider);
+  const providerConfig = effectiveProvider
+    ? resolveMergedModelProviderConfig(params.config, effectiveProvider)
+    : undefined;
   const modelConfig = resolveModelConfig({
     providerConfig,
     provider: effectiveProvider,
@@ -252,6 +324,7 @@ export function resolveModelRuntimePolicy(params: {
   }
   const agentWildcardModelPolicy = resolveAgentModelEntryRuntimePolicy({
     ...params,
+    agentId,
     provider: effectiveProvider,
     matchKind: "provider-wildcard",
   });
@@ -266,4 +339,77 @@ export function resolveModelRuntimePolicy(params: {
     };
   }
   return {};
+}
+
+/** Projects authored routing intent without changing harness compatibility or selection. */
+export function resolveModelRouteIntent(
+  params: Parameters<typeof resolveModelRuntimePolicy>[0] & {
+    runtimePolicy?: ReturnType<typeof resolveModelRuntimePolicy>;
+    primaryModel?: ProviderModelRef;
+    resolveProfileAuthMode?: (profileId: string) => string | undefined;
+    resolveProfileAuthFlow?: (profileId: string) => string | undefined;
+  },
+): ProviderResolveModelRoutesContext["routeIntent"] {
+  const resolveIntent = (
+    provider: string | undefined,
+    profile: string | undefined,
+    runtimeId: string | undefined,
+    source: "explicit" | "inherited",
+  ): ProviderResolveModelRoutesContext["routeIntent"] => {
+    const authRequirement =
+      profile && provider
+        ? resolveProviderModelAuthPolicy({
+            provider,
+            mode:
+              params.config?.auth?.profiles?.[profile]?.mode ??
+              params.resolveProfileAuthMode?.(profile),
+            authFlow: params.resolveProfileAuthFlow?.(profile),
+          }).authRequirement
+        : undefined;
+    const runtime = runtimeId && !isDefaultAgentRuntimeId(runtimeId) ? runtimeId : undefined;
+    if (authRequirement) {
+      return { ...(runtime ? { runtimeId: runtime } : {}), authRequirement, source };
+    }
+    return runtime ? { runtimeId: runtime, source } : undefined;
+  };
+  const selected = splitTrailingAuthProfile(params.modelId ?? "");
+  const provider = resolveEffectiveProvider(params.provider, selected.model);
+  const configured =
+    params.runtimePolicy ?? resolveModelRuntimePolicy({ ...params, modelId: selected.model });
+  const runtimeId = normalizeOptionalAgentRuntimeId(configured.policy?.id);
+  const explicit = resolveIntent(provider, selected.profile, runtimeId, "explicit");
+  if (explicit) {
+    return explicit;
+  }
+  if (!params.config) {
+    return undefined;
+  }
+  const agentId = resolveAgentRuntimePolicyAgentId(params);
+  const primary = agentId
+    ? resolveNativeModelPrimary(params.config, agentId)
+    : resolveAgentModelPrimaryValue(params.config.agents?.defaults?.model);
+  const primarySelection = primary ? splitTrailingAuthProfile(primary) : undefined;
+  const primaryRef = params.primaryModel
+    ? {
+        provider: params.primaryModel.provider,
+        modelId: splitTrailingAuthProfile(params.primaryModel.model).model,
+      }
+    : primarySelection
+      ? parseModelCatalogRef(primarySelection.model)
+      : null;
+  if (!primaryRef || primaryRef.provider !== provider) {
+    return undefined;
+  }
+  const inheritedPolicy = resolveModelRuntimePolicy({
+    ...params,
+    provider: primaryRef.provider,
+    modelId: primaryRef.modelId,
+  });
+  const inheritedRuntimeId = normalizeOptionalAgentRuntimeId(inheritedPolicy.policy?.id);
+  return resolveIntent(
+    primaryRef.provider,
+    primarySelection?.profile,
+    inheritedRuntimeId,
+    "inherited",
+  );
 }

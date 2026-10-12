@@ -1,8 +1,22 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { renderNotificationsSection } from "./notifications-section.ts";
+
+const userPreferences = {
+  categories: {
+    approvalRequested: true,
+    agentFinished: false,
+    agentQuestion: false,
+    humanMentioned: false,
+    scheduledTaskFailed: false,
+  },
+  detailLevel: "private" as const,
+  quietHours: { enabled: false, startMinute: 1320, endMinute: 420, timeZone: "UTC" },
+  agentIds: [],
+};
 
 describe("native notification test outcome", () => {
   it("renders pending immediately and disables duplicate sends", () => {
@@ -56,5 +70,207 @@ describe("native notification test outcome", () => {
 
     expect(container.textContent).toContain("Granted");
     expect(container.textContent).toContain("Test notification queued");
+  });
+});
+
+describe("Web Push preference saves", () => {
+  it("lets recipients opt in to mentions and override them for one browser", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    onTestFinished(() => container.remove());
+    const onUserPreferences = vi.fn();
+    const onDevicePreferences = vi.fn();
+    render(
+      renderNotificationsSection({
+        connected: true,
+        webPush: {
+          supported: true,
+          permission: "granted",
+          subscription: "registered",
+          loading: false,
+          preferences: {
+            durableIdentity: true,
+            user: userPreferences,
+            device: { enabled: true, label: "phone" },
+            effective: { ...userPreferences, enabled: true, label: "phone" },
+          },
+        },
+        onWebPushSetUserPreferences: onUserPreferences,
+        onWebPushSetDevicePreferences: onDevicePreferences,
+      }),
+      container,
+    );
+
+    const accountToggle = expectDefined(
+      [...container.querySelectorAll<HTMLInputElement>(".settings-toggle__input")].find(
+        (toggle) =>
+          toggle.closest(".settings-toggle")?.textContent?.trim() === "Someone mentions me",
+      ),
+      "mention account preference",
+    );
+    expect(accountToggle.checked).toBe(false);
+    accountToggle.click();
+    expect(onUserPreferences).toHaveBeenCalledWith({
+      ...userPreferences,
+      categories: { ...userPreferences.categories, humanMentioned: true },
+    });
+
+    const browserOverride = expectDefined(
+      container.querySelector<HTMLSelectElement>('select[aria-label="Someone mentions me"]'),
+      "mention browser preference",
+    );
+    expect(browserOverride.value).toBe("inherit");
+    browserOverride.value = "off";
+    browserOverride.dispatchEvent(new Event("change"));
+    expect(onDevicePreferences).toHaveBeenLastCalledWith({
+      enabled: true,
+      label: "phone",
+      categories: { humanMentioned: false },
+    });
+  });
+
+  it("disables every preference control while a save is in flight", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderNotificationsSection({
+        connected: true,
+        webPush: {
+          supported: true,
+          permission: "granted",
+          subscription: "registered",
+          loading: true,
+          preferences: {
+            durableIdentity: true,
+            user: userPreferences,
+            device: { enabled: true, label: "phone" },
+            effective: { ...userPreferences, enabled: true, label: "phone" },
+          },
+        },
+      }),
+      container,
+    );
+
+    // Preference sections stack inside the page column; a nested .settings-page
+    // would reapply the 760px max-width and inset them from the card above.
+    expect(container.querySelector(".settings-page .settings-page")).toBeNull();
+    const preferences = container.querySelector<HTMLElement>(".settings-page .settings-stack");
+    const preferenceGroup = expectDefined(preferences, "notification preferences group");
+    expect(preferenceGroup.querySelector("input, select")).not.toBeNull();
+    expect(preferenceGroup.hasAttribute("inert")).toBe(true);
+  });
+});
+
+type DevicePreferencesListener = NonNullable<
+  Parameters<typeof renderNotificationsSection>[0]["onWebPushSetDevicePreferences"]
+>;
+
+describe("Web Push preference controls", () => {
+  function renderPreferences(
+    options: {
+      onDevice?: DevicePreferencesListener;
+      onUser?: Parameters<typeof renderNotificationsSection>[0]["onWebPushSetUserPreferences"];
+      timeZone?: string;
+      container?: HTMLElement;
+    } = {},
+  ) {
+    const container = options.container ?? document.createElement("div");
+    const user = {
+      ...userPreferences,
+      quietHours: {
+        ...userPreferences.quietHours,
+        enabled: true,
+        timeZone: options.timeZone ?? "UTC",
+      },
+    };
+    const device = { enabled: true, label: "phone", agentIds: ["main"] };
+    render(
+      renderNotificationsSection({
+        connected: true,
+        onWebPushSetDevicePreferences: options.onDevice,
+        onWebPushSetUserPreferences: options.onUser,
+        webPush: {
+          supported: true,
+          permission: "granted",
+          subscription: "registered",
+          loading: false,
+          preferences: {
+            durableIdentity: true,
+            user,
+            device,
+            effective: { ...user, ...device },
+          },
+        },
+      }),
+      container,
+    );
+    return container;
+  }
+
+  it("preserves a saved timezone alias and saves a native selection", () => {
+    const onUser = vi.fn();
+    const container = renderPreferences({ onUser, timeZone: "US/Pacific" });
+    const select = expectDefined(
+      container.querySelector<HTMLSelectElement>('select[aria-label="Time zone"]'),
+      "timezone select",
+    );
+    expect(select.value).toBe("US/Pacific");
+    select.value = "Europe/London";
+    select.dispatchEvent(new Event("change"));
+    renderPreferences({ container, onUser, timeZone: "Europe/London" });
+    expect(select.value).toBe("Europe/London");
+    expect(container.querySelector('select[aria-label="Time zone"]')).toBe(select);
+    expect(onUser).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        quietHours: expect.objectContaining({ timeZone: "Europe/London" }),
+      }),
+    );
+  });
+
+  it("retains UTC and the saved timezone when the browser catalog is unavailable", () => {
+    const catalog = vi.spyOn(Intl, "supportedValuesOf").mockImplementation(() => {
+      throw new RangeError("unavailable");
+    });
+    try {
+      const container = renderPreferences({ timeZone: "US/Pacific" });
+      const select = expectDefined(
+        container.querySelector<HTMLSelectElement>('select[aria-label="Time zone"]'),
+        "timezone select",
+      );
+      expect(select.value).toBe("US/Pacific");
+      expect([...select.options].map((option) => option.value)).toEqual(
+        expect.arrayContaining(["UTC", "US/Pacific"]),
+      );
+    } finally {
+      catalog.mockRestore();
+    }
+  });
+
+  it("patches device preferences from the toggle row and select row", () => {
+    const onDevice = vi.fn<DevicePreferencesListener>();
+    const container = renderPreferences({ onDevice });
+    document.body.append(container);
+    onTestFinished(() => container.remove());
+    const deviceGroup = expectDefined(
+      container.querySelectorAll(".settings-page .settings-stack .settings-group")[1],
+      "device preference group",
+    );
+
+    const toggle = expectDefined(
+      deviceGroup.querySelector<HTMLInputElement>(".settings-toggle__input"),
+      "deliver toggle",
+    );
+    toggle.click();
+    expect(onDevice).toHaveBeenLastCalledWith(
+      expect.objectContaining({ enabled: false, label: "phone", agentIds: ["main"] }),
+    );
+
+    const detail = expectDefined(
+      deviceGroup.querySelector<HTMLSelectElement>('select[aria-label="Lock-screen detail"]'),
+      "device lock-screen detail select",
+    );
+    detail.value = "detailed";
+    detail.dispatchEvent(new Event("change"));
+    expect(onDevice).toHaveBeenLastCalledWith(expect.objectContaining({ detailLevel: "detailed" }));
   });
 });

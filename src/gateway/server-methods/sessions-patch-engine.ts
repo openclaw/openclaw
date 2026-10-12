@@ -1,189 +1,128 @@
-import {
-  ErrorCodes,
-  errorShape,
-  type ErrorShape,
-  type SessionsPatchManyResult,
-  type SessionsPatchManyTarget,
-  type SessionsPatchParams,
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import type {
+  ErrorShape,
+  SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { isInternalSessionEffectsKey } from "../../config/sessions/internal-session-key.js";
-import { SESSION_LIFECYCLE_CHANGED_ERROR_REASON } from "../../config/sessions/lifecycle.js";
-import {
-  applySessionEntryCanonicalReplacements,
-  type SessionEntryCanonicalReplacement,
-} from "../../config/sessions/session-accessor.sqlite-replacement-projection.js";
+import type { SqliteLifecycleTargetSnapshot } from "../../config/sessions/session-accessor.sqlite-entry-equality.js";
+import type { SessionEntryCanonicalReplacement } from "../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import { SessionLabelOwnerIndex } from "../../config/sessions/session-entry-selection.js";
-import { disableCronJobsBoundToSessions } from "../../cron/job-session-bindings.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
-import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
+import type { UserModelAccountSelection } from "../model-account-authority.js";
+import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
-import { ensureSessionGroupRegistered } from "../session-groups.js";
-import { triggerSessionPatchHook } from "../session-patch-hooks.js";
+import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
+import { recordSessionStatusModelPatchOutcome } from "../session-model-patch-origin.js";
 import { resolvePluginSessionOwnershipError } from "../session-plugin-ownership.js";
-import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
-import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
-import { projectSessionPatchResult } from "../session-utils-model.js";
+import { invalidSessionRequest } from "../session-request-error.js";
 import {
   resolveCanonicalGatewaySessionStoreKey,
   resolveCanonicalSessionEntryFromStoreKeys,
-  resolveGatewaySessionStoreTargetWithStore,
-  type SessionsPatchResult,
 } from "../session-utils.js";
-import { projectSessionsPatchEntry } from "../sessions-patch.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
-import { emitSessionsChanged } from "./session-change-event.js";
-import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
+import { createSessionModelCatalogWait } from "./session-model-catalog-wait.js";
+import * as sessionUnreadAck from "./session-unread-ack.js";
 import {
   prepareSessionPatchArchive,
-  type SessionPatchArchivePreparation,
+  prepareSessionPatchArchiveTransition,
+  releaseSessionPatchArchive,
   validateSessionPatchArchiveProjection,
 } from "./sessions-patch-archive.js";
-import { persistSessionPatchModelSelection } from "./sessions-patch-model-selection.js";
-import { resolveSessionWorkerPlacementPatchError, sessionLog } from "./sessions-shared.js";
+import {
+  createSessionPatchCatalogPreparation,
+  type SessionPatchCatalogResult,
+} from "./sessions-patch-catalog-preparation.js";
+import type { SessionPatchDiagnostics } from "./sessions-patch-diagnostics.js";
+import { discoverSessionPatchTargets } from "./sessions-patch-discovery.js";
+import * as patchEffects from "./sessions-patch-effects.js";
+import {
+  assertSessionPatchCommitAllowed,
+  sessionChangedError,
+  unexpectedPatchError,
+} from "./sessions-patch-errors.js";
+import * as sessionPatchExpectations from "./sessions-patch-expectations.js";
+import { runSessionPatchGroups } from "./sessions-patch-groups.js";
+import * as modelSelection from "./sessions-patch-model-selection.js";
+import {
+  prepareSessionPatchReplacement,
+  createSessionPatchGroupWriter,
+} from "./sessions-patch-replacement.js";
+import type {
+  GroupMutationOperation,
+  MutationCoreResult,
+  MutationOutcome,
+  MutationTarget,
+  PreparedPatchTarget,
+} from "./sessions-patch-types.js";
+import { prepareSessionWorkerPlacementPatchError } from "./sessions-shared.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
   SessionMutationAuthorization,
 } from "./types.js";
+import { preparePersonalModelSelection } from "./users-model-account-access.js";
 
-type PatchTargetIdentity = Pick<
-  SessionsPatchManyTarget,
-  "agentId" | "expectedLifecycleRevision" | "expectedSessionId" | "key"
->;
+type PatchTargetIdentity = sessionUnreadAck.SessionPatchTargetIdentity;
+const { resolveSessionUnreadAck, validateSessionUnreadAck } = sessionUnreadAck;
 
-type MutationTarget = PatchTargetIdentity & {
-  commitGuard: () => ErrorShape | undefined;
-};
+type ArchiveTransition = Awaited<ReturnType<typeof prepareSessionPatchArchiveTransition>>;
 
-type PreparedPatchTarget = {
-  archiveActor: ReturnType<typeof gatewayClientSessionCreator>;
-  archivePreparation?: SessionPatchArchivePreparation;
-  canonicalKey: string;
-  fullPatch: SessionsPatchParams;
-  index: number;
-  initialEntry?: SessionEntry;
-  initialStoreKeys: string[];
-  key: string;
-  lifecycleIdentities: Array<string | undefined>;
-  requestedAgentId?: string;
-  storePath: string;
-  targetAgentId: string;
-};
-
-type MutationOutcome = { ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape };
-
-type ModelCatalog = Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalog"]>>;
-
-type MutationCoreResult =
-  | { ok: false; error: ErrorShape }
-  | {
-      ok: true;
-      cfg: ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
-      outcomes: MutationOutcome[];
-      preparedByIndex: Array<PreparedPatchTarget | undefined>;
-      modelCatalogByAgent: Map<string, Promise<ModelCatalog>>;
-    };
-
-function unexpectedPatchError(key: string, error: unknown): ErrorShape {
-  sessionLog.warn(`sessions.patch: target failed for ${key}: ${formatErrorMessage(error)}`);
-  const message = "Session patch failed unexpectedly. Retry the request.";
-  return errorShape(ErrorCodes.UNAVAILABLE, message, { retryable: true });
-}
-
-function sessionChangedError(key: string): ErrorShape {
-  return errorShape(ErrorCodes.INVALID_REQUEST, `Session ${key} changed before patch. Retry.`, {
-    details: { reason: SESSION_LIFECYCLE_CHANGED_ERROR_REASON },
-  });
-}
-
-function pluginOwnershipError(
-  client: GatewayClient | null,
-  entry: SessionEntry | undefined,
-  key: string,
-): ErrorShape | undefined {
-  return resolvePluginSessionOwnershipError({
-    action: "patch",
-    entry,
-    key,
-    pluginOwnerId: client?.internal?.pluginRuntimeOwnerId,
-  });
-}
-
-function createCommitGuard(key: string, assertCurrent: (() => void) | undefined) {
-  return (): ErrorShape | undefined => {
-    try {
-      assertCurrent?.();
-      return undefined;
-    } catch (error) {
-      return error instanceof SessionMutationAuthorizationChangedError
-        ? error.error
-        : unexpectedPatchError(key, error);
-    }
-  };
-}
-
-async function executeSessionPatchMutations(params: {
+export async function executeSessionPatchMutations(params: {
   client: GatewayClient | null;
   context: GatewayRequestContext;
+  signal?: AbortSignal;
+  diagnostics?: SessionPatchDiagnostics;
+  operatorAuthority?: Promise<{ authority: AdmittedRunOperatorAuthority } | undefined>;
+  onCreatedSessionCommitted?: SessionMutationAuthorization["recordCreatedSession"];
   patch: Omit<SessionsPatchParams, keyof PatchTargetIdentity>;
   targets: readonly MutationTarget[];
 }): Promise<MutationCoreResult> {
   const { client } = params;
-  const cfg = params.context.getRuntimeConfig();
-  const creation = resolveOperatorSessionCreation(client);
+  const timing = params.diagnostics?.scope("preflight");
+  let personalModelSelection: UserModelAccountSelection | undefined;
+  try {
+    personalModelSelection = await preparePersonalModelSelection(params, params.patch.model);
+  } catch (error) {
+    return { ok: false, error: unexpectedPatchError(params.targets[0]?.key ?? "", error) };
+  }
+  const getCurrentConfig = params.context.getRuntimeConfig;
+  const cfg = getCurrentConfig();
+  const operatorCreation = resolveOperatorSessionCreation(client);
+  const sandbox = resolveCreatorSandbox(cfg, operatorCreation);
+  const creation = { ...operatorCreation, ...(sandbox ? { sandbox } : {}) };
   const archiveActor = gatewayClientSessionCreator(client);
   const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
-  const callerCanManageCron = client === null || callerScopes.includes(ADMIN_SCOPE);
+  const callerIsAdmin = client === null || callerScopes.includes(ADMIN_SCOPE);
   const pluginOwnerId = client?.internal?.pluginRuntimeOwnerId;
-  const targetDiscoveryCache = new Map();
-  const preflightTargets = params.targets.map((input) => {
-    const key = input.key.trim();
-    const requestedAgent = resolveRequestedGlobalAgentId(cfg, key, input.agentId);
-    return {
-      input,
-      key,
-      requestedAgent,
-      resolved: requestedAgent.ok
-        ? resolveGatewaySessionStoreTargetWithStore({
-            cfg,
-            key,
-            agentId: requestedAgent.agentId,
-            exactRead: true,
-            targetDiscoveryCache,
-          })
-        : undefined,
-    };
-  });
-  const logicalTargets = new Set<string>();
-  for (const { key, resolved } of preflightTargets) {
-    if (!resolved) {
-      continue;
-    }
-    const logicalId = `${resolved.storePath}\0${resolved.canonicalKey ?? key}`;
-    if (logicalTargets.has(logicalId)) {
-      return { ok: false, error: errorShape(ErrorCodes.INVALID_REQUEST, "Duplicate target.") };
-    }
-    logicalTargets.add(logicalId);
+  const discovery = discoverSessionPatchTargets(cfg, params.targets);
+  if (!discovery.ok) {
+    return discovery;
   }
+  const targetAccessError = (entry: SessionEntry | undefined, agentId: string, key: string) =>
+    (!entry && authorizeGatewaySessionCreation({ cfg, client, agentId })) ||
+    resolvePluginSessionOwnershipError({ action: "patch", entry, key, pluginOwnerId });
 
   const outcomes = Array.from<MutationOutcome | undefined>({ length: params.targets.length });
+  const permissionErrors = new Map<number, ErrorShape>();
   const prepared: PreparedPatchTarget[] = [];
   const preparedByIndex = Array.from<PreparedPatchTarget | undefined>({
     length: params.targets.length,
   });
-  for (const [index, { input, key, requestedAgent, resolved }] of preflightTargets.entries()) {
+  for (const [index, { input, key, requestedAgent, resolved }] of discovery.value.entries()) {
+    const unreadAckError = validateSessionUnreadAck(params.patch, input);
+    if (unreadAckError) {
+      outcomes[index] = invalidSessionRequest(unreadAckError);
+      continue;
+    }
     if (!requestedAgent.ok) {
       outcomes[index] = requestedAgent;
       continue;
     }
     if (!resolved) {
-      outcomes[index] = {
-        ok: false,
-        error: errorShape(ErrorCodes.INVALID_REQUEST, "Session target could not be resolved."),
-      };
+      outcomes[index] = invalidSessionRequest("Session target could not be resolved.");
       continue;
     }
     const requestedAgentId = requestedAgent.agentId;
@@ -196,15 +135,9 @@ async function executeSessionPatchMutations(params: {
       outcomes[index] = { ok: false, error: unexpectedPatchError(key, error) };
       continue;
     }
-    const creationError =
-      !initialEntry && authorizeGatewaySessionCreation({ cfg, client, agentId: resolved.agentId });
-    if (creationError) {
-      outcomes[index] = { ok: false, error: creationError };
-      continue;
-    }
-    const ownershipError = pluginOwnershipError(client, initialEntry, canonicalKey);
-    if (ownershipError) {
-      outcomes[index] = { ok: false, error: ownershipError };
+    const accessError = targetAccessError(initialEntry, resolved.agentId, canonicalKey);
+    if (accessError) {
+      outcomes[index] = { ok: false, error: accessError };
       continue;
     }
     const missingHarnessSessionError = resolveMissingAgentHarnessSessionError(
@@ -212,19 +145,22 @@ async function executeSessionPatchMutations(params: {
       initialEntry,
     );
     if (missingHarnessSessionError) {
-      outcomes[index] = {
-        ok: false,
-        error: errorShape(ErrorCodes.INVALID_REQUEST, missingHarnessSessionError),
-      };
+      outcomes[index] = invalidSessionRequest(missingHarnessSessionError);
       continue;
     }
     // Commit guards are core control state; construct the protocol patch from
     // its public identity fields so closures can never reach hooks or entries.
     const { commitGuard: _commitGuard, ...identity } = input;
     const fullPatch: SessionsPatchParams = { ...params.patch, ...identity };
+    const expectationError =
+      sessionPatchExpectations.resolveSessionPatchExpectationError(fullPatch);
+    if (expectationError) {
+      outcomes[index] = invalidSessionRequest(expectationError);
+      continue;
+    }
     let initialPlacementPatchError: string | undefined;
     try {
-      initialPlacementPatchError = resolveSessionWorkerPlacementPatchError({
+      initialPlacementPatchError = await prepareSessionWorkerPlacementPatchError({
         agentId: resolved.agentId,
         cfg,
         context: params.context,
@@ -239,15 +175,9 @@ async function executeSessionPatchMutations(params: {
       continue;
     }
     if (initialPlacementPatchError) {
-      outcomes[index] = {
-        ok: false,
-        error: errorShape(ErrorCodes.INVALID_REQUEST, initialPlacementPatchError),
-      };
+      outcomes[index] = invalidSessionRequest(initialPlacementPatchError);
       continue;
     }
-    const lifecycleIdentities = Array.from(
-      new Set([key, canonicalKey, ...candidateKeys, initialEntry?.sessionId]),
-    );
     const preparedTarget: PreparedPatchTarget = {
       archiveActor,
       canonicalKey,
@@ -256,7 +186,7 @@ async function executeSessionPatchMutations(params: {
       ...(initialEntry ? { initialEntry } : {}),
       initialStoreKeys: [...candidateKeys],
       key,
-      lifecycleIdentities,
+      lifecycleIdentities: [key, canonicalKey, ...candidateKeys, initialEntry?.sessionId],
       ...(requestedAgentId ? { requestedAgentId } : {}),
       storePath: resolved.storePath,
       targetAgentId: resolved.agentId,
@@ -265,157 +195,184 @@ async function executeSessionPatchMutations(params: {
     preparedByIndex[index] = preparedTarget;
   }
 
-  const modelCatalogByAgent = new Map<string, Promise<ModelCatalog>>();
-  const loadModelCatalog = (agentId: string) => {
-    let promise = modelCatalogByAgent.get(agentId);
-    if (!promise) {
-      promise = params.context.loadGatewayModelCatalog({ agentId });
-      modelCatalogByAgent.set(agentId, promise);
-    }
-    return promise;
-  };
+  const mutationTargets = params.targets.map((target) => ({ ...target }));
+  const originalCommitGuards = mutationTargets.map((target) => target.commitGuard);
+  await using preparation = await sessionPatchExpectations.prepareSessionPatchTargets({
+    cfg,
+    getCurrentConfig,
+    prepared,
+    mutationTargets,
+    originalCommitGuards,
+    outcomes,
+    operatorAuthority: params.operatorAuthority,
+    personalModelSelection,
+  });
+  const { operatorAuthority, prepared: activePrepared } = preparation;
+  const permissionRuntime =
+    "permissionMode" in params.patch
+      ? await import("./sessions-patch-permissions.runtime.js")
+      : undefined;
+  const sandboxRuntime =
+    "sandboxMode" in params.patch || "nativeRuntimeConsent" in params.patch
+      ? await import("./sessions-patch-sandbox.runtime.js")
+      : undefined;
 
-  if (prepared.length > 0) {
+  const catalogWait = createSessionModelCatalogWait(
+    [
+      params.signal,
+      client?.connectionSignal,
+      operatorAuthority?.signal,
+      client?.internal?.operatorRunAuthority?.signal,
+      client?.internal?.operatorAccessAuthority?.signal,
+    ],
+    "The session was not changed",
+  );
+  const catalogs = createSessionPatchCatalogPreparation(
+    (agentId) => catalogWait.run(() => params.context.loadGatewayModelCatalogSnapshot({ agentId })),
+    params.diagnostics,
+  );
+
+  if (activePrepared.length > 0) {
+    const releaseArchiveDrains = async () =>
+      activePrepared.forEach((target) => releaseSessionPatchArchive(target.archivePreparation));
     try {
-      await runExclusiveSessionLifecycleMutation({
-        targets: prepared.map((target) => ({
+      // Cloud reclaim precedes every mutation mutex; an earlier Move may need one.
+      timing?.mark("archive");
+      await Promise.all(
+        activePrepared
+          .filter((target) => target.fullPatch.archived === true)
+          .map(async (target) => {
+            try {
+              const result = await prepareSessionPatchArchive({
+                cfg,
+                commitGuard: mutationTargets[target.index]!.commitGuard,
+                context: params.context,
+                loadGatewayModelCatalogSnapshot: () => catalogs.load(target.targetAgentId),
+                personalModelSelection,
+                ...(pluginOwnerId ? { pluginOwnerId } : {}),
+                target,
+              });
+              if (result.ok) {
+                target.archivePreparation = result.value;
+              } else {
+                outcomes[target.index] = result;
+              }
+            } catch (error) {
+              outcomes[target.index] = {
+                ok: false,
+                error: unexpectedPatchError(target.key, error),
+              };
+            }
+          }),
+      );
+      timing?.mark("lifecycleAdmission");
+      const archived = params.patch.archived;
+      const operation = archived === undefined ? "patch" : archived ? "archive" : "restore";
+      await runExclusiveSessionLifecycleMutation(operation, {
+        targets: activePrepared.map((target) => ({
           scope: target.storePath,
           identities: target.lifecycleIdentities,
         })),
         prepare: async () => {
-          await Promise.all(
-            prepared
-              .filter((target) => target.fullPatch.archived === true)
-              .map(async (target) => {
-                try {
-                  const result = await prepareSessionPatchArchive({
-                    cfg,
-                    commitGuard: params.targets[target.index]!.commitGuard,
-                    context: params.context,
-                    loadGatewayModelCatalog: () => loadModelCatalog(target.targetAgentId),
-                    ...(pluginOwnerId ? { pluginOwnerId } : {}),
-                    target,
-                  });
-                  if (result.ok) {
-                    target.archivePreparation = result.value;
-                  } else {
-                    outcomes[target.index] = result;
-                  }
-                } catch (error) {
-                  outcomes[target.index] = {
-                    ok: false,
-                    error: unexpectedPatchError(target.key, error),
-                  };
-                }
-              }),
-          );
-        },
-        run: async () => {
-          const groups = new Map<string, PreparedPatchTarget[]>();
-          for (const target of prepared) {
-            if (target.fullPatch.archived === true && !target.archivePreparation) {
-              continue;
-            }
-            const groupKey = `${target.storePath}\0${target.targetAgentId}`;
-            const group = groups.get(groupKey);
-            if (group) {
-              group.push(target);
-            } else {
-              groups.set(groupKey, [target]);
-            }
+          for (const target of activePrepared) {
+            target.archivePreparation?.drain.handoffToMutation();
           }
-          await Promise.all(
-            [...groups.values()].map(async (group) => {
+        },
+        finalize: releaseArchiveDrains,
+        run: async () => {
+          timing?.mark();
+          try {
+            await runSessionPatchGroups(activePrepared, async (group) => {
               const first = group[0]!;
+              const storage = preparation.storage.get(first.index);
+              const groupTiming = params.diagnostics?.scope("snapshot");
               try {
-                // Labels need store-wide uniqueness. Other single patches retain every resolver
-                // candidate so writer-queued legacy aliases remain visible to revalidation.
-                const selectedSessionKeys =
-                  group.length === 1 && first.fullPatch.label === undefined
-                    ? Array.from(
-                        new Set([first.key, first.canonicalKey, ...first.initialStoreKeys]),
-                      )
-                    : undefined;
-                const groupOutcomes = await applySessionEntryCanonicalReplacements({
-                  agentId: first.targetAgentId,
-                  ...(selectedSessionKeys ? { sessionKeys: selectedSessionKeys } : {}),
-                  storePath: first.storePath,
-                  skipMaintenance: true,
-                  update: async (entries) => {
-                    const workingStore = Object.fromEntries(
-                      entries.flatMap(({ entry, sessionKey }) =>
-                        isInternalSessionEffectsKey(sessionKey)
-                          ? []
-                          : [[sessionKey, entry] as const],
-                      ),
-                    );
-                    const labelOwners = new SessionLabelOwnerIndex(workingStore);
-                    const replacements: SessionEntryCanonicalReplacement[] = [];
-                    const projectedOutcomes: MutationOutcome[] = [];
-                    for (const target of group) {
-                      try {
-                        // Preflight facts can stale behind the writer queue; resolve this snapshot
-                        // again so a new legacy alias is rejected rather than promoted or deleted.
-                        const {
-                          entry: existingEntry,
-                          primaryKey,
-                          target: currentTarget,
-                        } = resolveCanonicalGatewaySessionStoreKey({
-                          cfg,
-                          key: target.key,
-                          store: workingStore,
-                          ...(target.requestedAgentId ? { agentId: target.requestedAgentId } : {}),
+                // Keep every resolver candidate for queued alias revalidation. Label
+                // uniqueness needs only the requested label's owners, not the full store.
+                const selectedSessionKeys = group.flatMap((target) => [
+                  target.key,
+                  target.canonicalKey,
+                  ...target.initialStoreKeys,
+                ]);
+                const archiveTransitions = new Map<number, ArchiveTransition>();
+                const createdSessions: Parameters<
+                  NonNullable<SessionMutationAuthorization["recordCreatedSession"]>
+                >[0][] = [];
+                const commitGuards = new Set<() => ErrorShape | undefined>();
+                const originalGuards = group.map(({ index }) =>
+                  expectDefined(originalCommitGuards[index], "original patch guard"),
+                );
+                const assertCommitAllowed = () => {
+                  operatorAuthority?.assertCurrent();
+                  assertSessionPatchCommitAllowed({
+                    personalModelSelection,
+                    guards: commitGuards.size ? commitGuards : originalGuards,
+                    archiveTransitions: archiveTransitions.values(),
+                  });
+                  storage?.assertCurrent();
+                };
+                const projectGroup = async (
+                  entries: SqliteLifecycleTargetSnapshot,
+                  admission: "admitted" | "detached",
+                  catalogPreparation?: SessionPatchCatalogResult,
+                ): Promise<GroupMutationOperation> => {
+                  createdSessions.length = 0;
+                  const workingStore = Object.fromEntries(
+                    entries.flatMap(({ entry, sessionKey }) =>
+                      isInternalSessionEffectsKey(sessionKey) ? [] : [[sessionKey, entry] as const],
+                    ),
+                  );
+                  const labelOwners = new SessionLabelOwnerIndex(workingStore);
+                  const replacements: SessionEntryCanonicalReplacement[] = [];
+                  const projectedOutcomes: MutationOutcome[] = [];
+                  for (const target of group) {
+                    try {
+                      if (params.operatorAuthority) {
+                        assertSessionPatchCommitAllowed({
+                          personalModelSelection,
+                          guards: [
+                            expectDefined(
+                              originalCommitGuards[target.index],
+                              "original patch guard",
+                            ),
+                          ],
+                          archiveTransitions: [],
                         });
-                        const creationError =
-                          !existingEntry &&
-                          authorizeGatewaySessionCreation({
-                            cfg,
-                            client,
-                            agentId: target.targetAgentId,
-                          });
-                        if (creationError) {
-                          projectedOutcomes.push({ ok: false, error: creationError });
-                          continue;
-                        }
-                        const candidateKeys = currentTarget.storeKeys;
-                        const ownershipError = pluginOwnershipError(
-                          client,
+                        operatorAuthority?.assertCurrent();
+                      }
+                      // Preflight facts can stale behind the writer queue; resolve this snapshot
+                      // again so a new legacy alias is rejected rather than promoted or deleted.
+                      const {
+                        entry: existingEntry,
+                        primaryKey,
+                        target: currentTarget,
+                      } = resolveCanonicalGatewaySessionStoreKey({
+                        cfg,
+                        key: target.key,
+                        store: workingStore,
+                        ...(target.requestedAgentId ? { agentId: target.requestedAgentId } : {}),
+                      });
+                      const accessError = targetAccessError(
+                        existingEntry,
+                        target.targetAgentId,
+                        primaryKey,
+                      );
+                      if (accessError) {
+                        projectedOutcomes.push({ ok: false, error: accessError });
+                        continue;
+                      }
+                      const candidateKeys = currentTarget.storeKeys;
+                      // Compare tool policy against the captured snapshot; the final
+                      // commit rejects a selection changed during preparation.
+                      const projectionError =
+                        sessionPatchExpectations.resolveSessionPatchTargetError(
                           existingEntry,
-                          primaryKey,
-                        );
-                        if (ownershipError) {
-                          projectedOutcomes.push({ ok: false, error: ownershipError });
-                          continue;
-                        }
-                        const expectedSessionChanged =
-                          (target.fullPatch.expectedSessionId !== undefined &&
-                            existingEntry?.sessionId !== target.fullPatch.expectedSessionId) ||
-                          (target.fullPatch.expectedLifecycleRevision !== undefined &&
-                            existingEntry?.lifecycleRevision !==
-                              target.fullPatch.expectedLifecycleRevision);
-                        const lifecycleEntryRemoved =
-                          target.initialEntry !== undefined && existingEntry === undefined;
-                        const archiveTargetChanged =
-                          target.fullPatch.archived === true &&
-                          (target.initialEntry === undefined
-                            ? existingEntry !== undefined
-                            : existingEntry !== undefined &&
-                              (existingEntry.sessionId !== target.initialEntry.sessionId ||
-                                existingEntry.lifecycleRevision !==
-                                  target.initialEntry.lifecycleRevision));
-                        if (
-                          expectedSessionChanged ||
-                          lifecycleEntryRemoved ||
-                          archiveTargetChanged
-                        ) {
-                          projectedOutcomes.push({
-                            ok: false,
-                            error: sessionChangedError(target.key),
-                          });
-                          continue;
-                        }
-                        if (target.fullPatch.archived === true) {
-                          const archiveError = validateSessionPatchArchiveProjection({
+                          target,
+                        ) ||
+                        (params.operatorAuthority &&
+                          mutationTargets[target.index]!.commitGuard()) ||
+                        (target.fullPatch.archived === true &&
+                          validateSessionPatchArchiveProjection({
                             cfg,
                             existingEntry,
                             fullPatch: target.fullPatch,
@@ -423,16 +380,42 @@ async function executeSessionPatchMutations(params: {
                             ...(pluginOwnerId ? { pluginOwnerId } : {}),
                             preparation: target.archivePreparation!,
                             primaryKey,
-                          });
-                          if (archiveError) {
-                            projectedOutcomes.push({
-                              ok: false,
-                              error: archiveError,
-                            });
-                            continue;
-                          }
+                          }));
+                      if (projectionError) {
+                        projectedOutcomes.push({ ok: false, error: projectionError });
+                        continue;
+                      }
+                      const unreadAck = resolveSessionUnreadAck(existingEntry, target.fullPatch);
+                      if (unreadAck.kind === "missing") {
+                        projectedOutcomes.push({
+                          ok: false,
+                          error: sessionChangedError(target.key),
+                        });
+                        continue;
+                      }
+                      if (unreadAck.kind === "stale") {
+                        const authorizationFailure = mutationTargets[target.index]!.commitGuard();
+                        if (authorizationFailure) {
+                          projectedOutcomes.push({ ok: false, error: authorizationFailure });
+                          continue;
                         }
-                        const projected = await projectSessionsPatchEntry({
+                        // A newer explicit marker owns the session until a later activation.
+                        projectedOutcomes.push({
+                          ok: true,
+                          applied: false,
+                          accessChanged: false,
+                          entry: unreadAck.entry,
+                        });
+                        continue;
+                      }
+                      const projection = await catalogs.project({
+                        agentId: target.targetAgentId,
+                        // Detached preparation must not replay earlier restoration or
+                        // permission owners when a later target needs the catalog.
+                        mode:
+                          admission === "admitted" || group.length === 1 ? "prepare" : "ordered",
+                        catalog: catalogPreparation,
+                        projection: {
                           cfg,
                           creation,
                           existingEntry,
@@ -441,63 +424,194 @@ async function executeSessionPatchMutations(params: {
                           agentId: target.requestedAgentId,
                           patch: target.fullPatch,
                           archivedBy: archiveActor,
-                          loadGatewayModelCatalog: () => loadModelCatalog(target.targetAgentId),
-                        });
-                        if (!projected.ok) {
-                          projectedOutcomes.push(projected);
-                          continue;
-                        }
-                        const placementPatchError = resolveSessionWorkerPlacementPatchError({
-                          agentId: target.targetAgentId,
-                          cfg,
-                          context: params.context,
-                          entry: projected.entry,
-                          key: target.key,
-                          patch: target.fullPatch,
-                          sessionKey: primaryKey,
-                          validateModelRuntime: true,
-                        });
-                        if (placementPatchError) {
-                          projectedOutcomes.push({
-                            ok: false,
-                            error: errorShape(ErrorCodes.INVALID_REQUEST, placementPatchError),
-                          });
-                          continue;
-                        }
-                        const authorizationFailure = params.targets[target.index]!.commitGuard();
-                        if (authorizationFailure) {
-                          projectedOutcomes.push({ ok: false, error: authorizationFailure });
-                          continue;
-                        }
-                        const previousSessionKeys = candidateKeys.filter(
-                          (sessionKey) => sessionKey !== primaryKey && workingStore[sessionKey],
-                        );
-                        replacements.push({
-                          entry: projected.entry,
-                          previousSessionKeys,
-                          sessionKey: primaryKey,
-                        });
-                        const cloned = labelOwners.replaceEntry(
-                          candidateKeys,
-                          primaryKey,
-                          projected.entry,
-                        );
-                        projectedOutcomes.push({
-                          ok: true,
-                          entry: cloned,
-                        });
-                      } catch (error) {
-                        projectedOutcomes.push({
-                          ok: false,
-                          error: unexpectedPatchError(target.key, error),
-                        });
+                          personalModelSelection,
+                          operatorAuthority,
+                        },
+                      });
+                      if (projection.kind === "model-catalog") {
+                        // Nothing has committed. Release provisional permission handles
+                        // with this writer snapshot, then project again from fresh rows.
+                        return { result: projection };
                       }
+                      const projected = projection.result;
+                      if (!projected.ok) {
+                        projectedOutcomes.push(projected);
+                        continue;
+                      }
+                      const validateSandbox = sandboxRuntime
+                        ? () =>
+                            sandboxRuntime.validateSessionPatchSandboxChange({
+                              client,
+                              context: params.context,
+                              patch: target.fullPatch,
+                              existingEntry,
+                              entry: projected.entry,
+                              sessionKey: primaryKey,
+                              storePath: target.storePath,
+                              lifecycleIdentities: target.lifecycleIdentities,
+                            })
+                        : undefined;
+                      const sandboxError = validateSandbox?.();
+                      if (sandboxError) {
+                        projectedOutcomes.push({ ok: false, error: sandboxError });
+                        continue;
+                      }
+                      const runtimeSelection =
+                        await modelSelection.prepareSessionPatchRuntimeSelection({
+                          cfg,
+                          agentId: target.targetAgentId,
+                          patch: target.fullPatch,
+                          entry: projected.entry,
+                          expectedEntry: existingEntry,
+                          callerCanConsent: callerIsAdmin,
+                          catalog: (await catalogs.available(target.targetAgentId))?.entries,
+                          validateModelSelection: projected.validateModelSelection,
+                          placement: { context: params.context, sessionKey: primaryKey },
+                        });
+                      if (!runtimeSelection.ok) {
+                        projectedOutcomes.push(runtimeSelection);
+                        continue;
+                      }
+                      const authorizationFailure = mutationTargets[target.index]!.commitGuard();
+                      if (authorizationFailure) {
+                        projectedOutcomes.push({ ok: false, error: authorizationFailure });
+                        continue;
+                      }
+                      if (
+                        existingEntry &&
+                        typeof target.fullPatch.archived === "boolean" &&
+                        (existingEntry.worktree ||
+                          existingEntry.archivedAt !== undefined ||
+                          target.fullPatch.archived)
+                      ) {
+                        const worktreeTiming = params.diagnostics?.scope("worktree");
+                        let transition: ArchiveTransition;
+                        try {
+                          transition = await prepareSessionPatchArchiveTransition({
+                            archived: target.fullPatch.archived,
+                            entry: existingEntry,
+                            context: params.context,
+                            scope: {
+                              agentId: target.targetAgentId,
+                              sessionKey: primaryKey,
+                              storePath: target.storePath,
+                            },
+                            authorize: mutationTargets[target.index]!.commitGuard,
+                            preparation: target.archivePreparation,
+                          });
+                        } finally {
+                          worktreeTiming?.finish();
+                        }
+                        archiveTransitions.set(target.index, transition);
+                      }
+                      if (permissionRuntime && existingEntry?.sessionId) {
+                        const permission = permissionRuntime.prepareSessionPatchPermissionChange({
+                          context: params.context,
+                          sessionId: existingEntry.sessionId,
+                          sessionKey: target.canonicalKey,
+                          agentId: target.targetAgentId,
+                          assertCurrent: mutationTargets[target.index]!.commitGuard,
+                        });
+                        if (!permission.ok) {
+                          projectedOutcomes.push(permission);
+                          continue;
+                        }
+                        target.permissionChange = permission.change;
+                      }
+                      commitGuards.add(mutationTargets[target.index]!.commitGuard);
+                      if (validateSandbox) {
+                        commitGuards.add(validateSandbox);
+                      }
+                      if (runtimeSelection.validate) {
+                        commitGuards.add(runtimeSelection.validate);
+                      }
+                      const replacement = prepareSessionPatchReplacement({
+                        existingEntry,
+                        projectedEntry: projected.entry,
+                        primaryKey,
+                        canonicalKey: target.canonicalKey,
+                        candidateKeys,
+                        workingStore,
+                        labelOwners,
+                        assertCurrent: assertCommitAllowed,
+                      });
+                      if (replacement.replacement) {
+                        replacements.push(replacement.replacement);
+                        if (!existingEntry && params.onCreatedSessionCommitted) {
+                          createdSessions.push({
+                            agentId: target.targetAgentId,
+                            sessionKey: primaryKey,
+                            storePath: target.storePath,
+                            sessionId: replacement.outcome.entry.sessionId,
+                            lifecycleRevision: replacement.outcome.entry.lifecycleRevision,
+                          });
+                        }
+                      }
+                      projectedOutcomes.push(replacement.outcome);
+                    } catch (error) {
+                      projectedOutcomes.push({
+                        ok: false,
+                        error: unexpectedPatchError(target.key, error),
+                      });
                     }
-                    return { replacements, result: projectedOutcomes };
+                  }
+                  return {
+                    replacements,
+                    result: { kind: "complete", outcomes: projectedOutcomes },
+                  };
+                };
+                const groupStore = {
+                  ...(storage ? { env: storage.env, retainedExecution: storage.execution } : {}),
+                  onLifecycleCommitted: () => {
+                    for (const created of createdSessions) {
+                      params.onCreatedSessionCommitted?.(created);
+                    }
                   },
+                  afterCommitted: patchEffects.createSessionPatchCategoryRegistration(params),
+                  assertCommitAllowed,
+                  agentId: first.targetAgentId,
+                  sessionKeys: selectedSessionKeys,
+                  storePath: first.storePath,
+                  skipMaintenance: true,
+                };
+                const applyGroup = createSessionPatchGroupWriter({
+                  store: groupStore,
+                  patch: first.fullPatch,
+                  project: projectGroup,
+                  timing: groupTiming,
                 });
+                let result = await applyGroup();
+                if (result.kind === "model-catalog") {
+                  for (const target of group) {
+                    target.permissionChange?.finish();
+                    target.permissionChange = undefined;
+                  }
+                  commitGuards.clear();
+                  archiveTransitions.clear();
+                  groupTiming?.mark();
+                  const catalog = await catalogs.prepare(first.targetAgentId);
+                  result = await applyGroup(catalog);
+                }
+                if (result.kind !== "complete") {
+                  throw new Error("Session patch catalog preparation did not complete");
+                }
+                const groupOutcomes = result.outcomes;
                 for (const [groupIndex, target] of group.entries()) {
-                  outcomes[target.index] = groupOutcomes[groupIndex]!;
+                  const outcome = groupOutcomes[groupIndex]!;
+                  outcomes[target.index] = outcome;
+                  if (outcome.ok) {
+                    recordSessionStatusModelPatchOutcome(outcome.applied);
+                  }
+                  if (outcome.ok && outcome.applied) {
+                    modelSelection.refreshSessionPatchQueuedSelection({
+                      cfg,
+                      entry: outcome.entry,
+                      patch: target.fullPatch,
+                      sessionKey: target.canonicalKey,
+                      agentId: target.targetAgentId,
+                      catalog: (await catalogs.available(target.targetAgentId))?.entries,
+                    });
+                  }
                 }
               } catch (error) {
                 for (const target of group) {
@@ -506,187 +620,65 @@ async function executeSessionPatchMutations(params: {
                     error: unexpectedPatchError(target.key, error),
                   };
                 }
+              } finally {
+                groupTiming?.finish();
               }
-            }),
-          );
+            });
+            // Keep runtime acknowledgement in the mutation lane. A second browser
+            // must not persist a newer mode and then have this older update win.
+            timing?.mark("permissions");
+            for (const target of activePrepared) {
+              const outcome = outcomes[target.index];
+              if (!target.permissionChange || !outcome?.ok || !outcome.applied) {
+                continue;
+              }
+              const error = await target.permissionChange.apply(
+                outcome.entry.permissionMode ?? null,
+              );
+              if (error) {
+                permissionErrors.set(target.index, error);
+              }
+            }
+          } finally {
+            timing?.mark("lifecycleFinalize");
+          }
         },
       });
     } finally {
-      for (const target of prepared) {
-        try {
-          target.archivePreparation?.drain.release();
-        } catch (error) {
-          sessionLog.warn(
-            `sessions.patch: archive drain release failed for ${target.canonicalKey}: ${formatErrorMessage(error)}`,
-          );
-        }
+      timing?.mark("cleanup");
+      for (const target of activePrepared) {
+        target.permissionChange?.finish();
       }
+      await releaseArchiveDrains();
     }
   }
 
-  let patched = false;
-  const archivedSessionKeys = new Set<string>();
-  for (const target of prepared) {
-    const outcome = outcomes[target.index];
-    if (!outcome?.ok) {
-      continue;
-    }
-    triggerSessionPatchHook({
-      cfg,
-      sessionEntry: outcome.entry,
-      sessionKey: target.canonicalKey,
-      patch: target.fullPatch,
-    });
-    persistSessionPatchModelSelection({
-      cfg,
-      callerScopes,
-      entry: outcome.entry,
-      patch: target.fullPatch,
-      sessionKey: target.canonicalKey,
-      targetAgentId: target.targetAgentId,
-    });
-    emitSessionsChanged(params.context, {
-      sessionKey: target.canonicalKey,
-      ...(target.requestedAgentId ? { agentId: target.requestedAgentId } : {}),
-      reason: "patch",
-    });
-    patched = true;
-    if (target.fullPatch.archived === true) {
-      archivedSessionKeys.add(target.canonicalKey);
-    }
-  }
+  timing?.mark("effects");
+  const archivedSessionsCommitted = await patchEffects.publishSessionPatchEffects({
+    cfg,
+    context: params.context,
+    callerScopes,
+    callerCanManageCron: callerIsAdmin,
+    targets: activePrepared.flatMap((target) => {
+      const outcome = outcomes[target.index];
+      return outcome?.ok && outcome.applied
+        ? [{ target, entry: outcome.entry, accessChanged: outcome.accessChanged }]
+        : [];
+    }),
+  });
+  timing?.finish();
 
-  const category = params.patch.category;
-  if (patched && typeof category === "string" && category.trim()) {
-    // A first-use category is a group-catalog mutation: clients reload the
-    // catalog only on reason "groups" (the sessions.groups.* siblings emit it).
-    if (ensureSessionGroupRegistered(category)) {
-      emitSessionsChanged(params.context, { reason: "groups" });
-    }
+  // Runtime application can fail after commit. Publish every saved field's
+  // normal effects before returning the application error to the caller.
+  for (const [index, error] of permissionErrors) {
+    outcomes[index] = { ok: false, error };
   }
-  if (callerCanManageCron && archivedSessionKeys.size > 0) {
-    try {
-      const disabledBySession = await disableCronJobsBoundToSessions({
-        cron: params.context.cron,
-        cfg,
-        sessionKeys: [...archivedSessionKeys],
-      });
-      for (const [sessionKey, disabledJobIds] of disabledBySession) {
-        if (disabledJobIds.length > 0) {
-          sessionLog.info(
-            `sessions.patch: disabled cron jobs bound to archived session ${sessionKey}: ${disabledJobIds.join(", ")}`,
-          );
-        }
-      }
-    } catch (error) {
-      sessionLog.warn(
-        `sessions.patch: failed to disable cron jobs for archived sessions: ${formatErrorMessage(error)}`,
-      );
-    }
-  }
-
   return {
     ok: true,
+    archivedSessionsCommitted,
     cfg,
     outcomes: outcomes as MutationOutcome[],
     preparedByIndex,
-    modelCatalogByAgent,
-  };
-}
-
-export async function executeSessionPatchMany(params: {
-  client: GatewayClient | null;
-  context: GatewayRequestContext;
-  patch: Omit<SessionsPatchParams, keyof PatchTargetIdentity>;
-  sessionMutationAuthorization?: SessionMutationAuthorization;
-  targets: readonly PatchTargetIdentity[];
-}): Promise<
-  { ok: false; error: ErrorShape } | { ok: true; outcomes: SessionsPatchManyResult["outcomes"] }
-> {
-  const executed = await executeSessionPatchMutations({
-    client: params.client,
-    context: params.context,
-    patch: params.patch,
-    targets: params.targets.map((target) => ({
-      ...target,
-      commitGuard: createCommitGuard(target.key.trim(), () =>
-        params.sessionMutationAuthorization?.assertTargetCurrent({
-          sessionKey: target.key.trim(),
-          ...(target.agentId ? { agentId: target.agentId } : {}),
-        }),
-      ),
-    })),
-  });
-  if (!executed.ok) {
-    return executed;
-  }
-  const outcomes: SessionsPatchManyResult["outcomes"] = [];
-  for (const [index, outcome] of executed.outcomes.entries()) {
-    const target = params.targets[index]!;
-    if (outcome.ok) {
-      outcomes.push(
-        target.agentId
-          ? { ok: true, key: target.key, agentId: target.agentId }
-          : { ok: true, key: target.key },
-      );
-      continue;
-    }
-    outcomes.push(
-      target.agentId
-        ? { ok: false, key: target.key, agentId: target.agentId, error: outcome.error }
-        : { ok: false, key: target.key, error: outcome.error },
-    );
-  }
-  return { ok: true, outcomes };
-}
-
-export async function executeSessionPatch(params: {
-  client: GatewayClient | null;
-  context: GatewayRequestContext;
-  patch: SessionsPatchParams;
-  sessionMutationAuthorization?: SessionMutationAuthorization;
-}): Promise<{ ok: false; error: ErrorShape } | { ok: true; result: SessionsPatchResult }> {
-  const target = {
-    key: params.patch.key,
-    ...(params.patch.agentId ? { agentId: params.patch.agentId } : {}),
-    ...(params.patch.expectedSessionId !== undefined
-      ? { expectedSessionId: params.patch.expectedSessionId }
-      : {}),
-    ...(params.patch.expectedLifecycleRevision !== undefined
-      ? { expectedLifecycleRevision: params.patch.expectedLifecycleRevision }
-      : {}),
-  };
-  const executed = await executeSessionPatchMutations({
-    client: params.client,
-    context: params.context,
-    patch: params.patch,
-    targets: [
-      {
-        ...target,
-        commitGuard: createCommitGuard(
-          target.key,
-          params.sessionMutationAuthorization?.assertCurrent,
-        ),
-      },
-    ],
-  });
-  if (!executed.ok) {
-    return executed;
-  }
-  const outcome = executed.outcomes[0]!;
-  if (!outcome.ok) {
-    return outcome;
-  }
-  const prepared = executed.preparedByIndex[0]!;
-  return {
-    ok: true,
-    result: await projectSessionPatchResult({
-      canonicalKey: prepared.canonicalKey,
-      cfg: executed.cfg,
-      entry: outcome.entry,
-      modelCatalogByAgent: executed.modelCatalogByAgent,
-      storePath: prepared.storePath,
-      targetAgentId: prepared.targetAgentId,
-    }),
+    catalogs,
   };
 }

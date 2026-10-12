@@ -5,38 +5,24 @@ import { autonomyBudget, parseReefRelayUrl, ReefChannelConfigSchema } from "./co
 import { createReefRuntimeAuthority } from "./runtime.js";
 
 describe("Reef configuration boundary", () => {
-  it("defaults to the canonical Reef relay", () => {
-    expect(ReefChannelConfigSchema.parse({}).relayUrl).toBe("https://reefwire.ai");
-  });
-
-  it("validates owner-controlled relay, guard model, policy, and key reference", () => {
-    const result = ReefChannelConfigSchema.safeParse({
-      relayUrl: "https://relay.owner.example",
-      handle: "owner",
-      email: "owner@example.com",
-      guard: {
-        provider: "anthropic",
-        pinnedModel: "claude-test-2026-07-12",
-        apiKeyEnv: "REEF_GUARD_API_KEY",
-        policyVersion: "owner-policy-v2",
-        timeoutMs: 5_000,
-      },
-      requestPolicy: "friends-of-friends",
-    });
-
-    expect(result.success).toBe(true);
-    if (!result.success) {
-      throw result.error;
+  it("rejects OAuth guard configs that could change provider or credential owner", () => {
+    const base = {
+      authMode: "oauth",
+      authProfileId: "openai:work",
+      pinnedModel: "gpt-5.6-terra",
+      policyVersion: "reef-v1",
+      timeoutMs: 5_000,
+    };
+    for (const guard of [
+      { ...base, provider: "anthropic" },
+      { ...base, provider: "openai", authProfileId: "" },
+      { ...base, provider: "openai", authProfileId: "openai:   " },
+      { ...base, provider: "openai", authProfileId: "openai:team/work" },
+      { ...base, provider: "openai", authProfileId: "anthropic:work" },
+      { ...base, provider: "openai", apiKeyEnv: "OPENAI_API_KEY" },
+    ]) {
+      expect(ReefChannelConfigSchema.safeParse({ guard }).success).toBe(false);
     }
-    expect(result.data).toMatchObject({
-      relayUrl: "https://relay.owner.example",
-      requestPolicy: "friends-of-friends",
-      guard: {
-        pinnedModel: "claude-test-2026-07-12",
-        apiKeyEnv: "REEF_GUARD_API_KEY",
-        policyVersion: "owner-policy-v2",
-      },
-    });
   });
 
   it("accepts legacy trust snapshots but rejects retired policy fields", () => {
@@ -92,7 +78,7 @@ describe("Reef configuration boundary", () => {
       reviews: { list: vi.fn(), decide },
     } as never);
     const ownerRequired = {
-      text: "Only an owner in commands.ownerAllowFrom can change Reef friends or decide reviews. Ask a configured owner; friendship changes can also use openclaw reef locally.",
+      text: "Only an authorized owner can change Reef friends or decide reviews. Ask an owner; friendship changes can also use openclaw reef locally.",
     };
     await expect(
       command.handler({ args: "friend autonomy peer extended", senderIsOwner: false }),
@@ -122,8 +108,8 @@ describe("Reef configuration boundary", () => {
     ).resolves.toEqual({
       text: "Reef review approved. Retry the identical message to re-run the guard.",
     });
-    expect(setAutonomy).toHaveBeenCalledWith("peer", "extended");
-    expect(decide).toHaveBeenCalledWith("a".repeat(64), true);
+    expect(setAutonomy).toHaveBeenCalledWith("peer", "extended", undefined);
+    expect(decide).toHaveBeenCalledWith("a".repeat(64), true, undefined);
 
     await expect(
       command.handler({

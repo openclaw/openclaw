@@ -1,6 +1,7 @@
 // Detects Windows console/OEM code pages and decodes console output encodings.
 import { spawnSync } from "node:child_process";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { resolveDiagnosticProcessEnv } from "./process-env.js";
 import { getWindowsCmdExePath, queryWindowsRegistryValue } from "./windows-install-roots.js";
 
 const WINDOWS_CODEPAGE_ENCODING_MAP: Record<number, string> = {
@@ -69,18 +70,8 @@ let cachedWindowsOemCodePage: number | null | undefined;
 
 /** Extracts a Windows console code page number from localized `chcp` output. */
 function parseWindowsCodePage(raw: string): number | null {
-  if (!raw) {
-    return null;
-  }
-  const match = raw.match(/\b(\d{3,5})\b/);
-  if (!match?.[1]) {
-    return null;
-  }
-  const codePage = Number.parseInt(match[1], 10);
-  if (!Number.isFinite(codePage) || codePage <= 0) {
-    return null;
-  }
-  return codePage;
+  const codePage = Number(raw.match(/\b(\d{3,5})\b/)?.[1]);
+  return codePage > 0 ? codePage : null;
 }
 
 /** Resolves and caches the current Windows console encoding for subprocess output. */
@@ -91,21 +82,12 @@ export function resolveWindowsConsoleEncoding(): string | null {
   if (cachedWindowsConsoleEncoding !== undefined) {
     return cachedWindowsConsoleEncoding;
   }
-  try {
-    const result = spawnSync(getWindowsCmdExePath(), ["/d", "/s", "/c", "chcp"], {
-      windowsHide: true,
-      encoding: "utf8",
-      killSignal: "SIGKILL",
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: WINDOWS_ENCODING_PROBE_TIMEOUT_MS,
-    });
-    const raw = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
-    const codePage = parseWindowsCodePage(raw);
-    cachedWindowsConsoleEncoding =
-      codePage !== null ? (WINDOWS_CODEPAGE_ENCODING_MAP[codePage] ?? null) : null;
-  } catch {
-    cachedWindowsConsoleEncoding = null;
-  }
+  cachedWindowsConsoleEncoding = probeWindowsEncoding(getWindowsCmdExePath, [
+    "/d",
+    "/s",
+    "/c",
+    "chcp",
+  ]);
   return cachedWindowsConsoleEncoding;
 }
 
@@ -117,26 +99,28 @@ function resolveWindowsSystemEncoding(): string | null {
   if (cachedWindowsSystemEncoding !== undefined) {
     return cachedWindowsSystemEncoding;
   }
-  try {
-    const result = spawnSync(
-      "powershell.exe",
-      ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "[Text.Encoding]::Default.CodePage"],
-      {
-        windowsHide: true,
-        encoding: "utf8",
-        killSignal: "SIGKILL",
-        stdio: ["ignore", "pipe", "pipe"],
-        timeout: WINDOWS_ENCODING_PROBE_TIMEOUT_MS,
-      },
-    );
-    const raw = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
-    const codePage = parseWindowsCodePage(raw);
-    cachedWindowsSystemEncoding =
-      codePage !== null ? (WINDOWS_CODEPAGE_ENCODING_MAP[codePage] ?? null) : null;
-  } catch {
-    cachedWindowsSystemEncoding = null;
-  }
+  cachedWindowsSystemEncoding = probeWindowsEncoding(
+    () => "powershell.exe",
+    ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "[Text.Encoding]::Default.CodePage"],
+  );
   return cachedWindowsSystemEncoding;
+}
+
+function probeWindowsEncoding(command: () => string, args: string[]): string | null {
+  try {
+    const result = spawnSync(command(), args, {
+      env: resolveDiagnosticProcessEnv(),
+      windowsHide: true,
+      encoding: "utf8",
+      killSignal: "SIGKILL",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: WINDOWS_ENCODING_PROBE_TIMEOUT_MS,
+    });
+    const codePage = parseWindowsCodePage(`${result.stdout ?? ""}\n${result.stderr ?? ""}`);
+    return codePage !== null ? (WINDOWS_CODEPAGE_ENCODING_MAP[codePage] ?? null) : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Resolves and caches the boot-time Windows OEM encoding cmd.exe reads batch files with. */
@@ -169,14 +153,6 @@ export function decodeWindowsOutputBuffer(params: {
   platform?: NodeJS.Platform;
   windowsEncoding?: string | null;
 }): string {
-  if ((params.platform ?? process.platform) !== "win32") {
-    return params.buffer.toString("utf8");
-  }
-  const [first, second] = params.buffer;
-  if ((first === 0xff && second === 0xfe) || (first === 0xfe && second === 0xff)) {
-    const decoder = createWindowsOutputDecoder(params);
-    return decoder.decode(params.buffer) + decoder.flush();
-  }
   return decodeWindowsBufferWithFallback({
     ...params,
     resolveFallbackEncoding: () => params.windowsEncoding ?? resolveWindowsConsoleEncoding(),
@@ -184,15 +160,23 @@ export function decodeWindowsOutputBuffer(params: {
 }
 
 /** Decodes a text file, preferring valid UTF-8 before the Windows system encoding. */
-export function decodeWindowsTextFileBuffer(params: {
-  buffer: Buffer;
-  platform?: NodeJS.Platform;
-  windowsEncoding?: string | null;
-}): string {
-  return decodeWindowsBufferWithFallback({
-    ...params,
-    resolveFallbackEncoding: () => params.windowsEncoding ?? resolveWindowsSystemEncoding(),
-  });
+export function decodeWindowsTextFileBuffer(
+  params: Parameters<typeof decodeWindowsOutputBuffer>[0],
+): string {
+  return (
+    decodeUtf16BomBuffer(params.buffer) ??
+    decodeWindowsBufferWithFallback({
+      ...params,
+      resolveFallbackEncoding: () => params.windowsEncoding ?? resolveWindowsSystemEncoding(),
+    })
+  );
+}
+
+function decodeUtf16BomBuffer(buffer: Buffer): string | undefined {
+  const [first, second] = buffer;
+  return (first === 0xff && second === 0xfe) || (first === 0xfe && second === 0xff)
+    ? new TextDecoder(first === 0xff ? "utf-16le" : "utf-16be").decode(buffer)
+    : undefined;
 }
 
 function decodeWindowsBufferWithFallback(params: {
@@ -203,6 +187,13 @@ function decodeWindowsBufferWithFallback(params: {
   const platform = params.platform ?? process.platform;
   if (platform !== "win32") {
     return params.buffer.toString("utf8");
+  }
+
+  // Windows PowerShell files and command output can declare UTF-16 with a BOM;
+  // honor it before consulting either the system or console legacy code page.
+  const utf16 = decodeUtf16BomBuffer(params.buffer);
+  if (utf16 !== undefined) {
+    return utf16;
   }
 
   const utf8 = decodeStrictUtf8(params.buffer);
@@ -239,59 +230,51 @@ export function createWindowsOutputDecoder(params?: {
       ? new TextDecoder(encoding)
       : null;
   const preserveUtf8Bom = params?.preserveUtf8Bom === true;
-  const utf8Decoder =
-    platform === "win32" && legacyDecoder
-      ? new TextDecoder("utf-8", {
+  let decoder = new TextDecoder(
+    "utf-8",
+    legacyDecoder
+      ? {
           fatal: true,
           ...(preserveUtf8Bom ? { ignoreBOM: true } : {}),
-        })
-      : null;
-  const streamingUtf8Decoder = legacyDecoder
-    ? null
-    : new TextDecoder("utf-8", preserveUtf8Bom ? { ignoreBOM: true } : undefined);
-  let useLegacyDecoder = false;
+        }
+      : preserveUtf8Bom
+        ? { ignoreBOM: true }
+        : undefined,
+  );
   let pendingUtf8Bytes = Buffer.alloc(0);
   let pendingBomByte: number | null | undefined = platform === "win32" ? undefined : null;
   let utf16Decoder: TextDecoder | null = null;
 
-  const decodeCurrent = (buffer: Buffer): string => {
-    if (!legacyDecoder || !utf8Decoder) {
-      return streamingUtf8Decoder?.decode(buffer, { stream: true }) ?? "";
-    }
-    if (useLegacyDecoder) {
-      return legacyDecoder.decode(buffer, { stream: true });
+  const decodeCurrent = (buffer?: Buffer): string => {
+    const options = buffer === undefined ? undefined : { stream: true };
+    if (!legacyDecoder || decoder === legacyDecoder) {
+      return decoder.decode(buffer, options);
     }
     // Stay on strict UTF-8 until it fails; replay any pending lead bytes through the legacy
     // decoder so split GBK/Big5/etc. characters are not lost at the fallback boundary.
-    const replayBuffer =
-      pendingUtf8Bytes.length > 0 ? Buffer.concat([pendingUtf8Bytes, buffer]) : buffer;
     try {
-      const decoded = utf8Decoder.decode(buffer, { stream: true });
-      pendingUtf8Bytes = Buffer.from(getTrailingIncompleteUtf8Bytes(replayBuffer));
+      const decoded = decoder.decode(buffer, options);
+      // Four trailing bytes contain every possible incomplete UTF-8 sequence.
+      const trailingBuffer =
+        buffer && buffer.length < 4 && pendingUtf8Bytes.length > 0
+          ? Buffer.concat([pendingUtf8Bytes, buffer])
+          : buffer;
+      pendingUtf8Bytes = trailingBuffer
+        ? Buffer.from(getTrailingIncompleteUtf8Bytes(trailingBuffer))
+        : Buffer.alloc(0);
       return decoded;
     } catch {
-      useLegacyDecoder = true;
+      const replayBuffer =
+        buffer === undefined
+          ? pendingUtf8Bytes
+          : pendingUtf8Bytes.length > 0
+            ? Buffer.concat([pendingUtf8Bytes, buffer])
+            : buffer;
+      decoder = legacyDecoder;
       pendingUtf8Bytes = Buffer.alloc(0);
-      return legacyDecoder.decode(replayBuffer, { stream: true });
-    }
-  };
-
-  const flushCurrent = (): string => {
-    if (!legacyDecoder || !utf8Decoder) {
-      return streamingUtf8Decoder?.decode() ?? "";
-    }
-    if (useLegacyDecoder) {
-      return legacyDecoder.decode();
-    }
-    try {
-      const decoded = utf8Decoder.decode();
-      pendingUtf8Bytes = Buffer.alloc(0);
-      return decoded;
-    } catch {
-      useLegacyDecoder = true;
-      const replayBuffer = pendingUtf8Bytes;
-      pendingUtf8Bytes = Buffer.alloc(0);
-      return replayBuffer.length > 0 ? legacyDecoder.decode(replayBuffer) : "";
+      return buffer !== undefined || replayBuffer.length > 0
+        ? legacyDecoder.decode(replayBuffer, options)
+        : "";
     }
   };
 
@@ -328,7 +311,7 @@ export function createWindowsOutputDecoder(params?: {
       }
       const pending = typeof pendingBomByte === "number" ? Buffer.from([pendingBomByte]) : null;
       pendingBomByte = null;
-      return (pending ? decodeCurrent(pending) : "") + flushCurrent();
+      return (pending ? decodeCurrent(pending) : "") + decodeCurrent();
     },
   };
 }
@@ -337,8 +320,8 @@ function getTrailingIncompleteUtf8Bytes(buffer: Buffer): Buffer {
   let index = buffer.length - 1;
   let continuationBytes = 0;
   while (index >= 0 && continuationBytes < 3) {
-    const byte = buffer.at(index);
-    if (byte === undefined || byte < 0x80 || byte > 0xbf) {
+    const byte = buffer.readUInt8(index);
+    if (byte < 0x80 || byte > 0xbf) {
       break;
     }
     continuationBytes += 1;
@@ -348,11 +331,7 @@ function getTrailingIncompleteUtf8Bytes(buffer: Buffer): Buffer {
     return buffer;
   }
 
-  const leadByte = buffer.at(index);
-  if (leadByte === undefined) {
-    return Buffer.alloc(0);
-  }
-  const sequenceLength = getUtf8SequenceLength(leadByte);
+  const sequenceLength = getUtf8SequenceLength(buffer.readUInt8(index));
   if (sequenceLength <= 1) {
     return Buffer.alloc(0);
   }

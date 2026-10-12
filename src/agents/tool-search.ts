@@ -5,38 +5,24 @@ import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import type { AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
-import type { ToolDefinition } from "./sessions/index.js";
 import { resolveToolResultFailureKind } from "./tool-result-error.js";
 import {
-  addClientToolsToToolCatalog,
   applyToolCatalogCompaction,
-  getReusableCatalogSnapshotCountForTest,
   isDirectVisibleCatalogTool,
   resolveCatalog,
 } from "./tool-search-catalog.js";
+import { resolveToolSearchConfig } from "./tool-search-config.js";
+import { renderToolSearchControlText } from "./tool-search-control-result.js";
+import { applyToolSchemaDirectoryCatalog } from "./tool-search-directory.js";
 import {
-  appendToolSearchCodeStderrTail,
-  readToolSearchCode,
-  runCodeMode,
-  runCodeModeChild,
-} from "./tool-search-code-mode.js";
-import {
-  isToolSearchCodeModeSupported,
-  resolveToolSearchConfig,
-  setToolSearchCodeModeSupportedForTest,
-  setToolSearchMinCodeTimeoutMsForTest,
-} from "./tool-search-config.js";
-import {
-  applyToolSchemaDirectoryCatalog,
-  MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS,
-} from "./tool-search-directory.js";
-import { readToolSearchRequest } from "./tool-search-request.js";
-import {
-  formatToolSearchControlError,
-  formatToolSearchControlResult,
   prepareToolSearchDispatcherArguments,
   readToolSearchCallArgs,
   readToolSearchId,
+  readToolSearchRequest,
+} from "./tool-search-request.js";
+import {
+  formatToolSearchControlError,
+  formatToolSearchControlResult,
   ToolSearchRuntime,
 } from "./tool-search-runtime.js";
 import {
@@ -47,21 +33,17 @@ import {
   MAX_TOOL_SEARCH_RESULTS,
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
-  TOOL_SEARCH_CODE_MODE_TOOL_NAME,
-  TOOL_SEARCH_CONTROL_TOOL_NAMES,
+  TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES,
   TOOL_SEARCH_RAW_TOOL_NAME,
   type ToolSearchCatalogRef,
   type ToolSearchMode,
   type ToolSearchToolContext,
 } from "./tool-search-types.js";
-import { jsonResult, type AnyAgentTool } from "./tools/common.js";
+import { textResult, ToolInputError, type AnyAgentTool } from "./tools/common.js";
 
 export {
-  addClientToolsToToolCatalog,
-  applyToolCatalogCompaction,
   clearToolSearchCatalog,
   collectUniqueCatalogToolNames,
-  compactToolSearchCatalogEntry,
   createToolSearchCatalogRef,
   registerHeadlessToolSearchCatalog,
   restrictToolSearchCatalog,
@@ -71,12 +53,9 @@ export {
   buildToolSchemaDirectoryPrompt,
   resolveToolSearchCatalogTool,
 } from "./tool-search-directory.js";
-export { ToolSearchRuntime } from "./tool-search-runtime.js";
-export { projectToolSearchTargetTranscriptMessages } from "./tool-search-transcript.js";
 export {
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
-  TOOL_SEARCH_CODE_MODE_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
 } from "./tool-search-types.js";
 export type {
@@ -84,7 +63,6 @@ export type {
   ToolSearchCatalogRef,
   ToolSearchCatalogToolExecutor,
   ToolSearchConfig,
-  ToolSearchTargetTranscriptProjection,
   ToolSearchToolContext,
 } from "./tool-search-types.js";
 
@@ -160,10 +138,13 @@ function compactBatchCandidate(candidate: ToolSearchCandidate): ToolSearchCandid
   };
 }
 
-function boundToolSearchBatchResponse(results: ToolSearchBatchGroup[]): {
+function formatToolSearchBatchResponse(
+  results: ToolSearchBatchGroup[],
+  networkContent: boolean,
+): AgentToolResult<{
   results: ToolSearchBatchGroup[];
   truncated?: true;
-} {
+}> {
   const bounded: ToolSearchBatchGroup[] = results.map((result) => {
     const candidates = result.candidates
       .map(compactBatchCandidate)
@@ -177,58 +158,45 @@ function boundToolSearchBatchResponse(results: ToolSearchBatchGroup[]): {
   });
   let truncated = bounded.some((result) => result.truncated);
   const render = () => ({ results: bounded, ...(truncated ? { truncated: true as const } : {}) });
-  while (JSON.stringify(render(), null, 2).length > MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS) {
-    const removable = bounded
-      .map((result, index) => ({
-        index,
-        rank: result.candidates.length,
-        candidate: result.candidates.at(-1),
-      }))
-      .filter(
-        (item): item is { index: number; rank: number; candidate: ToolSearchCandidate } =>
-          item.candidate !== undefined,
-      )
-      .toSorted(
-        (a, b) =>
-          b.rank - a.rank ||
-          JSON.stringify(b.candidate).length - JSON.stringify(a.candidate).length ||
-          a.index - b.index,
-      )[0];
+  let payload = render();
+  let { text } = renderToolSearchControlText(JSON.stringify(payload, null, 2), networkContent);
+  while (text.length > MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS) {
+    let removable: ToolSearchBatchGroup | undefined;
+    for (const group of bounded) {
+      if (group.candidates.length === 0) {
+        continue;
+      }
+      // Keep the earlier request on exact ties, matching the batch's stable order.
+      if (
+        !removable ||
+        group.candidates.length > removable.candidates.length ||
+        (group.candidates.length === removable.candidates.length &&
+          JSON.stringify(group.candidates.at(-1)).length >
+            JSON.stringify(removable.candidates.at(-1)).length)
+      ) {
+        removable = group;
+      }
+    }
     if (!removable) {
       break;
     }
-    const group = bounded[removable.index];
-    group?.candidates.pop();
-    if (group) {
-      group.truncated = true;
-    }
+    removable.candidates.pop();
+    removable.truncated = true;
     truncated = true;
+    payload = render();
+    ({ text } = renderToolSearchControlText(JSON.stringify(payload, null, 2), networkContent));
   }
-  return render();
+  return textResult(text, payload);
 }
 
 function shouldExposeControlTool(name: string, mode: ToolSearchMode): boolean {
-  if (name === TOOL_SEARCH_CODE_MODE_TOOL_NAME) {
-    return mode === "code";
-  }
-  if (
-    name === TOOL_SEARCH_RAW_TOOL_NAME ||
-    name === TOOL_DESCRIBE_RAW_TOOL_NAME ||
-    name === TOOL_CALL_RAW_TOOL_NAME
-  ) {
-    return mode === "tools";
-  }
-  return false;
+  return mode === "tools" && TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES.has(name);
 }
 
 /** Replace visible tools with Tool Search controls and register hidden catalog entries. */
 export function applyToolSearchCatalog(params: {
   tools: AnyAgentTool[];
   config?: OpenClawConfig;
-  sessionId?: string;
-  sessionKey?: string;
-  agentId?: string;
-  runId?: string;
   catalogRef?: ToolSearchCatalogRef;
   toolHookContext?: HookContext;
   shouldCatalogTool?: (tool: AnyAgentTool) => boolean;
@@ -239,31 +207,12 @@ export function applyToolSearchCatalog(params: {
   return applyToolCatalogCompaction({
     ...params,
     enabled: config.enabled,
-    isVisibleControlTool: (tool) =>
-      TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name) &&
-      shouldExposeControlTool(tool.name, config.mode),
+    isVisibleControlTool: (tool) => shouldExposeControlTool(tool.name, config.mode),
     isVisibleCatalogTool: (tool) => isDirectVisibleCatalogTool(tool, directToolNames),
   });
 }
 
 export { applyToolSchemaDirectoryCatalog };
-
-/** Move client-provided tools into an existing Tool Search catalog. */
-export function addClientToolsToToolSearchCatalog(params: {
-  tools: ToolDefinition[];
-  config?: OpenClawConfig;
-  sessionId?: string;
-  sessionKey?: string;
-  agentId?: string;
-  runId?: string;
-  catalogRef?: ToolSearchCatalogRef;
-}): { tools: ToolDefinition[]; compacted: boolean; catalogToolCount: number } {
-  const config = resolveToolSearchConfig(params.config);
-  if (config.mode === "directory") {
-    return { tools: params.tools, compacted: false, catalogToolCount: 0 };
-  }
-  return addClientToolsToToolCatalog({ ...params, enabled: config.enabled });
-}
 
 /** Create Tool Search control tools for the current run/session context. */
 export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[] {
@@ -271,98 +220,73 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
   const runtime = new ToolSearchRuntime(ctx, config, { validateInput: true });
   return [
     {
-      name: TOOL_SEARCH_CODE_MODE_TOOL_NAME,
-      label: "Tool Search Code",
-      description:
-        "Run JavaScript in an isolated Node subprocess over a large tool catalog. APIs: `openclaw.tools.search(query: string, options?)`, `openclaw.tools.describe(id: string)`, and `openclaw.tools.call(id: string, args?)`. Search takes a positional query string, which must be in English: matching is lexical against tool names and descriptions, which are written in English. Call returns `{ tool, result }`; JSON values normally live in `result.details`.",
-      parameters: Type.Object({
-        code: Type.String({
-          description:
-            "JavaScript body for an async function. Use return to return the final value. The openclaw.tools bridge is available.",
-        }),
-      }),
-      execute: async (
-        toolCallId: string,
-        args: unknown,
-        signal?: AbortSignal,
-        onUpdate?: AgentToolUpdateCallback,
-      ): Promise<AgentToolResult<unknown>> => {
-        let executionRuntime: ToolSearchRuntime | undefined;
-        try {
-          const result = await runCodeMode({
-            toolCallId,
-            ctx,
-            code: readToolSearchCode(args),
-            config,
-            signal,
-            onUpdate,
-            onRuntime: (value) => {
-              executionRuntime = value;
-            },
-          });
-          return formatToolSearchControlResult(result, executionRuntime);
-        } catch (error) {
-          throw formatToolSearchControlError(
-            error,
-            executionRuntime,
-            toolCallId,
-            signal ?? ctx.abortSignal,
-          );
-        }
-      },
-    },
-    {
       name: TOOL_SEARCH_RAW_TOOL_NAME,
       label: "Tool Search",
       description:
-        "Search the effective Tool Search catalog. Pass exactly one of query for one search or queries for several independent searches in one call. Batch results stay grouped in request order. Queries must be in English: matching is lexical against tool names and descriptions, which are written in English, so another language will usually match nothing. Pass an exact result id or name to tool_call; use tool_describe only when you need its input schema.",
+        "Search the effective Tool Search catalog. Pass query for one search or queries for several independent searches in one call; a non-empty query joins a non-empty batch first, with its own limit. Batch results stay grouped in request order. Queries must be in English: matching is lexical against tool names and descriptions, which are written in English, so another language will usually match nothing. Pass an exact result id or name to tool_call; use tool_describe only when you need its input schema.",
       parameters: Type.Object({
         query: Type.Optional(
-          Type.String({
+          Type.Union([Type.String(), Type.Null()], {
             description:
-              "Single search query, in English. Do not set this when queries is present.",
+              "Single search query, in English. A non-empty query joins a non-empty batch first. Null or blank is ignored beside a non-empty batch.",
           }),
         ),
         limit: Type.Optional(
-          Type.Integer({ minimum: 1, description: "Maximum number of single-search results." }),
+          Type.Union([Type.Integer({ minimum: 1 }), Type.Null()], {
+            description:
+              "Maximum number of single-search results. Omitted or null uses the default. With only batch queries, omit this or set it to null; set limits on each batch entry.",
+          }),
         ),
         queries: Type.Optional(
-          Type.Array(
-            Type.Object({
-              query: Type.String({
-                minLength: 1,
-                maxLength: MAX_TOOL_SEARCH_BATCH_QUERY_GRAPHEMES,
-                description: "Search query, in English. Describe the capability you need.",
-              }),
-              limit: Type.Optional(
-                Type.Integer({
-                  minimum: 1,
-                  description: `Maximum results for this query. Defaults to ${config.searchDefaultLimit} when omitted.`,
+          Type.Union(
+            [
+              // Let the parser handle empty or null batch placeholders beside a scalar.
+              Type.Array(
+                Type.Object({
+                  query: Type.String({
+                    minLength: 1,
+                    maxLength: MAX_TOOL_SEARCH_BATCH_QUERY_GRAPHEMES,
+                    description: "Search query, in English. Describe the capability you need.",
+                  }),
+                  limit: Type.Optional(
+                    Type.Integer({
+                      minimum: 1,
+                      description: `Maximum results for this query. Defaults to ${config.searchDefaultLimit} when omitted.`,
+                    }),
+                  ),
                 }),
+                { maxItems: MAX_TOOL_SEARCH_BATCH_QUERIES },
               ),
-            }),
+              Type.Null(),
+            ],
             {
-              minItems: 1,
-              maxItems: MAX_TOOL_SEARCH_BATCH_QUERIES,
-              description: `Independent searches. Do not set query when this is present. Their effective limits may total at most ${MAX_TOOL_SEARCH_RESULTS}; an omitted item limit counts as ${config.searchDefaultLimit}. The serialized query strings may use at most ${MAX_TOOL_SEARCH_BATCH_QUERY_BYTES} UTF-8 bytes in total.`,
+              description: `Independent searches. Prefer this alone for several searches; a non-empty query beside it runs as the first entry. Their effective limits may total at most ${MAX_TOOL_SEARCH_RESULTS}; an omitted item limit counts as ${config.searchDefaultLimit}. The serialized query strings may use at most ${MAX_TOOL_SEARCH_BATCH_QUERY_BYTES} UTF-8 bytes in total.`,
             },
           ),
         ),
       }),
-      execute: async (_toolCallId: string, args: unknown): Promise<AgentToolResult<unknown>> => {
+      execute: async (toolCallId: string, args: unknown): Promise<AgentToolResult<unknown>> => {
         const request = readToolSearchRequest(args, config);
         if (request.kind === "single") {
-          return jsonResult(
-            await runtime.search(request.search.query, { limit: request.search.limit }),
+          return formatToolSearchControlResult(
+            await runtime.search(request.search.query, {
+              limit: request.search.limit,
+              parentToolCallId: toolCallId,
+            }),
+            runtime,
+            { parentToolCallId: toolCallId },
           );
         }
         const results = await Promise.all(
           request.searches.map(async (search) => ({
             query: search.query,
-            candidates: await runtime.search(search.query, { limit: search.limit }),
+            candidates: await runtime.search(search.query, {
+              limit: search.limit,
+              parentToolCallId: toolCallId,
+            }),
           })),
         );
-        return jsonResult(boundToolSearchBatchResponse(results));
+        return formatToolSearchBatchResponse(results, runtime.hasNetworkContent(toolCallId));
       },
     },
     {
@@ -374,8 +298,12 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
         id: Type.String({ description: "Tool search result id or tool name." }),
       }),
       prepareArguments: prepareToolSearchDispatcherArguments,
-      execute: async (_toolCallId: string, args: unknown): Promise<AgentToolResult<unknown>> =>
-        jsonResult(await runtime.describe(readToolSearchId(args))),
+      execute: async (toolCallId: string, args: unknown): Promise<AgentToolResult<unknown>> =>
+        formatToolSearchControlResult(
+          await runtime.describe(readToolSearchId(args), { parentToolCallId: toolCallId }),
+          runtime,
+          { parentToolCallId: toolCallId },
+        ),
     },
     {
       name: TOOL_CALL_RAW_TOOL_NAME,
@@ -394,14 +322,41 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
         signal?: AbortSignal,
         onUpdate?: AgentToolUpdateCallback,
       ): Promise<AgentToolResult<unknown>> => {
-        const call = readToolSearchCallArgs(args, resolveCatalog(ctx));
+        const catalog = resolveCatalog(ctx);
+        const call = readToolSearchCallArgs(args, catalog);
         try {
+          if (
+            ctx.catalogRef?.directOnlyToolNames?.has(call.id) &&
+            !catalog.entries.some((entry) => entry.id === call.id || entry.name === call.id)
+          ) {
+            throw new ToolInputError(
+              "This tool is already available directly, not through the tool catalog. Call it directly by its declared name with its declared parameters.",
+            );
+          }
           const callResult = await runtime.call(call.id, call.input, {
             parentToolCallId: toolCallId,
             signal,
             onUpdate,
           });
-          const wrappedResult = formatToolSearchControlResult(callResult, runtime, toolCallId);
+          const { id, name, source } = callResult.tool;
+          const images = callResult.result.content.filter((block) => block.type === "image");
+          const modelResult =
+            images.length > 0
+              ? {
+                  ...callResult.result,
+                  content: callResult.result.content.filter((block) => block.type !== "image"),
+                }
+              : callResult.result;
+          // Invocation results need identity, not another copy of the discovery metadata.
+          // Keep the full target result in details; forward its already-projected images as content.
+          const wrappedResult = {
+            ...formatToolSearchControlResult(
+              { tool: { id, name, source }, result: modelResult },
+              runtime,
+              { parentToolCallId: toolCallId, images },
+            ),
+            details: callResult,
+          };
           const failureKind = resolveToolResultFailureKind(callResult.result);
           if (!failureKind) {
             return wrappedResult;
@@ -415,21 +370,4 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
       },
     },
   ];
-}
-
-const testing = {
-  getReusableCatalogSnapshotCountForTest,
-  maxToolSchemaDirectoryPromptChars: MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS,
-  resolveToolSearchConfig,
-  isToolSearchCodeModeSupported,
-  setToolSearchCodeModeSupportedForTest,
-  setToolSearchMinCodeTimeoutMsForTest,
-  applyToolSearchCatalog,
-  addClientToolsToToolSearchCatalog,
-  appendToolSearchCodeStderrTail,
-  runCodeModeChild,
-};
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.toolSearchTestApi")] = testing;
 }

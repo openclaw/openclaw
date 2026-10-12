@@ -4,28 +4,24 @@
  * Produces compact one-line summaries for verbose tool descriptions in inventory/list views.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 
 function normalizeSummaryWhitespace(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
-function truncateSummary(value: string, maxLen = 120): string {
+function truncateSummary(value: string, maxLen = 120, minWordBoundary = 48): string {
   if (value.length <= maxLen) {
     return value;
   }
   const sliced = truncateUtf16Safe(value, maxLen - 3);
   const boundary = sliced.lastIndexOf(" ");
-  const trimmed = (boundary >= 48 ? sliced.slice(0, boundary) : sliced).trimEnd();
+  const trimmed = (boundary >= minWordBoundary ? sliced.slice(0, boundary) : sliced).trimEnd();
   return `${trimmed}...`;
 }
 
 function isToolDocBlockStart(line: string): boolean {
   const normalized = line.trim().toUpperCase();
-  if (!normalized) {
-    return false;
-  }
   if (
     normalized === "ACTIONS:" ||
     normalized === "JOB SCHEMA (FOR ADD ACTION):" ||
@@ -45,6 +41,15 @@ function isToolDocBlockStart(line: string): boolean {
   );
 }
 
+function isExcludedDescriptionLine(line: string): boolean {
+  return (
+    isToolDocBlockStart(line) ||
+    line.startsWith("{") ||
+    line.startsWith("[") ||
+    line.startsWith("- ")
+  );
+}
+
 /** Build a short one-line summary from a tool description. */
 export function summarizeToolDescriptionText(params: {
   rawDescription?: string | null;
@@ -61,33 +66,19 @@ export function summarizeToolDescriptionText(params: {
     return "Tool";
   }
 
-  const paragraphs = normalizeStringEntries(raw.split(/\n\s*\n/g));
-  for (const paragraph of paragraphs) {
-    const lines = normalizeStringEntries(paragraph.split("\n"));
-    if (lines.length === 0) {
-      continue;
-    }
-    const first = lines[0] ?? "";
-    if (!first || isToolDocBlockStart(first)) {
-      continue;
-    }
-    if (first.startsWith("{") || first.startsWith("[") || first.startsWith("- ")) {
+  // Prefer paragraph openings before falling back to later lines.
+  for (const paragraph of raw.split(/\n\s*\n/g)) {
+    const first = paragraph.trim().split("\n", 1)[0]?.trim() ?? "";
+    if (!first || isExcludedDescriptionLine(first)) {
       continue;
     }
     return truncateSummary(normalizeSummaryWhitespace(first), params.maxLen);
   }
 
-  const firstLine = raw
-    .split("\n")
-    .map((line) => line.trim())
-    .find(
-      (line) =>
-        line.length > 0 &&
-        !isToolDocBlockStart(line) &&
-        !line.startsWith("{") &&
-        !line.startsWith("[") &&
-        !line.startsWith("- "),
-    );
+  const firstLine = raw.split("\n").find((line) => {
+    const first = line.trim();
+    return first.length > 0 && !isExcludedDescriptionLine(first);
+  });
   return firstLine ? truncateSummary(normalizeSummaryWhitespace(firstLine), params.maxLen) : "Tool";
 }
 
@@ -102,42 +93,32 @@ export function describeToolForVerbose(params: {
     return params.fallback;
   }
 
-  const lines = raw.split("\n").map((line) => line.trimEnd());
   const kept: string[] = [];
-  for (const line of lines) {
+  let keptLength = 0;
+  for (const line of raw.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed) {
       if (kept.length > 0 && kept.at(-1) !== "") {
         kept.push("");
+        // A paragraph gap contributes a separator even before the next line arrives.
+        keptLength += 1;
       }
       continue;
     }
-    if (
-      isToolDocBlockStart(trimmed) ||
-      trimmed.startsWith("{") ||
-      trimmed.startsWith("[") ||
-      trimmed.startsWith("- ")
-    ) {
+    if (isExcludedDescriptionLine(trimmed)) {
       break;
     }
+    keptLength += trimmed.length + (kept.length > 0 ? 1 : 0);
     kept.push(trimmed);
-    if (kept.join(" ").length >= (params.maxLen ?? 320)) {
+    if (keptLength >= (params.maxLen ?? 320)) {
       break;
     }
   }
 
-  const normalized = kept
-    .join("\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+  const normalized = kept.join("\n").trim();
   if (!normalized) {
     return params.fallback;
   }
   const maxLen = params.maxLen ?? 320;
-  if (normalized.length <= maxLen) {
-    return normalized;
-  }
-  const sliced = truncateUtf16Safe(normalized, maxLen - 3);
-  const boundary = sliced.lastIndexOf(" ");
-  return `${(boundary >= Math.floor(maxLen / 2) ? sliced.slice(0, boundary) : sliced).trimEnd()}...`;
+  return truncateSummary(normalized, maxLen, Math.floor(maxLen / 2));
 }

@@ -2,12 +2,15 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI owner-first session roster" });
+const rosterMatch = { includeGlobal: true, ownerFirst: true };
+const mineMatch = { includeGlobal: true, ownerId: "profile-ada" };
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "session-owner-stack");
 
 function sessionRoster(ownerId: string, key: string, label: string, updatedAt: number) {
   const owner = {
@@ -44,61 +47,69 @@ async function captureSidebar(page: Page, fileName: string) {
   if (!captureProof) {
     return;
   }
-  await mkdir(proofDir, { recursive: true });
+  await mkdir(path.join(suite.artifactDir, "session-owner-stack"), { recursive: true });
   await page.locator(".sidebar-sessions").screenshot({
     animations: "disabled",
-    path: path.join(proofDir, fileName),
+    path: path.join(path.join(suite.artifactDir, "session-owner-stack"), fileName),
   });
 }
 
 suite.define(() => {
-  it("publishes the signed-in owner's sessions before the shared roster", async () => {
+  it("hydrates the owner-first roster separately from the event subscription", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const page = await context.newPage();
     const sharedRoster = sessionsList();
-    const ownerRoster = {
-      ...sharedRoster,
-      count: 1,
-      owners: sharedRoster.owners.slice(0, 1),
-      sessions: sharedRoster.sessions.slice(0, 1),
-    };
     const gateway = await installMockGateway(page, {
-      deferredMethods: ["sessions.list", "sessions.list"],
+      heldMethods: ["sessions.list"],
       presenceUsers: [{ self: true, id: "profile-ada", name: "Ada" }],
       sessionKey: "agent:main:ada",
-      methodResponses: {
-        "sessions.list": {
-          cases: [
-            { match: { ownerId: "profile-ada" }, response: ownerRoster },
-            { response: sharedRoster },
-          ],
-        },
-      },
+      methodResponses: { "sessions.list": sharedRoster },
     });
 
     try {
-      await page.goto(`${suite.server?.baseUrl ?? ""}chat`);
-      await expect
-        .poll(async () => (await gateway.getRequests("sessions.list")).length)
-        .toBeGreaterThanOrEqual(2);
-      expect(
-        (await gateway.getRequests("sessions.list")).some(
-          (request) =>
-            (request.params as { ownerId?: unknown } | undefined)?.ownerId === "profile-ada",
-        ),
-      ).toBe(true);
-      await gateway.resolveDeferred("sessions.list", ownerRoster);
-
+      // A literal key avoids the independent slug lookup while the roster is deferred.
+      await page.goto(`${suite.server?.baseUrl ?? ""}chat/main/~key/ada`);
+      const subscribe = await gateway.waitForRequest("sessions.subscribe");
+      expect(subscribe.params).toEqual({});
+      const roster = await gateway.waitForRequest("sessions.list", { match: rosterMatch });
+      expect(roster.params).toEqual(
+        expect.objectContaining({
+          ownerFirst: true,
+          limit: SIDEBAR_SESSION_ROSTER_LIMIT,
+        }),
+      );
       const adaRow = page.locator('[data-session-key="agent:main:ada"]');
       const bobRow = page.locator('[data-session-key="agent:main:bob"]');
-      await adaRow.waitFor();
-      await expect.poll(() => bobRow.count()).toBe(0);
-      await captureSidebar(page, "owner-first-roster.png");
-
-      await gateway.resolveDeferred("sessions.list", sharedRoster);
-      await bobRow.waitFor();
+      // The selected session can resolve independently while the roster is deferred.
       await expect.poll(() => adaRow.count()).toBe(1);
-      await captureSidebar(page, "owner-first-shared-roster.png");
+      await expect.poll(() => bobRow.count()).toBe(0);
+      expect(await gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(1);
+
+      await gateway.resolveDeferred("sessions.list");
+      const mineRoster = await gateway.waitForRequest("sessions.list", { match: mineMatch });
+      expect(mineRoster.params).not.toHaveProperty("ownerFirst");
+      expect(mineRoster.params).toMatchObject({ limit: SIDEBAR_SESSION_ROSTER_LIMIT });
+      await adaRow.waitFor();
+      // My sessions hydrates only the current human until All owners is selected.
+      expect(await bobRow.count()).toBe(0);
+      // The canonical owner-first window and self filter are distinct query owners.
+      expect(await gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(1);
+      expect(await gateway.getRequests("sessions.list", mineMatch)).toHaveLength(1);
+      expect(await gateway.getRequests("sessions.list", { includeGlobal: true })).toHaveLength(2);
+      await selectAllSidebarSessions(page);
+      const allRoster = await gateway.waitForRequest("sessions.list", {
+        after: 1,
+        match: rosterMatch,
+      });
+      expect(allRoster.params).toEqual(
+        expect.objectContaining({ ownerFirst: true, limit: SIDEBAR_SESSION_ROSTER_LIMIT }),
+      );
+      expect(allRoster.params).not.toHaveProperty("ownerId");
+      await bobRow.waitFor();
+      expect(await gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(2);
+      expect(await gateway.getRequests("sessions.list", mineMatch)).toHaveLength(1);
+      expect(await gateway.getRequests("sessions.list", { includeGlobal: true })).toHaveLength(3);
+      await captureSidebar(page, "owner-first-bootstrap.png");
     } finally {
       await context.close();
     }

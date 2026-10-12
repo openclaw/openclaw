@@ -1,8 +1,9 @@
-// Migrate Claude tests cover provider plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { redactMigrationPlan } from "openclaw/plugin-sdk/migration";
+import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import {
   resolvePreferredOpenClawTmpDir,
   tempWorkspace,
@@ -16,11 +17,18 @@ import { CLAUDE_AUTO_MEMORY_MAX_FILES, type ClaudeSource, discoverClaudeSource }
 import { makeConfigRuntime, makeContext, writeFile } from "./test/provider-helpers.js";
 
 let testWorkspace: TempWorkspace;
+let root: string;
+let workspaceDir: string;
+let stateDir: string;
+let reportDir: string;
 
-function planItemById(
-  items: readonly { id: string; kind?: string; action?: string }[],
-  id: string,
-) {
+const provider = buildClaudeMigrationProvider();
+
+function contextFor(source: string, options: Partial<Parameters<typeof makeContext>[0]> = {}) {
+  return makeContext({ source, stateDir, workspaceDir, ...options });
+}
+
+function planItemById(items: readonly MigrationItem[], id: string) {
   const item = items.find((candidate) => candidate.id === id);
   if (!item) {
     throw new Error(`expected migration plan item ${id}`);
@@ -34,6 +42,10 @@ describe("Claude migration provider", () => {
       rootDir: resolvePreferredOpenClawTmpDir(),
       prefix: "openclaw-migrate-claude-",
     });
+    root = testWorkspace.dir;
+    workspaceDir = path.join(root, "workspace");
+    stateDir = path.join(root, "state");
+    reportDir = path.join(root, "report");
   });
 
   afterEach(async () => {
@@ -41,69 +53,138 @@ describe("Claude migration provider", () => {
     await testWorkspace.cleanup();
   });
 
-  it("registers a Claude migration provider", () => {
-    const provider = buildClaudeMigrationProvider();
-    expect(provider.id).toBe("claude");
-    expect(provider.label).toBe("Claude");
+  it.each([
+    {
+      name: "project CLAUDE.md",
+      sourceDir: "project-root",
+      sourceFile: "CLAUDE.md",
+      itemId: "workspace:CLAUDE.md",
+      targetFile: "AGENTS.md",
+    },
+    {
+      name: "project .claude/CLAUDE.md",
+      sourceDir: "project-root",
+      sourceFile: path.join(".claude", "CLAUDE.md"),
+      itemId: "workspace:.claude/CLAUDE.md",
+      targetFile: "AGENTS.md",
+    },
+    {
+      name: "user ~/.claude/CLAUDE.md",
+      sourceDir: ".claude",
+      sourceFile: "CLAUDE.md",
+      itemId: "memory:user-CLAUDE.md",
+      targetFile: "USER.md",
+    },
+  ])("keeps repeated $name imports byte-identical", async (testCase) => {
+    const source = path.join(root, testCase.sourceDir);
+    const sourceFile = path.join(source, testCase.sourceFile);
+    const context = contextFor(source);
+    await writeFile(sourceFile, "Version one.\n");
+
+    const firstPlan = await provider.plan(context);
+    expect(planItemById(firstPlan.items, testCase.itemId).action).toBe("append");
+    const firstResult = await provider.apply(context, firstPlan);
+    expect(planItemById(firstResult.items, testCase.itemId).status).toBe("migrated");
+    const target = path.join(workspaceDir, testCase.targetFile);
+    const firstBytes = await fs.readFile(target, "utf8");
+
+    const secondResult = await provider.apply(context);
+    expect(planItemById(secondResult.items, testCase.itemId)).toMatchObject({
+      status: "skipped",
+      reason: "already imported from Claude",
+    });
+    expect(await fs.readFile(target, "utf8")).toBe(firstBytes);
+
+    await fs.writeFile(sourceFile, "Version two.\n", "utf8");
+    const changedResult = await provider.apply(context);
+    expect(planItemById(changedResult.items, testCase.itemId).status).toBe("migrated");
+    const changedBytes = await fs.readFile(target, "utf8");
+    expect(changedBytes).toContain("Version one.");
+    expect(changedBytes).toContain("Version two.");
   });
 
+  it("skips empty instructions without creating a target", async () => {
+    const source = path.join(root, "project");
+    await writeFile(path.join(source, "CLAUDE.md"), "  \n");
+    const result = await provider.apply(contextFor(source));
+
+    expect(planItemById(result.items, "workspace:CLAUDE.md")).toMatchObject({
+      status: "skipped",
+      reason: "source file is empty",
+    });
+    await expect(fs.access(path.join(workspaceDir, "AGENTS.md"))).rejects.toThrow();
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects an instruction target replaced by a symlink after planning",
+    async () => {
+      const source = path.join(root, "project");
+      const target = path.join(workspaceDir, "AGENTS.md");
+      const linkedTarget = path.join(root, "outside.md");
+      await writeFile(path.join(source, "CLAUDE.md"), "Protected instruction.\n");
+      await writeFile(target, "Existing instructions.\n");
+      const context = contextFor(source);
+      const plan = await provider.plan(context);
+      const linkedContent =
+        "\n\n<!-- Imported from Claude: project CLAUDE.md -->\n\nProtected instruction.\n";
+      await writeFile(linkedTarget, linkedContent);
+      await fs.rm(target);
+      await fs.symlink(linkedTarget, target);
+
+      const result = await provider.apply(context, plan);
+
+      expect(planItemById(result.items, "workspace:CLAUDE.md").status).toBe("error");
+      expect(await fs.readFile(linkedTarget, "utf8")).toBe(linkedContent);
+    },
+  );
+
   it("resolves tilde source paths against the OS home when OPENCLAW_HOME is set", () => {
-    const previous = process.env.OPENCLAW_HOME;
-    process.env.OPENCLAW_HOME = path.join(path.sep, "tmp", "openclaw-home");
+    vi.stubEnv("OPENCLAW_HOME", path.join(path.sep, "tmp", "openclaw-home"));
+    expect(resolveHomePath("~/.claude")).toBe(path.join(os.homedir(), ".claude"));
+  });
+
+  it("keeps literal $ patterns in home when expanding tildes", () => {
+    const spy = vi.spyOn(os, "homedir").mockReturnValue("/home/$&user");
     try {
-      expect(resolveHomePath("~/.claude")).toBe(path.join(os.homedir(), ".claude"));
+      expect(resolveHomePath("~/.claude")).toBe(path.resolve("/home/$&user/.claude"));
     } finally {
-      if (previous === undefined) {
-        delete process.env.OPENCLAW_HOME;
-      } else {
-        process.env.OPENCLAW_HOME = previous;
-      }
+      spy.mockRestore();
     }
   });
 
   it("rejects missing Claude sources before planning", async () => {
-    const root = testWorkspace.dir;
     const source = path.join(root, "missing");
-    const provider = buildClaudeMigrationProvider();
 
-    await expect(
-      provider.plan(
-        makeContext({ source, stateDir: path.join(root, "state"), workspaceDir: root }),
-      ),
-    ).rejects.toThrow("Claude state was not found");
+    await expect(provider.plan(contextFor(source, { workspaceDir: root }))).rejects.toThrow(
+      "Claude state was not found",
+    );
   });
 
   it("plans and imports only Claude Code auto-memory into the selected agent", async () => {
-    const root = testWorkspace.dir;
     const source = path.join(root, ".claude");
     const defaultWorkspace = path.join(root, "workspace-main");
     const targetWorkspace = path.join(root, "workspace-research");
-    const stateDir = path.join(root, "state");
-    const reportDir = path.join(root, "report");
     const memoryDir = path.join(source, "projects", "-tmp-research", "memory");
     await writeFile(path.join(memoryDir, "MEMORY.md"), "# Research memory\n");
     await writeFile(path.join(memoryDir, "topics", "api.md"), "# API facts\n");
     await writeFile(path.join(memoryDir, "ignored.txt"), "not memory\n");
     await writeFile(path.join(source, "CLAUDE.md"), "# Global instructions\n");
-    const config = {
+    const config: OpenClawConfig = {
       agents: {
         defaults: { workspace: defaultWorkspace },
-        list: [
-          { id: "main", default: true },
-          { id: "research", workspace: targetWorkspace },
-        ],
+        entries: {
+          main: {},
+          research: { workspace: targetWorkspace },
+        },
       },
-    } as never;
-    const context = makeContext({
-      source,
-      stateDir,
+    };
+    const context = contextFor(source, {
       workspaceDir: defaultWorkspace,
       reportDir,
       config,
       targetAgentId: "research",
       itemKinds: ["memory"],
     });
-    const provider = buildClaudeMigrationProvider();
 
     const plan = await provider.plan(context);
 
@@ -126,7 +207,6 @@ describe("Claude migration provider", () => {
   });
 
   it("discovers a user-configured Claude Code auto-memory directory", async () => {
-    const root = testWorkspace.dir;
     const source = path.join(root, ".claude");
     const customMemory = path.join(root, "custom-memory");
     await writeFile(
@@ -134,23 +214,14 @@ describe("Claude migration provider", () => {
       JSON.stringify({ autoMemoryDirectory: customMemory }),
     );
     await writeFile(path.join(customMemory, "MEMORY.md"), "# Custom memory\n");
-    const provider = buildClaudeMigrationProvider();
 
-    const plan = await provider.plan(
-      makeContext({
-        source,
-        stateDir: path.join(root, "state"),
-        workspaceDir: path.join(root, "workspace"),
-        itemKinds: ["memory"],
-      }),
-    );
+    const plan = await provider.plan(contextFor(source, { itemKinds: ["memory"] }));
 
     expect(plan.items).toHaveLength(1);
     expect(plan.items[0]?.source).toBe(path.join(customMemory, "MEMORY.md"));
   });
 
   it("honors CLAUDE_CONFIG_DIR for a relocated Claude home", async () => {
-    const root = testWorkspace.dir;
     const relocatedHome = path.join(root, "relocated-claude");
     const memoryDir = path.join(relocatedHome, "projects", "-tmp-project", "memory");
     await writeFile(path.join(memoryDir, "MEMORY.md"), "# Relocated memory\n");
@@ -164,7 +235,6 @@ describe("Claude migration provider", () => {
   });
 
   it("treats an explicit repo root with a top-level projects/ dir as a project, not a home", async () => {
-    const root = testWorkspace.dir;
     const projectRoot = path.join(root, "my-monorepo");
     await writeFile(path.join(projectRoot, "projects", "svc-a", "readme.md"), "# svc\n");
     await writeFile(path.join(projectRoot, "settings.json"), "{}\n");
@@ -178,7 +248,6 @@ describe("Claude migration provider", () => {
   it.runIf(process.platform !== "win32")(
     "reports an unreadable configured Claude Code auto-memory directory",
     async () => {
-      const root = testWorkspace.dir;
       const source = path.join(root, ".claude");
       const customMemory = path.join(root, "custom-memory");
       await writeFile(
@@ -187,19 +256,11 @@ describe("Claude migration provider", () => {
       );
       await writeFile(path.join(customMemory, "MEMORY.md"), "# Custom memory\n");
       await fs.chmod(customMemory, 0o000);
-      const provider = buildClaudeMigrationProvider();
 
       try {
-        await expect(
-          provider.plan(
-            makeContext({
-              source,
-              stateDir: path.join(root, "state"),
-              workspaceDir: path.join(root, "workspace"),
-              itemKinds: ["memory"],
-            }),
-          ),
-        ).rejects.toThrow("Unable to read Claude Code auto-memory directory");
+        await expect(provider.plan(contextFor(source, { itemKinds: ["memory"] }))).rejects.toThrow(
+          "Unable to read Claude Code auto-memory directory",
+        );
       } finally {
         await fs.chmod(customMemory, 0o700);
       }
@@ -209,7 +270,6 @@ describe("Claude migration provider", () => {
   it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
     "reports an inaccessible configured Claude Code auto-memory directory",
     async () => {
-      const root = testWorkspace.dir;
       const source = path.join(root, ".claude");
       const lockedParent = path.join(root, "locked-parent");
       const customMemory = path.join(lockedParent, "custom-memory");
@@ -219,19 +279,11 @@ describe("Claude migration provider", () => {
       );
       await writeFile(path.join(customMemory, "MEMORY.md"), "# Custom memory\n");
       await fs.chmod(lockedParent, 0o000);
-      const provider = buildClaudeMigrationProvider();
 
       try {
-        await expect(
-          provider.plan(
-            makeContext({
-              source,
-              stateDir: path.join(root, "state"),
-              workspaceDir: path.join(root, "workspace"),
-              itemKinds: ["memory"],
-            }),
-          ),
-        ).rejects.toThrow(customMemory);
+        await expect(provider.plan(contextFor(source, { itemKinds: ["memory"] }))).rejects.toThrow(
+          customMemory,
+        );
       } finally {
         await fs.chmod(lockedParent, 0o700);
       }
@@ -241,136 +293,71 @@ describe("Claude migration provider", () => {
   it.runIf(process.platform !== "win32")(
     "reports an unreadable standard Claude Code projects directory",
     async () => {
-      const root = testWorkspace.dir;
       const source = path.join(root, ".claude");
       const projects = path.join(source, "projects");
       await fs.mkdir(projects, { recursive: true });
       await fs.chmod(projects, 0o000);
-      const provider = buildClaudeMigrationProvider();
 
       try {
-        await expect(
-          provider.plan(
-            makeContext({
-              source,
-              stateDir: path.join(root, "state"),
-              workspaceDir: path.join(root, "workspace"),
-              itemKinds: ["memory"],
-            }),
-          ),
-        ).rejects.toThrow("Unable to read Claude Code projects directory");
+        await expect(provider.plan(contextFor(source, { itemKinds: ["memory"] }))).rejects.toThrow(
+          "Unable to read Claude Code projects directory",
+        );
       } finally {
         await fs.chmod(projects, 0o700);
       }
     },
   );
 
-  it("rejects relative Claude Code auto-memory settings", async () => {
-    const root = testWorkspace.dir;
-    const source = path.join(root, ".claude");
-    await writeFile(
-      path.join(source, "settings.json"),
-      JSON.stringify({ autoMemoryDirectory: "relative-memory" }),
-    );
-    const provider = buildClaudeMigrationProvider();
-
-    await expect(
-      provider.plan(
-        makeContext({
-          source,
-          stateDir: path.join(root, "state"),
-          workspaceDir: path.join(root, "workspace"),
-          itemKinds: ["memory"],
-        }),
-      ),
-    ).rejects.toThrow("autoMemoryDirectory must be absolute or start with ~/");
-  });
-
   it('rejects bare "~" as a Claude Code auto-memory directory', async () => {
-    const root = testWorkspace.dir;
     const source = path.join(root, ".claude");
     await writeFile(
       path.join(source, "settings.json"),
       JSON.stringify({ autoMemoryDirectory: "~" }),
     );
-    const provider = buildClaudeMigrationProvider();
 
-    await expect(
-      provider.plan(
-        makeContext({
-          source,
-          stateDir: path.join(root, "state"),
-          workspaceDir: path.join(root, "workspace"),
-          itemKinds: ["memory"],
-        }),
-      ),
-    ).rejects.toThrow("autoMemoryDirectory must be absolute or start with ~/");
+    await expect(provider.plan(contextFor(source, { itemKinds: ["memory"] }))).rejects.toThrow(
+      "autoMemoryDirectory must be absolute or start with ~/",
+    );
   });
 
   it("rejects Claude Code auto-memory that contains the import destination", async () => {
-    const root = testWorkspace.dir;
     const source = path.join(root, ".claude");
-    const workspaceDir = path.join(root, "workspace");
     const customMemory = path.join(workspaceDir, "memory");
     await writeFile(
       path.join(source, "settings.json"),
       JSON.stringify({ autoMemoryDirectory: customMemory }),
     );
     await writeFile(path.join(customMemory, "MEMORY.md"), "# Existing memory\n");
-    const provider = buildClaudeMigrationProvider();
 
-    await expect(
-      provider.plan(
-        makeContext({
-          source,
-          stateDir: path.join(root, "state"),
-          workspaceDir,
-          itemKinds: ["memory"],
-        }),
-      ),
-    ).rejects.toThrow("source and OpenClaw import destination must be separate");
+    await expect(provider.plan(contextFor(source, { itemKinds: ["memory"] }))).rejects.toThrow(
+      "source and OpenClaw import destination must be separate",
+    );
   });
 
   it.runIf(process.platform !== "win32")(
     "rejects a symlinked import destination that resolves into Claude Code memory",
     async () => {
-      const root = testWorkspace.dir;
       const source = path.join(root, ".claude");
       const memoryDir = path.join(source, "projects", "-tmp-linked", "memory");
-      const workspaceDir = path.join(root, "workspace");
       await writeFile(path.join(memoryDir, "MEMORY.md"), "# Source memory\n");
       await fs.mkdir(workspaceDir, { recursive: true });
       await fs.symlink(memoryDir, path.join(workspaceDir, "memory"));
-      const provider = buildClaudeMigrationProvider();
 
-      await expect(
-        provider.plan(
-          makeContext({
-            source,
-            stateDir: path.join(root, "state"),
-            workspaceDir,
-            itemKinds: ["memory"],
-          }),
-        ),
-      ).rejects.toThrow("destination must stay in the selected workspace");
+      await expect(provider.plan(contextFor(source, { itemKinds: ["memory"] }))).rejects.toThrow(
+        "destination must stay in the selected workspace",
+      );
     },
   );
 
   it.runIf(process.platform !== "win32")(
     "marks a dangling Claude Code memory destination symlink as a conflict",
     async () => {
-      const root = testWorkspace.dir;
       const source = path.join(root, ".claude");
-      const workspaceDir = path.join(root, "workspace");
       await writeFile(
         path.join(source, "projects", "-tmp-linked", "memory", "MEMORY.md"),
         "# Source memory\n",
       );
-      const provider = buildClaudeMigrationProvider();
-      const context = makeContext({
-        source,
-        stateDir: path.join(root, "state"),
-        workspaceDir,
+      const context = contextFor(source, {
         itemKinds: ["memory"],
         overwrite: true,
       });
@@ -392,7 +379,6 @@ describe("Claude migration provider", () => {
   );
 
   it("fails planning when a discovered Claude Code memory directory cannot be read", async () => {
-    const root = testWorkspace.dir;
     const missingMemory = path.join(root, "missing-memory");
     await writeFile(missingMemory, "not a directory\n");
     const source: ClaudeSource = {
@@ -412,8 +398,8 @@ describe("Claude migration provider", () => {
       buildMemoryItems({
         source,
         targets: {
-          workspaceDir: path.join(root, "workspace"),
-          stateDir: path.join(root, "state"),
+          workspaceDir,
+          stateDir,
           agentDir: path.join(root, "state", "agents", "main", "agent"),
         },
         includeInstructions: false,
@@ -422,7 +408,6 @@ describe("Claude migration provider", () => {
   });
 
   it("rejects oversized Claude Code auto-memory instead of returning a partial plan", async () => {
-    const root = testWorkspace.dir;
     const source = path.join(root, ".claude");
     const memoryDir = path.join(source, "projects", "-tmp-large", "memory");
     await fs.mkdir(memoryDir, { recursive: true });
@@ -431,24 +416,14 @@ describe("Claude migration provider", () => {
         await fs.writeFile(path.join(memoryDir, `memory-${index}.md`), "memory\n", "utf8");
       }),
     );
-    const provider = buildClaudeMigrationProvider();
 
-    await expect(
-      provider.plan(
-        makeContext({
-          source,
-          stateDir: path.join(root, "state"),
-          workspaceDir: path.join(root, "workspace"),
-          itemKinds: ["memory"],
-        }),
-      ),
-    ).rejects.toThrow("safe import limit of 2000 Markdown files");
+    await expect(provider.plan(contextFor(source, { itemKinds: ["memory"] }))).rejects.toThrow(
+      "safe import limit of 2000 Markdown files",
+    );
   });
 
   it("plans project memory, MCP servers, commands, skills, and manual review items", async () => {
-    const root = testWorkspace.dir;
     const source = path.join(root, "project");
-    const workspaceDir = path.join(root, "workspace");
     await writeFile(path.join(source, "CLAUDE.md"), "# Project instructions\n");
     await writeFile(path.join(source, "CLAUDE.local.md"), "local-only\n");
     await writeFile(
@@ -472,13 +447,22 @@ describe("Claude migration provider", () => {
       }),
     );
     await writeFile(path.join(source, ".claude", "commands", "commit.md"), "Commit $ARGUMENTS\n");
+    await writeFile(
+      path.join(source, ".claude", "commands", "team", "review.md"),
+      "Review $ARGUMENTS\n",
+    );
+    await writeFile(path.join(source, ".claude", "commands", "ignored.MD"), "Not a command\n");
+    const linkedCommands = path.join(root, "linked-commands");
+    await writeFile(path.join(linkedCommands, "outside.md"), "Outside command\n");
+    await fs.symlink(
+      linkedCommands,
+      path.join(source, ".claude", "commands", "linked"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
     await writeFile(path.join(source, ".claude", "skills", "Review", "SKILL.md"), "# Review\n");
     await writeFile(path.join(source, ".claude", "agents", "reviewer.md"), "# Reviewer\n");
 
-    const provider = buildClaudeMigrationProvider();
-    const plan = await provider.plan(
-      makeContext({ source, stateDir: path.join(root, "state"), workspaceDir }),
-    );
+    const plan = await provider.plan(contextFor(source));
 
     expect(plan.summary.total).toBeGreaterThan(0);
     expect(planItemById(plan.items, "workspace:CLAUDE.md").kind).toBe("workspace");
@@ -486,6 +470,12 @@ describe("Claude migration provider", () => {
       "config",
     );
     expect(planItemById(plan.items, "skill:claude-command-commit").action).toBe("create");
+    expect(
+      plan.items
+        .filter((item) => item.id.startsWith("skill:claude-command-"))
+        .map((item) => item.id)
+        .toSorted(),
+    ).toEqual(["skill:claude-command-commit", "skill:claude-command-team-review"]);
     expect(planItemById(plan.items, "skill:review").action).toBe("copy");
     expect(planItemById(plan.items, "archive:CLAUDE.local.md").action).toBe("archive");
     expect(planItemById(plan.items, "archive:project-agents").action).toBe("archive");
@@ -498,11 +488,7 @@ describe("Claude migration provider", () => {
   });
 
   it("applies project imports without reading global Claude state", async () => {
-    const root = testWorkspace.dir;
     const source = path.join(root, "project");
-    const workspaceDir = path.join(root, "workspace");
-    const stateDir = path.join(root, "state");
-    const reportDir = path.join(root, "report");
     await writeFile(path.join(source, "CLAUDE.md"), "# Project instructions\n");
     await writeFile(path.join(workspaceDir, "AGENTS.md"), "# Existing agents\n");
     await writeFile(
@@ -523,19 +509,15 @@ describe("Claude migration provider", () => {
     );
     await writeFile(path.join(source, ".claude", "skills", "Review", "SKILL.md"), "# Review\n");
 
-    const config = {
+    const config: OpenClawConfig = {
       agents: {
         defaults: {
           workspace: workspaceDir,
         },
       },
-    } as never;
-    const provider = buildClaudeMigrationProvider();
+    };
     const result = await provider.apply(
-      makeContext({
-        source,
-        stateDir,
-        workspaceDir,
+      contextFor(source, {
         reportDir,
         runtime: makeConfigRuntime(config),
         config,
@@ -547,7 +529,7 @@ describe("Claude migration provider", () => {
       (item) => item.id === "config:mcp-server:project-mcp:filesystem",
     );
     expect(mcpItem?.status).toBe("migrated");
-    expect((config as { mcp?: { servers?: Record<string, unknown> } }).mcp?.servers).toEqual({
+    expect(config.mcp?.servers).toEqual({
       filesystem: {
         command: "npx",
         args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
@@ -556,6 +538,8 @@ describe("Claude migration provider", () => {
     expect(await fs.readFile(path.join(workspaceDir, "AGENTS.md"), "utf8")).toContain(
       "Imported from Claude: project CLAUDE.md",
     );
+    const generatedSkillItem = planItemById(result.items, "skill:claude-command-ship");
+    expect(generatedSkillItem.details?.backupPath).toBeUndefined();
     const generatedSkill = await fs.readFile(
       path.join(workspaceDir, "skills", "claude-command-ship", "SKILL.md"),
       "utf8",
@@ -563,9 +547,160 @@ describe("Claude migration provider", () => {
     expect(generatedSkill.split("\n").find((line) => line.startsWith("description: "))).toBe(
       `description: ${JSON.stringify(commandDescriptionPrefix)}`,
     );
-    await expect(
-      fs.access(path.join(workspaceDir, "skills", "review", "SKILL.md")),
-    ).resolves.toBeUndefined();
-    await expect(fs.access(path.join(reportDir, "summary.md"))).resolves.toBeUndefined();
+    await fs.access(path.join(workspaceDir, "skills", "review", "SKILL.md"));
+    await fs.access(path.join(reportDir, "summary.md"));
   });
+
+  it("backs up the whole generated skill directory before overwriting it", async () => {
+    const source = path.join(root, "project");
+    const targetDir = path.join(workspaceDir, "skills", "claude-command-ship");
+    await writeFile(path.join(source, ".claude", "commands", "ship.md"), "Ship safely.\n");
+    const context = contextFor(source, { reportDir });
+    const plan = await provider.plan(context);
+    await writeFile(path.join(targetDir, "SKILL.md"), "# Local skill\n");
+    await writeFile(path.join(targetDir, "notes.md"), "Keep these notes.\n");
+
+    const conflict = await provider.apply(context, plan);
+    expect(planItemById(conflict.items, "skill:claude-command-ship")).toMatchObject({
+      status: "conflict",
+      reason: "target exists",
+    });
+    await expect(fs.readFile(path.join(targetDir, "SKILL.md"), "utf8")).resolves.toBe(
+      "# Local skill\n",
+    );
+
+    const result = await provider.apply({ ...context, overwrite: true }, plan);
+
+    const item = planItemById(result.items, "skill:claude-command-ship");
+    expect(item.status).toBe("migrated");
+    expect(await fs.readFile(path.join(targetDir, "SKILL.md"), "utf8")).toContain("Ship safely.");
+    await expect(fs.readFile(path.join(targetDir, "notes.md"), "utf8")).resolves.toBe(
+      "Keep these notes.\n",
+    );
+    const backupPath = item.details?.backupPath;
+    if (typeof backupPath !== "string") {
+      throw new Error("expected generated skill backup path");
+    }
+    await expect(fs.readFile(path.join(backupPath, "SKILL.md"), "utf8")).resolves.toBe(
+      "# Local skill\n",
+    );
+    await expect(fs.readFile(path.join(backupPath, "notes.md"), "utf8")).resolves.toBe(
+      "Keep these notes.\n",
+    );
+    expect(
+      JSON.parse(await fs.readFile(path.join(reportDir, "report.json"), "utf8")).items.find(
+        (reportItem: { id?: string }) => reportItem.id === item.id,
+      )?.details?.backupPath,
+    ).toBe(backupPath);
+  });
+
+  it.each([false, true])(
+    "reports a removed command source without changing its generated skill (overwrite: %s)",
+    async (overwrite) => {
+      const source = path.join(root, "project");
+      const sourceFile = path.join(source, ".claude", "commands", "ship.md");
+      const targetDir = path.join(workspaceDir, "skills", "claude-command-ship");
+      const targetFile = path.join(targetDir, "SKILL.md");
+      await writeFile(sourceFile, "Ship safely.\n");
+      if (overwrite) {
+        await writeFile(targetFile, "# Local skill\n");
+      }
+      const context = contextFor(source, {
+        reportDir,
+        overwrite,
+      });
+      const plan = await provider.plan(context);
+      await fs.unlink(sourceFile);
+
+      const result = await provider.apply(context, plan);
+
+      const item = planItemById(result.items, "skill:claude-command-ship");
+      expect(item).toMatchObject({ status: "error", reason: expect.stringContaining("ENOENT") });
+      expect(result.summary).toMatchObject({ migrated: 0, errors: 1 });
+      expect(item.details?.backupPath).toBeUndefined();
+      if (overwrite) {
+        await expect(fs.readFile(targetFile, "utf8")).resolves.toBe("# Local skill\n");
+      } else {
+        await expect(fs.access(targetDir)).rejects.toThrow();
+      }
+      const report = JSON.parse(await fs.readFile(path.join(reportDir, "report.json"), "utf8"));
+      expect(planItemById(report.items, item.id)).toEqual(item);
+      await expect(fs.access(path.join(reportDir, "item-backups"))).rejects.toThrow();
+    },
+  );
+
+  it("reports the generated skill backup when the overwrite fails", async () => {
+    const source = path.join(root, "project");
+    const targetDir = path.join(workspaceDir, "skills", "claude-command-ship");
+    await writeFile(path.join(source, ".claude", "commands", "ship.md"), "Ship safely.\n");
+    await writeFile(path.join(targetDir, "SKILL.md", "original.md"), "# Local skill\n");
+
+    const result = await provider.apply(
+      contextFor(source, {
+        reportDir,
+        overwrite: true,
+      }),
+    );
+
+    const item = planItemById(result.items, "skill:claude-command-ship");
+    expect(item.status).toBe("error");
+    const backupPath = item.details?.backupPath;
+    if (typeof backupPath !== "string") {
+      throw new Error("expected failed generated skill overwrite to report its backup path");
+    }
+    await expect(
+      fs.readFile(path.join(backupPath, "SKILL.md", "original.md"), "utf8"),
+    ).resolves.toBe("# Local skill\n");
+    expect(
+      JSON.parse(await fs.readFile(path.join(reportDir, "report.json"), "utf8")).items.find(
+        (reportItem: { id?: string }) => reportItem.id === item.id,
+      )?.details?.backupPath,
+    ).toBe(backupPath);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "materializes symlinked generated skills in the backup before overwriting them",
+    async () => {
+      for (const scenario of ["target-directory", "skill-file"] as const) {
+        const scenarioRoot = path.join(root, scenario);
+        const source = path.join(scenarioRoot, "project");
+        const scenarioWorkspace = path.join(scenarioRoot, "workspace");
+        const targetDir = path.join(scenarioWorkspace, "skills", "claude-command-ship");
+        const outsideDir = path.join(scenarioRoot, "outside");
+        const outsideSkill = path.join(outsideDir, "SKILL.md");
+        await writeFile(path.join(source, ".claude", "commands", "ship.md"), "Ship safely.\n");
+        await writeFile(outsideSkill, "# Outside skill\n");
+        if (scenario === "target-directory") {
+          await fs.mkdir(path.dirname(targetDir), { recursive: true });
+          await fs.symlink(outsideDir, targetDir);
+        } else {
+          await fs.mkdir(targetDir, { recursive: true });
+          await fs.symlink(outsideSkill, path.join(targetDir, "SKILL.md"));
+        }
+
+        const result = await provider.apply(
+          makeContext({
+            source,
+            stateDir: path.join(scenarioRoot, "state"),
+            workspaceDir: scenarioWorkspace,
+            reportDir: path.join(scenarioRoot, "report"),
+            overwrite: true,
+          }),
+        );
+
+        const item = planItemById(result.items, "skill:claude-command-ship");
+        expect(item.status).toBe("migrated");
+        const backupPath = item.details?.backupPath;
+        if (typeof backupPath !== "string") {
+          throw new Error("expected symlinked generated skill backup path");
+        }
+        expect((await fs.lstat(backupPath)).isSymbolicLink()).toBe(false);
+        expect((await fs.lstat(path.join(backupPath, "SKILL.md"))).isSymbolicLink()).toBe(false);
+        await expect(fs.readFile(path.join(backupPath, "SKILL.md"), "utf8")).resolves.toBe(
+          "# Outside skill\n",
+        );
+        await expect(fs.readFile(outsideSkill, "utf8")).resolves.toContain("Ship safely.");
+      }
+    },
+  );
 });

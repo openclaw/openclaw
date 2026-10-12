@@ -1,52 +1,43 @@
 import { describe, expect, it } from "vitest";
 import { buildSessionResetBoundaryEvent } from "./session-reset-boundary-event.js";
 
-function message(params: {
-  id: string;
-  parentId: string | null;
-  role: "user" | "assistant";
-  content: string;
-  second: number;
-}) {
+function message(
+  id: string,
+  parentId: string | null,
+  role: "user" | "assistant",
+  content: string,
+  second: number,
+) {
   return {
     type: "message",
-    id: params.id,
-    parentId: params.parentId,
-    timestamp: `2026-07-22T00:00:${String(params.second).padStart(2, "0")}.000Z`,
-    message: { role: params.role, content: params.content },
+    id,
+    parentId,
+    timestamp: `2026-07-22T00:00:${String(second).padStart(2, "0")}.000Z`,
+    message: { role, content },
   };
 }
 
 describe("reset boundary planning", () => {
-  it("selects repeated reset tails from the current logical window", async () => {
-    const oldUser = message({
-      id: "old-user",
-      parentId: null,
-      role: "user",
-      content: "discarded",
-      second: 1,
+  it("cuts prior conversation context for explicit reset boundaries", () => {
+    const reason = "reset";
+    const user = message("prior-user", null, "user", "discarded", 1);
+    const assistant = message("prior-assistant", user.id, "assistant", "discarded answer", 2);
+
+    const event = buildSessionResetBoundaryEvent({
+      context: "clear",
+      events: [user, assistant],
+      reason,
     });
-    const oldAssistant = message({
-      id: "old-assistant",
-      parentId: oldUser.id,
-      role: "assistant",
-      content: "discarded answer",
-      second: 2,
-    });
-    const keptUser = message({
-      id: "kept-user",
-      parentId: oldAssistant.id,
-      role: "user",
-      content: "kept",
-      second: 3,
-    });
-    const keptAssistant = message({
-      id: "kept-assistant",
-      parentId: keptUser.id,
-      role: "assistant",
-      content: "kept answer",
-      second: 4,
-    });
+
+    expect(event).toMatchObject({ parentId: assistant.id, reason });
+    expect(event).not.toHaveProperty("firstKeptEntryId");
+  });
+
+  it("retains repeated reset tails for automatic recovery", () => {
+    const oldUser = message("old-user", null, "user", "discarded", 1);
+    const oldAssistant = message("old-assistant", oldUser.id, "assistant", "discarded answer", 2);
+    const keptUser = message("kept-user", oldAssistant.id, "user", "kept", 3);
+    const keptAssistant = message("kept-assistant", keptUser.id, "assistant", "kept answer", 4);
     const firstReset = {
       type: "reset",
       id: "first-reset",
@@ -58,37 +49,27 @@ describe("reset boundary planning", () => {
 
     expect(
       buildSessionResetBoundaryEvent({
+        context: "preserve-tail",
         events: [oldUser, oldAssistant, keptUser, keptAssistant, firstReset],
         reason: "reset",
       }),
     ).toMatchObject({
       parentId: firstReset.id,
       firstKeptEntryId: keptUser.id,
+      reason: "reset",
     });
   });
 
-  it("keeps a compaction retained tail when planning the next reset", async () => {
-    const discarded = message({
-      id: "discarded-user",
-      parentId: null,
-      role: "user",
-      content: "discarded",
-      second: 1,
-    });
-    const keptUser = message({
-      id: "compaction-kept-user",
-      parentId: discarded.id,
-      role: "user",
-      content: "kept",
-      second: 2,
-    });
-    const keptAssistant = message({
-      id: "compaction-kept-assistant",
-      parentId: keptUser.id,
-      role: "assistant",
-      content: "kept answer",
-      second: 3,
-    });
+  it("keeps a compaction retained tail when planning the next reset", () => {
+    const discarded = message("discarded-user", null, "user", "discarded", 1);
+    const keptUser = message("compaction-kept-user", discarded.id, "user", "kept", 2);
+    const keptAssistant = message(
+      "compaction-kept-assistant",
+      keptUser.id,
+      "assistant",
+      "kept answer",
+      3,
+    );
     const compaction = {
       type: "compaction",
       id: "compaction-boundary",
@@ -101,12 +82,14 @@ describe("reset boundary planning", () => {
 
     expect(
       buildSessionResetBoundaryEvent({
+        context: "preserve-tail",
         events: [discarded, keptUser, keptAssistant, compaction],
-        reason: "new",
+        reason: "daily",
       }),
     ).toMatchObject({
       parentId: compaction.id,
       firstKeptEntryId: keptUser.id,
+      reason: "daily",
     });
   });
 });

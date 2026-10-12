@@ -17,6 +17,9 @@ Moonshot and Kimi Coding are **separate providers**, each shipped as a separate 
 
 ## Built-in model catalog
 
+Moonshot and Kimi Coding setup save connection settings and aliases without copying generated catalog rows into your config.
+Explicit `models.mode: "replace"` keeps catalog seeding enabled; custom model rows stay intact.
+
 [//]: # "moonshot-kimi-k2-ids:start"
 
 | Model ref                           | Name                     | Reasoning        | Input              | Context   | Max output |
@@ -33,9 +36,9 @@ and [Kimi K2.7 Code](https://platform.kimi.ai/docs/pricing/chat-k27-code)
 before making cost decisions.
 
 Kimi K3 always reasons and accepts `reasoning_effort` values `low`, `high`,
-and `max` (the default). OpenClaw exposes those exact levels and maps `/think
-xhigh` to `max`; it omits the K2-only `thinking` field and removes sampling
-overrides (`temperature`, `top_p`, `n`, `presence_penalty`, and
+and `max` (the default). On the direct Moonshot route OpenClaw exposes only
+`/think max` and always sends `reasoning_effort: "max"`. It omits the K2-only
+`thinking` field and removes sampling overrides (`temperature`, `top_p`, `n`, `presence_penalty`, and
 `frequency_penalty`) that K3 fixes to provider defaults. Kimi K2.7 Code also
 always uses native thinking but requires both `thinking` and
 `reasoning_effort` to be omitted; the HighSpeed variant uses the same contract.
@@ -55,8 +58,10 @@ onboarding.
       <Step title="Install the plugin">
         ```bash
         openclaw plugins install @openclaw/moonshot-provider
-        openclaw gateway restart
         ```
+
+        Installation applies to a running Gateway automatically; otherwise it takes effect
+        on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
       </Step>
       <Step title="Choose your endpoint region">
         | Auth choice            | Endpoint                       | Region        |
@@ -148,7 +153,7 @@ onboarding.
                   max: "max",
                 },
                 input: ["text", "image", "video"],
-                cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
+                cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3 },
                 contextWindow: 1048576,
                 maxTokens: 1048576,
               },
@@ -207,8 +212,10 @@ onboarding.
       <Step title="Install the plugin">
         ```bash
         openclaw plugins install @openclaw/kimi-provider
-        openclaw gateway restart
         ```
+
+        Installation applies to a running Gateway automatically; otherwise it takes effect
+        on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
       </Step>
       <Step title="Run onboarding">
         ```bash
@@ -233,7 +240,7 @@ onboarding.
       </Step>
     </Steps>
 
-    Kimi Code K3 always uses adaptive thinking when reasoning is enabled and
+    Kimi Coding K3 always uses adaptive thinking when reasoning is enabled and
     defaults to high effort. `/think minimal|low` maps to low effort,
     `/think medium|high|adaptive` maps to high effort, and `/think xhigh|max`
     maps to max effort. `/think off` sends `thinking.type: "disabled"`.
@@ -313,18 +320,36 @@ Config lives under `plugins.entries.moonshot.config.webSearch`:
 
 ## Advanced configuration
 
+Moonshot automatically caches matching prompt prefixes. Kimi K3 uses a five-minute
+cache by default and reports cache writes separately from cache reads. OpenClaw's
+default cost estimate prices those writes at $3 per million tokens and cache reads
+at $0.30 per million tokens. See
+[Kimi context caching](https://platform.kimi.ai/docs/guide/context-caching).
+
 <AccordionGroup>
   <Accordion title="Native thinking mode">
     Moonshot API Kimi K3 always reasons at maximum effort. OpenClaw exposes only
     `/think max`, sends `reasoning_effort: "max"`, and ignores stale lower or
     `off` settings.
 
-    Kimi Code K3 exposes `/think off|minimal|low|medium|high|adaptive|xhigh|max`.
+    Kimi Coding K3 exposes `/think off|minimal|low|medium|high|adaptive|xhigh|max`.
     Its Anthropic-compatible endpoint receives `thinking.type: "disabled"` for
     off. Every enabled level uses adaptive thinking; minimal/low maps to low
     effort, medium/high/adaptive maps to high effort, and xhigh/max maps to max
     effort. This applies to both `kimi/k3` and `kimi/k3-256k`. Legacy
     `kimi/k3[1m]` normalizes to `kimi/k3`.
+
+    Self-hosted K3 registrations under `kimi` with model ID `kimi-k3` or
+    `Kimi-K3` and `api: "openai-completions"` expose the same thinking choices.
+    They stay off by default, including existing configurations without an
+    explicit thinking preference. Enabled levels use the mapping above and
+    send top-level `reasoning_effort`; off sends `thinking: { type: "disabled" }`
+    without an effort. Explicit model mappings and `params.extra_body` overrides
+    remain effective. A configured `params.chat_template_kwargs.reasoning_effort`
+    is not shadowed by a generated top-level effort. Whether a self-hosted
+    endpoint honors disabling depends on its serving configuration; this does
+    not change the hosted Moonshot API's always-on policy.
+
     Moonshot API K3 supports `auto`, `none`, `required`, and pinned tool choices,
     so OpenClaw preserves the requested `tool_choice`. For multi-turn tool use,
     OpenClaw preserves the assistant reasoning content required by Moonshot's
@@ -440,6 +465,9 @@ Config lives under `plugins.entries.moonshot.config.webSearch`:
   </Card>
   <Card title="Configuration reference" href="/gateway/configuration-reference" icon="gear">
     Full config schema for providers, models, and plugins.
+  </Card>
+  <Card title="Fireworks" href="/providers/fireworks" icon="server">
+    Kimi models on Fireworks, including their thinking-off behavior.
   </Card>
   <Card title="Moonshot Open Platform" href="https://platform.moonshot.ai" icon="globe">
     Moonshot API key management and documentation.

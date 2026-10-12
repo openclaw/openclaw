@@ -1,25 +1,26 @@
 export const MAX_BEFORE_AGENT_FINALIZE_REVISIONS = 3;
 
+export type EmbeddedRunCompletionCheck = {
+  unfinishedPlan: boolean;
+  checked: boolean;
+};
+
 export type EmbeddedRunTerminalRetryState = {
+  completionCheck?: EmbeddedRunCompletionCheck;
   reasoningOnlyAttempts: number;
   emptyResponseAttempts: number;
   missingAssistantAttempts: number;
   compactionContinuationAttempts: number;
-  compactionContinuationInstruction: string | null;
   beforeFinalizeRevisionAttempts: number;
-  codeModeReconciliationAttempts: number;
-  forceCodeModeReconciliationTools: boolean;
 };
 
 export function createEmbeddedRunTerminalRetryState(): EmbeddedRunTerminalRetryState {
   return {
+    completionCheck: { unfinishedPlan: false, checked: false },
     reasoningOnlyAttempts: 0,
     emptyResponseAttempts: 0,
     missingAssistantAttempts: 0,
     compactionContinuationAttempts: 0,
-    compactionContinuationInstruction: null,
     beforeFinalizeRevisionAttempts: 0,
-    codeModeReconciliationAttempts: 0,
-    forceCodeModeReconciliationTools: false,
   };
 }

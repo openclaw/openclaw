@@ -13,13 +13,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { formatErrorMessage } from "./lib/error-format.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 
 type WorkspaceMountModule = Pick<
   typeof import("../src/agents/sandbox/workspace-mounts.js"),
-  | "resolveReadOnlyWorkspaceSkillMounts"
-  | "resolveProtectedSkillMountContainerPaths"
-  | "filterBindsConflictingWithProtectedMounts"
+  "resolveSandboxMountSelection"
 >;
 
 const repoRoot = resolveRepoRoot(import.meta.url);
@@ -52,48 +51,36 @@ function pass(label: string) {
   console.log(`✅ ${label}`);
 }
 
-// ── Load production code ──────────────────────────────────────────────
-const {
-  resolveReadOnlyWorkspaceSkillMounts,
-  resolveProtectedSkillMountContainerPaths,
-  filterBindsConflictingWithProtectedMounts,
-}: WorkspaceMountModule = await import(
+const { resolveSandboxMountSelection }: WorkspaceMountModule = await import(
   path.join(repoRoot, "src/agents/sandbox/workspace-mounts.js")
 );
 
-// ── Resolve protected skill mounts ────────────────────────────────────
 console.log("\n--- Protected skill mounts ---");
-const protectedMounts = resolveReadOnlyWorkspaceSkillMounts({
+const selection = resolveSandboxMountSelection({
   workspaceDir,
   agentWorkspaceDir: workspaceDir,
   workdir: "/workspace",
   workspaceAccess: "rw",
+  binds: userBinds,
 });
 console.log(
   "Protected:",
-  protectedMounts.map((m) => `${m.hostPath} -> ${m.containerPath}`),
+  selection.readOnlyWorkspaceSkillMounts.map((m) => `${m.hostPath} -> ${m.containerPath}`),
 );
 
-// ── Resolve protected container paths ─────────────────────────────────
-const protectedPaths = resolveProtectedSkillMountContainerPaths(protectedMounts);
-console.log("Protected paths:", [...protectedPaths]);
-
-// ── Filter user binds ─────────────────────────────────────────────────
 console.log("\nUser binds:", userBinds);
-const safeBinds = filterBindsConflictingWithProtectedMounts(userBinds, protectedPaths);
+const safeBinds = selection.custom;
 console.log(
   "Safe binds (after skipping conflicts):",
   safeBinds.length === 0 ? "(none)" : safeBinds,
 );
 
-// Conflicting bind should be filtered out (no safe binds remain)
 if (safeBinds.length > 0) {
   fail("conflicting user bind was not filtered out");
 } else {
   pass("conflicting user bind correctly skipped");
 }
 
-// ── Build container create args ───────────────────────────────────────
 const createArgs = [
   "create",
   "--name",
@@ -102,17 +89,13 @@ const createArgs = [
   "openclaw.e2e=1",
   "--workdir",
   "/workspace",
-  "-v",
-  `${workspaceDir}:/workspace`,
-  ...safeBinds.flatMap((b) => ["-v", b]),
+  ...selection.mounts.flatMap((mount) => [
+    "-v",
+    `${mount.hostPath}:${mount.containerPath}:${mount.readOnly ? "ro" : "rw"}`,
+  ]),
 ];
-// Protected skill mounts always appended (authoritative, read-only)
-for (const m of protectedMounts) {
-  createArgs.push("-v", `${m.hostPath}:${m.containerPath}:ro`);
-}
 createArgs.push(image, "sleep", "infinity");
 
-// ── Duplicate check ───────────────────────────────────────────────────
 console.log(`\n--- ${engine} args ---`);
 let nextIsMount = false;
 for (const a of createArgs) {
@@ -121,30 +104,20 @@ for (const a of createArgs) {
     nextIsMount = false;
   } else if (a === "-v") {
     nextIsMount = true;
-  } else if (a.startsWith("-")) {
-    console.log(`  ${a}`);
   } else {
     console.log(`  ${a}`);
   }
 }
 
 console.log("\n--- Duplicate check ---");
-const seen = new Map<string, string>();
+const seen = new Set<string>();
 let dupes = 0;
-for (let i = 0; i < createArgs.length - 1; i++) {
-  if (createArgs[i] !== "-v") {
-    continue;
-  }
-  const mountArg = createArgs[i + 1] ?? "";
-  const [, cpath] = mountArg.split(":");
-  if (!cpath) {
-    continue;
-  }
+for (const { containerPath: cpath } of selection.mounts) {
   if (seen.has(cpath)) {
     console.log(`❌ DUPLICATE: ${cpath}`);
     dupes++;
   } else {
-    seen.set(cpath, mountArg);
+    seen.add(cpath);
   }
 }
 if (dupes === 0) {
@@ -153,7 +126,6 @@ if (dupes === 0) {
   fail(`found ${dupes} duplicate container paths`);
 }
 
-// ── Helper: run the selected engine with argv (no shell string) ───────
 function runEngine(args: string[], opts: { stdio?: "pipe" | "inherit" } = {}) {
   return spawnSync(useSudo ? "sudo" : engine, useSudo ? [engine, ...args] : args, {
     encoding: "utf8",
@@ -162,7 +134,6 @@ function runEngine(args: string[], opts: { stdio?: "pipe" | "inherit" } = {}) {
   });
 }
 
-// ── Container create ──────────────────────────────────────────────────
 console.log(`\n--- ${engine} create ${containerName} ---`);
 let created = false;
 try {
@@ -206,7 +177,6 @@ try {
     fail(`/workspace/skills appears ${skillsCount} times (expected ≤1)`);
   }
 
-  // Verify protected mount source (not user bind)
   const skillMount = mounts.find((mount) => mount.Destination === "/workspace/skills");
   const mountSrc = typeof skillMount?.Source === "string" ? skillMount.Source : "";
   console.log(`Mount source for /workspace/skills: ${mountSrc}`);
@@ -224,7 +194,12 @@ try {
   }
 } catch (err) {
   const engineError = isRecord(err) ? err : {};
-  const msg = engineError.stderr ? String(engineError.stderr) : String(engineError.message ?? err);
+  const msg =
+    typeof engineError.stderr === "string" && engineError.stderr
+      ? engineError.stderr
+      : typeof engineError.message === "string"
+        ? engineError.message
+        : formatErrorMessage(err);
   if (msg.includes("Duplicate mount point") || msg.includes("duplicate mount")) {
     fail(`Duplicate mount point rejected by ${engine}`);
     console.log(msg.slice(0, 500));

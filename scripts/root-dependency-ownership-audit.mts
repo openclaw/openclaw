@@ -64,14 +64,6 @@ function readJson(filePath: string): JsonObject {
   return value;
 }
 
-function isScannableSourceFile(fileName: string) {
-  return SCANNED_EXTENSIONS.has(path.extname(fileName));
-}
-
-function shouldSkipDir(dirName: string) {
-  return dirName === "dist" || dirName === "node_modules" || dirName === ".git";
-}
-
 function walkFiles(rootDir: string): string[] {
   if (!fs.existsSync(rootDir)) {
     return [];
@@ -86,13 +78,13 @@ function walkFiles(rootDir: string): string[] {
     for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
       const fullPath = path.join(current, entry.name);
       if (entry.isDirectory()) {
-        if (shouldSkipDir(entry.name)) {
+        if (entry.name === "dist" || entry.name === "node_modules" || entry.name === ".git") {
           continue;
         }
         queue.push(fullPath);
         continue;
       }
-      if (entry.isFile() && isScannableSourceFile(entry.name)) {
+      if (entry.isFile() && SCANNED_EXTENSIONS.has(path.extname(entry.name))) {
         files.push(fullPath);
       }
     }
@@ -113,23 +105,22 @@ function sectionFor(relativePath: string) {
  * Collects static and simple constant-backed package specifiers from source text.
  */
 export function collectModuleSpecifiers(source: string): Set<string> {
-  const sourceText = source;
   const specifiers = new Set<string>();
   for (const pattern of IMPORT_PATTERNS) {
-    for (const match of sourceText.matchAll(pattern)) {
+    for (const match of source.matchAll(pattern)) {
       if (match[1]) {
         specifiers.add(match[1]);
       }
     }
   }
   const stringConstants = new Map<string, string>();
-  for (const match of sourceText.matchAll(STRING_CONSTANT_PATTERN)) {
+  for (const match of source.matchAll(STRING_CONSTANT_PATTERN)) {
     if (match[1] && match[2]) {
       stringConstants.set(match[1], match[2]);
     }
   }
   for (const pattern of DYNAMIC_CONSTANT_IMPORT_PATTERNS) {
-    for (const match of sourceText.matchAll(pattern)) {
+    for (const match of source.matchAll(pattern)) {
       const specifier = match[1] ? stringConstants.get(match[1]) : undefined;
       if (specifier) {
         specifiers.add(specifier);
@@ -139,13 +130,15 @@ export function collectModuleSpecifiers(source: string): Set<string> {
   return specifiers;
 }
 
-function collectExtensionDependencyDeclarations(repoRoot: string) {
+function collectExtensionDependencyDeclarations(repoRoot: string, rootPackageJson: JsonObject) {
   const declarations = new Map<string, string[]>();
+  const internalized = new Map<string, string[]>();
   const extensionsRoot = path.join(repoRoot, "extensions");
   if (!fs.existsSync(extensionsRoot)) {
-    return declarations;
+    return { declarations, internalized };
   }
 
+  const excluded = collectExcludedPackagedExtensionDirs(rootPackageJson);
   for (const entry of fs.readdirSync(extensionsRoot, { withFileTypes: true })) {
     if (!entry.isDirectory()) {
       continue;
@@ -155,6 +148,9 @@ function collectExtensionDependencyDeclarations(repoRoot: string) {
       continue;
     }
     const packageJson = readJson(packageJsonPath);
+    const isBundled =
+      !excluded.has(entry.name) &&
+      fs.existsSync(path.join(extensionsRoot, entry.name, "openclaw.plugin.json"));
     for (const section of [
       "dependencies",
       "optionalDependencies",
@@ -162,97 +158,50 @@ function collectExtensionDependencyDeclarations(repoRoot: string) {
       "peerDependencies",
     ]) {
       const sectionRecord = packageJson[section];
+      const maps =
+        isBundled && (section === "dependencies" || section === "optionalDependencies")
+          ? [declarations, internalized]
+          : [declarations];
       for (const depName of Object.keys(isRecord(sectionRecord) ? sectionRecord : {})) {
-        const existing = declarations.get(depName) ?? [];
-        existing.push(`${entry.name}:${section}`);
-        declarations.set(depName, existing);
+        for (const map of maps) {
+          const owners = map.get(depName) ?? [];
+          owners.push(`${entry.name}:${section}`);
+          map.set(depName, owners);
+        }
       }
     }
   }
 
-  for (const values of declarations.values()) {
-    values.sort((left, right) => left.localeCompare(right));
-  }
-
-  return declarations;
-}
-
-function collectInternalizedBundledExtensionRuntimeDependencies(
-  repoRoot: string,
-  rootPackageJson: JsonObject,
-) {
-  const dependencies = new Map<string, string[]>();
-  const extensionsRoot = path.join(repoRoot, "extensions");
-  if (!fs.existsSync(extensionsRoot)) {
-    return dependencies;
-  }
-
-  const excluded = collectExcludedPackagedExtensionDirs(rootPackageJson);
-  for (const entry of fs.readdirSync(extensionsRoot, { withFileTypes: true })) {
-    if (!entry.isDirectory() || excluded.has(entry.name)) {
-      continue;
-    }
-    const packageJsonPath = path.join(extensionsRoot, entry.name, "package.json");
-    const manifestPath = path.join(extensionsRoot, entry.name, "openclaw.plugin.json");
-    if (!fs.existsSync(packageJsonPath) || !fs.existsSync(manifestPath)) {
-      continue;
-    }
-    const packageJson = readJson(packageJsonPath);
-    for (const section of ["dependencies", "optionalDependencies"]) {
-      const sectionRecord = packageJson[section];
-      for (const depName of Object.keys(isRecord(sectionRecord) ? sectionRecord : {})) {
-        const existing = dependencies.get(depName) ?? [];
-        existing.push(`${entry.name}:${section}`);
-        dependencies.set(depName, existing);
-      }
+  for (const map of [declarations, internalized]) {
+    for (const owners of map.values()) {
+      owners.sort((left, right) => left.localeCompare(right));
     }
   }
-
-  for (const values of dependencies.values()) {
-    values.sort((left, right) => left.localeCompare(right));
-  }
-
-  return dependencies;
+  return { declarations, internalized };
 }
 
-function sectionSetContainsCore(sectionSet: Set<string>) {
-  return sectionSet.has("src") || sectionSet.has("packages") || sectionSet.has("ui");
-}
-
-function sectionSetIsSubsetOf(sectionSet: Set<string>, allowed: Set<string>) {
-  for (const value of sectionSet) {
-    if (!allowed.has(value)) {
-      return false;
-    }
-  }
-  return sectionSet.size > 0;
-}
-
-/**
- * Classifies whether a root dependency is core-owned, shared, or extension-local.
- */
 export function classifyRootDependencyOwnership(record: OwnershipClassificationInput): {
   category: string;
   recommendation: string;
 } {
-  const sections = new Set(record.sections);
+  const sections = [...record.sections];
 
-  if (sections.size === 0) {
+  if (sections.length === 0) {
     return {
       category: "unreferenced",
       recommendation: "investigate removal; no direct source imports found in scanned files",
     };
   }
 
-  if (sectionSetIsSubsetOf(sections, new Set(["scripts", "test"]))) {
+  if (sections.every((section) => section === "scripts" || section === "test")) {
     return {
       category: "script_or_test_only",
       recommendation: "consider moving from dependencies to devDependencies",
     };
   }
 
-  if (sectionSetContainsCore(sections)) {
-    if (sections.has("extensions")) {
+  if (sections.some((section) => section === "src" || section === "packages" || section === "ui")) {
+    if (sections.includes("extensions")) {
       return {
         category: "shared_core_and_extension",
         recommendation:
@@ -265,31 +214,19 @@ export function classifyRootDependencyOwnership(record: OwnershipClassificationI
     };
   }
 
-  const rootOwnedExtensionRuntime = record.depName
-    ? ROOT_OWNED_EXTENSION_RUNTIME_DEPENDENCIES.get(record.depName)
-    : undefined;
-  const internalizedOwners = record.internalizedBundledRuntimeOwners ?? [];
-  if (
-    rootOwnedExtensionRuntime &&
-    sectionSetIsSubsetOf(sections, new Set(["extensions", "test"]))
-  ) {
-    return {
-      category: "root_owned_extension_runtime",
-      recommendation: rootOwnedExtensionRuntime,
-    };
-  }
-
-  if (
-    internalizedOwners.length > 0 &&
-    sectionSetIsSubsetOf(sections, new Set(["extensions", "test"]))
-  ) {
-    return {
-      category: "root_owned_extension_runtime",
-      recommendation: `keep at root while bundled plugin runtime dependencies are internalized; owners: ${internalizedOwners.join(", ")}`,
-    };
-  }
-
-  if (sectionSetIsSubsetOf(sections, new Set(["extensions", "test"]))) {
+  if (sections.every((section) => section === "extensions" || section === "test")) {
+    const rootOwnedExtensionRuntime = record.depName
+      ? ROOT_OWNED_EXTENSION_RUNTIME_DEPENDENCIES.get(record.depName)
+      : undefined;
+    const internalizedOwners = record.internalizedBundledRuntimeOwners ?? [];
+    if (rootOwnedExtensionRuntime || internalizedOwners.length > 0) {
+      return {
+        category: "root_owned_extension_runtime",
+        recommendation:
+          rootOwnedExtensionRuntime ??
+          `keep at root while bundled plugin runtime dependencies are internalized; owners: ${internalizedOwners.join(", ")}`,
+      };
+    }
     return {
       category: "extension_only_localizable",
       recommendation:
@@ -303,9 +240,6 @@ export function classifyRootDependencyOwnership(record: OwnershipClassificationI
   };
 }
 
-/**
- * Builds dependency ownership records from root package.json and scanned imports.
- */
 export function collectRootDependencyOwnershipAudit(
   params: { repoRoot?: string; scanRoots?: string[] } = {},
 ) {
@@ -353,29 +287,18 @@ export function collectRootDependencyOwnershipAudit(
     }
   }
 
-  const extensionDeclarations = collectExtensionDependencyDeclarations(repoRoot);
-  for (const [depName, declarations] of extensionDeclarations) {
-    const record = records.get(depName);
-    if (record) {
-      record.declaredInExtensions = declarations;
-    }
-  }
-
-  const internalizedBundledRuntimeDependencies =
-    collectInternalizedBundledExtensionRuntimeDependencies(repoRoot, rootPackageJson);
-  for (const [depName, owners] of internalizedBundledRuntimeDependencies) {
-    const record = records.get(depName);
-    if (record) {
-      record.internalizedBundledRuntimeOwners = owners;
-    }
+  const { declarations, internalized } = collectExtensionDependencyDeclarations(
+    repoRoot,
+    rootPackageJson,
+  );
+  for (const record of records.values()) {
+    record.declaredInExtensions = declarations.get(record.depName) ?? [];
+    record.internalizedBundledRuntimeOwners = internalized.get(record.depName) ?? [];
   }
 
   return [...records.values()]
     .map((record) => {
-      const classification = classifyRootDependencyOwnership({
-        ...record,
-        sections: [...record.sections].toSorted((left, right) => left.localeCompare(right)),
-      });
+      const classification = classifyRootDependencyOwnership(record);
       return {
         depName: record.depName,
         spec: record.spec,
@@ -393,9 +316,6 @@ export function collectRootDependencyOwnershipAudit(
 
 type AuditRecord = ReturnType<typeof collectRootDependencyOwnershipAudit>[number];
 
-/**
- * Returns actionable errors for dependencies that should not remain root-owned.
- */
 export function collectRootDependencyOwnershipCheckErrors(
   records: OwnershipCheckRecord[],
 ): string[] {
@@ -427,13 +347,17 @@ function printTextReport(records: AuditRecord[]) {
     console.log(`\n## ${category}`);
     for (const record of grouped.get(category) ?? []) {
       const details = [`sections=${record.sections.join(",") || "-"}`, `files=${record.fileCount}`];
+      const spec =
+        typeof record.spec === "string"
+          ? record.spec
+          : (JSON.stringify(record.spec) ?? "<undefined>");
       if (record.declaredInExtensions.length > 0) {
         details.push(`extensions=${record.declaredInExtensions.join(",")}`);
       }
       if (record.internalizedBundledRuntimeOwners.length > 0) {
         details.push(`internalized=${record.internalizedBundledRuntimeOwners.join(",")}`);
       }
-      console.log(`- ${record.depName}@${record.spec} :: ${details.join(" | ")}`);
+      console.log(`- ${record.depName}@${spec} :: ${details.join(" | ")}`);
       console.log(`  ${record.recommendation}`);
     }
   }

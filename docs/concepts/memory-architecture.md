@@ -8,11 +8,16 @@ read_when:
   - You are deciding which memory surface a new feature or plugin should write to
 ---
 
-OpenClaw memory is a set of plain files and one SQLite index, organized into
-tiers with different trust levels, write rules, and injection behavior. This
+Memory Core, OpenClaw's default memory plugin, uses plain files and one SQLite
+index, organized into tiers with different trust levels, write rules, and injection behavior. This
 page explains the whole system: what gets written where, how content earns its
 way into long-term memory, how recall works on every turn, and how the system
 defends itself against junk and poisoning.
+
+Other selected memory plugins can own their storage and save pre-compaction
+context through their tools. Their flush receives the source turn's memory
+audience and sandbox state; the file and dreaming pipeline below describes
+Memory Core. See [Automatic memory flush](/concepts/memory#automatic-memory-flush).
 
 If you want task-oriented guides instead, start with
 [Memory overview](/concepts/memory), [Dreaming](/concepts/dreaming),
@@ -51,17 +56,21 @@ Five rules shape everything below:
 | ------------ | ------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------ |
 | Instructions | `AGENTS.md` and workspace instruction files             | Human only                                          | Always, at session start                               |
 | Curated core | `MEMORY.md`, `USER.md`                                  | Dreaming consolidation; direct user request         | At session start when provenance is eligible; budgeted |
-| Episodic     | `memory/YYYY-MM-DD.md` daily notes, session transcripts | Agent during work; memory flush; transcript capture | Never; searchable on demand                            |
+| Episodic     | `memory/YYYY-MM-DD.md` daily notes, session transcripts | Agent during work; memory flush; transcript capture | On recall; not at session start                        |
 | Prospective  | Standing intents (SQLite) and cron jobs                 | `intent` tool; scheduled tasks                      | Only when a trigger fires                              |
 | Review       | `DREAMS.md`, dreaming reports                           | Dreaming phases                                     | Never; for human reading                               |
 
 The boundary that matters most is between the **curated core** and the
 **episodic** tier. Curated files are small, normally in context when their
 provenance is eligible, and written only through gated consolidation. Episodic
-files are large, append-friendly,
-and reachable only through explicit search tools or the escalation lane.
-Nothing crosses from episodic to curated without passing the promotion gates
-described below.
+files are large, append-friendly, and retrieved through search tools or
+Active Memory rather than loaded at session start. With
+`memory.search.rememberAcrossConversations` enabled and Active Memory on,
+relevant excerpts from the same agent's other recognized private conversations
+can inform reply context before generation. See
+[Remember across conversations](/concepts/active-memory/enabling#remember-across-conversations)
+for eligibility and privacy boundaries. Nothing crosses from episodic to curated
+without passing the promotion gates described below.
 
 ## Provenance: every memory knows where it came from
 
@@ -96,6 +105,15 @@ noise, and recall feedback loops:
   structurally marked and never re-extracted as a new memory. A fact recalled
   one hundred times stays one fact.
 
+Beyond per-chunk trust metadata, automatic session ingestion records source
+sessions for its staged entries. Consolidation carries those origins forward,
+so `openclaw memory forget` can remove tracked entries derived from selected
+sessions and exclude those session IDs from future ingestion. Separately,
+admission policy can exclude matching sources from dreaming ingestion and session backfill.
+Neither control covers every workspace write or retained copy; see the
+coverage, retained-data boundaries, and operator workflow in
+[Memory provenance and deletion](/concepts/memory-provenance).
+
 ## Trust boundaries and limits
 
 Workspace memory files are inside the operator trust boundary: any process
@@ -105,11 +123,15 @@ classified from the sender, while a memory flush records the least-trusted
 class for the whole file; trusted lines in a downgraded file intentionally lose
 promotion eligibility so untrusted content cannot ride a trusted file hash.
 
-The current runtime does not propagate content origin within an owner turn.
-Assistant text derived from tool or web output therefore inherits the turn's
-sender class. A follow-up should carry content-origin metadata through tool-result
-assembly into assistant output and flush writes; that cross-cutting taint model
-is not part of this memory integration.
+Content origin also propagates within a turn. When a tool result declares
+network-sourced content (web fetches, browser reads, search results), the rest
+of that turn is marked tainted: every assistant message produced after that
+result carries the taint, and memory classification treats it as `untrusted`
+even inside an owner turn. The taint clears on the next user message. The
+remaining gap is declaration coverage: only tools that declare their results
+as network-sourced participate, so output from tools that do not — local file
+reads, for example — does not taint the turn, and assistant text derived from
+it keeps its normal turn-derived provenance (`agent` in an owner turn).
 
 ## The write path
 
@@ -172,7 +194,12 @@ touching long-term memory.
 The consolidation output is accepted only if it passes structural
 validation, stays within the bootstrap file budget, and does not lose more
 than a bounded fraction of existing entries. A rejected rewrite falls back
-to the previous append-only behavior for that sweep.
+to append-only behavior for that sweep. Promotion uses the smallest configured
+per-file bootstrap limit among agents sharing the workspace, capped by the
+writer's own limit. If an append still cannot fit after older generated
+sections are removed, the writer preserves `MEMORY.md` unchanged and leaves
+the candidates eligible for a later sweep instead of committing an oversized
+file.
 
 **Write safety.** Replacing `MEMORY.md` uses optimistic concurrency: the
 content hash captured when consolidation input was built is re-checked
@@ -211,7 +238,7 @@ Three mechanisms run on eligible turns with no model involvement:
 - **Trigger injection.** Writers can attach short trigger phrases to
   entries describing when they are relevant. Each inbound message runs a
   fast lexical and vector prefilter against those triggers; entries that
-  match strongly (score at or above 0.72) are injected as a compact hidden
+  match strongly (score at or above 0.65) are injected as a compact hidden
   context block, at most three per turn.
 
 Writers store both signals as trailing comments on the same `MEMORY.md` or
@@ -410,18 +437,20 @@ authority in a future session.
 Memory architecture is mostly convention over configuration; these are the
 knobs that exist:
 
-| Concern                         | Where                                                           | Reference                                                |
-| ------------------------------- | --------------------------------------------------------------- | -------------------------------------------------------- |
-| Dreaming enable, cadence, model | `plugins.entries.memory-core.config.dreaming`                   | [Dreaming](/concepts/dreaming)                           |
-| Search providers, hybrid tuning | `memory.search`                                                 | [Memory config](/reference/memory-config)                |
-| Escalation lane mode, scope     | `plugins.entries.active-memory`                                 | [Active memory](/concepts/active-memory)                 |
-| Cross-conversation recall       | `agents.entries.<id>.memory.search.rememberAcrossConversations` | [Active memory](/concepts/active-memory)                 |
-| Flush behavior                  | `agents.defaults.compaction.memoryFlush`                        | [Memory overview](/concepts/memory)                      |
-| Memory plugin selection         | `plugins.slots.memory`                                          | [Builtin](/concepts/memory-builtin), [Plugins](/plugins) |
+| Concern                         | Where                                                           | Reference                                                     |
+| ------------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------- |
+| Dreaming enable, cadence, model | `plugins.entries.memory-core.config.dreaming`                   | [Dreaming](/concepts/dreaming)                                |
+| Session admission exclusions    | `plugins.entries.memory-core.config.memoryPolicy`               | [Provenance & deletion](/concepts/memory-provenance)          |
+| Search providers, hybrid tuning | `memory.search`                                                 | [Memory config](/reference/memory-config)                     |
+| Escalation lane mode, scope     | `plugins.entries.active-memory`                                 | [Active memory](/concepts/active-memory)                      |
+| Cross-conversation recall       | `agents.entries.<id>.memory.search.rememberAcrossConversations` | [Active memory](/concepts/active-memory)                      |
+| Flush behavior                  | `agents.defaults.compaction.memoryFlush`                        | [Memory overview](/concepts/memory)                           |
+| Memory plugin selection         | `plugins.slots.memory`                                          | [Builtin](/concepts/memory-builtin), [Plugins](/tools/plugin) |
 
 ## Related
 
 - [Memory overview](/concepts/memory)
+- [Memory provenance and deletion](/concepts/memory-provenance)
 - [Dreaming](/concepts/dreaming)
 - [Active memory](/concepts/active-memory)
 - [User model](/concepts/user-model)

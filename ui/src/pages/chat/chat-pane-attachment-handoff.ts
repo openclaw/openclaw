@@ -1,36 +1,240 @@
+import type { ChatInputRegion } from "../../app/chat-input-owner.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { storageTargetForGateway } from "../../lib/chat/outbox-store.ts";
+import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import {
-  releaseChatAttachmentPayload,
+  releaseChatAttachmentPayloads,
   releaseDisplacedChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
+import type { ChatComposerRecoveryOwner } from "./chat-send-contract.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { resolveStoredChatOutboxScope, storedChatOutboxScopeKey } from "./composer-persistence.ts";
+import type { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
+import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.ts";
+import {
+  isIncognitoComposerScope,
+  isChatComposerOwnerCurrent,
+  type captureChatComposerOwner,
+} from "./composer-persistence-state.ts";
+import {
+  CHAT_COMPOSER_DRAFT_STORAGE_ERROR,
+  loadChatComposerState,
+  storedChatOutboxScopeKey,
+} from "./composer-persistence.ts";
 import type { ChatSplitLayout } from "./split-layout-types.ts";
-import { panesOf, visiblePanesOf } from "./split-layout.ts";
+import { visiblePanesOf } from "./split-layout.ts";
 
 export type ChatAttachmentGatewayOwner = ApplicationContext["gateway"]["snapshot"]["client"];
+
+type ComposerPresentation = {
+  state: () => ChatPageHost | undefined;
+  owner: () => ChatAttachmentGatewayOwner;
+  presentationOwner: () => ReturnType<typeof captureChatComposerOwner> | undefined;
+  region: () => ChatInputRegion;
+  presented: () => boolean;
+  pause: () => void;
+  resume: (restore?: boolean) => void;
+  takeAttachmentReads: () => ChatAttachmentReadLifecycle;
+  adoptAttachmentReads: (reads: ChatAttachmentReadLifecycle) => void;
+};
+type ComposerOwnerScope = {
+  owner: NonNullable<ChatAttachmentGatewayOwner>;
+  gatewayOwner: string;
+  recoveryScope: string;
+  scopeKey: string;
+};
+const composerPresentations = new WeakMap<ApplicationContext, Set<ChatPaneComposerHandoff>>();
+
+/** Transfers live composer ownership across regions, never between ordinary split panes.
+ * The registry holds presentations only; existing persistence still owns stored drafts. */
+export class ChatPaneComposerHandoff {
+  private readonly presentations: Set<ChatPaneComposerHandoff>;
+  private scope: ComposerOwnerScope | null;
+  private ownsComposer = true;
+  private custody = Symbol("chat-composer-custody");
+
+  constructor(
+    private readonly context: ApplicationContext,
+    private readonly host: ComposerPresentation,
+  ) {
+    let presentations = composerPresentations.get(context);
+    if (!presentations) {
+      presentations = new Set();
+      composerPresentations.set(context, presentations);
+    }
+    this.presentations = presentations;
+    this.scope = this.currentScope();
+    presentations.add(this);
+  }
+
+  claim(): void {
+    if (!this.host.presented()) {
+      return;
+    }
+    const scope = this.currentScope();
+    const source = this.otherRegion(scope).find((candidate) => candidate.ownsComposer);
+    source?.transferTo(this);
+    if (!this.ownsComposer) {
+      this.host.resume(true);
+      this.ownsComposer = true;
+    }
+    this.scope = scope;
+    // Most recently presented wins when the same Home appeared in multiple splits.
+    this.presentations.delete(this);
+    this.presentations.add(this);
+  }
+
+  captureOwner(): ChatComposerRecoveryOwner | undefined {
+    const scope = this.currentScope();
+    if (!scope) {
+      return undefined;
+    }
+    const custody = this.custody;
+    const resolveOwner = () => {
+      const candidates = [this, ...[...this.presentations].toReversed()];
+      for (const candidate of candidates) {
+        if (
+          !this.presentations.has(candidate) ||
+          !candidate.ownsComposer ||
+          candidate.custody !== custody
+        ) {
+          continue;
+        }
+        const current = candidate.currentScope();
+        // Reconnect may retain payload custody; command completion separately
+        // fences draft mutation with its submitted client and connection epoch.
+        if (
+          current &&
+          (current.owner === scope.owner || current.owner.recoveryScopeReady) &&
+          candidate.matchesScope({ ...scope, owner: current.owner })
+        ) {
+          return candidate.host.state();
+        }
+      }
+      return undefined;
+    };
+    return {
+      resolveOwner,
+      retainedAttachmentIds: (attachments) =>
+        this.context.chatAttachmentHandoff.retainedAttachmentIds(attachments),
+    };
+  }
+
+  dispose(): void {
+    if (this.ownsComposer) {
+      const candidates = this.otherRegion(this.currentScope());
+      const target = candidates.find((candidate) => candidate.host.presented()) ?? candidates[0];
+      if (target) {
+        this.transferTo(target);
+      }
+    }
+    this.presentations.delete(this);
+  }
+
+  private currentScope(): ComposerOwnerScope | null {
+    const state = this.host.state();
+    const captured = this.host.presentationOwner();
+    if (
+      state &&
+      captured?.recoveryScope &&
+      !isChatComposerOwnerCurrent({ ...state, connected: false }, captured)
+    ) {
+      return null;
+    }
+    const owner = this.host.owner();
+    const recoveryScope = owner?.recoveryScope;
+    return state && owner && state.client === owner && recoveryScope
+      ? {
+          owner,
+          gatewayOwner: storageTargetForGateway(state.settings.gatewayUrl).gatewayOwner,
+          recoveryScope,
+          scopeKey: storedChatOutboxScopeKey(
+            resolveUiConversationIdentity(state, state.sessionKey),
+          ),
+        }
+      : null;
+  }
+
+  private otherRegion(scope: ComposerOwnerScope | null): ChatPaneComposerHandoff[] {
+    return [...this.presentations]
+      .toReversed()
+      .filter(
+        (candidate) =>
+          candidate.host.region() !== this.host.region() && candidate.matchesScope(scope),
+      );
+  }
+
+  private matchesScope(scope: ComposerOwnerScope | null): boolean {
+    const captured = this.scope;
+    const current = this.currentScope();
+    return Boolean(
+      scope &&
+      captured &&
+      current &&
+      current.owner === scope.owner &&
+      captured.gatewayOwner === scope.gatewayOwner &&
+      captured.recoveryScope === scope.recoveryScope &&
+      captured.scopeKey === scope.scopeKey &&
+      // A new transport must prove the same authenticated owner before taking
+      // over a live draft. Ordinary reconnects retain their captured identity.
+      (current.owner === captured.owner || current.owner.recoveryScopeReady) &&
+      current.gatewayOwner === captured.gatewayOwner &&
+      current.recoveryScope === captured.recoveryScope &&
+      current.scopeKey === captured.scopeKey,
+    );
+  }
+
+  private transferTo(target: ChatPaneComposerHandoff): void {
+    const sourceState = this.host.state();
+    const targetState = target.host.state();
+    if (!sourceState || !targetState || !this.matchesScope(target.currentScope())) {
+      return;
+    }
+    this.host.pause();
+    target.host.pause();
+    const attachments = sourceState.chatAttachments;
+    const fallbacks = sourceState.chatComposerFallbackByScope;
+    releaseDisplacedChatAttachmentPayloads(
+      [
+        targetState.chatAttachments,
+        ...Object.values(targetState.chatComposerFallbackByScope).map(
+          (fallback) => fallback.attachments,
+        ),
+      ].flat(),
+      [attachments, ...Object.values(fallbacks).map((fallback) => fallback.attachments)],
+    );
+    targetState.chatMessage = sourceState.chatMessage;
+    targetState.chatMentions = sourceState.chatMentions;
+    targetState.chatGoalDraftMode = sourceState.chatGoalDraftMode;
+    targetState.chatReplyTarget = sourceState.chatReplyTarget;
+    targetState.chatQueuedEdit = sourceState.chatQueuedEdit;
+    targetState.chatAttachments = attachments;
+    targetState.chatComposerFallbackByScope = fallbacks;
+    sourceState.chatMessage = "";
+    sourceState.chatMentions = [];
+    sourceState.chatGoalDraftMode = null;
+    sourceState.chatReplyTarget = null;
+    sourceState.chatQueuedEdit = null;
+    sourceState.chatAttachments = [];
+    sourceState.chatComposerFallbackByScope = {};
+    // Pending file reads move with the draft, including Send's preparation gate.
+    target.host.adoptAttachmentReads(this.host.takeAttachmentReads());
+    this.ownsComposer = false;
+    target.ownsComposer = true;
+    target.custody = this.custody;
+    target.scope = target.currentScope();
+    target.host.resume();
+    sourceState.requestUpdate?.();
+    targetState.requestUpdate?.();
+  }
+}
 
 function handoffKey(paneId: string, state: ChatPageHost, owner: ChatAttachmentGatewayOwner) {
   return {
     owner,
     paneId,
-    scopeKey: storedChatOutboxScopeKey(resolveStoredChatOutboxScope(state, state.sessionKey)),
+    scopeKey: storedChatOutboxScopeKey(resolveUiConversationIdentity(state, state.sessionKey)),
   };
-}
-
-function releaseAttachments(
-  attachments: readonly ChatAttachment[],
-  retainedIds = new Set<string>(),
-  releasedIds = new Set<string>(),
-): void {
-  for (const attachment of attachments) {
-    if (retainedIds.has(attachment.id) || releasedIds.has(attachment.id)) {
-      continue;
-    }
-    releasedIds.add(attachment.id);
-    releaseChatAttachmentPayload(attachment.id);
-  }
 }
 
 export function restorePaneStagedAttachments(
@@ -43,10 +247,20 @@ export function restorePaneStagedAttachments(
   if (!restored) {
     return;
   }
+  const current =
+    restored.draftRevision === undefined ||
+    restored.draftRevision >=
+      loadChatComposerState(state, state.sessionKey).revisions.latestAttempt;
+  if (current && restored.draftRevision !== undefined) {
+    state.chatMessage = restored.message ?? "";
+    state.chatMentions = restored.mentions;
+    state.chatGoalDraftMode = restored.goalMode ?? null;
+    state.chatReplyTarget = restored.replyTarget ?? null;
+  }
   const currentIds = new Set(state.chatAttachments.map((attachment) => attachment.id));
   state.chatAttachments = [
     ...state.chatAttachments,
-    ...restored.attachments.filter((attachment) => !currentIds.has(attachment.id)),
+    ...(current ? restored.attachments.filter((attachment) => !currentIds.has(attachment.id)) : []),
   ];
   const displaced = Object.entries(restored.fallbacks)
     .filter(([scopeKey]) => Object.hasOwn(state.chatComposerFallbackByScope, scopeKey))
@@ -55,10 +269,19 @@ export function restorePaneStagedAttachments(
     ...restored.fallbacks,
     ...state.chatComposerFallbackByScope,
   };
-  releaseDisplacedChatAttachmentPayloads(displaced, [
-    state.chatAttachments,
-    ...Object.values(state.chatComposerFallbackByScope).map((fallback) => fallback.attachments),
-  ]);
+  const currentFallback =
+    state.chatComposerFallbackByScope[handoffKey(paneId, state, owner).scopeKey];
+  if (current && currentFallback?.storageFailed) {
+    state.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
+    state.chatError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
+  }
+  releaseDisplacedChatAttachmentPayloads(
+    [...displaced, ...(!current ? restored.attachments : [])],
+    [
+      state.chatAttachments,
+      ...Object.values(state.chatComposerFallbackByScope).map((fallback) => fallback.attachments),
+    ],
+  );
 }
 
 export function preparePaneStagedAttachments(
@@ -66,12 +289,32 @@ export function preparePaneStagedAttachments(
   paneId: string,
   state: ChatPageHost,
   owner: ChatAttachmentGatewayOwner,
+  draftRevision: number,
+  presentationOwner?: ReturnType<typeof captureChatComposerOwner>,
 ): void {
+  // Teardown may run after hello replaced the identity on this same client.
+  // Never mint a handoff for that new account from the retired pane’s input.
+  if (
+    presentationOwner &&
+    !isChatComposerOwnerCurrent({ ...state, connected: false }, presentationOwner)
+  ) {
+    return;
+  }
   const attachments = [...state.chatAttachments];
   context.chatAttachmentHandoff.prepare({
+    reviewPrivateDraft: reviewPrivateComposerDraft,
     ...handoffKey(paneId, state, owner),
     attachments,
     fallbacks: state.chatComposerFallbackByScope,
+    message: state.chatMessage,
+    mentions: state.chatMentions,
+    goalMode: state.chatGoalDraftMode,
+    replyTarget: state.chatReplyTarget,
+    draftRevision,
+    incognito: isIncognitoComposerScope(
+      state,
+      resolveUiConversationIdentity(state, state.sessionKey),
+    ),
   });
 }
 
@@ -79,10 +322,9 @@ export function discardStateStagedAttachments(state: ChatPageHost | undefined): 
   if (!state) {
     return;
   }
-  const releasedIds = new Set<string>();
-  releaseAttachments(state.chatAttachments, new Set(), releasedIds);
+  releaseChatAttachmentPayloads(state.chatAttachments);
   for (const fallback of Object.values(state.chatComposerFallbackByScope)) {
-    releaseAttachments(fallback.attachments, new Set(), releasedIds);
+    releaseChatAttachmentPayloads(fallback.attachments);
     fallback.attachments = [];
   }
   state.chatAttachments = [];
@@ -103,7 +345,9 @@ export function replacePaneStagedAttachmentGatewayOwner(
   // reconnect or plugin-install rotation must not silently discard them.
   if (state) {
     const dropAnnotations = (attachments: readonly ChatAttachment[]) => {
-      releaseAttachments(attachments.filter((attachment) => attachment.browserAnnotation));
+      releaseChatAttachmentPayloads(
+        attachments.filter((attachment) => attachment.browserAnnotation),
+      );
       return attachments.filter((attachment) => !attachment.browserAnnotation);
     };
     state.chatAttachments = dropAnnotations(state.chatAttachments);
@@ -118,8 +362,6 @@ export function replacePaneStagedAttachmentGatewayOwner(
 
 type StagedAttachmentPane = Element & {
   paneId: string;
-  sessionKey: string;
-  discardStagedAttachments?: () => void;
   resumeStagedAttachments?: () => void;
 };
 
@@ -134,23 +376,4 @@ export function resumeStagedPanes(
       pane.resumeStagedAttachments?.();
     }
   }
-}
-
-export function closeStagedPane(
-  context: ApplicationContext,
-  root: ParentNode,
-  layout: ChatSplitLayout,
-  paneId: string,
-) {
-  const survivingPane = panesOf(layout).find((candidate) => candidate.id !== paneId);
-  const mounted = [...root.querySelectorAll<StagedAttachmentPane>("openclaw-chat-pane")].filter(
-    (candidate) => candidate.paneId === paneId,
-  );
-  // Clear every retained presentation first so their disconnects cannot
-  // restage a package under a later reused logical pane id.
-  for (const pane of mounted) {
-    pane.discardStagedAttachments?.();
-  }
-  context.chatAttachmentHandoff.clearPane(paneId);
-  return survivingPane;
 }

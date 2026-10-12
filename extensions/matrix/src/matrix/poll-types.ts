@@ -1,14 +1,14 @@
-/**
- * Matrix Poll Types (MSC3381)
- *
- * Defines types for Matrix poll events:
- * - m.poll.start - Creates a new poll
- * - m.poll.response - Records a vote
- * - m.poll.end - Closes a poll
- */
-
+// Matrix polls follow MSC3381.
+import {
+  M_POLL_KIND_DISCLOSED,
+  type PollKind as MatrixPollKind,
+} from "matrix-js-sdk/lib/@types/polls.js";
 import { normalizePollInput, type PollInput } from "openclaw/plugin-sdk/poll-runtime";
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asFiniteNumber,
+  isRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const M_POLL_START = "m.poll.start" as const;
 const M_POLL_RESPONSE = "m.poll.response" as const;
@@ -50,7 +50,7 @@ type PollParsedAnswer = {
 
 type PollStartSubtype = {
   question: TextContent;
-  kind?: PollKind;
+  kind?: MatrixPollKind;
   max_selections?: number;
   answers: PollAnswer[];
 };
@@ -63,18 +63,9 @@ export type PollStartContent = {
   "org.matrix.msc1767.text"?: string;
 };
 
-type PollSummary = {
-  eventId: string;
-  roomId: string;
-  sender: string;
-  senderName: string;
+type PollResultsSummary = {
   question: string;
-  answers: string[];
   kind: PollKind;
-  maxSelections: number;
-};
-
-type PollResultsSummary = PollSummary & {
   entries: Array<{
     id: string;
     text: string;
@@ -129,10 +120,7 @@ function getTextContent(text?: unknown): string {
 }
 
 export function parsePollStart(content: PollStartContent): ParsedPollStart | null {
-  const poll =
-    (content as Record<string, PollStartSubtype | undefined>)[M_POLL_START] ??
-    (content as Record<string, PollStartSubtype | undefined>)[ORG_POLL_START] ??
-    (content as Record<string, PollStartSubtype | undefined>)["m.poll"];
+  const poll = content[M_POLL_START] ?? content[ORG_POLL_START] ?? content["m.poll"];
   if (!poll) {
     return null;
   }
@@ -164,35 +152,19 @@ export function parsePollStart(content: PollStartContent): ParsedPollStart | nul
   return {
     question,
     answers,
-    kind: poll.kind ?? "m.poll.disclosed",
+    kind: M_POLL_KIND_DISCLOSED.matches(poll.kind ?? "m.poll.disclosed")
+      ? "m.poll.disclosed"
+      : "m.poll.undisclosed",
     maxSelections: Math.min(Math.max(maxSelections, 1), answers.length),
   };
 }
 
-export function parsePollStartContent(content: PollStartContent): PollSummary | null {
-  const parsed = parsePollStart(content);
-  if (!parsed) {
-    return null;
-  }
-
-  return {
-    eventId: "",
-    roomId: "",
-    sender: "",
-    senderName: "",
-    question: parsed.question,
-    answers: parsed.answers.map((answer) => answer.text),
-    kind: parsed.kind,
-    maxSelections: parsed.maxSelections,
-  };
-}
-
-export function formatPollAsText(summary: PollSummary): string {
+export function formatPollAsText(summary: ParsedPollStart): string {
   const lines = [
     "[Poll]",
     summary.question,
     "",
-    ...summary.answers.map((answer, idx) => `${idx + 1}. ${answer}`),
+    ...summary.answers.map((answer, idx) => `${idx + 1}. ${answer.text}`),
   ];
   return lines.join("\n");
 }
@@ -223,11 +195,8 @@ function parsePollResponseAnswerIds(content: unknown): string[] | null {
 }
 
 export function buildPollResultsSummary(params: {
-  pollEventId: string;
-  roomId: string;
   sender: string;
-  senderName: string;
-  content: PollStartContent;
+  poll: ParsedPollStart;
   relationEvents: Array<{
     event_id?: string;
     sender?: string;
@@ -238,11 +207,8 @@ export function buildPollResultsSummary(params: {
       redacted_because?: unknown;
     };
   }>;
-}): PollResultsSummary | null {
-  const parsed = parsePollStart(params.content);
-  if (!parsed) {
-    return null;
-  }
+}): PollResultsSummary {
+  const parsed = params.poll;
 
   let pollClosedAt = Number.POSITIVE_INFINITY;
   for (const event of params.relationEvents) {
@@ -255,34 +221,18 @@ export function buildPollResultsSummary(params: {
     if (event.sender !== params.sender) {
       continue;
     }
-    const ts =
-      typeof event.origin_server_ts === "number" && Number.isFinite(event.origin_server_ts)
-        ? event.origin_server_ts
-        : Number.POSITIVE_INFINITY;
+    const ts = asFiniteNumber(event.origin_server_ts) ?? Number.POSITIVE_INFINITY;
     if (ts < pollClosedAt) {
       pollClosedAt = ts;
     }
   }
 
   const answerIds = new Set(parsed.answers.map((answer) => answer.id));
-  const latestVoteBySender = new Map<
-    string,
-    {
-      ts: number;
-      eventId: string;
-      answerIds: string[];
-    }
-  >();
+  const latestVoteBySender = new Map<string, string[]>();
 
-  const orderedRelationEvents = [...params.relationEvents].toSorted((left, right) => {
-    const leftTs =
-      typeof left.origin_server_ts === "number" && Number.isFinite(left.origin_server_ts)
-        ? left.origin_server_ts
-        : Number.POSITIVE_INFINITY;
-    const rightTs =
-      typeof right.origin_server_ts === "number" && Number.isFinite(right.origin_server_ts)
-        ? right.origin_server_ts
-        : Number.POSITIVE_INFINITY;
+  const orderedRelationEvents = params.relationEvents.toSorted((left, right) => {
+    const leftTs = asFiniteNumber(left.origin_server_ts) ?? Number.POSITIVE_INFINITY;
+    const rightTs = asFiniteNumber(right.origin_server_ts) ?? Number.POSITIVE_INFINITY;
     if (leftTs !== rightTs) {
       return leftTs - rightTs;
     }
@@ -300,10 +250,7 @@ export function buildPollResultsSummary(params: {
     if (!senderId) {
       continue;
     }
-    const eventTs =
-      typeof event.origin_server_ts === "number" && Number.isFinite(event.origin_server_ts)
-        ? event.origin_server_ts
-        : Number.POSITIVE_INFINITY;
+    const eventTs = asFiniteNumber(event.origin_server_ts) ?? Number.POSITIVE_INFINITY;
     if (eventTs > pollClosedAt) {
       continue;
     }
@@ -316,11 +263,7 @@ export function buildPollResultsSummary(params: {
           .slice(0, parsed.maxSelections),
       ),
     );
-    latestVoteBySender.set(senderId, {
-      ts: eventTs,
-      eventId: typeof event.event_id === "string" ? event.event_id : "",
-      answerIds: normalizedAnswers,
-    });
+    latestVoteBySender.set(senderId, normalizedAnswers);
   }
 
   const voteCounts = new Map<string, number>(
@@ -328,24 +271,18 @@ export function buildPollResultsSummary(params: {
   );
   let totalVotes = 0;
   for (const latestVote of latestVoteBySender.values()) {
-    if (latestVote.answerIds.length === 0) {
+    if (latestVote.length === 0) {
       continue;
     }
     totalVotes += 1;
-    for (const answerId of latestVote.answerIds) {
+    for (const answerId of latestVote) {
       voteCounts.set(answerId, (voteCounts.get(answerId) ?? 0) + 1);
     }
   }
 
   return {
-    eventId: params.pollEventId,
-    roomId: params.roomId,
-    sender: params.sender,
-    senderName: params.senderName,
     question: parsed.question,
-    answers: parsed.answers.map((answer) => answer.text),
     kind: parsed.kind,
-    maxSelections: parsed.maxSelections,
     entries: parsed.answers.map((answer) => ({
       id: answer.id,
       text: answer.text,
@@ -397,10 +334,7 @@ export function buildPollStartContent(poll: PollInput): PollStartContent {
   }));
 
   const isMultiple = normalized.maxSelections > 1;
-  const fallbackText = buildPollFallbackText(
-    normalized.question,
-    answers.map((answer) => getTextContent(answer)),
-  );
+  const fallbackText = buildPollFallbackText(normalized.question, normalized.options);
 
   return {
     [M_POLL_START]: {

@@ -1,12 +1,10 @@
-import {
-  loadSessionEntryReadOnly,
-  updateSessionEntry,
-} from "../../config/sessions/session-accessor.js";
+import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
 import { getGatewayRecoveryRuntime } from "../../gateway/server-recovery-runtime-context.js";
 import { findDeliveryIntentOwner } from "../../infra/outbound/delivery-queue-storage.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import {
-  deliveryContextFromSession,
   deliveryContextKey,
   normalizeDeliveryContext,
 } from "../../utils/delivery-context.shared.js";
@@ -14,46 +12,11 @@ import {
 const PENDING_DELIVERY_NOTICE =
   "I couldn’t confirm whether my previous reply reached this chat, so I won’t resend it automatically. Please ask for any missing remainder.";
 
-function noticeId(intentId: string): string {
-  return `main-session-restart-recovery:pending-final:${intentId}`;
-}
-
-async function acknowledgePendingDeliveryNotice(params: {
-  sessionKey: string;
-  storePath: string;
-  sessionId: string;
-  intentId: string;
-  idempotencyKey: string;
-}): Promise<void> {
-  if (
-    !(
-      await appendAssistantMessageToSessionTranscript({
-        sessionKey: params.sessionKey,
-        storePath: params.storePath,
-        expectedSessionId: params.sessionId,
-        text: PENDING_DELIVERY_NOTICE,
-        idempotencyKey: params.idempotencyKey,
-      })
-    ).ok
-  ) {
-    return;
-  }
-  await updateSessionEntry(
-    { sessionKey: params.sessionKey, storePath: params.storePath },
-    (current) =>
-      current.sessionId === params.sessionId &&
-      current.pendingDeliveryNotice?.intentId === params.intentId
-        ? { pendingDeliveryNotice: undefined, updatedAt: Date.now() }
-        : null,
-    { skipMaintenance: true, takeCacheOwnership: true },
-  );
-}
-
 export async function deliverPendingDeliveryNotice(
   sessionKey: string,
   storePath: string,
 ): Promise<void> {
-  const entry = loadSessionEntryReadOnly({
+  const entry = await readSessionEntryReadOnlyInWorker({
     sessionKey,
     storePath,
     readConsistency: "latest",
@@ -73,7 +36,8 @@ export async function deliverPendingDeliveryNotice(
   ) {
     return;
   }
-  const idempotencyKey = noticeId(notice.intentId);
+  const idempotencyKey = `main-session-restart-recovery:pending-final:${notice.intentId}`;
+  let delivered: boolean;
   try {
     const outcome = await runtime.sendRecoveryNotice({
       channel: context.channel,
@@ -83,48 +47,44 @@ export async function deliverPendingDeliveryNotice(
       text: PENDING_DELIVERY_NOTICE,
       idempotencyKey,
     });
-    if (outcome.suppressed) {
-      // Zero platform results: nothing user-visible was sent. Retain the debt
-      // terminally instead of appending a transcript entry that claims it was.
-      await updateSessionEntry({ sessionKey, storePath }, (current) =>
-        current.sessionId === entry.sessionId &&
-        current.pendingDeliveryNotice?.intentId === notice.intentId
-          ? {
-              pendingDeliveryNotice: { ...notice, state: "unresolved" as const },
-              updatedAt: Date.now(),
-            }
-          : null,
-      );
+    delivered = !outcome.suppressed;
+  } catch {
+    const owner = await findDeliveryIntentOwner(idempotencyKey);
+    if (owner?.status !== "completed" && owner?.status !== "failed") {
       return;
     }
-  } catch {
-    const owner = findDeliveryIntentOwner(idempotencyKey);
-    if (owner?.status === "completed") {
-      await acknowledgePendingDeliveryNotice({
+    delivered = owner.status === "completed";
+  }
+  if (
+    delivered &&
+    !(
+      await appendAssistantMessageToSessionTranscript({
         sessionKey,
         storePath,
-        sessionId: entry.sessionId,
-        intentId: notice.intentId,
+        expectedSessionId: entry.sessionId,
+        text: PENDING_DELIVERY_NOTICE,
         idempotencyKey,
-      });
-    } else if (owner?.status === "failed") {
-      await updateSessionEntry({ sessionKey, storePath }, (current) =>
-        current.sessionId === entry.sessionId &&
-        current.pendingDeliveryNotice?.intentId === notice.intentId
-          ? {
-              pendingDeliveryNotice: { ...notice, state: "unresolved" as const },
-              updatedAt: Date.now(),
-            }
-          : null,
-      );
-    }
+      })
+    ).ok
+  ) {
     return;
   }
-  await acknowledgePendingDeliveryNotice({
-    sessionKey,
-    storePath,
-    sessionId: entry.sessionId,
-    intentId: notice.intentId,
-    idempotencyKey,
-  });
+  await updateSessionEntry(
+    { sessionKey, storePath },
+    (current) =>
+      current.sessionId === entry.sessionId &&
+      current.pendingDeliveryNotice?.intentId === notice.intentId &&
+      current.pendingDeliveryNotice.state !== "acknowledged"
+        ? {
+            // Retain the terminal fact: queue settlement may replay after this
+            // acknowledgment, and one intent must never owe its notice again.
+            pendingDeliveryNotice: {
+              ...current.pendingDeliveryNotice,
+              state: delivered ? "acknowledged" : "unresolved",
+            },
+            updatedAt: Date.now(),
+          }
+        : null,
+    { skipMaintenance: true, takeCacheOwnership: true },
+  );
 }

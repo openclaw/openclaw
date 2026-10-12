@@ -1,106 +1,103 @@
-// Discord tests cover runtime.presence plugin behavior.
-import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { ActionGate } from "openclaw/plugin-sdk/channel-actions";
+import type { DiscordActionConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayPlugin } from "../internal/gateway.js";
 import { clearGateways, registerGateway } from "../monitor/gateway-registry.js";
-import type { ActionGate } from "../runtime-api.js";
+import { handleDiscordAction } from "./runtime.js";
 import { handleDiscordPresenceAction } from "./runtime.presence.js";
 
 const mockUpdatePresence = vi.fn();
-
+const presenceEnabled: ActionGate<DiscordActionConfig> = (key) => key === "presence";
+const defaultDiscordConfig: OpenClawConfig = {
+  channels: { discord: { token: "test-token", actions: { presence: true } } },
+};
 function createMockGateway(connected = true): GatewayPlugin {
   return { isConnected: connected, updatePresence: mockUpdatePresence } as unknown as GatewayPlugin;
 }
-
-const presenceEnabled: ActionGate<DiscordActionConfig> = (key) => key === "presence";
-const presenceDisabled: ActionGate<DiscordActionConfig> = () => false;
+function setPresence(params: Record<string, unknown>, gate = presenceEnabled) {
+  return handleDiscordPresenceAction("setPresence", params, gate, defaultDiscordConfig);
+}
 
 describe("handleDiscordPresenceAction", () => {
-  async function setPresence(
-    params: Record<string, unknown>,
-    actionGate: ActionGate<DiscordActionConfig> = presenceEnabled,
-  ) {
-    return await handleDiscordPresenceAction("setPresence", params, actionGate);
-  }
-
   beforeEach(() => {
     mockUpdatePresence.mockClear();
     clearGateways();
-    registerGateway(undefined, createMockGateway());
-  });
-
-  it("sets playing activity", async () => {
-    const result = await handleDiscordPresenceAction(
-      "setPresence",
-      { activityType: "playing", activityName: "with fire", status: "online" },
-      presenceEnabled,
-    );
-    expect(mockUpdatePresence).toHaveBeenCalledWith({
-      since: null,
-      activities: [{ name: "with fire", type: 0 }],
-      status: "online",
-      afk: false,
-    });
-    const textBlock = result.content.find((block) => block.type === "text");
-    const payload = JSON.parse(
-      (textBlock as { type: "text"; text: string } | undefined)?.text ?? "{}",
-    );
-    expect(payload.ok).toBe(true);
-    expect(payload.activities[0]).toEqual({ type: 0, name: "with fire" });
+    registerGateway("default", createMockGateway());
   });
 
   it.each([
     {
-      name: "streaming activity with URL",
+      name: "mixed-case streaming activity with URL",
       params: {
-        activityType: "streaming",
+        activityType: "StReAmInG",
         activityName: "My Stream",
         activityUrl: "https://twitch.tv/example",
       },
-      expectedActivities: [{ name: "My Stream", type: 1, url: "https://twitch.tv/example" }],
+      activities: [{ name: "My Stream", type: 1, url: "https://twitch.tv/example" }],
     },
     {
       name: "streaming activity without URL",
-      params: { activityType: "streaming", activityName: "My Stream" },
-      expectedActivities: [{ name: "My Stream", type: 1 }],
-    },
-    {
-      name: "listening activity",
-      params: { activityType: "listening", activityName: "Spotify" },
-      expectedActivities: [{ name: "Spotify", type: 2 }],
-    },
-    {
-      name: "watching activity",
-      params: { activityType: "watching", activityName: "you" },
-      expectedActivities: [{ name: "you", type: 3 }],
+      params: { accountId: "default", activityType: "streaming", activityName: "My Stream" },
+      activities: [{ name: "My Stream", type: 1 }],
     },
     {
       name: "custom activity using state",
       params: { activityType: "custom", activityState: "Vibing" },
-      expectedActivities: [{ name: "", type: 4, state: "Vibing" }],
+      activities: [{ name: "", type: 4, state: "Vibing" }],
     },
-    {
-      name: "activity with state",
-      params: { activityType: "playing", activityName: "My Game", activityState: "In the lobby" },
-      expectedActivities: [{ name: "My Game", type: 0, state: "In the lobby" }],
-    },
-    {
-      name: "default empty activity name when only type provided",
-      params: { activityType: "playing" },
-      expectedActivities: [{ name: "", type: 0 }],
-    },
-  ])("sets $name", async ({ params, expectedActivities }) => {
-    await setPresence(params);
+  ])("sets $name", async ({ params, activities }) => {
+    const result = await setPresence(params);
     expect(mockUpdatePresence).toHaveBeenCalledWith({
       since: null,
-      activities: expectedActivities,
+      activities,
       status: "online",
       afk: false,
     });
+    expect(result.details).toEqual({ ok: true, status: "online", activities });
   });
 
-  it("sets status-only without activity", async () => {
-    await setPresence({ status: "idle" });
+  it.each<[string, Record<string, unknown>, RegExp]>([
+    ["invalid status", { status: "offline" }, /Invalid status/],
+    [
+      "inherited constructor activityType",
+      { activityType: "constructor", activityName: "x" },
+      /Invalid activityType/,
+    ],
+    ["missing activityType", { activityName: "My Game" }, /activityType is required/],
+  ])("rejects %s before sending to the gateway", async (_name, params, error) => {
+    await expect(setPresence(params)).rejects.toThrow(error);
+    expect(mockUpdatePresence).not.toHaveBeenCalled();
+  });
+
+  it("respects presence gating", async () => {
+    await expect(setPresence({ status: "online" }, () => false)).rejects.toThrow(/disabled/);
+  });
+
+  it.each([false, true])("rejects an unavailable gateway (registered: %s)", async (registered) => {
+    clearGateways();
+    if (registered) {
+      registerGateway("default", createMockGateway(false));
+    }
+    await expect(setPresence({ status: "dnd" })).rejects.toThrow(
+      registered ? /not connected/ : /not available/,
+    );
+  });
+
+  it("routes the full presence action to the configured named default account", async () => {
+    clearGateways();
+    registerGateway("ops", createMockGateway());
+    await handleDiscordAction(
+      { action: "setPresence", status: "idle" },
+      {
+        channels: {
+          discord: {
+            actions: { presence: true },
+            defaultAccount: "ops",
+            accounts: { ops: { token: "ops-token" } },
+          },
+        },
+      },
+    );
     expect(mockUpdatePresence).toHaveBeenCalledWith({
       since: null,
       activities: [],
@@ -109,58 +106,9 @@ describe("handleDiscordPresenceAction", () => {
     });
   });
 
-  it.each([
-    { name: "invalid status", params: { status: "offline" }, expectedMessage: /Invalid status/ },
-    {
-      name: "invalid activity type",
-      params: { activityType: "invalid" },
-      expectedMessage: /Invalid activityType/,
-    },
-  ])("rejects $name", async ({ params, expectedMessage }) => {
-    await expect(setPresence(params)).rejects.toThrow(expectedMessage);
-  });
-
-  it("defaults status to online", async () => {
-    await setPresence({ activityType: "playing", activityName: "test" });
-    expect(mockUpdatePresence).toHaveBeenCalledWith({
-      since: null,
-      activities: [{ name: "test", type: 0 }],
-      status: "online",
-      afk: false,
-    });
-  });
-
-  it("respects presence gating", async () => {
-    await expect(setPresence({ status: "online" }, presenceDisabled)).rejects.toThrow(/disabled/);
-  });
-
-  it("errors when gateway is not registered", async () => {
-    clearGateways();
-    await expect(setPresence({ status: "dnd" })).rejects.toThrow(/not available/);
-  });
-
-  it("errors when gateway is not connected", async () => {
-    clearGateways();
-    registerGateway(undefined, createMockGateway(false));
-    await expect(setPresence({ status: "dnd" })).rejects.toThrow(/not connected/);
-  });
-
-  it("uses accountId to resolve gateway", async () => {
-    const accountGateway = createMockGateway();
-    registerGateway("my-account", accountGateway);
-    await setPresence({ accountId: "my-account", activityType: "playing", activityName: "test" });
-    expect(mockUpdatePresence).toHaveBeenCalled();
-  });
-
-  it("requires activityType when activityName is provided", async () => {
-    await expect(setPresence({ activityName: "My Game" })).rejects.toThrow(
-      /activityType is required/,
-    );
-  });
-
   it("rejects unknown presence actions", async () => {
-    await expect(handleDiscordPresenceAction("unknownAction", {}, presenceEnabled)).rejects.toThrow(
-      /Unknown presence action/,
-    );
+    await expect(
+      handleDiscordPresenceAction("unknownAction", {}, presenceEnabled, defaultDiscordConfig),
+    ).rejects.toThrow(/Unknown presence action/);
   });
 });

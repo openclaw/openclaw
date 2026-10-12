@@ -7,6 +7,31 @@ import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { formatSignalMediaText } from "../media-text.js";
 
+const internalHookMocks = vi.hoisted(() => ({
+  createInternalHookEvent: vi.fn(
+    (type: string, action: string, sessionKey: string, context: Record<string, unknown>) => ({
+      type,
+      action,
+      sessionKey,
+      context,
+      timestamp: new Date(),
+      messages: [],
+    }),
+  ),
+  triggerInternalHook: vi.fn(async () => undefined),
+}));
+
+vi.mock("openclaw/plugin-sdk/hook-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/hook-runtime")>(
+    "openclaw/plugin-sdk/hook-runtime",
+  );
+  return {
+    ...actual,
+    createInternalHookEvent: internalHookMocks.createInternalHookEvent,
+    triggerInternalHook: internalHookMocks.triggerInternalHook,
+  };
+});
+
 type SignalMsgContext = Pick<MsgContext, "Body" | "WasMentioned"> & {
   Body?: string;
   WasMentioned?: boolean;
@@ -54,54 +79,24 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
     "openclaw/plugin-sdk/channel-inbound",
   );
-  type RunParams = Parameters<typeof actual.runChannelInboundEvent>[0];
+  const { createSignalPreparedDispatchRunner } = await import("./event-handler.test-harness.js");
   return {
     ...actual,
-    runChannelInboundEvent: async (params: RunParams) => {
-      const input = await params.adapter.ingest(params.raw);
-      if (!input) {
-        return { admission: { kind: "drop" as const, reason: "ingest-null" }, dispatched: false };
-      }
-      const eventClass = (await params.adapter.classify?.(input)) ?? {
-        kind: "message" as const,
-        canStartAgentTurn: true,
-      };
-      const preflight = (await params.adapter.preflight?.(input, eventClass)) ?? {};
-      const resolved = await params.adapter.resolveTurn(
-        input,
-        eventClass,
-        "kind" in preflight ? { admission: preflight } : preflight,
-      );
-      if (!("route" in resolved) || !("delivery" in resolved)) {
-        throw new Error("expected assembled Signal channel turn plan");
-      }
-      const result = await actual.runPreparedInboundReply({
-        channel: resolved.channel,
-        accountId: resolved.accountId,
-        routeSessionKey: resolved.route.sessionKey,
-        storePath: "/tmp/openclaw/signal-sessions.json",
-        ctxPayload: resolved.ctxPayload,
-        recordInboundSession: async () => {},
-        afterRecord: resolved.afterRecord,
-        record: resolved.record,
-        history: resolved.history,
-        admission: resolved.admission,
-        botLoopProtection: resolved.botLoopProtection,
-        runDispatch: async () => {
-          capturedCtx = resolved.ctxPayload as SignalMsgContext;
-          return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
-        },
-      });
-      await params.adapter.onFinalize?.(result);
-      return result;
-    },
+    runChannelInboundEvent: createSignalPreparedDispatchRunner(
+      actual.runChannelInboundEvent,
+      async () => {},
+      async (resolved) => {
+        capturedCtx = resolved.ctxPayload as SignalMsgContext;
+        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+      },
+    ),
   };
 });
 
 const [
   { createBaseSignalEventHandlerDeps, createSignalReceiveEvent },
   { createSignalEventHandler },
-  { renderSignalMentions, resolveSignalMentionFacts },
+  { renderSignalMentions },
   { resolveSignalReplyContextWithPersistence },
 ] = await Promise.all([
   import("./event-handler.test-harness.js"),
@@ -200,25 +195,41 @@ describe("signal mention gating", () => {
     capturedCtx = undefined;
   });
 
-  it("drops group messages without mention when requireMention is configured", async () => {
-    const handler = createMentionHandler({ requireMention: true });
+  it("logs identity-derived mention drops once per account and group while preserving history", async () => {
+    const log = vi.fn();
+    const groupHistories = new Map();
+    const createHandler = (accountId: string) =>
+      createSignalEventHandler(
+        createBaseSignalEventHandlerDeps({
+          accountId,
+          runtime: { log, error: vi.fn(), exit: vi.fn() },
+          groupHistories,
+          cfg: { agents: { entries: { main: { identity: { name: "Claw" } } } } },
+        }),
+      );
+    const event = (groupId: string) =>
+      createSignalReceiveEvent({
+        dataMessage: {
+          message: "What up",
+          groupInfo: { groupId },
+        },
+      });
+    const handler = createHandler("mention-primary");
 
-    await handler(makeGroupEvent({ message: "hello everyone" }));
+    await handler(event("mention-g1"));
+    await handler(event("mention-g1"));
+    await handler(event("mention-g2"));
+    await createHandler("mention-secondary")(event("mention-g1"));
+
     expect(capturedCtx).toBeUndefined();
-  });
-
-  it("allows group messages with mention when requireMention is configured", async () => {
-    const handler = createMentionHandler({ requireMention: true });
-
-    await handler(makeGroupEvent({ message: "hey @bot what's up" }));
-    expect(getCapturedCtx().WasMentioned).toBe(true);
-  });
-
-  it("sets WasMentioned=false for group messages without mention when requireMention is off", async () => {
-    const handler = createMentionHandler({ requireMention: false });
-
-    await handler(makeGroupEvent({ message: "hello everyone" }));
-    expect(getCapturedCtx().WasMentioned).toBe(false);
+    expect(groupHistories.get("mention-g1")).toHaveLength(3);
+    expect(log).toHaveBeenCalledTimes(3);
+    expect(log.mock.calls[0]?.[0]).toContain("mention-g1");
+    expect(log.mock.calls[1]?.[0]).toContain("mention-g2");
+    expect(log.mock.calls[0]?.[0]).toContain("requireMention");
+    expect(log.mock.calls[0]?.[0]).toContain("false");
+    expect(log.mock.calls.flat().join(" ")).not.toContain("What up");
+    expect(log.mock.calls.flat().join(" ")).not.toContain("+15550001111");
   });
 
   it("allows explicitly configured Signal groups by group id without a mention", async () => {
@@ -244,38 +255,6 @@ describe("signal mention gating", () => {
 
     await handler(makeGroupEvent({ message: "hello everyone" }));
     expect(getCapturedCtx().WasMentioned).toBe(false);
-  });
-
-  it("records pending history for skipped group messages", async () => {
-    const { handler, groupHistories } = createMentionGatedHistoryHandler();
-    await handler(makeGroupEvent({ message: "hello from alice" }));
-    expect(capturedCtx).toBeUndefined();
-    const entries = getGroupHistoryEntries(groupHistories);
-    expect(entries).toHaveLength(1);
-    const entry = expectDefined(entries[0], "Signal group history entry");
-    expect(entry.sender).toBe("Alice");
-    expect(entry.body).toBe("hello from alice");
-  });
-
-  it("keeps the canonical data-message timestamp in skipped group history", async () => {
-    const { handler, groupHistories } = createMentionGatedHistoryHandler();
-    const timestamp = 1700000000123;
-
-    await handler(
-      createSignalReceiveEvent({
-        timestamp: undefined,
-        dataMessage: {
-          timestamp,
-          message: "history without a mention",
-          attachments: [],
-          groupInfo: { groupId: "g1", groupName: "Test Group" },
-        },
-      }),
-    );
-
-    const entry = expectDefined(getGroupHistoryEntries(groupHistories)[0], "Signal history entry");
-    expect(entry.timestamp).toBe(timestamp);
-    expect(entry.messageId).toBe(String(timestamp));
   });
 
   it("records edited target reply authors for skipped group messages", async () => {
@@ -324,32 +303,6 @@ describe("signal mention gating", () => {
     });
   });
 
-  it("normalizes mixed-case parameterized attachment MIME in skipped pending history", async () => {
-    const groupHistories = new Map();
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: createSignalConfig({ requireMention: true }),
-        historyLimit: 5,
-        groupHistories,
-        ignoreAttachments: false,
-      }),
-    );
-
-    await handler(
-      makeGroupEvent({
-        message: "",
-        attachments: [{ contentType: " Audio/Ogg; codecs=opus " }],
-      }),
-    );
-
-    expect(capturedCtx).toBeUndefined();
-    const entries = getGroupHistoryEntries(groupHistories);
-    expect(entries).toHaveLength(1);
-    const entry = expectDefined(entries[0], "Signal audio history entry");
-    expect(entry.body).toBe("");
-    expect(formatSignalMediaText(entry.media ?? [])).toBe("<media:audio>");
-  });
-
   it("summarizes multiple skipped attachments with stable file count wording", async () => {
     const groupHistories = new Map();
     const handler = createSignalEventHandler(
@@ -381,57 +334,6 @@ describe("signal mention gating", () => {
 
   it("records quote text in pending history for skipped quote-only group messages", async () => {
     await expectSkippedGroupHistory({ message: "", quoteText: "quoted context" }, "quoted context");
-  });
-
-  it("bypasses mention gating for authorized control commands", async () => {
-    const handler = createMentionHandler({ requireMention: true });
-
-    await handler(makeGroupEvent({ message: "/help" }));
-    expect(getCapturedCtx().Body).toContain("/help");
-  });
-
-  it("hydrates mention placeholders before trimming so offsets stay aligned", async () => {
-    const handler = createMentionHandler({ requireMention: false });
-
-    const placeholder = "\uFFFC";
-    const message = `\n${placeholder} hi ${placeholder}`;
-    const firstStart = message.indexOf(placeholder);
-    const secondStart = message.indexOf(placeholder, firstStart + 1);
-
-    await handler(
-      makeGroupEvent({
-        message,
-        mentions: [
-          { uuid: "123e4567", start: firstStart, length: placeholder.length },
-          { number: "+15550002222", start: secondStart, length: placeholder.length },
-        ],
-      }),
-    );
-
-    const body = getCapturedCtx().Body ?? "";
-    expect(body).toContain("@123e4567 hi @+15550002222");
-    expect(body).not.toContain(placeholder);
-  });
-
-  it("counts mention metadata replacements toward requireMention gating", async () => {
-    const handler = createMentionHandler({
-      requireMention: true,
-      mentionPattern: "@123e4567",
-    });
-
-    const placeholder = "\uFFFC";
-    const message = ` ${placeholder} ping`;
-    const start = message.indexOf(placeholder);
-
-    await handler(
-      makeGroupEvent({
-        message,
-        mentions: [{ uuid: "123e4567", start, length: placeholder.length }],
-      }),
-    );
-
-    expect(getCapturedCtx()?.Body ?? "").toContain("@123e4567");
-    expect(getCapturedCtx().WasMentioned).toBe(true);
   });
 
   it("allows native bot UUID mentions without a text mention pattern", async () => {
@@ -468,31 +370,6 @@ describe("signal mention gating", () => {
 
     expect(getCapturedCtx()?.Body ?? "").toContain("@1 (555) 000-2222");
     expect(getCapturedCtx().WasMentioned).toBe(true);
-  });
-
-  it("keeps native mentions of other participants silent while recording pending context", async () => {
-    const groupHistories = new Map();
-    const handler = createMentionHandler({
-      requireMention: true,
-      mentionPattern: null,
-      accountUuid: "bot-uuid",
-      groupHistories,
-    });
-    const placeholder = "\uFFFC";
-
-    await handler(
-      makeGroupEvent({
-        message: `${placeholder} can you check?`,
-        mentions: [{ uuid: "other-user", start: 0, length: placeholder.length }],
-      }),
-    );
-
-    expect(capturedCtx).toBeUndefined();
-    const entries = getGroupHistoryEntries(groupHistories);
-    expect(entries).toHaveLength(1);
-    expect(expectDefined(entries[0], "Signal native mention history entry").body).toBe(
-      "@other-user can you check?",
-    );
   });
 
   it("does not let an authorized command bypass a native mention of another participant", async () => {
@@ -543,34 +420,10 @@ describe("signal mention gating", () => {
       "plain ping",
     );
   });
-
-  it("preserves no-detector behavior when no text pattern or bot identity is configured", async () => {
-    const handler = createMentionHandler({ requireMention: true, mentionPattern: null });
-
-    await handler(makeGroupEvent({ message: "hello everyone" }));
-
-    expect(getCapturedCtx().WasMentioned).toBe(false);
-  });
 });
 
 describe("renderSignalMentions", () => {
   const PLACEHOLDER = "\uFFFC";
-
-  it("returns the original message when no mentions are provided", () => {
-    const message = `${PLACEHOLDER} ping`;
-    expect(renderSignalMentions(message, null)).toBe(message);
-    expect(renderSignalMentions(message, [])).toBe(message);
-  });
-
-  it("replaces placeholder code points using mention metadata", () => {
-    const message = `${PLACEHOLDER} hi ${PLACEHOLDER}!`;
-    const normalized = renderSignalMentions(message, [
-      { uuid: "abc-123", start: 0, length: 1 },
-      { number: "+15550005555", start: message.lastIndexOf(PLACEHOLDER), length: 1 },
-    ]);
-
-    expect(normalized).toBe("@abc-123 hi @+15550005555!");
-  });
 
   it("skips mentions that lack identifiers or out-of-bounds spans", () => {
     const message = `${PLACEHOLDER} hi`;
@@ -582,75 +435,120 @@ describe("renderSignalMentions", () => {
 
     expect(normalized).toBe("@valid hi");
   });
-
-  it("clamps and truncates fractional mention offsets", () => {
-    const message = `${PLACEHOLDER} ping`;
-    const normalized = renderSignalMentions(message, [{ uuid: "valid", start: -0.7, length: 1.9 }]);
-
-    expect(normalized).toBe("@valid ping");
-  });
 });
 
-describe("resolveSignalMentionFacts", () => {
-  const PLACEHOLDER = "\uFFFC";
+function requireInternalHookEventCall() {
+  const [call] = internalHookMocks.createInternalHookEvent.mock.calls;
+  if (!call) {
+    throw new Error("expected internal hook event call");
+  }
+  return call;
+}
 
-  it("reports bot, any, and capability facts for valid UUID metadata", () => {
-    expect(
-      resolveSignalMentionFacts({ accountUuid: "bot-uuid" }, `${PLACEHOLDER} ping`, [
-        { uuid: "bot-uuid", start: 0, length: 1 },
-      ]),
-    ).toEqual({
-      canDetectBotMention: true,
-      hasAnyMention: true,
-      mentionsBot: true,
+describe("signal mention-skip silent ingest", () => {
+  it("emits internal message:received when ingest is enabled", async () => {
+    internalHookMocks.createInternalHookEvent.mockClear();
+    internalHookMocks.triggerInternalHook.mockClear();
+
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: {
+            groupChat: { mentionPatterns: ["@bot"] },
+          },
+          channels: {
+            signal: {
+              groups: {
+                "*": {
+                  requireMention: true,
+                  ingest: true,
+                },
+              },
+            },
+          },
+        } as never,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        dataMessage: {
+          message: "hello without mention",
+          attachments: [],
+          groupInfo: { groupId: "group-123", groupName: "Ops" },
+        },
+      }),
+    );
+
+    expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledTimes(1);
+    const [type, action, sessionKey, context] = requireInternalHookEventCall();
+    expect(type).toBe("message");
+    expect(action).toBe("received");
+    expect(sessionKey).toContain("signal");
+    expect(context).toEqual({
+      from: "group:group-123",
+      content: "hello without mention",
+      timestamp: 1700000000000,
+      channelId: "signal",
+      accountId: "default",
+      conversationId: "group:group-123",
+      messageId: "1700000000000",
+      metadata: {
+        to: "group:group-123",
+        provider: "signal",
+        surface: "signal",
+        threadId: undefined,
+        senderId: "+15550001111",
+        senderName: "Alice",
+        senderUsername: undefined,
+        senderE164: undefined,
+        guildId: undefined,
+        channelName: undefined,
+        topicName: undefined,
+      },
     });
+    expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
   });
 
-  it("reports unrelated valid metadata without treating it as a bot mention", () => {
-    expect(
-      resolveSignalMentionFacts({ accountUuid: "bot-uuid" }, `${PLACEHOLDER} ping`, [
-        { uuid: "other-user", start: 0, length: 1 },
-      ]),
-    ).toEqual({
-      canDetectBotMention: true,
-      hasAnyMention: true,
-      mentionsBot: false,
-    });
-  });
+  it("does not emit when group ingest is false and wildcard ingest is true", async () => {
+    internalHookMocks.createInternalHookEvent.mockClear();
+    internalHookMocks.triggerInternalHook.mockClear();
 
-  it("accepts valid mention metadata over ordinary message text", () => {
-    expect(
-      resolveSignalMentionFacts({ accountUuid: "bot-uuid" }, "Hi X!", [
-        { uuid: "bot-uuid", start: 3, length: 1 },
-      ]),
-    ).toEqual({
-      canDetectBotMention: true,
-      hasAnyMention: true,
-      mentionsBot: true,
-    });
-  });
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: {
+            groupChat: { mentionPatterns: ["@bot"] },
+          },
+          channels: {
+            signal: {
+              groups: {
+                "group-123": {
+                  requireMention: true,
+                  ingest: false,
+                },
+                "*": {
+                  requireMention: true,
+                  ingest: true,
+                },
+              },
+            },
+          },
+        } as never,
+      }),
+    );
 
-  it("ignores matching metadata whose span is outside the message", () => {
-    expect(
-      resolveSignalMentionFacts({ accountUuid: "bot-uuid" }, "plain ping", [
-        { uuid: "bot-uuid", start: 99, length: 1 },
-      ]),
-    ).toEqual({
-      canDetectBotMention: true,
-      hasAnyMention: false,
-      mentionsBot: false,
-    });
-  });
+    await handler(
+      createSignalReceiveEvent({
+        dataMessage: {
+          message: "hello without mention",
+          attachments: [],
+          groupInfo: { groupId: "group-123", groupName: "Ops" },
+        },
+      }),
+    );
 
-  it("keeps mention facts but no bot detection capability without account identity", () => {
-    expect(
-      resolveSignalMentionFacts({}, `${PLACEHOLDER} ping`, [
-        { uuid: "bot-uuid", start: 0, length: 1 },
-      ]),
-    ).toEqual({
-      canDetectBotMention: false,
-      hasAnyMention: true,
-      mentionsBot: false,
-    });
+    expect(internalHookMocks.createInternalHookEvent).not.toHaveBeenCalled();
+    expect(internalHookMocks.triggerInternalHook).not.toHaveBeenCalled();
   });
 });

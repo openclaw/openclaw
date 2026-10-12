@@ -6,10 +6,12 @@ import {
   pluginEnvelopeHas,
   readEmbeddedMessageDeliveryFact,
 } from "./embedded-agent-message-delivery.js";
+import { normalizeMessageDeliveryStatus } from "./embedded-agent-messaging-status.js";
 import {
   isMessageToolConversationCreateActionName,
   isMessageToolSendActionName,
   isMessagingToolDeliveryAction,
+  isPluginNativeMessagingTool,
 } from "./embedded-agent-messaging.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import { isToolResultError, readToolResultDetails } from "./tool-result-error.js";
@@ -33,7 +35,7 @@ function hasExplicitMessageRoute(args: Record<string, unknown>): boolean {
 function isMessageToolSourceReplyActionName(action: unknown): boolean {
   return (
     isMessageToolSendActionName(action) ||
-    ["reply", "thread-reply", "poll"].includes(normalizeStatus(action) ?? "")
+    ["reply", "thread-reply", "poll"].includes(normalizeMessageDeliveryStatus(action) ?? "")
   );
 }
 
@@ -42,20 +44,12 @@ export function readMessageToolSourceReplyText(args: unknown): string | undefine
   if (!isMessageToolSourceReplyActionName(record.action)) {
     return undefined;
   }
-  if (normalizeStatus(record.action) === "poll") {
+  if (normalizeMessageDeliveryStatus(record.action) === "poll") {
     return readStringValue(record.pollQuestion) ?? readStringValue(record.poll_question);
   }
   return ["content", "message", "text", "body"]
     .map((key) => readStringValue(record[key]))
     .find((value) => value !== undefined);
-}
-
-function normalizeStatus(value: unknown): string | undefined {
-  return typeof value === "string" ? value.trim().toLowerCase() : undefined;
-}
-
-export function hasPluginMessagingDeliveryId(value: unknown): boolean {
-  return pluginEnvelopeHas(value, "deliveryId");
 }
 
 export function isDeliveredMessagingToolResult(params: {
@@ -64,42 +58,57 @@ export function isDeliveredMessagingToolResult(params: {
   result?: unknown;
   hookResult?: unknown;
   isError?: boolean;
+  requirePluginDeliveryId?: boolean;
 }): boolean {
   const args = asOptionalRecord(params.args) ?? {};
-  const action = normalizeStatus(args.action);
-  const results = [params.result, params.hookResult];
-  if (args.dryRun === true || results.some((result) => pluginEnvelopeHas(result, "dryRun"))) {
+  if (args.dryRun === true) {
     return false;
   }
-  if (results.some((result) => pluginEnvelopeHas(result, "partial"))) {
+  const normalizedToolName = normalizeToolPolicyName(params.toolName ?? "message");
+  if (normalizedToolName === "conversations_send" || normalizedToolName === "conversations_turn") {
+    const status = readToolResultDetails(params.result)?.status;
+    // Waiting for a peer reply can fail after the channel send has succeeded.
+    return (
+      status === "sent" ||
+      (normalizedToolName === "conversations_turn" &&
+        (status === "replied" || status === "timeout"))
+    );
+  }
+  if (!isPluginNativeMessagingTool(normalizedToolName)) {
+    return false;
+  }
+  const action = normalizeMessageDeliveryStatus(args.action);
+  const results = [params.result, params.hookResult];
+  const hasSignal = (signal: Parameters<typeof pluginEnvelopeHas>[1]) =>
+    results.some((result) => pluginEnvelopeHas(result, signal));
+  if (hasSignal("dryRun") || (params.requirePluginDeliveryId && !hasSignal("deliveryId"))) {
+    return false;
+  }
+  if (hasSignal("partial")) {
     return true;
   }
-  if (
-    action &&
-    isMessageToolConversationCreateActionName(action) &&
-    results.some((result) => pluginEnvelopeHas(result, "conversation"))
-  ) {
+  if (action && isMessageToolConversationCreateActionName(action) && hasSignal("conversation")) {
     return true;
   }
   if (action === "broadcast" && results.some(pluginBroadcastHasDelivery)) {
     return true;
   }
-  if (params.isError || results.some(isToolResultError)) {
+  if (
+    params.isError ||
+    results.some((result) => isToolResultError(result) || pluginEnvelopeHas(result, "failure"))
+  ) {
     return false;
   }
-  const normalizedToolName = normalizeToolPolicyName(params.toolName ?? "message");
-  const nonDelivery = results.some((result) => pluginEnvelopeHas(result, "nonDelivery"));
-  const noOp = results.some((result) => pluginEnvelopeHas(result, "noOp"));
-  if (
+  const nonDelivery = hasSignal("nonDelivery");
+  const noOp = hasSignal("noOp");
+  return (
     !nonDelivery &&
     !noOp &&
-    isMessagingToolDeliveryAction(normalizedToolName, args) &&
-    action !== "broadcast" &&
-    results.some((result) => pluginEnvelopeHas(result, "ok"))
-  ) {
-    return true;
-  }
-  return !nonDelivery && !noOp && results.some((result) => pluginEnvelopeHas(result, "delivery"));
+    ((isMessagingToolDeliveryAction(normalizedToolName, args) &&
+      action !== "broadcast" &&
+      hasSignal("ok")) ||
+      hasSignal("delivery"))
+  );
 }
 
 export function isDeliveredMessageToolOnlySourceReplyResult(params: {
@@ -112,12 +121,13 @@ export function isDeliveredMessageToolOnlySourceReplyResult(params: {
   allowExplicitSourceRoute?: boolean;
   deliveryConfirmed?: boolean;
 }): boolean {
+  const deliveryFact =
+    readEmbeddedMessageDeliveryFact(readToolResultDetails(params.hookResult)?.messageDelivery) ??
+    readEmbeddedMessageDeliveryFact(readToolResultDetails(params.result)?.messageDelivery);
   const confirmedCurrentSourceRoute =
+    deliveryFact?.sourceReplyDelivered === true ||
     resultConfirmsCurrentSourceRoute(params.result) ||
     resultConfirmsCurrentSourceRoute(params.hookResult);
-  const deliveryFact = readEmbeddedMessageDeliveryFact(
-    readToolResultDetails(params.hookResult ?? params.result)?.messageDelivery,
-  );
   if (params.sourceReplyDeliveryMode !== "message_tool_only" && !confirmedCurrentSourceRoute) {
     return false;
   }
@@ -128,7 +138,11 @@ export function isDeliveredMessageToolOnlySourceReplyResult(params: {
   const sourceRouteReplyAction =
     (params.allowExplicitSourceRoute === true || confirmedCurrentSourceRoute) &&
     isMessageToolSourceReplyActionName(args.action);
-  if (!isMessageToolSendActionName(args.action) && !sourceRouteReplyAction) {
+  if (
+    deliveryFact?.sourceReplyDelivered !== true &&
+    !isMessageToolSendActionName(args.action) &&
+    !sourceRouteReplyAction
+  ) {
     return false;
   }
   if (

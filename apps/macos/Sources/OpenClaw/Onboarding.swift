@@ -2,11 +2,8 @@ import AppKit
 import CryptoKit
 import Observation
 import OpenClawDiscovery
+import OpenClawKit
 import SwiftUI
-
-enum UIStrings {
-    static let welcomeTitle = "Welcome to OpenClaw"
-}
 
 struct RemoteGatewayProbeInput: Equatable {
     let transport: AppState.RemoteTransport
@@ -75,10 +72,17 @@ enum OnboardingSystemAgentResumeStore {
     }
 
     private struct Record {
-        let phase: RecordPhase
+        var phase: RecordPhase
         let startedAt: Date?
-        let deadline: Date?
-        let activationOwner: ActivationOwner?
+        var deadline: Date?
+        let activationOwner: ActivationOwner? // nil identifies ownerless records; it is not a wildcard.
+        let modelTarget: OnboardingAISetupModel.ModelTarget?
+        var utilityModel: String?
+    }
+
+    struct ActivationModel: Equatable {
+        let modelTarget: OnboardingAISetupModel.ModelTarget?
+        let utilityModel: String?
     }
 
     private static let recordVersion = 4
@@ -101,15 +105,14 @@ enum OnboardingSystemAgentResumeStore {
         state: AppState = AppStateStore.shared,
         preferredGatewayID: String? = GatewayDiscoveryPreferences.preferredStableID()) -> String?
     {
-        let defaultRemotePort = GatewayEnvironment.gatewayPort()
         let sshRemotePort: Int = if state.connectionMode == .remote,
                                     state.remoteTransport == .ssh
         {
-            RemotePortTunnel.resolveRemotePortOverride(
-                defaultRemotePort: defaultRemotePort,
-                for: CommandResolver.parseSSHTarget(state.remoteTarget)?.host ?? "") ?? defaultRemotePort
+            RemotePortTunnel.ports(
+                root: OpenClawConfigFile.loadDict(),
+                sshHost: CommandResolver.parseSSHTarget(state.remoteTarget)?.host ?? "").remote
         } else {
-            defaultRemotePort
+            18789
         }
         return self.routeIdentity(
             connectionMode: state.connectionMode,
@@ -117,7 +120,7 @@ enum OnboardingSystemAgentResumeStore {
             remoteTransport: state.remoteTransport,
             remoteURL: state.remoteUrl,
             remoteTarget: state.remoteTarget,
-            localStateDir: OpenClawConfigFile.stateDirURL(),
+            localStateDir: OpenClawPaths.stateDirURL,
             sshRemotePort: sshRemotePort)
     }
 
@@ -127,8 +130,8 @@ enum OnboardingSystemAgentResumeStore {
         remoteTransport: AppState.RemoteTransport,
         remoteURL: String,
         remoteTarget: String,
-        localStateDir: URL = OpenClawConfigFile.stateDirURL(),
-        sshRemotePort: Int = GatewayEnvironment.gatewayPort()) -> String?
+        localStateDir: URL = OpenClawPaths.stateDirURL,
+        sshRemotePort: Int = 18789) -> String?
     {
         switch connectionMode {
         case .unconfigured:
@@ -144,7 +147,7 @@ enum OnboardingSystemAgentResumeStore {
             }
             return "local:\(self.nonSecretFingerprint(stateDir))"
         case .remote:
-            if let gatewayID = normalized(preferredGatewayID) {
+            if let gatewayID = preferredGatewayID?.trimmedNonEmpty {
                 return "remote:id:\(gatewayID)"
             }
             let endpoint = switch remoteTransport {
@@ -169,38 +172,45 @@ enum OnboardingSystemAgentResumeStore {
     static func markPending(
         routeIdentity: String?,
         activationOwner: ActivationOwner? = nil,
+        modelTarget: OnboardingAISetupModel.ModelTarget? = nil,
+        utilityModel: String? = nil,
         activationTimeoutMs: Double = OnboardingSystemAgentResumeStore.maximumActivationTimeoutMs,
         defaults: UserDefaults = AppDefaults.standard,
         now: Date = Date())
         -> Date?
     {
-        guard let routeIdentity = normalized(routeIdentity) else { return nil }
+        guard let routeIdentity = routeIdentity?.trimmedNonEmpty else { return nil }
         let duration = max(0, activationTimeoutMs / 1000) + self.activationDeadlineSafetySeconds
         let deadline = now.addingTimeInterval(duration)
-        var records = self.loadRecords(defaults: defaults, now: now)
-        records[routeIdentity] = Record(
-            phase: .activating,
-            startedAt: now,
+        self.restorePending(
+            routeIdentity: routeIdentity,
+            activationOwner: activationOwner,
+            modelTarget: modelTarget,
+            utilityModel: utilityModel,
             deadline: deadline,
-            activationOwner: activationOwner)
-        self.writeRecords(records, defaults: defaults)
+            defaults: defaults,
+            now: now)
         return deadline
     }
 
     static func restorePending(
         routeIdentity: String,
         activationOwner: ActivationOwner? = nil,
+        modelTarget: OnboardingAISetupModel.ModelTarget? = nil,
+        utilityModel: String? = nil,
         deadline: Date,
         defaults: UserDefaults = AppDefaults.standard,
         now: Date = Date())
     {
-        guard let routeIdentity = normalized(routeIdentity) else { return }
+        guard let routeIdentity = routeIdentity.trimmedNonEmpty else { return }
         var records = self.loadRecords(defaults: defaults, now: now)
         records[routeIdentity] = Record(
             phase: .activating,
             startedAt: now,
             deadline: deadline,
-            activationOwner: activationOwner)
+            activationOwner: activationOwner,
+            modelTarget: modelTarget,
+            utilityModel: modelTarget == .utility ? utilityModel?.trimmedNonEmpty : nil)
         self.writeRecords(records, defaults: defaults)
     }
 
@@ -210,16 +220,14 @@ enum OnboardingSystemAgentResumeStore {
         defaults: UserDefaults = AppDefaults.standard,
         now: Date = Date())
     {
-        guard let routeIdentity = normalized(routeIdentity) else { return }
+        guard let routeIdentity = routeIdentity?.trimmedNonEmpty else { return }
         var records = self.loadRecords(defaults: defaults, now: now)
-        guard let record = records[routeIdentity],
-              ownerMatches(record, activationOwner: activationOwner)
+        guard var record = records[routeIdentity],
+              record.activationOwner == activationOwner
         else { return }
-        records[routeIdentity] = Record(
-            phase: .verified,
-            startedAt: record.startedAt,
-            deadline: record.deadline ?? now.addingTimeInterval(self.legacyActivationLeaseSeconds),
-            activationOwner: record.activationOwner)
+        record.phase = .verified
+        record.deadline = record.deadline ?? now.addingTimeInterval(self.legacyActivationLeaseSeconds)
+        records[routeIdentity] = record
         self.writeRecords(records, defaults: defaults)
     }
 
@@ -230,16 +238,13 @@ enum OnboardingSystemAgentResumeStore {
         defaults: UserDefaults = AppDefaults.standard,
         now: Date = Date()) -> Bool
     {
-        guard let routeIdentity = normalized(routeIdentity) else { return false }
+        guard let routeIdentity = routeIdentity?.trimmedNonEmpty else { return false }
         var records = self.loadRecords(defaults: defaults, now: now)
-        guard let record = records[routeIdentity],
-              ownerMatches(record, activationOwner: activationOwner)
+        guard var record = records[routeIdentity],
+              record.activationOwner == activationOwner
         else { return false }
-        records[routeIdentity] = Record(
-            phase: .completed,
-            startedAt: record.startedAt,
-            deadline: record.deadline,
-            activationOwner: record.activationOwner)
+        record.phase = .completed
+        records[routeIdentity] = record
         self.writeRecords(records, defaults: defaults)
         return true
     }
@@ -249,8 +254,36 @@ enum OnboardingSystemAgentResumeStore {
         defaults: UserDefaults = AppDefaults.standard,
         now: Date = Date()) -> ActivationOwner?
     {
-        guard let routeIdentity = normalized(routeIdentity) else { return nil }
+        guard let routeIdentity = routeIdentity?.trimmedNonEmpty else { return nil }
         return self.loadRecords(defaults: defaults, now: now)[routeIdentity]?.activationOwner
+    }
+
+    static func activationModel(
+        for routeIdentity: String?,
+        activationOwner: ActivationOwner?,
+        defaults: UserDefaults = AppDefaults.standard) -> ActivationModel?
+    {
+        guard let routeIdentity = routeIdentity?.trimmedNonEmpty,
+              let record = loadRecords(defaults: defaults)[routeIdentity],
+              record.activationOwner == activationOwner
+        else { return nil }
+        return ActivationModel(modelTarget: record.modelTarget, utilityModel: record.utilityModel)
+    }
+
+    static func recordUtilityModel(
+        _ modelRef: String,
+        ifOwnedBy routeIdentity: String?,
+        activationOwner: ActivationOwner,
+        defaults: UserDefaults = AppDefaults.standard)
+    {
+        guard let routeIdentity = routeIdentity?.trimmedNonEmpty,
+              let modelRef = modelRef.trimmedNonEmpty else { return }
+        var records = self.loadRecords(defaults: defaults)
+        guard var record = records[routeIdentity], record.modelTarget == .utility,
+              record.activationOwner == activationOwner else { return }
+        record.utilityModel = modelRef
+        records[routeIdentity] = record
+        self.writeRecords(records, defaults: defaults)
     }
 
     static func isOwned(
@@ -259,7 +292,7 @@ enum OnboardingSystemAgentResumeStore {
         defaults: UserDefaults = AppDefaults.standard,
         now: Date = Date()) -> Bool
     {
-        guard let routeIdentity = normalized(routeIdentity),
+        guard let routeIdentity = routeIdentity?.trimmedNonEmpty,
               let record = loadRecords(defaults: defaults, now: now)[routeIdentity]
         else { return false }
         return record.activationOwner == activationOwner
@@ -270,7 +303,7 @@ enum OnboardingSystemAgentResumeStore {
         defaults: UserDefaults = AppDefaults.standard,
         now: Date = Date()) -> PendingState
     {
-        guard let routeIdentity = normalized(routeIdentity),
+        guard let routeIdentity = routeIdentity?.trimmedNonEmpty,
               let record = loadRecords(defaults: defaults, now: now)[routeIdentity]
         else { return .none }
 
@@ -278,8 +311,7 @@ enum OnboardingSystemAgentResumeStore {
         case .completed:
             return .completed
         case .activating, .verified:
-            guard let deadline = record.deadline else { return .activationExpired }
-            guard now < deadline else { return .activationExpired }
+            guard let deadline = record.deadline, now < deadline else { return .activationExpired }
             return record.phase == .activating
                 ? .activating(deadline: deadline)
                 : .verified(deadline: deadline)
@@ -292,10 +324,10 @@ enum OnboardingSystemAgentResumeStore {
         activationOwner: ActivationOwner? = nil,
         defaults: UserDefaults = AppDefaults.standard) -> Bool
     {
-        guard let routeIdentity = normalized(routeIdentity) else { return false }
+        guard let routeIdentity = routeIdentity.trimmedNonEmpty else { return false }
         var records = self.loadRecords(defaults: defaults)
         guard let record = records[routeIdentity],
-              ownerMatches(record, activationOwner: activationOwner)
+              record.activationOwner == activationOwner
         else { return false }
         records.removeValue(forKey: routeIdentity)
         self.writeRecords(records, defaults: defaults)
@@ -324,7 +356,7 @@ enum OnboardingSystemAgentResumeStore {
         now: Date = Date()) -> [String: Record]
     {
         guard let stored = self.storedPendingPayload(defaults: defaults) else { return [:] }
-        if let legacyRoute = normalized(stored as? String) {
+        if let legacyRoute = (stored as? String)?.trimmedNonEmpty {
             let records = [legacyRoute: conservativeLegacyRecord(now: now)]
             self.writeRecords(records, defaults: defaults)
             return records
@@ -335,74 +367,60 @@ enum OnboardingSystemAgentResumeStore {
         }
         let version = (container["version"] as? NSNumber)?.intValue
         if version == self.legacyRecordVersion,
-           let routeIdentity = normalized(container["routeIdentity"] as? String)
+           let routeIdentity = (container["routeIdentity"] as? String)?.trimmedNonEmpty
         {
             let record = self.decodeLegacyRecord(container, now: now)
             let records = [routeIdentity: record]
             self.writeRecords(records, defaults: defaults)
             return records
         }
-        if version == self.unsafeOwnerlessRecordVersion ||
+        let stripsUnsafeOwner = version == self.unsafeOwnerlessRecordVersion ||
             version == self.unsafeCredentialFingerprintRecordVersion
-        {
-            guard let storedRecords = container["records"] as? [String: Any] else {
-                self.clear(defaults: defaults)
-                return [:]
-            }
-            // Strip the unsafe/absent auth owner immediately, but retain active
-            // deadlines so a possibly running activation cannot overlap a new one.
-            let records: [String: Record] = storedRecords.reduce(into: [:]) { result, entry in
-                guard let routeIdentity = normalized(entry.key),
-                      let payload = entry.value as? [String: Any],
-                      let record = decodeRecord(payload),
-                      record.phase != .completed
-                else { return }
-                result[routeIdentity] = Record(
-                    phase: record.phase,
-                    startedAt: record.startedAt,
-                    deadline: record.deadline,
-                    activationOwner: nil)
-            }
-            self.writeRecords(records, defaults: defaults)
-            return records
-        }
-        guard version == self.recordVersion,
+        guard version == self.recordVersion || stripsUnsafeOwner,
               let storedRecords = container["records"] as? [String: Any]
         else {
             self.clear(defaults: defaults)
             return [:]
         }
-        return storedRecords.reduce(into: [:]) { result, entry in
-            guard let routeIdentity = normalized(entry.key),
+        let records: [String: Record] = storedRecords.reduce(into: [:]) { result, entry in
+            guard let routeIdentity = entry.key.trimmedNonEmpty,
                   let payload = entry.value as? [String: Any],
                   let record = decodeRecord(payload)
             else { return }
-            result[routeIdentity] = record
+            if stripsUnsafeOwner {
+                // Strip the unsafe/absent auth owner immediately, but retain active
+                // deadlines so a possibly running activation cannot overlap a new one.
+                guard record.phase != .completed else { return }
+                result[routeIdentity] = Record(
+                    phase: record.phase,
+                    startedAt: record.startedAt,
+                    deadline: record.deadline,
+                    activationOwner: nil,
+                    modelTarget: nil,
+                    utilityModel: nil)
+            } else {
+                result[routeIdentity] = record
+            }
         }
+        if stripsUnsafeOwner {
+            self.writeRecords(records, defaults: defaults)
+        }
+        return records
     }
 
     private static func decodeLegacyRecord(_ payload: [String: Any], now: Date) -> Record {
         guard let phaseRaw = payload["phase"] as? String,
               let phase = RecordPhase(rawValue: phaseRaw)
         else { return self.conservativeLegacyRecord(now: now) }
-        let startedAt = self.date(payload["startedAt"])
-        let deadline = self.date(payload["deadlineAt"])
-        switch phase {
-        case .activating:
-            return Record(
-                phase: .activating,
-                startedAt: startedAt ?? now,
-                deadline: deadline ?? now.addingTimeInterval(self.legacyActivationLeaseSeconds),
-                activationOwner: nil)
-        case .verified, .completed:
-            // v1 `verified` could be written by an early read-only probe and
-            // carried no deadline, so migration must restore a full lease.
-            return Record(
-                phase: .verified,
-                startedAt: startedAt ?? now,
-                deadline: deadline ?? now.addingTimeInterval(self.legacyActivationLeaseSeconds),
-                activationOwner: nil)
-        }
+        // v1 `verified` could be written by an early read-only probe and
+        // carried no deadline, so migration must restore a full lease.
+        return Record(
+            phase: phase == .activating ? .activating : .verified,
+            startedAt: self.date(payload["startedAt"]) ?? now,
+            deadline: self.date(payload["deadlineAt"]) ?? now.addingTimeInterval(self.legacyActivationLeaseSeconds),
+            activationOwner: nil,
+            modelTarget: nil,
+            utilityModel: nil)
     }
 
     private static func conservativeLegacyRecord(now: Date) -> Record {
@@ -410,25 +428,31 @@ enum OnboardingSystemAgentResumeStore {
             phase: .activating,
             startedAt: now,
             deadline: now.addingTimeInterval(self.legacyActivationLeaseSeconds),
-            activationOwner: nil)
+            activationOwner: nil,
+            modelTarget: nil,
+            utilityModel: nil)
     }
 
     private static func decodeRecord(_ payload: [String: Any]) -> Record? {
         guard let phaseRaw = payload["phase"] as? String,
               let phase = RecordPhase(rawValue: phaseRaw)
         else { return nil }
-        let activationID = self.normalized(payload["activationId"] as? String)
-        let routeFingerprint = self.normalized(payload["routeFingerprint"] as? String)
+        let activationID = (payload["activationId"] as? String)?.trimmedNonEmpty
+        let routeFingerprint = (payload["routeFingerprint"] as? String)?.trimmedNonEmpty
         let activationOwner: ActivationOwner? = if let activationID, let routeFingerprint {
             ActivationOwner(id: activationID, routeFingerprint: routeFingerprint)
         } else {
             nil
         }
+        let modelTarget = (payload["modelTarget"] as? String)
+            .flatMap(OnboardingAISetupModel.ModelTarget.init(rawValue:))
         return Record(
             phase: phase,
             startedAt: self.date(payload["startedAt"]),
             deadline: self.date(payload["deadlineAt"]),
-            activationOwner: activationOwner)
+            activationOwner: activationOwner,
+            modelTarget: modelTarget,
+            utilityModel: modelTarget == .utility ? (payload["utilityModel"] as? String)?.trimmedNonEmpty : nil)
     }
 
     private static func writeRecords(_ records: [String: Record], defaults: UserDefaults) {
@@ -438,16 +462,14 @@ enum OnboardingSystemAgentResumeStore {
         }
         let payload = records.mapValues { record -> [String: Any] in
             var value: [String: Any] = ["phase": record.phase.rawValue]
-            if let startedAt = record.startedAt {
-                value["startedAt"] = startedAt.timeIntervalSince1970
-            }
-            if let deadline = record.deadline {
-                value["deadlineAt"] = deadline.timeIntervalSince1970
-            }
+            value["startedAt"] = record.startedAt?.timeIntervalSince1970
+            value["deadlineAt"] = record.deadline?.timeIntervalSince1970
             if let activationOwner = record.activationOwner {
                 value["activationId"] = activationOwner.id
                 value["routeFingerprint"] = activationOwner.routeFingerprint
             }
+            value["utilityModel"] = record.utilityModel
+            value["modelTarget"] = record.modelTarget?.rawValue
             return value
         }
         defaults.set(
@@ -458,20 +480,6 @@ enum OnboardingSystemAgentResumeStore {
     private static func date(_ value: Any?) -> Date? {
         guard let interval = (value as? NSNumber)?.doubleValue else { return nil }
         return Date(timeIntervalSince1970: interval)
-    }
-
-    private static func normalized(_ value: String?) -> String? {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed?.isEmpty == false ? trimmed : nil
-    }
-
-    private static func ownerMatches(
-        _ record: Record,
-        activationOwner: ActivationOwner?) -> Bool
-    {
-        // A missing owner names legacy ownerless records; it is not a wildcard.
-        // Otherwise stale UI paths can verify, complete, or clear a newer activation.
-        record.activationOwner == activationOwner
     }
 
     private static func nonSecretFingerprint(_ value: String) -> String {
@@ -490,47 +498,13 @@ enum OnboardingSystemAgentResumeStore {
         components.user = nil
         components.password = nil
         components.queryItems = components.queryItems?.filter { queryItem in
-            !self.isSensitiveQueryItemName(queryItem.name)
+            !GatewayEndpointID.isSensitiveQueryItemName(queryItem.name)
         }
         if components.queryItems?.isEmpty == true {
             components.query = nil
         }
         components.fragment = nil
         return components.string ?? normalized
-    }
-
-    private static func isSensitiveQueryItemName(_ value: String) -> Bool {
-        let normalized = value
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-            .replacingOccurrences(of: "-", with: "_")
-        return [
-            "access_token",
-            "api_key",
-            "apikey",
-            "app_secret",
-            "auth",
-            "auth_token",
-            "authorization",
-            "client_secret",
-            "code",
-            "credential",
-            "hook_token",
-            "id_token",
-            "jwt",
-            "key",
-            "pass",
-            "passwd",
-            "password",
-            "private_key",
-            "refresh_token",
-            "secret",
-            "session",
-            "signature",
-            "token",
-            "x_amz_security_token",
-            "x_amz_signature",
-        ].contains(normalized)
     }
 }
 
@@ -539,6 +513,7 @@ final class OnboardingController: NSObject, NSWindowDelegate {
     static let shared = OnboardingController()
     static let windowStyleMask: NSWindow.StyleMask = [.titled, .closable, .resizable, .fullSizeContentView]
     private var window: NSWindow?
+    private var closeConfirmationPending = false
     var sheetPresentationWindow: NSWindow? {
         self.window
     }
@@ -563,14 +538,14 @@ final class OnboardingController: NSObject, NSWindowDelegate {
         }
         if let window {
             DockIconManager.shared.temporarilyShowDock()
-            window.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
+            AppActivation.shared.makeKeyAndOrderFront(window: window)
+            AppActivation.shared.activate()
             return
         }
         let hosting = NSHostingController(rootView: OnboardingView())
         let window = NSWindow(contentViewController: hosting)
         window.isRestorable = false
-        window.title = UIStrings.welcomeTitle
+        window.title = "Welcome to OpenClaw"
         window.styleMask = Self.windowStyleMask
         window.setContentSize(NSSize(width: OnboardingView.windowWidth, height: OnboardingView.windowHeight))
         if let visibleFrame = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame {
@@ -590,8 +565,8 @@ final class OnboardingController: NSObject, NSWindowDelegate {
         window.isMovableByWindowBackground = true
         window.delegate = self
         DockIconManager.shared.temporarilyShowDock()
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        AppActivation.shared.makeKeyAndOrderFront(window: window)
+        AppActivation.shared.activate()
         self.window = window
     }
 
@@ -625,8 +600,10 @@ final class OnboardingController: NSObject, NSWindowDelegate {
         self.show()
     }
 
-    func windowShouldClose(_: NSWindow) -> Bool {
+    func windowShouldClose(_ window: NSWindow) -> Bool {
         guard let busyReason else { return true }
+        guard !self.closeConfirmationPending else { return false }
+        self.closeConfirmationPending = true
         let alert = NSAlert()
         alert.messageText = "Setup is still working"
         alert.informativeText =
@@ -635,8 +612,17 @@ final class OnboardingController: NSObject, NSWindowDelegate {
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Continue Setup")
         alert.addButton(withTitle: "Quit Setup")
-        let response = alert.runModal()
-        return response == .alertSecondButtonReturn
+        var shouldClose = false
+        AppActivation.shared.presentAlert(alert) { [weak self, weak window] response in
+            self?.closeConfirmationPending = false
+            guard response == .alertSecondButtonReturn else { return }
+            if AppLaunchRuntimePlan.current.allowsActivation {
+                shouldClose = true
+            } else if let window, self?.window === window {
+                window.close()
+            }
+        }
+        return shouldClose
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -658,15 +644,17 @@ struct OnboardingView: View {
     @State var installingCLI = false
     @State var cliInstallPhase: CLIInstallPhase = .idle
     @State var cliStatus: String?
+    @State var updatingGatewayHosting = false
+    @State var gatewayHostingError: String?
     @State var monitoringDiscovery = false
     @State var cliExecutableReady = false
     @State var cliInstalled = false
     @State var cliStatusKnown = false
     @State var onboardingVisible = false
     @State var cliInstallLocation: String?
-    @State var showAdvancedConnection = false
     @State var showRemoteChoices = false
-    @State var preferredGatewayID: String?
+    @State var showBrowserGateway = false
+    @State var showConnectionEditor = false
     @State var remoteProbeState: RemoteOnboardingProbeState = .idle
     @State var remoteProbeAttemptID: UUID?
     @State var remoteProbeTemporaryRestoreMode: AppState.ConnectionMode?
@@ -694,23 +682,10 @@ struct OnboardingView: View {
     let aiPageIndex = 3
     let readyPageIndex = 9
 
-    var heroFrameHeight: CGFloat {
-        145
-    }
-
-    var heroSize: CGFloat {
-        130
-    }
-
     /// The active page is scrollable on short screens. Taller windows donate all
     /// extra room instead of leaving the content pinned to a fixed canvas.
-    func contentHeight(for windowHeight: CGFloat) -> CGFloat {
-        Self.contentHeight(for: windowHeight, usesCompactHero: self.usesCompactHero)
-    }
-
-    static func contentHeight(for windowHeight: CGFloat, usesCompactHero: Bool) -> CGFloat {
-        let heroHeight: CGFloat = usesCompactHero ? 78 : 145
-        return max(0, windowHeight - heroHeight - 72)
+    static func contentHeight(for windowHeight: CGFloat) -> CGFloat {
+        max(0, windowHeight - 145 - 72)
     }
 
     static func pageOrder(
@@ -718,10 +693,12 @@ struct OnboardingView: View {
         requiresCLIInstall: Bool) -> [Int]
     {
         switch mode {
-        case .remote, .local:
+        case .local:
             // Native onboarding ends once inference works: install (when
             // needed) plus AI setup. Successful first run lands in the normal dashboard.
             requiresCLIInstall ? [0, 1, 2, 3] : [0, 1, 3]
+        case .remote:
+            [0, 1, 3]
         case .unconfigured:
             // "Set up later" has no gateway to hand off to; keep the native
             // ready page so the flow still ends with a visible outcome.
@@ -729,15 +706,12 @@ struct OnboardingView: View {
         }
     }
 
-    static func shouldActivateLocalGateway(afterCLIInstallFor mode: AppState.ConnectionMode) -> Bool {
-        mode == .local
+    var requiresLocalCLI: Bool {
+        self.selectedConnectionMode == .local && GatewayProcessManager.shared.installation != .external
     }
 
     var selectedConnectionMode: AppState.ConnectionMode {
-        if self.isConnectionSelectionBlocking {
-            return .local
-        }
-        return self.state.connectionMode
+        self.isConnectionSelectionBlocking ? .local : self.state.connectionMode
     }
 
     var isConnectionSelectionBlocking: Bool {
@@ -746,8 +720,8 @@ struct OnboardingView: View {
 
     var pageOrder: [Int] {
         Self.pageOrder(
-            for: self.state.connectionMode,
-            requiresCLIInstall: !self.cliInstalled)
+            for: self.selectedConnectionMode,
+            requiresCLIInstall: self.requiresLocalCLI && !self.cliInstalled)
     }
 
     var pageCount: Int {
@@ -796,7 +770,7 @@ struct OnboardingView: View {
     }
 
     var canAdvance: Bool {
-        !self.isCLIBlocking && !self.isAISetupBlocking
+        !self.isCLIBlocking && !self.isAISetupBlocking && !self.updatingGatewayHosting
     }
 
     static func remoteGatewayAdvanceDecision(

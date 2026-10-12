@@ -1,73 +1,57 @@
-// Vitest shared config wires the shared test shard.
+// Threads inherit admission; forks also run this bootstrap in their own process.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { ViteUserConfig } from "vitest/config";
 import acpCorePackageJson from "../../packages/acp-core/package.json" with { type: "json" };
 import normalizationCorePackageJson from "../../packages/normalization-core/package.json" with { type: "json" };
 import { pluginSdkSubpaths } from "../../scripts/lib/plugin-sdk-entries.mts";
 import privateLocalOnlyPluginSdkSubpaths from "../../scripts/lib/plugin-sdk-private-local-only-subpaths.json" with { type: "json" };
 import { createStateSchemaInlinePlugin } from "../../scripts/lib/state-schema-inline-plugin.mts";
+import { resolveTsxImport } from "../../scripts/lib/tsx-cli-shim.mjs";
 import {
-  detectVitestHostInfo as detectVitestHostInfoImpl,
   isCiLikeEnv,
-  resolveLocalVitestScheduling as resolveLocalVitestSchedulingImpl,
+  resolveLocalVitestScheduling,
 } from "../../scripts/lib/vitest-local-scheduling.mts";
-import type {
-  LocalVitestScheduling,
-  VitestHostInfo,
-} from "../../scripts/lib/vitest-local-scheduling.mts";
+import type { LocalVitestScheduling } from "../../scripts/lib/vitest-local-scheduling.mts";
+import { resolveTestBunSourceArgs } from "../../src/test-utils/bun-process.ts";
+import { controlUiSolidPlugin } from "../../ui/config/control-ui-solid.ts";
 import {
   BUNDLED_PLUGIN_ROOT_DIR,
   BUNDLED_PLUGIN_TEST_GLOB,
 } from "./vitest.bundled-plugin-paths.ts";
-import { loadVitestExperimentalConfig } from "./vitest.performance-config.ts";
+import { sharedVitestExcludePatterns } from "./vitest.pattern-file.ts";
+import {
+  createVitestProjectCachePlugin,
+  loadVitestPerformanceConfig,
+} from "./vitest.performance-config.ts";
+import { createRedactingReporterPlugin } from "./vitest.reporters.ts";
 import { shouldPrintVitestThrottle } from "./vitest.system-load.ts";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "./vitest.timeouts.ts";
+import { compiledSubprocessesPlugin } from "./vitest.worker-artifacts.ts";
 
-export type OpenClawVitestPool = "forks" | "threads";
+if (process.versions.bun) {
+  await import("./vitest.sqlite-preload.mts");
+}
 
 export type { LocalVitestScheduling };
 
 export const jsdomOptimizedDeps = {
   optimizer: {
-    web: {
+    client: {
       enabled: true,
-      include: ["lit", "lit-html", "@lit/reactive-element"] as string[],
+      // Root and directives must share browser/development internals; native
+      // Node deep imports otherwise mix incompatible private Lit fields.
+      include: ["lit/**"] as string[],
     },
   },
 };
-
-function detectVitestHostInfo(): Required<VitestHostInfo> {
-  return detectVitestHostInfoImpl();
-}
-
-export function resolveLocalVitestMaxWorkers(
-  env: Record<string, string | undefined> = process.env,
-  system: VitestHostInfo = detectVitestHostInfo(),
-  pool: OpenClawVitestPool = resolveDefaultVitestPool(env),
-): number {
-  return resolveLocalVitestSchedulingImpl(env, system, pool).maxWorkers;
-}
-
-export function resolveLocalVitestScheduling(
-  env: Record<string, string | undefined> = process.env,
-  system: VitestHostInfo = detectVitestHostInfo(),
-  pool: OpenClawVitestPool = resolveDefaultVitestPool(env),
-): LocalVitestScheduling {
-  return resolveLocalVitestSchedulingImpl(env, system, pool);
-}
-
-export function resolveDefaultVitestPool(
-  _env: Record<string, string | undefined> = process.env,
-): OpenClawVitestPool {
-  return "threads";
-}
 
 export const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 export const nonIsolatedRunnerPath = path.join(repoRoot, "test", "non-isolated-runner.ts");
 const vitestConfigFiles = fs
   .readdirSync(path.join(repoRoot, "test", "vitest"), { withFileTypes: true })
-  .filter((entry) => entry.isFile() && /\.(?:mjs|ts)$/u.test(entry.name))
+  .filter((entry) => entry.isFile() && /\.(?:mjs|mts|ts)$/u.test(entry.name))
   .map((entry) => `test/vitest/${entry.name}`)
   .toSorted((left, right) => left.localeCompare(right));
 export function resolveRepoRootPath(value: string): string {
@@ -75,12 +59,7 @@ export function resolveRepoRootPath(value: string): string {
 }
 const isCI = isCiLikeEnv(process.env);
 const isWindows = process.platform === "win32";
-const defaultPool = resolveDefaultVitestPool();
-const localScheduling = resolveLocalVitestScheduling(
-  process.env,
-  detectVitestHostInfo(),
-  defaultPool,
-);
+const localScheduling = resolveLocalVitestScheduling();
 
 function hasWorkerOverride(env: Record<string, string | undefined>): boolean {
   return Boolean((env.OPENCLAW_VITEST_MAX_WORKERS ?? env.OPENCLAW_TEST_WORKERS)?.trim());
@@ -114,22 +93,31 @@ export function resolveSharedVitestWorkerConfig(params: {
   isCI?: boolean;
   isWindows?: boolean;
   localScheduling?: LocalVitestScheduling;
-}): Pick<LocalVitestScheduling, "fileParallelism" | "maxWorkers"> {
+}): Pick<LocalVitestScheduling, "fileParallelism" | "maxWorkers"> & {
+  pool: "forks" | "threads";
+} {
   const env = params.env ?? process.env;
   const local = params.localScheduling ?? localScheduling;
+  const windows = params.isWindows ?? isWindows;
+  // Windows concurrent thread spawns can inherit one another's temporary pipe
+  // handles. Separate processes keep those writers out of unrelated child trees.
+  const pool = windows ? "forks" : "threads";
   if (hasWorkerOverride(env)) {
     return {
+      pool,
       fileParallelism: local.fileParallelism,
       maxWorkers: local.maxWorkers,
     };
   }
   if (params.isCI ?? isCI) {
     return {
+      pool,
       fileParallelism: true,
-      maxWorkers: (params.isWindows ?? isWindows) ? 2 : 3,
+      maxWorkers: windows ? 2 : 3,
     };
   }
   return {
+    pool,
     fileParallelism: local.fileParallelism,
     maxWorkers: local.maxWorkers,
   };
@@ -160,7 +148,30 @@ if (!isCI && localScheduling.throttledBySystem && shouldPrintVitestThrottle(proc
 export const sharedVitestConfig = {
   root: repoRoot,
   envDir: false as const,
-  plugins: [createStateSchemaInlinePlugin(repoRoot)],
+  plugins: [
+    {
+      name: "openclaw:node-worker-policy",
+      config: {
+        order: "pre" as const,
+        handler: (config: ViteUserConfig) => ({
+          test: {
+            // Generated projects may copy plugins without the shared test block.
+            environment: config.test?.environment ?? "node",
+            globalSetup: [resolveRepoRootPath("test/vitest/vitest.node-policy.global-setup.ts")],
+          },
+        }),
+      },
+    },
+    // Node tests also import UI renderers. Keep their compiler off non-UI sources.
+    ...controlUiSolidPlugin([
+      `${repoRoot.replaceAll("\\", "/")}/ui/**/*.tsx`,
+      `${repoRoot.replaceAll("\\", "/")}/extensions/*/browser/**/*.tsx`,
+    ]),
+    createStateSchemaInlinePlugin(repoRoot),
+    compiledSubprocessesPlugin(),
+    createVitestProjectCachePlugin(),
+    createRedactingReporterPlugin(),
+  ],
   resolve: {
     alias: [
       {
@@ -172,22 +183,33 @@ export const sharedVitestConfig = {
         replacement: path.join(repoRoot, "test", "vitest", "zod-runtime.ts"),
       },
       {
-        // Bun substitutes its built-in fetch shim for bare `undici`, whose
-        // MockAgent is a non-functional stub; pin the real package so
-        // mock-http interception works. Node resolves to this file anyway.
+        // Bypass Bun's bare-undici builtin (MockAgent is a stub) while keeping
+        // package resolution relative to the importer and its installed version.
         find: /^undici$/u,
-        replacement: path.join(repoRoot, "node_modules", "undici", "index.js"),
+        replacement: "undici/index.js",
+      },
+      {
+        // Keep the installed WebSocket package and its mocks on one module identity in Bun.
+        find: /^ws$/u,
+        replacement: path.join(repoRoot, "node_modules", "ws", "wrapper.mjs"),
       },
       {
         find: "discord-api-types/v10",
-        replacement: path.join(repoRoot, "test", "vitest", "discord-api-types-v10-runtime.ts"),
+        replacement: path.join(
+          repoRoot,
+          "extensions",
+          "discord",
+          "test",
+          "discord-api-types-v10-runtime.ts",
+        ),
       },
       {
         find: "discord-api-types/payloads/v10",
         replacement: path.join(
           repoRoot,
+          "extensions",
+          "discord",
           "test",
-          "vitest",
           "discord-api-types-payloads-v10-runtime.ts",
         ),
       },
@@ -210,6 +232,10 @@ export const sharedVitestConfig = {
       {
         find: "@openclaw/slack/api.js",
         replacement: path.join(repoRoot, "extensions", "slack", "api.ts"),
+      },
+      {
+        find: "@openclaw/slack/test-api.js",
+        replacement: path.join(repoRoot, "extensions", "slack", "test-api.ts"),
       },
       {
         find: "@openclaw/whatsapp/api.js",
@@ -268,6 +294,16 @@ export const sharedVitestConfig = {
         ),
       },
       {
+        find: "@openclaw/gateway-protocol/restart-unavailable",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "gateway-protocol",
+          "src",
+          "restart-unavailable.ts",
+        ),
+      },
+      {
         find: "@openclaw/gateway-protocol/schema",
         replacement: path.join(repoRoot, "packages", "gateway-protocol", "src", "schema.ts"),
       },
@@ -279,6 +315,16 @@ export const sharedVitestConfig = {
           "gateway-protocol",
           "src",
           "startup-unavailable.ts",
+        ),
+      },
+      {
+        find: "@openclaw/gateway-protocol/system-agent-context",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "gateway-protocol",
+          "src",
+          "system-agent-context.ts",
         ),
       },
       {
@@ -333,6 +379,8 @@ export const sharedVitestConfig = {
         find: "@openclaw/llm-core/validation",
         replacement: path.join(repoRoot, "packages", "llm-core", "src", "validation.ts"),
       },
+      sourcePackageAlias("llm-core", "types"),
+      sourcePackageAlias("llm-core", "model-contracts/anthropic"),
       {
         find: "@openclaw/llm-core",
         replacement: path.join(repoRoot, "packages", "llm-core", "src", "index.ts"),
@@ -367,6 +415,7 @@ export const sharedVitestConfig = {
           "model-catalog-normalize.ts",
         ),
       },
+      sourcePackageAlias("model-catalog-core", "model-catalog-pricing"),
       {
         find: "@openclaw/model-catalog-core/model-catalog-types",
         replacement: path.join(
@@ -453,7 +502,13 @@ export const sharedVitestConfig = {
       sourcePackageAlias("media-core", "read-byte-stream-with-limit"),
       sourcePackageAlias("media-core"),
       sourcePackageAlias("retry"),
+      sourcePackageAlias("worker-runtime", "worker"),
+      sourcePackageAlias("worker-runtime", "lifecycle"),
+      sourcePackageAlias("worker-runtime"),
       sourcePackageAlias("session-url-contract", "parse"),
+      sourcePackageAlias("session-url-contract", "session-key-normalization"),
+      sourcePackageAlias("session-url-contract", "share-build"),
+      sourcePackageAlias("session-url-contract", "public-share"),
       sourcePackageAlias("session-url-contract"),
       sourcePackageAlias("workboard-contract"),
       ...sourcePackageAliasesFromExports("acp-core", acpCorePackageJson.exports),
@@ -469,14 +524,31 @@ export const sharedVitestConfig = {
   },
   test: {
     dir: repoRoot,
+    root: repoRoot,
+    // Solid defaults unspecified test environments to jsdom; preserve Node's default.
+    environment: "node",
+    // Emit completed cases even under agent detection so healthy runs feed the output watchdog.
+    reporters: ["verbose", ...(process.env.GITHUB_ACTIONS === "true" ? ["github-actions"] : [])],
     testTimeout: DEFAULT_VITEST_TEST_TIMEOUT_MS,
+    // Preserve calls recorded during shared setup and beforeAll hooks.
+    clearMocks: false,
     // 180s on every platform: GitHub-hosted 4-core fallback runners (Blacksmith
     // outage breaker) push e2e beforeAll hooks past 120s; Windows always needed it.
     hookTimeout: 180_000,
     unstubEnvs: true,
     unstubGlobals: true,
     isolate: false,
-    pool: defaultPool,
+    pool: workerConfig.pool,
+    // Native imports keep the invocation owner's isolated source-cache policy.
+    execArgv: [
+      ...(process.versions.bun
+        ? resolveTestBunSourceArgs(repoRoot)
+        : ["--import", resolveTsxImport(repoRoot)]),
+      // Bun's Windows preload resolver requires a filesystem path instead of a file URL.
+      process.versions.bun
+        ? `--preload=${fileURLToPath(new URL("./vitest.jsdom-preload.mts", import.meta.url))}`
+        : `--import=${new URL("./vitest.jsdom-preload.mts", import.meta.url).href}`,
+    ],
     runner: nonIsolatedRunnerPath,
     maxWorkers: workerConfig.maxWorkers,
     fileParallelism: workerConfig.fileParallelism,
@@ -485,6 +557,9 @@ export const sharedVitestConfig = {
     },
     server: {
       deps: {
+        // Vite versions unoptimized imports; native transitive imports do not.
+        // Keep editor classes and parser properties in one module graph.
+        inline: [/@(?:codemirror|lezer)\//u],
         external: dependencyExternalPatterns,
       },
     },
@@ -502,7 +577,7 @@ export const sharedVitestConfig = {
       "test/setup.extensions.ts",
       "test/setup-openclaw-runtime.ts",
       ...vitestConfigFiles,
-      "test/vitest/**/*.{ts,mjs}",
+      "test/vitest/**/*.{ts,mts,mjs}",
     ].map(resolveRepoRootPath),
     include: [
       "src/**/*.test.ts",
@@ -512,18 +587,7 @@ export const sharedVitestConfig = {
       "ui/src/pages/chat/tool-stream.node.test.ts",
     ],
     setupFiles: [resolveRepoRootPath("test/setup.ts")],
-    exclude: [
-      "dist/**",
-      "test/fixtures/**",
-      "apps/macos/**",
-      "apps/macos/.build/**",
-      "**/node_modules/**",
-      "**/vendor/**",
-      "dist/OpenClaw.app/**",
-      "**/._*",
-      "**/*.live.test.ts",
-      "**/*.e2e.test.ts",
-    ],
+    exclude: [...sharedVitestExcludePatterns],
     coverage: {
       provider: "v8" as const,
       reporter: ["text", "lcov"],
@@ -559,7 +623,6 @@ export const sharedVitestConfig = {
         "src/agents/sandbox.ts",
         "src/agents/agent-tool-definition-adapter.ts",
         "src/agents/tools/discord-actions*.ts",
-        "src/infra/state-migrations.ts",
         "src/infra/update-check.ts",
         "src/infra/ports-inspect.ts",
         "src/infra/outbound/outbound-session.ts",
@@ -568,7 +631,7 @@ export const sharedVitestConfig = {
         "src/gateway/server-methods/config.ts",
         "src/gateway/server-methods/send.ts",
         "src/gateway/server-methods/skills.ts",
-        "src/gateway/server-methods/talk.ts",
+        "src/gateway/talk/handlers/index.ts",
         "src/gateway/server-methods/web.ts",
         "src/gateway/server-methods/wizard.ts",
         "src/gateway/call.ts",
@@ -583,6 +646,6 @@ export const sharedVitestConfig = {
         "src/infra/tailscale.ts",
       ],
     },
-    ...loadVitestExperimentalConfig(),
+    ...loadVitestPerformanceConfig(process.env, process.platform, repoRoot),
   },
 };

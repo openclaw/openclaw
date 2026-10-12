@@ -1,11 +1,19 @@
 // SQLite query-plan tests pin hot OpenClaw state indexes used by perf proof.
-import type { DatabaseSync } from "node:sqlite";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import type { DatabaseSync, StatementSync } from "node:sqlite";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { deleteOrphanedTranscriptIndexRowsInTransaction } from "../config/sessions/session-transcript-index.js";
+import { countFailedDeliveryQueueEntriesInDatabase } from "../infra/delivery-queue-sqlite.kernel.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
+import {
+  migrateSessionWatchCursorProvenance,
+  needsSessionWatchCursorProvenanceMigration,
+} from "./openclaw-state-db-session-watch-migration.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -58,6 +66,206 @@ afterEach(() => {
 });
 
 describe("sqlite hot query plans", () => {
+  it("bounds absent legacy watch detection and migration by the cursor index", () => {
+    const { db } = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: createTempStateDir() },
+    });
+    const plans: string[] = [];
+    const prototype = requireNodeSqlite().StatementSync.prototype;
+    const observers = (["get", "all", "iterate"] as const).map((method) => {
+      const original = prototype[method];
+      return vi.spyOn(prototype, method).mockImplementation(
+        new Proxy(original, {
+          apply(target, receiver: StatementSync, params) {
+            if (/^select .* from "session_watch_cursors" /i.test(receiver.sourceSQL)) {
+              plans.push(explainQueryPlan(db, receiver.sourceSQL, params));
+            }
+            return Reflect.apply(target, receiver, params);
+          },
+        }),
+      );
+    });
+    try {
+      expect(needsSessionWatchCursorProvenanceMigration(db, 4)).toBe(false);
+      expect(migrateSessionWatchCursorProvenance(db)).toEqual({
+        addedColumn: false,
+        migratedAmbientWatches: 0,
+        removedLegacySentinels: 0,
+      });
+    } finally {
+      observers.forEach((observer) => observer.mockRestore());
+    }
+    expect(plans).toHaveLength(2);
+    for (const plan of plans) {
+      expect(plan).toMatch(
+        /SEARCH session_watch_cursors .*\(watcher_session_key>\? AND watcher_session_key<\?\)/,
+      );
+      expect(plan).not.toContain("SCAN");
+    }
+  });
+
+  it.each(["missing", "production", "stale"])(
+    "checks orphan-query plans and preserves live rows with %s statistics",
+    (statistics) => {
+      const { db } = openOpenClawAgentDatabase({
+        agentId: "worker-1",
+        env: { OPENCLAW_STATE_DIR: createTempStateDir() },
+      });
+      // Multiple events per owner exercise the cost that a one-row fixture hides.
+      db.exec(`
+        PRAGMA foreign_keys = OFF;
+        WITH RECURSIVE events(n) AS (
+          VALUES(0) UNION ALL SELECT n + 1 FROM events WHERE n < 191
+        )
+        INSERT INTO transcript_events (session_id, seq, event_json, created_at)
+          SELECT 'session-' || (n / 64), n % 64, '{}', 1 FROM events;
+        INSERT INTO session_transcript_active_events
+          (session_id, active_position, event_seq, context_eligible)
+          SELECT session_id, seq, seq, 1 FROM transcript_events;
+        PRAGMA foreign_keys = ON;
+      `);
+      if (statistics !== "missing") {
+        db.exec(`
+          ANALYZE;
+          DELETE FROM sqlite_stat1;
+          INSERT INTO sqlite_stat1 (tbl, idx, stat) VALUES
+            ('transcript_events', 'sqlite_autoindex_transcript_events_1', '4763052 401 1'),
+            ('session_transcript_active_events', 'sqlite_autoindex_session_transcript_active_events_1', '4747766 401 1'),
+            ('session_transcript_active_events', 'idx_agent_transcript_active_event_seq', '4747766 401 1'),
+            ('session_transcript_active_events', 'idx_agent_transcript_active_messages', '3774978 401 1'),
+            ('session_transcript_active_events', 'idx_agent_transcript_context_pending', '0 0');
+        `);
+        if (statistics === "stale") {
+          db.exec("UPDATE sqlite_stat1 SET stat = '1 1 1'");
+        }
+        db.exec("ANALYZE sqlite_schema");
+      }
+
+      const statements: string[] = [];
+      const tracker = trackSqliteStatementExecutions(db, ["delete"], (sql) => {
+        statements.push(sql);
+        return "delete";
+      });
+      try {
+        db.exec("BEGIN IMMEDIATE");
+        deleteOrphanedTranscriptIndexRowsInTransaction(db);
+        db.exec("COMMIT");
+        expect(tracker.counts).toEqual({ delete: 3 });
+      } finally {
+        tracker.restore();
+      }
+      const activeStatements = statements.filter((sql) =>
+        sql.includes('from "session_transcript_active_events"'),
+      );
+      expect(activeStatements).toHaveLength(1);
+      for (const sql of activeStatements) {
+        const plan = explainQueryPlan(db, sql);
+        expect(plan).not.toContain("CORRELATED");
+        expect(plan).toContain("USING COVERING INDEX");
+        if (statistics === "production") {
+          expect(plan).toMatch(/SEARCH session_transcript_active_events .*\(session_id=\?\)/);
+          const program = db.prepare(`EXPLAIN ${sql}`).all();
+          for (const table of ["session_transcript_active_events", "transcript_events"]) {
+            const roots = new Set(
+              db
+                .prepare("SELECT rootpage FROM sqlite_schema WHERE type = 'index' AND tbl_name = ?")
+                .all(table)
+                .map((row) => row.rootpage),
+            );
+            const cursors = new Set(
+              program
+                .filter((op) => op.opcode === "OpenRead" && roots.has(op.p2))
+                .map((op) => op.p1),
+            );
+            // SCAN alone is ambiguous: SeekGT jumps over duplicate session keys.
+            expect(program.some((op) => op.opcode === "SeekGT" && cursors.has(op.p1))).toBe(true);
+          }
+        }
+      }
+      db.exec(`
+        PRAGMA foreign_keys = OFF;
+        INSERT INTO session_transcript_active_events
+          (session_id, active_position, event_seq, context_eligible)
+          VALUES ('orphan', 0, 0, 1);
+        PRAGMA foreign_keys = ON;
+      `);
+      db.exec("BEGIN IMMEDIATE");
+      deleteOrphanedTranscriptIndexRowsInTransaction(db);
+      db.exec("COMMIT");
+      expect(
+        db.prepare("SELECT count(*) AS n FROM session_transcript_active_events").get(),
+      ).toEqual({
+        n: 192,
+      });
+    },
+  );
+
+  it("searches failed delivery ranges with and without planner statistics", () => {
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: createTempStateDir() },
+    });
+    const { db } = database;
+    db.exec(`
+      INSERT INTO delivery_queue_entries
+        (queue_name, id, status, entry_json, enqueued_at, updated_at, failed_at)
+      VALUES
+        ('z', 'null', 'failed', '{}', 1, 1, NULL),
+        ('a', 'late', 'failed', '{}', 1, 1, 30),
+        ('a', 'b', 'failed', '{}', 1, 1, 10),
+        ('a', 'a', 'failed', '{}', 1, 1, 10),
+        ('a', 'null', 'failed', '{}', 1, 1, NULL),
+        ('a', 'pending', 'pending', '{}', 1, 1, 0),
+        ('pending-only', 'pending', 'pending', '{}', 1, 1, NULL);
+      WITH RECURSIVE history(n) AS (
+        VALUES(1) UNION ALL SELECT n + 1 FROM history WHERE n < 200
+      )
+      INSERT INTO delivery_queue_entries
+        (queue_name, id, status, entry_json, enqueued_at, updated_at, failed_at)
+      SELECT 'history-' || (n % 10), CAST(n AS TEXT), 'completed', '{}', 1, 1, 0
+        FROM history;
+    `);
+
+    for (const analyzed of [false, true]) {
+      if (analyzed) {
+        db.exec("ANALYZE");
+      }
+      let countSql = "";
+      const reads = trackSqliteStatementExecutions(db, ["countFailed"], (sql) => {
+        countSql = sql;
+        return "countFailed";
+      });
+      try {
+        expect(countFailedDeliveryQueueEntriesInDatabase(database)).toEqual([
+          { queueName: "a", count: 4, oldestFailedAt: 10 },
+          { queueName: "z", count: 1 },
+        ]);
+        expect(reads.counts.countFailed).toBe(1);
+      } finally {
+        reads.restore();
+      }
+      const countPlan = explainQueryPlan(db, countSql, ["failed"]);
+      expect(countPlan).toContain(
+        "SEARCH delivery_queue_entries USING COVERING INDEX idx_delivery_queue_failed (status=?)",
+      );
+      expect(countPlan).not.toContain("SCAN");
+      expect(countPlan).not.toContain("USE TEMP B-TREE");
+
+      const listingSql = `SELECT id, failed_at FROM delivery_queue_entries
+        WHERE queue_name = ? AND status = ? ORDER BY failed_at ASC, id ASC`;
+      const listingPlan = explainQueryPlan(db, listingSql, ["a", "failed"]);
+      expect(listingPlan).toContain(
+        "SEARCH delivery_queue_entries USING COVERING INDEX idx_delivery_queue_failed (status=? AND queue_name=?)",
+      );
+      expect(listingPlan).not.toContain("USE TEMP B-TREE");
+      expect(db.prepare(listingSql).all("a", "failed")).toEqual([
+        { id: "null", failed_at: null },
+        { id: "a", failed_at: 10 },
+        { id: "b", failed_at: 10 },
+        { id: "late", failed_at: 30 },
+      ]);
+    }
+  });
+
   it("uses shared state indexes for list and queue queries", () => {
     const stateDir = createTempStateDir();
     const database = openOpenClawStateDatabase({
@@ -78,18 +286,6 @@ describe("sqlite hot query plans", () => {
     });
     expectPlanUsesIndex({
       db: database.db,
-      indexName: "idx_cron_jobs_enabled_next_run",
-      params: ["/state/cron/jobs.json"],
-      sql: `
-        SELECT job_id, next_run_at_ms
-          FROM cron_jobs
-         WHERE store_key = ? AND enabled = 1 AND next_run_at_ms IS NOT NULL
-         ORDER BY next_run_at_ms ASC, job_id
-         LIMIT 25
-      `,
-    });
-    expectPlanUsesIndex({
-      db: database.db,
       indexName: "idx_delivery_queue_pending",
       params: ["outbound", "pending"],
       sql: `
@@ -100,30 +296,32 @@ describe("sqlite hot query plans", () => {
          LIMIT 50
       `,
     });
-    expectPlanUsesIndex({
-      db: database.db,
-      indexName: "idx_delivery_queue_session",
-      params: ["outbound", "pending", "agent:main:main"],
-      sql: `
-        SELECT id, entry_json
-          FROM delivery_queue_entries
-         WHERE queue_name = ? AND status = ? AND session_key = ?
-         ORDER BY enqueued_at ASC, id
-         LIMIT 50
-      `,
-    });
-    expectPlanUsesIndex({
-      db: database.db,
-      indexName: "idx_plugin_state_listing",
-      params: ["telegram", "kv"],
-      sql: `
+    const pluginListingPlan = explainQueryPlan(
+      database.db,
+      `
         SELECT entry_key, value_json
           FROM plugin_state_entries
          WHERE plugin_id = ? AND namespace = ?
          ORDER BY created_at ASC, entry_key
          LIMIT 50
       `,
-    });
+      ["telegram", "kv"],
+    );
+    expect(pluginListingPlan).toContain("idx_plugin_state_listing");
+    expect(pluginListingPlan).not.toContain("USE TEMP B-TREE FOR ORDER BY");
+    for (const namespace of [undefined, "kv"]) {
+      expectPlanIncludes({
+        db: database.db,
+        expected: "USING COVERING INDEX idx_plugin_state_listing",
+        params: namespace ? ["telegram", namespace, 1000] : ["telegram", 1000],
+        sql: `
+          SELECT count(*)
+            FROM plugin_state_entries
+           WHERE plugin_id = ? ${namespace ? "AND namespace = ?" : ""}
+             AND (expires_at IS NULL OR expires_at > ?)
+        `,
+      });
+    }
     expectPlanUsesIndex({
       db: database.db,
       indexName: "idx_channel_ingress_pending",
@@ -159,18 +357,6 @@ describe("sqlite hot query plans", () => {
     });
     expectPlanUsesIndex({
       db: database.db,
-      indexName: "idx_agent_cache_expiry",
-      params: ["session_entries"],
-      sql: `
-        SELECT key, expires_at
-          FROM cache_entries
-         WHERE scope = ? AND expires_at IS NOT NULL
-         ORDER BY expires_at ASC, key
-        LIMIT 50
-      `,
-    });
-    expectPlanUsesIndex({
-      db: database.db,
       indexName: "idx_agent_session_nodes_current_session_id",
       params: ["session-1"],
       sql: `
@@ -178,8 +364,29 @@ describe("sqlite hot query plans", () => {
           FROM session_nodes
          WHERE current_session_id = ?
          ORDER BY updated_at DESC, session_key ASC
+        LIMIT 1
+      `,
+    });
+    const latestWindowPlan = explainQueryPlan(
+      database.db,
+      `
+        SELECT session_id, updated_at
+          FROM session_windows
+         WHERE session_key = ?
+         ORDER BY updated_at DESC, session_id ASC
          LIMIT 1
       `,
+      ["agent:worker-1:main"],
+    );
+    expect(latestWindowPlan).toContain("idx_agent_session_windows_session_key");
+    expect(latestWindowPlan).not.toContain("SCAN session_windows");
+    expect(latestWindowPlan).not.toContain("USE TEMP B-TREE FOR ORDER BY");
+
+    expectPlanUsesIndex({
+      db: database.db,
+      indexName: "idx_agent_session_windows_session_key",
+      params: ["agent:worker-1:main"],
+      sql: "DELETE FROM session_nodes WHERE session_key = ?",
     });
     expectPlanUsesIndex({
       db: database.db,
@@ -191,6 +398,26 @@ describe("sqlite hot query plans", () => {
          WHERE status = ?
       `,
     });
+    expectPlanUsesIndex({
+      db: database.db,
+      indexName: "idx_agent_session_nodes_active",
+      sql: `
+        SELECT *
+          FROM session_nodes
+         WHERE archived_at IS NULL
+         ORDER BY session_key
+      `,
+    });
+    for (const activeOnly of [false, true]) {
+      expectPlanUsesIndex({
+        db: database.db,
+        indexName: "idx_agent_session_nodes_entry_not_valid",
+        params: [1],
+        sql: `SELECT entry_json FROM session_nodes WHERE entry_valid != ?${
+          activeOnly ? " AND archived_at IS NULL" : ""
+        }`,
+      });
+    }
     const latestMessagePlan = explainQueryPlan(
       database.db,
       `
@@ -236,6 +463,12 @@ describe("sqlite hot query plans", () => {
          WHERE session_id = ? AND event_type = ?
       `,
     });
+    expectPlanUsesIndex({
+      db: database.db,
+      indexName: "idx_agent_transcript_event_identity_sequence",
+      params: ["session-1", 1],
+      sql: "DELETE FROM transcript_events WHERE session_id = ? AND seq = ?",
+    });
 
     expectPlanIncludes({
       db: database.db,
@@ -250,7 +483,7 @@ describe("sqlite hot query plans", () => {
     const rawDeltaPlan = explainQueryPlan(
       database.db,
       `
-        SELECT seq, LENGTH(CAST(event_json AS BLOB)) + 1 AS serialized_bytes
+        SELECT seq, OCTET_LENGTH(event_json) + 1 AS serialized_bytes
           FROM transcript_events
          WHERE session_id = ? AND seq > ?
          ORDER BY seq ASC
@@ -299,7 +532,7 @@ describe("sqlite hot query plans", () => {
       database.db,
       `
         SELECT active.event_seq, active.message_position,
-               LENGTH(CAST(event.event_json AS BLOB)) + 1 AS serialized_bytes
+               OCTET_LENGTH(event.event_json) + 1 AS serialized_bytes
           FROM session_transcript_active_events AS active
           JOIN transcript_events AS event
             ON event.session_id = active.session_id AND event.seq = active.event_seq
@@ -341,7 +574,7 @@ describe("sqlite hot query plans", () => {
     expect(visibleDeltaPayloadPlan).toContain(
       "sqlite_autoindex_session_transcript_active_events_1",
     );
-    expect(visibleDeltaPayloadPlan).toContain("idx_agent_transcript_event_sequence");
+    expect(visibleDeltaPayloadPlan).toContain("idx_agent_transcript_event_identity_sequence");
     expect(visibleDeltaPayloadPlan).not.toContain("USE TEMP B-TREE FOR ORDER BY");
 
     const historyAnchorPlan = explainQueryPlan(

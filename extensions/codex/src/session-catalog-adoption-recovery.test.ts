@@ -1,183 +1,33 @@
 // Codex supervision tests cover passive listing and safe local session takeover.
 /* oxlint-disable typescript/unbound-method -- assertions inspect vi.fn-backed object methods, not unbound class methods. */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { createCodexAppServerBindingStore } from "./app-server/session-binding.js";
+import { createCodexSqliteTestBindingStateStore } from "./app-server/session-binding.sqlite.test-helpers.js";
 import {
+  transcriptMirrorMocks,
   continueLocalCodexSession,
   config,
   idleThread,
   createEligibleControl,
   adoptedEntry,
-  supervisionSessionInputKey,
   supervisionSessionKey,
   seedSupervisionBinding,
   interruptedAdoptionEntry,
   createRuntime,
   createGatewayApi,
-  resolveStorePath,
   sessionBindingIdentity,
   createCodexTestBindingStore,
   type CodexAppServerBindingStore,
   type CodexAppServerThreadBinding,
-  originalPath,
-  tempDirs,
-  fs,
 } from "./session-catalog.test-helpers.js";
 
-const commandRpcMocks = vi.hoisted(() => ({
-  codexControlRequest: vi.fn(),
-}));
-const pinnedConnectionMocks = vi.hoisted(() => ({
-  client: { connectionId: "pinned-catalog-client" },
-  getClient: vi.fn(),
-  releaseClient: vi.fn(),
-  request: vi.fn(),
-}));
-const transcriptMirrorMocks = vi.hoisted(() => ({
-  importCodexThreadHistoryToTranscript: vi.fn(async () => ({
-    importedMessages: 0,
-    omittedMessages: 0,
-  })),
-}));
-const nodeHostMocks = vi.hoisted(() => ({
-  runNodePtyCommand: vi.fn(async () => ({ exitCode: 0 })),
-  userShellPaths: new Map<string, string>(),
-}));
-
-vi.mock("./command-rpc.js", () => ({
-  codexControlRequest: commandRpcMocks.codexControlRequest,
-}));
-vi.mock("./app-server/request.js", () => ({
-  requestCodexAppServerClientJson: pinnedConnectionMocks.request,
-}));
-vi.mock("./app-server/shared-client.js", () => ({
-  getLeasedSharedCodexAppServerClient: pinnedConnectionMocks.getClient,
-  releaseLeasedSharedCodexAppServerClient: pinnedConnectionMocks.releaseClient,
-}));
-vi.mock("./app-server/transcript-mirror.js", () => ({
-  importCodexThreadHistoryToTranscript: transcriptMirrorMocks.importCodexThreadHistoryToTranscript,
-}));
-vi.mock("./session-catalog-pty.runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./session-catalog-pty.runtime.js")>();
-  return {
-    ...actual,
-    runNodePtyCommand: nodeHostMocks.runNodePtyCommand,
-    resolveNodeHostExecutable: (
-      command: string,
-      options: {
-        env?: NodeJS.ProcessEnv;
-        pathEnv?: string;
-        includeExtensionless?: boolean;
-        strategy: "direct" | "fallback" | "prefer";
-      },
-    ) => {
-      const env = options.env ?? process.env;
-      const pathEnv = options.pathEnv ?? env.PATH ?? env.Path ?? "";
-      const direct = actual.resolveNodeHostExecutable(command, {
-        env,
-        pathEnv,
-        includeExtensionless: options.includeExtensionless,
-        strategy: "direct",
-      });
-      if (direct && options.strategy !== "prefer") {
-        return direct;
-      }
-      const shellPath = nodeHostMocks.userShellPaths.get(command);
-      if (!shellPath) {
-        return direct;
-      }
-      const shellExecutable = actual.resolveNodeHostExecutable(command, {
-        env,
-        pathEnv: shellPath,
-        includeExtensionless: options.includeExtensionless,
-        strategy: "direct",
-      });
-      return shellExecutable
-        ? { executable: shellExecutable.executable, pathEnv: shellPath }
-        : direct;
-    },
-  };
-});
-
-beforeEach(() => {
-  nodeHostMocks.runNodePtyCommand.mockClear();
-  nodeHostMocks.userShellPaths.clear();
-  commandRpcMocks.codexControlRequest.mockReset();
-  pinnedConnectionMocks.getClient.mockReset();
-  pinnedConnectionMocks.getClient.mockResolvedValue(pinnedConnectionMocks.client);
-  pinnedConnectionMocks.releaseClient.mockReset();
-  pinnedConnectionMocks.request.mockReset();
-  transcriptMirrorMocks.importCodexThreadHistoryToTranscript.mockReset();
-  transcriptMirrorMocks.importCodexThreadHistoryToTranscript.mockResolvedValue({
-    importedMessages: 0,
-    omittedMessages: 0,
-  });
-});
-
-afterEach(async () => {
-  process.env.PATH = originalPath;
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
-});
+function continueSource(
+  params: Omit<Parameters<typeof continueLocalCodexSession>[0], "config" | "threadId">,
+) {
+  return continueLocalCodexSession({ config, threadId: "thread-1", ...params });
+}
 
 describe("Codex supervision actions", () => {
-  it("recovers the same pending session after a restart before binding commit", async () => {
-    const sessionKey = supervisionSessionKey("thread-1");
-    const sessionId = "openclaw-interrupted-before-binding";
-    const crashedRuntime = createRuntime();
-    crashedRuntime.entries.push({
-      sessionKey,
-      entry: interruptedAdoptionEntry({ sourceThreadId: "thread-1", sessionId }),
-    });
-    const { runtime, entries, createSessionEntry } = createRuntime({
-      entries: crashedRuntime.entries,
-    });
-    const { api } = createGatewayApi(runtime);
-    const bindingStore = createCodexTestBindingStore();
-
-    await expect(
-      continueLocalCodexSession({
-        api,
-        bindingStore,
-        config,
-        control: createEligibleControl(),
-        threadId: "thread-1",
-      }),
-    ).resolves.toEqual({ sessionKey, disposition: "forked" });
-
-    expect(createSessionEntry).toHaveBeenCalledOnce();
-    expect(createSessionEntry).toHaveBeenCalledWith(
-      expect.objectContaining({
-        key: supervisionSessionInputKey("thread-1"),
-        recoverMatchingInitialEntry: true,
-      }),
-    );
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.entry).toMatchObject({
-      sessionId,
-      pluginExtensions: {
-        codex: {
-          supervision: { sourceThreadId: "thread-1", modelLocked: true },
-        },
-      },
-    });
-    expect(entries[0]?.entry.initializationPending).toBeUndefined();
-    expect(transcriptMirrorMocks.importCodexThreadHistoryToTranscript).toHaveBeenCalledWith(
-      expect.objectContaining({
-        storePath: resolveStorePath(undefined, { agentId: "main" }),
-        sessionId,
-        sessionKey,
-      }),
-    );
-    await expect(
-      bindingStore.read(sessionBindingIdentity({ sessionId, sessionKey, config })),
-    ).resolves.toMatchObject({
-      threadId: "thread-1",
-      connectionScope: "supervision",
-      supervisionSourceThreadId: "thread-1",
-      preserveNativeModel: true,
-      pendingSupervisionBranch: { sourceThreadId: "thread-1" },
-    });
-  });
-
   it("recovers the same pending session after a restart following binding commit", async () => {
     const sessionKey = supervisionSessionKey("thread-1");
     const sessionId = "openclaw-interrupted-after-binding";
@@ -213,13 +63,7 @@ describe("Codex supervision actions", () => {
     const bindingStore: CodexAppServerBindingStore = { ...inner, mutate };
 
     await expect(
-      continueLocalCodexSession({
-        api,
-        bindingStore,
-        config,
-        control: createEligibleControl(),
-        threadId: "thread-1",
-      }),
+      continueSource({ api, bindingStore, control: createEligibleControl() }),
     ).resolves.toEqual({ sessionKey, disposition: "forked" });
 
     expect(createSessionEntry).toHaveBeenCalledOnce();
@@ -232,7 +76,7 @@ describe("Codex supervision actions", () => {
       },
     });
     expect(mutate).not.toHaveBeenCalled();
-    await expect(bindingStore.read(identity)).resolves.toMatchObject({
+    expect(bindingStore.read(identity)).toMatchObject({
       threadId: "thread-1",
       connectionScope: "supervision",
       supervisionSourceThreadId: "thread-1",
@@ -241,209 +85,50 @@ describe("Codex supervision actions", () => {
     });
   });
 
-  it.each([
-    "a different working directory",
-    "a different terminal turn",
-    "pending cleanup artifacts",
-  ] as const)("rejects recovery against %s in a same-thread binding", async (invalidState) => {
-    const sessionKey = supervisionSessionKey("thread-1");
-    const sessionId = "openclaw-interrupted-invalid-binding";
-    const crashedRuntime = createRuntime();
-    crashedRuntime.entries.push({
-      sessionKey,
-      entry: interruptedAdoptionEntry({ sourceThreadId: "thread-1", sessionId }),
-    });
-    const { runtime, entries } = createRuntime({ entries: crashedRuntime.entries });
-    const { api } = createGatewayApi(runtime);
-    const bindingStore = createCodexTestBindingStore();
-    const identity = sessionBindingIdentity({ sessionId, sessionKey, config });
-    const binding: CodexAppServerThreadBinding = {
-      threadId: "thread-1",
-      connectionScope: "supervision",
-      supervisionSourceThreadId: "thread-1",
-      cwd: "/workspace/project",
-      historyCoveredThrough: new Date().toISOString(),
-      conversationSourceTransferComplete: true,
-      preserveNativeModel: true,
-      pendingSupervisionBranch: { sourceThreadId: "thread-1" },
-    };
-    if (invalidState === "a different working directory") {
-      binding.cwd = "/workspace/other";
-    } else if (invalidState === "a different terminal turn") {
-      binding.pendingSupervisionBranch = {
-        sourceThreadId: "thread-1",
-        lastTurnId: "turn-other",
-      };
-    } else {
-      binding.pendingSupervisionBranch = {
-        sourceThreadId: "thread-1",
-        cleanupThreadIds: ["thread-orphan"],
-      };
-    }
-    await bindingStore.mutate(identity, {
-      kind: "set",
-      if: { kind: "absent" },
-      binding,
-    });
-
-    await expect(
-      continueLocalCodexSession({
-        api,
-        bindingStore,
-        config,
-        control: createEligibleControl(),
-        threadId: "thread-1",
-      }),
-    ).rejects.toThrow("OpenClaw session is already bound to Codex thread thread-1");
-    expect(entries).toEqual([]);
-  });
-
-  it("does not infer a terminal boundary from completedAt without a terminal status", async () => {
-    const { runtime, createSessionEntry } = createRuntime();
-    const { api } = createGatewayApi(runtime);
-    const bindingStore = createCodexTestBindingStore();
-    const control = createEligibleControl({
-      readThread: vi.fn(async () =>
-        idleThread({
-          status: { type: "notLoaded" },
-          turns: [{ id: "turn-unknown", completedAt: 123, items: [] }],
-        }),
-      ),
-    });
-
-    const result = await continueLocalCodexSession({
-      api,
-      bindingStore,
-      config,
-      control,
-      threadId: "thread-1",
-    });
-
-    expect(result.disposition).toBe("forked");
-    expect(createSessionEntry).toHaveBeenCalledOnce();
-    expect(transcriptMirrorMocks.importCodexThreadHistoryToTranscript).toHaveBeenCalledWith(
-      expect.objectContaining({ throughTurnId: null, modelProvider: undefined }),
-    );
-    await expect(
-      bindingStore.read(
-        sessionBindingIdentity({
-          sessionId: "openclaw-session-1",
-          sessionKey: result.sessionKey,
-          config,
-        }),
-      ),
-    ).resolves.toMatchObject({
-      connectionScope: "supervision",
-      supervisionSourceThreadId: "thread-1",
-      pendingSupervisionBranch: { sourceThreadId: "thread-1" },
-    });
-    const binding = await bindingStore.read(
-      sessionBindingIdentity({
-        sessionId: "openclaw-session-1",
-        sessionKey: result.sessionKey,
-        config,
-      }),
-    );
-    expect(binding?.pendingSupervisionBranch).not.toHaveProperty("lastTurnId");
-  });
-
-  it("restores an archived mapped session without changing its locked generation metadata", async () => {
-    const { runtime, entries, createSessionEntry, patchSessionEntry } = createRuntime();
-    const { api } = createGatewayApi(runtime);
-    const sessionKey = supervisionSessionKey("thread-1");
-    const sessionId = "openclaw-session-archived";
-    entries.push({
-      sessionKey,
-      entry: {
-        ...adoptedEntry({ sourceThreadId: "thread-1", sessionId }),
-        archivedAt: 123,
-        updatedAt: 99,
-        model: "gpt-5.4",
-        modelProvider: "openai",
-      },
-    });
-    const bindingStore = createCodexTestBindingStore();
-    await seedSupervisionBinding({
-      bindingStore,
-      sessionId,
-      sessionKey,
-      sourceThreadId: "thread-1",
-    });
-
-    await expect(
-      continueLocalCodexSession({
-        api,
-        bindingStore,
-        config,
-        control: createEligibleControl(),
-        threadId: "thread-1",
-      }),
-    ).resolves.toEqual({ sessionKey, disposition: "existing" });
-
-    expect(patchSessionEntry).toHaveBeenCalledWith(
-      expect.objectContaining({
+  it.each(["a different working directory", "pending cleanup artifacts"] as const)(
+    "rejects recovery against %s in a same-thread binding",
+    async (invalidState) => {
+      const sessionKey = supervisionSessionKey("thread-1");
+      const sessionId = "openclaw-interrupted-invalid-binding";
+      const crashedRuntime = createRuntime();
+      crashedRuntime.entries.push({
         sessionKey,
-        readConsistency: "latest",
-        preserveActivity: true,
-        update: expect.any(Function),
-      }),
-    );
-    expect(entries[0]?.entry).toMatchObject({
-      sessionId,
-      updatedAt: 99,
-      agentHarnessId: "codex",
-      modelSelectionLocked: true,
-      model: "gpt-5.4",
-      modelProvider: "openai",
-      pluginExtensions: {
-        codex: { supervision: { sourceThreadId: "thread-1", modelLocked: true } },
-      },
-    });
-    expect(entries[0]?.entry.archivedAt).toBeUndefined();
-    expect(createSessionEntry).not.toHaveBeenCalled();
-  });
-
-  it("opens a mapped active bound thread without applying the unadopted idle gate", async () => {
-    const { runtime, entries, createSessionEntry, patchSessionEntry } = createRuntime();
-    const { api } = createGatewayApi(runtime);
-    const control = createEligibleControl({
-      readThread: vi.fn(async () =>
-        idleThread({
-          id: "thread-1-branch",
-          status: { type: "active", activeFlags: ["waitingOnApproval"] },
-        }),
-      ),
-    });
-    const sessionKey = supervisionSessionKey("thread-1");
-    const sessionId = "openclaw-session-existing";
-    entries.push({
-      sessionKey,
-      entry: adoptedEntry({ sourceThreadId: "thread-1", sessionId }),
-    });
-    const bindingStore = createCodexTestBindingStore();
-    await seedSupervisionBinding({
-      bindingStore,
-      sessionId,
-      sessionKey,
-      sourceThreadId: "thread-1",
-    });
-
-    await expect(
-      continueLocalCodexSession({
-        api,
-        bindingStore,
-        config,
-        control,
+        entry: interruptedAdoptionEntry({ sourceThreadId: "thread-1", sessionId }),
+      });
+      const { runtime, entries } = createRuntime({ entries: crashedRuntime.entries });
+      const { api } = createGatewayApi(runtime);
+      const bindingStore = createCodexTestBindingStore();
+      const identity = sessionBindingIdentity({ sessionId, sessionKey, config });
+      const binding: CodexAppServerThreadBinding = {
         threadId: "thread-1",
-      }),
-    ).resolves.toEqual({
-      sessionKey,
-      disposition: "existing",
-    });
-    expect(control.readThread).toHaveBeenCalledWith("thread-1-branch", true);
-    expect(patchSessionEntry).toHaveBeenCalledOnce();
-    expect(createSessionEntry).not.toHaveBeenCalled();
-  });
+        connectionScope: "supervision",
+        supervisionSourceThreadId: "thread-1",
+        cwd: "/workspace/project",
+        historyCoveredThrough: new Date().toISOString(),
+        conversationSourceTransferComplete: true,
+        preserveNativeModel: true,
+        pendingSupervisionBranch: { sourceThreadId: "thread-1" },
+      };
+      if (invalidState === "a different working directory") {
+        binding.cwd = "/workspace/other";
+      } else {
+        binding.pendingSupervisionBranch = {
+          sourceThreadId: "thread-1",
+          cleanupThreadIds: ["thread-orphan"],
+        };
+      }
+      await bindingStore.mutate(identity, {
+        kind: "set",
+        if: { kind: "absent" },
+        binding,
+      });
+
+      await expect(
+        continueSource({ api, bindingStore, control: createEligibleControl() }),
+      ).rejects.toThrow("guarded rollback did not complete");
+      expect(entries[0]?.entry.initializationPending).toBe(true);
+    },
+  );
 
   it.each([
     { name: "mapped", mapped: true, includeTurns: true },
@@ -472,15 +157,9 @@ describe("Codex supervision actions", () => {
         readThread: vi.fn(async () => idleThread({ id: "different-thread", source: "cli" })),
       });
 
-      await expect(
-        continueLocalCodexSession({
-          api,
-          bindingStore,
-          config,
-          control,
-          threadId: "thread-1",
-        }),
-      ).rejects.toThrow("returned a different thread than requested");
+      await expect(continueSource({ api, bindingStore, control })).rejects.toThrow(
+        "returned a different thread than requested",
+      );
 
       expect(control.readThread).toHaveBeenCalledWith(
         mapped ? "thread-1-branch" : "thread-1",
@@ -522,15 +201,9 @@ describe("Codex supervision actions", () => {
       }),
     });
 
-    await expect(
-      continueLocalCodexSession({
-        api,
-        bindingStore,
-        config,
-        control,
-        threadId: "thread-1",
-      }),
-    ).rejects.toThrow("changed before it could be opened");
+    await expect(continueSource({ api, bindingStore, control })).rejects.toThrow(
+      "changed before it could be opened",
+    );
     expect(patchSessionEntry).toHaveBeenCalledOnce();
     expect(entries[0]?.entry.archivedAt).toBe(123);
     expect(entries[0]?.entry.modelSelectionLocked).toBe(true);
@@ -540,7 +213,13 @@ describe("Codex supervision actions", () => {
   it("rolls back the session when its pending binding cannot be committed", async () => {
     const { runtime, entries, createSessionEntry } = createRuntime();
     const { api } = createGatewayApi(runtime);
-    const inner = createCodexTestBindingStore();
+    const inner = createCodexAppServerBindingStore(
+      createCodexSqliteTestBindingStateStore({
+        namespace: "adoption-rollback",
+        maxEntries: 10,
+        env: { ...process.env },
+      }),
+    );
     let rejectBinding = true;
     const mutate = vi.fn(async (...args: Parameters<CodexAppServerBindingStore["mutate"]>) => {
       if (rejectBinding && args[1].kind === "set") {
@@ -552,102 +231,12 @@ describe("Codex supervision actions", () => {
     const bindingStore: CodexAppServerBindingStore = { ...inner, mutate };
     const control = createEligibleControl();
 
-    await expect(
-      continueLocalCodexSession({
-        api,
-        bindingStore,
-        config,
-        control,
-        threadId: "thread-1",
-      }),
-    ).rejects.toThrow("failed to bind OpenClaw session to Codex thread thread-1");
+    await expect(continueSource({ api, bindingStore, control })).rejects.toThrow(
+      "Codex session binding changed during initialization",
+    );
     expect(entries).toEqual([]);
     expect(createSessionEntry).toHaveBeenCalledOnce();
     expect(transcriptMirrorMocks.importCodexThreadHistoryToTranscript).toHaveBeenCalledOnce();
-    expect(control.archiveThread).not.toHaveBeenCalled();
-  });
-
-  it("clears a committed pending binding when session finalization fails", async () => {
-    const { runtime } = createRuntime({ failAfterCreate: () => true });
-    const { api } = createGatewayApi(runtime);
-    const bindingStore = createCodexTestBindingStore();
-    const control = createEligibleControl();
-
-    await expect(
-      continueLocalCodexSession({
-        api,
-        bindingStore,
-        config,
-        control,
-        threadId: "thread-1",
-      }),
-    ).rejects.toThrow("session finalization failed after binding commit");
-    await expect(
-      bindingStore.read(
-        sessionBindingIdentity({
-          sessionId: "openclaw-session-1",
-          sessionKey: supervisionSessionKey("thread-1"),
-          config,
-        }),
-      ),
-    ).resolves.toBeUndefined();
-    expect(control.archiveThread).not.toHaveBeenCalled();
-  });
-
-  it("preserves successor cleanup state when failed finalization loses its binding CAS", async () => {
-    const { runtime } = createRuntime({ failAfterCreate: () => true });
-    const { api } = createGatewayApi(runtime);
-    const inner = createCodexTestBindingStore();
-    const successorThreadId = "thread-successor-probe";
-    let replaced = false;
-    const bindingStore: CodexAppServerBindingStore = {
-      ...inner,
-      mutate: async (identity, mutation) => {
-        if (!replaced && mutation.kind === "clear") {
-          const current = await inner.read(identity);
-          const pending = current?.pendingSupervisionBranch;
-          if (!pending) {
-            throw new Error("missing pending supervision binding before cleanup");
-          }
-          replaced = true;
-          const patched = await inner.mutate(identity, {
-            kind: "patch-pending-supervision-branch",
-            expected: pending,
-            pending: { ...pending, cleanupThreadIds: [successorThreadId] },
-          });
-          if (!patched) {
-            throw new Error("failed to install successor supervision cleanup state");
-          }
-        }
-        return await inner.mutate(identity, mutation);
-      },
-    };
-    const control = createEligibleControl();
-
-    await expect(
-      continueLocalCodexSession({
-        api,
-        bindingStore,
-        config,
-        control,
-        threadId: "thread-1",
-      }),
-    ).rejects.toThrow("session finalization failed after binding commit");
-    await expect(
-      bindingStore.read(
-        sessionBindingIdentity({
-          sessionId: "openclaw-session-1",
-          sessionKey: supervisionSessionKey("thread-1"),
-          config,
-        }),
-      ),
-    ).resolves.toMatchObject({
-      threadId: "thread-1",
-      pendingSupervisionBranch: {
-        sourceThreadId: "thread-1",
-        cleanupThreadIds: [successorThreadId],
-      },
-    });
     expect(control.archiveThread).not.toHaveBeenCalled();
   });
 });

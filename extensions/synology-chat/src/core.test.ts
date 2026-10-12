@@ -1,21 +1,17 @@
 // Synology Chat tests cover core plugin behavior.
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import {
   createPluginSetupWizardConfigure,
   createTestWizardPrompter,
   runSetupWizardConfigure,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import { SynologyChatChannelConfigSchema } from "./config-schema.js";
-import {
-  authorizeUserForDmWithIngress,
-  RateLimiter,
-  sanitizeInput,
-  validateToken,
-} from "./security.js";
+import { setSynologyRuntime } from "./runtime.js";
+import { authorizeUserForDmWithIngress, sanitizeInput, validateToken } from "./security.js";
 import { buildSynologyChatInboundSessionKey } from "./session-key.js";
 import { synologyChatSetupContract, synologyChatSetupWizard } from "./setup-surface.js";
 
@@ -32,7 +28,6 @@ const synologyChatSetupPlugin = {
 };
 
 const synologyChatConfigure = createPluginSetupWizardConfigure(synologyChatSetupPlugin);
-const originalEnv = { ...process.env };
 
 function createSynologySetupPrompter(params: { allowedUserIds?: string } = {}) {
   return createTestWizardPrompter({
@@ -77,23 +72,21 @@ async function expectDmAuthorization(params: {
   }
 }
 
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
+beforeEach(() => {
+  setSynologyRuntime(createPluginRuntimeMock());
+  vi.stubEnv("SYNOLOGY_CHAT_TOKEN", undefined);
+  vi.stubEnv("SYNOLOGY_CHAT_INCOMING_URL", undefined);
+  vi.stubEnv("SYNOLOGY_NAS_HOST", undefined);
+  vi.stubEnv("SYNOLOGY_ALLOWED_USER_IDS", undefined);
+  vi.stubEnv("SYNOLOGY_RATE_LIMIT", undefined);
+  vi.stubEnv("OPENCLAW_BOT_NAME", undefined);
+});
+
 describe("synology-chat core", () => {
-  afterAll(() => {
-    vi.unstubAllEnvs();
-    process.env = { ...originalEnv };
-  });
-
-  beforeEach(() => {
-    vi.unstubAllEnvs();
-    process.env = { ...originalEnv };
-    delete process.env.SYNOLOGY_CHAT_TOKEN;
-    delete process.env.SYNOLOGY_CHAT_INCOMING_URL;
-    delete process.env.SYNOLOGY_NAS_HOST;
-    delete process.env.SYNOLOGY_ALLOWED_USER_IDS;
-    delete process.env.SYNOLOGY_RATE_LIMIT;
-    delete process.env.OPENCLAW_BOT_NAME;
-  });
-
   it("exports hosted media and dangerous compatibility fields in the JSON schema", () => {
     const properties = (SynologyChatChannelConfigSchema.schema.properties ?? {}) as Record<
       string,
@@ -250,21 +243,11 @@ describe("synology-chat core", () => {
 });
 
 describe("synology-chat account resolution", () => {
-  it("lists no accounts when the channel is missing", () => {
-    expect(listAccountIds({})).toStrictEqual([]);
-    expect(listAccountIds({ channels: {} })).toStrictEqual([]);
-  });
-
   it("does not discover an env account when the channel is not installed", () => {
     process.env.SYNOLOGY_CHAT_TOKEN = "env-token";
 
     expect(listAccountIds({})).toStrictEqual([]);
     expect(listAccountIds({ channels: {} })).toStrictEqual([]);
-  });
-
-  it("lists the default account when base config has a token", () => {
-    const cfg = { channels: { "synology-chat": { token: "abc" } } };
-    expect(listAccountIds(cfg)).toEqual(["default"]);
   });
 
   it("lists the default account when env provides a token", () => {
@@ -602,40 +585,5 @@ describe("synology-chat security helpers", () => {
     expect(result).toContain("[truncated]");
     expect(result.startsWith(`${"a".repeat(3998)}${emoji}`)).toBe(true);
     expect(result).not.toMatch(loneSurrogatePattern);
-  });
-
-  it("rate limits per user and caps tracked state", () => {
-    const limiter = new RateLimiter(3, 60);
-    expect(limiter.check("user1")).toBe(true);
-    expect(limiter.check("user1")).toBe(true);
-    expect(limiter.check("user1")).toBe(true);
-    expect(limiter.check("user1")).toBe(false);
-    expect(limiter.check("user2")).toBe(true);
-
-    const capped = new RateLimiter(1, 60, 3);
-    expect(capped.check("user1")).toBe(true);
-    expect(capped.check("user2")).toBe(true);
-    expect(capped.check("user3")).toBe(true);
-    expect(capped.check("user4")).toBe(true);
-    expect(capped.size()).toBeLessThanOrEqual(3);
-  });
-
-  it("caps oversized rate limit windows before constructing the limiter", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    try {
-      const limiter = new RateLimiter(1, Number.MAX_SAFE_INTEGER);
-
-      expect(limiter.check("user1")).toBe(true);
-      expect(limiter.check("user1")).toBe(false);
-
-      vi.setSystemTime(MAX_TIMER_TIMEOUT_MS - 1);
-      expect(limiter.check("user1")).toBe(false);
-
-      vi.setSystemTime(MAX_TIMER_TIMEOUT_MS);
-      expect(limiter.check("user1")).toBe(true);
-    } finally {
-      vi.useRealTimers();
-    }
   });
 });

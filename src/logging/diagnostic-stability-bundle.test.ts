@@ -4,15 +4,14 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { emitDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
-import { resetFatalErrorHooksForTest, runFatalErrorHooks } from "../infra/fatal-error-hooks.js";
+import { registerFatalErrorHook, runFatalErrorHooks } from "../infra/fatal-error-hooks.js";
 import {
   installDiagnosticStabilityFatalHook,
   MAX_DIAGNOSTIC_STABILITY_BUNDLE_BYTES,
   readDiagnosticStabilityBundleFileSync,
   readLatestDiagnosticStabilityBundleSync,
-  resetDiagnosticStabilityBundleForTest,
+  uninstallDiagnosticStabilityFatalHook,
   writeDiagnosticStabilityBundleForFailureSync,
-  writeDiagnosticStabilityBundleSync,
   type DiagnosticStabilityBundle,
 } from "./diagnostic-stability-bundle.js";
 import {
@@ -27,8 +26,7 @@ describe("diagnostic stability bundles", () => {
   function resetStabilityBundleTestState(): void {
     resetDiagnosticEventsForTest();
     resetDiagnosticStabilityRecorderForTest();
-    resetDiagnosticStabilityBundleForTest();
-    resetFatalErrorHooksForTest();
+    uninstallDiagnosticStabilityFatalHook();
   }
 
   beforeEach(() => {
@@ -96,12 +94,14 @@ describe("diagnostic stability bundles", () => {
       ),
       { code: "ERR_TEST" },
     );
-    const result = writeDiagnosticStabilityBundleSync({
-      reason: "gateway.restart_startup_failed",
+    const result = writeDiagnosticStabilityBundleForFailureSync(
+      "gateway.restart_startup_failed",
       error,
-      stateDir: tempDir,
-      now: new Date("2026-04-22T12:00:00.000Z"),
-    });
+      {
+        stateDir: tempDir,
+        now: new Date("2026-04-22T12:00:00.000Z"),
+      },
+    );
 
     expect(result.status).toBe("written");
     const file = result.status === "written" ? result.path : "";
@@ -127,20 +127,15 @@ describe("diagnostic stability bundles", () => {
     expect(raw).not.toContain(os.hostname());
   });
 
-  it("skips empty recorder snapshots by default", () => {
-    const result = writeDiagnosticStabilityBundleSync({
-      reason: "uncaught_exception",
-      stateDir: tempDir,
+  it("writes redacted failure stacks even when the recorder snapshot is empty", () => {
+    const secret = "sk-1234567890abcdef";
+    const error = Object.assign(new Error("raw startup config payload"), {
+      code: "ERR_CONFIG_PARSE",
+      stack: `Error: OPENAI_API_KEY=${secret}\n    at finishPosixAuthority (relay-host.js:12:3)`,
     });
-
-    expect(result).toEqual({ status: "skipped", reason: "empty" });
-    expect(fs.existsSync(path.join(tempDir, "logs", "stability"))).toBe(false);
-  });
-
-  it("writes failure bundles even when the recorder snapshot is empty", () => {
     const result = writeDiagnosticStabilityBundleForFailureSync(
       "gateway.restart_startup_failed",
-      Object.assign(new Error("raw startup config payload"), { code: "ERR_CONFIG_PARSE" }),
+      error,
       {
         stateDir: tempDir,
         now: new Date("2026-04-22T12:00:00.000Z"),
@@ -157,17 +152,29 @@ describe("diagnostic stability bundles", () => {
       name: "Error",
       code: "ERR_CONFIG_PARSE",
       message: "raw startup config payload",
+      stack: expect.stringContaining("\n    at finishPosixAuthority (relay-host.js:12:3)"),
     });
     expect(bundle.snapshot.count).toBe(0);
     expect(bundle.snapshot.events).toEqual([]);
-    expect(raw).not.toContain("stack");
+    expect(raw).not.toContain(secret);
+    const readback = readDiagnosticStabilityBundleFileSync(result.path);
+    expect(readback.status).toBe("found");
+    if (readback.status === "found") {
+      expect(readback.bundle.error?.stack).toContain(
+        "\n    at finishPosixAuthority (relay-host.js:12:3)",
+      );
+      expect(readback.bundle.error?.stack).not.toContain(secret);
+    }
   });
 
-  it("keeps bounded failure messages UTF-16 safe", () => {
+  it("keeps bounded failure messages and stacks UTF-16 safe", () => {
     const prefix = "a".repeat(499);
+    const stackPrefix = "a".repeat(7_999);
     const result = writeDiagnosticStabilityBundleForFailureSync(
       "gateway.restart_startup_failed",
-      new Error(`${prefix}😀${"b".repeat(500)}`),
+      Object.assign(new Error(`${prefix}😀${"b".repeat(500)}`), {
+        stack: `${stackPrefix}😀${"b".repeat(1_000)}`,
+      }),
       { stateDir: tempDir },
     );
 
@@ -176,6 +183,80 @@ describe("diagnostic stability bundles", () => {
       return;
     }
     expect(readBundle(result.path).error?.message).toBe(`${prefix}...`);
+    expect(readBundle(result.path).error).toHaveProperty("stack", stackPrefix);
+  });
+
+  it("preserves redacted shutdown causes and stacks through bundle readback", () => {
+    const secret = "sk-1234567890abcdef";
+    const cause = new TypeError(`fixture close failed: OPENAI_API_KEY=${secret}`);
+    cause.stack = `${cause.name}: ${cause.message}\n    at closeOwner (fixture.js:12:3)`;
+    const stepError = new Error("shutdown step failed (gateway lifetime sidecars)", { cause });
+    const error = new AggregateError([stepError], "Gateway shutdown did not complete cleanly");
+    const result = writeDiagnosticStabilityBundleForFailureSync(
+      "gateway.restart_close_failed",
+      error,
+      {
+        stateDir: tempDir,
+        shutdownStep: "gateway-server-close",
+      },
+    );
+    if (result.status !== "written") {
+      throw new Error(`expected written bundle, got ${result.status}`);
+    }
+    const readback = readDiagnosticStabilityBundleFileSync(result.path);
+    expect(readback.status).toBe("found");
+    if (readback.status !== "found") {
+      return;
+    }
+    expect(readback.bundle.evidence?.shutdown).toMatchObject({
+      step: "gateway-server-close",
+      errors: [
+        { name: "AggregateError", message: "Gateway shutdown did not complete cleanly" },
+        { name: "Error", message: "shutdown step failed (gateway lifetime sidecars)" },
+        {
+          name: "TypeError",
+          message: expect.stringContaining("fixture close failed"),
+          stack: expect.stringContaining("at closeOwner (fixture.js:12:3)"),
+        },
+      ],
+    });
+    expect(fs.readFileSync(result.path, "utf8")).not.toContain(secret);
+    expect(JSON.stringify(readback.bundle)).not.toContain(secret);
+  });
+
+  it("bounds cyclic shutdown error graphs and stack text without losing non-Error throws", () => {
+    const error = new AggregateError(
+      Array.from({ length: 100 }, (_, index) => new Error(`failure ${index}`)),
+      "shutdown failures",
+    );
+    error.cause = error;
+    error.stack = "a".repeat(7_999) + "😀" + "b".repeat(1_000);
+    const result = writeDiagnosticStabilityBundleForFailureSync(
+      "gateway.stop_close_failed",
+      error,
+      {
+        shutdownStep: "gateway-server-close",
+        stateDir: tempDir,
+      },
+    );
+    expect(result.status).toBe("written");
+    if (result.status !== "written") {
+      return;
+    }
+    expect(readBundle(result.path).evidence?.shutdown?.errors.length).toBeLessThanOrEqual(32);
+    expect(readBundle(result.path).evidence?.shutdown?.errors[0]?.stack).toBe("a".repeat(7_999));
+    const nonError = writeDiagnosticStabilityBundleForFailureSync(
+      "gateway.stop_close_failed",
+      "fixture string failure",
+      {
+        shutdownStep: "startup-operations",
+        stateDir: tempDir,
+      },
+    );
+    expect(nonError.status === "written" && readBundle(nonError.path).evidence?.shutdown).toEqual({
+      step: "startup-operations",
+      errors: [{ message: "fixture string failure" }],
+    });
   });
 
   it("registers a fatal hook only while installed", () => {
@@ -192,45 +273,112 @@ describe("diagnostic stability bundles", () => {
     expect(messages[0]).toContain("wrote stability bundle:");
     expect(messages[0]).toContain(tempDir);
 
-    resetDiagnosticStabilityBundleForTest();
+    uninstallDiagnosticStabilityFatalHook();
     expect(runFatalErrorHooks({ reason: "uncaught_exception" })).toStrictEqual([]);
+
+    const unsubscribeIndependent = registerFatalErrorHook(() => "independent diagnostic");
+    try {
+      const reinstalledDir = path.join(tempDir, "reinstalled");
+      installDiagnosticStabilityFatalHook({ stateDir: reinstalledDir });
+      const reinstalledMessages = runFatalErrorHooks({ reason: "uncaught_exception" });
+      expect(reinstalledMessages).toHaveLength(2);
+      expect(reinstalledMessages[0]).toBe("independent diagnostic");
+      expect(reinstalledMessages[1]).toContain("wrote stability bundle:");
+      expect(reinstalledMessages[1]).toContain(reinstalledDir);
+
+      uninstallDiagnosticStabilityFatalHook();
+      expect(runFatalErrorHooks({ reason: "uncaught_exception" })).toEqual([
+        "independent diagnostic",
+      ]);
+      uninstallDiagnosticStabilityFatalHook();
+      expect(runFatalErrorHooks({ reason: "uncaught_exception" })).toEqual([
+        "independent diagnostic",
+      ]);
+    } finally {
+      uninstallDiagnosticStabilityFatalHook();
+      unsubscribeIndependent();
+    }
   });
 
   it("retains only the newest bundle files", () => {
     startDiagnosticStabilityRecorder();
     emitDiagnosticEvent({ type: "webhook.received", channel: "telegram" });
 
-    for (let index = 0; index < 4; index += 1) {
-      const result = writeDiagnosticStabilityBundleSync({
-        reason: "gateway.restart_respawn_failed",
-        stateDir: tempDir,
-        now: new Date(`2026-04-22T12:00:0${index}.000Z`),
-        retention: 2,
-      });
+    for (let index = 0; index < 22; index += 1) {
+      const result = writeDiagnosticStabilityBundleForFailureSync(
+        "gateway.restart_respawn_failed",
+        undefined,
+        {
+          stateDir: tempDir,
+          now: new Date(Date.UTC(2026, 3, 22, 12, 0, index)),
+        },
+      );
       expect(result.status).toBe("written");
     }
 
     const bundleDir = path.join(tempDir, "logs", "stability");
     const files = fs.readdirSync(bundleDir).toSorted();
-    expect(files).toHaveLength(2);
+    expect(files).toHaveLength(20);
     expect(files[0]).toContain("12-00-02");
-    expect(files[1]).toContain("12-00-03");
+    expect(files[19]).toContain("12-00-21");
+  });
+
+  it("keeps the published bundle within retention despite future mtimes", () => {
+    for (let index = 0; index < 20; index++) {
+      const older = writeDiagnosticStabilityBundleForFailureSync(
+        "gateway.startup_failed",
+        undefined,
+        {
+          stateDir: tempDir,
+          now: new Date(Date.UTC(2026, 3, 22, 12, 0, index)),
+        },
+      );
+      expect(older.status).toBe("written");
+      if (older.status !== "written") {
+        throw new Error("Fixture publication failed");
+      }
+      const future = new Date(Date.UTC(2036, 3, 22, 12, 0, index));
+      fs.utimesSync(older.path, future, future);
+    }
+
+    const current = writeDiagnosticStabilityBundleForFailureSync(
+      "gateway.restart_respawn_failed",
+      undefined,
+      {
+        stateDir: tempDir,
+        now: new Date("2026-04-22T12:01:00.000Z"),
+      },
+    );
+    expect(current.status).toBe("written");
+    if (current.status !== "written") {
+      throw new Error("Current publication failed");
+    }
+    expect(current.message).toContain(current.path);
+    expect(fs.existsSync(current.path)).toBe(true);
+    expect(readDiagnosticStabilityBundleFileSync(current.path).status).toBe("found");
+    expect(fs.readdirSync(path.dirname(current.path))).toHaveLength(20);
   });
 
   it("reads the newest retained bundle", () => {
     startDiagnosticStabilityRecorder();
     emitDiagnosticEvent({ type: "webhook.received", channel: "telegram" });
 
-    const older = writeDiagnosticStabilityBundleSync({
-      reason: "gateway.restart_startup_failed",
-      stateDir: tempDir,
-      now: new Date("2026-04-22T12:00:00.000Z"),
-    });
-    const newer = writeDiagnosticStabilityBundleSync({
-      reason: "gateway.restart_respawn_failed",
-      stateDir: tempDir,
-      now: new Date("2026-04-22T12:00:01.000Z"),
-    });
+    const older = writeDiagnosticStabilityBundleForFailureSync(
+      "gateway.restart_startup_failed",
+      undefined,
+      {
+        stateDir: tempDir,
+        now: new Date("2026-04-22T12:00:00.000Z"),
+      },
+    );
+    const newer = writeDiagnosticStabilityBundleForFailureSync(
+      "gateway.restart_respawn_failed",
+      undefined,
+      {
+        stateDir: tempDir,
+        now: new Date("2026-04-22T12:00:01.000Z"),
+      },
+    );
 
     expect(older.status).toBe("written");
     expect(newer.status).toBe("written");
@@ -244,16 +392,131 @@ describe("diagnostic stability bundles", () => {
     );
   });
 
+  it("preserves worker memory attribution and unavailable samples in exported bundles", () => {
+    startDiagnosticStabilityRecorder();
+    emitDiagnosticEvent({
+      type: "diagnostic.memory.pressure",
+      level: "critical",
+      reason: "worker_heap_threshold",
+      usedBytes: 1024,
+      limitBytes: 1100,
+      thresholdBytes: 990,
+      workerThreadId: 2,
+      memory: {
+        rssBytes: 4096,
+        heapTotalBytes: 1024,
+        heapUsedBytes: 512,
+        externalBytes: 32,
+        arrayBuffersBytes: 16,
+        workerCount: 2,
+        workerHeapSampledCount: 1,
+        workerHeapTotalBytes: 2048,
+        workerHeapUsedBytes: 1024,
+        workerExternalBytes: 1024,
+        workerArrayBuffersBytes: 512,
+        workerArrayBuffersSampledCount: 1,
+        workerMemoryScope: "direct",
+        workerMemoryCoverage: "partial",
+        workerHeaps: [
+          {
+            script: "prepared-model-catalog.worker.js",
+            threadId: 2,
+            heapUsed: 1024,
+            heapSizeLimitBytes: 1100,
+            heapTotal: 2048,
+            external: 1024,
+            arrayBuffers: 512,
+            sampleAgeMs: 20,
+          },
+        ],
+        workerMemoryMissing: [
+          { script: "/private/secret-worker.js", threadId: 3, reason: "stale" },
+        ],
+      },
+    });
+    const written = writeDiagnosticStabilityBundleForFailureSync("uncaught_exception", undefined, {
+      stateDir: tempDir,
+    });
+    expect(written.status).toBe("written");
+    if (written.status !== "written") {
+      throw new Error("Expected exported diagnostics");
+    }
+    const readback = readDiagnosticStabilityBundleFileSync(written.path);
+    expect(readback.status).toBe("found");
+    if (readback.status !== "found") {
+      throw new Error("Expected readable diagnostics");
+    }
+    expect(readback.bundle.snapshot.events[0]).toMatchObject({
+      type: "diagnostic.memory.pressure",
+      level: "critical",
+      reason: "worker_heap_threshold",
+      usedBytes: 1024,
+      limitBytes: 1100,
+      thresholdBytes: 990,
+      workerThreadId: 2,
+    });
+    expect(readback.bundle.snapshot.events[0]?.memory).toMatchObject({
+      workerCount: 2,
+      workerHeapSampledCount: 1,
+      workerHeapUsedBytes: 1024,
+      workerExternalBytes: 1024,
+      workerArrayBuffersBytes: 512,
+      workerArrayBuffersSampledCount: 1,
+      workerMemoryScope: "direct",
+      workerMemoryCoverage: "partial",
+      workerHeaps: [
+        {
+          script: "prepared-model-catalog.worker.js",
+          threadId: 2,
+          heapUsed: 1024,
+          heapSizeLimitBytes: 1100,
+          heapTotal: 2048,
+          external: 1024,
+          arrayBuffers: 512,
+          sampleAgeMs: 20,
+        },
+      ],
+      workerMemoryMissing: [{ script: "other", threadId: 3, reason: "stale" }],
+    });
+    expect(JSON.stringify(readback.bundle)).not.toContain("secret-worker");
+  });
+
   it("sanitizes imported bundles before returning them", () => {
     const file = path.join(tempDir, "imported.json");
     const bundle = createImportedBundle();
+    const retainedRuntimeEvidence = {
+      heapStatistics: { heapSizeLimitBytes: 8192, usedHeapSizeBytes: 1536 },
+      heapSpaces: [
+        {
+          spaceName: "old_space",
+          spaceSizeBytes: 2048,
+          spaceUsedBytes: 1536,
+          spaceAvailableBytes: 512,
+          physicalSpaceSizeBytes: 2048,
+        },
+      ],
+      cgroup: {
+        version: "v2",
+        values: { current: 4096, max: "max" },
+        events: { high: 2, "events.local.oom": 1 },
+      },
+      activeResources: { total: 3, byType: { Timeout: 2, PipeWrap: 1 } },
+    };
     Object.assign(bundle, {
       reason: "private reason token=secret",
       privateTopLevel: "top-level-secret",
       evidence: {
         memoryPressure: {
+          ...retainedRuntimeEvidence,
+          heapStatistics: {
+            ...retainedRuntimeEvidence.heapStatistics,
+            totalHeapSizeBytes: 1536.75,
+          },
           level: "critical",
           reason: "rss_threshold",
+          thresholdBytes: 0,
+          rssGrowthBytes: -1,
+          windowMs: 0.5,
           memory: {
             rssBytes: 4096,
             heapTotalBytes: 2048,
@@ -285,6 +548,7 @@ describe("diagnostic stability bundles", () => {
     });
     const snapshot = bundle.snapshot as Record<string, unknown>;
     Object.assign(snapshot, {
+      count: 3,
       privateSnapshot: "snapshot-secret",
       events: [
         {
@@ -305,11 +569,21 @@ describe("diagnostic stability bundles", () => {
           phase: "gateway_preflight",
           command: "raw command secret",
         },
+        {
+          seq: 3,
+          ts: 3,
+          type: "model.usage",
+          costUsd: 0,
+          durationMs: 0,
+          usage: {},
+          context: {},
+        },
       ],
       summary: {
         byType: {
           "webhook.error": 1,
           "exec.approval.followup_suppressed": 1,
+          "model.usage": 1,
           "private summary type": 1,
         },
         privateSummary: "summary-secret",
@@ -328,9 +602,22 @@ describe("diagnostic stability bundles", () => {
     expect(result.bundle.error?.code).toBe("ERR_TEST");
     expect(result.bundle.error?.message).toContain("OPENAI_API_KEY=");
     expect(result.bundle.error?.message).not.toContain("sk-1234567890abcdef");
+    expect(result.bundle.error).not.toHaveProperty("stack");
     expect(result.bundle.evidence?.memoryPressure?.topSessionFiles?.[0]?.relativePath).toBe(
       "agents/<agent>/sessions/<session>.jsonl",
     );
+    expect(result.bundle.evidence?.memoryPressure).toMatchObject(retainedRuntimeEvidence);
+    expect(result.bundle.evidence?.memoryPressure).toMatchObject({
+      thresholdBytes: 0,
+      rssGrowthBytes: -1,
+      windowMs: 0.5,
+      heapStatistics: { totalHeapSizeBytes: 1536 },
+    });
+    expect(Object.keys(result.bundle.evidence?.memoryPressure?.heapStatistics ?? {})).toEqual([
+      "totalHeapSizeBytes",
+      "usedHeapSizeBytes",
+      "heapSizeLimitBytes",
+    ]);
     expect(result.bundle.snapshot.events[0]).toEqual({
       seq: 1,
       ts: 1,
@@ -345,9 +632,21 @@ describe("diagnostic stability bundles", () => {
       reason: "session_rebound",
       phase: "gateway_preflight",
     });
+    expect(JSON.stringify(result.bundle.snapshot.events[2])).toBe(
+      JSON.stringify({
+        seq: 3,
+        ts: 3,
+        type: "model.usage",
+        durationMs: 0,
+        costUsd: 0,
+        usage: {},
+        context: {},
+      }),
+    );
     expect(result.bundle.snapshot.summary.byType).toEqual({
       "webhook.error": 1,
       "exec.approval.followup_suppressed": 1,
+      "model.usage": 1,
     });
     const sanitized = JSON.stringify(result.bundle);
     for (const secret of [
@@ -432,6 +731,45 @@ describe("diagnostic stability bundles", () => {
           },
         },
         error: "snapshot.summary",
+      },
+      {
+        name: "optional-code-before-number",
+        bundle: {
+          ...baseBundle,
+          snapshot: {
+            ...baseSnapshot,
+            events: [{ seq: 1, ts: 1, type: "model.usage", channel: null, durationMs: null }],
+          },
+        },
+        error: "snapshot.events[0].channel",
+      },
+      {
+        name: "optional-usage-before-context",
+        bundle: {
+          ...baseBundle,
+          snapshot: {
+            ...baseSnapshot,
+            events: [
+              { seq: 1, ts: 1, type: "model.usage", usage: { input: null }, context: false },
+            ],
+          },
+        },
+        error: "snapshot.events[0].usage.input",
+      },
+      {
+        name: "heap-statistics-before-required-memory",
+        bundle: {
+          ...baseBundle,
+          evidence: {
+            memoryPressure: {
+              level: "critical",
+              reason: "rss_threshold",
+              heapStatistics: { totalHeapSizeBytes: null },
+              memory: null,
+            },
+          },
+        },
+        error: "evidence.memoryPressure.heapStatistics.totalHeapSizeBytes",
       },
     ];
 

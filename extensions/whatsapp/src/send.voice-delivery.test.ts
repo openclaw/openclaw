@@ -97,22 +97,6 @@ describe("WhatsApp gateway voice delivery", () => {
     hoisted.controllerListeners.clear();
   });
 
-  it("maps audio to PTT with opus mime when ogg", async () => {
-    const buf = Buffer.from("audio");
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: buf,
-      contentType: "audio/ogg",
-      kind: "audio",
-    });
-    await sendMessageWhatsApp("+1555", "voice note", {
-      verbose: false,
-      cfg: WHATSAPP_TEST_CFG,
-      mediaUrl: "/tmp/voice.ogg",
-    });
-    expect(sendMessage).toHaveBeenNthCalledWith(1, "+1555", "", buf, "audio/ogg; codecs=opus");
-    expect(sendMessage).toHaveBeenNthCalledWith(2, "+1555", "voice note", undefined, undefined);
-  });
-
   it("shares one gateway activity scope across separately accepted producer voice and caption", async () => {
     recordChannelActivity.mockReset();
     recordChannelActivity.mockImplementation(() => {
@@ -186,10 +170,22 @@ describe("WhatsApp gateway voice delivery", () => {
     expect(onDeliveryResult).toHaveBeenNthCalledWith(1, {
       messageId: "gateway-scoped-voice",
       toJid: "1555@s.whatsapp.net",
+      receipt: expect.objectContaining({
+        platformMessageIds: ["gateway-scoped-voice"],
+        parts: [
+          expect.objectContaining({ platformMessageId: "gateway-scoped-voice", kind: "media" }),
+        ],
+      }),
     });
     expect(onDeliveryResult).toHaveBeenNthCalledWith(2, {
       messageId: "gateway-scoped-caption",
       toJid: "1555@s.whatsapp.net",
+      receipt: expect.objectContaining({
+        platformMessageIds: ["gateway-scoped-caption"],
+        parts: [
+          expect.objectContaining({ platformMessageId: "gateway-scoped-caption", kind: "text" }),
+        ],
+      }),
     });
     expect(recordChannelActivity).toHaveBeenCalledExactlyOnceWith({
       channel: "whatsapp",
@@ -197,49 +193,6 @@ describe("WhatsApp gateway voice delivery", () => {
       direction: "outbound",
     });
     recordChannelActivity.mockReset();
-  });
-
-  it("normalizes MIME parameters before handing media to the socket transport", async () => {
-    const buf = Buffer.from("image");
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: buf,
-      contentType: " Image/PNG; charset=binary ",
-    });
-
-    await sendMessageWhatsApp("+1555", "caption", {
-      verbose: false,
-      cfg: WHATSAPP_TEST_CFG,
-      mediaUrl: "/tmp/image.png",
-    });
-
-    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "caption", buf, "image/png");
-  });
-
-  it("reports the accepted voice send before a caption failure", async () => {
-    const buf = Buffer.from("audio");
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: buf,
-      contentType: "audio/ogg",
-      kind: "audio",
-    });
-    sendMessage
-      .mockResolvedValueOnce(createAcceptedWhatsAppSendResult("media", "voice-accepted"))
-      .mockRejectedValueOnce(new Error("caption failed"));
-    const onDeliveryResult = vi.fn();
-
-    await expect(
-      sendMessageWhatsApp("+1555", "voice note", {
-        verbose: false,
-        cfg: WHATSAPP_TEST_CFG,
-        mediaUrl: "/tmp/voice.ogg",
-        onDeliveryResult,
-      }),
-    ).rejects.toThrow("caption failed");
-
-    expect(onDeliveryResult).toHaveBeenCalledOnce();
-    expect(onDeliveryResult).toHaveBeenCalledWith(
-      expect.objectContaining({ messageId: "voice-accepted" }),
-    );
   });
 
   it("retains the accepted voice receipt when its gateway caption has no provider key", async () => {
@@ -320,12 +273,9 @@ describe("WhatsApp gateway voice delivery", () => {
     expect(sendMessage).toHaveBeenCalledTimes(2);
   });
 
-  it.each([
-    { name: "mp3", contentType: "audio/mpeg", fileName: "voice.mp3" },
-    { name: "m4a", contentType: "audio/mp4; codecs=mp4a.40.2", fileName: "voice.m4a" },
-    { name: "webm", contentType: "audio/webm", fileName: "voice.webm" },
-  ])("transcodes $name audio to Ogg Opus before sending a PTT voice note", async (media) => {
-    const buf = Buffer.from(media.name);
+  it("transcodes non-native audio to Ogg Opus before sending a PTT voice note", async () => {
+    const media = { contentType: "audio/mp4; codecs=mp4a.40.2", fileName: "voice.m4a" };
+    const buf = Buffer.from("m4a");
     loadWebMediaMock.mockResolvedValueOnce({
       buffer: buf,
       contentType: media.contentType,

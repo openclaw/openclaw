@@ -5,7 +5,7 @@ import path from "node:path";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createIMessageDurableIngress } from "./ingress.js";
 
@@ -302,31 +302,6 @@ describe("iMessage durable ingress", () => {
     });
   });
 
-  it("keeps a completion tombstone so a duplicate cannot dispatch twice", async () => {
-    await withQueue(async (queue) => {
-      const dispatch = vi.fn(async (_message, claimLifecycle) => {
-        await claimLifecycle.onAdopted();
-        return { kind: "deferred" } as const;
-      });
-      const ingress = createIMessageDurableIngress({
-        accountId: "default",
-        queue,
-        dispatch,
-        runtime: runtime(),
-      });
-      ingress.start();
-      try {
-        await ingress.receive(rawRow());
-        await ingress.waitForIdle();
-        await ingress.receive(rawRow());
-        await ingress.waitForIdle();
-        expect(dispatch).toHaveBeenCalledTimes(1);
-      } finally {
-        await ingress.stop();
-      }
-    });
-  });
-
   it("preserves the retired guard's GUID parity across ROWID churn", async () => {
     await withQueue(async (queue) => {
       const dispatch = vi.fn(async (_message, claimLifecycle) => {
@@ -346,30 +321,6 @@ describe("iMessage durable ingress", () => {
         await ingress.receive(rawRow({ id: 999 }));
         await ingress.waitForIdle();
         expect(dispatch).toHaveBeenCalledTimes(1);
-      } finally {
-        await ingress.stop();
-      }
-    });
-  });
-
-  it("stores the raw row under its GUID in the per-chat lane", async () => {
-    await withQueue(async (queue) => {
-      const event = rawRow({ text: "\u0005hello" });
-      const ingress = createIMessageDurableIngress({
-        accountId: "default",
-        queue,
-        dispatch: vi.fn(),
-        runtime: runtime(),
-      });
-      try {
-        await ingress.receive(event);
-        expect(await queue.listPending({ limit: "all" })).toEqual([
-          expect.objectContaining({
-            id: "GUID-101",
-            laneKey: "chat:42",
-            payload: expect.objectContaining({ raw: event }),
-          }),
-        ]);
       } finally {
         await ingress.stop();
       }

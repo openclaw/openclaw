@@ -1,26 +1,34 @@
 // Gateway request scope tracks request-local plugin runtime context across async work.
-import { AsyncLocalStorage } from "node:async_hooks";
 import type {
   GatewayContextResolver,
   GatewayRequestContext,
-  GatewayRequestOptions,
 } from "../../gateway/server-methods/types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { withAgentDatabasePreparationContext } from "../../state/agent-database-preparation-context.js";
+import {
+  getPluginExecutionFrame,
+  pluginInstanceInvocation,
+  runWithPluginExecutionFrame,
+} from "../plugin-instance-invocation.js";
+import type { PluginInstanceInvocation } from "../plugin-instance-invocation.types.js";
 import type { PluginOrigin } from "../plugin-origin.types.js";
+import { mapPluginReturnPromise, resolvePluginReturnPromise } from "../plugin-return-value.js";
+import type { DeclaredProviderOwnerIndex } from "../provider-owner-index.js";
 import type { PluginRegistry } from "../registry-types.js";
+import { getPluginRegistryState } from "../runtime-state.js";
+import { getPluginRuntimeExecutionFrame, PluginRuntimeExecutionFrame } from "./execution-frame.js";
+import type { PluginRuntimeGatewayRequestScope } from "./gateway-request-scope.types.js";
+import { getPluginRuntimeLoadContextState } from "./load-context-state.js";
 
-type PluginRuntimeGatewayRequestScope = {
-  context?: GatewayRequestContext;
-  resolveGatewayContext?: GatewayContextResolver;
-  client?: GatewayRequestOptions["client"];
-  isWebchatConnect: GatewayRequestOptions["isWebchatConnect"];
-  pluginId?: string;
-  pluginSource?: string;
-  pluginOrigin?: PluginOrigin;
-  pluginTrustedOfficialInstall?: boolean;
-  gatewayMethodDispatchAllowed?: boolean;
-  pluginRegistry?: PluginRegistry;
-};
+export {
+  bindGatewayContextResolver,
+  clearGatewayContextResolver,
+  getCanonicalGatewayContextResolver,
+  getGatewayContextLifetime,
+  getGatewayContextResolver,
+  getSharedGatewayContextResolver,
+  hasGatewayContextOwner,
+} from "./gateway-context-binding.js";
 
 type PluginRuntimePluginScope = {
   pluginId: string;
@@ -29,43 +37,118 @@ type PluginRuntimePluginScope = {
   pluginTrustedOfficialInstall?: boolean;
 };
 
-const PLUGIN_RUNTIME_GATEWAY_REQUEST_SCOPE_KEY: unique symbol = Symbol.for(
-  "openclaw.pluginRuntimeGatewayRequestScope",
-);
-const GATEWAY_CONTEXT_RESOLVERS_KEY: unique symbol = Symbol.for("openclaw.gatewayContextResolvers");
-
-const pluginRuntimeGatewayRequestScope = resolveGlobalSingleton<
-  AsyncLocalStorage<PluginRuntimeGatewayRequestScope>
->(
-  PLUGIN_RUNTIME_GATEWAY_REQUEST_SCOPE_KEY,
-  () => new AsyncLocalStorage<PluginRuntimeGatewayRequestScope>(),
-);
-// Built plugin chunks and source Gateway code must redeem the same host-issued owner bindings.
-const gatewayContextResolvers = resolveGlobalSingleton<WeakMap<object, GatewayContextResolver>>(
-  GATEWAY_CONTEXT_RESOLVERS_KEY,
-  () => new WeakMap(),
-);
-
-export function bindGatewayContextResolver(
-  owner: object,
-  resolver: GatewayContextResolver | undefined,
-): void {
-  if (resolver) {
-    gatewayContextResolvers.set(owner, resolver);
-  }
+function runWithPluginGatewayScope<T>(
+  gatewayScope: PluginRuntimeGatewayRequestScope,
+  run: () => T,
+  invocation = pluginInstanceInvocation.getStore(),
+): T {
+  const current = getPluginExecutionFrame();
+  const runtime = getPluginRuntimeExecutionFrame(current);
+  return runWithPluginExecutionFrame(
+    runtime?.gatewayScope === gatewayScope && runtime.invocation === invocation
+      ? runtime
+      : new PluginRuntimeExecutionFrame(
+          // Reuse prepared frame facts; the mutable Gateway view remains call-local.
+          current ?? {},
+          gatewayScope,
+          runtime?.generationRegistry,
+          invocation,
+        ),
+    run,
+  );
 }
 
-export const getGatewayContextResolver = (owner: object) => gatewayContextResolvers.get(owner);
+const isNotWebchatConnect = () => false;
 
-export const clearGatewayContextResolver = (owner: object) => gatewayContextResolvers.delete(owner);
+// Settled reactions may outlive the call; capture only its emptied custody holder.
+function settleRegistryScope(completion: Promise<unknown>, held: PluginRegistry[]) {
+  return mapPluginReturnPromise(
+    completion,
+    (value) => {
+      held.length = 0;
+      return value;
+    },
+    (error) => {
+      held.length = 0;
+      throw error;
+    },
+  ).value;
+}
 
-export function getSharedGatewayContextResolver(
-  owners: readonly object[],
-): GatewayContextResolver | undefined {
-  const first = owners[0] ? gatewayContextResolvers.get(owners[0]) : undefined;
-  return first && owners.every((owner) => gatewayContextResolvers.get(owner) === first)
-    ? first
-    : undefined;
+export const ExpiredPluginRegistryScopeError = resolveGlobalSingleton(
+  Symbol.for("openclaw.expiredPluginRegistryScopeError"),
+  () =>
+    class extends Error {
+      constructor() {
+        super("Plugin registry scope is no longer available");
+      }
+    },
+);
+
+// Native resources inherit these views; the registry's lifecycle owner keeps the graph alive.
+function bindBorrowedRegistry(
+  scope: PluginRuntimeGatewayRequestScope,
+  registry: PluginRegistry | undefined,
+  initiallyExpired = false,
+): void {
+  let expired = initiallyExpired;
+  let reference = registry && new WeakRef(registry);
+  Object.defineProperty(scope, "pluginRegistry", {
+    enumerable: true,
+    configurable: true,
+    get() {
+      const current = reference?.deref();
+      if (expired || (reference && !current)) {
+        throw new ExpiredPluginRegistryScopeError();
+      }
+      return current;
+    },
+    set(next: PluginRegistry | undefined) {
+      reference = next && new WeakRef(next);
+      expired = false;
+    },
+  });
+}
+
+function copyGatewayScope(
+  current: PluginRuntimeGatewayRequestScope | undefined,
+  inheritRegistry = true,
+): PluginRuntimeGatewayRequestScope {
+  const scoped: PluginRuntimeGatewayRequestScope = { isWebchatConnect: isNotWebchatConnect };
+  if (!current) {
+    return scoped;
+  }
+  // Copy enumerable values like spread, but do not read a registry that the caller replaces.
+  for (const key of Reflect.ownKeys(current)) {
+    if (key !== "pluginRegistry" && Object.getOwnPropertyDescriptor(current, key)?.enumerable) {
+      Object.defineProperty(scoped, key, {
+        value: Reflect.get(current, key),
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
+    }
+  }
+  if (inheritRegistry && Object.getOwnPropertyDescriptor(current, "pluginRegistry")?.enumerable) {
+    try {
+      bindBorrowedRegistry(scoped, current.pluginRegistry);
+    } catch (error) {
+      if (!(error instanceof ExpiredPluginRegistryScopeError)) {
+        throw error;
+      }
+      bindBorrowedRegistry(scoped, undefined, true);
+    }
+  }
+  return scoped;
+}
+
+/** Carry only closure-bound node authorities into a nested request scope. */
+export function getPluginRuntimeGatewayNodeAuthorities() {
+  const scope = getPluginRuntimeGatewayRequestScope();
+  return {
+    invokeWithSessionNodeAuthority: scope?.invokeWithSessionNodeAuthority,
+    nodePlacementGrantAuthority: scope?.nodePlacementGrantAuthority,
+  };
 }
 
 /**
@@ -75,56 +158,81 @@ export function withPluginRuntimeGatewayRequestScope<T>(
   scope: PluginRuntimeGatewayRequestScope,
   run: () => T,
 ): T {
-  return pluginRuntimeGatewayRequestScope.run(scope, run);
+  return runWithPluginGatewayScope(scope, run);
 }
 
-/** Runs detached plugin work against one lifecycle-fenced Gateway instance. */
+/** Runs detached work with its captured Gateway binding, including an explicitly unbound owner. */
 export function withPluginRuntimeGatewayContextResolver<T>(
-  resolveGatewayContext: GatewayContextResolver,
+  resolveGatewayContext: GatewayContextResolver | undefined,
   run: () => T,
   options?: { inheritRequestScope?: boolean },
 ): T {
   // Scheduler-owned work must not retain the request-local client or context
   // that happened to exist when its timer was armed.
   const current =
-    options?.inheritRequestScope === false
-      ? undefined
-      : pluginRuntimeGatewayRequestScope.getStore();
-  const scoped: PluginRuntimeGatewayRequestScope = {
-    ...current,
-    isWebchatConnect: current?.isWebchatConnect ?? (() => false),
-    resolveGatewayContext,
-  };
+    options?.inheritRequestScope === false ? undefined : getPluginRuntimeGatewayRequestScope();
+  const scoped = copyGatewayScope(current);
+  scoped.isWebchatConnect = current?.isWebchatConnect ?? isNotWebchatConnect;
+  scoped.resolveGatewayContext = resolveGatewayContext;
   delete scoped.context;
-  return pluginRuntimeGatewayRequestScope.run(scoped, run);
+  return withAgentDatabasePreparationContext(
+    () => resolveGatewayContext?.()?.agentDatabaseStartup,
+    () => runWithPluginGatewayScope(scoped, run),
+  );
 }
 
 /** Runs work against an owned registry handle while preserving any gateway request facts. */
 export function withPluginRuntimeRegistryScope<T>(
   registry: PluginRegistry | undefined,
   run: () => T,
+  declaredProviderOwners?: DeclaredProviderOwnerIndex,
 ): T {
   if (!registry) {
     return run();
   }
-  const current = pluginRuntimeGatewayRequestScope.getStore();
-  return pluginRuntimeGatewayRequestScope.run(
-    { isWebchatConnect: () => false, ...current, pluginRegistry: registry },
-    run,
+  const current = getPluginRuntimeGatewayRequestScope();
+  return runWithPluginGatewayScope(
+    createRegistryScope(registry, current, declaredProviderOwners),
+    () => {
+      const value = run();
+      const completion = resolvePluginReturnPromise(value);
+      // SAFETY: Awaiting the callback preserves its value and rejection reason.
+      return completion ? (settleRegistryScope(completion, [registry]) as T) : value;
+    },
   );
 }
 
-/**
- * Runs work under the current gateway request scope while attaching plugin identity.
- */
-export function withPluginRuntimePluginScope<T>(scope: PluginRuntimePluginScope, run: () => T): T {
-  const current = pluginRuntimeGatewayRequestScope.getStore();
-  const scoped: PluginRuntimeGatewayRequestScope = current
-    ? { ...current, pluginId: scope.pluginId }
-    : {
-        pluginId: scope.pluginId,
-        isWebchatConnect: () => false,
-      };
+export function createRegistryScope(
+  registry: PluginRegistry,
+  current: PluginRuntimeGatewayRequestScope | undefined,
+  declaredProviderOwners?: DeclaredProviderOwnerIndex,
+): PluginRuntimeGatewayRequestScope {
+  const scoped = copyGatewayScope(current, false);
+  let inheritedOwners: DeclaredProviderOwnerIndex | undefined;
+  if (declaredProviderOwners === undefined && current) {
+    try {
+      if (current.pluginRegistry === registry) {
+        inheritedOwners = current.declaredProviderOwners;
+      }
+    } catch (error) {
+      if (!(error instanceof ExpiredPluginRegistryScopeError)) {
+        throw error;
+      }
+    }
+  }
+  bindBorrowedRegistry(scoped, registry);
+  scoped.declaredProviderOwners =
+    declaredProviderOwners ??
+    inheritedOwners ??
+    getPluginRuntimeLoadContextState(registry)?.declaredProviderOwners;
+  return scoped;
+}
+
+function applyPluginScope(
+  scoped: PluginRuntimeGatewayRequestScope,
+  scope: PluginRuntimePluginScope,
+): void {
+  scoped.pluginId = scope.pluginId;
   if (scope.pluginSource !== undefined) {
     scoped.pluginSource = scope.pluginSource;
   } else {
@@ -140,21 +248,63 @@ export function withPluginRuntimePluginScope<T>(scope: PluginRuntimePluginScope,
   } else {
     delete scoped.pluginTrustedOfficialInstall;
   }
-  return pluginRuntimeGatewayRequestScope.run(scoped, run);
 }
 
 /**
  * Runs work under the current gateway request scope while attaching plugin identity.
  */
-export function withPluginRuntimePluginIdScope<T>(pluginId: string, run: () => T): T {
-  return withPluginRuntimePluginScope({ pluginId }, run);
+export function withPluginRuntimePluginScope<T>(
+  scope: PluginRuntimePluginScope,
+  run: () => T,
+  registry?: PluginRegistry,
+  invocation?: PluginInstanceInvocation,
+): T {
+  const current = getPluginRuntimeGatewayRequestScope();
+  // Instance calls combine registry and identity without adding a second async frame.
+  const scoped: PluginRuntimeGatewayRequestScope = registry
+    ? createRegistryScope(registry, current)
+    : copyGatewayScope(current);
+  applyPluginScope(scoped, scope);
+  return runWithPluginGatewayScope(scoped, run, invocation);
 }
 
-/**
- * Returns the current plugin gateway request scope when called from a plugin request handler.
- */
+/** Drops only generation selection; authenticated Gateway caller and authority stay attached. */
+export function runOutsidePluginRuntimeRegistryScope<T>(run: () => T): T {
+  const current = getPluginRuntimeGatewayRequestScope();
+  if (!current) {
+    return run();
+  }
+  // Registry selection and its declared provider index belong to the same generation.
+  const scoped = copyGatewayScope(current, false);
+  scoped.pluginRegistry = undefined;
+  scoped.declaredProviderOwners = undefined;
+  return runWithPluginGatewayScope(scoped, run);
+}
+
 export function getPluginRuntimeGatewayRequestScope():
   | PluginRuntimeGatewayRequestScope
   | undefined {
-  return pluginRuntimeGatewayRequestScope.getStore();
+  return getPluginRuntimeExecutionFrame()?.gatewayScope;
+}
+
+/** Reads registration/request/active registry precedence without initializing a cold runtime. */
+export function getPluginRegistryForContext(): PluginRegistry | null {
+  const state = getPluginRegistryState();
+  return (
+    state?.registrationContext?.registry ??
+    getPluginRuntimeGatewayRequestScope()?.pluginRegistry ??
+    state?.activeRegistry ??
+    null
+  );
+}
+
+/** Live request context for trusted built-in tools that need direct runtime state. */
+export function getInProcessGatewayRequestContext(
+  resolveGatewayContext?: GatewayContextResolver,
+): GatewayRequestContext | undefined {
+  if (resolveGatewayContext) {
+    return resolveGatewayContext();
+  }
+  const scope = getPluginRuntimeGatewayRequestScope();
+  return scope?.resolveGatewayContext ? scope.resolveGatewayContext() : scope?.context;
 }

@@ -1,20 +1,18 @@
 // Stores and resolves the last TUI session per workspace.
 import { createHash } from "node:crypto";
 import { normalizeLowercaseStringOrEmpty as normalizeMarker } from "@openclaw/normalization-core/string-coerce";
+import { normalizeAgentId } from "../routing/session-key.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../infra/kysely-sync.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
-import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+  executeOpenClawStateWorker,
+  runOpenClawStateWorkerOperation,
+} from "../state/openclaw-state-worker-store.js";
 import type { TuiSessionList } from "./tui-backend.js";
+import { TUI_LAST_SESSION_STATE_KEY_PREFIX } from "./tui-last-session.contract.js";
+import { matchesOwnedTuiSession } from "./tui-session-events.js";
 import type { SessionScope } from "./tui-types.js";
-
-type TuiLastSessionDatabase = Pick<OpenClawStateKyselyDatabase, "tui_last_sessions">;
 
 function stateDatabaseOptions(stateDir?: string) {
   return stateDir
@@ -62,24 +60,25 @@ export async function readTuiLastSessionKey(params: {
   scopeKey: string;
   stateDir?: string;
 }): Promise<string | null> {
-  const options = stateDatabaseOptions(params.stateDir);
-  // CLI reads must not join the Gateway's writable SQLite lifecycle (#101290).
-  return (
-    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-      if (!tableExists(db, "tui_last_sessions")) {
-        return null;
-      }
-      const row = executeSqliteQueryTakeFirstSync(
-        db,
-        getNodeSqliteKysely<TuiLastSessionDatabase>(db)
-          .selectFrom("tui_last_sessions")
-          .select("session_key")
-          .where("scope_key", "=", params.scopeKey),
-      );
-      const sessionKey = row?.session_key.trim() ?? "";
-      return sessionKey && !isHeartbeatSessionKey(sessionKey) ? sessionKey : null;
-    }, options) ?? null
-  );
+  const result = await executeExistingOpenClawStateRead(stateDatabaseOptions(params.stateDir), {
+    type: "tui.lastSession.read",
+    stateKey: `${TUI_LAST_SESSION_STATE_KEY_PREFIX}${params.scopeKey}`,
+  });
+  if (result === undefined) {
+    return null;
+  }
+  if (!result.ok || result.type !== "tui.lastSession.read") {
+    throw new Error("Unexpected remembered TUI session read result");
+  }
+  if (!result.row) {
+    return null;
+  }
+  const stored: unknown = JSON.parse(result.row.value_json);
+  if (typeof stored !== "string") {
+    throw new Error("Remembered TUI session key must be a string");
+  }
+  const rememberedKey = stored.trim();
+  return rememberedKey && !isHeartbeatSessionKey(rememberedKey) ? rememberedKey : null;
 }
 
 /** Writes the remembered session key unless it is empty, unknown, or heartbeat-owned. */
@@ -92,74 +91,67 @@ export async function writeTuiLastSessionKey(params: {
   if (!sessionKey || sessionKey === "unknown" || isHeartbeatSessionKey(sessionKey)) {
     return;
   }
-  const updatedAt = Date.now();
-  runOpenClawStateWriteTransaction(({ db }) => {
-    const tuiDb = getNodeSqliteKysely<TuiLastSessionDatabase>(db);
-    executeSqliteQuerySync(
-      db,
-      tuiDb
-        .insertInto("tui_last_sessions")
-        .values({
-          scope_key: params.scopeKey,
-          session_key: sessionKey,
-          updated_at: updatedAt,
-        })
-        .onConflict((conflict) =>
-          conflict.column("scope_key").doUpdateSet({
-            session_key: sessionKey,
-            updated_at: updatedAt,
-          }),
-        ),
-    );
-  }, stateDatabaseOptions(params.stateDir));
+  await executeOpenClawStateWorker(
+    captureOpenClawStateWorkerContext(stateDatabaseOptions(params.stateDir)),
+    {
+      type: "tui.lastSession.write",
+      input: { stateKey: `${TUI_LAST_SESSION_STATE_KEY_PREFIX}${params.scopeKey}`, sessionKey },
+    },
+  );
 }
 
-/**
- * Wraps writeTuiLastSessionKey for fire-and-forget callers: a failing state DB
- * means the next launch silently loses session restore, so the first failure
- * is reported once instead of spamming every session switch.
- */
+/** Owns pending session-memory writes through TUI shutdown and reports the first failure. */
 export function createRememberSessionKeyWriter(params: {
   buildScopeKey: (sessionKey: string) => string;
   reportFailure: (message: string) => void;
   write: typeof writeTuiLastSessionKey;
-}): (sessionKey: string) => void {
-  const write = params.write;
+}) {
+  const work = new AsyncWorkScope();
   let failureReported = false;
-  return (sessionKey: string) => {
-    const trimmed = sessionKey.trim();
-    if (!trimmed || trimmed === "unknown") {
-      return;
-    }
-    void write({ scopeKey: params.buildScopeKey(trimmed), sessionKey: trimmed }).catch(
-      (err: unknown) => {
-        if (failureReported) {
-          return;
+  return {
+    remember: (sessionKey: string): Promise<void> => {
+      const trimmed = sessionKey.trim();
+      if (work.isClosing || !trimmed || trimmed === "unknown") {
+        return Promise.resolve();
+      }
+      const scopeKey = params.buildScopeKey(trimmed);
+      return work.track(async () => {
+        try {
+          await params.write({ scopeKey, sessionKey: trimmed });
+        } catch (err) {
+          if (!failureReported) {
+            failureReported = true;
+            params.reportFailure(err instanceof Error ? err.message : String(err));
+          }
         }
-        failureReported = true;
-        params.reportFailure(err instanceof Error ? err.message : String(err));
-      },
-    );
+      });
+    },
+    close: () => work.drain(),
   };
 }
 
 /** Removes restore pointers that target sessions retired by doctor repair. */
-export function clearTuiLastSessionPointers(params: {
+export async function clearTuiLastSessionPointers(params: {
   sessionKeys: ReadonlySet<string>;
   stateDir?: string;
-}): number {
+}): Promise<number> {
   if (params.sessionKeys.size === 0) {
     return 0;
   }
-  return runOpenClawStateWriteTransaction(({ db }) => {
-    const result = executeSqliteQuerySync(
-      db,
-      getNodeSqliteKysely<TuiLastSessionDatabase>(db)
-        .deleteFrom("tui_last_sessions")
-        .where("session_key", "in", [...params.sessionKeys]),
-    );
-    return Number(result.numAffectedRows ?? 0n);
-  }, stateDatabaseOptions(params.stateDir));
+  const retiredSessionKeys = [...params.sessionKeys];
+  const options = stateDatabaseOptions(params.stateDir);
+  const context = captureOpenClawStateWorkerContext(options);
+  return (
+    (await runOpenClawStateWorkerOperation(
+      context,
+      (scope) =>
+        scope.execute({
+          type: "tui.lastSession.clear",
+          input: { retiredSessionKeys },
+        }),
+      { existingOnly: true },
+    )) ?? 0
+  );
 }
 
 /** Resolves a remembered key to a currently listed session for the active agent. */
@@ -176,20 +168,15 @@ export function resolveRememberedTuiSessionKey(params: {
     return null;
   }
   const currentAgentId = normalizeAgentId(params.currentAgentId);
-  const parsed = parseAgentSessionKey(rememberedKey);
-  if (parsed && normalizeAgentId(parsed.agentId) !== currentAgentId) {
-    return null;
-  }
-  const rememberedRest = parsed?.rest ?? rememberedKey;
-  // Agent-prefixed and bare keys can refer to the same session; compare the session rest too.
-  const match = params.sessions.find((session) => {
-    if (isHeartbeatLikeTuiSession(session)) {
-      return false;
-    }
-    if (session.key === rememberedKey) {
-      return true;
-    }
-    return parseAgentSessionKey(session.key)?.rest === rememberedRest;
-  });
+  const match = params.sessions.find(
+    (session) =>
+      !isHeartbeatLikeTuiSession(session) &&
+      matchesOwnedTuiSession(
+        rememberedKey,
+        currentAgentId,
+        { sessionKey: session.key },
+        currentAgentId,
+      ),
+  );
   return match?.key ?? null;
 }

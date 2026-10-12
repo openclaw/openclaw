@@ -1,5 +1,5 @@
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { createOpenAICompletionsTransportStreamFn } from "../transports/openai-completions-transport.js";
 import type { AssistantMessageEventStreamLike, Context, Model } from "../types.js";
@@ -22,17 +22,50 @@ const context = {
   messages: [{ role: "user", content: "Explain the billing", timestamp: 1 }],
 } satisfies Context;
 
+const tieredCost = {
+  ...model.cost,
+  tieredPricing: [
+    { ...model.cost, range: [0, 101] as [number, number] },
+    { input: 3, output: 6, cacheRead: 1, cacheWrite: 2, range: [101] as [number] },
+  ],
+};
+
 type UsageScenario = {
   name: string;
-  usage: Record<string, unknown>;
+  package?: boolean;
+  usage?: Record<string, unknown>;
   expectedUsage: Record<string, unknown>;
   expectedCost?: number;
+  cost?: typeof model.cost | typeof tieredCost;
   inChoice?: boolean;
 };
 
 const scenarios: UsageScenario[] = [
   {
+    name: "successful stream without usage",
+    package: true,
+    expectedUsage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      contextUsage: { state: "unavailable" },
+    },
+  },
+  {
+    name: "explicit coherent zero usage",
+    package: true,
+    usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+    expectedUsage: {
+      totalTokens: 0,
+      cacheTelemetry: { state: "unavailable" },
+      contextUsage: { state: "available", promptTokens: 0, totalTokens: 0 },
+    },
+  },
+  {
     name: "documented reasoning tokens and cache buckets",
+    package: true,
     usage: {
       prompt_tokens: 100,
       completion_tokens: 20,
@@ -45,11 +78,80 @@ const scenarios: UsageScenario[] = [
       output: 20,
       cacheRead: 25,
       cacheWrite: 10,
+      cacheTelemetry: { state: "available" },
       reasoningTokens: 7,
+      contextUsage: { state: "available", promptTokens: 100, totalTokens: 120 },
       totalTokens: 120,
     },
     expectedCost: 0.00011625,
   },
+  {
+    name: "compatible nested cache-creation tokens",
+    usage: {
+      prompt_tokens: 100,
+      completion_tokens: 20,
+      total_tokens: 120,
+      prompt_tokens_details: { cached_tokens: 25, cache_creation_input_tokens: 10 },
+    },
+    expectedUsage: { input: 65, output: 20, cacheRead: 25, cacheWrite: 10, totalTokens: 120 },
+    expectedCost: 0.00011625,
+  },
+  ...[
+    { name: "below tier boundary", prompt: 100, cached: 0, written: 0, cost: 0.00014 },
+    { name: "at tier boundary", prompt: 101, cached: 0, written: 0, cost: 0.000423 },
+    {
+      name: "cached input crossing tier boundary",
+      prompt: 101,
+      cached: 76,
+      written: 0,
+      cost: 0.000271,
+    },
+    { name: "fully cached tier", prompt: 101, cached: 101, written: 0, cost: 0.000221 },
+    {
+      name: "cache writes crossing tier boundary",
+      prompt: 101,
+      cached: 25,
+      written: 51,
+      cost: 0.000322,
+    },
+  ].map(({ name, prompt, cached, written, cost }) => ({
+    name,
+    cost: tieredCost,
+    usage: {
+      prompt_tokens: prompt,
+      completion_tokens: 20,
+      total_tokens: prompt + 20,
+      prompt_tokens_details: { cached_tokens: cached, cache_write_tokens: written },
+    },
+    expectedUsage: {
+      input: prompt - cached - written,
+      output: 20,
+      cacheRead: cached,
+      cacheWrite: written,
+      totalTokens: prompt + 20,
+    },
+    expectedCost: cost,
+  })),
+  ...[0, 0.0009].map((billedCost) => ({
+    name: `provider-billed ${billedCost} overrides tier estimate`,
+    cost: tieredCost,
+    usage: {
+      prompt_tokens: 101,
+      completion_tokens: 20,
+      total_tokens: 121,
+      prompt_tokens_details: { cached_tokens: 76 },
+      cost: billedCost,
+    },
+    expectedUsage: {
+      input: 25,
+      output: 20,
+      cacheRead: 76,
+      cacheWrite: 0,
+      totalTokens: 121,
+      cost: { total: billedCost, totalOrigin: "provider-billed" },
+    },
+    expectedCost: billedCost,
+  })),
   {
     name: "explicit zero reasoning tokens",
     usage: {
@@ -71,25 +173,40 @@ const scenarios: UsageScenario[] = [
     expectedUsage: { input: 75, output: 20, cacheRead: 25, cacheWrite: 0, totalTokens: 120 },
     expectedCost: 0.00012125,
   },
-  {
-    name: "authoritative provider-billed zero cost",
-    usage: {
-      prompt_tokens: 100,
-      completion_tokens: 20,
-      total_tokens: 120,
-      prompt_tokens_details: { cached_tokens: 25, cache_write_tokens: 10 },
-      cost: 0,
+  ...[
+    { name: "top-level cached tokens", expectedCached: 25, cached_tokens: 25 },
+    {
+      name: "nested cache count takes precedence over top-level fallback",
+      expectedCached: 25,
+      cached_tokens: 90,
+      prompt_tokens_details: { cached_tokens: 25 },
     },
-    expectedUsage: {
-      input: 65,
-      output: 20,
-      cacheRead: 25,
-      cacheWrite: 10,
-      totalTokens: 120,
-      cost: { total: 0, totalOrigin: "provider-billed" },
+    {
+      name: "explicit nested zero takes precedence over top-level fallback",
+      expectedCached: 0,
+      cached_tokens: 25,
+      prompt_tokens_details: { cached_tokens: 0 },
     },
-    expectedCost: 0,
-  },
+  ].map(({ name, expectedCached: cached, ...cacheUsage }) => {
+    return {
+      name,
+      package: true,
+      usage: {
+        prompt_tokens: 100,
+        completion_tokens: 20,
+        total_tokens: 120,
+        ...cacheUsage,
+      },
+      expectedUsage: {
+        input: 100 - cached,
+        cacheRead: cached,
+        cacheTelemetry: { state: "available" },
+        totalTokens: 120,
+        contextUsage: { state: "available", promptTokens: 100, totalTokens: 120 },
+      },
+      expectedCost: (100 - cached + 40 + cached * 0.25) / 1_000_000,
+    };
+  }),
   {
     name: "invalid provider cost and cached-token overflow",
     usage: {
@@ -99,11 +216,19 @@ const scenarios: UsageScenario[] = [
       prompt_tokens_details: { cached_tokens: 4 },
       cost: -1,
     },
-    expectedUsage: { input: 0, output: 5, cacheRead: 4, cacheWrite: 0, totalTokens: 9 },
+    expectedUsage: {
+      input: 0,
+      output: 5,
+      cacheRead: 4,
+      cacheWrite: 0,
+      contextUsage: { state: "unavailable" },
+      totalTokens: 9,
+    },
     expectedCost: 0.000011,
   },
   {
     name: "provider-compatible usage nested in a choice",
+    package: true,
     usage: {
       prompt_tokens: 20,
       completion_tokens: 10,
@@ -116,7 +241,7 @@ const scenarios: UsageScenario[] = [
   },
 ];
 
-function installUsageChunk(scenario: UsageScenario): void {
+function installUsageChunk(scenario: Pick<UsageScenario, "name" | "usage" | "inChoice">): void {
   const choice = {
     index: 0,
     delta: { role: "assistant", content: "Usage preserved." },
@@ -143,8 +268,10 @@ function installUsageChunk(scenario: UsageScenario): void {
 
 const createManagedStream = createOpenAICompletionsTransportStreamFn();
 
-function createManagedFixtureStream(): AssistantMessageEventStreamLike {
-  const stream = createManagedStream(model, context, {
+function createManagedFixtureStream(
+  requestModel: Model<"openai-completions">,
+): AssistantMessageEventStreamLike {
+  const stream = createManagedStream(requestModel, context, {
     apiKey: "fixture-token",
     reasoning: "medium",
   });
@@ -164,21 +291,63 @@ afterEach(() => {
   configureAiTransportHost(previousHost);
 });
 
+it.each([
+  { name: "custom endpoint without usage", warns: 1 },
+  { name: "custom endpoint with usage enabled", supportsUsageInStreaming: true, warns: 0 },
+  {
+    name: "custom endpoint reporting usage",
+    usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+    warns: 0,
+  },
+  { name: "local endpoint with usage disabled", endpointClass: "local", warns: 0 },
+])("emits one actionable hint for $name", async (scenario) => {
+  installUsageChunk(scenario);
+  const logWarn = vi.fn();
+  const capabilities = getAiTransportHost().resolveProviderRequestCapabilities({});
+  configureAiTransportHost({
+    ...getAiTransportHost(),
+    resolveProviderRequestCapabilities: () => ({
+      ...capabilities,
+      endpointClass: scenario.endpointClass ?? "custom",
+    }),
+    logWarn,
+  });
+  const requestModel = {
+    ...model,
+    id: scenario.name,
+    provider: "usage-hint",
+    baseUrl: "https://llm.example.com/v1",
+    compat: { supportsUsageInStreaming: scenario.supportsUsageInStreaming ?? false },
+  };
+  expect((await createManagedFixtureStream(requestModel).result()).stopReason).toBe("stop");
+  expect((await createManagedFixtureStream(requestModel).result()).stopReason).toBe("stop");
+  expect(logWarn).toHaveBeenCalledTimes(scenario.warns);
+  if (scenario.warns) {
+    expect(logWarn).toHaveBeenCalledWith(
+      "openai-transport",
+      expect.stringContaining("set compat.supportsUsageInStreaming: true"),
+      { provider: requestModel.provider, model: requestModel.id },
+    );
+  }
+});
+
 describe.each([
   {
     name: "package",
     preservesReasoningTokens: false,
-    createStream: () =>
-      streamOpenAICompletions(model, context, {
+    createStream: (requestModel: Model<"openai-completions">) =>
+      streamOpenAICompletions(requestModel, context, {
         apiKey: "fixture-token",
         reasoningEffort: "medium",
       }),
   },
   { name: "managed", preservesReasoningTokens: true, createStream: createManagedFixtureStream },
-])("$name Chat Completions usage", ({ createStream, preservesReasoningTokens }) => {
-  it.each(scenarios)("preserves $name", async (scenario) => {
+])("$name Chat Completions usage", ({ name, createStream, preservesReasoningTokens }) => {
+  const ownerScenarios =
+    name === "package" ? scenarios.filter((scenario) => scenario.package) : scenarios;
+  it.each(ownerScenarios)("preserves $name", async (scenario) => {
     installUsageChunk(scenario);
-    const result = await createStream().result();
+    const result = await createStream({ ...model, cost: scenario.cost ?? model.cost }).result();
     const expectedUsage = { ...scenario.expectedUsage };
     if (!preservesReasoningTokens) {
       delete expectedUsage.reasoningTokens;

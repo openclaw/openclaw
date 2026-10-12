@@ -1,10 +1,10 @@
-import { render } from "lit";
 import { expect } from "vitest";
 import type { CronJob } from "../../api/types.ts";
 import { DEFAULT_CRON_FORM } from "../../test-helpers/cron.ts";
-import { renderCron } from "./view.ts";
-
-type CronProps = Parameters<typeof renderCron>[0];
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
+import type { CronProps } from "./view-types.ts";
+import { CronView } from "./view.tsx";
 
 export function createCronViewJob(id: string, overrides: Partial<CronJob> = {}): CronJob {
   return {
@@ -21,11 +21,23 @@ export function createCronViewJob(id: string, overrides: Partial<CronJob> = {}):
   } as CronJob;
 }
 
-function createCronViewProps(overrides: Partial<CronProps> = {}): CronProps {
+export function scheduledJob(id: string, overrides: Partial<CronJob> = {}): CronJob {
+  return createCronViewJob(id, {
+    name: "Nightly digest",
+    schedule: { kind: "every", everyMs: 60_000 },
+    sessionTarget: "isolated",
+    wakeMode: "now",
+    payload: { kind: "agentTurn", message: "digest" },
+    state: {},
+    ...overrides,
+  });
+}
+
+export function createCronViewProps(overrides: Partial<CronProps> = {}): CronProps {
   return {
-    basePath: "",
-    agentId: "main",
     loading: false,
+    hasLoaded: true,
+    listError: null,
     canManage: true,
     jobsLoadingMore: false,
     status: {
@@ -33,10 +45,6 @@ function createCronViewProps(overrides: Partial<CronProps> = {}): CronProps {
       triggersEnabled: true,
       jobs: Math.max(overrides.jobsTotal ?? 0, overrides.jobs?.length ?? 0),
     },
-    failingCount: null,
-    agentScoped: false,
-    scopedTotal: null,
-    scopedNextWakeAtMs: null,
     jobs: [],
     jobsTotal: 0,
     jobsHasMore: false,
@@ -50,6 +58,7 @@ function createCronViewProps(overrides: Partial<CronProps> = {}): CronProps {
     error: null,
     busy: false,
     form: { ...DEFAULT_CRON_FORM },
+    heartbeatScratch: "",
     fieldErrors: {},
     canSubmit: true,
     editingJob: null,
@@ -59,7 +68,7 @@ function createCronViewProps(overrides: Partial<CronProps> = {}): CronProps {
     channels: [],
     channelLabels: {},
     runs: [],
-    runsTotal: 0,
+    runsState: "ready",
     runsHasMore: false,
     runsLoadingMore: false,
     runsStatuses: [],
@@ -71,6 +80,7 @@ function createCronViewProps(overrides: Partial<CronProps> = {}): CronProps {
     thinkingSuggestions: [],
     timezoneSuggestions: [],
     deliveryToSuggestions: [],
+    failureAlertToSuggestions: [],
     accountSuggestions: [],
     onListTabChange: () => undefined,
     onDetailTabChange: () => undefined,
@@ -96,7 +106,8 @@ function createCronViewProps(overrides: Partial<CronProps> = {}): CronProps {
 
 export function renderCronView(overrides: Partial<CronProps> = {}) {
   const container = document.createElement("div");
-  render(renderCron(createCronViewProps(overrides)), container);
+  mountSolid(() => CronView(createCronViewProps(overrides)), { container });
+  flush();
   return container;
 }
 
@@ -125,19 +136,13 @@ export function getElement<T extends Element>(
 }
 
 export function selectSegmented(control: HTMLElement) {
-  const group = control.closest<HTMLElement & { value: string }>("wa-radio-group");
-  expect(group).not.toBeNull();
-  if (!group) {
-    return;
-  }
-  group.value = control.getAttribute("value") ?? "";
-  group.dispatchEvent(new Event("change", { bubbles: true }));
+  getElement(control, "input.settings-segmented__input", HTMLInputElement).click();
 }
 
 export function findToggleByLabel(container: Element, label: string) {
   return (
-    Array.from(container.querySelectorAll("wa-switch.settings-toggle")).find((toggle) =>
-      toggle.textContent?.includes(label),
+    Array.from(container.querySelectorAll(".settings-toggle")).find((toggle) =>
+      (toggle.closest(".settings-row--toggle") ?? toggle).textContent?.includes(label),
     ) ?? null
   );
 }

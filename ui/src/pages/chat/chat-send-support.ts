@@ -1,6 +1,12 @@
-import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionsListResult } from "../../api/types.ts";
+import type { RetainedChatSubmission } from "../../app/chat-submissions.ts";
+import { t } from "../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { parseSlashCommand } from "../../lib/chat/commands.ts";
+import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
+import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
+import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
+import { chatOutboxDeliveryKey } from "../../lib/chat/outbox-store.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
@@ -10,19 +16,112 @@ import {
   normalizeAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
-import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
+import { isExpiredIncognitoSession } from "./chat-history-state.ts";
+import { getChatPendingInputs } from "./chat-pending-inputs.ts";
+import { chatProviderReviewRow } from "./chat-provider-review.ts";
+import {
+  readDeliveredQueuedChatSendForRun,
+  readQueuedMessageById,
+  removeDeliveredQueuedChatSendForRun,
+  updateQueuedMessage,
+} from "./chat-queue.ts";
 import type { TerminalFailureChatSendAck } from "./chat-send-ack.ts";
-import type { ChatState } from "./chat-state-contract.ts";
-import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
+import type { ChatHost } from "./chat-send-contract.ts";
+import type { ChatQueueAdmissionResult } from "./composer-persistence.ts";
+import {
+  admitChatSubmission,
+  retireChatSubmissionDisplay,
+  shouldDisplayChatSubmission,
+} from "./history-merge.ts";
+import {
+  captureOutboxPayloadOwner,
+  failOutboxPayload,
+  prepareOutboxPayload,
+} from "./outbox-payloads.ts";
 import { appendChatMessageToCache, readChatMessagesFromCache } from "./session-message-cache.ts";
+import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
 import { buildLocalUserMessage } from "./user-message-content.ts";
 
-type ChatSendSupportHost = ChatState & {
-  sessionsResult?: SessionsListResult | null;
-};
+export const UNCONFIRMED_CHAT_SEND_ERROR =
+  "Delivery has not been confirmed. Check the conversation — retry only if your message didn't arrive.";
 
 export const OFFLINE_QUEUE_STORAGE_ERROR =
   "Could not store this message for reconnect. Free browser storage or reconnect before sending.";
+
+export function formatChatQueueAdmissionError(
+  result: Exclude<ChatQueueAdmissionResult, "admitted">,
+  editing: boolean,
+): string {
+  if (result === "source-changed") {
+    return t("chat.queue.editSourceChanged");
+  }
+  if (result === "full") {
+    return t("chat.queue.full");
+  }
+  return editing ? t("chat.queue.editStorageFailed") : OFFLINE_QUEUE_STORAGE_ERROR;
+}
+
+export function isChatResetCommand(text: string) {
+  const parsed = parseSlashCommand(text);
+  return (
+    parsed?.command.key === "new" ||
+    (parsed?.command.key === "reset" && !/^soft(?:\s|$)/i.test(parsed.args))
+  );
+}
+
+/** Commands and Goals have their own terminal receipts; chat needs input consumption. */
+export function requiresChatInputConsumption(item: ChatQueueItem): boolean {
+  return !item.intent && !item.localCommandName && !item.text.trimStart().startsWith("/");
+}
+
+/** Local queue admission does not require the initial turn to have settled. */
+export function chatSendAdmissionHoldReason(
+  host: ChatHost,
+  sessionKey: string,
+  agentId?: string,
+): string | null {
+  if (isExpiredIncognitoSession(host, sessionKey)) {
+    return t("chat.incognitoExpiredTitle");
+  }
+  const sendDisabledReason = chatProviderReviewRow(host, sessionKey, agentId)?.sendDisabledReason;
+  if (sendDisabledReason) {
+    return sendDisabledReason;
+  }
+  return chatConnectionPendingReason(host);
+}
+
+export function chatSendHoldReason(
+  host: ChatHost,
+  sessionKey: string,
+  initialTurnPending = false,
+  agentId?: string,
+): string | null {
+  return (
+    chatSendAdmissionHoldReason(host, sessionKey, agentId) ??
+    chatSendPendingReason(host, sessionKey, initialTurnPending)
+  );
+}
+
+function chatConnectionPendingReason(host: Pick<ChatHost, "client" | "connected">): string | null {
+  return host.connected && host.client && !host.client.recoveryScopeReady
+    ? t("chat.queue.connectionPending")
+    : null;
+}
+
+// Hello permits RPCs before account recovery has claimed any retained first turn.
+// Renderers show loading only for these transient holds, never terminal expiry.
+export function chatSendPendingReason(
+  host: Pick<ChatHost, "client" | "connected" | "hasPendingInitialTurn">,
+  sessionKey: string,
+  initialTurnPending = false,
+): string | null {
+  return (
+    chatConnectionPendingReason(host) ??
+    (initialTurnPending || host.hasPendingInitialTurn?.(sessionKey)
+      ? t("chat.queue.initialTurnPending")
+      : null)
+  );
+}
 
 export function formatTerminalChatSendAckError(
   ack: TerminalFailureChatSendAck,
@@ -35,87 +134,174 @@ export function formatTerminalChatSendAckError(
       : "The run ended before the message was accepted.";
 }
 
-export function chatMessagesContainQueuedSend(
-  messages: unknown,
-  item: ChatQueueItem,
-  userRoleOnly = false,
-): boolean {
-  return findQueuedSendMessageIndex(messages, item, userRoleOnly) >= 0;
-}
-
-function findQueuedSendMessageIndex(
-  messages: unknown,
-  item: ChatQueueItem,
-  userRoleOnly = false,
-): number {
-  if (!item.sendRunId) {
-    return -1;
-  }
-  return (Array.isArray(messages) ? messages : []).findIndex((message) => {
-    if (!isRecord(message)) {
-      return false;
-    }
-    // Render retirement requires a user-role entry: an assistant entry can
-    // carry the same run key without proving the queued turn is visible.
-    if (userRoleOnly && message.role !== "user") {
-      return false;
-    }
-    const markerIdempotencyKey = asOptionalRecord(message["__openclaw"])?.idempotencyKey;
-    const idempotencyKey = markerIdempotencyKey ?? message.idempotencyKey;
-    return idempotencyKey === item.sendRunId || idempotencyKey === `${item.sendRunId}:user`;
-  });
-}
-
-function durableDeliveredAttachments(
-  attachments: readonly ChatAttachment[] | undefined,
-): ChatAttachment[] | undefined {
-  return attachments?.flatMap((attachment) => {
-    // Composer uploads keep their bytes in the payload store; queue rows carry
-    // metadata only. Resolve through the store before queue ownership ends.
-    const dataUrl = getChatAttachmentDataUrl(attachment);
-    return dataUrl ? [{ ...attachment, dataUrl, previewUrl: dataUrl }] : [];
-  });
-}
-
-export function preserveQueuedUserTurn(state: ChatSendSupportHost, item: ChatQueueItem): void {
-  const runId = item.sendRunId;
-  const sessionKey = item.sessionKey ?? state.sessionKey;
-  if (!runId) {
+function preserveDeliveredUserTurn(
+  state: ChatHost,
+  submission: RetainedChatSubmission | undefined,
+): void {
+  if (submission?.kind !== "delivered" || !submission.pending) {
     return;
   }
-  const userMessage = buildLocalUserMessage({
-    text: item.text,
-    attachments: durableDeliveredAttachments(item.attachments),
-    createdAt: item.createdAt,
-    runId,
-    ...(item.replyToId ? { replyToId: item.replyToId } : {}),
-    ...(item.sender ? { sender: item.sender } : {}),
-  });
-  if (!userMessage) {
-    return;
-  }
-  if (visibleSessionMatches(state, sessionKey, item.agentId)) {
-    if (!chatMessagesContainQueuedSend(state.chatMessages, item, true)) {
-      const scope = readChatSessionProjectionScope(state, {
-        sessionKey,
-        agentId: item.agentId,
-      });
-      reduceChatSessionProjection(
-        state,
-        { type: "sendPending", runId, message: userMessage },
-        { scope },
-      );
+  const { sessionKey, agentId, message } = submission;
+  if (visibleSessionMatches(state, sessionKey, agentId)) {
+    if (
+      !submission.sessionId ||
+      !state.currentSessionId ||
+      submission.sessionId === state.currentSessionId
+    ) {
+      admitChatSubmission(state, getChatPendingInputs(state)?.page.items, submission);
     }
     return;
   }
-  if (!state.chatMessagesBySession) {
-    return;
+  if (state.chatMessagesBySession) {
+    const target = { sessionKey, agentId };
+    const cached = readChatMessagesFromCache(state.chatMessagesBySession, state, target);
+    if (
+      shouldDisplayChatSubmission(
+        submission,
+        findChatSubmissionMessage(cached, submission.pendingRunId, true),
+      )
+    ) {
+      appendChatMessageToCache(state.chatMessagesBySession, state, target, message);
+    }
   }
-  const target = { sessionKey, agentId: item.agentId };
-  const cached = readChatMessagesFromCache(state.chatMessagesBySession, state, target);
-  if (!chatMessagesContainQueuedSend(cached, item, true)) {
-    appendChatMessageToCache(state.chatMessagesBySession, state, target, userMessage);
+}
+
+type DeliveredTurnRetirement = "retired" | "retained" | "stale";
+
+/** Preserve local display bytes until canonical consumption retires the submission. */
+export function retireDeliveredQueuedUserTurn(
+  host: ChatHost,
+  runId: string | undefined,
+  scope: StoredChatOutboxScope,
+  options?: { retainUntilConsumed?: boolean; inputConsumed?: boolean },
+): DeliveredTurnRetirement | Promise<DeliveredTurnRetirement> {
+  const client = host.client;
+  const owner = client ?? host;
+  const submissions = host.chatSubmissions;
+  const deliveryKey = chatOutboxDeliveryKey(host, scope, runId);
+  const stored = readDeliveredQueuedChatSendForRun(host, runId, scope);
+  if (options?.inputConsumed && runId) {
+    const remembered = submissions.readDelivered(deliveryKey, owner);
+    if (remembered && !persistedSteerTargetRunId(remembered.message)) {
+      remembered.pending = false;
+    }
+    if (
+      visibleSessionMatches(host, scope.sessionKey, scope.agentId) &&
+      (!stored?.sessionId || stored.sessionId === host.currentSessionId)
+    ) {
+      retireChatSubmissionDisplay(host, new Set([runId]), { awaitTranscriptReceipt: true });
+    }
+    return !stored || removeDeliveredQueuedChatSendForRun(host, runId, scope)
+      ? "retired"
+      : "retained";
   }
+  if (!stored) {
+    preserveDeliveredUserTurn(host, submissions.readDelivered(deliveryKey, owner));
+    return "retired";
+  }
+  const connectionEpoch = host.connectionEpoch;
+  const connected = host.connected;
+  const payloadOwnerIsCurrent = captureOutboxPayloadOwner(host);
+  const isCurrent = () =>
+    host.connected === connected &&
+    host.connectionEpoch === connectionEpoch &&
+    payloadOwnerIsCurrent();
+  const currentItem = () => readDeliveredQueuedChatSendForRun(host, runId, scope);
+  const commit = (
+    message: NonNullable<ReturnType<typeof buildLocalUserMessage>>,
+  ): DeliveredTurnRetirement => {
+    if (!isCurrent()) {
+      return "stale";
+    }
+    const current = currentItem();
+    if (!current) {
+      preserveDeliveredUserTurn(host, submissions.readDelivered(deliveryKey, owner));
+      // Consumption can retire the outbox during hydration. A replacement
+      // attempt still owns the row; an absent row must not swallow chat.final.
+      return readQueuedMessageById(host, stored.id) ? "stale" : "retired";
+    }
+    if (!sameQueuedDeliveryVersion(current, stored) || !stored.sendRunId) {
+      return "stale";
+    }
+    // Every pane receives the terminal. Retain complete message bytes before
+    // the first pane removes the outbox item and releases its Blob/preview URLs.
+    const remembered = submissions.readDelivered(deliveryKey, owner);
+    const submission = submissions.retain({
+      kind: "delivered",
+      deliveryKey,
+      owner,
+      sessionKey: stored.sessionKey ?? scope.sessionKey,
+      agentId: stored.agentId,
+      sessionId: stored.sessionId,
+      pendingRunId: stored.sendRunId,
+      message:
+        remembered?.kind === "delivered" &&
+        remembered.pending &&
+        persistedSteerTargetRunId(remembered.message)
+          ? remembered.message
+          : message,
+    });
+    preserveDeliveredUserTurn(host, submission);
+    const beforeRemoval = currentItem();
+    if (!isCurrent() || !beforeRemoval || !sameQueuedDeliveryVersion(beforeRemoval, stored)) {
+      return "stale";
+    }
+    return !options?.retainUntilConsumed && removeDeliveredQueuedChatSendForRun(host, runId, scope)
+      ? "retired"
+      : "retained";
+  };
+  const live = readQueuedMessageById(host, stored.id);
+  const source =
+    live &&
+    live.attachmentPayload?.key === stored.attachmentPayload?.key &&
+    live.attachments?.length === stored.attachments?.length
+      ? live
+      : stored;
+  const buildMessage = (attachments: readonly ChatAttachment[] | undefined) =>
+    buildLocalUserMessage(
+      {
+        ...stored,
+        attachments,
+        runId: stored.sendRunId,
+      },
+      "complete",
+    );
+  const message = buildMessage(source.attachments) ?? buildMessage(stored.attachments);
+  if (
+    message &&
+    ((!stored.attachmentPayload && !stored.attachmentStorageError) ||
+      (stored.attachments?.length ?? 0) > 0)
+  ) {
+    return commit(message);
+  }
+  return prepareOutboxPayload(host, stored, "handoff").then((result): DeliveredTurnRetirement => {
+    if (!isCurrent()) {
+      return "stale";
+    }
+    if (result.status === "ready") {
+      const hydrated = buildMessage(result.update.attachments ?? stored.attachments);
+      if (hydrated) {
+        return commit(hydrated);
+      }
+    }
+    const current = currentItem();
+    if (!current) {
+      return readQueuedMessageById(host, stored.id) ? "stale" : "retired";
+    }
+    if (!sameQueuedDeliveryVersion(current, stored)) {
+      return "stale";
+    }
+    const reason = result.status === "failed" ? result.reason : "missing";
+    // Delivery proof must never become a fresh-send retry because local bytes
+    // were unavailable. Keep the same run identity and its no-replay barrier.
+    updateQueuedMessage(host, stored.id, (item) =>
+      failOutboxPayload(
+        { ...item, sendState: item.sendState === "held" ? "held" : "unconfirmed" },
+        reason,
+      ),
+    );
+    return "retained";
+  });
 }
 
 type ChatDeliveryFailureHost = Parameters<typeof visibleSessionMatches>[0] & {
@@ -147,4 +333,20 @@ export function surfaceChatDeliveryFailure(
         (session.agentId !== undefined && normalizeAgentId(session.agentId) === scopedAgentId)),
   );
   showToast({ message: `${resolveSessionDisplayName(sessionKey, row)}: ${message}` });
+}
+
+export function prependReplyQuote(
+  message: string,
+  replyTarget: NonNullable<ChatHost["chatReplyTarget"]>,
+): string {
+  const label = (replyTarget.senderLabel ?? "User").replace(/([\\`*_{}[\]()#+\-.!|>])/g, "\\$1");
+  const text = replyTarget.text.trim();
+  if (!text.includes("\n")) {
+    return `> **${label}:** ${text}\n\n${message}`;
+  }
+  const quoted = text
+    .split("\n")
+    .map((line) => `> ${line}`)
+    .join("\n");
+  return `> **${label}:**\n${quoted}\n\n${message}`;
 }

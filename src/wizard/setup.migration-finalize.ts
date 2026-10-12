@@ -1,4 +1,3 @@
-// Setup migration finalization owns deferred activation, reporting, and terminal acknowledgement.
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -24,28 +23,14 @@ type SetupMigrationImportOutcome = SetupMigrationPromotionOutcome & {
   acknowledgePromotion?: () => Promise<void>;
 };
 
-function withPromotionAcknowledgement(
-  outcome: SetupMigrationImportOutcome,
-  acknowledgePromotion: () => Promise<void>,
-): SetupMigrationImportOutcome {
-  Object.defineProperty(outcome, "acknowledgePromotion", {
-    value: acknowledgePromotion,
-    enumerable: false,
-  });
-  return outcome;
-}
-
-function hasDeferredMigrationItems(plan: MigrationPlan): boolean {
-  return plan.items.some(
-    (item) => item.applyPhase === "after-promotion" && item.status === "planned",
-  );
-}
-
 export function assertDeferredMigrationApplyContract(
   provider: MigrationProviderPlugin,
   plan: MigrationPlan,
 ): void {
-  if (hasDeferredMigrationItems(plan) && provider.deferredApply?.retrySafe !== true) {
+  if (
+    plan.items.some((item) => item.applyPhase === "after-promotion" && item.status === "planned") &&
+    provider.deferredApply?.retrySafe !== true
+  ) {
     throw new Error(
       `Migration provider "${provider.id}" cannot defer activation during onboarding because it does not declare retry-safe deferred apply.`,
     );
@@ -104,34 +89,34 @@ function buildPendingDeferredMigrationPlan(
   return { ...deferredPlan, items, summary: summarizeMigrationItems(items) };
 }
 
-function mergeDeferredMigrationResults(params: {
-  previous: MigrationApplyResult | undefined;
-  next: MigrationApplyResult;
-}): MigrationApplyResult {
-  if (!params.previous) {
-    return params.next;
+function mergeDeferredMigrationResults(
+  previous: MigrationApplyResult | undefined,
+  next: MigrationApplyResult,
+): MigrationApplyResult {
+  if (!previous) {
+    return next;
   }
-  const previousById = new Map(params.previous.items.map((item) => [item.id, item]));
-  const items = params.next.items.map((item) =>
+  const previousById = new Map(previous.items.map((item) => [item.id, item]));
+  const items = next.items.map((item) =>
     item.status === "skipped" && item.reason === COMPLETED_AFTER_PROMOTION_REASON
       ? (previousById.get(item.id) ?? item)
       : item,
   );
-  const retry = deferredRetryInstruction(params.next.providerId);
+  const retry = deferredRetryInstruction(next.providerId);
   return {
-    ...params.next,
+    ...next,
     items,
     summary: summarizeMigrationItems(items),
     warnings: [
       ...new Set([
-        ...(params.previous.warnings ?? []).filter((warning) => warning !== retry),
-        ...(params.next.warnings ?? []),
+        ...(previous.warnings ?? []).filter((warning) => warning !== retry),
+        ...(next.warnings ?? []),
       ]),
     ],
     nextSteps: [
       ...new Set([
-        ...(params.previous.nextSteps ?? []).filter((nextStep) => nextStep !== retry),
-        ...(params.next.nextSteps ?? []),
+        ...(previous.nextSteps ?? []).filter((nextStep) => nextStep !== retry),
+        ...(next.nextSteps ?? []),
       ]),
     ],
   };
@@ -180,10 +165,7 @@ export async function finalizeSetupMigrationPromotion(params: {
 
   const configRuntime = await createPromotionConfigRuntime(params.config);
   let deferredResult = continuation.deferredResult;
-  if (
-    hasDeferredMigrationItems(continuation.plan) &&
-    hasPendingDeferredMigrationItems(continuation.plan, deferredResult)
-  ) {
+  if (hasPendingDeferredMigrationItems(continuation.plan, deferredResult)) {
     const previousDeferredResult = deferredResult;
     const deferredPlan = buildPendingDeferredMigrationPlan(
       continuation.plan,
@@ -208,10 +190,10 @@ export async function finalizeSetupMigrationPromotion(params: {
         overwrite: false,
       };
       preparation = await params.provider.prepareApply?.(deferredContext);
-      retryResult = mergeDeferredMigrationResults({
-        previous: previousDeferredResult,
-        next: await params.provider.apply(deferredContext, deferredPlan),
-      });
+      retryResult = mergeDeferredMigrationResults(
+        previousDeferredResult,
+        await params.provider.apply(deferredContext, deferredPlan),
+      );
       if (hasPendingDeferredMigrationItems(continuation.plan, retryResult)) {
         retryResult = deferredMigrationFailure(
           retryResult,
@@ -219,13 +201,12 @@ export async function finalizeSetupMigrationPromotion(params: {
         );
       }
     } catch (error) {
-      retryResult = mergeDeferredMigrationResults({
-        previous: previousDeferredResult,
-        next: deferredMigrationFailure(deferredPlan, error),
-      });
+      retryResult = mergeDeferredMigrationResults(
+        previousDeferredResult,
+        deferredMigrationFailure(deferredPlan, error),
+      );
     } finally {
-      const disposable = preparation as { dispose?: () => void | Promise<void> } | undefined;
-      await disposable?.dispose?.();
+      await preparation?.dispose?.();
     }
     deferredResult = retryResult;
     await params.resume.saveDeferredResult(deferredResult);
@@ -258,7 +239,11 @@ export async function finalizeSetupMigrationPromotion(params: {
       t("wizard.migration.appliedTitle"),
     );
   }
-  return hasPendingActivation
-    ? continuation.outcome
-    : withPromotionAcknowledgement(continuation.outcome, params.resume.acknowledge);
+  if (!hasPendingActivation) {
+    Object.defineProperty(continuation.outcome, "acknowledgePromotion", {
+      value: params.resume.acknowledge,
+      enumerable: false,
+    });
+  }
+  return continuation.outcome;
 }

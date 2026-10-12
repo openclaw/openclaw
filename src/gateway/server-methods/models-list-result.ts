@@ -1,659 +1,249 @@
-// Resolves public model catalogs without exposing runtime-only provider params.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import type { ModelChoice } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
-import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import type { RuntimeAuthMaterialization } from "../../agents/auth-profiles/runtime-materializations.js";
-import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+import type {
+  ModelChoice,
+  ModelRuntimeChoice,
+  ModelsListResult,
+} from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
 import { resolveConfiguredModelEntries } from "../../agents/configured-model-entries.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
-import type {
-  ModelAuthAvailability,
-  ModelAuthAvailabilityEvaluation,
-  ModelAuthAvailabilityResolver,
-} from "../../agents/model-auth-availability.js";
-import { hasSyntheticLocalProviderAuthConfig } from "../../agents/model-auth-provider-config.js";
+import { resolveFastModeState } from "../../agents/fast-mode.js";
+import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
+import type { ModelAuthAvailabilityEvaluation } from "../../agents/model-auth-availability.js";
 import {
-  buildProviderConfigModelCatalogForBrowse,
-  loadPreparedModelCatalogSnapshotForBrowse,
-  modelCatalogBrowseRequiresFullDiscovery,
-  type ModelCatalogBrowseView,
-} from "../../agents/model-catalog-browse.js";
-import {
-  findModelCatalogRouteDonor,
-  projectModelCatalogEntryForRoute,
-  resolveConfiguredModelCatalogOverrides,
-} from "../../agents/model-catalog-route.js";
+  createModelCatalogDecisions,
+  prepareModelCatalogDecisions,
+  resolveCatalogDecisionRuntime,
+  type ModelCatalogDecisionParams,
+} from "../../agents/model-catalog-decisions.js";
+import { createModelPickerRecommendationRank } from "../../agents/model-catalog-order.js";
+import { prepareModelCatalogView } from "../../agents/model-catalog-view.js";
 import {
   resolveLogicalModelCatalogEntryState,
-  resolveLogicalVisibleModelCatalog,
+  prepareLogicalVisibleModelCatalog,
 } from "../../agents/model-catalog-visibility.js";
-import type { ModelCatalogSnapshot, ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import { createModelSpeedPolicyResolver } from "../../agents/model-fast-mode.js";
 import { modelKey } from "../../agents/model-ref-shared.js";
-import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
+import {
+  omitCliRuntimeAliasTwins,
+  resolveCliRuntimeTwinRoute,
+  type CliRuntimeTwinRoute,
+} from "../../agents/model-runtime-aliases.js";
+import { dedupeModelCatalogEntries } from "../../agents/model-selection-shared.js";
 import {
   createModelVisibilityPolicy,
   RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
 } from "../../agents/model-visibility-policy.js";
 import {
-  createOpenAIModelRoutesResolver,
+  createModelCatalogIdentityKeyResolver,
   openAIModelCatalogRoutePolicy,
   resolveModelCatalogIdentityKey,
 } from "../../agents/openai-model-routes.js";
-import { publishedModelCatalogOwnerMatchesAgent } from "../../agents/prepared-model-catalog-owner.js";
-import { preparedModelRuntimeConfigsMatch } from "../../agents/prepared-model-runtime.js";
-import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
+import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
+import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
+import { isPreparedModelCatalogFull } from "../../agents/prepared-model-runtime.full-catalog.js";
+import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
+import { createThinkingCatalogResolver } from "../../auto-reply/thinking.js";
 import { getRuntimeConfigSourceSnapshot } from "../../config/config.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
-import type { ProviderCatalogOutcome } from "../../plugins/provider-catalog.types.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
-import { loadDeferredCatalog, readPreparedCatalog } from "../server-model-catalog-auth.js";
+import { resolveRuntimeModelConfigCacheKey } from "../../config/runtime-snapshot.js";
+import { resolveProviderModelCatalogId } from "../../plugins/provider-model-routes.js";
+import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { withCurrentReadAuthority } from "../../shared/current-read-authority.js";
 import { resolveGatewayModelThinkingProfile } from "../session-utils-model.js";
+import { projectWorkerPlacementAgentRuntime } from "../worker-environments/placement-session-runtime.js";
+import { prepareChatAccountSelection } from "./chat-account-selection.js";
 import { resolveModelProviderCapabilities } from "./model-provider-capabilities.js";
-import {
-  createModelsListAuthResolver,
-  createPreparedSyntheticCliRuntimeResolver,
-} from "./models-list-auth-resolver.js";
-import { prepareModelsListHarnessCatalog } from "./models-list-harness-catalog.js";
+import { createModelsListProviderFilter, listDecisionModels } from "./models-list-capabilities.js";
 import {
   buildPublicModelProjection,
-  resolveModelChoiceAgentRuntime,
+  projectModelServiceTiers,
+  projectProviderCatalogOutcomes,
 } from "./models-list-public-projection.js";
-import type { GatewayRequestContext } from "./types.js";
+import { resolveDefaultModelsPreview } from "./models-list-result.default-models.js";
+import {
+  resolveModelsListOwner,
+  type BuildModelsListResultParams,
+  type ModelsListOwner,
+} from "./models-list-result.owner.js";
+import { prepareModelPickerRuntimeChoices } from "./models-list-runtime-choices.js";
 
-type ModelsListEntryWithCapabilities = ModelChoice;
-type ApiKeyProviderCapabilities = {
-  providers: ReadonlyMap<string, boolean>;
-  resolveProvider(provider: string): string;
-};
-type ModelsListResult = {
-  models: ModelsListEntryWithCapabilities[];
-  providerOutcomes?: readonly ProviderCatalogOutcome[];
-};
-
-let loggedSlowModelsListCatalog = false;
-
-function resolveModelsListView(params: Record<string, unknown>): ModelCatalogBrowseView {
-  const view = params.view;
-  return view === "configured" || view === "provider-config" || view === "all" ? view : "default";
-}
-
-function resolveLegacyEntryAvailability(params: {
-  authResolver: ModelAuthAvailabilityResolver;
-  entry: ModelCatalogEntry;
-  primaryAvailability: ModelAuthAvailability;
-  cfg: OpenClawConfig;
-  agentId: string;
-  metadataSnapshot: PluginMetadataSnapshot;
-  resolvePreparedSyntheticCliRuntime: (entry: ModelCatalogEntry) => string | undefined;
-}): ModelAuthAvailability {
-  if (params.primaryAvailability === true) {
-    return true;
-  }
-  let available = params.primaryAvailability;
-  const preparedSyntheticRuntime = params.resolvePreparedSyntheticCliRuntime(params.entry);
-  const runtimeProvider =
-    resolveCliRuntimeExecutionProvider({
-      provider: params.entry.provider,
-      cfg: params.cfg,
-      agentId: params.agentId,
-      modelId: params.entry.id,
-      metadataSnapshot: params.metadataSnapshot,
-    }) ?? preparedSyntheticRuntime;
-  if (
-    runtimeProvider &&
-    normalizeProviderId(runtimeProvider) !== normalizeProviderId(params.entry.provider)
-  ) {
-    const runtimeAvailable = params.authResolver.resolveProviderAuthAvailability(runtimeProvider);
-    if (runtimeAvailable === true || preparedSyntheticRuntime === runtimeProvider) {
-      return true;
-    }
-    if (available === false && runtimeAvailable === undefined) {
-      available = undefined;
-    }
-  }
-  return available;
-}
-
-function createModelsListEntryEvaluator(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  authResolver: ModelAuthAvailabilityResolver;
-  metadataSnapshot: PluginMetadataSnapshot;
-  providerOutcomes?: readonly ProviderCatalogOutcome[];
-  preferredProfileId?: string;
-  lockedProfileId?: string;
-}): (
-  entry: ModelCatalogEntry,
-  routeVariants?: readonly ModelCatalogEntry[],
-) => Promise<ModelAuthAvailabilityEvaluation> {
-  const resolvePreparedSyntheticCliRuntime = createPreparedSyntheticCliRuntimeResolver({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    metadataSnapshot: params.metadataSnapshot,
-  });
-  const pending = new Map<string, Promise<ModelAuthAvailabilityEvaluation>>();
-  return (entry, routeVariants = [entry]) => {
-    const identity = openAIModelCatalogRoutePolicy.resolveIdentity(entry);
-    const cacheKey = resolveModelCatalogIdentityKey(entry);
-    const cached = pending.get(cacheKey);
-    if (cached) {
-      return cached;
-    }
-    const next = Promise.resolve().then(() => {
-      const evaluation = params.authResolver.evaluateModelAuth(entry.provider, {
-        modelId: identity?.id ?? entry.id,
-        ...(params.preferredProfileId ? { preferredProfileId: params.preferredProfileId } : {}),
-        ...(params.lockedProfileId ? { lockedProfileId: params.lockedProfileId } : {}),
-        observedRoutes: routeVariants.map((variant) => ({
-          api: variant.api,
-          baseUrl: variant.baseUrl,
-        })),
-      });
-      const resolved =
-        evaluation.routeResolution === null && normalizeProviderId(entry.provider) !== "openai"
-          ? {
-              ...evaluation,
-              availability: resolveLegacyEntryAvailability({
-                authResolver: params.authResolver,
-                entry,
-                primaryAvailability: evaluation.availability,
-                cfg: params.cfg,
-                agentId: params.agentId,
-                metadataSnapshot: params.metadataSnapshot,
-                resolvePreparedSyntheticCliRuntime,
-              }),
-            }
-          : evaluation;
-      const provider = normalizeProviderId(entry.provider);
-      // Stored credentials prove presence, not acceptance. Apply the live rejection only to the
-      // profile discovery tested; widening it would hide routes backed by another valid profile.
-      return params.providerOutcomes?.some(
-        (outcome) =>
-          outcome.status === "auth-rejected" &&
-          normalizeProviderId(outcome.provider) === provider &&
-          (outcome.profileId === undefined || outcome.profileId === resolved.selectedProfileId),
-      )
-        ? { ...resolved, availability: false }
-        : resolved;
-    });
-    pending.set(cacheKey, next);
-    return next;
-  };
-}
-
-/** Configured dynamic-catalog providers that omit explicit model inventory. */
-function listConfiguredRuntimeDiscoveryProviderIds(
-  cfg: OpenClawConfig,
-  metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">,
-): Set<string> {
-  const ids = new Set<string>();
-  const providers = cfg.models?.providers;
-  if (!providers || typeof providers !== "object" || !metadataSnapshot) {
-    return ids;
-  }
-  const dynamicProviders = new Set<string>();
-  for (const plugin of metadataSnapshot.plugins) {
-    for (const [providerRaw, mode] of Object.entries(plugin.modelCatalog?.discovery ?? {})) {
-      const providerId = normalizeProviderId(providerRaw);
-      if (providerId && (mode === "runtime" || mode === "refreshable")) {
-        dynamicProviders.add(providerId);
-      }
-    }
-  }
-  for (const [providerRaw, provider] of Object.entries(providers)) {
-    const providerId = normalizeProviderId(providerRaw);
-    if (providerId && dynamicProviders.has(providerId) && !Array.isArray(provider?.models)) {
-      ids.add(providerId);
-    }
-  }
-  return ids;
-}
-
-function resolveProviderConfigInventoryEntries(params: {
-  authoredEntries: readonly ModelCatalogEntry[];
-  canonicalEntries: readonly ModelCatalogEntry[];
-  discoveryOnlyProviderIds?: ReadonlySet<string>;
-}): ModelCatalogEntry[] {
-  const canonicalByKey = new Map<string, ModelCatalogEntry>();
-  for (const entry of params.canonicalEntries) {
-    const key = resolveModelCatalogIdentityKey(entry);
-    if (!canonicalByKey.has(key)) {
-      canonicalByKey.set(key, entry);
-    }
-  }
-  const seen = new Set<string>();
-  const inventory: ModelCatalogEntry[] = [];
-  for (const authoredEntry of params.authoredEntries) {
-    const key = resolveModelCatalogIdentityKey(authoredEntry);
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    // Authored config owns inventory membership. Canonical catalog rows own
-    // route metadata; configured logical overrides are applied by the projector.
-    inventory.push(canonicalByKey.get(key) ?? authoredEntry);
-  }
-  if (params.discoveryOnlyProviderIds) {
-    // Providers configured without explicit model lists (for example litellm)
-    // surface their key-scoped discovered rows as the configured inventory.
-    for (const canonicalEntry of params.canonicalEntries) {
-      const key = resolveModelCatalogIdentityKey(canonicalEntry);
-      if (seen.has(key)) {
-        continue;
-      }
-      if (!params.discoveryOnlyProviderIds.has(normalizeProviderId(canonicalEntry.provider))) {
-        continue;
-      }
-      seen.add(key);
-      inventory.push(canonicalEntry);
-    }
-  }
-  return inventory;
-}
-
-/** Builds one per-agent, snapshot-scoped route projection for Gateway thinking metadata. */
-export function createGatewayAgentModelCatalogProjector(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  snapshot: ModelCatalogSnapshot;
-  metadataSnapshot: PluginMetadataSnapshot;
-  preparedAuthStore: AuthProfileStore;
-  preparedRuntimeAuthModes?: PreparedAgentCredentialModes;
-  preparedRuntimeAuthMaterializations?: readonly RuntimeAuthMaterialization[];
-  preferredProfileId?: string;
-  lockedProfileId?: string;
-  routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
-}) {
-  // The Gateway owns one process-lifecycle plugin metadata snapshot. Carry it
-  // through the whole projection so per-model normalization cannot rediscover it.
-  const metadataSnapshot = params.metadataSnapshot;
-  const workspaceDir =
-    resolveAgentWorkspaceDir(params.cfg, params.agentId) ?? resolveDefaultAgentWorkspaceDir();
-  const projectionCatalog =
-    params.snapshot.routeVariants.length > 0
-      ? params.snapshot.routeVariants
-      : params.snapshot.entries;
-  const routeVariantsByKey = new Map<string, ModelCatalogEntry[]>();
-  for (const entry of projectionCatalog) {
-    const key = resolveModelCatalogIdentityKey(entry);
-    const variants = routeVariantsByKey.get(key) ?? [];
-    variants.push(entry);
-    routeVariantsByKey.set(key, variants);
-  }
-  const resolveRouteVariants = (entry: ModelCatalogEntry) =>
-    routeVariantsByKey.get(resolveModelCatalogIdentityKey(entry)) ?? [entry];
-  const logicalEntries: ModelCatalogEntry[] = [];
-  const logicalEntryKeys = new Set<string>();
-  for (const entry of params.snapshot.entries) {
-    const key = resolveModelCatalogIdentityKey(entry);
-    if (!logicalEntryKeys.has(key)) {
-      logicalEntryKeys.add(key);
-      logicalEntries.push(entry);
-    }
-  }
-  const authResolver = createModelsListAuthResolver({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    metadataSnapshot,
-    preparedAuthStore: params.preparedAuthStore,
-    preparedRuntimeAuthModes: params.preparedRuntimeAuthModes,
-    preparedRuntimeAuthMaterializations: params.preparedRuntimeAuthMaterializations,
-    workspaceDir,
-    routeResolverFactory: params.routeResolverFactory,
-  });
-  const evaluateEntry = createModelsListEntryEvaluator({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    authResolver,
-    metadataSnapshot,
-    providerOutcomes: params.snapshot.providerOutcomes,
-    ...(params.preferredProfileId ? { preferredProfileId: params.preferredProfileId } : {}),
-    ...(params.lockedProfileId ? { lockedProfileId: params.lockedProfileId } : {}),
-  });
-  let projectedCatalog: Promise<ModelCatalogEntry[]> | undefined;
-  return {
-    evaluateEntry,
-    metadataSnapshot,
-    authStore: params.preparedAuthStore,
-    authModes: params.preparedRuntimeAuthModes,
-    authMaterializations: params.preparedRuntimeAuthMaterializations,
-    projectCatalog: () =>
-      (projectedCatalog ??= Promise.all(
-        logicalEntries.map(async (entry) => {
-          const routeVariants = resolveRouteVariants(entry);
-          const evaluation = await evaluateEntry(entry, routeVariants);
-          const state = resolveLogicalModelCatalogEntryState({
-            entry,
-            evaluation,
-            routePolicy: openAIModelCatalogRoutePolicy,
-          });
-          const overrides = resolveConfiguredModelCatalogOverrides({
-            cfg: params.cfg,
-            entry,
-            policy: openAIModelCatalogRoutePolicy,
-          });
-          const projected = projectModelCatalogEntryForRoute({
-            entry,
-            projection: state.routeProjection,
-            catalog: routeVariants,
-            ...(overrides ? { overrides } : {}),
-          });
-          if (state.routeProjection.kind !== "selected") {
-            return projected;
-          }
-          const donor = findModelCatalogRouteDonor({
-            entry,
-            route: state.routeProjection.route,
-            policy: openAIModelCatalogRoutePolicy,
-            catalog: routeVariants,
-          });
-          if (donor && Object.hasOwn(donor, "compat")) {
-            projected.compat = donor.compat;
-          }
-          if (donor && Object.hasOwn(donor, "params")) {
-            projected.params = donor.params;
-          }
-          return projected;
-        }),
-      )),
-  };
-}
-
-async function buildPublicModelsListEntries(params: {
-  catalog: ModelCatalogEntry[];
-  thinkingCatalog: ModelCatalogEntry[];
-  cfg: OpenClawConfig;
-  agentId: string;
-  configuredEntriesByKey: ReturnType<typeof resolveConfiguredModelEntries>["byKey"];
-  evaluateEntry(entry: ModelCatalogEntry): Promise<ModelAuthAvailabilityEvaluation>;
-  includeInput?: boolean;
-  preserveUnknownAvailability?: boolean;
-  apiKeyCapabilities?: ApiKeyProviderCapabilities;
-}): Promise<ModelsListEntryWithCapabilities[]> {
-  return Promise.all(
-    params.catalog.map(async (entry): Promise<ModelsListEntryWithCapabilities> => {
-      const configuredEntry = params.configuredEntriesByKey.get(modelKey(entry.provider, entry.id));
-      const alias = configuredEntry?.aliases.at(-1);
-      const publicEntry = configuredEntry?.aliasDisabled
-        ? { ...entry, alias: undefined }
-        : alias && alias !== entry.alias
-          ? { ...entry, alias }
-          : entry;
-      const evaluation = await params.evaluateEntry(entry);
-      const syntheticLocalAvailable =
-        evaluation.availability === undefined &&
-        evaluation.routeResolution === null &&
-        normalizeProviderId(entry.provider) !== "openai" &&
-        hasSyntheticLocalProviderAuthConfig({ cfg: params.cfg, provider: entry.provider });
-      const available = evaluation.availability ?? (syntheticLocalAvailable ? true : undefined);
-      // Legacy views keep emitting a boolean because existing clients treat
-      // omission as selectable. Inventory consumers preserve unknown state.
-      const capabilityProvider = params.apiKeyCapabilities?.resolveProvider(entry.provider);
-      const agentRuntime = resolveModelChoiceAgentRuntime({
-        cfg: params.cfg,
-        agentId: params.agentId,
-        entry,
-      });
-      const thinkingProfile =
-        typeof publicEntry.reasoning !== "boolean"
-          ? undefined
-          : resolveGatewayModelThinkingProfile({
-              cfg: params.cfg,
-              agentId: params.agentId,
-              provider: entry.provider,
-              model: entry.id,
-              modelCatalog: params.thinkingCatalog,
-              configuredReasoning: publicEntry.configuredReasoning ?? publicEntry.reasoning,
-              thinkingPolicyProvider: publicEntry.thinkingPolicyProvider,
-            });
-      return {
-        ...buildPublicModelProjection(publicEntry),
-        ...(configuredEntry?.tags.size ? { tags: [...configuredEntry.tags] } : {}),
-        ...(agentRuntime ? { agentRuntime } : {}),
-        ...thinkingProfile,
-        ...(capabilityProvider && params.apiKeyCapabilities?.providers.has(capabilityProvider)
-          ? {
-              apiKeySupported: params.apiKeyCapabilities.providers.get(capabilityProvider) === true,
-            }
-          : {}),
-        ...(params.includeInput && entry.input?.length ? { input: entry.input } : {}),
-        ...(params.preserveUnknownAvailability && available === undefined
-          ? {}
-          : { available: available ?? false }),
-      };
-    }),
-  );
-}
-
-function apiKeyProviderCapabilities(params: {
-  cfg: OpenClawConfig;
-  metadataSnapshot: PluginMetadataSnapshot;
-  workspaceDir: string;
-}): ApiKeyProviderCapabilities {
-  const { capabilities, resolveProvider } = resolveModelProviderCapabilities({
-    config: params.cfg,
-    metadataSnapshot: params.metadataSnapshot,
-    workspaceDir: params.workspaceDir,
-  });
-  return {
-    providers: new Map(
-      capabilities.map(({ provider, apiKeySupported }) => [provider, apiKeySupported]),
-    ),
-    resolveProvider,
-  };
-}
-
-type BuildModelsListResultParams = {
-  context: GatewayRequestContext;
-  agentId?: string;
-  params: Record<string, unknown>;
-  preloadedCatalog?: {
-    agentId: string;
-    config: OpenClawConfig;
-    snapshot: ModelCatalogSnapshot;
-    /** The owner already ran full discovery for this exact snapshot. */
-    fullyDiscovered?: boolean;
-  };
-  catalogProjector?: ReturnType<typeof createGatewayAgentModelCatalogProjector>;
-  preloadedOnly?: boolean;
-  routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
+type PreparedModelsListResult = {
+  read: () => ModelsListResult;
+  isCurrent: () => boolean;
 };
 
 export async function buildModelsListResult(
   params: BuildModelsListResultParams,
 ): Promise<ModelsListResult> {
-  const initialConfig = params.context.getRuntimeConfig();
-  const initialAgentId = normalizeAgentId(params.agentId ?? resolveDefaultAgentId(initialConfig));
-  const view = resolveModelsListView(params.params);
-  const preparedOnly = params.params.preparedOnly === true;
-  const refresh = params.params.refresh === true;
-  const preloadedCatalog =
-    params.preloadedCatalog?.agentId === initialAgentId &&
-    preparedModelRuntimeConfigsMatch(params.preloadedCatalog.config, initialConfig)
-      ? params.preloadedCatalog
-      : undefined;
-  let loadedSnapshot: Awaited<ReturnType<typeof loadDeferredCatalog>> | undefined;
-  let loadedReadOnly = true;
-  let usedPreloadedCatalog = false;
-  const handleCatalogTimeout = (timeoutMs: number) => {
-    if (loggedSlowModelsListCatalog) {
-      return;
-    }
-    loggedSlowModelsListCatalog = true;
-    params.context.logGateway.debug(
-      `models.list continuing without model catalog after ${timeoutMs}ms`,
+  const prepared = await prepareModelsListResult(params);
+  if (!prepared.isCurrent()) {
+    throw new PreparedModelRuntimePublicationSupersededError(
+      "Model catalog changed while preparing this result. Retry the request.",
     );
-  };
-  let snapshot = await loadPreparedModelCatalogSnapshotForBrowse({
-    cfg: initialConfig,
-    agentId: initialAgentId,
-    view,
-    preparedOnly,
-    refresh,
-    loadCatalog: async (loadParams) => {
-      loadedReadOnly = loadParams.readOnly ?? true;
-      // A read-only preload cannot satisfy a full-discovery request. Reuse it only when the
-      // owner carried the completed-discovery fact with the exact snapshot.
-      if (
-        preloadedCatalog &&
-        (loadedReadOnly || (params.preloadedOnly && preloadedCatalog.fullyDiscovered === true))
-      ) {
-        usedPreloadedCatalog = true;
-        return preloadedCatalog.snapshot;
-      }
-      if (params.preloadedOnly) {
-        return { entries: [], routeVariants: [] };
-      }
-      loadedSnapshot = await loadDeferredCatalog(params.context, initialAgentId, {
-        readOnly: loadedReadOnly,
-        refreshAuth: refresh && loadedReadOnly,
-        refreshFullCatalog: loadParams.refresh === true,
-      });
-      return loadedSnapshot;
-    },
-    onTimeout: handleCatalogTimeout,
-  });
-  if (
-    loadedSnapshot &&
-    loadedReadOnly &&
-    !preparedOnly &&
-    modelCatalogBrowseRequiresFullDiscovery({
-      cfg: loadedSnapshot.config,
-      agentId: loadedSnapshot.agentId,
-      view,
-    })
-  ) {
-    const escalationAgentId = loadedSnapshot.agentId;
-    let escalationTimedOut = false;
-    let fullSnapshot: typeof loadedSnapshot | undefined;
-    const escalatedCatalog = await loadPreparedModelCatalogSnapshotForBrowse({
-      cfg: loadedSnapshot.config,
-      agentId: escalationAgentId,
-      view,
-      refresh,
-      loadCatalog: async ({ readOnly }) => {
-        fullSnapshot = await loadDeferredCatalog(params.context, escalationAgentId, {
-          readOnly,
-          refreshAuth: refresh && readOnly,
-          refreshFullCatalog: refresh,
-        });
-        return fullSnapshot;
-      },
-      timeoutFullDiscovery: true,
-      onTimeout: (timeoutMs) => {
-        escalationTimedOut = true;
-        handleCatalogTimeout(timeoutMs);
-      },
-    });
-    if (!escalationTimedOut && fullSnapshot) {
-      if (!publishedModelCatalogOwnerMatchesAgent(fullSnapshot, escalationAgentId)) {
-        return { models: [] };
-      }
-      loadedSnapshot = fullSnapshot;
-      snapshot = escalatedCatalog;
-    }
   }
-  if (
-    loadedSnapshot &&
-    params.agentId !== undefined &&
-    !publishedModelCatalogOwnerMatchesAgent(loadedSnapshot, initialAgentId)
-  ) {
-    return { models: [] };
+  params.readScope?.draftAccountSelection?.assertCurrent();
+  return prepared.read();
+}
+
+/** Prepares catalog work once; the returned reader revalidates native readiness without I/O. */
+export async function prepareModelsListResult(
+  params: BuildModelsListResultParams,
+): Promise<PreparedModelsListResult> {
+  const owner = await resolveModelsListOwner(params);
+  if (!owner) {
+    return { read: () => ({ models: [] }), isCurrent: () => true };
   }
-  const ownerSnapshot =
-    loadedSnapshot ??
-    (preloadedCatalog && params.catalogProjector
-      ? undefined
-      : await readPreparedCatalog(params.context, initialAgentId));
-  const cfg = ownerSnapshot?.config ?? initialConfig;
-  const agentId = ownerSnapshot?.agentId ?? initialAgentId;
-  const workspaceDir =
-    ownerSnapshot?.workspaceDir ??
-    resolveAgentWorkspaceDir(cfg, agentId) ??
-    resolveDefaultAgentWorkspaceDir();
-  const preparedProjectionOwner = ownerSnapshot ?? params.catalogProjector;
-  const metadataSnapshot = preparedProjectionOwner?.metadataSnapshot;
-  const preparedAuthStore = ownerSnapshot?.authStore ?? params.catalogProjector?.authStore;
+  // A prepared owner's registry can differ from the caller's (standalone CLI, workspace
+  // generations); preparation resolves plugin facts from the owner. Reads stay pure
+  // projections of those prepared facts.
+  return withPluginRuntimeRegistryScope(owner.preparedPluginRegistry, () =>
+    prepareOwnedModelsListResult(owner),
+  );
+}
+
+async function prepareOwnedModelsListResult({
+  params,
+  scope,
+  publicationScope,
+  draft,
+  authority,
+  sessionEntry,
+  useRequesterDefaults,
+  currentConfig,
+  publishedOwner,
+  requestConfig,
+  profiles,
+  view,
+  refresh,
+  usedPreloadedCatalog,
+  ownerSnapshot,
+  snapshot,
+  sourceOwner,
+  cfg,
+  agentId,
+  workspaceDir,
+  preparedProjectionOwner,
+  metadataSnapshot,
+  preparedAuthStore,
+  preparedPluginRegistry,
+}: ModelsListOwner): Promise<PreparedModelsListResult> {
+  const preparedOwnerIsCurrent = preparedProjectionOwner?.isCurrent;
+  const configKey = resolveRuntimeModelConfigCacheKey(requestConfig);
+  // Native readiness belongs to the prepared generation, even across config publication.
+  const isCurrent = () =>
+    resolveRuntimeModelConfigCacheKey(currentConfig()) === configKey &&
+    preparedOwnerIsCurrent?.() === true &&
+    publicationScope?.isCurrent?.() !== false;
   if (!metadataSnapshot || !preparedAuthStore) {
     throw new Error("Gateway model catalog owner omitted prepared metadata or auth state");
   }
-  const preparedCatalog = await prepareModelsListHarnessCatalog({
+  const availableDecisionModels = listDecisionModels({
+    config: cfg,
+    snapshot: metadataSnapshot,
+  });
+  const selectedModel = resolveSessionModelRef(cfg, scope?.sessionEntry, agentId, {
+    allowPluginNormalization: false,
+  });
+  const retainedModel =
+    params.includeManualSelection && view === "configured" && scope?.sessionEntry
+      ? selectedModel
+      : undefined;
+  const preparedCatalog = prepareModelCatalogView({
     cfg,
     agentId,
-    agentDir: ownerSnapshot?.agentDir,
+    agentDir: sourceOwner?.agentDir,
     workspaceDir,
     snapshot,
     view,
+    retainedModel,
     metadataSnapshot,
-    allowHarnessDiscovery: params.preloadedOnly !== true && !preparedOnly,
-    onError: (error) =>
-      params.context.logGateway.debug(
-        `models.list continuing without harness catalog: ${String(error)}`,
-      ),
+    pluginRegistry: preparedPluginRegistry,
+    isCurrent,
+    observationConfig: preparedProjectionOwner?.observationConfig,
   });
-  snapshot = preparedCatalog.snapshot;
-  const { catalog, defaultModel } = preparedCatalog;
-  const { routeVariants, providerOutcomes } = snapshot;
-  const outcomeProjection = providerOutcomes?.length ? { providerOutcomes } : {};
+  const { defaultModel } = preparedCatalog;
   const preparedRuntimeAuthModes = preparedProjectionOwner?.authModes;
   const preparedRuntimeAuthMaterializations = preparedProjectionOwner?.authMaterializations;
-  const includeProviderCapabilities = params.params.includeProviderCapabilities === true;
-  const capableProviders = includeProviderCapabilities
-    ? apiKeyProviderCapabilities({ cfg, metadataSnapshot, workspaceDir })
-    : undefined;
-  const configuredEntriesByKey = resolveConfiguredModelEntries({
+  // Capture authority again after acquisition and before hydrating a personal projection.
+  draft?.assertCurrent();
+  const decisionOwner = () => ({
     cfg,
     agentId,
-    defaultModel,
-    ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
-    manifestPlugins: metadataSnapshot.plugins,
-  }).byKey;
-  if (view === "provider-config") {
-    const sourceConfig = getRuntimeConfigSourceSnapshot() ?? cfg;
-    const authoredEntries = buildProviderConfigModelCatalogForBrowse({
-      cfg: sourceConfig,
-      workspaceDir,
-    });
-    const inventorySnapshot = {
-      entries: resolveProviderConfigInventoryEntries({
-        authoredEntries,
-        canonicalEntries: catalog,
-        discoveryOnlyProviderIds: listConfiguredRuntimeDiscoveryProviderIds(
-          sourceConfig,
-          metadataSnapshot,
-        ),
-      }),
-      routeVariants,
-      ...(providerOutcomes?.length ? { providerOutcomes } : {}),
-    };
-    const inventoryProjector = createGatewayAgentModelCatalogProjector({
-      cfg,
-      agentId,
-      snapshot: inventorySnapshot,
-      metadataSnapshot,
-      preparedAuthStore,
-      preparedRuntimeAuthModes,
-      preparedRuntimeAuthMaterializations,
-      ...(params.routeResolverFactory ? { routeResolverFactory: params.routeResolverFactory } : {}),
-    });
-    const inventory = await inventoryProjector.projectCatalog();
-    return {
-      models: await buildPublicModelsListEntries({
-        catalog: inventory,
-        thinkingCatalog: catalog,
-        cfg,
-        agentId,
-        configuredEntriesByKey,
-        evaluateEntry: inventoryProjector.evaluateEntry,
-        includeInput: true,
-        preserveUnknownAvailability: true,
-        ...(capableProviders ? { apiKeyCapabilities: capableProviders } : {}),
-      }),
-      ...outcomeProjection,
-    };
+    metadataSnapshot,
+    preparedAuthStore,
+    accountCatalog: preparedProjectionOwner?.accountCatalog,
+    preparedRuntimeAuthModes,
+    preparedRuntimeAuthMaterializations,
+    pluginRegistry: preparedPluginRegistry,
+    isCurrent,
+    observationConfig: preparedProjectionOwner?.observationConfig,
+  });
+  const projectorParams: ModelCatalogDecisionParams = {
+    ...decisionOwner(),
+    agentDir: sourceOwner?.agentDir,
+    workspaceDir,
+    snapshot: {
+      ...snapshot,
+      entries: preparedCatalog.catalog,
+      get pendingProviders() {
+        return snapshot.pendingProviders;
+      },
+      get refreshFailed() {
+        return snapshot.refreshFailed;
+      },
+    },
+    // A complete catalog and its synthetic-auth probes cross the worker boundary together.
+    preparedSyntheticAuthComplete: publishedOwner
+      ? isPreparedModelCatalogFull(publishedOwner.modelCatalog)
+      : ownerSnapshot?.catalogComplete === true,
+    // Provider-config inventory describes shared authored configuration, not personal accounts.
+    requesterProfileId:
+      view === "provider-config" || !useRequesterDefaults
+        ? undefined
+        : (draft?.owner ?? params.requesterProfileId),
+    ...(view === "provider-config" ? {} : profiles),
+    routeResolverFactory: params.routeResolverFactory,
+  };
+  const preloadedProjector = usedPreloadedCatalog ? params.catalogProjector : undefined;
+  const projector = preloadedProjector
+    ? await withCurrentReadAuthority(authority, () => preloadedProjector)
+    : await prepareModelCatalogDecisions(projectorParams, authority);
+  if (view !== "provider-config") {
+    await projector.prepareSelectedAccountCatalog(
+      () => {
+        draft?.assertCurrent();
+        publicationScope?.assertCurrent?.();
+        if (!isCurrent()) {
+          throw new PreparedModelRuntimePublicationSupersededError(
+            "Selected account catalog changed",
+          );
+        }
+      },
+      {
+        refresh: refresh && !params.preloadedOnly && !params.params.preparedOnly,
+        withCurrent: authority?.withCurrent,
+        beforeRequest: publicationScope?.beforeRequest,
+      },
+    );
   }
+  await withCurrentReadAuthority(authority, () => {});
+  const catalog = dedupeModelCatalogEntries([
+    ...preparedCatalog.catalog,
+    ...projector.snapshot.entries,
+  ]);
+  const evaluateNative: typeof projector.evaluateNative = (entry, host, runtimeId) => {
+    const native = projector.evaluateNative(entry, host, runtimeId);
+    return native !== host && !isCurrent() ? { ...native, availability: false } : native;
+  };
+  const { normalizeProvider, providerFilter, matchesProvider } = createModelsListProviderFilter({
+    config: cfg,
+    metadataSnapshot,
+    catalog,
+    provider: params.params.provider,
+  });
+  const decisionModels = availableDecisionModels.filter(matchesProvider);
+  const { routeVariants, providerOutcomes } = projector.snapshot;
+  const publicProviderOutcomes = projectProviderCatalogOutcomes(providerOutcomes);
   const visibilityPolicy = createModelVisibilityPolicy({
     cfg,
     catalog,
@@ -661,63 +251,401 @@ export async function buildModelsListResult(
     defaultModel,
     agentId,
     ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
-    manifestPlugins: metadataSnapshot?.plugins,
+    manifestPlugins: metadataSnapshot,
   });
-  const evaluateEntry =
-    (usedPreloadedCatalog ? params.catalogProjector?.evaluateEntry : undefined) ??
-    createModelsListEntryEvaluator({
+  draft?.assertCurrent();
+  const defaultModels =
+    (params.params.includeDefaultModels ??
+    (view === "configured" && !params.params.sessionKey && !params.params.authProfileId))
+      ? await resolveDefaultModelsPreview({
+          cfg,
+          agentId,
+          agentDir: sourceOwner?.agentDir,
+          workspaceDir,
+          metadataSnapshot,
+          preparedAuthStore,
+          preparedRuntimeAuthModes: preparedProjectionOwner?.authModes,
+          preparedRuntimeAuthMaterializations: preparedProjectionOwner?.authMaterializations,
+          pluginRegistry: preparedPluginRegistry,
+          snapshot,
+          isCurrent,
+        })
+      : undefined;
+  draft?.assertCurrent();
+  const outcomeProjection = {
+    ...(defaultModels ? { defaultModels } : {}),
+    ...(publicProviderOutcomes?.length ? { providerOutcomes: publicProviderOutcomes } : {}),
+  };
+  const readAccountSelection =
+    view === "provider-config" || (!scope && !params.requesterProfileId)
+      ? undefined
+      : await withCurrentReadAuthority(authority, () =>
+          prepareChatAccountSelection({
+            authStore: projector.authStore,
+            sessionEntry,
+            requesterProfileId:
+              draft?.owner ?? scope?.requesterProfileId ?? params.requesterProfileId,
+          }),
+        );
+  await withCurrentReadAuthority(authority, () => {});
+  const readOutcomeProjection = () => {
+    const accountSelection = readAccountSelection?.();
+    const pendingProviders = projector.snapshot.pendingProviders?.filter(
+      (provider) =>
+        (!providerFilter || normalizeProvider(provider) === providerFilter) &&
+        (view === "all" ||
+          view === "provider-config" ||
+          visibilityPolicy.allowAny ||
+          [...visibilityPolicy.allowedKeys].some((key) => key.startsWith(`${provider}/`))),
+    );
+    return {
+      ...(pendingProviders?.length ? { pendingProviders } : {}),
+      ...outcomeProjection,
+      ...(snapshot.refreshFailed ? { refreshFailed: true } : {}),
+      ...(accountSelection ? { accountSelection } : {}),
+      ...(decisionModels.length ? { decisionModels } : {}),
+    };
+  };
+  const includeProviderCapabilities = params.params.includeProviderCapabilities === true;
+  const capableProviders = includeProviderCapabilities
+    ? resolveModelProviderCapabilities({ config: cfg, metadataSnapshot, workspaceDir })
+    : undefined;
+  const apiKeyProviders = new Map(
+    capableProviders?.capabilities.map(({ provider, apiKeySupported }) => [
+      provider,
+      apiKeySupported,
+    ]),
+  );
+  const manualSelectionAllowed = params.includeManualSelection
+    ? visibilityPolicy.allows
+    : undefined;
+  const configuredEntriesByKey = resolveConfiguredModelEntries({
+    cfg,
+    agentId,
+    defaultModel,
+    canonicalizeRef: (ref) => ({
+      ...ref,
+      model:
+        resolveProviderModelCatalogId({ provider: ref.provider, modelId: ref.model }) ?? ref.model,
+    }),
+    ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
+    manifestPlugins: metadataSnapshot,
+  }).byKey;
+  const createPublicProjector = (
+    decisions: ReturnType<typeof createModelCatalogDecisions>,
+    modelCatalog: ModelCatalogEntry[],
+  ) => {
+    const projectionSnapshot = decisions.snapshot;
+    const accountCatalog = preparedProjectionOwner?.accountCatalog;
+    const includeDetails = params.params.includeDetails;
+    const preserveUnknownAvailability = view === "provider-config" || includeDetails;
+    const projectionIsCurrent =
+      view === "provider-config" ? isCurrent : () => isCurrent() && decisions.isCurrent();
+    const fastMode = createModelSpeedPolicyResolver({
       cfg,
       agentId,
-      authResolver: createModelsListAuthResolver({
-        cfg,
-        agentId,
-        metadataSnapshot,
-        preparedAuthStore,
-        preparedRuntimeAuthModes,
-        preparedRuntimeAuthMaterializations,
-        workspaceDir,
-        routeResolverFactory: params.routeResolverFactory,
-      }),
+      catalog: modelCatalog,
       metadataSnapshot,
-      providerOutcomes,
+      pluginRegistry: preparedPluginRegistry,
     });
-  const models = await resolveLogicalVisibleModelCatalog({
-    cfg,
-    catalog,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel,
-    agentId,
-    workspaceDir,
-    view,
-    policy: visibilityPolicy,
-    routePolicy: openAIModelCatalogRoutePolicy,
-    routeVariants,
-    evaluateEntry: async (entry, variants) => {
-      const evaluation = await evaluateEntry(entry, variants);
-      const routeManaged = evaluation.routeResolution !== null;
-      const syntheticLocal =
-        !routeManaged &&
-        normalizeProviderId(entry.provider) !== "openai" &&
-        evaluation.availability === undefined &&
-        evaluation.evidence === "synthetic";
-      return resolveLogicalModelCatalogEntryState({
+    const catalogResolver = createThinkingCatalogResolver(catalog);
+    // Route rows retain identity across reads; keep display/thinking work outside the hot overlay.
+    const prepared = new WeakMap<ModelCatalogEntry, Map<string, ModelChoice>>();
+    return (
+      entry: ModelCatalogEntry,
+      evaluation: ModelAuthAvailabilityEvaluation,
+      runtimeChoice?: string,
+    ): ModelChoice => {
+      const runtimeKey = runtimeChoice ?? "";
+      let preparedEntry = prepared.get(entry)?.get(runtimeKey);
+      if (!preparedEntry) {
+        const configuredEntry = configuredEntriesByKey.get(modelKey(entry.provider, entry.id));
+        const alias = configuredEntry?.aliases.at(-1);
+        const publicEntry = configuredEntry?.aliasDisabled
+          ? Object.assign({}, entry, { alias: undefined })
+          : alias && alias !== entry.alias
+            ? Object.assign({}, entry, { alias })
+            : entry;
+        const capabilityProvider = capableProviders?.resolveProvider(entry.provider);
+        const selectedRuntime = runtimeChoice
+          ? { id: runtimeChoice, source: "model" as const }
+          : resolveCatalogDecisionRuntime({
+              cfg,
+              agentId,
+              entry,
+              evaluation,
+              pluginRegistry: preparedPluginRegistry,
+            });
+        const agentRuntime = selectedRuntime
+          ? preparedPluginRegistry
+            ? withPluginRuntimeRegistryScope(preparedPluginRegistry, () =>
+                projectWorkerPlacementAgentRuntime(selectedRuntime),
+              )
+            : projectWorkerPlacementAgentRuntime(selectedRuntime)
+          : undefined;
+        const thinkingProfile =
+          typeof publicEntry.reasoning !== "boolean"
+            ? undefined
+            : resolveGatewayModelThinkingProfile({
+                cfg,
+                agentId,
+                provider: entry.provider,
+                model: entry.id,
+                agentRuntime: selectedRuntime?.id ?? "openclaw",
+                modelCatalog: runtimeChoice ? [entry] : catalog,
+                catalogResolver: runtimeChoice
+                  ? createThinkingCatalogResolver([entry])
+                  : catalogResolver,
+                configuredReasoning: publicEntry.configuredReasoning ?? publicEntry.reasoning,
+                thinkingPolicyProvider: publicEntry.thinkingPolicyProvider,
+              });
+        const fastModeState = resolveFastModeState({
+          cfg,
+          agentId,
+          provider: entry.provider,
+          model: entry.id,
+        });
+        preparedEntry = {
+          ...buildPublicModelProjection(publicEntry, { includeDetails }),
+          ...(configuredEntry?.tags.size ? { tags: [...configuredEntry.tags] } : {}),
+          ...(agentRuntime ? { agentRuntime } : {}),
+          ...thinkingProfile,
+          ...(fastModeState.source === "default" ? {} : { effectiveFastMode: fastModeState.mode }),
+          ...(capabilityProvider && apiKeyProviders.has(capabilityProvider)
+            ? {
+                apiKeySupported: apiKeyProviders.get(capabilityProvider) === true,
+              }
+            : {}),
+          ...(view === "provider-config" && entry.input?.length ? { input: entry.input } : {}),
+        };
+        const entries = prepared.get(entry) ?? new Map<string, ModelChoice>();
+        entries.set(runtimeKey, preparedEntry);
+        prepared.set(entry, entries);
+      }
+      const projectedAvailability =
+        preserveUnknownAvailability || evaluation.runtimeAuth?.source === "native"
+          ? evaluation.availability
+          : (evaluation.availability ?? false);
+      const speedPolicy = fastMode(entry, evaluation, preparedEntry.agentRuntime?.id);
+      const supportsFastMode = speedPolicy.supportsFastMode;
+      const serviceTiers = projectModelServiceTiers({
+        config: cfg,
+        agentId,
+        pluginRegistry: preparedPluginRegistry,
+        snapshot: projectionSnapshot,
         entry,
         evaluation,
-        authBacked: evaluation.availability === true || syntheticLocal,
-        routePolicy: openAIModelCatalogRoutePolicy,
+        runtimeId: preparedEntry.agentRuntime?.id ?? "openclaw",
+        modelServiceTiers: speedPolicy.serviceTiers,
+        isCurrent: projectionIsCurrent,
       });
-    },
-  });
-  return {
-    models: await buildPublicModelsListEntries({
-      catalog: models,
-      thinkingCatalog: catalog,
+      const credential = evaluation.selectedCredential;
+      const route = evaluation.selectedRoute;
+      const serviceTierObservation =
+        projectionIsCurrent() &&
+        evaluation.availability === true &&
+        speedPolicy.supportsServiceTierRecovery &&
+        credential &&
+        credential.source !== "harness" &&
+        route
+          ? accountCatalog?.readServiceTierObservation({
+              identityKey: credential.identityKey,
+              modelId: entry.id,
+              runtimeId: preparedEntry.agentRuntime?.id ?? "openclaw",
+              api: route.api,
+              baseUrl: route.baseUrl,
+            })
+          : undefined;
+      return Object.assign(
+        {},
+        preparedEntry,
+        manualSelectionAllowed
+          ? {
+              manualSelectionAllowed: manualSelectionAllowed({
+                provider: entry.provider,
+                model: entry.id,
+              }),
+            }
+          : {},
+        supportsFastMode === undefined ? {} : { supportsFastMode },
+        speedPolicy.supportsServiceTierRecovery === true
+          ? { supportsServiceTierRecovery: true }
+          : {},
+        serviceTiers === undefined ? {} : { serviceTiers },
+        serviceTierObservation ? { serviceTierObservation } : {},
+        projectedAvailability === undefined ? {} : { available: projectedAvailability },
+        projectedAvailability === false && evaluation.unavailableReason
+          ? {
+              unavailableReason: evaluation.unavailableReason,
+              ...(evaluation.unavailableUntil !== undefined
+                ? { unavailableUntil: evaluation.unavailableUntil }
+                : {}),
+            }
+          : {},
+      );
+    };
+  };
+
+  if (view === "provider-config") {
+    const sourceConfig = getRuntimeConfigSourceSnapshot() ?? cfg;
+    const inventorySnapshot = {
+      entries: preparedCatalog.providerInventory(sourceConfig, catalog),
+      routeVariants,
+      ...(providerOutcomes?.length ? { providerOutcomes } : {}),
+    };
+    const inventoryProjector = createModelCatalogDecisions({
+      ...decisionOwner(),
+      snapshot: inventorySnapshot,
+      ...(params.routeResolverFactory ? { routeResolverFactory: params.routeResolverFactory } : {}),
+    });
+    const inventory = await inventoryProjector.projectCatalog(authority);
+    const entries = await withCurrentReadAuthority(authority, () =>
+      inventory.map((entry) => ({
+        entry,
+        host: inventoryProjector.evaluateEntry(entry),
+      })),
+    );
+    const projectPublic = createPublicProjector(inventoryProjector, inventory);
+    return {
+      isCurrent: () => isCurrent() && inventoryProjector.isCurrent(),
+      read: () => ({
+        models: entries
+          .filter(({ entry }) => matchesProvider(entry))
+          .map(({ entry, host }) => projectPublic(entry, evaluateNative(entry, host))),
+        ...readOutcomeProjection(),
+      }),
+    };
+  }
+  const { evaluateEntry } = projector;
+  const evaluations = new Map<string, ModelAuthAvailabilityEvaluation>();
+  const runtimeChoiceReaders = new Map<string, () => ModelRuntimeChoice[]>();
+  const twinRoutes = new Map<string, CliRuntimeTwinRoute>();
+  // Collapsing twins must not hide the only row the agent's manual policy or a role may select.
+  const selectionPolicies =
+    view === "all"
+      ? []
+      : [
+          visibilityPolicy,
+          ...Object.values(cfg.gateway?.roles?.definitions ?? {}).flatMap(
+            ({ modelPolicy }) =>
+              prepareOperatorModelPolicy({
+                cfg,
+                policy: modelPolicy,
+                manifestPlugins: metadataSnapshot,
+              }) ?? [],
+          ),
+        ];
+  const projectPublic = createPublicProjector(projector, catalog);
+  const readCatalog = await withCurrentReadAuthority(authority, () =>
+    prepareLogicalVisibleModelCatalog({
       cfg,
+      isCurrent: () => isCurrent() && projector.isCurrent(),
+      metadataSnapshot,
+      catalog,
+      defaultProvider: DEFAULT_PROVIDER,
+      defaultModel,
       agentId,
-      configuredEntriesByKey,
-      evaluateEntry,
-      ...(capableProviders ? { apiKeyCapabilities: capableProviders } : {}),
+      workspaceDir,
+      view,
+      policy: visibilityPolicy,
+      retainedModel,
+      selectedModel,
+      routePolicy: openAIModelCatalogRoutePolicy,
+      routeVariants,
+      prepareEntry: (entry, variants) => {
+        const key = resolveModelCatalogIdentityKey(entry);
+        const twin =
+          view === "all"
+            ? undefined
+            : resolveCliRuntimeTwinRoute(entry, {
+                config: cfg,
+                agentId,
+                cliRuntimeBindings: projector.cliRuntimeBindings,
+              });
+        if (twin) {
+          twinRoutes.set(key, twin);
+        }
+        const requestedRuntimes = configuredEntriesByKey.get(
+          modelKey(entry.provider, entry.id),
+        )?.pickerRuntimes;
+        const baseRuntime = requestedRuntimes?.length
+          ? resolveAgentHarnessPolicy({
+              config: cfg,
+              agentId,
+              provider: entry.provider,
+              modelId: entry.id,
+              modelApi: entry.api,
+              modelBaseUrl: entry.baseUrl,
+            }).runtime
+          : undefined;
+        const preparedHost = evaluateEntry(entry, variants, baseRuntime);
+        // Picker alternatives never change the configured row when a session selects a sibling.
+        const host = baseRuntime
+          ? { ...preparedHost, requestedRuntimeId: undefined }
+          : preparedHost;
+        if (requestedRuntimes?.length) {
+          runtimeChoiceReaders.set(
+            key,
+            prepareModelPickerRuntimeChoices({
+              cfg,
+              agentId,
+              entry,
+              variants,
+              requestedRuntimes,
+              baseEvaluation: evaluateNative(entry, host),
+              decisions: projector,
+              evaluateNative,
+              projectPublic,
+            }),
+          );
+        }
+        return () => {
+          const evaluation = evaluateNative(entry, host);
+          evaluations.set(key, evaluation);
+          const routeManaged = evaluation.routeResolution !== null;
+          const syntheticLocal =
+            !routeManaged &&
+            normalizeProviderId(entry.provider) !== "openai" &&
+            evaluation.availability === undefined &&
+            evaluation.evidence === "synthetic";
+          return resolveLogicalModelCatalogEntryState({
+            evaluation,
+            authBacked: evaluation.availability === true || syntheticLocal,
+            routePolicy: openAIModelCatalogRoutePolicy,
+          });
+        };
+      },
     }),
-    ...outcomeProjection,
+  );
+
+  return {
+    isCurrent: () => isCurrent() && projector.isCurrent(),
+    read: () => {
+      const currentCatalog = readCatalog();
+      const keyOf = createModelCatalogIdentityKeyResolver();
+      const recommendationRank = createModelPickerRecommendationRank(cfg);
+      return {
+        models: omitCliRuntimeAliasTwins(
+          currentCatalog.filter(matchesProvider).map((entry) => {
+            const key = keyOf(entry);
+            const evaluation = evaluations.get(key);
+            if (!evaluation) {
+              throw new Error("Model catalog publication omitted prepared auth evaluation");
+            }
+            const runtimeChoices = runtimeChoiceReaders.get(key)?.();
+            const projected = projectPublic(entry, evaluation);
+            if (runtimeChoices?.length) {
+              projected.runtimeChoices = runtimeChoices;
+            }
+            if (recommendationRank(entry) !== undefined) {
+              projected.recommended = true;
+            }
+            return { row: projected, twin: twinRoutes.get(key) };
+          }),
+          selectionPolicies,
+        ),
+        ...readOutcomeProjection(),
+      };
+    },
   };
 }

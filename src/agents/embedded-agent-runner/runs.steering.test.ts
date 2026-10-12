@@ -1,637 +1,569 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  MessageInjectionAcceptedUnconfirmedError,
+  MessageInjectionWithdrawnError,
+} from "../../auto-reply/reply/message-injection-authority.js";
+import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { testing as replyRunTesting } from "../../auto-reply/reply/reply-run-registry.test-support.js";
+import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { setDiagnosticsEnabledForProcess } from "../../infra/diagnostic-events.js";
 import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
 import { markDiagnosticToolStartedForTest } from "../../logging/diagnostic-run-activity.test-support.js";
 import { resetDiagnosticSessionStateForTest } from "../../logging/diagnostic-session-state.js";
+import { diagnosticLogger } from "../../logging/diagnostic.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { QuestionAnswerUnconfirmedError } from "../harness/gateway-question-dispatch.js";
 import {
+  claimPendingEmbeddedAgentQuestionAnswer,
   clearActiveEmbeddedRun,
   formatEmbeddedAgentQueueFailureSummary,
   preemptAndDrainEmbeddedHeartbeatRun,
-  queueEmbeddedAgentMessageWithOutcome,
-  queueEmbeddedAgentMessageWithOutcomeAsync,
+  queueEmbeddedAgentMessageWithOutcome as queueSync,
+  queueEmbeddedAgentMessageWithOutcomeAsync as queueAsync,
+  queueGuardedEmbeddedAgentMessageWithOutcomeAsync as queueGuarded,
   setActiveEmbeddedRun,
+  waitForEmbeddedAgentRunEnd,
   type EmbeddedAgentQueueHandle,
+  type EmbeddedAgentQueueMessageOptions,
 } from "./runs.js";
 import { createEmbeddedRunHandle, testing } from "./runs.test-support.js";
 
+const sessionId = "session",
+  sessionKey = "agent:main:test";
+const images = [{ type: "image" as const, data: "aW1hZ2U=", mimeType: "image/png" }];
+function start(overrides: Partial<EmbeddedAgentQueueHandle> = {}) {
+  const handle = {
+    ...createEmbeddedRunHandle(),
+    queueMessage: vi.fn(async () => {}),
+    ...overrides,
+  };
+  setActiveEmbeddedRun(sessionId, handle);
+  return handle;
+}
+function failure(reason: string, errorMessage?: string) {
+  return {
+    queued: false,
+    sessionId,
+    reason,
+    gatewayHealth: "live",
+    ...(errorMessage ? { errorMessage } : {}),
+  };
+}
+afterEach(() => {
+  testing.resetActiveEmbeddedRuns();
+  resetDiagnosticRunActivityForTest();
+  replyRunTesting.resetReplyRunRegistry();
+  resetDiagnosticSessionStateForTest();
+  setDiagnosticsEnabledForProcess(false);
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
+
 describe("embedded-agent active-run steering", () => {
-  afterEach(() => {
-    testing.resetActiveEmbeddedRuns();
-    replyRunTesting.resetReplyRunRegistry();
-    resetDiagnosticSessionStateForTest();
-    setDiagnosticsEnabledForProcess(false);
-    vi.restoreAllMocks();
-  });
-
-  it("aborts and drains the exact heartbeat handle through session replacement", async () => {
-    const heartbeatPreempt = vi.fn(() => true);
-    const finalizingHeartbeatPreempt = vi.fn(() => true);
-    const visibleAbort = vi.fn();
-    const heartbeatHandle: EmbeddedAgentQueueHandle = {
-      ...createEmbeddedRunHandle(),
-      preemptByVisibleTurn: heartbeatPreempt,
-    };
-    const replacementHandle: EmbeddedAgentQueueHandle = {
-      ...createEmbeddedRunHandle({ abort: visibleAbort }),
-    };
-    const finalizingHeartbeatHandle: EmbeddedAgentQueueHandle = {
-      ...createEmbeddedRunHandle({ isAbortable: false }),
-      preemptByVisibleTurn: finalizingHeartbeatPreempt,
-    };
-    setActiveEmbeddedRun("heartbeat-session", heartbeatHandle);
-    setActiveEmbeddedRun("visible-session", replacementHandle);
-    setActiveEmbeddedRun("finalizing-heartbeat-session", finalizingHeartbeatHandle);
-
-    const heartbeatPreemption = preemptAndDrainEmbeddedHeartbeatRun("heartbeat-session", 1_000);
-    const finalizingPreemption = preemptAndDrainEmbeddedHeartbeatRun(
-      "finalizing-heartbeat-session",
-      1_000,
-    );
-    await expect(preemptAndDrainEmbeddedHeartbeatRun("visible-session", 1_000)).resolves.toBe(
-      "not-heartbeat",
-    );
-
-    let heartbeatDrained = false;
-    void heartbeatPreemption.then(() => {
-      heartbeatDrained = true;
-    });
-    setActiveEmbeddedRun("heartbeat-session", replacementHandle);
-    await Promise.resolve();
-    expect(heartbeatDrained).toBe(false);
-
-    clearActiveEmbeddedRun("heartbeat-session", heartbeatHandle);
-    clearActiveEmbeddedRun("finalizing-heartbeat-session", finalizingHeartbeatHandle);
-
-    await expect(heartbeatPreemption).resolves.toBe("drained");
-    await expect(finalizingPreemption).resolves.toBe("drained");
-    expect(heartbeatPreempt).toHaveBeenCalledOnce();
-    expect(finalizingHeartbeatPreempt).toHaveBeenCalledOnce();
-    expect(visibleAbort).not.toHaveBeenCalled();
-  });
-
-  it("leaves a heartbeat in another session running", async () => {
-    const preemptIsolatedHeartbeat = vi.fn(() => true);
-    setActiveEmbeddedRun("base-session:heartbeat", {
-      ...createEmbeddedRunHandle(),
-      preemptByVisibleTurn: preemptIsolatedHeartbeat,
-    });
-
-    await expect(preemptAndDrainEmbeddedHeartbeatRun("base-session", 1_000)).resolves.toBe(
-      "not-heartbeat",
-    );
-    expect(preemptIsolatedHeartbeat).not.toHaveBeenCalled();
-  });
-
-  it("passes steering options to active embedded runs", () => {
-    const queueMessage = vi.fn(async () => {});
-    setActiveEmbeddedRun("session-steer", {
-      ...createEmbeddedRunHandle(),
-      sourceReplyDeliveryMode: "message_tool_only",
+  it("keeps V1 compatibility and refuses guarded injection", async () => {
+    const queueMessage = vi.fn(async () => {}),
+      claim = vi.fn(async () => true);
+    let available = false;
+    let compacting = true;
+    start({
+      isCompacting: () => compacting,
+      runId: "legacy",
       queueMessage,
+      claimPendingUserInputAnswer: claim,
+      messageInjection: { isAvailable: () => available, queueMessage },
     });
-
-    expect(
-      queueEmbeddedAgentMessageWithOutcome("session-steer", "continue", {
-        steeringMode: "all",
-        sourceReplyDeliveryMode: "message_tool_only",
-      }).queued,
-    ).toBe(true);
-
-    expect(queueMessage).toHaveBeenCalledWith("continue", {
-      steeringMode: "all",
-      sourceReplyDeliveryMode: "message_tool_only",
-    });
-  });
-
-  it("rejects images when the active run cannot preserve them", () => {
-    const queueMessage = vi.fn(async () => {});
-    setActiveEmbeddedRun("session-images", {
-      ...createEmbeddedRunHandle(),
-      queueMessage,
-    });
-
-    const outcome = queueEmbeddedAgentMessageWithOutcome("session-images", "inspect", {
-      images: [{ type: "image", data: "png", mimeType: "image/png" }],
-    });
-
-    expect(outcome).toEqual({
-      queued: false,
-      sessionId: "session-images",
-      reason: "image_input_unsupported",
-      gatewayHealth: "live",
-    });
+    expect(queueSync(sessionId, "continue")).toEqual(failure("not_streaming"));
+    available = true;
+    expect(queueSync(sessionId, "continue")).toEqual(failure("compacting"));
+    await expect(
+      queueGuarded(sessionId, "source-bound", undefined, () => true),
+    ).resolves.toMatchObject({ queued: false, reason: "guarded_injection_unsupported" });
     expect(queueMessage).not.toHaveBeenCalled();
-
-    setActiveEmbeddedRun(
-      "session-images",
-      createEmbeddedRunHandle({ queueMessage, supportsQueueMessageImages: true }),
-    );
-
-    expect(
-      queueEmbeddedAgentMessageWithOutcome("session-images", "inspect", {
-        images: [{ type: "image", data: "png", mimeType: "image/png" }],
-      }).queued,
-    ).toBe(true);
-    expect(queueMessage).toHaveBeenCalledWith("inspect", {
-      images: [{ type: "image", data: "png", mimeType: "image/png" }],
-    });
+    expect(claim).not.toHaveBeenCalled();
+    await expect(
+      claimPendingEmbeddedAgentQuestionAnswer(sessionId, "unscoped"),
+    ).resolves.toBeNull();
+    expect(claim).not.toHaveBeenCalled();
+    compacting = false;
+    await expect(queueAsync(sessionId, "unscoped")).resolves.toMatchObject({ queued: true });
+    expect(queueMessage).toHaveBeenCalledOnce();
   });
 
-  it("rejects message-tool-only steering for active runs created without that mode", () => {
+  it.each([true, false])("claims pending answers without steering: %s", async (claimed) => {
     const queueMessage = vi.fn(async () => {});
-    setActiveEmbeddedRun("session-automatic-source-reply", {
-      ...createEmbeddedRunHandle(),
+    start({
+      runId: "question-owner",
       queueMessage,
-    });
-
-    const outcome = queueEmbeddedAgentMessageWithOutcome(
-      "session-automatic-source-reply",
-      "continue",
-      {
-        steeringMode: "all",
-        sourceReplyDeliveryMode: "message_tool_only",
-      },
-    );
-
-    expect(outcome).toEqual({
-      queued: false,
-      sessionId: "session-automatic-source-reply",
-      reason: "source_reply_delivery_mode_mismatch",
-      gatewayHealth: "live",
-    });
-    expect(queueMessage).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    {
-      label: "capable prompt into an incapable run",
-      handleMode: undefined,
-      requestMode: "gateway" as const,
-    },
-    {
-      label: "incapable prompt into a capable run",
-      handleMode: "gateway" as const,
-      requestMode: undefined,
-    },
-  ])("rejects $label", ({ handleMode, requestMode }) => {
-    const queueMessage = vi.fn(async () => {});
-    setActiveEmbeddedRun("session-task-suggestions", {
-      ...createEmbeddedRunHandle(),
-      taskSuggestionDeliveryMode: handleMode,
-      queueMessage,
-    });
-
-    const outcome = queueEmbeddedAgentMessageWithOutcome("session-task-suggestions", "continue", {
-      steeringMode: "all",
-      taskSuggestionDeliveryMode: requestMode,
-    });
-
-    expect(outcome).toEqual({
-      queued: false,
-      sessionId: "session-task-suggestions",
-      reason: "task_suggestion_delivery_mode_mismatch",
-      gatewayHealth: "live",
-    });
-    expect(queueMessage).not.toHaveBeenCalled();
-  });
-
-  it("defaults active embedded steering to all pending messages", () => {
-    const queueMessage = vi.fn(async () => {});
-    setActiveEmbeddedRun("session-default-steer", {
-      ...createEmbeddedRunHandle(),
-      queueMessage,
-    });
-
-    expect(queueEmbeddedAgentMessageWithOutcome("session-default-steer", "continue").queued).toBe(
-      true,
-    );
-
-    expect(queueMessage).toHaveBeenCalledWith("continue", { steeringMode: "all" });
-  });
-
-  it("queues into active non-streaming handles that expose live stopped state", () => {
-    const queueMessage = vi.fn(async () => {});
-    setActiveEmbeddedRun(
-      "session-active-non-streaming",
-      createEmbeddedRunHandle({
-        isStreaming: false,
-        isStopped: () => false,
+      messageInjectionV2: {
+        version: 2,
+        isAvailable: () => true,
         queueMessage,
-      }),
+        claimPendingUserInputAnswer: async (_text, options, assertCurrent) => {
+          assertCurrent();
+          return options?.isInboundUserMessage === true && claimed;
+        },
+      },
+    });
+    await expect(claimPendingEmbeddedAgentQuestionAnswer(sessionId, "Green")).resolves.toEqual(
+      claimed ? { runId: "question-owner" } : null,
     );
-
-    expect(
-      queueEmbeddedAgentMessageWithOutcome("session-active-non-streaming", "continue").queued,
-    ).toBe(true);
-    expect(queueMessage).toHaveBeenCalledWith("continue", { steeringMode: "all" });
+    expect(queueMessage).not.toHaveBeenCalled();
   });
 
-  it("refuses embedded steering when diagnostic evidence is stale", () => {
-    vi.useFakeTimers();
-    try {
-      const queueMessage = vi.fn(async () => {});
-      setActiveEmbeddedRun("session-stale-steer", createEmbeddedRunHandle({ queueMessage }));
-
-      vi.advanceTimersByTime(10 * 60_000 + 1);
-
-      const outcome = queueEmbeddedAgentMessageWithOutcome("session-stale-steer", "continue");
-
-      expect(outcome).toEqual({
-        queued: false,
-        sessionId: "session-stale-steer",
-        reason: "stale_run",
-        gatewayHealth: "live",
+  it.each(["image", "overlay", "wrong-authority-overlay"] as const)(
+    "routes hidden input through its question owner: %s",
+    async (input) => {
+      const runId = "hidden-question-owner",
+        ownerRun = createQueueTestRun({ prompt: "pending question" });
+      const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+      operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(ownerRun));
+      const fingerprint = operation.bindToolAuthorityRoute({
+        provider: ownerRun.run.provider,
+        model: ownerRun.run.model,
       });
-      expect(queueMessage).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("keeps steering into a quiet tool phase until the blocked-tool floor", () => {
-    vi.useFakeTimers();
-    try {
-      const queueMessage = vi.fn(async () => {});
-      setActiveEmbeddedRun("session-quiet-tool-steer", createEmbeddedRunHandle({ queueMessage }));
-      markDiagnosticToolStartedForTest({
-        sessionId: "session-quiet-tool-steer",
-        toolName: "exec",
-        toolCallId: "tool-quiet-steer",
-      });
-
-      vi.advanceTimersByTime(12 * 60_000);
-      expect(
-        queueEmbeddedAgentMessageWithOutcome("session-quiet-tool-steer", "status?").queued,
-      ).toBe(true);
-
-      vi.advanceTimersByTime(4 * 60_000);
-      const late = queueEmbeddedAgentMessageWithOutcome("session-quiet-tool-steer", "status?");
-      expect(late).toMatchObject({ queued: false, reason: "stale_run" });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("refuses reply-backed steering with stale registry evidence as stale_run", () => {
-    vi.useFakeTimers();
-    try {
-      const operation = createReplyOperation({
-        sessionKey: "agent:main:cli-stale-steer",
-        sessionId: "session-cli-stale-steer",
-        resetTriggered: false,
-      });
-      operation.attachBackend({
-        kind: "cli",
-        cancel: () => {},
-        isStreaming: () => true,
-      });
+      const queueMessage = vi.fn(async () => {}),
+        claim = vi.fn(async () => true),
+        cancel = vi.fn(async () => true);
+      const handle = {
+        ...createEmbeddedRunHandle({ runId, queueMessage }),
+        kind: "embedded" as const,
+        cancel: vi.fn(),
+        toolAuthorityFingerprint: fingerprint,
+      };
+      handle.messageInjectionV2 = {
+        version: 2,
+        isAvailable: () => true,
+        queueMessage,
+        claimPendingUserInputAnswer: async (_text, _options, assertCurrent, authorityKind) => {
+          expect(authorityKind).toBe("source-bound");
+          assertCurrent();
+          return claim();
+        },
+        cancelPendingUserInput: async (_resolvedBy, assertCurrent, authorityKind) => {
+          expect(authorityKind).toBe("source-bound");
+          assertCurrent();
+          return cancel();
+        },
+      };
+      operation.attachBackend(handle);
       operation.setPhase("running");
-
-      vi.advanceTimersByTime(10 * 60_000 + 1);
-      const outcome = queueEmbeddedAgentMessageWithOutcome("session-cli-stale-steer", "hello");
-
-      expect(outcome).toEqual({
-        queued: false,
-        sessionId: "session-cli-stale-steer",
-        reason: "stale_run",
-        gatewayHealth: "live",
-      });
-      operation.complete();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("accepts embedded steering with fresh or missing diagnostic evidence", () => {
-    const freshQueueMessage = vi.fn(async () => {});
-    setActiveEmbeddedRun(
-      "session-fresh-steer",
-      createEmbeddedRunHandle({ queueMessage: freshQueueMessage }),
-    );
-
-    expect(queueEmbeddedAgentMessageWithOutcome("session-fresh-steer", "continue").queued).toBe(
-      true,
-    );
-    expect(freshQueueMessage).toHaveBeenCalledWith("continue", { steeringMode: "all" });
-
-    const missingSnapshotQueueMessage = vi.fn(async () => {});
-    setActiveEmbeddedRun(
-      "session-no-diagnostic-snapshot",
-      createEmbeddedRunHandle({ queueMessage: missingSnapshotQueueMessage }),
-    );
-    resetDiagnosticRunActivityForTest();
-
-    expect(
-      queueEmbeddedAgentMessageWithOutcome("session-no-diagnostic-snapshot", "continue").queued,
-    ).toBe(true);
-    expect(missingSnapshotQueueMessage).toHaveBeenCalledWith("continue", { steeringMode: "all" });
-  });
-
-  it("does not queue into stopped handles", () => {
-    const queueMessage = vi.fn(async () => {});
-    setActiveEmbeddedRun(
-      "session-stopped",
-      createEmbeddedRunHandle({
-        isStreaming: true,
-        isStopped: () => true,
-        queueMessage,
-      }),
-    );
-
-    const outcome = queueEmbeddedAgentMessageWithOutcome("session-stopped", "continue");
-
-    expect(outcome).toEqual({
-      queued: false,
-      sessionId: "session-stopped",
-      reason: "not_streaming",
-      gatewayHealth: "live",
-    });
-    expect(queueMessage).not.toHaveBeenCalled();
-  });
-
-  it("fails closed when stopped state checks throw", () => {
-    const queueMessage = vi.fn(async () => {});
-    setActiveEmbeddedRun(
-      "session-bad-state",
-      createEmbeddedRunHandle({
-        isStopped: () => {
-          throw new Error("bad stopped state");
-        },
-        queueMessage,
-      }),
-    );
-
-    const outcome = queueEmbeddedAgentMessageWithOutcome("session-bad-state", "continue");
-
-    expect(outcome).toEqual({
-      queued: false,
-      sessionId: "session-bad-state",
-      reason: "not_streaming",
-      gatewayHealth: "live",
-    });
-    expect(queueMessage).not.toHaveBeenCalled();
-  });
-
-  it("returns a structured no-active-run queue failure", () => {
-    const outcome = queueEmbeddedAgentMessageWithOutcome("session-missing", "continue");
-
-    expect(outcome).toEqual({
-      queued: false,
-      sessionId: "session-missing",
-      reason: "no_active_run",
-      gatewayHealth: "live",
-    });
-    expect(formatEmbeddedAgentQueueFailureSummary(outcome)).toBe(
-      "queue_message_failed reason=no_active_run sessionId=session-missing gatewayHealth=live",
-    );
-  });
-
-  it("returns structured queue failures for legacy, unavailable, or compacting runs", () => {
-    const legacyQueue = vi.fn(async () => {});
-    const unavailableQueue = vi.fn(async () => {});
-    setActiveEmbeddedRun(
-      "session-not-streaming",
-      createEmbeddedRunHandle({ isStreaming: false, queueMessage: legacyQueue }),
-    );
-    setActiveEmbeddedRun(
-      "session-unavailable",
-      createEmbeddedRunHandle({
-        messageInjection: { isAvailable: () => false, queueMessage: unavailableQueue },
-      }),
-    );
-    setActiveEmbeddedRun("session-compacting", createEmbeddedRunHandle({ isCompacting: true }));
-
-    expect(queueEmbeddedAgentMessageWithOutcome("session-not-streaming", "continue")).toMatchObject(
-      { queued: false, reason: "not_streaming" },
-    );
-    expect(legacyQueue).not.toHaveBeenCalled();
-    expect(queueEmbeddedAgentMessageWithOutcome("session-unavailable", "continue")).toMatchObject({
-      queued: false,
-      reason: "not_streaming",
-    });
-    expect(unavailableQueue).not.toHaveBeenCalled();
-    expect(queueEmbeddedAgentMessageWithOutcome("session-compacting", "continue")).toMatchObject({
-      queued: false,
-      reason: "compacting",
-    });
-  });
-
-  it("returns runtime rejection details when async queue delivery fails", async () => {
-    setActiveEmbeddedRun("session-rejected", {
-      ...createEmbeddedRunHandle(),
-      queueMessage: async () => {
-        throw new Error("cannot steer a compact turn");
-      },
-    });
-
-    const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync("session-rejected", "continue");
-
-    expect(outcome).toEqual({
-      queued: false,
-      sessionId: "session-rejected",
-      reason: "runtime_rejected",
-      gatewayHealth: "live",
-      errorMessage: "cannot steer a compact turn",
-    });
-    expect(formatEmbeddedAgentQueueFailureSummary(outcome)).toBe(
-      "queue_message_failed reason=runtime_rejected sessionId=session-rejected gatewayHealth=live error=cannot steer a compact turn",
-    );
-  });
-
-  it("atomically claims pending plain-text input across an authority mismatch", async () => {
-    const claimPendingUserInputAnswer = vi.fn(async () => true);
-    const queueMessage = vi.fn(async () => {});
-    setActiveEmbeddedRun("session-pending-question", {
-      ...createEmbeddedRunHandle(),
-      toolAuthorityFingerprint: "fallback-authority",
-      claimPendingUserInputAnswer,
-      queueMessage,
-    });
-
-    const options = {
-      isInboundUserMessage: true,
-      onQueueAccepted: vi.fn(),
-      pendingInputAuthorityFingerprint: "fallback-authority",
-      toolAuthorityFingerprint: "default-authority",
-    } as const;
-    const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
-      "session-pending-question",
-      "2",
-      options,
-    );
-
-    expect(outcome).toMatchObject({ queued: true, target: "embedded_run" });
-    expect(claimPendingUserInputAnswer).toHaveBeenCalledWith("2", options);
-    expect(options.onQueueAccepted).toHaveBeenCalledWith(true);
-    expect(queueMessage).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    {
-      label: "a proven route-only mismatch without a pending question",
-      claimed: false,
-      images: undefined,
-      pendingInputAuthorityFingerprint: "fallback-authority",
-      expectedClaimCalls: 1,
-      expectedCancelCalls: 0,
-    },
-    {
-      label: "unproven plain text",
-      claimed: true,
-      images: undefined,
-      pendingInputAuthorityFingerprint: undefined,
-      expectedClaimCalls: 0,
-      expectedCancelCalls: 0,
-    },
-    {
-      label: "unproven image input",
-      claimed: true,
-      images: [{ type: "image" as const, data: "png", mimeType: "image/png" as const }],
-      pendingInputAuthorityFingerprint: undefined,
-      expectedClaimCalls: 0,
-      expectedCancelCalls: 0,
-    },
-  ])(
-    "preserves authority mismatch for $label",
-    async ({
-      claimed,
-      images,
-      pendingInputAuthorityFingerprint,
-      expectedClaimCalls,
-      expectedCancelCalls,
-    }) => {
-      const claimPendingUserInputAnswer = vi.fn(async () => claimed);
-      const cancelPendingUserInput = vi.fn(async () => true);
-      const queueMessage = vi.fn(async () => {});
-      setActiveEmbeddedRun("session-pending-question-rejected", {
-        ...createEmbeddedRunHandle(),
-        toolAuthorityFingerprint: "fallback-authority",
-        claimPendingUserInputAnswer,
-        cancelPendingUserInput,
-        queueMessage,
-      });
-
-      const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
-        "session-pending-question-rejected",
-        "continue",
-        {
-          isInboundUserMessage: true,
-          pendingInputAuthorityFingerprint,
-          toolAuthorityFingerprint: "default-authority",
-          images,
-        },
-      );
-
-      expect(outcome).toMatchObject({ queued: false, reason: "tool_authority_mismatch" });
-      expect(claimPendingUserInputAnswer).toHaveBeenCalledTimes(expectedClaimCalls);
-      expect(cancelPendingUserInput).toHaveBeenCalledTimes(expectedCancelCalls);
-      expect(queueMessage).not.toHaveBeenCalled();
+      setActiveEmbeddedRun(sessionId, handle);
+      registerAgentRunContext(runId, { isControlUiVisible: false, projectSessionMessages: false });
+      const image = input === "image",
+        authorized = input !== "wrong-authority-overlay";
+      const options: Parameters<typeof queueGuarded>[2] = {
+        isInboundUserMessage: true,
+        toolAuthorityFingerprint: fingerprint,
+        ...(image
+          ? { images }
+          : {
+              toolAuthorityOverlay: {
+                senderIsOwner: false,
+                disableTools: !authorized,
+                traceAuthorized: false,
+              },
+              pendingInputAuthorityFingerprint: fingerprint,
+            }),
+      };
+      try {
+        await expect(queueGuarded(sessionId, "Green", options, () => true)).resolves.toMatchObject(
+          input === "overlay"
+            ? { queued: true }
+            : {
+                queued: false,
+                reason:
+                  input === "wrong-authority-overlay"
+                    ? "tool_authority_mismatch"
+                    : "input_visibility_mismatch",
+              },
+        );
+        expect(claim).toHaveBeenCalledTimes(authorized && !image ? 1 : 0);
+        expect(cancel).toHaveBeenCalledTimes(image ? 1 : 0);
+        expect(queueMessage).not.toHaveBeenCalled();
+      } finally {
+        clearAgentRunContext(runId);
+        operation.complete();
+      }
     },
   );
 
-  it("cancels pending input for a proven route-only image mismatch", async () => {
-    const cancelPendingUserInput = vi.fn(async () => true);
-    setActiveEmbeddedRun("session-route-image", {
-      ...createEmbeddedRunHandle(),
-      toolAuthorityFingerprint: "fallback-authority",
-      cancelPendingUserInput,
+  it.each(["availability", "claim"] as const)(
+    "rejects backend replacement during question %s",
+    async (stage) => {
+      const entered = createDeferredCore(),
+        released = createDeferredCore();
+      const queueMessage = vi.fn(async () => {}),
+        replacement = createEmbeddedRunHandle({ runId: "replacement", queueMessage });
+      const claim = vi.fn(
+        async (
+          _text: string,
+          _options: EmbeddedAgentQueueMessageOptions | undefined,
+          assertCurrent: () => void,
+        ) => {
+          entered.resolve();
+          await released.promise;
+          assertCurrent();
+          return true;
+        },
+      );
+      start({
+        runId: "question-owner",
+        queueMessage,
+        messageInjectionV2: {
+          version: 2,
+          queueMessage,
+          claimPendingUserInputAnswer: claim,
+          isAvailable: () => {
+            if (stage === "availability") {
+              setActiveEmbeddedRun(sessionId, replacement);
+            }
+            return true;
+          },
+        },
+      });
+      const result = claimPendingEmbeddedAgentQuestionAnswer(sessionId, "Green");
+      try {
+        if (stage === "availability") {
+          await expect(result).resolves.toBeNull();
+          expect(claim).not.toHaveBeenCalled();
+        } else {
+          await entered.promise;
+          setActiveEmbeddedRun(sessionId, replacement);
+          released.resolve();
+          await expect(result).rejects.toThrow("Message injection authority is no longer current");
+        }
+        expect(queueMessage).not.toHaveBeenCalled();
+      } finally {
+        released.resolve();
+      }
+    },
+  );
+
+  it("keeps handle and session waiters distinct through replacements", async () => {
+    vi.useFakeTimers();
+    const preempt = vi.fn(() => true),
+      visibleAbort = vi.fn();
+    const heartbeat = start({ isAbortable: () => false, preemptByVisibleTurn: preempt });
+    const replacement = createEmbeddedRunHandle({ abort: visibleAbort });
+    setActiveEmbeddedRun("visible", replacement);
+    const heartbeatWait = preemptAndDrainEmbeddedHeartbeatRun(sessionId, 1_000);
+    const sessionWait = waitForEmbeddedAgentRunEnd(sessionId, null);
+    let heartbeatDrained = false,
+      sessionDrained = false;
+    void heartbeatWait.then(() => {
+      heartbeatDrained = true;
     });
-
-    const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
-      "session-route-image",
-      "inspect",
-      {
-        isInboundUserMessage: true,
-        pendingInputAuthorityFingerprint: "fallback-authority",
-        toolAuthorityFingerprint: "default-authority",
-        images: [{ type: "image", data: "png", mimeType: "image/png" }],
-      },
+    void sessionWait.then(() => {
+      sessionDrained = true;
+    });
+    await expect(preemptAndDrainEmbeddedHeartbeatRun("visible", 1_000)).resolves.toBe(
+      "not-heartbeat",
     );
-
-    expect(outcome).toMatchObject({ queued: false, reason: "tool_authority_mismatch" });
-    expect(cancelPendingUserInput).toHaveBeenCalledWith("image-reply");
+    setActiveEmbeddedRun(sessionId, replacement);
+    await Promise.resolve();
+    expect(heartbeatDrained).toBe(false);
+    clearActiveEmbeddedRun(sessionId, heartbeat);
+    await expect(heartbeatWait).resolves.toBe("drained");
+    expect(sessionDrained).toBe(false);
+    clearActiveEmbeddedRun(sessionId, replacement);
+    const successor = createEmbeddedRunHandle();
+    setActiveEmbeddedRun(sessionId, successor);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(sessionDrained).toBe(false);
+    clearActiveEmbeddedRun(sessionId, successor);
+    await expect(sessionWait).resolves.toBe(true);
+    expect(preempt).toHaveBeenCalledOnce();
+    expect(visibleAbort).not.toHaveBeenCalled();
   });
 
-  it("cancels pending input before rejecting an unsupported queued image", async () => {
-    const cancelPendingUserInput = vi.fn(async () => true);
-    setActiveEmbeddedRun("session-unsupported-question-image", {
-      ...createEmbeddedRunHandle(),
-      toolAuthorityFingerprint: "same-authority",
-      cancelPendingUserInput,
-    });
+  it.each([undefined, "message_tool_only"] as const)(
+    "preserves source-reply delivery semantics with active mode %s",
+    (sourceReplyDeliveryMode) => {
+      const handle = start({ sourceReplyDeliveryMode });
+      const options = {
+        steeringMode: "all",
+        sourceReplyDeliveryMode: "message_tool_only",
+      } as const;
+      const outcome = queueSync(sessionId, "continue", options);
+      if (sourceReplyDeliveryMode === "message_tool_only") {
+        expect(outcome.queued).toBe(true);
+        expect(handle.queueMessage).toHaveBeenCalledExactlyOnceWith("continue", options);
+      } else {
+        expect(outcome).toEqual(failure("source_reply_delivery_mode_mismatch"));
+        expect(handle.queueMessage).not.toHaveBeenCalled();
+      }
+    },
+  );
 
-    const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
-      "session-unsupported-question-image",
-      "inspect",
-      {
-        isInboundUserMessage: true,
-        toolAuthorityFingerprint: "same-authority",
-        images: [{ type: "image", data: "png", mimeType: "image/png" }],
-      },
-    );
-
-    expect(outcome).toMatchObject({ queued: false, reason: "image_input_unsupported" });
-    expect(cancelPendingUserInput).toHaveBeenCalledWith("image-reply");
-  });
-
-  it("reports accepted steering without transcript confirmation as non-replayable", async () => {
-    setActiveEmbeddedRun("session-unconfirmed", {
-      ...createEmbeddedRunHandle(),
-      queueMessage: async () => ({
-        transcriptCommit: "unconfirmed",
-        errorMessage: "receipt unavailable",
-      }),
-    });
-
-    const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
-      "session-unconfirmed",
-      "continue",
-    );
-
-    expect(outcome).toEqual({
-      queued: true,
-      sessionId: "session-unconfirmed",
-      target: "embedded_run",
-      gatewayHealth: "live",
-      transcriptCommit: "unconfirmed",
-      errorMessage: "receipt unavailable",
-      enqueuedAtMs: expect.any(Number),
-    });
-  });
-
-  it("rejects transcript-commit waits for active handles without support", async () => {
+  it("uses stopped state for non-streaming steering", () => {
     const queueMessage = vi.fn(async () => {});
-    setActiveEmbeddedRun("session-no-transcript-wait", {
-      ...createEmbeddedRunHandle(),
-      queueMessage,
-    });
-
-    const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
-      "session-no-transcript-wait",
-      "continue",
-      { waitForTranscriptCommit: true },
-    );
-
-    expect(outcome).toEqual({
-      queued: false,
-      sessionId: "session-no-transcript-wait",
-      reason: "transcript_commit_wait_unsupported",
-      gatewayHealth: "live",
-    });
+    start({ isStreaming: () => false, queueMessage });
+    expect(queueSync(sessionId, "continue")).toEqual(failure("not_streaming"));
     expect(queueMessage).not.toHaveBeenCalled();
+    start({ isStreaming: () => false, isStopped: () => false, queueMessage });
+    expect(queueSync(sessionId, "continue").queued).toBe(true);
+    expect(queueMessage).toHaveBeenCalledWith("continue", { steeringMode: "all" });
   });
 
-  it("rejects transcript-commit waits before reply-run fallback without an active handle", async () => {
-    const queueMessage = vi.fn(async () => {});
-    const operation = createReplyOperation({
-      sessionKey: "agent:main:main",
-      sessionId: "session-reply-run",
-      resetTriggered: false,
+  it("rejects quiet tool steering only after its stale floor", () => {
+    vi.useFakeTimers();
+    start();
+    markDiagnosticToolStartedForTest({ sessionId, toolName: "exec", toolCallId: "tool" });
+    vi.advanceTimersByTime(12 * 60_000);
+    expect(queueSync(sessionId, "status?").queued).toBe(true);
+    vi.advanceTimersByTime(4 * 60_000);
+    expect(queueSync(sessionId, "status?")).toMatchObject({
+      queued: false,
+      reason: "stale_run",
     });
+  });
+
+  it("refuses reply-backed steering with stale registry evidence", () => {
+    vi.useFakeTimers();
+    const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+    operation.attachBackend({ kind: "cli", cancel: () => {}, isStreaming: () => true });
+    operation.setPhase("running");
+    vi.advanceTimersByTime(10 * 60_000 + 1);
+    expect(queueSync(sessionId, "hello")).toEqual(failure("stale_run"));
+    operation.complete();
+  });
+
+  it("fails closed when stopped state checks throw", () => {
+    const handle = start({
+      isStopped: () => {
+        throw new Error("bad stopped state");
+      },
+    });
+    expect(queueSync(sessionId, "continue")).toEqual(failure("not_streaming"));
+    expect(handle.queueMessage).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the compacting state check throws", async () => {
+    const warnings = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => {});
+    const handle = start({
+      isCompacting: () => {
+        throw new Error("compaction probe unavailable");
+      },
+    });
+    const outcome = failure("compacting");
+    await expect(queueAsync(sessionId, "continue")).resolves.toEqual(outcome);
+    await expect(queueAsync(sessionId, "retry")).resolves.toEqual(outcome);
+    expect(warnings).toHaveBeenCalledTimes(1);
+    expect(handle.queueMessage).not.toHaveBeenCalled();
+  });
+
+  it.each(["accepted", "wrapped-withdrawal"] as const)(
+    "does not replay pending input: %s",
+    async (disposition) => {
+      const unconfirmed = disposition !== "accepted";
+      const error = new QuestionAnswerUnconfirmedError(
+        new MessageInjectionWithdrawnError("exact queue input withdrawn"),
+      );
+      const claim = vi.fn(async () => {
+        if (unconfirmed) {
+          throw new Error("backend failed", { cause: error });
+        }
+        return true;
+      });
+      const handle = start({
+        toolAuthorityFingerprint: "fallback",
+        claimPendingUserInputAnswer: claim,
+      });
+      const options = {
+        isInboundUserMessage: true,
+        onQueueAccepted: vi.fn(),
+        onQueueSettled: vi.fn(),
+        pendingInputAuthorityFingerprint: "fallback",
+        toolAuthorityFingerprint: "default",
+      } as const;
+      const outcome = queueAsync(sessionId, "2", options);
+      if (unconfirmed) {
+        await expect(outcome).rejects.toBe(error);
+        expect(options.onQueueAccepted).not.toHaveBeenCalled();
+        expect(options.onQueueSettled).not.toHaveBeenCalled();
+      } else {
+        await expect(outcome).resolves.toMatchObject({ queued: true, target: "embedded_run" });
+        expect(options.onQueueAccepted).toHaveBeenCalledExactlyOnceWith(true);
+        expect(options.onQueueSettled).toHaveBeenCalledOnce();
+      }
+      expect(claim).toHaveBeenCalledExactlyOnceWith("2", options);
+      expect(handle.queueMessage).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([false, true])("rejects unmatched authority: unproven image=%s", async (image) => {
+    const claim = vi.fn(async () => image),
+      cancel = vi.fn(async () => true);
+    const handle = start({
+      toolAuthorityFingerprint: "fallback",
+      claimPendingUserInputAnswer: claim,
+      cancelPendingUserInput: cancel,
+    });
+    const outcome = await queueAsync(sessionId, "continue", {
+      isInboundUserMessage: true,
+      toolAuthorityFingerprint: "default",
+      pendingInputAuthorityFingerprint: image ? undefined : "fallback",
+      images: image ? images : undefined,
+    });
+    expect(outcome).toMatchObject({ queued: false, reason: "tool_authority_mismatch" });
+    expect(claim).toHaveBeenCalledTimes(image ? 0 : 1);
+    expect(cancel).not.toHaveBeenCalled();
+    expect(handle.queueMessage).not.toHaveBeenCalled();
+  });
+
+  it.each(["tool_authority_mismatch", "image_input_unsupported"] as const)(
+    "cancels pending input before image rejection: %s",
+    async (reason) => {
+      const cancel = vi.fn(async () => true);
+      start({ toolAuthorityFingerprint: "fallback", cancelPendingUserInput: cancel });
+      const outcome = await queueAsync(sessionId, "inspect", {
+        isInboundUserMessage: true,
+        pendingInputAuthorityFingerprint: "fallback",
+        toolAuthorityFingerprint: reason === "tool_authority_mismatch" ? "default" : "fallback",
+        images,
+      });
+      expect(outcome).toMatchObject({ queued: false, reason });
+      expect(cancel).toHaveBeenCalledWith("image-reply");
+    },
+  );
+
+  it.each(["receipt", "wrapped-cleanup-error"] as const)(
+    "preserves accepted steering custody after %s",
+    async (deliveryFailure) => {
+      const acceptedError = new MessageInjectionAcceptedUnconfirmedError({
+        cause: new Error("admission cleanup failed"),
+      });
+      const queueMessage = vi.fn(
+        async (_text: string, options?: EmbeddedAgentQueueMessageOptions) => {
+          if (deliveryFailure === "wrapped-cleanup-error") {
+            throw new Error("backend settlement failed", { cause: acceptedError });
+          }
+          options?.onQueueAccepted?.(true);
+          return { transcriptCommit: "unconfirmed" as const, errorMessage: "receipt unavailable" };
+        },
+      );
+      start({ toolAuthorityFingerprint: "same", supportsTranscriptCommitWait: true, queueMessage });
+      const onQueueAccepted = vi.fn();
+      await expect(
+        queueAsync(sessionId, "continue", {
+          isInboundUserMessage: true,
+          toolAuthorityFingerprint: "same",
+          waitForTranscriptCommit: true,
+          onQueueAccepted,
+        }),
+      ).resolves.toEqual({
+        queued: true,
+        sessionId,
+        target: "embedded_run",
+        gatewayHealth: "live",
+        transcriptCommit: "unconfirmed",
+        errorMessage: deliveryFailure === "receipt" ? "receipt unavailable" : acceptedError.message,
+        enqueuedAtMs: expect.any(Number),
+      });
+      if (deliveryFailure === "receipt") {
+        expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(true);
+      } else {
+        expect(onQueueAccepted).not.toHaveBeenCalled();
+      }
+      expect(queueMessage).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["completion", "observer", "before-acceptance"] as const)(
+    "retains prepared sink custody after %s failure",
+    async (failurePoint) => {
+      const completionError = new Error("backend completion failed");
+      const observerError = new Error("acceptance observer failed");
+      const onQueueAccepted = vi.fn(() => {
+        if (failurePoint === "observer") {
+          throw observerError;
+        }
+      });
+      const onQueueSettled = vi.fn();
+      const queueMessage = vi.fn(async () => {});
+      const queueMessageAsync = vi.fn<
+        NonNullable<
+          NonNullable<EmbeddedAgentQueueHandle["messageInjectionV2"]>["queueMessageAsync"]
+        >
+      >(async (_text, options, preparation) => {
+        await preparation.prepareCurrent();
+        preparation.assertCurrent();
+        if (failurePoint !== "before-acceptance") {
+          options?.onQueueAccepted?.(true);
+        }
+        throw completionError;
+      });
+      const handle = start({
+        messageInjectionV2: {
+          version: 2,
+          isAvailable: () => true,
+          queueMessage,
+          queueMessageAsync,
+        },
+      });
+      const outcome = await queueGuarded(
+        sessionId,
+        "continue",
+        { onQueueAccepted, onQueueSettled },
+        () => true,
+        { assertCurrent: () => {}, prepareCurrent: async () => {} },
+      );
+      expect(queueMessageAsync).toHaveBeenCalledOnce();
+      expect(queueMessage).not.toHaveBeenCalled();
+      expect(onQueueSettled).not.toHaveBeenCalled();
+      if (failurePoint === "before-acceptance") {
+        expect(outcome).toEqual(failure("runtime_rejected", completionError.message));
+        expect(formatEmbeddedAgentQueueFailureSummary(outcome)).toBe(
+          "queue_message_failed reason=runtime_rejected sessionId=session gatewayHealth=live error=backend completion failed",
+        );
+        expect(onQueueAccepted).not.toHaveBeenCalled();
+      } else {
+        expect(outcome).toMatchObject({
+          queued: true,
+          transcriptCommit: "unconfirmed",
+          errorMessage:
+            failurePoint === "observer" ? observerError.message : completionError.message,
+        });
+        expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(true);
+      }
+      clearActiveEmbeddedRun(sessionId, handle);
+      expect(onQueueSettled).toHaveBeenCalledTimes(failurePoint === "before-acceptance" ? 0 : 1);
+    },
+  );
+
+  it("retains custody across a transcript wait retry", async () => {
+    const queueMessage = vi.fn(async () => {}),
+      onQueueSettled = vi.fn();
+    const handle = start({
+      queueMessage,
+      messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
+    });
+    await expect(
+      queueGuarded(
+        sessionId,
+        "continue",
+        { waitForTranscriptCommit: true, onQueueSettled },
+        () => true,
+      ),
+    ).resolves.toEqual(failure("transcript_commit_wait_unsupported"));
+    expect(queueMessage).not.toHaveBeenCalled();
+    expect(onQueueSettled).not.toHaveBeenCalled();
+    await expect(
+      queueGuarded(sessionId, "continue", { onQueueSettled }, () => true),
+    ).resolves.toMatchObject({ queued: true });
+    expect(onQueueSettled).not.toHaveBeenCalled();
+    clearActiveEmbeddedRun(sessionId, handle);
+    expect(onQueueSettled).toHaveBeenCalledOnce();
+  });
+
+  it("rejects transcript waits before reply fallback", async () => {
+    const queueMessage = vi.fn(async () => {});
+    const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
     operation.attachBackend({
       kind: "embedded",
       cancel: vi.fn(),
@@ -643,19 +575,12 @@ describe("embedded-agent active-run steering", () => {
       input: { text: "visible group prompt", sender: { id: "user-42" } },
       target: createTestUserTurnTranscriptTarget(),
     });
-
-    const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
-      "session-reply-run",
-      "completion from child",
-      { waitForTranscriptCommit: true, userTurnTranscriptRecorder: recorder },
-    );
-
-    expect(outcome).toEqual({
-      queued: false,
-      sessionId: "session-reply-run",
-      reason: "transcript_commit_wait_unsupported",
-      gatewayHealth: "live",
-    });
+    await expect(
+      queueAsync(sessionId, "completion from child", {
+        waitForTranscriptCommit: true,
+        userTurnTranscriptRecorder: recorder,
+      }),
+    ).resolves.toEqual(failure("transcript_commit_wait_unsupported"));
     expect(queueMessage).not.toHaveBeenCalled();
   });
 });

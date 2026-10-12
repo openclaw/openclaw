@@ -3,16 +3,31 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
+import { setTimeout as waitForProofTick } from "node:timers/promises";
 import { promisify } from "node:util";
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { startQaGatewayChild, startQaMockOpenAiServer } from "../../../../extensions/qa-lab/api.js";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  createQaGatewayChild,
+  startQaMockOpenAiServer,
+} from "../../../../extensions/qa-lab/api.js";
 import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
+import type { GatewayClientOptions } from "../../../../src/gateway/client.js";
+import { readGatewayLockProcessCmdline } from "../../../../src/infra/gateway-lock-process.js";
+import { isPidDefinitelyDead } from "../../../../src/shared/pid-alive.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../../helpers/fixture-receipts.js";
+import { createDeferred, withinTest } from "../../../helpers/promise.js";
+import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import {
   approvePairing,
@@ -36,18 +51,31 @@ const COMMAND = "codex.exec-server.stdio.v1";
 const MODEL = "mock-openai/gpt-5.6-luna";
 const SESSION_KEY = "agent:qa:codex-node-exec-server-proof";
 const SUCCESS_MARKER = "CODEX_NODE_EXEC_SUCCESS_PROOF";
+const REPEAT_MARKER = "CODEX_NODE_EXEC_REPEAT_PROOF";
 const DISCONNECT_MARKER = "CODEX_NODE_EXEC_DISCONNECT_PROOF";
 const RECOVERY_MARKER = "CODEX_NODE_EXEC_FRESH_ATTEMPT_PROOF";
 const REQUEST_TIMEOUT_MS = 120_000;
 const WAIT_OPTIONS = { timeout: 60_000, interval: 100 };
+const WORKER_COMMAND_ARGS = new Set(["worker", "--internal-worker-session"]);
+const WORKER_OR_CODEX_COMMAND_ARGS = new Set([...WORKER_COMMAND_ARGS, "codex"]);
+let receipts: FixtureReceiptChannel;
 
-type ProofScenario = "success" | "disconnect" | "recovery";
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+
+afterAll(async () => {
+  await receipts?.close();
+});
+
+type ProofScenario = "success" | "repeat" | "disconnect" | "recovery";
 type PendingPluginApproval = {
   id: string;
   request?: { pluginId?: string; allowedDecisions?: string[]; title?: string };
 };
 type ProofProvider = {
   readonly baseUrl: string;
+  readonly sessionObserverUrl: string;
   readonly httpHits: number;
   readonly nativeExecCalls: number;
   readonly observations: readonly string[];
@@ -96,6 +124,9 @@ function readProofScenario(body: Record<string, unknown>): ProofScenario | undef
     if (userText.includes(RECOVERY_MARKER)) {
       return "recovery";
     }
+    if (userText.includes(REPEAT_MARKER)) {
+      return "repeat";
+    }
     if (userText.includes(DISCONNECT_MARKER)) {
       return "disconnect";
     }
@@ -111,11 +142,22 @@ function proofShellCommand(params: {
   baseUrl: string;
   nodeHome: string;
 }): string {
+  const evidenceFile =
+    params.scenario === "recovery"
+      ? "codex-node-recovery.json"
+      : params.scenario === "repeat"
+        ? "codex-node-repeat.json"
+        : "codex-node-proof.json";
   const script =
     params.scenario === "disconnect"
       ? [
           'const fs=require("node:fs");',
           'fs.writeFileSync("codex-node-disconnect.json",JSON.stringify({pid:process.pid}));',
+          `import(${JSON.stringify(
+            `data:text/javascript;base64,${Buffer.from(
+              `${fixtureReceiptClientSource(receipts.endpoint)}\nexport { sendReceipt };`,
+            ).toString("base64")}`,
+          )}).then(({sendReceipt})=>sendReceipt(${JSON.stringify(DISCONNECT_MARKER)},"started"));`,
           "setInterval(()=>{},1000);",
         ].join("")
       : [
@@ -133,7 +175,7 @@ function proofShellCommand(params: {
           `privateHome:process.env.HOME!==${JSON.stringify(params.nodeHome)},`,
           'privateCodexHome:Boolean(process.env.CODEX_HOME&&process.env.CODEX_HOME.startsWith(process.env.HOME+"/")),',
           "http:await response.text(),pid:process.pid};",
-          `fs.writeFileSync(${JSON.stringify(params.scenario === "recovery" ? "codex-node-recovery.json" : "codex-node-proof.json")},JSON.stringify(evidence));`,
+          `fs.writeFileSync(${JSON.stringify(evidenceFile)},JSON.stringify(evidence));`,
           `console.log(${JSON.stringify(params.scenario === "recovery" ? "CODEX_NODE_FRESH_ATTEMPT_OK" : "CODEX_NODE_PROCESS_OK")});`,
           "}).catch(error=>{console.error(error.message);process.exitCode=1});",
         ].join("");
@@ -215,7 +257,15 @@ async function startProofProvider(nodeHome: string): Promise<ProofProvider> {
       const forwarded = await fetch(`${mock.baseUrl}${request.url ?? "/"}`, {
         method: request.method,
         ...(raw.byteLength ? { body: raw } : {}),
-        headers: { "content-type": request.headers["content-type"] ?? "application/json" },
+        headers: {
+          "content-type": request.headers["content-type"] ?? "application/json",
+          ...(typeof request.headers.session_id === "string"
+            ? { session_id: request.headers.session_id }
+            : {}),
+          ...(typeof request.headers["x-session-affinity"] === "string"
+            ? { "x-session-affinity": request.headers["x-session-affinity"] }
+            : {}),
+        },
       });
       response.writeHead(forwarded.status, Object.fromEntries(forwarded.headers));
       response.end(Buffer.from(await forwarded.arrayBuffer()));
@@ -239,6 +289,7 @@ async function startProofProvider(nodeHome: string): Promise<ProofProvider> {
     baseUrl = `http://127.0.0.1:${address.port}`;
     return {
       baseUrl,
+      sessionObserverUrl: mock.sessionObserverUrl,
       get httpHits() {
         return httpHits;
       },
@@ -265,7 +316,10 @@ async function startProofProvider(nodeHome: string): Promise<ProofProvider> {
   }
 }
 
-async function connectApprovalReviewer(gateway: GatewayHandle): Promise<GatewayClient> {
+async function connectApprovalReviewer(
+  gateway: GatewayHandle,
+  onEvent?: GatewayClientOptions["onEvent"],
+): Promise<GatewayClient> {
   return await new Promise<GatewayClient>((resolve, reject) => {
     let settled = false;
     const finish = (error?: Error) => {
@@ -297,6 +351,7 @@ async function connectApprovalReviewer(gateway: GatewayHandle): Promise<GatewayC
       caps: [GATEWAY_CLIENT_CAPS.PLUGIN_APPROVALS],
       deviceIdentity: null,
       requestTimeoutMs: REQUEST_TIMEOUT_MS,
+      onEvent,
       onHelloOk: () => finish(),
       onConnectError: (error) => finish(error),
       onClose: (code, reason) => finish(new Error(`approval reviewer closed (${code}): ${reason}`)),
@@ -307,7 +362,7 @@ async function connectApprovalReviewer(gateway: GatewayHandle): Promise<GatewayC
 
 async function resolveNextApproval(
   reviewer: GatewayClient,
-  decision: "allow-once" | "deny",
+  decision: "allow-once" | "allow-always" | "deny",
   context: { gateway: GatewayHandle; runId: string },
 ): Promise<PendingPluginApproval> {
   let pending: PendingPluginApproval;
@@ -353,10 +408,13 @@ async function resolveNextApproval(
       { cause: error },
     );
   }
-  expect(pending.request).toMatchObject({
+  expect(
+    pending.request,
+    `unexpected Codex approval request: ${JSON.stringify(pending.request)}`,
+  ).toMatchObject({
     pluginId: "codex",
-    title: "Run Codex execution on node",
-    allowedDecisions: ["allow-once", "deny"],
+    title: "Run Codex on this node placement",
+    allowedDecisions: ["allow-once", "allow-always", "deny"],
   });
   await reviewer.request("plugin.approval.resolve", { id: pending.id, decision });
   return pending;
@@ -366,19 +424,44 @@ async function readRemoteEvidence<T>(filePath: string): Promise<T> {
   return JSON.parse(await fs.readFile(filePath, "utf8")) as T;
 }
 
-async function nodeChildCommands(nodePid: number): Promise<string[]> {
-  const { stdout } = await execFileAsync("ps", ["-ax", "-o", "ppid=", "-o", "command="], {
+async function nodeChildCommands(nodePid: number): Promise<string[][]> {
+  // Unrelated inline scripts can overflow a whole-host command-line census.
+  const { stdout } = await execFileAsync("ps", ["-ax", "-o", "ppid=", "-o", "pid="], {
     encoding: "utf8",
   });
   return stdout
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.startsWith(`${nodePid} `))
-    .map((line) => line.slice(String(nodePid).length).trim());
+    .flatMap((line) => {
+      const pid = Number(line.slice(String(nodePid).length).trim());
+      const argv = readGatewayLockProcessCmdline(pid, process.platform, 1_000);
+      if (argv?.length) {
+        return [argv];
+      }
+      if (isPidDefinitelyDead(pid)) {
+        return [];
+      }
+      throw new Error(`Could not inspect live node child process ${pid}`);
+    });
 }
 
-async function startTurn(reviewer: GatewayClient, marker: string): Promise<{ runId: string }> {
-  const runId = `codex-node-proof-${randomUUID()}`;
+function launchCommandHasArg(argv: string[], names: ReadonlySet<string>): boolean {
+  const inlineScript = argv.findIndex(
+    (arg) => arg === "-e" || arg === "--eval" || arg.startsWith("--eval="),
+  );
+  const launchArgs = inlineScript < 0 ? argv : argv.slice(0, inlineScript);
+  return launchArgs.some((arg) => {
+    const normalized = arg.toLowerCase();
+    return names.has(normalized) || names.has(path.basename(normalized));
+  });
+}
+
+async function startTurn(
+  reviewer: GatewayClient,
+  marker: string,
+  runId = `codex-node-proof-${randomUUID()}`,
+): Promise<{ runId: string }> {
   const started = await reviewer.request<{ runId?: string; status?: string }>("chat.send", {
     sessionKey: SESSION_KEY,
     message: marker,
@@ -387,6 +470,36 @@ async function startTurn(reviewer: GatewayClient, marker: string): Promise<{ run
   });
   expect(started).toMatchObject({ runId, status: "started" });
   return { runId };
+}
+
+// Native exec may yield before its file write; reconciliation and foreign-PID extinction
+// expose no joined test signal. Keep their eventual assertions under the owning test abort.
+async function waitForProofState(
+  check: () => void | Promise<void>,
+  description: string,
+  signal: AbortSignal,
+): Promise<void> {
+  let lastError: unknown;
+  try {
+    await withinTest(
+      (async () => {
+        for (;;) {
+          signal.throwIfAborted();
+          try {
+            await check();
+            return;
+          } catch (error) {
+            lastError = error;
+          }
+          await waitForProofTick(10, undefined, { signal });
+        }
+      })(),
+      signal,
+    );
+  } catch (error) {
+    const detail = lastError instanceof Error ? `: ${lastError.message}` : "";
+    throw new Error(`timed out waiting for ${description}${detail}`, { cause: error });
+  }
 }
 
 async function expectSuccessfulTurn(params: {
@@ -419,7 +532,7 @@ describe("Codex paired-device exec-server carrier", () => {
   it(
     "keeps approved native execution on the real node, reconciles files, and never resumes a disconnect",
     { timeout: 360_000 },
-    async () => {
+    async ({ signal }) => {
       const root = tempDirs.make("openclaw-codex-node-exec-server-");
       const nodeRoot = path.join(root, "node");
       const nodeHome = path.join(nodeRoot, "home");
@@ -427,20 +540,25 @@ describe("Codex paired-device exec-server carrier", () => {
       const nodeTmp = path.join(nodeRoot, "tmp");
       const nodeConfigPath = path.join(nodeRoot, "openclaw.json");
       await Promise.all(
-        [nodeHome, nodeState, nodeTmp].map(async (dir) => await fs.mkdir(dir, { recursive: true })),
+        [nodeHome, nodeState, nodeTmp].map(
+          async (dir) => await fs.mkdir(dir, { recursive: true, mode: 0o700 }),
+        ),
       );
 
       let provider: ProofProvider | undefined;
       let published: PublishedWireWorkspace | undefined;
+      const gatewayOwner = createQaGatewayChild();
       let gateway: GatewayHandle | undefined;
       let requester: GatewayClient | undefined;
       let reviewer: GatewayClient | undefined;
       let node: CapturedChild | undefined;
 
-      try {
+      const interruptedRunId = `codex-node-proof-${randomUUID()}`;
+      const interruptedTurnSettled = createDeferred();
+      const runProof = async () => {
         provider = await startProofProvider(nodeHome);
         published = await createPublishedWireWorkspace(path.join(root, "workspace"));
-        gateway = await startQaGatewayChild({
+        gateway = await gatewayOwner.start({
           repoRoot: process.cwd(),
           command: {
             executablePath: process.execPath,
@@ -451,6 +569,7 @@ describe("Codex paired-device exec-server carrier", () => {
           transportBaseUrl: "http://127.0.0.1",
           providerMode: "mock-openai",
           providerBaseUrl: `${provider.baseUrl}/v1`,
+          mockSessionObserverUrl: provider.sessionObserverUrl,
           primaryModel: MODEL,
           alternateModel: MODEL,
           forcedRuntime: "codex",
@@ -488,7 +607,17 @@ describe("Codex paired-device exec-server carrier", () => {
             nodeHost: { ...config.nodeHost, workerRuns: { enabled: true } },
           }),
         });
-        requester = await connectApprovalReviewer(gateway);
+        requester = await connectApprovalReviewer(gateway, (event) => {
+          const payload = event.payload;
+          if (
+            event.event === "chat" &&
+            isRecord(payload) &&
+            payload.runId === interruptedRunId &&
+            (payload.state === "final" || payload.state === "error" || payload.state === "aborted")
+          ) {
+            interruptedTurnSettled.resolve();
+          }
+        });
         reviewer = await connectApprovalReviewer(gateway);
 
         const nodeConfig: OpenClawConfig = {
@@ -592,7 +721,7 @@ describe("Codex paired-device exec-server carrier", () => {
         ).toEqual([]);
         expect(
           (await nodeChildCommands(unapprovedNodePid!)).filter((command) =>
-            /(?:^|\s)(?:worker|codex(?:\s+exec-server)?)(?:\s|$)/iu.test(command),
+            launchCommandHasArg(command, WORKER_OR_CODEX_COMMAND_ARGS),
           ),
         ).toEqual([]);
         expect(provider.nativeExecCalls).toBe(0);
@@ -651,7 +780,7 @@ describe("Codex paired-device exec-server carrier", () => {
         ).rejects.toThrow();
 
         const allowed = await startTurn(requester, SUCCESS_MARKER);
-        await resolveNextApproval(reviewer, "allow-once", { gateway, runId: allowed.runId });
+        await resolveNextApproval(reviewer, "allow-always", { gateway, runId: allowed.runId });
         await expectSuccessfulTurn({ reviewer, gateway, node, provider, runId: allowed.runId });
         expect(provider.visibleTools).toContain("exec_command");
         expect(provider.httpHits).toBe(1);
@@ -667,32 +796,64 @@ describe("Codex paired-device exec-server carrier", () => {
           privateCodexHome: true,
           http: "CODEX_NODE_HTTP_OK",
         };
-        await vi.waitFor(async () => {
-          expect(
-            await readRemoteEvidence<Record<string, unknown>>(
-              path.join(localWorkspace!, "codex-node-proof.json"),
-            ),
-          ).toMatchObject(expectedEvidence);
-        }, WAIT_OPTIONS);
+        await waitForProofState(
+          async () => {
+            expect(
+              await readRemoteEvidence<Record<string, unknown>>(
+                path.join(localWorkspace!, "codex-node-proof.json"),
+              ),
+            ).toMatchObject(expectedEvidence);
+          },
+          "initial Codex node execution evidence",
+          signal,
+        );
         const nodePid = node.child.pid;
         expect(nodePid).toBeTruthy();
         const children = await nodeChildCommands(nodePid!);
-        expect(children.filter((command) => /(?:^|\s)worker(?:\s|$)/u.test(command))).toEqual([]);
+        expect(
+          children.filter((command) => launchCommandHasArg(command, WORKER_COMMAND_ARGS)),
+        ).toEqual([]);
 
-        const interrupted = await startTurn(requester, DISCONNECT_MARKER);
-        await resolveNextApproval(reviewer, "allow-once", { gateway, runId: interrupted.runId });
+        const repeated = await startTurn(requester, REPEAT_MARKER);
+        await expectSuccessfulTurn({ reviewer, gateway, node, provider, runId: repeated.runId });
+        await waitForProofState(
+          async () => {
+            expect(
+              await readRemoteEvidence<Record<string, unknown>>(
+                path.join(localWorkspace!, "codex-node-repeat.json"),
+              ),
+            ).toMatchObject(expectedEvidence);
+          },
+          "repeated Codex node execution evidence",
+          signal,
+        );
+        expect(
+          (await reviewer.request<PendingPluginApproval[]>("plugin.approval.list", {})).filter(
+            (approval) => approval.request?.pluginId === "codex",
+          ),
+        ).toEqual([]);
+        expect(provider.httpHits).toBe(2);
+
+        await requester.request("sessions.messages.subscribe", { key: SESSION_KEY });
+        const interrupted = await startTurn(requester, DISCONNECT_MARKER, interruptedRunId);
         let interruptedProcess: number;
         try {
-          interruptedProcess = await vi.waitFor(
-            async () => {
-              const evidence = await readRemoteEvidence<{ pid?: number }>(
-                path.join(remoteWorkspace!, "codex-node-disconnect.json"),
-              );
-              expect(evidence.pid).toEqual(expect.any(Number));
-              expect(processIsAlive(evidence.pid!)).toBe(true);
-              return evidence.pid!;
-            },
-            { timeout: 15_000, interval: 100 },
+          const readStartedProcess = async () => {
+            const evidence = await readRemoteEvidence<{ pid?: number }>(
+              path.join(remoteWorkspace!, "codex-node-disconnect.json"),
+            );
+            expect(evidence.pid).toEqual(expect.any(Number));
+            expect(processIsAlive(evidence.pid!)).toBe(true);
+            return evidence.pid!;
+          };
+          // Receipt and terminal events use separate transports. A terminal that wins
+          // checks the PID record written before the fixture reports entry.
+          interruptedProcess = await withinTest(
+            Promise.race([
+              receipts.waitFor(DISCONNECT_MARKER, "started"),
+              interruptedTurnSettled.promise,
+            ]).then(readStartedProcess),
+            signal,
           );
         } catch (error) {
           const terminal = await reviewer
@@ -745,9 +906,10 @@ describe("Codex paired-device exec-server carrier", () => {
         expect(interruptedOutcome.error).toEqual(
           expect.stringMatching(/execution node disconnected.*fresh attempt/iu),
         );
-        await vi.waitFor(
+        await waitForProofState(
           () => expect(processIsAlive(interruptedProcess)).toBe(false),
-          WAIT_OPTIONS,
+          `interrupted Codex command ${interruptedProcess} to exit`,
+          signal,
         );
         await vi.waitFor(async () => {
           expect(await readNode(gateway!, nodeId)).toMatchObject({ connected: false });
@@ -772,23 +934,69 @@ describe("Codex paired-device exec-server carrier", () => {
           });
           expect(reconnected?.commands).toContain(COMMAND);
         }, WAIT_OPTIONS);
+        const reconnectPlacement = (await gateway.call("sessions.describe", {
+          key: SESSION_KEY,
+        })) as {
+          session?: {
+            placement?: {
+              generation?: number;
+              environmentId?: string;
+              activeOwnerEpoch?: number;
+            };
+          };
+        };
+        const moveSource = reconnectPlacement.session?.placement;
+        expect(moveSource).toMatchObject({
+          generation: expect.any(Number),
+          environmentId: expect.any(String),
+          activeOwnerEpoch: expect.any(Number),
+        });
+        if (
+          typeof moveSource?.generation !== "number" ||
+          typeof moveSource.environmentId !== "string" ||
+          typeof moveSource.activeOwnerEpoch !== "number"
+        ) {
+          throw new Error("reconnected Codex placement omitted exact move-source facts");
+        }
+        await gateway.call(
+          "sessions.move",
+          {
+            key: SESSION_KEY,
+            expected: {
+              generation: moveSource.generation,
+              environmentId: moveSource.environmentId,
+              ownerEpoch: moveSource.activeOwnerEpoch,
+            },
+            target: { kind: "gateway" },
+          },
+          { timeoutMs: REQUEST_TIMEOUT_MS },
+        );
+        await gateway.call(
+          "sessions.dispatch",
+          { key: SESSION_KEY, deviceId: nodeId },
+          { timeoutMs: REQUEST_TIMEOUT_MS },
+        );
         const recovered = await startTurn(requester, RECOVERY_MARKER);
         expect(recovered.runId).not.toBe(interrupted.runId);
         await resolveNextApproval(reviewer, "allow-once", { gateway, runId: recovered.runId });
         await expectSuccessfulTurn({ reviewer, gateway, node, provider, runId: recovered.runId });
-        await vi.waitFor(async () => {
-          expect(
-            await readRemoteEvidence<Record<string, unknown>>(
-              path.join(localWorkspace!, "codex-node-recovery.json"),
-            ),
-          ).toMatchObject(expectedEvidence);
-          expect(
-            await readRemoteEvidence<{ pid?: number }>(
-              path.join(localWorkspace!, "codex-node-disconnect.json"),
-            ),
-          ).toMatchObject({ pid: interruptedProcess });
-        }, WAIT_OPTIONS);
-        expect(provider.httpHits).toBe(2);
+        await waitForProofState(
+          async () => {
+            expect(
+              await readRemoteEvidence<Record<string, unknown>>(
+                path.join(localWorkspace!, "codex-node-recovery.json"),
+              ),
+            ).toMatchObject(expectedEvidence);
+            expect(
+              await readRemoteEvidence<{ pid?: number }>(
+                path.join(localWorkspace!, "codex-node-disconnect.json"),
+              ),
+            ).toMatchObject({ pid: interruptedProcess });
+          },
+          "recovered Codex node evidence and retained disconnect PID",
+          signal,
+        );
+        expect(provider.httpHits).toBe(3);
         console.info(
           JSON.stringify({
             proof: "codex-paired-device-remote-exec",
@@ -796,6 +1004,7 @@ describe("Codex paired-device exec-server carrier", () => {
             nodeId,
             deniedRunId: denied.runId,
             allowedRunId: allowed.runId,
+            repeatedRunId: repeated.runId,
             interruptedRunId: interrupted.runId,
             recoveredRunId: recovered.runId,
             inferenceProvider: "deterministic mock",
@@ -808,17 +1017,19 @@ describe("Codex paired-device exec-server carrier", () => {
             workspaceReconciled: true,
             disconnectTerminal: true,
             freshReconnect: true,
+            placementMoveInvalidatedStandingGrant: true,
             workerChildLaunched: false,
           }),
         );
-      } finally {
+      };
+      await runQaGatewayFixture(runProof, async () => {
         const connectionCleanup = await Promise.allSettled([
           stopChild(node),
           requester?.stopAndWait({ timeoutMs: 5_000 }) ?? Promise.resolve(),
           reviewer?.stopAndWait({ timeoutMs: 5_000 }) ?? Promise.resolve(),
         ]);
         const resourceCleanup = await Promise.allSettled([
-          gateway?.stop() ?? Promise.resolve(),
+          stopQaGatewayFixture(gatewayOwner),
           published ? closeWireServer(published.server) : Promise.resolve(),
           provider?.stop() ?? Promise.resolve(),
         ]);
@@ -828,7 +1039,7 @@ describe("Codex paired-device exec-server carrier", () => {
         if (failures.length) {
           throw new AggregateError(failures, "Codex paired-node proof cleanup failed");
         }
-      }
+      });
     },
   );
 });

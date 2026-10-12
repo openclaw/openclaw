@@ -1,21 +1,14 @@
-// Resolves heartbeat visibility toggles across config precedence levels.
 import type { ChannelHeartbeatVisibilityConfig } from "../config/types.channels.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
 
 /** Resolved heartbeat presentation toggles after defaults/channel/account precedence. */
-export type ResolvedHeartbeatVisibility = {
-  /** Whether successful heartbeat content should be sent as visible chat text. */
-  showOk: boolean;
-  /** Whether warning/error heartbeat content should be sent as visible chat text. */
-  showAlerts: boolean;
-  /** Whether heartbeat status should emit indicator events for UI surfaces. */
-  useIndicator: boolean;
-};
+export type ResolvedHeartbeatVisibility = Required<ChannelHeartbeatVisibilityConfig>;
 
 const DEFAULT_VISIBILITY: ResolvedHeartbeatVisibility = {
-  showOk: false, // Silent by default
-  showAlerts: true, // Show content messages
-  useIndicator: true, // Emit indicator events
+  showOk: false,
+  showAlerts: true,
+  useIndicator: true,
 };
 
 /** Resolves heartbeat visibility for a channel, applying account > channel > defaults precedence. */
@@ -26,21 +19,10 @@ export function resolveHeartbeatVisibility(params: {
 }): ResolvedHeartbeatVisibility {
   const { cfg, channel, accountId } = params;
 
-  // Webchat has no channel/account config branch, so only shared channel defaults apply.
-  if (channel === "webchat") {
-    const channelDefaults = cfg.channels?.defaults?.heartbeatVisibility;
-    return {
-      showOk: channelDefaults?.showOk ?? DEFAULT_VISIBILITY.showOk,
-      showAlerts: channelDefaults?.showAlerts ?? DEFAULT_VISIBILITY.showAlerts,
-      useIndicator: channelDefaults?.useIndicator ?? DEFAULT_VISIBILITY.useIndicator,
-    };
-  }
-
-  // Layer 1: Global channel defaults
   const channelDefaults = cfg.channels?.defaults?.heartbeatVisibility;
 
-  // Layer 2: Per-channel config (at channel root level)
-  const channelCfg = cfg.channels?.[channel] as
+  // Webchat has no channel/account config branch, so only shared channel defaults apply.
+  const channelCfg = (channel === "webchat" ? undefined : cfg.channels?.[channel]) as
     | {
         heartbeatVisibility?: ChannelHeartbeatVisibilityConfig;
         accounts?: Record<string, { heartbeatVisibility?: ChannelHeartbeatVisibilityConfig }>;
@@ -48,25 +30,17 @@ export function resolveHeartbeatVisibility(params: {
     | undefined;
   const perChannel = channelCfg?.heartbeatVisibility;
 
-  // Layer 3: Per-account config (most specific)
-  const accountCfg = accountId ? channelCfg?.accounts?.[accountId] : undefined;
+  const accountCfg =
+    channel !== "webchat" && accountId
+      ? resolveChannelAccountEntry(channelCfg?.accounts, accountId, channel, (id) => id)
+      : undefined;
   const perAccount = accountCfg?.heartbeatVisibility;
+  const resolve = (key: keyof ResolvedHeartbeatVisibility) =>
+    perAccount?.[key] ?? perChannel?.[key] ?? channelDefaults?.[key] ?? DEFAULT_VISIBILITY[key];
 
   return {
-    showOk:
-      perAccount?.showOk ??
-      perChannel?.showOk ??
-      channelDefaults?.showOk ??
-      DEFAULT_VISIBILITY.showOk,
-    showAlerts:
-      perAccount?.showAlerts ??
-      perChannel?.showAlerts ??
-      channelDefaults?.showAlerts ??
-      DEFAULT_VISIBILITY.showAlerts,
-    useIndicator:
-      perAccount?.useIndicator ??
-      perChannel?.useIndicator ??
-      channelDefaults?.useIndicator ??
-      DEFAULT_VISIBILITY.useIndicator,
+    showOk: resolve("showOk"),
+    showAlerts: resolve("showAlerts"),
+    useIndicator: resolve("useIndicator"),
   };
 }

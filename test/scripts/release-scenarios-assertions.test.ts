@@ -38,74 +38,62 @@ function writeAuthProfileStoreSqlite(stateDir: string, store: unknown) {
   const db = new DatabaseSync(databasePath);
   try {
     db.exec(`
-      CREATE TABLE IF NOT EXISTS auth_profile_stores (
-        store_key TEXT NOT NULL PRIMARY KEY,
-        store_json TEXT NOT NULL,
-        updated_at INTEGER NOT NULL
+      PRAGMA user_version = 13;
+      CREATE TABLE IF NOT EXISTS config_machine_state (
+        state_key TEXT NOT NULL PRIMARY KEY,
+        value_json TEXT NOT NULL,
+        updated_at_ms INTEGER NOT NULL
       );
     `);
     db.prepare(
       `
-        INSERT INTO auth_profile_stores (store_key, store_json, updated_at)
+        INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
         VALUES (?, ?, ?)
       `,
-    ).run("shared", JSON.stringify(store), Date.now());
+    ).run("authProfiles.store", JSON.stringify(store), Date.now());
   } finally {
     db.close();
   }
 }
 
 describe("release scenario assertions", () => {
-  it("rejects loose mock OpenAI port args", () => {
-    const result = runAssertion(["configure-mock-openai", "1e3"]);
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("mock OpenAI port must be a TCP port from 1 to 65535");
-    expect(result.stderr).toContain('"1e3"');
-  });
-
-  it("scans large files when checking release scenario output text", () => {
+  it("reports bounded onboarding hook diagnostics without leaking unrelated config", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-scenarios-"));
-    const outputPath = path.join(root, "output.log");
+    const configPath = path.join(root, "openclaw.json");
+    const secretSentinel = "release-diagnostic-secret-sentinel";
 
     try {
-      const needlePrefix = "release-market";
-      writeFileSync(
-        outputPath,
-        `${"x".repeat(64 * 1024 - needlePrefix.length)}${needlePrefix}place-plugin:v2\n`,
-        "utf8",
-      );
+      writeJson(configPath, {
+        wizard: {
+          lastRunCommand: "onboard",
+          lastRunMode: "local",
+          lastRunVersion: secretSentinel,
+        },
+        hooks: {
+          internal: {
+            enabled: true,
+            entries: {
+              "unrelated-hook": { token: secretSentinel },
+            },
+          },
+        },
+        env: {
+          vars: {
+            OPENCLAW_TEST_SECRET: secretSentinel,
+          },
+        },
+      });
 
-      const result = runAssertion([
-        "assert-file-contains",
-        outputPath,
-        "release-marketplace-plugin:v2",
-      ]);
-
-      expect(result.status).toBe(0);
-      expect(result.stderr).toBe("");
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
-
-  it("bounds release output text assertion diagnostics", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-scenarios-"));
-    const outputPath = path.join(root, "output.log");
-
-    try {
-      writeFileSync(
-        outputPath,
-        `DO_NOT_DUMP_OLD_OUTPUT${"x".repeat(70 * 1024)}\nrecent output tail\n`,
-        "utf8",
-      );
-
-      const result = runAssertion(["assert-file-contains", outputPath, "missing"]);
+      const result = runAssertion(["assert-session-memory-hook-enabled"], {
+        OPENCLAW_CONFIG_PATH: configPath,
+      });
 
       expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("Output tail:");
-      expect(result.stderr).toContain("recent output tail");
-      expect(result.stderr).not.toContain("DO_NOT_DUMP_OLD_OUTPUT");
+      expect(result.stderr).toContain(
+        'Onboarding config projection: {"wizard":{"present":true,"lastRunCommand":"onboard","lastRunMode":"local"},"hooks":{"present":true,"internalPresent":true,"internalEnabled":true,"sessionMemoryPresent":false,"sessionMemoryEnabled":"missing"}}',
+      );
+      expect(result.stderr).not.toContain(secretSentinel);
+      expect(result.stderr.length).toBeLessThan(4 * 1024);
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
@@ -133,31 +121,6 @@ describe("release scenario assertions", () => {
 
       expect(result.status).toBe(0);
       expect(result.stderr).toBe("");
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
-
-  it("rejects oversized JSON artifacts before parsing release scenario outputs", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-scenarios-"));
-    const outputPath = path.join(root, "describe.json");
-    const requestLogPath = path.join(root, "requests.jsonl");
-
-    try {
-      writeFileSync(
-        outputPath,
-        `DO_NOT_DUMP_OLD_JSON${"x".repeat(2 * 1024 * 1024)}\nrecent json tail`,
-        "utf8",
-      );
-      writeFileSync(requestLogPath, "/v1/responses\n", "utf8");
-
-      const result = runAssertion(["assert-image-describe", outputPath, requestLogPath]);
-
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("JSON artifact exceeded");
-      expect(result.stderr).toContain("recent json tail");
-      expect(result.stderr).not.toContain("DO_NOT_DUMP_OLD_JSON");
-      expect(result.stderr.length).toBeLessThan(80 * 1024);
     } finally {
       rmSync(root, { force: true, recursive: true });
     }

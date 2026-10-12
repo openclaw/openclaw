@@ -1,4 +1,3 @@
-// Kilocode plugin entrypoint registers its OpenClaw integration.
 import { readConfiguredProviderCatalogEntries } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
@@ -22,7 +21,8 @@ export default defineSingleProviderPluginEntry({
       applyConfig: applyKilocodeConfig,
     },
     catalog: {
-      buildProvider: buildKilocodeProviderWithDiscovery,
+      discoveryMode: "strict",
+      buildProvider: () => buildKilocodeProviderWithDiscovery({ discoveryMode: "strict" }),
       buildStaticProvider: buildKilocodeProvider,
     },
     augmentModelCatalog: ({ config }) =>

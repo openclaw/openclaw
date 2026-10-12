@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const installMocks = vi.hoisted(() => ({
@@ -12,20 +13,56 @@ const installMocks = vi.hoisted(() => ({
 vi.mock("./llama-server-install.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./llama-server-install.js")>()),
   ensureLlamaServerInstalled: installMocks.ensureLlamaServerInstalled,
+}));
+
+vi.mock("./llama-server-assets.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./llama-server-assets.js")>()),
   resolveManagedLlamaServerPaths: installMocks.resolveManagedLlamaServerPaths,
 }));
 
-import { selectLlamaServerAsset } from "./llama-server-install.js";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { selectLlamaServerAsset } from "./llama-server-assets.js";
+import { withHuggingFaceMetadataFixture } from "./managed-server-huggingface.test-support.js";
 import {
   ensureLlamaCppModel,
   ensureManagedLlamaServerForChat,
   inspectLlamaServerRuntime,
   prepareManagedLlamaServer,
+  reconcileManagedLlamaServer,
 } from "./managed-server.js";
 
 const servers: http.Server[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+async function listen(server: http.Server, port = 0): Promise<number> {
+  await new Promise<void>((resolve) => {
+    server.listen(port, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("missing test server address");
+  }
+  return address.port;
+}
+
+async function createPresetFixture(label: string) {
+  const tempRoot = tempDirs.make(`llama-server-${label}-`);
+  const presetPath = path.join(tempRoot, "models.ini");
+  const asset = selectLlamaServerAsset("darwin", "arm64");
+  installMocks.ensureLlamaServerInstalled.mockResolvedValue({
+    command: path.join(tempRoot, "llama-server"),
+    asset,
+  });
+  installMocks.resolveManagedLlamaServerPaths.mockReturnValue({
+    installDir: tempRoot,
+    command: path.join(tempRoot, "llama-server"),
+    presetPath,
+  });
+  return { tempRoot, presetPath };
+}
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   vi.clearAllMocks();
   await Promise.all(
     servers.splice(0).map(
@@ -41,51 +78,11 @@ describe("managed llama-server", () => {
   it.each([
     [
       "darwin",
-      "arm64",
-      "metal",
-      "tar.gz",
-      "llama-b10472-bin-macos-arm64.tar.gz",
-      "194a3e7008cc8c4e7a8d201012f4a32102333664c2eb7d0511d091589c48a13c",
-    ],
-    [
-      "darwin",
       "x64",
       "cpu",
       "tar.gz",
-      "llama-b10472-bin-macos-x64.tar.gz",
-      "fc92e1521cb1ddfd723ff81ea48fac0792a988da6ed052965a84411634d97fd4",
-    ],
-    [
-      "linux",
-      "arm64",
-      "cpu",
-      "tar.gz",
-      "llama-b10472-bin-ubuntu-arm64.tar.gz",
-      "3c289bb7be0766189f71c47791e28d9d80540871771c1c7930be3711784c1f4d",
-    ],
-    [
-      "linux",
-      "x64",
-      "cpu",
-      "tar.gz",
-      "llama-b10472-bin-ubuntu-x64.tar.gz",
-      "8826da7085323c25180cb997ebb48c121c0a3698ec102ea3248843d3a7ed4166",
-    ],
-    [
-      "win32",
-      "arm64",
-      "cpu",
-      "zip",
-      "llama-b10472-bin-win-cpu-arm64.zip",
-      "6de7a00ad19fa3c5a772575d8a4fc75b265fcc2b875a2206b437af7d925b29b1",
-    ],
-    [
-      "win32",
-      "x64",
-      "cpu",
-      "zip",
-      "llama-b10472-bin-win-cpu-x64.zip",
-      "ef495329c85c171991972fd3226a179c1900368cab66e2ebba8b21a7471a74e5",
+      "llama-b10809-bin-macos-x64.tar.gz",
+      "13b34aa8a5d87341a21065a83f54a8167e1aaa6fe0d66065de01632a1ed64be6",
     ],
   ] as const)(
     "selects the pinned %s/%s asset",
@@ -107,42 +104,154 @@ describe("managed llama-server", () => {
     );
   });
 
-  it("writes a 2048-token physical batch in the combined preset", async () => {
-    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "llama-server-preset-"));
-    const presetPath = path.join(tempRoot, "models.ini");
+  it("prepares an isolated candidate without changing the active restart preset", async () => {
+    const root = tempDirs.make("llama-server-candidate-");
+    const presetPath = path.join(root, "models.ini");
+    const active = "version = 1\n\n[active-chat]\nmodel = /models/active.gguf\n";
+    await fs.writeFile(presetPath, active);
     const asset = selectLlamaServerAsset("darwin", "arm64");
-    installMocks.ensureLlamaServerInstalled.mockResolvedValue({
-      command: path.join(tempRoot, "llama-server"),
-      asset,
-    });
+    const command = path.join(root, "llama-server");
+    installMocks.ensureLlamaServerInstalled.mockResolvedValue({ command, asset });
     installMocks.resolveManagedLlamaServerPaths.mockReturnValue({
-      installDir: tempRoot,
-      command: path.join(tempRoot, "llama-server"),
+      installDir: root,
+      command,
       presetPath,
     });
 
-    try {
-      await prepareManagedLlamaServer({
-        chatModelId: "chat-model",
-        chatModelPath: "/models/chat.gguf",
-        contextSize: 8192,
-        maxTokens: 2048,
-        embeddingModelIsDefault: true,
-        embeddingModelPath: "/models/embedding.gguf",
-        port: 19_432,
-      });
-      const preset = await fs.readFile(presetPath, "utf8");
-      expect(preset).toContain("[chat-model]\nmodel = /models/chat.gguf\nctx-size = 8192");
-      expect(preset).toContain(
-        "[embeddinggemma-300m-qat-q8_0]\nmodel = /models/embedding.gguf\nubatch-size = 2048\nembedding = true",
-      );
-      expect(preset).not.toMatch(/mmproj|draft/iu);
-    } finally {
-      await fs.rm(tempRoot, { recursive: true, force: true });
-    }
+    const candidate = await prepareManagedLlamaServer({
+      chatModel: {
+        mode: "configure",
+        id: "candidate-chat",
+        path: "/models/candidate.gguf",
+        contextSize: 16_384,
+      },
+      embeddingModelPath: "/models/embedding.gguf",
+      asset,
+      isolated: true,
+      port: 19_435,
+    });
+    const candidatePreset = candidate.args[candidate.args.indexOf("--models-preset") + 1]!;
+    expect(candidatePreset).not.toBe(presetPath);
+    expect(await fs.readFile(presetPath, "utf8")).toBe(active);
+    const contents = await fs.readFile(candidatePreset, "utf8");
+    expect(contents).toContain(
+      "[candidate-chat]\nmodel = /models/candidate.gguf\nctx-size = 16384",
+    );
+    expect(contents).toContain("[embeddinggemma-300m-qat-q8_0]\nmodel = /models/embedding.gguf");
+    expect(contents).not.toContain("active-chat");
   });
 
-  it("preserves the llama.cpp physical batch default for a custom embedding model", async () => {
+  it("does not reconcile a configured direct-model service without a router preset", async () => {
+    const root = tempDirs.make("llama-server-direct-model-");
+    let reloads = 0;
+    const server = http.createServer((req, res) => {
+      reloads += Number(req.url === "/models?reload=1");
+      res.end("{}");
+    });
+    servers.push(server);
+    const port = await listen(server);
+
+    await prepareManagedLlamaServer({
+      localService: {
+        command: path.join(root, "custom-server"),
+        args: ["--model", "/models/chat.gguf", "--alias", "chat"],
+      },
+      port,
+      chatModel: { mode: "configure", id: "chat", path: "/models/chat.gguf" },
+      embeddingModelPath: "/models/embedding.gguf",
+    });
+    await reconcileManagedLlamaServer({ baseUrl: `http://127.0.0.1:${port}/v1` });
+
+    expect(reloads).toBe(0);
+  });
+
+  it.each([
+    { route: "args", mode: "preserve", newline: "\n" },
+    { route: "env", mode: "configure", newline: "\r\n" },
+  ] as const)(
+    "preserves configured preset settings for $route/$mode",
+    async ({ route, mode, newline }) => {
+      const root = tempDirs.make("llama-server-owned-settings-");
+      const presetPath = path.join(root, "custom.ini");
+      const global = `version = 1${newline}; operator defaults${newline}[*]${newline}ctx-size = 16384${newline}${newline}`;
+      const sibling = `[sibling] ; another model${newline}model = /models/sibling.gguf${newline}n-gpu-layers = 7${newline}${newline}`;
+      const chat = `[chat]${newline}model = /models/chat.gguf${newline}c = 4096 ; selected context${newline}n-gpu-layers = 12${newline}${newline}`;
+      await fs.writeFile(
+        presetPath,
+        global +
+          "[stale\nmultiline]\nmodel = /models/stale.gguf\n\n".replaceAll("\n", newline) +
+          sibling +
+          chat +
+          `[embeddinggemma-300m-qat-q8_0]${newline}; keep\u2028model = /models/comment.gguf${newline}model = /models/old.gguf ; embedding path${newline}pooling = mean${newline}ubatch-size = 256${newline}`,
+      );
+
+      await prepareManagedLlamaServer({
+        localService: {
+          command: path.join(root, "custom-server"),
+          cwd: root,
+          ...(route === "args"
+            ? { args: ["--models-preset", "custom.ini"] }
+            : { env: { LLAMA_ARG_MODELS_PRESET: "custom.ini" } }),
+        },
+        port: 19436,
+        configuredChatModelIds: ["chat", "sibling"],
+        chatModel:
+          mode === "preserve"
+            ? { mode }
+            : { mode, id: "chat", path: "/models/chat.gguf", contextSize: 8192 },
+        embeddingModelPath: "/models/new.gguf",
+      });
+
+      const updated = await fs.readFile(presetPath, "utf8");
+      expect(updated.startsWith(global)).toBe(true);
+      expect(updated).toContain(sibling.trimEnd());
+      expect(updated).not.toContain("[stale");
+      expect(updated.indexOf("[chat]")).toBeLessThan(updated.indexOf("[sibling]"));
+      expect(updated).toContain(`n-gpu-layers = 12${newline}`);
+      expect(updated).toContain(`model = /models/new.gguf ; embedding path${newline}`);
+      expect(updated).toContain(`pooling = mean${newline}`);
+      expect(updated).toContain(`; keep\u2028model = /models/comment.gguf${newline}`);
+      expect(updated).toContain(`ubatch-size = 256${newline}`);
+      if (mode === "preserve") {
+        expect(updated).toContain(chat);
+      } else {
+        expect(updated).toContain(`ctx-size = 8192 ; selected context${newline}`);
+        expect(updated).not.toContain("c = 4096");
+      }
+      expect(installMocks.ensureLlamaServerInstalled).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["release-Q4_K_M"])(
+    "updates the native model's effective %s preset alias",
+    async (tag) => {
+      const root = tempDirs.make("llama-server-preset-alias-");
+      const presetPath = path.join(root, "custom.ini");
+      const active = `[chat:${tag}]\nmodel = /models/chat.gguf\nc = 4096\nn-gpu-layers = 12\n`;
+      const inactive = "[chat:Q4_K_M]\nmodel = /models/inactive.gguf\n";
+      await fs.writeFile(presetPath, `version = 1\n${active}${inactive}`);
+      await prepareManagedLlamaServer({
+        localService: {
+          command: path.join(root, "custom-server"),
+          args: ["--models-preset", presetPath],
+        },
+        port: 19436,
+        configuredChatModelIds: ["chat:Q4_K_M"],
+        chatModel: {
+          mode: "configure",
+          id: "chat:Q4_K_M",
+          path: "/models/chat.gguf",
+          contextSize: 8192,
+        },
+        embeddingModelPath: "/models/embedding.gguf",
+      });
+      const updated = await fs.readFile(presetPath, "utf8");
+      expect(updated).toContain(active.replace("c = 4096", "ctx-size = 8192"));
+      expect(updated).toContain(inactive);
+    },
+  );
+
+  it("bounds a custom embedding model while removing stale chat from the preset", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "llama-server-embedding-only-"));
     const presetPath = path.join(tempRoot, "models.ini");
     const asset = selectLlamaServerAsset("darwin", "arm64");
@@ -157,13 +266,19 @@ describe("managed llama-server", () => {
     });
 
     try {
+      await fs.writeFile(
+        presetPath,
+        "version = 1\n\n[*]\ncache-type-k = q8_0\n\n[stale-chat]\nmodel = /models/stale-chat.gguf\n\n" +
+          "[embeddinggemma-300m-qat-q8_0]\nmodel = /models/old-embedding.gguf\nembedding = true\n",
+      );
       await prepareManagedLlamaServer({
+        chatModel: { mode: "remove" },
         embeddingModelPath: "/models/custom-embedding.gguf",
         port: 19_432,
       });
       const preset = await fs.readFile(presetPath, "utf8");
       expect(preset).toBe(
-        "version = 1\n\n[embeddinggemma-300m-qat-q8_0]\nmodel = /models/custom-embedding.gguf\nembedding = true\n",
+        "version = 1\n\n[*]\ncache-type-k = q8_0\n\n[embeddinggemma-300m-qat-q8_0]\nmodel = /models/custom-embedding.gguf\nembedding = true\nparallel = 1\nctx-size = 2048\nubatch-size = 2048\n",
       );
       expect(preset).not.toContain("jinja");
     } finally {
@@ -171,36 +286,32 @@ describe("managed llama-server", () => {
     }
   });
 
-  it("preserves a custom embedding model when chat prepares the shared restart preset", async () => {
+  it("preserves both model stanzas and the configured CUDA runtime during concurrent preparation", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "llama-server-chat-preset-"));
     const presetPath = path.join(tempRoot, "models.ini");
     const chatModelPath = path.join(tempRoot, "chat.gguf");
     const embeddingModelPath = path.join(tempRoot, "custom-embedding.gguf");
-    const asset = selectLlamaServerAsset("darwin", "arm64");
-    installMocks.ensureLlamaServerInstalled.mockResolvedValue({
-      command: path.join(tempRoot, "llama-server"),
-      asset,
-    });
-    installMocks.resolveManagedLlamaServerPaths.mockReturnValue({
-      installDir: tempRoot,
-      command: path.join(tempRoot, "llama-server"),
-      presetPath,
-    });
+    const localService = {
+      command: path.join(tempRoot, "win32-x64-cuda-12.4", "llama-server.exe"),
+      args: ["--models-preset", presetPath],
+    };
 
     try {
       await Promise.all([
         fs.writeFile(chatModelPath, "GGUF"),
         fs.writeFile(embeddingModelPath, "GGUF"),
       ]);
-      await Promise.all([
+      const [embeddingRuntime] = await Promise.all([
         prepareManagedLlamaServer({
+          chatModel: { mode: "preserve" },
           embeddingModelPath,
           port: 19_434,
+          localService,
         }),
         ensureManagedLlamaServerForChat({
           provider: {
             baseUrl: "http://127.0.0.1:19434/v1",
-            localService: { command: path.join(tempRoot, "llama-server"), args: [] },
+            localService,
             models: [],
             params: { modelCacheDir: tempRoot },
           },
@@ -212,15 +323,326 @@ describe("managed llama-server", () => {
         }),
       ]);
 
+      expect(embeddingRuntime.command).toBe(localService.command);
+      expect(embeddingRuntime.args).toContain(presetPath);
+      expect(installMocks.ensureLlamaServerInstalled).not.toHaveBeenCalled();
+      expect(installMocks.resolveManagedLlamaServerPaths).not.toHaveBeenCalled();
       const preset = await fs.readFile(presetPath, "utf8");
       expect(preset).toContain(`[chat-model]\nmodel = ${chatModelPath}\nctx-size = 8192`);
       expect(preset).toContain(
         `[embeddinggemma-300m-qat-q8_0]\nmodel = ${embeddingModelPath}\nembedding = true`,
       );
-      expect(preset).not.toContain("ubatch-size");
+      expect(preset).toContain("parallel = 1\nctx-size = 2048\nubatch-size = 2048\n");
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true });
     }
+  });
+
+  it("retains the chat inventory across A to B to A and reapplies changed limits", async () => {
+    const { tempRoot, presetPath } = await createPresetFixture("chat-transitions");
+    const firstPath = path.join(tempRoot, "first.gguf");
+    const secondPath = path.join(tempRoot, "second.gguf");
+    const first = {
+      id: "first",
+      name: "First",
+      reasoning: false,
+      input: ["text" as const],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      params: { modelPath: firstPath, contextSize: 16_384 },
+      maxTokens: 1024,
+    };
+    const second = {
+      id: "second",
+      name: "Second",
+      reasoning: false,
+      input: ["text" as const],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      params: { modelPath: secondPath, contextSize: 32_768 },
+      maxTokens: 2048,
+    };
+    const provider = {
+      baseUrl: "http://127.0.0.1:29432/v1",
+      localService: {
+        command: path.join(tempRoot, "llama-server"),
+        args: ["--models-preset", presetPath],
+      },
+      models: [first, second],
+      params: { modelCacheDir: tempRoot },
+    };
+    await Promise.all([fs.writeFile(firstPath, "GGUF"), fs.writeFile(secondPath, "GGUF")]);
+    for (const model of [
+      first,
+      second,
+      { ...first, params: { ...first.params, contextSize: 32_768 }, maxTokens: 4096 },
+    ]) {
+      await ensureManagedLlamaServerForChat({ provider, model });
+    }
+    const preset = await fs.readFile(presetPath, "utf8");
+    expect(preset).toContain(
+      `[first]\nmodel = ${firstPath}\nctx-size = 32768\nn-predict = 4096\njinja = true`,
+    );
+    expect(preset).toContain(
+      `[second]\nmodel = ${secondPath}\nctx-size = 32768\nn-predict = 2048\njinja = true`,
+    );
+    expect(preset.indexOf("[first]")).toBeLessThan(preset.indexOf("[second]"));
+  });
+
+  it("prunes and orders sections without rewriting or reloading unchanged bytes", async () => {
+    const { presetPath } = await createPresetFixture("chat-prune");
+    let reloads = 0;
+    const server = http.createServer((req, res) => {
+      reloads += Number(req.url === "/models?reload=1");
+      res.end("{}");
+    });
+    servers.push(server);
+    const port = await listen(server);
+    const rename = vi.spyOn(fs, "rename");
+    const params = {
+      chatModel: { mode: "preserve" as const },
+      configuredChatModelIds: ["zeta", "alpha"],
+      port,
+    };
+    await fs.writeFile(
+      presetPath,
+      [
+        "; operator header",
+        "version = 1",
+        "",
+        "[*]",
+        "n-gpu-layers = 12",
+        "",
+        "[stale]",
+        "model = /models/stale.gguf",
+        "",
+        "[zeta]",
+        "model = /models/zeta.gguf",
+        "",
+        "[alpha]",
+        "model = /models/alpha.gguf",
+        "",
+        "[embeddinggemma-300m-qat-q8_0]",
+        "model = /models/embedding.gguf",
+        "embedding = true",
+        "",
+      ].join("\n"),
+    );
+    await prepareManagedLlamaServer(params);
+    await prepareManagedLlamaServer(params);
+    const baseUrl = `http://127.0.0.1:${port}/v1`;
+    await reconcileManagedLlamaServer({ baseUrl });
+    await reconcileManagedLlamaServer({ baseUrl });
+    expect(await fs.readFile(presetPath, "utf8")).toBe(
+      [
+        "; operator header",
+        "version = 1",
+        "",
+        "[*]",
+        "n-gpu-layers = 12",
+        "",
+        "[alpha]",
+        "model = /models/alpha.gguf",
+        "",
+        "[zeta]",
+        "model = /models/zeta.gguf",
+        "",
+        "[embeddinggemma-300m-qat-q8_0]",
+        "model = /models/embedding.gguf",
+        "embedding = true",
+        "",
+      ].join("\n"),
+    );
+    expect(rename).toHaveBeenCalledTimes(1);
+    expect(reloads).toBe(1);
+  });
+
+  it("tracks applied preset revisions independently by managed origin", async () => {
+    await createPresetFixture("origin-transition");
+    const reloads = [0, 0];
+    const createReloadServer = (index: number) =>
+      http.createServer((req, res) => {
+        reloads[index]! += Number(req.url === "/models?reload=1");
+        res.end("{}");
+      });
+    const firstServer = createReloadServer(0);
+    const secondServer = createReloadServer(1);
+    servers.push(firstServer, secondServer);
+    const firstPort = await listen(firstServer);
+    const secondPort = await listen(secondServer);
+    await prepareManagedLlamaServer({
+      chatModel: { mode: "remove" },
+      configuredChatModelIds: [],
+      embeddingModelPath: "/models/embedding.gguf",
+      port: firstPort,
+    });
+    await prepareManagedLlamaServer({
+      chatModel: { mode: "remove" },
+      configuredChatModelIds: [],
+      embeddingModelPath: "/models/embedding.gguf",
+      port: secondPort,
+    });
+    const firstBaseUrl = `http://127.0.0.1:${firstPort}/v1`;
+    const secondBaseUrl = `http://127.0.0.1:${secondPort}/v1`;
+
+    await reconcileManagedLlamaServer({ baseUrl: firstBaseUrl });
+    await reconcileManagedLlamaServer({ baseUrl: secondBaseUrl });
+    await reconcileManagedLlamaServer({ baseUrl: firstBaseUrl });
+
+    expect(reloads).toEqual([1, 1]);
+  });
+
+  it("reconciles using the configured managed-service origin", async () => {
+    await createPresetFixture("configured-origin");
+    let reloads = 0;
+    const server = http.createServer((req, res) => {
+      reloads += Number(req.url === "/models?reload=1");
+      res.end("{}");
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => {
+      server.listen(0, resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("missing test server address");
+    }
+    const baseUrl = `http://localhost:${address.port}/v1`;
+    await prepareManagedLlamaServer({
+      chatModel: { mode: "remove" },
+      configuredChatModelIds: [],
+      embeddingModelPath: "/models/embedding.gguf",
+      port: address.port,
+      reconcileBaseUrl: baseUrl,
+    });
+
+    await reconcileManagedLlamaServer({ baseUrl });
+
+    expect(reloads).toBe(1);
+  });
+
+  it("retains a failed reload revision for the next reconciliation", async () => {
+    await createPresetFixture("reload-failure");
+    let status = 500;
+    let reloads = 0;
+    const server = http.createServer((_req, res) => {
+      reloads += 1;
+      res.statusCode = status;
+      res.end("{}");
+    });
+    servers.push(server);
+    const port = await listen(server);
+    await prepareManagedLlamaServer({
+      chatModel: { mode: "remove" },
+      configuredChatModelIds: [],
+      embeddingModelPath: "/models/embedding.gguf",
+      port,
+    });
+    await expect(
+      reconcileManagedLlamaServer({ baseUrl: `http://127.0.0.1:${port}/v1` }),
+    ).rejects.toThrow("llama.cpp preset reload failed: HTTP 500");
+    const controller = new AbortController();
+    controller.abort(new Error("reload aborted"));
+    await expect(
+      reconcileManagedLlamaServer({
+        baseUrl: `http://127.0.0.1:${port}/v1`,
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(controller.signal.reason);
+    status = 200;
+    await reconcileManagedLlamaServer({ baseUrl: `http://127.0.0.1:${port}/v1` });
+    expect(reloads).toBe(2);
+  });
+
+  it("allows reloads to use llama.cpp's pinned model shutdown window", async ({ signal }) => {
+    await createPresetFixture("reload-shutdown-window");
+    let reloads = 0;
+    const requested = createDeferred<http.ServerResponse>();
+    const server = http.createServer((req, res) => {
+      if (req.url === "/models?reload=1") {
+        reloads += 1;
+        requested.resolve(res);
+        return;
+      }
+      res.end("{}");
+    });
+    servers.push(server);
+    const port = await listen(server);
+    await prepareManagedLlamaServer({
+      chatModel: { mode: "remove" },
+      configuredChatModelIds: [],
+      embeddingModelPath: "/models/embedding.gguf",
+      port,
+    });
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const controller = new AbortController();
+    const reload = reconcileManagedLlamaServer({
+      baseUrl: `http://127.0.0.1:${port}/v1`,
+      signal: AbortSignal.any([signal, controller.signal]),
+    });
+    try {
+      const response = await Promise.race([
+        requested.promise,
+        reload.then(() => {
+          throw new Error("Reload completed without requesting the preset");
+        }),
+      ]);
+      // Advance the real guard's deadline only after DNS and HTTP admission.
+      await vi.advanceTimersByTimeAsync(2_600);
+      response.end("{}");
+      await reload;
+      expect(reloads).toBe(1);
+    } finally {
+      controller.abort();
+      vi.useRealTimers();
+      await reload.catch(() => {});
+    }
+  });
+
+  it("reconciles a mutation after the child reads the preset but before it listens", async () => {
+    const { presetPath } = await createPresetFixture("startup-race");
+    const probe = http.createServer();
+    const port = await listen(probe);
+    await new Promise<void>((resolve) => {
+      probe.close(() => {
+        resolve();
+      });
+    });
+    const prepare = async (contextSize: number) =>
+      await prepareManagedLlamaServer({
+        chatModel: {
+          mode: "configure",
+          id: "chat",
+          path: "/models/chat.gguf",
+          contextSize,
+          maxTokens: 2048,
+        },
+        configuredChatModelIds: ["chat"],
+        defaultEmbeddingModelPath: "/models/embedding.gguf",
+        port,
+      });
+    await prepare(8192);
+    let loadedPreset = await fs.readFile(presetPath, "utf8");
+    await prepare(16_384);
+
+    let reloads = 0;
+    const server = http.createServer((req, res) => {
+      if (req.url === "/models?reload=1") {
+        reloads += 1;
+        void fs.readFile(presetPath, "utf8").then((contents) => {
+          loadedPreset = contents;
+          res.end("{}");
+        });
+        return;
+      }
+      res.end("{}");
+    });
+    servers.push(server);
+    await listen(server, port);
+    await reconcileManagedLlamaServer({ baseUrl: `http://127.0.0.1:${port}/v1` });
+    await reconcileManagedLlamaServer({ baseUrl: `http://127.0.0.1:${port}/v1` });
+
+    expect(reloads).toBe(1);
+    expect(loadedPreset).toContain("ctx-size = 16384");
   });
 
   it("reports a missing local GGUF with the setup repair path", async () => {
@@ -233,7 +655,94 @@ describe("managed llama-server", () => {
     ).rejects.toThrow("Run interactive llama.cpp setup or correct params.modelPath");
   });
 
-  it("reports only facts observed from health, models, props, and metrics", async () => {
+  it.each(["manifest", "file"] as const)(
+    "bounds Hugging Face %s metadata while preserving a legitimate response",
+    async (endpoint) => {
+      await withHuggingFaceMetadataFixture(
+        { cacheDir: tempDirs.make(`llama-cpp-hf-${endpoint}-`), servers },
+        endpoint,
+        async ({ cacheDir, setPadding }) => {
+          await expect(
+            ensureLlamaCppModel({
+              source: "hf:owner/repo",
+              cacheDir,
+              download: false,
+            }),
+          ).resolves.toBe(path.join(cacheDir, "hf_owner_repo_model.gguf"));
+
+          setPadding(endpoint, "x".repeat(16 * 1024 * 1024 + 1));
+          await expect(
+            ensureLlamaCppModel({
+              source: `hf:owner/repo#oversized-${endpoint}`,
+              cacheDir,
+              download: false,
+            }),
+          ).rejects.toThrow(
+            `llama.cpp Hugging Face ${endpoint === "manifest" ? "manifest" : "file metadata"}: JSON response exceeds 16777216 bytes`,
+          );
+        },
+      );
+    },
+  );
+
+  it("resolves a cached GGUF when unrelated repository tree metadata is oversized", async () => {
+    await withHuggingFaceMetadataFixture(
+      { cacheDir: tempDirs.make("llama-cpp-hf-tree-"), servers },
+      "tree",
+      async ({ cacheDir, setPadding, pathInfoBodies, requestedUrls, source }) => {
+        setPadding("tree", "x".repeat(16 * 1024 * 1024 + 1));
+        await expect(
+          ensureLlamaCppModel({
+            source,
+            cacheDir,
+            download: false,
+          }),
+        ).resolves.toBe(path.join(cacheDir, "hf_owner_repo_model.gguf"));
+        expect(pathInfoBodies).toEqual([{ paths: ["model.gguf"], expand: false }]);
+        expect(requestedUrls.some((url) => url.includes("/tree/"))).toBe(false);
+      },
+    );
+  });
+
+  it("keeps a verified custom Hugging Face artifact available while refreshing its preset", async () => {
+    await withHuggingFaceMetadataFixture(
+      { cacheDir: tempDirs.make("llama-cpp-hf-file-"), servers },
+      "file",
+      async ({ cacheDir, setMetadataAvailable, source }) => {
+        const presetPath = path.join(cacheDir, "models.ini");
+        const localService = {
+          command: path.join(cacheDir, "llama-server"),
+          args: ["--models-preset", presetPath],
+        };
+        const model = {
+          id: "custom-chat",
+          name: "Custom Chat",
+          reasoning: false,
+          input: ["text" as const],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          params: { modelPath: source, contextSize: 8192 },
+          maxTokens: 1024,
+        };
+        const provider = {
+          baseUrl: "http://127.0.0.1:19432/v1",
+          localService,
+          models: [model],
+          params: { modelCacheDir: cacheDir },
+        };
+
+        await ensureManagedLlamaServerForChat({ provider, model });
+        setMetadataAvailable(false);
+        model.maxTokens = 2048;
+        await ensureManagedLlamaServerForChat({ provider, model });
+
+        expect(await fs.readFile(presetPath, "utf8")).toContain("n-predict = 2048");
+      },
+      "hf:owner/repo/model.gguf",
+    );
+  });
+
+  it("reports optional metrics separately from runtime readiness and load errors", async () => {
+    let metricsAvailable = true;
     const server = http.createServer((req, res) => {
       res.setHeader("content-type", "application/json");
       if (req.url === "/health") {
@@ -264,7 +773,7 @@ describe("managed llama-server", () => {
         );
         return;
       }
-      if (req.url?.startsWith("/metrics?")) {
+      if (metricsAvailable && req.url?.startsWith("/metrics?")) {
         res.setHeader("content-type", "text/plain");
         res.end("llamacpp:prompt_tokens_total 1\n");
         return;
@@ -273,21 +782,16 @@ describe("managed llama-server", () => {
       res.end("{}");
     });
     servers.push(server);
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("missing test server address");
-    }
-
-    await expect(
+    const port = await listen(server);
+    const inspect = (loadError?: string) =>
       inspectLlamaServerRuntime({
-        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        baseUrl: `http://127.0.0.1:${port}/v1`,
         modelId: "embedding-model",
         backend: "metal",
-      }),
-    ).resolves.toEqual({
+        loadError,
+      });
+
+    await expect(inspect()).resolves.toEqual({
       engine: "llama.cpp",
       state: "ready",
       backend: "metal",
@@ -301,5 +805,84 @@ describe("managed llama-server", () => {
         metrics: "ready",
       },
     });
+
+    metricsAvailable = false;
+    await expect(inspect()).resolves.toMatchObject({
+      state: "ready",
+      endpoints: { health: "ready", models: "ready", props: "ready", metrics: "unavailable" },
+    });
+    await expect(inspect("Model load failed")).resolves.toMatchObject({
+      state: "failed",
+      loadError: "Model load failed",
+      endpoints: { metrics: "unavailable" },
+    });
   });
+
+  it.each(["metrics", "props"] as const)(
+    "bounds %s inspection responses while accepting a legitimate large body",
+    async (endpoint) => {
+      const responseBytes = (size: number) => {
+        const padding = "x".repeat(size);
+        return Buffer.from(endpoint === "metrics" ? padding : JSON.stringify({ padding }));
+      };
+      // Fixture serialization must not consume the concurrent inspection deadlines.
+      let body = responseBytes(1024 * 1024);
+      const server = http.createServer((req, res) => {
+        if (req.url?.startsWith(`/${endpoint}?`)) {
+          res.setHeader("content-type", endpoint === "metrics" ? "text/plain" : "application/json");
+          res.end(body);
+          return;
+        }
+        res.setHeader("content-type", "application/json");
+        if (req.url === "/health") {
+          res.end(JSON.stringify({ status: "ok" }));
+          return;
+        }
+        if (req.url === "/models") {
+          res.end(JSON.stringify({ data: [{ id: "embedding-model" }] }));
+          return;
+        }
+        if (req.url?.startsWith("/props?")) {
+          res.end(JSON.stringify({ modalities: { vision: false } }));
+          return;
+        }
+        if (req.url?.startsWith("/metrics?")) {
+          res.setHeader("content-type", "text/plain");
+          res.end("llamacpp:requests_total 1\n");
+          return;
+        }
+        res.statusCode = 404;
+        res.end("{}");
+      });
+      servers.push(server);
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("missing test server address");
+      }
+      const inspect = () =>
+        inspectLlamaServerRuntime({
+          baseUrl: `http://127.0.0.1:${address.port}/v1`,
+          modelId: "embedding-model",
+        });
+
+      await expect(inspect()).resolves.toMatchObject({
+        state: "ready",
+        endpoints: { health: "ready", models: "ready", props: "ready", metrics: "ready" },
+      });
+
+      body = responseBytes(32 * 1024 * 1024);
+      await expect(inspect()).resolves.toMatchObject({
+        state: endpoint === "metrics" ? "ready" : "failed",
+        endpoints: {
+          health: "ready",
+          models: "ready",
+          props: endpoint === "props" ? "unavailable" : "ready",
+          metrics: endpoint === "metrics" ? "unavailable" : "ready",
+        },
+      });
+    },
+  );
 });

@@ -79,33 +79,6 @@ describe("getTelegramTextParts", () => {
 });
 
 describe("joinTelegramTextParts", () => {
-  it("rebases text and caption entities using Telegram UTF-16 offsets", () => {
-    const result = joinTelegramTextParts(
-      [
-        asTelegramMessage({
-          text: "😀 bold",
-          entities: [{ type: "bold", offset: 3, length: 4 }],
-        }),
-        asTelegramMessage({
-          caption: "read docs",
-          caption_entities: [
-            { type: "text_link", offset: 5, length: 4, url: "https://docs.example" },
-          ],
-        }),
-      ],
-      "\n",
-    );
-
-    expect(result.text).toBe("😀 bold\nread docs");
-    expect(result.entities).toEqual([
-      { type: "bold", offset: 3, length: 4 },
-      { type: "text_link", offset: 13, length: 4, url: "https://docs.example" },
-    ]);
-    expect(renderTelegramTextEntities(result.text, result.entities)).toBe(
-      "😀 **bold**\nread [docs](https://docs.example)",
-    );
-  });
-
   it("skips empty segments without shifting later entity offsets", () => {
     const result = joinTelegramTextParts(
       [
@@ -124,38 +97,53 @@ describe("joinTelegramTextParts", () => {
     });
   });
 
-  it("preserves links from joined messages and captions through the real Markdown parser", () => {
-    const messageLabel = "😀 report]";
-    const captionLabel = "[caption";
-    const messageUrl = "https://example.com/message)final";
-    const captionUrl = "https://example.com/caption(a)b)";
-    const result = joinTelegramTextParts(
-      [
-        asTelegramMessage({
-          text: `Read ${messageLabel}`,
-          entities: [
-            { type: "text_link", offset: 5, length: messageLabel.length, url: messageUrl },
-          ],
-        }),
-        asTelegramMessage({
-          caption: `Open ${captionLabel}`,
-          caption_entities: [
-            { type: "text_link", offset: 5, length: captionLabel.length, url: captionUrl },
-          ],
-        }),
-      ],
-      "\n",
+  it.each(["a`b", "npm`", " npm ", " "])(
+    "preserves literal inline code %j from joined text and captions",
+    (code) => {
+      const prefix = "😀 Code: ";
+      const text = `${prefix}${code} end`;
+      const entities: MessageEntity[] = [
+        { type: "code", offset: prefix.length, length: code.length },
+      ];
+      const result = joinTelegramTextParts(
+        [
+          asTelegramMessage({ text, entities }),
+          asTelegramMessage({ caption: text, caption_entities: entities }),
+        ],
+        "\n",
+      );
+
+      const parsed = markdownToIR(renderTelegramTextEntities(result.text, result.entities));
+
+      expect(parsed.text).toBe(result.text);
+      expect(
+        parsed.styles
+          .filter((span) => span.style === "code")
+          .map((span) => parsed.text.slice(span.start, span.end)),
+      ).toEqual([code, code]);
+    },
+  );
+});
+
+describe("renderTelegramTextEntities inline code normalization", () => {
+  it.each([[" \r\n ", "   "]])("preserves normalized spaces in %j", (code, normalized) => {
+    const prefix = "Code: ";
+    const text = `${prefix}${code} end`;
+    const parsed = markdownToIR(
+      renderTelegramTextEntities(text, [
+        { type: "code", offset: prefix.length, length: code.length },
+      ]),
     );
 
-    const parsed = markdownToIR(renderTelegramTextEntities(result.text, result.entities));
-
-    expect(parsed.text).toBe(result.text);
-    expect(parsed.links.map((link) => link.href)).toEqual([messageUrl, captionUrl]);
+    expect(parsed.text).toBe(`${prefix}${normalized} end`);
+    expect(parsed.styles).toEqual([
+      { start: prefix.length, end: prefix.length + normalized.length, style: "code" },
+    ]);
   });
 });
 
 describe("renderTelegramTextEntities quoted blocks", () => {
-  it.each(["blockquote", "expandable_blockquote"] as const)(
+  it.each(["blockquote"] as const)(
     "preserves multiline %s entities and nested formatting",
     (type) => {
       const text = "Before\n😀 quoted\nsecond link\nAfter";

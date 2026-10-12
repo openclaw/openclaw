@@ -1,7 +1,7 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -19,7 +19,12 @@ const suite = createControlUiE2eSuite({
 });
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const proofStage = process.env.OPENCLAW_DESKTOP_FULLSCREEN_PROOF_STAGE ?? "after";
-const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "desktop-fullscreen");
+let proofDir: string;
+beforeEach(() => {
+  if (captureUiProof) {
+    proofDir = createControlUiE2eArtifactDir("desktop-fullscreen");
+  }
+});
 
 function sessionsList() {
   return {
@@ -60,7 +65,10 @@ async function openDesktopPanel(page: Page) {
   await page.evaluate(() => {
     window.dispatchEvent(new CustomEvent("openclaw:command-palette-open"));
   });
-  await page.getByRole("combobox", { name: "Search chats and commands…" }).waitFor();
+  await page
+    .locator("openclaw-command-palette")
+    .getByRole("textbox", { name: "Search or start a task…" })
+    .waitFor();
   await page.getByRole("option", { name: "Desktop", exact: true }).click();
   const panel = page.locator("openclaw-desktop-panel");
   await panel.locator("section[aria-label='Desktop']").waitFor();
@@ -82,7 +90,6 @@ async function captureDesktopProof(page: Page, panel: import("playwright").Locat
   if (!captureUiProof) {
     return;
   }
-  await mkdir(proofDir, { recursive: true });
   await page.screenshot({
     animations: "disabled",
     path: path.join(proofDir, `${proofStage}-${name}-context.png`),
@@ -245,7 +252,11 @@ suite.define(() => {
             .poll(async () => (await gateway.getRequests("desktop.observe")).length)
             .toBe(2);
           expect(await page.evaluate(() => document.fullscreenElement !== null)).toBe(true);
-          await panel.locator(".desktop-surface canvas").waitFor();
+          // The authenticated handoff keeps both canvases until the replacement connects.
+          await expect
+            .poll(() => screenHandle?.evaluate((element) => element.isConnected))
+            .toBe(false);
+          await screen.waitFor();
           await expect
             .poll(() => panel.getByRole("button", { name: "Take control", exact: true }).count())
             .toBe(0);

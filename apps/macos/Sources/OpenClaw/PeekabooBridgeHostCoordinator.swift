@@ -71,9 +71,7 @@ final class PeekabooBridgeHostCoordinator {
     static let allowedClientTeamIDs = PeekabooBridgeConstants.trustedReleaseTeamIDs
     static let allowedClientBundleIDs: Set<String> = ["boo.peekaboo.peekaboo"]
 
-    private static let legacySocketDirectoryNames = ["clawdbot", "clawdis", "moltbot"]
-
-    private let logger: Logger
+    private let logger = Logger(subsystem: "ai.openclaw", category: "PeekabooBridge")
     private let runtimeFactory: RuntimeFactory
     private let aliasManager: LegacyPeekabooSocketAliasManager
 
@@ -82,8 +80,10 @@ final class PeekabooBridgeHostCoordinator {
     private var reconciliationTail: Task<Void, Never>?
 
     init() {
-        let socketPath = Self.openclawSocketPath
-        self.logger = Logger(subsystem: "ai.openclaw", category: "PeekabooBridge")
+        let fileManager = FileManager.default
+        let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
+        let socketPath = Self.makeSocketPath(for: "OpenClaw", in: base)
         self.runtimeFactory = {
             PeekabooEmbeddedBridgeRuntime.make(
                 configuration: .init(
@@ -99,11 +99,10 @@ final class PeekabooBridgeHostCoordinator {
         }
         self.aliasManager = LegacyPeekabooSocketAliasManager(
             targetSocketPath: socketPath,
-            aliasSocketPaths: Self.legacySocketPaths)
+            aliasSocketPaths: ["clawdbot", "clawdis", "moltbot"].map { Self.makeSocketPath(for: $0, in: base) })
     }
 
     init(runtimeFactory: @escaping RuntimeFactory, aliasManager: LegacyPeekabooSocketAliasManager) {
-        self.logger = Logger(subsystem: "ai.openclaw", category: "PeekabooBridge")
         self.runtimeFactory = runtimeFactory
         self.aliasManager = aliasManager
     }
@@ -113,7 +112,12 @@ final class PeekabooBridgeHostCoordinator {
         let predecessor = self.reconciliationTail
         let operation = Task { @MainActor [weak self] in
             await predecessor?.value
-            await self?.reconcileDesiredState()
+            guard let self else { return }
+            if self.desiredEnabled {
+                await self.ensureStarted()
+            } else {
+                await self.ensureStopped()
+            }
         }
         self.reconciliationTail = operation
         await operation.value
@@ -123,13 +127,6 @@ final class PeekabooBridgeHostCoordinator {
         await self.setEnabled(false)
     }
 
-    private static var openclawSocketPath: String {
-        let fileManager = FileManager.default
-        let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
-        return Self.makeSocketPath(for: "OpenClaw", in: base)
-    }
-
     private static func makeSocketPath(for directoryName: String, in baseDirectory: URL) -> String {
         baseDirectory
             .appendingPathComponent(directoryName, isDirectory: true)
@@ -137,58 +134,51 @@ final class PeekabooBridgeHostCoordinator {
             .path
     }
 
-    private static var legacySocketPaths: [String] {
-        let fileManager = FileManager.default
-        let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
-        return Self.legacySocketDirectoryNames.map { Self.makeSocketPath(for: $0, in: base) }
-    }
-
-    private func reconcileDesiredState() async {
-        if self.desiredEnabled {
-            await self.ensureStarted()
-        } else {
-            await self.ensureStopped()
-        }
-    }
-
     private func ensureStarted() async {
-        if let retainedRuntime {
-            let snapshot = await retainedRuntime.snapshot()
+        let retained = self.retainedRuntime
+        if let retained {
+            let snapshot = await retained.snapshot()
             guard snapshot.state != .ready else { return }
-            do {
-                let started = try await retainedRuntime.startChecked()
-                guard started.state == .ready else {
-                    self.logger.error("PeekabooBridge retained runtime did not become ready")
-                    return
-                }
-                self.aliasManager.ensureAliases(logger: self.logger)
-            } catch {
-                let message = "Failed to restart retained PeekabooBridge runtime: \(error.localizedDescription)"
-                self.logger.error("\(message, privacy: .public)")
-            }
-            return
         }
-
-        let candidate = self.runtimeFactory()
+        let candidate = retained ?? self.runtimeFactory()
         do {
             let started = try await candidate.startChecked()
             guard started.state == .ready else {
-                await self.stopCandidate(candidate)
-                self.logger.error("PeekabooBridge runtime returned before becoming ready")
+                if retained != nil {
+                    self.logger.error("PeekabooBridge retained runtime did not become ready")
+                } else {
+                    await self.stopCandidate(candidate)
+                    self.logger.error("PeekabooBridge runtime returned before becoming ready")
+                }
                 return
             }
-            guard self.desiredEnabled else {
+            if retained == nil, !self.desiredEnabled {
                 await self.stopCandidate(candidate)
                 return
             }
 
-            self.retainedRuntime = candidate
+            if retained == nil { self.retainedRuntime = candidate }
             self.aliasManager.ensureAliases(logger: self.logger)
-            self.logger.info("PeekabooBridge host ready at \(started.socketPath, privacy: .public)")
+            if retained == nil {
+                self.logger.info("PeekabooBridge host ready at \(started.socketPath, privacy: .public)")
+            }
+        } catch let PeekabooBridgeHostError.socketAlreadyOwned(path) {
+            self.logSocketServedElsewhere(path)
         } catch {
-            self.logger.error("Failed to start PeekabooBridge host: \(error.localizedDescription, privacy: .public)")
+            if retained != nil {
+                let message = "Failed to restart retained PeekabooBridge runtime: \(error.localizedDescription)"
+                self.logger.error("\(message, privacy: .public)")
+            } else {
+                self.logger
+                    .error("Failed to start PeekabooBridge host: \(error.localizedDescription, privacy: .public)")
+            }
         }
+    }
+
+    private func logSocketServedElsewhere(_ path: String) {
+        self.logger.info(
+            "PeekabooBridge host not started: \(path, privacy: .public) is already served by another host; " +
+                "this per-user socket is shared by all OpenClaw profiles")
     }
 
     private func ensureStopped() async {

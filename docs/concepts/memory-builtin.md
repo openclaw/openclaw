@@ -23,6 +23,51 @@ started.
 - **CJK support** via trigram tokenization for Chinese, Japanese, and Korean.
 - **sqlite-vec acceleration** for in-database vector queries (optional).
 
+Native sqlite-vec queries run in a separate, read-only process so a slow query
+does not block the Gateway event loop. Cancelling a search terminates its query
+process; OpenClaw does not retry that native query on the Gateway thread.
+Queries reuse a process for each database, with at most two processes alive.
+Idle processes retire after 30 minutes or when another database needs capacity.
+Each query reopens the database so committed updates and replaced indexes remain visible.
+
+Keyword retrieval, recall metadata, curated trigger and project candidates, and
+source timestamps use the memory search worker. The Gateway awaits projected
+rows and applies the same ranking. Session-only searches retain their final
+metadata and timestamp reads on the caller because an additional worker request
+increased measured latency; other retrieval reads run off the Gateway event loop. Searches retain their index generation until the worker closes its
+reader; recall metadata is read after candidate retrieval so forgotten chunks
+are excluded. This does not change stored data, configuration, or upgrade behavior.
+
+After Gateway readiness, idle warmup loads the active Memory Core retrieval
+worker before the first search. It does not open an index, start an embedding
+provider, or delay readiness. Requests arriving before warmup completes still
+initialize retrieval normally; the worker keeps its existing idle retirement policy.
+
+If semantic retrieval reaches the 30-second tool deadline after keyword matches
+from memory files are ready, `memory_search` returns those matches with a
+partial-result warning. Session transcript hits require fresh visibility checks
+and are excluded from timeout recovery. A partial response does not put the
+entire memory corpus into the timeout cooldown. When the agent provides no final
+reply, the fallback warning states the timeout duration and whether partial
+results are available.
+
+## When to use
+
+The builtin engine is the right choice for most users:
+
+- Works out of the box with no extra dependencies.
+- Handles keyword and vector search well.
+- Supports all embedding providers.
+- Hybrid search combines the best of both retrieval approaches.
+
+The builtin engine can index directories outside the workspace with
+`memory.search.extraPaths`. It uses bounded lexical query expansion to improve
+conversational recall, but it does not provide a learned or model-based relevance
+reranking stage. Its MMR pass is deterministic and local.
+
+Consider [Honcho](/concepts/memory-honcho) if you want cross-session memory
+with automatic user modeling.
+
 ## Getting started
 
 By default, the builtin engine uses OpenAI embeddings. If `OPENAI_API_KEY` or
@@ -43,8 +88,9 @@ To set a provider explicitly:
 
 Without an embedding provider, only keyword search is available.
 
-To force local GGUF embeddings, install and configure the official llama.cpp
-provider, then point `local.modelPath` at a GGUF file:
+To force local GGUF embeddings, install and configure the official
+[llama.cpp provider](/plugins/llama-cpp), then point `local.modelPath` at a
+GGUF file:
 
 ```bash
 openclaw plugins install @openclaw/llama-cpp-provider
@@ -96,7 +142,10 @@ only injects curated or promoted-trusted entries.
 Each indexed chunk also has SQLite-owned provenance: origin class (`owner`,
 `agent`, `untrusted`, or `system`), session kind, observation time, and an
 optional supersession key. This metadata is stored separately from Markdown
-so recalled prose cannot rewrite its own trust classification.
+so recalled prose cannot rewrite its own trust classification. Automatic
+session ingestion also records source-session origins for its staged entries,
+which support selective deletion after promotion. For coverage and limits, see
+[Memory provenance and deletion](/concepts/memory-provenance).
 
 - **Index location:** the owning agent database at
   `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
@@ -104,9 +153,103 @@ so recalled prose cannot rewrite its own trust classification.
   shutdown checkpoints.
 - **File watching:** changes to memory files trigger a debounced reindex
   (1.5s default).
-- **Auto-reindex:** the index rebuilds automatically when the embedding
-  provider, model, chunking config, configured sources, or scope change.
-- **Reindex on demand:** `openclaw memory index --force`
+- **Index compatibility:** changing the embedding provider, model, settings,
+  configured sources, or scope can pause search until you explicitly rebuild.
+  See [provider selection](/reference/memory-config#provider-selection).
+- **Reindex on demand:** `openclaw memory index --force --agent <id>`
+
+When Memory Core owns the memory slot, its Gateway service schedules each configured
+agent's memory manager to open at startup and after plugin replacement. This
+background activation waits for that agent's database preparation, including
+after an upgrade or restart, without delaying Gateway readiness. Failed
+preparation reports the database's repair guidance. Watched file changes can
+then update the index without a search or agent turn. Retiring an
+instance closes its managers, including file watchers, timers, and session
+listeners. A session startup scan still in progress stops after its current
+step, so disabling or replacing the plugin does not wait for it. Plugin reload also stops and restarts the retained Memory Core
+service around publication, so its managers use the current embedding providers,
+including providers loaded on demand, without waiting for a search or turn. If
+reload fails after draining managers, recovery restarts their previous services
+and schedules their index activation before reporting the previous runtime restored.
+Service stop joins pending activation before closing its managers. Memory Core running only as
+another memory plugin's consolidation sidecar does not start these indexes automatically.
+
+When the index identity reports an OpenClaw chunking-implementation change,
+a normal or CLI search rebuilds it before returning results. The rebuild uses
+the agent's current embedding settings; status inspection remains read-only.
+
+Search-triggered maintenance applies pending memory and session changes
+incrementally while searches remain available. A failed full rebuild retains
+its full-retry state; ordinary dirty content does not itself force a rebuild.
+Growing session transcripts retain unchanged indexed chunks and embed only new
+or changed chunks, even when the embedding cache is disabled. An explicit full
+rebuild still replaces the complete index.
+If a memory file changes or disappears during indexing, only that file's
+unfinished work is retried incrementally. Other files finish indexing, and
+the changed file's obsolete chunks are not published.
+
+Automatic full-rebuild retries wait 30 seconds after a failure. Repeated
+failures double that delay up to 30 minutes; a successful rebuild resets it.
+Searches keep reading the published index, and targeted session updates can
+still publish when its identity is valid. Explicit CLI repair bypasses the
+process-local cooldown.
+
+When native file watching is unavailable, Memory Core uses background polling
+with a 30-second default interval, including when polling is explicitly enabled
+with `CHOKIDAR_USEPOLLING`. A valid `CHOKIDAR_INTERVAL` overrides this default,
+with a 20 ms minimum. Shorter intervals increase background scanning cost,
+especially for large memory trees. Native events
+still trigger prompt, debounced updates. Automatic fallback logs one warning per
+watcher lifetime. A running memory manager exposes each local observation's
+mode, polling interval, and `pollingFallback` in its status under `custom.watcher`;
+standalone status inspection does not start a watcher. The filesystem
+library does not currently retain the fallback reason or retry native selection;
+the warning says when no reason was reported. Restart the Gateway after resolving
+the native backend problem to try native watching again.
+
+If the host runs out of native file-watch capacity, Memory Core logs one warning
+and disables its watchers. Later searches trigger incremental synchronization
+to discover file changes. A search can return the previous index while that
+background work finishes; subsequent searches see the updated content. Restart
+the Gateway after restoring watch capacity to enable native watching again.
+
+Incremental indexing, stale-source cleanup, and cache pruning wait asynchronously when
+another SQLite writer is active. Cache pruning removes the oldest entries in
+bounded batches, yielding between batches while preserving the existing cache cap.
+
+Full reindexes build a replacement in a temporary database and publish the
+memory tables atomically. Concurrent searches and status reads keep using the
+published index; a failed rebuild leaves that index intact. The embedding cache
+is bounded before publication, not after copying excess entries into the
+shared database.
+
+Other agent state, including sessions and transcripts in the same database,
+is retained. Use the [memory index command](/cli/memory#memory-index) for
+memory-only repair.
+
+`openclaw memory status` reports stored chunk text and binary embedding bytes
+for each source (`sourceCounts[].chunkBytes` in JSON). These are payload sizes,
+not total disk usage: embedding cache, FTS/vector tables, SQLite overhead, and
+WAL/free pages are excluded.
+
+Chunk and embedding-cache vectors use little-endian 64-bit floating-point
+BLOBs. The software search fallback scores these full-precision BLOBs directly
+in a worker, without allocating a numeric array per chunk, even when the
+optional sqlite-vec accelerator is unavailable; sqlite-vec keeps its
+separate 32-bit vector index. The keyword index uses each chunk's stable integer
+identity, so edits and deletion update the corresponding FTS rows directly.
+
+Agent schema 23 converts existing JSON vectors locally, without contacting an
+embedding provider. It preserves chunk IDs, provenance, recall metadata, and
+cache identities. Malformed legacy vectors retain their searchable text and
+mark their sources for reindexing. Unknown schema extensions that cannot be
+preserved cause migration to stop without rewriting those tables. Follow the
+[database versioning and rollback contract](/reference/database-schemas/versioning)
+when upgrading or returning to an older build.
+
+After an upgrade, automatic project and trigger recall may need to repair
+legacy provenance. That repair runs in the background. Replies continue while
+automatic recall stays empty until the affected sources have been reclassified.
 
 <Info>
 You can also index Markdown files outside the workspace with
@@ -126,9 +269,18 @@ Doctor removes the retired `memory.backend`, `memory.qmd`, and
 `memory.search.qmd` settings, including agent-scoped `memory.search.qmd`
 forms. It preserves QMD paths and extra collections as the corresponding
 `memory.search.extraPaths` entries, including `{ path, pattern }` globs. When
-Memory Core finds a retired per-agent QMD workspace under
-`~/.openclaw/agents/<agentId>/qmd/`, Doctor also offers to remove its derived
-indexes, model downloads, collection metadata, and session exports.
+QMD session indexing was enabled, Doctor also enables builtin session indexing
+and adds `sessions` to `memory.search.sources` without enabling broader
+cross-conversation recall. Retained session-reset transcripts remain in the
+agent's sessions directory and are indexed from those original artifacts.
+
+Doctor removes only empty per-agent QMD directories under
+`~/.openclaw/agents/<agentId>/qmd/`. Nonempty directories stay untouched:
+OpenClaw's retired QMD backend used the same layout as standalone QMD, without
+an ownership marker. Retained directories do not block migration or Gateway
+startup. After backing them up, you can remove old indexes, model downloads,
+collection metadata, and session exports manually if you have confirmed that
+no standalone QMD installation uses them.
 
 Canonical memory remains in `MEMORY.md`, `USER.md`, `memory/*.md`, and the
 migrated extra paths. Builtin indexes those same Markdown sources on its next
@@ -150,30 +302,14 @@ install the [llama.cpp provider](/plugins/llama-cpp) and set
 `memory.search.provider: "local"`; without an embedding provider, builtin uses
 BM25 keyword search only.
 
-## When to use
-
-The builtin engine is the right choice for most users:
-
-- Works out of the box with no extra dependencies.
-- Handles keyword and vector search well.
-- Supports all embedding providers.
-- Hybrid search combines the best of both retrieval approaches.
-
-The builtin engine can index directories outside the workspace with
-`memory.search.extraPaths`. It uses bounded lexical query expansion to improve
-conversational recall, but it does not provide a learned or model-based relevance
-reranking stage. Its MMR pass is deterministic and local.
-
-Consider [Honcho](/concepts/memory-honcho) if you want cross-session memory
-with automatic user modeling.
-
 ## Troubleshooting
 
 **Memory search disabled?** Check `openclaw memory status`. If no provider is
 detected, set one explicitly or add an API key.
 
-**Local provider not detected?** Run interactive llama.cpp setup once, confirm
-the local path exists, and run:
+**Local provider not detected?** Run the interactive
+[llama.cpp](/plugins/llama-cpp) setup once with `openclaw onboard`, confirm the
+local path exists, and run:
 
 ```bash
 openclaw memory status --deep --agent main
@@ -192,6 +328,74 @@ vector store separately from the embedding provider, so `Vector store:
 unavailable` points at sqlite-vec loading while `Embeddings: unavailable`
 points at provider/auth or model readiness. Check logs for the specific load
 error.
+
+### Safe index recovery
+
+To rebuild after stale results or an embedding-provider change, select the
+affected agent explicitly:
+
+```bash
+openclaw memory status --agent <agent-id> --deep
+openclaw memory index --agent <agent-id> --force --verbose
+openclaw memory status --agent <agent-id> --deep
+```
+
+<Warning>
+The index shares `openclaw-agent.sqlite` with canonical sessions, transcripts,
+and other durable agent state. Never delete that database or its `-wal`, `-shm`,
+or `-journal` sidecars to reset memory. Memory indexing cannot reconstruct
+conversation history lost this way.
+</Warning>
+
+To discard the derived index and embedding cache before rebuilding, use
+[`memory reset`](/cli/memory#memory-reset):
+
+```bash
+openclaw memory reset --agent <agent-id>
+openclaw memory index --agent <agent-id>
+```
+
+Reset asks for confirmation; add `--yes` for non-interactive use. It clears only
+memory-owned derived tables, preserving non-memory database tables, including
+sessions and transcripts, and memory source files. It coordinates with
+existing memory maintenance without restarting the Gateway, which can reindex
+retained sources afterward. If indexing is busy, let it finish and retry reset.
+Reset does not shrink the database file or recover already deleted data.
+
+If indexing fails or the database grows unexpectedly, keep the database and
+its sidecars, retain the verbose error, and [create and verify a backup](/cli/backup)
+before manual recovery. A large database alone does not show which tables are
+responsible. Reindexing is not a session-history restore: if history is missing
+after moving or deleting the database, recover from a verified backup using
+the [restore workflow](/install/backups#restore-a-full-archive).
+
+### Reclaim disk space
+
+Start with `openclaw memory status --agent <agent-id> --json`. Compare the
+database and WAL sizes, reusable bytes, retained embedding-cache payload, and
+per-source chunk payloads. Reusable bytes are pages already free inside SQLite;
+they are not additional data. Cache and chunk payloads exclude indexes and
+SQLite overhead, so they do not explain every byte in the shared file.
+
+If the derived index needs to be discarded, create and verify a
+[backup](/cli/backup), then stop the Gateway through its deployment owner and
+stop other writers. Keep them stopped through reset and compaction so background
+indexing cannot refill the cache between commands:
+
+```bash
+openclaw memory reset --agent <agent-id> --yes
+openclaw doctor --session-sqlite compact --session-sqlite-agent <agent-id>
+openclaw memory index --agent <agent-id>
+openclaw memory status --agent <agent-id>
+```
+
+If only unused pages need reclaiming, skip reset and preserve the existing index.
+Doctor compacts the whole agent database, verifies integrity, and reports the
+before/after database and WAL sizes. Compaction needs temporary disk space; on a
+full volume, free space or move a verified backup to a volume with sufficient
+capacity before attempting it. Rebuilding can call the embedding provider and
+incur cost. Restart the Gateway through its deployment owner after verification.
+Neither reset nor compaction removes canonical sessions or changes retention.
 
 ## Configuration
 

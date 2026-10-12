@@ -8,9 +8,7 @@
 // msteams cancel has no inbound event: user Stop makes Teams 403 the next chunk
 // and the SDK throws StreamCancelledError synchronously from the write, so the
 // cancel scenario arms a stream write fault at setup and maps the scripted
-// `cancel` step to nothing. A non-cancel write fault latches streamFailed and
-// the full reply is intentionally re-delivered as blocks even though a prefix
-// already streamed (duplication over truncation — see reply-stream-controller).
+// `cancel` step to nothing.
 // Refresh goldens with OPENCLAW_TRACE_UPDATE=1 (see delivery-trace harness docs).
 import {
   deliveryTraceScenarios,
@@ -39,10 +37,10 @@ type CapturedDispatcherOptions = {
 
 /**
  * Deterministic stream write fault. Writes are counted across emit/update/close;
- * the fault fires at `atWrite` and every later write, matching a broken or
- * canceled SDK HttpStream that stays broken for the rest of the turn.
+ * the fault fires at `atWrite` and every later write, matching a canceled
+ * SDK HttpStream for the rest of the turn.
  */
-type StreamWriteFault = { atWrite: number; kind: "cancelled" | "broken" };
+type StreamWriteFault = { atWrite: number };
 
 function createStreamCancelledError(): Error {
   // The controller matches by err.name (the SDK class re-export is not
@@ -60,23 +58,15 @@ function createRecordingStream(recorder: WireRecorder, fault?: StreamWriteFault)
     if (!fault || writes < fault.atWrite) {
       return;
     }
-    if (fault.kind === "cancelled") {
-      // SDK behavior on user Stop: the chunk POST 403s, the streamer flips its
-      // canceled flag, and this and every later write throws StreamCancelledError.
-      canceled = true;
-      recorder.recordWireCall({
-        method,
-        ...(payload !== undefined ? { payload } : {}),
-        result: { error: "StreamCancelledError" },
-      });
-      throw createStreamCancelledError();
-    }
+    // SDK behavior on user Stop: the chunk POST 403s, the streamer flips its
+    // canceled flag, and this and every later write throws StreamCancelledError.
+    canceled = true;
     recorder.recordWireCall({
       method,
       ...(payload !== undefined ? { payload } : {}),
-      result: { error: "stream write failed" },
+      result: { error: "StreamCancelledError" },
     });
-    throw new Error("Teams stream write failed");
+    throw createStreamCancelledError();
   };
   return {
     emit(activity: unknown): void {
@@ -212,19 +202,7 @@ const MSTEAMS_TRACE_CASES: readonly MSTeamsTraceCase[] = [
     scenario: "cancel-mid-stream",
     conversationType: "personal",
     conversationId: "a:1dm-trace-conversation",
-    streamWriteFault: { atWrite: 2, kind: "cancelled" },
-  },
-  {
-    // Mid-stream non-cancel write failure latches streamFailed: the streamed
-    // prefix stays visible AND the full reply re-delivers as blocks. A later
-    // segment rewrites the stale stream buffer, then finalize attempts the
-    // closing metadata write after fallback delivery. The duplication is the
-    // contract (truncation is the worse outcome).
-    golden: "stream-failure-redeliver-full",
-    scenario: "streaming-happy",
-    conversationType: "personal",
-    conversationId: "a:1dm-trace-conversation",
-    streamWriteFault: { atWrite: 2, kind: "broken" },
+    streamWriteFault: { atWrite: 2 },
   },
 ];
 
@@ -244,7 +222,6 @@ function setupMSTeamsTrace(recorder: WireRecorder, traceCase: MSTeamsTraceCase) 
     runtime: { error: () => {} } as never,
     log: { info: () => {}, error: () => {} },
     app: {} as never,
-    appId: "app-trace",
     conversationRef: {
       activityId: "inbound-activity",
       user: { id: "29:trace-user", name: "Trace User" },

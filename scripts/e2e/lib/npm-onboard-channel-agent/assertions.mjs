@@ -8,7 +8,7 @@ import {
 import {
   assertNoLegacyPrimaryAuthRows,
   assertOpenAiEnvAuthProfileStore,
-  readSharedAuthProfileStoreText,
+  readCanonicalAuthProfileStoreText,
 } from "../auth-profile-store-assertions.mjs";
 import { readPositiveIntEnv } from "../env-limits.mjs";
 import {
@@ -89,7 +89,7 @@ function assertOnboardState() {
     throw new Error("onboard did not write openclaw.json");
   }
   assertNoLegacyPrimaryAuthRows(stateDir);
-  const authStoreText = readSharedAuthProfileStoreText(stateDir);
+  const authStoreText = readCanonicalAuthProfileStoreText(stateDir);
   if (!authStoreText) {
     throw new Error("onboard did not persist auth profile store");
   }
@@ -115,11 +115,6 @@ function assertMockModelConfig() {
   const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
   const cfg = readJson(configPath);
   const provider = cfg.models?.providers?.openai;
-  const defaultModel = cfg.agents?.defaults?.model?.primary;
-  const defaultRuntime = cfg.agents?.defaults?.models?.[expectedModelRef]?.agentRuntime?.id;
-  const agent = cfg.agents?.entries?.main;
-  const agentModel = agent?.model?.primary;
-  const agentRuntime = agent?.models?.[expectedModelRef]?.agentRuntime?.id;
   if (provider?.baseUrl !== expectedBaseUrl) {
     throw new Error(
       `mock OpenAI baseUrl was not preserved; expected ${expectedBaseUrl}, got ${provider?.baseUrl}`,
@@ -131,21 +126,20 @@ function assertMockModelConfig() {
   if (provider?.agentRuntime?.id !== "openclaw") {
     throw new Error(`mock OpenAI runtime was not preserved; got ${provider?.agentRuntime?.id}`);
   }
-  if (defaultModel !== expectedModelRef) {
-    throw new Error(
-      `mock default model was not preserved; expected ${expectedModelRef}, got ${defaultModel}`,
-    );
-  }
-  if (defaultRuntime !== "openclaw") {
-    throw new Error(`mock default runtime was not preserved; got ${defaultRuntime}`);
-  }
-  if (agentModel !== expectedModelRef) {
-    throw new Error(
-      `mock agent model was not preserved; expected ${expectedModelRef}, got ${agentModel}`,
-    );
-  }
-  if (agentRuntime !== "openclaw") {
-    throw new Error(`mock agent runtime was not preserved; got ${agentRuntime}`);
+  for (const [label, agent] of [
+    ["default", cfg.agents?.defaults],
+    ["agent", cfg.agents?.entries?.main],
+  ]) {
+    const model = agent?.model?.primary;
+    const runtime = agent?.models?.[expectedModelRef]?.agentRuntime?.id;
+    if (model !== expectedModelRef) {
+      throw new Error(
+        `mock ${label} model was not preserved; expected ${expectedModelRef}, got ${model}`,
+      );
+    }
+    if (runtime !== "openclaw") {
+      throw new Error(`mock ${label} runtime was not preserved; got ${runtime}`);
+    }
   }
 }
 
@@ -158,38 +152,26 @@ function assertChannelConfig() {
   if (!entry || entry.enabled === false) {
     throw new Error(`${channel} was not enabled`);
   }
-  const assertTokenField = (field, expected) => {
+  const tokenFields = new Map([
+    ["telegram", ["botToken"]],
+    ["discord", ["token"]],
+    ["slack", ["botToken", "appToken"]],
+  ]).get(channel);
+  if (!tokenFields) {
+    throw new Error(`unsupported channel config assertion: ${channel}`);
+  }
+  if (expectedTokens.length !== tokenFields.length) {
+    throw new Error(
+      `${channel} channel config assertion requires ${channel === "slack" ? "bot and app tokens" : "one bot token"}`,
+    );
+  }
+  for (const [index, field] of tokenFields.entries()) {
+    const expected = expectedTokens[index];
     if (entry[field] !== expected) {
       throw new Error(
         `${channel} config did not persist ${field}; expected ${expected}, got ${JSON.stringify(entry[field])}`,
       );
     }
-  };
-  switch (channel) {
-    case "telegram": {
-      if (expectedTokens.length !== 1) {
-        throw new Error("telegram channel config assertion requires one bot token");
-      }
-      assertTokenField("botToken", expectedTokens[0]);
-      return;
-    }
-    case "discord": {
-      if (expectedTokens.length !== 1) {
-        throw new Error("discord channel config assertion requires one bot token");
-      }
-      assertTokenField("token", expectedTokens[0]);
-      return;
-    }
-    case "slack": {
-      if (expectedTokens.length !== 2) {
-        throw new Error("slack channel config assertion requires bot and app tokens");
-      }
-      assertTokenField("botToken", expectedTokens[0]);
-      assertTokenField("appToken", expectedTokens[1]);
-      return;
-    }
-    default:
-      throw new Error(`unsupported channel config assertion: ${channel}`);
   }
 }
 

@@ -3,17 +3,22 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { getRegistryWorktree, insertRegistryWorktree } from "../agents/worktrees/registry.js";
+import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
+import { getRegistryWorktree } from "../agents/worktrees/registry.test-support.js";
 import { ManagedWorktreeService } from "../agents/worktrees/service.js";
 import { initializeManagedWorktreeTestRepository } from "../agents/worktrees/service.test-support.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
-import { detectLegacyStateMigrations, runLegacyStateMigrations } from "./state-migrations.js";
+import {
+  detectLegacyStateMigrations,
+  runLegacyStateMigrations,
+} from "./state-migrations.doctor.js";
 
 describe("managed worktree path state migrations", () => {
   beforeEach(() => {
@@ -94,11 +99,11 @@ describe("managed worktree path state migrations", () => {
         path: movedPath,
         branch: "openclaw/moved",
       };
-      insertRegistryWorktree(env, removed, { provisionedPaths: [] });
-      insertRegistryWorktree(env, canonical, { provisionedPaths: [] });
-      insertRegistryWorktree(env, moved, { provisionedPaths: [] });
+      await insertRegistryWorktree(env, removed, { provisionedPaths: [] });
+      await insertRegistryWorktree(env, canonical, { provisionedPaths: [] });
+      await insertRegistryWorktree(env, moved, { provisionedPaths: [] });
 
-      closeOpenClawStateDatabaseForTest();
+      await closeOpenClawStateDatabaseAsync();
       const { DatabaseSync } = requireNodeSqlite();
       const beforeCleanupOutcome = new DatabaseSync(database.path);
       try {
@@ -129,6 +134,17 @@ describe("managed worktree path state migrations", () => {
       expect(result.changes).toContain(
         "Canonicalized 2 managed worktree paths for symlinked state directories",
       );
+      expect(
+        result.stepReceipts.find((receipt) => receipt.id === "managed-worktrees"),
+      ).toMatchObject({
+        source: [
+          { kind: "sqlite", path: database.path },
+          ...[live.id, removed.id]
+            .toSorted()
+            .map((id) => ({ kind: "owner", id: `core:managed-worktree:${id}` })),
+        ],
+        outcome: "completed",
+      });
       expect(getRegistryWorktree(env, live.id)?.path).toBe(live.path);
       expect(getRegistryWorktree(env, removed.id)?.path).toBe(
         path.join(canonicalRoot, live.repoFingerprint, removed.name),

@@ -1,0 +1,131 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
+import type { Locator, Page } from "playwright";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+
+export const sessionKey = "agent:main:dashboard";
+export const boardSnapshot = {
+  sessionKey,
+  revision: 1,
+  tabs: [
+    { tabId: "main", title: "Main", position: 0, chatDock: "right" },
+    { tabId: "research", title: "Research", position: 1, chatDock: "right" },
+  ],
+  widgets: [
+    {
+      name: "status",
+      tabId: "main",
+      title: "Status",
+      contentKind: "html",
+      sizeW: 6,
+      sizeH: 4,
+      position: 0,
+      grantState: "pending",
+      revision: 1,
+      frameUrl: "about:blank#status",
+    },
+    {
+      name: "sources",
+      tabId: "research",
+      title: "Sources",
+      contentKind: "html",
+      sizeW: 6,
+      sizeH: 4,
+      position: 0,
+      grantState: "pending",
+      revision: 1,
+      frameUrl: "about:blank#sources",
+    },
+  ],
+};
+export const pinnedBoardSnapshot = {
+  ...boardSnapshot,
+  revision: 2,
+  widgets: [
+    ...boardSnapshot.widgets,
+    {
+      name: "canvas-cv_release",
+      tabId: "main",
+      title: "Release status",
+      contentKind: "html",
+      sizeW: 6,
+      sizeH: 4,
+      position: 1,
+      grantState: "pending",
+      revision: 1,
+      frameUrl: "about:blank#canvas-cv_release",
+    },
+  ],
+};
+export const pinnedMcpAppBoardSnapshot = {
+  ...boardSnapshot,
+  revision: 2,
+  widgets: [
+    ...boardSnapshot.widgets,
+    {
+      name: "mcp-app-28b65635ecaa78ac",
+      tabId: "main",
+      title: "Demo App",
+      contentKind: "mcp-app",
+      sizeW: 6,
+      sizeH: 4,
+      position: 1,
+      grantState: "pending",
+      revision: 1,
+      instanceId: "instance-pinned-app",
+    },
+  ],
+};
+export const pluginWidgetBoardSnapshot = {
+  sessionKey,
+  revision: 1,
+  tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
+  widgets: [
+    {
+      name: "workboard-card",
+      tabId: "main",
+      title: "Priority card",
+      contentKind: "plugin",
+      pluginKind: "workboard:card",
+      props: { cardId: "card-widget-ready" },
+      sizeW: 6,
+      sizeH: 4,
+      position: 0,
+      grantState: "none",
+      revision: 1,
+    },
+    {
+      name: "workboard-summary",
+      tabId: "main",
+      title: "Platform summary",
+      contentKind: "plugin",
+      pluginKind: "workboard:mini",
+      props: { boardId: "platform", limit: 2 },
+      sizeW: 6,
+      sizeH: 4,
+      position: 1,
+      grantState: "none",
+      revision: 1,
+    },
+  ],
+};
+
+export async function captureWidgetDetailsPlacement(
+  page: Page,
+  artifactDir: string,
+  content: Locator[],
+) {
+  if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
+    return;
+  }
+  const conversation = page.locator(".chat-main__conversation");
+  const frame = await takeControlUiScreenshotFrame(page, conversation, content, {
+    animations: "disabled",
+    elements: [conversation],
+  });
+  await writeFile(path.join(artifactDir, "widget-details-placement.png"), frame.png);
+  await writeFile(
+    path.join(artifactDir, "widget-details-placement-crop.png"),
+    frame.elements[0]!.png,
+  );
+}

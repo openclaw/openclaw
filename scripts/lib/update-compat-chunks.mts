@@ -1,0 +1,672 @@
+import fs from "node:fs";
+import path from "node:path";
+import * as ts from "typescript/unstable/ast";
+import { createNativeTypeScriptParser } from "./native-typescript.mts";
+import { isRecord as object } from "./record-shared.mjs";
+import { parseReleaseVersion } from "./release-version.mjs";
+import {
+  isUpdateCompatibilityChunk,
+  UPDATE_COMPATIBILITY_CHUNK_HEADER,
+} from "./update-compat-contract.mjs";
+import { ModuleGraph, type UpdateCompatibilityOrigin } from "./update-compat-module-graph.mts";
+
+export { isUpdateCompatibilityChunk } from "./update-compat-contract.mjs";
+const HASHED_CHUNK = /-[A-Za-z0-9_-]{8}\.m?js$/;
+const POST_SWAP_OWNER = /^src\/(?:cli\/update-cli\/|daemon\/|cli\/runtime-cleanup(?:-scope)?\.ts$)/;
+
+// These verified releases coalesced lifecycle declarations under the cache module's region.
+// Keep this provenance correction only while those releases remain in the supported upgrade window.
+const COALESCED_REGISTRY_RELEASES = [
+  {
+    version: "2026.9.1",
+    buildId: "2026.9.1-release-ad6fe23aecb9-2026-09-03T15-04-19.382Z",
+    commit: "ad6fe23aecb9b833d68139b0ddc9f239b894d2f1",
+    integrity:
+      "sha512-0Ve0631CdgkJDwd4NNG1BawIdF5yCL2sO+Tts8amStw+H6vKURTj0K4rOa4+hFpJk1Dnw5LyKl5twzwX1VtA2w==",
+    chunk: "registry-lifecycle-CzoxN0g_.js",
+  },
+  {
+    version: "2026.9.2",
+    buildId: "2026.9.2-release-3928bad9badf-2026-09-05T15-22-41.651Z",
+    commit: "3928bad9badfcb6c7d140530435e806fb8092190",
+    integrity:
+      "sha512-M6C7UsnX815nv26qBJFYGe6aGzv+ftZLRzV6S9oRXUtXg2Yn67eVntpssT94kgkquKVSeUxerUg0j1ONp4WYQg==",
+    chunk: "registry-lifecycle-D1ErazNK.js",
+  },
+  {
+    version: "2026.9.3",
+    buildId: "2026.9.3-release-1391f7cd2d40-2026-09-08T07-46-00.264Z",
+    commit: "1391f7cd2d40ab5bbcf2f5f831d3a64f520e72d7",
+    integrity:
+      "sha512-CzDHMeHdnjlIZ76ZyBb1lvLO4H/yBIMYXupFGGBN87x0853y3hg5nLAnKfxSKqLzqhbUKqy9ebDRAWWV4t8aew==",
+    chunk: "registry-lifecycle-BxSg6w0a.mjs",
+  },
+  {
+    version: "2026.9.4",
+    buildId: "2026.9.4-release-3a9d69db306c-2026-09-10T22-53-16.719Z",
+    commit: "3a9d69db306cd7f081e06254cb89c4bcc14a7107",
+    integrity:
+      "sha512-lTQpEEe1Xm3u2PCHaPEr+vP8paGk1vLdHuzdItsNToaLI6hAqRVvgJYg+GxukJhETJp4tPy/S1Gftl4KuB8n7A==",
+    chunk: "registry-lifecycle-Dbi3yP7o.mjs",
+  },
+];
+
+type UpdateCompatibilityChunk = {
+  path: string;
+  imports: Array<{ importer: string; owner: string; exports: string[] }>;
+  exports: Array<{ exported: string; origin: UpdateCompatibilityOrigin }>;
+};
+export type UpdateCompatibilityRelease = {
+  version: string;
+  buildId: string;
+  commit: string;
+  integrity: string;
+  schemaVersions?: unknown;
+  chunks: UpdateCompatibilityChunk[];
+};
+export type UpdateCompatibilityInventory = {
+  schemaVersion: 1;
+  releases: UpdateCompatibilityRelease[];
+};
+
+function portable(value: string): string {
+  return value.split(path.sep).join("/");
+}
+
+function moduleFiles(root: string): string[] {
+  const files: string[] = [];
+  const visit = (directory: string) => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const file = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        // Plugin outputs and installed dependencies are independent runtime graphs.
+        if (!["node_modules", "extensions", "plugin-sdk"].includes(entry.name)) {
+          visit(file);
+        }
+      } else if (entry.isFile() && /\.m?js$/.test(entry.name)) {
+        files.push(file);
+      }
+    }
+  };
+  visit(root);
+  return files.toSorted();
+}
+
+function ownerAt(source: string, offset: number): string | undefined {
+  let owner: string | undefined;
+  for (const match of source.matchAll(/^\/\/#region (.+)$/gm)) {
+    if (match.index > offset) {
+      break;
+    }
+    owner = match[1];
+  }
+  return owner;
+}
+
+function isPostSwapImport(owner: string, node: ts.CallExpression): boolean {
+  // The wizard starts the update, and cleanup-scope prepares its resources
+  // before running the command. Only its final drain can follow replacement.
+  if (owner === "src/cli/update-cli/wizard.ts") {
+    return false;
+  }
+  if (owner !== "src/cli/runtime-cleanup-scope.ts") {
+    return true;
+  }
+  for (let ancestor: ts.Node = node; ancestor.parent; ancestor = ancestor.parent) {
+    if (ts.isTryStatement(ancestor.parent) && ancestor.parent.finallyBlock === ancestor) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function consumedPromiseAllExports(node: ts.CallExpression): string[] | undefined {
+  const array = node.parent;
+  if (
+    !ts.isArrayLiteralExpression(array) ||
+    !array.elements.every(
+      (element) =>
+        ts.isCallExpression(element) &&
+        element.expression.kind === ts.SyntaxKind.ImportKeyword &&
+        element.arguments.length === 1 &&
+        ts.isStringLiteralLikeNode(element.arguments[0]!),
+    )
+  ) {
+    return undefined;
+  }
+  const call = array.parent;
+  if (
+    !ts.isCallExpression(call) ||
+    call.questionDotToken ||
+    call.arguments.length !== 1 ||
+    !ts.isPropertyAccessExpression(call.expression) ||
+    call.expression.questionDotToken ||
+    !ts.isIdentifier(call.expression.expression) ||
+    call.expression.expression.text !== "Promise" ||
+    call.expression.name.text !== "all" ||
+    !ts.isAwaitExpression(call.parent)
+  ) {
+    return undefined;
+  }
+  const declaration = call.parent.parent;
+  if (
+    !ts.isVariableDeclaration(declaration) ||
+    declaration.initializer !== call.parent ||
+    !ts.isArrayBindingPattern(declaration.name) ||
+    declaration.name.elements.length !== array.elements.length
+  ) {
+    return undefined;
+  }
+  const names: string[][] = [];
+  for (const element of declaration.name.elements) {
+    if (
+      !ts.isBindingElement(element) ||
+      element.dotDotDotToken ||
+      element.initializer ||
+      !element.name ||
+      !ts.isObjectBindingPattern(element.name) ||
+      element.name.elements.length === 0
+    ) {
+      return undefined;
+    }
+    const exports: string[] = [];
+    for (const binding of element.name.elements) {
+      const name = binding.propertyName ?? binding.name;
+      if (
+        binding.dotDotDotToken ||
+        binding.initializer ||
+        !binding.name ||
+        !name ||
+        !ts.isIdentifier(binding.name) ||
+        !ts.isIdentifier(name)
+      ) {
+        return undefined;
+      }
+      exports.push(name.text);
+    }
+    names.push(exports);
+  }
+  return names[array.elements.indexOf(node)];
+}
+
+function consumedExports(node: ts.CallExpression): string[] | undefined {
+  let expression: ts.Node = node;
+  let awaited = false;
+  while (
+    ts.isAwaitExpression(expression.parent) ||
+    ts.isParenthesizedExpression(expression.parent)
+  ) {
+    awaited ||= ts.isAwaitExpression(expression.parent);
+    expression = expression.parent;
+  }
+  // A direct import() is a Promise; its properties are not namespace exports.
+  if (!awaited) {
+    return consumedPromiseAllExports(node);
+  }
+  const parent = expression.parent;
+  if (ts.isPropertyAccessExpression(parent) && parent.expression === expression) {
+    return [parent.name.text];
+  }
+  if (
+    ts.isElementAccessExpression(parent) &&
+    parent.expression === expression &&
+    ts.isStringLiteralLikeNode(parent.argumentExpression)
+  ) {
+    return [parent.argumentExpression.text];
+  }
+  if (
+    ts.isVariableDeclaration(parent) &&
+    parent.initializer === expression &&
+    ts.isObjectBindingPattern(parent.name)
+  ) {
+    const names: string[] = [];
+    for (const element of parent.name.elements) {
+      const name = element.propertyName ?? element.name;
+      if (element.dotDotDotToken || !name || !ts.isIdentifier(name)) {
+        return undefined;
+      }
+      names.push(name.text);
+    }
+    return names;
+  }
+  return undefined;
+}
+
+/** Record the package's emitted imports, without executing any package code. */
+export function recordUpdateCompatibilityRelease(params: {
+  packageDir: string;
+  integrity: string;
+}): UpdateCompatibilityRelease {
+  const packageDir = path.resolve(params.packageDir);
+  const distDir = path.join(packageDir, "dist");
+  const packageJson = JSON.parse(fs.readFileSync(path.join(packageDir, "package.json"), "utf8"));
+  const build = JSON.parse(fs.readFileSync(path.join(distDir, "build-info.json"), "utf8"));
+  if (
+    packageJson.name !== "openclaw" ||
+    packageJson.version !== build.version ||
+    typeof build.buildId !== "string" ||
+    typeof build.commit !== "string" ||
+    !/^sha512-[A-Za-z0-9+/]+=*$/.test(params.integrity)
+  ) {
+    throw new Error(
+      "Update compatibility inventory requires an OpenClaw release build and npm SHA-512 integrity",
+    );
+  }
+  const historicalRegistryChunk = COALESCED_REGISTRY_RELEASES.find(
+    (release) =>
+      release.version === packageJson.version &&
+      release.buildId === build.buildId &&
+      release.commit === build.commit &&
+      release.integrity === params.integrity,
+  )?.chunk;
+  using parser = createNativeTypeScriptParser({ cwd: packageDir });
+  const graph = new ModuleGraph(parser);
+  const chunks = new Map<string, UpdateCompatibilityChunk>();
+  for (const file of moduleFiles(distDir)) {
+    const source = fs.readFileSync(file, "utf8");
+    if (
+      !source.includes("import(") ||
+      ![...source.matchAll(/^\/\/#region (.+)$/gm)].some(
+        ([, owner]) => owner !== undefined && POST_SWAP_OWNER.test(owner),
+      )
+    ) {
+      continue;
+    }
+    const visit = (node: ts.Node) => {
+      if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+        const owner = ownerAt(source, node.getStart());
+        if (owner && POST_SWAP_OWNER.test(owner) && isPostSwapImport(owner, node)) {
+          const specifier = node.arguments[0];
+          if (!specifier || !ts.isStringLiteralLikeNode(specifier)) {
+            // This inventory bridges literal dist imports. Computed package
+            // assets retain their package owner's installation contract.
+            return;
+          }
+          if (specifier.text.startsWith(".")) {
+            const target = path.resolve(path.dirname(file), specifier.text);
+            const relative = portable(path.relative(distDir, target));
+            if (relative.startsWith("../")) {
+              throw new Error(`Post-swap import escapes dist: ${relative}`);
+            }
+            const names = consumedExports(node) ?? graph.names(target);
+            const chunk = chunks.get(relative) ?? { path: relative, imports: [], exports: [] };
+            chunk.imports.push({
+              importer: portable(path.relative(distDir, file)),
+              owner,
+              exports: names.toSorted(),
+            });
+            for (const exported of names) {
+              if (chunk.exports.some((entry) => entry.exported === exported)) {
+                continue;
+              }
+              let origin = graph.origin(target, exported);
+              if (!origin) {
+                throw new Error(
+                  `Cannot trace ${relative} export ${exported} to its release source`,
+                );
+              }
+              if (
+                relative === historicalRegistryChunk &&
+                exported === "markPluginRegistryRetired" &&
+                origin.module === "src/plugins/loader-cache-state.ts" &&
+                origin.symbol === "markPluginRegistryRetired"
+              ) {
+                origin = { module: "src/plugins/registry-lifecycle.ts", symbol: origin.symbol };
+              }
+              chunk.exports.push({ exported, origin });
+            }
+            chunks.set(relative, chunk);
+          }
+        }
+      }
+      node.forEachChild(visit);
+    };
+    visit(parser.parseSourceFile(file, source));
+  }
+  return {
+    version: packageJson.version,
+    buildId: build.buildId,
+    commit: build.commit,
+    integrity: params.integrity,
+    schemaVersions: packageJson.openclaw?.schemaVersions,
+    chunks: [...chunks.values()]
+      .toSorted((a, b) => a.path.localeCompare(b.path))
+      .map((chunk) => ({
+        path: chunk.path,
+        imports: chunk.imports,
+        exports: chunk.exports.toSorted((a, b) => a.exported.localeCompare(b.exported)),
+      })),
+  };
+}
+
+function safeRelative(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    !value.includes("\\") &&
+    !path.posix.isAbsolute(value) &&
+    !value.split("/").includes("..")
+  );
+}
+function identifier(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z_$][\w$]*$/.test(value);
+}
+
+export function readUpdateCompatibilityInventory(file: string): UpdateCompatibilityInventory {
+  const value: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
+  return parseUpdateCompatibilityInventory(value, file);
+}
+
+export function parseUpdateCompatibilityInventory(
+  value: unknown,
+  file = "update compatibility inventory",
+): UpdateCompatibilityInventory {
+  if (
+    !object(value) ||
+    value.schemaVersion !== 1 ||
+    !Array.isArray(value.releases) ||
+    value.releases.length < 1
+  ) {
+    throw new Error(`Invalid update compatibility inventory: ${file}`);
+  }
+  const releases: UpdateCompatibilityRelease[] = value.releases.map((release) => {
+    if (
+      !object(release) ||
+      typeof release.version !== "string" ||
+      typeof release.buildId !== "string" ||
+      typeof release.commit !== "string" ||
+      typeof release.integrity !== "string" ||
+      !Array.isArray(release.chunks)
+    ) {
+      throw new Error(`Invalid release in ${file}`);
+    }
+    const chunks: UpdateCompatibilityChunk[] = release.chunks.map((chunk) => {
+      if (
+        !object(chunk) ||
+        !safeRelative(chunk.path) ||
+        !/\.m?js$/.test(chunk.path) ||
+        !Array.isArray(chunk.imports) ||
+        !Array.isArray(chunk.exports) ||
+        chunk.imports.length === 0 ||
+        chunk.exports.length === 0
+      ) {
+        throw new Error(`Invalid chunk in ${file}`);
+      }
+      const imports = chunk.imports.map((entry) => {
+        if (
+          !object(entry) ||
+          !safeRelative(entry.importer) ||
+          !safeRelative(entry.owner) ||
+          !Array.isArray(entry.exports) ||
+          !entry.exports.every(identifier)
+        ) {
+          throw new Error(`Invalid import in ${file}`);
+        }
+        return { importer: entry.importer, owner: entry.owner, exports: entry.exports };
+      });
+      const exports = chunk.exports.map((entry) => {
+        if (
+          !object(entry) ||
+          !identifier(entry.exported) ||
+          !object(entry.origin) ||
+          !safeRelative(entry.origin.module) ||
+          !identifier(entry.origin.symbol)
+        ) {
+          throw new Error(`Invalid export in ${file}`);
+        }
+        return {
+          exported: entry.exported,
+          origin: { module: entry.origin.module, symbol: entry.origin.symbol },
+        };
+      });
+      for (const entry of imports) {
+        for (const name of entry.exports) {
+          if (!exports.some((exported) => exported.exported === name)) {
+            throw new Error(`Missing recorded export ${chunk.path}:${name} in ${file}`);
+          }
+        }
+      }
+      return { path: chunk.path, imports, exports };
+    });
+    return {
+      version: release.version,
+      buildId: release.buildId,
+      commit: release.commit,
+      integrity: release.integrity,
+      schemaVersions: release.schemaVersions,
+      chunks,
+    };
+  });
+  const versions = new Set<string>();
+  for (const release of releases) {
+    if (
+      parseReleaseVersion(release.version)?.version !== release.version ||
+      versions.has(release.version)
+    ) {
+      throw new Error(`Invalid or duplicate release version ${release.version} in ${file}`);
+    }
+    versions.add(release.version);
+  }
+  collectRequiredCompatibilityChunks(releases);
+  return { schemaVersion: 1, releases };
+}
+
+function collectRequiredCompatibilityChunks(
+  releases: UpdateCompatibilityRelease[],
+): UpdateCompatibilityChunk[] {
+  const requiredByPath = new Map<string, UpdateCompatibilityChunk>();
+  const exportVersions = new Map<string, string>();
+  for (const release of releases) {
+    for (const chunk of release.chunks) {
+      const merged = requiredByPath.get(chunk.path) ?? {
+        path: chunk.path,
+        imports: [],
+        exports: [],
+      };
+      for (const entry of chunk.exports) {
+        const previous = merged.exports.find((candidate) => candidate.exported === entry.exported);
+        const key = `${chunk.path}:${entry.exported}`;
+        if (
+          previous &&
+          (previous.origin.module !== entry.origin.module ||
+            previous.origin.symbol !== entry.origin.symbol)
+        ) {
+          throw new Error(
+            `Release inventories disagree about ${key}: ${exportVersions.get(key)} uses ${previous.origin.module}:${previous.origin.symbol}; ${release.version} uses ${entry.origin.module}:${entry.origin.symbol}`,
+          );
+        }
+        if (!previous) {
+          merged.exports.push(entry);
+          exportVersions.set(key, release.version);
+        }
+      }
+      requiredByPath.set(chunk.path, merged);
+    }
+  }
+  return [...requiredByPath.values()];
+}
+
+const STABLE_10_1_CLEANUP_FACADE = "runtime-cleanup-DlrF_x2c.mjs";
+const STABLE_10_1_CLEANUP_OWNER = "runtime-cleanup-Dowg583v.mjs";
+
+export function listUpdateCompatibilityChunkPaths(
+  inventory: UpdateCompatibilityInventory,
+): string[] {
+  return [
+    ...new Set(
+      inventory.releases.flatMap((release) => [
+        ...release.chunks
+          .filter((chunk) => HASHED_CHUNK.test(chunk.path))
+          .map((chunk) => chunk.path),
+        ...(release.version === "2026.10.1" ? [STABLE_10_1_CLEANUP_OWNER] : []),
+      ]),
+    ),
+  ].toSorted();
+}
+
+/** Follow the old owner's current lexical binding when its implementation moves. */
+function currentOrigin(
+  origin: UpdateCompatibilityOrigin,
+  sourceDir: string,
+  graph: ModuleGraph,
+): UpdateCompatibilityOrigin {
+  const file = path.join(sourceDir, origin.module);
+  if (!fs.existsSync(file)) {
+    return origin;
+  }
+  const resolved = graph.localOrigin(file, origin.symbol) ?? graph.origin(file, origin.symbol);
+  if (resolved) {
+    return resolved;
+  }
+  const info = graph.info(file);
+  if (info.imports.has(origin.symbol) || info.exports.has(origin.symbol)) {
+    throw new Error(`Cannot resolve current source binding ${origin.module}:${origin.symbol}`);
+  }
+  return origin;
+}
+
+/** Generate only recorded hashed paths; existing public entrypoints remain build-owned. */
+export function writeUpdateCompatibilityChunks(params: {
+  distDir: string;
+  sourceDir: string;
+  inventory: UpdateCompatibilityInventory;
+}): string[] {
+  const distDir = path.resolve(params.distDir);
+  using parser = createNativeTypeScriptParser({ cwd: params.sourceDir });
+  const graph = new ModuleGraph(parser);
+  const sourceGraph = new ModuleGraph(parser, params.sourceDir);
+  const required = collectRequiredCompatibilityChunks(params.inventory.releases);
+  const origins = new Map<string, UpdateCompatibilityOrigin>();
+  for (const chunk of required) {
+    for (const entry of chunk.exports) {
+      const origin = currentOrigin(entry.origin, params.sourceDir, sourceGraph);
+      origins.set(`${entry.origin.module}:${entry.origin.symbol}`, origin);
+    }
+  }
+  const ownerModules = new Set([...origins.values()].map((origin) => origin.module));
+  const candidates = new Map<string, Map<string, { file: string; exported: string }>>();
+  for (const file of moduleFiles(distDir)) {
+    const relative = portable(path.relative(distDir, file));
+    // Retained config repairs and the one-shot native hook relay are built
+    // separately from the updater's runtime graph; their copies of shared
+    // modules are not bridge candidates.
+    if (
+      relative.startsWith("extensions/") ||
+      relative.startsWith("plugin-sdk/") ||
+      relative.startsWith("config-doctor/") ||
+      relative.startsWith("state-retention/") ||
+      relative.startsWith("native-hook-relay/")
+    ) {
+      continue;
+    }
+    const source = fs.readFileSync(file, "utf8");
+    if (
+      isUpdateCompatibilityChunk(source) ||
+      ![...source.matchAll(/^\/\/#region (.+)$/gm)].some(
+        ([, owner]) => owner !== undefined && ownerModules.has(owner),
+      )
+    ) {
+      continue;
+    }
+    for (const exported of graph.names(file)) {
+      const binding = graph.binding(file, exported);
+      const origin = binding?.origin;
+      if (!binding || binding.kind !== "file" || !origin) {
+        continue;
+      }
+      const key = `${origin.module}:${origin.symbol}`;
+      const matches = candidates.get(key) ?? new Map<string, { file: string; exported: string }>();
+      const bindingKey = `${binding.file}:${binding.symbol}`;
+      const previous = matches.get(bindingKey);
+      // Prefer the declaration's own export; sorted files/names break alias ties.
+      if (!previous || (file === binding.file && previous.file !== relative)) {
+        matches.set(bindingKey, { file: relative, exported });
+      }
+      candidates.set(key, matches);
+    }
+  }
+  const outputs = new Map<string, string>();
+  for (const chunk of required) {
+    const destination = path.join(distDir, chunk.path);
+    const existing =
+      fs.existsSync(destination) &&
+      !isUpdateCompatibilityChunk(fs.readFileSync(destination, "utf8"));
+    if (existing) {
+      const names = graph.names(destination);
+      for (const entry of chunk.exports) {
+        if (!names.includes(entry.exported)) {
+          throw new Error(
+            `Existing update compatibility target ${chunk.path} lacks ${entry.exported}`,
+          );
+        }
+        if (HASHED_CHUNK.test(chunk.path)) {
+          const actual = graph.origin(destination, entry.exported);
+          const expected = origins.get(`${entry.origin.module}:${entry.origin.symbol}`)!;
+          if (actual?.module !== expected.module || actual?.symbol !== expected.symbol) {
+            throw new Error(
+              `Existing update compatibility target ${chunk.path}:${entry.exported} has no equivalent source origin`,
+            );
+          }
+        }
+      }
+      continue;
+    }
+    if (!HASHED_CHUNK.test(chunk.path)) {
+      throw new Error(
+        `Missing public update compatibility target ${chunk.path}; restore its canonical build output`,
+      );
+    }
+    const lines = [UPDATE_COMPATIBILITY_CHUNK_HEADER];
+    for (const entry of chunk.exports) {
+      const origin = origins.get(`${entry.origin.module}:${entry.origin.symbol}`)!;
+      const matches = [...(candidates.get(`${origin.module}:${origin.symbol}`)?.values() ?? [])];
+      const match = matches[0];
+      if (matches.length !== 1 || !match) {
+        throw new Error(
+          `Cannot bridge ${chunk.path} export ${entry.exported} (${entry.origin.module}:${entry.origin.symbol}): ${matches.length ? `ambiguous current exports ${matches.map((candidate) => `${candidate.file}:${candidate.exported}`).join(", ")}` : "no equivalent current export"}`,
+        );
+      }
+      let specifier = portable(
+        path.relative(path.dirname(destination), path.join(distDir, match.file)),
+      );
+      if (!specifier.startsWith(".")) {
+        specifier = `./${specifier}`;
+      }
+      if (
+        chunk.path === STABLE_10_1_CLEANUP_FACADE &&
+        entry.exported === "runCliDisposerAfterPending"
+      ) {
+        // Published 10.1 loads the queue owner before updating, then imports this
+        // facade after replacement. Resolve through that original URL so Node uses
+        // its cached disposer queue, not the candidate's empty queue. Keep the owner
+        // path resolver-visible until upgrades from 10.1 are no longer supported.
+        const owner = path.join(distDir, STABLE_10_1_CLEANUP_OWNER);
+        if (!fs.existsSync(owner) || isUpdateCompatibilityChunk(fs.readFileSync(owner, "utf8"))) {
+          outputs.set(
+            STABLE_10_1_CLEANUP_OWNER,
+            `${UPDATE_COMPATIBILITY_CHUNK_HEADER}\nexport { ${match.exported} as i } from ${JSON.stringify(specifier)};\n`,
+          );
+        }
+        lines.push(
+          "// 10.1's already-loaded owner must drain its original pending disposer queue.",
+          `export { i as runCliDisposerAfterPending } from "./${STABLE_10_1_CLEANUP_OWNER}";`,
+        );
+      } else {
+        lines.push(
+          `export { ${match.exported} as ${entry.exported} } from ${JSON.stringify(specifier)};`,
+        );
+      }
+    }
+    const contents = `${lines.join("\n")}\n`;
+    outputs.set(chunk.path, contents);
+  }
+  // Finish all mappings before writing any compatibility output.
+  for (const [relative, contents] of outputs) {
+    const destination = path.join(distDir, relative);
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
+    if (!fs.existsSync(destination) || fs.readFileSync(destination, "utf8") !== contents) {
+      fs.writeFileSync(destination, contents);
+    }
+  }
+  return [...outputs.keys()].toSorted();
+}

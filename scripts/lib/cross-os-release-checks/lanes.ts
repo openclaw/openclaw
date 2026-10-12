@@ -1,4 +1,13 @@
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import type {
@@ -7,17 +16,22 @@ import type {
   CommandResult,
   GatewayHandle,
   LaneBaseParams,
+  LaneResult,
   LaneState,
+  PackagedUpgradeFallbackEvidence,
   ProviderConfig,
 } from "./config.ts";
 import {
-  buildPackagedUpgradeUpdateArgs,
+  buildPackagedUpgradeUpdateCommand,
   buildRealUpdateEnv,
   isRecoverableWindowsPackagedUpgradeSwapCleanupFailure,
   isRecoverableWindowsPackagedUpgradeTimeoutError,
+  isRecoverableWindowsPackagedUpgradeUnsettledExit,
   normalizeRequestedRef,
+  parsePackagedUpgradeUpdateTimings,
   resolveDevUpdateVerificationRef,
   resolveExpectedDevUpdateRef,
+  resolvePackagedUpgradeTimeouts,
   shouldRunMainChannelDevUpdate,
   shouldRunPackagedUpgradeStatusProbe,
   shouldUseManagedGatewayService,
@@ -39,6 +53,7 @@ import {
   runInstalledBrowserOverrideImportSmoke,
   shouldRunWindowsInstalledBrowserOverrideImportSmoke,
   verifyInstalledCandidate,
+  withNpmDiagnostics,
 } from "./install.ts";
 import {
   ensureDevUpdateGitInstall,
@@ -55,7 +70,9 @@ import {
   waitForInstalledGateway,
   waitForInstalledGatewayToStop,
 } from "./installed.ts";
+import { installLaneCompanions } from "./lane-companions.ts";
 import { maybeRunDiscordRoundtrip } from "./network-smokes.ts";
+import { runPackagedSelfUpdateTransition } from "./packaged-self-update.ts";
 import {
   reserveGatewayPortForLane,
   runCleanup,
@@ -75,76 +92,36 @@ import {
 } from "./runtime.ts";
 import { formatError, trimForSummary } from "./shared.ts";
 
-async function installLaneCompanions(
-  params: LaneBaseParams & {
-    lane: LaneState;
-    env: NodeJS.ProcessEnv;
-    cliPath?: string;
-  },
-) {
-  if (params.companions.length === 0) {
-    return;
-  }
-  await runTimedLanePhase(params.lane, "install-companions", async () => {
-    for (const companion of params.companions) {
-      const logPath = join(
-        params.logsDir,
-        `companion-${companion.name.replace(/[^a-z0-9]+/giu, "-")}.log`,
-      );
-      const args = ["plugins", "install", `npm-pack:${companion.tarballPath}`, "--force"];
-      if (params.cliPath) {
-        await runInstalledCli({
-          cliPath: params.cliPath,
-          args,
-          env: params.env,
-          cwd: params.lane.homeDir,
-          logPath,
-          timeoutMs: 10 * 60 * 1000,
-        });
-        continue;
-      }
-      await runOpenClaw({
-        lane: params.lane,
-        args,
-        env: params.env,
-        logPath,
-        timeoutMs: 10 * 60 * 1000,
-      });
-    }
-  });
-}
-
 export async function runFreshLane(params: LaneBaseParams & { build: CandidateBuild }) {
   const lane = createLaneState("fresh");
   const cleanup: Cleanup[] = [];
-  const gatewayHolder: { current: GatewayHandle | null } = { current: null };
   try {
     const env = buildLaneEnv(lane, params.providerConfig, params.providerSecretValue);
-    await runTimedLanePhase(lane, "install-candidate", async () => {
-      await installTarballPackage({
+    await runTimedLanePhase(lane, "install-candidate", () =>
+      installTarballPackage({
         lane,
         env,
         tgzPath: params.build.candidateTgz,
         logPath: join(params.logsDir, "fresh-install.log"),
         restoreBundledPluginPostinstall: false,
-      });
-    });
+      }),
+    );
     const installed = readInstalledMetadata(lane.prefixDir);
     verifyInstalledCandidate(installed, params.build);
-    await runTimedLanePhase(lane, "run-bundled-plugin-postinstall", async () => {
-      await runBundledPluginPostinstall({
+    await runTimedLanePhase(lane, "run-bundled-plugin-postinstall", () =>
+      runBundledPluginPostinstall({
         lane,
         env,
         logPath: join(params.logsDir, "fresh-install.log"),
-      });
-    });
+      }),
+    );
 
     let browserOverrideImportStatus = "skipped";
     if (shouldRunWindowsInstalledBrowserOverrideImportSmoke()) {
       browserOverrideImportStatus = await runTimedLanePhase(
         lane,
         "windows-browser-override-import",
-        async () =>
+        () =>
           runInstalledBrowserOverrideImportSmoke({
             lane,
             env,
@@ -156,59 +133,33 @@ export async function runFreshLane(params: LaneBaseParams & { build: CandidateBu
 
     await installLaneCompanions({ ...params, lane, env });
 
-    await runTimedLanePhase(lane, "onboard", async () => {
-      await runOnboard({
-        lane,
-        env,
-        providerConfig: params.providerConfig,
-        logPath: join(params.logsDir, "fresh-onboard.log"),
-      });
+    const authoredConfigPath = join(lane.stateDir, "openclaw.json");
+    const nestedPluginPath = "~/.openclaw/wiki";
+    const agent = await runPackagedGatewaySmoke({
+      ...params,
+      lane,
+      env,
+      cleanup,
+      beforeGatewayStart: () =>
+        runTimedLanePhase(lane, "seed-nested-plugin-path", async () => {
+          const config = JSON.parse(readFileSync(authoredConfigPath, "utf8"));
+          config.plugins ??= {};
+          config.plugins.entries ??= {};
+          // A disabled entry exercises generic path expansion without changing provider setup.
+          config.plugins.entries.wiki = {
+            enabled: false,
+            config: { store: { path: nestedPluginPath } },
+          };
+          writeFileSync(authoredConfigPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+        }),
+      afterGatewayReady: () =>
+        runTimedLanePhase(lane, "verify-nested-plugin-path", async () => {
+          const config = JSON.parse(readFileSync(authoredConfigPath, "utf8"));
+          if (config.plugins?.entries?.wiki?.config?.store?.path !== nestedPluginPath) {
+            throw new Error("Fresh Gateway startup changed the authored nested plugin path.");
+          }
+        }),
     });
-
-    await runTimedLanePhase(lane, "models-set", async () => {
-      await runModelsSet({
-        lane,
-        env,
-        providerConfig: params.providerConfig,
-        logPath: join(params.logsDir, "fresh-models-set.log"),
-      });
-    });
-
-    const gateway = await runTimedLanePhase(lane, "start-gateway", async () =>
-      startGateway({
-        lane,
-        env,
-        logPath: join(params.logsDir, "fresh-gateway.log"),
-      }),
-    );
-    gatewayHolder.current = gateway;
-    cleanup.push(() => stopGateway(gatewayHolder.current));
-
-    await runTimedLanePhase(lane, "wait-gateway", async () => {
-      await waitForGateway({
-        lane,
-        env,
-        gatewayHolder,
-        gatewayLogPath: join(params.logsDir, "fresh-gateway.log"),
-        logPath: join(params.logsDir, "fresh-gateway-status.log"),
-      });
-    });
-
-    await runTimedLanePhase(lane, "dashboard", async () => {
-      await runDashboardSmoke({
-        lane,
-        logPath: join(params.logsDir, "fresh-dashboard.log"),
-      });
-    });
-
-    const agent = await runTimedLanePhase(lane, "agent-turn", async () =>
-      runAgentTurn({
-        lane,
-        env,
-        label: "fresh",
-        logPath: join(params.logsDir, "fresh-agent.log"),
-      }),
-    );
 
     return {
       status: "pass",
@@ -241,7 +192,11 @@ export async function runUpgradeLane(
   }
   const lane = createLaneState("upgrade");
   const cleanup: Cleanup[] = [];
-  const gatewayHolder: { current: GatewayHandle | null } = { current: null };
+  const result: LaneResult = {
+    status: "pending",
+    phaseTimings: lane.phaseTimings,
+    updateTimings: [],
+  };
   try {
     const env = buildLaneEnv(lane, params.providerConfig, params.providerSecretValue);
     await runTimedLanePhase(lane, "install-baseline", async () => {
@@ -264,33 +219,62 @@ export async function runUpgradeLane(
         });
       }
     });
-    await runTimedLanePhase(lane, "run-baseline-bundled-plugin-postinstall", async () => {
-      await runBundledPluginPostinstall({
+    await runTimedLanePhase(lane, "run-baseline-bundled-plugin-postinstall", () =>
+      runBundledPluginPostinstall({
         lane,
         env,
         logPath: join(params.logsDir, "upgrade-install-baseline.log"),
-      });
-    });
+      }),
+    );
 
     const baseline = {
       version: readInstalledVersion(lane.prefixDir),
     };
 
-    const updateEnv = buildRealUpdateEnv(env);
-    const updateArgs = buildPackagedUpgradeUpdateArgs(params.candidateUrl);
+    if (baseline.version === "2026.9.2" && params.build.candidateVersion === "2026.9.3") {
+      return await runPackagedSelfUpdateTransition({
+        ...params,
+        lane,
+        env,
+        baselineVersion: baseline.version,
+      });
+    }
+
+    const baselineInstallDurationMs = lane.phaseTimings.find(
+      (phase) => phase.name === "install-baseline",
+    )!.durationMs;
+    const updateTimeouts = resolvePackagedUpgradeTimeouts(baselineInstallDurationMs);
+    result.updateTimeouts = { baselineInstallDurationMs, ...updateTimeouts };
+    const updateCommand = buildPackagedUpgradeUpdateCommand({
+      env,
+      candidateUrl: params.candidateUrl,
+      candidateVersion: params.build.candidateVersion,
+      timeoutSeconds: updateTimeouts.stepTimeoutSeconds,
+      baselineVersion: baseline.version,
+    });
+    const updateEnv = updateCommand.env;
+    const updateArgs = updateCommand.args;
     const updateLogPath = join(params.logsDir, "upgrade-update.log");
-    let updateResult: CommandResult | undefined;
-    let usedWindowsPackagedUpgradeTimeoutFallback = false;
-    await runTimedLanePhase(lane, "update", async () => {
-      try {
-        updateResult = await runOpenClaw({
+    appendFileSync(
+      updateLogPath,
+      `[release-checks] update-timeouts ${JSON.stringify(result.updateTimeouts)}\n`,
+    );
+    const runUpdate = () =>
+      withNpmDiagnostics(lane.homeDir, updateLogPath, updateEnv, () =>
+        runOpenClaw({
           lane,
           env: updateEnv,
           args: updateArgs,
           logPath: updateLogPath,
-          timeoutMs: updateTimeoutMs(),
+          timeoutMs: updateTimeouts.wrapperTimeoutMs,
           check: false,
-        });
+        }),
+      );
+    let updateResult: CommandResult | undefined;
+    let usedWindowsPackagedUpgradeTimeoutFallback = false;
+    await runTimedLanePhase(lane, "update", async () => {
+      try {
+        updateResult = await runUpdate();
       } catch (error) {
         if (!isRecoverableWindowsPackagedUpgradeTimeoutError(error, process.platform)) {
           throw error;
@@ -298,7 +282,7 @@ export async function runUpgradeLane(
         usedWindowsPackagedUpgradeTimeoutFallback = true;
         appendFileSync(
           updateLogPath,
-          `\n[release-checks] Windows baseline updater timed out after fetching candidate; falling back to direct candidate install: ${formatError(error)}\n`,
+          `\n[release-checks] Windows baseline updater timed out with process tree terminated; falling back to direct candidate install: ${formatError(error)}\n`,
         );
         updateResult = {
           exitCode: 124,
@@ -310,9 +294,47 @@ export async function runUpgradeLane(
     if (!updateResult) {
       throw new Error("Packaged update completed without a command result.");
     }
+    let updateFallback: PackagedUpgradeFallbackEvidence | undefined =
+      usedWindowsPackagedUpgradeTimeoutFallback
+        ? { reason: "timeout", action: "direct-candidate-install" }
+        : isRecoverableWindowsPackagedUpgradeSwapCleanupFailure(updateResult, process.platform)
+          ? { reason: "swap-cleanup", action: "direct-candidate-install" }
+          : undefined;
+    const isUnsettledBaselineExit = (commandResult: CommandResult) =>
+      process.platform === "win32" &&
+      commandResult.exitCode === 13 &&
+      isRecoverableWindowsPackagedUpgradeUnsettledExit(commandResult, {
+        baselineVersion: baseline.version,
+        installedVersion: readInstalledVersion(lane.prefixDir),
+      });
+    if (isUnsettledBaselineExit(updateResult)) {
+      appendFileSync(
+        updateLogPath,
+        `\n[release-checks] Windows baseline ${baseline.version} updater exited 13 (known shipped liveness defect fixed in 2026.9.7); install remains at baseline; retrying the same update once.\n`,
+      );
+      updateResult = await runTimedLanePhase(lane, "update-retry", runUpdate);
+      if (updateResult.exitCode === 0) {
+        updateFallback = { reason: "unsettled-exit", action: "retry-update" };
+        appendFileSync(
+          updateLogPath,
+          "\n[release-checks] Windows baseline updater retry succeeded; continuing normal candidate verification.\n",
+        );
+      } else if (isUnsettledBaselineExit(updateResult)) {
+        updateFallback = { reason: "unsettled-exit", action: "direct-candidate-install" };
+        appendFileSync(
+          updateLogPath,
+          `\n[release-checks] Windows baseline ${baseline.version} updater retry exited 13 with the same shipped liveness defect; install remains at baseline; falling back to direct candidate install.\n`,
+        );
+      } else {
+        verifyPackagedUpgradeUpdateResult(updateResult);
+      }
+    }
+    result.updateTimings = parsePackagedUpgradeUpdateTimings(updateResult.stdout);
+    if (updateFallback) {
+      result.updateFallback = updateFallback;
+    }
     const usedWindowsPackagedUpgradeFallback =
-      usedWindowsPackagedUpgradeTimeoutFallback ||
-      isRecoverableWindowsPackagedUpgradeSwapCleanupFailure(updateResult, process.platform);
+      updateFallback?.action === "direct-candidate-install";
     if (usedWindowsPackagedUpgradeFallback) {
       await runTimedLanePhase(lane, "update-fallback-install", async () => {
         await installPackageSpec({
@@ -321,6 +343,7 @@ export async function runUpgradeLane(
           packageSpec: params.candidateUrl,
           logPath: join(params.logsDir, "upgrade-update-fallback-install.log"),
           ignoreScripts: true,
+          retryWindowsRemoval: true,
         });
         const fallbackInstalledVersion = readInstalledVersion(lane.prefixDir);
         verifyWindowsPackagedUpgradeFallbackInstall({
@@ -333,9 +356,7 @@ export async function runUpgradeLane(
         );
       });
     } else {
-      verifyPackagedUpgradeUpdateResult(updateResult, {
-        candidateVersion: params.build.candidateVersion,
-      });
+      verifyPackagedUpgradeUpdateResult(updateResult);
     }
 
     if (
@@ -344,84 +365,32 @@ export async function runUpgradeLane(
         usedWindowsPackagedUpgradeFallback,
       })
     ) {
-      await runTimedLanePhase(lane, "update-status", async () => {
-        await runOpenClaw({
+      await runTimedLanePhase(lane, "update-status", () =>
+        runOpenClaw({
           lane,
           env: updateEnv,
           args: ["update", "status", "--json"],
           logPath: join(params.logsDir, "upgrade-update-status.log"),
           timeoutMs: 2 * 60 * 1000,
-        });
-      });
+        }),
+      );
     }
-    await runTimedLanePhase(lane, "run-bundled-plugin-postinstall", async () => {
-      await runBundledPluginPostinstall({
+    await runTimedLanePhase(lane, "run-bundled-plugin-postinstall", () =>
+      runBundledPluginPostinstall({
         lane,
         env,
         logPath: join(params.logsDir, "upgrade-bundled-plugin-postinstall.log"),
-      });
-    });
+      }),
+    );
 
     const installed = readInstalledMetadata(lane.prefixDir);
     verifyInstalledCandidate(installed, params.build);
 
     await installLaneCompanions({ ...params, lane, env });
-
-    await runTimedLanePhase(lane, "onboard", async () => {
-      await runOnboard({
-        lane,
-        env,
-        providerConfig: params.providerConfig,
-        logPath: join(params.logsDir, "upgrade-onboard.log"),
-      });
-    });
-
-    await runTimedLanePhase(lane, "models-set", async () => {
-      await runModelsSet({
-        lane,
-        env,
-        providerConfig: params.providerConfig,
-        logPath: join(params.logsDir, "upgrade-models-set.log"),
-      });
-    });
-
-    const gateway = await runTimedLanePhase(lane, "start-gateway", async () =>
-      startGateway({
-        lane,
-        env,
-        logPath: join(params.logsDir, "upgrade-gateway.log"),
-      }),
-    );
-    gatewayHolder.current = gateway;
-    cleanup.push(() => stopGateway(gatewayHolder.current));
-
-    await runTimedLanePhase(lane, "wait-gateway", async () => {
-      await waitForGateway({
-        lane,
-        env,
-        gatewayHolder,
-        gatewayLogPath: join(params.logsDir, "upgrade-gateway.log"),
-        logPath: join(params.logsDir, "upgrade-gateway-status.log"),
-      });
-    });
-
-    await runTimedLanePhase(lane, "dashboard", async () => {
-      await runDashboardSmoke({
-        lane,
-        logPath: join(params.logsDir, "upgrade-dashboard.log"),
-      });
-    });
-
-    const agent = await runTimedLanePhase(lane, "agent-turn", async () =>
-      runAgentTurn({
-        lane,
-        env,
-        label: "upgrade",
-        logPath: join(params.logsDir, "upgrade-agent.log"),
-      }),
-    );
+    const agent = await runPackagedGatewaySmoke({ ...params, lane, env, cleanup });
 
     return {
+      ...result,
       status: "pass",
       baselineVersion: baseline.version,
       installedVersion: installed.version,
@@ -429,11 +398,75 @@ export async function runUpgradeLane(
       dashboardStatus: "pass",
       gatewayPort: lane.gatewayPort,
       agentOutput: trimForSummary(agent.stdout),
-      phaseTimings: lane.phaseTimings,
+    };
+  } catch (error) {
+    return {
+      ...result,
+      status: "fail",
+      error: formatError(error),
     };
   } finally {
     await runCleanup(cleanup);
   }
+}
+
+async function runPackagedGatewaySmoke(
+  params: Pick<LaneBaseParams, "logsDir" | "providerConfig"> & {
+    lane: LaneState;
+    env: NodeJS.ProcessEnv;
+    cleanup: Cleanup[];
+    beforeGatewayStart?: () => Promise<void>;
+    afterGatewayReady?: () => Promise<void>;
+  },
+) {
+  const { lane, env, cleanup } = params;
+  const gatewayHolder: { current: GatewayHandle | null } = { current: null };
+  const logPath = (phase: string) => join(params.logsDir, `${lane.name}-${phase}.log`);
+  // Own the configured port through setup; release only when the gateway can claim it.
+  const gatewayPortReservation = await reserveGatewayPortForLane(lane);
+  cleanup.push(() => gatewayPortReservation.release());
+  await runTimedLanePhase(lane, "onboard", () =>
+    runOnboard({
+      lane,
+      env,
+      providerConfig: params.providerConfig,
+      logPath: logPath("onboard"),
+    }),
+  );
+  await runTimedLanePhase(lane, "models-set", () =>
+    runModelsSet({
+      lane,
+      env,
+      providerConfig: params.providerConfig,
+      logPath: logPath("models-set"),
+    }),
+  );
+  if (params.beforeGatewayStart) {
+    await params.beforeGatewayStart();
+  }
+  gatewayHolder.current = await runTimedLanePhase(lane, "start-gateway", async () => {
+    await gatewayPortReservation.release();
+    return startGateway({ lane, env, logPath: logPath("gateway") });
+  });
+  cleanup.push(() => stopGateway(gatewayHolder.current));
+  await runTimedLanePhase(lane, "wait-gateway", () =>
+    waitForGateway({
+      lane,
+      env,
+      gatewayHolder,
+      gatewayLogPath: logPath("gateway"),
+      logPath: logPath("gateway-status"),
+    }),
+  );
+  if (params.afterGatewayReady) {
+    await params.afterGatewayReady();
+  }
+  await runTimedLanePhase(lane, "dashboard", () =>
+    runDashboardSmoke({ lane, logPath: logPath("dashboard") }),
+  );
+  return runTimedLanePhase(lane, "agent-turn", () =>
+    runAgentTurn({ lane, env, label: lane.name, logPath: logPath("agent") }),
+  );
 }
 
 export async function runInstallerFreshSuite(
@@ -591,53 +624,14 @@ export async function runInstallerFreshSuite(
       });
     }
     await gatewayPortReservation?.release();
-    logLanePhase(lane, "gateway-start");
-    const gateway = await startManualGatewayFromInstalledCli({
+    const { agent, discordStatus } = await runInstalledGatewaySmoke({
+      ...params,
       lane,
-      cliPath: freshShell.cliPath,
       env,
-      logPath: join(params.logsDir, "installer-fresh-gateway.log"),
-    });
-    manualGateway.current = gateway;
-    if (!usesManagedGateway) {
-      cleanup.push(() => stopGateway(manualGateway.current));
-    }
-    logLanePhase(lane, "gateway-status");
-    await waitForInstalledGateway({
-      lane,
       cliPath: freshShell.cliPath,
-      env,
       gatewayHolder: manualGateway,
-      gatewayLogPath: join(params.logsDir, "installer-fresh-gateway.log"),
-      logPath: join(params.logsDir, "installer-fresh-gateway-status.log"),
+      cleanup: usesManagedGateway ? undefined : cleanup,
     });
-
-    logLanePhase(lane, "dashboard");
-    await runDashboardSmoke({
-      lane,
-      logPath: join(params.logsDir, "installer-fresh-dashboard.log"),
-    });
-
-    logLanePhase(lane, "agent-turn");
-    const agent = await runInstalledAgentTurn({
-      cliPath: freshShell.cliPath,
-      env,
-      cwd: lane.homeDir,
-      label: "installer-fresh",
-      logPath: join(params.logsDir, "installer-fresh-agent.log"),
-    });
-
-    let discordStatus = "skipped";
-    if (params.runDiscordRoundtrip && process.platform === "darwin") {
-      logLanePhase(lane, "discord-roundtrip");
-      discordStatus = await maybeRunDiscordRoundtrip({
-        lane,
-        cliPath: freshShell.cliPath,
-        env,
-        gatewayHolder: manualGateway,
-        logPath: join(params.logsDir, "installer-fresh-discord.log"),
-      });
-    }
 
     return {
       status: "pass",
@@ -804,6 +798,8 @@ export async function runDevUpdateSuite(
 
     await installLaneCompanions({ ...params, lane, env, cliPath: verifiedShell.cliPath });
 
+    const gatewayPortReservation = await reserveGatewayPortForLane(lane);
+    cleanup.push(() => gatewayPortReservation.release());
     logLanePhase(lane, "onboard");
     await runOnboardWithInstalledCli({
       lane,
@@ -812,6 +808,7 @@ export async function runDevUpdateSuite(
       providerConfig: params.providerConfig,
       installDaemon: false,
       logPath: join(params.logsDir, "dev-update-onboard.log"),
+      allocateGatewayPort: false,
     });
 
     logLanePhase(lane, "models-set");
@@ -823,51 +820,15 @@ export async function runDevUpdateSuite(
       logPath: join(params.logsDir, "dev-update-models-set.log"),
     });
 
-    logLanePhase(lane, "gateway-start");
-    const gateway = await startManualGatewayFromInstalledCli({
+    await gatewayPortReservation.release();
+    const { agent, discordStatus } = await runInstalledGatewaySmoke({
+      ...params,
       lane,
-      cliPath: verifiedShell.cliPath,
       env,
-      logPath: join(params.logsDir, "dev-update-gateway.log"),
-    });
-    manualGateway.current = gateway;
-    cleanup.push(() => stopGateway(manualGateway.current));
-    logLanePhase(lane, "gateway-status");
-    await waitForInstalledGateway({
-      lane,
       cliPath: verifiedShell.cliPath,
-      env,
       gatewayHolder: manualGateway,
-      gatewayLogPath: join(params.logsDir, "dev-update-gateway.log"),
-      logPath: join(params.logsDir, "dev-update-gateway-status.log"),
+      cleanup,
     });
-
-    logLanePhase(lane, "dashboard");
-    await runDashboardSmoke({
-      lane,
-      logPath: join(params.logsDir, "dev-update-dashboard.log"),
-    });
-
-    logLanePhase(lane, "agent-turn");
-    const agent = await runInstalledAgentTurn({
-      cliPath: verifiedShell.cliPath,
-      env,
-      cwd: lane.homeDir,
-      label: "dev-update",
-      logPath: join(params.logsDir, "dev-update-agent.log"),
-    });
-
-    let discordStatus = "skipped";
-    if (params.runDiscordRoundtrip && process.platform === "darwin") {
-      logLanePhase(lane, "discord-roundtrip");
-      discordStatus = await maybeRunDiscordRoundtrip({
-        lane,
-        cliPath: verifiedShell.cliPath,
-        env,
-        gatewayHolder: manualGateway,
-        logPath: join(params.logsDir, "dev-update-discord.log"),
-      });
-    }
 
     return {
       status: "pass",
@@ -883,8 +844,67 @@ export async function runDevUpdateSuite(
   }
 }
 
+async function runInstalledGatewaySmoke(
+  params: Pick<LaneBaseParams, "logsDir"> & {
+    lane: LaneState;
+    env: NodeJS.ProcessEnv;
+    cliPath: string;
+    gatewayHolder: { current: GatewayHandle | null };
+    cleanup?: Cleanup[];
+    runDiscordRoundtrip: boolean;
+  },
+) {
+  const { lane, env, cliPath, gatewayHolder } = params;
+  const logPath = (phase: string) => join(params.logsDir, `${lane.name}-${phase}.log`);
+  logLanePhase(lane, "gateway-start");
+  gatewayHolder.current = await startManualGatewayFromInstalledCli({
+    lane,
+    cliPath,
+    env,
+    logPath: logPath("gateway"),
+  });
+  // Managed installer checks retain their host-level cleanup owner.
+  params.cleanup?.push(() => stopGateway(gatewayHolder.current));
+  logLanePhase(lane, "gateway-status");
+  await waitForInstalledGateway({
+    lane,
+    cliPath,
+    env,
+    gatewayHolder,
+    gatewayLogPath: logPath("gateway"),
+    logPath: logPath("gateway-status"),
+  });
+
+  logLanePhase(lane, "dashboard");
+  await runDashboardSmoke({ lane, logPath: logPath("dashboard") });
+
+  logLanePhase(lane, "agent-turn");
+  const agent = await runInstalledAgentTurn({
+    cliPath,
+    env,
+    cwd: lane.homeDir,
+    label: lane.name,
+    logPath: logPath("agent"),
+  });
+
+  let discordStatus = "skipped";
+  if (params.runDiscordRoundtrip && process.platform === "darwin") {
+    logLanePhase(lane, "discord-roundtrip");
+    discordStatus = await maybeRunDiscordRoundtrip({
+      lane,
+      cliPath,
+      env,
+      gatewayHolder,
+      logPath: logPath("discord"),
+    });
+  }
+  return { agent, discordStatus };
+}
+
 function createLaneState(name: string): LaneState {
-  const rootDir = mkdtempSync(join(tmpdir(), `openclaw-${name}-`));
+  const createdRootDir = mkdtempSync(join(tmpdir(), `openclaw-${name}-`));
+  const rootDir =
+    process.platform === "darwin" ? realpathSync.native(createdRootDir) : createdRootDir;
   const prefixDir = join(rootDir, "prefix");
   const homeDir = join(rootDir, "home");
   const stateDir = join(homeDir, ".openclaw");
@@ -916,7 +936,7 @@ function buildLaneEnv(
 ): NodeJS.ProcessEnv {
   ensureLocalNpmShim(lane);
   return {
-    ...process.env,
+    ...inheritLaneEnv(),
     HOME: lane.homeDir,
     USERPROFILE: lane.homeDir,
     APPDATA: lane.appDataDir,
@@ -932,6 +952,21 @@ function buildLaneEnv(
   };
 }
 
+function inheritLaneEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  if (process.platform === "win32" || process.platform === "darwin") {
+    // Published updaters cannot be patched: use canonical paths for their
+    // handoff receipts while keeping the runner's physical temp directories.
+    for (const key of Object.keys(env)) {
+      const value = env[key];
+      if (["TEMP", "TMP", "TMPDIR"].includes(key.toUpperCase()) && value) {
+        env[key] = realpathSync.native(value);
+      }
+    }
+  }
+  return env;
+}
+
 function buildInstallerEnv(
   lane: LaneState,
   providerMeta: ProviderConfig,
@@ -940,7 +975,7 @@ function buildInstallerEnv(
   const localAppData = join(lane.homeDir, "AppData", "Local");
   mkdirSync(localAppData, { recursive: true });
   return {
-    ...process.env,
+    ...inheritLaneEnv(),
     HOME: lane.homeDir,
     USERPROFILE: lane.homeDir,
     APPDATA: lane.appDataDir,
@@ -975,18 +1010,16 @@ export function resolveManagedGatewayInstallerEnv(params: {
     APPDATA: hostEnv.APPDATA,
     LOCALAPPDATA: hostEnv.LOCALAPPDATA,
   };
-  const isolatedIdentityKeys = new Set(
-    [
-      "OPENCLAW_HOME",
-      "OPENCLAW_PROFILE",
-      "OPENCLAW_STATE_DIR",
-      "OPENCLAW_CONFIG_PATH",
-      "OPENCLAW_WINDOWS_TASK_NAME",
-      "OPENCLAW_TASK_SCRIPT_NAME",
-      "OPENCLAW_TASK_SCRIPT",
-      "OPENCLAW_SERVICE_KIND",
-    ].map((key) => key.toUpperCase()),
-  );
+  const isolatedIdentityKeys = new Set([
+    "OPENCLAW_HOME",
+    "OPENCLAW_PROFILE",
+    "OPENCLAW_STATE_DIR",
+    "OPENCLAW_CONFIG_PATH",
+    "OPENCLAW_WINDOWS_TASK_NAME",
+    "OPENCLAW_TASK_SCRIPT_NAME",
+    "OPENCLAW_TASK_SCRIPT",
+    "OPENCLAW_SERVICE_KIND",
+  ]);
   // Windows environment keys are case-insensitive. Remove every casing variant
   // so the installed CLI cannot inherit the isolated lane identity.
   for (const key of Object.keys(env)) {

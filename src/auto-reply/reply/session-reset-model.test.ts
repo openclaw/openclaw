@@ -1,20 +1,22 @@
 // Tests reset model selection and persisted model override cleanup.
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
+import { buildModelAliasIndex } from "../../agents/model-selection-shared.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
+import { resolveStoredModelOverride } from "../../sessions/stored-model-overrides.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import type { ModelAliasIndex } from "./model-selection-directive.js";
 
-const loadPreparedModelCatalog = vi.hoisted(() => vi.fn(async () => modelCatalog));
+const readPreparedModelCatalog = vi.hoisted(() => vi.fn(async () => modelCatalog));
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-reset-model-lock-");
 
 vi.mock("../../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
-  loadPreparedModelCatalog,
+  readPreparedModelCatalog,
 }));
 
 import { applyResetModelOverride } from "./session-reset-model.js";
@@ -39,33 +41,152 @@ function createResetFixture(entry: Partial<SessionEntry> = {}) {
     sessionEntry,
     sessionStore: { "agent:main:dm:1": sessionEntry } as Record<string, SessionEntry>,
     sessionCtx: { BodyStripped: "minimax summarize" },
-    ctx: { ChatType: "direct" },
+  };
+}
+
+function resetModelParams(fixture: ReturnType<typeof createResetFixture>) {
+  return {
+    ...fixture,
+    sessionKey: "agent:main:dm:1",
+    defaultProvider: "openai",
+    defaultModel: "gpt-4o-mini",
+    modelCatalog,
   };
 }
 
 async function applyResetFixture(params: {
   resetTriggered: boolean;
   sessionEntry?: Partial<SessionEntry>;
+  body?: string;
 }) {
   const fixture = createResetFixture(params.sessionEntry);
   await applyResetModelOverride({
-    cfg: fixture.cfg,
+    ...resetModelParams(fixture),
     resetTriggered: params.resetTriggered,
-    bodyStripped: "minimax summarize",
-    sessionCtx: fixture.sessionCtx,
-    ctx: fixture.ctx,
-    sessionEntry: fixture.sessionEntry,
-    sessionStore: fixture.sessionStore,
-    sessionKey: "agent:main:dm:1",
-    defaultProvider: "openai",
-    defaultModel: "gpt-4o-mini",
-    aliasIndex: fixture.aliasIndex,
-    modelCatalog,
+    bodyStripped: params.body ?? "minimax summarize",
   });
   return fixture;
 }
 
 describe("applyResetModelOverride", () => {
+  it.each(["initial", "persisted"])("honors the %s session model lock", async (owner) => {
+    const fixture = createResetFixture({ modelSelectionLocked: owner === "initial" });
+    const storePath = path.join(sessionDirs.make(), "sessions.json");
+    const lockedEntry: SessionEntry = { ...fixture.sessionEntry, modelSelectionLocked: true };
+    const sessionKey = "agent:main:dm:1";
+    await replaceSessionEntry({ sessionKey, storePath }, lockedEntry);
+
+    await expect(
+      applyResetModelOverride({
+        ...resetModelParams(fixture),
+        sessionKey,
+        storePath,
+        resetTriggered: true,
+        bodyStripped: "minimax/m2.7 summarize",
+      }),
+    ).rejects.toThrow("Model selection is locked");
+    expect(fixture.sessionEntry.modelOverride).toBeUndefined();
+    expect(loadSessionEntry({ sessionKey, storePath })).toEqual(lockedEntry);
+  });
+
+  it.each([
+    { name: "omitted", policy: undefined, allowed: true },
+    { name: "empty", policy: {}, allowed: true },
+    { name: "empty allow", policy: { allow: [] }, allowed: true },
+    { name: "restricted", policy: { allow: ["openai/*"] }, allowed: false },
+  ])("authorizes an off-catalog reset hint with $name policy", async ({ policy, allowed }) => {
+    const fixture = createResetFixture({ thinkingLevel: "high" });
+    fixture.cfg = {
+      agents: { defaults: { modelPolicy: policy } },
+      models: {
+        providers: {
+          "fixture-route": {
+            api: "openai-responses",
+            baseUrl: "https://fixture.invalid/v1",
+            models: [],
+          },
+        },
+      },
+    };
+    fixture.sessionCtx.BodyStripped = "fixture-route/reasoner summarize";
+    const initial = structuredClone(fixture.sessionEntry);
+    const result = await applyResetModelOverride({
+      ...resetModelParams(fixture),
+      resetTriggered: true,
+      bodyStripped: fixture.sessionCtx.BodyStripped,
+    });
+
+    if (allowed) {
+      expect(result).toMatchObject({
+        selection: { provider: "fixture-route", model: "reasoner", isDefault: false },
+        cleanedBody: "summarize",
+      });
+      expect(fixture.sessionEntry).toMatchObject({
+        providerOverride: "fixture-route",
+        modelOverride: "reasoner",
+        thinkingLevel: "high",
+      });
+      expect(fixture.sessionCtx.BodyStripped).toBe("summarize");
+    } else {
+      expect(result).toEqual({});
+      expect(fixture.sessionEntry).toEqual(initial);
+      expect(fixture.sessionCtx.BodyStripped).toBe("fixture-route/reasoner summarize");
+    }
+  });
+
+  it("recognizes an exact configured alias outside the picker inventory", async () => {
+    const fixture = createResetFixture();
+    fixture.cfg = {
+      agents: {
+        defaults: {
+          modelPolicy: { allow: [] },
+          models: { "fixture-route/reasoner": { alias: "quick" } },
+        },
+      },
+      models: {
+        providers: {
+          "fixture-route": {
+            api: "openai-responses",
+            baseUrl: "https://fixture.invalid/v1",
+            models: [],
+          },
+        },
+      },
+    };
+    const result = await applyResetModelOverride({
+      ...resetModelParams(fixture),
+      aliasIndex: buildModelAliasIndex({ cfg: fixture.cfg, defaultProvider: "openai" }),
+      resetTriggered: true,
+      bodyStripped: "quick summarize",
+    });
+    expect(result).toMatchObject({
+      selection: { provider: "fixture-route", model: "reasoner", alias: "quick" },
+      cleanedBody: "summarize",
+    });
+    expect(fixture.sessionEntry.providerOverride).toBe("fixture-route");
+  });
+
+  it.each([
+    "summarize the previous conversation",
+    "missing-provider/reasoner summarize",
+    "missing-provider reasoner summarize",
+  ])("keeps unrecognized model-hint text unchanged: %s", async (body) => {
+    const fixture = createResetFixture();
+    fixture.sessionCtx.BodyStripped = body;
+    const result = await applyResetModelOverride({
+      ...fixture,
+      resetTriggered: true,
+      bodyStripped: fixture.sessionCtx.BodyStripped,
+      defaultProvider: "openai",
+      defaultModel: "gpt-4o-mini",
+      modelCatalog,
+    });
+
+    expect(result).toEqual({});
+    expect(fixture.sessionCtx.BodyStripped).toBe(body);
+    expect(fixture.sessionEntry.modelOverride).toBeUndefined();
+  });
+
   it("loads the reset catalog for the active agent owner", async () => {
     const fixture = createResetFixture();
 
@@ -77,13 +198,12 @@ describe("applyResetModelOverride", () => {
       resetTriggered: true,
       bodyStripped: "minimax summarize",
       sessionCtx: fixture.sessionCtx,
-      ctx: fixture.ctx,
       defaultProvider: "openai",
       defaultModel: "gpt-4o-mini",
       aliasIndex: fixture.aliasIndex,
     });
 
-    expect(loadPreparedModelCatalog).toHaveBeenCalledWith({
+    expect(readPreparedModelCatalog).toHaveBeenCalledWith({
       config: fixture.cfg,
       agentId: "worker",
       agentDir: "/tmp/shared-agent",
@@ -92,16 +212,55 @@ describe("applyResetModelOverride", () => {
     });
   });
 
-  it("selects a model hint while preserving the stored thinking level for validation", async () => {
-    const { sessionEntry, sessionCtx } = await applyResetFixture({
-      resetTriggered: true,
-      sessionEntry: { thinkingLevel: "ultra" },
+  it.each(["minimax summarize", "minimax m2.7 summarize", "minimax/m2.7 summarize"])(
+    "selects a model hint while preserving thinking: %s",
+    async (body) => {
+      const { sessionEntry, sessionCtx } = await applyResetFixture({
+        resetTriggered: true,
+        sessionEntry: { thinkingLevel: "ultra" },
+        body,
+      });
+
+      expect(sessionEntry.providerOverride).toBe("minimax");
+      expect(sessionEntry.modelOverride).toBe("m2.7");
+      expect(sessionEntry.thinkingLevel).toBe("ultra");
+      expect(sessionCtx.BodyStripped).toBe("summarize");
+    },
+  );
+
+  it("persists explicit default intent so a later turn does not re-inherit its parent", async () => {
+    const parentKey = "agent:main:parent";
+    const fixture = createResetFixture({
+      providerOverride: "minimax",
+      modelOverride: "m2.7",
+      modelOverrideSource: "user",
     });
 
-    expect(sessionEntry.providerOverride).toBe("minimax");
-    expect(sessionEntry.modelOverride).toBe("m2.7");
-    expect(sessionEntry.thinkingLevel).toBe("ultra");
-    expect(sessionCtx.BodyStripped).toBe("summarize");
+    await applyResetModelOverride({
+      ...resetModelParams(fixture),
+      resetTriggered: true,
+      bodyStripped: "openai/gpt-4o-mini summarize",
+      sessionKey: "agent:main:child",
+    });
+
+    expect(fixture.sessionEntry.modelOverrideSource).toBe("default");
+    expect(
+      resolveStoredModelOverride({
+        sessionEntry: fixture.sessionEntry,
+        sessionStore: {
+          [parentKey]: {
+            sessionId: "parent-session",
+            updatedAt: 1,
+            providerOverride: "minimax",
+            modelOverride: "m2.7",
+            modelOverrideSource: "user",
+          },
+        },
+        sessionKey: "agent:main:child",
+        parentSessionKey: parentKey,
+        defaultProvider: "openai",
+      }),
+    ).toBeNull();
   });
 
   it.each([
@@ -120,20 +279,19 @@ describe("applyResetModelOverride", () => {
       fixture.cfg.agents = {
         defaults: { model: { primary: "custom/private-model" } },
       };
+      fixture.cfg.models = {
+        providers: {
+          custom: { api: "openai-responses", baseUrl: "https://fixture.invalid/v1", models: [] },
+        },
+      };
       fixture.sessionCtx.BodyStripped = "custom/private-model summarize";
 
       const result = await applyResetModelOverride({
-        cfg: fixture.cfg,
+        ...resetModelParams(fixture),
         resetTriggered: true,
         bodyStripped: fixture.sessionCtx.BodyStripped,
-        sessionCtx: fixture.sessionCtx,
-        ctx: fixture.ctx,
-        sessionEntry: fixture.sessionEntry,
-        sessionStore: fixture.sessionStore,
-        sessionKey: "agent:main:dm:1",
         defaultProvider: "custom",
         defaultModel: "private-model",
-        aliasIndex: fixture.aliasIndex,
         modelCatalog: catalog,
       });
 
@@ -160,18 +318,11 @@ describe("applyResetModelOverride", () => {
     fixture.sessionCtx.BodyStripped = "custom/private-model summarize";
 
     const result = await applyResetModelOverride({
-      cfg: fixture.cfg,
+      ...resetModelParams(fixture),
       resetTriggered: true,
       bodyStripped: fixture.sessionCtx.BodyStripped,
-      sessionCtx: fixture.sessionCtx,
-      ctx: fixture.ctx,
-      sessionEntry: fixture.sessionEntry,
-      sessionStore: fixture.sessionStore,
-      sessionKey: "agent:main:dm:1",
       defaultProvider: "custom",
       defaultModel: "private-model",
-      aliasIndex: fixture.aliasIndex,
-      modelCatalog,
     });
 
     expect(result).toEqual({});
@@ -196,7 +347,7 @@ describe("applyResetModelOverride", () => {
   });
 
   it("adopts a concurrent model winner instead of acknowledging the reset hint", async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reset-model-race-"));
+    const tempRoot = sessionDirs.make();
     const storePath = path.join(tempRoot, "sessions.json");
     const fixture = createResetFixture();
     const concurrentEntry: SessionEntry = {
@@ -210,19 +361,10 @@ describe("applyResetModelOverride", () => {
 
     try {
       const result = await applyResetModelOverride({
-        cfg: fixture.cfg,
+        ...resetModelParams(fixture),
         resetTriggered: true,
         bodyStripped: "minimax summarize",
-        sessionCtx: fixture.sessionCtx,
-        ctx: fixture.ctx,
-        sessionEntry: fixture.sessionEntry,
-        sessionStore: fixture.sessionStore,
-        sessionKey: "agent:main:dm:1",
         storePath,
-        defaultProvider: "openai",
-        defaultModel: "gpt-4o-mini",
-        aliasIndex: fixture.aliasIndex,
-        modelCatalog,
       });
 
       expect(result.selection).toBeUndefined();
@@ -239,12 +381,11 @@ describe("applyResetModelOverride", () => {
       );
     } finally {
       clearSessionStoreCacheForTest();
-      fs.rmSync(tempRoot, { recursive: true, force: true });
     }
   });
 
   it("checks the persisted winner for an explicit same-value reset hint", async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reset-model-race-"));
+    const tempRoot = sessionDirs.make();
     const storePath = path.join(tempRoot, "sessions.json");
     const fixture = createResetFixture({
       providerOverride: "minimax",
@@ -261,19 +402,10 @@ describe("applyResetModelOverride", () => {
 
     try {
       const result = await applyResetModelOverride({
-        cfg: fixture.cfg,
+        ...resetModelParams(fixture),
         resetTriggered: true,
         bodyStripped: "minimax summarize",
-        sessionCtx: fixture.sessionCtx,
-        ctx: fixture.ctx,
-        sessionEntry: fixture.sessionEntry,
-        sessionStore: fixture.sessionStore,
-        sessionKey: "agent:main:dm:1",
         storePath,
-        defaultProvider: "openai",
-        defaultModel: "gpt-4o-mini",
-        aliasIndex: fixture.aliasIndex,
-        modelCatalog,
       });
 
       expect(result.selection).toBeUndefined();
@@ -284,12 +416,11 @@ describe("applyResetModelOverride", () => {
       expect(fixture.sessionStore["agent:main:dm:1"]).toEqual(fixture.sessionEntry);
     } finally {
       clearSessionStoreCacheForTest();
-      fs.rmSync(tempRoot, { recursive: true, force: true });
     }
   });
 
   it("rejects a reset-model hint when the session rotates during persistence", async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reset-model-rotation-"));
+    const tempRoot = sessionDirs.make();
     const storePath = path.join(tempRoot, "sessions.json");
     const fixture = createResetFixture();
     const rotatedEntry: SessionEntry = {
@@ -305,19 +436,10 @@ describe("applyResetModelOverride", () => {
     try {
       await expect(
         applyResetModelOverride({
-          cfg: fixture.cfg,
+          ...resetModelParams(fixture),
           resetTriggered: true,
           bodyStripped: "minimax summarize",
-          sessionCtx: fixture.sessionCtx,
-          ctx: fixture.ctx,
-          sessionEntry: fixture.sessionEntry,
-          sessionStore: fixture.sessionStore,
-          sessionKey: "agent:main:dm:1",
           storePath,
-          defaultProvider: "openai",
-          defaultModel: "gpt-4o-mini",
-          aliasIndex: fixture.aliasIndex,
-          modelCatalog,
         }),
       ).rejects.toThrow(/changed while starting work/i);
 
@@ -327,7 +449,6 @@ describe("applyResetModelOverride", () => {
       expect(loadSessionEntry({ sessionKey: "agent:main:dm:1", storePath })).toEqual(rotatedEntry);
     } finally {
       clearSessionStoreCacheForTest();
-      fs.rmSync(tempRoot, { recursive: true, force: true });
     }
   });
 

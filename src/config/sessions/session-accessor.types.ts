@@ -1,27 +1,31 @@
-import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import type { SchemaContract } from "../../../packages/gateway-protocol/src/schema-contract.js";
+import type { SessionBranch } from "../../../packages/gateway-protocol/src/schema/sessions.js";
+import type { AssistantMessage } from "../../llm/types.js";
+import type {
+  InternalSessionTranscriptUpdate,
+  SessionTranscriptUpdate,
+} from "../../sessions/transcript-events.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type {
-  DeleteSessionEntryLifecycleParams,
-  DeleteSessionEntryLifecycleResult,
-  ResetSessionEntryLifecycleParams,
-  ResetSessionEntryLifecycleResult,
-  DeletedAgentSessionEntryPurgeParams,
-  SessionArchivedTranscriptCleanupRule,
-  SessionEntryLifecycleMutationResult,
-  SessionEntryLifecycleRemoval,
-  SessionEntryLifecycleUpsert,
-  SessionLifecycleArchivedTranscript,
-  SessionLifecycleArtifactCleanupParams,
-  SessionLifecycleArtifactCleanupResult,
-  SessionLifecycleStoreTarget,
-} from "./session-accessor.lifecycle-types.js";
+  SessionTranscriptTurnMutation,
+  SessionTranscriptTurnMutationResult,
+} from "./goals-operations.types.js";
+import type { SessionLifecycleStoreTarget } from "./session-accessor.lifecycle-types.js";
+import type { SessionEntryCreationOperation } from "./session-accessor.sqlite-entry-cache.types.js";
+import type { SessionEntryCommitContext } from "./session-entry-commit-context.js";
+import type { SessionOwnerAssignment } from "./session-entry-provenance.js";
+import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
+import type { SessionEntryProjection } from "./session-entry-snapshot-values.js";
+import type { SessionSourceAssertion } from "./session-source-authority.js";
+import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import type {
+  SessionLifecycleRevisionExpectation,
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
 } from "./session-transcript-turn-lifecycle.types.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
-import type { InternalSessionEntry as SessionEntry, SessionCompactionCheckpoint } from "./types.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 /**
  * Session access API for callers that need entries or transcripts without
@@ -55,6 +59,8 @@ export type SessionAccessScope = {
 };
 
 export type LogicalSessionAccessScope = {
+  /** Prepared agent owner for unscoped keys; must agree with agent-scoped keys. */
+  agentId?: string;
   /** Runtime config whose session store rules define the logical session owner. */
   cfg: OpenClawConfig;
   /** Environment override used when resolving configured/discovered agent stores. */
@@ -63,9 +69,32 @@ export type LogicalSessionAccessScope = {
   sessionKey: string;
 };
 
-export type SessionEntryListScope = Partial<Omit<SessionAccessScope, "sessionKey">> & {
-  /** Listing views do not consume the large per-run prompt snapshots. */
+export type SessionEntryReadScope = SessionAccessScope & {
+  /** Select only required saved snapshots; list omits all of them before decoding. */
+  projection?: SessionEntryProjection;
+};
+
+export type SessionEntryReadOnlyWorkerScope = SessionEntryReadScope & {
+  agentId: string;
+  databaseAgentId: string;
+  storePath: string;
+  env: NodeJS.ProcessEnv;
+};
+
+export type SessionEntryListScope = Partial<
+  Omit<SessionEntryReadScope, "sessionKey" | "projection">
+> & {
   projection?: "full" | "list";
+  /** Retain the physical source assertion independently of this synchronous read. */
+  captureSource?: (assertCurrent: () => void) => void;
+  /** Select exact persisted keys after validating the complete listing snapshot. */
+  sessionKeys?: readonly string[];
+  /** Set false for readers that do not consume derived participant identities or counts. */
+  includeParticipants?: boolean;
+  /** Validate the complete listing, retaining full cron-run entries for deletion guards. */
+  cronRetention?: true;
+  /** Validate the complete listing, retaining full expired cron rows only for this logical owner. */
+  expiredCronRuns?: { agentId: string; updatedBefore: number };
 };
 
 export type ResolvedSessionEntryAccessTarget = {
@@ -83,6 +112,15 @@ export type ResolvedSessionEntryAccessTarget = {
 
 export type ResolvedSessionEntryStoreTarget = ResolvedSessionEntryAccessTarget & {
   storePath: string;
+};
+
+/** Temporary opt-in; remove the selector after internal callers use qualified identities. */
+export type QualifiedSessionEntryAccessTarget = ResolvedSessionEntryStoreTarget & {
+  keyFormat: "agent-qualified";
+  /** The admitted physical database is distinct from the logical agent namespace. */
+  readSource?: CapturedSessionEntryReadSource;
+  /** Exact selected key and any conflicting spelling checked by the writer snapshot. */
+  storeKeys: readonly string[];
 };
 
 export type SessionEntryCandidateAccessScope = {
@@ -106,7 +144,7 @@ export type ResolvedSessionEntryCandidateTarget = {
   agentId: string;
   /** Candidate key that selected the result, or the fallback key. */
   candidateKey: string;
-  /** Session metadata cloned from storage or from the synthesized fallback. */
+  /** Fresh owned session metadata, or a clone of the synthesized fallback. */
   entry: SessionEntry;
   /** False only for synthesized fallback entries that have not been written. */
   persisted: boolean;
@@ -143,11 +181,8 @@ export type SessionTranscriptAccessScope = Omit<SessionAccessScope, "sessionKey"
   threadId?: string | number;
 };
 
-export type SessionTranscriptRuntimeScope = SessionAccessScope & {
-  /** Deprecated transcript locator from older file-backed call sites. */
-  sessionFile?: string;
-  sessionId: string;
-  threadId?: string | number;
+export type SessionTranscriptRuntimeScope = SessionTranscriptAccessScope & {
+  sessionKey: string;
 };
 
 export type SessionTranscriptReadScope = Omit<SessionTranscriptRuntimeScope, "sessionKey"> & {
@@ -155,6 +190,8 @@ export type SessionTranscriptReadScope = Omit<SessionTranscriptRuntimeScope, "se
   sessionKey?: string;
   /** Entry already loaded by hot callers; avoids rereading the session store. */
   sessionEntry?: Partial<Pick<SessionEntry, "sessionId">>;
+  /** Byte budget enforced via SQL before parsing transcript event rows. */
+  maxEventBytes?: number;
 };
 
 export interface SessionTranscriptReadTarget {
@@ -171,6 +208,8 @@ export type SessionTranscriptWriteScope = Omit<SessionTranscriptAccessScope, "se
   expectedWriterRunId?: string;
   /** Optional lifecycle fence paired with sessionId for run-owned writes. */
   expectedLifecycleRevision?: string;
+  /** Exact owner facts, including absent fields, checked inside the write transaction. */
+  expectedOwner?: Pick<SessionEntry, "lifecycleRevision" | "activeWriterRunId">;
 };
 
 export type SessionEntrySummary = {
@@ -188,10 +227,7 @@ export type SessionEntryReadView = {
 };
 
 /** Session entry read by the exact persisted session key, without alias resolution. */
-export type ExactSessionEntry = {
-  sessionKey: string;
-  entry: SessionEntry;
-};
+export type ExactSessionEntry = SessionEntrySummary;
 
 /** Raw transcript record for non-message events; message records use appendTranscriptMessage. */
 export type TranscriptEvent = unknown;
@@ -219,14 +255,13 @@ export type SessionTranscriptRawDeltaLimits = {
   maxEvents?: number;
 };
 
-/** Generation-aware outcome for one bounded raw transcript read. */
-export type SessionTranscriptRawDeltaResult =
+type SessionTranscriptDeltaResult<TEvent, TResetReason extends string> =
   | {
       kind: "page";
       /** Cursor positioned after the last returned event. */
       cursor: string;
-      /** Ordered raw transcript events selected for this page. */
-      events: SessionTranscriptEventRow[];
+      /** Ordered transcript events selected for this page. */
+      events: TEvent[];
       /** True when another event remains after this page. */
       hasMore: boolean;
       /** First unread event size when it cannot fit under maxBytes. */
@@ -239,9 +274,15 @@ export type SessionTranscriptRawDeltaResult =
       /** Fresh bootstrap cursor for the current generation. */
       cursor: string;
       /** Stable discontinuity that invalidated the supplied cursor. */
-      reason: "generation_mismatch" | "invalid_cursor" | "scope_mismatch";
+      reason: TResetReason;
     }
   | { kind: "missing" };
+
+/** Generation-aware outcome for one bounded raw transcript read. */
+export type SessionTranscriptRawDeltaResult = SessionTranscriptDeltaResult<
+  SessionTranscriptEventRow,
+  "generation_mismatch" | "invalid_cursor" | "scope_mismatch"
+>;
 
 /** Count, byte, and continuation bounds for one visible-message page. */
 export type SessionTranscriptVisibleMessageDeltaLimits = {
@@ -262,35 +303,20 @@ export type SessionTranscriptVisibleMessageEventRow = SessionTranscriptEventRow 
 };
 
 /** Generation-aware outcome for one bounded visible-message read. */
-export type SessionTranscriptVisibleMessageDeltaResult =
-  | {
-      kind: "page";
-      /** Cursor positioned after the last returned visible message. */
-      cursor: string;
-      /** Ordered active-path message events selected for this page. */
-      events: SessionTranscriptVisibleMessageEventRow[];
-      /** True when another visible message remains after this page. */
-      hasMore: boolean;
-      /** First unread event size when it cannot fit under maxBytes. */
-      requiredBytes?: number;
-      /** Stored JSONL bytes represented by events. */
-      serializedBytes: number;
-    }
-  | {
-      kind: "reset";
-      /** Fresh bootstrap cursor for the current visible generation. */
-      cursor: string;
-      /** Stable discontinuity that invalidated the supplied cursor. */
-      reason:
-        | "anchor_missing"
-        | "anchor_moved"
-        | "generation_mismatch"
-        | "invalid_cursor"
-        | "scope_mismatch";
-    }
-  | { kind: "missing" };
+export type SessionTranscriptVisibleMessageDeltaResult = SessionTranscriptDeltaResult<
+  SessionTranscriptVisibleMessageEventRow,
+  "anchor_missing" | "anchor_moved" | "generation_mismatch" | "invalid_cursor" | "scope_mismatch"
+>;
 
 export type TranscriptMessageAppendOptions<TMessage> = {
+  /** Detached preparation; fresh commit compares the exact transcript version before insertion. */
+  preparation?: {
+    prepareMessage?: (message: TMessage) => Promise<TMessage | undefined>;
+    /** Owner-prepared row predicates and live lifecycle authority; opaque SQL callbacks are unsupported. */
+    source?: SessionSourceAssertion;
+  };
+  /** Exact read snapshot required for a fresh insertion; replay keeps its original receipt. */
+  expectedTranscript?: SessionTranscriptContextVersion;
   /** Rebase a stale explicit parent when the current tail still descends from it. */
   appendIntent?: "active-branch";
   /** Runtime config used for message redaction and transcript header metadata. */
@@ -299,6 +325,8 @@ export type TranscriptMessageAppendOptions<TMessage> = {
   cwd?: string;
   /** How duplicate message idempotency keys are detected before append. */
   idempotencyLookup?: "scan" | "scan-assistant" | "caller-checked";
+  /** Reject the append when the transcript changed since the caller loaded it. */
+  expectedMutationAt?: number | null;
   /** Provider/channel message payload to persist. */
   message: TMessage;
   /** Testable timestamp override for the generated transcript entry. */
@@ -307,8 +335,10 @@ export type TranscriptMessageAppendOptions<TMessage> = {
   eventId?: string;
   /** Existing parent id owned by a caller with its own session tree. */
   parentId?: string | null;
-  /** Optional finalizer that runs after duplicate detection but before persistence. */
+  /** @deprecated Use preparation.prepareMessage; removed in the next Plugin SDK major. */
   prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
+  /** @deprecated Use preparation.source; removed in the next Plugin SDK major. */
+  beforeFreshMessageCommit?: () => void;
   /** Allow append without parent-link migration for large legacy linear transcripts. */
   useRawWhenLinear?: boolean;
 };
@@ -327,62 +357,91 @@ export type TranscriptMessageAppendResult<TMessage> = {
 };
 
 /** Transcript update fields supplied by callers; the target is resolved here. */
-export type TranscriptUpdatePayload = Partial<SessionTranscriptUpdate>;
+export type TranscriptUpdatePayload = Partial<SessionTranscriptUpdate> &
+  Pick<InternalSessionTranscriptUpdate, "lifecycleRevision" | "assistantItemIds">;
 
 export type LatestTranscriptAssistantText = {
   id?: string;
   text: string;
   timestamp?: number;
+  openclawDelivery?: AssistantMessage["openclawDelivery"];
 };
 
 export type SessionTranscriptWriteLockAccessorContext = {
+  publishUpdate: (update?: TranscriptUpdatePayload) => Promise<void>;
   appendMessage: <TMessage>(
-    options: TranscriptMessageAppendOptions<TMessage>,
+    options: LockedTranscriptMessageAppendOptions<TMessage>,
   ) => Promise<TranscriptMessageAppendResult<TMessage> | undefined>;
   /** Appends with commit-time idempotency and returns the committed visible sequence. */
   appendMessageWithMessageSequence: <TMessage>(
-    options: TranscriptMessageAppendOptions<TMessage>,
+    options: LockedTranscriptMessageAppendOptions<TMessage>,
   ) => Promise<{
+    /** Unfenced imports omit ownership and retain canonical-history refresh. */
+    lifecycleRevision?: string;
     messageSeq?: number;
     result: TranscriptMessageAppendResult<TMessage> | undefined;
   }>;
   /** Reads bounded indexed facts for supplied transcript mirror identities. */
-  readMessageFacts: (params: { idempotencyKeys: readonly string[] }) => Promise<{
+  readMessageFacts: (params: {
+    idempotencyKeys: readonly string[];
+    sourceRunId?: string;
+  }) => Promise<{
     anchorsByIdempotencyKey: Map<string, TranscriptEntryAnchor>;
     existingIdempotencyKeys: Set<string>;
     messagesByIdempotencyKey: Map<string, unknown>;
+    sourceEvents?: TranscriptEvent[];
   }>;
   readEvents: () => Promise<TranscriptEvent[]>;
   replaceEvents: (events: readonly TranscriptEvent[]) => Promise<void>;
 };
 
-export type SessionTranscriptWriteTransactionContext = {
-  /** Canonical transcript identity owned by the transaction. */
-  agentId: string;
-  sessionId: string;
-  sessionKey: string;
-  storePath: string;
+export type LockedTranscriptMessageAppendOptions<TMessage> = Omit<
+  TranscriptMessageAppendOptions<TMessage>,
+  "prepareMessageAfterIdempotencyCheck"
+> & {
+  /** @deprecated Use preparation.prepareMessage; removed in the next Plugin SDK major. */
+  prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
+  /** Awaited after duplicate detection; undefined suppresses a fresh append. */
+  prepareMessageAfterIdempotencyCheckAsync?: (message: TMessage) => Promise<TMessage | undefined>;
 };
+
+/** Canonical transcript identity owned by the transaction. */
+export type SessionTranscriptWriteTransactionContext = SessionTranscriptRuntimeTarget;
 
 export type SessionTranscriptTurnUpdateMode = "inline" | "file-only" | "none";
 
 export type SessionTranscriptTurnMessageAppend = TranscriptMessageAppendOptions<unknown> & {
+  /** Audited preparation runs once on the host against worker-read idempotency facts. */
+  workerPreparation?: Pick<
+    TranscriptMessageAppendOptions<unknown>,
+    "prepareMessageAfterIdempotencyCheck" | "beforeFreshMessageCommit"
+  > & {
+    /** Requires expectedSessionId and one message without transaction predicates; awaited after duplicate detection. */
+    prepareMessageAfterIdempotencyCheckAsync?: (message: unknown) => Promise<unknown>;
+  };
+  predicate?:
+    | { kind: "latest-assistant-differs"; runId: string; text: string }
+    | { kind: "active-entry"; entryId: string; errorMessage: string };
   /**
    * Runs inside the session writer queue before the SQLite transaction begins.
    * The commit phase revalidates session ownership and database idempotency
    * after asynchronous predicate work finishes.
    */
   shouldAppend?: (context: SessionTranscriptTurnWriteContext) => Promise<boolean> | boolean;
+  /**
+   * Rechecks authority after the write transaction begins. Read the newest assistant
+   * only when the predicate needs it, synchronously within this callback.
+   * Direct synchronous writers bypass the process queue, so prepared facts can be stale.
+   */
+  shouldAppendInTransaction?: (readLatestAssistantMessage: () => unknown) => boolean;
 };
 
-export type SessionTranscriptTurnWriteContext = {
-  agentId?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  storePath?: string;
-};
+export type SessionTranscriptTurnWriteContext = Partial<SessionTranscriptRuntimeTarget>;
 
 export type SessionTranscriptTurnPersistOptions = {
+  /** Retained caller authority, with no same-database reads inside worker grants. */
+  assertCurrent?: () => void;
+  acceptedResultGuard?: { expectedWriterRunId: string | null; errorMessage: string };
   /** Runtime config used for lock settings, redaction, and header metadata. */
   config?: OpenClawConfig;
   /** Working directory recorded in a newly created transcript header. */
@@ -393,18 +452,33 @@ export type SessionTranscriptTurnPersistOptions = {
    * write as the transcript append and metadata touch.
    */
   expectedSessionId?: string;
+  /** Creates this entry with the turn only if the logical session is still absent. */
+  initialSessionEntry?: SessionEntry;
   /** Rejects the turn when lifecycle ownership changed without rotating the session id. */
-  expectedLifecycleRevision?: string;
+  expectedLifecycleRevision?: SessionLifecycleRevisionExpectation;
   /** Rejects the turn when another admitted run owns transcript writes. */
   expectedWriterRunId?: SessionTranscriptTurnExpectedState["expectedWriterRunId"];
   /** Rejects the turn unless the persisted row still has this exact lifecycle owner state. */
   expectedSessionState?: SessionTranscriptTurnExpectedState;
   /** Lifecycle metadata committed when the guarded turn inserts or idempotently matches a message. */
   sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
+  /** Closed mutation committed with the admitted turn, never as a separate client write. */
+  sessionTurnMutation?: SessionTranscriptTurnMutation;
   /** Message rows to append under one transcript write lock. */
   messages: readonly SessionTranscriptTurnMessageAppend[];
   /** Exact run provenance persisted on output rows and emitted on terminal assistant updates. */
   runId?: string;
+  /**
+   * Accept appended or matched messages synchronously after guarded SQLite commit.
+   * Explicit completion work is joined before owner drain or transcript publication.
+   * The canonical result preserves replay bytes. Throws cannot roll back committed rows.
+   */
+  onMessageCommitted?: (
+    result: TranscriptMessageAppendResult<unknown>,
+    acceptCompletion: (complete: () => Promise<void>) => void,
+    /** Exact guarded-turn postimage; absent for legacy, unguarded single-message writes. */
+    turn?: Pick<SessionTranscriptTurnPersistResult, "sessionEntry" | "sessionTurnMutationResult">,
+  ) => void;
   /** Publish each appended message inline, one file-only invalidation, or nothing. */
   updateMode?: SessionTranscriptTurnUpdateMode;
   /** Emit file-only updates even when every candidate message was skipped. */
@@ -419,6 +493,8 @@ export type SessionTranscriptTurnPersistOptions = {
 };
 
 export interface SessionTranscriptTurnPersistResult {
+  predicateSkipped?: boolean;
+  sessionTurnMutationResult?: SessionTranscriptTurnMutationResult;
   appendedCount: number;
   messages: TranscriptMessageAppendResult<unknown>[];
   rejectedReason?: "session-rebound";
@@ -431,6 +507,11 @@ export interface SessionTranscriptRuntimeTarget {
   sessionKey: string;
   storePath: string;
 }
+
+export type ResolvedSessionTranscriptRuntimeTarget = SessionTranscriptRuntimeTarget & {
+  selectedSessionId?: string | null;
+  selectedLifecycleRevision?: SessionLifecycleRevisionExpectation;
+};
 
 export type SessionTranscriptManualTrimResult =
   | {
@@ -453,6 +534,8 @@ export type SessionTranscriptManualTrimPreflightResult =
     };
 
 export type SessionEntryUpdateOptions = {
+  /** Let this write satisfy a legacy updatedAt=0 pending reset without rotating lifecycle identity. */
+  consumePendingReset?: boolean;
   /** Skip prune/cap/rotation maintenance for specialized internal updates. */
   skipMaintenance?: boolean;
   /** Let the writer cache retain the updated object without cloning. */
@@ -480,27 +563,22 @@ export type SessionAbortTargetResult = SessionAbortTargetIdentity & {
   persistenceError?: string;
 };
 
-export type SessionLifecycleTranscriptInfo = {
-  sessionFile?: string;
-  transcriptArchived?: boolean;
-};
-
 export type ReplySessionInitializationSnapshot = {
   currentEntry?: SessionEntry;
   readEntry: (sessionKey: string) => SessionEntry | undefined;
   revision: string;
 };
 
-export type ReplySessionInitializationCommitContext = {
-  currentEntry?: SessionEntry;
-  readEntry: (sessionKey: string) => SessionEntry | undefined;
+export type ReplySessionInitializationCommitContext = Omit<
+  ReplySessionInitializationSnapshot,
+  "revision"
+> & {
   sessionEntry: SessionEntry;
 };
 
 export type ReplySessionInitializationCommitResult =
   | {
       ok: true;
-      previousSessionTranscript: SessionLifecycleTranscriptInfo;
       sessionEntry: SessionEntry;
       sessionStoreView: Record<string, SessionEntry>;
     }
@@ -511,23 +589,19 @@ export type ReplySessionInitializationCommitResult =
       revision: string;
     };
 
-export type SessionEntryPatchOptions = {
+export type SessionEntryPatchOptions = SessionEntryUpdateOptions & {
   /** Synchronous final ownership check executed inside the commit transaction. */
   assertCommitAllowed?: () => void;
+  /** Internal review owner authorization; ordinary patches preserve the current pause. */
+  providerReviewMutation?: boolean;
   /** Entry to synthesize when a patch operation is allowed to create. */
   fallbackEntry?: SessionEntry;
   /** Fully resolved maintenance settings when the caller already has config loaded. */
   maintenanceConfig?: ResolvedSessionMaintenanceConfig;
   /** Keep the previous updatedAt value when the patch should not count as activity. */
   preserveActivity?: boolean;
-  /** Throw when best-effort store recovery cannot confirm the requested write. */
-  requireWriteSuccess?: boolean;
   /** Replace the whole entry instead of merging the returned patch. */
   replaceEntry?: boolean;
-  /** Skip prune/cap/rotation maintenance for specialized internal updates. */
-  skipMaintenance?: boolean;
-  /** Let the writer cache retain the updated object without cloning. */
-  takeCacheOwnership?: boolean;
 };
 
 export type SessionEntryPatchContext = {
@@ -535,14 +609,13 @@ export type SessionEntryPatchContext = {
   existingEntry?: SessionEntry;
 };
 
-export type SessionEntryPatchResult = {
-  /** Exact persisted key for the patched entry after alias normalization. */
-  sessionKey: string;
-  /** Persisted entry returned by the backing store. */
-  entry: SessionEntry;
-};
+/** Persisted row returned after alias normalization. */
+export type SessionEntryPatchResult = SessionEntrySummary;
 
 export type SessionEntryTargetPatchScope = {
+  env?: NodeJS.ProcessEnv;
+  /** An existing read target fixes the physical owner without registry reselection. */
+  readSource?: CapturedSessionEntryReadSource;
   /** Agent owner used when resolving custom/shared legacy store paths. */
   agentId?: string;
   storePath: string;
@@ -550,19 +623,11 @@ export type SessionEntryTargetPatchScope = {
   target: SessionLifecycleStoreTarget;
 };
 
-export type SessionEntryReplacementSnapshot = {
-  /** Exact persisted key for the candidate row. */
-  sessionKey: string;
-  /** Detached entry snapshot; mutating it does not persist unless returned as a replacement. */
-  entry: SessionEntry;
-};
+/** Detached candidate row; changes persist only when returned as a replacement. */
+export type SessionEntryReplacementSnapshot = SessionEntrySummary;
 
-export type SessionEntryReplacement = {
-  /** Exact persisted key to replace. Missing keys are ignored. */
-  sessionKey: string;
-  /** Full replacement row to persist for this transaction. */
-  entry: SessionEntry;
-};
+/** Full row to replace in the transaction; missing keys are ignored. */
+export type SessionEntryReplacement = SessionEntrySummary;
 
 export type SessionEntryReplacementUpdate<T> = {
   /** Caller-owned result returned after replacements are persisted. */
@@ -570,19 +635,6 @@ export type SessionEntryReplacementUpdate<T> = {
   /** Exact rows to replace inside the storage transaction. */
   replacements?: Iterable<SessionEntryReplacement>;
 };
-
-/** File-backed checkpoint transcript fork produced by the checkpoint storage boundary. */
-export type SessionCompactionCheckpointForkedTranscript = {
-  sessionFile: string;
-  sessionId: string;
-  totalTokens?: number;
-};
-
-/** Result of resolving and copying checkpoint transcript content for branch/restore. */
-export type SessionCompactionCheckpointTranscriptForkResult =
-  | { status: "created"; transcript: SessionCompactionCheckpointForkedTranscript }
-  | { status: "missing-boundary" }
-  | { status: "failed" };
 
 /** Decision made before inheriting parent context into a child session. */
 export type SessionParentForkDecision =
@@ -629,6 +681,8 @@ export type ForkSessionFromParentTranscriptParams = {
   forkFrom?: "last-completed";
   /** Enforce the parent-fork context cap against the selected source. */
   enforceTokenLimit?: boolean;
+  /** Resolved child-model capacity; omission preserves the legacy safety cap. */
+  maxTokens?: number;
   /** Stable target identity for lifecycle-owned hidden or resumable sessions. */
   targetSessionId?: string;
   /** Cross-agent forks land the child transcript in the target agent's store. */
@@ -656,6 +710,7 @@ export type ForkSessionEntryFromParentTargetResult =
 
 export type ForkSessionEntryFromParentTargetParams = {
   agentId?: string;
+  commitGuard?: () => void;
   decisionSkipPatch?: (params: {
     decision: Extract<SessionParentForkDecision, { status: "skip" }>;
     entry: SessionEntry;
@@ -675,20 +730,6 @@ export type ForkSessionEntryFromParentTargetParams = {
   storePath: string;
 };
 
-/** Result of applying a checkpoint branch or restore mutation to session storage. */
-export type SessionCompactionCheckpointMutationResult =
-  | {
-      status: "created";
-      key: string;
-      checkpoint: SessionCompactionCheckpoint;
-      entry: SessionEntry;
-    }
-  | { status: "missing-session" }
-  | { status: "missing-checkpoint" }
-  | { status: "missing-boundary" }
-  | { status: "model-selection-locked" }
-  | { status: "failed" };
-
 export type SessionMessageCutMutationResult =
   | {
       status: "created";
@@ -707,9 +748,12 @@ export type SessionMessageCutMutationResult =
 
 export type SessionMessageCutMutationParams = {
   agentId?: string;
+  /** Synchronous authority check run inside the transcript commit transaction. */
+  commitGuard?: () => void;
   creation?: {
     via: import("./session-entry-provenance.js").SessionCreatedVia;
     actor?: import("./session-entry-provenance.js").SessionCreatedActor;
+    sandbox?: "required";
   };
   entryId: string;
   env?: NodeJS.ProcessEnv;
@@ -717,15 +761,16 @@ export type SessionMessageCutMutationParams = {
   sessionStoreKey?: string;
   storePath?: string;
   targetKey?: string;
+  /** Canonical local workspace prepared by the fork lifecycle before transcript commit. */
+  forkWorkspace?: Pick<
+    SessionEntry,
+    "projectId" | "spawnedCwd" | "spawnedWorkspaceDir" | "sessionRoot"
+  >;
+  /** Distinct repository owner prepared by the fork lifecycle before transcript commit. */
+  repositoryWorkspaceId?: string;
 };
 
-export type SessionBranchSummary = {
-  leafEntryId: string;
-  headline: string;
-  messageCount: number;
-  updatedAt?: string;
-  active: boolean;
-};
+export type SessionBranchSummary = SchemaContract<SessionBranch>;
 
 export type SessionBranchListResult =
   | { status: "ok"; branches: SessionBranchSummary[] }
@@ -758,69 +803,13 @@ export type SessionBranchSwitchMutationParams = Omit<
   leafEntryId: string;
 };
 
-export type SessionCompactionCheckpointEntryBuildContext = {
-  /** Checkpoint row selected from the current persisted session entry. */
-  checkpoint: SessionCompactionCheckpoint;
-  /** Persisted entry that owns the selected checkpoint. */
-  currentEntry: SessionEntry;
-  /** Forked transcript identity created from the stored checkpoint boundary. */
-  forkedTranscript: SessionCompactionCheckpointForkedTranscript;
-};
-
-export type SessionCompactionCheckpointTranscriptForker = (
-  checkpoint: SessionCompactionCheckpoint,
-) => Promise<SessionCompactionCheckpointTranscriptForkResult>;
-
-export type SessionCompactionCheckpointEntryBuilder = (
-  context: SessionCompactionCheckpointEntryBuildContext,
-) => Promise<SessionEntry> | SessionEntry;
-
-export type BranchSessionFromCompactionCheckpointParams = {
-  /** Checkpoint id stored on the source session entry. */
-  checkpointId: string;
-  /** Builds the branched session entry from the forked transcript. */
-  buildEntry: SessionCompactionCheckpointEntryBuilder;
-  /** Copies transcript content through the stored checkpoint boundary. */
-  forkTranscriptFromCheckpoint: SessionCompactionCheckpointTranscriptForker;
-  /** Persisted key for the new checkpoint branch. */
-  nextKey: string;
-  /** Canonical key used as the branch parent. */
-  sourceKey: string;
-  /** Actual persisted key to read when a legacy alias still owns the row. */
-  sourceStoreKey?: string;
-  /** Explicit store target for file-backed stores and SQLite migration adapters. */
-  storePath: string;
-};
-
-export type RestoreSessionFromCompactionCheckpointParams = {
-  /** Checkpoint id stored on the current session entry. */
-  checkpointId: string;
-  /** Builds the restored session entry from the forked transcript. */
-  buildEntry: SessionCompactionCheckpointEntryBuilder;
-  /** Copies transcript content through the stored checkpoint boundary. */
-  forkTranscriptFromCheckpoint: SessionCompactionCheckpointTranscriptForker;
-  /** Canonical key to replace with the restored checkpoint state. */
-  sessionKey: string;
-  /** Actual persisted key to read when a legacy alias still owns the row. */
-  sessionStoreKey?: string;
-  /** Explicit store target for file-backed stores and SQLite migration adapters. */
-  storePath: string;
-};
-
-export type TemporarySessionMappingPreservationResult<T> = {
-  /** Result returned by the operation while the temporary mapping may exist. */
-  result: T;
-  /** Snapshot failure; callers may continue when temporary cleanup is best-effort. */
-  snapshotFailure?: string;
-  /** Restore/delete failure for the original temporary mapping state. */
-  restoreFailure?: string;
-};
-
 export type SessionEntryCreateWithTranscriptContext = {
   /** Current entry under the requested key before creation, if any. */
   existingEntry?: SessionEntry;
-  /** Current entries snapshot for validation rules such as label uniqueness. */
-  sessionEntries: Record<string, SessionEntry>;
+  /** Exact normalized target from the same snapshot, distinct from an alias-resolved entry. */
+  targetEntry?: SessionEntry;
+  /** Requested label's detached occupancy; excludes the exact normalized target only. */
+  labelInUse: boolean;
 };
 
 export type SessionEntryCreateWithTranscriptResult<TError = string> =
@@ -829,10 +818,25 @@ export type SessionEntryCreateWithTranscriptResult<TError = string> =
   | { ok: false; error: string; phase: "transcript" };
 
 export type SessionEntryCreateWithTranscriptPrepareResult<TError = string> =
-  | { ok: true; entry: SessionEntry }
+  | { ok: true; entry: SessionEntry; transcriptEvents?: readonly TranscriptEvent[] }
   | { ok: false; error: TError };
 
+export type { SessionEntryCommitContext } from "./session-entry-commit-context.js";
+
+export type SessionEntryCreationPhase =
+  | "snapshot"
+  | "entry"
+  | "transcript"
+  | "writerAdmission"
+  | "commit"
+  | "publication";
+
 export type SessionEntryCreateWithTranscriptOptions = {
+  /** Explicit label claim, checked again inside the final write transaction. */
+  label?: string;
+  onPhase?: (phase: SessionEntryCreationPhase) => void;
+  /** Bind retained target facts to this creator's own placeholder publication. */
+  bindCreation?: (operation: SessionEntryCreationOperation) => void;
   /** Protect the newly created row from maintenance during its initial write. */
   activeSessionKey?: string;
   /** Working directory stored in the initial transcript header. */
@@ -841,6 +845,14 @@ export type SessionEntryCreateWithTranscriptOptions = {
   requireWriteSuccess?: boolean;
   /** Synchronous caller-authority guard checked by the storage owner before commits. */
   commitGuard?: () => void;
+  /** Retain source authority around each final writer, after asynchronous preparation. */
+  withCommit?: <T>(run: (assertSourceCurrent: () => void) => Promise<T>) => Promise<T>;
+  /** Non-throwing notification after the entry's outer COMMIT, before publication or cleanup. */
+  onLifecycleCommitted?: (entry: SessionEntry) => void;
+  /** Best-effort bookkeeping after publication, still under the original writer. */
+  afterCommitted?: (entry: SessionEntry, context: SessionEntryCommitContext) => Promise<void>;
+  /** Resolves a trusted owner after entry projection; the assignment commits with a new entry. */
+  resolveOwnerAssignment?: () => SessionOwnerAssignment | undefined;
 };
 
 export type SessionPatchProjectionSnapshot = { store: Readonly<Record<string, SessionEntry>> };
@@ -862,17 +874,6 @@ export type SessionPatchProjectionResult<TFailure extends SessionPatchProjection
   | { ok: true; entry: SessionEntry }
   | TFailure;
 
-export type SessionPatchProjectionOperation<TFailure extends SessionPatchProjectionFailure> = {
-  /** Revalidates request-scoped authorization after projection and before persistence. */
-  authorize?: () => TFailure | undefined;
-  /** Converts a target-local projection exception without aborting sibling targets. */
-  onError?: (error: unknown) => TFailure;
-  resolveTarget: (snapshot: SessionPatchProjectionSnapshot) => SessionPatchProjectionTarget;
-  project: (
-    context: SessionPatchProjectionContext,
-  ) => Promise<SessionPatchProjectionResult<TFailure>> | SessionPatchProjectionResult<TFailure>;
-};
-
 export type {
   DeleteSessionEntryLifecycleParams,
   DeleteSessionEntryLifecycleResult,
@@ -882,12 +883,9 @@ export type {
   SessionLifecycleArtifactCleanupParams,
   SessionLifecycleArtifactCleanupResult,
   SessionLifecycleStoreTarget,
-};
-
-export type {
   DeletedAgentSessionEntryPurgeParams,
   SessionArchivedTranscriptCleanupRule,
   SessionEntryLifecycleMutationResult,
   SessionEntryLifecycleRemoval,
   SessionEntryLifecycleUpsert,
-};
+} from "./session-accessor.lifecycle-types.js";

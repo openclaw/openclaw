@@ -1,24 +1,40 @@
 package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.chat.CHAT_IMAGE_MAX_BASE64_CHARS
+import android.content.ContentProvider
+import android.content.ContentValues
+import android.content.pm.ProviderInfo
+import android.database.Cursor
+import android.database.MatrixCursor
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.net.Uri
+import android.os.ParcelFileDescriptor
+import android.provider.OpenableColumns
 import android.util.Base64
 import androidx.exifinterface.media.ExifInterface
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import org.robolectric.annotation.Implementation
+import org.robolectric.annotation.Implements
+import org.robolectric.shadow.api.Shadow
+import org.robolectric.shadows.ShadowContentResolver
+import org.robolectric.shadows.ShadowNativeBitmap
+import org.robolectric.util.ReflectionHelpers
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.OutputStream
 
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -28,6 +44,27 @@ class ChatImageCodecTest {
   @After
   fun deleteTemporaryImages() {
     temporaryImages.forEach(File::delete)
+  }
+
+  @Test
+  fun locallyAdmittedLargeJpegUsesItsOwnBoundedPreviewPolicy() {
+    val raw = syntheticLargeChatPhotoBase64()
+    assertTrue(raw.length > CHAT_IMAGE_MAX_BASE64_CHARS)
+    assertTrue(decodedBase64ByteCount(raw) < CHAT_COMPOSER_MAX_IMAGE_DECODED_BYTES)
+    assertNull(decodeBase64Bitmap(raw))
+    val preview = requireNotNull(decodeBase64Bitmap(raw, source = Base64ImageSource.Composer))
+    assertEquals(1024, preview.width)
+    assertEquals(768, preview.height)
+    // A cached local preview must not relax incoming inline or Markdown admission.
+    assertNull(decodeBase64Bitmap(raw))
+    assertNull(parseDataImageDestination("data:image/jpeg;base64,$raw"))
+  }
+
+  @Test
+  fun locallyAdmittedPreviewStillRejectsBytesBeyondTheComposerLimit() {
+    val maxChars = (((CHAT_COMPOSER_MAX_IMAGE_DECODED_BYTES + 2) / 3) * 4).toInt()
+    assertNull(decodeBase64Bitmap("A".repeat(maxChars + 1), source = Base64ImageSource.Composer))
+    assertNull(decodeBase64Bitmap("YQ==", source = Base64ImageSource.Composer))
   }
 
   @Test
@@ -122,6 +159,68 @@ class ChatImageCodecTest {
   }
 
   @Test
+  @Config(shadows = [AttachmentEncodingBitmap::class])
+  fun pickedImageReleasesDecodedPixelsAfterEncodingOrFailure() {
+    val image = createTaggedImage(ExifInterface.ORIENTATION_NORMAL)
+    val resolver = RuntimeEnvironment.getApplication().contentResolver
+    for (fails in listOf(false, true)) {
+      AttachmentEncodingBitmap.encoded = null
+      AttachmentEncodingBitmap.failCompression = fails
+      try {
+        if (fails) {
+          val error = assertThrows(IllegalStateException::class.java) { loadSizedImageAttachment(resolver, Uri.fromFile(image)) }
+          assertEquals("attachment encode failed", error.message)
+        } else {
+          loadSizedImageAttachment(resolver, Uri.fromFile(image))
+        }
+        val decoded = requireNotNull(AttachmentEncodingBitmap.encoded)
+        assertTrue("decoded pixels must be released when attachment encoding finishes (failure=$fails)", decoded.isRecycled)
+      } finally {
+        AttachmentEncodingBitmap.encoded?.recycle()
+        AttachmentEncodingBitmap.encoded = null
+        AttachmentEncodingBitmap.failCompression = false
+      }
+    }
+  }
+
+  @Test
+  fun pickedImagePreservesProviderDisplayNameInsteadOfContentUriId() {
+    val attachment = loadProviderImage(displayName = "vacation-photo.png")
+
+    assertEquals("vacation-photo.jpg", attachment.fileName)
+    assertEquals("image/jpeg", attachment.mimeType)
+    assertTrue(requireNotNull(decodeBase64Bitmap(attachment.base64)).width > 0)
+  }
+
+  @Test
+  fun pickedImageSanitizesUnsafeProviderDisplayName() {
+    val attachment = loadProviderImage(displayName = "Summer/Trips\\2026\u0007.png")
+
+    assertEquals("Summer_Trips_2026_.jpg", attachment.fileName)
+  }
+
+  @Test
+  fun pickedImagePreservesUnicodeProviderDisplayName() {
+    val attachment = loadProviderImage(displayName = "旅-été.png")
+
+    assertEquals("旅-été.jpg", attachment.fileName)
+  }
+
+  @Test
+  fun pickedImageFallsBackWhenProviderDisplayNameIsBlank() {
+    val attachment = loadProviderImage(displayName = "   ")
+
+    assertEquals("42.jpg", attachment.fileName)
+  }
+
+  @Test
+  fun pickedImageFallsBackWhenProviderDisplayNameQueryFails() {
+    val attachment = loadProviderImage(displayName = "unavailable.png", failQuery = true)
+
+    assertEquals("42.jpg", attachment.fileName)
+  }
+
+  @Test
   fun imageDecoderPreservesImagesWithoutExifMetadata() {
     val bitmap = createAsymmetricBitmap()
     val bytes =
@@ -136,6 +235,21 @@ class ChatImageCodecTest {
     assertOrientedPixels(
       decoded,
       OrientationCase(ExifInterface.ORIENTATION_NORMAL, RED, GREEN, BLUE, YELLOW),
+    )
+  }
+
+  private fun loadProviderImage(
+    displayName: String,
+    failQuery: Boolean = false,
+  ): PendingAttachment {
+    val image = createTaggedImage(ExifInterface.ORIENTATION_NORMAL)
+    val authority = "ai.openclaw.app.image-proof"
+    val provider = TestImageContentProvider(image, displayName, failQuery)
+    provider.attachInfo(RuntimeEnvironment.getApplication(), ProviderInfo().apply { this.authority = authority })
+    ShadowContentResolver.registerProviderInternal(authority, provider)
+    return loadPickedMediaOrDocumentAttachment(
+      RuntimeEnvironment.getApplication().contentResolver,
+      Uri.parse("content://$authority/images/42"),
     )
   }
 
@@ -211,4 +325,74 @@ class ChatImageCodecTest {
     val BLUE = Color.rgb(0, 0, 255)
     val YELLOW = Color.rgb(255, 255, 0)
   }
+}
+
+@Implements(value = Bitmap::class, isInAndroidSdk = false, callNativeMethodsByDefault = true)
+class AttachmentEncodingBitmap : ShadowNativeBitmap() {
+  @Implementation
+  fun compress(
+    format: Bitmap.CompressFormat,
+    quality: Int,
+    stream: OutputStream,
+  ): Boolean {
+    encoded = realBitmap
+    if (failCompression) return false
+    return Shadow.directlyOn(
+      realBitmap,
+      Bitmap::class.java,
+      "compress",
+      ReflectionHelpers.ClassParameter.from(Bitmap.CompressFormat::class.java, format),
+      ReflectionHelpers.ClassParameter.from(Integer.TYPE, quality),
+      ReflectionHelpers.ClassParameter.from(OutputStream::class.java, stream),
+    )
+  }
+
+  companion object {
+    var encoded: Bitmap? = null
+    var failCompression = false
+  }
+}
+
+private class TestImageContentProvider(
+  private val image: File,
+  private val displayName: String,
+  private val failQuery: Boolean,
+) : ContentProvider() {
+  override fun onCreate(): Boolean = true
+
+  override fun query(
+    uri: Uri,
+    projection: Array<out String>?,
+    selection: String?,
+    selectionArgs: Array<out String>?,
+    sortOrder: String?,
+  ): Cursor {
+    if (failQuery) throw SecurityException("display name unavailable")
+    return MatrixCursor(arrayOf(OpenableColumns.DISPLAY_NAME)).apply { addRow(arrayOf(displayName)) }
+  }
+
+  override fun openFile(
+    uri: Uri,
+    mode: String,
+  ): ParcelFileDescriptor = ParcelFileDescriptor.open(image, ParcelFileDescriptor.MODE_READ_ONLY)
+
+  override fun getType(uri: Uri): String = "image/jpeg"
+
+  override fun insert(
+    uri: Uri,
+    values: ContentValues?,
+  ): Uri? = null
+
+  override fun delete(
+    uri: Uri,
+    selection: String?,
+    selectionArgs: Array<out String>?,
+  ): Int = 0
+
+  override fun update(
+    uri: Uri,
+    values: ContentValues?,
+    selection: String?,
+    selectionArgs: Array<out String>?,
+  ): Int = 0
 }

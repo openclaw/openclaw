@@ -1,27 +1,16 @@
-// Google Meet plugin module implements create behavior.
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { GoogleMeetConfig, GoogleMeetMode, GoogleMeetTransport } from "./config.js";
+import type { GoogleMeetConfig } from "./config.js";
 import {
   createGoogleMeetSpace,
   type GoogleMeetAccessType,
   type GoogleMeetEntryPointAccess,
   type GoogleMeetSpaceConfig,
-} from "./meet.js";
-import { resolveGoogleMeetAccessToken } from "./oauth.js";
+} from "./meet-api.js";
+import { resolveGoogleMeetTokenFromParams } from "./plugin-helpers.js";
+import { normalizeMode, normalizeTransport } from "./plugin-registration.js";
 import type { GoogleMeetRuntime } from "./runtime.js";
 import { createMeetWithBrowserProxyOnNode } from "./transports/chrome-create.js";
-
-function normalizeTransport(value: unknown): GoogleMeetTransport | undefined {
-  return value === "chrome" || value === "chrome-node" || value === "twilio" ? value : undefined;
-}
-
-function normalizeMode(value: unknown): GoogleMeetMode | undefined {
-  if (value === "realtime") {
-    return "agent";
-  }
-  return value === "agent" || value === "bidi" || value === "transcribe" ? value : undefined;
-}
 
 function normalizeGoogleMeetAccessType(value: unknown): GoogleMeetAccessType | undefined {
   const normalized = normalizeOptionalString(value)?.toUpperCase().replaceAll("-", "_");
@@ -64,14 +53,11 @@ export function hasCreateSpaceConfigInput(raw: Record<string, unknown>): boolean
   );
 }
 
-async function createSpaceFromParams(config: GoogleMeetConfig, raw: Record<string, unknown>) {
-  const token = await resolveGoogleMeetAccessToken({
-    clientId: normalizeOptionalString(raw.clientId) ?? config.oauth.clientId,
-    clientSecret: normalizeOptionalString(raw.clientSecret) ?? config.oauth.clientSecret,
-    refreshToken: normalizeOptionalString(raw.refreshToken) ?? config.oauth.refreshToken,
-    accessToken: normalizeOptionalString(raw.accessToken) ?? config.oauth.accessToken,
-    expiresAt: typeof raw.expiresAt === "number" ? raw.expiresAt : config.oauth.expiresAt,
-  });
+export async function createSpaceFromParams(
+  config: GoogleMeetConfig,
+  raw: Record<string, unknown>,
+) {
+  const token = await resolveGoogleMeetTokenFromParams(config, raw);
   const result = await createGoogleMeetSpace({
     accessToken: token.accessToken,
     config: resolveCreateSpaceConfig(raw),
@@ -79,7 +65,10 @@ async function createSpaceFromParams(config: GoogleMeetConfig, raw: Record<strin
   return { source: "api" as const, token, ...result };
 }
 
-function hasGoogleMeetOAuth(config: GoogleMeetConfig, raw: Record<string, unknown>): boolean {
+export function hasGoogleMeetOAuth(
+  config: GoogleMeetConfig,
+  raw: Record<string, unknown>,
+): boolean {
   return Boolean(
     normalizeOptionalString(raw.accessToken) ??
     normalizeOptionalString(raw.refreshToken) ??

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
@@ -17,6 +18,9 @@ const cleanIndexDigest = `sha256:${"5".repeat(64)}`;
 const defaultSourceDigest = `sha256:${"6".repeat(64)}`;
 const slimSourceDigest = `sha256:${"7".repeat(64)}`;
 const browserSourceDigest = `sha256:${"8".repeat(64)}`;
+const browserArm64Digest = `sha256:${"9".repeat(64)}`;
+const configDigest = `sha256:${"a".repeat(64)}`;
+const layerDigest = `sha256:${"b".repeat(64)}`;
 const immutableSourceRefs = [
   `default=${sourceImage}@${defaultSourceDigest}`,
   `slim=${sourceImage}@${slimSourceDigest}`,
@@ -35,7 +39,8 @@ type WorkflowStep = {
 };
 
 type WorkflowJob = {
-  "continue-on-error"?: boolean;
+  concurrency?: { group?: string; "cancel-in-progress"?: boolean; queue?: string };
+  "continue-on-error"?: boolean | string;
   environment?: string;
   if?: string;
   needs?: string | string[];
@@ -45,7 +50,7 @@ type WorkflowJob = {
   steps?: WorkflowStep[];
   "timeout-minutes"?: number;
   uses?: string;
-  with?: Record<string, string>;
+  with?: Record<string, boolean | string>;
 };
 
 type Workflow = {
@@ -55,6 +60,9 @@ type Workflow = {
     workflow_call?: {
       inputs?: Record<string, { required?: boolean; type?: string }>;
       outputs?: Record<string, { description?: string; value?: string }>;
+    };
+    workflow_dispatch?: {
+      inputs?: Record<string, { required?: boolean; type?: string }>;
     };
   };
 };
@@ -71,9 +79,13 @@ function requireJob(workflow: Workflow, name: string): WorkflowJob {
   return job;
 }
 
-function indexManifest(architectures: Array<"amd64" | "arm64">, includeAttestations = true) {
+function indexManifest(
+  architectures: Array<"amd64" | "arm64">,
+  includeAttestations = true,
+  armDigest = arm64Digest,
+) {
   const manifests = architectures.flatMap((architecture) => {
-    const digest = architecture === "amd64" ? amd64Digest : arm64Digest;
+    const digest = architecture === "amd64" ? amd64Digest : armDigest;
     const image = {
       digest,
       mediaType: imageManifestMediaType,
@@ -109,7 +121,7 @@ function architectureForRef(ref: string): "amd64" | "arm64" | undefined {
 }
 
 function requireCommandRef(args: string[]): string {
-  const ref = args[3];
+  const ref = args[3] === "--raw" ? args[4] : args[3];
   if (!ref) {
     throw new Error(`Expected an imagetools image reference in ${JSON.stringify(args)}.`);
   }
@@ -120,6 +132,25 @@ function imageConfig(version: string) {
   return JSON.stringify({
     config: { Labels: { "org.opencontainers.image.version": version } },
   });
+}
+
+function platformManifest() {
+  return {
+    schemaVersion: 2,
+    mediaType: imageManifestMediaType,
+    config: {
+      mediaType: "application/vnd.oci.image.config.v1+json",
+      digest: configDigest,
+      size: 256,
+    },
+    layers: [
+      {
+        mediaType: "application/vnd.oci.image.layer.v1.tar+gzip",
+        digest: layerDigest,
+        size: 1024,
+      },
+    ],
+  };
 }
 
 function publishParams(version: string, includeBrowser: boolean) {
@@ -136,10 +167,33 @@ function successfulExecutor(
   options: {
     changedTargetRef?: string;
     currentAliasVersion?: string;
+    sourceVersions?: Record<string, string>;
+    sourceImageConfigs?: Record<string, string>;
+    rawManifests?: Record<string, string | Error>;
+    unattestedSourceRef?: string;
     version?: string;
   } = {},
 ) {
   const version = options.version ?? "2026.7.2";
+  const rawManifests: Record<string, string | Error> = {
+    ...Object.fromEntries(
+      [defaultSourceDigest, slimSourceDigest, browserSourceDigest].map((digest) => [
+        `${sourceImage}@${digest}`,
+        indexManifest(
+          ["amd64", "arm64"],
+          `${sourceImage}@${digest}` !== options.unattestedSourceRef,
+          digest === browserSourceDigest ? browserArm64Digest : arm64Digest,
+        ),
+      ]),
+    ),
+    ...Object.fromEntries(
+      [amd64Digest, arm64Digest, browserArm64Digest].map((digest) => [
+        `${sourceImage}@${digest}`,
+        JSON.stringify(platformManifest()),
+      ]),
+    ),
+    ...options.rawManifests,
+  };
   return vi.fn((_command: string, args: string[]) => {
     calls.push(args);
     if (args[2] === "create") {
@@ -147,17 +201,40 @@ function successfulExecutor(
     }
     const ref = requireCommandRef(args);
     if (args.at(-1)?.includes(".Image")) {
-      return imageConfig(ref.includes("@") ? version : (options.currentAliasVersion ?? version));
+      const platform = args.at(-1)?.includes("linux/arm64") ? "linux/arm64" : "linux/amd64";
+      if (ref.includes("@") && options.sourceImageConfigs?.[platform] !== undefined) {
+        return options.sourceImageConfigs[platform];
+      }
+      return imageConfig(
+        ref.includes("@")
+          ? (options.sourceVersions?.[ref] ?? version)
+          : (options.currentAliasVersion ?? version),
+      );
+    }
+    if (ref === `${sourceImage}@${attestationDigest}`) {
+      return JSON.stringify({
+        artifactType: "application/vnd.docker.attestation.manifest.v1+json",
+        layers: ["https://spdx.dev/Document", "https://slsa.dev/provenance/v1"].map(
+          (predicate) => ({ annotations: { "in-toto.io/predicate-type": predicate } }),
+        ),
+      });
     }
     if (ref.startsWith(sourceImage)) {
-      const architecture = architectureForRef(ref);
-      return indexManifest(architecture ? [architecture] : ["amd64", "arm64"]);
+      const raw = rawManifests[ref];
+      if (!args.includes("--raw") || raw === undefined) {
+        throw new Error(`Unexpected source inspection: ${JSON.stringify(args)}`);
+      }
+      if (raw instanceof Error) {
+        throw raw;
+      }
+      return raw;
     }
+    const armDigest = ref.includes("-browser") ? browserArm64Digest : arm64Digest;
     if (args.at(-1) === "--raw") {
-      return indexManifest(["amd64", "arm64"], false);
+      return indexManifest(["amd64", "arm64"], false, armDigest);
     }
     const architecture = architectureForRef(ref);
-    const expectedDigest = architecture === "arm64" ? arm64Digest : amd64Digest;
+    const expectedDigest = architecture === "arm64" ? armDigest : amd64Digest;
     return JSON.stringify({
       digest:
         ref === options.changedTargetRef
@@ -170,9 +247,23 @@ function successfulExecutor(
   });
 }
 
+function admissionFixture(raw: string | Error, { digest = amd64Digest } = {}) {
+  const calls: string[][] = [];
+  const execFileSyncImpl = successfulExecutor(calls, {
+    rawManifests: { [`${sourceImage}@${digest}`]: raw },
+  });
+  return {
+    calls,
+    publish: () =>
+      publishVercelContainerRegistryImages(publishParams("2026.7.2", true), {
+        execFileSyncImpl,
+        log: () => {},
+      }),
+  };
+}
+
 describe("Vercel Container Registry publishing", () => {
   it.each([
-    ["stable", "2026.7.2"],
     ["extended-stable", "2026.6.33"],
     ["beta", "2026.7.2-beta.1"],
   ])("plans the full immutable %s image set", (channel, version) => {
@@ -198,87 +289,109 @@ describe("Vercel Container Registry publishing", () => {
     ]);
   });
 
-  it("omits browser images when the tagged Docker release did not build them", () => {
-    const plan = createVercelContainerRegistryPublishPlan({
-      includeBrowser: false,
-      sourceImage,
-      targetImage,
-      version: "2026.7.2",
+  it("admits the observed release node_modules layer that the former 500 MB cap rejected", () => {
+    const calls: string[][] = [];
+    const manifest = platformManifest();
+    const observedDigest =
+      "sha256:87a84edfc11732d9ef1ca5a598a871ce3f4b7572dd3213dc5107d519d9ab61c0";
+    manifest.layers = Array.from({ length: 11 }, (_, index) => ({
+      ...manifest.layers[0]!,
+      digest: index === 10 ? observedDigest : layerDigest,
+      size: index === 10 ? 869_561_235 : 1024,
+    }));
+    const execFileSyncImpl = successfulExecutor(calls, {
+      rawManifests: { [`${sourceImage}@${amd64Digest}`]: JSON.stringify(manifest) },
+      version: "2026.9.6",
     });
 
-    expect(plan.readinessTags).toEqual(["2026.7.2", "2026.7.2-slim"]);
-    expect(plan.copies.map((copy) => copy.targetTag)).toEqual([
-      "2026.7.2",
-      "2026.7.2-amd64",
-      "2026.7.2-arm64",
-      "2026.7.2-slim",
-      "2026.7.2-slim-amd64",
-      "2026.7.2-slim-arm64",
-    ]);
-  });
-
-  it("rejects tagged image names", () => {
-    expect(() =>
-      createVercelContainerRegistryPublishPlan({
-        includeBrowser: true,
-        sourceImage: `${sourceImage}:latest`,
-        targetImage,
-        version: "2026.7.2",
-      }),
-    ).toThrow("untagged container image name");
-  });
-
-  it("resolves every source before the first registry write", () => {
-    const calls: string[][] = [];
-    const execFileSyncImpl = successfulExecutor(calls);
-
-    publishVercelContainerRegistryImages(publishParams("2026.7.2", true), {
+    publishVercelContainerRegistryImages(publishParams("2026.9.6", true), {
       execFileSyncImpl,
       log: () => {},
     });
 
-    const firstCreate = calls.findIndex((args) => args[2] === "create");
-    expect(firstCreate).toBe(3);
-    expect(calls.slice(0, firstCreate).every((args) => args[2] === "inspect")).toBe(true);
-    expect(
-      calls
-        .slice(0, firstCreate)
-        .map((args) => requireCommandRef(args))
-        .every((ref) => ref.includes("@sha256:")),
-    ).toBe(true);
     expect(calls.filter((args) => args[2] === "create")).toHaveLength(9);
-    expect(calls[firstCreate]).toEqual([
-      "buildx",
-      "imagetools",
-      "create",
-      "--progress",
-      "plain",
-      "--tag",
-      `${targetImage}:2026.7.2`,
-      `${sourceImage}@${amd64Digest}`,
-      `${sourceImage}@${arm64Digest}`,
-    ]);
-    expect(
-      calls.find((args) => args[2] === "inspect" && args[3] === `${targetImage}:2026.7.2-amd64`),
-    ).toEqual([
-      "buildx",
-      "imagetools",
-      "inspect",
-      `${targetImage}:2026.7.2-amd64`,
-      "--format",
-      "{{json .Manifest}}",
-    ]);
   });
 
-  it("fails before writing when an immutable source is missing", () => {
+  it("admits every selection before copying even when only the last platform exceeds a cap", () => {
+    const manifest = platformManifest();
+    manifest.layers[0]!.size = 2_000_000_001;
+    const { calls, publish } = admissionFixture(JSON.stringify(manifest), {
+      digest: browserArm64Digest,
+    });
+
+    expect(publish).toThrow(
+      `browser/2026.7.2-browser linux/arm64 ${sourceImage}@${browserArm64Digest}: layer[0] ${layerDigest} is 2000000001 bytes; client cap 2000000000 bytes`,
+    );
+    expect(calls.filter((args) => args[2] === "create")).toHaveLength(0);
+  });
+
+  it("rejects invalid layer[0] size 0.5 before copying", () => {
+    const { field, size } = { field: "layer[0]", size: 0.5 };
+
+    const manifest = platformManifest();
+    const raw = JSON.stringify({
+      ...manifest,
+      layers: [{ ...manifest.layers[0], size }],
+    });
+    const { calls, publish } = admissionFixture(raw);
+
+    expect(publish).toThrow(
+      `default/2026.7.2 linux/amd64 ${sourceImage}@${amd64Digest}: ${field}.size must be a nonnegative safe integer byte count`,
+    );
+    expect(calls.filter((args) => args[2] === "create")).toHaveLength(0);
+  });
+
+  it.each([
+    ["non-array layers", { ...platformManifest(), layers: {} }, "layers"],
+    ["null layer", { ...platformManifest(), layers: [null] }, "layer[0]"],
+    ["unsupported schema", { ...platformManifest(), schemaVersion: 1 }, "image manifest"],
+  ] as const)("rejects %s before copying", (_name, manifest, diagnostic) => {
+    const { calls, publish } = admissionFixture(JSON.stringify(manifest));
+    const execute = vi.fn(publish);
+
+    expect(execute).toThrow(
+      `VCR preflight: default/2026.7.2 linux/amd64 ${sourceImage}@${amd64Digest}:`,
+    );
+    expect(calls.filter((args) => args[2] === "create")).toHaveLength(0);
+    expect(execute.mock.results[0]?.value).toHaveProperty(
+      "message",
+      expect.stringContaining(diagnostic),
+    );
+  });
+
+  it.each([
+    ["invalid JSON", "{", "Invalid platform manifest JSON."],
+    ["inspect failure", new Error("Manifest fetch failed"), "Could not inspect platform manifest."],
+  ] as const)("rejects %s with selection context before copying", (_name, raw, diagnostic) => {
+    const { calls, publish } = admissionFixture(raw);
+
+    expect(publish).toThrow(
+      `VCR preflight: default/2026.7.2 linux/amd64 ${sourceImage}@${amd64Digest}: ${diagnostic} No images copied.`,
+    );
+    expect(calls.filter((args) => args[2] === "create")).toHaveLength(0);
+  });
+
+  it("rejects an unattested immutable source before any registry write", () => {
     const calls: string[][] = [];
-    const execFileSyncImpl = vi.fn((_command: string, args: string[]) => {
-      calls.push(args);
-      if (calls.length === 2) {
-        throw new Error("manifest unknown");
-      }
-      const architecture = architectureForRef(requireCommandRef(args));
-      return indexManifest(architecture ? [architecture] : ["amd64", "arm64"]);
+    const unattestedSourceRef = `${sourceImage}@${browserSourceDigest}`;
+    const execFileSyncImpl = successfulExecutor(calls, { unattestedSourceRef });
+
+    expect(() =>
+      publishVercelContainerRegistryImages(publishParams("2026.7.2", true), {
+        execFileSyncImpl,
+        log: () => {},
+      }),
+    ).toThrow(`${unattestedSourceRef}: missing attestation manifest for linux/amd64`);
+    expect(calls.some((args) => args[2] === "create")).toBe(false);
+  });
+
+  it("rejects attested source label custom-build at the requested-release comparison", () => {
+    const sourceVersion = "custom-build";
+
+    const calls: string[][] = [];
+    const mismatchedSourceRef = `${sourceImage}@${browserSourceDigest}`;
+    const execFileSyncImpl = successfulExecutor(calls, {
+      sourceVersions: { [mismatchedSourceRef]: sourceVersion },
     });
 
     expect(() =>
@@ -286,7 +399,44 @@ describe("Vercel Container Registry publishing", () => {
         execFileSyncImpl,
         log: () => {},
       }),
-    ).toThrow("manifest unknown");
+    ).toThrow(`${mismatchedSourceRef} reports version ${sourceVersion}, expected 2026.7.2`);
+    expect(calls.some((args) => args[2] === "create")).toBe(false);
+  });
+
+  it.each([
+    ["malformed JSON", "{", "linux/amd64"],
+    ["second-platform missing label", "{}", "linux/arm64"],
+  ])("rejects %s before copying an attested source", (_name, raw, platform) => {
+    const calls: string[][] = [];
+    const execFileSyncImpl = successfulExecutor(calls, {
+      sourceImageConfigs: { [platform]: raw },
+    });
+    const publish = vi.fn(() =>
+      publishVercelContainerRegistryImages(publishParams("2026.7.2", true), {
+        execFileSyncImpl,
+        log: () => {},
+      }),
+    );
+    const sourceRef = `${sourceImage}@${defaultSourceDigest}`;
+
+    expect(publish).toThrow(
+      raw === "{"
+        ? `Could not parse the ${platform} image config for ${sourceRef}.`
+        : `${sourceRef} does not have an org.opencontainers.image.version label for ${platform}.`,
+    );
+    if (raw === "{") {
+      expect(publish.mock.results[0]?.value).toHaveProperty("cause", expect.any(SyntaxError));
+    } else {
+      expect(publish.mock.results[0]?.value).not.toHaveProperty("cause");
+    }
+    expect(calls.at(-1)).toEqual([
+      "buildx",
+      "imagetools",
+      "inspect",
+      sourceRef,
+      "--format",
+      `{{json (index .Image "${platform}")}}`,
+    ]);
     expect(calls.some((args) => args[2] === "create")).toBe(false);
   });
 
@@ -393,19 +543,92 @@ describe("Vercel Container Registry publishing", () => {
     ).toBe(false);
   });
 
+  it("allows a first VCR alias publication when the exact target ref is absent", () => {
+    const calls: string[][] = [];
+    const execute = successfulExecutor(calls);
+    let created = false;
+    const execFileSyncImpl = vi.fn((command: string, args: string[]) => {
+      if (args[2] === "create") {
+        created = true;
+      } else if (args.at(-1)?.includes(".Image") && !args[3]!.includes("@") && !created) {
+        const error = new Error("docker inspect failed");
+        Object.assign(error, { stderr: `ERROR: ${args[3]}: not found` });
+        throw error;
+      }
+      return execute(command, args);
+    });
+
+    promoteVercelContainerRegistryAliases(
+      {
+        includeBrowser: false,
+        targetImage,
+        version: "2026.7.2",
+      },
+      { execFileSyncImpl, log: () => {} },
+    );
+
+    expect(calls.filter((args) => args[2] === "create")).toHaveLength(2);
+  });
+
+  it("transports only secret-safe digests across the VCR workflow boundary", () => {
+    const dockerRelease = readWorkflow(".github/workflows/docker-release.yml");
+    const releaseWorkflow = readWorkflow(".github/workflows/openclaw-release-publish.yml");
+    const reusable = readWorkflow(".github/workflows/vercel-container-registry-publish.yml");
+    const dockerPublish = requireJob(dockerRelease, "publish");
+    const releasePublish = requireJob(releaseWorkflow, "publish_vcr");
+    const reusablePublish = requireJob(reusable, "publish");
+
+    expect(dockerPublish.outputs?.vcr_source_digests).toBe(
+      "${{ steps.promote.outputs.vcr_source_digests }}",
+    );
+    expect(dockerRelease.on?.workflow_call?.outputs?.vcr_source_digests?.value).toBe(
+      "${{ jobs.publish.outputs.vcr_source_digests }}",
+    );
+
+    expect(releasePublish.with?.source_digests).toBe(
+      "${{ needs.publish_docker.outputs.vcr_source_digests }}",
+    );
+    expect(reusable.on?.workflow_call?.inputs?.source_digests).toEqual({
+      description: "Newline-delimited alias=sha256:<64 lowercase hex> entries",
+      required: true,
+      type: "string",
+    });
+    const copyStep = reusablePublish.steps?.find(
+      (step) => step.name === "Copy and verify immutable release images",
+    );
+    expect(copyStep?.env).toMatchObject({
+      SOURCE_DIGESTS: "${{ inputs.source_digests }}",
+      SOURCE_IMAGE: "ghcr.io/${{ github.repository }}",
+    });
+    expect(copyStep?.env).not.toHaveProperty("SOURCE_REFS");
+    expect(copyStep?.run).toContain("${alias}=${SOURCE_IMAGE}@${digest}");
+  });
+
+  it("keeps direct VCR recovery blocking without exposing an advisory dispatch input", () => {
+    const reusable = readWorkflow(".github/workflows/vercel-container-registry-publish.yml");
+    const releaseWorkflow = readWorkflow(".github/workflows/openclaw-release-publish.yml");
+
+    expect(reusable.on?.workflow_dispatch?.inputs).not.toHaveProperty("advisory");
+    expect(requireJob(reusable, "publish")["continue-on-error"]).toBe(
+      "${{ inputs.advisory == true }}",
+    );
+    expect(requireJob(releaseWorkflow, "publish_vcr").with?.advisory).toBe(true);
+  });
+
   it("isolates best-effort VCR publication from Docker and GitHub release finalization", () => {
     const reusable = readWorkflow(".github/workflows/vercel-container-registry-publish.yml");
     const dockerRelease = readWorkflow(".github/workflows/docker-release.yml");
     const releaseWorkflow = readWorkflow(".github/workflows/openclaw-release-publish.yml");
     const manualPromotion = readWorkflow(".github/workflows/docker-channel-promote.yml");
+    const recoveryValidation = requireJob(reusable, "validate_recovery");
+    const recoveryApproval = requireJob(reusable, "approve_recovery");
     const reusablePublish = requireJob(reusable, "publish");
     const releasePublish = requireJob(releaseWorkflow, "publish_vcr");
     const finalizeRelease = requireJob(releaseWorkflow, "finalize_github_release");
-    const verifyAttestations = requireJob(dockerRelease, "verify-attestations");
     const manualResolve = requireJob(manualPromotion, "resolve");
     const manualApproval = requireJob(manualPromotion, "approve");
 
-    expect(dockerRelease.concurrency).toEqual({
+    expect(requireJob(dockerRelease, "publish").concurrency).toEqual({
       group: "docker-release-publish",
       "cancel-in-progress": false,
       queue: "max",
@@ -419,16 +642,41 @@ describe("Vercel Container Registry publishing", () => {
     expect(releasePublish.if).not.toContain("beta");
     expect(releasePublish.uses).toBe("./.github/workflows/vercel-container-registry-publish.yml");
     expect(releasePublish.with).toMatchObject({
+      advisory: true,
       include_browser: "${{ needs.publish_docker.outputs.include_browser == 'true' }}",
-      source_refs: "${{ needs.publish_docker.outputs.vcr_source_refs }}",
       version: "${{ needs.publish_docker.outputs.version }}",
     });
     expect(releasePublish.secrets).toEqual({
       VERCEL_TOKEN: "${{ secrets.VERCEL_TOKEN }}",
     });
-    expect(finalizeRelease.needs).toEqual(["publish", "publish_docker"]);
+    expect(finalizeRelease.needs).toEqual([
+      "publish",
+      "publish_docker",
+      "approve_github_release",
+      "finalize_github_release_before_docker",
+    ]);
     expect(finalizeRelease.if).not.toContain("publish_vcr");
-    expect(reusablePublish["continue-on-error"]).toBe(true);
+    expect(recoveryValidation.if).toBe("${{ !inputs.advisory }}");
+    expect(recoveryValidation.permissions).toEqual({});
+    expect(recoveryValidation.environment).toBeUndefined();
+    expect(recoveryValidation.secrets).toBeUndefined();
+    const validateRecoveryStep = recoveryValidation.steps?.find(
+      (step) => step.name === "Require a main-branch recovery dispatch",
+    );
+    expect(validateRecoveryStep?.env).toEqual({ WORKFLOW_REF: "${{ github.ref }}" });
+    expect(validateRecoveryStep?.run).toContain('"${WORKFLOW_REF}" != "refs/heads/main"');
+    expect(validateRecoveryStep?.run).toContain(
+      "::error::Vercel registry recovery must be dispatched from main",
+    );
+    expect(recoveryApproval.needs).toBe("validate_recovery");
+    expect(recoveryApproval.if).toBe("${{ !inputs.advisory }}");
+    expect(recoveryApproval.environment).toBe("docker-release");
+    expect(recoveryApproval.permissions).toEqual({});
+    expect(reusablePublish.needs).toEqual(["validate_recovery", "approve_recovery"]);
+    expect(reusablePublish.if).toBe(
+      "${{ always() && (inputs.advisory || (needs.validate_recovery.result == 'success' && needs.approve_recovery.result == 'success')) }}",
+    );
+    expect(reusablePublish.permissions).toEqual({ contents: "read" });
     expect(reusablePublish["timeout-minutes"]).toBe(30);
 
     const validateDispatch = manualResolve.steps?.find((step) =>
@@ -451,39 +699,23 @@ describe("Vercel Container Registry publishing", () => {
         ),
       );
     expect(reusableCallers).toEqual(["openclaw-release-publish.yml"]);
+    expect(reusable.on?.workflow_call?.inputs?.advisory).toEqual({
+      description: "Keep automated release mirroring non-blocking",
+      required: true,
+      type: "boolean",
+    });
     expect(reusable.on?.workflow_call?.inputs?.include_browser).toEqual({
       description: "Whether the tagged Docker release includes browser images",
       required: true,
       type: "boolean",
     });
-    expect(reusable.on?.workflow_call?.inputs?.source_refs).toEqual({
-      description: "Newline-delimited alias=immutable-ref entries verified by the caller",
-      required: true,
-      type: "string",
+    expect(reusable.on?.workflow_dispatch?.inputs).toEqual({
+      include_browser: reusable.on?.workflow_call?.inputs?.include_browser,
+      source_digests: reusable.on?.workflow_call?.inputs?.source_digests,
+      version: reusable.on?.workflow_call?.inputs?.version,
     });
-    expect(verifyAttestations.outputs?.vcr_source_refs).toBe(
-      "${{ steps.vcr_source_refs.outputs.value }}",
-    );
-    expect(dockerRelease.on?.workflow_call?.outputs).toMatchObject({
-      include_browser: {
-        value: "${{ jobs.create-manifest.outputs.browser_supported }}",
-      },
-      vcr_source_refs: {
-        value: "${{ jobs.verify-attestations.outputs.vcr_source_refs }}",
-      },
-      version: {
-        value: "${{ jobs.resolve_release_policy.outputs.version }}",
-      },
-    });
-    const immutableSourceStep = verifyAttestations.steps?.find(
-      (step) => step.name === "Resolve and verify immutable VCR source refs",
-    );
-    expect(immutableSourceStep?.run).toContain("docker buildx imagetools inspect");
-    expect(immutableSourceStep?.run).toContain("${GHCR_IMAGE}@${digest}");
-    expect(immutableSourceStep?.run).toContain("verify-docker-attestations.mjs");
-
     expect(reusablePublish.steps?.find((step) => step.name === "Set up Docker Builder")?.uses).toBe(
-      "docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c",
+      "docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069",
     );
     const materializeVercel = reusablePublish.steps?.find(
       (step) => step.name === "Materialize locked Vercel CLI",
@@ -508,8 +740,10 @@ describe("Vercel Container Registry publishing", () => {
     expect(copyIndex).toBeGreaterThan(-1);
     expect(smokeIndex).toBeGreaterThan(copyIndex ?? -1);
     expect(promoteIndex).toBeGreaterThan(smokeIndex ?? -1);
-    const smokeRun = reusablePublish.steps?.[smokeIndex ?? -1]?.run ?? "";
-    expect(smokeRun).toContain("sandbox run \\\n");
+    const smokeStep = reusablePublish.steps?.[smokeIndex ?? -1];
+    expect(smokeStep?.env?.SANDBOX_CLI).toBe("${{ steps.vercel_cli.outputs.sandbox_cli }}");
+    const smokeRun = smokeStep?.run ?? "";
+    expect(smokeRun).toContain('"${SANDBOX_CLI}" run \\\n');
     expect(smokeRun).toContain("image_not_ready");
     expect(smokeRun).toContain("retry_deadline");
   });
@@ -518,25 +752,31 @@ describe("Vercel Container Registry publishing", () => {
     const packageJson = JSON.parse(
       readFileSync(".github/release/vercel-cli/package.json", "utf8"),
     ) as { dependencies?: Record<string, string> };
-    const packageLock = JSON.parse(
-      readFileSync(".github/release/vercel-cli/package-lock.json", "utf8"),
-    ) as {
+    const packageLockBytes = readFileSync(".github/release/vercel-cli/package-lock.json");
+    const packageLock = JSON.parse(packageLockBytes.toString("utf8")) as {
       lockfileVersion?: number;
       packages?: Record<string, { integrity?: string; version?: string }>;
     };
     const materialize = readFileSync("scripts/materialize-vercel-cli.sh", "utf8");
 
-    expect(packageJson.dependencies).toEqual({ vercel: "59.1.4" });
+    expect(packageJson.dependencies).toEqual({ sandbox: "4.6.0", vercel: "62.2.0" });
     expect(packageLock.lockfileVersion).toBe(3);
     expect(packageLock.packages?.["node_modules/vercel"]).toMatchObject({
       integrity:
-        "sha512-oLctNaFB5bptskV4gioZQ6Ac4E0fDbKKU/q/JX1H+lz7IWgsTgKafwxvfJHJiCANEH5syl7a9H1IxxGN7Dp8dg==",
-      version: "59.1.4",
+        "sha512-hwet6qXoOfZEc6waIx1VgI2nLl83wwuZZnFqKSsKJ47UFi9waEezPmAV7uNOx8Fq+6JTJIi+lRnxFXr9YFW3Eg==",
+      version: "62.2.0",
     });
-    expect(materialize).toContain(
-      'expected_lock_sha256="7a1aaa3017353437cd8908c50034d6c1f54899c9c9d92f289b06ccb26532848a"',
-    );
+    expect(packageLock.packages?.["node_modules/sandbox"]).toMatchObject({
+      bin: { sandbox: "bin/sandbox.mjs", sbx: "bin/sandbox.mjs" },
+      integrity:
+        "sha512-u2hE1xn/HNxLxupbVsGQGfA+W2WYORrK18j6+x7AFRQzStkd5X2CHOUP2Zj93up8tT5lKBHmwyplVivlK9e4CQ==",
+      version: "4.6.0",
+    });
+    const lockSha256 = createHash("sha256").update(packageLockBytes).digest("hex");
+    expect(materialize).toContain(`expected_lock_sha256="${lockSha256}"`);
     expect(materialize).toContain("npm ci \\\n");
     expect(materialize).toContain("--ignore-scripts");
+    expect(materialize).toContain('sandbox_cli="${destination}/node_modules/.bin/sandbox"');
+    expect(materialize).toContain('echo "sandbox_cli=${sandbox_cli}"');
   });
 });

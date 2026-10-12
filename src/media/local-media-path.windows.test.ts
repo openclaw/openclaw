@@ -2,12 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { toInboundMediaFactsWithMetadata } from "../channels/inbound-event/media.js";
 import { createManagedOutgoingMediaBlocks } from "../gateway/managed-image-attachments.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { resolveLocalMediaPath } from "./local-media-path.js";
 import { appendLocalMediaParentRoots } from "./local-roots.js";
 
@@ -29,7 +29,7 @@ async function withTempRoot<T>(run: (root: string) => Promise<T>): Promise<T> {
   try {
     return await run(root);
   } finally {
-    closeOpenClawStateDatabaseForTest();
+    await cleanupSessionStateForTest({ stateDir: root, rootPath: root });
     await fs.rm(root, { recursive: true, force: true });
   }
 }
@@ -37,10 +37,6 @@ async function withTempRoot<T>(run: (root: string) => Promise<T>): Promise<T> {
 describe.runIf(process.platform === "win32")("Windows local media file URLs", () => {
   beforeEach(() => {
     probeMediaFilesWithinBudget.mockReset();
-  });
-
-  afterEach(() => {
-    closeOpenClawStateDatabaseForTest();
   });
 
   it("resolves single-slash mixed-case file schemes and rejects unsafe file URLs", async () => {
@@ -100,7 +96,12 @@ describe.runIf(process.platform === "win32")("Windows local media file URLs", ()
         const blocks = await createManagedOutgoingMediaBlocks({
           stateDir: root,
           sessionKey: "agent:main:main",
-          mediaUrls: [sourceUrl.href.replace(/^file:/u, "FILE:")],
+          items: [
+            {
+              url: sourceUrl.href.replace(/^file:/u, "FILE:"),
+              trustedLocal: false,
+            },
+          ],
           localRoots: [path.join(root, "workspace")],
         });
 

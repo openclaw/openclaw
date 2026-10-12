@@ -98,7 +98,7 @@ describe("extractCanvasShortcodes", () => {
     // The visible text between the self-closing embed and the stray close
     // marker must be preserved, not silently stripped.
     expect(text).toContain("keep me");
-    expect(text).toBe("keep me [/embed]");
+    expect(text).toBe(" keep me [/embed]");
   });
 
   it("still extracts a normal block embed and strips only the shortcode span", () => {
@@ -117,5 +117,21 @@ describe("extractCanvasShortcodes", () => {
     expect(previews).toHaveLength(1);
     expect(previews[0]?.url).toBe("https://b.com");
     expect(text).toBe("see  end");
+  });
+
+  it.each([
+    ["indented code", '    [embed url="https://example.com/image.png"]\n    example\n    [/embed]'],
+    ["inline code", '`[embed url="https://example.com/image.png" /]`'],
+  ])("preserves literal embed examples in %s", (_kind, example) => {
+    const input = `Before the example.\n\n${example}\n\nAfter the example.`;
+    expect(extractCanvasShortcodes(input)).toEqual({ text: input, previews: [] });
+  });
+});
+
+it("removes a shortcode without rewriting surrounding literal whitespace", () => {
+  const source = '    a\n\n\n    b\n\n[embed ref="doc1" /]';
+  expect(extractCanvasShortcodes(source)).toMatchObject({
+    text: "    a\n\n\n    b\n\n",
+    previews: [{ viewId: "doc1" }],
   });
 });

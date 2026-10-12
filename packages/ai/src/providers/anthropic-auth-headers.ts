@@ -1,3 +1,13 @@
+import { getAiTransportHost } from "../host.js";
+
+/** Inspect resolved credential shape for auth routing without exposing its value. */
+export function isAnthropicOAuthApiKey(apiKey: unknown): boolean {
+  return (
+    typeof apiKey === "string" &&
+    getAiTransportHost().resolveSecretSentinel(apiKey).includes("sk-ant-oat")
+  );
+}
+
 type AnthropicAuthModel = {
   provider?: string;
   authHeader?: boolean;
@@ -7,16 +17,11 @@ type AnthropicAuthModel = {
 export function usesFoundryBearerAuth(model: AnthropicAuthModel): boolean {
   return (
     model.provider === "microsoft-foundry" &&
-    (model.authHeader === true || hasBearerAuthorizationHeader(model.headers))
-  );
-}
-
-function hasBearerAuthorizationHeader(headers?: Record<string, string>): boolean {
-  if (!headers) {
-    return false;
-  }
-  return Object.entries(headers).some(
-    ([key, value]) => key.toLowerCase() === "authorization" && /^bearer\s+\S+/i.test(value.trim()),
+    (model.authHeader === true ||
+      Object.entries(model.headers ?? {}).some(
+        ([key, value]) =>
+          key.toLowerCase() === "authorization" && /^bearer\s+\S+/i.test(value.trim()),
+      ))
   );
 }
 

@@ -1,4 +1,4 @@
-// Defines normalized provider catalog results from plugin metadata.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.js";
 import {
   copyArrayEntries,
@@ -15,7 +15,6 @@ const PROVIDER_CATALOG_OUTCOME_STATUSES = new Set<ProviderCatalogOutcome["status
 ]);
 
 const MODEL_PROVIDER_CONFIG_KEYS = [
-  "baseUrl",
   "apiKey",
   "auth",
   "api",
@@ -73,9 +72,51 @@ export function copyProviderCatalogResultProjection(
   return providers.length > 0 ? { kind: "providers", providers } : { kind: "empty" };
 }
 
+function copyModelServiceTiers(
+  value: unknown,
+): NonNullable<ProviderCatalogOutcome["modelServiceTiers"]> {
+  return copyArrayEntries(value).flatMap((entry) => {
+    const modelId = normalizeOptionalString(readRecordValue(entry, "modelId"));
+    const runtimeId = normalizeOptionalString(readRecordValue(entry, "runtimeId"));
+    const api = normalizeOptionalString(readRecordValue(entry, "api"));
+    const baseUrl = normalizeOptionalString(readRecordValue(entry, "baseUrl"));
+    const tiers = readRecordValue(entry, "serviceTiers");
+    if (!modelId || !runtimeId || !api || !baseUrl || !Array.isArray(tiers)) {
+      return [];
+    }
+    const serviceTiers = copyArrayEntries(tiers);
+    if (
+      !serviceTiers.every(
+        (tier): tier is string => typeof tier === "string" && Boolean(tier.trim()),
+      )
+    ) {
+      return [];
+    }
+    return [
+      {
+        modelId,
+        runtimeId,
+        api,
+        baseUrl,
+        serviceTiers: [...new Set(serviceTiers.map((tier) => tier.trim()))],
+      },
+    ];
+  });
+}
+
+function copyModelIds(value: unknown): string[] {
+  return [
+    ...new Set(
+      copyArrayEntries(value).flatMap((id) =>
+        typeof id === "string" && id.trim() ? [id.trim()] : [],
+      ),
+    ),
+  ];
+}
+
 /** Copies valid, secret-free provider outcomes out of a catalog hook result. */
 export function copyProviderCatalogOutcomes(
-  result: ProviderCatalogResult,
+  result: { outcomes?: readonly ProviderCatalogOutcome[] } | null | undefined,
 ): ProviderCatalogOutcome[] {
   return copyArrayEntries(readRecordValue(result, "outcomes")).flatMap((entry) => {
     if (!isRecordWithoutThrowing(entry)) {
@@ -83,22 +124,39 @@ export function copyProviderCatalogOutcomes(
     }
     const provider = readRecordValue(entry, "provider");
     const profileId = readRecordValue(entry, "profileId");
+    const rejectionScope = readRecordValue(entry, "rejectionScope");
     const status = readRecordValue(entry, "status");
+    const rawModelOrder = readRecordValue(entry, "modelOrder");
+    const rawListedModelIds = readRecordValue(entry, "listedModelIds");
     if (
       typeof provider !== "string" ||
       provider.trim().length === 0 ||
       (profileId !== undefined &&
         (typeof profileId !== "string" || profileId.trim().length === 0)) ||
+      (rejectionScope !== undefined && rejectionScope !== "catalog") ||
       typeof status !== "string" ||
       !PROVIDER_CATALOG_OUTCOME_STATUSES.has(status as ProviderCatalogOutcome["status"])
     ) {
       return [];
     }
+    const ready = status === "ready";
+    const modelOrder = ready && rawModelOrder !== undefined ? copyModelIds(rawModelOrder) : [];
     return [
       {
         provider: provider.trim(),
         ...(typeof profileId === "string" ? { profileId: profileId.trim() } : {}),
+        ...(rejectionScope === "catalog" ? { rejectionScope } : {}),
         status: status as ProviderCatalogOutcome["status"],
+        ...(status === "ready" && readRecordValue(entry, "modelServiceTiers") !== undefined
+          ? {
+              modelServiceTiers: copyModelServiceTiers(readRecordValue(entry, "modelServiceTiers")),
+            }
+          : {}),
+        ...(modelOrder.length > 0 ? { modelOrder } : {}),
+        // An empty successful listing remains authoritative.
+        ...(ready && Array.isArray(rawListedModelIds)
+          ? { listedModelIds: copyModelIds(rawListedModelIds) }
+          : {}),
       },
     ];
   });
@@ -114,16 +172,6 @@ export function copyProviderCatalogResultEntries(params: {
     return [[params.providerId, projection.provider]];
   }
   return projection.kind === "providers" ? projection.providers : [];
-}
-
-/** Copies model definitions from provider catalog provider config. */
-export function copyProviderCatalogModels(
-  providerConfig: ModelProviderConfig,
-): ModelProviderConfig["models"] {
-  return copyArrayEntries(readRecordValue(providerConfig, "models")).flatMap((entry) => {
-    const copied = copyProviderCatalogModel(entry);
-    return copied ? [copied] : [];
-  });
 }
 
 function copyProviderCatalogModel(model: unknown): ModelDefinitionConfig | undefined {
@@ -164,12 +212,12 @@ function copyProviderCatalogProviderConfig(
 
   const copied: Partial<ModelProviderConfig> = {
     baseUrl,
-    models: copyProviderCatalogModels(providerConfig as ModelProviderConfig),
+    models: copyArrayEntries(readRecordValue(providerConfig, "models")).flatMap((entry) => {
+      const model = copyProviderCatalogModel(entry);
+      return model ? [model] : [];
+    }),
   };
   for (const key of MODEL_PROVIDER_CONFIG_KEYS) {
-    if (key === "baseUrl") {
-      continue;
-    }
     const value = readRecordValue(providerConfig, key);
     if (value !== undefined) {
       (copied as Record<string, unknown>)[key] = value;

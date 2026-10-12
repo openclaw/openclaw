@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { cloneAuthProfileStore } from "./clone.js";
 import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
 
@@ -16,20 +17,6 @@ export function setRuntimeExternalCliProfileIds(
   runtimeStore.runtimeExternalCliProfileIds = ids.length > 0 ? ids : undefined;
 }
 
-export function getRuntimeLocalProfileIds(store: AuthProfileStore): readonly string[] {
-  const runtimeStore: RuntimeAuthProfileStore = store;
-  return runtimeStore.runtimeLocalProfileIds ?? [];
-}
-
-export function setRuntimeLocalProfileIds(
-  store: AuthProfileStore,
-  profileIds: Iterable<string>,
-): void {
-  const ids = [...new Set(profileIds)].filter((profileId) => store.profiles[profileId]).toSorted();
-  const runtimeStore: RuntimeAuthProfileStore = store;
-  runtimeStore.runtimeLocalProfileIds = ids.length > 0 ? ids : undefined;
-}
-
 export function removeRuntimeExternalProfileReferences(params: {
   store: AuthProfileStore;
   profileIds: ReadonlySet<string>;
@@ -38,11 +25,11 @@ export function removeRuntimeExternalProfileReferences(params: {
     return params.store;
   }
   const next = cloneAuthProfileStore(params.store);
+  const runtimeNext: RuntimeAuthProfileStore = next;
   for (const profileId of params.profileIds) {
     delete next.profiles[profileId];
-    if (next.usageStats) {
-      delete next.usageStats[profileId];
-    }
+    delete runtimeNext.runtimeCredentialSources?.[profileId];
+    delete next.usageStats?.[profileId];
   }
   if (next.order) {
     const order = Object.fromEntries(
@@ -73,10 +60,12 @@ export function removeRuntimeExternalProfileReferences(params: {
   if (next.runtimePersistedProfileIds?.length === 0) {
     next.runtimePersistedProfileIds = undefined;
   }
-  setRuntimeLocalProfileIds(
-    next,
-    getRuntimeLocalProfileIds(next).filter((profileId) => !params.profileIds.has(profileId)),
-  );
+  for (const field of ["runtimeLocalProfileIds", "runtimeExternalCliProfileIds"] as const) {
+    const ids = [...new Set(runtimeNext[field] ?? [])]
+      .filter((profileId) => !params.profileIds.has(profileId) && next.profiles[profileId])
+      .toSorted();
+    runtimeNext[field] = ids.length > 0 ? ids : undefined;
+  }
   next.runtimeExternalProfileIds = next.runtimeExternalProfileIds?.filter(
     (profileId) => !params.profileIds.has(profileId),
   );
@@ -86,23 +75,45 @@ export function removeRuntimeExternalProfileReferences(params: {
   ) {
     next.runtimeExternalProfileIds = undefined;
   }
-  setRuntimeExternalCliProfileIds(
-    next,
-    getRuntimeExternalCliProfileIds(next).filter((profileId) => !params.profileIds.has(profileId)),
-  );
   return next;
+}
+
+/** Shared persistence and snapshots never retain a turn's selected personal account. */
+export function removePersonalAuthProfileReferences(store: AuthProfileStore): AuthProfileStore {
+  const runtimeStore: RuntimeAuthProfileStore = store;
+  const profileIds = new Set(
+    [
+      ...Object.keys(store.profiles),
+      ...Object.keys(store.usageStats ?? {}),
+      ...Object.values(store.order ?? {}).flat(),
+      ...Object.values(store.lastGood ?? {}),
+      ...(store.runtimePersistedProfileIds ?? []),
+      ...(store.runtimeExternalProfileIds ?? []),
+      ...(runtimeStore.runtimeLocalProfileIds ?? []),
+      ...getRuntimeExternalCliProfileIds(store),
+    ].filter(isUserModelAuthProfileId),
+  );
+  return removeRuntimeExternalProfileReferences({ store, profileIds });
 }
 
 /** Carries lifecycle-owned external profiles across a durable-store refresh. */
 export function mergeRuntimeExternalProfileReferences(params: {
   next: AuthProfileStore;
   existing: AuthProfileStore;
+  /** An external lookup retains state for every surviving overlay, including refreshed rows. */
+  externalRefresh?: boolean;
 }): AuthProfileStore {
   const runtimeExternalProfileIds = new Set(params.existing.runtimeExternalProfileIds ?? []);
-  if (params.next.runtimeExternalProfileIdsAuthoritative === true) {
+  const externalRefresh = params.externalRefresh === true && runtimeExternalProfileIds.size > 0;
+  if (!externalRefresh && params.next.runtimeExternalProfileIdsAuthoritative === true) {
     return params.next;
   }
-  if (runtimeExternalProfileIds.size === 0) {
+  // A completed empty lookup is still authoritative; durable refreshes must
+  // not turn it back into an unknown external-profile set.
+  if (
+    runtimeExternalProfileIds.size === 0 &&
+    params.existing.runtimeExternalProfileIdsAuthoritative !== true
+  ) {
     return params.next;
   }
   const merged = cloneAuthProfileStore(params.next);
@@ -111,31 +122,42 @@ export function mergeRuntimeExternalProfileReferences(params: {
   const existingRuntimeExternalCliProfileIds = new Set(
     getRuntimeExternalCliProfileIds(params.existing),
   );
-  const backfilledRuntimeExternalProfileIds = new Set<string>();
+  const retainedStateProfileIds = new Set<string>();
   for (const profileId of runtimeExternalProfileIds) {
     const existingCredential = params.existing.profiles[profileId];
     const nextCredential = merged.profiles[profileId];
+    if (
+      externalRefresh &&
+      (!existingCredential ||
+        (params.next.runtimeExternalProfileIdsAuthoritative === true &&
+          !mergedRuntimeExternalProfileIds.has(profileId)))
+    ) {
+      continue;
+    }
     if (nextCredential) {
       if (
-        mergedRuntimeExternalProfileIds.has(profileId) ||
-        (existingCredential && isDeepStrictEqual(nextCredential, existingCredential))
+        !mergedRuntimeExternalProfileIds.has(profileId) &&
+        (!existingCredential || !isDeepStrictEqual(nextCredential, existingCredential))
       ) {
-        mergedRuntimeExternalProfileIds.add(profileId);
-        if (existingRuntimeExternalCliProfileIds.has(profileId)) {
-          mergedRuntimeExternalCliProfileIds.add(profileId);
-        }
+        continue;
       }
+    } else if (existingCredential) {
+      merged.profiles[profileId] = existingCredential;
+    } else {
       continue;
     }
-    if (!existingCredential) {
-      continue;
-    }
-    merged.profiles[profileId] = existingCredential;
     mergedRuntimeExternalProfileIds.add(profileId);
     if (existingRuntimeExternalCliProfileIds.has(profileId)) {
       mergedRuntimeExternalCliProfileIds.add(profileId);
     }
-    backfilledRuntimeExternalProfileIds.add(profileId);
+    if (externalRefresh || !nextCredential) {
+      retainedStateProfileIds.add(profileId);
+    }
+  }
+  if (externalRefresh && retainedStateProfileIds.size === 0) {
+    return params.next;
+  }
+  for (const profileId of retainedStateProfileIds) {
     if (params.existing.usageStats?.[profileId]) {
       merged.usageStats = {
         ...merged.usageStats,
@@ -145,7 +167,7 @@ export function mergeRuntimeExternalProfileReferences(params: {
   }
   for (const [provider, profileIds] of Object.entries(params.existing.order ?? {})) {
     const externalProfileIds = profileIds.filter((profileId) =>
-      backfilledRuntimeExternalProfileIds.has(profileId),
+      retainedStateProfileIds.has(profileId),
     );
     if (externalProfileIds.length === 0 || merged.order?.[provider]) {
       continue;
@@ -156,7 +178,7 @@ export function mergeRuntimeExternalProfileReferences(params: {
     };
   }
   for (const [provider, profileId] of Object.entries(params.existing.lastGood ?? {})) {
-    if (!backfilledRuntimeExternalProfileIds.has(profileId) || merged.lastGood?.[provider]) {
+    if (!retainedStateProfileIds.has(profileId) || merged.lastGood?.[provider]) {
       continue;
     }
     merged.lastGood = {

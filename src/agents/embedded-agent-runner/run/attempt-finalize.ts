@@ -1,48 +1,50 @@
-/**
- * Finalizes post-turn state, abort resources, and terminal trajectory artifacts.
- * It may assume stream execution and transcript writes are settled.
- */
-
-import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
-import { readActiveTranscriptEntryAnchor } from "../../../config/sessions/session-accessor.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
-import type { ContextEngine } from "../../../context-engine/types.js";
+import { createAbortError } from "../../../infra/abort-signal.js";
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
-import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
-import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
+import { projectNestedToolActivityForHooks } from "../../../sessions/nested-tool-activity.js";
 import { buildTrajectoryArtifacts } from "../../../trajectory/metadata.js";
-import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
-import type { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
+import {
+  mergeAgentRunAttemptTerminal,
+  projectAgentRunAttemptTerminal,
+} from "../../agent-run-terminal-outcome.js";
 import { FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE } from "../../bootstrap-files.js";
 import { isHeartbeatLifecycleRunKind } from "../../bootstrap-mode.js";
-import type { createCacheTrace } from "../../cache-trace.js";
-import { countActiveToolExecutions } from "../../embedded-agent-subscribe.handlers.tools.js";
+import { countActiveToolExecutions } from "../../embedded-agent-subscribe.handlers.tools.start.js";
 import { isSignalTimeoutReason } from "../../failover-error.js";
-import { runAgentEndSideEffects } from "../../harness/agent-end-side-effects.js";
+import { runAgentEndSideEffectsAsync } from "../../harness/agent-end-side-effects.js";
 import { finalizeHarnessContextEngineTurn } from "../../harness/context-engine-lifecycle.js";
-import { runAgentCleanupStep } from "../../run-cleanup-timeout.js";
-import type { AgentMessage } from "../../runtime/index.js";
-import type { AgentSession, SessionManager } from "../../sessions/index.js";
-import type { NormalizedUsage } from "../../usage.js";
+import { bindAgentHarnessHookMessages } from "../../harness/lifecycle-hook-messages.js";
+import type { AgentSession, SessionMessageEntry } from "../../sessions/index.js";
+import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
+import {
+  completedTurnMessageAnchor,
+  captureCompletedTurnMessageAnchor,
+} from "../../sessions/session-manager-message-anchor.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { log } from "../logger.js";
 import { markActiveEmbeddedRunAbandoned, type EmbeddedAgentQueueHandle } from "../runs.js";
 import { buildEmbeddedAgentEndContext } from "./agent-end-context.js";
-import type { buildContextEnginePromptCacheInfo } from "./attempt-context-engine-helpers.js";
+import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
+import { readAttemptNestedToolActivity } from "./attempt-nested-tool-activity.js";
 import { buildAfterTurnRuntimeContextFromUsage } from "./attempt-prompt-helpers.js";
-import { shouldPersistCompletedBootstrapTurn } from "./attempt-thread-helpers.js";
+import { SESSIONS_YIELD_ABORT_REASON } from "./attempt-sessions-yield.js";
+import type { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
+import { resolveTerminalMessageEntryId } from "./attempt-terminal-anchor.js";
 import {
   resolveAttemptTrajectoryTerminal,
   resolveTerminalAssistantTexts,
 } from "./attempt-trajectory-status.js";
 import { shouldFlagCompactionTimeout } from "./compaction-timeout.js";
+import type { EmbeddedAttemptDeferredLifecycleOwner } from "./deferred-lifecycle-owner.js";
 import { resolveFinalAssistantVisibleText } from "./helpers.js";
 import {
   isEmbeddedRunTerminalInterrupted,
   resolveEmbeddedRunAttemptTerminalOutcome,
 } from "./terminal-outcome.js";
 import type {
+  EmbeddedAttemptExternalAbortController,
+  EmbeddedAttemptExecutionState,
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
   EmbeddedRunAttemptTrajectoryRecorder,
@@ -55,9 +57,9 @@ type FinalizeEmbeddedAttemptParams = {
   emptyAssistantReplyIsSilent: boolean;
   hasTerminalOutput: boolean;
   silentExpected?: boolean;
+  deferredLifecycleOwner?: EmbeddedAttemptDeferredLifecycleOwner;
 };
 
-/** Classifies the completed attempt and records its terminal trajectory artifacts. */
 export function finalizeEmbeddedAttempt(
   params: FinalizeEmbeddedAttemptParams,
 ): EmbeddedRunAttemptResult {
@@ -72,13 +74,23 @@ export function finalizeEmbeddedAttempt(
     : (result.currentAttemptCompletedAssistant ?? result.currentAttemptAssistant);
   const completionOutcome = resolveEmbeddedRunAttemptTerminalOutcome({
     attempt: result,
-    assistant: terminalState.cleanupYieldAborted ? undefined : assistant,
+    assistant,
   });
   const stopReason =
     terminalState.cleanupYieldAborted && completionOutcome.status === "ok"
       ? "end_turn"
       : completionOutcome.stopReason;
+  const toolEvidence = () => ({
+    toolMetas: result.toolMetas,
+    didSendViaMessagingTool: result.didSendViaMessagingTool,
+    messagingToolSentTexts: result.messagingToolSentTexts,
+    messagingToolSentMediaUrls: result.messagingToolSentMediaUrls,
+    messagingToolSentTargets: result.messagingToolSentTargets,
+    successfulCronAdds: result.successfulCronAdds ?? 0,
+    lastToolError: result.lastToolError,
+  });
   const terminal = resolveAttemptTrajectoryTerminal({
+    ...toolEvidence(),
     failed: completionOutcome.status === "error",
     interrupted: isEmbeddedRunTerminalInterrupted(completionOutcome),
     assistantTexts: resolveTerminalAssistantTexts({
@@ -86,19 +98,12 @@ export function finalizeEmbeddedAttempt(
       lastAssistantStopReason: stopReason,
       lastAssistantVisibleText: resolveFinalAssistantVisibleText(assistant),
     }),
-    toolMetas: result.toolMetas,
-    didSendViaMessagingTool: result.didSendViaMessagingTool,
     didSendDeterministicApprovalPrompt: result.didSendDeterministicApprovalPrompt === true,
-    messagingToolSentTexts: result.messagingToolSentTexts,
-    messagingToolSentMediaUrls: result.messagingToolSentMediaUrls,
-    messagingToolSentTargets: result.messagingToolSentTargets,
-    successfulCronAdds: result.successfulCronAdds ?? 0,
     synthesizedPayloadCount: params.synthesizedPayloadCount,
     acceptedSessionSpawns: result.acceptedSessionSpawns,
     heartbeatToolResponse: result.heartbeatToolResponse,
     clientToolCalls: result.clientToolCalls,
     yieldDetected: result.yieldDetected,
-    lastToolError: result.lastToolError,
     silentExpected: params.silentExpected,
     emptyAssistantReplyIsSilent: params.emptyAssistantReplyIsSilent,
     lastAssistantStopReason: stopReason,
@@ -108,7 +113,7 @@ export function finalizeEmbeddedAttempt(
     ? formatErrorMessage(terminalState.promptError)
     : undefined;
 
-  trajectoryRecorder.recordEvent("model.completed", {
+  const terminalFields = {
     aborted: terminalState.aborted,
     externalAbort: terminalState.externalAbort,
     timedOut: terminalState.timedOut,
@@ -117,6 +122,10 @@ export function finalizeEmbeddedAttempt(
     timedOutDuringToolExecution: terminalState.timedOutDuringToolExecution,
     timedOutByRunBudget: terminalState.timedOutByRunBudget,
     promptError,
+  };
+
+  const modelFields = {
+    ...terminalFields,
     promptErrorSource: terminalState.promptErrorSource,
     terminalError: terminal.terminalError,
     usage: result.attemptUsage,
@@ -125,227 +134,148 @@ export function finalizeEmbeddedAttempt(
     assistantTexts: result.assistantTexts,
     stopReason,
     finalPromptText: result.finalPromptText,
+  };
+  trajectoryRecorder.recordEvent("model.completed", {
+    ...modelFields,
     messagesSnapshot: result.messagesSnapshot,
   });
   trajectoryRecorder.recordEvent(
     "trace.artifacts",
     buildTrajectoryArtifacts({
       status: terminal.status,
-      aborted: terminalState.aborted,
-      externalAbort: terminalState.externalAbort,
-      timedOut: terminalState.timedOut,
-      idleTimedOut: terminalState.idleTimedOut,
-      timedOutDuringCompaction: terminalState.timedOutDuringCompaction,
-      timedOutDuringToolExecution: terminalState.timedOutDuringToolExecution,
-      timedOutByRunBudget: terminalState.timedOutByRunBudget,
-      promptError,
-      promptErrorSource: terminalState.promptErrorSource,
-      terminalError: terminal.terminalError,
-      usage: result.attemptUsage,
-      promptCache: result.promptCache,
+      ...modelFields,
       compactionCount: result.compactionCount ?? 0,
-      assistantTexts: result.assistantTexts,
-      stopReason,
-      finalPromptText: result.finalPromptText,
       itemLifecycle: result.itemLifecycle,
-      toolMetas: result.toolMetas,
-      didSendViaMessagingTool: result.didSendViaMessagingTool,
-      successfulCronAdds: result.successfulCronAdds ?? 0,
-      messagingToolSentTexts: result.messagingToolSentTexts,
-      messagingToolSentMediaUrls: result.messagingToolSentMediaUrls,
-      messagingToolSentTargets: result.messagingToolSentTargets,
-      lastToolError: result.lastToolError,
+      ...toolEvidence(),
     }),
   );
-  trajectoryRecorder.recordEvent("session.ended", {
+  const sessionEndData = {
     status: terminal.status,
-    aborted: terminalState.aborted,
-    externalAbort: terminalState.externalAbort,
-    timedOut: terminalState.timedOut,
-    idleTimedOut: terminalState.idleTimedOut,
-    timedOutDuringCompaction: terminalState.timedOutDuringCompaction,
-    timedOutDuringToolExecution: terminalState.timedOutDuringToolExecution,
-    timedOutByRunBudget: terminalState.timedOutByRunBudget,
-    promptError,
+    ...terminalFields,
     terminalError: terminal.terminalError,
     stopReason,
-  });
+  };
+  if (params.deferredLifecycleOwner) {
+    params.deferredLifecycleOwner.recordSessionEnd(sessionEndData);
+  } else {
+    trajectoryRecorder.recordEvent("session.ended", sessionEndData);
+  }
 
   return result;
 }
 
-/**
- * Runs post-stream context-engine, transcript, cache, and lifecycle work.
- */
-
-type CacheTrace = ReturnType<typeof createCacheTrace>;
-type AnthropicPayloadLogger = ReturnType<typeof createAnthropicPayloadLogger>;
-type HookRunner = ReturnType<typeof getGlobalHookRunner>;
-type PromptCacheInfo = ReturnType<typeof buildContextEnginePromptCacheInfo>;
-type WithOwnedTranscriptWrite = <T>(operation: () => Promise<T> | T) => Promise<T>;
-
-type CompleteEmbeddedAttemptAfterTurnInput = {
-  attempt: EmbeddedRunAttemptParams;
-  activeContextEngine?: ContextEngine;
-  activeSession: AgentSession;
-  sessionManager: SessionManager;
-  withOwnedTranscriptWrite: WithOwnedTranscriptWrite;
-  state: {
-    promptError: unknown;
-    yieldAborted: boolean;
-    sessionIdUsed: string;
-    sessionFileUsed?: string;
-    messagesSnapshot: AgentMessage[];
-    prePromptMessageCount: number;
-    contextEngineAfterTurnCheckpoint: number | null;
-    lastCallUsage?: NormalizedUsage;
-    promptCache?: PromptCacheInfo;
-    beforeAgentFinalizeRevisionReason?: string;
-    compactionOccurredThisAttempt: boolean;
-  };
-  readLifecycleState: () => {
-    aborted: boolean;
-    timedOut: boolean;
-    idleTimedOut: boolean;
-    timedOutDuringCompaction: boolean;
-  };
-  runtime: {
-    effectiveWorkspace: string;
-    agentDir: string;
-    sessionAgentId: string;
-    resolveActiveContextEnginePluginId: () => string | undefined;
-    shouldRecordCompletedBootstrapTurn: boolean;
-    cacheTrace: CacheTrace;
-    anthropicPayloadLogger: AnthropicPayloadLogger;
-    hookAgentId: string;
-    diagnosticTrace: Parameters<typeof freezeDiagnosticTraceContext>[0];
-    skillWorkshopAvailable: boolean;
-    hookRunner: HookRunner;
-    promptStartedAt: number;
-  };
-};
-
 export async function completeEmbeddedAttemptAfterTurn(
-  input: CompleteEmbeddedAttemptAfterTurnInput,
-): Promise<{ sessionIdUsed: string; sessionFileUsed?: string }> {
-  const { attempt, activeContextEngine, sessionManager, state, runtime } = input;
-  const { sessionIdUsed, sessionFileUsed } = state;
+  input: EmbeddedAttemptExecutionPhaseInput,
+  settled: Awaited<ReturnType<typeof settleEmbeddedAttemptStream>>,
+  prompt: {
+    yieldAborted: boolean;
+    transcriptLeafId: string | null;
+    promptStartedAt: number;
+    beforeAgentFinalizeRevisionReason?: string;
+  },
+): Promise<void> {
+  const {
+    attempt,
+    activeContextEngine,
+    agentDir,
+    resolveActiveContextEnginePluginId,
+    state: executionState,
+  } = input;
+  const { withOwnedTranscriptWrite } = input.sessionLock;
+  const { effectiveWorkspace, sessionAgentId } = input.setup;
+  const { sessionRuntime, bootstrap, bundleTools, toolBase } = input.prepared;
+  const { sessionManager, cacheTrace, anthropicPayloadLogger } = sessionRuntime;
+  const { diagnosticTrace } = input.diagnostics;
+  const { shouldRecordCompletedBootstrapTurn } = bootstrap;
+  const skillWorkshopAvailable = bundleTools.uncompactedEffectiveTools.some(
+    (tool) => tool.name === "skill_workshop",
+  );
+  const { hookRunner } = sessionRuntime.agentSession;
+  const { promptStartedAt, yieldAborted, transcriptLeafId } = prompt;
+  const { sessionIdUsed, promptError, messagesSnapshot } = settled;
+  const { nestedToolActivityState } = toolBase;
+  const { prePromptMessageCount } = sessionRuntime.state;
+  const contextEngineAfterTurnCheckpoint = sessionRuntime.contextGuards.getAfterTurnCheckpoint();
+  const { lastCallUsage, promptCache, compactionOccurredThisAttempt } = settled;
+  const { beforeAgentFinalizeRevisionReason } = prompt;
 
   // Context-engine hooks may call runtime LLM capabilities. Only the transcript
   // rewrite callback reacquires the synchronous session write boundary.
-  if (activeContextEngine && !state.beforeAgentFinalizeRevisionReason) {
-    const lifecycleState = input.readLifecycleState();
-    const afterTurnRuntimeContext = buildAfterTurnRuntimeContextFromUsage({
-      attempt,
-      workspaceDir: runtime.effectiveWorkspace,
-      agentDir: runtime.agentDir,
+  if (activeContextEngine && !beforeAgentFinalizeRevisionReason) {
+    const lifecycleState = projectAgentRunAttemptTerminal(executionState.terminal);
+    const terminalEntryId = attempt.onContextEngineTurnCandidate
+      ? resolveTerminalMessageEntryId(sessionManager)
+      : undefined;
+    await finalizeHarnessContextEngineTurn({
+      ...attempt,
+      contextEngine: activeContextEngine,
+      promptError: Boolean(promptError),
+      aborted: lifecycleState.aborted,
+      yieldAborted,
+      sessionIdUsed,
+      messagesSnapshot,
+      prePromptMessageCount: contextEngineAfterTurnCheckpoint ?? prePromptMessageCount,
       tokenBudget: attempt.contextTokenBudget,
-      lastCallUsage: state.lastCallUsage,
-      promptCache: state.promptCache,
-      activeAgentId: runtime.sessionAgentId,
-      contextEnginePluginId: runtime.resolveActiveContextEnginePluginId(),
-    });
-    const finalizeTurn = async (transcript: {
-      messagesSnapshot: AgentMessage[];
-      prePromptMessageCount: number;
-      sessionManager?: SessionManager;
-      withSessionManagerRewriteLock: WithOwnedTranscriptWrite;
-    }) => {
-      await finalizeHarnessContextEngineTurn({
-        contextEngine: activeContextEngine,
-        promptError: Boolean(state.promptError),
-        aborted: lifecycleState.aborted,
-        yieldAborted: state.yieldAborted,
-        sessionIdUsed,
-        sessionKey: attempt.sessionKey,
-        sessionTarget: attempt.sessionTarget,
-        sessionFile: attempt.sessionFile,
-        messagesSnapshot: transcript.messagesSnapshot,
-        prePromptMessageCount: transcript.prePromptMessageCount,
-        tokenBudget: attempt.contextTokenBudget,
-        runtimeContext: afterTurnRuntimeContext,
-        contextEngineHostSupport: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
-        providerId: attempt.provider,
-        requestedModelId: attempt.requestedModelId,
-        modelId: attempt.modelId,
-        fallbackReason: attempt.fallbackReason,
-        degradedReason: attempt.degradedReason,
-        runMaintenance: async (contextParams) =>
-          await runContextEngineMaintenance({
-            ...contextParams,
-            contextEngine: contextParams.contextEngine as never,
-            sessionManager: contextParams.sessionManager as never,
-            withSessionManagerRewriteLock: transcript.withSessionManagerRewriteLock,
-            config: attempt.config,
-            agentId: runtime.sessionAgentId,
-            contextEngineAgentId: attempt.contextEngineAgentId,
+      turnCandidate: attempt.onContextEngineTurnCandidate
+        ? {
+            admission: attempt.userTurnTranscriptRecorder?.getAdmissionReceipt(),
+            terminalEntryId,
+            [completedTurnMessageAnchor]: captureCompletedTurnMessageAnchor(
+              sessionManager,
+              terminalEntryId,
+            ),
+            record: attempt.onContextEngineTurnCandidate,
+          }
+        : undefined,
+      runtimeContext: attempt.onContextEngineTurnCandidate
+        ? undefined
+        : buildAfterTurnRuntimeContextFromUsage({
+            attempt,
+            workspaceDir: effectiveWorkspace,
+            agentDir,
+            tokenBudget: attempt.contextTokenBudget,
+            lastCallUsage,
+            promptCache,
+            activeAgentId: sessionAgentId,
+            contextEnginePluginId: resolveActiveContextEnginePluginId(),
           }),
-        sessionManager: transcript.sessionManager,
-        config: attempt.config,
-        warn: (message) => log.warn(message),
-        isHeartbeat: isHeartbeatLifecycleRunKind(attempt.bootstrapContextRunKind),
-      });
-    };
-    if (attempt.onContextEngineTurnCandidate) {
-      const admission = attempt.userTurnTranscriptRecorder?.getAdmissionReceipt();
-      const terminalEntryId = sessionManager.getLeafId() ?? undefined;
-      const terminal =
-        admission && terminalEntryId
-          ? readActiveTranscriptEntryAnchor({
-              agentId: admission.agentId,
-              sessionId: admission.sessionId,
-              sessionKey: admission.sessionKey,
-              storePath: admission.storePath,
-              entryId: terminalEntryId,
-            })
-          : undefined;
-      if (admission && terminal) {
-        attempt.onContextEngineTurnCandidate({
-          boundary: { admission, terminal },
-          sessionIdUsed,
-          sessionKey: attempt.sessionKey,
-          sessionTarget: attempt.sessionTarget,
-          sessionFile: attempt.sessionFile,
-          promptError: Boolean(state.promptError),
-          aborted: lifecycleState.aborted,
-          yieldAborted: state.yieldAborted,
-          tokenBudget: attempt.contextTokenBudget,
-          runtimeContext: afterTurnRuntimeContext,
-          contextEngineHostSupport: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
-          providerId: attempt.provider,
-          requestedModelId: attempt.requestedModelId,
-          modelId: attempt.modelId,
-          fallbackReason: attempt.fallbackReason,
-          degradedReason: attempt.degradedReason,
+      contextEngineHostSupport: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+      providerId: attempt.provider,
+      runMaintenance: async (contextParams) =>
+        await runContextEngineMaintenance({
+          ...contextParams,
+          contextEngine: activeContextEngine,
+          sessionManager,
+          withSessionManagerRewriteLock: withOwnedTranscriptWrite,
           config: attempt.config,
-          isHeartbeat: isHeartbeatLifecycleRunKind(attempt.bootstrapContextRunKind),
-        });
-      }
-    } else {
-      await finalizeTurn({
-        messagesSnapshot: state.messagesSnapshot,
-        prePromptMessageCount:
-          state.contextEngineAfterTurnCheckpoint ?? state.prePromptMessageCount,
-        sessionManager,
-        withSessionManagerRewriteLock: input.withOwnedTranscriptWrite,
-      });
-    }
+          agentId: sessionAgentId,
+          contextEngineAgentId: attempt.contextEngineAgentId,
+        }),
+      sessionManager,
+      warn: (message) => log.warn(message),
+      isHeartbeat: isHeartbeatLifecycleRunKind(attempt.bootstrapContextRunKind),
+    });
   }
 
-  if (!state.beforeAgentFinalizeRevisionReason) {
-    await input.withOwnedTranscriptWrite(async () => {
-      const lifecycleState = input.readLifecycleState();
-      if (
-        shouldPersistCompletedBootstrapTurn({
-          shouldRecordCompletedBootstrapTurn: runtime.shouldRecordCompletedBootstrapTurn,
-          promptError: state.promptError,
-          aborted: lifecycleState.aborted,
-          timedOutDuringCompaction: lifecycleState.timedOutDuringCompaction,
-          compactionOccurredThisAttempt: state.compactionOccurredThisAttempt,
-        })
-      ) {
+  const shouldPersistBootstrapCompletion = () => {
+    const lifecycleState = projectAgentRunAttemptTerminal(executionState.terminal);
+    return (
+      shouldRecordCompletedBootstrapTurn &&
+      !promptError &&
+      !lifecycleState.aborted &&
+      !lifecycleState.timedOutDuringCompaction &&
+      !compactionOccurredThisAttempt
+    );
+  };
+  if (!beforeAgentFinalizeRevisionReason && shouldPersistBootstrapCompletion()) {
+    await withOwnedTranscriptWrite(() =>
+      withSessionManagerAppend(sessionManager, async () => {
+        // Cancellation can arrive while an eligible completion waits for its writer.
+        if (!shouldPersistBootstrapCompletion()) {
+          return;
+        }
         try {
-          sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, {
+          await sessionManager.appendCustomEntryAsync(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, {
             timestamp: Date.now(),
             runId: attempt.runId,
             sessionId: attempt.sessionId,
@@ -353,74 +283,83 @@ export async function completeEmbeddedAttemptAfterTurn(
         } catch (entryErr) {
           log.warn(`failed to persist bootstrap completion entry: ${String(entryErr)}`);
         }
-      }
-    });
+      }),
+    );
   }
 
-  const lifecycleAfterTurn = input.readLifecycleState();
-  runtime.cacheTrace?.recordStage("session:after", {
-    messages: state.messagesSnapshot,
+  const lifecycleAfterTurn = projectAgentRunAttemptTerminal(executionState.terminal);
+  cacheTrace?.recordStage("session:after", {
+    messages: messagesSnapshot,
     note: lifecycleAfterTurn.timedOutDuringCompaction
       ? "compaction timeout"
-      : state.promptError
+      : promptError
         ? "prompt error"
         : undefined,
   });
-  runtime.anthropicPayloadLogger?.recordUsage(state.messagesSnapshot, state.promptError);
+  anthropicPayloadLogger?.recordUsage(messagesSnapshot, promptError);
 
-  // A detached run (skill experience review) writes no transcript or session record and
-  // runs under the foreground session key; firing agent_end here would let plugins observe
-  // it as a foreground turn and let the review schedule a successor review of itself.
+  // A detached run (such as skill experience review) writes no transcript or session record.
+  // Firing agent_end would expose maintenance as a normal turn and schedule successor work.
   if (
     attempt.operation !== "settled-tool-finalization" &&
     attempt.sessionPersistence !== "detached" &&
-    !state.beforeAgentFinalizeRevisionReason
+    !beforeAgentFinalizeRevisionReason
   ) {
-    const lifecycleForAgentEnd = input.readLifecycleState();
+    const lifecycleForAgentEnd = projectAgentRunAttemptTerminal(executionState.terminal);
     // Abort outranks failure in terminal-outcome precedence: teardown races can
     // stamp an AbortError into promptError, and surfacing it as `error` would
     // make agent_end consumers treat a user abort as an errored completion.
     const agentEndError =
-      state.promptError && !lifecycleForAgentEnd.aborted
-        ? formatErrorMessage(state.promptError)
-        : undefined;
-    runAgentEndSideEffects({
-      event: {
-        messages: state.messagesSnapshot,
-        success: !lifecycleForAgentEnd.aborted && !state.promptError,
-        error: agentEndError,
-        durationMs: Date.now() - runtime.promptStartedAt,
-      },
+      promptError && !lifecycleForAgentEnd.aborted ? formatErrorMessage(promptError) : undefined;
+    const sourceTarget = sessionManager.getSessionTarget();
+    let terminalEntry: SessionMessageEntry | undefined;
+    let entry = sessionManager.getLeafEntry();
+    // Suppressed writes can leave the previous turn as the tail. Partial current
+    // turns remain useful, but review must never cross the pre-prompt boundary.
+    while (entry && entry.id !== transcriptLeafId) {
+      if (!terminalEntry && entry.type === "message") {
+        terminalEntry = entry;
+      }
+      entry = entry.parentId ? sessionManager.getEntry(entry.parentId) : undefined;
+    }
+    const reachedPromptBoundary = transcriptLeafId === null || entry?.id === transcriptLeafId;
+    await runAgentEndSideEffectsAsync({
+      [completedTurnMessageAnchor]:
+        sourceTarget && terminalEntry && reachedPromptBoundary
+          ? captureCompletedTurnMessageAnchor(sessionManager, terminalEntry.id)
+          : undefined,
+      skillExperienceReviewSource:
+        sourceTarget && terminalEntry && reachedPromptBoundary
+          ? { ...sourceTarget, entryId: terminalEntry.id }
+          : undefined,
+      event: bindAgentHarnessHookMessages(
+        {
+          messages: messagesSnapshot,
+          success: !lifecycleForAgentEnd.aborted && !promptError,
+          error: agentEndError,
+          durationMs: Date.now() - promptStartedAt,
+        },
+        async () =>
+          projectNestedToolActivityForHooks(
+            messagesSnapshot,
+            await readAttemptNestedToolActivity(sessionManager, nestedToolActivityState),
+          ),
+      ),
       ctx: buildEmbeddedAgentEndContext({
         run: attempt,
-        agentId: runtime.hookAgentId,
-        trace: freezeDiagnosticTraceContext(runtime.diagnosticTrace),
-        skillWorkshopAvailable: runtime.skillWorkshopAvailable,
-        compacted: state.compactionOccurredThisAttempt,
+        agentId: sessionAgentId,
+        agentDir,
+        trace: freezeDiagnosticTraceContext(diagnosticTrace),
+        skillWorkshopAvailable,
+        compacted: compactionOccurredThisAttempt,
       }),
-      hookRunner: runtime.hookRunner,
+      hookRunner,
     });
   }
-
-  return { sessionIdUsed, sessionFileUsed };
 }
-
-/**
- * Releases attempt resources when an embedded-agent run aborts.
- */
 
 type AbortLog = {
   warn(message: string): void;
-};
-
-export type EmbeddedAttemptAbortStatePort = {
-  markAborted: () => void;
-  markExternalAbort: () => void;
-  markTimedOut: () => void;
-  markTimedOutDuringCompaction: () => void;
-  markTimedOutDuringToolExecution: () => void;
-  readTimedOutDuringCompaction: () => boolean;
-  setPromptError: (error: unknown) => void;
 };
 
 type ActiveSessionAbort = (reason?: unknown) => Promise<void>;
@@ -430,19 +369,40 @@ function createAttemptAbortError(signal: AbortSignal): Error {
   if (signal.reason instanceof Error) {
     return signal.reason;
   }
-  const error = new Error("request aborted", { cause: signal.reason });
-  error.name = "AbortError";
-  return error;
-}
-
-function getAbortReason(signal: AbortSignal): unknown {
-  return "reason" in signal ? (signal as { reason?: unknown }).reason : undefined;
+  return createAbortError("request aborted", { cause: signal.reason });
 }
 
 function createTimeoutAbortReason(): Error {
-  const error = new Error("request timed out");
-  error.name = "TimeoutError";
-  return error;
+  return Object.assign(new Error("request timed out"), { name: "TimeoutError" });
+}
+
+function recordAttemptAbort(
+  state: Pick<EmbeddedAttemptExecutionState, "terminal">,
+  signal: AbortSignal,
+  runId: string,
+  isTimeout: boolean,
+): void {
+  state.terminal = mergeAgentRunAttemptTerminal(state.terminal, {
+    kind: "aborted",
+    source: signal.reason === SESSIONS_YIELD_ABORT_REASON ? "yield_cleanup" : "runtime",
+  });
+  if (isTimeout) {
+    state.terminal = mergeAgentRunAttemptTerminal(state.terminal, {
+      kind: "timeout",
+      phase: "prompt",
+      source: "runtime",
+    });
+    if (
+      !projectAgentRunAttemptTerminal(state.terminal).timedOutDuringCompaction &&
+      countActiveToolExecutions(runId) > 0
+    ) {
+      state.terminal = mergeAgentRunAttemptTerminal(state.terminal, {
+        kind: "timeout",
+        phase: "tool_execution",
+        source: "observation",
+      });
+    }
+  }
 }
 
 /** Owns the external AbortSignal listener and its handoff to the live session. */
@@ -451,31 +411,28 @@ export function createEmbeddedAttemptExternalAbortController(input: {
   cleanupAfterEarlyAbort: () => Promise<void>;
   runAbortController: AbortController;
   runId: string;
-  state: EmbeddedAttemptAbortStatePort;
-}): {
-  arm: () => void;
-  dispose: () => void;
-  setActiveSessionAbort: (abort: ActiveSessionAbort) => void;
-  setCompactionState: (state: {
-    isInFlight: () => boolean;
-    isPendingOrRetrying: () => boolean;
-  }) => void;
-  setRunAbort: (abort: RunAbort) => void;
-  throwIfFiredAfterPrepCleanup: () => Promise<void>;
-} {
+  state: Pick<EmbeddedAttemptExecutionState, "terminal">;
+}): EmbeddedAttemptExternalAbortController {
   let abortActiveSession: ActiveSessionAbort | undefined;
   let abortRun: RunAbort | undefined;
   let isCompactionPendingOrRetrying: (() => boolean) | undefined;
   let isCompactionInFlight: (() => boolean) | undefined;
   let removeListener: (() => void) | undefined;
+  let abortHandled = false;
 
   const onAbort = () => {
     const signal = input.abortSignal;
-    if (!signal) {
+    if (!signal || abortHandled) {
       return;
     }
-    input.state.markExternalAbort();
-    const reason = getAbortReason(signal);
+    // Preparation checkpoints and the listener share classification and side effects.
+    // Mark before handoff because aborting live work can synchronously re-enter.
+    abortHandled = true;
+    input.state.terminal = mergeAgentRunAttemptTerminal(input.state.terminal, {
+      kind: "aborted",
+      source: "external",
+    });
+    const reason = signal.reason;
     const isTimeout = reason ? isSignalTimeoutReason(reason) : false;
     if (
       shouldFlagCompactionTimeout({
@@ -484,27 +441,35 @@ export function createEmbeddedAttemptExternalAbortController(input: {
         isCompactionInFlight: isCompactionInFlight?.() ?? false,
       })
     ) {
-      input.state.markTimedOutDuringCompaction();
+      input.state.terminal = mergeAgentRunAttemptTerminal(input.state.terminal, {
+        kind: "timeout",
+        phase: "compaction",
+        source: "observation",
+      });
     }
     if (abortRun) {
       abortRun(isTimeout, reason);
       return;
     }
-    input.state.markAborted();
-    if (isTimeout) {
-      input.state.markTimedOut();
-      if (
-        !input.state.readTimedOutDuringCompaction() &&
-        countActiveToolExecutions(input.runId) > 0
-      ) {
-        input.state.markTimedOutDuringToolExecution();
-      }
-    }
-    input.state.setPromptError(createAttemptAbortError(signal));
+    recordAttemptAbort(input.state, input.runAbortController.signal, input.runId, isTimeout);
+    input.state.terminal = mergeAgentRunAttemptTerminal(input.state.terminal, {
+      kind: "failed",
+      source: "prompt",
+      error: createAttemptAbortError(signal),
+    });
     if (!input.runAbortController.signal.aborted) {
       input.runAbortController.abort(isTimeout ? (reason ?? createTimeoutAbortReason()) : reason);
     }
     void abortActiveSession?.(input.runAbortController.signal.reason);
+  };
+
+  const readFiredAbortError = () => {
+    const signal = input.abortSignal;
+    if (!signal?.aborted) {
+      return undefined;
+    }
+    onAbort();
+    return createAttemptAbortError(signal);
   };
 
   return {
@@ -536,18 +501,41 @@ export function createEmbeddedAttemptExternalAbortController(input: {
     setRunAbort: (abort) => {
       abortRun = abort;
     },
+    throwIfFired: () => {
+      const abortError = readFiredAbortError();
+      if (abortError) {
+        throw abortError;
+      }
+    },
     throwIfFiredAfterPrepCleanup: async () => {
-      const signal = input.abortSignal;
-      if (!signal?.aborted) {
+      const abortError = readFiredAbortError();
+      if (!abortError) {
         return;
       }
-      const abortError = createAttemptAbortError(signal);
-      input.state.markAborted();
-      input.state.markExternalAbort();
-      input.state.setPromptError(abortError);
       await input.cleanupAfterEarlyAbort();
       throw abortError;
     },
+  };
+}
+
+/** Interrupts an owned idle request without cancelling the enclosing reply or lane. */
+export function createEmbeddedAttemptIdleInterruption(input: {
+  runAbortController: AbortController;
+  activeSession: Pick<AgentSession, "isCompacting">;
+  state: Pick<EmbeddedAttemptExecutionState, "terminal">;
+  abortRun: RunAbort;
+}): (error: Error) => boolean {
+  return (error) => {
+    if (input.runAbortController.signal.aborted) {
+      return false;
+    }
+    input.state.terminal = mergeAgentRunAttemptTerminal(input.state.terminal, {
+      kind: "timeout",
+      phase: input.activeSession.isCompacting ? "compaction" : "prompt",
+      source: "idle",
+    });
+    input.abortRun(true, error);
+    return true;
   };
 }
 
@@ -563,30 +551,9 @@ export function createEmbeddedAttemptRunAbort(input: {
   isProbeSession: boolean;
   log: AbortLog;
   runAbortController: AbortController;
-  state: Pick<
-    EmbeddedAttemptAbortStatePort,
-    | "markAborted"
-    | "markTimedOut"
-    | "markTimedOutDuringToolExecution"
-    | "readTimedOutDuringCompaction"
-  >;
+  state: Pick<EmbeddedAttemptExecutionState, "terminal">;
 }): RunAbort {
   let abortAccepted = false;
-  const abortCompaction = () => {
-    if (!input.activeSession.isCompacting) {
-      return;
-    }
-    try {
-      input.activeSession.abortCompaction();
-    } catch (error) {
-      if (!input.isProbeSession) {
-        input.log.warn(
-          `embedded run abortCompaction failed: runId=${input.attempt.runId} sessionId=${input.attempt.sessionId} err=${String(error)}`,
-        );
-      }
-    }
-  };
-
   return (isTimeout = false, reason?: unknown) => {
     // Reply-operation cancellation can synchronously re-enter through its abort signal.
     // The attempt owner accepts the first reason so session and lock cleanup run once.
@@ -594,22 +561,30 @@ export function createEmbeddedAttemptRunAbort(input: {
       return;
     }
     abortAccepted = true;
-    input.state.markAborted();
+    recordAttemptAbort(
+      input.state,
+      input.runAbortController.signal,
+      input.attempt.runId,
+      isTimeout,
+    );
     if (isTimeout) {
-      input.state.markTimedOut();
-      if (
-        !input.state.readTimedOutDuringCompaction() &&
-        countActiveToolExecutions(input.attempt.runId) > 0
-      ) {
-        input.state.markTimedOutDuringToolExecution();
-      }
       const timeoutReason = reason instanceof Error ? reason : createTimeoutAbortReason();
       input.attempt.onAttemptTimeout?.(timeoutReason);
       input.runAbortController.abort(timeoutReason);
     } else {
       input.runAbortController.abort(reason);
     }
-    abortCompaction();
+    if (input.activeSession.isCompacting) {
+      try {
+        input.activeSession.abortCompaction();
+      } catch (error) {
+        if (!input.isProbeSession) {
+          input.log.warn(
+            `embedded run abortCompaction failed: runId=${input.attempt.runId} sessionId=${input.attempt.sessionId} err=${String(error)}`,
+          );
+        }
+      }
+    }
     void input.abortActiveSession(input.runAbortController.signal.reason);
     const queueHandle = input.getQueueHandle();
     if (isTimeout && queueHandle) {
@@ -622,66 +597,4 @@ export function createEmbeddedAttemptRunAbort(input: {
       });
     }
   };
-}
-
-/**
- * Flushes attempt trajectory recorders during cleanup.
- */
-
-/** Minimal recorder surface needed to flush trajectory data during run cleanup. */
-type EmbeddedAttemptTrajectoryRecorder = {
-  describeFlushState: () => string | undefined;
-  flush: () => Promise<void>;
-};
-
-/**
- * Flushes attempt trajectory data through the shared cleanup timeout wrapper so
- * stuck recorder writes warn with run/session context instead of blocking run
- * teardown indefinitely.
- */
-export async function flushEmbeddedAttemptTrajectoryRecorder(params: {
-  runId: string;
-  sessionId: string;
-  trajectoryRecorder: EmbeddedAttemptTrajectoryRecorder | null;
-  log: {
-    warn: (message: string) => void;
-  };
-  env?: NodeJS.ProcessEnv;
-  timeoutMs?: number;
-}): Promise<void> {
-  await runAgentCleanupStep({
-    runId: params.runId,
-    sessionId: params.sessionId,
-    step: "openclaw-trajectory-flush",
-    log: params.log,
-    env: params.env,
-    timeoutMs: params.timeoutMs,
-    getTimeoutDetails: () => params.trajectoryRecorder?.describeFlushState(),
-    cleanup: async () => {
-      await params.trajectoryRecorder?.flush();
-    },
-  });
-}
-
-/**
- * Resolves how long aborted attempts wait for cleanup to settle.
- */
-
-type AbortSettleTimeoutEnv = Partial<
-  Pick<NodeJS.ProcessEnv, "OPENCLAW_EMBEDDED_ABORT_SETTLE_TIMEOUT_MS" | "OPENCLAW_TEST_FAST">
->;
-
-/**
- * Resolves how long embedded-run cleanup waits for abort side effects to settle.
- * The explicit env override is strict decimal milliseconds; invalid values fall
- * back to the normal/test defaults instead of silently widening cleanup waits.
- */
-export function resolveEmbeddedAbortSettleTimeoutMs(
-  env: AbortSettleTimeoutEnv = process.env,
-): number {
-  const override = parseStrictPositiveInteger(env.OPENCLAW_EMBEDDED_ABORT_SETTLE_TIMEOUT_MS);
-  if (override !== undefined) {
-    return override;
-  }
-  return isFastTestRuntimeEnv(env) ? 250 : 2_000;
 }

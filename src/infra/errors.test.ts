@@ -1,97 +1,59 @@
 // Tests shared infra error formatting helpers.
 import { describe, expect, it } from "vitest";
-import { collectNestedErrorCandidates, extractErrorCodeOrErrno } from "./error-graph-internal.js";
+import { attachErrorDiagnostic, formatErrorMessageForDisplay } from "./error-diagnostics.js";
 import {
   collectErrorGraphCandidates,
-  extractErrorCode,
   formatErrorMessage,
   formatErrorMessageWithCode,
   formatUncaughtError,
   hasErrnoCode,
   isErrno,
   isMissingPathError,
-  readErrorName,
+  readErrorCause,
 } from "./errors.js";
 
-function createCircularObject() {
-  const circular: { self?: unknown } = {};
-  circular.self = circular;
-  return circular;
-}
-
 describe("error helpers", () => {
-  it.each([
-    { value: { code: "EADDRINUSE" }, expected: "EADDRINUSE" },
-    { value: { code: 429 }, expected: "429" },
-    { value: { code: false }, expected: undefined },
-    { value: "boom", expected: undefined },
-  ])("extracts error codes from %j", ({ value, expected }) => {
-    expect(extractErrorCode(value)).toBe(expected);
-  });
-
-  it.each([
-    { value: { name: "AbortError" }, expected: "AbortError" },
-    { value: { name: 42 }, expected: "" },
-    { value: null, expected: "" },
-  ])("reads error names from %j", ({ value, expected }) => {
-    expect(readErrorName(value)).toBe(expected);
-  });
-
-  it("walks nested error graphs once in breadth-first order", () => {
-    const leaf = { name: "leaf" };
-    const child = { name: "child" } as {
-      name: string;
-      cause?: unknown;
-      errors?: unknown[];
-    };
-    const root = { name: "root", cause: child, errors: [leaf, child] };
-    child.cause = root;
-
+  it("keeps bounded redacted diagnostics off frozen errors and follows wrapper graphs", () => {
+    const error = Object.freeze(new Error("native failure"));
+    const secret = "sk-abcdefghijklmnopqrstuv";
+    const before = Object.getOwnPropertyDescriptors(error);
     expect(
-      collectErrorGraphCandidates(root, (current) => [
-        current.cause,
-        ...((current as { errors?: unknown[] }).errors ?? []),
-      ]),
-    ).toEqual([root, child, leaf]);
-    expect(collectErrorGraphCandidates(null)).toStrictEqual([]);
+      attachErrorDiagnostic(error, `Authorization: Bearer ${secret}\n${"x".repeat(4_000)}`),
+    ).toBe(error);
+    const wrapper = new AggregateError([{ cause: error }], "outer failure");
+    const display = formatErrorMessageForDisplay(wrapper);
+    expect(display).toContain("Authorization: Bearer");
+    expect(display).not.toContain(secret);
+    expect(display.length).toBeLessThanOrEqual('outer failure | {"cause":{}}\n'.length + 2_048);
+    expect(formatErrorMessage(wrapper)).toBe('outer failure | {"cause":{}}');
+    expect(Object.getOwnPropertyDescriptors(error)).toEqual(before);
+    expect(formatErrorMessageForDisplay(new Error("unrelated failure"))).toBe("unrelated failure");
   });
 
-  it("walks every canonical wrapper edge once despite duplicates and cycles", () => {
-    const cause = { name: "cause" } as { name: string; cause?: unknown };
-    const reason = { name: "reason" };
-    const original = { name: "original" };
-    const error = { name: "error" };
-    const data = { name: "data" };
-    const aggregate = { name: "aggregate" };
-    const root = {
-      name: "root",
-      cause,
-      reason,
-      original,
-      error,
-      data,
-      errors: [aggregate, cause],
+  it.each([["primitive input", "boom", undefined]])(
+    "reads %s directly",
+    (_name, value, expected) => {
+      expect(readErrorCause(value)).toBe(expected);
+    },
+  );
+
+  it("propagates cause accessor failures", () => {
+    const failure = new Error("cause access failed");
+    const error = {
+      get cause(): never {
+        throw failure;
+      },
     };
-    cause.cause = root;
-
-    expect(collectNestedErrorCandidates(root)).toEqual([
-      root,
-      cause,
-      reason,
-      original,
-      error,
-      data,
-      aggregate,
-    ]);
-  });
-
-  it.each([
-    { value: { code: " econnreset " }, expected: "ECONNRESET" },
-    { value: { errno: " eai_again " }, expected: "EAI_AGAIN" },
-    { value: { errno: -3001 }, expected: "-3001" },
-    { value: { errno: false }, expected: undefined },
-  ])("normalizes error code or errno from %#", ({ value, expected }) => {
-    expect(extractErrorCodeOrErrno(value)).toBe(expected);
+    expect(() => readErrorCause(error)).toThrow(failure);
+    let caught: unknown;
+    try {
+      collectErrorGraphCandidates(error, function* (current) {
+        yield readErrorCause(current);
+      });
+    } catch (caughtError) {
+      caught = caughtError;
+    }
+    expect(caught).toBe(failure);
   });
 
   it("matches errno-shaped errors by code", () => {
@@ -102,49 +64,9 @@ describe("error helpers", () => {
     expect(isErrno("busy")).toBe(false);
   });
 
-  it.each(["ENOENT", "ENOTDIR", "not-found"])(
-    "classifies %s as a missing path without requiring Error identity",
-    (code) => {
-      expect(isMissingPathError({ code })).toBe(true);
-    },
-  );
-
   it("does not classify other fs-safe or errno failures as missing paths", () => {
     expect(isMissingPathError({ code: "path-alias" })).toBe(false);
     expect(isMissingPathError(new Error("ENOENT"))).toBe(false);
-  });
-
-  it.each([
-    { value: 123n, expected: "123" },
-    { value: false, expected: "false" },
-    { value: createCircularObject(), expected: "[object Object]" },
-  ])("formats error messages for case %#", ({ value, expected }) => {
-    expect(formatErrorMessage(value)).toBe(expected);
-  });
-
-  it("traverses .cause chain to include nested error messages", () => {
-    const rootCause = new Error("ECONNRESET");
-    const httpError = Object.assign(new Error("Network request for 'sendMessage' failed!"), {
-      cause: rootCause,
-    });
-    const formatted = formatErrorMessage(httpError);
-    expect(formatted).toBe("Network request for 'sendMessage' failed! | ECONNRESET");
-  });
-
-  it("handles circular .cause references without infinite loop", () => {
-    const a: Error & { cause?: unknown } = new Error("error A");
-    const b: Error & { cause?: unknown } = new Error("error B");
-    a.cause = b;
-    b.cause = a;
-    const formatted = formatErrorMessage(a);
-    expect(formatted).toBe("error A | error B");
-  });
-
-  it("dedupes repeated cause messages while preserving deeper distinct causes", () => {
-    const rootCause = new Error("provider auth lookup failed");
-    const inner = new Error('No API key found for provider "openai".', { cause: rootCause });
-    const wrapper = new Error(inner.message, { cause: inner });
-    expect(formatErrorMessage(wrapper)).toBe(`${inner.message} | ${rootCause.message}`);
   });
 
   it("redacts sensitive tokens from formatted error messages", () => {

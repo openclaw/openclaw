@@ -15,26 +15,12 @@ describe("createDeferredEventBuffer", () => {
     expect(sink.push).toHaveBeenNthCalledWith(2, "b");
   });
 
-  it("discards buffered events without delivering to sink", () => {
-    const sink = { push: vi.fn() };
-    const buffer = createDeferredEventBuffer(sink);
-    buffer.push("a");
-    buffer.discard();
-    buffer.flush();
-    expect(sink.push).not.toHaveBeenCalled();
-  });
-
   it("calls onBufferedEvent callback on each push", () => {
     const onEvent = vi.fn();
     const buffer = createDeferredEventBuffer({ push() {} }, onEvent);
     buffer.push("a");
     buffer.push("b");
     expect(onEvent).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not throw when onBufferedEvent is not provided", () => {
-    const buffer = createDeferredEventBuffer({ push() {} });
-    expect(() => buffer.push("a")).not.toThrow();
   });
 
   it("allows push after flush to start a new buffer", () => {

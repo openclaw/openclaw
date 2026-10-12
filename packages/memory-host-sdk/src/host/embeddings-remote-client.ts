@@ -1,4 +1,3 @@
-// Memory Host SDK module implements embeddings remote client behavior.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { EmbeddingProviderOptions } from "./embeddings.types.js";
 import { requireApiKey, resolveApiKeyForProvider } from "./openclaw-runtime-auth.js";
@@ -22,15 +21,14 @@ function resolveOpenClawAttributionHeaders(): Record<string, string> {
 }
 
 function normalizeEmbeddingDestinationKey(baseUrl: string): string | undefined {
-  try {
-    const parsed = new URL(baseUrl);
-    const hostname = parsed.hostname.toLowerCase();
-    const port = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
-    const pathname = parsed.pathname === "/" ? "" : parsed.pathname.replace(/\/$/, "");
-    return `${parsed.protocol}//${hostname}:${port}${pathname}${parsed.search}`;
-  } catch {
+  const parsed = URL.parse(baseUrl);
+  if (!parsed) {
     return undefined;
   }
+  const hostname = parsed.hostname.toLowerCase();
+  const port = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
+  const pathname = parsed.pathname === "/" ? "" : parsed.pathname.replace(/\/$/, "");
+  return `${parsed.protocol}//${hostname}:${port}${pathname}${parsed.search}`;
 }
 
 /** Whether provider-owned embedding credentials belong to the selected destination. */
@@ -51,44 +49,63 @@ export function resolveEmbeddingEndpointUrl(baseUrl: string, endpoint: string): 
   return url.toString();
 }
 
-function resolveEmbeddingHeaders(params: {
-  headers: Record<string, unknown> | undefined;
-  path: string;
-}): Record<string, string> {
-  const resolved: Record<string, string> = {};
-  for (const [name, value] of Object.entries(params.headers ?? {})) {
-    const header = resolveMemorySecretInputString({
-      value,
-      path: `${params.path}.${name}`,
-    });
-    if (header) {
-      resolved[name] = header;
+function resolveEmbeddingHeaders(
+  ...sources: Array<{ headers: Record<string, unknown> | undefined; path: string }>
+): Map<string, [string, string]> {
+  const resolved = new Map<string, [string, string]>();
+  for (const source of sources) {
+    // Retain each source's existing SecretRef and prototype-key handling.
+    const headers: Record<string, string> = {};
+    for (const [name, value] of Object.entries(source.headers ?? {})) {
+      const header = resolveMemorySecretInputString({ value, path: `${source.path}.${name}` });
+      if (header) {
+        headers[name] = header;
+      }
+    }
+    for (const entry of Object.entries(headers)) {
+      resolved.set(entry[0].toLowerCase(), entry);
     }
   }
   return resolved;
 }
 
-function hasAuthorizationHeader(headers: Record<string, string>): boolean {
-  return Object.entries(headers).some(
-    ([name, value]) => name.toLowerCase() === "authorization" && value.trim().length > 0,
+/** Detect the native OpenAI embeddings API route that accepts attribution headers. */
+function isNativeOpenAIEmbeddingRoute(provider: string, baseUrl: string): boolean {
+  return (
+    provider === "openai" &&
+    URL.parse(baseUrl)?.hostname.toLowerCase().replace(/\.+$/, "") === "api.openai.com"
   );
 }
 
-/** Detect the native OpenAI embeddings API route that accepts attribution headers. */
-function isNativeOpenAIEmbeddingRoute(provider: string, baseUrl: string): boolean {
-  if (provider !== "openai") {
-    return false;
-  }
-  try {
-    return new URL(baseUrl).hostname.toLowerCase().replace(/\.+$/, "") === "api.openai.com";
-  } catch {
-    return false;
-  }
+/**
+ * The recognized native ChatGPT/Codex subscription route. It serves chat
+ * traffic only — it has no embeddings endpoint, so its base URL must never
+ * leak into embedding requests. (#165476)
+ */
+const NATIVE_CHAT_ONLY_SUBSCRIPTION_BASE_URL = "https://chatgpt.com/backend-api/codex";
+
+/**
+ * Whether the provider is pinned to the recognized native chat-only
+ * subscription route. The redirect to the adapter default must apply ONLY
+ * here: matching on the api mode alone would also redirect custom provider
+ * URLs, misattributing their destination-owned credentials (e.g. a custom
+ * Authorization header) to the adapter default such as api.openai.com.
+ */
+function isNativeChatOnlySubscriptionRoute(
+  api: string | undefined,
+  baseUrl: string | undefined,
+): boolean {
+  return (
+    api === "openai-chatgpt-responses" &&
+    normalizeEmbeddingDestinationKey(NATIVE_CHAT_ONLY_SUBSCRIPTION_BASE_URL) ===
+      normalizeEmbeddingDestinationKey(baseUrl ?? "")
+  );
 }
 
 /** Resolve base URL, bearer headers, header overrides, and SSRF policy for remote embeddings. */
 export async function resolveRemoteEmbeddingBearerClient(params: {
   provider: RemoteEmbeddingProviderId;
+  capability?: string;
   options: EmbeddingProviderOptions;
   defaultBaseUrl: string;
 }): Promise<{ baseUrl: string; headers: Record<string, string>; ssrfPolicy?: SsrFPolicy }> {
@@ -99,26 +116,33 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
   });
   const remoteBaseUrl = normalizeOptionalString(remote?.baseUrl);
   const providerConfig = params.options.config.models?.providers?.[params.provider];
-  const providerBaseUrl = normalizeOptionalString(providerConfig?.baseUrl) || params.defaultBaseUrl;
+  // A chat-only subscription route has no embeddings endpoint: never inherit
+  // its base URL for embeddings — fall through to the adapter default instead.
+  // The redirect applies ONLY to the recognized native subscription route; a
+  // custom provider URL keeps its own destination (and credentials) even when
+  // the provider uses a chat-only subscription api mode.
+  const providerBaseUrl = isNativeChatOnlySubscriptionRoute(
+    normalizeOptionalString(providerConfig?.api),
+    normalizeOptionalString(providerConfig?.baseUrl),
+  )
+    ? params.defaultBaseUrl
+    : normalizeOptionalString(providerConfig?.baseUrl) || params.defaultBaseUrl;
   const baseUrl = remoteBaseUrl || providerBaseUrl;
   const providerOwnsDestination = embeddingProviderOwnsDestination({
     baseUrl,
     providerBaseUrl,
   });
-  const headerOverrides = Object.assign(
-    {},
-    providerOwnsDestination
-      ? resolveEmbeddingHeaders({
-          headers: providerConfig?.headers,
-          path: `models.providers.${params.provider}.headers`,
-        })
-      : undefined,
-    resolveEmbeddingHeaders({
+  const headerOverrides = resolveEmbeddingHeaders(
+    {
+      headers: providerOwnsDestination ? providerConfig?.headers : undefined,
+      path: `models.providers.${params.provider}.headers`,
+    },
+    {
       headers: remote?.headers,
       path: "memory.search.remote.headers",
-    }),
+    },
   );
-  const hasExplicitAuthorization = hasAuthorizationHeader(headerOverrides);
+  const hasExplicitAuthorization = headerOverrides.has("authorization");
   const apiKey = hasExplicitAuthorization
     ? undefined
     : remoteApiKey
@@ -127,6 +151,8 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
         ? requireApiKey(
             await resolveApiKeyForProvider({
               provider: params.provider,
+              capability: params.capability,
+              modelBaseUrl: baseUrl,
               cfg: params.options.config,
               agentDir: params.options.agentDir,
             }),
@@ -138,13 +164,18 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
       `${params.provider} embedding credentials are not configured for ${baseUrl}. Set memory.search.remote.apiKey or an Authorization header for this destination.`,
     );
   }
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
-    ...headerOverrides,
-  };
-  if (isNativeOpenAIEmbeddingRoute(params.provider, baseUrl)) {
-    Object.assign(headers, resolveOpenClawAttributionHeaders());
+  const entries: Array<[string, string]> = [["Content-Type", "application/json"]];
+  if (apiKey) {
+    entries.push(["Authorization", `Bearer ${apiKey}`]);
   }
+  entries.push(...headerOverrides.values());
+  if (isNativeOpenAIEmbeddingRoute(params.provider, baseUrl)) {
+    entries.push(...Object.entries(resolveOpenClawAttributionHeaders()));
+  }
+  // Fetch joins duplicate names; retain only the last source, but preserve its
+  // spelling so ordinary non-secret embedding cache identities stay unchanged.
+  const headers = Object.fromEntries(
+    new Map(entries.map((entry) => [entry[0].toLowerCase(), entry])).values(),
+  );
   return { baseUrl, headers, ssrfPolicy: buildRemoteBaseUrlPolicy(baseUrl) };
 }

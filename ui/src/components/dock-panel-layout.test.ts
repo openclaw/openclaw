@@ -5,7 +5,7 @@ import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { DockLayoutController } from "./dock-layout-controller.ts";
-import { createDockPanelLayout, type DockPanelSide } from "./dock-panel-layout.ts";
+import { createDockPanelLayout, type DockPanelPlacement } from "./dock-panel-layout.ts";
 
 function createControllerHost() {
   return {
@@ -17,7 +17,18 @@ function createControllerHost() {
   };
 }
 
-function createLayout(defaultDock: DockPanelSide) {
+function createEmbeddedControllerHost() {
+  const host = Object.assign(document.createElement("div"), {
+    addController: vi.fn((_controller: ReactiveController) => undefined),
+    removeController: vi.fn((_controller: ReactiveController) => undefined),
+    requestUpdate: vi.fn(),
+    updateComplete: Promise.resolve(true),
+  });
+  host.setAttribute("embedded", "");
+  return host;
+}
+
+function createLayout(defaultDock: Exclude<DockPanelPlacement, "main">) {
   return createDockPanelLayout({
     storageKey: `test.dock-panel.${defaultDock}`,
     minHeight: 140,
@@ -61,16 +72,6 @@ describe("createDockPanelLayout", () => {
       height: layout.defaults.height,
       width: layout.defaults.width,
     });
-  });
-
-  it("restores a left dock without changing existing consumers", () => {
-    const layout = createLayout("right");
-    localStorage.setItem(
-      "test.dock-panel.right",
-      JSON.stringify({ open: true, dock: "left", height: 320, width: 420 }),
-    );
-
-    expect(layout.load()).toEqual({ open: true, dock: "left", height: 320, width: 420 });
   });
 
   it("rejects docks unsupported by a consumer", () => {
@@ -117,34 +118,93 @@ describe("createDockPanelLayout", () => {
   });
 });
 
-describe("DockLayoutController inline columns", () => {
-  it("does not reserve the viewport for an embedded dock", () => {
+describe("DockLayoutController open intent", () => {
+  it("reads saved intent once per attachment and preserves explicit choices across suppression", () => {
     const layout = createLayout("right");
-    layout.save({ open: true, dock: "right", height: 320, width: 520 });
-    const host = Object.assign(document.createElement("div"), {
-      addController: vi.fn((_controller: ReactiveController) => undefined),
-      removeController: vi.fn((_controller: ReactiveController) => undefined),
-      requestUpdate: vi.fn(),
-      updateComplete: Promise.resolve(true),
-    });
-    host.setAttribute("embedded", "");
-    const controller = new DockLayoutController(host, {
+    layout.save({ ...layout.defaults, open: true });
+    const load = vi.spyOn(layout, "load");
+    let available = false;
+    const controller = new DockLayoutController(createControllerHost(), {
       layout,
-      reservationPrefix: "test-embedded",
-      isAvailable: () => true,
+      reservationPrefix: "test-intent",
+      isAvailable: () => available,
     });
-
     controller.hostConnected();
-    controller.syncReservation();
+    expect(controller.open).toBe(false);
 
-    expect(
-      document.documentElement.style.getPropertyValue("--oc-test-embedded-reserve-bottom"),
-    ).toBe("0px");
-    expect(
-      document.documentElement.style.getPropertyValue("--oc-test-embedded-reserve-right"),
-    ).toBe("0px");
+    controller.setSuppressed(true);
+    available = true;
+    expect(controller.restoreOpenState()).toBe(false);
+    expect(controller.setSuppressed(false)).toBe(true);
+    expect(controller.open).toBe(true);
+
+    controller.hideWithoutPersisting();
+    expect(controller.restoreOpenState()).toBe(true);
+    controller.setOpen(false);
+    expect(controller.restoreOpenState()).toBe(false);
+    controller.setSuppressed(true);
+    expect(controller.setSuppressed(false)).toBe(false);
+    expect(controller.restoreOpenState()).toBe(false);
+    expect(load).toHaveBeenCalledOnce();
+
+    controller.setOpen(true);
+    controller.hideWithoutPersisting();
+    expect(controller.restoreOpenState()).toBe(true);
+    controller.hostDisconnected();
+
+    // A new attachment captures the saved preference afresh.
+    layout.save({ ...layout.defaults, open: false });
+    controller.hostConnected();
+    expect(controller.open).toBe(false);
+    expect(controller.restoreOpenState()).toBe(false);
+    expect(load).toHaveBeenCalledTimes(2);
     controller.hostDisconnected();
   });
+});
+
+describe("DockLayoutController inline columns", () => {
+  it.each([
+    { dock: "right", hostKind: "element", reserved: { bottom: "0px", right: "520px" } },
+    { dock: "bottom", hostKind: "element", reserved: { bottom: "320px", right: "0px" } },
+    { dock: "right", hostKind: "controller", reserved: { bottom: "0px", right: "520px" } },
+    { dock: "bottom", hostKind: "controller", reserved: { bottom: "320px", right: "0px" } },
+  ] as const)(
+    "lets only the standalone $dock dock own the viewport reservation with an embedded $hostKind",
+    ({ dock, hostKind, reserved }) => {
+      const layout = createLayout("right");
+      layout.save({ open: true, dock, height: 320, width: 520 });
+      const embeddedHost =
+        hostKind === "controller"
+          ? { ...createControllerHost(), embedded: true }
+          : createEmbeddedControllerHost();
+      // Both instances of one panel share its layout store and reservation properties.
+      const options = { layout, reservationPrefix: "test-shared", isAvailable: () => true };
+      const standalone = new DockLayoutController(createControllerHost(), options);
+      const embedded = new DockLayoutController(embeddedHost, options);
+      const reservation = () => ({
+        bottom: document.documentElement.style.getPropertyValue("--oc-test-shared-reserve-bottom"),
+        right: document.documentElement.style.getPropertyValue("--oc-test-shared-reserve-right"),
+      });
+      const cleared = { bottom: "0px", right: "0px" };
+
+      standalone.hostConnected();
+      embedded.hostConnected();
+      standalone.syncReservation();
+      embedded.syncReservation();
+      expect(reservation()).toEqual(reserved);
+
+      standalone.setOpen(false);
+      embedded.syncReservation();
+      expect(reservation()).toEqual(cleared);
+
+      standalone.setOpen(true);
+      embedded.hostDisconnected();
+      expect(reservation()).toEqual(reserved);
+
+      standalone.hostDisconnected();
+      expect(reservation()).toEqual(cleared);
+    },
+  );
 
   it("resizes and restores a width without reserving the global viewport", async () => {
     const layout = createDockPanelLayout({
@@ -158,13 +218,12 @@ describe("DockLayoutController inline columns", () => {
     });
     const reservation = "--oc-test-inline-reserve-right";
     document.documentElement.style.setProperty(reservation, "17px");
-    const host = createControllerHost();
+    const host = createEmbeddedControllerHost();
     const controller = new DockLayoutController(host, {
       layout,
       reservationPrefix: "test-inline",
       isAvailable: () => true,
       maxWidth: () => 420,
-      reserveViewport: false,
     });
 
     controller.hostConnected();
@@ -190,12 +249,11 @@ describe("DockLayoutController inline columns", () => {
     });
     expect(document.documentElement.style.getPropertyValue(reservation)).toBe("17px");
 
-    const restored = new DockLayoutController(createControllerHost(), {
+    const restored = new DockLayoutController(createEmbeddedControllerHost(), {
       layout,
       reservationPrefix: "test-inline",
       isAvailable: () => true,
       maxWidth: () => 420,
-      reserveViewport: false,
     });
     restored.hostConnected();
     expect(restored.width).toBe(380);
@@ -218,10 +276,9 @@ describe("DockLayoutController inline columns", () => {
     controller.hostConnected();
 
     render(controller.renderResizer("test", "Resize panel"), container);
-    let separator = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
-      '[role="separator"]',
-    )!;
+    let separator = container.querySelector("resizable-divider")!;
     await separator.updateComplete;
+    expect(separator.getAttribute("role")).toBe("separator");
     expect(separator.getAttribute("tabindex")).toBe("0");
     expect(separator.getAttribute("aria-orientation")).toBe("vertical");
 
@@ -232,9 +289,7 @@ describe("DockLayoutController inline columns", () => {
 
     controller.setDock("bottom", false);
     render(controller.renderResizer("test", "Resize panel"), container);
-    separator = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
-      '[role="separator"]',
-    )!;
+    separator = container.querySelector("resizable-divider")!;
     await separator.updateComplete;
     expect(separator.getAttribute("aria-orientation")).toBe("horizontal");
 

@@ -1,48 +1,62 @@
-// Session model override helpers normalize per-session provider model choices.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { SessionEntry } from "../config/sessions.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import {
+  MODEL_SELECTION_LOCKED_MESSAGE,
+  ModelSelectionLockedError,
+} from "./model-selection-error.js";
+
+export {
+  MODEL_SELECTION_LOCKED_MESSAGE,
+  ModelSelectionLockedError,
+} from "./model-selection-error.js";
 
 /** User or automatic model/provider override selection for a session entry. */
-type ModelOverrideSelection = {
+export type ModelOverrideSelection = {
   provider: string;
   model: string;
   isDefault?: boolean;
 };
 
-export const MODEL_SELECTION_LOCKED_MESSAGE = "Model selection is locked for this session.";
 export const MODEL_SELECTION_LOCKED_RESET_MESSAGE =
   "This session cannot be reset while model selection is locked.";
-
-/** Raised when a caller attempts to mutate a locked session model selection. */
-export class ModelSelectionLockedError extends Error {
-  constructor(message = MODEL_SELECTION_LOCKED_MESSAGE) {
-    super(message);
-    this.name = "ModelSelectionLockedError";
-  }
-}
+export const MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE =
+  "Model-selection-locked sessions cannot create child sessions from parent context.";
 
 export function isModelSelectionLocked(entry: SessionEntry | undefined): boolean {
   return entry?.modelSelectionLocked === true;
 }
 
-/** Enforces the durable model-selection lock before any session model fields change. */
-function assertModelSelectionUnlocked(entry: SessionEntry): void {
+/** A locked harness owns both model selection and transcript lineage. */
+export function assertModelSelectionUnlocked(
+  entry: SessionEntry,
+  message = MODEL_SELECTION_LOCKED_MESSAGE,
+): void {
   if (isModelSelectionLocked(entry)) {
-    throw new ModelSelectionLockedError();
+    throw new ModelSelectionLockedError(message);
   }
 }
 
-function clearFallbackOrigin(entry: SessionEntry): boolean {
+function clearDefinedFields(entry: SessionEntry, ...keys: (keyof SessionEntry)[]): boolean {
   let updated = false;
-  if (entry.modelOverrideFallbackOriginProvider !== undefined) {
-    delete entry.modelOverrideFallbackOriginProvider;
-    updated = true;
-  }
-  if (entry.modelOverrideFallbackOriginModel !== undefined) {
-    delete entry.modelOverrideFallbackOriginModel;
-    updated = true;
+  for (const key of keys) {
+    if (entry[key] !== undefined) {
+      delete entry[key];
+      updated = true;
+    }
   }
   return updated;
+}
+
+function setField<K extends keyof SessionEntry>(
+  entry: SessionEntry,
+  key: K,
+  value: SessionEntry[K],
+): boolean {
+  if (entry[key] === value) {
+    return false;
+  }
+  entry[key] = value;
+  return true;
 }
 
 /** Applies a model/auth-profile override to a session entry and clears stale runtime fields. */
@@ -53,6 +67,7 @@ export function applyModelOverrideToSessionEntry(params: {
   profileOverrideSource?: "auto" | "user";
   preserveAuthProfileOverride?: boolean;
   selectionSource?: "auto" | "user";
+  explicitDefaultSelection?: boolean;
   markLiveSwitchPending?: boolean;
 }): { updated: boolean } {
   const { entry, selection, profileOverride } = params;
@@ -64,46 +79,38 @@ export function applyModelOverrideToSessionEntry(params: {
   let profileUpdated = false;
 
   if (selection.isDefault) {
-    if (entry.providerOverride) {
-      delete entry.providerOverride;
+    if (params.explicitDefaultSelection && entry.modelOverrideSource !== "default") {
+      entry.modelOverrideSource = "default";
       updated = true;
       selectionUpdated = true;
-    }
-    if (entry.modelOverride) {
-      delete entry.modelOverride;
-      updated = true;
-      selectionUpdated = true;
-    }
-    if (entry.modelOverrideSource) {
+    } else if (!params.explicitDefaultSelection && entry.modelOverrideSource !== undefined) {
       delete entry.modelOverrideSource;
       updated = true;
+      selectionUpdated = true;
+    }
+    for (const key of ["providerOverride", "modelOverride"] as const) {
+      if (entry[key]) {
+        delete entry[key];
+        updated = true;
+        selectionUpdated = true;
+      }
     }
     if (entry.modelOverrideRouteResolution) {
       delete entry.modelOverrideRouteResolution;
       updated = true;
     }
-    updated = clearFallbackOrigin(entry) || updated;
   } else {
-    if (entry.providerOverride !== selection.provider) {
-      entry.providerOverride = selection.provider;
-      updated = true;
-      selectionUpdated = true;
-    }
-    if (entry.modelOverride !== selection.model) {
-      entry.modelOverride = selection.model;
-      updated = true;
-      selectionUpdated = true;
-    }
-    if (entry.modelOverrideSource !== selectionSource) {
-      entry.modelOverrideSource = selectionSource;
-      updated = true;
-    }
-    if (entry.modelOverrideRouteResolution !== "resolved") {
-      entry.modelOverrideRouteResolution = "resolved";
-      updated = true;
-    }
-    updated = clearFallbackOrigin(entry) || updated;
+    selectionUpdated = setField(entry, "providerOverride", selection.provider);
+    selectionUpdated = setField(entry, "modelOverride", selection.model) || selectionUpdated;
+    updated = setField(entry, "modelOverrideSource", selectionSource) || selectionUpdated;
+    updated = setField(entry, "modelOverrideRouteResolution", "resolved") || updated;
   }
+  updated =
+    clearDefinedFields(
+      entry,
+      "modelOverrideFallbackOriginProvider",
+      "modelOverrideFallbackOriginModel",
+    ) || updated;
 
   // Model overrides supersede previously recorded runtime model identity.
   // If runtime fields are stale (or the override changed), clear them so status
@@ -115,20 +122,10 @@ export function applyModelOverrideToSessionEntry(params: {
     runtimeModel === selection.model &&
     (runtimeProvider.length === 0 || runtimeProvider === selection.provider);
   if (runtimePresent && (selectionUpdated || !runtimeAligned)) {
-    if (entry.model !== undefined) {
-      delete entry.model;
-      updated = true;
-    }
-    if (entry.modelProvider !== undefined) {
-      delete entry.modelProvider;
-      updated = true;
-    }
+    updated = clearDefinedFields(entry, "model", "modelProvider") || updated;
   }
 
-  // When switching back to the default model without override fields to delete
-  // (e.g. model comes from steering/fallback runtime fields), the isDefault
-  // branch at line 42 won't set selectionUpdated. Mark it here so that
-  // liveModelSwitchPending can still be set below when runtime is misaligned.
+  // Switching to the default may only replace steering/fallback runtime fields.
   if (selection.isDefault && runtimePresent && !runtimeAligned) {
     selectionUpdated = true;
   }
@@ -138,50 +135,26 @@ export function applyModelOverrideToSessionEntry(params: {
   // pin the session to an older/smaller limit until another run refreshes it.
   const shouldClearModelDerivedState = selectionUpdated || (runtimePresent && !runtimeAligned);
   if (shouldClearModelDerivedState) {
-    if (entry.contextTokens !== undefined) {
-      delete entry.contextTokens;
-      updated = true;
-    }
-    if (entry.contextTokensSource !== undefined) {
-      delete entry.contextTokensSource;
-      updated = true;
-    }
-    if (entry.contextBudgetStatus !== undefined) {
-      delete entry.contextBudgetStatus;
-      updated = true;
-    }
+    updated =
+      clearDefinedFields(entry, "contextTokens", "contextTokensSource", "contextBudgetStatus") ||
+      updated;
   }
 
   if (profileOverride) {
-    if (entry.authProfileOverride !== profileOverride) {
-      entry.authProfileOverride = profileOverride;
-      updated = true;
-      profileUpdated = true;
-    }
-    if (entry.authProfileOverrideSource !== profileOverrideSource) {
-      entry.authProfileOverrideSource = profileOverrideSource;
-      updated = true;
-      profileUpdated = true;
-    }
-    if (entry.authProfileOverrideCompactionCount !== undefined) {
-      delete entry.authProfileOverrideCompactionCount;
-      updated = true;
-    }
+    profileUpdated = setField(entry, "authProfileOverride", profileOverride);
+    profileUpdated =
+      setField(entry, "authProfileOverrideSource", profileOverrideSource) || profileUpdated;
   } else if (!params.preserveAuthProfileOverride) {
-    if (entry.authProfileOverride) {
-      delete entry.authProfileOverride;
-      updated = true;
-      profileUpdated = true;
+    for (const key of ["authProfileOverride", "authProfileOverrideSource"] as const) {
+      if (entry[key]) {
+        delete entry[key];
+        profileUpdated = true;
+      }
     }
-    if (entry.authProfileOverrideSource) {
-      delete entry.authProfileOverrideSource;
-      updated = true;
-      profileUpdated = true;
-    }
-    if (entry.authProfileOverrideCompactionCount !== undefined) {
-      delete entry.authProfileOverrideCompactionCount;
-      updated = true;
-    }
+  }
+  updated = profileUpdated || updated;
+  if (profileOverride || !params.preserveAuthProfileOverride) {
+    updated = clearDefinedFields(entry, "authProfileOverrideCompactionCount") || updated;
   }
 
   // Clear stale fallback notice when the user explicitly switches models.
@@ -199,10 +172,6 @@ export function applyModelOverrideToSessionEntry(params: {
   return { updated };
 }
 
-function wrappedOverrideModel(provider: string, model: string): string {
-  return `${provider}/${model}`;
-}
-
 /** Repairs overrides where legacy provider/model fields were stored as provider/model strings. */
 export function repairProviderWrappedModelOverride(params: {
   entry: SessionEntry;
@@ -215,7 +184,7 @@ export function repairProviderWrappedModelOverride(params: {
     return { updated: false };
   }
 
-  const wrappedModel = wrappedOverrideModel(overrideProvider, overrideModel);
+  const wrappedModel = `${overrideProvider}/${overrideModel}`;
   const runtimeProvider = normalizeOptionalString(params.entry.modelProvider);
   const runtimeModel = normalizeOptionalString(params.entry.model);
   if (runtimeProvider && runtimeModel === wrappedModel && runtimeProvider !== overrideProvider) {

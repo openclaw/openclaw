@@ -1,7 +1,6 @@
-// Feishu plugin module implements reactions behavior.
 import type { ClawdbotConfig } from "../runtime-api.js";
-import { resolveFeishuRuntimeAccount } from "./accounts.js";
-import { createFeishuClient } from "./client.js";
+import { assertFeishuApiSuccess } from "./api-response.js";
+import { createConfiguredFeishuClient } from "./configured-client.js";
 
 type FeishuReaction = {
   reactionId: string;
@@ -9,20 +8,6 @@ type FeishuReaction = {
   operatorType: "app" | "user" | "unknown";
   operatorId: string;
 };
-
-function resolveConfiguredFeishuClient(params: { cfg: ClawdbotConfig; accountId?: string }) {
-  const account = resolveFeishuRuntimeAccount(params);
-  if (!account.configured) {
-    throw new Error(`Feishu account "${account.accountId}" not configured`);
-  }
-  return createFeishuClient(account);
-}
-
-function assertFeishuReactionApiSuccess(response: { code?: number; msg?: string }, action: string) {
-  if (response.code !== 0) {
-    throw new Error(`Feishu ${action} failed: ${response.msg || `code ${response.code}`}`);
-  }
-}
 
 /**
  * Add a reaction (emoji) to a message.
@@ -36,22 +21,18 @@ export async function addReactionFeishu(params: {
   accountId?: string;
 }): Promise<{ reactionId: string }> {
   const { cfg, messageId, emojiType, accountId } = params;
-  const client = resolveConfiguredFeishuClient({ cfg, accountId });
+  const client = createConfiguredFeishuClient({ cfg, accountId });
 
-  const response = (await client.im.messageReaction.create({
+  const response = await client.im.messageReaction.create({
     path: { message_id: messageId },
     data: {
       reaction_type: {
         emoji_type: emojiType,
       },
     },
-  })) as {
-    code?: number;
-    msg?: string;
-    data?: { reaction_id?: string };
-  };
+  });
 
-  assertFeishuReactionApiSuccess(response, "add reaction");
+  assertFeishuApiSuccess(response, "Feishu add reaction failed");
 
   const reactionId = response.data?.reaction_id;
   if (!reactionId) {
@@ -61,9 +42,6 @@ export async function addReactionFeishu(params: {
   return { reactionId };
 }
 
-/**
- * Remove a reaction from a message.
- */
 export async function removeReactionFeishu(params: {
   cfg: ClawdbotConfig;
   messageId: string;
@@ -71,21 +49,18 @@ export async function removeReactionFeishu(params: {
   accountId?: string;
 }): Promise<void> {
   const { cfg, messageId, reactionId, accountId } = params;
-  const client = resolveConfiguredFeishuClient({ cfg, accountId });
+  const client = createConfiguredFeishuClient({ cfg, accountId });
 
-  const response = (await client.im.messageReaction.delete({
+  const response = await client.im.messageReaction.delete({
     path: {
       message_id: messageId,
       reaction_id: reactionId,
     },
-  })) as { code?: number; msg?: string };
+  });
 
-  assertFeishuReactionApiSuccess(response, "remove reaction");
+  assertFeishuApiSuccess(response, "Feishu remove reaction failed");
 }
 
-/**
- * List all reactions for a message.
- */
 export async function listReactionsFeishu(params: {
   cfg: ClawdbotConfig;
   messageId: string;
@@ -93,13 +68,13 @@ export async function listReactionsFeishu(params: {
   accountId?: string;
 }): Promise<FeishuReaction[]> {
   const { cfg, messageId, emojiType, accountId } = params;
-  const client = resolveConfiguredFeishuClient({ cfg, accountId });
+  const client = createConfiguredFeishuClient({ cfg, accountId });
   const reactions: FeishuReaction[] = [];
   const seenPageTokens = new Set<string>();
   let pageToken: string | undefined;
 
   while (true) {
-    const response = (await client.im.messageReaction.list({
+    const response = await client.im.messageReaction.list({
       path: { message_id: messageId },
       params:
         emojiType || pageToken
@@ -108,24 +83,9 @@ export async function listReactionsFeishu(params: {
               ...(pageToken ? { page_token: pageToken } : {}),
             }
           : undefined,
-    })) as {
-      code?: number;
-      msg?: string;
-      data?: {
-        items?: Array<{
-          reaction_id?: string;
-          reaction_type?: { emoji_type?: string };
-          operator?: {
-            operator_type?: string;
-            operator_id?: string;
-          };
-        }>;
-        has_more?: boolean;
-        page_token?: string;
-      };
-    };
+    });
 
-    assertFeishuReactionApiSuccess(response, "list reactions");
+    assertFeishuApiSuccess(response, "Feishu list reactions failed");
 
     for (const item of response.data?.items ?? []) {
       reactions.push({

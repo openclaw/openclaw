@@ -7,6 +7,44 @@ import {
 const suite = createNewSessionPageE2eSuite();
 
 suite.define(() => {
+  it.each([
+    {
+      name: "desktop",
+      viewport: { width: 1280, height: 900 },
+      composerVisible: true,
+      railVisible: false,
+    },
+    {
+      name: "mobile",
+      viewport: { width: 390, height: 844 },
+      composerVisible: false,
+      railVisible: true,
+    },
+  ])("shows Draft once on $name", async ({ viewport, composerVisible, railVisible }) => {
+    await suite.withPage({ viewport }, async ({ page }) => {
+      await installMockGateway(page, {
+        allowedSessionVisibilities: ["shared", "draft"],
+        hasMultipleSessionSharingIdentities: true,
+        operatorScopes: ["operator.read", "operator.write", "operator.admin"],
+      });
+
+      await page.goto(`${suite.server.baseUrl}new`);
+      const composer = page.locator(".new-session-page__composer");
+      await composer.getByRole("button", { name: "Add attachment" }).click();
+      await composer
+        .locator("wa-dropdown.agent-chat__capability-menu")
+        .getByRole("menuitemcheckbox", { name: "Draft" })
+        .click();
+
+      await expect
+        .poll(() => composer.locator(".new-session-page__visibility--draft").isVisible())
+        .toBe(composerVisible);
+      await expect
+        .poll(() => page.locator(".new-session-page__draft-toggle").isVisible())
+        .toBe(railVisible);
+    });
+  });
+
   it("creates the first turn with Draft and selected capabilities atomically", async () => {
     await suite.withPage({ viewport: { width: 555, height: 1200 } }, async ({ page }) => {
       const config = {
@@ -64,17 +102,21 @@ suite.define(() => {
       await composer.getByRole("button", { name: "Add attachment" }).click();
       await expect.poll(() => menu.getAttribute("data-view")).toBe("root");
 
-      await menu.getByRole("menuitem", { name: "Draft" }).click();
+      const draft = menu.getByRole("menuitemcheckbox", { name: "Draft" });
+      await expect.poll(() => draft.getAttribute("aria-checked")).toBe("false");
+      await draft.focus();
+      await page.keyboard.press("Space");
+      await expect.poll(() => draft.getAttribute("aria-checked")).toBe("true");
       await menu.getByRole("menuitem", { name: /^Skills/ }).click();
       await expect.poll(() => menu.getAttribute("data-view")).toBe("skills");
-      const release = menu.getByRole("menuitem", { name: "Release" });
+      const release = menu.getByRole("menuitemcheckbox", { name: "Release" });
       await expect.poll(() => release.isEnabled()).toBe(true);
       await release.click();
       await menu.getByRole("menuitem", { name: "Back" }).click();
 
       await menu.getByRole("menuitem", { name: /^Connectors/ }).click();
       await expect.poll(() => menu.getAttribute("data-view")).toBe("connectors");
-      await menu.getByRole("menuitem", { name: /^github/ }).click();
+      await menu.getByRole("menuitemcheckbox", { name: /^github/ }).click();
       await menu.getByRole("menuitem", { name: "Back" }).click();
       await menu.getByRole("menuitemcheckbox", { name: "Web search" }).click();
 
@@ -84,7 +126,7 @@ suite.define(() => {
             (text) => text.replace(/\s+/g, " ").trim(),
           ),
         )
-        .toEqual(["Draft", "3 session overrides"]);
+        .toEqual(["3 overrides"]);
       await page.locator(".new-session-page__message").fill("prepare the release");
       await composer.getByRole("button", { name: "Start session" }).click();
 

@@ -1,34 +1,27 @@
-/**
- * Resolves terminal attempt trajectory status and assistant-visible text.
- */
 import {
   hasAcceptedSessionSpawn,
   type AcceptedSessionSpawn,
 } from "../../accepted-session-spawn.js";
+import { hasAnyNonEmptyString as hasAnyNonBlankString } from "../../delivery-evidence-values.js";
+import { hasCommittedMessagingToolDeliveryEvidence } from "../delivery-evidence.js";
+import { hasAsyncActivity } from "./attempt-terminal-evidence.js";
+import type { EmbeddedRunAttemptResult } from "./types.js";
 
 type AttemptTrajectoryTerminalStatus = "success" | "error" | "interrupted";
 
 /** Terminal error marker for runs that produced no user-visible delivery or durable progress. */
 const NON_DELIVERABLE_TERMINAL_TURN_REASON = "non_deliverable_terminal_turn";
 
-/** Normalized terminal status recorded for an embedded run attempt trajectory. */
 type AttemptTrajectoryTerminal = {
   status: AttemptTrajectoryTerminalStatus;
   terminalError?: typeof NON_DELIVERABLE_TERMINAL_TURN_REASON;
 };
 
-/** Signals that decide whether a completed run attempt has deliverable output. */
 type ResolveAttemptTrajectoryTerminalParams = {
   failed: boolean;
   interrupted: boolean;
   assistantTexts: string[];
-  toolMetas: Array<{
-    toolName: string;
-    meta?: string;
-    asyncStarted?: boolean;
-    asyncTaskRunId?: string;
-    asyncTaskId?: string;
-  }>;
+  toolMetas: EmbeddedRunAttemptResult["toolMetas"];
   didSendViaMessagingTool: boolean;
   didSendDeterministicApprovalPrompt: boolean;
   messagingToolSentTexts: string[];
@@ -57,7 +50,7 @@ export function resolveTerminalAssistantTexts(params: {
   lastAssistantStopReason?: string;
   lastAssistantVisibleText?: string;
 }): string[] {
-  if (hasNonEmptyAssistantText(params.assistantTexts)) {
+  if (hasAnyNonBlankString(params.assistantTexts)) {
     return params.assistantTexts;
   }
   if (params.lastAssistantStopReason === "error" || params.lastAssistantStopReason === "aborted") {
@@ -65,31 +58,6 @@ export function resolveTerminalAssistantTexts(params: {
   }
   const fallbackText = params.lastAssistantVisibleText?.trim();
   return fallbackText ? [fallbackText] : params.assistantTexts;
-}
-
-function hasNonEmptyAssistantText(texts: string[]): boolean {
-  return texts.some((text) => text.trim().length > 0);
-}
-
-function hasAnyNonBlankString(values: string[]): boolean {
-  return values.some((value) => value.trim().length > 0);
-}
-
-function hasCommittedMessagingDeliveryEvidence(
-  params: Pick<
-    ResolveAttemptTrajectoryTerminalParams,
-    "messagingToolSentTexts" | "messagingToolSentMediaUrls" | "messagingToolSentTargets"
-  >,
-): boolean {
-  return (
-    hasAnyNonBlankString(params.messagingToolSentTexts) ||
-    hasAnyNonBlankString(params.messagingToolSentMediaUrls) ||
-    params.messagingToolSentTargets.length > 0
-  );
-}
-
-function hasAsyncStartedToolActivity(toolMetas?: readonly { asyncStarted?: boolean }[]): boolean {
-  return (toolMetas ?? []).some((entry) => entry.asyncStarted === true);
 }
 
 /**
@@ -101,11 +69,8 @@ function hasAsyncStartedToolActivity(toolMetas?: readonly { asyncStarted?: boole
 export function resolveAttemptTrajectoryTerminal(
   params: ResolveAttemptTrajectoryTerminalParams,
 ): AttemptTrajectoryTerminal {
-  if (params.interrupted) {
-    return { status: "interrupted" };
-  }
-  if (params.failed) {
-    return { status: "error" };
+  if (params.interrupted || params.failed) {
+    return { status: params.interrupted ? "interrupted" : "error" };
   }
 
   // Messaging/tool-use attempts may not have assistant text; only committed
@@ -115,53 +80,25 @@ export function resolveAttemptTrajectoryTerminal(
     params.silentExpected === true ||
     params.emptyAssistantReplyIsSilent === true ||
     params.didSendDeterministicApprovalPrompt ||
-    hasCommittedMessagingDeliveryEvidence(params) ||
+    hasCommittedMessagingToolDeliveryEvidence(params) ||
     hasAcceptedSessionSpawn(params.acceptedSessionSpawns) ||
     params.heartbeatToolResponse !== undefined ||
     (params.clientToolCalls?.length ?? 0) > 0 ||
     params.yieldDetected === true ||
     params.lastToolError !== undefined ||
-    hasAsyncStartedToolActivity(params.toolMetas);
+    hasAsyncActivity(params.toolMetas);
 
-  if (params.lastAssistantStopReason === "toolUse" && !hasExplicitTerminalDelivery) {
-    return {
-      status: "error",
-      terminalError: NON_DELIVERABLE_TERMINAL_TURN_REASON,
-    };
-  }
-  // A length stop with visible assistant text is delivered as a partial reply by
-  // the terminal owner, so recording it as non-deliverable here would contradict
-  // what the user received. Visible text is the canonical fact to key on:
-  // finalization runs before terminal preparation turns assistant text into
-  // payloads, so synthesizedPayloadCount is still 0 for an ordinary text-only
-  // reply and cannot stand in for "nothing was delivered".
-  const hasVisibleAssistantOutput =
-    hasNonEmptyAssistantText(params.assistantTexts) || params.synthesizedPayloadCount > 0;
-
-  if (
-    params.lastAssistantStopReason === "length" &&
-    !params.hasTerminalOutput &&
-    !hasExplicitTerminalDelivery &&
-    !hasVisibleAssistantOutput
-  ) {
-    return {
-      status: "error",
-      terminalError: NON_DELIVERABLE_TERMINAL_TURN_REASON,
-    };
-  }
-
+  // Tool-use turns need explicit delivery; length stops need delivered or visible
+  // output. Finalization can precede payload synthesis, so text itself counts.
   const hasDeliverableOrProgress =
     hasExplicitTerminalDelivery ||
-    params.hasTerminalOutput ||
-    hasVisibleAssistantOutput ||
-    params.successfulCronAdds > 0;
+    (params.lastAssistantStopReason !== "toolUse" &&
+      (params.hasTerminalOutput ||
+        hasAnyNonBlankString(params.assistantTexts) ||
+        params.synthesizedPayloadCount > 0 ||
+        (params.lastAssistantStopReason !== "length" && params.successfulCronAdds > 0)));
 
-  if (hasDeliverableOrProgress) {
-    return { status: "success" };
-  }
-
-  return {
-    status: "error",
-    terminalError: NON_DELIVERABLE_TERMINAL_TURN_REASON,
-  };
+  return hasDeliverableOrProgress
+    ? { status: "success" }
+    : { status: "error", terminalError: NON_DELIVERABLE_TERMINAL_TURN_REASON };
 }

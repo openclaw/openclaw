@@ -12,27 +12,22 @@ export type WorkspaceResultConflict = {
 };
 
 function isWorkspaceConflictPath(entryPath: string): boolean {
-  if (!entryPath || entryPath.startsWith("/") || entryPath.includes("\0")) {
-    return false;
-  }
-  return entryPath
-    .split("/")
-    .every((segment) => segment !== "" && segment !== "." && segment !== "..");
+  return (
+    !entryPath.includes("\0") &&
+    entryPath.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..")
+  );
 }
 
 export function workspaceConflictPathForDisplay(entryPath: string): string {
-  return Array.from(entryPath)
-    .map((character) => {
-      if (character === "\\") {
-        return "\\\\";
-      }
-      const codePoint = character.codePointAt(0);
-      return codePoint !== undefined &&
-        (codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f))
-        ? `\\u{${codePoint.toString(16).padStart(4, "0")}}`
-        : character;
-    })
-    .join("");
+  return Array.from(entryPath, (character) => {
+    if (character === "\\") {
+      return "\\\\";
+    }
+    const codeUnit = character.charCodeAt(0);
+    return codeUnit <= 0x1f || (codeUnit >= 0x7f && codeUnit <= 0x9f)
+      ? `\\u{${codeUnit.toString(16).padStart(4, "0")}}`
+      : character;
+  }).join("");
 }
 
 function normalizeWorkspaceResultConflict(value: unknown): WorkspaceResultConflict | undefined {
@@ -98,13 +93,21 @@ function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
-export function workspaceConflictGitCommands(conflict: WorkspaceResultConflict):
+export function workspaceConflictGitCommands(
+  conflict: WorkspaceResultConflict,
+  requestedPath?: string,
+):
   | {
       inspect: string;
       takeCloud: string;
     }
   | undefined {
-  const entryPath = conflict.paths.find((candidate) => !hasTerminalControl(candidate));
+  const entryPath =
+    requestedPath === undefined
+      ? conflict.paths.find((candidate) => !hasTerminalControl(candidate))
+      : conflict.paths.includes(requestedPath) && !hasTerminalControl(requestedPath)
+        ? requestedPath
+        : undefined;
   if (!entryPath) {
     return undefined;
   }

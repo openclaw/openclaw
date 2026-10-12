@@ -1,183 +1,69 @@
-// Plugin synchronization and convergence after the core update.
-import { confirm, isCancel, text } from "@clack/prompts";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
-import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
-import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import {
+  prepareDoctorConfigReferenceSource,
+  restoreDoctorConfigEnvRefs,
+} from "../../commands/doctor/shared/config-flow-steps.js";
+import { assertInstalledPluginIdRecoveryCurrent } from "../../commands/doctor/shared/installed-plugin-id-recovery.js";
+import { runPostCorePluginConvergence } from "../../commands/doctor/shared/post-core-plugin-convergence.js";
+import { resolvePostCoreConvergenceEnv } from "../../commands/doctor/shared/update-phase.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
+import {
+  getDeferredPluginMigrationConfigFacts,
+  setDeferredPluginMigrationConfigFacts,
+} from "../../config/deferred-plugin-migration-config.js";
+import type { ConfigWriteOptions } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
-import type { ClawHubRiskAcknowledgementRequest } from "../../infra/clawhub-install-trust.js";
-import type { UpdateChannel } from "../../infra/update-channels.js";
+import { comparePackageUpdateVersions } from "../../infra/package-update-utils.js";
+import { resolveRegistryUpdateChannel, type UpdateChannel } from "../../infra/update-channels.js";
+import { getLogger } from "../../logging/logger.js";
+import type { PluginCapabilityConsentHandler } from "../../plugins/capability-consent.js";
 import { commitPluginInstallRecordsWithConfig } from "../../plugins/install-record-commit.js";
+import { resolvePluginInstallOwnerMigrations } from "../../plugins/install-transaction.js";
 import {
   loadInstalledPluginIndexInstallRecords,
   withoutPluginInstallRecords,
   withPluginInstallRecords,
 } from "../../plugins/installed-plugin-index-records.js";
+import { listPersistedBundledPluginLocationBridges } from "../../plugins/location-bridges.js";
+import { isTrustedOfficialPluginInstallRecord } from "../../plugins/official-external-install-records.js";
+import { VERSION_BOUND_RUNTIME_PLUGIN_IDS } from "../../plugins/official-runtime-plugins.js";
+import type { MissingPluginInstallPayload } from "../../plugins/payload-verification.js";
+import {
+  withPluginLifecycleLease,
+  type PluginLifecycleLeaseContext,
+} from "../../plugins/plugin-lifecycle-lease.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../plugins/registry-refresh.js";
+import { convergePluginReleaseCohort } from "../../plugins/update-cohort.js";
 import {
-  isClawHubTrustSkippedOutcome,
-  syncPluginsForUpdateChannel,
-  updateNpmInstalledPlugins,
-  type PluginUpdateIntegrityDriftParams,
-  type PluginUpdateOutcome,
-} from "../../plugins/update.js";
-import { defaultRuntime } from "../../runtime.js";
-import { listPersistedBundledPluginLocationBridges } from "../plugins-location-bridges.js";
+  resolveExactNpmSpecVersion,
+  resolveNpmSpecPackageName,
+} from "../../plugins/update-source.js";
+import { isClawHubTrustSkippedOutcome, type PluginUpdateOutcome } from "../../plugins/update.js";
+import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import { formatCliCommand } from "../command-format.js";
+import { resolvePluginCapabilityConsentCliOptions } from "../plugin-capability-consent.js";
+import { readPackageVersion } from "./shared.js";
+import { withUpdateConfigWriteAuthority } from "./update-command-config.js";
 import {
-  convergenceWarningsToOutcomes,
-  runPostCorePluginConvergence,
-} from "./post-core-plugin-convergence.js";
-import { readPackageVersion, type UpdateCommandOptions } from "./shared.js";
-import {
+  assessPluginUpdate,
   buildInvalidConfigPostCoreUpdateResult,
-  collectMissingPluginInstallPayloads,
-  resolvePostSyncPluginUpdateSkipIds,
-  type MissingPluginInstallPayload,
+  createPluginUpdateWarning,
+  type PluginUpdateWarning,
   type PostCorePluginUpdateResult,
+  type ProducedPluginUpdateResult,
 } from "./update-command-plugins-internals.js";
 
 export type { PostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
 
-const POST_UPDATE_PLUGIN_REPAIR_GUIDANCE =
-  "Run openclaw update repair to retry post-update plugin repair.";
-
-type PostUpdatePluginWarning = NonNullable<PostCorePluginUpdateResult["warnings"]>[number];
-
-function isClawHubTrustNotice(message: string): boolean {
-  const trimmed = stripAnsi(message).trimStart();
-  return (
-    trimmed.startsWith("ClawHub trust warning ") ||
-    trimmed.startsWith("╭─ REVIEW RECOMMENDED - ClawHub ") ||
-    trimmed.startsWith("╭─ WARNING - ClawHub found security risks ") ||
-    trimmed.startsWith("╭─ BLOCKED - ClawHub ")
-  );
-}
-
-function isNonBlockingClawHubTrustNotice(message: string): boolean {
-  const trimmed = stripAnsi(message).trimStart();
-  return (
-    trimmed.startsWith("ClawHub trust warning ") ||
-    trimmed.startsWith("╭─ REVIEW RECOMMENDED - ClawHub ")
-  );
-}
-
-function formatPluginUpdateWarning(message: string): string {
-  return message.includes("╭─") ? message : theme.warn(message);
-}
-
-function resolveUpdateClawHubRiskAcknowledgementOptions(
-  opts: UpdateCommandOptions,
-  params: {
-    renderWarningBeforePrompt?: (warning: string) => void;
-  } = {},
-): {
-  acknowledgeClawHubRisk?: boolean;
-  onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => Promise<boolean>;
-} {
-  if (opts.acknowledgeClawHubRisk) {
-    return { acknowledgeClawHubRisk: true };
-  }
-  if (opts.dryRun || opts.yes || opts.json || !process.stdin.isTTY || !process.stdout.isTTY) {
-    return {};
-  }
-  return {
-    onClawHubRisk: async (request) => {
-      params.renderWarningBeforePrompt?.(request.warning);
-      const packageName = sanitizeTerminalText(request.packageName);
-      const releaseLabel = `${packageName}@${sanitizeTerminalText(request.version)}`;
-      if (request.acknowledgementKind === "type-package") {
-        const answer = await text({
-          message: stylePromptMessage(`type: '${packageName}' to update anyway`),
-          placeholder: packageName,
-        });
-        return !isCancel(answer) && answer.trim() === packageName;
-      }
-      const ok = await confirm({
-        message: stylePromptMessage(
-          `Update ClawHub package "${releaseLabel}" after reviewing the warning above?`,
-        ),
-        initialValue: false,
-      });
-      return !isCancel(ok) && ok;
-    },
-  };
-}
-
 function formatMissingPluginPayloadReason(entry: MissingPluginInstallPayload): string {
-  if (entry.reason === "missing-install-path") {
-    return "installPath is missing";
-  }
-  if (entry.reason === "missing-package-json") {
-    return `package.json is missing under ${entry.installPath}`;
-  }
-  return `package directory is missing: ${entry.installPath}`;
-}
-
-function formatPostUpdatePluginInspectGuidance(pluginId: string): string {
-  return `Run openclaw plugins inspect ${pluginId} --runtime --json for details.`;
-}
-
-function createPostUpdatePluginWarning(params: {
-  pluginId?: string;
-  reason: string;
-}): PostUpdatePluginWarning {
-  const reason = params.reason.trim() || "unknown plugin post-update failure";
-  const guidance = [
-    POST_UPDATE_PLUGIN_REPAIR_GUIDANCE,
-    ...(params.pluginId ? [formatPostUpdatePluginInspectGuidance(params.pluginId)] : []),
-  ];
-  return {
-    ...(params.pluginId ? { pluginId: params.pluginId } : {}),
-    reason,
-    message: params.pluginId
-      ? `Plugin "${params.pluginId}" could not be processed after the core update: ${reason} ${guidance.join(" ")}`
-      : `Plugin post-update processing could not complete after the core update: ${reason} ${guidance.join(" ")}`,
-    guidance,
-  };
-}
-
-function createGuidedPostUpdatePluginOutcome(
-  outcome: PluginUpdateOutcome,
-  options: { includeWarningInReason?: boolean } = {},
-): {
-  outcome: PluginUpdateOutcome;
-  warning?: PostUpdatePluginWarning;
-} {
-  if (outcome.status !== "error" && !isActionableSkippedPostUpdateOutcome(outcome)) {
-    return { outcome };
-  }
-  const includeWarningInReason = options.includeWarningInReason ?? true;
-  const warningReason =
-    outcome.warning && includeWarningInReason
-      ? `${outcome.warning}\n${outcome.message}`
-      : outcome.message;
-  const warning = createPostUpdatePluginWarning({
-    ...(outcome.pluginId && outcome.pluginId !== "unknown" ? { pluginId: outcome.pluginId } : {}),
-    reason: warningReason,
-  });
-  return {
-    outcome: {
-      ...outcome,
-      message: warning.message,
-    },
-    warning,
-  };
-}
-
-function collectPluginChannelFallbackMessages(outcomes: readonly PluginUpdateOutcome[]): string[] {
-  const seen = new Set<string>();
-  const messages: string[] = [];
-  for (const outcome of outcomes) {
-    const message = outcome.channelFallback?.message;
-    if (!message || seen.has(message)) {
-      continue;
-    }
-    seen.add(message);
-    messages.push(message);
-  }
-  return messages;
+  return entry.reason === "missing-install-path"
+    ? "installPath is missing"
+    : entry.reason === "missing-package-json"
+      ? `package.json is missing under ${entry.installPath}`
+      : `package directory is missing: ${entry.installPath}`;
 }
 
 function isDisabledAfterFailureOutcome(outcome: PluginUpdateOutcome): boolean {
@@ -190,309 +76,413 @@ function isActionableSkippedPostUpdateOutcome(outcome: PluginUpdateOutcome): boo
 
 export async function updatePluginsAfterCoreUpdate(params: {
   root: string;
+  assertCurrent?: () => void;
   channel: UpdateChannel;
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
+  configWriteOptions: ConfigWriteOptions;
   configChanged?: boolean;
   restoredAuthoredChannels?: unknown;
-  opts: UpdateCommandOptions;
   timeoutMs: number;
+  workTimeoutMs?: number | null;
   pluginInstallRecords?: Record<string, PluginInstallRecord>;
-}): Promise<PostCorePluginUpdateResult> {
+  json?: boolean;
+  acceptCapabilities?: boolean;
+  onCapabilityConsent?: PluginCapabilityConsentHandler;
+  runtime?: RuntimeEnv;
+}): Promise<ProducedPluginUpdateResult> {
   if (!params.configSnapshot.valid) {
-    const invalid = buildInvalidConfigPostCoreUpdateResult();
-    if (!params.opts.json) {
-      defaultRuntime.log(theme.error(invalid.message));
+    params.assertCurrent?.();
+    const invalid = buildInvalidConfigPostCoreUpdateResult(params.configSnapshot);
+    if (!params.json) {
+      const runtime = params.runtime ?? defaultRuntime;
+      runtime.log(theme.error(invalid.message));
       for (const line of invalid.guidance) {
-        defaultRuntime.log(theme.muted(`  ${line}`));
+        runtime.log(theme.muted(`  ${line}`));
       }
     }
-    return invalid.result;
+    return {
+      ...invalid.result,
+      assessment: { kind: "core-critical", reason: invalid.result.reason },
+    };
   }
+  // Same-run migration receipts are facts from this lease. Keep their owner
+  // continuously held from cohort planning through final index/config publication.
+  return await withPluginLifecycleLease({ assertCurrent: params.assertCurrent }, (lease) =>
+    updatePluginsAfterCoreUpdateWithLease(
+      { ...params, assertCurrent: () => lease.assertOwned() },
+      lease,
+    ),
+  );
+}
 
+async function updatePluginsAfterCoreUpdateWithLease(
+  params: Parameters<typeof updatePluginsAfterCoreUpdate>[0],
+  lease: PluginLifecycleLeaseContext,
+): Promise<ProducedPluginUpdateResult> {
+  params.assertCurrent?.();
+  const runtime = params.runtime ?? defaultRuntime;
+  const referenceSource = prepareDoctorConfigReferenceSource(params.configSnapshot);
   const clawHubTrustNotices = new Set<string>();
   const loggedPluginWarnings = new Set<string>();
-  const hasLoggedPluginWarning = (message: string): boolean =>
-    loggedPluginWarnings.has(stripAnsi(message));
-  const recordLoggedPluginWarning = (message: string): void => {
-    loggedPluginWarnings.add(stripAnsi(message));
-  };
-  const recordClawHubTrustNotice = (message: string): void => {
-    const shouldRecord = params.opts.json
-      ? isClawHubTrustNotice(message)
-      : isNonBlockingClawHubTrustNotice(message);
-    if (shouldRecord) {
-      clawHubTrustNotices.add(stripAnsi(message));
+  const logPluginWarning = (message: string) => {
+    const plain = stripAnsi(message);
+    if (!params.json && !loggedPluginWarnings.has(plain)) {
+      runtime.log(message.includes("╭─") ? message : theme.warn(message));
+      loggedPluginWarnings.add(plain);
     }
   };
   const pluginLogger = {
-    ...(params.opts.json ? { terminalLinks: false } : {}),
+    ...(params.json ? { terminalLinks: false } : {}),
     info: (msg: string) => {
-      if (!params.opts.json) {
-        defaultRuntime.log(msg);
+      if (!params.json) {
+        runtime.log(msg);
       }
     },
     warn: (msg: string) => {
-      recordLoggedPluginWarning(msg);
-      recordClawHubTrustNotice(msg);
-      if (!params.opts.json) {
-        defaultRuntime.log(formatPluginUpdateWarning(msg));
+      const plain = stripAnsi(msg);
+      if (
+        plain.includes("ClawHub Security Audit") &&
+        (params.json || plain.includes("Outcome: Review"))
+      ) {
+        clawHubTrustNotices.add(plain);
       }
-    },
-    error: (msg: string) => {
-      if (!params.opts.json) {
-        defaultRuntime.log(theme.error(msg));
+      if (plain.includes("ClawHub") && plain.includes("╭─")) {
+        logPluginWarning(msg);
       }
     },
   };
 
-  if (!params.opts.json) {
-    defaultRuntime.log("");
-    defaultRuntime.log(theme.heading("Updating plugins..."));
+  if (!params.json) {
+    runtime.log("");
+    runtime.log(theme.heading("Updating plugins..."));
   }
 
-  const warnings: PostUpdatePluginWarning[] = [];
-  const clawHubRiskAcknowledgementOptions = resolveUpdateClawHubRiskAcknowledgementOptions(
-    params.opts,
-    {
-      renderWarningBeforePrompt: (warning) => {
-        if (hasLoggedPluginWarning(warning)) {
-          return;
-        }
-        recordLoggedPluginWarning(warning);
-        recordClawHubTrustNotice(warning);
-        if (!params.opts.json) {
-          defaultRuntime.log(formatPluginUpdateWarning(warning));
-        }
-      },
-    },
-  );
+  let warnings: PluginUpdateWarning[] = [];
+  const capabilityConsent = params.onCapabilityConsent
+    ? { onCapabilityConsent: params.onCapabilityConsent }
+    : resolvePluginCapabilityConsentCliOptions({
+        acceptCapabilities: params.acceptCapabilities,
+        action: "update",
+        allowPrompt: !params.json,
+        runtime,
+      });
   const pluginInstallRecords =
     params.pluginInstallRecords ?? (await loadInstalledPluginIndexInstallRecords());
-  const pluginUpdateChannel = params.channel;
   const coreVersion = await readPackageVersion(params.root);
-  const syncConfig = withPluginInstallRecords(
-    params.configSnapshot.sourceConfig,
-    pluginInstallRecords,
-  );
-  const syncResult = await syncPluginsForUpdateChannel({
-    config: syncConfig,
-    channel: pluginUpdateChannel,
-    coreVersion: coreVersion ?? undefined,
-    workspaceDir: params.root,
-    externalizedBundledPluginBridges: await listPersistedBundledPluginLocationBridges({
-      workspaceDir: params.root,
-    }),
-    ...clawHubRiskAcknowledgementOptions,
-    logger: pluginLogger,
+  const pluginUpdateChannel = resolveRegistryUpdateChannel({
+    configChannel: params.channel,
+    currentVersion: coreVersion,
   });
-  for (const error of syncResult.summary.errors) {
-    warnings.push(createPostUpdatePluginWarning({ reason: error }));
-  }
-  let pluginConfig = syncResult.config;
   const integrityDrifts: PostCorePluginUpdateResult["integrityDrifts"] = [];
   const pluginUpdateOutcomes: PluginUpdateOutcome[] = [];
-  let pluginsChanged = syncResult.changed || params.configChanged === true;
-  let npmPluginsChanged = false;
-
-  const onPluginIntegrityDrift = async (drift: PluginUpdateIntegrityDriftParams) => {
-    integrityDrifts.push({
-      pluginId: drift.pluginId,
-      spec: drift.spec,
-      expectedIntegrity: drift.expectedIntegrity,
-      actualIntegrity: drift.actualIntegrity,
-      ...(drift.resolvedSpec ? { resolvedSpec: drift.resolvedSpec } : {}),
-      ...(drift.resolvedVersion ? { resolvedVersion: drift.resolvedVersion } : {}),
-      action: "aborted",
-    });
-    if (!params.opts.json) {
-      const specLabel = drift.resolvedSpec ?? drift.spec;
-      defaultRuntime.log(
-        theme.warn(
-          `Integrity drift detected for "${drift.pluginId}" (${specLabel})` +
-            `\nExpected: ${drift.expectedIntegrity}` +
-            `\nActual:   ${drift.actualIntegrity}` +
-            "\nPlugin update aborted. Reinstall the plugin only if you trust the new artifact.",
-        ),
-      );
-    }
-    return false;
-  };
-
-  const collectMissingPayloadWarnings = async (
-    records: Record<string, PluginInstallRecord>,
-  ): Promise<readonly string[]> => {
-    const missing = await collectMissingPluginInstallPayloads({
-      records,
-      config: pluginConfig,
-      skipDisabledPlugins: true,
-      syncOfficialPluginInstalls: true,
-    });
-    if (missing.length === 0) {
-      return [];
-    }
-    const missingIds = missing.map((entry) => entry.pluginId);
-    for (const entry of missing) {
-      const warning = createPostUpdatePluginWarning({
-        pluginId: entry.pluginId,
-        reason: `Plugin install payload missing after update: ${formatMissingPluginPayloadReason(entry)}.`,
+  const collectPluginOutcome = (
+    outcome: PluginUpdateOutcome,
+    phase: "cohort" | "convergence" = "cohort",
+  ) => {
+    const fromCohort = phase === "cohort";
+    if (fromCohort && outcome.status === "skipped" && outcome.code === "plugin-operator-managed") {
+      warnings.push({
+        pluginId: outcome.pluginId,
+        source: outcome.rootDir,
+        reason: outcome.code,
+        message: outcome.message,
+        guidance: outcome.guidance,
       });
-      warnings.push(warning);
-      pluginUpdateOutcomes.push({
-        pluginId: entry.pluginId,
-        status: "error",
-        message: warning.message,
-      });
-      if (!params.opts.json) {
-        defaultRuntime.log(theme.warn(warning.message));
-      }
     }
-    const repairResult = await updateNpmInstalledPlugins({
-      config: pluginConfig,
-      pluginIds: missingIds,
-      timeoutMs: params.timeoutMs,
-      updateChannel: pluginUpdateChannel,
-      coreVersion: coreVersion ?? undefined,
-      skipDisabledPlugins: true,
-      syncOfficialPluginInstalls: true,
-      disableOnFailure: true,
-      logger: pluginLogger,
-      onIntegrityDrift: onPluginIntegrityDrift,
-      ...clawHubRiskAcknowledgementOptions,
-    });
-    pluginConfig = repairResult.config;
-    pluginsChanged ||= repairResult.changed;
-    npmPluginsChanged ||= repairResult.changed;
-    pluginUpdateOutcomes.push(...repairResult.outcomes);
-    return missingIds;
-  };
-
-  const missingPayloadIdSet = new Set(await collectMissingPayloadWarnings(pluginInstallRecords));
-
-  const npmResult = await updateNpmInstalledPlugins({
-    config: pluginConfig,
-    timeoutMs: params.timeoutMs,
-    updateChannel: pluginUpdateChannel,
-    coreVersion: coreVersion ?? undefined,
-    skipIds: resolvePostSyncPluginUpdateSkipIds({
-      switchedToClawHub: syncResult.summary.switchedToClawHub,
-      switchedToNpm: syncResult.summary.switchedToNpm,
-      repairedMissingPayloadIds: missingPayloadIdSet,
-    }),
-    skipDisabledPlugins: true,
-    syncOfficialPluginInstalls: true,
-    disableOnFailure: true,
-    logger: pluginLogger,
-    onIntegrityDrift: onPluginIntegrityDrift,
-    ...clawHubRiskAcknowledgementOptions,
-  });
-  pluginConfig = npmResult.config;
-  pluginsChanged ||= npmResult.changed;
-  npmPluginsChanged ||= npmResult.changed;
-  for (const rawOutcome of npmResult.outcomes) {
+    pluginUpdateOutcomes.push(outcome);
+    if (outcome.status !== "error" && !isActionableSkippedPostUpdateOutcome(outcome)) {
+      return;
+    }
     const includeWarningInReason =
-      params.opts.json || !rawOutcome.warning || !hasLoggedPluginWarning(rawOutcome.warning);
-    const guided = createGuidedPostUpdatePluginOutcome(rawOutcome, { includeWarningInReason });
-    pluginUpdateOutcomes.push(guided.outcome);
-    if (guided.warning) {
-      warnings.push(guided.warning);
+      fromCohort &&
+      (params.json || !outcome.warning || !loggedPluginWarnings.has(stripAnsi(outcome.warning)));
+    const warning = createPluginUpdateWarning({
+      ...(!fromCohort || (outcome.pluginId && outcome.pluginId !== "unknown")
+        ? { pluginId: outcome.pluginId }
+        : {}),
+      reason:
+        outcome.warning && includeWarningInReason
+          ? `${outcome.warning}\n${outcome.message}`
+          : outcome.message,
+    });
+    if (fromCohort || !warnings.some((entry) => entry.pluginId === warning.pluginId)) {
+      warnings.push(warning);
+    }
+  };
+  const collectMissingPayloadOutcome = (entry: MissingPluginInstallPayload) => {
+    const warning = createPluginUpdateWarning({
+      pluginId: entry.pluginId,
+      reason: `Plugin install payload missing after update: ${formatMissingPluginPayloadReason(entry)}.`,
+      kind: "load",
+    });
+    warnings.push(warning);
+    pluginUpdateOutcomes.push({
+      pluginId: entry.pluginId,
+      status: "error",
+      message: warning.message,
+    });
+  };
+
+  const externalizedBundledPluginBridges = await listPersistedBundledPluginLocationBridges({
+    workspaceDir: params.root,
+  });
+  params.assertCurrent?.();
+  const cohort = await convergePluginReleaseCohort({
+    config: withPluginInstallRecords(params.configSnapshot.sourceConfig, pluginInstallRecords),
+    channel: pluginUpdateChannel,
+    coreVersion: coreVersion ?? undefined,
+    versionBoundPluginIds: VERSION_BOUND_RUNTIME_PLUGIN_IDS,
+    timeoutMs: params.timeoutMs,
+    workTimeoutMs: params.workTimeoutMs,
+    workspaceDir: params.root,
+    externalizedBundledPluginBridges,
+    beforePersistentEffect: params.assertCurrent,
+    logger: pluginLogger,
+    onIntegrityDrift: async (drift) => {
+      integrityDrifts.push({
+        pluginId: drift.pluginId,
+        spec: drift.spec,
+        expectedIntegrity: drift.expectedIntegrity,
+        actualIntegrity: drift.actualIntegrity,
+        ...(drift.resolvedSpec ? { resolvedSpec: drift.resolvedSpec } : {}),
+        ...(drift.resolvedVersion ? { resolvedVersion: drift.resolvedVersion } : {}),
+        action: "aborted",
+      });
+      return false;
+    },
+    ...capabilityConsent,
+  });
+  params.assertCurrent?.();
+  for (const error of cohort.sync.summary.errors) {
+    collectPluginOutcome({ ...error, status: "error" });
+  }
+  for (const warning of cohort.sync.summary.warnings) {
+    getLogger().warn(warning);
+  }
+  let pluginConfig = cohort.config;
+  let pluginsChanged = cohort.changed || params.configChanged === true;
+  for (const entry of cohort.missingPayloads) {
+    collectMissingPayloadOutcome(entry);
+  }
+  pluginUpdateOutcomes.push(...cohort.repairOutcomes);
+  for (const rawOutcome of cohort.updateOutcomes) {
+    collectPluginOutcome(rawOutcome);
+  }
+
+  for (const entry of cohort.remainingMissingPayloads) {
+    if (!cohort.repairedMissingPayloadIds.has(entry.pluginId)) {
+      collectMissingPayloadOutcome(entry);
     }
   }
 
-  const remainingMissingPayloads = await collectMissingPluginInstallPayloads({
-    records: pluginConfig.plugins?.installs ?? {},
-    config: pluginConfig,
-    skipDisabledPlugins: true,
-    syncOfficialPluginInstalls: true,
-  });
-  pluginUpdateOutcomes.push(
-    ...remainingMissingPayloads
-      .filter((entry) => !missingPayloadIdSet.has(entry.pluginId))
-      .map((entry): PluginUpdateOutcome => {
-        const warning = createPostUpdatePluginWarning({
-          pluginId: entry.pluginId,
-          reason: `Plugin install payload missing after update: ${formatMissingPluginPayloadReason(entry)}.`,
-        });
-        warnings.push(warning);
-        return {
-          pluginId: entry.pluginId,
-          status: "error",
-          message: warning.message,
-        };
-      }),
-  );
-
-  // Mandatory post-core convergence: repair any configured plugin install
-  // records that are still missing payloads on disk and run a static smoke
-  // check that the repaired payloads are at least loadable. Failures here
-  // escalate `status` to `"error"`, which the caller maps to exit 1 BEFORE
-  // restarting the gateway. See `post-core-plugin-convergence.ts`.
-  //
-  // We pass `baselineInstallRecords: pluginConfig.plugins?.installs ?? {}`
-  // so that convergence layers its mutations on top of the latest
-  // *in-memory* sync/npm record state — not on the stale pre-update disk
-  // snapshot. The merged map convergence returns is the single source of
-  // truth for the subsequent commit block.
+  // Convergence checks activation before restart. Seed it from the current
+  // sync/npm records so repair cannot overwrite them with an older disk snapshot.
   const convergenceBaselineRecords = pluginConfig.plugins?.installs ?? {};
+  // Keep the observed records stable if convergence replaces them.
+  const probedRecords = new Map(
+    cohort.updateOutcomes.map(({ pluginId }) => {
+      const record = convergenceBaselineRecords[pluginId];
+      return [pluginId, record ? { ...record } : undefined];
+    }),
+  );
+  const convergenceEnv = resolvePostCoreConvergenceEnv(process.env, coreVersion ?? undefined);
   const convergence = await runPostCorePluginConvergence({
     cfg: pluginConfig,
-    env: process.env,
+    timeoutMs: params.timeoutMs,
+    workTimeoutMs: params.workTimeoutMs,
+    configPersistence: "caller",
+    env: convergenceEnv,
+    compatibilityHostVersion: coreVersion ?? undefined,
     baselineInstallRecords: convergenceBaselineRecords,
-    ...clawHubRiskAcknowledgementOptions,
+    beforePersistentEffect: params.assertCurrent,
+    ...capabilityConsent,
   });
+  params.assertCurrent?.();
+  const repairedPluginIds = new Set([
+    ...[...cohort.repairOutcomes, ...cohort.updateOutcomes]
+      .filter((outcome) => outcome.status === "updated" || outcome.status === "unchanged")
+      .map((outcome) => outcome.pluginId),
+    ...(convergence.repairedPluginIds ?? []),
+  ]);
+  warnings = warnings.filter(
+    (warning) => !warning.pluginId || !repairedPluginIds.has(warning.pluginId),
+  );
+  for (const pluginId of convergence.repairedPluginIds ?? []) {
+    const before = convergenceBaselineRecords[pluginId];
+    const after = convergence.installRecords[pluginId];
+    pluginUpdateOutcomes.push({
+      pluginId,
+      status: "updated",
+      currentVersion: before?.resolvedVersion ?? before?.version,
+      nextVersion: after?.resolvedVersion ?? after?.version,
+      message: `Repaired plugin "${pluginId}".`,
+    });
+  }
   for (const change of convergence.changes) {
-    if (!params.opts.json) {
-      defaultRuntime.log(theme.muted(change));
+    if (!params.json) {
+      runtime.log(theme.muted(change));
     }
   }
-  const convergenceFolded = convergenceWarningsToOutcomes(convergence);
-  for (const warning of convergenceFolded.warnings) {
-    warnings.push(warning);
-    if (!params.opts.json) {
-      defaultRuntime.log(theme.warn(warning.message));
-      for (const guidance of warning.guidance) {
-        defaultRuntime.log(theme.muted(`  ${guidance}`));
-      }
+  const convergenceWarnings = convergence.warnings.map((warning) =>
+    createPluginUpdateWarning({
+      ...warning,
+      kind: warning.kind === "repair" ? "update" : warning.kind,
+    }),
+  );
+  const convergenceOutcomes: PluginUpdateOutcome[] = [
+    ...(convergence.outcomes ?? []),
+    ...convergence.warnings.flatMap((warning): PluginUpdateOutcome[] =>
+      warning.pluginId
+        ? [{ pluginId: warning.pluginId, status: "error", message: warning.message }]
+        : [],
+    ),
+  ];
+  warnings.push(...convergenceWarnings, ...(convergence.notices ?? []));
+  for (const outcome of convergenceOutcomes) {
+    collectPluginOutcome(outcome, "convergence");
+  }
+
+  // Repair already persisted this authoritative map; the commit below must not
+  // restore the pre-convergence records and discard successful repairs.
+  pluginConfig = withPluginInstallRecords(convergence.config, convergence.installRecords);
+  // Report retention only while the probed install survives convergence.
+  for (const outcome of cohort.updateOutcomes) {
+    const record = convergence.installRecords[outcome.pluginId];
+    const probed = probedRecords.get(outcome.pluginId);
+    if (
+      outcome.status !== "unchanged" ||
+      !outcome.currentVersion ||
+      !record ||
+      record.source !== probed?.source ||
+      record.spec !== probed.spec
+    ) {
+      continue;
+    }
+    const unavailable = outcome.code === "plugin-target-unavailable";
+    if (
+      unavailable
+        ? record.installPath !== probed?.installPath ||
+          record.version !== probed?.version ||
+          record.resolvedVersion !== probed?.resolvedVersion
+        : record.source !== "npm" ||
+          !outcome.nextVersion ||
+          comparePackageUpdateVersions(outcome.nextVersion, outcome.currentVersion) <= 0 ||
+          (record.resolvedVersion ?? record.version) !== outcome.currentVersion ||
+          resolveExactNpmSpecVersion(record.spec) !== outcome.currentVersion ||
+          !isTrustedOfficialPluginInstallRecord({
+            pluginId: outcome.pluginId,
+            packageName: resolveNpmSpecPackageName(record.spec),
+            record,
+          })
+    ) {
+      continue;
+    }
+    const message = unavailable
+      ? outcome.message
+      : `Plugin update retained an official plugin pin: ${outcome.message}`;
+    warnings.push({
+      pluginId: outcome.pluginId,
+      reason: unavailable ? "plugin-target-unavailable" : "retained-plugin-pin",
+      message,
+      guidance: unavailable
+        ? [formatCliCommand(`openclaw plugins update ${outcome.pluginId}`)]
+        : ["Keep the pin if intentional; replacing it is an explicit operator choice."],
+    });
+    if (unavailable) {
+      getLogger().warn(message);
     }
   }
-  pluginUpdateOutcomes.push(...convergenceFolded.outcomes);
-  const convergenceErrored = convergenceFolded.errored;
-  // Reseed `pluginConfig` from convergence's authoritative post-merge
-  // record map. This is unconditional because convergence is what
-  // reconciled the baseline (sync/npm in-memory state) with disk and any
-  // new repairs, and convergence already persisted that exact map. If
-  // we did not adopt it here, the commit block below would overwrite the
-  // disk with `convergenceBaselineRecords` (no repairs included).
-  pluginConfig = withPluginInstallRecords(pluginConfig, convergence.installRecords);
-  if (convergence.changes.length > 0) {
-    pluginsChanged = true;
-  }
+  pluginsChanged ||= convergence.changes.length > 0 || convergence.configChanges.length > 0;
 
   if (pluginsChanged) {
     const nextInstallRecords = pluginConfig.plugins?.installs ?? {};
+    // Old npm generations remain discoverable until final commit retires them.
+    // Same-run reference moves use updater facts, not durable-recovery absence checks.
+    const appliedPluginIdMigrations = Object.fromEntries(
+      Object.entries(resolvePluginInstallOwnerMigrations(cohort) ?? {}).filter(
+        ([fromId, toId]) =>
+          !Object.hasOwn(nextInstallRecords, fromId) && Object.hasOwn(nextInstallRecords, toId),
+      ),
+    );
+    const installedPluginIdRecovery = convergence.installedPluginIdRecovery;
     let nextConfig = withoutPluginInstallRecords(pluginConfig);
+    if (referenceSource) {
+      referenceSource.installedPluginIdRecovery = installedPluginIdRecovery;
+      nextConfig = restoreDoctorConfigEnvRefs(
+        nextConfig,
+        referenceSource,
+        params.configWriteOptions.explicitSetPaths,
+        { appliedPluginIdMigrations },
+      );
+    }
     if (params.restoredAuthoredChannels !== undefined) {
       nextConfig = {
         ...nextConfig,
         channels: structuredClone(params.restoredAuthoredChannels) as OpenClawConfig["channels"],
       };
     }
+    // Install-record and authored-channel rewrites create new config identities.
+    // Keep the same deferred generation that admitted the original source snapshot.
+    setDeferredPluginMigrationConfigFacts(
+      nextConfig,
+      getDeferredPluginMigrationConfigFacts(params.configSnapshot.sourceConfig),
+    );
     // Installed plugin metadata can own migrations that this process has not loaded yet.
     // Finalization runs fresh doctor plus strict validation before the update can complete.
+    const guardedWriteOptions = withUpdateConfigWriteAuthority(
+      params.configWriteOptions,
+      params.assertCurrent,
+    );
+    const assertCurrent = () => {
+      guardedWriteOptions.assertCurrent?.();
+      lease.assertOwned();
+    };
+    const assertRecoveryCurrent = () =>
+      assertInstalledPluginIdRecoveryCurrent(
+        params.configSnapshot.sourceConfig,
+        installedPluginIdRecovery,
+        convergenceEnv,
+      );
+    assertCurrent();
+    await assertRecoveryCurrent();
+    assertCurrent();
     await commitPluginInstallRecordsWithConfig({
+      beforePersistentEffect: assertCurrent,
       previousInstallRecords: pluginInstallRecords,
       nextInstallRecords,
       nextConfig,
       baseHash: params.configSnapshot.hash,
-      writeOptions: { skipPluginValidation: true },
+      writeOptions: {
+        ...guardedWriteOptions,
+        observe: false,
+        assertCurrent,
+        beforeCommit: async () => {
+          assertCurrent();
+          await params.configWriteOptions.beforeCommit?.();
+          assertCurrent();
+          await assertRecoveryCurrent();
+          assertCurrent();
+        },
+        inputBase: "source",
+        skipPluginValidation: true,
+      },
     });
+    if (!params.json) {
+      for (const change of convergence.configChanges) {
+        runtime.log(theme.muted(change));
+      }
+    }
+    params.assertCurrent?.();
     await refreshPluginRegistryAfterConfigMutation({
-      config: nextConfig,
+      configPath: params.configSnapshot.path,
       reason: "source-changed",
       workspaceDir: params.root,
       installRecords: nextInstallRecords,
       invalidateRuntimeCache: false,
       logger: pluginLogger,
+      lease,
     });
+    params.assertCurrent?.();
   }
 
   for (const notice of clawHubTrustNotices) {
@@ -506,98 +496,97 @@ export async function updatePluginsAfterCoreUpdate(params: {
     });
   }
 
-  if (params.opts.json) {
-    return {
-      status: convergenceErrored ? "error" : warnings.length > 0 ? "warning" : "ok",
-      changed: pluginsChanged,
-      warnings,
-      sync: {
-        changed: syncResult.changed,
-        switchedToBundled: syncResult.summary.switchedToBundled,
-        switchedToNpm: syncResult.summary.switchedToNpm,
-        warnings: syncResult.summary.warnings,
-        errors: syncResult.summary.errors,
-      },
-      npm: {
-        changed: npmPluginsChanged,
-        outcomes: pluginUpdateOutcomes,
-      },
-      integrityDrifts,
-    };
-  }
-
-  const summarizeList = (list: string[]) => {
-    if (list.length <= 6) {
-      return list.join(", ");
-    }
-    return `${list.slice(0, 6).join(", ")} +${list.length - 6} more`;
-  };
-
-  if (syncResult.summary.switchedToBundled.length > 0) {
-    defaultRuntime.log(
-      theme.muted(
-        `Switched to bundled plugins: ${summarizeList(syncResult.summary.switchedToBundled)}.`,
-      ),
-    );
-  }
-  if (syncResult.summary.switchedToNpm.length > 0) {
-    defaultRuntime.log(
-      theme.muted(`Restored npm plugins: ${summarizeList(syncResult.summary.switchedToNpm)}.`),
-    );
-  }
-  for (const warning of syncResult.summary.warnings) {
-    if (!hasLoggedPluginWarning(warning)) {
-      defaultRuntime.log(formatPluginUpdateWarning(warning));
-    }
-  }
-  for (const error of syncResult.summary.errors) {
-    defaultRuntime.log(theme.warn(createPostUpdatePluginWarning({ reason: error }).message));
-  }
-
-  const updated = pluginUpdateOutcomes.filter((entry) => entry.status === "updated").length;
-  const unchanged = pluginUpdateOutcomes.filter((entry) => entry.status === "unchanged").length;
-  const failed = pluginUpdateOutcomes.filter((entry) => entry.status === "error").length;
-  const skipped = pluginUpdateOutcomes.filter((entry) => entry.status === "skipped").length;
-
-  if (pluginUpdateOutcomes.length === 0) {
-    defaultRuntime.log(theme.muted("No plugin updates needed."));
-  } else {
-    const parts = [`${updated} updated`, `${unchanged} unchanged`];
-    if (failed > 0) {
-      parts.push(`${failed} failed`);
-    }
-    if (skipped > 0) {
-      parts.push(`${skipped} skipped`);
-    }
-    defaultRuntime.log(theme.muted(`npm plugins: ${parts.join(", ")}.`));
-  }
-
-  for (const message of collectPluginChannelFallbackMessages(pluginUpdateOutcomes)) {
-    defaultRuntime.log(theme.warn(message));
-  }
-
-  for (const outcome of pluginUpdateOutcomes) {
-    if (outcome.status !== "error" && !isActionableSkippedPostUpdateOutcome(outcome)) {
-      continue;
-    }
-    defaultRuntime.log(theme.warn(outcome.message));
-  }
-
-  return {
-    status: convergenceErrored ? "error" : warnings.length > 0 ? "warning" : "ok",
+  const assessment = assessPluginUpdate({
+    smokeFailures: convergence.smokeFailures,
+    // A failed cohort repair can disable a plugin before active smoke verification.
+    // Keep that unavailable capability visible; prior failures that were re-enabled
+    // by a successful repair remain diagnostic history only.
+    hasDisabledPlugin: pluginUpdateOutcomes.some(
+      (outcome) =>
+        isDisabledAfterFailureOutcome(outcome) &&
+        pluginConfig.plugins?.entries?.[outcome.pluginId]?.enabled === false,
+    ),
+    errored: convergence.errored,
+    outcomes: pluginUpdateOutcomes,
+    integrityDrift: integrityDrifts.length > 0,
+  });
+  // Keep the established caller status contract. Assessment is separate evidence;
+  // consuming it to change restart/finalization requires a qualified caller cutover.
+  const finalPluginOutcomes = [
+    ...new Map(pluginUpdateOutcomes.map((outcome) => [outcome.pluginId, outcome])).values(),
+  ];
+  const status =
+    warnings.length > 0 ||
+    cohort.sync.summary.warnings.length > 0 ||
+    finalPluginOutcomes.some((outcome) => outcome.status === "error")
+      ? "warning"
+      : "ok";
+  const result: ProducedPluginUpdateResult = {
+    status,
+    assessment,
     changed: pluginsChanged,
     warnings,
     sync: {
-      changed: syncResult.changed,
-      switchedToBundled: syncResult.summary.switchedToBundled,
-      switchedToNpm: syncResult.summary.switchedToNpm,
-      warnings: syncResult.summary.warnings,
-      errors: syncResult.summary.errors,
+      changed: cohort.sync.changed,
+      switchedToBundled: cohort.sync.summary.switchedToBundled,
+      switchedToNpm: cohort.sync.summary.switchedToNpm,
+      warnings: cohort.sync.summary.warnings,
+      errors: cohort.sync.summary.errors.map((error) => error.message),
     },
     npm: {
-      changed: npmPluginsChanged,
+      changed: cohort.npmChanged,
       outcomes: pluginUpdateOutcomes,
     },
     integrityDrifts,
   };
+
+  if (params.json) {
+    return result;
+  }
+
+  const summarizeList = (list: string[]) =>
+    list.length <= 6 ? list.join(", ") : `${list.slice(0, 6).join(", ")} +${list.length - 6} more`;
+
+  for (const [label, plugins] of [
+    ["Switched to bundled plugins", cohort.sync.summary.switchedToBundled],
+    ["Restored plugins", cohort.sync.summary.switchedToNpm],
+  ] as const) {
+    if (plugins.length > 0) {
+      runtime.log(theme.muted(`${label}: ${summarizeList(plugins)}.`));
+    }
+  }
+  for (const warning of cohort.sync.summary.warnings) {
+    logPluginWarning(warning);
+  }
+  const updated = finalPluginOutcomes.filter((entry) => entry.status === "updated").length;
+  const unchanged = finalPluginOutcomes.filter((entry) => entry.status === "unchanged").length;
+  const failed = finalPluginOutcomes.filter((entry) => entry.status === "error").length;
+  const skipped = finalPluginOutcomes.filter((entry) => entry.status === "skipped").length;
+
+  if (pluginUpdateOutcomes.length === 0 && warnings.length === 0) {
+    runtime.log(theme.muted("No plugin updates needed."));
+  } else if (pluginUpdateOutcomes.length > 0) {
+    const parts = [`${updated} updated`, `${unchanged} unchanged`];
+    if (failed > 0) {
+      parts.push(`${failed} to retry`);
+    }
+    if (skipped > 0) {
+      parts.push(`${skipped} skipped`);
+    }
+    runtime.log(theme.muted(`Plugin updates: ${parts.join(", ")}.`));
+  }
+
+  for (const message of uniqueStrings(
+    pluginUpdateOutcomes.flatMap(({ channelFallback }) =>
+      channelFallback?.message ? [channelFallback.message] : [],
+    ),
+  )) {
+    runtime.log(theme.warn(message));
+  }
+
+  for (const warning of warnings) {
+    logPluginWarning(warning.message);
+  }
+
+  return result;
 }

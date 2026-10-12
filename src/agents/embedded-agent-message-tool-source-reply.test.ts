@@ -79,9 +79,34 @@ describe("messaging delivery action classification", () => {
 });
 
 describe("isDeliveredMessagingToolResult", () => {
+  it.each(["sessions_send", "conversations_list", "exec"])(
+    "does not infer external delivery for %s from plugin-shaped success",
+    (toolName) => {
+      expect(
+        isDeliveredMessagingToolResult({
+          toolName,
+          args: { action: "send" },
+          result: { details: { status: "sent", messageId: "operation-1" } },
+        }),
+      ).toBe(false);
+    },
+  );
+
+  it.each(["queued", "suppressed", "unknown"])(
+    "keeps a core %s receipt authoritative over plugin-shaped hook evidence",
+    (status) => {
+      expect(
+        isDeliveredMessagingToolResult({
+          toolName: "conversations_send",
+          result: { details: { status, messageId: "prepared-id" } },
+          hookResult: { details: { status: "sent", messageId: "hook-id" } },
+        }),
+      ).toBe(false);
+    },
+  );
+
   it.each([
     ["sent status", { deliveryStatus: "sent" }, true],
-    ["gateway id", { result: { messageId: "msg-1" } }, true],
     ["unknown id", { result: { messageId: "unknown" } }, true],
     ["skipped id", { result: { messageId: "skipped" } }, false],
     ["suppressed id", { result: { messageId: "suppressed" } }, false],
@@ -145,6 +170,24 @@ describe("isDeliveredMessagingToolResult", () => {
       false,
     ],
     ["provider no-op marker", { ok: true, payload: { ok: true, changed: false } }, false],
+    [
+      "provider failure with an attempt id",
+      { ok: true, payload: { ok: false, error: "send failed", messageId: "attempt-id" } },
+      false,
+    ],
+    [
+      "provider failure after partial delivery",
+      {
+        ok: true,
+        payload: {
+          ok: false,
+          error: "second attachment failed",
+          messageId: "partial-receipt-1",
+          sentBeforeError: true,
+        },
+      },
+      true,
+    ],
     ["missing provider payload", { ok: true }, false],
     ["failed entry after partial delivery", { ok: false, sentBeforeError: true as const }, true],
   ] satisfies Array<[string, Record<string, unknown>, boolean]>)(
@@ -261,6 +304,12 @@ describe("isDeliveredMessagingToolResult", () => {
               ok: true,
               payload: { ok: true, messageId: "gateway-message-1" },
             },
+            {
+              channel: "googlechat",
+              to: "space-2",
+              ok: false,
+              payload: { ok: false, error: "send failed" },
+            },
           ],
         },
       }),
@@ -288,16 +337,20 @@ describe("isDeliveredMessagingToolResult", () => {
     ).toBe(true);
   });
 
-  it("rejects successful plugin broadcast wrappers around suppressed sends", () => {
+  it.each([
+    ["suppressed", false],
+    ["dry_run", false],
+    ["failed", false],
+    ["sent", true],
+    ["partial_failed", true],
+  ] as const)("maps plugin deliveryStatus %s to delivered=%s", (deliveryStatus, delivered) => {
     expect(
       isDeliveredMessagingToolResult({
         toolName: "message",
-        args: { action: "broadcast" },
-        result: {
-          results: [{ ok: true, payload: { ok: true, status: "suppressed" } }],
-        },
+        args: { action: "send", to: "channel-1" },
+        result: { ok: true, deliveryStatus },
       }),
-    ).toBe(false);
+    ).toBe(delivered);
   });
 
   it("rejects non-delivery message id sentinels", () => {

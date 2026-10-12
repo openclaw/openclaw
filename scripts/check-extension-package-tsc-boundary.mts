@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 
 // Verifies extension packages compile through their package-local TypeScript boundary.
-import { spawn, spawnSync } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import type { EventEmitter } from "node:events";
 import {
+  appendFileSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -12,22 +13,40 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { createRequire } from "node:module";
 import os from "node:os";
-import path, { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import pMap from "p-map";
 import {
   MAX_TIMER_TIMEOUT_MS,
   resolveTimerTimeoutMs,
 } from "../packages/normalization-core/src/number-coercion.ts";
+import { collectFilesSync } from "./check-file-utils.ts";
+import { appendBoundedTail, formatBoundedTail } from "./lib/bounded-output-tail.mjs";
+import {
+  portableRelativePath,
+  readArtifactRecord,
+  writeArtifactRecord,
+} from "./lib/build-artifact-cache.mts";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
+import {
+  distArtifactEntryArgs,
+  withDistArtifactOwnership,
+} from "./lib/dist-artifact-ownership.mts";
 import { toErrorObject } from "./lib/error-format.mts";
+import { BOUNDARY_CACHE_ROOT, BoundaryInputSnapshot } from "./lib/extension-boundary-inputs.mts";
+import { prepareExtensionBoundaryProjects } from "./lib/extension-boundary-projects.mts";
+import {
+  formatBoundarySelection,
+  resolveExtensionBoundarySelection,
+} from "./lib/extension-boundary-selection.mts";
+import { classifyBundledExtensionSourcePath } from "./lib/extension-source-classifier.mts";
+import {
+  runManagedCommand,
+  signalExitCode,
+  terminateManagedChild,
+} from "./lib/managed-child-process.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
-import {
-  forwardSignalToVitestProcessGroup,
-  installVitestProcessGroupCleanup,
-  shouldUseDetachedVitestProcessGroup,
-} from "./vitest-process-group.mts";
 
 type BoundaryMode = "all" | "compile" | "canary";
 type StepOutputCapture = { text: string; truncatedChars: number };
@@ -44,11 +63,6 @@ type BoundarySummaryParams = {
   canaryElapsedMs?: number;
   elapsedMs?: number;
 };
-type CompileFreshnessParams = {
-  rootDir?: string;
-  extensionNewestInputMtimeMs?: number;
-  sharedNewestInputMtimeMs?: number;
-};
 type StepFailureParams = {
   stdout?: string;
   stderr?: string;
@@ -57,64 +71,29 @@ type StepFailureParams = {
   note?: string;
 };
 type StepResult = { stdout: string; stderr: string; elapsedMs: number };
-type StepChildPipe = {
-  setEncoding(encoding: BufferEncoding): unknown;
-  on(event: "data", listener: (chunk: unknown) => void): unknown;
-};
-type StepChild = {
-  pid?: number;
-  stdout: StepChildPipe | null;
-  stderr: StepChildPipe | null;
-  kill(signal?: NodeJS.Signals | number): boolean;
-  on(event: "error", listener: (error: Error) => void): unknown;
-  on(event: "close", listener: (code: number | null) => void): unknown;
-};
-type StepSpawnOptions = NonNullable<Parameters<typeof spawn>[2]> & {
-  stdio: ["ignore", "pipe", "pipe"];
-};
-type StepSpawn = (command: string, args: string[], options: StepSpawnOptions) => StepChild;
 type RunNodeStepParams = {
+  env?: NodeJS.ProcessEnv;
   abortController?: AbortController;
-  killProcess?: (pid: number, signal?: NodeJS.Signals | number) => boolean;
   onFailure?: (error: ReturnType<typeof attachStepFailureMetadata>) => void;
-  platform?: NodeJS.Platform;
-  spawnImpl?: StepSpawn;
 };
 type BoundaryStep = {
   label: string;
   args: string[];
   timeoutMs: number;
+  env?: NodeJS.ProcessEnv;
   onStart?: () => void;
   onSuccess?: (result: StepResult) => void;
 };
 type BoundaryCheckParams = { rootDir?: string; processObject?: Pick<EventEmitter, "on" | "off"> };
-type VitestProcessSignal = Exclude<
-  Parameters<typeof forwardSignalToVitestProcessGroup>[0]["signal"],
-  0
->;
-
-const require = createRequire(import.meta.url);
 const repoRoot = resolveRepoRoot(import.meta.url);
-const tscBin = require.resolve("typescript/bin/tsc");
-const nativePreviewPackageJsonPath = require.resolve("@typescript/native-preview/package.json");
-const nativePreviewPackageJson = JSON.parse(readFileSync(nativePreviewPackageJsonPath, "utf8"));
-const nativePreviewBin = nativePreviewPackageJson.bin?.tsgo;
-if (typeof nativePreviewBin !== "string") {
-  throw new Error("@typescript/native-preview does not declare the tsgo binary");
-}
-const tsgoBin = resolve(dirname(nativePreviewPackageJsonPath), nativePreviewBin);
-const prepareBoundaryArtifactsArgs = [
-  "--import",
-  "tsx",
+const compilerWorker = resolve(repoRoot, "scripts/compile-extension-boundary.mts");
+const prepareBoundaryArtifactsArgs = distArtifactEntryArgs(
   resolve(repoRoot, "scripts/prepare-extension-package-boundary-artifacts.mts"),
-];
+);
 const extensionPackageBoundaryBaseConfig = "../tsconfig.package-boundary.base.json";
 const FAILURE_OUTPUT_TAIL_LINES = 40;
 const STEP_OUTPUT_MAX_CHARS = 256 * 1024;
-const STEP_PROCESS_GROUP_EXIT_POLL_MS = 25;
-const STEP_POST_FORCE_KILL_WAIT_MS = 1_000;
 const SLOW_COMPILE_SUMMARY_LIMIT = 10;
-const COMPILE_INPUT_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".json"]);
 const ROOTDIR_BOUNDARY_CANARY_IMPORT_PATH =
   "../../src/plugins/contracts/rootdir-boundary-canary.ts";
 const ROOTDIR_BOUNDARY_CANARY_OUTPUT_HINT = "src/plugins/contracts/rootdir-boundary-canary.ts";
@@ -129,21 +108,17 @@ function parseMode(argv: string[]): BoundaryMode {
 }
 
 /**
- * Resolves the compile worker count from CLI/env/default settings.
+ * Reserve at least two CPU slots per compiler, including explicit CI requests.
  */
 export function resolveCompileConcurrency(
   env: NodeJS.ProcessEnv = process.env,
   availableParallelism = os.availableParallelism(),
 ) {
   const raw = env.OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY?.trim();
-  if (raw) {
-    return parsePositiveInt(raw, "OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY");
-  }
-  return Math.max(1, Math.min(6, Math.floor(availableParallelism / 2)));
-}
-
-function readJsonFile(filePath: string): unknown {
-  return JSON.parse(readFileSync(filePath, "utf8"));
+  const capacity = Math.max(1, Math.floor(availableParallelism / 2));
+  return raw
+    ? Math.min(capacity, parsePositiveInt(raw, "OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY"))
+    : capacity;
 }
 
 function summarizeOutputSection(name: string, output: string) {
@@ -176,33 +151,6 @@ function formatFailureFooter(params: StepFailureParams = {}) {
   return footerLines.join("\n");
 }
 
-function createStepOutputCapture(): StepOutputCapture {
-  return { text: "", truncatedChars: 0 };
-}
-
-/**
- * Appends child-process output while preserving only the diagnostic tail.
- */
-export function appendBoundedStepOutput(
-  buffer: StepOutputCapture,
-  chunk: unknown,
-  maxChars = STEP_OUTPUT_MAX_CHARS,
-) {
-  const nextText = buffer.text + String(chunk);
-  if (nextText.length <= maxChars) {
-    return { text: nextText, truncatedChars: buffer.truncatedChars };
-  }
-  const truncatedChars = buffer.truncatedChars + nextText.length - maxChars;
-  return { text: nextText.slice(-maxChars), truncatedChars };
-}
-
-function formatCapturedStepOutput(buffer: StepOutputCapture) {
-  if (buffer.truncatedChars === 0) {
-    return buffer.text;
-  }
-  return `[output truncated ${buffer.truncatedChars} chars; showing tail]\n${buffer.text}`;
-}
-
 function isPositiveFinite(value: number | undefined): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
@@ -211,9 +159,6 @@ function isPositiveInteger(value: number | undefined): value is number {
   return typeof value === "number" && Number.isInteger(value) && value > 0;
 }
 
-/**
- * Formats the successful boundary compile summary.
- */
 export function formatBoundaryCheckSuccessSummary(params: BoundarySummaryParams = {}) {
   const lines = ["extension package boundary check passed"];
   if (params.mode) {
@@ -228,14 +173,14 @@ export function formatBoundaryCheckSuccessSummary(params: BoundarySummaryParams 
   if (Number.isInteger(params.canaryCount)) {
     lines.push(`canary plugins: ${params.canaryCount}`);
   }
-  if (isPositiveFinite(params.prepElapsedMs)) {
-    lines.push(`prep elapsed: ${params.prepElapsedMs}ms`);
-  }
-  if (isPositiveFinite(params.compileElapsedMs)) {
-    lines.push(`compile elapsed: ${params.compileElapsedMs}ms`);
-  }
-  if (isPositiveFinite(params.canaryElapsedMs)) {
-    lines.push(`canary elapsed: ${params.canaryElapsedMs}ms`);
+  for (const [phase, elapsed] of [
+    ["prep", params.prepElapsedMs],
+    ["compile", params.compileElapsedMs],
+    ["canary", params.canaryElapsedMs],
+  ] as const) {
+    if (isPositiveFinite(elapsed)) {
+      lines.push(`${phase} elapsed: ${elapsed}ms`);
+    }
   }
   if (Number.isFinite(params.elapsedMs)) {
     lines.push(`elapsed: ${params.elapsedMs}ms`);
@@ -243,9 +188,6 @@ export function formatBoundaryCheckSuccessSummary(params: BoundarySummaryParams 
   return `${lines.join("\n")}\n`;
 }
 
-/**
- * Formats skipped compile progress for fresh extension canaries.
- */
 export function formatSkippedCompileProgress(params: SkippedCompileParams = {}) {
   const skippedCount = params.skippedCount ?? 0;
   const totalCount = params.totalCount ?? 0;
@@ -260,9 +202,6 @@ export function formatSkippedCompileProgress(params: SkippedCompileParams = {}) 
   return `skipped ${skippedCount} fresh plugin compiles\n`;
 }
 
-/**
- * Formats slow extension compile diagnostics.
- */
 export function formatSlowCompileSummary(params: SlowCompileParams = {}) {
   const compileTimings = Array.isArray(params.compileTimings) ? params.compileTimings : [];
   if (compileTimings.length === 0) {
@@ -279,9 +218,6 @@ export function formatSlowCompileSummary(params: SlowCompileParams = {}) {
   return `${lines.join("\n")}\n`;
 }
 
-/**
- * Formats a failed boundary-check child process step.
- */
 export function formatStepFailure(label: string, params: StepFailureParams = {}) {
   const stdoutSection = summarizeOutputSection("stdout", params.stdout ?? "");
   const stderrSection = summarizeOutputSection("stderr", params.stderr ?? "");
@@ -301,428 +237,123 @@ function attachStepFailureMetadata(error: Error, label: string, params: StepFail
   });
 }
 
-function collectBundledExtensionIds() {
+function collectOptInExtensionIds() {
   return readdirSync(join(repoRoot, "extensions"), { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
-    .toSorted();
-}
-
-function resolveExtensionTsconfigPath(extensionId: string) {
-  return join(repoRoot, "extensions", extensionId, "tsconfig.json");
-}
-
-function readExtensionTsconfig(extensionId: string) {
-  const config = readJsonFile(resolveExtensionTsconfigPath(extensionId));
-  return config && typeof config === "object" && "extends" in config
-    ? { extends: config.extends }
-    : {};
-}
-
-function collectOptInExtensionIds() {
-  return collectBundledExtensionIds().filter((extensionId) => {
-    const tsconfigPath = resolveExtensionTsconfigPath(extensionId);
-    if (!existsSync(tsconfigPath)) {
-      return false;
-    }
-    return readExtensionTsconfig(extensionId).extends === extensionPackageBoundaryBaseConfig;
-  });
-}
-
-function collectCanaryExtensionIds(extensionIds: string[]) {
-  return [
-    ...new Map(
-      extensionIds.map((extensionId) => [
-        JSON.stringify(readExtensionTsconfig(extensionId)),
-        extensionId,
-      ]),
-    ).values(),
-  ];
-}
-
-function isRelevantCompileInput(filePath: string) {
-  const basename = path.basename(filePath);
-  if (
-    basename === "__rootdir_boundary_canary__.ts" ||
-    basename === "tsconfig.rootdir-canary.json"
-  ) {
-    return false;
-  }
-  if (basename.endsWith(".tsbuildinfo")) {
-    return false;
-  }
-  return COMPILE_INPUT_EXTENSIONS.has(path.extname(filePath));
-}
-
-function collectNewestMtime(
-  entryPath: string,
-  params: { includeFile?: (filePath: string) => boolean; skipDistDirectories?: boolean } = {},
-) {
-  const includeFile = params.includeFile ?? (() => true);
-  const skipDistDirectories = params.skipDistDirectories ?? true;
-  let newestMtimeMs = 0;
-
-  function visit(currentPath: string) {
-    if (!existsSync(currentPath)) {
-      return;
-    }
-    const stats = statSync(currentPath);
-    if (stats.isDirectory()) {
-      const basename = path.basename(currentPath);
-      if ((skipDistDirectories && basename === "dist") || basename === "node_modules") {
-        return;
+    .toSorted()
+    .filter((extensionId) => {
+      const tsconfigPath = join(repoRoot, "extensions", extensionId, "tsconfig.json");
+      if (!existsSync(tsconfigPath)) {
+        return false;
       }
-      for (const child of readdirSync(currentPath)) {
-        visit(path.join(currentPath, child));
-      }
-      return;
-    }
-    if (!includeFile(currentPath)) {
-      return;
-    }
-    newestMtimeMs = Math.max(newestMtimeMs, stats.mtimeMs);
-  }
-
-  visit(entryPath);
-  return newestMtimeMs;
+      const config: unknown = JSON.parse(readFileSync(tsconfigPath, "utf8"));
+      return (
+        config !== null &&
+        typeof config === "object" &&
+        "extends" in config &&
+        config.extends === extensionPackageBoundaryBaseConfig
+      );
+    });
 }
 
-function collectOldestMtime(paths: string[]) {
-  let oldestMtimeMs = Number.POSITIVE_INFINITY;
-
-  for (const entryPath of paths) {
-    if (!existsSync(entryPath)) {
-      return null;
-    }
-    oldestMtimeMs = Math.min(oldestMtimeMs, statSync(entryPath).mtimeMs);
-  }
-
-  return Number.isFinite(oldestMtimeMs) ? oldestMtimeMs : null;
-}
-
-/**
- * Checks whether an extension boundary compile canary is still fresh.
- */
-export function isBoundaryCompileFresh(extensionId: string, params: CompileFreshnessParams = {}) {
-  const rootDir = params.rootDir ?? repoRoot;
-  const extensionRoot = resolve(rootDir, "extensions", extensionId);
-  const extensionNewestInputMtimeMs =
-    params.extensionNewestInputMtimeMs ??
-    collectNewestMtime(extensionRoot, { includeFile: isRelevantCompileInput });
-  const sharedNewestInputMtimeMs =
-    params.sharedNewestInputMtimeMs ??
-    Math.max(
-      collectNewestMtime(resolve(rootDir, "dist/plugin-sdk"), {
-        skipDistDirectories: false,
-      }),
-      collectNewestMtime(resolve(rootDir, "packages/plugin-sdk/dist"), {
-        skipDistDirectories: false,
-      }),
-    );
-  const newestInputMtimeMs = Math.max(extensionNewestInputMtimeMs, sharedNewestInputMtimeMs);
-  const oldestOutputMtimeMs = collectOldestMtime([
-    resolveBoundaryTsStampPath(extensionId, rootDir),
-  ]);
-  return oldestOutputMtimeMs !== null && oldestOutputMtimeMs >= newestInputMtimeMs;
-}
-
-function writeStampFile(filePath: string) {
-  mkdirSync(dirname(filePath), { recursive: true });
-  writeFileSync(filePath, `${new Date().toISOString()}\n`, "utf8");
-}
-
-function runNodeStep(label: string, args: string[], timeoutMs: number) {
-  const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, MAX_TIMER_TIMEOUT_MS);
-  const startedAt = Date.now();
-  const result = spawnSync(process.execPath, args, {
-    cwd: repoRoot,
-    encoding: "utf8",
-    maxBuffer: 16 * 1024 * 1024,
-    timeout: resolvedTimeoutMs,
-  });
-
-  if (result.status === 0 && !result.error) {
-    return result;
-  }
-
-  const timeoutSuffix =
-    result.error?.name === "Error" && result.error.message.includes("ETIMEDOUT")
-      ? `${label} timed out after ${resolvedTimeoutMs}ms`
-      : "";
-  const errorSuffix = result.error ? result.error.message : "";
-  const note = [timeoutSuffix, errorSuffix].filter(Boolean).join("\n");
-  const elapsedMs = Date.now() - startedAt;
-  const kind = timeoutSuffix ? "timeout" : result.error ? "spawn-error" : "nonzero-exit";
-  const failure = attachStepFailureMetadata(
-    new Error(
-      formatStepFailure(label, {
-        stdout: result.stdout,
-        stderr: result.stderr,
-        kind,
-        elapsedMs,
-        note,
-      }),
-    ),
-    label,
-    {
-      stdout: result.stdout,
-      stderr: result.stderr,
-      kind,
-      elapsedMs,
-      note,
-    },
-  );
-  throw Object.assign(failure, { status: result.status ?? 1 });
-}
-
-function abortSiblingSteps(abortController?: AbortController) {
-  if (abortController && !abortController.signal.aborted) {
-    abortController.abort();
-  }
-}
-
-/**
- * Runs one node-based boundary check step with timeout and output capture.
- */
-export function runNodeStepAsync(
+export async function runNodeStepAsync(
   label: string,
   args: string[],
   timeoutMs: number,
   params: RunNodeStepParams = {},
 ) {
   const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, MAX_TIMER_TIMEOUT_MS);
-  const abortController = params.abortController;
-  const killProcess = params.killProcess ?? process.kill.bind(process);
-  const onFailure = params.onFailure;
-  const platform = params.platform ?? process.platform;
-  const spawnImpl: StepSpawn = params.spawnImpl ?? spawn;
   const startedAt = Date.now();
-  return new Promise<StepResult>((resolvePromise, rejectPromise) => {
-    const child = spawnImpl(process.execPath, args, {
+  let stdout: StepOutputCapture = { text: "", truncatedChars: 0 };
+  let stderr: StepOutputCapture = { text: "", truncatedChars: 0 };
+  let receivedSignal: NodeJS.Signals | undefined;
+  let activeChild: ChildProcess | undefined;
+  try {
+    const code = await runManagedCommand({
+      bin: process.execPath,
+      args,
       cwd: repoRoot,
-      detached: shouldUseDetachedVitestProcessGroup(platform),
-      env: process.env,
-      signal: abortController?.signal,
+      env: params.env ?? process.env,
       stdio: ["ignore", "pipe", "pipe"],
-    });
-    if (!child.stdout || !child.stderr) {
-      throw new Error(`${label} child process did not expose piped output`);
-    }
-
-    let stdout = createStepOutputCapture();
-    let stderr = createStepOutputCapture();
-    let settled = false;
-    let forwardedSignal: VitestProcessSignal | null = null;
-    const signalChild = (signal: VitestProcessSignal) => {
-      if (
-        !forwardSignalToVitestProcessGroup({
-          child,
-          kill: killProcess,
-          platform,
-          signal,
-        })
-      ) {
-        child.kill(signal);
-      }
-    };
-    const processGroupAlive = () => {
-      if (platform === "win32" || typeof child.pid !== "number") {
-        return false;
-      }
-      try {
-        killProcess(-child.pid, 0);
-        return true;
-      } catch (error) {
-        return Boolean(
-          error && typeof error === "object" && "code" in error && error.code === "EPERM",
-        );
-      }
-    };
-    const waitForProcessGroupExit = async (ms: number) => {
-      const deadlineAt = Date.now() + ms;
-      while (Date.now() < deadlineAt) {
-        if (!processGroupAlive()) {
-          return true;
+      shell: false,
+      timeoutMs: resolvedTimeoutMs,
+      signal: params.abortController?.signal,
+      abortKillGraceMs: 0,
+      requireProcessTreeExit: process.platform !== "win32",
+      onSignal(signal) {
+        receivedSignal = signal;
+        // Boundary cancellation historically stops compiler groups immediately.
+        if (activeChild) {
+          terminateManagedChild(activeChild, "SIGKILL");
         }
-        await new Promise((resolvePoll) => {
-          setTimeout(resolvePoll, STEP_PROCESS_GROUP_EXIT_POLL_MS);
+      },
+      onReady(child) {
+        activeChild = child;
+        child.stdout!.setEncoding("utf8");
+        child.stderr!.setEncoding("utf8");
+        child.stdout!.on("data", (chunk) => {
+          stdout = appendBoundedTail(stdout, chunk, STEP_OUTPUT_MAX_CHARS);
         });
-      }
-      return !processGroupAlive();
-    };
-    const waitAfterForceKill = async () => {
-      if (processGroupAlive()) {
-        await waitForProcessGroupExit(STEP_POST_FORCE_KILL_WAIT_MS);
-      }
-    };
-    const rejectCanceledStep = async () => {
-      signalChild("SIGKILL");
-      await waitAfterForceKill();
-      rejectPromise(
-        toErrorObject(
-          attachStepFailureMetadata(new Error(`${label} canceled after sibling failure`), label, {
-            kind: "canceled",
-            elapsedMs: Date.now() - startedAt,
-            note: "canceled after sibling failure",
-          }),
-          "Step canceled after sibling failure",
-        ),
-      );
-    };
-    const abortSignal = abortController?.signal;
-    const abortListener = () => {
-      signalChild("SIGTERM");
-    };
-    abortSignal?.addEventListener("abort", abortListener, { once: true });
-    const teardownProcessCleanup = installVitestProcessGroupCleanup({
-      child,
-      forceSignal: "SIGKILL",
-      onSignal: (signal) => {
-        forwardedSignal ??= signal;
+        child.stderr!.on("data", (chunk) => {
+          stderr = appendBoundedTail(stderr, chunk, STEP_OUTPUT_MAX_CHARS);
+        });
       },
     });
-    const cleanup = () => {
-      clearTimeout(timer);
-      abortSignal?.removeEventListener("abort", abortListener);
-      teardownProcessCleanup();
+    if (receivedSignal) {
+      process.exitCode = signalExitCode(receivedSignal);
+      throw new Error(`${label} interrupted by ${receivedSignal}`);
+    }
+    if (code !== 0) {
+      throw Object.assign(new Error(`${label} failed with exit code ${code}`), {
+        code: "NONZERO_EXIT",
+      });
+    }
+    return {
+      stdout: formatBoundedTail(stdout),
+      stderr: formatBoundedTail(stderr),
+      elapsedMs: Date.now() - startedAt,
     };
-    const timer = setTimeout(() => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      cleanup();
-      signalChild("SIGKILL");
-      void (async () => {
-        await waitAfterForceKill();
-        const stdoutText = formatCapturedStepOutput(stdout);
-        const stderrText = formatCapturedStepOutput(stderr);
-        const error = attachStepFailureMetadata(
-          new Error(
-            formatStepFailure(label, {
-              stdout: stdoutText,
-              stderr: stderrText,
-              kind: "timeout",
-              elapsedMs: Date.now() - startedAt,
-              note: `${label} timed out after ${resolvedTimeoutMs}ms`,
-            }),
-          ),
-          label,
-          {
-            stdout: stdoutText,
-            stderr: stderrText,
-            kind: "timeout",
-            elapsedMs: Date.now() - startedAt,
-            note: `${label} timed out after ${resolvedTimeoutMs}ms`,
-          },
-        );
-        onFailure?.(error);
-        abortSiblingSteps(abortController);
-        rejectPromise(toErrorObject(error, "Step timed out"));
-      })();
-    }, resolvedTimeoutMs);
-
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      stdout = appendBoundedStepOutput(stdout, chunk);
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr = appendBoundedStepOutput(stderr, chunk);
-    });
-    child.on("error", (error) => {
-      if (settled) {
-        return;
-      }
-      cleanup();
-      settled = true;
-      if (error.name === "AbortError" && abortController?.signal.aborted) {
-        void rejectCanceledStep();
-        return;
-      }
-      const stdoutText = formatCapturedStepOutput(stdout);
-      const stderrText = formatCapturedStepOutput(stderr);
-      const failure = attachStepFailureMetadata(
-        new Error(
-          formatStepFailure(label, {
-            stdout: stdoutText,
-            stderr: stderrText,
-            kind: "spawn-error",
-            elapsedMs: Date.now() - startedAt,
-            note: error.message,
-          }),
-        ),
-        label,
-        {
-          stdout: stdoutText,
-          stderr: stderrText,
-          kind: "spawn-error",
-          elapsedMs: Date.now() - startedAt,
-          note: error.message,
-        },
-      );
-      onFailure?.(failure);
-      abortSiblingSteps(abortController);
-      rejectPromise(toErrorObject(failure, "Step spawn failed"));
-    });
-    child.on("close", (code) => {
-      if (settled) {
-        return;
-      }
-      cleanup();
-      settled = true;
-      const signal = forwardedSignal;
-      if (signal) {
-        signalChild("SIGKILL");
-        void waitAfterForceKill().finally(() => {
-          process.kill(process.pid, signal);
-        });
-        return;
-      }
-      if (abortController?.signal.aborted) {
-        void rejectCanceledStep();
-        return;
-      }
-      if (code === 0) {
-        resolvePromise({
-          stdout: formatCapturedStepOutput(stdout),
-          stderr: formatCapturedStepOutput(stderr),
-          elapsedMs: Date.now() - startedAt,
-        });
-        return;
-      }
-      const stdoutText = formatCapturedStepOutput(stdout);
-      const stderrText = formatCapturedStepOutput(stderr);
-      const error = attachStepFailureMetadata(
-        new Error(
-          formatStepFailure(label, {
-            stdout: stdoutText,
-            stderr: stderrText,
-            kind: "nonzero-exit",
-            elapsedMs: Date.now() - startedAt,
-          }),
-        ),
-        label,
-        {
-          stdout: stdoutText,
-          stderr: stderrText,
-          kind: "nonzero-exit",
-          elapsedMs: Date.now() - startedAt,
-        },
-      );
-      onFailure?.(error);
-      abortSiblingSteps(abortController);
-      rejectPromise(toErrorObject(error, "Step failed"));
-    });
-  });
+  } catch (error) {
+    const original = toErrorObject(error, "Boundary step failed");
+    const code = "code" in original ? original.code : undefined;
+    const kind =
+      code === "ETIMEDOUT"
+        ? "timeout"
+        : code === "ABORT_ERR"
+          ? "canceled"
+          : code === "NONZERO_EXIT"
+            ? "nonzero-exit"
+            : code === "EPROCESSGROUP_CLEANUP_FAILED"
+              ? "cleanup-error"
+              : receivedSignal
+                ? "signal"
+                : "spawn-error";
+    const detail = {
+      stdout: formatBoundedTail(stdout),
+      stderr: formatBoundedTail(stderr),
+      kind,
+      elapsedMs: Date.now() - startedAt,
+      note:
+        code === "ETIMEDOUT"
+          ? `${label} timed out after ${resolvedTimeoutMs}ms`
+          : error instanceof Error
+            ? error.message
+            : String(error),
+    };
+    // Preserve cleanup identity and cause for the checkout ownership boundary.
+    original.message = formatStepFailure(label, detail);
+    const failure = attachStepFailureMetadata(original, label, detail);
+    params.onFailure?.(failure);
+    params.abortController?.abort();
+    throw failure;
+  }
 }
 
-/**
- * Runs boundary check steps with bounded concurrency.
- */
 export async function runNodeStepsWithConcurrency(steps: BoundaryStep[], concurrency: number) {
   const abortController = new AbortController();
   let firstFailure: unknown = null;
+  const failures: unknown[] = [];
   await pMap(
     steps,
     async (step) => {
@@ -732,6 +363,7 @@ export async function runNodeStepsWithConcurrency(steps: BoundaryStep[], concurr
       try {
         step.onStart?.();
         const result = await runNodeStepAsync(step.label, step.args, step.timeoutMs, {
+          env: step.env,
           abortController,
           onFailure(error) {
             firstFailure ??= error;
@@ -741,19 +373,22 @@ export async function runNodeStepsWithConcurrency(steps: BoundaryStep[], concurr
       } catch (error) {
         // Keep the mapper fulfilled so pMap waits for active process-group cleanup.
         firstFailure ??= error;
-        abortSiblingSteps(abortController);
+        failures.push(error);
+        abortController.abort();
       }
     },
     { concurrency, stopOnError: false },
   );
   if (firstFailure) {
-    throw toErrorObject(firstFailure, "Non-Error thrown");
+    const primary = toErrorObject(firstFailure, "Non-Error thrown");
+    // Retain every cleanup failure so the owner cannot release on only the
+    // first compiler error while a later sibling still has unjoined work.
+    throw failures.length > 1
+      ? new AggregateError(failures, primary.message, { cause: primary })
+      : primary;
   }
 }
 
-/**
- * Resolves canary artifact paths for an extension boundary compile.
- */
 export function resolveCanaryArtifactPaths(extensionId: string, rootDir = repoRoot) {
   const extensionRoot = resolve(rootDir, "extensions", extensionId);
   return {
@@ -763,27 +398,19 @@ export function resolveCanaryArtifactPaths(extensionId: string, rootDir = repoRo
   };
 }
 
-/**
- * Removes canary artifacts for one extension.
- */
 function cleanupCanaryArtifacts(extensionId: string, rootDir = repoRoot) {
   const { canaryPath, tsconfigPath } = resolveCanaryArtifactPaths(extensionId, rootDir);
   rmSync(canaryPath, { force: true });
   rmSync(tsconfigPath, { force: true });
+  rmSync(resolveBoundaryInputReceiptPath(`${extensionId}-canary`, rootDir), { force: true });
 }
 
-/**
- * Removes canary artifacts for multiple extensions.
- */
-export function cleanupCanaryArtifactsForExtensions(extensionIds: string[], rootDir = repoRoot) {
+function cleanupCanaryArtifactsForExtensions(extensionIds: string[], rootDir = repoRoot) {
   for (const extensionId of extensionIds) {
     cleanupCanaryArtifacts(extensionId, rootDir);
   }
 }
 
-/**
- * Installs signal/exit cleanup for extension canary artifacts.
- */
 export function installCanaryArtifactCleanup(
   extensionIds: string[],
   params: BoundaryCheckParams = {},
@@ -799,144 +426,106 @@ export function installCanaryArtifactCleanup(
   };
 }
 
-function resolveBoundaryTsBuildInfoPath(extensionId: string) {
-  return resolve(repoRoot, "extensions", extensionId, "dist", ".boundary-tsc.tsbuildinfo");
+function resolveBoundaryInputReceiptPath(extensionId: string, rootDir = repoRoot) {
+  return resolve(rootDir, BOUNDARY_CACHE_ROOT, "compile", `${extensionId}.inputs.json`);
 }
-
 function resolveBoundaryTsStampPath(extensionId: string, rootDir = repoRoot) {
-  return resolve(rootDir, "extensions", extensionId, "dist", ".boundary-tsc.stamp");
+  return resolve(rootDir, BOUNDARY_CACHE_ROOT, "compile", `${extensionId}.json`);
 }
-
-/**
- * Resolves the local lock path for extension boundary checks.
- */
-export function resolveBoundaryCheckLockPath(rootDir = repoRoot) {
-  return resolve(rootDir, "dist", ".extension-package-boundary.lock");
-}
-
-function resolveBoundaryCheckLockOwnerPath(lockPath: string) {
-  return join(lockPath, "owner.json");
-}
-
-function isProcessAlive(pid: unknown) {
-  if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) {
-    return false;
+async function runCompileCheck(extensionIds: string[], selectedPreparation: boolean) {
+  const sharedSdk = process.env.OPENCLAW_CI_SHARED_SDK === "1";
+  if (extensionIds.length === 0 && !sharedSdk) {
+    return {
+      prepElapsedMs: 0,
+      compileCount: 0,
+      skippedCompileCount: 0,
+      compileElapsedMs: 0,
+      compileTimings: [],
+    };
   }
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return Boolean(error && typeof error === "object" && "code" in error && error.code === "EPERM");
-  }
-}
-
-function removeStaleBoundaryCheckLock(lockPath: string) {
-  const ownerPath = resolveBoundaryCheckLockOwnerPath(lockPath);
-  let owner: unknown;
-  try {
-    owner = JSON.parse(readFileSync(ownerPath, "utf8"));
-  } catch {
-    rmSync(lockPath, { force: true, recursive: true });
-    return true;
-  }
-
-  const ownerPid = owner && typeof owner === "object" && "pid" in owner ? owner.pid : undefined;
-  if (isProcessAlive(ownerPid)) {
-    return false;
-  }
-  rmSync(lockPath, { force: true, recursive: true });
-  return true;
-}
-
-/**
- * Acquires the single-process lock for extension boundary checks.
- */
-export function acquireBoundaryCheckLock(params: BoundaryCheckParams = {}) {
-  const rootDir = params.rootDir ?? repoRoot;
-  const processObject = params.processObject ?? process;
-  const lockPath = resolveBoundaryCheckLockPath(rootDir);
-  mkdirSync(dirname(lockPath), { recursive: true });
-  try {
-    mkdirSync(lockPath);
-  } catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") {
-      if (removeStaleBoundaryCheckLock(lockPath)) {
-        mkdirSync(lockPath);
-      } else {
-        throw attachStepFailureMetadata(
-          new Error(
-            [
-              "extension package boundary check",
-              "kind: lock-contention",
-              `lock: ${lockPath}`,
-              "another extension package boundary check is already running in this checkout",
-            ].join("\n\n"),
-            { cause: error },
-          ),
-          "extension package boundary check",
-          {
-            kind: "lock-contention",
-            note: `lock: ${lockPath}\nanother extension package boundary check is already running in this checkout`,
-          },
-        );
-      }
-    } else {
-      throw error;
-    }
-  }
-
-  writeFileSync(
-    resolveBoundaryCheckLockOwnerPath(lockPath),
-    `${JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }, null, 2)}\n`,
-    "utf8",
-  );
-
-  const release = () => {
-    rmSync(lockPath, { force: true, recursive: true });
-  };
-  processObject.on("exit", release);
-  return () => {
-    processObject.off("exit", release);
-    release();
-  };
-}
-
-async function runCompileCheck(extensionIds: string[]) {
   const prepStartedAt = Date.now();
   process.stdout.write(
     `preparing plugin-sdk boundary artifacts for ${extensionIds.length} plugins\n`,
   );
-  runNodeStep("plugin-sdk boundary prep", prepareBoundaryArtifactsArgs, 420_000);
-  const prepElapsedMs = Date.now() - prepStartedAt;
-  const concurrency = resolveCompileConcurrency();
-  const verboseFreshLogs = process.env.OPENCLAW_EXTENSION_BOUNDARY_VERBOSE_FRESH === "1";
-  const sharedNewestInputMtimeMs = Math.max(
-    collectNewestMtime(resolve(repoRoot, "dist/plugin-sdk"), {
-      skipDistDirectories: false,
-    }),
-    collectNewestMtime(resolve(repoRoot, "packages/plugin-sdk/dist"), {
-      skipDistDirectories: false,
-    }),
+  const preparation = await runNodeStepAsync(
+    "plugin-sdk boundary prep",
+    [
+      ...prepareBoundaryArtifactsArgs,
+      ...(extensionIds.length === 0
+        ? ["--mode=package-boundary"]
+        : selectedPreparation
+          ? [`--extensions=${JSON.stringify(extensionIds)}`]
+          : []),
+    ],
+    420_000,
   );
-  process.stdout.write(`compile concurrency ${concurrency}\n`);
+  process.stdout.write(preparation.stdout);
+  const prepElapsedMs = Date.now() - prepStartedAt;
+  if (extensionIds.length === 0) {
+    return {
+      prepElapsedMs,
+      compileCount: 0,
+      skippedCompileCount: 0,
+      compileElapsedMs: 0,
+      compileTimings: [],
+    };
+  }
   const compileStartedAt = Date.now();
+  const availableParallelism = os.availableParallelism();
+  const concurrency = resolveCompileConcurrency(process.env, availableParallelism);
+  const cpuShare = Math.max(1, Math.floor(availableParallelism / concurrency));
+  const compilerThreads = process.env.GOMAXPROCS?.trim()
+    ? Math.min(cpuShare, parsePositiveInt(process.env.GOMAXPROCS.trim(), "GOMAXPROCS"))
+    : cpuShare;
+  const compilerEnv = { ...process.env, GOMAXPROCS: String(compilerThreads) };
+  const verboseFreshLogs = process.env.OPENCLAW_EXTENSION_BOUNDARY_VERBOSE_FRESH === "1";
+  const projects = prepareExtensionBoundaryProjects(repoRoot, extensionIds);
+  const metadataInputs = projects.flatMap((project) => project.metadataInputs);
+  const before = new BoundaryInputSnapshot(repoRoot, metadataInputs);
+  process.stdout.write(
+    `compile concurrency ${concurrency}; CPUs per compiler ${compilerThreads}\n`,
+  );
   let skippedCompileCount = 0;
   const compileTimings: CompileTiming[] = [];
-  const steps = extensionIds
-    .map((extensionId, index) => {
-      const tsBuildInfoPath = resolveBoundaryTsBuildInfoPath(extensionId);
-      const extensionNewestInputMtimeMs = collectNewestMtime(
-        resolve(repoRoot, "extensions", extensionId),
-        {
-          includeFile: isRelevantCompileInput,
-        },
-      );
-      mkdirSync(dirname(tsBuildInfoPath), { recursive: true });
+  const completed: {
+    recordPath: string;
+    config: string;
+    args: string[];
+    inputReceipt: string;
+  }[] = [];
+  // Source bytes are a cold-cache scheduling hint, never a coverage selector.
+  // Include the package's implementation even when its config starts at public barrels.
+  const orderedExtensions = projects
+    .map((project) =>
+      Object.assign(project, {
+        sourceBytes: collectFilesSync(join(repoRoot, "extensions", project.extensionId), {
+          includeFile: (file) => classifyBundledExtensionSourcePath(file).isProductionSource,
+        }).reduce((total, file) => total + statSync(file).size, 0),
+      }),
+    )
+    .toSorted((left, right) => right.sourceBytes - left.sourceBytes);
+  const steps = orderedExtensions
+    .map(({ extensionId, config }, index) => {
+      const inputReceipt = resolveBoundaryInputReceiptPath(extensionId);
+      const args = [
+        compilerWorker,
+        JSON.stringify({
+          configFile: config,
+          inputReceipt: portableRelativePath(repoRoot, inputReceipt),
+          emit: false,
+        }),
+      ];
+      before.signature(config, args, []);
+      const recordPath = resolveBoundaryTsStampPath(extensionId);
+      mkdirSync(dirname(inputReceipt), { recursive: true });
       if (
-        isBoundaryCompileFresh(extensionId, {
-          extensionNewestInputMtimeMs,
-          sharedNewestInputMtimeMs,
-        })
+        before.matchesReceipt(
+          readArtifactRecord(recordPath),
+          config,
+          args,
+          [portableRelativePath(repoRoot, inputReceipt)],
+          inputReceipt,
+        )
       ) {
         skippedCompileCount += 1;
         if (verboseFreshLogs) {
@@ -946,27 +535,25 @@ async function runCompileCheck(extensionIds: string[]) {
         }
         return null;
       }
+      rmSync(recordPath, { force: true });
+      rmSync(inputReceipt, { force: true });
       return {
         label: extensionId,
         onStart() {
           process.stdout.write(`[${index + 1}/${extensionIds.length}] ${extensionId}\n`);
         },
         onSuccess(result) {
-          writeStampFile(resolveBoundaryTsStampPath(extensionId));
+          process.stdout.write(
+            `[${index + 1}/${extensionIds.length}] ${extensionId} (${result.elapsedMs}ms)\n`,
+          );
+          completed.push({ recordPath, config, args, inputReceipt });
           compileTimings.push({
             extensionId,
             elapsedMs: result.elapsedMs,
           });
         },
-        args: [
-          tsgoBin,
-          "-p",
-          resolve(repoRoot, "extensions", extensionId, "tsconfig.json"),
-          "--noEmit",
-          "--incremental",
-          "--tsBuildInfoFile",
-          tsBuildInfoPath,
-        ],
+        args,
+        env: compilerEnv,
         timeoutMs: 120_000,
       } satisfies BoundaryStep;
     })
@@ -981,6 +568,18 @@ async function runCompileCheck(extensionIds: string[]) {
   }
   if (steps.length > 0) {
     await runNodeStepsWithConcurrency(steps, concurrency);
+    const after = new BoundaryInputSnapshot(repoRoot, metadataInputs);
+    const records = completed.map((unit) =>
+      Object.assign(unit, {
+        record: after.record(unit.config, unit.args, unit.inputReceipt, [
+          portableRelativePath(repoRoot, unit.inputReceipt),
+        ]),
+      }),
+    );
+    for (const unit of records) {
+      rmSync(unit.inputReceipt.replace(/\.inputs\.json$/u, ".tsbuildinfo"), { force: true });
+      writeArtifactRecord(unit.recordPath, unit.record);
+    }
   }
   return {
     prepElapsedMs,
@@ -993,7 +592,7 @@ async function runCompileCheck(extensionIds: string[]) {
 
 async function runCanaryCheck(extensionIds: string[]) {
   const startedAt = Date.now();
-  await Promise.all(
+  const results = await Promise.allSettled(
     extensionIds.map(async (extensionId, index) => {
       const { canaryPath, tsconfigPath } = resolveCanaryArtifactPaths(extensionId);
 
@@ -1026,7 +625,14 @@ async function runCanaryCheck(extensionIds: string[]) {
 
         const result = await runNodeStepAsync(
           `${extensionId} canary`,
-          [tscBin, "-p", tsconfigPath, "--noEmit"],
+          [
+            compilerWorker,
+            JSON.stringify({
+              configFile: tsconfigPath,
+              inputReceipt: resolveBoundaryInputReceiptPath(`${extensionId}-canary`),
+              emit: false,
+            }),
+          ],
           120_000,
         );
         throw new Error(
@@ -1037,7 +643,13 @@ async function runCanaryCheck(extensionIds: string[]) {
           error instanceof Error && "fullOutput" in error && typeof error.fullOutput === "string"
             ? error.fullOutput
             : String(error);
-        if (!output.includes("TS6059") || !output.includes(ROOTDIR_BOUNDARY_CANARY_OUTPUT_HINT)) {
+        if (
+          !(error instanceof Error) ||
+          !("kind" in error) ||
+          error.kind !== "nonzero-exit" ||
+          !output.includes("TS6059") ||
+          !output.includes(ROOTDIR_BOUNDARY_CANARY_OUTPUT_HINT)
+        ) {
           throw error;
         }
       } finally {
@@ -1045,63 +657,69 @@ async function runCanaryCheck(extensionIds: string[]) {
       }
     }),
   );
+  const failures = results.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
+  if (failures.length) {
+    throw new AggregateError(failures, "extension boundary canary failed");
+  }
   return {
     canaryElapsedMs: Date.now() - startedAt,
   };
 }
 
-/**
- * Runs the extension package TypeScript boundary check.
- */
-export async function main(argv: string[] = process.argv.slice(2)) {
+async function runBoundaryCheck(argv: string[]) {
   const startedAt = Date.now();
   const mode = parseMode(argv);
   const optInExtensionIds = collectOptInExtensionIds();
-  const canaryExtensionIds = collectCanaryExtensionIds(optInExtensionIds);
-  const cleanupExtensionIds = optInExtensionIds;
+  // Opt-in already requires the same base config, so one package covers that boundary.
+  const canaryExtensionIds = optInExtensionIds.slice(-1);
   const shouldRunCanary = mode === "all" || mode === "canary";
-  const releaseBoundaryLock = acquireBoundaryCheckLock();
-  const teardownCanaryCleanup = installCanaryArtifactCleanup(cleanupExtensionIds);
-  let prepElapsedMs: number | undefined;
-  let compileCount = 0;
-  let skippedCompileCount = 0;
-  let compileElapsedMs: number | undefined;
-  let compileTimings: CompileTiming[] = [];
-  let canaryElapsedMs: number | undefined;
+  const teardownCanaryCleanup = installCanaryArtifactCleanup(optInExtensionIds);
+  const summary: BoundarySummaryParams & SlowCompileParams = {
+    mode,
+    compileCount: 0,
+    skippedCompileCount: 0,
+    canaryCount: shouldRunCanary ? canaryExtensionIds.length : 0,
+  };
 
   try {
-    cleanupCanaryArtifactsForExtensions(cleanupExtensionIds);
+    cleanupCanaryArtifactsForExtensions(optInExtensionIds);
     if (mode === "all" || mode === "compile") {
-      ({ prepElapsedMs, compileCount, skippedCompileCount, compileElapsedMs, compileTimings } =
-        await runCompileCheck(optInExtensionIds));
+      const selection = resolveExtensionBoundarySelection(repoRoot, optInExtensionIds);
+      const selectionSummary = formatBoundarySelection(selection);
+      process.stdout.write(selectionSummary);
+      if (process.env.GITHUB_STEP_SUMMARY) {
+        appendFileSync(process.env.GITHUB_STEP_SUMMARY, selectionSummary);
+      }
+      Object.assign(
+        summary,
+        await runCompileCheck(
+          selection.selected.map((row) => row.package),
+          selection.mode === "affected",
+        ),
+      );
     }
     if (shouldRunCanary) {
-      ({ canaryElapsedMs } = await runCanaryCheck(canaryExtensionIds));
+      Object.assign(summary, await runCanaryCheck(canaryExtensionIds));
     }
     process.stdout.write(
       formatBoundaryCheckSuccessSummary({
-        mode,
-        compileCount,
-        skippedCompileCount,
-        canaryCount: shouldRunCanary ? canaryExtensionIds.length : 0,
-        prepElapsedMs,
-        compileElapsedMs,
-        canaryElapsedMs,
+        ...summary,
         elapsedMs: Date.now() - startedAt,
       }),
     );
-    process.stdout.write(
-      formatSlowCompileSummary({
-        compileTimings,
-      }),
-    );
+    process.stdout.write(formatSlowCompileSummary(summary));
   } finally {
-    releaseBoundaryLock?.();
-    teardownCanaryCleanup?.();
-    cleanupCanaryArtifactsForExtensions(cleanupExtensionIds);
+    teardownCanaryCleanup();
+    cleanupCanaryArtifactsForExtensions(optInExtensionIds);
   }
 }
 
-if (import.meta.main) {
+export async function main(argv: string[] = process.argv.slice(2)) {
+  return withDistArtifactOwnership(repoRoot, () => runBoundaryCheck(argv));
+}
+
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   await main();
 }

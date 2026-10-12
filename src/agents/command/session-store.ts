@@ -1,6 +1,3 @@
-/**
- * Updates persisted session metadata after agent command runs.
- */
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -9,45 +6,31 @@ import {
   type SessionEntry,
 } from "../../config/sessions.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { COMPACTION_RUN_USAGE_CLEAR_PATCH } from "../../config/sessions/session-entry-projection.js";
 import { projectSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import {
-  clearAllCliSessions,
-  clearCliSession,
-  getCliSessionBinding,
-  setCliSessionBinding,
-  setCliSessionId,
-} from "../cli-session.js";
+import { estimateAggregateUsageCost } from "../../utils/usage-format.js";
+import { clearAllCliSessions } from "../cli-session.js";
+import { resolveContextTokensForModel } from "../context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
+import type { CompactionAccountingFact } from "../embedded-agent-runner/run/internal-params.js";
 import type { EmbeddedAgentCompactResult } from "../embedded-agent-runner/types.js";
 import { clearMainSessionRecoveryAfterAgentRun } from "../main-session-recovery/main-session-recovery-clear.js";
-import { isCliProvider } from "../model-selection.js";
-import { deriveSessionTotalTokens, hasNonzeroUsage } from "../usage.js";
+import { deriveSessionTotalTokens, hasBillableUsage, hasNonzeroUsage } from "../usage.js";
 
 type RunResult = Awaited<ReturnType<(typeof import("../embedded-agent.js"))["runEmbeddedAgent"]>>;
 
-const usageFormatModuleLoader = createLazyImportLoader(() => import("../../utils/usage-format.js"));
-const contextModuleLoader = createLazyImportLoader(() => import("../context.js"));
-
-async function getUsageFormatModule() {
-  return await usageFormatModuleLoader.load();
-}
-
-async function getContextModule() {
-  return await contextModuleLoader.load();
-}
-
-function resolvePositiveInteger(value: number | undefined): number | undefined {
+export function normalizeSessionTokenCount(value: number | undefined): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     return undefined;
   }
   return Math.floor(value);
 }
 
-/** Applies run result metadata, usage, and CLI bindings to a session entry. */
 export async function updateSessionStoreAfterAgentRun(params: {
+  agentId: string;
   cfg: OpenClawConfig;
   agentDir: string;
   sessionId: string;
@@ -59,6 +42,8 @@ export async function updateSessionStoreAfterAgentRun(params: {
   fallbackProvider?: string;
   fallbackModel?: string;
   result: RunResult;
+  /** Private committed owner and ordered context; an unknown snapshot invalidates older usage. */
+  compactionAccounting?: Extract<CompactionAccountingFact, { kind: "durable" }>;
   touchInteraction?: boolean;
   /**
    * When false, skip the lastActivityAt bump so heartbeat/internal-event runs
@@ -95,22 +80,15 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const usage = result.meta.agentMeta?.usage;
   const promptTokens = result.meta.agentMeta?.promptTokens;
   const lastCallUsage = result.meta.agentMeta?.lastCallUsage;
-  const compactionTokensAfter =
-    typeof result.meta.agentMeta?.compactionTokensAfter === "number" &&
-    Number.isFinite(result.meta.agentMeta.compactionTokensAfter) &&
-    result.meta.agentMeta.compactionTokensAfter >= 0
-      ? Math.floor(result.meta.agentMeta.compactionTokensAfter)
-      : undefined;
-  const compactionsThisRun = Math.max(0, result.meta.agentMeta?.compactionCount ?? 0);
   const modelUsed = result.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
   const providerUsed = result.meta.agentMeta?.provider ?? fallbackProvider ?? defaultProvider;
   const agentHarnessId = normalizeOptionalString(result.meta.agentMeta?.agentHarnessId);
-  const runtimeContextTokens = resolvePositiveInteger(result.meta.agentMeta?.contextTokens);
+  const runtimeContextTokens = normalizeSessionTokenCount(result.meta.agentMeta?.contextTokens);
   const contextBudgetStatus = result.meta.agentMeta?.contextBudgetStatus;
   const contextTokens =
     runtimeContextTokens !== undefined
       ? runtimeContextTokens
-      : ((await getContextModule()).resolveContextTokensForModel({
+      : (resolveContextTokensForModel({
           cfg,
           provider: providerUsed,
           model: modelUsed,
@@ -122,16 +100,19 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const preserveUserFacingRunState = params.preserveUserFacingSessionModelState === true;
   const preserveRuntimeModel = params.preserveRuntimeModel === true || preserveUserFacingRunState;
   const hadPreExistingEntry = sessionStore[sessionKey] !== undefined;
-  const entry = sessionStore[sessionKey] ?? {
+  const entry: InternalSessionEntry = sessionStore[sessionKey] ?? {
     sessionId,
     updatedAt: now,
     sessionStartedAt: now,
   };
+  const expectedSession = params.compactionAccounting?.target ?? entry;
+  if (!preserveUserFacingRunState && expectedSession.sessionId !== sessionId) {
+    return;
+  }
   const next: SessionEntry = {
     ...entry,
-    sessionId,
     updatedAt: now,
-    sessionStartedAt: entry.sessionId === sessionId ? (entry.sessionStartedAt ?? now) : now,
+    sessionStartedAt: entry.sessionStartedAt ?? now,
     lastInteractionAt: touchInteraction ? now : entry.lastInteractionAt,
     lastActivityAt: touchActivity ? now : entry.lastActivityAt,
     ...(preserveRuntimeModel
@@ -141,56 +122,18 @@ export async function updateSessionStoreAfterAgentRun(params: {
           contextTokensSource,
         }),
   };
-  if (entry.sessionId !== sessionId) {
-    delete (next as { sessionFile?: unknown }).sessionFile;
-    next.usageFamilyKey = entry.usageFamilyKey ?? sessionKey;
-    next.usageFamilySessionIds = Array.from(
-      new Set([...(entry.usageFamilySessionIds ?? []), entry.sessionId, sessionId]),
-    );
-  }
-  if (preserveRuntimeModel) {
-    // Keep the pre-existing runtime model and context window so a turn-local
-    // model does not bleed into the session's perceived selection.
-    if (entry.model) {
-      // Prior runtime model exists: preserve its contextTokens. When missing,
-      // leave contextTokens unset rather than falling back to the heartbeat
-      // run's context window; status derives it from the preserved model.
-      next.contextTokens = entry.contextTokens;
-      if (entry.modelProvider) {
-        setSessionRuntimeModel(next, {
-          provider: entry.modelProvider,
-          model: entry.model,
-        });
-      } else {
-        // Retain the model-only entry without borrowing the heartbeat provider
-        // to avoid invalid cross-provider pairs (e.g. ollama/claude-opus-4-6).
-        next.model = entry.model;
-      }
-    }
-    // When there is no prior runtime model, do nothing: a heartbeat turn
-    // should not establish initial model state on an empty session.
-  } else {
+  if (!preserveRuntimeModel) {
     setSessionRuntimeModel(next, {
       provider: providerUsed,
       model: modelUsed,
     });
+  } else if (entry.model && entry.modelProvider) {
+    // The entry spread retains partial model state and context; normalize only a complete pair.
+    setSessionRuntimeModel(next, { provider: entry.modelProvider, model: entry.model });
   }
   if (!preserveUserFacingRunState) {
     if (!preserveRuntimeModel) {
       next.agentHarnessId = agentHarnessId;
-    }
-    if (!preserveRuntimeModel && isCliProvider(providerUsed, cfg)) {
-      const cliSessionBinding = result.meta.agentMeta?.cliSessionBinding;
-      if (result.meta.agentMeta?.clearCliSessionBinding === true) {
-        clearCliSession(next, providerUsed);
-      } else if (cliSessionBinding?.sessionId?.trim()) {
-        setCliSessionBinding(next, providerUsed, cliSessionBinding);
-      } else {
-        const cliSessionId = result.meta.agentMeta?.sessionId?.trim();
-        if (cliSessionId) {
-          setCliSessionId(next, providerUsed, cliSessionId);
-        }
-      }
     }
     next.abortedLastRun = result.meta.aborted ?? false;
     clearMainSessionRecoveryAfterAgentRun(next, params.clearRestartRecoveryForceSafeTools);
@@ -201,80 +144,42 @@ export async function updateSessionStoreAfterAgentRun(params: {
       next.contextBudgetStatus = contextBudgetStatus;
     }
   }
-  if (hasNonzeroUsage(usage) && !preserveUserFacingRunState) {
-    const { estimateUsageCost, resolveModelCostConfig } = await getUsageFormatModule();
-    const input = usage.input ?? 0;
-    const output = usage.output ?? 0;
-    const totalTokens = deriveSessionTotalTokens({
-      lastCallUsage,
-      contextTokens,
-      promptTokens,
-    });
+  const hasUsage = hasNonzeroUsage(usage);
+  if (hasBillableUsage(usage) && !preserveUserFacingRunState) {
     const runEstimatedCostUsd = asNonNegativeFiniteNumber(
-      estimateUsageCost({
+      estimateAggregateUsageCost({
         usage,
-        cost: resolveModelCostConfig({
-          provider: providerUsed,
-          model: modelUsed,
-          config: cfg,
-          agentDir: params.agentDir,
-        }),
+        provider: providerUsed,
+        model: modelUsed,
+        config: cfg,
+        agentDir: params.agentDir,
       }),
     );
-    next.inputTokens = input;
-    next.outputTokens = output;
-    const hasUsageTotalTokens =
-      typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0;
-    const useCompactionSnapshot = compactionTokensAfter !== undefined && !hasUsageTotalTokens;
-    if (useCompactionSnapshot) {
-      next.totalTokens = compactionTokensAfter;
-      next.totalTokensFresh = true;
-      next.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
-      next.inputTokens = undefined;
-      next.outputTokens = undefined;
-      next.cacheRead = undefined;
-      next.cacheWrite = undefined;
-      next.contextBudgetStatus = undefined;
-    } else if (hasUsageTotalTokens) {
-      next.totalTokens = totalTokens;
-      next.totalTokensFresh = true;
-      next.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
-    } else {
-      next.totalTokens = undefined;
-      next.totalTokensFresh = false;
-      next.totalTokensVersion = undefined;
-    }
-    if (!useCompactionSnapshot) {
+    if (hasUsage) {
+      next.inputTokens = usage.input ?? 0;
+      next.outputTokens = usage.output ?? 0;
       next.cacheRead = usage.cacheRead ?? 0;
       next.cacheWrite = usage.cacheWrite ?? 0;
     }
-    // Snapshot cost like tokens (runEstimatedCostUsd is already computed from
-    // cumulative run usage, so assign directly instead of accumulating).
-    // Fixes #69347: cost was inflated 1x-72x by accumulating on every persist.
-    if (runEstimatedCostUsd !== undefined) {
-      next.estimatedCostUsd = runEstimatedCostUsd;
-    }
-  } else if (compactionTokensAfter !== undefined && !preserveUserFacingRunState) {
-    next.totalTokens = compactionTokensAfter;
-    next.totalTokensFresh = true;
-    next.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
-    next.inputTokens = undefined;
-    next.outputTokens = undefined;
-    next.cacheRead = undefined;
-    next.cacheWrite = undefined;
-    next.contextBudgetStatus = undefined;
-  } else if (
-    !preserveUserFacingRunState &&
-    typeof entry.totalTokens === "number" &&
-    Number.isFinite(entry.totalTokens) &&
-    entry.totalTokens > 0
-  ) {
-    next.totalTokens = entry.totalTokens;
-    next.totalTokensFresh = false;
-    next.totalTokensVersion = undefined;
+    // Snapshot cumulative run cost once, independently of current context.
+    // Unknown current cost must clear the previous run's snapshot too.
+    next.estimatedCostUsd = runEstimatedCostUsd;
   }
-  if (compactionsThisRun > 0 && !preserveUserFacingRunState) {
-    next.compactionCount = (entry.compactionCount ?? 0) + compactionsThisRun;
+  if (!preserveUserFacingRunState) {
+    const currentContextSnapshot = params.compactionAccounting?.currentContextSnapshot;
+    if (currentContextSnapshot || hasUsage) {
+      const totalTokens = currentContextSnapshot
+        ? currentContextSnapshot.tokens
+        : deriveSessionTotalTokens({ lastCallUsage, contextTokens, promptTokens });
+      next.totalTokens = totalTokens;
+      next.totalTokensFresh = totalTokens !== undefined;
+      next.totalTokensVersion =
+        totalTokens !== undefined ? SESSION_TOTAL_TOKENS_VERSION : undefined;
+    } else {
+      // Empty-session zero is no longer current after a turn without usage.
+      next.totalTokensFresh = false;
+      next.totalTokensVersion = undefined;
+    }
   }
   const metadataPatch = preserveUserFacingRunState
     ? {
@@ -285,8 +190,9 @@ export async function updateSessionStoreAfterAgentRun(params: {
       }
     : next;
   const maintenanceConfig = resolveMaintenanceConfigFromInput(cfg.session?.maintenance);
-  const persisted = await patchSessionEntryCore(
+  await patchSessionEntryCore(
     {
+      agentId: params.agentId,
       storePath,
       sessionKey,
     },
@@ -295,13 +201,13 @@ export async function updateSessionStoreAfterAgentRun(params: {
         (!context.existingEntry && hadPreExistingEntry) ||
         (!preserveUserFacingRunState &&
           context.existingEntry &&
-          context.existingEntry.sessionId !== entry.sessionId)
+          !isSameSessionLifecycleOwner(context.existingEntry, expectedSession))
       ) {
-        // Normal runs may rotate session ids, but stale finalizers must not
-        // recreate rows that were reset/deleted while the run was active.
+        // Successor acceptance owns identity changes. Finalizers may update only
+        // their exact still-current row and cannot recreate a deleted owner.
         return null;
       }
-      return preserveUserFacingRunState
+      const patch: Partial<SessionEntry> = preserveUserFacingRunState
         ? metadataPatch
         : projectSessionSnapshotChanges({
             initial: entry,
@@ -309,198 +215,52 @@ export async function updateSessionStoreAfterAgentRun(params: {
             current: currentEntry,
             reassertAbortedLastRun: result.meta.aborted === true,
           });
+      if (touchActivity && !preserveUserFacingRunState && currentEntry.snoozedUntil !== undefined) {
+        // Clear the current snooze, including one set while this run was in flight.
+        patch.snoozedUntil = undefined;
+        patch.snoozedAt = undefined;
+      }
+      return patch;
     },
     {
-      ...(preserveUserFacingRunState ? {} : { fallbackEntry: entry }),
+      workerGuard: {},
+      ...(preserveUserFacingRunState || params.compactionAccounting
+        ? {}
+        : { fallbackEntry: entry }),
       maintenanceConfig,
+      onCommitted: (committed) => {
+        // Maintenance may yield to a newer writer before the patch promise returns.
+        sessionStore[sessionKey] = committed;
+      },
     },
   );
-  if (persisted) {
-    sessionStore[sessionKey] = persisted;
-  }
 }
 
-/** Clears a stored CLI session binding after a failed or invalidated run. */
-export async function clearCliSessionInStore(params: {
-  provider: string;
-  sessionKey: string;
-  sessionStore: Record<string, SessionEntry>;
-  storePath: string;
-  expectedSessionId?: string;
-  expectedCliSessionId?: string;
-}): Promise<SessionEntry | undefined> {
-  const { provider, sessionKey, sessionStore, storePath, expectedSessionId, expectedCliSessionId } =
-    params;
-  const entry = sessionStore[sessionKey];
-  if (!entry) {
-    return undefined;
-  }
-
-  let didClear = false;
-  const persisted = await patchSessionEntryCore(
-    {
-      storePath,
-      sessionKey,
-    },
-    (currentEntry, context) => {
-      if (
-        expectedSessionId &&
-        (!context.existingEntry || currentEntry.sessionId !== expectedSessionId)
-      ) {
-        return null;
-      }
-      if (
-        expectedCliSessionId &&
-        getCliSessionBinding(currentEntry, provider)?.sessionId !== expectedCliSessionId
-      ) {
-        return null;
-      }
-      const next = { ...currentEntry };
-      clearCliSession(next, provider);
-      next.updatedAt = Date.now();
-      didClear = true;
-      return next;
-    },
-    { fallbackEntry: entry },
+function isSameSessionLifecycleOwner(
+  current: InternalSessionEntry,
+  expected: Pick<InternalSessionEntry, "sessionId" | "lifecycleRevision" | "activeWriterRunId">,
+): boolean {
+  return (
+    current.sessionId === expected.sessionId &&
+    current.lifecycleRevision === expected.lifecycleRevision &&
+    current.activeWriterRunId === expected.activeWriterRunId
   );
-  if (persisted && didClear) {
-    sessionStore[sessionKey] = persisted;
-    return persisted;
-  }
-  return undefined;
-}
-
-/** Clears the one-shot fork marker before the resumed CLI process starts. */
-export async function consumeCliSessionForkInStore(params: {
-  provider: string;
-  sessionKey: string;
-  sessionStore: Record<string, SessionEntry>;
-  storePath: string;
-  expectedCliSessionId: string;
-}): Promise<SessionEntry | undefined> {
-  const { provider, sessionKey, sessionStore, storePath, expectedCliSessionId } = params;
-  const entry = sessionStore[sessionKey];
-  const binding = entry?.cliSessionBindings?.[provider];
-  if (!entry || binding?.sessionId !== expectedCliSessionId || binding.forkNextResume !== true) {
-    return undefined;
-  }
-  const persisted = await patchSessionEntryCore(
-    { storePath, sessionKey },
-    (currentEntry) => {
-      const currentBinding = currentEntry.cliSessionBindings?.[provider];
-      if (
-        currentBinding?.sessionId !== expectedCliSessionId ||
-        currentBinding.forkNextResume !== true
-      ) {
-        return null;
-      }
-      const next = { ...currentEntry };
-      const { forkNextResume: _forkNextResume, ...consumedBinding } = currentBinding;
-      setCliSessionBinding(next, provider, consumedBinding);
-      return next;
-    },
-    { fallbackEntry: entry },
-  );
-  if (persisted) {
-    sessionStore[sessionKey] = persisted;
-  }
-  return persisted ?? undefined;
-}
-
-/** Arms a fork marker for recovery, or re-arms one after a failed CLI turn. */
-export async function restoreCliSessionForkInStore(params: {
-  provider: string;
-  sessionKey: string;
-  sessionStore: Record<string, SessionEntry>;
-  storePath: string;
-  expectedCliSessionId: string;
-}): Promise<SessionEntry | undefined> {
-  const { provider, sessionKey, sessionStore, storePath, expectedCliSessionId } = params;
-  const entry = sessionStore[sessionKey];
-  const binding = entry?.cliSessionBindings?.[provider];
-  if (!entry || binding?.sessionId !== expectedCliSessionId || binding.forkNextResume === true) {
-    return undefined;
-  }
-  const persisted = await patchSessionEntryCore(
-    { storePath, sessionKey },
-    (currentEntry) => {
-      const currentBinding = currentEntry.cliSessionBindings?.[provider];
-      if (
-        currentBinding?.sessionId !== expectedCliSessionId ||
-        currentBinding.forkNextResume === true
-      ) {
-        return null;
-      }
-      const next = { ...currentEntry };
-      setCliSessionBinding(next, provider, { ...currentBinding, forkNextResume: true });
-      return next;
-    },
-    { fallbackEntry: entry },
-  );
-  if (persisted) {
-    sessionStore[sessionKey] = persisted;
-  }
-  return persisted ?? undefined;
-}
-
-/** Rebinds a claimed fork to its successor before the rest of the CLI turn can fail. */
-export async function persistCliSessionForkSuccessorInStore(params: {
-  provider: string;
-  sessionKey: string;
-  sessionStore: Record<string, SessionEntry>;
-  storePath: string;
-  expectedCliSessionId: string;
-  successorCliSessionId: string;
-}): Promise<SessionEntry | undefined> {
-  const {
-    provider,
-    sessionKey,
-    sessionStore,
-    storePath,
-    expectedCliSessionId,
-    successorCliSessionId,
-  } = params;
-  const entry = sessionStore[sessionKey];
-  if (!entry || successorCliSessionId === expectedCliSessionId) {
-    return undefined;
-  }
-  const persisted = await patchSessionEntryCore(
-    { storePath, sessionKey },
-    (currentEntry) => {
-      const currentBinding = currentEntry.cliSessionBindings?.[provider];
-      if (
-        currentBinding?.sessionId !== expectedCliSessionId ||
-        currentBinding.forkNextResume === true
-      ) {
-        return null;
-      }
-      const next = { ...currentEntry };
-      setCliSessionBinding(next, provider, {
-        ...currentBinding,
-        sessionId: successorCliSessionId,
-        forceReuse: true,
-      });
-      return next;
-    },
-    { fallbackEntry: entry },
-  );
-  if (persisted) {
-    sessionStore[sessionKey] = persisted;
-  }
-  return persisted ?? undefined;
 }
 
 /** Records CLI compaction metadata on the persisted session entry. */
 export async function recordCliCompactionInStore(params: {
+  agentId: string;
   compactionKind: NonNullable<EmbeddedAgentCompactResult["compactionKind"]>;
   sessionKey: string;
   sessionStore: Record<string, SessionEntry>;
   storePath: string;
   tokensAfter?: number;
-  newSessionId?: string;
-  expectedSessionId?: string;
+  expectedSession: Pick<
+    InternalSessionEntry,
+    "sessionId" | "lifecycleRevision" | "activeWriterRunId"
+  >;
 }): Promise<SessionEntry | undefined> {
-  const { compactionKind, sessionKey, sessionStore, storePath, expectedSessionId } = params;
+  const { compactionKind, sessionKey, sessionStore, storePath, expectedSession } = params;
   const entry = sessionStore[sessionKey];
   if (!entry) {
     return undefined;
@@ -513,21 +273,9 @@ export async function recordCliCompactionInStore(params: {
   }
   next.compactionCount = (entry.compactionCount ?? 0) + 1;
   next.updatedAt = Date.now();
-  const newSessionId = normalizeOptionalString(params.newSessionId);
-  if (newSessionId && newSessionId !== entry.sessionId) {
-    delete (next as { sessionFile?: unknown }).sessionFile;
-    next.sessionId = newSessionId;
-    next.usageFamilyKey = entry.usageFamilyKey ?? sessionKey;
-    next.usageFamilySessionIds = Array.from(
-      new Set([...(entry.usageFamilySessionIds ?? []), entry.sessionId, newSessionId]),
-    );
-  }
   const tokensAfterCompaction = asNonNegativeFiniteNumber(params.tokensAfter);
   next.contextBudgetStatus = undefined;
-  next.inputTokens = undefined;
-  next.outputTokens = undefined;
-  next.cacheRead = undefined;
-  next.cacheWrite = undefined;
+  Object.assign(next, COMPACTION_RUN_USAGE_CLEAR_PATCH);
   if (tokensAfterCompaction !== undefined) {
     next.totalTokens = Math.floor(tokensAfterCompaction);
     next.totalTokensFresh = true;
@@ -537,24 +285,31 @@ export async function recordCliCompactionInStore(params: {
     next.totalTokensVersion = undefined;
   }
 
-  const persisted = await patchSessionEntryCore(
+  let committedEntry: SessionEntry | undefined;
+  await patchSessionEntryCore(
     {
+      agentId: params.agentId,
       storePath,
       sessionKey,
     },
     (currentEntry, context) => {
-      if (
-        expectedSessionId &&
-        (!context.existingEntry || currentEntry.sessionId !== expectedSessionId)
-      ) {
+      if (!context.existingEntry || !isSameSessionLifecycleOwner(currentEntry, expectedSession)) {
         return null;
       }
-      return next;
+      return {
+        ...currentEntry,
+        ...projectSessionSnapshotChanges({ initial: entry, next, current: currentEntry }),
+        compactionCount: (currentEntry.compactionCount ?? 0) + 1,
+      };
     },
-    { fallbackEntry: entry },
+    {
+      workerGuard: {},
+      onCommitted: (committed) => {
+        // Retain the committed fact without overwriting a later writer's cache on return.
+        committedEntry = committed;
+        sessionStore[sessionKey] = committed;
+      },
+    },
   );
-  if (persisted) {
-    sessionStore[sessionKey] = persisted;
-  }
-  return persisted ?? undefined;
+  return committedEntry;
 }

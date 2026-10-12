@@ -1,21 +1,46 @@
-import { guard } from "lit/directives/guard.js";
 import type { coalesceAgentRunFrames } from "../chat-agent-run-grouping.ts";
+import type { ActivityGroup, MessageGroup } from "./chat-message-group-view.tsx";
+import type { StreamGroup, WorkGroupSummary } from "./chat-message-stream-view.tsx";
 import type { ChatThreadState } from "./chat-thread-interactions.ts";
+import { transcriptArraysEqual } from "./chat-transcript-memo.ts";
 
 type ChatRenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
+
+export type NativeTranscriptView =
+  | ({ kind: "group" } & Parameters<typeof MessageGroup>[0])
+  | ({ kind: "activity" } & Parameters<typeof ActivityGroup>[0])
+  | ({ kind: "stream" } & Parameters<typeof StreamGroup>[0])
+  | ({ kind: "work" } & Parameters<typeof WorkGroupSummary>[0]);
+
+/** The keyed virtual row owns the dependency memo and its rendered content. */
+export class GuardedTranscriptItem {
+  constructor(
+    readonly dependencies: readonly unknown[],
+    readonly native: NativeTranscriptView | undefined,
+    readonly legacy?: () => unknown,
+  ) {}
+}
 
 function itemDependencies(item: ChatRenderItem): readonly unknown[] {
   if (item.kind === "stream-run") {
     return [item.key, ...item.parts];
   }
   if (item.kind === "work-group") {
-    return [item.key, item.durationMs, ...item.groups];
+    const anchors = Array.from(item.previewAfterGroup ?? []).flat();
+    return [item.key, item.durationMs, ...item.groups, ...anchors];
   }
   if (item.kind === "activity-run") {
     return [item.key, ...item.groups];
   }
   if (item.kind === "agent-run-frame") {
-    return [item.key, item.outcome, ...item.parts];
+    const outcome = item.outcome;
+    // Grouping recreates frame wrappers; only the outcome and nested content invalidate a row.
+    return [
+      item.key,
+      outcome.kind,
+      outcome.kind === "completed" ? outcome.actionOwner : null,
+      ...item.parts.flatMap(itemDependencies),
+    ];
   }
   return [item];
 }
@@ -23,31 +48,28 @@ function itemDependencies(item: ChatRenderItem): readonly unknown[] {
 export function trackTranscriptRenderDependencies(
   state: ChatThreadState,
   dependencies: unknown[],
-): unknown[] {
+): void {
   const previous = state.transcriptRenderDependencies;
-  const nextLength = dependencies.length - 1;
-  let changed = previous.length !== nextLength;
-  for (let index = 0; !changed && index < nextLength; index += 1) {
-    changed = !Object.is(previous[index], dependencies[index + 1]);
+  if (!transcriptArraysEqual(dependencies, previous)) {
+    state.transcriptRenderDependencies = dependencies;
   }
-  if (changed) {
-    // The first dependency is chatItems. Keep the shared context stable when
-    // only the live row changes, but invalidate every row for presentation changes.
-    state.transcriptRenderDependencies = dependencies.slice(1);
-    state.transcriptRenderContext = {};
-  }
-  return dependencies;
 }
 
 export function guardChatRenderItems(
   state: ChatThreadState,
-  // Live status ownership depends on sibling rows, while usage patches can
-  // update a visible indicator without changing the row itself.
-  liveStatus: (item: ChatRenderItem) => string,
-  render: (item: ChatRenderItem) => unknown,
+  // Reply sources and live status can change without replacing the row itself.
+  presentationDependencies: (item: ChatRenderItem) => readonly unknown[],
+  nativeFor: (item: ChatRenderItem) => NativeTranscriptView | undefined,
+  legacyFor?: (item: ChatRenderItem) => GuardedTranscriptItem["legacy"],
 ) {
   return (item: ChatRenderItem) =>
-    guard([...itemDependencies(item), state.transcriptRenderContext, liveStatus(item)], () =>
-      render(item),
+    new GuardedTranscriptItem(
+      [
+        ...itemDependencies(item),
+        state.transcriptRenderDependencies,
+        ...presentationDependencies(item),
+      ],
+      nativeFor(item),
+      legacyFor?.(item),
     );
 }

@@ -1,11 +1,8 @@
-// Deepinfra plugin entrypoint registers its OpenClaw integration.
-import {
-  type ProviderCatalogContext,
-  type ConfiguredProviderCatalogEntry,
-  readConfiguredProviderCatalogEntries,
-} from "openclaw/plugin-sdk/provider-catalog-shared";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
-import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  applyModelCompatPatch,
+  buildProviderReplayFamilyHooks,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import {
   createOpenRouterWrapper,
   isProxyReasoningUnsupported,
@@ -15,13 +12,13 @@ import { buildDeepInfraEmbeddingAdapter } from "./embedding-adapter.js";
 import { buildDeepInfraImageGenerationProvider } from "./image-generation-provider.js";
 import { buildDeepInfraMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { applyDeepInfraConfig } from "./onboard.js";
-import { buildDeepInfraApiKeyCatalog, buildStaticDeepInfraProvider } from "./provider-catalog.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
+import { buildDeepInfraApiKeyCatalog } from "./provider-catalog.js";
+import { getDeepInfraSurfaceFallbackCatalog } from "./provider-models.js";
 import {
   DEEPINFRA_DEFAULT_MODEL_REF,
-  discoverDeepInfraModels,
-  getDeepInfraSurfaceFallbackCatalog,
-  hasDeepInfraApiKey,
-} from "./provider-models.js";
+  buildStaticDeepInfraProvider,
+} from "./provider-static-catalog.js";
 import { buildDeepInfraSpeechProvider } from "./speech-provider.js";
 import {
   listDeepInfraImageGenCatalog,
@@ -35,76 +32,34 @@ export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "DeepInfra Provider",
   description: "Bundled DeepInfra provider plugin",
+  manifest,
   provider: {
     label: "DeepInfra",
     docsPath: "/providers/deepinfra",
-    auth: [
-      {
-        methodId: "api-key",
-        label: "DeepInfra API key",
-        hint: "Unified API for open source models",
-        optionKey: "deepinfraApiKey",
-        flagName: "--deepinfra-api-key",
-        envVar: "DEEPINFRA_API_KEY",
-        promptMessage: "Enter DeepInfra API key",
-        noteTitle: "DeepInfra",
-        noteMessage: [
-          "DeepInfra provides an OpenAI-compatible API for open source and frontier models.",
-          "Get your API key at: https://deepinfra.com/dash/api_keys",
-        ].join("\n"),
-        defaultModel: DEEPINFRA_DEFAULT_MODEL_REF,
-        applyConfig: (cfg) => applyDeepInfraConfig(cfg),
-        wizard: {
-          choiceId: "deepinfra-api-key",
-          choiceLabel: "DeepInfra API key",
-          choiceHint: "Unified API for open source models",
-          groupId: PROVIDER_ID,
-          groupLabel: "DeepInfra",
-          groupHint: "Unified API for open source models",
-        },
-      },
-    ],
+    manifestAuth: {
+      noteTitle: "DeepInfra",
+      noteMessage: [
+        "DeepInfra provides an OpenAI-compatible API for open source and frontier models.",
+        "Get your API key at: https://deepinfra.com/dash/api_keys",
+      ].join("\n"),
+      defaultModel: DEEPINFRA_DEFAULT_MODEL_REF,
+      applyConfig: applyDeepInfraConfig,
+    },
     catalog: {
       order: "simple",
-      run: (ctx: ProviderCatalogContext) => buildDeepInfraApiKeyCatalog(ctx),
+      run: buildDeepInfraApiKeyCatalog,
       staticRun: async () => ({ provider: buildStaticDeepInfraProvider() }),
     },
-    augmentModelCatalog: async ({ config, env, agentDir }) => {
-      const configured = readConfiguredProviderCatalogEntries({
-        config,
-        providerId: PROVIDER_ID,
-      });
-      // Gate dynamic discovery on the user having configured a DeepInfra API
-      // key (env var, config SecretInput, or auth-profile store).
-      // Pre-auth flows keep the curated manifest fallback so the model picker
-      // stays tight and startup stays offline-friendly.
-      const hasApiKey = hasDeepInfraApiKey({ env, agentDir, config });
-      const seen = new Set(configured.map((entry) => entry.id));
-      const discovered = await discoverDeepInfraModels({ hasApiKey, env, agentDir });
-      const merged: ConfiguredProviderCatalogEntry[] = [...configured];
-      for (const model of discovered) {
-        if (seen.has(model.id)) {
-          continue;
-        }
-        seen.add(model.id);
-        const input = model.input;
-        merged.push({
-          provider: PROVIDER_ID,
-          id: model.id,
-          name: model.name ?? model.id,
-          ...(typeof model.contextWindow === "number" && model.contextWindow > 0
-            ? { contextWindow: model.contextWindow }
-            : {}),
-          ...(typeof model.reasoning === "boolean" ? { reasoning: model.reasoning } : {}),
-          ...(input && input.length > 0 ? { input } : {}),
-        });
-      }
-      return merged;
-    },
-    normalizeConfig: ({ providerConfig }) => providerConfig,
-    normalizeTransport: ({ api, baseUrl }) =>
-      baseUrl === "https://api.deepinfra.com/v1/openai" ? { api, baseUrl } : undefined,
     ...buildProviderReplayFamilyHooks({ family: "passthrough-gemini" }),
+    normalizeResolvedModel: ({ model }) =>
+      model.api === "openai-completions" &&
+      model.baseUrl?.trim().replace(/\/+$/u, "") ===
+        manifest.modelCatalog.providers.deepinfra.baseUrl
+        ? applyModelCompatPatch(model, {
+            supportsPromptCacheKey: model.compat?.supportsPromptCacheKey ?? true,
+            supportsLongCacheRetention: model.compat?.supportsLongCacheRetention ?? false,
+          })
+        : model,
     wrapStreamFn: (ctx) => {
       const thinkingLevel = isProxyReasoningUnsupported(ctx.modelId)
         ? undefined
@@ -115,16 +70,14 @@ export default defineSingleProviderPluginEntry({
       // the upstream OpenRouter-only wrapper skips.
       return createDeepInfraAnthropicCacheWrapper(
         createOpenRouterWrapper(ctx.streamFn, thinkingLevel),
+        ctx.extraParams,
       );
     },
     isModernModelRef: () => true,
     isCacheTtlEligible: (ctx) => ctx.modelId.toLowerCase().startsWith("anthropic/"),
   },
   register(api) {
-    // Single source for media defaults at register time; image-gen and
-    // video-gen also get a live registerModelCatalogProvider that refreshes
-    // from the agent endpoint when a key is configured (OpenRouter pattern).
-    // TTS/STT/VLM/embed stay static until UnifiedModelCatalogKind covers them.
+    // Registration stays offline; image/video catalog hooks refresh after auth.
     const catalog = getDeepInfraSurfaceFallbackCatalog();
     api.registerImageGenerationProvider(
       buildDeepInfraImageGenerationProvider({ imageGenModels: catalog.imageGen }),

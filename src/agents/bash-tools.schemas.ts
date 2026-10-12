@@ -5,7 +5,9 @@
  * descriptions that match runtime validation.
  */
 import { Type } from "typebox";
-import { optionalStringEnum } from "./schema/typebox.js";
+import { isRequestedExecTargetAllowed } from "./bash-tools.exec-target.js";
+import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
+import { executionTitleSchema, optionalStringEnum } from "./schema/typebox.js";
 
 const EXEC_TOOL_HOST_VALUES = ["auto", "sandbox", "gateway", "node"] as const;
 const PROCESS_TOOL_ACTIONS = [
@@ -23,47 +25,57 @@ const PROCESS_TOOL_ACTIONS = [
 
 /** Parameters accepted by the exec tool. */
 export const execSchema = Type.Object({
-  command: Type.String({ description: "Shell command to execute" }),
+  title: executionTitleSchema(),
+  command: Type.String({ description: "Shell command." }),
   workdir: Type.Optional(
     Type.String({
-      description:
-        "Working directory; omit for default. An empty string means omitted; whitespace-only is invalid.",
+      description: "Omit/empty string: default; whitespace-only invalid.",
     }),
   ),
-  env: Type.Optional(Type.Record(Type.String(), Type.String())),
+  env: Type.Optional(
+    Type.Record(Type.String(), Type.String(), {
+      description: "Literal overrides; no expansion. Omit to inherit.",
+    }),
+  ),
   yieldMs: Type.Optional(
     Type.Number({
-      description: "Milliseconds before backgrounding; default 10000.",
+      description: "Milliseconds before returning an ordinary-command handle; default 10000.",
     }),
   ),
-  background: Type.Optional(Type.Boolean({ description: "Run in background immediately" })),
+  awaitResults: Type.Optional(
+    Type.Boolean({
+      description:
+        "Result required to finish the task; wait for terminal collection. Not for detached servers.",
+    }),
+  ),
+  background: Type.Optional(
+    Type.Boolean({
+      description:
+        "Start an independent service now; survives request Stop. Use yieldMs for ordinary work. timeoutSeconds applies.",
+    }),
+  ),
   timeoutSeconds: Type.Optional(
     Type.Number({
-      description: "Timeout in seconds.",
+      description: "Process lifetime in seconds; 0 disables.",
     }),
   ),
   pty: Type.Optional(
     Type.Boolean({
-      description: "Use PTY for TTY-required CLIs and coding agents.",
+      description: "PTY for TTY-required CLIs/coding agents.",
     }),
   ),
   elevated: Type.Optional(
     Type.Boolean({
-      description: "Run on host with elevated permissions if allowed.",
+      description: "Host elevation if allowed.",
     }),
   ),
   host: optionalStringEnum(EXEC_TOOL_HOST_VALUES, {
-    description: "Exec host/target (auto|sandbox|gateway|node).",
+    description: "Omit/auto: inherit configured host.",
   }),
-  security: Type.Optional(
-    Type.String({
-      description: "Ignored per call; tools.exec.security and host approvals decide.",
-    }),
-  ),
   ask: Type.Optional(
     Type.String({
       description:
-        "Uses tools.exec.ask and host approvals; channel-origin calls cannot override host ask=off.",
+        "Requests stricter approvals under tools.exec.mode and host policy; channel-origin calls cannot override host ask=off.",
     }),
   ),
   node: Type.Optional(
@@ -73,11 +85,29 @@ export const execSchema = Type.Object({
   ),
 });
 
-/** Exec parameters when no process-control continuation is authorized. */
-export const execCompletionSchema = Type.Omit(execSchema, ["yieldMs", "background"]);
+/** Capture host capabilities once; direct tools and catalog hints share this schema. */
+export function createExecSchema(
+  defaults?: Pick<ExecToolDefaults, "host" | "sandbox" | "sandboxRequired">,
+) {
+  const sandboxAvailable = Boolean(defaults?.sandbox);
+  const configuredTarget = defaults?.sandboxRequired ? "sandbox" : (defaults?.host ?? "auto");
+  const hosts = EXEC_TOOL_HOST_VALUES.filter(
+    (requestedTarget) =>
+      requestedTarget === "auto" ||
+      ((requestedTarget !== "sandbox" || sandboxAvailable) &&
+        isRequestedExecTargetAllowed({ configuredTarget, requestedTarget, sandboxAvailable })),
+  );
+  return Type.Object({
+    ...execSchema.properties,
+    host: optionalStringEnum(hosts, {
+      description: `Omit/auto: inherit configured host (${configuredTarget === "auto" ? (sandboxAvailable ? "sandbox" : "gateway") : configuredTarget}).`,
+    }),
+  });
+}
 
 /** Parameters exposed by node-only exec surfaces. */
 export const nodeExecSchema = Type.Object({
+  title: execSchema.properties.title,
   command: execSchema.properties.command,
   workdir: execSchema.properties.workdir,
   env: execSchema.properties.env,
@@ -94,7 +124,7 @@ export const processSchema = Type.Object({
     enum: [...PROCESS_TOOL_ACTIONS],
     description: "Process action (list|poll|log|write|send-keys|submit|paste|kill|clear|remove)",
   }),
-  sessionId: Type.Optional(Type.String({ description: "Session id for actions other than list" })),
+  sessionId: Type.Optional(Type.String({ description: "Required for every action except list." })),
   data: Type.Optional(Type.String({ description: "Data to write for write" })),
   keys: Type.Optional(
     Type.Array(Type.String(), { description: "Key tokens to send for send-keys" }),

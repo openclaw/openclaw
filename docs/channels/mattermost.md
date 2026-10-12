@@ -29,8 +29,9 @@ Details: [Plugins](/tools/plugin)
 ## Quick setup
 
 <Steps>
-  <Step title="Ensure plugin is available">
-    Install `@openclaw/mattermost` with the command above, then restart the Gateway if it is already running.
+  <Step title="Check plugin availability">
+    <a id="ensure-plugin-is-available" />
+    Install `@openclaw/mattermost` with the command above. Check the [application result](/plugins/manage-plugins#apply-changes-and-inspect) before continuing.
   </Step>
   <Step title="Create a Mattermost bot">
     Create a Mattermost bot account, copy the **bot token**, and add the bot to the teams and channels it should read.
@@ -98,8 +99,8 @@ Registered commands: `/oc_status`, `/oc_model`, `/oc_models`, `/oc_new`, `/oc_he
     - Existing slash commands with the same trigger created by other integrations are left untouched (registration skips them); commands the bot created are updated or recreated when the callback URL drifts.
     - Command callbacks are validated with the per-command tokens returned by Mattermost when OpenClaw registers `oc_*` commands.
     - OpenClaw refreshes current Mattermost command registration before accepting each callback, so stale tokens from deleted or regenerated slash commands stop being accepted without a gateway restart.
-    - Callback validation fails closed if the Mattermost API cannot confirm the command is still current; failed validations are cached briefly, concurrent lookups are coalesced, and fresh lookup starts are rate-limited per command to bound replay pressure.
-    - Slash callbacks fail closed when registration failed, startup was partial, or the callback token does not match the resolved command's registered token (a token valid for one command cannot reach upstream validation for a different command).
+    - Callbacks are rejected if the Mattermost API cannot confirm the command is still current; failed validations are cached briefly, concurrent lookups are coalesced, and fresh lookup starts are rate-limited per command to bound replay pressure.
+    - Slash callbacks are rejected when registration failed, startup was partial, or the callback token does not match the resolved command's registered token (a token valid for one command cannot reach upstream validation for a different command).
     - Accepted callbacks are acknowledged with an ephemeral "Processing..." reply; the real answer arrives as a normal message.
 
   </Accordion>
@@ -169,7 +170,20 @@ Notes:
 - `onchar` still responds to explicit @mentions.
 - `channels.mattermost.requireMention` is still honored, but `chatmode` is preferred. Per-channel `groups.<channelId>.requireMention` settings win over both.
 - After the bot sends a visible reply in a channel thread, later messages in that same thread are answered without a new @mention or `onchar` prefix, so multi-turn thread conversations keep flowing. Participation is remembered for 7 days after the bot last replied in that thread and persists across gateway restarts. Threads the bot has only observed are unaffected; start a new top-level message to require an explicit mention again.
-- Set `channels.mattermost.implicitMentions.threadParticipation: false` to stop participated-thread follow-ups from bypassing mention gating. Account overrides use `channels.mattermost.accounts.<id>.implicitMentions`. Mattermost does not currently produce `replyToBot` or `quotedBot` facts, so those flags have no effect here.
+- Set `channels.mattermost.implicitMentions.threadParticipation: false` to stop participated-thread follow-ups from bypassing mention gating. Account overrides use `channels.mattermost.accounts.<id>.implicitMentions`. Mattermost does not produce `replyToBot` or `quotedBot` facts, so those flags have no effect here.
+
+Set `channels.mattermost.requireMentionInBotThreads: false` to accept follow-ups
+without an @mention or `onchar` prefix in threads whose root post was sent by the
+receiving bot. Set it to `true` to require explicit activation there even after
+the bot has participated. Omitting it preserves the behavior above.
+
+Account settings override the channel-wide value. For an individual channel,
+`groups.<channelId>.requireMentionInBotThreads` overrides
+`groups["*"].requireMentionInBotThreads`, then the account value. OpenClaw verifies
+the root post's author and channel through Mattermost; unavailable or deleted
+roots keep the existing mention behavior. Sender and channel restrictions still
+apply, and top-level messages and threads rooted in someone else's post are
+unchanged.
 
 ## Threading and sessions
 
@@ -177,7 +191,7 @@ Use `channels.mattermost.replyToMode` to control whether channel and group repli
 
 - `off` (default): only reply in a thread when the inbound post is already in one.
 - `first`: for top-level channel/group posts, start a thread under that post and route the conversation to a thread-scoped session.
-- `all` and `batched`: same behavior as `first` for Mattermost today, because once Mattermost has a thread root, follow-up chunks and media continue in that same thread.
+- `all` and `batched`: same behavior as `first` for Mattermost, because once Mattermost has a thread root, follow-up chunks and media continue in that same thread.
 - Direct messages default to `off` even when `replyToMode` is set.
 
 Use `channels.mattermost.replyToModeByChatType` to override the mode for `direct`, `group`, or `channel` chats. Set `direct` to opt direct messages into threading:
@@ -201,8 +215,9 @@ Use `channels.mattermost.replyToModeByChatType` to override the mode for `direct
 Notes:
 
 - Thread-scoped sessions use the triggering post id as the thread root.
-- `first` and `all` are currently equivalent because once Mattermost has a thread root, follow-up chunks and media continue in that same thread.
+- `first` and `all` are equivalent because once Mattermost has a thread root, follow-up chunks and media continue in that same thread.
 - Per-chat-type overrides take precedence over `replyToMode`. Without a `direct` override, existing deployments keep flat, non-threaded DMs.
+- After a restart or session reset, thread-scoped conversations recover recent messages from Mattermost when their pending history is cold. This includes DMs with threading enabled; flat DMs are unchanged. Recovery respects sender access and context visibility, excludes the triggering message, and is bounded by `historyLimit`, a 200-post server window, and a five-second deadline. A temporary server failure does not block the new message indefinitely.
 
 ## Access control (DMs)
 
@@ -219,10 +234,11 @@ Notes:
 - Allowlist senders with `channels.mattermost.groupAllowFrom` (user IDs recommended).
 - `channels.mattermost.groupAllowFrom` accepts `accessGroup:<name>` entries. See [Access groups](/channels/access-groups).
 - Per-channel mention overrides live under `channels.mattermost.groups.<channelId>.requireMention` or `channels.mattermost.groups["*"].requireMention` for a default.
+- Text commands can follow the mention: `@<bot-username> /new` runs `/new` while `commands.text` is enabled (the default). Mattermost itself executes a bare `/new` as a Mattermost slash command instead of posting it.
 - `@username` matching is mutable and only enabled when `channels.mattermost.dangerouslyAllowNameMatching: true`.
 - Open channels: `channels.mattermost.groupPolicy="open"` (mention-gated).
 - Resolution order: `channels.mattermost.groupPolicy`, then `channels.defaults.groupPolicy`, then `"allowlist"`.
-- Runtime note: if the `channels.mattermost` section is completely missing, runtime fails closed to `groupPolicy="allowlist"` for group checks (even if `channels.defaults.groupPolicy` is set) and logs a one-time warning.
+- Runtime note: if the `channels.mattermost` section is completely missing, runtime defaults to `groupPolicy="allowlist"` for group checks (even if `channels.defaults.groupPolicy` is set) and logs a one-time warning.
 
 Example:
 
@@ -253,6 +269,14 @@ Use these target formats with `openclaw message send` or cron/webhooks:
 
 Outbound sends support at most one attachment per message; split multiple files into separate sends.
 
+Set `channels.mattermost.mediaMaxMb` to limit each inbound download and outbound
+attachment in MiB. `accounts.<id>.mediaMaxMb` overrides the channel root, then
+`agents.defaults.mediaMaxMb` supplies the fallback. Without any configured cap,
+inbound downloads retain their 8 MiB default and outbound media retains the
+shared loader defaults. Outbound images may be optimized. With a configured cap,
+download or upload failures fail the send instead of posting the unchecked original
+URL. Without a configured cap, the existing URL fallback remains available.
+
 <Warning>
 Bare opaque IDs (like `64ifufp...`) are **ambiguous** in Mattermost (user ID vs channel ID).
 
@@ -261,7 +285,7 @@ OpenClaw resolves them **user-first**:
 - If the ID exists as a user (`GET /api/v4/users/<id>` succeeds), OpenClaw sends a **DM** by resolving the direct channel via `/api/v4/channels/direct`.
 - Otherwise the ID is treated as a **channel ID**.
 
-If you need deterministic behavior, always use the explicit prefixes (`user:<id>` / `channel:<id>`).
+To avoid ambiguous targets, always use the explicit prefixes (`user:<id>` / `channel:<id>`).
 </Warning>
 
 ## DM channel retry
@@ -289,7 +313,7 @@ Notes:
 
 - This applies only to DM channel creation (`/api/v4/channels/direct`), not every Mattermost API call.
 - Retries use exponential backoff with jitter and apply to transient failures such as rate limits, 5xx responses, and network or timeout errors.
-- 4xx client errors other than `429` are treated as permanent and are not retried.
+- 4xx client errors other than `429` are treated as permanent and are not retried, even if reading the error response body fails. Diagnostics retain the HTTP status when the response body is unavailable.
 
 ## Preview streaming
 
@@ -317,6 +341,7 @@ Preview streaming is **on by default** in `partial` mode. Configure via `channel
   </Accordion>
   <Accordion title="Streaming behavior notes">
     - If the stream cannot be finalized in place (for example the post was deleted mid-stream), OpenClaw falls back to sending a fresh final post so the reply is never lost.
+    - Clearing a plan removes an otherwise empty preview; a replacement plan gets a fresh preview even when its text is unchanged. At turn completion, failed deletions of old previews are attempted once more without deleting the finalized reply. If deletion still fails, the old preview may remain; verbose logs include the cleanup failure.
     - Thinking-only payloads are suppressed from channel posts, including text that arrives as a `> Thinking` blockquote. Set `/reasoning on` to see thinking in other surfaces; the Mattermost final post keeps the answer only.
     - See [Streaming](/concepts/streaming#preview-streaming-modes) for the channel-mapping matrix.
 
@@ -334,8 +359,9 @@ openclaw message read --channel mattermost --target channel:<channelId> --limit 
 - Results follow Mattermost's ordered post list and include normalized `timestampMs` and `timestampUtc` fields.
 - `limit` defaults to 60 and is capped at Mattermost's maximum of 200. Use either `before=<postId>` or `after=<postId>` for pagination; the two cursors cannot be combined.
 - Direct operator calls rely on Mattermost's channel membership and `read_channel` permission. A provider 403 remains a normal, visible tool error.
-- Delegated reads of the current Mattermost conversation are allowed for the current account. Cross-channel delegated reads additionally require the destination channel ID under `channels.mattermost.groups`, a `"*"` groups entry, or `groupPolicy: "open"`. Cross-account and cross-channel DM reads fail closed.
+- Delegated reads of the current Mattermost conversation are allowed for the current account. Cross-channel delegated reads additionally require the destination channel ID under `channels.mattermost.groups`, a `"*"` groups entry, or `groupPolicy: "open"`. Cross-account and cross-channel DM reads are denied.
 - History reads are disabled by default. Set `channels.mattermost.actions.messages: true` to enable them. Override the setting per account with `channels.mattermost.accounts.<id>.actions.messages`.
+- These access rules apply to both the bundled plugin and the official plugin installed through npm or ClawHub. Delegated reads require the calling run and plugin registration to remain active.
 
 ## Reactions (message tool)
 
@@ -362,6 +388,14 @@ Config:
 Send messages with clickable buttons. When a user clicks a button, the agent receives the selection and can respond.
 
 Buttons come from the semantic `presentation` payload (in normal agent replies and in `message action=send`). OpenClaw renders value buttons as Mattermost interactive buttons, keeps URL buttons visible in the message text, and downgrades select menus to readable text.
+
+The options an `ask_user` question offers are also rendered as buttons, and tapping one answers
+that question directly. The question stays answerable by typing, and an option the Gateway does
+not index stays in the prose instead: the "Other…" choice, and any prompt that asks more than one
+question or whose question is multi-select, secret, or does not offer two to four distinct options.
+Every other typed presentation action (`command`, `callback`, `approval`) stays readable text on
+Mattermost rather than becoming a button: a click here reaches the agent as a message rather than
+running the action, so a control would do something other than what it says.
 
 ```text
 message action=send channel=mattermost target=channel:<channelId> presentation={"blocks":[{"type":"buttons","buttons":[{"label":"Yes","value":"yes"},{"label":"No","value":"no"}]}]}
@@ -489,7 +523,7 @@ The gateway verifies button clicks with HMAC-SHA256. External scripts must gener
     Build the context object with all fields **except** `_token`.
   </Step>
   <Step title="Serialize with sorted keys">
-    Serialize with **recursively sorted keys** and **no spaces** (the gateway canonicalizes nested objects too and produces compact JSON).
+    Serialize with **recursively sorted keys** and **no spaces** (the gateway sorts keys in nested objects too and produces compact JSON).
   </Step>
   <Step title="Sign the payload">
     `HMAC-SHA256(key=secret, data=serializedContext)`
@@ -521,7 +555,7 @@ context = {**ctx, "_token": token}
     - Python's `json.dumps` adds spaces by default (`{"key": "val"}`). Use `separators=(",", ":")` to match JavaScript's compact output (`{"key":"val"}`).
     - Always sign **all** context fields (minus `_token`). The gateway strips `_token` then signs everything remaining. Signing a subset causes silent verification failure.
     - Use `sort_keys=True` - the gateway sorts keys before signing, and Mattermost may reorder context fields when storing the payload.
-    - Derive the secret from the bot token (deterministic), not random bytes. The secret must be the same across the process that creates buttons and the gateway that verifies.
+    - Derive the secret from the bot token, not random bytes. The secret must be the same across the process that creates buttons and the gateway that verifies.
 
   </Accordion>
 </AccordionGroup>
@@ -555,7 +589,7 @@ Account values override top-level fields; `channels.mattermost.defaultAccount` p
 
 <AccordionGroup>
   <Accordion title="No replies in channels">
-    Ensure the bot is in the channel and mention it (oncall), use a trigger prefix (onchar), or set `chatmode: "onmessage"`.
+    Add the bot to the channel and mention it (oncall), use a trigger prefix (onchar), or set `chatmode: "onmessage"`.
   </Accordion>
   <Accordion title="Auth or multi-account errors">
     - Check the bot token, base URL, and whether the account is enabled.
@@ -569,6 +603,7 @@ Account values override top-level fields; `channels.mattermost.defaultAccount` p
       - the callback is hitting the wrong gateway/account
       - Mattermost still has old commands pointing at a previous callback target
       - the gateway restarted without reactivating slash commands
+    - HTTP 429 under load: callbacks using an outgoing OAuth connection or a proxy that strips the `Authorization` header carry the command token only in the body. They share the bounded anonymous request pool and can be throttled when it is saturated. Preserve Mattermost's original `Authorization: Token` header through proxies so recognized command credentials receive separate capacity.
     - If native slash commands stop working, check logs for `mattermost: failed to register slash commands` or `mattermost: native slash commands enabled but no commands could be registered`.
     - If `callbackUrl` is omitted and logs warn that the callback resolved to a loopback URL like `http://localhost:18789/...`, that URL is probably only reachable when Mattermost runs on the same host/network namespace as OpenClaw. Set an explicit externally reachable `commands.callbackUrl` instead.
 
@@ -579,7 +614,7 @@ Account values override top-level fields; `channels.mattermost.defaultAccount` p
     - Buttons return 404 on click: the button `id` likely contains hyphens or underscores. Mattermost's action router breaks on non-alphanumeric IDs. Use `[a-zA-Z0-9]` only.
     - Gateway logs `rejected callback source`: the click came from an IP outside `interactions.allowedSourceIps`. Allowlist the Mattermost server or your ingress, and set `gateway.trustedProxies` behind a reverse proxy.
     - Gateway logs `invalid _token`: HMAC mismatch. Check that you sign all context fields (not a subset), use sorted keys, and use compact JSON (no spaces). See the HMAC section above.
-    - Gateway logs `missing _token in context`: the `_token` field is not in the button's context. Ensure it is included when building the integration payload.
+    - Gateway logs `missing _token in context`: the `_token` field is not in the button's context. Include it when building the integration payload.
     - Gateway rejects the click with `Unknown action`: `context.action_id` does not match any action `id` on the post. Set both to the same sanitized value.
     - Agent does not offer buttons: add `capabilities: ["inlineButtons"]` to the Mattermost channel config.
 
@@ -588,7 +623,7 @@ Account values override top-level fields; `channels.mattermost.defaultAccount` p
 
 ## Related
 
-- [Channel Routing](/channels/channel-routing) - session routing for messages
+- [Channel routing](/channels/channel-routing) - session routing for messages
 - [Channels Overview](/channels) - all supported channels
 - [Groups](/channels/groups) - group chat behavior and mention gating
 - [Pairing](/channels/pairing) - DM authentication and pairing flow

@@ -7,8 +7,10 @@ const authMocks = vi.hoisted(() => ({
   getBridgeAuthForPort: vi.fn(() => undefined),
 }));
 
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/runtime-config-snapshot")
+  >("openclaw/plugin-sdk/runtime-config-snapshot");
   return { ...actual, getRuntimeConfig: authMocks.loadConfig, loadConfig: authMocks.loadConfig };
 });
 vi.mock("./control-auth.js", () => ({
@@ -37,8 +39,6 @@ describe("fetchHttpJson error body boundary", () => {
   let baseUrl: string;
   let streamClosed: Promise<void>;
   let resolveStreamClosed: () => void;
-  let smallConnectionClosed: Promise<void>;
-  let resolveSmallConnectionClosed: () => void;
   let successStreamClosed: Promise<void>;
   let resolveSuccessStreamClosed: () => void;
   let malformedConnectionClosed: Map<number, Promise<void>>;
@@ -58,11 +58,9 @@ describe("fetchHttpJson error body boundary", () => {
       vi.stubEnv(key, "");
     }
 
+    vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "0");
     streamClosed = new Promise<void>((resolve) => {
       resolveStreamClosed = resolve;
-    });
-    smallConnectionClosed = new Promise<void>((resolve) => {
-      resolveSmallConnectionClosed = resolve;
     });
     successStreamClosed = new Promise<void>((resolve) => {
       resolveSuccessStreamClosed = resolve;
@@ -80,9 +78,10 @@ describe("fetchHttpJson error body boundary", () => {
     streamCompleted = false;
     successStreamCompleted = false;
     server = http.createServer((req, res) => {
-      if (req.url === "/success-small") {
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end('{"payload":"control 🦞"}');
+      if (req.url === "/rate-limit") {
+        req.socket.once("close", () => resolveStreamClosed());
+        res.writeHead(429, { "Content-Type": "application/json" });
+        res.write('{"error":"rate-limited"');
         return;
       }
       const malformedStatus = Number(req.url?.match(/^\/malformed-utf8\/(\d+)$/)?.[1]);
@@ -132,25 +131,13 @@ describe("fetchHttpJson error body boundary", () => {
         return;
       }
 
-      if (req.url === "/small") {
-        req.socket.once("close", () => resolveSmallConnectionClosed());
-        res.writeHead(500, { "Content-Type": "text/plain" });
-        res.end("session expired");
-        return;
-      }
-
-      if (req.url === "/structured") {
-        res.writeHead(409, { "Content-Type": "application/json" });
+      if (req.url === "/navigation-blocked") {
+        res.writeHead(400, { "Content-Type": "application/json" });
         res.end(
           JSON.stringify({
-            error: "display required",
-            reason: "no_display_for_headed_profile",
-            details: {
-              profile: "openclaw",
-              requestedHeadless: false,
-              headlessSource: "config",
-              displayPresent: false,
-            },
+            error: "browser navigation blocked by policy",
+            reason: "navigation_blocked",
+            details: { url: "http://internal.example/admin" },
           }),
         );
         return;
@@ -199,6 +186,13 @@ describe("fetchHttpJson error body boundary", () => {
     });
   });
 
+  it("rejects 429 and closes the hanging loopback socket", async ({ signal }) => {
+    await expect(fetchBrowserJson(`${baseUrl}/rate-limit`, { signal })).rejects.toThrow(
+      /rate[ -]?limit/i,
+    );
+    await streamClosed;
+  });
+
   it("cancels an overflowing stream and releases the guarded fetch", async () => {
     const error = await fetchBrowserJson(`${baseUrl}/large`).catch((err: unknown) => err);
 
@@ -216,12 +210,6 @@ describe("fetchHttpJson error body boundary", () => {
     });
     await expect(successStreamClosed).resolves.toBeUndefined();
     expect(successStreamCompleted).toBe(false);
-  });
-
-  it("preserves a normal successful JSON response", async () => {
-    await expect(fetchBrowserJson(`${baseUrl}/success-small`)).resolves.toEqual({
-      payload: "control 🦞",
-    });
   });
 
   it("rejects malformed UTF-8 responses, preserves retry policy, and releases each fetch", async () => {
@@ -249,29 +237,17 @@ describe("fetchHttpJson error body boundary", () => {
     }
   });
 
-  it("preserves a complete diagnostic body within the limit", async () => {
-    const error = await fetchBrowserJson(`${baseUrl}/small`).catch((err: unknown) => err);
+  it("preserves a navigation denial without exposing raw policy details over HTTP", async () => {
+    const error = await fetchBrowserJson(`${baseUrl}/navigation-blocked`).catch(
+      (err: unknown) => err,
+    );
 
     expect(error).toMatchObject({
       name: "BrowserServiceError",
-      message: "session expired",
-    });
-    await expect(smallConnectionClosed).resolves.toBeUndefined();
-  });
-
-  it("preserves validated structured errors over HTTP", async () => {
-    const error = await fetchBrowserJson(`${baseUrl}/structured`).catch((err: unknown) => err);
-
-    expect(error).toMatchObject({
-      name: "BrowserServiceError",
-      message: "display required",
-      reason: "no_display_for_headed_profile",
-      details: {
-        profile: "openclaw",
-        requestedHeadless: false,
-        headlessSource: "config",
-        displayPresent: false,
-      },
+      message: "browser navigation blocked by policy",
+      reason: "navigation_blocked",
+      status: 400,
+      details: undefined,
     });
   });
 });

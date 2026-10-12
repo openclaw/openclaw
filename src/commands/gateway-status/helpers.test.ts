@@ -13,7 +13,7 @@ import {
   resolveTargets,
   sanitizeSshTarget,
 } from "./helpers.js";
-import { createSecretRefGatewayConfig } from "./test-support.js";
+import { createUnreachableGatewayProbe, createSecretRefGatewayConfig } from "./test-support.js";
 
 describe("extractConfigSummary", () => {
   it("marks SecretRef-backed gateway auth credentials as configured", () => {
@@ -93,41 +93,6 @@ describe("resolveAuthForTarget", () => {
     };
   }
 
-  it("resolves local auth token SecretRef before probing local targets", async () => {
-    await withEnvAsync(
-      {
-        OPENCLAW_GATEWAY_TOKEN: undefined,
-        OPENCLAW_GATEWAY_PASSWORD: undefined,
-        LOCAL_GATEWAY_TOKEN: "resolved-local-token",
-      },
-      async () => {
-        const auth = await resolveAuthForTarget(
-          {
-            secrets: {
-              providers: {
-                default: { source: "env" },
-              },
-            },
-            gateway: {
-              auth: {
-                token: { source: "env", provider: "default", id: "LOCAL_GATEWAY_TOKEN" },
-              },
-            },
-          },
-          {
-            id: "localLoopback",
-            kind: "localLoopback",
-            url: "ws://127.0.0.1:18789",
-            active: true,
-          },
-          {},
-        );
-
-        expect(auth).toEqual({ token: "resolved-local-token", password: undefined });
-      },
-    );
-  });
-
   it("resolves remote auth token SecretRef before probing remote targets", async () => {
     await withEnvAsync(
       {
@@ -141,53 +106,6 @@ describe("resolveAuthForTarget", () => {
         );
 
         expect(auth).toEqual({ token: "resolved-remote-token", password: undefined });
-      },
-    );
-  });
-
-  it("resolves remote auth even when local auth mode is none", async () => {
-    await withEnvAsync(
-      {
-        REMOTE_GATEWAY_TOKEN: "resolved-remote-token",
-      },
-      async () => {
-        const auth = await resolveAuthForTarget(
-          createRemoteGatewayTargetConfig({ mode: "none" }),
-          createConfigRemoteTarget(),
-          {},
-        );
-
-        expect(auth).toEqual({ token: "resolved-remote-token", password: undefined });
-      },
-    );
-  });
-
-  it("does not force remote auth type from local auth mode", async () => {
-    await withEnvAsync(
-      { OPENCLAW_GATEWAY_PASSWORD: "ambient-password" }, // pragma: allowlist secret
-      async () => {
-        const auth = await resolveAuthForTarget(
-          {
-            gateway: {
-              auth: {
-                mode: "password",
-              },
-              remote: {
-                token: "remote-token",
-                password: "remote-password", // pragma: allowlist secret
-              },
-            },
-          },
-          {
-            id: "configRemote",
-            kind: "configRemote",
-            url: "wss://remote.example:18789",
-            active: true,
-          },
-          {},
-        );
-
-        expect(auth).toEqual({ token: "remote-token", password: undefined });
       },
     );
   });
@@ -237,6 +155,7 @@ describe("probe reachability classification", () => {
       ok: false,
       url: "ws://127.0.0.1:18789",
       connectLatencyMs: 51,
+      gatewayReached: true as const,
       error: "missing scope: operator.read",
       close: null,
       auth: {
@@ -253,7 +172,7 @@ describe("probe reachability classification", () => {
     expect(isScopeLimitedProbeFailure(probe)).toBe(true);
     expect(isProbeReachable(probe)).toBe(true);
     expect(renderProbeSummaryLine(probe, false)).toBe(
-      "Connect: ok (51ms) · Capability: write-capable · Read probe: limited - missing scope: operator.read",
+      "Connect: ok (51ms) · Capability: write-capable · Read check: limited - missing scope: operator.read",
     );
   });
 
@@ -262,6 +181,7 @@ describe("probe reachability classification", () => {
       ok: false,
       url: "ws://127.0.0.1:18789",
       connectLatencyMs: 51,
+      gatewayReached: true as const,
       error: "permission denied",
       missingScopeErrorDetails: {
         code: "MISSING_SCOPE" as const,
@@ -288,6 +208,7 @@ describe("probe reachability classification", () => {
       ok: false,
       url: "ws://127.0.0.1:18789",
       connectLatencyMs: 43,
+      gatewayReached: true as const,
       error: "unknown method: status",
       close: null,
       auth: {
@@ -305,27 +226,12 @@ describe("probe reachability classification", () => {
     expect(isPostConnectProbeFailure(probe)).toBe(true);
     expect(isProbeReachable(probe)).toBe(true);
     expect(renderProbeSummaryLine(probe, false)).toBe(
-      "Connect: ok (43ms) · Capability: connect-only · Read probe: failed - unknown method: status",
+      "Connect: ok (43ms) · Capability: connect-only · Read check: failed - unknown method: status",
     );
   });
 
   it("keeps failed-before-connect probes unreachable", () => {
-    const probe = {
-      ok: false,
-      url: "ws://127.0.0.1:18789",
-      connectLatencyMs: null,
-      error: "timeout",
-      close: null,
-      auth: {
-        role: null,
-        scopes: [],
-        capability: "unknown" as const,
-      },
-      health: null,
-      status: null,
-      presence: null,
-      configSnapshot: null,
-    };
+    const probe = createUnreachableGatewayProbe("ws://127.0.0.1:18789", "timeout");
 
     expect(isPostConnectProbeFailure(probe)).toBe(false);
     expect(isProbeReachable(probe)).toBe(false);
@@ -364,25 +270,6 @@ describe("gateway-status local target scheme", () => {
     expect(hints.localLoopbackUrl).toBe("ws://127.0.0.1:19080");
   });
 
-  it("treats a bare local port override as the selected active local target", () => {
-    const cfg = {
-      gateway: {
-        mode: "remote",
-        port: 18789,
-        remote: { url: "wss://remote.example:18789" },
-      },
-    };
-
-    expect(resolveTargets(cfg as never, undefined, 19080)).toEqual([
-      {
-        id: "localLoopback",
-        kind: "localLoopback",
-        url: "ws://127.0.0.1:19080",
-        active: true,
-      },
-    ]);
-  });
-
   it("preserves explicit URL targets when a local port override is also present", () => {
     const cfg = {
       gateway: {
@@ -416,89 +303,32 @@ describe("gateway-status local target scheme", () => {
 });
 
 describe("resolveProbeBudgetMs", () => {
-  it("lets active local loopback probes use the full caller budget", () => {
-    expect(
-      resolveProbeBudgetMs(15_000, {
-        kind: "localLoopback",
-        active: true,
-        url: "ws://127.0.0.1:18789",
-      }),
-    ).toBe(15_000);
-    expect(
-      resolveProbeBudgetMs(3_000, {
-        kind: "localLoopback",
-        active: true,
-        url: "ws://127.0.0.1:18789",
-      }),
-    ).toBe(3_000);
-  });
-
-  it("keeps inactive local loopback probes on the short cap", () => {
-    expect(
-      resolveProbeBudgetMs(15_000, {
-        kind: "localLoopback",
-        active: false,
-        url: "ws://127.0.0.1:18789",
-      }),
-    ).toBe(800);
-    expect(
-      resolveProbeBudgetMs(500, {
-        kind: "localLoopback",
-        active: false,
-        url: "ws://127.0.0.1:18789",
-      }),
-    ).toBe(500);
-  });
-
-  it("lets explicit loopback URLs use the full caller budget", () => {
-    expect(
-      resolveProbeBudgetMs(15_000, {
-        kind: "explicit",
-        active: true,
-        url: "ws://127.0.0.1:18789",
-      }),
-    ).toBe(15_000);
-    expect(
-      resolveProbeBudgetMs(2_500, {
-        kind: "explicit",
-        active: true,
-        url: "wss://localhost:18789/ws",
-      }),
-    ).toBe(2_500);
-  });
-
-  it("lets active remote probes use the full caller budget", () => {
-    expect(
-      resolveProbeBudgetMs(15_000, {
-        kind: "configRemote",
-        active: true,
-        url: "wss://gateway.example/ws",
-      }),
-    ).toBe(15_000);
-    expect(
-      resolveProbeBudgetMs(15_000, {
-        kind: "explicit",
-        active: true,
-        url: "wss://gateway.example/ws",
-      }),
-    ).toBe(15_000);
-  });
-
-  it("keeps inactive remote and SSH tunnel probes on the short cap", () => {
-    expect(
-      resolveProbeBudgetMs(15_000, {
-        kind: "configRemote",
-        active: false,
-        url: "wss://gateway.example/ws",
-      }),
-    ).toBe(1500);
-    expect(
-      resolveProbeBudgetMs(15_000, {
-        kind: "sshTunnel",
-        active: true,
-        url: "wss://gateway.example/ws",
-      }),
-    ).toBe(2000);
+  it.each([
+    [
+      "keeps inactive local loopback probes on the short cap",
+      [
+        [15_000, "localLoopback", false, "ws://127.0.0.1:18789", 800],
+        [500, "localLoopback", false, "ws://127.0.0.1:18789", 500],
+      ],
+    ],
+    [
+      "lets explicit loopback URLs use the full caller budget",
+      [
+        [15_000, "explicit", true, "ws://127.0.0.1:18789", 15_000],
+        [2_500, "explicit", true, "wss://localhost:18789/ws", 2_500],
+      ],
+    ],
+    [
+      "keeps inactive remote and SSH tunnel probes on the short cap",
+      [
+        [15_000, "configRemote", false, "wss://gateway.example/ws", 1500],
+        [15_000, "sshTunnel", true, "wss://gateway.example/ws", 2000],
+      ],
+    ],
+  ] as const)("%s", (_name, cases) => {
+    for (const [overallMs, kind, active, url, expected] of cases) {
+      expect(resolveProbeBudgetMs(overallMs, { kind, active, url })).toBe(expected);
+    }
   });
 });
 

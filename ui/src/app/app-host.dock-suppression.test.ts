@@ -1,29 +1,30 @@
 /* @vitest-environment jsdom */
 
+import type { RouterState } from "@openclaw/uirouter";
 import { render as renderLit, type TemplateResult } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { RouteId } from "../app-routes.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
+import { selectShellRouteState, type ShellRouteState } from "./app-host-route-state.ts";
 import { resetAppHostTestGlobals } from "./app-host.test-support.ts";
 // This test owns shell panel routing, not lazy sidebar loading; settle that module at setup.
 import "../components/app-sidebar.ts";
 import "./app-host.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";
+import { loadSettings } from "./settings.ts";
 
 type ShellRenderState = {
   runtime: ApplicationRuntime;
   activeSessionKey: string;
-  routeState: {
-    routeId: RouteId;
-    location?: { hash: string; pathname: string; search: string };
-  };
+  routeState: ShellRouteState;
   render: () => TemplateResult;
 };
 
-afterEach(() => {
+afterEach(async () => {
+  await vi.dynamicImportSettled();
   resetAppHostTestGlobals();
 });
 
@@ -46,7 +47,14 @@ describe("OpenClaw shell dock suppression", () => {
           hello: {
             auth: { role: "operator", scopes: ["operator.admin"] },
             features: {
-              methods: ["terminal.open", "browser.request", "openclaw.chat", "desktop.observe"],
+              methods: [
+                "terminal.open",
+                "browser.request",
+                "openclaw.chat",
+                "desktop.observe",
+                "chat.history",
+                "chat.send",
+              ],
             },
           },
           lastError: null,
@@ -112,7 +120,7 @@ describe("OpenClaw shell dock suppression", () => {
         },
         runUpdate: vi.fn(),
       },
-      theme: { mode: "dark" },
+      theme: { mode: "dark", settings: loadSettings() },
       preload: vi.fn(),
     } as unknown as ApplicationContext;
     const shell = document.createElement("openclaw-app-shell") as unknown as ShellRenderState;
@@ -128,8 +136,16 @@ describe("OpenClaw shell dock suppression", () => {
           | null
       )?.available ?? false;
 
+    const homeAvailable = () =>
+      container.querySelector<HTMLElement & { homeAvailable: boolean }>("openclaw-assistant-panel")
+        ?.homeAvailable ?? false;
+
     shell.routeState = { routeId: "appearance" };
     renderLit(shell.render(), container);
+    expect(
+      container.querySelector<HTMLElement & { pageRouteId: RouteId }>("openclaw-assistant-panel")
+        ?.pageRouteId,
+    ).toBe("appearance");
     expect(
       (
         container.querySelector("openclaw-terminal-panel") as HTMLElement & {
@@ -146,24 +162,35 @@ describe("OpenClaw shell dock suppression", () => {
     ).toBe(true);
     expect(
       (
-        container.querySelector("openclaw-custodian-panel") as HTMLElement & {
-          suppressed: boolean;
+        container.querySelector("openclaw-assistant-panel") as HTMLElement & {
+          custodianSuppressed: boolean;
         }
-      ).suppressed,
+      ).custodianSuppressed,
     ).toBe(false);
 
     shell.routeState = { routeId: "custodian" };
     renderLit(shell.render(), container);
     expect(
       (
-        container.querySelector("openclaw-custodian-panel") as HTMLElement & {
-          suppressed: boolean;
+        container.querySelector("openclaw-assistant-panel") as HTMLElement & {
+          custodianSuppressed: boolean;
         }
-      ).suppressed,
+      ).custodianSuppressed,
+    ).toBe(true);
+
+    shell.routeState = { routeId: "systems" };
+    renderLit(shell.render(), container);
+    expect(
+      container.querySelector<HTMLElement & { suppressed: boolean }>("openclaw-desktop-panel")
+        ?.suppressed,
     ).toBe(true);
 
     shell.routeState = { routeId: "chat" };
     renderLit(shell.render(), container);
+    expect(
+      container.querySelector<HTMLElement & { pageRouteId: RouteId }>("openclaw-assistant-panel")
+        ?.pageRouteId,
+    ).toBe("chat");
     expect(
       (
         container.querySelector("openclaw-terminal-panel") as HTMLElement & {
@@ -173,6 +200,25 @@ describe("OpenClaw shell dock suppression", () => {
     ).toBe("agent:main:main");
     expect(container.querySelector("openclaw-browser-panel")).toBeNull();
     expect(container.querySelector("openclaw-desktop-panel")).toBeNull();
+
+    const failedLocation = { pathname: "/chat/main/missing", search: "", hash: "" };
+    shell.routeState = selectShellRouteState({
+      matches: [],
+      pendingMatches: [
+        {
+          routeId: "chat",
+          location: failedLocation,
+          status: "error",
+          error: new Error("Unavailable session"),
+        },
+      ],
+    } as unknown as RouterState<RouteId>);
+    renderLit(shell.render(), container);
+    expect(
+      container.querySelector<HTMLElement & { pageRouteFailed: boolean }>(
+        "openclaw-assistant-panel",
+      )?.pageRouteFailed,
+    ).toBe(true);
 
     shell.routeState = {
       routeId: "new-session",
@@ -221,14 +267,46 @@ describe("OpenClaw shell dock suppression", () => {
     renderLit(shell.render(), container);
     expect(desktopAvailable()).toBe(true);
 
-    // Collapsed-nav fallback: the Ask OpenClaw toggle joins the chrome strip
-    // only while the sidebar (its footer home) is hidden, and stays admin-gated.
+    // Home now lives in the retained rail, not duplicate floating chrome.
+    // The shell still projects its access through permission, reconnect, and Gateway changes.
     expect(container.querySelector(".shell-chrome-controls__custodian")).toBeNull();
     context.navigation.snapshot.navCollapsed = true;
     renderLit(shell.render(), container);
-    expect(container.querySelector(".shell-chrome-controls__custodian")).not.toBeNull();
+    expect(container.querySelector(".shell-chrome-controls__custodian")).toBeNull();
+    expect(container.querySelector(".shell-chrome-controls__home")).toBeNull();
+    expect(container.querySelector(".shell--navigation-rail openclaw-app-sidebar")).not.toBeNull();
+    expect(homeAvailable()).toBe(true);
+    context.gateway.snapshot.hello!.auth = {
+      role: "operator",
+      scopes: ["operator.read", "operator.write"],
+    };
+    renderLit(shell.render(), container);
+    expect(container.querySelector(".shell-chrome-controls__custodian")).toBeNull();
+    expect(container.querySelector(".shell-chrome-controls__home")).toBeNull();
+    expect(container.querySelector(".shell--navigation-rail openclaw-app-sidebar")).not.toBeNull();
+    expect(homeAvailable()).toBe(true);
+    context.gateway.snapshot.phase = "offline";
+    renderLit(shell.render(), container);
+    expect(container.querySelector(".shell-chrome-controls__home")).toBeNull();
+    expect(container.querySelector(".shell--navigation-rail openclaw-app-sidebar")).not.toBeNull();
+    expect(homeAvailable()).toBe(true);
+    context.gateway.connection.gatewayUrl = "ws://another-gateway.test";
+    renderLit(shell.render(), container);
+    expect(container.querySelector(".shell-chrome-controls__home")).toBeNull();
+    expect(homeAvailable()).toBe(false);
+    context.gateway.snapshot.phase = "connected";
+    renderLit(shell.render(), container);
+    expect(container.querySelector(".shell-chrome-controls__home")).toBeNull();
+    expect(container.querySelector(".shell--navigation-rail openclaw-app-sidebar")).not.toBeNull();
+    expect(homeAvailable()).toBe(true);
     context.gateway.snapshot.hello!.auth = { role: "operator", scopes: ["operator.read"] };
     renderLit(shell.render(), container);
     expect(container.querySelector(".shell-chrome-controls__custodian")).toBeNull();
+    expect(container.querySelector(".shell-chrome-controls__home")).toBeNull();
+    expect(homeAvailable()).toBe(false);
+    context.gateway.snapshot.phase = "offline";
+    renderLit(shell.render(), container);
+    expect(container.querySelector(".shell-chrome-controls__home")).toBeNull();
+    expect(homeAvailable()).toBe(false);
   });
 });

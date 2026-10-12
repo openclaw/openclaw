@@ -1,54 +1,40 @@
-// QA Lab mock provider output event builders.
-
-import type { StreamEvent } from "./mock-openai-contracts.js";
+import { stripInboundMetadata } from "openclaw/plugin-sdk/qa-runtime";
+import {
+  type MockAssistantMessageSpec,
+  type StreamEvent,
+  parseJsonObjectBody,
+  QA_TELEGRAM_LONG_FINAL_THREE_CHUNK_PROMPT_RE,
+  QA_TELEGRAM_LONG_FINAL_PROMPT_RE,
+  QA_WHATSAPP_LONG_FINAL_PROMPT_RE,
+} from "./mock-openai-contracts.js";
+import { MockResponseStream } from "./mock-openai-stream.js";
 import { buildMockFunctionCall } from "./mock-openai-tooling.js";
 
+export function buildRemoteCompactionV2Events(): StreamEvent[] {
+  const stream = new MockResponseStream("resp_mock_compaction_1");
+  stream.item({
+    type: "compaction",
+    encrypted_content: "QA_MOCK_REMOTE_COMPACTION_SUMMARY",
+  });
+  return stream.complete(16);
+}
+
 export function buildFailedResponseEvents(): StreamEvent[] {
-  const responseId = `resp_qa_failed_${Date.now()}`;
-  return [
-    { type: "response.created", response: { id: responseId } },
-    {
-      type: "response.failed",
-      response: {
-        id: responseId,
-        status: "failed",
-      },
-    },
-  ];
+  return new MockResponseStream(`resp_qa_failed_${Date.now()}`).fail();
 }
 
 export function buildPartialFailureEvents(partialText: string): StreamEvent[] {
-  const responseId = "resp_qa_partial_failed_1";
-  const itemId = "msg_qa_partial_failed_1";
-  return [
-    { type: "response.created", response: { id: responseId } },
+  const stream = new MockResponseStream("resp_qa_partial_failed_1");
+  stream.message(
     {
-      type: "response.output_item.added",
-      output_index: 0,
-      item: {
-        type: "message",
-        id: itemId,
-        role: "assistant",
-        phase: "final_answer",
-        content: [],
-        status: "in_progress",
-      },
+      id: "msg_qa_partial_failed_1",
+      phase: "final_answer",
+      streamDeltas: [partialText],
+      text: partialText,
     },
-    {
-      type: "response.output_text.delta",
-      item_id: itemId,
-      output_index: 0,
-      content_index: 0,
-      delta: partialText,
-    },
-    {
-      type: "response.failed",
-      response: {
-        id: responseId,
-        status: "failed",
-      },
-    },
-  ];
+    false,
+  );
+  return stream.fail();
 }
 
 export function buildReleaseAuditJson() {
@@ -132,86 +118,50 @@ export function buildReleaseHandoffMarkdown() {
   ].join("\n");
 }
 
-export function extractPlannedToolName(events: StreamEvent[]) {
-  for (const event of events) {
-    if (event.type !== "response.output_item.done") {
-      continue;
-    }
-    const item = event.item as { type?: unknown; name?: unknown };
-    if (
-      (item.type === "function_call" || item.type === "custom_tool_call") &&
-      typeof item.name === "string"
-    ) {
-      return item.name;
-    }
-  }
-  return undefined;
-}
-
-export function extractPlannedToolIdentity(events: StreamEvent[]): {
-  callId?: string;
-  itemId?: string;
-} {
-  for (const event of events) {
-    if (event.type !== "response.output_item.done") {
-      continue;
-    }
-    const item = event.item as { type?: unknown; id?: unknown; call_id?: unknown };
-    if (
-      (item.type === "function_call" || item.type === "custom_tool_call") &&
-      typeof item.call_id === "string"
-    ) {
-      return {
-        callId: item.call_id,
-        itemId: typeof item.id === "string" ? item.id : undefined,
-      };
-    }
-  }
-  return {};
-}
-
-export function extractPlannedToolArgs(events: StreamEvent[]) {
-  for (const event of events) {
-    if (event.type !== "response.output_item.done") {
-      continue;
-    }
-    const item = event.item as { type?: unknown; arguments?: unknown; input?: unknown };
-    if (item.type === "custom_tool_call") {
-      return typeof item.input === "string" ? { input: item.input } : undefined;
-    }
-    if (item.type !== "function_call" || typeof item.arguments !== "string") {
-      continue;
-    }
+export function extractPlannedTool(events: StreamEvent[]) {
+  const items = events.flatMap((event) =>
+    event.type === "response.output_item.done" &&
+    (event.item.type === "function_call" || event.item.type === "custom_tool_call")
+      ? [event.item]
+      : [],
+  );
+  const named = items.find((item) => typeof item.name === "string");
+  const identified = items.find((item) => typeof item.call_id === "string");
+  const argumentsItem = items.find(
+    (item) => item.type === "custom_tool_call" || typeof item.arguments === "string",
+  );
+  let args: Record<string, unknown> | undefined;
+  if (argumentsItem?.type === "custom_tool_call") {
+    args = typeof argumentsItem.input === "string" ? { input: argumentsItem.input } : undefined;
+  } else if (typeof argumentsItem?.arguments === "string") {
     try {
-      const parsed = JSON.parse(item.arguments);
-      return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : undefined;
+      const parsed: unknown = JSON.parse(argumentsItem.arguments);
+      args = parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : undefined;
     } catch {
-      return undefined;
+      // Malformed arguments remain unavailable in the debug projection.
     }
   }
-  return undefined;
+  return {
+    name: typeof named?.name === "string" ? named.name : undefined,
+    callId: typeof identified?.call_id === "string" ? identified.call_id : undefined,
+    itemId: typeof identified?.id === "string" ? identified.id : undefined,
+    args,
+  };
 }
 
-type MockAssistantMessageSpec = {
-  id: string;
-  phase?: "commentary" | "final_answer";
-  streamDeltas?: string[];
-  text: string;
-};
-
-export function splitMockStreamingText(text: string, parts = 3) {
+export function splitMockStreamingText(text: string) {
   if (text.length <= 1) {
     return [text];
   }
-  const chunkSize = Math.max(1, Math.ceil(text.length / parts));
+  const chunkSize = Math.ceil(text.length / 3);
   const chunks: string[] = [];
   for (let index = 0; index < text.length; index += chunkSize) {
     chunks.push(text.slice(index, index + chunkSize));
   }
-  return chunks.length > 1 ? chunks : [text.slice(0, 1), text.slice(1)];
+  return chunks;
 }
 
-export function buildQaLongFinalText({
+function buildQaLongFinalText({
   endMarker = "TELEGRAM-LONG-FINAL-END",
   segmentPrefix = "telegram-long-final-segment",
   segmentCount = 42,
@@ -229,57 +179,111 @@ export function buildQaLongFinalText({
   return `${startMarker}\n${body}\n${endMarker}`;
 }
 
-function buildAssistantOutputItem(spec: MockAssistantMessageSpec) {
-  return {
-    type: "message",
-    id: spec.id,
-    role: "assistant",
-    status: "completed",
-    ...(spec.phase ? { phase: spec.phase } : {}),
-    content: [{ type: "output_text", text: spec.text, annotations: [] }],
-  } as const;
+const QA_TELEGRAM_PREPARED_DELIVERY_RE = /Telegram prepared delivery QA: (\{[^\n]+\})/u;
+const QA_TELEGRAM_POLICY_HOT_RELOAD_RE =
+  /^Write (40|12) numbered plain-text lines\. Every line must contain (TG-RELOAD-(?:root|account)-[0-9a-f]{8}(?:-NEXT)?) and the words ((?:hot reload|new policy) keeps this conversation connected)\. Finish with a separate final line containing \2-END\. Do not use tools, Markdown, or explicit reply tags\.$/u;
+
+function readTelegramPolicyHotReloadPrompt(prompt: string) {
+  const match = QA_TELEGRAM_POLICY_HOT_RELOAD_RE.exec(stripInboundMetadata(prompt));
+  const lineCount = Number(match?.[1]);
+  const marker = match?.[2];
+  const phrase = match?.[3];
+  if (!Number.isSafeInteger(lineCount) || !marker || !phrase) {
+    return undefined;
+  }
+  const isHeldTurn =
+    lineCount === 40 && !marker.endsWith("-NEXT") && phrase.startsWith("hot reload");
+  const isNextTurn =
+    lineCount === 12 && marker.endsWith("-NEXT") && phrase.startsWith("new policy");
+  return isHeldTurn || isNextTurn ? { lineCount, marker, phrase } : undefined;
 }
 
-function appendAssistantMessageEvents(
-  events: StreamEvent[],
-  spec: MockAssistantMessageSpec,
-  outputIndex: number,
-) {
-  events.push({
-    type: "response.output_item.added",
-    output_index: outputIndex,
-    item: {
-      type: "message",
-      id: spec.id,
-      role: "assistant",
-      ...(spec.phase ? { phase: spec.phase } : {}),
-      content: [],
-      status: "in_progress",
-    },
-  });
-  for (const delta of spec.streamDeltas ?? []) {
-    events.push({
-      type: "response.output_text.delta",
-      item_id: spec.id,
-      output_index: outputIndex,
-      content_index: 0,
-      delta,
-    });
+function buildTelegramPolicyHotReloadEvents(prompt: string): StreamEvent[] | undefined {
+  const fixture = readTelegramPolicyHotReloadPrompt(prompt);
+  if (!fixture) {
+    return undefined;
   }
-  if ((spec.streamDeltas ?? []).length > 0) {
-    events.push({
-      type: "response.output_text.done",
-      item_id: spec.id,
-      output_index: outputIndex,
-      content_index: 0,
-      text: spec.text,
-    });
+  const { lineCount, marker, phrase } = fixture;
+  const lines = Array.from(
+    { length: lineCount },
+    (_, index) => `${index + 1}. ${marker} ${phrase}`,
+  );
+  const text = [...lines, `${marker}-END`].join("\n");
+  return buildStreamingFinalAnswerEvents(
+    "msg_mock_telegram_policy_hot_reload",
+    text,
+    lineCount === 40 ? lines[0] : text,
+  );
+}
+
+export function resolveTelegramChannelStreamingPause(
+  prompt: string,
+): { previewPauseMs: number } | undefined {
+  return QA_TELEGRAM_PREPARED_DELIVERY_RE.test(prompt) ||
+    readTelegramPolicyHotReloadPrompt(prompt)?.lineCount === 40
+    ? { previewPauseMs: 3_000 }
+    : undefined;
+}
+
+export function buildChannelStreamingFixtureEvents(params: {
+  currentPrompt: string;
+  allInputText: string;
+  hasCompletedToolOutput: boolean;
+}): StreamEvent[] | undefined {
+  const policyHotReloadEvents = buildTelegramPolicyHotReloadEvents(params.currentPrompt);
+  if (policyHotReloadEvents) {
+    return policyHotReloadEvents;
   }
-  events.push({
-    type: "response.output_item.done",
-    output_index: outputIndex,
-    item: buildAssistantOutputItem(spec),
-  });
+  if (QA_TELEGRAM_LONG_FINAL_THREE_CHUNK_PROMPT_RE.test(params.allInputText)) {
+    const text = buildQaLongFinalText({
+      endMarker: "TELEGRAM-LONG-FINAL-3CHUNK-END",
+      segmentCount: 96,
+      startMarker: "TELEGRAM-LONG-FINAL-3CHUNK-BEGIN",
+    });
+    return buildStreamingFinalAnswerEvents("msg_mock_telegram_long_final_three_chunk", text);
+  }
+  if (QA_TELEGRAM_LONG_FINAL_PROMPT_RE.test(params.allInputText)) {
+    const text = buildQaLongFinalText();
+    return buildStreamingFinalAnswerEvents("msg_mock_telegram_long_final", text);
+  }
+  const preparedDeliveryMatch = QA_TELEGRAM_PREPARED_DELIVERY_RE.exec(params.currentPrompt);
+  if (preparedDeliveryMatch?.[1]) {
+    const fixture = parseJsonObjectBody(preparedDeliveryMatch[1]);
+    if (typeof fixture?.text !== "string" || typeof fixture.previewText !== "string") {
+      throw new Error("Telegram prepared delivery fixture requires text and previewText.");
+    }
+    if (typeof fixture.mediaPath === "string" && !params.hasCompletedToolOutput) {
+      if (typeof fixture.blockCaption !== "string") {
+        throw new Error("Telegram prepared media fixture requires a block caption.");
+      }
+      const blockText = `${fixture.blockCaption}\n\nMEDIA:${fixture.mediaPath}`;
+      return buildAssistantThenToolCallEvents(
+        {
+          id: "msg_mock_telegram_prepared_media",
+          phase: "final_answer",
+          streamDeltas: splitMockStreamingText(blockText),
+          text: blockText,
+        },
+        "read",
+        { path: "QA_KICKOFF_TASK.md" },
+      );
+    }
+    return buildStreamingFinalAnswerEvents(
+      "msg_mock_telegram_prepared_delivery",
+      fixture.text,
+      fixture.previewText,
+    );
+  }
+  if (QA_WHATSAPP_LONG_FINAL_PROMPT_RE.test(params.allInputText)) {
+    const text = buildQaLongFinalText({
+      endMarker: "WHATSAPP-LONG-FINAL-END",
+      segmentPrefix: "whatsapp-long-final-segment",
+      segmentCount: 64,
+      startMarker: "WHATSAPP-LONG-FINAL-BEGIN",
+    });
+    return buildStreamingFinalAnswerEvents("msg_mock_whatsapp_long_final", text);
+  }
+  return undefined;
 }
 
 export function buildAssistantThenToolCallEvents(
@@ -288,41 +292,10 @@ export function buildAssistantThenToolCallEvents(
   args: Record<string, unknown>,
 ): StreamEvent[] {
   const call = buildMockFunctionCall(name, args);
-  const message = buildAssistantOutputItem(spec);
-  const events: StreamEvent[] = [];
-  appendAssistantMessageEvents(events, spec, 0);
-  events.push({
-    type: "response.output_item.added",
-    output_index: 1,
-    item: {
-      type: "function_call",
-      id: call.itemId,
-      call_id: call.callId,
-      name,
-      arguments: "",
-    },
-  });
-  events.push({
-    type: "response.function_call_arguments.delta",
-    item_id: call.itemId,
-    output_index: 1,
-    delta: call.serialized,
-  });
-  events.push({
-    type: "response.output_item.done",
-    output_index: 1,
-    item: call.item,
-  });
-  events.push({
-    type: "response.completed",
-    response: {
-      id: call.responseId,
-      status: "completed",
-      output: [message, call.item],
-      usage: { input_tokens: 64, output_tokens: 32, total_tokens: 96 },
-    },
-  });
-  return events;
+  const stream = new MockResponseStream(call.responseId);
+  stream.message(spec);
+  stream.tool(call.item);
+  return stream.complete(32);
 }
 
 export function buildAssistantEvents(
@@ -337,24 +310,26 @@ export function buildAssistantEvents(
           },
         ]
       : specsOrText;
-  const renderedSpecs = specs.map((spec) => ({ spec, item: buildAssistantOutputItem(spec) }));
-  const output = renderedSpecs.map(({ item }) => item);
-  const events: StreamEvent[] = [];
-
-  for (const [outputIndex, { spec }] of renderedSpecs.entries()) {
-    appendAssistantMessageEvents(events, spec, outputIndex);
+  const stream = new MockResponseStream("resp_mock_msg_1");
+  for (const spec of specs) {
+    stream.message(spec);
   }
+  return stream.complete(24);
+}
 
-  events.push({
-    type: "response.completed",
-    response: {
-      id: "resp_mock_msg_1",
-      status: "completed",
-      output,
-      usage: { input_tokens: 64, output_tokens: 24, total_tokens: 88 },
+export function buildStreamingFinalAnswerEvents(
+  id: string,
+  text: string,
+  previewText = text,
+): StreamEvent[] {
+  return buildAssistantEvents([
+    {
+      id,
+      phase: "final_answer",
+      streamDeltas: splitMockStreamingText(previewText),
+      text,
     },
-  });
-  return events;
+  ]);
 }
 
 export function buildReasoningOnlyEvents(summaryText: string, id: string): StreamEvent[] {
@@ -363,31 +338,9 @@ export function buildReasoningOnlyEvents(summaryText: string, id: string): Strea
     id,
     summary: [{ text: summaryText }],
   } as const;
-  return [
-    {
-      type: "response.output_item.added",
-      output_index: 0,
-      item: {
-        type: "reasoning",
-        id,
-        summary: [],
-      },
-    },
-    {
-      type: "response.output_item.done",
-      output_index: 0,
-      item: reasoningItem,
-    },
-    {
-      type: "response.completed",
-      response: {
-        id: `resp_${id}`,
-        status: "completed",
-        output: [reasoningItem],
-        usage: { input_tokens: 64, output_tokens: 8, total_tokens: 72 },
-      },
-    },
-  ];
+  const stream = new MockResponseStream(`resp_${id}`);
+  stream.item(reasoningItem, { ...reasoningItem, summary: [] });
+  return stream.complete(8);
 }
 
 export function buildReasoningAndAssistantEvents(params: {
@@ -400,65 +353,13 @@ export function buildReasoningAndAssistantEvents(params: {
     id: params.reasoningId,
     summary: [],
   } as const;
-  const answerItem = buildAssistantOutputItem({
+  const stream = new MockResponseStream(`resp_${params.reasoningId}`);
+  stream.item(reasoningItem);
+  stream.message({
     id: params.answerId ?? "msg_mock_reasoned_answer",
     phase: "final_answer",
+    streamDeltas: [params.answerText],
     text: params.answerText,
   });
-  return [
-    {
-      type: "response.output_item.added",
-      output_index: 0,
-      item: {
-        type: "reasoning",
-        id: params.reasoningId,
-        summary: [],
-      },
-    },
-    {
-      type: "response.output_item.done",
-      output_index: 0,
-      item: reasoningItem,
-    },
-    {
-      type: "response.output_item.added",
-      output_index: 1,
-      item: {
-        type: "message",
-        id: answerItem.id,
-        role: "assistant",
-        phase: "final_answer",
-        content: [],
-        status: "in_progress",
-      },
-    },
-    {
-      type: "response.output_text.delta",
-      item_id: answerItem.id,
-      output_index: 1,
-      content_index: 0,
-      delta: params.answerText,
-    },
-    {
-      type: "response.output_text.done",
-      item_id: answerItem.id,
-      output_index: 1,
-      content_index: 0,
-      text: params.answerText,
-    },
-    {
-      type: "response.output_item.done",
-      output_index: 1,
-      item: answerItem,
-    },
-    {
-      type: "response.completed",
-      response: {
-        id: `resp_${params.reasoningId}`,
-        status: "completed",
-        output: [reasoningItem, answerItem],
-        usage: { input_tokens: 64, output_tokens: 16, total_tokens: 80 },
-      },
-    },
-  ];
+  return stream.complete(16);
 }

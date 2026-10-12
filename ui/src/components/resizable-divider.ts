@@ -1,331 +1,238 @@
-// Control UI component implements the resizable divider element.
-import { css, nothing } from "lit";
-import { property } from "lit/decorators.js";
-import { t } from "../i18n/index.ts";
-import { OpenClawLitElement } from "../lit/openclaw-element.ts";
+import { createRenderEffect, onCleanup } from "solid-js";
+import { t } from "../lib/reactive/i18n.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import "./resizable-divider.css";
 
 const DRAG_END_EVENTS = ["pointerup", "pointercancel", "blur"] as const;
 
-/**
- * An accessible draggable divider for resizable split views.
- * Dispatches 'resize' events with the current ratio and 'resize-end' after the interaction.
- */
-class ResizableDivider extends OpenClawLitElement {
-  @property({ type: Number }) splitRatio = 0.6;
-  @property({ type: Number }) minRatio = 0.4;
-  @property({ type: Number }) maxRatio = 0.7;
-  @property({ type: String }) label = "";
-  @property({ type: String, reflect: true }) orientation: "vertical" | "horizontal" = "vertical";
-  @property({ attribute: false }) measureRatio?: () => number;
-  @property({ attribute: false }) measureSize?: () => number;
+type ResizableDividerProps = {
+  splitRatio: number;
+  minRatio: number;
+  maxRatio: number;
+  label: string;
+  orientation: "vertical" | "horizontal";
+  measureRatio?: () => number;
+  measureSize?: () => number;
+};
 
-  private startPosition = 0;
-  private startRatio = 0;
-  private dragRatio = 0;
-  private dragSize = 0;
-  private dragFrame = 0;
-  private pendingPosition: number | null = null;
-  private activePointerId: number | null = null;
+type ResizableDividerElement = SolidBridgeElement<ResizableDividerProps>;
 
-  static override styles = css`
-    :host {
-      width: var(--resize-handle-size, 6px);
-      cursor: col-resize;
-      flex-shrink: 0;
-      position: relative;
-      touch-action: none;
-      user-select: none;
-    }
-    :host::before {
-      content: "";
-      position: absolute;
-      top: 0;
-      left: -4px;
-      right: -4px;
-      bottom: 0;
-    }
-    /* The visible divider is a centered hairline, not the whole gutter:
-       filling the host paints a fat bar that stacks with neighboring pane
-       borders into a multi-line smear while dragging. */
-    :host::after {
-      content: "";
-      position: absolute;
-      top: 0;
-      bottom: 0;
-      inset-inline-start: var(--resize-handle-line-inline, 50%);
-      width: var(--resize-handle-line-size, 1px);
-      transform: translateX(-50%);
-      background: var(--resize-handle-rest-color, var(--border, #1e2028));
-      transition:
-        background 150ms ease-out,
-        width 150ms ease-out;
-    }
-    :host(:hover)::after,
-    :host(.dragging)::after,
-    :host(:focus-visible)::after {
-      width: var(--resize-handle-active-line-size, 2px);
-      background: var(--resize-handle-active-color, currentColor);
-    }
-    :host(:focus-visible) {
-      outline: 2px solid var(--accent, #ff5c5c);
-      outline-offset: 2px;
-    }
-    :host([orientation="horizontal"]) {
-      width: auto;
-      height: var(--resize-handle-size, 6px);
-      cursor: row-resize;
-    }
-    :host([orientation="horizontal"])::before {
-      top: -4px;
-      left: 0;
-      right: 0;
-      bottom: -4px;
-    }
-    :host([orientation="horizontal"])::after {
-      top: var(--resize-handle-line-block, 50%);
-      bottom: auto;
-      inset-inline-start: 0;
-      left: 0;
-      right: 0;
-      width: auto;
-      height: var(--resize-handle-line-size, 1px);
-      transform: translateY(-50%);
-      transition:
-        background 150ms ease-out,
-        height 150ms ease-out;
-    }
-    :host([orientation="horizontal"]:hover)::after,
-    :host([orientation="horizontal"].dragging)::after,
-    :host([orientation="horizontal"]:focus-visible)::after {
-      width: auto;
-      height: var(--resize-handle-active-line-size, 2px);
-    }
-  `;
+/** Dispatches resize-start, resize, and resize-end from the split-view separator. */
+defineSolidBridge<ResizableDividerProps>(
+  "resizable-divider",
+  (props, host) => {
+    let startPosition = 0;
+    let startRatio = 0;
+    let dragRatio = 0;
+    let dragSize = 0;
+    let dragFrame = 0;
+    let pendingPosition: number | null = null;
+    let activePointerId: number | null = null;
 
-  override render() {
-    return nothing;
-  }
-
-  override connectedCallback() {
-    super.connectedCallback();
-    this.setStaticAccessibilityAttributes();
-    this.addEventListener("pointerdown", this.handlePointerDown);
-    this.addEventListener("keydown", this.handleKeyDown);
-  }
-
-  override disconnectedCallback() {
-    super.disconnectedCallback();
-    this.removeEventListener("pointerdown", this.handlePointerDown);
-    this.removeEventListener("keydown", this.handleKeyDown);
-    this.finishDragging(new Event("disconnect"));
-  }
-
-  protected override updated() {
-    this.setAttribute("aria-valuemin", String(this.toAriaValue(this.minRatio)));
-    this.setAttribute("aria-valuemax", String(this.toAriaValue(this.maxRatio)));
-    this.setCurrentAriaValue(this.currentRatio());
-    this.setAttribute("aria-label", this.label || t("common.resizeSplitView"));
-    this.setAttribute("aria-orientation", this.orientation);
-  }
-
-  private handlePointerDown = (e: PointerEvent) => {
-    if (e.button !== 0 || this.activePointerId !== null) {
-      return;
-    }
-    this.startPosition = this.orientation === "horizontal" ? e.clientY : e.clientX;
-    this.startRatio = this.currentRatio();
-    this.dragRatio = this.startRatio;
-    this.dragSize = this.measureDragSize();
-    if (this.dragSize <= 0) {
-      return;
-    }
-    this.classList.add("dragging");
-    this.capturePointer(e.pointerId);
-
-    window.addEventListener("pointermove", this.handlePointerMove);
-    for (const type of DRAG_END_EVENTS) {
-      window.addEventListener(type, this.finishDragging);
-    }
-
-    e.preventDefault();
-  };
-
-  private handlePointerMove = (e: PointerEvent) => {
-    if (e.pointerId !== this.activePointerId) {
-      return;
-    }
-
-    this.pendingPosition = this.orientation === "horizontal" ? e.clientY : e.clientX;
-    if (!this.dragFrame) {
-      this.dragFrame = requestAnimationFrame(this.flushPointerMove);
-    }
-  };
-
-  private readonly flushPointerMove = () => {
-    this.dragFrame = 0;
-    const position = this.pendingPosition;
-    this.pendingPosition = null;
-    if (position !== null) {
-      this.dragRatio = this.emitResize(
-        this.startRatio + (position - this.startPosition) / this.dragSize,
-      );
-    }
-  };
-
-  private handleKeyDown = (e: KeyboardEvent) => {
-    const step = e.shiftKey ? 0.05 : 0.02;
-    const currentRatio = this.currentRatio();
-    let nextRatio: number | null = null;
-
-    const decreaseKey = this.orientation === "horizontal" ? "ArrowUp" : "ArrowLeft";
-    const increaseKey = this.orientation === "horizontal" ? "ArrowDown" : "ArrowRight";
-    if (e.key === decreaseKey) {
-      nextRatio = currentRatio - step;
-    } else if (e.key === increaseKey) {
-      nextRatio = currentRatio + step;
-    } else if (e.key === "Home") {
-      nextRatio = this.minRatio;
-    } else if (e.key === "End") {
-      nextRatio = this.maxRatio;
-    }
-
-    if (nextRatio == null) {
-      return;
-    }
-
-    e.preventDefault();
-    this.emitResize(nextRatio);
-    this.emitResizeEnd(nextRatio);
-  };
-
-  private readonly finishDragging = (event: Event) => {
-    if ("pointerId" in event && event.pointerId !== this.activePointerId) {
-      return;
-    }
-    if (this.activePointerId !== null) {
-      if (this.dragFrame) {
-        cancelAnimationFrame(this.dragFrame);
-        this.dragFrame = 0;
+    const handlePointerDown = (e: PointerEvent) => {
+      if (e.button !== 0 || activePointerId !== null) {
+        return;
       }
-      this.flushPointerMove();
-      this.emitResizeEnd(this.dragRatio);
-    }
-    this.stopDragging();
-  };
+      startPosition = props.orientation === "horizontal" ? e.clientY : e.clientX;
+      startRatio = currentRatio();
+      dragRatio = startRatio;
+      dragSize = measureDragSize();
+      if (dragSize <= 0) {
+        return;
+      }
+      host.classList.add("dragging");
+      activePointerId = e.pointerId;
+      if (typeof host.setPointerCapture === "function") {
+        host.setPointerCapture(e.pointerId);
+      }
 
-  private stopDragging() {
-    const pointerId = this.activePointerId;
-    if (pointerId === null) {
-      return;
-    }
-    this.classList.remove("dragging");
-    this.releaseActivePointer(pointerId);
-    if (this.dragFrame) {
-      cancelAnimationFrame(this.dragFrame);
-      this.dragFrame = 0;
-    }
-    this.pendingPosition = null;
+      window.addEventListener("pointermove", handlePointerMove);
+      for (const type of DRAG_END_EVENTS) {
+        window.addEventListener(type, finishDragging);
+      }
+      host.addEventListener("lostpointercapture", finishDragging);
 
-    window.removeEventListener("pointermove", this.handlePointerMove);
-    for (const type of DRAG_END_EVENTS) {
-      window.removeEventListener(type, this.finishDragging);
-    }
-  }
+      e.preventDefault();
+      host.dispatchEvent(new CustomEvent("resize-start", { bubbles: true, composed: true }));
+    };
 
-  private emitResize(nextRatio: number) {
-    const splitRatio = this.clampRatio(nextRatio);
-    this.setCurrentAriaValue(splitRatio);
-    this.dispatchEvent(
-      new CustomEvent("resize", {
-        detail: { splitRatio },
-        bubbles: true,
-        composed: true,
+    const handlePointerMove = (e: PointerEvent) => {
+      if (e.pointerId !== activePointerId) {
+        return;
+      }
+
+      pendingPosition = props.orientation === "horizontal" ? e.clientY : e.clientX;
+      if (!dragFrame) {
+        dragFrame = requestAnimationFrame(flushPointerMove);
+      }
+    };
+
+    const flushPointerMove = () => {
+      dragFrame = 0;
+      const position = pendingPosition;
+      pendingPosition = null;
+      if (position !== null) {
+        dragRatio = emitResize(startRatio + (position - startPosition) / dragSize);
+      }
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const step = e.shiftKey ? 0.05 : 0.02;
+      const ratio = currentRatio();
+      let nextRatio: number | null = null;
+
+      const decreaseKey = props.orientation === "horizontal" ? "ArrowUp" : "ArrowLeft";
+      const increaseKey = props.orientation === "horizontal" ? "ArrowDown" : "ArrowRight";
+      if (e.key === decreaseKey) {
+        nextRatio = ratio - step;
+      } else if (e.key === increaseKey) {
+        nextRatio = ratio + step;
+      } else if (e.key === "Home") {
+        nextRatio = props.minRatio;
+      } else if (e.key === "End") {
+        nextRatio = props.maxRatio;
+      }
+
+      if (nextRatio == null) {
+        return;
+      }
+
+      e.preventDefault();
+      emitResize(nextRatio);
+      emitResize(nextRatio, "resize-end");
+    };
+
+    const finishDragging = (event: Event) => {
+      if ("pointerId" in event && event.pointerId !== activePointerId) {
+        return;
+      }
+      if (activePointerId !== null) {
+        if (dragFrame) {
+          cancelAnimationFrame(dragFrame);
+          dragFrame = 0;
+        }
+        flushPointerMove();
+        emitResize(dragRatio, "resize-end");
+      }
+      const pointerId = activePointerId;
+      if (pointerId === null) {
+        return;
+      }
+      host.classList.remove("dragging");
+      // Releasing capture can synchronously report capture loss. Remove the
+      // listener first so one owner end cannot emit resize-end twice.
+      host.removeEventListener("lostpointercapture", finishDragging);
+      activePointerId = null;
+      if (
+        typeof host.releasePointerCapture === "function" &&
+        (typeof host.hasPointerCapture !== "function" || host.hasPointerCapture(pointerId))
+      ) {
+        host.releasePointerCapture(pointerId);
+      }
+      if (dragFrame) {
+        cancelAnimationFrame(dragFrame);
+        dragFrame = 0;
+      }
+      pendingPosition = null;
+
+      window.removeEventListener("pointermove", handlePointerMove);
+      for (const type of DRAG_END_EVENTS) {
+        window.removeEventListener(type, finishDragging);
+      }
+    };
+
+    function emitResize(nextRatio: number, type: "resize" | "resize-end" = "resize") {
+      const splitRatio = clampRatio(nextRatio);
+      if (type === "resize") {
+        setCurrentAriaValue(splitRatio);
+      }
+      host.dispatchEvent(
+        new CustomEvent(type, {
+          detail: { splitRatio },
+          bubbles: true,
+          composed: true,
+        }),
+      );
+      return splitRatio;
+    }
+
+    function clampRatio(value: number) {
+      return Math.max(props.minRatio, Math.min(props.maxRatio, value));
+    }
+
+    function measureDragSize() {
+      const measuredSize = props.measureSize?.() ?? 0;
+      if (measuredSize > 0) {
+        return measuredSize;
+      }
+      const previousBounds = host.previousElementSibling?.getBoundingClientRect();
+      const nextBounds = host.nextElementSibling?.getBoundingClientRect();
+      const dimension = props.orientation === "horizontal" ? "height" : "width";
+      const siblingSize = (previousBounds?.[dimension] ?? 0) + (nextBounds?.[dimension] ?? 0);
+      if (siblingSize > 0) {
+        return siblingSize;
+      }
+      const containerBounds = host.parentElement?.getBoundingClientRect();
+      return containerBounds?.[dimension] ?? 0;
+    }
+
+    function currentRatio() {
+      const measuredRatio = props.measureRatio?.();
+      return measuredRatio !== undefined && Number.isFinite(measuredRatio)
+        ? clampRatio(measuredRatio)
+        : props.splitRatio;
+    }
+
+    function toAriaValue(value: number) {
+      return Math.round(value * 100);
+    }
+
+    function setCurrentAriaValue(value: number) {
+      host.setAttribute("aria-valuenow", String(toAriaValue(value)));
+    }
+
+    host.setAttribute("role", "separator");
+    host.setAttribute("tabindex", "0");
+    host.addEventListener("pointerdown", handlePointerDown);
+    host.addEventListener("keydown", handleKeyDown);
+    createRenderEffect(
+      () => ({
+        min: toAriaValue(props.minRatio),
+        max: toAriaValue(props.maxRatio),
+        value: currentRatio(),
+        label: props.label || t("common.resizeSplitView"),
+        orientation: props.orientation,
       }),
+      (value) => {
+        host.setAttribute("aria-valuemin", String(value.min));
+        host.setAttribute("aria-valuemax", String(value.max));
+        setCurrentAriaValue(value.value);
+        host.setAttribute("aria-label", value.label);
+        host.setAttribute("aria-orientation", value.orientation);
+      },
     );
-    return splitRatio;
-  }
-
-  private emitResizeEnd(nextRatio: number) {
-    this.dispatchEvent(
-      new CustomEvent("resize-end", {
-        detail: { splitRatio: this.clampRatio(nextRatio) },
-        bubbles: true,
-        composed: true,
-      }),
-    );
-  }
-
-  private clampRatio(value: number) {
-    return Math.max(this.minRatio, Math.min(this.maxRatio, value));
-  }
-
-  private measureDragSize() {
-    const measuredSize = this.measureSize?.() ?? 0;
-    if (measuredSize > 0) {
-      return measuredSize;
-    }
-    const previousBounds = this.previousElementSibling?.getBoundingClientRect();
-    const nextBounds = this.nextElementSibling?.getBoundingClientRect();
-    const siblingSize =
-      this.orientation === "horizontal"
-        ? (previousBounds?.height ?? 0) + (nextBounds?.height ?? 0)
-        : (previousBounds?.width ?? 0) + (nextBounds?.width ?? 0);
-    if (siblingSize > 0) {
-      return siblingSize;
-    }
-    const containerBounds = this.parentElement?.getBoundingClientRect();
-    return this.orientation === "horizontal"
-      ? (containerBounds?.height ?? 0)
-      : (containerBounds?.width ?? 0);
-  }
-
-  private currentRatio() {
-    const measuredRatio = this.measureRatio?.();
-    return measuredRatio !== undefined && Number.isFinite(measuredRatio)
-      ? this.clampRatio(measuredRatio)
-      : this.splitRatio;
-  }
-
-  private toAriaValue(value: number) {
-    return Math.round(value * 100);
-  }
-
-  private setCurrentAriaValue(value: number) {
-    this.setAttribute("aria-valuenow", String(this.toAriaValue(value)));
-  }
-
-  private setStaticAccessibilityAttributes() {
-    this.setAttribute("role", "separator");
-    this.setAttribute("tabindex", "0");
-    this.setAttribute("aria-orientation", this.orientation);
-  }
-
-  private capturePointer(pointerId: number) {
-    this.activePointerId = pointerId;
-    if (typeof this.setPointerCapture !== "function") {
-      return;
-    }
-    this.setPointerCapture(pointerId);
-  }
-
-  private releaseActivePointer(pointerId: number) {
-    this.activePointerId = null;
-    if (typeof this.releasePointerCapture !== "function") {
-      return;
-    }
-    if (typeof this.hasPointerCapture === "function" && !this.hasPointerCapture(pointerId)) {
-      return;
-    }
-    this.releasePointerCapture(pointerId);
-  }
-}
-
-if (!customElements.get("resizable-divider")) {
-  customElements.define("resizable-divider", ResizableDivider);
-}
+    onCleanup(() => {
+      host.removeEventListener("pointerdown", handlePointerDown);
+      host.removeEventListener("keydown", handleKeyDown);
+      finishDragging(new Event("disconnect"));
+    });
+    return undefined;
+  },
+  {
+    properties: {
+      splitRatio: { default: 0.6, type: Number },
+      minRatio: { default: 0.4, type: Number },
+      maxRatio: { default: 0.7, type: Number },
+      label: { default: "" },
+      orientation: { default: "vertical", reflect: true },
+      measureRatio: { default: undefined, attribute: false },
+      measureSize: { default: undefined, attribute: false },
+    },
+  },
+);
 
 declare global {
   interface HTMLElementTagNameMap {
-    "resizable-divider": ResizableDivider;
+    "resizable-divider": ResizableDividerElement;
   }
 }

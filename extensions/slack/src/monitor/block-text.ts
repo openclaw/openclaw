@@ -1,4 +1,8 @@
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+  readNonBlankString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { renderSlackBlockFallbackText } from "../blocks-fallback.js";
 
 type SlackBlocksText = {
@@ -20,14 +24,8 @@ type SlackMessageTextSource = {
   attachments?: SlackMessageTextAttachment[];
 };
 
-function readSlackBlockType(block: unknown): unknown {
-  return block && typeof block === "object" && !Array.isArray(block)
-    ? (block as { type?: unknown }).type
-    : undefined;
-}
-
 export function hasSlackTableBlock(blocks: unknown[] | undefined): boolean {
-  return blocks?.some((block) => readSlackBlockType(block) === "table") ?? false;
+  return blocks?.some((block) => asOptionalRecord(block)?.type === "table") ?? false;
 }
 
 export function hasSlackMessageTableBlock(message: SlackMessageTextSource): boolean {
@@ -55,11 +53,14 @@ export function resolveSlackBlocksText(blocks: unknown[] | undefined): SlackBloc
   let hasRichText = false;
   let hasNativeData = false;
   for (const block of blocks) {
-    const blockType = readSlackBlockType(block);
+    const blockType = asOptionalRecord(block)?.type;
     hasRichText ||= blockType === "rich_text";
     hasNativeData ||=
       blockType === "data_visualization" || blockType === "data_table" || blockType === "table";
-    const text = renderSlackBlockFallbackText(block, { nativeDataFormat: "plain" });
+    const text = renderSlackBlockFallbackText(block, {
+      nativeDataFormat: "plain",
+      nativeReferenceFormat: "plain",
+    });
     if (text) {
       parts.push(text);
     }
@@ -89,7 +90,7 @@ function resolveSlackAttachmentTableTexts(
       continue;
     }
     for (const block of attachment.blocks ?? []) {
-      if (readSlackBlockType(block) !== "table") {
+      if (asOptionalRecord(block)?.type !== "table") {
         continue;
       }
       const text = renderSlackBlockFallbackText(block, { nativeDataFormat: "plain" });
@@ -109,9 +110,7 @@ export function resolveSlackMessageText(
   options: { preserveMessageTextWhitespace?: boolean } = {},
 ): string | undefined {
   const messageText = options.preserveMessageTextWhitespace
-    ? typeof message.text === "string" && message.text.trim().length > 0
-      ? message.text
-      : undefined
+    ? readNonBlankString(message.text)
     : normalizeOptionalString(message.text);
   let resolved = chooseSlackPrimaryText({
     messageText,

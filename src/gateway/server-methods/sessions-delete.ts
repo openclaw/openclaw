@@ -1,20 +1,29 @@
-// Destructive session deletion and lifecycle cleanup.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
+  type ErrorShape,
   type PreservedSessionWorktree,
+  type SessionsDeleteParams,
   type SessionsDeleteResult,
   validateSessionsDeleteParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { classifyWorktreeRemovalError, managedWorktrees } from "../../agents/worktrees/service.js";
-import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
+import { tryResolveAgentOperationAgentId } from "../../agents/agent-scope-config.js";
 import {
   deleteSessionEntryLifecycle,
   SESSION_LIFECYCLE_CHANGED_ERROR_REASON,
   type SessionEntry,
 } from "../../config/sessions.js";
 import { rollbackPluginOwnedSessionEntryLifecycle } from "../../config/sessions/session-accessor.js";
+import {
+  getSessionActorStorageBinding,
+  type SessionActorStorageBinding,
+} from "../../config/sessions/session-actor-storage-binding.js";
+import {
+  captureIncognitoSessionOperation,
+  captureIncognitoSessionSource,
+  withIncognitoSessionBinding,
+} from "../../config/sessions/session-incognito-binding.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -24,517 +33,494 @@ import {
 } from "../../routing/session-key.js";
 import { isAgentHarnessSessionKey } from "../../sessions/agent-harness-session-key.js";
 import { isModelSelectionLocked } from "../../sessions/model-overrides.js";
-import {
-  interruptSessionWorkAdmissions,
-  runExclusiveSessionLifecycleMutation,
-  SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-} from "../../sessions/session-lifecycle-admission.js";
+import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { handleSessionStateSessionDeleted } from "../../sessions/session-state-events.js";
+import { removeSessionWorktree } from "../../sessions/session-worktree-lifecycle.js";
+import { resolvePluginSessionOwnershipError } from "../session-plugin-ownership.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
-import { resolveSessionStoreAgentId } from "../session-store-key.js";
-import { loadSessionEntry } from "../session-utils.js";
-import { chatHandlers } from "./chat.js";
+import { invalidSessionRequest } from "../session-request-error.js";
+import {
+  cleanupSessionBeforeMutation,
+  emitGatewaySessionEndPluginHook,
+  emitSessionUnboundLifecycleEvent,
+} from "../session-reset-service.js";
+import { resolveSessionStoreIdentity } from "../session-store-key.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
+import { loadGatewaySessionEntryReadOnly, loadSessionEntry } from "../session-utils.js";
+import { prepareSessionWorkerPlacementRetirement } from "../worker-environments/session-placement-lifecycle.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import {
+  prepareSessionLifecycleDrain,
+  SessionLifecycleWorkspaceRecoveryError,
+  type SessionLifecycleDrain,
+} from "./sessions-lifecycle-drain.js";
+import {
   loadAccessorSessionEntryForGatewayTarget,
-  loadSessionsRuntimeModule,
   isAgentMainSessionKey,
-  rejectPluginRuntimeSessionOwnershipMismatch,
   requireSessionKey,
-  resolveGatewaySessionTargetFromKey,
-  resolveSessionWorkerPlacementMutationError,
-  retireSessionWorkerPlacementBeforeMutation,
-  respondSessionWorkerPlacementMutationError,
-  sessionLog,
 } from "./sessions-shared.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-export const sessionDeleteHandlers: GatewayRequestHandlers = {
-  "sessions.delete": async ({
-    req,
-    params,
-    respond,
+class SessionDeletionError extends Error {
+  constructor(readonly error: ErrorShape) {
+    super(error.message);
+  }
+}
+
+type DeleteGatewaySessionOptions = Pick<
+  GatewayRequestHandlerOptions,
+  "client" | "context" | "sessionMutationAuthorization"
+> & {
+  params: SessionsDeleteParams;
+  assertCurrent?: () => void;
+  onDeleted?: (result: SessionsDeleteResult) => void;
+};
+type DeleteGatewaySessionResult =
+  | { ok: true; result: SessionsDeleteResult }
+  | { ok: false; error: ErrorShape };
+
+/** Shared lifecycle owner for operator deletion and automatic Incognito expiry. */
+export async function deleteGatewaySession(
+  options: DeleteGatewaySessionOptions,
+): Promise<DeleteGatewaySessionResult> {
+  const scope = { sessionKey: options.params.key.trim(), agentId: options.params.agentId };
+  const memory = getSessionActorStorageBinding(scope);
+  if (memory) {
+    return deleteGatewaySessionInScope(options, undefined, undefined, memory);
+  }
+  const source = captureIncognitoSessionSource(scope);
+  const absent = source && "kind" in source ? source : undefined;
+  const binding = absent ? undefined : captureIncognitoSessionOperation(scope);
+  const run = () => deleteGatewaySessionInScope(options, binding, absent);
+  return binding
+    ? binding.actor.sessions.withSharedState(() =>
+        withIncognitoSessionBinding({ ...binding, admissionSignal: undefined }, run),
+      )
+    : run();
+}
+
+async function deleteGatewaySessionInScope(
+  {
+    params: p,
     client,
-    isWebchatConnect,
     context,
     sessionMutationAuthorization,
-  }) => {
+    assertCurrent: assertCallerCurrent,
+    onDeleted,
+  }: DeleteGatewaySessionOptions,
+  binding: ReturnType<typeof captureIncognitoSessionOperation>,
+  absent?: Extract<
+    NonNullable<ReturnType<typeof captureIncognitoSessionSource>>,
+    { kind: "absent" }
+  >,
+  memory?: SessionActorStorageBinding,
+): Promise<DeleteGatewaySessionResult> {
+  assertCallerCurrent?.();
+  const key = p.key.trim();
+  const cfg = context.getRuntimeConfig();
+  const requestedAgent = resolveRequestedGlobalAgentId(cfg, key, p.agentId);
+  if (!requestedAgent.ok) {
+    return requestedAgent;
+  }
+  const requestedAgentId = requestedAgent.agentId;
+  const actorIdentity =
+    (memory || binding || absent) &&
+    resolveSessionStoreIdentity({ cfg, sessionKey: key, agentId: requestedAgentId });
+  const actorOwner = memory ?? binding?.actor ?? absent;
+  const target =
+    actorIdentity && actorOwner
+      ? {
+          agentId: actorOwner.agentId,
+          canonicalKey: actorIdentity.canonicalKey,
+          storeKeys: [actorIdentity.canonicalKey],
+          storePath: actorOwner.path,
+        }
+      : await resolveGatewaySessionStoreTargetInWorker({
+          cfg,
+          key,
+          agentId: requestedAgentId,
+          assertActive: () => {
+            assertCallerCurrent?.();
+            sessionMutationAuthorization?.assertCurrent();
+          },
+        });
+  const { storePath } = target;
+  const compatibilityDefaultAgentId = tryResolveAgentOperationAgentId(cfg);
+  const persistedStoreOwner = resolvePersistedSessionStoreOwnerForKey(cfg, key);
+  const protectedGlobalAgentId =
+    persistedStoreOwner.kind === "configured"
+      ? persistedStoreOwner.agentId
+      : compatibilityDefaultAgentId;
+  const explicitlySelectedGlobalAgentId =
+    normalizeOptionalString(p.agentId) ?? parseAgentSessionKey(key)?.agentId;
+  const isSelectedNonDefaultGlobal =
+    target.canonicalKey === "global" &&
+    explicitlySelectedGlobalAgentId !== undefined &&
+    normalizeAgentId(explicitlySelectedGlobalAgentId) !== protectedGlobalAgentId;
+  const isMainSession =
+    target.canonicalKey !== "global" && isAgentMainSessionKey(cfg, target.canonicalKey);
+  if ((target.canonicalKey === "global" || isMainSession) && !isSelectedNonDefaultGlobal) {
+    return invalidSessionRequest(`Cannot delete the main session (${target.canonicalKey}).`);
+  }
+
+  const deleteTranscript = typeof p.deleteTranscript === "boolean" ? p.deleteTranscript : true;
+  const assertExternalCurrent = () => {
+    assertCallerCurrent?.();
+    sessionMutationAuthorization?.assertCurrent();
+    memory?.actor.assertCurrent();
+    memory?.authority.assertCurrent();
+    binding?.authority.assertCurrent();
+    absent?.assertCurrent();
+  };
+  let actorEntry =
+    binding &&
+    (await binding.actor.sessions.read(
+      { assertCurrent: assertExternalCurrent },
+      { sessionKey: target.canonicalKey },
+    ));
+  const actorClaim = actorEntry?.claim;
+  const readMemoryEntry = () =>
+    memory?.actor.storage!.readCurrent({ type: "session.entry.read", input: {} }, memory.authority);
+  const initialDeleteEntry = memory
+    ? readMemoryEntry()
+    : actorEntry
+      ? actorEntry.entry
+      : absent
+        ? undefined
+        : loadSessionEntry(key, {
+            agentId: requestedAgentId,
+          }).entry;
+  const expectedSessionId = p.expectedSessionId?.trim();
+  const expectedLifecycleRevision = p.expectedLifecycleRevision?.trim();
+  const sessionChangedError = () =>
+    errorShape(ErrorCodes.INVALID_REQUEST, `Session ${key} changed before deletion. Retry.`, {
+      details: { reason: SESSION_LIFECYCLE_CHANGED_ERROR_REASON },
+    });
+  const resolveEntryError = (entry: SessionEntry | undefined) => {
+    const deletablePluginOwnedSession =
+      normalizeOptionalString(entry?.pluginOwnerId) !== undefined &&
+      entry?.agentHarnessId === undefined &&
+      !isAgentHarnessSessionKey(target.canonicalKey);
+    if (isModelSelectionLocked(entry) && !deletablePluginOwnedSession) {
+      return errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "This session cannot be deleted while model selection is locked.",
+      );
+    }
+    // archivedOnly is the write-scope archive-then-delete contract, rechecked
+    // under the fence so a racing unarchive cannot authorize active deletion.
+    if (p.archivedOnly === true && entry?.archivedAt === undefined) {
+      return errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        `Session ${key} is not archived. Archive it first, then delete it.`,
+      );
+    }
+    if (
+      (expectedSessionId && entry?.sessionId !== expectedSessionId) ||
+      (expectedLifecycleRevision && entry?.lifecycleRevision !== expectedLifecycleRevision)
+    ) {
+      return sessionChangedError();
+    }
+    return resolvePluginSessionOwnershipError({
+      action: "delete",
+      entry,
+      key: target.canonicalKey,
+      pluginOwnerId: client?.internal?.pluginRuntimeOwnerId,
+    });
+  };
+  const initialError = resolveEntryError(initialDeleteEntry);
+  if (initialError) {
+    return { ok: false, error: initialError };
+  }
+  if (absent) {
+    assertExternalCurrent();
+    if (p.expectedSessionUpdatedAt !== undefined) {
+      return { ok: false, error: sessionChangedError() };
+    }
+    const result: SessionsDeleteResult = {
+      ok: true,
+      key: target.canonicalKey,
+      deleted: false,
+      archived: [],
+    };
+    onDeleted?.(result);
+    return { ok: true, result };
+  }
+  const assertGenerationCurrent = () => {
+    assertExternalCurrent();
+    actorClaim?.assertCurrent();
+  };
+  const refreshActorEntry = async () => {
+    if (binding) {
+      assertGenerationCurrent();
+      actorEntry = await binding.actor.sessions.read(
+        { assertCurrent: assertExternalCurrent },
+        {
+          sessionKey: target.canonicalKey,
+        },
+      );
+      assertGenerationCurrent();
+      actorEntry.snapshot.assertCurrent();
+    }
+  };
+  const assertCurrent = () => {
+    assertGenerationCurrent();
+    if (memory) {
+      const entry = readMemoryEntry();
+      const error = resolveEntryError(entry);
+      if (error) {
+        throw new SessionDeletionError(error);
+      }
+      return { ...target, entry, legacyKey: undefined };
+    }
+    actorEntry?.snapshot.assertCurrent();
+    const current = actorEntry
+      ? { ...target, entry: actorEntry.entry, legacyKey: undefined }
+      : loadGatewaySessionEntryReadOnly(key, { agentId: requestedAgentId });
+    if (
+      current.storePath !== storePath ||
+      current.canonicalKey !== target.canonicalKey ||
+      current.entry?.sessionId !== initialDeleteEntry?.sessionId ||
+      current.entry?.lifecycleRevision !== initialDeleteEntry?.lifecycleRevision
+    ) {
+      throw new SessionDeletionError(sessionChangedError());
+    }
+    const error = resolveEntryError(current.entry);
+    if (error) {
+      throw new SessionDeletionError(error);
+    }
+    return current;
+  };
+  const deleteLifecycleIdentities = [
+    target.canonicalKey,
+    key,
+    ...target.storeKeys,
+    initialDeleteEntry?.sessionId,
+    expectedSessionId,
+  ];
+  let drain: SessionLifecycleDrain | undefined;
+  let worktreePreserved: PreservedSessionWorktree | undefined;
+  const deleteCurrent = async () => {
+    try {
+      const current = assertCurrent();
+      try {
+        drain = await prepareSessionLifecycleDrain({
+          action: "delete",
+          authorize: binding || memory ? assertGenerationCurrent : assertCurrent,
+          beforeCancel: () => {
+            // Compare before cancellation writes its own terminal metadata.
+            if (
+              p.expectedSessionUpdatedAt !== undefined &&
+              assertCurrent().entry?.updatedAt !== p.expectedSessionUpdatedAt
+            ) {
+              throw new SessionDeletionError(sessionChangedError());
+            }
+          },
+          context,
+          storePath,
+          sessionKeys: Array.from(new Set([key, target.canonicalKey, ...target.storeKeys])),
+          sessionId: current.entry?.sessionId,
+          sessionKey: target.canonicalKey,
+          agentId: target.agentId,
+          defaultAgentId: compatibilityDefaultAgentId,
+          lifecycleIdentities: deleteLifecycleIdentities.filter((identity): identity is string =>
+            Boolean(identity),
+          ),
+        });
+      } catch (error) {
+        assertCurrent();
+        if (error instanceof SessionDeletionError) {
+          throw error;
+        }
+        if (error instanceof SessionLifecycleWorkspaceRecoveryError) {
+          throw new SessionDeletionError(error.error);
+        }
+        throw new SessionDeletionError(
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            `Session ${key} could not safely stop before deletion: ${formatErrorMessage(error)} Retry after active work or worker recovery finishes.`,
+            { retryable: true },
+          ),
+        );
+      }
+      await refreshActorEntry();
+      // Reclaim may wait for an earlier placement operation that needs this mutex.
+      return await runExclusiveSessionLifecycleMutation("delete", {
+        scope: storePath,
+        identities: deleteLifecycleIdentities,
+        prepare: async () => drain?.handoffToMutation(),
+        finalize: async () => drain?.release(),
+        run: async () => {
+          const { entry, legacyKey, canonicalKey } = assertCurrent();
+          const retirement = await prepareSessionWorkerPlacementRetirement({
+            context,
+            sessionId: entry?.sessionId,
+          });
+          const commitGuard = () => {
+            if (binding) {
+              assertExternalCurrent();
+            } else {
+              assertCurrent();
+            }
+            retirement.assertCurrent();
+            if (drain?.hasAuthoritativeWork()) {
+              throw new SessionDeletionError(
+                errorShape(ErrorCodes.UNAVAILABLE, `Session ${key} is still active; try again.`, {
+                  retryable: true,
+                }),
+              );
+            }
+          };
+          commitGuard();
+          const mutationCleanupError = await cleanupSessionBeforeMutation({
+            cfg,
+            key,
+            target,
+            entry,
+            legacyKey,
+            canonicalKey,
+            reason: "session-delete",
+            assertCurrent:
+              binding || memory
+                ? () => {
+                    assertGenerationCurrent();
+                    commitGuard();
+                  }
+                : commitGuard,
+          });
+          if (mutationCleanupError) {
+            throw new SessionDeletionError(mutationCleanupError);
+          }
+          await refreshActorEntry();
+          assertCurrent();
+          const postCleanupTarget = memory
+            ? { entry: readMemoryEntry(), target }
+            : actorEntry
+              ? { entry: actorEntry.entry, target }
+              : loadAccessorSessionEntryForGatewayTarget({
+                  key,
+                  cfg,
+                  agentId: requestedAgentId,
+                });
+          const postCleanupEntry = postCleanupTarget.entry;
+          const deletedWorktreeId = normalizeOptionalString(postCleanupEntry?.worktree?.id);
+          commitGuard();
+          const pluginOwnerId = normalizeOptionalString(postCleanupEntry?.pluginOwnerId);
+          const incognito =
+            postCleanupEntry?.incognito === true || isIncognitoSessionKey(target.canonicalKey);
+          const deletionParams = {
+            agentId: target.agentId,
+            archiveTranscript: incognito ? false : deleteTranscript,
+            commitGuard,
+            deleteDeliveryArtifacts: true,
+            deleteTranscriptWithoutArchive: incognito,
+            expectedEntry: memory ? undefined : postCleanupEntry,
+            expectedLifecycleRevision,
+            expectedSessionId: initialDeleteEntry?.sessionId ?? null,
+            expectedUpdatedAt: memory ? undefined : postCleanupEntry?.updatedAt,
+            storePath,
+            target: { canonicalKey: target.canonicalKey, storeKeys: target.storeKeys },
+          };
+          // Catalog and other plugin-owned sessions keep model selection locked,
+          // so deletion must use the exact-row owner-validated lifecycle seam.
+          const result =
+            postCleanupEntry && pluginOwnerId && isModelSelectionLocked(postCleanupEntry)
+              ? await rollbackPluginOwnedSessionEntryLifecycle({
+                  ...deletionParams,
+                  expectedEntry: postCleanupEntry,
+                  expectedPluginOwnerId: pluginOwnerId,
+                  target: {
+                    canonicalKey: postCleanupTarget.target.canonicalKey,
+                    storeKeys: postCleanupTarget.target.storeKeys,
+                  },
+                })
+              : await deleteSessionEntryLifecycle(deletionParams);
+          if (result.expectedEntryMismatch) {
+            throw new SessionDeletionError(sessionChangedError());
+          }
+          if (result.deleted) {
+            // Retain cloud affinity on every precommit failure. The absent-session
+            // reconciler covers a crash or artifact-publication failure after commit.
+            await retirement.retire();
+            emitGatewaySessionEndPluginHook({
+              cfg,
+              sessionKey: target.canonicalKey ?? key,
+              sessionId: result.deletedSessionId,
+              storePath,
+              agentId: target.agentId,
+              reason: "deleted",
+              archivedTranscripts: result.archivedTranscripts,
+            });
+            await emitSessionUnboundLifecycleEvent({
+              targetSessionKey: target.canonicalKey ?? key,
+              reason: "session-delete",
+              emitHooks: p.emitLifecycleHooks !== false,
+            });
+            // Hooks and unbinding retain their historical post-delete order. The
+            // generation-scoped purge and checkout cleanup still finish before
+            // this fence opens, so a same-key successor cannot be mistaken for it.
+            const deletedSessionKey = target.canonicalKey ?? key;
+            await handleSessionStateSessionDeleted(deletedSessionKey, requestedAgentId);
+            worktreePreserved = await removeSessionWorktree({
+              id: deletedWorktreeId,
+              sessionKey: deletedSessionKey,
+              reason: "session-delete",
+            });
+          }
+          return result;
+        },
+      });
+    } finally {
+      drain?.release();
+    }
+  };
+  let deletion: Awaited<ReturnType<typeof deleteCurrent>>;
+  try {
+    deletion = await deleteCurrent();
+  } catch (error) {
+    if (!(error instanceof SessionDeletionError)) {
+      throw error;
+    }
+    return { ok: false, error: error.error };
+  }
+  const response: SessionsDeleteResult = {
+    ok: true,
+    key: target.canonicalKey,
+    deleted: deletion.deleted,
+    archived: deletion.archivedTranscripts.map((entry) => entry.archivedPath),
+    ...(worktreePreserved ? { worktreePreserved } : {}),
+  };
+  onDeleted?.(response);
+  if (deletion.deleted) {
+    emitSessionsChanged(context, {
+      sessionKey: target.canonicalKey,
+      sessionId: deletion.deletedSessionId,
+      agentId: target.agentId,
+      reason: "delete",
+    });
+    // The storage owner published the exact removal; this notification refreshes the list.
+    emitSessionsChanged(context, { reason: "delete" }, { preparedPublication: true });
+  }
+  return { ok: true, result: response };
+}
+
+export const sessionDeleteHandlers: GatewayRequestHandlers = {
+  "sessions.delete": async (options) => {
+    const { params, respond } = options;
     if (!assertValidParams(params, validateSessionsDeleteParams, "sessions.delete", respond)) {
       return;
     }
-    const p = params;
-    const key = requireSessionKey(p.key, respond);
-    if (!key) {
+    if (!requireSessionKey(params.key, respond)) {
       return;
     }
-    const cfg = context.getRuntimeConfig();
-    const requestedAgent = resolveRequestedGlobalAgentId(cfg, key, p.agentId);
-    if (!requestedAgent.ok) {
-      respond(false, undefined, requestedAgent.error);
-      return;
-    }
-    const requestedAgentId = requestedAgent.agentId;
-    const { target, storePath } = resolveGatewaySessionTargetFromKey(key, cfg, {
-      agentId: requestedAgentId,
+    const result = await deleteGatewaySession({
+      ...options,
+      params,
+      onDeleted: (response) => respond(true, response, undefined),
     });
-    const compatibilityDefaultAgentId = tryResolveLegacyCompatibilityAgentId(cfg);
-    const persistedStoreOwner = resolvePersistedSessionStoreOwnerForKey(cfg, key);
-    const protectedGlobalAgentId =
-      persistedStoreOwner.kind === "configured"
-        ? persistedStoreOwner.agentId
-        : compatibilityDefaultAgentId;
-    const explicitlySelectedGlobalAgentId =
-      normalizeOptionalString(p.agentId) ?? parseAgentSessionKey(key)?.agentId;
-    const isSelectedNonDefaultGlobal =
-      target.canonicalKey === "global" &&
-      explicitlySelectedGlobalAgentId !== undefined &&
-      normalizeAgentId(explicitlySelectedGlobalAgentId) !== protectedGlobalAgentId;
-    const isMainSession =
-      target.canonicalKey !== "global" && isAgentMainSessionKey(cfg, target.canonicalKey);
-    if ((target.canonicalKey === "global" || isMainSession) && !isSelectedNonDefaultGlobal) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `Cannot delete the main session (${target.canonicalKey}).`,
-        ),
-      );
-      return;
-    }
-
-    const deleteTranscript = typeof p.deleteTranscript === "boolean" ? p.deleteTranscript : true;
-    const {
-      cleanupSessionBeforeMutation,
-      emitGatewaySessionEndPluginHook,
-      emitSessionUnboundLifecycleEvent,
-    } = await loadSessionsRuntimeModule();
-
-    const initialDeleteEntry = loadSessionEntry(key, {
-      agentId: requestedAgentId,
-    }).entry;
-    const rejectModelSelectionLockedDelete = (
-      entry: SessionEntry | undefined,
-      sessionKey: string,
-    ): boolean => {
-      if (!isModelSelectionLocked(entry)) {
-        return false;
-      }
-      const deletablePluginOwnedSession =
-        normalizeOptionalString(entry?.pluginOwnerId) !== undefined &&
-        entry?.agentHarnessId === undefined &&
-        !isAgentHarnessSessionKey(sessionKey);
-      if (deletablePluginOwnedSession) {
-        return false;
-      }
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "This session cannot be deleted while model selection is locked.",
-        ),
-      );
-      return true;
-    };
-    if (rejectModelSelectionLockedDelete(initialDeleteEntry, target.canonicalKey)) {
-      return;
-    }
-    // archivedOnly is the archive-then-delete contract: the dispatcher grants
-    // it to write-scope operators, so the target must actually be archived.
-    if (p.archivedOnly === true && initialDeleteEntry?.archivedAt === undefined) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `Session ${key} is not archived. Archive it first, then delete it.`,
-        ),
-      );
-      return;
-    }
-    const expectedSessionId = p.expectedSessionId?.trim();
-    const expectedLifecycleRevision = p.expectedLifecycleRevision?.trim();
-    const expectedSessionUpdatedAt = p.expectedSessionUpdatedAt;
-    const expectedLifecycleRevisionMatches = (entry: SessionEntry | undefined): boolean =>
-      !expectedLifecycleRevision || entry?.lifecycleRevision === expectedLifecycleRevision;
-    const expectedSessionIdMatches = (entry: SessionEntry | undefined): boolean => {
-      if (!expectedSessionId || entry?.sessionId === expectedSessionId) {
-        return true;
-      }
-      return false;
-    };
-    const respondSessionChanged = () => {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `Session ${key} changed before deletion. Retry.`, {
-          details: { reason: SESSION_LIFECYCLE_CHANGED_ERROR_REASON },
-        }),
-      );
-    };
-    const rejectExpectedSessionMismatch = (entry: SessionEntry | undefined): boolean => {
-      const updatedAtMatches =
-        expectedSessionUpdatedAt === undefined || entry?.updatedAt === expectedSessionUpdatedAt;
-      if (
-        expectedLifecycleRevisionMatches(entry) &&
-        expectedSessionIdMatches(entry) &&
-        updatedAtMatches
-      ) {
-        return false;
-      }
-      respondSessionChanged();
-      return true;
-    };
-    if (rejectExpectedSessionMismatch(initialDeleteEntry)) {
-      return;
-    }
-    const initialPlacementError = resolveSessionWorkerPlacementMutationError({
-      action: "delete",
-      context,
-      key,
-      sessionId: normalizeOptionalString(initialDeleteEntry?.sessionId),
-    });
-    if (initialPlacementError) {
-      respondSessionWorkerPlacementMutationError(initialPlacementError, respond);
-      return;
-    }
-    if (
-      rejectPluginRuntimeSessionOwnershipMismatch({
-        action: "delete",
-        client,
-        key: target.canonicalKey ?? key,
-        entry: initialDeleteEntry,
-        respond,
-      })
-    ) {
-      return;
-    }
-    const abortSessionKey = target.canonicalKey ?? key;
-    const chatAbort = chatHandlers["chat.abort"];
-    if (!chatAbort) {
-      throw new Error("chat.abort handler is not registered");
-    }
-    const deleteLifecycleIdentities = [
-      target.canonicalKey,
-      key,
-      initialDeleteEntry?.sessionId,
-      expectedSessionId,
-    ];
-    let admittedWorkReleased = true;
-    let expectedSessionStillCurrent = true;
-    let deleteBlockedByModelLock = false;
-    let deleteBlockedByWorkerPlacement = false;
-    let deleteBlockedByArchiveOrOwnership = false;
-    let preparedDeleteSessionId: string | undefined;
-    let deletedWorktreeId: string | undefined;
-    let worktreePreserved: PreservedSessionWorktree | undefined;
-    const deletion = await runExclusiveSessionLifecycleMutation({
-      scope: storePath,
-      identities: deleteLifecycleIdentities,
-      prepare: async () => {
-        sessionMutationAuthorization?.assertCurrent();
-        const { entry: preparedEntry, canonicalKey: preparedCanonicalKey } = loadSessionEntry(key, {
-          agentId: requestedAgentId,
-        });
-        deleteBlockedByModelLock = rejectModelSelectionLockedDelete(
-          preparedEntry,
-          preparedCanonicalKey ?? target.canonicalKey,
-        );
-        if (deleteBlockedByModelLock) {
-          return;
-        }
-        expectedSessionStillCurrent = !rejectExpectedSessionMismatch(preparedEntry);
-        if (!expectedSessionStillCurrent) {
-          return;
-        }
-        const placementError = resolveSessionWorkerPlacementMutationError({
-          action: "delete",
-          context,
-          key,
-          sessionId: normalizeOptionalString(preparedEntry?.sessionId),
-        });
-        if (placementError) {
-          deleteBlockedByWorkerPlacement = true;
-          respondSessionWorkerPlacementMutationError(placementError, respond);
-          return;
-        }
-        if (p.archivedOnly === true && preparedEntry?.archivedAt === undefined) {
-          deleteBlockedByArchiveOrOwnership = true;
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `Session ${key} is not archived. Archive it first, then delete it.`,
-            ),
-          );
-          return;
-        }
-        if (
-          rejectPluginRuntimeSessionOwnershipMismatch({
-            action: "delete",
-            client,
-            key: preparedCanonicalKey ?? key,
-            entry: preparedEntry,
-            respond,
-          })
-        ) {
-          deleteBlockedByArchiveOrOwnership = true;
-          return;
-        }
-        preparedDeleteSessionId = normalizeOptionalString(preparedEntry?.sessionId);
-        admittedWorkReleased = await interruptSessionWorkAdmissions({
-          scope: storePath,
-          identities: deleteLifecycleIdentities,
-          timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-        });
-      },
-      run: async () => {
-        if (
-          deleteBlockedByModelLock ||
-          deleteBlockedByWorkerPlacement ||
-          deleteBlockedByArchiveOrOwnership ||
-          !expectedSessionStillCurrent
-        ) {
-          return undefined;
-        }
-        if (!admittedWorkReleased) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.UNAVAILABLE, `Session ${key} is still active; try again.`),
-          );
-          return undefined;
-        }
-        sessionMutationAuthorization?.assertCurrent();
-        const { entry, legacyKey, canonicalKey } = loadSessionEntry(key, {
-          agentId: requestedAgentId,
-        });
-        if (normalizeOptionalString(entry?.sessionId) !== preparedDeleteSessionId) {
-          respondSessionChanged();
-          return undefined;
-        }
-        if (rejectModelSelectionLockedDelete(entry, canonicalKey ?? target.canonicalKey)) {
-          return undefined;
-        }
-        if (rejectExpectedSessionMismatch(entry)) {
-          return undefined;
-        }
-        // Recheck under the lifecycle lock: an unarchive racing the pre-lock
-        // check must not let an archive-gated delete remove an active session.
-        if (p.archivedOnly === true && entry?.archivedAt === undefined) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `Session ${key} is not archived. Archive it first, then delete it.`,
-            ),
-          );
-          return undefined;
-        }
-        if (
-          rejectPluginRuntimeSessionOwnershipMismatch({
-            action: "delete",
-            client,
-            key: canonicalKey ?? key,
-            entry,
-            respond,
-          })
-        ) {
-          return undefined;
-        }
-        // Drain first so a legitimate local turn can release its claim. Retire only
-        // after every non-destructive guard is rechecked; a placement race must abort
-        // before runtime cleanup or session mutation begins.
-        const placementRetirementError = retireSessionWorkerPlacementBeforeMutation({
-          action: "delete",
-          context,
-          key,
-          sessionId: normalizeOptionalString(entry?.sessionId),
-        });
-        if (placementRetirementError) {
-          respondSessionWorkerPlacementMutationError(placementRetirementError, respond);
-          return undefined;
-        }
-        let abortResult:
-          | {
-              ok: boolean;
-              error?: ReturnType<typeof errorShape>;
-            }
-          | undefined;
-        await chatAbort({
-          req,
-          params: {
-            sessionKey: abortSessionKey,
-            ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
-          },
-          respond: (ok, _payload, error) => {
-            abortResult = { ok, ...(error ? { error } : {}) };
-          },
-          context,
-          client,
-          isWebchatConnect,
-          ...(sessionMutationAuthorization ? { sessionMutationAuthorization } : {}),
-        });
-        if (abortResult?.ok === false) {
-          respond(false, undefined, abortResult.error);
-          return undefined;
-        }
-        const mutationCleanupError = await cleanupSessionBeforeMutation({
-          cfg,
-          key,
-          target,
-          entry,
-          legacyKey,
-          canonicalKey,
-          reason: "session-delete",
-        });
-        if (mutationCleanupError) {
-          respond(false, undefined, mutationCleanupError);
-          return undefined;
-        }
-        const postCleanupTarget = loadAccessorSessionEntryForGatewayTarget({
-          key,
-          cfg,
-          ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
-        });
-        const postCleanupEntry = postCleanupTarget.entry;
-        deletedWorktreeId = normalizeOptionalString(postCleanupEntry?.worktree?.id);
-        sessionMutationAuthorization?.assertCurrent();
-        if (
-          !expectedLifecycleRevisionMatches(postCleanupEntry) ||
-          !expectedSessionIdMatches(postCleanupEntry)
-        ) {
-          respondSessionChanged();
-          return undefined;
-        }
-        const pluginOwnerId = normalizeOptionalString(postCleanupEntry?.pluginOwnerId);
-        const incognito =
-          postCleanupEntry?.incognito === true || isIncognitoSessionKey(target.canonicalKey);
-        const deletionParams = {
-          agentId: target.agentId,
-          archiveTranscript: incognito ? false : deleteTranscript,
-          deleteDeliveryArtifacts: true,
-          deleteTranscriptWithoutArchive: incognito,
-          expectedEntry: postCleanupEntry,
-          expectedLifecycleRevision,
-          expectedSessionId,
-          expectedUpdatedAt: postCleanupEntry?.updatedAt,
-          storePath,
-          target: {
-            canonicalKey: target.canonicalKey,
-            storeKeys: target.storeKeys,
-          },
-        };
-        // Catalog and other plugin-owned sessions keep model selection locked,
-        // so deletion must use the exact-row owner-validated lifecycle seam.
-        const result =
-          postCleanupEntry && pluginOwnerId && isModelSelectionLocked(postCleanupEntry)
-            ? await rollbackPluginOwnedSessionEntryLifecycle({
-                ...deletionParams,
-                expectedEntry: postCleanupEntry,
-                expectedPluginOwnerId: pluginOwnerId,
-                target: {
-                  canonicalKey: postCleanupTarget.target.canonicalKey,
-                  storeKeys: postCleanupTarget.target.storeKeys,
-                },
-              })
-            : await deleteSessionEntryLifecycle(deletionParams);
-        if (result.expectedEntryMismatch) {
-          respondSessionChanged();
-          return undefined;
-        }
-        if (result.deleted) {
-          emitGatewaySessionEndPluginHook({
-            cfg,
-            sessionKey: target.canonicalKey ?? key,
-            sessionId: result.deletedSessionId,
-            storePath,
-            agentId: target.agentId,
-            reason: "deleted",
-            archivedTranscripts: result.archivedTranscripts,
-          });
-          await emitSessionUnboundLifecycleEvent({
-            targetSessionKey: target.canonicalKey ?? key,
-            reason: "session-delete",
-            emitHooks: p.emitLifecycleHooks !== false,
-          });
-          // Hooks and unbinding retain their historical post-delete order. The
-          // generation-scoped purge and checkout cleanup still finish before
-          // this fence opens, so a same-key successor cannot be mistaken for it.
-          const deletedSessionKey = target.canonicalKey ?? key;
-          handleSessionStateSessionDeleted(
-            deletedSessionKey,
-            requestedAgentId ?? resolveSessionStoreAgentId(cfg, deletedSessionKey),
-          );
-          const deletedWorktree = deletedWorktreeId
-            ? managedWorktrees.findLiveById(deletedWorktreeId)
-            : undefined;
-          if (deletedWorktree) {
-            if (
-              deletedWorktree.ownerKind !== "session" ||
-              deletedWorktree.ownerId !== deletedSessionKey
-            ) {
-              worktreePreserved = {
-                id: deletedWorktree.id,
-                branch: deletedWorktree.branch,
-                path: deletedWorktree.path,
-                reason: "owner-mismatch",
-              };
-              sessionLog.warn(
-                `refusing to clean up worktree ${deletedWorktree.id} for deleted session ${deletedSessionKey}: registry owner is ${deletedWorktree.ownerKind}${deletedWorktree.ownerId ? ` ${deletedWorktree.ownerId}` : ""}`,
-              );
-            } else {
-              try {
-                await managedWorktrees.remove({
-                  id: deletedWorktree.id,
-                  reason: "session-delete",
-                });
-              } catch (error) {
-                sessionLog.warn(
-                  `failed to clean up worktree for deleted session ${deletedSessionKey}: ${formatErrorMessage(error)}`,
-                );
-                const liveWorktree = managedWorktrees.findLiveById(deletedWorktree.id);
-                if (liveWorktree) {
-                  worktreePreserved = {
-                    id: liveWorktree.id,
-                    branch: liveWorktree.branch,
-                    path: liveWorktree.path,
-                    reason: classifyWorktreeRemovalError(error),
-                  };
-                }
-              }
-            }
-          }
-        }
-        return result;
-      },
-    });
-    if (!deletion) {
-      return;
-    }
-    const deleted = deletion.deleted;
-    const archivedTranscripts = deletion.archivedTranscripts;
-    const archived = archivedTranscripts.map((entryLocal) => entryLocal.archivedPath);
-
-    const response: SessionsDeleteResult = {
-      ok: true,
-      key: target.canonicalKey,
-      deleted,
-      archived,
-      ...(worktreePreserved ? { worktreePreserved } : {}),
-    };
-    respond(true, response, undefined);
-    if (deleted) {
-      emitSessionsChanged(context, {
-        sessionKey: target.canonicalKey,
-        agentId: target.agentId,
-        reason: "delete",
-      });
-      emitSessionsChanged(context, { reason: "delete" });
+    if (!result.ok) {
+      respond(false, undefined, result.error);
     }
   },
 };

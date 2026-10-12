@@ -1,8 +1,8 @@
-// Export trajectory tests cover trajectory export command output and file selection.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ExpectedCliError } from "../cli/failure-output.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { exportTrajectoryCommand } from "./export-trajectory.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   exportTrajectoryForCommand: vi.fn(),
@@ -47,14 +47,6 @@ vi.mock("./session-store-targets.js", () => ({
   resolveExplicitSessionStorePath: mocks.resolveExplicitStorePath,
 }));
 
-function createRuntime(): RuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  } as unknown as RuntimeEnv;
-}
-
 async function expectTrajectoryFailure(
   execution: Promise<void>,
   runtime: RuntimeEnv,
@@ -93,7 +85,7 @@ describe("exportTrajectoryCommand", () => {
   });
 
   it("points missing session key users at the sessions command", async () => {
-    const runtime = createRuntime();
+    const runtime = createTestRuntime();
 
     await expectTrajectoryFailure(
       exportTrajectoryCommand({}, runtime),
@@ -136,7 +128,7 @@ describe("exportTrajectoryCommand", () => {
   ])(
     "rejects an encoded request containing $name before looking up its session",
     async ({ encoded, detail }) => {
-      const runtime = createRuntime();
+      const runtime = createTestRuntime();
 
       await expectTrajectoryFailure(
         exportTrajectoryCommand({ requestJsonBase64: encoded }, runtime),
@@ -150,7 +142,7 @@ describe("exportTrajectoryCommand", () => {
   );
 
   it("preserves direct options when an encoded request omits them", async () => {
-    const runtime = createRuntime();
+    const runtime = createTestRuntime();
     const requestJsonBase64 = Buffer.from(
       JSON.stringify({ output: "/tmp/export.json" }),
       "utf8",
@@ -186,11 +178,10 @@ describe("exportTrajectoryCommand", () => {
       "nope-agent",
       'Unknown agent id "nope-agent". Run openclaw agents list to see configured agents.',
     ],
-    ["empty", "", "--agent must not be blank"],
     ["whitespace-only", "   ", "--agent must not be blank"],
   ])("rejects an %s explicit agent before reading a session", async (_label, agent, message) => {
-    const runtime = createRuntime();
-    mocks.getRuntimeConfig.mockReturnValue({ agents: { list: [{ id: "main" }] } });
+    const runtime = createTestRuntime();
+    mocks.getRuntimeConfig.mockReturnValue({ agents: { entries: { main: {} } } });
 
     await expectTrajectoryFailure(
       exportTrajectoryCommand({ sessionKey: "agent:main:telegram:direct:123", agent }, runtime),
@@ -202,8 +193,69 @@ describe("exportTrajectoryCommand", () => {
     expect(mocks.exportTrajectoryForCommand).not.toHaveBeenCalled();
   });
 
+  it("rejects a blank explicit store before resolving one", async () => {
+    const runtime = createTestRuntime();
+
+    await expectTrajectoryFailure(
+      exportTrajectoryCommand(
+        { sessionKey: "agent:main:telegram:direct:123", store: "   " },
+        runtime,
+      ),
+      runtime,
+      "--store must not be blank",
+    );
+    expect(mocks.resolveStorePath).not.toHaveBeenCalled();
+    expect(mocks.loadSessionEntryReadOnly).not.toHaveBeenCalled();
+    expect(mocks.exportTrajectoryForCommand).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["whitespace-only", "agent", "   ", "--agent must not be blank"],
+    ["whitespace-only", "store", "   ", "--store must not be blank"],
+  ])("rejects an %s encoded %s before reading a session", async (_label, field, value, message) => {
+    const runtime = createTestRuntime();
+    const requestJsonBase64 = Buffer.from(
+      JSON.stringify({ sessionKey: "agent:main:telegram:direct:123", [field]: value }),
+      "utf8",
+    ).toString("base64url");
+
+    await expectTrajectoryFailure(
+      exportTrajectoryCommand({ requestJsonBase64 }, runtime),
+      runtime,
+      message,
+    );
+    expect(mocks.resolveStorePath).not.toHaveBeenCalled();
+    expect(mocks.loadSessionEntryReadOnly).not.toHaveBeenCalled();
+    expect(mocks.exportTrajectoryForCommand).not.toHaveBeenCalled();
+  });
+
+  it("honours a non-blank encoded store and agent", async () => {
+    const runtime = createTestRuntime();
+    mocks.getRuntimeConfig.mockReturnValue({ agents: { entries: { main: {}, work: {} } } });
+    mocks.resolveStorePath.mockReturnValue("/tmp/encoded-store.json");
+    const requestJsonBase64 = Buffer.from(
+      JSON.stringify({
+        sessionKey: "agent:main:telegram:direct:123",
+        store: "/tmp/encoded-store.json",
+        agent: "work",
+      }),
+      "utf8",
+    ).toString("base64url");
+
+    await exportTrajectoryCommand({ requestJsonBase64 }, runtime);
+
+    expect(mocks.resolveStorePath).toHaveBeenCalledWith("/tmp/encoded-store.json", {
+      agentId: "work",
+    });
+    expect(mocks.loadSessionEntryReadOnly).toHaveBeenCalledWith({
+      agentId: "work",
+      sessionKey: "agent:main:telegram:direct:123",
+      storePath: "/tmp/encoded-store.json",
+    });
+  });
+
   it("routes invalid explicit stores through the command failure owner", async () => {
-    const runtime = createRuntime();
+    const runtime = createTestRuntime();
     mocks.resolveStorePath.mockReturnValue("/tmp/missing.sqlite");
     mocks.resolveExplicitStorePath.mockImplementationOnce(() => {
       throw new Error("Session store target does not exist: /tmp/missing.sqlite");
@@ -226,65 +278,105 @@ describe("exportTrajectoryCommand", () => {
     expect(mocks.exportTrajectoryForCommand).not.toHaveBeenCalled();
   });
 
-  it("keeps a configured explicit agent as the session store owner", async () => {
-    const runtime = createRuntime();
-    mocks.getRuntimeConfig.mockReturnValue({
-      agents: { list: [{ id: "main" }, { id: "work" }] },
-      session: { store: "/tmp/openclaw/agents/{agentId}/sessions/sessions.json" },
-    });
-    mocks.resolveStorePath.mockReturnValue("/tmp/openclaw/agents/work/sessions/sessions.json");
-
-    await exportTrajectoryCommand(
-      { sessionKey: "agent:main:telegram:direct:123", agent: "work" },
-      runtime,
-    );
-
-    expect(mocks.resolveStorePath).toHaveBeenCalledWith(
-      "/tmp/openclaw/agents/{agentId}/sessions/sessions.json",
-      { agentId: "work" },
-    );
-    expect(mocks.loadSessionEntryReadOnly).toHaveBeenCalledWith({
-      agentId: "work",
-      sessionKey: "agent:main:telegram:direct:123",
-      storePath: "/tmp/openclaw/agents/work/sessions/sessions.json",
-    });
-  });
-
-  it.each([
-    ["home-prefixed", "~/x/sessions.json", "/home/demo/x/sessions.json"],
-    [
-      "agent template",
-      "/tmp/openclaw/agents/{agentId}/sessions/sessions.json",
-      "/tmp/openclaw/agents/work/sessions/sessions.json",
-    ],
-  ])(
-    "resolves explicit --store %s paths through the shared resolver",
-    async (_name, store, resolvedStore) => {
-      const runtime = createRuntime();
-      mocks.resolveStorePath.mockReturnValue(resolvedStore);
-
-      await exportTrajectoryCommand(
-        { sessionKey: "agent:work:telegram:direct:123", store },
-        runtime,
-      );
-
-      expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
-      expect(mocks.resolveStorePath).toHaveBeenCalledWith(store, { agentId: "work" });
-      expect(mocks.resolveExplicitStorePath).toHaveBeenCalledWith({
-        storePath: resolvedStore,
-        inputStorePath: store,
-        agentId: "work",
+  it.each(["agent:main:telegram:direct:123", "global"])(
+    "keeps a configured explicit agent as the store owner for %s",
+    async (sessionKey) => {
+      const runtime = createTestRuntime();
+      mocks.getRuntimeConfig.mockReturnValue({
+        agents: { entries: { main: {}, work: {} } },
+        session: { store: "/tmp/openclaw/agents/{agentId}/sessions/sessions.json" },
       });
+      mocks.resolveStorePath.mockReturnValue("/tmp/openclaw/agents/work/sessions/sessions.json");
+
+      await exportTrajectoryCommand({ sessionKey, agent: "work" }, runtime);
+
+      expect(mocks.resolveStorePath).toHaveBeenCalledWith(
+        "/tmp/openclaw/agents/{agentId}/sessions/sessions.json",
+        { agentId: "work" },
+      );
       expect(mocks.loadSessionEntryReadOnly).toHaveBeenCalledWith({
         agentId: "work",
-        sessionKey: "agent:work:telegram:direct:123",
-        storePath: resolvedStore,
+        sessionKey,
+        storePath: "/tmp/openclaw/agents/work/sessions/sessions.json",
       });
     },
   );
 
+  it("resolves explicit --store paths through the shared resolver", async () => {
+    const store = "/tmp/openclaw/agents/{agentId}/sessions/sessions.json";
+    const resolvedStore = "/tmp/openclaw/agents/work/sessions/sessions.json";
+    const runtime = createTestRuntime();
+    mocks.resolveStorePath.mockReturnValue(resolvedStore);
+
+    await exportTrajectoryCommand({ sessionKey: "agent:work:telegram:direct:123", store }, runtime);
+
+    expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
+    expect(mocks.resolveStorePath).toHaveBeenCalledWith(store, { agentId: "work" });
+    expect(mocks.resolveExplicitStorePath).toHaveBeenCalledWith({
+      storePath: resolvedStore,
+      inputStorePath: store,
+      agentId: "work",
+    });
+    expect(mocks.loadSessionEntryReadOnly).toHaveBeenCalledWith({
+      agentId: "work",
+      sessionKey: "agent:work:telegram:direct:123",
+      storePath: resolvedStore,
+    });
+  });
+
+  it.each(["main", "global"])(
+    "exports %s from the sole configured agent without an explicit selector",
+    async (sessionKey) => {
+      const runtime = createTestRuntime();
+      mocks.getRuntimeConfig.mockReturnValue({
+        agents: { ownership: "explicit", entries: { work: {} } },
+      });
+
+      await exportTrajectoryCommand({ sessionKey }, runtime);
+
+      expect(mocks.loadSessionEntryReadOnly).toHaveBeenCalledWith({
+        agentId: "work",
+        sessionKey,
+        storePath: "/tmp/openclaw/sessions.json",
+      });
+      expect(mocks.exportTrajectoryForCommand).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionTarget: expect.objectContaining({ agentId: "work" }),
+        }),
+      );
+    },
+  );
+
+  it("requires an explicit owner for an ambiguous alias before reading or exporting", async () => {
+    const runtime = createTestRuntime();
+    mocks.getRuntimeConfig.mockReturnValue({
+      agents: { ownership: "explicit", entries: { main: {}, work: {} } },
+    });
+
+    await expect(exportTrajectoryCommand({ sessionKey: "global" }, runtime)).rejects.toThrow(
+      "--agent <id>",
+    );
+
+    expect(mocks.loadSessionEntryReadOnly).not.toHaveBeenCalled();
+    expect(mocks.exportTrajectoryForCommand).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed agent keys before selecting a configured owner", async () => {
+    const runtime = createTestRuntime();
+    mocks.getRuntimeConfig.mockReturnValue({
+      agents: { ownership: "explicit", entries: { main: {}, work: {} } },
+    });
+
+    await expect(exportTrajectoryCommand({ sessionKey: "agent:work" }, runtime)).rejects.toThrow(
+      "Malformed agent session key",
+    );
+
+    expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
+    expect(mocks.loadSessionEntryReadOnly).not.toHaveBeenCalled();
+  });
+
   it("uses configured session.store when no explicit store is provided", async () => {
-    const runtime = createRuntime();
+    const runtime = createTestRuntime();
     mocks.getRuntimeConfig.mockReturnValue({
       session: { store: "/tmp/openclaw/agents/{agentId}/sessions/sessions.json" },
     });
@@ -303,21 +395,8 @@ describe("exportTrajectoryCommand", () => {
     });
   });
 
-  it("falls back through resolveStorePath when no session.store is configured", async () => {
-    const runtime = createRuntime();
-
-    await exportTrajectoryCommand({ sessionKey: "agent:main:telegram:direct:123" }, runtime);
-
-    expect(mocks.resolveStorePath).toHaveBeenCalledWith(undefined, { agentId: "main" });
-    expect(mocks.loadSessionEntryReadOnly).toHaveBeenCalledWith({
-      agentId: "main",
-      sessionKey: "agent:main:telegram:direct:123",
-      storePath: "/tmp/openclaw/sessions.json",
-    });
-  });
-
   it("passes blank configured session.store through the default-store resolver", async () => {
-    const runtime = createRuntime();
+    const runtime = createTestRuntime();
     mocks.getRuntimeConfig.mockReturnValue({ session: { store: "" } });
 
     await exportTrajectoryCommand({ sessionKey: "agent:main:telegram:direct:123" }, runtime);
@@ -331,7 +410,7 @@ describe("exportTrajectoryCommand", () => {
   });
 
   it("reports a missing session without resolving its transcript or exporting", async () => {
-    const runtime = createRuntime();
+    const runtime = createTestRuntime();
     mocks.loadSessionEntryReadOnly.mockReturnValue(undefined);
 
     await expectTrajectoryFailure(
@@ -345,7 +424,7 @@ describe("exportTrajectoryCommand", () => {
   });
 
   it("reports transcript target resolution failures without invoking the exporter", async () => {
-    const runtime = createRuntime();
+    const runtime = createTestRuntime();
     mocks.resolveSessionTranscriptReadTarget.mockImplementationOnce(() => {
       throw new Error("transcript target is unavailable");
     });
@@ -360,7 +439,7 @@ describe("exportTrajectoryCommand", () => {
   });
 
   it("reports exporter failures without formatting a successful result", async () => {
-    const runtime = createRuntime();
+    const runtime = createTestRuntime();
     mocks.exportTrajectoryForCommand.mockRejectedValueOnce(new Error("workspace is unavailable"));
 
     await expectTrajectoryFailure(
@@ -373,7 +452,7 @@ describe("exportTrajectoryCommand", () => {
   });
 
   it("exports SQLite sessions without probing a transcript JSONL file", async () => {
-    const runtime = createRuntime();
+    const runtime = createTestRuntime();
 
     await exportTrajectoryCommand(
       {
@@ -401,7 +480,7 @@ describe("exportTrajectoryCommand", () => {
   });
 
   it("preserves successful JSON output", async () => {
-    const runtime = createRuntime();
+    const runtime = createTestRuntime();
 
     await exportTrajectoryCommand(
       { sessionKey: "agent:main:telegram:direct:123", json: true },

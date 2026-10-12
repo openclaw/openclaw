@@ -1,10 +1,13 @@
 /* @vitest-environment jsdom */
 
-import { describe, expect, it, vi } from "vitest";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
+import {
+  GatewayPayloadLimitError,
+  GatewayRequestError,
+  type GatewayBrowserClient,
+} from "../../api/gateway.ts";
 import {
   deleteSessionPlacementDraft,
-  deleteRecoveredSessionPlacementDraft,
   startSessionPlacementInitialTurn,
 } from "./session-placement-startup.ts";
 
@@ -13,10 +16,17 @@ const params = {
   agentId: "cloud",
   target: { kind: "profile", profileId: "aws" } as const,
   message: "run remotely",
+  mode: "dispatch" as const,
 };
 
-function clientWith(request: ReturnType<typeof vi.fn>): Pick<GatewayBrowserClient, "request"> {
-  return { request: request as GatewayBrowserClient["request"] };
+function clientWith(
+  request: ReturnType<typeof vi.fn>,
+): Parameters<typeof startSessionPlacementInitialTurn>[0] {
+  const client = { request: request as GatewayBrowserClient["request"] };
+  return {
+    client,
+    describe: (target) => client.request("sessions.describe", target),
+  };
 }
 
 describe("session placement startup", () => {
@@ -47,8 +57,13 @@ describe("session placement startup", () => {
   it.each([
     {
       name: "profile",
-      target: { kind: "profile", profileId: "aws", machineClass: "fast" } as const,
-      expectedTarget: { profileId: "aws", machineClass: "fast" },
+      target: {
+        kind: "profile",
+        profileId: "aws",
+        os: "windows/wsl2",
+        machineClass: "fast",
+      } as const,
+      expectedTarget: { profileId: "aws", os: "windows/wsl2", machineClass: "fast" },
     },
     {
       name: "device",
@@ -100,6 +115,10 @@ describe("session placement startup", () => {
   });
 
   it("reclaims an allocated worker when provisioning becomes failed", async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     const request = vi
       .fn()
       .mockResolvedValueOnce({
@@ -110,9 +129,9 @@ describe("session placement startup", () => {
       })
       .mockResolvedValueOnce({ ok: true });
 
-    await expect(
-      startSessionPlacementInitialTurn(clientWith(request), params, () => true),
-    ).resolves.toEqual({
+    const outcome = startSessionPlacementInitialTurn(clientWith(request), params, () => true);
+    await vi.runAllTimersAsync();
+    await expect(outcome).resolves.toEqual({
       status: "dispatch-rejected",
       error: "session placement became failed",
     });
@@ -151,7 +170,6 @@ describe("session placement startup", () => {
       startSessionPlacementInitialTurn(clientWith(request), { ...params, attachments }, () => true),
     ).resolves.toMatchObject({
       status: "started",
-      messageSeq: 3,
     });
     expect(request).toHaveBeenNthCalledWith(2, "sessions.describe", { key: params.key });
     expect(request).toHaveBeenNthCalledWith(
@@ -161,20 +179,35 @@ describe("session placement startup", () => {
     );
   });
 
-  it("waits for an absent placement after an ambiguous dispatch error", async () => {
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("transport closed"))
-      .mockResolvedValueOnce({ session: {} })
+  it.each([
+    { name: "absent placement", response: { session: {} } },
+    {
+      name: "draining placement",
+      response: { session: { placement: { state: "draining", environmentId: "environment-1" } } },
+    },
+    { name: "transient lookup failure", response: new Error("still reconnecting") },
+  ])("waits through $name after an ambiguous dispatch error", async ({ response }) => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const request = vi.fn().mockRejectedValueOnce(new Error("transport closed"));
+    if (response instanceof Error) {
+      request.mockRejectedValueOnce(response);
+    } else {
+      request.mockResolvedValueOnce(response);
+    }
+    request
       .mockResolvedValueOnce({
         session: { placement: { state: "active", environmentId: "environment-1" } },
       })
       .mockResolvedValueOnce({ runId: "run-1" });
 
-    await expect(
-      startSessionPlacementInitialTurn(clientWith(request), params, () => true),
-    ).resolves.toMatchObject({ status: "started" });
+    const outcome = startSessionPlacementInitialTurn(clientWith(request), params, () => true);
+    await vi.runAllTimersAsync();
+    await expect(outcome).resolves.toMatchObject({ status: "started" });
     expect(request).toHaveBeenNthCalledWith(3, "sessions.describe", { key: params.key });
+    expect(request).not.toHaveBeenCalledWith("environments.destroy", expect.anything());
     expect(request).toHaveBeenNthCalledWith(
       4,
       "sessions.send",
@@ -183,6 +216,10 @@ describe("session placement startup", () => {
   });
 
   it("waits for a successful dispatch placement to become active", async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     const request = vi
       .fn()
       .mockResolvedValueOnce({
@@ -193,9 +230,9 @@ describe("session placement startup", () => {
       })
       .mockResolvedValueOnce({ runId: "run-1" });
 
-    await expect(
-      startSessionPlacementInitialTurn(clientWith(request), params, () => true),
-    ).resolves.toMatchObject({ status: "started" });
+    const outcome = startSessionPlacementInitialTurn(clientWith(request), params, () => true);
+    await vi.runAllTimersAsync();
+    await expect(outcome).resolves.toMatchObject({ status: "started" });
     expect(request).toHaveBeenNthCalledWith(2, "sessions.describe", { key: params.key });
     expect(request).toHaveBeenNthCalledWith(
       3,
@@ -204,85 +241,39 @@ describe("session placement startup", () => {
     );
   });
 
-  it("waits through an in-progress placement after an ambiguous dispatch error", async () => {
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("transport closed"))
-      .mockResolvedValueOnce({ session: { placement: { state: "provisioning" } } })
-      .mockResolvedValueOnce({
-        session: { placement: { state: "active", environmentId: "environment-1" } },
-      })
-      .mockResolvedValueOnce({ runId: "run-1" });
-
-    await expect(
-      startSessionPlacementInitialTurn(clientWith(request), params, () => true),
-    ).resolves.toMatchObject({ status: "started" });
-    expect(request).toHaveBeenNthCalledWith(3, "sessions.describe", { key: params.key });
-    expect(request).toHaveBeenNthCalledWith(
-      4,
-      "sessions.send",
-      expect.objectContaining({ message: params.message }),
-    );
-  });
-
-  it("waits for a draining placement to become active during recovery", async () => {
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("transport closed"))
-      .mockResolvedValueOnce({
-        session: { placement: { state: "draining", environmentId: "environment-1" } },
-      })
-      .mockResolvedValueOnce({
-        session: { placement: { state: "active", environmentId: "environment-1" } },
-      })
-      .mockResolvedValueOnce({ runId: "run-1" });
-
-    await expect(
-      startSessionPlacementInitialTurn(clientWith(request), params, () => true),
-    ).resolves.toMatchObject({ status: "started" });
-    expect(request).not.toHaveBeenCalledWith("environments.destroy", expect.anything());
-    expect(request).toHaveBeenNthCalledWith(
-      4,
-      "sessions.send",
-      expect.objectContaining({ message: params.message }),
-    );
-  });
-
-  it("keeps reconciling after a transient placement lookup failure", async () => {
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("transport closed"))
-      .mockRejectedValueOnce(new Error("still reconnecting"))
-      .mockResolvedValueOnce({
-        session: { placement: { state: "active", environmentId: "environment-1" } },
-      })
-      .mockResolvedValueOnce({ runId: "run-1" });
-
-    await expect(
-      startSessionPlacementInitialTurn(clientWith(request), params, () => true),
-    ).resolves.toMatchObject({ status: "started" });
-    expect(request).toHaveBeenNthCalledWith(3, "sessions.describe", { key: params.key });
-    expect(request).toHaveBeenNthCalledWith(
-      4,
-      "sessions.send",
-      expect.objectContaining({ message: params.message }),
-    );
-  });
-
-  it("stops quickly when placement lookups remain unavailable", async () => {
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("transport closed"))
-      .mockRejectedValue(new Error("authentication expired"));
-
-    await expect(
-      startSessionPlacementInitialTurn(clientWith(request), params, () => true),
-    ).resolves.toEqual({
-      status: "cleanup-rejected",
-      error: "session placement could not be verified; cleanup failed: authentication expired",
-    });
-    expect(request).toHaveBeenCalledTimes(6);
-  });
+  it.each(["gateway-suspending", "gateway-restarting"])(
+    "continues provisioning automatically after %s without reclaiming the worker",
+    async (reason) => {
+      vi.useFakeTimers();
+      try {
+        let unavailableReads = 0;
+        const request = vi.fn(async (method: string) => {
+          if (method === "sessions.dispatch") {
+            return { placement: { state: "provisioning" } };
+          }
+          if (method === "sessions.describe") {
+            if (unavailableReads++ < 8) {
+              throw new GatewayRequestError({
+                code: "UNAVAILABLE",
+                message: "Gateway temporarily unavailable",
+                retryable: true,
+                details: { reason },
+              });
+            }
+            return { session: { placement: { state: "active" } } };
+          }
+          return { status: "started" };
+        });
+        const outcome = startSessionPlacementInitialTurn(clientWith(request), params, () => true);
+        await vi.runAllTimersAsync();
+        await expect(outcome).resolves.toMatchObject({ status: "started" });
+        expect(request).not.toHaveBeenCalledWith("sessions.reclaim", expect.anything());
+        expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it.each([
     {
@@ -328,25 +319,50 @@ describe("session placement startup", () => {
     }
   });
 
-  it("keeps a still-provisioning placement recoverable after reconciliation times out", async () => {
-    vi.useFakeTimers();
-    try {
-      const request = vi.fn().mockResolvedValue({
-        placement: { state: "provisioning", environmentId: "environment-slow" },
-        session: { placement: { state: "provisioning", environmentId: "environment-slow" } },
-      });
+  it.each(["pending", "unavailable", "pending then unavailable"] as const)(
+    "explains an unfinished placement without discarding it when the Gateway is %s",
+    async (observation) => {
+      vi.useFakeTimers();
+      try {
+        const pending = { state: "provisioning", environmentId: "environment-slow" };
+        const request = vi.fn();
+        if (observation === "pending") {
+          request.mockResolvedValue({ session: { placement: pending } });
+        } else {
+          request.mockRejectedValue(
+            new GatewayRequestError({
+              code: "UNAVAILABLE",
+              message: "gateway restarting",
+              retryable: true,
+              details: { reason: "gateway-restarting" },
+            }),
+          );
+        }
+        if (observation !== "unavailable") {
+          request.mockResolvedValueOnce({ session: { placement: pending } });
+        }
 
-      const outcome = startSessionPlacementInitialTurn(clientWith(request), params, () => true);
-      await vi.runAllTimersAsync();
-      await expect(outcome).resolves.toEqual({
-        status: "cleanup-rejected",
-        error: "session placement reconciliation timed out",
-      });
-      expect(request).not.toHaveBeenCalledWith("sessions.reclaim", expect.anything());
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+        const outcome = startSessionPlacementInitialTurn(
+          clientWith(request),
+          { ...params, mode: "recover" },
+          () => true,
+        );
+        await vi.runAllTimersAsync();
+        await expect(outcome).resolves.toEqual({
+          status: "cleanup-rejected",
+          error:
+            observation === "pending"
+              ? "Worker setup is still in progress. Retry to check the existing worker; your message has not been sent."
+              : "Could not confirm whether worker setup finished. Retry to check again; your message has not been sent.",
+        });
+        expect(request).not.toHaveBeenCalledWith("sessions.reclaim", expect.anything());
+        expect(request).not.toHaveBeenCalledWith("sessions.send", expect.anything());
+        expect(request).not.toHaveBeenCalledWith("sessions.dispatch", expect.anything());
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("keeps a cancelled placement recoverable when reclaim fails", async () => {
     const request = vi
@@ -389,6 +405,10 @@ describe("session placement startup", () => {
   });
 
   it("reclaims by session when cancellation coincides with a lookup failure", async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     let current = true;
     const request = vi
       .fn()
@@ -401,9 +421,9 @@ describe("session placement startup", () => {
       })
       .mockResolvedValueOnce({ ok: true });
 
-    await expect(
-      startSessionPlacementInitialTurn(clientWith(request), params, () => current),
-    ).resolves.toEqual({ status: "cancelled" });
+    const outcome = startSessionPlacementInitialTurn(clientWith(request), params, () => current);
+    await vi.runAllTimersAsync();
+    await expect(outcome).resolves.toEqual({ status: "cancelled" });
     expect(request).toHaveBeenNthCalledWith(3, "sessions.reclaim", {
       key: params.key,
       agentId: params.agentId,
@@ -411,6 +431,10 @@ describe("session placement startup", () => {
   });
 
   it("reclaims without carrying an environment identity", async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     let current = true;
     const request = vi
       .fn()
@@ -423,16 +447,16 @@ describe("session placement startup", () => {
       })
       .mockResolvedValueOnce({ ok: true });
 
-    await expect(
-      startSessionPlacementInitialTurn(clientWith(request), params, () => current),
-    ).resolves.toEqual({ status: "cancelled" });
+    const outcome = startSessionPlacementInitialTurn(clientWith(request), params, () => current);
+    await vi.runAllTimersAsync();
+    await expect(outcome).resolves.toEqual({ status: "cancelled" });
     expect(request).toHaveBeenNthCalledWith(3, "sessions.reclaim", {
       key: params.key,
       agentId: params.agentId,
     });
   });
 
-  it("aborts and reclaims when cancellation lands while the first turn is in flight", async () => {
+  it("reclaims when cancellation lands while the first turn is in flight", async () => {
     let current = true;
     const request = vi
       .fn()
@@ -443,7 +467,6 @@ describe("session placement startup", () => {
         current = false;
         return { runId: "run-1" };
       })
-      .mockResolvedValueOnce({ ok: true, status: "aborted" })
       .mockResolvedValueOnce({ ok: true });
 
     await expect(
@@ -451,11 +474,8 @@ describe("session placement startup", () => {
     ).resolves.toEqual({
       status: "cancelled",
     });
-    expect(request).toHaveBeenNthCalledWith(3, "sessions.abort", {
-      key: params.key,
-      agentId: params.agentId,
-    });
-    expect(request).toHaveBeenNthCalledWith(4, "sessions.reclaim", {
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(request).toHaveBeenNthCalledWith(3, "sessions.reclaim", {
       key: params.key,
       agentId: params.agentId,
     });
@@ -472,7 +492,6 @@ describe("session placement startup", () => {
         current = false;
         return { runId: "run-1", requestParams };
       })
-      .mockResolvedValueOnce({ ok: true, status: "aborted" })
       .mockRejectedValueOnce(new Error("cleanup unavailable"));
 
     const outcome = await startSessionPlacementInitialTurn(
@@ -516,7 +535,7 @@ describe("session placement startup", () => {
     });
   });
 
-  it("redispatches terminal sending recovery with the same message identity", async () => {
+  it("does not redispatch a terminal placement during recovery", async () => {
     const request = vi
       .fn()
       .mockResolvedValueOnce({ session: { placement: { state: "failed" } } })
@@ -532,22 +551,13 @@ describe("session placement startup", () => {
         {
           ...params,
           messageId: "message-recovered",
-          recovering: true,
-          retryTerminalPlacement: true,
+          mode: "recover",
         },
         () => true,
       ),
-    ).resolves.toEqual({ status: "started", messageId: "message-recovered" });
-    expect(request).toHaveBeenNthCalledWith(3, "sessions.dispatch", {
-      key: params.key,
-      agentId: params.agentId,
-      profileId: params.target.profileId,
-    });
-    expect(request).toHaveBeenNthCalledWith(
-      4,
-      "sessions.send",
-      expect.objectContaining({ idempotencyKey: "message-recovered" }),
-    );
+    ).resolves.toEqual({ status: "dispatch-rejected", error: "session placement became failed" });
+    expect(request).not.toHaveBeenCalledWith("sessions.dispatch", expect.anything());
+    expect(request).not.toHaveBeenCalledWith("sessions.send", expect.anything());
   });
 
   it("reclaims the worker without sending when recovery cannot enter the sending phase", async () => {
@@ -561,12 +571,13 @@ describe("session placement startup", () => {
     await expect(
       startSessionPlacementInitialTurn(
         clientWith(request),
-        params,
+        { ...params, messageId: "message-retained" },
         () => true,
         () => false,
       ),
     ).resolves.toEqual({
       status: "send-not-started",
+      messageId: "message-retained",
       error: "placement recovery storage is unavailable",
     });
     expect(request).toHaveBeenNthCalledWith(2, "sessions.reclaim", {
@@ -575,6 +586,50 @@ describe("session placement startup", () => {
     });
     expect(request).not.toHaveBeenCalledWith("sessions.send", expect.anything());
   });
+
+  it.each([
+    { error: new GatewayPayloadLimitError(), status: "send-not-started", cleanupFails: false },
+    { error: new Error("gateway not connected"), status: "send-not-started", cleanupFails: true },
+    {
+      error: new GatewayRequestError({ code: "INVALID_REQUEST", message: "send rejected" }),
+      status: "send-definitive-rejected",
+      cleanupFails: true,
+    },
+  ])(
+    "preserves $status classification when cleanup fails=$cleanupFails",
+    async ({ error, status, cleanupFails }) => {
+      const request = vi.fn((method: string) => {
+        if (method === "sessions.dispatch") {
+          return Promise.resolve({ placement: { state: "active" } });
+        }
+        if (method === "sessions.send") {
+          return Promise.reject(error);
+        }
+        if (method === "sessions.reclaim") {
+          return cleanupFails
+            ? Promise.reject(new Error("cleanup unavailable"))
+            : Promise.resolve({ ok: true });
+        }
+        throw new Error(`unexpected method ${method}`);
+      });
+      await expect(
+        startSessionPlacementInitialTurn(
+          clientWith(request),
+          { ...params, messageId: "retained" },
+          () => true,
+        ),
+      ).resolves.toEqual({
+        status,
+        messageId: "retained",
+        error: error.message + (cleanupFails ? "; cleanup failed: cleanup unavailable" : ""),
+      });
+      expect(request.mock.calls.map(([method]) => method)).toEqual([
+        "sessions.dispatch",
+        "sessions.send",
+        "sessions.reclaim",
+      ]);
+    },
+  );
 
   it("reclaims a cancelled placement without an environment identity", async () => {
     const request = vi
@@ -701,7 +756,7 @@ describe("session placement startup", () => {
       .mockResolvedValueOnce({ ok: true, deleted: true });
 
     await expect(
-      deleteRecoveredSessionPlacementDraft(clientWith(request), params.key, params.agentId),
+      deleteSessionPlacementDraft(clientWith(request), params.key, params.agentId, true),
     ).resolves.toBeUndefined();
     expect(request.mock.calls).toEqual([
       ["sessions.describe", { key: params.key }],
@@ -732,7 +787,7 @@ describe("session placement startup", () => {
     const request = vi.fn().mockRejectedValueOnce(new Error("gateway unavailable"));
 
     await expect(
-      deleteRecoveredSessionPlacementDraft(clientWith(request), params.key, params.agentId),
+      deleteSessionPlacementDraft(clientWith(request), params.key, params.agentId, true),
     ).resolves.toBe("session placement could not be verified");
     expect(request).toHaveBeenCalledOnce();
     expect(request).toHaveBeenCalledWith("sessions.describe", { key: params.key });
@@ -742,7 +797,7 @@ describe("session placement startup", () => {
     const request = vi.fn().mockResolvedValueOnce({ session: null });
 
     await expect(
-      deleteRecoveredSessionPlacementDraft(clientWith(request), params.key, params.agentId),
+      deleteSessionPlacementDraft(clientWith(request), params.key, params.agentId, true),
     ).resolves.toBeUndefined();
     expect(request).toHaveBeenCalledTimes(1);
   });
@@ -801,7 +856,7 @@ describe("session placement startup", () => {
     await expect(
       startSessionPlacementInitialTurn(
         clientWith(request),
-        { ...params, recovering: true, messageId: "recovery-message-1" },
+        { ...params, mode: "recover", messageId: "recovery-message-1" },
         () => true,
       ),
     ).resolves.toEqual({ status: "started", messageId: "recovery-message-1" });

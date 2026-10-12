@@ -7,13 +7,14 @@ import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 export type CoreToolFactoryFamily = "base-coding" | "shell" | "openclaw";
 
 type CoreToolFactoryDescriptor = {
-  name: string;
-  family: CoreToolFactoryFamily;
+  readonly name: string;
+  readonly family: CoreToolFactoryFamily;
 };
 
 const CORE_TOOL_FACTORY_DESCRIPTORS = [
   { name: "edit", family: "base-coding" },
   { name: "read", family: "base-coding" },
+  { name: "ls", family: "base-coding" },
   { name: "write", family: "base-coding" },
   { name: "apply_patch", family: "shell" },
   { name: "exec", family: "shell" },
@@ -29,8 +30,12 @@ const CORE_TOOL_FACTORY_DESCRIPTORS = [
   { name: "conversations_turn", family: "openclaw" },
   { name: AUTOMATIONS_TOOL_NAME, family: "openclaw" },
   { name: "screen", family: "openclaw" },
+  { name: "theme", family: "openclaw" },
+  { name: "secrets", family: "openclaw" },
   { name: "dashboard", family: "openclaw" },
+  { name: "decision_evaluate", family: "openclaw" },
   { name: "gateway", family: "openclaw" },
+  { name: "plugins", family: "openclaw" },
   { name: "get_goal", family: "openclaw" },
   { name: "github_identity_status", family: "openclaw" },
   { name: "github_publish", family: "openclaw" },
@@ -42,6 +47,8 @@ const CORE_TOOL_FACTORY_DESCRIPTORS = [
   { name: "music_generate", family: "openclaw" },
   { name: "nodes", family: "openclaw" },
   { name: "pdf", family: "openclaw" },
+  { name: "personal_instructions", family: "openclaw" },
+  { name: "presence", family: "openclaw" },
   { name: "session_status", family: "openclaw" },
   { name: "show_widget", family: "openclaw" },
   { name: "progress_card", family: "openclaw" },
@@ -82,6 +89,10 @@ export type OpenClawCodingToolConstructionPlan = {
 
 export function resolveCoreToolFactoryFamily(name: string): CoreToolFactoryFamily | undefined {
   return CORE_TOOL_FACTORY_FAMILY_BY_NAME.get(name);
+}
+
+export function listCoreToolFactoryDescriptors(): readonly CoreToolFactoryDescriptor[] {
+  return CORE_TOOL_FACTORY_DESCRIPTORS;
 }
 
 /**

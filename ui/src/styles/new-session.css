@@ -26,15 +26,83 @@ openclaw-new-session-page {
   z-index: 45;
 }
 
-.new-session-page__incognito-toggle--active,
-.new-session-page__incognito-toggle--active:hover:not(:disabled) {
+:where(html:not(.openclaw-native-macos, .openclaw-native-desktop)) .shell:not(.shell--mobile-nav) {
+  .new-session-page__incognito-rail {
+    top: calc((var(--rail-header-height) - 40px) / 2);
+  }
+}
+
+.new-session-page__draft-toggle {
+  display: none;
+}
+
+:is(
+  .new-session-page__draft-toggle,
+  .new-session-page__incognito-toggle
+).shell-chrome-controls__button {
+  width: 40px;
+  height: 40px;
+  border-color: color-mix(in srgb, var(--text-strong) 12%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  corner-shape: superellipse(1.5);
+}
+
+:is(
+    .new-session-page__draft-toggle,
+    .new-session-page__incognito-toggle
+  ).shell-chrome-controls__button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--text-strong) 18%, transparent);
+  background: color-mix(in srgb, var(--text-strong) 7%, var(--panel));
+}
+
+:is(
+    .new-session-page__draft-toggle,
+    .new-session-page__incognito-toggle
+  ).shell-chrome-controls__button
+  svg {
+  width: 19px;
+  height: 19px;
+}
+
+:is(.new-session-page__draft-toggle--active, .new-session-page__incognito-toggle--active),
+:is(.new-session-page__draft-toggle--active, .new-session-page__incognito-toggle--active):hover:not(
+    :disabled
+  ) {
   border-color: color-mix(in srgb, var(--accent) 42%, transparent);
   background: color-mix(in srgb, var(--accent) 18%, var(--bg-elevated));
   color: var(--accent);
 }
 
-html.openclaw-native-macos .new-session-page__incognito-rail {
-  top: 52px;
+html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__incognito-rail {
+  top: var(--openclaw-native-titlebar-height, 52px);
+}
+
+@media (max-width: 560px) {
+  .new-session-page__incognito-rail {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .new-session-page__draft-toggle {
+    display: inline-flex;
+  }
+
+  .new-session-page__draft-toggle--active.shell-chrome-controls__button {
+    width: auto;
+    padding-inline: 10px;
+    gap: 7px;
+  }
+
+  .new-session-page__draft-toggle-label {
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .new-session-page__composer .new-session-page__visibility--draft {
+    display: none;
+  }
 }
 
 /* Mirrors .chat-thread: the top inset doubles as the native macOS titlebar
@@ -60,46 +128,175 @@ html.openclaw-native-macos .new-session-page__incognito-rail {
   margin: 0 auto auto;
 }
 
+.new-session-page .agent-chat__welcome-identity {
+  gap: 12px;
+}
+
+.new-session-page .agent-chat__welcome-identity-copy {
+  gap: 6px;
+}
+
 /* Draft block inside the centered welcome column; the welcome centers text,
-   so reset alignment for the controls and composer. */
+   so reset alignment for the controls and composer.
+   The top margin is a paragraph break, not a nudge: the tagline is the last line
+   of the hero and the scope chips are the first line of the form, so they must
+   not read as one stack. */
 .new-session-page__draft {
   display: flex;
   flex-direction: column;
   gap: 8px;
   width: 100%;
-  margin-top: 6px;
+  margin-top: 34px;
   text-align: left;
 }
 
-.new-session-page__selection-status {
+.new-session-page__scroll > .new-session-page__draft {
+  max-width: var(--chat-thread-max-width, 48rem);
+  margin-inline: auto;
+}
+
+.new-session-page__incognito-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  width: calc(100% - 36px);
+  max-height: 0;
+  max-width: var(--chat-thread-max-width, 48rem);
+  margin: -8px auto 0;
+  padding-inline: var(--chat-composer-editor-inset-inline, 14px);
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+  opacity: 0;
+  filter: blur(4px);
+  pointer-events: none;
+  transform: translateY(-2px);
+  visibility: hidden;
+  white-space: nowrap;
+  transition:
+    max-height 160ms cubic-bezier(0.2, 0, 0, 1),
+    margin 160ms cubic-bezier(0.2, 0, 0, 1),
+    opacity 120ms ease-out,
+    filter 120ms ease-out,
+    transform 120ms ease-out,
+    visibility 0s linear 160ms;
+}
+
+.new-session-page__incognito-notice--visible {
+  max-height: 20px;
+  margin-top: 0;
+  opacity: 1;
+  filter: blur(0);
+  pointer-events: auto;
+  transform: translateY(0);
+  visibility: visible;
+  transition-delay: 0s;
+}
+
+.new-session-page__incognito-notice-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.new-session-page__incognito-notice-icon svg {
+  width: 14px;
+  height: 14px;
+  stroke-width: 1.6px;
+}
+
+.new-session-page--incognito .agent-chat__input {
+  border-color: color-mix(in srgb, var(--text-strong) 22%, transparent);
+  border-style: dashed;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .new-session-page__incognito-notice {
+    transition-duration: 0ms;
+  }
+}
+
+/* Sits after the model and reasoning pickers: the footer row reads as the
+   settings for the next turn, and how the session is recorded is the last of
+   them, not the first thing between "+" and the model. The model control claims
+   order 3 in chat/composer.css, so this follows it.
+   Box, type and rhythm come from the composer's chip family tokens rather than
+   numbers of its own: this control is a peer of the pickers beside it, and it
+   used to announce itself as a different component — smaller text, shorter box,
+   pill corners and a muted foreground against their 13px squared-off chips. The
+   fallbacks keep it sane if it is ever rendered outside a composer. */
+.new-session-page__visibility {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  min-height: 24px;
-  padding: 2px 8px;
+  order: 4;
+  gap: var(--chat-composer-chip-gap, 6px);
+  min-height: var(--chat-composer-chip-height, 30px);
+  padding-block: 0;
+  padding-inline: var(--chat-composer-chip-padding-inline, 8px);
   border: 0;
   border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-  color: var(--accent);
+  background: transparent;
+  color: var(--chat-composer-secondary, var(--muted));
   font: inherit;
-  font-size: 11px;
+  font-size: var(--chat-composer-chip-text, 13px);
+  line-height: 1.35;
   cursor: var(--cursor-action);
 }
 
-.new-session-page__selection-status:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 20%, transparent);
+/* Draft belongs with the attachment and permission controls. On pointer-first
+   layouts it stays quiet until the footer is explored; touch layouts keep the
+   action reachable because they have no persistent hover state. */
+@media (hover: hover) and (pointer: fine) {
+  .new-session-page__composer
+    .agent-chat__composer-lead
+    .new-session-page__visibility--draft:not(.new-session-page__visibility--active) {
+    opacity: 0;
+    pointer-events: none;
+    visibility: hidden;
+    transition:
+      opacity 120ms var(--ease-out),
+      visibility 0s linear 160ms;
+  }
+
+  .new-session-page__composer
+    .agent-chat__composer-footer:is(:hover, :focus-within)
+    .agent-chat__composer-lead
+    .new-session-page__visibility--draft:not(.new-session-page__visibility--active) {
+    opacity: 1;
+    pointer-events: auto;
+    visibility: visible;
+    transition-delay: 0s;
+  }
 }
 
-.new-session-page__selection-status:disabled {
+.new-session-page__visibility:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  color: var(--text-strong);
+}
+
+/* Active mode must read as toggled-on even while hovered: hover on an
+   inactive pill already shows a neutral fill, so active gets an accent
+   tint to stay distinguishable under the cursor. */
+.new-session-page__visibility--active,
+.new-session-page__visibility--active:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+
+.new-session-page__visibility:disabled {
   cursor: default;
   opacity: 0.5;
 }
 
-.new-session-page__selection-status svg {
-  width: 12px;
-  height: 12px;
-  fill: none;
-  stroke: currentColor;
+/* The mark has to be a block: left inline it sits on the label's baseline, which
+   parks it about 2px above the row's axis while every sibling control is centred
+   on its own box. Blocking it lets the wrapper collapse to the icon so the
+   button's `align-items: center` puts it on the same line as the label. */
+.new-session-page__visibility svg {
+  display: block;
+  width: var(--chat-composer-chip-icon, 14px);
+  height: var(--chat-composer-chip-icon, 14px);
   stroke-width: 1.7px;
 }
 
@@ -123,37 +320,15 @@ html.openclaw-native-macos .new-session-page__incognito-rail {
   position: relative;
 }
 
+.new-session-page__hosted-workspace {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 4px 8px;
+}
+
 .new-session-page__select--agent openclaw-agent-select {
   width: auto;
   max-width: min(40vw, 260px);
-}
-
-.agent-select--compact .agent-select__trigger,
-:root[data-theme-mode="light"] .agent-select--compact .agent-select__trigger {
-  width: auto;
-  height: 26px;
-  padding: 0 10px;
-  border: 0;
-  border-radius: var(--radius-full);
-  background: transparent;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.agent-select--compact .agent-select__trigger:hover:not(:disabled),
-.agent-select--compact .agent-select__trigger[aria-expanded="true"] {
-  color: var(--text);
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
-}
-
-.agent-select--compact .agent-select__avatar {
-  width: 18px;
-  height: 18px;
-}
-
-.agent-select--compact .agent-select__label {
-  max-width: min(32vw, 220px);
 }
 
 .new-session-page__trigger {
@@ -178,7 +353,8 @@ html.openclaw-native-macos .new-session-page__incognito-rail {
 }
 
 .new-session-page__trigger:hover:not(:disabled),
-.new-session-page__trigger[aria-expanded="true"] {
+.new-session-page__trigger[aria-expanded="true"],
+.new-session-page__browser-nav:hover:not(:disabled) {
   color: var(--text);
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
 }
@@ -217,9 +393,32 @@ html.openclaw-native-macos .new-session-page__incognito-rail {
   white-space: nowrap;
 }
 
+.new-session-page__select--where,
+.new-session-page__select--where > .new-session-page__trigger {
+  max-width: 100%;
+}
+
+.new-session-page__trigger-summary,
+.new-session-page__selected-summary {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .new-session-page__trigger-chevron {
   display: inline-flex;
-  color: inherit;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-inline-start: 2px;
+  color: var(--muted);
+  opacity: 0.8;
+}
+
+.new-session-page__trigger-chevron--mobile {
+  display: none;
 }
 
 /* Icon templates only carry paths; without an explicit stroke rule the SVGs
@@ -237,8 +436,34 @@ html.openclaw-native-macos .new-session-page__incognito-rail {
 }
 
 .new-session-page__trigger-chevron svg {
-  width: 12px;
-  height: 12px;
+  width: 10px;
+  height: 10px;
+  stroke-width: 1.5px;
+}
+
+.new-session-page__trigger > .new-session-page__target-icon {
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 14px;
+  width: 14px;
+  height: 14px;
+}
+
+.new-session-page__trigger > .new-session-page__target-icon svg {
+  stroke-width: 1.5px;
+}
+
+.new-session-page__trigger .cloud-profile-icon {
+  align-items: center;
+  justify-content: center;
+}
+
+/* The wide AWS wordmark has generous vertical whitespace in its source art.
+   Scale its paint, not the shared leading column or the compact menu icons. */
+.new-session-page__trigger .cloud-provider-icon[data-provider-icon="aws"] {
+  width: 18px;
+  height: 18px;
+  flex-basis: 18px;
 }
 
 .session-group-defaults .exec-approval-header {
@@ -264,13 +489,15 @@ html.openclaw-native-macos .new-session-page__incognito-rail {
 }
 
 @media (hover: hover) {
-  .session-group-defaults__folder:hover:not(:disabled) {
+  .session-group-defaults__folder:hover:not(:disabled),
+  .session-group-defaults__mode-trigger:hover:not(:disabled) {
     border-color: color-mix(in srgb, var(--accent) 35%, var(--input));
     background: color-mix(in srgb, var(--bg-hover) 65%, var(--card));
   }
 }
 
-.session-group-defaults__folder:focus-visible {
+.session-group-defaults__folder:focus-visible,
+.session-group-defaults__mode-trigger:focus-visible {
   outline: none;
   border-color: var(--ring);
   box-shadow: var(--focus-ring);
@@ -327,7 +554,9 @@ html.openclaw-native-macos .new-session-page__incognito-rail {
 }
 
 .session-group-defaults__resolved-mode > .new-session-page__target-icon,
-.session-group-defaults__mode-option-icon {
+.session-group-defaults__mode-option-icon,
+.session-group-defaults__mode-trigger .new-session-page__trigger-chevron,
+.new-session-page__target-icon {
   display: inline-flex;
   color: var(--muted);
 }
@@ -359,27 +588,9 @@ html.openclaw-native-macos .new-session-page__incognito-rail {
   box-shadow: inset 0 1px 0 var(--card-highlight);
 }
 
-@media (hover: hover) {
-  .session-group-defaults__mode-trigger:hover:not(:disabled) {
-    border-color: color-mix(in srgb, var(--accent) 35%, var(--input));
-    background: color-mix(in srgb, var(--bg-hover) 65%, var(--card));
-  }
-}
-
-.session-group-defaults__mode-trigger:focus-visible {
-  outline: none;
-  border-color: var(--ring);
-  box-shadow: var(--focus-ring);
-}
-
 .session-group-defaults__mode-trigger:disabled {
   cursor: default;
   opacity: 0.6;
-}
-
-.session-group-defaults__mode-trigger .new-session-page__trigger-chevron {
-  display: inline-flex;
-  color: var(--muted);
 }
 
 .session-group-defaults__mode-option {
@@ -403,9 +614,8 @@ wa-popover.new-session-page__select {
   --max-width: min(320px, calc(100vw - 24px));
 }
 
-wa-popover.new-session-page__select::part(body) {
-  min-width: 224px;
-  max-width: min(320px, calc(100vw - 24px));
+wa-popover.new-session-page__select::part(body),
+.new-session-page__branch-popup::part(popup) {
   padding: var(--menu-padding);
   border: 1px solid var(--overlay-border);
   border-radius: var(--menu-radius);
@@ -413,7 +623,11 @@ wa-popover.new-session-page__select::part(body) {
   box-shadow: var(--overlay-shadow);
 }
 
-.agent-select--compact .agent-select__menu-title,
+wa-popover.new-session-page__select::part(body) {
+  min-width: 224px;
+  max-width: min(320px, calc(100vw - 24px));
+}
+
 .new-session-page__menu-title {
   padding: 4px 8px 2px;
   color: var(--muted);
@@ -421,6 +635,12 @@ wa-popover.new-session-page__select::part(body) {
   font-weight: 650;
   letter-spacing: 0.05em;
   text-transform: uppercase;
+}
+
+wa-popover.new-session-page__picker-popover
+  .new-session-page__picker-root
+  > .new-session-page__menu-title:not(:first-child) {
+  margin-top: var(--space-2);
 }
 
 .new-session-page__project-search {
@@ -490,6 +710,25 @@ wa-popover.new-session-page__select::part(body) {
   border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
 }
 
+.new-session-page__branch-field {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.new-session-page__branch-field > input {
+  width: 100%;
+}
+
+.new-session-page__branch-suggestions {
+  display: grid;
+  gap: 2px;
+}
+
+.new-session-page__branch-suggestions [aria-selected="true"] {
+  background: var(--bg-hover);
+  color: var(--text-strong);
+}
+
 /* Context line inside a picker menu, e.g. which repo syncs to a cloud worker. */
 .new-session-page__menu-note {
   padding: 4px 8px 6px;
@@ -498,13 +737,25 @@ wa-popover.new-session-page__select::part(body) {
   color: var(--muted);
 }
 
-.new-session-page__menu-facts {
+.new-session-page__menu-meta {
   display: inline-flex;
   flex: 0 1 auto;
-  gap: 3px;
+  align-items: center;
+  gap: 8px;
   min-width: 0;
   max-width: 62%;
   overflow: hidden;
+}
+
+.new-session-page__menu-facts {
+  display: inline-flex;
+  gap: 3px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.new-session-page__menu-meta > .session-context-meter {
+  flex: 0 0 84px;
 }
 
 .new-session-page__menu-fact {
@@ -524,8 +775,9 @@ wa-popover.new-session-page__project-popover {
   --max-width: min(420px, calc(100vw - 24px));
 }
 
-wa-popover.new-session-page__project-popover::part(body) {
-  width: min(420px, calc(100vw - 24px));
+wa-popover.new-session-page__project-popover::part(body),
+wa-popover.new-session-page__where-popover::part(body) {
+  width: var(--max-width);
   max-width: none;
   padding: 0;
   overflow: hidden;
@@ -539,6 +791,102 @@ wa-popover.new-session-page__project-popover::part(body) {
   overflow-y: auto;
 }
 
+/* Destination search and mode controls stay visible while the flat inventory scrolls. */
+wa-popover.new-session-page__where-popover {
+  --max-width: min(360px, calc(100vw - 24px));
+}
+
+.new-session-page__environment-picker {
+  display: flex;
+  flex-direction: column;
+  max-height: min(360px, calc(var(--auto-size-available-height, 70vh) - 2px));
+  overflow: hidden;
+}
+
+.new-session-page__environment-search {
+  background: var(--bg-hover);
+  margin-bottom: var(--space-1);
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  color: var(--muted);
+  border-radius: var(--menu-item-radius);
+}
+
+.new-session-page__environment-search svg,
+.new-session-page__connect-device svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+
+.new-session-page__environment-search input {
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--control-ui-text-sm);
+  outline: none;
+}
+
+.new-session-page__environment-search input::placeholder {
+  color: var(--muted);
+}
+
+.new-session-page__environment-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overscroll-behavior: contain;
+  overflow-y: auto;
+}
+
+.new-session-page__environment-option {
+  min-height: 28px;
+  gap: 8px;
+  padding: 3px 8px;
+}
+
+/* Reserve the selection column even when empty so labels never move. */
+.new-session-page__environment-option > .session-menu__check {
+  flex: 0 0 20px;
+  width: 20px;
+}
+
+.new-session-page__device-icon {
+  display: inline-flex;
+}
+
+.new-session-page__environment-option .session-menu__icon,
+.new-session-page__environment-option .session-menu__icon svg,
+.new-session-page__card-icon svg,
+.new-session-page__submenu-chevron svg {
+  width: 14px;
+  height: 14px;
+}
+
+.new-session-page__environment-empty {
+  padding: 24px 12px;
+  color: var(--muted);
+  text-align: center;
+  font-size: var(--control-ui-text-sm);
+}
+
+.new-session-page__environment-skeletons {
+  display: grid;
+  gap: 8px;
+  padding: 6px 12px;
+}
+
+.new-session-page__environment-skeleton-row {
+  display: block;
+  height: 14px;
+}
+
 .new-session-page__menu-chevron {
   display: inline-flex;
   margin-left: auto;
@@ -548,15 +896,7 @@ wa-popover.new-session-page__project-popover::part(body) {
 .new-session-page__menu-chevron svg {
   width: 13px;
   height: 13px;
-  stroke: currentColor;
-  fill: none;
   stroke-width: 1.7px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.new-session-page__connect-machine .session-menu__icon {
-  color: var(--muted);
 }
 
 .connect-machine-dialog {
@@ -593,8 +933,8 @@ wa-popover.new-session-page__project-popover::part(body) {
 
 .connect-machine-dialog .login-gate__command code {
   min-width: 0;
-  overflow-x: auto;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
   user-select: all;
 }
 
@@ -609,50 +949,29 @@ wa-popover.new-session-page__project-popover::part(body) {
   border-radius: var(--radius-md);
 }
 
-.new-session-page__start-split {
-  display: inline-flex;
-  align-items: center;
+.new-session-page__start-submit.new-session-page__start-submit--busy svg {
+  animation: btn-spinner-spin 2.25s linear infinite;
 }
 
-.new-session-page__start-submit[aria-busy="true"] svg {
-  animation: new-session-start-spin 2.25s linear infinite;
-}
-
-@keyframes new-session-start-spin {
-  to {
-    transform: rotate(1turn);
-  }
-}
-
-.new-session-page__start-primary {
-  width: 34px;
-  min-width: 34px;
-  border-radius: var(--radius-full) 0 0 var(--radius-full);
-}
-
-wa-dropdown.new-session-page__start-menu {
-  display: inline-flex;
-}
-
-.new-session-page__start-menu-trigger {
-  width: 22px;
-  min-width: 22px;
-  height: 36px;
-  padding: 0 4px 0 2px;
-  border-left: 1px solid color-mix(in srgb, var(--primary-foreground) 28%, transparent);
-  border-radius: 0 var(--radius-full) var(--radius-full) 0;
-}
-
-.new-session-page__start-menu-trigger svg {
-  width: 13px;
-  height: 13px;
+.new-session-page__start-submit--blocked {
+  cursor: var(--cursor-action);
+  filter: saturate(0.45);
+  opacity: 0.48;
 }
 
 /* Keep a long first prompt visible before scrolling. The shared auto-height
    controller measures content; this surface owns its ten-line visual cap. */
+/* No inset of its own: the editor's breathing room is the composer surface's
+   decision, and a left-only override here put the draft further from one edge
+   than the other while the chat composer stayed symmetric. */
 .new-session-page__composer .new-session-page__message {
   max-height: calc(10lh + var(--chat-box-inset) + var(--chat-box-inset));
-  padding-left: var(--chat-box-inset);
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--muted) 42%, transparent) transparent;
+}
+
+.new-session-page__composer .new-session-page__message::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--muted) 42%, transparent);
 }
 
 .new-session-page__composer::after {
@@ -679,15 +998,8 @@ wa-dropdown.new-session-page__start-menu {
   opacity: 0.5;
 }
 
-/* Reason shown after Enter/Start is pressed while a submit gate blocks it. */
-.new-session-page__blocked-submit {
-  padding: 4px var(--chat-box-inset) 0;
-  font-size: 12px;
-  color: var(--muted);
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .new-session-page__start-submit[aria-busy="true"] svg {
+  .new-session-page__start-submit.new-session-page__start-submit--busy svg {
     animation: none;
   }
 
@@ -695,11 +1007,6 @@ wa-dropdown.new-session-page__start-menu {
   .new-session-page__composer > * {
     transition-duration: 0ms;
   }
-}
-
-.new-session-page__target-icon {
-  display: inline-flex;
-  color: var(--muted);
 }
 
 .new-session-page__browser-nav {
@@ -713,11 +1020,6 @@ wa-dropdown.new-session-page__start-menu {
   background: transparent;
   color: var(--muted);
   cursor: var(--cursor-action);
-}
-
-.new-session-page__browser-nav:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
-  color: var(--text);
 }
 
 .new-session-page__browser-nav:disabled {
@@ -782,7 +1084,8 @@ wa-dropdown.new-session-page__start-menu {
   cursor: var(--cursor-action);
 }
 
-.new-session-page__browser-entry:hover {
+.new-session-page__browser-entry:hover,
+.new-session-page__browser-entry--active {
   background: var(--bg-hover);
 }
 
@@ -848,11 +1151,7 @@ wa-dropdown.new-session-page__start-menu {
 .new-session-page__alert-icon svg {
   width: 15px;
   height: 15px;
-  fill: none;
-  stroke: currentColor;
   stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .new-session-page__alert-message {
@@ -862,36 +1161,31 @@ wa-dropdown.new-session-page__start-menu {
   overflow-wrap: anywhere;
 }
 
-.new-session-page__browser-use {
+.new-session-page__browser-use,
+.new-session-page__browser-register {
   padding: 6px 14px;
-  border: 1px solid transparent;
   border-radius: var(--radius-md);
-  background: var(--primary);
-  color: var(--primary-foreground);
   font-size: 13px;
   font-weight: 600;
   cursor: var(--cursor-action);
 }
 
-.new-session-page__browser-use:disabled {
+.new-session-page__browser-use {
+  border: 1px solid transparent;
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
+.new-session-page__browser-use:disabled,
+.new-session-page__browser-register:disabled {
   opacity: 0.5;
   cursor: default;
 }
 
 .new-session-page__browser-register {
-  padding: 6px 14px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
   background: transparent;
   color: var(--text);
-  font-size: 13px;
-  font-weight: 600;
-  cursor: var(--cursor-action);
-}
-
-.new-session-page__browser-register:disabled {
-  opacity: 0.5;
-  cursor: default;
 }
 
 /* Phones (and short landscape): match the chat thread's mobile inset, and
@@ -900,7 +1194,41 @@ wa-dropdown.new-session-page__start-menu {
    the right edge. */
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .new-session-page__scroll {
-    padding: 52px 8px 12px;
+    /* The shared composer owns the chat edge and bottom insets. */
+    padding: 52px 0 0;
+  }
+
+  .new-session-page .agent-chat__welcome {
+    min-height: 100%;
+    padding: 0;
+  }
+
+  .new-session-page__scroll > .new-session-page__draft {
+    max-width: none;
+  }
+
+  .new-session-page .agent-chat__welcome-identity {
+    margin-block: auto;
+    padding-inline: var(--chat-mobile-edge-inset);
+  }
+
+  .new-session-page .agent-chat__welcome-secondary {
+    display: none;
+  }
+
+  .new-session-page__draft {
+    flex: 0 0 auto;
+    min-height: 0;
+    margin-top: 8px;
+  }
+
+  .new-session-page__composer {
+    /* Keep privacy context above the writing surface, never below it. */
+    order: 1;
+  }
+
+  .new-session-page__incognito-notice:not(.new-session-page__incognito-notice--visible) {
+    display: none;
   }
 
   .new-session-page__triggers {
@@ -908,23 +1236,405 @@ wa-dropdown.new-session-page__start-menu {
     gap: 4px 2px;
   }
 
-  /* A new session has visibility pills instead of the chat settings cluster.
-     Keep those pills intrinsic and let the model picker use the remaining width. */
-  .new-session-page__composer .agent-chat__composer-controls {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 2px;
-  }
-
-  .new-session-page__composer .agent-chat__input .chat-composer-model-control {
-    flex: 1 1 auto;
-    width: auto;
-    min-width: 0;
-    max-width: 100%;
-    margin-left: auto;
-  }
-
   .new-session-page__select {
     position: static;
   }
+}
+
+/* Narrow phones need the same compact hero as landscape to leave room for setup. */
+@media (max-width: 400px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .new-session-page .agent-chat__welcome-identity {
+    flex-direction: row;
+    text-align: start;
+  }
+
+  .new-session-page .agent-chat__welcome-identity-copy {
+    justify-items: start;
+  }
+}
+
+@container chat-composer (max-width: 480px) {
+  .new-session-page__composer .new-session-page__visibility {
+    flex: 0 0 var(--chat-composer-control-size);
+    width: var(--chat-composer-control-size);
+    padding-inline: 0;
+    justify-content: center;
+  }
+
+  .new-session-page__composer .new-session-page__visibility-label {
+    display: none;
+  }
+}
+
+@media (max-width: 560px) {
+  .agent-chat__input--mobile-toolbar .new-session-page__start-submit {
+    width: var(--chat-composer-send-size);
+    min-width: var(--chat-composer-send-size);
+    height: var(--chat-composer-send-size);
+    padding: var(--chat-mobile-row-action-padding);
+  }
+
+  .agent-chat__input--mobile-toolbar .new-session-page__start-submit > svg {
+    width: var(--chat-mobile-row-icon-size);
+    height: var(--chat-mobile-row-icon-size);
+    color: var(--primary-foreground);
+  }
+
+  .new-session-page .agent-chat__welcome-identity {
+    gap: 6px;
+  }
+
+  .new-session-page .agent-chat__welcome-clawd {
+    margin-bottom: 0;
+  }
+
+  .new-session-page__triggers {
+    display: grid;
+    /* Keep placement controls stacked while leaving breathing room on phones. */
+    grid-template-columns: minmax(0, 1fr);
+    align-items: center;
+    gap: 2px 4px;
+    width: calc(100% - 2 * var(--chat-mobile-edge-inset));
+    margin-inline: auto;
+    margin-block-end: 8px;
+    padding: 0 calc(var(--chat-composer-editor-inset-inline, 12px) - 6px);
+    border: 0;
+    background: transparent;
+  }
+
+  .new-session-page__trigger,
+  .new-session-page__select--agent .agent-select--compact .agent-select__trigger,
+  :root[data-theme-mode="light"]
+    .new-session-page__select--agent
+    .agent-select--compact
+    .agent-select__trigger {
+    height: 44px;
+    max-width: 100%;
+    padding-inline: 6px;
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 500;
+    line-height: 1.4;
+  }
+
+  .new-session-page__triggers > span.new-session-page__select {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .new-session-page__select--agent openclaw-agent-select {
+    max-width: 100%;
+  }
+
+  .new-session-page__triggers > span.new-session-page__select > .new-session-page__trigger {
+    width: fit-content;
+    max-width: 90%;
+  }
+
+  .new-session-page__catalog-unavailable,
+  .new-session-page__runtime,
+  .new-session-page__triggers > .new-session-page__menu-field {
+    grid-column: 1 / -1;
+  }
+
+  .new-session-page__triggers > .new-session-page__menu-field {
+    min-width: 0;
+    flex-wrap: wrap;
+  }
+
+  .new-session-page__trigger-label {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .new-session-page__trigger-label,
+  .new-session-page__trigger-summary {
+    /* Padding keeps fitting text out of the fade; only overflow reaches the tail. */
+    padding-inline-end: 8px;
+    white-space: nowrap;
+    text-overflow: clip;
+    mask-image: linear-gradient(to right, black calc(100% - 8px), transparent);
+  }
+
+  .new-session-page__trigger-label:dir(rtl),
+  .new-session-page__trigger-summary:dir(rtl) {
+    mask-image: linear-gradient(to left, black calc(100% - 8px), transparent);
+  }
+
+  .new-session-page__trigger {
+    gap: 0;
+    min-height: 44px;
+    height: auto;
+    padding-block: 8px;
+    text-align: start;
+  }
+
+  .new-session-page__select--where
+    > .new-session-page__trigger:has(.new-session-page__trigger-summary) {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .new-session-page__trigger-summary {
+    grid-column: 2;
+    grid-row: 2;
+  }
+
+  .new-session-page__select--where .new-session-page__target-icon {
+    grid-column: 1;
+    grid-row: 1 / 3;
+  }
+
+  .new-session-page__select--where .new-session-page__trigger-chevron {
+    grid-column: 3;
+    grid-row: 1 / 3;
+  }
+
+  .new-session-page__trigger > .new-session-page__target-icon {
+    flex-basis: 20px;
+    width: 20px;
+    height: 20px;
+    margin-inline-end: 8px;
+  }
+
+  .new-session-page__trigger > .new-session-page__target-icon svg {
+    flex: 0 0 16px;
+    width: 16px;
+    height: 16px;
+  }
+
+  .new-session-page__trigger .cloud-profile-icon {
+    flex-basis: 20px;
+    width: 20px;
+    height: 20px;
+  }
+
+  .new-session-page__trigger .cloud-provider-icon[data-provider-icon="aws"] {
+    flex-basis: 22px;
+    width: 22px;
+    height: 22px;
+  }
+
+  .new-session-page__trigger-chevron--desktop {
+    display: none;
+  }
+
+  .new-session-page__trigger-chevron--mobile {
+    display: inline-flex;
+    margin-inline-start: 4px;
+  }
+
+  .new-session-page__trigger-chevron--mobile svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  .new-session-page__incognito-notice {
+    align-items: flex-start;
+    width: calc(100% - 2 * var(--chat-mobile-edge-inset));
+    max-height: 0;
+    max-width: var(--chat-thread-max-width, 48rem);
+    margin-inline: auto;
+    padding-inline: 0;
+    white-space: normal;
+    text-align: left;
+  }
+
+  .new-session-page__incognito-notice--visible {
+    max-height: 48px;
+  }
+}
+
+.new-session-page__environment-details {
+  --openclaw-tooltip-popup-hide-duration: 0ms;
+  --openclaw-tooltip-popup-show-duration: 0ms;
+  --openclaw-tooltip-padding: 12px;
+  --openclaw-tooltip-max-width: min(280px, calc(100vw - 24px));
+}
+
+.new-session-page__environment-card {
+  display: grid;
+  gap: 6px;
+  min-width: 180px;
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.new-session-page__environment-card strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.new-session-page__card-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.new-session-page__card-icon {
+  display: inline-flex;
+  flex: 0 0 14px;
+}
+
+.new-session-page__environment-card code {
+  font-family: var(--mono);
+  font-size: inherit;
+  overflow-wrap: anywhere;
+}
+
+.new-session-page__environment-card .new-session-page__command {
+  display: block;
+  margin-block: 6px;
+}
+
+.new-session-page__environment-option[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.new-session-page__environment-heading {
+  margin: 12px 8px 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.new-session-page__cloud-configuration {
+  width: min(300px, calc(100vw - 48px));
+  padding: 0;
+  overflow-y: auto;
+  max-height: min(560px, calc(var(--auto-size-available-height, 70vh) - 2px));
+}
+
+.new-session-page__cloud-choice-list {
+  display: grid;
+  gap: 2px;
+}
+
+.new-session-page__cloud-choice-list .session-menu__text,
+.new-session-page__cloud-choice-list .session-menu__sub {
+  flex: 0 1 auto;
+}
+
+.new-session-page__cloud-choice-list .session-menu__check {
+  margin-left: auto;
+}
+
+.new-session-page__selected-summary {
+  display: block;
+  font-size: 11px;
+  margin-left: 8px;
+  font-weight: 400;
+}
+
+.new-session-page__environment-option .session-menu__text:has(.new-session-page__selected-summary) {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.new-session-page__cloud-config-card {
+  --openclaw-tooltip-background-color: var(--bg-elevated);
+  --openclaw-tooltip-max-width: min(510px, calc(100vw - 24px));
+}
+
+.new-session-page__cloud-configuration .new-session-page__environment-heading:first-child {
+  margin-top: 0;
+}
+
+.new-session-page__submenu-chevron {
+  display: flex;
+  flex: 0 0 14px;
+  color: var(--muted);
+}
+
+.new-session-page__devices-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.new-session-page__connect-device {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  margin-right: -4px;
+  padding: 2px;
+  border: 0;
+  border-radius: 50%;
+  color: inherit;
+  background: transparent;
+  opacity: 0.6;
+}
+
+.new-session-page__connect-device:hover {
+  background: var(--bg-hover);
+}
+
+.new-session-page__cloud-choice-list + .new-session-page__environment-heading {
+  margin-top: 20px;
+}
+
+.new-session-page__environment-detail-trigger {
+  display: flex;
+  align-items: center;
+}
+
+.new-session-page__environment-detail-trigger > .session-menu__item {
+  flex: 1;
+  min-width: 0;
+}
+
+.new-session-page__touch-details {
+  display: none;
+}
+
+@media (any-pointer: coarse) {
+  .new-session-page__touch-details {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 32px;
+    min-height: 32px;
+    padding: 6px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    color: var(--muted);
+    background: transparent;
+  }
+
+  .new-session-page__touch-details svg {
+    width: 16px;
+    height: 16px;
+  }
+}
+
+.new-session-page__fixed-os,
+.new-session-page__fixed-machine {
+  padding: 7px 8px;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.new-session-page__fixed-machine {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.new-session-page__fixed-machine span {
+  white-space: nowrap;
+}
+
+.new-session-page__fixed-machine span:last-child {
+  color: var(--muted);
 }

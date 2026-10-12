@@ -17,7 +17,6 @@ type ComfyCloudJobResponseOptions = {
   filename: string;
   outputKind: "gifs" | "images";
   promptId: string;
-  redirectLocation?: string;
 };
 
 export function buildComfyConfig(config: Record<string, unknown>): OpenClawConfig {
@@ -89,7 +88,7 @@ export function mockComfyCloudJobResponses(
     );
 }
 
-function fetchGuardJson(body: unknown) {
+export function fetchGuardJson(body: unknown) {
   return fetchGuardResponse(
     new Response(JSON.stringify(body), {
       status: 200,

@@ -1,11 +1,17 @@
 /**
  * Converts inline provider model config into runtime model definitions.
  */
+import { normalizeResolvedPricing } from "@openclaw/llm-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { MODEL_APIS } from "../../config/model-config-vocabulary.js";
+import { resolveMergedModelProviderModels } from "../../config/model-provider-config.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.js";
 import { normalizeGoogleApiBaseUrl } from "../../infra/google-api-base-url.js";
 import type { Api } from "../../llm/types.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../../plugins/plugin-metadata-snapshot.types.js";
+import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import { isStringOption } from "../../utils/string-readers.js";
+import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { isSecretRefHeaderValueMarker } from "../model-auth-markers.js";
 import { attachModelProviderLocalService } from "../provider-local-service.js";
 import {
@@ -43,37 +49,17 @@ export type InlineProviderConfig = {
 export function normalizeResolvedTransportApi(
   api: unknown,
 ): ModelDefinitionConfig["api"] | undefined {
-  switch (api) {
-    case "anthropic-messages":
-    case "bedrock-converse-stream":
-    case "github-copilot":
-    case "google-generative-ai":
-    case "google-vertex":
-    case "ollama":
-    case "openai-chatgpt-responses":
-    case "openai-completions":
-    case "openai-responses":
-    case "azure-openai-responses":
-      return api;
-    default:
-      return undefined;
-  }
+  return isStringOption(api, MODEL_APIS) ? api : undefined;
 }
 
 /** Sanitizes configured provider/model headers before they enter runtime model metadata. */
-export function sanitizeModelHeaders(
-  headers: unknown,
-  opts?: { stripSecretRefMarkers?: boolean },
-): Record<string, string> | undefined {
+export function sanitizeModelHeaders(headers: unknown): Record<string, string> | undefined {
   if (!headers || typeof headers !== "object" || Array.isArray(headers)) {
     return undefined;
   }
   const next: Record<string, string> = {};
   for (const [headerName, headerValue] of Object.entries(headers)) {
-    if (typeof headerValue !== "string") {
-      continue;
-    }
-    if (opts?.stripSecretRefMarkers && isSecretRefHeaderValueMarker(headerValue)) {
+    if (typeof headerValue !== "string" || isSecretRefHeaderValueMarker(headerValue)) {
       // Catalog/runtime model records are inspectable. Secret-ref markers are resolved later during
       // auth setup, so inline provider discovery must not expose them as literal headers.
       continue;
@@ -92,15 +78,11 @@ function isLegacyFoundryVisionModelCandidate(params: {
     return false;
   }
   const normalizedCandidates = [params.modelId, params.modelName]
-    .filter((value): value is string => typeof value === "string")
     .map((value) => normalizeOptionalLowercaseString(value))
     .filter((value): value is string => Boolean(value));
   return normalizedCandidates.some(
     (candidate) =>
-      candidate.startsWith("gpt-") ||
-      candidate.startsWith("o1") ||
-      candidate.startsWith("o3") ||
-      candidate.startsWith("o4") ||
+      ["gpt-", "o1", "o3", "o4"].some((prefix) => candidate.startsWith(prefix)) ||
       candidate === "computer-use-preview",
   );
 }
@@ -127,19 +109,6 @@ export function resolveProviderModelInput(params: {
   return normalizedInput.length > 0 ? normalizedInput : ["text"];
 }
 
-function resolveInlineProviderTransport(params: { api?: Api | null; baseUrl?: string }): {
-  api?: Api;
-  baseUrl?: string;
-} {
-  const api = normalizeResolvedTransportApi(params.api);
-  return {
-    api,
-    baseUrl:
-      api === "google-generative-ai" ? normalizeGoogleApiBaseUrl(params.baseUrl) : params.baseUrl,
-  };
-}
-
-/** Builds runtime model records from inline provider config. */
 export function buildInlineProviderModels(
   providers: Record<string, InlineProviderConfig>,
   options: { providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps } = {},
@@ -149,22 +118,25 @@ export function buildInlineProviderModels(
     if (!trimmed) {
       return [];
     }
-    const providerHeaders = sanitizeModelHeaders(entry?.headers, {
-      stripSecretRefMarkers: true,
-    });
+    const providerHeaders = sanitizeModelHeaders(entry?.headers);
     const providerRequest = sanitizeConfiguredModelProviderRequest(entry?.request);
-    return (entry?.models ?? []).map((model) => {
-      const transport = resolveInlineProviderTransport({
-        api: model.api ?? entry?.api,
-        baseUrl: (model as InlineModelEntry).baseUrl ?? entry?.baseUrl,
-      });
-      const modelHeaders = sanitizeModelHeaders((model as InlineModelEntry).headers, {
-        stripSecretRefMarkers: true,
-      });
+    // Provider defaults must not mask omissions before exact duplicate rows merge.
+    const models = resolveMergedModelProviderModels({
+      models: entry?.models,
+      normalizeModelId: (modelId) => modelId.trim(),
+    });
+    return Array.from(models.values()).map((model) => {
+      const api = normalizeResolvedTransportApi(model.api ?? entry?.api);
+      const configuredBaseUrl = model.baseUrl ?? entry?.baseUrl;
+      const baseUrl =
+        api === "google-generative-ai"
+          ? normalizeGoogleApiBaseUrl(configuredBaseUrl)
+          : configuredBaseUrl;
+      const modelHeaders = sanitizeModelHeaders(model.headers);
       const requestConfig = resolveProviderRequestConfig({
         provider: trimmed,
-        api: transport.api ?? model.api,
-        baseUrl: transport.baseUrl,
+        api: api ?? model.api,
+        baseUrl,
         ...(options.providerMetadataOwners
           ? { providerMetadataOwners: options.providerMetadataOwners }
           : {}),
@@ -189,7 +161,7 @@ export function buildInlineProviderModels(
                 input: model.input,
               }),
               provider: trimmed,
-              baseUrl: requestConfig.baseUrl ?? transport.baseUrl,
+              baseUrl: requestConfig.baseUrl ?? baseUrl,
               api: requestConfig.api ?? model.api,
               headers: requestConfig.headers,
             },
@@ -201,4 +173,31 @@ export function buildInlineProviderModels(
       );
     });
   });
+}
+
+/** Completes captured inline definitions with the same contract used by static catalogs. */
+export function completeInlineProviderModel(
+  model: InlineModelEntry,
+  providerConfig: ModelProviderConfig,
+): ProviderRuntimeModel {
+  return {
+    ...model,
+    name: model.name || model.id,
+    api: model.api ?? providerConfig.api ?? "openai-responses",
+    baseUrl: model.baseUrl ?? "",
+    reasoning: model.reasoning ?? false,
+    input: resolveProviderModelInput({
+      provider: model.provider,
+      modelId: model.id,
+      modelName: model.name,
+      input: model.input,
+    }),
+    cost: model.cost ?? normalizeResolvedPricing({}),
+    contextWindow:
+      model.contextWindow ?? Math.max(model.contextTokens ?? 0, DEFAULT_CONTEXT_TOKENS),
+    ...(model.contextWindow === undefined ? { contextWindowSource: "synthetic" as const } : {}),
+    contextTokens: model.contextTokens,
+    maxTokens: model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
+    ...(providerConfig.authHeader !== undefined ? { authHeader: providerConfig.authHeader } : {}),
+  };
 }

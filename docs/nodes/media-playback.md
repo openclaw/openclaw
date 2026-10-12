@@ -58,6 +58,10 @@ Playback conversion is lazy:
    route falls back to the original bytes. The client can then show its
    unplayable-media fallback and keep the download action available.
 
+The Control UI checks rendition readiness with `HEAD` before loading the inline
+player. It shows **Preparing playback** while conversion is pending and keeps
+the download action available when playback is unavailable.
+
 Transcoding accepts sources up to 20 minutes and never raises the normal audio
 or video byte cap. Cached playback renditions use a fixed seven-day retention
 that Gateway maintenance enforces at startup and hourly, independently of
@@ -65,17 +69,49 @@ that Gateway maintenance enforces at startup and hourly, independently of
 
 ## Managed attachments and access
 
+To attach a local file in an assistant reply, put `MEDIA:/absolute/path/movie.mp4`
+on its own line. The session's existing media access policy must allow the path.
+The Control UI stages allowed local audio and video with bounded streaming and
+plays them through the Gateway's authenticated, seekable media route. Use a
+portal for an app or development server; use `MEDIA:<path>` for files.
+
+Remote `MEDIA:` references must be public HTTPS URLs without credentials.
+Rejected references produce a visible attachment failure with instructions to
+use an allowed URL or local path; they do not appear as raw directive links.
+Inline prose and fenced code examples mentioning `MEDIA:` remain text.
+
 Agent-produced audio and video are stored as managed media artifacts. Images
 keep their separate managed-image artifact family. Native clients resolve the
 artifact through `artifacts.download`, which returns inline base64 bytes when
 the artifact is byte-backed or a short-lived, ticketed URL when it is
 Gateway-managed.
 
+Managed download tickets check current session access and the selected message's
+attachment reference in visible history. For indexed messages, issuing a ticket
+does not read the original file or validate unrelated transcript payloads. The
+HTTP request transfers the file separately.
+
+Download filenames preserve Unicode characters and literal percent sequences
+such as `%20`.
+
+Native clients resolve ticketed media against the connected Gateway URL,
+preserving its reverse-proxy path prefix. A Gateway reached at
+`wss://gateway.example/openclaw` loads managed media beneath
+`https://gateway.example/openclaw/api/chat/media/outgoing/`, not the server root.
+
 The ticketed byte routes support:
 
 - `Range` requests with HTTP `206 Partial Content` for seeking
-- `ETag` and `If-Range` for safe resume behavior
+- `ETag` and `If-Range` for safe resume of immutable managed originals
 - `HEAD` requests with the same content metadata and no response body
+
+For immutable originals, `If-None-Match` compares complete quoted tags using weak comparison. Commas and asterisks inside a quoted tag are literal; only a standalone `*` is a wildcard. A nonmatching tag leaves the normal full or ranged response intact.
+
+Local assistant files can change, and playback renditions can become available
+after a conversion retry. These responses revalidate without reusable validators:
+cached ETags or modification dates cannot suppress fresh bytes, and `If-Range`
+requests receive the full representation. Ordinary `Range` requests still support
+seeking. Managed playback responses remain private to the client cache.
 
 Do not copy a ticketed URL into durable configuration. Clients reacquire a
 ticket from the authenticated Gateway when needed.
@@ -85,18 +121,34 @@ ticket from the authenticated Gateway when needed.
 Chat attachments may include `sizeBytes`, `durationMs`, `width`, and `height`.
 OpenClaw also uses `ffprobe`, when available, to fill audio duration and video
 duration/dimensions for media facts and the Control UI `?meta=1` availability
-probe. Probing is best-effort: a missing or failed probe leaves fields absent
-instead of rejecting the attachment.
+check. Video dimensions account for non-square pixels and quarter-turn display
+rotation; image dimensions account for EXIF orientation. Checking is best-effort:
+a missing or failed check leaves fields absent instead of rejecting the attachment.
+The Gateway shares concurrent metadata inspections for the same local file and
+reuses successful results while that file is unchanged. Replacing or editing the
+file triggers a fresh inspection; failed checks remain retryable.
+Distinct files wait in a bounded inspection queue. If the queue is full, metadata
+reports temporary unavailability that you can retry, and playback remains
+preparing. Disconnected requests stop waiting, and queued checks with no remaining
+viewers release their queue slots immediately. Queued reads recheck current access
+before opening and checking the file. A busy inspector does not discard outgoing
+attachments; their optional playback metadata can remain absent. Outgoing reply
+creation uses immediate inspection admission and does not wait behind queued
+viewer requests.
 
-Gateway-managed assistant attachments use these per-file caps:
+Control UI managed assistant attachments use these per-file caps:
 
-| Kind  | Maximum size |
-| ----- | -----------: |
-| Image |       12 MiB |
-| Audio |       16 MiB |
-| Video |       16 MiB |
+| Kind        | Maximum size |
+| ----------- | -----------: |
+| Image       |       12 MiB |
+| Local audio |        4 GiB |
+| Local video |        4 GiB |
 
 These are playback/storage caps, not the separate media-understanding limits.
+The larger local-file limit does not change channel outbound limits, remote or
+data URL ingestion limits, or the limits of buffer-based remote workspace readers.
+It also does not raise the transcoding budget; large native MP4 files can play
+directly without conversion.
 For transcription and description limits, see
 [Image and media support](/nodes/images#limits-and-errors).
 

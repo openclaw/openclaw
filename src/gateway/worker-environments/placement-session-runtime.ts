@@ -1,27 +1,145 @@
-import { OPENCLAW_AGENT_RUNTIME_ID } from "../../agents/agent-runtime-id.js";
+import { resolveEffectiveAgentDir } from "../../agents/agent-scope-config.js";
 import { getRegisteredAgentHarness } from "../../agents/harness/registry.js";
-import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
+import { readSessionRuntimeOwnershipAsync } from "../../agents/harness/session-runtime-ownership.js";
+import type { AgentHarnessSessionRuntimeOwnership } from "../../agents/harness/types.js";
+import { resolveLegacyInheritedAuthAgentId } from "../../agents/legacy-inherited-auth-dir.js";
+import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
+import { isCliProvider } from "../../agents/model-selection-cli.js";
+import { resolveDefaultModelForAgent } from "../../agents/model-selection-config.js";
+import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
+import { captureRuntimeStateEnvironment } from "../../config/paths.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import type { GatewayAgentRuntime } from "../../shared/session-types.js";
+import { resolveSessionSelectedModelRef } from "../session-utils-model-selection.js";
+import { createGatewaySessionEntryReader } from "../session-utils-store-lineage.js";
+import { resolveGatewaySessionStoreTargetWithStore } from "../session-utils-store-lookup.js";
+import { resolveWorkerPlacementCapabilities } from "./placement-capabilities.js";
 import type { WorkerPlacementExecutionMode } from "./placement-record.js";
+
+export { resolveWorkerPlacementCapabilities } from "./placement-capabilities.js";
 
 export function resolveWorkerPlacementSessionRuntime(params: {
   cfg: OpenClawConfig;
   entry: SessionEntry;
   agentId: string;
   sessionKey: string;
+  preparedRuntimeOwnership?: AgentHarnessSessionRuntimeOwnership | null;
 }): string {
-  const selectedModel = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
-  return resolveEffectiveAgentRuntime({
-    cfg: params.cfg,
-    provider: selectedModel.provider,
-    modelId: selectedModel.model,
+  const { provider, model } = resolveSessionSelectedModelRef({
+    ...params,
+    source: {
+      entry: params.entry,
+      readSourceEntry: (key) => {
+        const metadata = captureSessionEntryMetadataRead({
+          sessionKey: key,
+          agentId: params.agentId,
+        });
+        if (metadata) {
+          return metadata.readCurrent();
+        }
+        const target = resolveGatewaySessionStoreTargetWithStore({
+          ...params,
+          key: params.sessionKey,
+          preserveQualifiedAddress: true,
+          clone: false,
+          readOnly: true,
+          exactRead: true,
+        });
+        return createGatewaySessionEntryReader({ ...target, cfg: params.cfg })(key);
+      },
+    },
+  });
+  return resolveWorkerPlacementModelRuntime({ ...params, provider, model });
+}
+
+export async function resolveWorkerPlacementSessionRuntimeAsync(
+  params: Omit<
+    Parameters<typeof resolveWorkerPlacementSessionRuntime>[0],
+    "preparedRuntimeOwnership"
+  > & {
+    assertCurrent?: () => void;
+  },
+): Promise<string> {
+  const ownership = await readSessionRuntimeOwnershipAsync({
+    config: params.cfg,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     sessionEntry: params.entry,
+    assertCurrent: params.assertCurrent,
   });
+  params.assertCurrent?.();
+  return resolveWorkerPlacementSessionRuntime({
+    ...params,
+    preparedRuntimeOwnership: ownership ?? null,
+  });
+}
+
+export function resolveWorkerPlacementModelRuntime(
+  params: Parameters<typeof resolveWorkerPlacementSessionRuntime>[0] & {
+    provider: string;
+    model: string;
+    preparedEnvironment?: NodeJS.ProcessEnv;
+    metadataSnapshot?: PluginMetadataSnapshot | null;
+  },
+): string {
+  const sessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider(params);
+  if (params.cfg.cloudWorkers?.requiredProfile) {
+    return "openclaw";
+  }
+  const pinnedHarnessId = resolveSessionPinnedHarnessId(params.entry);
+  const locksPersistedHarness =
+    pinnedHarnessId !== undefined && pinnedHarnessId === sessionRuntimeOverride;
+  const pinnedCliRuntime =
+    !locksPersistedHarness &&
+    sessionRuntimeOverride &&
+    isCliProvider(sessionRuntimeOverride, params.cfg, params.metadataSnapshot)
+      ? sessionRuntimeOverride
+      : undefined;
+  // When a non-CLI override is active the dispatch path skips CLI aliasing
+  // entirely and runs the embedded runtime; the guard must not reject that.
+  const cliExecutionProvider =
+    pinnedCliRuntime ??
+    (sessionRuntimeOverride
+      ? undefined
+      : resolveCliRuntimeExecutionProvider({
+          ...params,
+          metadataSnapshot:
+            params.metadataSnapshot === null ? { plugins: [] } : params.metadataSnapshot,
+          modelId: params.model,
+          authProfileId: params.entry.authProfileOverride,
+          preparedAuthDirectories: {
+            env: params.preparedEnvironment ?? captureRuntimeStateEnvironment(),
+            get agentDir() {
+              return resolveEffectiveAgentDir(params.cfg, params.agentId, { env: this.env });
+            },
+            get inheritedAuthDir() {
+              return resolveEffectiveAgentDir(
+                params.cfg,
+                resolveLegacyInheritedAuthAgentId(params.cfg),
+                { env: this.env },
+              );
+            },
+          },
+        }));
+  const useCliExecution =
+    pinnedCliRuntime !== undefined ||
+    (!sessionRuntimeOverride &&
+      isCliProvider(cliExecutionProvider ?? params.provider, params.cfg, params.metadataSnapshot));
+  return useCliExecution
+    ? (cliExecutionProvider ?? params.provider)
+    : resolveEffectiveAgentRuntime({
+        cfg: params.cfg,
+        provider: params.provider,
+        modelId: params.model,
+        agentScope: { kind: "prepared", agentId: params.agentId },
+        sessionKey: params.sessionKey,
+        sessionEntry: params.entry,
+      });
 }
 
 export function resolveWorkerPlacementExecutionMode(
@@ -30,39 +148,34 @@ export function resolveWorkerPlacementExecutionMode(
   return resolveWorkerPlacementCapabilities(runtime).executionMode;
 }
 
-export function resolveWorkerPlacementCapabilities(runtime: string): {
-  executionMode?: WorkerPlacementExecutionMode;
-  devicePlacement?: NonNullable<GatewayAgentRuntime["devicePlacement"]>;
-} {
-  const runtimeId = runtime.trim();
-  if (runtimeId === OPENCLAW_AGENT_RUNTIME_ID) {
-    return {
-      executionMode: "worker-turn",
-      devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
-    };
-  }
-  const placement = getRegisteredAgentHarness(runtimeId)?.harness.cloudPlacement;
-  if (!placement) {
-    return {};
-  }
-  const requirement = placement.devicePlacement;
-  if (!requirement) {
-    return { executionMode: placement.mode };
-  }
-  const requiredNodeCommands = [...new Set(requirement.requiredNodeCommands)].toSorted();
-  // Dropping an oversized or malformed required command would silently grant incomplete authority.
-  if (
-    requiredNodeCommands.length > 32 ||
-    requiredNodeCommands.some(
-      (command) => command.length === 0 || command.length > 128 || command.trim() !== command,
-    )
-  ) {
-    return { executionMode: placement.mode };
-  }
-  return {
-    executionMode: placement.mode,
-    devicePlacement: { requiredNodeCommands, consumesWorkerSlot: requirement.consumesWorkerSlot },
-  };
+/** Projects the same configured runtime choice a new default-model dashboard session will persist. */
+export function resolveDefaultWorkerPlacementExecutionMode(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+}): WorkerPlacementExecutionMode | undefined {
+  const { provider, model } = resolveDefaultModelForAgent(params);
+  const runtime = resolveWorkerPlacementModelRuntime({
+    ...params,
+    provider,
+    model,
+    entry: { sessionId: "prepared-pool-presence", updatedAt: 0 },
+    sessionKey: `agent:${params.agentId}:dashboard:prepared-pool-presence`,
+  });
+  return resolveWorkerPlacementExecutionMode(runtime);
+}
+
+export function resolveWorkerPlacementSessionRuntimeCapabilities(
+  params: Parameters<typeof resolveWorkerPlacementSessionRuntime>[0],
+) {
+  return resolveWorkerPlacementCapabilities(resolveWorkerPlacementSessionRuntime(params));
+}
+
+export async function resolveWorkerPlacementSessionRuntimeCapabilitiesAsync(
+  params: Parameters<typeof resolveWorkerPlacementSessionRuntimeAsync>[0],
+) {
+  return resolveWorkerPlacementCapabilities(
+    await resolveWorkerPlacementSessionRuntimeAsync(params),
+  );
 }
 
 export function projectWorkerPlacementAgentRuntime(
@@ -73,10 +186,12 @@ export function projectWorkerPlacementAgentRuntime(
   devicePlacement?: NonNullable<GatewayAgentRuntime["devicePlacement"]>;
   devicePlacementSupported: boolean;
 } {
-  const { source, ...identity } = runtime;
+  const { source, workspaceEnvironment: _previousEnvironment, ...identity } = runtime;
   const { executionMode, devicePlacement } = resolveWorkerPlacementCapabilities(runtime.id);
+  const workspaceEnvironment = getRegisteredAgentHarness(runtime.id)?.harness.workspaceEnvironment;
   return {
     ...identity,
+    ...(workspaceEnvironment ? { workspaceEnvironment } : {}),
     cloudPlacementSupported: executionMode !== undefined,
     ...(executionMode ? { cloudPlacementExecutionMode: executionMode } : {}),
     ...(devicePlacement ? { devicePlacement } : {}),

@@ -2,11 +2,10 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { createExecTool } from "../../agents/bash-tools.js";
-import type { ExecToolDetails } from "../../agents/bash-tools.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { listSessionEntriesReadOnly } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import type { ExecApprovalRequest } from "../../infra/exec-approvals.js";
 import type {
   LegacyInteractiveReply,
   MessagePresentationAction,
@@ -16,19 +15,15 @@ import type { PluginCommandDiagnosticsSession, PluginCommandResult } from "../..
 import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,
-} from "../../utils/delivery-context.shared.js";
+} from "../../utils/delivery-context.read.js";
 import type { ReplyPayload } from "../types.js";
-import { rejectNonOwnerCommand } from "./command-gates.js";
+import { formatCommandExecResult, formatCommandExecText } from "./command-exec-result.js";
+import { commandReply, matchCommandPrefix, rejectNonOwnerCommand } from "./command-gates.js";
+import { buildPluginCommandContext } from "./commands-context.js";
+import { buildCurrentOpenClawCliExecRequest } from "./commands-openclaw-cli.js";
 import {
-  buildCurrentOpenClawCliCommand,
-  buildCurrentOpenClawCliExecEnv,
-} from "./commands-openclaw-cli.js";
-import {
+  buildCommandExecApprovalDefaults,
   deliverPrivateCommandReply,
-  readCommandDeliveryTarget,
-  readCommandMessageThreadId,
-  resolveCommandExecApprovalRoute,
-  resolvePrivateCommandApprovalRouteExpiresAtMs,
   resolvePrivateCommandRouteTargets,
   type PrivateCommandRouteTarget,
 } from "./commands-private-route.js";
@@ -41,60 +36,31 @@ const GATEWAY_DIAGNOSTICS_EXPORT_JSON_LABEL = "openclaw gateway diagnostics expo
 const DIAGNOSTICS_EXEC_SCOPE_KEY = "chat:diagnostics";
 const DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE =
   "I couldn't find a private owner approval route for diagnostics. Run /diagnostics from an owner DM so the sensitive diagnostics details are not posted in this chat.";
-const DIAGNOSTICS_PRIVATE_ROUTE_ACK =
-  "Diagnostics are sensitive. I sent the diagnostics details and approval prompts to the owner privately.";
-
-type DiagnosticsCommandDeps = {
-  createExecTool: typeof createExecTool;
-  resolvePrivateDiagnosticsTargets: (
-    params: HandleCommandsParams,
-  ) => Promise<PrivateCommandRouteTarget[]>;
-  deliverPrivateDiagnosticsReply: (params: {
-    commandParams: HandleCommandsParams;
-    targets: PrivateCommandRouteTarget[];
-    reply: ReplyPayload;
-  }) => Promise<boolean>;
+const DIAGNOSTICS_PRIVATE_ROUTE_REPLIES = {
+  delivered: "Diagnostics are sensitive. I sent the diagnostics details to the owner privately.",
+  pending: "Diagnostics are sensitive. Private delivery is pending; I can't confirm receipt yet.",
+  suppressed:
+    "Diagnostics are sensitive. Private delivery of the diagnostics details was suppressed.",
+  failed: DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE,
 };
-
-type GatewayDiagnosticsApprovalResult =
-  | { status: "pending" }
-  | { status: "reply"; reply: ReplyPayload };
 
 type CodexDiagnosticsApprovalIntegration = {
   approvalText?: string;
   approvalFollowup?: () => Promise<string | undefined>;
 };
 
-const defaultDiagnosticsCommandDeps: DiagnosticsCommandDeps = {
-  createExecTool,
-  resolvePrivateDiagnosticsTargets: resolvePrivateDiagnosticsTargetsForCommand,
-  deliverPrivateDiagnosticsReply,
-};
-
-/** Creates a diagnostics command handler with injectable private-route dependencies. */
-function createDiagnosticsCommandHandler(
-  deps: Partial<DiagnosticsCommandDeps> = {},
-): CommandHandler {
-  const resolvedDeps: DiagnosticsCommandDeps = {
-    ...defaultDiagnosticsCommandDeps,
-    ...deps,
-  };
-  return async (params, allowTextCommands) =>
-    await handleDiagnosticsCommandWithDeps(resolvedDeps, params, allowTextCommands);
-}
-
-/** Default diagnostics command handler. */
-export const handleDiagnosticsCommand: CommandHandler = createDiagnosticsCommandHandler();
-
-async function handleDiagnosticsCommandWithDeps(
-  deps: DiagnosticsCommandDeps,
-  params: HandleCommandsParams,
-  allowTextCommands: boolean,
-) {
+export const handleDiagnosticsCommand: CommandHandler = async (input, allowTextCommands) => {
+  const params = { ...input, command: { ...input.command } };
   if (!allowTextCommands) {
     return null;
   }
-  const args = parseDiagnosticsArgs(params.command.commandBodyNormalized);
+  const args = matchCommandPrefix(
+    params.command.commandBodyNormalized.trim(),
+    DIAGNOSTICS_COMMAND,
+    {
+      allowColon: true,
+    },
+  );
   if (args == null) {
     return null;
   }
@@ -108,105 +74,70 @@ async function handleDiagnosticsCommandWithDeps(
   if (nonOwner) {
     return nonOwner;
   }
+  // Inventory belongs to this authorized command, not every reply's retained
+  // session view. Metadata preserves Codex target discovery without prompt snapshots.
+  const commandParams = params.storePath
+    ? {
+        ...params,
+        sessionStore: {
+          ...Object.fromEntries(
+            listSessionEntriesReadOnly({
+              agentId: params.agentId,
+              storePath: params.storePath,
+              projection: "list",
+            }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+          ),
+          ...params.sessionStore,
+        },
+      }
+    : params;
   if (isCodexDiagnosticsConfirmationAction(args)) {
-    const codexResult = await executeCodexDiagnosticsAddon(params, args);
+    const codexResult = await executeCodexDiagnosticsAddon(commandParams, args);
     const reply = codexResult
       ? rewriteCodexDiagnosticsResult(codexResult)
       : { text: "No Codex diagnostics confirmation handler is available for this session." };
-    if (params.isGroup) {
-      return await deliverGroupDiagnosticsReplyPrivately(deps, params, reply);
+    if (commandParams.isGroup) {
+      return await deliverGroupDiagnosticsReplyPrivately(commandParams, reply);
     }
-    return {
-      shouldContinue: false,
-      reply,
-    };
+    return commandReply(reply);
   }
 
-  if (params.isGroup) {
-    const privateTarget = (await deps.resolvePrivateDiagnosticsTargets(params))[0];
+  if (commandParams.isGroup) {
+    const privateTarget = (await resolvePrivateDiagnosticsTargetsForCommand(commandParams))[0];
     if (!privateTarget) {
-      return {
-        shouldContinue: false,
-        reply: { text: DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE },
-      };
+      return commandReply(DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE);
     }
-    const privateReply = await buildDiagnosticsReply(deps, params, args, {
+    const privateReply = await buildDiagnosticsReply(commandParams, args, {
       diagnosticsPrivateRouted: true,
       privateApprovalTarget: privateTarget,
     });
     if (!privateReply) {
-      return {
-        shouldContinue: false,
-        reply: { text: DIAGNOSTICS_PRIVATE_ROUTE_ACK },
-      };
+      return commandReply(
+        "Diagnostics are sensitive. Owner approval is pending on the private route.",
+      );
     }
-    return await deliverGroupDiagnosticsReplyPrivately(deps, params, privateReply, privateTarget);
+    return await deliverGroupDiagnosticsReplyPrivately(commandParams, privateReply, privateTarget);
   }
 
-  const reply = await buildDiagnosticsReply(deps, params, args);
-  return reply ? { shouldContinue: false, reply } : { shouldContinue: false };
-}
-
-async function buildDiagnosticsReply(
-  deps: DiagnosticsCommandDeps,
-  params: HandleCommandsParams,
-  args: string,
-  options: {
-    diagnosticsPrivateRouted?: boolean;
-    privateApprovalTarget?: PrivateCommandRouteTarget;
-  } = {},
-): Promise<ReplyPayload | undefined> {
-  const codexDiagnostics = await buildCodexDiagnosticsApprovalIntegration(params, args, options);
-  const gatewayApproval = await requestGatewayDiagnosticsExportApproval(
-    deps,
-    params,
-    options,
-    codexDiagnostics,
-  );
-  if (gatewayApproval.status === "pending") {
-    return undefined;
-  }
-  return gatewayApproval.reply;
-}
+  const reply = await buildDiagnosticsReply(commandParams, args);
+  return reply ? commandReply(reply) : { shouldContinue: false };
+};
 
 async function deliverGroupDiagnosticsReplyPrivately(
-  deps: DiagnosticsCommandDeps,
   params: HandleCommandsParams,
   reply: ReplyPayload,
   privateTarget?: PrivateCommandRouteTarget,
 ) {
-  const target = privateTarget ?? (await deps.resolvePrivateDiagnosticsTargets(params))[0];
+  const target = privateTarget ?? (await resolvePrivateDiagnosticsTargetsForCommand(params))[0];
   if (!target) {
-    return {
-      shouldContinue: false,
-      reply: { text: DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE },
-    };
+    return commandReply(DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE);
   }
-  const delivered = await deps.deliverPrivateDiagnosticsReply({
+  const outcome = await deliverPrivateCommandReply({
     commandParams: params,
     targets: [target],
     reply,
   });
-  return {
-    shouldContinue: false,
-    reply: {
-      text: delivered ? DIAGNOSTICS_PRIVATE_ROUTE_ACK : DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE,
-    },
-  };
-}
-
-function parseDiagnosticsArgs(commandBody: string): string | undefined {
-  const trimmed = commandBody.trim();
-  if (trimmed === DIAGNOSTICS_COMMAND) {
-    return "";
-  }
-  if (trimmed.startsWith(`${DIAGNOSTICS_COMMAND} `)) {
-    return trimmed.slice(DIAGNOSTICS_COMMAND.length + 1).trim();
-  }
-  if (trimmed.startsWith(`${DIAGNOSTICS_COMMAND}:`)) {
-    return trimmed.slice(DIAGNOSTICS_COMMAND.length + 1).trim();
-  }
-  return undefined;
+  return commandReply(DIAGNOSTICS_PRIVATE_ROUTE_REPLIES[outcome]);
 }
 
 function buildDiagnosticsPreamble(): string[] {
@@ -229,53 +160,25 @@ async function resolvePrivateDiagnosticsTargetsForCommand(
 ): Promise<PrivateCommandRouteTarget[]> {
   return await resolvePrivateCommandRouteTargets({
     commandParams: params,
-    request: buildDiagnosticsApprovalRequest(params),
+    id: "diagnostics-private-route",
+    command: buildGatewayDiagnosticsExportJsonRequest().command,
   });
 }
 
-function buildDiagnosticsApprovalRequest(params: HandleCommandsParams): ExecApprovalRequest {
-  const now = Date.now();
-  const agentId =
-    params.agentId ??
-    resolveSessionAgentId({
-      sessionKey: params.sessionKey,
-      config: params.cfg,
-    });
-  return {
-    approvalKind: "exec",
-    id: "diagnostics-private-route",
-    request: {
-      command: buildGatewayDiagnosticsExportJsonCommand(),
-      agentId,
-      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-      turnSourceChannel: params.command.channel,
-      turnSourceTo: readCommandDeliveryTarget(params) ?? null,
-      turnSourceAccountId: params.ctx.AccountId ?? null,
-      turnSourceThreadId: readCommandMessageThreadId(params) ?? null,
-    },
-    createdAtMs: now,
-    expiresAtMs: resolvePrivateCommandApprovalRouteExpiresAtMs(now),
-  };
+function buildGatewayDiagnosticsExportJsonRequest() {
+  return buildCurrentOpenClawCliExecRequest(["gateway", "diagnostics", "export", "--json"]);
 }
 
-function buildGatewayDiagnosticsExportJsonCommand(): string {
-  return buildCurrentOpenClawCliCommand(["gateway", "diagnostics", "export", "--json"]);
-}
-
-async function deliverPrivateDiagnosticsReply(params: {
-  commandParams: HandleCommandsParams;
-  targets: PrivateCommandRouteTarget[];
-  reply: ReplyPayload;
-}): Promise<boolean> {
-  return await deliverPrivateCommandReply(params);
-}
-
-async function requestGatewayDiagnosticsExportApproval(
-  deps: DiagnosticsCommandDeps,
+async function buildDiagnosticsReply(
   params: HandleCommandsParams,
-  options: { privateApprovalTarget?: PrivateCommandRouteTarget } = {},
-  codexDiagnostics: CodexDiagnosticsApprovalIntegration = {},
-): Promise<GatewayDiagnosticsApprovalResult> {
+  args: string,
+  options: {
+    diagnosticsPrivateRouted?: boolean;
+    privateApprovalTarget?: PrivateCommandRouteTarget;
+  } = {},
+): Promise<ReplyPayload | undefined> {
+  const codexDiagnostics =
+    (await buildCodexDiagnosticsApprovalIntegration(params, args, options)) ?? {};
   const timeoutSec = params.cfg.tools?.exec?.timeoutSeconds;
   const agentId =
     params.agentId ??
@@ -283,41 +186,27 @@ async function requestGatewayDiagnosticsExportApproval(
       sessionKey: params.sessionKey,
       config: params.cfg,
     });
-  const command = buildGatewayDiagnosticsExportJsonCommand();
+  const { command, env } = buildGatewayDiagnosticsExportJsonRequest();
   try {
-    const execTool = deps.createExecTool({
-      host: "gateway",
-      security: "allowlist",
-      ask: "always",
+    const execTool = createExecTool({
+      ...buildCommandExecApprovalDefaults(params, options.privateApprovalTarget),
       trigger: "diagnostics",
       scopeKey: DIAGNOSTICS_EXEC_SCOPE_KEY,
       approvalWarningText: buildDiagnosticsApprovalWarning(codexDiagnostics.approvalText),
       approvalFollowup: codexDiagnostics.approvalFollowup,
       approvalFollowupMode: "direct",
-      allowBackground: true,
       timeoutSec,
-      cwd: params.workspaceDir,
       agentId,
-      sessionKey: params.sessionKey,
-      mainKey: params.cfg.session?.mainKey,
-      sessionScope: params.cfg.session?.scope,
-      ...resolveCommandExecApprovalRoute({
-        commandParams: params,
-        privateApprovalTarget: options.privateApprovalTarget,
-      }),
-      notifyOnExit: params.cfg.tools?.exec?.notifyOnExit,
-      notifyOnExitEmptySuccess: params.cfg.tools?.exec?.notifyOnExitEmptySuccess,
     });
     const result = await execTool.execute("chat-diagnostics-gateway-export", {
       command,
-      env: buildCurrentOpenClawCliExecEnv(),
-      security: "allowlist",
+      env,
       ask: "always",
       background: true,
       timeoutSeconds: timeoutSec,
     });
     if (result.details?.status === "approval-pending") {
-      return { status: "pending" };
+      return undefined;
     }
     const codexFollowupText =
       result.details?.status === "completed" || result.details?.status === "failed"
@@ -327,20 +216,20 @@ async function requestGatewayDiagnosticsExportApproval(
     lines.push(
       "",
       `Local Gateway bundle: requested \`${GATEWAY_DIAGNOSTICS_EXPORT_JSON_LABEL}\` through exec approval. Approve once to create the bundle; do not use allow-all for diagnostics.`,
-      formatExecToolResultForDiagnostics(result),
+      formatCommandExecResult(result, "Gateway diagnostics export"),
     );
     if (codexFollowupText) {
       lines.push("", codexFollowupText);
     }
-    return { status: "reply", reply: { text: lines.join("\n") } };
+    return { text: lines.join("\n") };
   } catch (error) {
     const lines = buildDiagnosticsPreamble();
     lines.push(
       "",
       `Local Gateway bundle: could not request exec approval for \`${GATEWAY_DIAGNOSTICS_EXPORT_JSON_LABEL}\`.`,
-      formatExecDiagnosticsText(formatErrorMessage(error)),
+      formatCommandExecText(formatErrorMessage(error)),
     );
-    return { status: "reply", reply: { text: lines.join("\n") } };
+    return { text: lines.join("\n") };
   }
 }
 
@@ -350,40 +239,40 @@ async function buildCodexDiagnosticsApprovalIntegration(
   options: { diagnosticsPrivateRouted?: boolean } = {},
 ): Promise<CodexDiagnosticsApprovalIntegration | undefined> {
   const hasHarnessMetadata = hasCodexHarnessMetadata(params);
+  const renderSection = (result: PluginCommandResult | undefined) => {
+    if (!result) {
+      return hasHarnessMetadata
+        ? {
+            approvalText:
+              "OpenAI Codex harness: selected for this session, but the bundled Codex diagnostics command is not registered.",
+          }
+        : undefined;
+    }
+    const reply = rewriteCodexDiagnosticsResult(result);
+    if (!hasHarnessMetadata && isCodexDiagnosticsUnavailableText(reply.text)) {
+      return undefined;
+    }
+    return {
+      approvalText: reply.text ? ["OpenAI Codex harness:", reply.text].join("\n") : undefined,
+    };
+  };
   const previewResult = await executeCodexDiagnosticsAddon(params, args, {
     ...options,
     diagnosticsPreviewOnly: true,
   });
-  if (!previewResult) {
-    return hasHarnessMetadata
-      ? {
-          approvalText:
-            "OpenAI Codex harness: selected for this session, but the bundled Codex diagnostics command is not registered.",
-        }
-      : undefined;
-  }
-  const preview = rewriteCodexDiagnosticsResult(previewResult);
-  if (!hasHarnessMetadata && isCodexDiagnosticsUnavailableText(preview.text)) {
-    return undefined;
+  const preview = renderSection(previewResult);
+  if (!preview || !previewResult) {
+    return preview;
   }
   return {
-    approvalText: preview.text ? ["OpenAI Codex harness:", preview.text].join("\n") : undefined,
-    approvalFollowup: async () => {
-      const uploadResult = await executeCodexDiagnosticsAddon(params, args, {
-        ...options,
-        diagnosticsUploadApproved: true,
-      });
-      if (!uploadResult) {
-        return hasHarnessMetadata
-          ? "OpenAI Codex harness: selected for this session, but the bundled Codex diagnostics command is not registered."
-          : undefined;
-      }
-      const uploaded = rewriteCodexDiagnosticsResult(uploadResult);
-      if (!hasHarnessMetadata && isCodexDiagnosticsUnavailableText(uploaded.text)) {
-        return undefined;
-      }
-      return uploaded.text ? ["OpenAI Codex harness:", uploaded.text].join("\n") : undefined;
-    },
+    ...preview,
+    approvalFollowup: async () =>
+      renderSection(
+        await executeCodexDiagnosticsAddon(params, args, {
+          ...options,
+          diagnosticsUploadApproved: true,
+        }),
+      )?.approvalText,
   };
 }
 
@@ -436,29 +325,11 @@ async function executeCodexDiagnosticsAddon(
   return await executePluginCommand({
     command: match.command,
     args: match.args,
-    senderId: params.command.senderId,
-    channel: params.command.channel,
-    channelId: params.command.channelId,
-    isAuthorizedSender: params.command.isAuthorizedSender,
-    senderIsOwner: params.command.senderIsOwner,
-    gatewayClientScopes: params.ctx.GatewayClientScopes,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
+    ...buildPluginCommandContext(params),
     sessionId: targetSessionEntry?.sessionId,
     sessionFile: targetSessionEntry ? params.sessionKey : undefined,
     authProfileId: targetSessionEntry?.authProfileOverride,
     commandBody,
-    config: params.cfg,
-    from: params.command.from,
-    to: params.command.to,
-    originatingTo: normalizeOptionalString(params.ctx.OriginatingTo),
-    accountId: params.ctx.AccountId ?? undefined,
-    messageThreadId:
-      typeof params.ctx.MessageThreadId === "string" ||
-      typeof params.ctx.MessageThreadId === "number"
-        ? params.ctx.MessageThreadId
-        : undefined,
-    threadParentId: normalizeOptionalString(params.ctx.ThreadParentId),
     diagnosticsSessions: buildCodexDiagnosticsSessions(params),
     ...(options.diagnosticsUploadApproved === undefined
       ? {}
@@ -487,91 +358,37 @@ function buildCodexDiagnosticsSessions(
   }
   return Array.from(sessions.entries())
     .filter(([, entry]) => Boolean(entry.sessionId?.trim()))
-    .map(([sessionKey, entry]) => ({
-      sessionKey,
-      sessionId: entry.sessionId,
-      sessionFile: sessionKey,
-      agentHarnessId: entry.agentHarnessId,
-      channel: resolveDiagnosticsSessionChannel(entry, params, sessionKey),
-      channelId: resolveDiagnosticsSessionChannelId(entry, params, sessionKey),
-      accountId:
-        normalizeOptionalString(deliveryContextFromSession(entry)?.accountId) ??
-        normalizeOptionalString(sessionDeliveryOrigin(entry)?.accountId) ??
-        (sessionKey === params.sessionKey ? (params.ctx.AccountId ?? undefined) : undefined),
-      messageThreadId:
-        deliveryContextFromSession(entry)?.threadId ??
-        sessionDeliveryOrigin(entry)?.threadId ??
-        (sessionKey === params.sessionKey &&
-        (typeof params.ctx.MessageThreadId === "string" ||
-          typeof params.ctx.MessageThreadId === "number")
-          ? params.ctx.MessageThreadId
-          : undefined),
-      threadParentId:
-        sessionKey === params.sessionKey
-          ? normalizeOptionalString(params.ctx.ThreadParentId)
-          : undefined,
-    }));
-}
-
-function resolveDiagnosticsSessionChannel(
-  entry: SessionEntry,
-  params: HandleCommandsParams,
-  sessionKey: string,
-): string | undefined {
-  return (
-    normalizeOptionalString(deliveryContextFromSession(entry)?.channel) ??
-    normalizeOptionalString(sessionDeliveryOrigin(entry)?.provider) ??
-    (sessionKey === params.sessionKey ? params.command.channel : undefined)
-  );
-}
-
-function resolveDiagnosticsSessionChannelId(
-  entry: SessionEntry,
-  params: HandleCommandsParams,
-  sessionKey: string,
-) {
-  return (
-    normalizeOptionalString(sessionDeliveryOrigin(entry)?.nativeChannelId) ??
-    (sessionKey === params.sessionKey ? params.command.channelId : undefined)
-  );
-}
-
-function formatExecToolResultForDiagnostics(result: {
-  content?: Array<{ type: string; text?: string }>;
-  details?: ExecToolDetails;
-}): string {
-  const text = result.content
-    ?.map((chunk) => (chunk.type === "text" && typeof chunk.text === "string" ? chunk.text : ""))
-    .filter(Boolean)
-    .join("\n")
-    .trim();
-  if (text) {
-    return formatExecDiagnosticsText(text);
-  }
-  const details = result.details;
-  if (details?.status === "approval-pending") {
-    const decisions = details.allowedDecisions?.join(", ") || "allow-once, deny";
-    return formatExecDiagnosticsText(
-      `Exec approval pending (${details.approvalSlug}). Allowed decisions: ${decisions}.`,
-    );
-  }
-  if (details?.status === "running") {
-    return formatExecDiagnosticsText(
-      `Gateway diagnostics export is running (exec session ${details.sessionId}).`,
-    );
-  }
-  if (details?.status === "completed" || details?.status === "failed") {
-    return formatExecDiagnosticsText(details.aggregated);
-  }
-  return "(no exec details returned)";
-}
-
-function formatExecDiagnosticsText(text: string): string {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return "(no exec output)";
-  }
-  return trimmed;
+    .map(([sessionKey, entry]) => {
+      const delivery = deliveryContextFromSession(entry);
+      const origin = sessionDeliveryOrigin(entry);
+      const isCurrent = sessionKey === params.sessionKey;
+      return {
+        sessionKey,
+        sessionId: entry.sessionId,
+        sessionFile: sessionKey,
+        agentHarnessId: entry.agentHarnessId,
+        channel:
+          normalizeOptionalString(delivery?.channel) ??
+          normalizeOptionalString(origin?.provider) ??
+          (isCurrent ? params.command.channel : undefined),
+        channelId:
+          normalizeOptionalString(origin?.nativeChannelId) ??
+          (isCurrent ? params.command.channelId : undefined),
+        accountId:
+          normalizeOptionalString(delivery?.accountId) ??
+          normalizeOptionalString(origin?.accountId) ??
+          (isCurrent ? (params.ctx.AccountId ?? undefined) : undefined),
+        messageThreadId:
+          delivery?.threadId ??
+          origin?.threadId ??
+          (isCurrent &&
+          (typeof params.ctx.MessageThreadId === "string" ||
+            typeof params.ctx.MessageThreadId === "number")
+            ? params.ctx.MessageThreadId
+            : undefined),
+        threadParentId: isCurrent ? normalizeOptionalString(params.ctx.ThreadParentId) : undefined,
+      };
+    });
 }
 
 function rewriteCodexDiagnosticsResult(result: PluginCommandResult): PluginCommandResult {
@@ -602,7 +419,7 @@ function rewriteInteractive(interactive: LegacyInteractiveReply): LegacyInteract
           ...block,
           options: block.options.map((option) => ({
             ...option,
-            ...(option.action ? { action: rewriteSelectPresentationAction(option.action) } : {}),
+            ...(option.action ? { action: rewritePresentationAction(option.action) } : {}),
             ...(option.value ? { value: rewriteCodexDiagnosticsCommandPrefix(option.value) } : {}),
           })),
         };
@@ -612,6 +429,10 @@ function rewriteInteractive(interactive: LegacyInteractiveReply): LegacyInteract
   };
 }
 
+function rewritePresentationAction(
+  action: Extract<MessagePresentationAction, { type: "command" | "callback" | "model-picker" }>,
+): Extract<MessagePresentationAction, { type: "command" | "callback" | "model-picker" }>;
+function rewritePresentationAction(action: MessagePresentationAction): MessagePresentationAction;
 function rewritePresentationAction(action: MessagePresentationAction): MessagePresentationAction {
   if (action.type === "command") {
     return {
@@ -624,18 +445,6 @@ function rewritePresentationAction(action: MessagePresentationAction): MessagePr
       type: "callback",
       value: rewriteCodexDiagnosticsCommandPrefix(action.value),
     };
-  }
-  return action;
-}
-
-function rewriteSelectPresentationAction(
-  action: Extract<MessagePresentationAction, { type: "command" | "callback" | "model-picker" }>,
-): Extract<MessagePresentationAction, { type: "command" | "callback" | "model-picker" }> {
-  if (action.type === "command") {
-    return { type: "command", command: rewriteCodexDiagnosticsCommandPrefix(action.command) };
-  }
-  if (action.type === "callback") {
-    return { type: "callback", value: rewriteCodexDiagnosticsCommandPrefix(action.value) };
   }
   return action;
 }

@@ -1,8 +1,6 @@
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { markClawPackageIndependentlyOwned } from "../state/claw-package-adoption.js";
 import { withClawPackageLifecycleLease } from "../state/claw-package-lifecycle-lease.js";
-import type { ClawHubRiskAcknowledgementRequest } from "./clawhub.js";
-import { installPluginFromNpmSpec } from "./install.js";
 
 type ClawHubInstallRecord = {
   source?: string;
@@ -22,30 +20,13 @@ export function resolveRecordedClawHubPackage(record: ClawHubInstallRecord): str
   );
 }
 
-export function createTrackedNpmUpdateInstaller(onRun: () => void) {
-  return async (params: Parameters<typeof installPluginFromNpmSpec>[0]) => {
-    onRun();
-    return await installPluginFromNpmSpec(params);
-  };
-}
-
-export function resolveClawHubRiskAcknowledgementOptions(params: {
-  dryRun?: boolean;
-  acknowledgeClawHubRisk?: boolean;
-  onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
-}) {
-  return {
-    ...(params.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
-    ...(!params.dryRun && params.onClawHubRisk ? { onClawHubRisk: params.onClawHubRisk } : {}),
-  };
-}
-
 export async function runPluginUpdateWithClawHubLease<T>(params: {
   pluginId: string;
   clawhubPackage?: string;
   dryRun: boolean;
+  beforePersistentEffect?: () => void;
   run: () => Promise<T>;
-}): Promise<T | { kind: "exception"; message: string }> {
+}): Promise<T | { kind: "exception"; message: string; error: unknown }> {
   try {
     if (!params.clawhubPackage || params.dryRun) {
       return await params.run();
@@ -53,19 +34,20 @@ export async function runPluginUpdateWithClawHubLease<T>(params: {
     return await withClawPackageLifecycleLease(
       { kind: "plugin", source: "clawhub", ref: params.clawhubPackage },
       async () => {
-        markClawPackageIndependentlyOwned({
+        await markClawPackageIndependentlyOwned({
           kind: "plugin",
           source: "clawhub",
           ref: params.clawhubPackage!,
         });
+        params.beforePersistentEffect?.();
         return await params.run();
       },
-      { required: true },
     );
   } catch (error) {
     return {
       kind: "exception",
       message: `Failed to update ${params.pluginId}: ${error instanceof Error ? error.message : String(error)}`,
+      error,
     };
   }
 }

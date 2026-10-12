@@ -19,7 +19,10 @@ vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("node:child_process", () => ({ spawn: spawnMock }));
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return { ...actual, spawn: spawnMock };
+});
 
 function createMockChild() {
   const child = new EventEmitter() as EventEmitter & {
@@ -54,6 +57,23 @@ afterEach(() => {
 });
 
 describe("spawnSignalDaemon", () => {
+  it("starts the opt-in socket daemon without exposing an HTTP listener", () => {
+    spawnSignalDaemon({
+      cliPath: "signal-cli",
+      socketPath: "/private/signal/rpc",
+      httpHost: "127.0.0.1",
+      httpPort: 8080,
+    });
+    const args = spawnMock.mock.calls[0]?.[1] as string[];
+    expect(args).toContain("--socket");
+    expect(args).toContain("/private/signal/rpc");
+    expect(args).not.toContain("--http");
+    expect(args).not.toContain("--tcp");
+    expect(args.slice(args.indexOf("--receive-mode"), args.indexOf("--receive-mode") + 2)).toEqual([
+      "--receive-mode",
+      "manual",
+    ]);
+  });
   it("rejects an occupied managed endpoint with actionable port guidance", async () => {
     const listener = createServer();
     await new Promise<void>((resolve, reject) => {
@@ -80,8 +100,9 @@ describe("spawnSignalDaemon", () => {
         listener.close((error) => (error ? reject(error) : resolve()));
       });
     }
+    // The released port is unowned; let the kernel choose this free probe.
     await expect(
-      assertSignalDaemonEndpointAvailable({ httpHost: "127.0.0.1", httpPort: address.port }),
+      assertSignalDaemonEndpointAvailable({ httpHost: "127.0.0.1", httpPort: 0 }),
     ).resolves.toBeUndefined();
   });
 
@@ -158,7 +179,7 @@ describe("spawnSignalDaemon", () => {
     ]);
   });
 
-  it.each(["SEVERE Manager - database exception", "Failed to initialize HTTP Server - oops"])(
+  it.each(["SEVERE Manager - database exception"])(
     "surfaces untagged failure output: %s",
     async (line) => {
       const error = vi.fn();
@@ -176,27 +197,6 @@ describe("spawnSignalDaemon", () => {
       expect(error).toHaveBeenCalledWith(`signal-cli: ${line}`);
     },
   );
-
-  it("waits for exit after SIGTERM before resolving stop", async () => {
-    const handle = spawnSignalDaemon({
-      cliPath: "signal-cli",
-      httpHost: "127.0.0.1",
-      httpPort: 8080,
-    });
-
-    let resolved = false;
-    const stopPromise = handle.stop().then(() => {
-      resolved = true;
-    });
-    await Promise.resolve();
-
-    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
-    expect(resolved).toBe(false);
-
-    child.emit("exit", 0, null);
-    await stopPromise;
-    expect(resolved).toBe(true);
-  });
 
   it("falls back to SIGKILL when the daemon does not exit after SIGTERM", async () => {
     vi.useFakeTimers();

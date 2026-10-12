@@ -1,0 +1,470 @@
+/** Connection-scoped publication shared by the CLI and native app node transports. */
+import { isDeepStrictEqual } from "node:util";
+import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/schema/frames.js";
+import { WORKER_BUNDLE_PREWARM_VERSION } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { CORE_WORKER_LAUNCH_TOOL_NAMES } from "../agents/tool-catalog.js";
+import { GatewayClientRequestError } from "../gateway/client.js";
+import {
+  NODE_RUNNER_INVENTORY_UPDATE_METHOD,
+  NODE_WORKER_BUNDLE_RETENTION_VERSION,
+  NODE_WORKER_BUNDLE_STATUS_VERSION,
+  NODE_WORKER_HOST_DISABLED_REASON_MAX_LENGTH,
+  NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
+  NODE_WORKER_STATUS_WAIT_VERSION,
+  NODE_WORKER_PORTAL_STREAM_VERSION,
+  NODE_WORKER_PREPARED_WORKSPACE_VERSION,
+  NODE_WORKER_NATIVE_INFERENCE_VERSION,
+  NODE_WORKER_PROMPT_CONTEXT_VERSION,
+  NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION,
+  NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+  type NodeWorkerCapacitySnapshot,
+} from "../infra/node-runner-inventory.js";
+import { redactSensitiveText } from "../logging/redact.js";
+import { NODE_HOST_STATS_EVENT, NODE_HOST_STATS_INTERVAL_MS } from "../shared/node-host-stats.js";
+import type { NodeHostClient } from "./client.js";
+import { sampleNodeHostStats } from "./host-stats.js";
+import { buildNodeEventParams } from "./node-event-params.js";
+import type { prepareNodeHostRuntime, NodeHostInventory } from "./runtime.js";
+
+type PreparedRuntime = Awaited<ReturnType<typeof prepareNodeHostRuntime>>;
+export type NodeHostGatewayConnection = NonNullable<
+  Parameters<ReturnType<PreparedRuntime["start"]>["updateGatewayConnection"]>[0]
+> & {
+  protocol: number;
+  capabilities: string[];
+};
+
+const NODE_PLUGIN_TOOLS_UPDATE_METHOD = "node.pluginTools.update";
+const NODE_SKILLS_UPDATE_METHOD = "node.skills.update";
+const NODE_OPTIONAL_PUBLICATION_RETRY_INITIAL_MS = 250;
+const NODE_OPTIONAL_PUBLICATION_RETRY_MAX_MS = 5_000;
+
+function classifyNodeMethodFailure(
+  error: unknown,
+  method: string,
+  gatewayProtocol: number,
+): "legacy-unsupported" | "rejected" | "transient" {
+  if (!(error instanceof GatewayClientRequestError) || error.gatewayCode !== "INVALID_REQUEST") {
+    return "transient";
+  }
+  if (
+    error.message === `unknown method: ${method}` ||
+    (error.message === "unauthorized role: node" &&
+      (gatewayProtocol === 3 ||
+        (gatewayProtocol === 4 && method === NODE_RUNNER_INVENTORY_UPDATE_METHOD)))
+  ) {
+    return "legacy-unsupported";
+  }
+  return "rejected";
+}
+
+type NodeOptionalPublicationMethod =
+  | typeof NODE_RUNNER_INVENTORY_UPDATE_METHOD
+  | typeof NODE_PLUGIN_TOOLS_UPDATE_METHOD
+  | typeof NODE_SKILLS_UPDATE_METHOD;
+
+type NodeOptionalPublicationState = {
+  unsupported: boolean;
+  pendingParams?: Record<string, unknown>;
+  publishedParams?: Record<string, unknown>;
+  rejectedParams?: Record<string, unknown>;
+  loggedFailure?: string;
+  retryDelayMs: number;
+  retryPending: boolean;
+  retryTimer?: NodeJS.Timeout;
+  inFlight?: Promise<void>;
+};
+
+export function startNodeHostConnection({
+  prepared,
+  client,
+  onManifestChanged,
+  onWorkerHostingChanged,
+  writeStderrLine,
+}: {
+  prepared: PreparedRuntime;
+  client: NodeHostClient;
+  onManifestChanged: NonNullable<Parameters<PreparedRuntime["start"]>[0]["onManifestChanged"]>;
+  onWorkerHostingChanged?: (enabled: boolean) => void;
+  writeStderrLine: (message: string) => void;
+}) {
+  let publicationClient = client;
+  let workerHostingEnabled = prepared.workerHostingEnabled;
+  let workerHostingDisabledReason = prepared.workerHostingDisabledReason;
+  let inventory: NodeHostInventory = prepared.initialInventory;
+  let workerCapacity: NodeWorkerCapacitySnapshot | undefined;
+  let reportedWorkerHostingEnabled = false;
+  let gatewayHelloReceived = false;
+  let gatewayConnectionGeneration = 0;
+  let connectedGatewayProtocol = 0;
+  let gatewayCapabilities: ReadonlySet<string> = new Set();
+  let hostStatsTimer: NodeJS.Timeout | undefined;
+  let disconnectCleanup: Promise<void> | undefined;
+  const optionalPublicationStates = new Map<
+    NodeOptionalPublicationMethod,
+    NodeOptionalPublicationState
+  >();
+  const retireGatewayConnection = () => {
+    gatewayConnectionGeneration += 1;
+    gatewayHelloReceived = false;
+    connectedGatewayProtocol = 0;
+    gatewayCapabilities = new Set();
+    if (hostStatsTimer) {
+      clearInterval(hostStatsTimer);
+      hostStatsTimer = undefined;
+    }
+    for (const state of optionalPublicationStates.values()) {
+      if (state.retryTimer) {
+        clearTimeout(state.retryTimer);
+      }
+    }
+    optionalPublicationStates.clear();
+  };
+
+  const startHostStatsPublication = () => {
+    const generation = gatewayConnectionGeneration;
+    const connectionClient = publicationClient;
+    let failureLogged = false;
+    const publish = async () => {
+      // A queued timer or late rejection must never act for a replacement connection.
+      if (generation !== gatewayConnectionGeneration || !gatewayHelloReceived) {
+        return;
+      }
+      try {
+        // payloadJSON keeps the native bridge's fire-and-forget node-event frame usable.
+        const params = buildNodeEventParams(NODE_HOST_STATS_EVENT, sampleNodeHostStats());
+        await connectionClient.request("node.event", params);
+      } catch (error) {
+        if (generation === gatewayConnectionGeneration && !failureLogged) {
+          failureLogged = true;
+          writeStderrLine(`node host stats publish failed: ${redactSensitiveText(String(error))}`);
+        }
+      }
+    };
+    void publish();
+    hostStatsTimer = setInterval(() => void publish(), NODE_HOST_STATS_INTERVAL_MS);
+    hostStatsTimer.unref();
+  };
+
+  const queueOptionalPublication = (
+    method: NodeOptionalPublicationMethod,
+    params: Record<string, unknown>,
+    label: string,
+    isRetry = false,
+  ): void => {
+    if (!gatewayHelloReceived || prepared.restrictedSurface) {
+      return;
+    }
+    const connectionGeneration = gatewayConnectionGeneration;
+    const gatewayProtocol = connectedGatewayProtocol;
+    const connectionClient = publicationClient;
+    let state = optionalPublicationStates.get(method);
+    if (!state) {
+      state = {
+        unsupported: false,
+        retryDelayMs: NODE_OPTIONAL_PUBLICATION_RETRY_INITIAL_MS,
+        retryPending: false,
+      };
+      optionalPublicationStates.set(method, state);
+    }
+    const connectionIsCurrent = () =>
+      connectionGeneration === gatewayConnectionGeneration &&
+      optionalPublicationStates.get(method) === state;
+    if (
+      state.unsupported ||
+      isDeepStrictEqual(state.rejectedParams, params) ||
+      isDeepStrictEqual(state.pendingParams, params) ||
+      (!state.inFlight && isDeepStrictEqual(state.publishedParams, params))
+    ) {
+      return;
+    }
+    if (state.retryTimer) {
+      clearTimeout(state.retryTimer);
+      state.retryTimer = undefined;
+    }
+    if (!isRetry) {
+      state.retryDelayMs = NODE_OPTIONAL_PUBLICATION_RETRY_INITIAL_MS;
+    }
+    state.rejectedParams = undefined;
+    state.pendingParams = params;
+    if (state.inFlight) {
+      return;
+    }
+    const publish = async () => {
+      while (state.pendingParams && !state.unsupported) {
+        if (!connectionIsCurrent()) {
+          return;
+        }
+        const nextParams = state.pendingParams;
+        if (isDeepStrictEqual(state.publishedParams, nextParams)) {
+          state.pendingParams = undefined;
+          continue;
+        }
+        state.rejectedParams = undefined;
+        try {
+          await connectionClient.request(method, nextParams);
+          // Request settlement races reconnect teardown. Stale completions must
+          // not mutate or report against the retired connection.
+          if (!connectionIsCurrent()) {
+            return;
+          }
+          if (isDeepStrictEqual(state.pendingParams, nextParams)) {
+            state.pendingParams = undefined;
+          }
+          state.publishedParams = nextParams;
+          state.rejectedParams = undefined;
+          state.loggedFailure = undefined;
+          state.retryDelayMs = NODE_OPTIONAL_PUBLICATION_RETRY_INITIAL_MS;
+          state.retryPending = false;
+        } catch (error) {
+          if (!connectionIsCurrent()) {
+            return;
+          }
+          const failure = classifyNodeMethodFailure(error, method, gatewayProtocol);
+          if (failure === "legacy-unsupported") {
+            state.unsupported = true;
+            state.pendingParams = undefined;
+            state.retryPending = false;
+          } else {
+            const message = redactSensitiveText(String(error));
+            if (state.loggedFailure !== message) {
+              state.loggedFailure = message;
+              writeStderrLine(`node host ${label} publish failed: ${message}`);
+            }
+            if (failure === "rejected") {
+              state.rejectedParams = nextParams;
+              state.retryPending = false;
+              if (isDeepStrictEqual(state.pendingParams, nextParams)) {
+                state.pendingParams = undefined;
+              }
+            } else {
+              // A timeout or transport failure can occur after the Gateway applied
+              // the update. Forget the acknowledged baseline so the next desired
+              // value is never skipped against an uncertain remote state.
+              state.publishedParams = undefined;
+              if (!state.pendingParams || isDeepStrictEqual(state.pendingParams, nextParams)) {
+                state.pendingParams = nextParams;
+                state.retryPending = true;
+                break;
+              }
+            }
+          }
+        }
+      }
+    };
+    const inFlight = publish().finally(() => {
+      state.inFlight = undefined;
+      if (
+        state.pendingParams &&
+        !state.unsupported &&
+        gatewayHelloReceived &&
+        connectionIsCurrent()
+      ) {
+        const pendingParams = state.pendingParams;
+        const retryPending = state.retryPending;
+        state.retryPending = false;
+        if (retryPending) {
+          const retryDelayMs = state.retryDelayMs;
+          state.retryDelayMs = Math.min(retryDelayMs * 2, NODE_OPTIONAL_PUBLICATION_RETRY_MAX_MS);
+          state.retryTimer = setTimeout(() => {
+            state.retryTimer = undefined;
+            if (
+              state.pendingParams &&
+              isDeepStrictEqual(state.pendingParams, pendingParams) &&
+              gatewayHelloReceived &&
+              connectionIsCurrent()
+            ) {
+              state.pendingParams = undefined;
+              queueOptionalPublication(method, pendingParams, label, true);
+            }
+          }, retryDelayMs);
+          state.retryTimer.unref?.();
+        } else {
+          state.pendingParams = undefined;
+          queueOptionalPublication(method, pendingParams, label);
+        }
+      }
+    });
+    state.inFlight = inFlight;
+  };
+
+  const publishInventory = () => {
+    if (!gatewayHelloReceived) {
+      return;
+    }
+    if (inventory.skills) {
+      queueOptionalPublication(NODE_SKILLS_UPDATE_METHOD, { skills: inventory.skills }, "skill");
+    }
+    queueOptionalPublication(
+      NODE_PLUGIN_TOOLS_UPDATE_METHOD,
+      { tools: inventory.pluginTools },
+      "plugin tool",
+    );
+  };
+
+  const publishRunnerInventory = () => {
+    const hostingCapacity = workerHostingEnabled ? workerCapacity : undefined;
+    const hostingEnabled = hostingCapacity !== undefined;
+    if (hostingEnabled !== reportedWorkerHostingEnabled) {
+      reportedWorkerHostingEnabled = hostingEnabled;
+      onWorkerHostingChanged?.(hostingEnabled);
+    }
+    queueOptionalPublication(
+      NODE_RUNNER_INVENTORY_UPDATE_METHOD,
+      {
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+        workerHost: hostingCapacity
+          ? {
+              enabled: true,
+              capacity: {
+                total: hostingCapacity.total,
+                available: hostingCapacity.available,
+                ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_IDLE_RETENTION)
+                  ? { reclaimableIdle: hostingCapacity.reclaimableIdle ?? 0 }
+                  : {}),
+              },
+              ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_IDLE_RETENTION)
+                ? { idleRetention: true }
+                : {}),
+              ...(prepared.preparedWorkspacesEnabled
+                ? { preparedWorkspace: NODE_WORKER_PREPARED_WORKSPACE_VERSION }
+                : {}),
+              bundlePrewarm: WORKER_BUNDLE_PREWARM_VERSION,
+              ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION)
+                ? { bundleRetention: NODE_WORKER_BUNDLE_RETENTION_VERSION }
+                : {}),
+              ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION) &&
+              gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS)
+                ? { bundleStatus: NODE_WORKER_BUNDLE_STATUS_VERSION }
+                : {}),
+              ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_PORTAL_STREAM)
+                ? { portalStream: NODE_WORKER_PORTAL_STREAM_VERSION }
+                : {}),
+              ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_ENVIRONMENT_SESSION)
+                ? { environmentSession: NODE_WORKER_ENVIRONMENT_SESSION_VERSION }
+                : {}),
+              ...((process.platform === "linux" || process.platform === "win32") &&
+              !process.versions.bun &&
+              gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_WORKSPACE_QUIESCENCE)
+                ? { workspaceQuiescence: NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION }
+                : {}),
+              ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_STATUS_WAIT)
+                ? { statusWait: NODE_WORKER_STATUS_WAIT_VERSION }
+                : {}),
+              ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_CAPTURED_EXEC_POLICY)
+                ? { capturedExecPolicy: true }
+                : {}),
+              ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_LAUNCH_TOOL_NAMES)
+                ? { launchToolNames: [...CORE_WORKER_LAUNCH_TOOL_NAMES] }
+                : {}),
+              ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_PROMPT_CONTEXT)
+                ? { promptContext: NODE_WORKER_PROMPT_CONTEXT_VERSION }
+                : {}),
+              ...(prepared.nativeInferenceEnabled &&
+              gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_NATIVE_INFERENCE)
+                ? { nativeInference: NODE_WORKER_NATIVE_INFERENCE_VERSION }
+                : {}),
+            }
+          : {
+              enabled: false,
+              ...(workerHostingDisabledReason &&
+              gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_HOST_DIAGNOSTICS)
+                ? {
+                    reason: redactSensitiveText(workerHostingDisabledReason).slice(
+                      0,
+                      NODE_WORKER_HOST_DISABLED_REASON_MAX_LENGTH,
+                    ),
+                  }
+                : {}),
+            },
+      },
+      "runner inventory",
+    );
+  };
+
+  const onWorkerHostingDisabled = (reason: string) => {
+    workerHostingEnabled = false;
+    workerHostingDisabledReason = reason;
+    writeStderrLine(`node host worker hosting disabled: ${redactSensitiveText(reason)}`);
+    publishRunnerInventory();
+  };
+  // Preparation failures have no supervisor left to report them. Emit once before hello.
+  if (prepared.workerHostingDisabledReason) {
+    onWorkerHostingDisabled(prepared.workerHostingDisabledReason);
+  }
+  const disconnect = () => {
+    retireGatewayConnection();
+    runtime.updateGatewayConnection();
+    disconnectCleanup = runtime.cancelAll();
+  };
+  const runtime = prepared.start({
+    client,
+    onInventoryChanged: (nextInventory) => {
+      inventory = nextInventory;
+      publishInventory();
+    },
+    onRunnerCapacityChanged: (capacity) => {
+      workerCapacity = capacity;
+      publishRunnerInventory();
+    },
+    onWorkerHostingDisabled,
+    onManifestChanged: (manifest) => {
+      retireGatewayConnection();
+      onManifestChanged(manifest);
+    },
+  });
+  return {
+    ...runtime,
+    refreshRunnerInventory() {
+      if (!gatewayHelloReceived) {
+        return;
+      }
+      const previous = optionalPublicationStates.get(NODE_RUNNER_INVENTORY_UPDATE_METHOD);
+      if (previous?.retryTimer) {
+        clearTimeout(previous.retryTimer);
+      }
+      // Approval retires the Gateway's declaration without replacing this transport.
+      // Retire its acknowledgment too, including requests still settling in flight.
+      optionalPublicationStates.delete(NODE_RUNNER_INVENTORY_UPDATE_METHOD);
+      publishRunnerInventory();
+    },
+    connect(connection: NodeHostGatewayConnection, connectionClient: NodeHostClient = client) {
+      retireGatewayConnection();
+      const generation = gatewayConnectionGeneration;
+      const publish = () => {
+        if (generation !== gatewayConnectionGeneration) {
+          return;
+        }
+        publicationClient = connectionClient;
+        runtime.updateGatewayConnection(connection);
+        gatewayHelloReceived = true;
+        if (!prepared.restrictedSurface) {
+          startHostStatsPublication();
+        }
+        connectedGatewayProtocol = connection.protocol;
+        gatewayCapabilities = new Set(connection.capabilities);
+        publishRunnerInventory();
+        publishInventory();
+      };
+      if (disconnectCleanup) {
+        disconnectCleanup = disconnectCleanup.catch((error: unknown) => {
+          if (generation !== gatewayConnectionGeneration) {
+            throw error;
+          }
+          return runtime.cancelAll();
+        });
+        void disconnectCleanup.then(publish, () => {});
+      } else {
+        publish();
+      }
+    },
+    disconnect,
+    close() {
+      retireGatewayConnection();
+      workerHostingEnabled = false;
+      publishRunnerInventory();
+      runtime.updateGatewayConnection();
+      return runtime.close();
+    },
+  };
+}

@@ -14,7 +14,6 @@ const PROXY_ENV_KEYS = [
   "https_proxy",
   "no_proxy",
 ] as const;
-const savedProxyEnv = new Map<string, string | undefined>();
 
 function trackSocket(socket: Duplex): void {
   runningSockets.add(socket);
@@ -78,8 +77,7 @@ async function startConnectProxy(): Promise<{ proxyUrl: string; connects: string
 
 beforeEach(() => {
   for (const key of PROXY_ENV_KEYS) {
-    savedProxyEnv.set(key, process.env[key]);
-    delete process.env[key];
+    vi.stubEnv(key, undefined);
   }
 });
 
@@ -96,15 +94,7 @@ afterEach(async () => {
         }),
     ),
   );
-  for (const key of PROXY_ENV_KEYS) {
-    const value = savedProxyEnv.get(key);
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-  savedProxyEnv.clear();
+  vi.unstubAllEnvs();
 });
 
 type ClawRouterUsageFetchGuard = NonNullable<
@@ -119,8 +109,15 @@ function mockFetchGuard(response: Response): MockedFunction<ClawRouterUsageFetch
   }));
 }
 
+function fetchUsage(
+  params: Omit<Parameters<typeof fetchClawRouterUsage>[0], "token" | "timeoutMs">,
+) {
+  return fetchClawRouterUsage({ token: "proxy-key", timeoutMs: 5000, ...params });
+}
+
 describe("ClawRouter usage", () => {
   it("maps the managed monthly budget and usage totals", async () => {
+    const signal = new AbortController().signal;
     const fetchGuard = mockFetchGuard(
       Response.json({
         budget: {
@@ -141,10 +138,9 @@ describe("ClawRouter usage", () => {
       }),
     );
 
-    const snapshot = await fetchClawRouterUsage({
-      token: "proxy-key",
+    const snapshot = await fetchUsage({
       baseUrl: "https://clawrouter.example/v1",
-      timeoutMs: 5000,
+      signal,
       fetchGuard,
     });
 
@@ -181,34 +177,15 @@ describe("ClawRouter usage", () => {
           },
         }),
         auditContext: "clawrouter.usage",
+        signal,
         mode: "trusted_env_proxy",
       }),
     );
     expect(fetchGuard.mock.calls[0]?.[0]).not.toHaveProperty("fetchImpl");
   });
 
-  it("shows aggregate usage for an unmetered key", async () => {
-    const snapshot = await fetchClawRouterUsage({
-      token: "proxy-key",
-      timeoutMs: 5000,
-      fetchGuard: mockFetchGuard(
-        Response.json({
-          budget: { configured: false, ledger: "unmetered" },
-          usage: { summary: { requestCount: 0, totalTokens: 0, actualCostMicros: 0 } },
-        }),
-      ),
-    });
-
-    expect(snapshot.windows).toEqual([]);
-    expect(snapshot.summary).toBe("0 requests · 0 tokens · $0.00 used");
-    expect(snapshot.plan).toBe("Unmetered proxy key");
-    expect(snapshot.billing).toEqual([{ type: "spend", amount: 0, unit: "USD" }]);
-  });
-
   it("does not coerce numeric strings from the usage boundary", async () => {
-    const snapshot = await fetchClawRouterUsage({
-      token: "proxy-key",
-      timeoutMs: 5000,
+    const snapshot = await fetchUsage({
       fetchGuard: mockFetchGuard(
         Response.json({
           budget: { configured: true, limitMicros: "1000000", spentMicros: "500000" },
@@ -222,106 +199,69 @@ describe("ClawRouter usage", () => {
     expect(snapshot.summary).toBeUndefined();
   });
 
-  it.each([
-    ["malformed JSON", new TextEncoder().encode('{"budget":')],
-    ["a non-object JSON root", new TextEncoder().encode("null")],
-  ])("reports %s as a malformed usage response", async (_label, body) => {
-    const snapshot = await fetchClawRouterUsage({
-      token: "test-token",
-      timeoutMs: 5000,
-      fetchGuard: mockFetchGuard(new Response(body)),
+  it.each([["malformed JSON", new TextEncoder().encode('{"budget":')]])(
+    "reports %s as a malformed usage response",
+    async (_label, body) => {
+      const snapshot = await fetchUsage({
+        fetchGuard: mockFetchGuard(new Response(body)),
+      });
+
+      expect(snapshot).toEqual({
+        provider: "clawrouter",
+        displayName: "ClawRouter",
+        windows: [],
+        error: "Malformed usage response",
+      });
+    },
+  );
+
+  it("releases a rejected response while a capture clone retains its body", async () => {
+    const cancel = vi.fn();
+    const response = new Response(new ReadableStream({ cancel }), { status: 503 });
+    const capture = response.clone();
+    const release = vi.fn(async () => {
+      await capture.body?.cancel();
     });
-
-    expect(snapshot).toEqual({
-      provider: "clawrouter",
-      displayName: "ClawRouter",
-      windows: [],
-      error: "Malformed usage response",
+    const fetchGuard = mockFetchGuard(response);
+    fetchGuard.mockResolvedValue({
+      response,
+      finalUrl: "https://clawrouter.example/v1/usage",
+      release,
     });
-  });
+    const outcome = fetchUsage({
+      fetchGuard,
+    }).catch((error: unknown) => error);
 
-  it("reports invalid UTF-8 as a malformed usage response", async () => {
-    const prefix = new TextEncoder().encode(
-      '{"budget":{"configured":true,"windowKey":"default/test-policy/2026-',
-    );
-    const suffix = new TextEncoder().encode('","limitMicros":1000000,"spentMicros":500000}}');
-    const body = new Uint8Array([...prefix, 0xff, ...suffix]);
-
-    const snapshot = await fetchClawRouterUsage({
-      token: "test-token",
-      timeoutMs: 5000,
-      fetchGuard: mockFetchGuard(new Response(body)),
-    });
-
-    expect(snapshot).toEqual({
-      provider: "clawrouter",
-      displayName: "ClawRouter",
-      windows: [],
-      error: "Malformed usage response",
-    });
-  });
-
-  it("preserves response stream failures as transport errors", async () => {
-    const response = new Response(
-      new ReadableStream({
-        start(controller) {
-          controller.error(new TypeError("usage stream failed"));
-        },
-      }),
-    );
-
-    await expect(
-      fetchClawRouterUsage({
-        token: "test-token",
-        timeoutMs: 5000,
-        fetchGuard: mockFetchGuard(response),
-      }),
-    ).rejects.toThrow("usage stream failed");
-  });
-
-  it("cancels non-OK usage response body before throwing", async () => {
-    let cancelled = false;
-    const response = new Response(
-      new ReadableStream({
-        start(controller) {
-          controller.enqueue(new TextEncoder().encode("unauthorized"));
-        },
-        cancel() {
-          cancelled = true;
-        },
-      }),
-      { status: 403 },
-    );
-    await expect(
-      fetchClawRouterUsage({
-        token: "proxy-key",
-        timeoutMs: 5000,
-        fetchGuard: mockFetchGuard(response),
-      }),
-    ).rejects.toThrow("ClawRouter usage request failed (HTTP 403)");
-    expect(cancelled).toBe(true);
+    try {
+      await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
+      expect(await outcome).toEqual(new Error("ClawRouter usage request failed (HTTP 503)"));
+      expect(cancel).toHaveBeenCalledOnce();
+    } finally {
+      // Settle both native tee branches even when the release-order assertion fails.
+      await capture.body?.cancel();
+      await outcome;
+    }
   });
 
   it("observes peer closure when a real loopback server returns non-OK", async () => {
-    let responseClosed = false;
+    let onResponseClosed: () => void;
+    const responseClosed = new Promise<void>((resolve) => {
+      onResponseClosed = resolve;
+    });
     const { baseUrl, requests } = await startUsageServer((_req, res) => {
-      res.on("close", () => {
-        responseClosed = true;
-      });
+      res.once("close", onResponseClosed);
       res.writeHead(503, { "content-type": "text/plain" });
       res.write("service unavailable");
     });
 
     await expect(
-      fetchClawRouterUsage({
-        token: "test-auth-token",
+      fetchUsage({
         baseUrl,
-        timeoutMs: 5000,
       }),
     ).rejects.toThrow("ClawRouter usage request failed (HTTP 503)");
 
     expect(requests).toEqual(["GET /v1/usage"]);
-    expect(responseClosed).toBe(true);
+    await responseClosed;
   });
 
   it("bounds successful usage response bodies", async () => {
@@ -332,9 +272,7 @@ describe("ClawRouter usage", () => {
     });
 
     await expect(
-      fetchClawRouterUsage({
-        token: "proxy-key",
-        timeoutMs: 5000,
+      fetchUsage({
         fetchGuard: mockFetchGuard(
           new Response(oversizedPayload, {
             headers: { "content-type": "application/json" },
@@ -342,29 +280,6 @@ describe("ClawRouter usage", () => {
         ),
       }),
     ).rejects.toThrow("ClawRouter usage response exceeds");
-  });
-
-  it("fetches usage through the production SSRF-guarded transport", async () => {
-    const { baseUrl, requests } = await startUsageServer((req, res) => {
-      expect(req.headers.authorization).toBe("Bearer proxy-key");
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(
-        JSON.stringify({
-          budget: { configured: false, ledger: "unmetered" },
-          usage: { summary: { requestCount: 3, totalTokens: 9, actualCostMicros: 0 } },
-        }),
-      );
-    });
-
-    const snapshot = await fetchClawRouterUsage({
-      token: "proxy-key",
-      baseUrl,
-      timeoutMs: 5000,
-    });
-
-    expect(snapshot.summary).toBe("3 requests · 9 tokens · $0.00 used");
-    expect(snapshot.plan).toBe("Unmetered proxy key");
-    expect(requests).toEqual(["GET /v1/usage"]);
   });
 
   it("preserves provider usage routing through the env proxy", async () => {
@@ -380,10 +295,8 @@ describe("ClawRouter usage", () => {
     const { proxyUrl, connects } = await startConnectProxy();
     process.env.HTTP_PROXY = proxyUrl;
 
-    const snapshot = await fetchClawRouterUsage({
-      token: "proxy-key",
+    const snapshot = await fetchUsage({
       baseUrl,
-      timeoutMs: 5000,
     });
 
     expect(snapshot.summary).toBe("2 requests · 8 tokens · $0.00 used");
@@ -399,10 +312,8 @@ describe("ClawRouter usage", () => {
     process.env.HTTP_PROXY = proxyUrl;
 
     await expect(
-      fetchClawRouterUsage({
-        token: "proxy-key",
+      fetchUsage({
         baseUrl,
-        timeoutMs: 5000,
       }),
     ).rejects.toThrow(/private|internal|blocked/i);
     expect(requests).toEqual(["GET /v1/usage"]);

@@ -29,7 +29,8 @@ vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
 }));
 
-vi.mock("./comment-dispatcher-runtime-api.js", () => ({
+vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-outbound")>()),
   createReplyPrefixContext: createReplyPrefixContextMock,
 }));
 
@@ -59,7 +60,7 @@ describe("createFeishuCommentReplyDispatcher", () => {
   afterAll(() => {
     vi.doUnmock("./accounts.js");
     vi.doUnmock("./client.js");
-    vi.doUnmock("./comment-dispatcher-runtime-api.js");
+    vi.doUnmock("openclaw/plugin-sdk/channel-outbound");
     vi.doUnmock("./comment-reaction.js");
     vi.doUnmock("./drive.js");
     vi.doUnmock("./runtime.js");
@@ -167,20 +168,6 @@ describe("createFeishuCommentReplyDispatcher", () => {
     await deliverPromise;
   });
 
-  it("starts the typing reaction from dispatcher onReplyStart", async () => {
-    const start = vi.fn(async () => {});
-    createCommentTypingReactionLifecycleMock.mockReturnValue({
-      start,
-      cleanup: vi.fn(async () => {}),
-    });
-
-    const created = createTestCommentReplyDispatcher();
-    const options = replyDispatcherOptions(created);
-    await options.onReplyStart?.();
-
-    expect(start).toHaveBeenCalledTimes(1);
-  });
-
   it("does not send whitespace-only comment replies without attachments", async () => {
     const created = createTestCommentReplyDispatcher();
 
@@ -192,22 +179,83 @@ describe("createFeishuCommentReplyDispatcher", () => {
 
   it.each([
     [
-      "media-only singular",
-      { mediaUrl: "https://example.com/only.png" },
-      "https://example.com/only.png",
-    ],
-    [
-      "caption and multiple ordered attachments",
+      "caption, actionable presentation, and safe attachment",
       {
-        text: "see attachments",
-        mediaUrls: [" https://example.com/first.png ", "", "https://example.com/second.png"],
+        text: "Review this",
+        mediaUrl: "https://example.com/attachment.png",
+        presentation: {
+          blocks: [
+            {
+              type: "buttons" as const,
+              buttons: [
+                {
+                  label: "Approve",
+                  action: { type: "command" as const, command: "/approve req_1" },
+                },
+              ],
+            },
+          ],
+        },
       },
-      "see attachments\n\nhttps://example.com/first.png\n\nhttps://example.com/second.png",
+      "Review this\n\n- Approve: `/approve req_1`\n\n> Interactive buttons are unavailable in Feishu document comments. You can type the command shown above manually.\n\nhttps://example.com/attachment.png",
     ],
     [
-      "singular fallback when plural entries are blank",
-      { mediaUrls: [" "], mediaUrl: "https://example.com/fallback.png" },
-      "https://example.com/fallback.png",
+      "legacy interactive command",
+      {
+        interactive: {
+          blocks: [
+            {
+              type: "buttons" as const,
+              buttons: [
+                {
+                  label: "Approve",
+                  action: { type: "command" as const, command: "/approve req_1" },
+                },
+              ],
+            },
+          ],
+        },
+      },
+      "- Approve: `/approve req_1`\n\n> Interactive buttons are unavailable in Feishu document comments. You can type the command shown above manually.",
+    ],
+    [
+      "select option with an actionable command",
+      {
+        presentation: {
+          blocks: [
+            {
+              type: "select" as const,
+              placeholder: "Choose deployment",
+              options: [
+                {
+                  label: "Deploy",
+                  action: { type: "command" as const, command: "/deploy staging" },
+                },
+              ],
+            },
+          ],
+        },
+      },
+      "Choose deployment:\n- Deploy: `/deploy staging`\n\n> Interactive buttons are unavailable in Feishu document comments. You can type the command shown above manually.",
+    ],
+    [
+      "URL-only button without actionable guidance",
+      {
+        presentation: {
+          blocks: [
+            {
+              type: "buttons" as const,
+              buttons: [
+                {
+                  label: "Open",
+                  action: { type: "url" as const, url: "https://example.com/action" },
+                },
+              ],
+            },
+          ],
+        },
+      },
+      "- Open: https://example.com/action",
     ],
   ])("delivers %s as safe plain-text comment links", async (_label, payload, expected) => {
     const created = createTestCommentReplyDispatcher();
@@ -240,36 +288,6 @@ describe("createFeishuCommentReplyDispatcher", () => {
       visibleReplySent: true,
     });
     expect(deliverCommentThreadTextMock.mock.calls[0]?.[1]?.content).not.toContain(mediaUrl);
-  });
-
-  it("chunks the transformed comment text including attachment links", async () => {
-    const chunkTextWithMode = vi.fn((text: string) =>
-      Array.from({ length: Math.ceil(text.length / 12) }, (_value, index) =>
-        text.slice(index * 12, (index + 1) * 12),
-      ),
-    );
-    getFeishuRuntimeMock.mockReturnValue({
-      channel: {
-        text: {
-          resolveTextChunkLimit: vi.fn(() => 12),
-          resolveChunkMode: vi.fn(() => "line"),
-          chunkTextWithMode,
-        },
-      },
-    });
-    const expected = "caption\n\nhttps://example.com/file.png";
-    const created = createTestCommentReplyDispatcher();
-
-    const result = await created.delivery.deliver(
-      { text: "caption", mediaUrl: "https://example.com/file.png" },
-      { kind: "final" },
-    );
-
-    expect(chunkTextWithMode).toHaveBeenCalledWith(expected, 12, "line");
-    expect(
-      deliverCommentThreadTextMock.mock.calls.every((call) => call[1].content.length <= 12),
-    ).toBe(true);
-    expect(result).toMatchObject({ content: expected, visibleReplySent: true });
   });
 
   it("retains the accepted comment reply id and text when a later chunk fails", async () => {

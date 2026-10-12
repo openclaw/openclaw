@@ -1,8 +1,9 @@
 // Extension runtime dependency contract tests cover runtime dependency placement for extensions.
 import fs from "node:fs";
-import { builtinModules } from "node:module";
+import { builtinModules, createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolvePluginNpmRuntimeBuildPlan } from "../../../scripts/lib/plugin-npm-runtime-build.mts";
 import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
 import {
   listGitTrackedFiles,
@@ -35,8 +36,8 @@ const INDIRECT_RUNTIME_DEPENDENCIES = new Map<string, Set<string>>([
   ],
   [
     "extensions/whatsapp",
-    // Baileys loads these optional peers for media decoding and thumbnails.
-    new Set(["audio-decode", "jimp"]),
+    // Baileys loads this optional peer for audio decoding.
+    new Set(["audio-decode"]),
   ],
   [
     "extensions/memory-lancedb",
@@ -47,6 +48,11 @@ const INDIRECT_RUNTIME_DEPENDENCIES = new Map<string, Set<string>>([
     "extensions/memory-core",
     // Packaged memory tools run through generated OpenClaw runtime chunks that parse JSON5 config.
     new Set(["json5"]),
+  ],
+  [
+    "extensions/slack",
+    // Bolt loads Socket Mode, whose Undici 7 peer must be provided by the plugin package.
+    new Set(["undici"]),
   ],
   [
     "extensions/tlon",
@@ -133,11 +139,13 @@ function shouldSkipRuntimeFile(filePath: string): boolean {
     normalized.includes("/dist/") ||
     normalized.includes("/coverage/") ||
     normalized.includes("/assets/") ||
-    normalized.endsWith("/web/vite.config.ts")
+    // Bundler configs execute during asset preparation, not in the plugin runtime.
+    normalized.endsWith("/web/vite.config.ts") ||
+    normalized.endsWith("/rolldown.config.mjs")
   ) {
     return true;
   }
-  return /(\.(test|spec|d)\.(ts|tsx|js|jsx|mjs|cjs)$|\/(test|tests|__tests__|test-support)\/|test-(helpers|support|harness|mocks|fixtures|runtime|shared|utils)|\.test-(helpers|support|harness|mocks|fixtures|runtime|shared|utils)|fixture-test-support|mock-setup|test-fixtures|test-runtime-mocks|\.harness\.|e2e-harness|\.mock\.|-mock\.|-mocks\.|mocks-test-support|\.fixture|\.fixtures)/.test(
+  return /(\.(test|spec|d)\.(ts|tsx|js|jsx|mjs|cjs)$|\/(test|tests|__tests__|test-support)\/|test-(api|helpers|support|harness|mocks|fixtures|runtime|shared|utils)|\.test-(api|helpers|support|harness|mocks|fixtures|runtime|shared|utils)|fixture-test-support|mock-setup|test-fixtures|test-runtime-mocks|\.harness\.|e2e-harness|\.mock\.|-mock\.|-mocks\.|mocks-test-support|\.fixture|\.fixtures)/.test(
     normalized,
   );
 }
@@ -262,6 +270,50 @@ function runtimeDependencyNames(manifest: PackageManifest): Set<string> {
   ]);
 }
 
+function collectBundledRuntimeDependencies(root: string, manifest: PackageManifest) {
+  const dependencies = new Map<string, PackageManifest>();
+  const entryFiles = new Set<string>();
+  const declared = runtimeDependencyNames(manifest);
+  const buildDependencies = new Set(
+    Object.keys(manifest.devDependencies ?? {}).filter(
+      (name) => !name.startsWith("@openclaw/") && !declared.has(name),
+    ),
+  );
+  const plan = buildDependencies.size
+    ? resolvePluginNpmRuntimeBuildPlan({ repoRoot: REPO_ROOT, packageDir: root })
+    : null;
+  if (!plan) {
+    return { dependencies, entryFiles };
+  }
+  const require = createRequire(path.resolve(REPO_ROOT, root, "package.json"));
+  const staticAssets = (manifest.openclaw?.build?.staticAssets ?? []).flatMap((asset) =>
+    asset.source ? [path.resolve(REPO_ROOT, root, asset.source)] : [],
+  );
+  for (const filePath of Object.values(plan.entry)) {
+    // Copied assets still need installed dependencies; only emitted entrypoints bundle JS.
+    if (
+      staticAssets.some((asset) => filePath === asset || filePath.startsWith(`${asset}${path.sep}`))
+    ) {
+      continue;
+    }
+    entryFiles.add(toRepoPath(path.relative(REPO_ROOT, filePath)));
+    for (const name of collectRuntimeImports(filePath)) {
+      if (!buildDependencies.has(name) || dependencies.has(name)) {
+        continue;
+      }
+      const packagePath = require.resolve
+        .paths(name)
+        ?.map((directory) => path.join(directory, name, "package.json"))
+        .find((candidate) => fs.existsSync(candidate));
+      if (!packagePath) {
+        throw new Error(`${root} cannot resolve bundled dependency ${name}`);
+      }
+      dependencies.set(name, readPackageManifest(packagePath));
+    }
+  }
+  return { dependencies, entryFiles };
+}
+
 function allDependencyNames(manifest: PackageManifest): string[] {
   return [
     ...Object.keys(manifest.dependencies ?? {}),
@@ -341,6 +393,7 @@ describe("extension runtime dependency manifests", () => {
     it(`${extensionDir} declares every runtime package import`, () => {
       const manifest = readPackageManifest(manifestPath);
       const declared = runtimeDependencyNames(manifest);
+      const bundled = collectBundledRuntimeDependencies(extensionDir, manifest);
       const allowedOptional =
         OPTIONAL_UNDECLARED_RUNTIME_IMPORTS.get(extensionDir) ?? new Set<string>();
       const missing = new Map<string, string[]>();
@@ -352,6 +405,7 @@ describe("extension runtime dependency manifests", () => {
             packageName.startsWith("@openclaw/") ||
             BUILTIN_MODULES.has(packageName) ||
             declared.has(packageName) ||
+            (bundled.entryFiles.has(filePath) && bundled.dependencies.has(packageName)) ||
             allowedOptional.has(packageName)
           ) {
             continue;
@@ -373,6 +427,12 @@ describe("extension runtime dependency manifests", () => {
       ].toSorted();
       const allowedIndirect = INDIRECT_RUNTIME_DEPENDENCIES.get(extensionDir) ?? new Set<string>();
       const allowedComputed = COMPUTED_RUNTIME_DEPENDENCIES.get(extensionDir) ?? new Set<string>();
+      const bundled = collectBundledRuntimeDependencies(extensionDir, manifest);
+      const bundledIndirect = new Map(
+        [...bundled.dependencies.values()].flatMap((dependency) =>
+          Object.entries({ ...dependency.dependencies, ...dependency.optionalDependencies }),
+        ),
+      );
       const runtimeText = listRuntimeFiles(extensionDir)
         .map((filePath) => fs.readFileSync(path.resolve(REPO_ROOT, filePath), "utf8"))
         .concat(readManifestText(extensionDir))
@@ -382,6 +442,9 @@ describe("extension runtime dependency manifests", () => {
         (dependencyName) =>
           !allowedIndirect.has(dependencyName) &&
           !allowedComputed.has(dependencyName) &&
+          bundledIndirect.get(dependencyName) !==
+            (manifest.optionalDependencies?.[dependencyName] ??
+              manifest.dependencies?.[dependencyName]) &&
           !runtimeText.includes(dependencyName),
       );
 

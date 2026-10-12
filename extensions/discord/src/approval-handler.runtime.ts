@@ -1,27 +1,32 @@
-// Discord plugin module implements approval handler behavior.
 import { ButtonStyle } from "discord-api-types/v10";
-import type {
-  ApprovalViewModel,
-  ChannelApprovalCapabilityHandlerContext,
-  PendingApprovalView,
+import {
+  createChannelApprovalNativeRuntimeAdapter,
+  type ApprovalViewModel,
+  type ChannelApprovalCapabilityHandlerContext,
+  type PendingApprovalView,
+  type ExpiredApprovalView,
+  type ResolvedApprovalView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
-import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { ExecApprovalActionDescriptor } from "openclaw/plugin-sdk/approval-reply-runtime";
+import { formatChannelApprovalResolvedLabel } from "openclaw/plugin-sdk/approval-runtime";
 import type {
   DiscordExecApprovalConfig,
   OpenClawConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import { logDebug, logError } from "openclaw/plugin-sdk/logging-core";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { findGraphemeChunkEnd } from "openclaw/plugin-sdk/text-grapheme";
 import { buildExecApprovalCustomId } from "./approval-custom-id.js";
 import {
   DISCORD_APPROVAL_ALLOWED_MENTIONS,
   formatDiscordApprovalDisplayValue,
 } from "./approval-message-safety.js";
+import { discordApprovalMessageUpdates } from "./approval-message-updates.js";
 import { shouldHandleDiscordApprovalRequest } from "./approval-shared.js";
 import { isDiscordExecApprovalClientEnabled } from "./exec-approvals.js";
 import {
   Button,
+  Container,
   createChannelMessage,
   createUserDmChannel,
   deleteChannelMessage,
@@ -31,14 +36,12 @@ import {
   TextDisplay,
   serializePayload,
   type MessagePayloadObject,
-  type TopLevelComponents,
 } from "./internal/discord.js";
 import {
   createDiscordClient,
   createDiscordMessageNonce,
   stripUndefinedFields,
 } from "./send.shared.js";
-import { DiscordUiContainer } from "./ui.js";
 
 export { buildExecApprovalCustomId };
 
@@ -71,209 +74,75 @@ function resolveHandlerContext(params: ChannelApprovalCapabilityHandlerContext):
   return { accountId, context };
 }
 
-class ExecApprovalContainer extends DiscordUiContainer {
-  constructor(params: {
-    cfg: OpenClawConfig;
-    accountId: string;
-    title: string;
-    description?: string;
-    commandPreview: string;
-    commandSecondaryPreview?: string | null;
-    metadataLines?: string[];
-    actionRow?: Row<Button>;
-    footer?: string;
-    accentColor?: string;
-  }) {
-    const components: Array<TextDisplay | Separator | Row<Button>> = [
-      new TextDisplay(`## ${params.title}`),
-    ];
-    if (params.description) {
-      components.push(new TextDisplay(params.description));
-    }
-    components.push(new Separator({ divider: true, spacing: "small" }));
-    components.push(new TextDisplay(`### Command\n\`\`\`\n${params.commandPreview}\n\`\`\``));
-    if (params.commandSecondaryPreview) {
-      components.push(
-        new TextDisplay(`### Shell Preview\n\`\`\`\n${params.commandSecondaryPreview}\n\`\`\``),
-      );
-    }
-    if (params.metadataLines?.length) {
-      components.push(new TextDisplay(params.metadataLines.join("\n")));
-    }
-    if (params.actionRow) {
-      components.push(params.actionRow);
-    }
-    if (params.footer) {
-      components.push(new Separator({ divider: false, spacing: "small" }));
-      components.push(new TextDisplay(`-# ${params.footer}`));
-    }
-    super({
-      cfg: params.cfg,
-      accountId: params.accountId,
-      components,
-      accentColor: params.accentColor,
-    });
-  }
-}
-
 class ExecApprovalActionButton extends Button {
   override customId: string;
   override label: string;
   override style: ButtonStyle;
 
-  constructor(params: {
-    approvalId: string;
-    approvalKind: PendingApprovalView["approvalKind"];
-    descriptor: ExecApprovalActionDescriptor;
-  }) {
+  constructor(
+    view: Pick<PendingApprovalView, "approvalId" | "approvalKind">,
+    descriptor: ExecApprovalActionDescriptor,
+  ) {
     super();
     this.customId = buildExecApprovalCustomId(
-      params.approvalId,
-      params.approvalKind,
-      params.descriptor.decision,
+      view.approvalId,
+      view.approvalKind,
+      descriptor.decision,
     );
-    this.label = params.descriptor.label;
+    this.label = descriptor.label;
     this.style =
-      params.descriptor.style === "success"
+      descriptor.style === "success"
         ? ButtonStyle.Success
-        : params.descriptor.style === "primary"
+        : descriptor.style === "primary"
           ? ButtonStyle.Primary
-          : params.descriptor.style === "danger"
+          : descriptor.style === "danger"
             ? ButtonStyle.Danger
             : ButtonStyle.Secondary;
   }
 }
 
-class ExecApprovalActionRow extends Row<Button> {
-  constructor(params: {
-    approvalId: string;
-    approvalKind: PendingApprovalView["approvalKind"];
-    actions: readonly ExecApprovalActionDescriptor[];
-  }) {
-    super(
-      params.actions.map(
-        (descriptor) =>
-          new ExecApprovalActionButton({
-            approvalId: params.approvalId,
-            approvalKind: params.approvalKind,
-            descriptor,
-          }),
-      ),
-    );
-  }
-}
-
-function createApprovalActionRow(view: PendingApprovalView): Row<Button> {
-  return new ExecApprovalActionRow({
-    approvalId: view.approvalId,
-    approvalKind: view.approvalKind,
-    actions: view.actions,
-  });
-}
-
-function buildApprovalMetadataLines(
-  metadata: readonly { label: string; value: string }[],
-): string[] {
-  return metadata.map((item) => `- ${item.label}: ${item.value}`);
-}
-
-function buildExecApprovalPayload(container: DiscordUiContainer): MessagePayloadObject {
-  const components: TopLevelComponents[] = [container];
-  return { components, allowed_mentions: DISCORD_APPROVAL_ALLOWED_MENTIONS };
-}
-
-const commandPreviewSegmenter =
-  typeof Intl !== "undefined" && "Segmenter" in Intl
-    ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
-    : null;
-
-function* iterateCommandPreviewSegments(commandText: string): Iterable<string> {
-  if (!commandPreviewSegmenter) {
-    yield* Array.from(commandText);
-    return;
-  }
-  try {
-    for (const segment of commandPreviewSegmenter.segment(commandText)) {
-      yield segment.segment;
-    }
-  } catch {
-    yield* Array.from(commandText);
-  }
-}
-
-function truncateCommandPreview(commandText: string, maxChars: number): string {
-  let commandRaw = "";
-  for (const segment of iterateCommandPreviewSegments(commandText)) {
-    if (commandRaw.length + segment.length > maxChars) {
-      return `${commandRaw}...`;
-    }
-    commandRaw += segment;
-  }
-  return commandText;
+function buildExecApprovalPayload(container: Container): MessagePayloadObject {
+  return { components: [container], allowed_mentions: DISCORD_APPROVAL_ALLOWED_MENTIONS };
 }
 
 function formatCommandPreview(commandText: string, maxChars: number): string {
-  return truncateCommandPreview(commandText, maxChars).replace(/`/g, "\u200b`");
+  const end = findGraphemeChunkEnd(commandText, 0, maxChars, maxChars, false);
+  const preview = end < commandText.length ? `${commandText.slice(0, end)}...` : commandText;
+  return preview.replace(/`/g, "\u200b`");
 }
 
-function formatOptionalCommandPreview(
-  commandText: string | null | undefined,
-  maxChars: number,
-): string | null {
-  if (!commandText) {
-    return null;
-  }
-  return formatCommandPreview(commandText, maxChars);
-}
-
-function resolveCommandPreviews(
-  commandText: string,
-  commandPreview: string | null | undefined,
-  maxChars: number,
-  secondaryMaxChars: number,
-): { commandPreview: string; commandSecondaryPreview: string | null } {
-  return {
-    commandPreview: formatCommandPreview(commandText, maxChars),
-    commandSecondaryPreview: formatOptionalCommandPreview(commandPreview, secondaryMaxChars),
-  };
-}
-
-function createApprovalContainer(params: {
-  view: ApprovalViewModel;
-  cfg: OpenClawConfig;
-  accountId: string;
-  actionRow?: Row<Button>;
-}): ExecApprovalContainer {
-  const { view } = params;
+function createApprovalContainer(view: ApprovalViewModel): Container {
   const plugin = view.approvalKind === "plugin";
+  const systemAgent = view.approvalKind === "system-agent";
   const pending = view.phase === "pending";
-  const approvalLabel = plugin ? "Plugin" : "Exec";
-  const { commandPreview, commandSecondaryPreview } = plugin
-    ? {
-        commandPreview: formatCommandPreview(view.title, 700),
-        commandSecondaryPreview: formatOptionalCommandPreview(view.description, 1000),
-      }
-    : resolveCommandPreviews(
-        view.commandText,
-        view.commandPreview,
-        pending ? 1000 : 500,
-        pending ? 500 : 300,
-      );
+  const approvalLabel = plugin ? "Plugin" : systemAgent ? "OpenClaw Change" : "Exec";
+  const commandPreview = formatCommandPreview(
+    plugin ? view.title : view.commandText,
+    plugin ? 700 : pending ? 1000 : 500,
+  );
+  const secondaryText = plugin ? view.description : view.commandPreview;
+  const commandSecondaryPreview = secondaryText
+    ? formatCommandPreview(secondaryText, plugin ? 1000 : pending ? 500 : 300)
+    : null;
   const decisionLabel =
-    view.phase !== "resolved"
-      ? undefined
-      : view.decision === "allow-once"
-        ? "Allowed (once)"
-        : view.decision === "allow-always"
-          ? "Allowed (always)"
-          : "Denied";
+    view.phase === "resolved"
+      ? formatChannelApprovalResolvedLabel(view, (decision) =>
+          decision === "allow-once"
+            ? "Allowed (once)"
+            : decision === "allow-always"
+              ? "Allowed (always)"
+              : "Denied",
+        )
+      : undefined;
   const title = pending
     ? `${approvalLabel} Approval Required`
     : `${approvalLabel} Approval: ${view.phase === "expired" ? "Expired" : decisionLabel}`;
   const description = pending
     ? plugin
       ? "A plugin action needs your approval."
-      : "A command needs your approval."
+      : systemAgent
+        ? "An OpenClaw change needs your approval."
+        : "A command needs your approval."
     : view.phase === "expired"
       ? "This approval request has expired."
       : view.resolvedBy
@@ -300,45 +169,32 @@ function createApprovalContainer(params: {
     ? `Expires <t:${Math.max(0, Math.floor(view.expiresAtMs / 1000))}:R> · ID: ${approvalId}`
     : `ID: ${approvalId}`;
 
-  return new ExecApprovalContainer({
-    cfg: params.cfg,
-    accountId: params.accountId,
-    title,
-    description,
-    commandPreview,
-    commandSecondaryPreview,
-    metadataLines: buildApprovalMetadataLines(view.metadata),
-    actionRow: params.actionRow,
-    footer,
-    accentColor,
-  });
-}
-
-async function updateMessage(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  token: string;
-  channelId: string;
-  messageId: string;
-  container: DiscordUiContainer;
-}): Promise<void> {
-  try {
-    const { rest, request: discordRequest } = createDiscordClient({
-      cfg: params.cfg,
-      token: params.token,
-      accountId: params.accountId,
-    });
-    const payload = buildExecApprovalPayload(params.container);
-    await discordRequest(
-      () =>
-        editChannelMessage(rest, params.channelId, params.messageId, {
-          body: stripUndefinedFields(serializePayload(payload)),
-        }),
-      "update-approval",
+  const components: Array<TextDisplay | Separator | Row<Button>> = [
+    new TextDisplay(`## ${title}`),
+    new TextDisplay(description),
+    new Separator({ divider: true, spacing: "small" }),
+    new TextDisplay(`### ${systemAgent ? "Change" : "Command"}\n\`\`\`\n${commandPreview}\n\`\`\``),
+  ];
+  if (commandSecondaryPreview) {
+    components.push(
+      new TextDisplay(`### Shell Preview\n\`\`\`\n${commandSecondaryPreview}\n\`\`\``),
     );
-  } catch (err) {
-    logError(`discord approvals: failed to update message: ${String(err)}`);
   }
+  if (view.metadata.length) {
+    components.push(
+      new TextDisplay(view.metadata.map((item) => `- ${item.label}: ${item.value}`).join("\n")),
+    );
+  }
+  if (pending) {
+    components.push(
+      new Row(view.actions.map((descriptor) => new ExecApprovalActionButton(view, descriptor))),
+    );
+  }
+  components.push(
+    new Separator({ divider: false, spacing: "small" }),
+    new TextDisplay(`-# ${footer}`),
+  );
+  return new Container(components, { accentColor });
 }
 
 async function finalizeMessage(params: {
@@ -348,26 +204,45 @@ async function finalizeMessage(params: {
   cleanupAfterResolve?: boolean;
   channelId: string;
   messageId: string;
-  container: DiscordUiContainer;
+  container: Container;
 }): Promise<void> {
-  if (!params.cleanupAfterResolve) {
-    await updateMessage(params);
-    return;
+  const operations = params.cleanupAfterResolve ? ["delete", "update"] : ["update"];
+  for (const operation of operations) {
+    try {
+      const { rest, request: discordRequest } = createDiscordClient({
+        cfg: params.cfg,
+        token: params.token,
+        accountId: params.accountId,
+      });
+      let request: () => Promise<unknown>;
+      if (operation === "delete") {
+        request = () => deleteChannelMessage(rest, params.channelId, params.messageId);
+      } else {
+        const payload = buildExecApprovalPayload(params.container);
+        request = () =>
+          editChannelMessage(rest, params.channelId, params.messageId, {
+            body: stripUndefinedFields(serializePayload(payload)),
+          });
+      }
+      await discordApprovalMessageUpdates.enqueue(params.messageId, () =>
+        discordRequest(request, `${operation}-approval`),
+      );
+      return;
+    } catch (err) {
+      logError(`discord approvals: failed to ${operation} message: ${String(err)}`);
+    }
   }
-  try {
-    const { rest, request: discordRequest } = createDiscordClient({
-      cfg: params.cfg,
-      token: params.token,
-      accountId: params.accountId,
-    });
-    await discordRequest(
-      () => deleteChannelMessage(rest, params.channelId, params.messageId),
-      "delete-approval",
-    );
-  } catch (err) {
-    logError(`discord approvals: failed to delete message: ${String(err)}`);
-    await updateMessage(params);
+}
+
+function buildTerminalApprovalResult(
+  params: ChannelApprovalCapabilityHandlerContext & {
+    view: ResolvedApprovalView | ExpiredApprovalView;
+  },
+) {
+  if (!resolveHandlerContext(params)) {
+    return { kind: "delete" } as const;
   }
+  return { kind: "update", payload: createApprovalContainer(params.view) } as const;
 }
 
 export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
@@ -376,7 +251,7 @@ export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
   PendingApproval,
   never
 >({
-  eventKinds: ["exec", "plugin"],
+  eventKinds: ["exec", "plugin", "system-agent"],
   availability: {
     isConfigured: (params) => {
       const resolved = resolveHandlerContext(params);
@@ -406,40 +281,13 @@ export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
       if (!resolved) {
         return { body: {} };
       }
-      const container = createApprovalContainer({
-        view,
-        cfg,
-        accountId: resolved.accountId,
-        actionRow: createApprovalActionRow(view),
-      });
+      const container = createApprovalContainer(view);
       return {
         body: stripUndefinedFields(serializePayload(buildExecApprovalPayload(container))),
       };
     },
-    buildResolvedResult: ({ cfg, accountId, context, view }) => {
-      const resolvedContext = resolveHandlerContext({ cfg, accountId, context });
-      if (!resolvedContext) {
-        return { kind: "delete" } as const;
-      }
-      const container = createApprovalContainer({
-        view,
-        cfg,
-        accountId: resolvedContext.accountId,
-      });
-      return { kind: "update", payload: container } as const;
-    },
-    buildExpiredResult: ({ cfg, accountId, context, view }) => {
-      const resolvedContext = resolveHandlerContext({ cfg, accountId, context });
-      if (!resolvedContext) {
-        return { kind: "delete" } as const;
-      }
-      const container = createApprovalContainer({
-        view,
-        cfg,
-        accountId: resolvedContext.accountId,
-      });
-      return { kind: "update", payload: container } as const;
-    },
+    buildResolvedResult: buildTerminalApprovalResult,
+    buildExpiredResult: buildTerminalApprovalResult,
   },
   transport: {
     prepareTarget: async ({ cfg, accountId, context, plannedTarget }) => {
@@ -466,10 +314,7 @@ export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
         accountId: resolved.accountId,
       });
       const userId = plannedTarget.target.to;
-      const dmChannel = (await discordRequest(
-        () => createUserDmChannel(rest, userId),
-        "dm-channel",
-      )) as { id: string };
+      const dmChannel = await discordRequest(() => createUserDmChannel(rest, userId), "dm-channel");
       if (!dmChannel?.id) {
         logError(`discord approvals: failed to create DM for user ${userId}`);
         return null;
@@ -506,18 +351,11 @@ export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
         nonce: createDiscordMessageNonce(),
         enforce_nonce: true,
       };
-      const message = (await discordRequest(
-        () =>
-          createChannelMessage<{ id: string; channel_id: string }>(
-            rest,
-            preparedTarget.discordChannelId,
-            {
-              body,
-            },
-          ),
+      const message = await discordRequest(
+        () => createChannelMessage(rest, preparedTarget.discordChannelId, { body }),
         plannedTarget.surface === "origin" ? "send-approval-channel" : "send-approval",
         { safety: "nonce-protected-create" },
-      )) as { id: string; channel_id: string };
+      );
       if (!message?.id) {
         if (plannedTarget.surface === "origin") {
           logError("discord approvals: failed to send to channel");
@@ -538,7 +376,7 @@ export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
       if (!resolved) {
         return;
       }
-      const container = payload as DiscordUiContainer;
+      const container = payload as Container;
       await finalizeMessage({
         cfg,
         accountId: resolved.accountId,

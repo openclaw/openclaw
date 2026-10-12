@@ -1,8 +1,12 @@
 {
   "id": "memory-wiki",
+  "categories": ["memory"],
   "doctorContract": {
-    "configRepair": true,
-    "stateMigrations": true
+    "stateMigrations": [
+      { "id": "memory-wiki-compiled-cache-file-cleanup" },
+      { "id": "memory-wiki-source-sync-json-to-plugin-state" },
+      { "id": "memory-wiki-import-runs-json-to-plugin-state" }
+    ]
   },
   "activation": {
     "onStartup": true
@@ -40,7 +44,7 @@
     },
     "obsidian.useOfficialCli": {
       "label": "Use Obsidian CLI",
-      "help": "Probe and use the official Obsidian CLI when available."
+      "help": "Check and use the official Obsidian CLI when available."
     },
     "bridge.enabled": {
       "label": "Enable Bridge Mode",
@@ -59,6 +63,44 @@
       "help": "Append a compact compiled wiki digest snapshot to memory prompt sections for context engines and legacy prompt assembly."
     }
   },
+  "configGroups": [
+    {
+      "id": "wiki-vault",
+      "title": "Wiki vault",
+      "order": 10,
+      "properties": ["vaultMode", "vault"]
+    },
+    {
+      "id": "obsidian",
+      "title": "Obsidian",
+      "order": 20,
+      "properties": ["obsidian"]
+    },
+    {
+      "id": "memory-sources",
+      "title": "Memory sources",
+      "order": 30,
+      "properties": ["bridge", "unsafeLocal"]
+    },
+    {
+      "id": "ingestion",
+      "title": "Ingestion",
+      "order": 40,
+      "properties": ["ingest"]
+    },
+    {
+      "id": "search-and-context",
+      "title": "Search and context",
+      "order": 50,
+      "properties": ["search", "context"]
+    },
+    {
+      "id": "page-rendering",
+      "title": "Page rendering",
+      "order": 60,
+      "properties": ["render"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -239,9 +281,6 @@
         }
       }
     }
-  },
-  "configContracts": {
-    "compatibilityMigrationPaths": ["plugins.entries.memory-wiki.config.bridge.readMemoryCore"]
   },
   "commandAliases": [{ "name": "wiki" }]
 }

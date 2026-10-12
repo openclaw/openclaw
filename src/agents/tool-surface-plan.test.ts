@@ -1,14 +1,22 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runWithAgentRingZeroTools } from "./agent-tools.ring-zero-context.js";
 import { createCodeModeTools } from "./code-mode.js";
+import { createAgentHarnessToolSurfaceRuntimeCore } from "./harness/tool-surface-bridge.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
 import {
   createToolSearchCatalogRef,
+  clearToolSearchCatalog,
   TOOL_SEARCH_RAW_TOOL_NAME,
+  createToolSearchTools,
   type ToolSearchCatalogToolExecutor,
 } from "./tool-search.js";
-import { applyAgentToolSurfaceCatalog, resolveAgentToolSurfacePlan } from "./tool-surface-plan.js";
+import {
+  applyAgentToolSurfaceCatalog,
+  prepareAgentToolSurfacePresentation,
+  resolveAgentToolSurfacePlan,
+} from "./tool-surface-plan.js";
 
 // Params type stays module-local in production; derive it so the test cannot
 // keep a public export alive that no production caller needs.
@@ -25,6 +33,168 @@ const basePlanParams: AgentToolSurfacePlanParams = {
 };
 
 describe("resolveAgentToolSurfacePlan", () => {
+  it.each(
+    (["tools", "directory", "code"] as const).flatMap((mode) =>
+      [false, true].map((prepared) => ({ mode, prepared })),
+    ),
+  )(
+    "keeps memory persistence direct in $mode with prepared presentation=$prepared",
+    ({ mode, prepared }) => {
+      const config: OpenClawConfig = {
+        tools: {
+          codeMode: mode === "code",
+          toolSearch: { enabled: true, mode: mode === "directory" ? "directory" : "tools" },
+        },
+      };
+      const params = {
+        config,
+        modelToolsEnabled: true,
+        trigger: "memory" as const,
+        forceCodeModeControls: mode === "code",
+        presentation: prepared
+          ? prepareAgentToolSurfacePresentation({
+              ...basePlanParams,
+              config,
+              trigger: "user",
+            })
+          : undefined,
+      };
+      const memory = createAgentHarnessToolSurfaceRuntimeCore(params);
+      const foreground = createAgentHarnessToolSurfaceRuntimeCore({ ...params, trigger: "user" });
+      try {
+        const result = memory.compactTools(["read", "write"].map(createStubTool));
+        expect(result.tools.map((tool) => tool.name)).toEqual(["read", "write"]);
+        expect(result.catalog.catalogRegistered).toBe(false);
+        expect(foreground.codeModeControlsEnabled || foreground.toolSearchControlsEnabled).toBe(
+          true,
+        );
+        expect(config.tools?.toolSearch).toEqual({
+          enabled: true,
+          mode: mode === "directory" ? "directory" : "tools",
+        });
+      } finally {
+        memory.cleanup();
+        foreground.cleanup();
+      }
+    },
+  );
+  it.each(["tools", "directory"] as const)(
+    "keeps invocation-restricted tools direct with configured %s search",
+    (mode) => {
+      const config: OpenClawConfig = { tools: { toolSearch: { enabled: true, mode } } };
+      const params = { ...basePlanParams, config, codeModeOverride: false as const };
+      const plan = resolveAgentToolSurfacePlan({ ...params, disableToolSearch: true });
+      const tools = ["read", "sessions_history", "sessions_search"].map(createStubTool);
+      const result = applyAgentToolSurfaceCatalog({
+        tools,
+        config,
+        ...plan,
+        catalogRef: createToolSearchCatalogRef(),
+      });
+      expect(plan.toolSearchControlsEnabled).toBe(false);
+      expect(result.catalogRegistered).toBe(false);
+      expect(result.tools).toEqual(tools);
+      expect(resolveAgentToolSurfacePlan(params).toolSearchControlsEnabled).toBe(true);
+      expect(config.tools?.toolSearch).toEqual({ enabled: true, mode });
+    },
+  );
+  it.each([
+    { toolSearch: undefined, expected: true, expectedMode: "tools" },
+    { toolSearch: false, expected: false, expectedMode: undefined },
+    { toolSearch: { enabled: false }, expected: false, expectedMode: undefined },
+    {
+      toolSearch: { enabled: true, mode: "directory" as const },
+      expected: true,
+      expectedMode: "directory",
+    },
+  ])(
+    "honors explicit Tool Search $toolSearch over the model preference",
+    ({ toolSearch, expected, expectedMode }) => {
+      const config: OpenClawConfig = {
+        tools: { toolSearch },
+        agents: {
+          ownership: "explicit",
+          defaults: { experimental: { localModelLean: false } },
+          entries: { local: {}, hosted: {} },
+        },
+      };
+      const plan = resolveAgentToolSurfacePlan({
+        ...basePlanParams,
+        config,
+        agentId: "local",
+        model: { toolSearchMode: "tools" },
+      });
+      expect(plan.toolSearchControlsEnabled).toBe(expected);
+      if (expectedMode) {
+        expect(plan.toolSearchConfig.mode).toBe(expectedMode);
+      }
+      expect(config.tools?.toolSearch).toBe(toolSearch);
+    },
+  );
+
+  it("keeps structured search across sibling agents and fallback models without changing config", () => {
+    const config: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { local: {}, hosted: {} } },
+    };
+    const params = { ...basePlanParams, config, agentId: "local" };
+    expect(
+      resolveAgentToolSurfacePlan({ ...params, model: { toolSearchMode: "tools" } })
+        .toolSearchControlsEnabled,
+    ).toBe(true);
+    expect(
+      resolveAgentToolSurfacePlan({ ...params, model: { toolSearchMode: false } })
+        .toolSearchControlsEnabled,
+    ).toBe(true);
+    expect(
+      resolveAgentToolSurfacePlan({ ...params, agentId: "hosted", model: {} })
+        .toolSearchControlsEnabled,
+    ).toBe(true);
+    expect(config.tools).toBeUndefined();
+    expect(config.agents?.defaults).toBeUndefined();
+  });
+  it.each([
+    { codeModeOverride: false, modelOverride: true, expected: false },
+    { codeModeOverride: true, modelOverride: false, expected: true },
+    { codeModeOverride: "auto", modelOverride: false, expected: true },
+  ] as const)(
+    "honors invocation activation $codeModeOverride before model policy",
+    ({ codeModeOverride, modelOverride, expected }) => {
+      const plan = resolveAgentToolSurfacePlan({
+        ...basePlanParams,
+        config: { agents: { defaults: { models: { "test/model": { codeMode: modelOverride } } } } },
+        modelProvider: "test",
+        modelId: "model",
+        model: { compat: { codeMode: "preferred" } },
+        codeModeOverride,
+      });
+      expect(plan.codeModeControlsEnabled).toBe(expected);
+    },
+  );
+
+  it("uses automatic activation by default while honoring model policy and fallback capability", () => {
+    const config: OpenClawConfig = {
+      agents: { defaults: { models: { "test/family": { codeMode: false } } } },
+    };
+    const model = { id: "family-current", provider: "test", compat: { codeMode: "preferred" } };
+    const params = { ...basePlanParams, config, modelProvider: "test", model };
+    expect(
+      resolveAgentToolSurfacePlan({ ...params, modelId: "family" }).codeModeControlsEnabled,
+    ).toBe(false);
+    expect(
+      resolveAgentToolSurfacePlan({ ...params, modelId: "fallback" }).codeModeControlsEnabled,
+    ).toBe(true);
+    for (const compat of [{ codeMode: "capable" }, {}]) {
+      const plan = resolveAgentToolSurfacePlan({
+        ...params,
+        modelId: "fallback",
+        model: { ...model, compat },
+      });
+      expect(plan.codeModeControlsEnabled).toBe(false);
+      expect(plan.toolSearchControlsEnabled).toBe(true);
+    }
+    expect(config.tools).toBeUndefined();
+  });
+
   it.each([
     { name: "model tools disabled", overrides: { toolsEnabled: false } },
     { name: "tools disabled for the run", overrides: { disableTools: true } },
@@ -36,7 +206,8 @@ describe("resolveAgentToolSurfacePlan", () => {
     overrides: Partial<AgentToolSurfacePlanParams>;
     ringZero?: boolean;
   }>)("suppresses both controls for $name", ({ overrides, ringZero }) => {
-    const resolve = () => resolveAgentToolSurfacePlan({ ...basePlanParams, ...overrides });
+    const resolve = () =>
+      resolveAgentToolSurfacePlan({ ...basePlanParams, codeModeOverride: true, ...overrides });
     const plan = ringZero
       ? runWithAgentRingZeroTools([createStubTool("openclaw")], resolve)
       : resolve();
@@ -46,47 +217,6 @@ describe("resolveAgentToolSurfacePlan", () => {
   });
 
   it.each([
-    {
-      name: "code mode wins when engaged",
-      config: { tools: { codeMode: true, toolSearch: true } },
-      expected: { codeMode: true, toolSearch: false },
-    },
-    {
-      name: "tool search engages when code mode does not",
-      config: { tools: { codeMode: false, toolSearch: true } },
-      expected: { codeMode: false, toolSearch: true },
-    },
-  ] satisfies Array<{
-    name: string;
-    config: OpenClawConfig;
-    expected: { codeMode: boolean; toolSearch: boolean };
-  }>)("keeps controls mutually exclusive: $name", ({ config, expected }) => {
-    const plan = resolveAgentToolSurfacePlan({ ...basePlanParams, config });
-
-    expect(plan.codeModeControlsEnabled).toBe(expected.codeMode);
-    expect(plan.toolSearchControlsEnabled).toBe(expected.toolSearch);
-    expect(plan.codeModeControlsEnabled && plan.toolSearchControlsEnabled).toBe(false);
-  });
-
-  it("preserves Code Mode controls for a checkpoint-proven restart recovery", () => {
-    const config: OpenClawConfig = {
-      tools: { codeMode: false, toolSearch: true },
-    };
-    const plan = resolveAgentToolSurfacePlan({
-      ...basePlanParams,
-      config,
-      forceCodeModeControls: true,
-    });
-
-    expect(plan.codeModeControlsEnabled).toBe(true);
-    expect(plan.toolSearchControlsEnabled).toBe(false);
-  });
-
-  it.each([
-    {
-      name: "Code Mode",
-      config: { tools: { codeMode: true, toolSearch: true } },
-    },
     {
       name: "Code Mode with a normalized message allowlist",
       config: { tools: { codeMode: true, toolSearch: true } },
@@ -101,11 +231,17 @@ describe("resolveAgentToolSurfacePlan", () => {
       config: { tools: { codeMode: false, toolSearch: true } },
       forceCodeModeControls: true,
     },
+    {
+      name: "automatic model Tool Search",
+      config: {},
+      model: { toolSearchMode: "tools" },
+    },
   ] satisfies Array<{
     name: string;
     config: OpenClawConfig;
     toolsAllow?: string[];
     forceCodeModeControls?: boolean;
+    model?: { toolSearchMode: "tools" };
   }>)("does not add $name controls to a completion-private message-only run", (run) => {
     const plan = resolveAgentToolSurfacePlan({
       ...basePlanParams,
@@ -113,6 +249,7 @@ describe("resolveAgentToolSurfacePlan", () => {
       forceDirectMessageTool: true,
       toolsAllow: run.toolsAllow ?? ["message"],
       forceCodeModeControls: run.forceCodeModeControls,
+      model: run.model,
     });
     const result = applyAgentToolSurfaceCatalog({
       tools: [createStubTool("message")],
@@ -120,7 +257,6 @@ describe("resolveAgentToolSurfacePlan", () => {
       toolSearchRuntimeConfig: plan.toolSearchRuntimeConfig,
       codeModeControlsEnabled: plan.codeModeControlsEnabled,
       toolSearchConfig: plan.toolSearchConfig,
-      forceDirectMessageTool: true,
       catalogRef: createToolSearchCatalogRef(),
     });
 
@@ -132,8 +268,6 @@ describe("resolveAgentToolSurfacePlan", () => {
   it.each([
     { name: "no runtime allowlist", toolsAllow: undefined },
     { name: "a wildcard runtime allowlist", toolsAllow: ["*"] },
-    { name: "a wildcard alongside an explicit message", toolsAllow: ["message", "*"] },
-    { name: "an ordinary finite runtime allowlist", toolsAllow: ["read", "write"] },
     { name: "a message alongside another allowed tool", toolsAllow: ["message", "read"] },
   ])("preserves normal Code Mode message turns with $name", ({ toolsAllow }) => {
     const plan = resolveAgentToolSurfacePlan({
@@ -186,6 +320,77 @@ describe("resolveAgentToolSurfacePlan", () => {
 describe("applyAgentToolSurfaceCatalog", () => {
   const executeTool: ToolSearchCatalogToolExecutor = async () => ({ content: [], details: {} });
 
+  it.each(["code", "tools", "directory"] as const)(
+    "keeps the %s provider tool prefix across source reply delivery modes",
+    (mode) => {
+      const config: OpenClawConfig = {
+        tools: {
+          codeMode: mode === "code",
+          toolSearch: { enabled: true, mode: mode === "directory" ? "directory" : "tools" },
+        },
+      };
+      const surfaces = [false, true, false].map((forceMessageTool) => {
+        const runtime = createAgentHarnessToolSurfaceRuntimeCore({
+          config,
+          modelToolsEnabled: true,
+          sessionKey: "agent:main:reply-mode-stability",
+          forceMessageTool,
+          executeTool,
+        });
+        try {
+          const result = runtime.compactTools(
+            ["message", "read", "hidden_target"].map(createStubTool),
+          );
+          expect(result.tools.some((tool) => tool.name === "message")).toBe(true);
+          const descriptors = result.tools.map(({ name, description, parameters }) => ({
+            name,
+            description,
+            parameters,
+          }));
+          expect(
+            runtime
+              .compactTools([createStubTool("read")])
+              .tools.some((tool) => tool.name === "message"),
+          ).toBe(false);
+          return descriptors;
+        } finally {
+          runtime.cleanup();
+        }
+      });
+      expect(surfaces[1]).toEqual(surfaces[0]);
+      expect(surfaces[2]).toEqual(surfaces[0]);
+    },
+  );
+
+  it("compacts an unconfigured hosted run behind structured controls", () => {
+    const config: OpenClawConfig = {};
+    const plan = resolveAgentToolSurfacePlan({
+      ...basePlanParams,
+      config,
+      codeModeOverride: false,
+    });
+    const catalogRef = createToolSearchCatalogRef();
+    const result = applyAgentToolSurfaceCatalog({
+      tools: [
+        ...createToolSearchTools({ config, catalogRef, executeTool }),
+        createStubTool("hidden_target"),
+      ],
+      config,
+      ...plan,
+      catalogRef,
+    });
+
+    expect(plan.toolSearchControlsEnabled).toBe(true);
+    expect(plan.toolSearchConfig.mode).toBe("tools");
+    expect(result.tools.map((tool) => tool.name)).toEqual([
+      "tool_search",
+      "tool_describe",
+      "tool_call",
+    ]);
+    expect(result.catalogToolCount).toBe(1);
+    expect(config.tools).toBeUndefined();
+  });
+
   it("uses the code-mode catalog when code-mode controls are enabled", () => {
     const config: OpenClawConfig = {
       tools: { codeMode: true, toolSearch: { enabled: true, mode: "directory" } },
@@ -201,7 +406,6 @@ describe("applyAgentToolSurfaceCatalog", () => {
       toolSearchRuntimeConfig: plan.toolSearchRuntimeConfig,
       codeModeControlsEnabled: plan.codeModeControlsEnabled,
       toolSearchConfig: plan.toolSearchConfig,
-      forceDirectMessageTool: false,
       catalogRef,
     });
 
@@ -209,7 +413,7 @@ describe("applyAgentToolSurfaceCatalog", () => {
     expect(result.catalogToolCount).toBe(1);
   });
 
-  it("forces the Code Mode catalog for a checkpoint-proven restart recovery", () => {
+  it("keeps checkpoint-proven recovery executable after Code Mode is disabled", async () => {
     const config: OpenClawConfig = {
       tools: { codeMode: false, toolSearch: { enabled: true, mode: "directory" } },
     };
@@ -228,13 +432,25 @@ describe("applyAgentToolSurfaceCatalog", () => {
       toolSearchRuntimeConfig: plan.toolSearchRuntimeConfig,
       codeModeControlsEnabled: plan.codeModeControlsEnabled,
       toolSearchConfig: plan.toolSearchConfig,
-      forceDirectMessageTool: false,
-      forceCodeModeControls: true,
       catalogRef,
     });
 
     expect(result.tools.map((tool) => tool.name)).toEqual(["exec", "wait"]);
     expect(result.catalogToolCount).toBe(1);
+    try {
+      const exec = expectDefined(
+        result.tools.find((tool) => tool.name === "exec"),
+        "recovered exec control",
+      );
+      expect(
+        (await exec.execute("recovered-exec", { code: 'return "recovered";' })).details,
+      ).toMatchObject({
+        status: "completed",
+        value: "recovered",
+      });
+    } finally {
+      clearToolSearchCatalog({ catalogRef });
+    }
   });
 
   it("uses the schema-directory catalog in directory mode", () => {
@@ -248,7 +464,6 @@ describe("applyAgentToolSurfaceCatalog", () => {
       toolSearchRuntimeConfig: plan.toolSearchRuntimeConfig,
       codeModeControlsEnabled: plan.codeModeControlsEnabled,
       toolSearchConfig: plan.toolSearchConfig,
-      forceDirectMessageTool: false,
       catalogRef: createToolSearchCatalogRef(),
     });
 
@@ -269,7 +484,6 @@ describe("applyAgentToolSurfaceCatalog", () => {
       toolSearchRuntimeConfig: plan.toolSearchRuntimeConfig,
       codeModeControlsEnabled: plan.codeModeControlsEnabled,
       toolSearchConfig: plan.toolSearchConfig,
-      forceDirectMessageTool: false,
       catalogRef: createToolSearchCatalogRef(),
     });
 

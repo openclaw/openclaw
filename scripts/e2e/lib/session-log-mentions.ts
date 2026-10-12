@@ -2,6 +2,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import {
+  readSqliteTranscriptPayload,
+  sqliteTranscriptPayloadColumns,
+} from "../../lib/sqlite-transcript-payload.mjs";
 import { readPositiveIntEnv } from "./env-limits.mjs";
 
 type SessionLogMentionLimits = {
@@ -49,10 +53,6 @@ function countOccurrences(haystack: string, needle: string): number {
     count += 1;
     offset = next + needle.length;
   }
-}
-
-function createCounts(needles: SessionLogNeedles): Record<string, number> {
-  return Object.fromEntries(Object.keys(needles).map((key) => [key, 0]));
 }
 
 function recordRole(record: unknown): string | undefined {
@@ -129,10 +129,13 @@ export async function countSessionLogMentions(params: {
   sessionsDir: string;
 }): Promise<Record<string, number>> {
   const limits = params.limits ?? readSessionLogMentionLimits();
-  const counts = createCounts(params.needles);
-  const addCounts = (nextCounts: Record<string, number>) => {
-    for (const [key, count] of Object.entries(nextCounts)) {
-      counts[key] = (counts[key] ?? 0) + count;
+  const counts = Object.fromEntries(Object.keys(params.needles).map((key) => [key, 0]));
+  const countRecord = (text: string) => {
+    const scanText = sessionLogScanText(text);
+    if (scanText !== null) {
+      for (const [key, needle] of Object.entries(params.needles)) {
+        counts[key] = (counts[key] ?? 0) + countOccurrences(scanText, needle);
+      }
     }
   };
   let files: string[];
@@ -171,49 +174,17 @@ export async function countSessionLogMentions(params: {
       limit: limits.fileMaxBytes,
     });
     for (const line of raw.split(/\r?\n/u)) {
-      const scanText = sessionLogScanText(line);
-      if (scanText === null) {
-        continue;
-      }
-      for (const [key, needle] of Object.entries(params.needles)) {
-        counts[key] = (counts[key] ?? 0) + countOccurrences(scanText, needle);
-      }
+      countRecord(line);
     }
   }
-  addCounts(
-    await countSqliteTranscriptMentions({
-      limits,
-      needles: params.needles,
-      sessionsDir: params.sessionsDir,
-      startingBytes: totalBytes,
-    }),
-  );
-  return counts;
-}
-
-function resolveAgentSqlitePathFromSessionsDir(sessionsDir: string): string | null {
-  if (path.basename(sessionsDir) !== "sessions") {
-    return null;
-  }
-  return path.join(path.dirname(sessionsDir), "agent", "openclaw-agent.sqlite");
-}
-
-async function countSqliteTranscriptMentions(params: {
-  limits: SessionLogMentionLimits;
-  needles: SessionLogNeedles;
-  sessionsDir: string;
-  startingBytes: number;
-}): Promise<Record<string, number>> {
-  const counts = createCounts(params.needles);
-  const sqlitePath = resolveAgentSqlitePathFromSessionsDir(params.sessionsDir);
-  if (!sqlitePath) {
+  if (path.basename(params.sessionsDir) !== "sessions") {
     return counts;
   }
+  const sqlitePath = path.join(path.dirname(params.sessionsDir), "agent", "openclaw-agent.sqlite");
   const stat = await fs.stat(sqlitePath).catch(() => null);
   if (!stat?.isFile()) {
     return counts;
   }
-  let totalBytes = params.startingBytes;
   let db: DatabaseSync | null = null;
   try {
     db = new DatabaseSync(sqlitePath, { readOnly: true });
@@ -223,31 +194,25 @@ async function countSqliteTranscriptMentions(params: {
     if (!hasTranscriptEvents) {
       return counts;
     }
-    const rows = db.prepare("SELECT event_json FROM transcript_events ORDER BY session_id, seq");
-    for (const row of rows.iterate() as Iterable<{ event_json?: unknown }>) {
-      if (typeof row.event_json !== "string") {
-        continue;
-      }
-      const byteCount = Buffer.byteLength(row.event_json, "utf8");
+    const rows = db.prepare(
+      `SELECT ${sqliteTranscriptPayloadColumns(db)} FROM transcript_events ORDER BY session_id, seq`,
+    );
+    for (const row of rows.iterate()) {
+      const eventJson = readSqliteTranscriptPayload(row);
+      const byteCount = Buffer.byteLength(eventJson, "utf8");
       assertWithinLimit({
         byteCount,
         filePath: sqlitePath,
         label: "per-file",
-        limit: params.limits.fileMaxBytes,
+        limit: limits.fileMaxBytes,
       });
       totalBytes += byteCount;
       assertWithinLimit({
         byteCount: totalBytes,
         label: "total",
-        limit: params.limits.totalMaxBytes,
+        limit: limits.totalMaxBytes,
       });
-      const scanText = sessionLogScanText(row.event_json);
-      if (scanText === null) {
-        continue;
-      }
-      for (const [key, needle] of Object.entries(params.needles)) {
-        counts[key] = (counts[key] ?? 0) + countOccurrences(scanText, needle);
-      }
+      countRecord(eventJson);
     }
     return counts;
   } catch (error) {

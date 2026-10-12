@@ -1,37 +1,21 @@
-/**
- * Applies final effective tool policy to embedded-agent runtime settings.
- */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
-import { getPluginToolMeta } from "../../plugins/tools.js";
+import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
 import type { ResolvedConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import {
   buildConversationToolPolicyPipelineSteps,
   resolveConversationToolPolicies,
 } from "../conversation-tool-policy-pipeline.js";
 import { buildDeclaredToolAllowlistContext } from "../tool-policy-declared-context.js";
-import {
-  applyToolPolicyPipeline,
-  type ToolPolicyFilterEvent,
-  type ToolPolicyPipelineStep,
-} from "../tool-policy-pipeline.js";
+import { applyToolPolicyPipeline, type ToolPolicyFilterEvent } from "../tool-policy-pipeline.js";
 import { collectExplicitDenylist } from "../tool-policy.js";
 import type { AnyAgentTool } from "../tools/common.js";
 
-/**
- * The capability profile is an authorization signal (group/sender policies can
- * widen bundled-tool availability), so callers MUST resolve it from
- * server-verified session metadata (session key, inbound transport event),
- * never from tool-call or model-controlled input. Passing the same profile
- * that constructed the core tool set keeps this final bundled-tool pass and
- * tool construction from ever disagreeing about policy inputs.
- */
+// Reuse core tool construction's server-verified capability profile: group/sender
+// policy can widen access, so model-controlled input must never supply it.
 type FinalEffectiveToolPolicyParams = {
-  // Tools appended to the core tool set after `createOpenClawCodingTools()`
-  // has already applied the shared tool-policy pipeline (e.g. bundled
-  // MCP/LSP tools). Only these are filtered here; re-running the pipeline over
-  // the already-filtered core tools would drop plugin tools whose WeakMap
-  // metadata no longer survives core-tool wrapping/normalization.
+  // Filter only added MCP/LSP tools; core wrapping has already lost the WeakMap
+  // metadata needed to safely rerun its policy pipeline.
   bundledTools: AnyAgentTool[];
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -57,24 +41,16 @@ export function applyFinalEffectiveToolPolicy(
     );
   }
   const policies = resolveConversationToolPolicies({ capabilityProfile });
-  // Suppress unavailable-core-tool warnings on every step of this pass.
-  // `applyToolPolicyPipeline` infers `coreToolNames` from the `tools` array
-  // it's filtering, and this pass only sees the bundled MCP/LSP subset.
-  // Normal core allowlist entries (e.g. `tools.allow: ["read", "exec"]`)
-  // would look "unknown" relative to that reduced set even though they are
-  // valid core names already resolved by `createOpenClawCodingTools()` in
-  // the first pass — keeping those warnings on would pollute logs and evict
-  // real diagnostics from the shared warning cache. Genuinely unknown
-  // entries (typos) still surface through the `otherEntries` path in
-  // `applyToolPolicyPipeline`.
-  const pipelineSteps: ToolPolicyPipelineStep[] = buildConversationToolPolicyPipelineSteps({
+  // Core tools are absent from this subset but already validated. Suppress only
+  // their unavailable warnings; the pipeline still reports unknown entries.
+  const pipelineSteps = buildConversationToolPolicyPipelineSteps({
     capabilityProfile,
     policies,
     includeRuntimeToolPolicy: false,
   }).map((step) => Object.assign({}, step, { suppressUnavailableCoreToolWarning: true }));
   return applyToolPolicyPipeline({
     tools: params.bundledTools,
-    toolMeta: (tool) => getPluginToolMeta(tool),
+    toolMeta: getPluginToolMeta,
     warn: params.warn,
     steps: pipelineSteps,
     onFilter: params.onFilter,

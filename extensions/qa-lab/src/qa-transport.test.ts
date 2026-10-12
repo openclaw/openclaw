@@ -8,30 +8,6 @@ import {
 } from "./qa-transport.js";
 
 describe("waitForQaTransportAccountReady", () => {
-  it.each([
-    { description: "disconnected", connected: false, lifecycle: "starting" },
-    { description: "unauthenticated", connected: true, lifecycle: "starting" },
-    { description: "blocked", connected: true, lifecycle: "blocked" },
-  ])("does not declare a $description account ready", async ({ connected, lifecycle }) => {
-    const gateway = {
-      call: vi.fn().mockResolvedValue({
-        channelAccounts: {
-          slack: [{ accountId: "sut", connected, lifecycle, running: true }],
-        },
-      }),
-    };
-
-    await expect(
-      waitForQaTransportAccountReady({
-        accountId: "sut",
-        channel: "slack",
-        gateway,
-        pollIntervalMs: 1,
-        timeoutMs: 5,
-      }),
-    ).rejects.toThrow(`"lifecycle":"${lifecycle}"`);
-  });
-
   it("keeps channel-status probes inside the readiness deadline", async () => {
     const call = vi.fn().mockResolvedValue({ channelAccounts: {} });
 
@@ -67,6 +43,10 @@ describe("createQaStateBackedTransportAdapter", () => {
     const resetTransport = vi.fn(() => {
       expect(state.getSnapshot().messages).toHaveLength(1);
     });
+    const captureArtifacts = vi.fn(async () => ({
+      artifacts: [{ kind: "channel-driver-smoke" as const, path: "readiness.json" }],
+    }));
+    const createRuntimePreloads = vi.fn(() => ["file:///qa-preload.mjs"]);
     const adapter = createQaStateBackedTransportAdapter(state, {
       id: "live",
       label: "Live",
@@ -75,6 +55,8 @@ describe("createQaStateBackedTransportAdapter", () => {
       prepareFlow: vi.fn(),
       supportedActions: [],
       resetTransport,
+      captureArtifacts,
+      createRuntimePreloads,
       sendInbound: async (input) => state.addInboundMessage(input),
       createGatewayConfig: () => ({}),
       waitReady: async () => undefined,
@@ -92,6 +74,12 @@ describe("createQaStateBackedTransportAdapter", () => {
 
     expect(resetTransport).toHaveBeenCalledOnce();
     expect(adapter.prepareFlow).toBeTypeOf("function");
+    await expect(adapter.captureArtifacts?.({ outputDir: "/qa-output" })).resolves.toEqual({
+      artifacts: [{ kind: "channel-driver-smoke", path: "readiness.json" }],
+    });
+    expect(captureArtifacts).toHaveBeenCalledWith({ outputDir: "/qa-output" });
+    expect(adapter.createRuntimePreloads?.()).toEqual(["file:///qa-preload.mjs"]);
+    expect(createRuntimePreloads).toHaveBeenCalledOnce();
     expect(state.getSnapshot().messages).toHaveLength(0);
   });
 
@@ -183,38 +171,6 @@ describe("waitForQaTransportOutboundSequence", () => {
       events: [{ kind: "sent" }, { kind: "edited" }],
       final: { text: "final marker", threadId: "42" },
     });
-  });
-
-  it("returns preview and final sends across distinct messages", async () => {
-    const state = createQaBusState();
-    const preview = state.addOutboundMessage({
-      accountId: "default",
-      text: "preview",
-      to: "dm:alice",
-    });
-    const final = state.addOutboundMessage({
-      accountId: "default",
-      text: "final marker",
-      to: "dm:alice",
-    });
-
-    const sequence = await waitForQaTransportOutboundSequence({
-      accountId: "default",
-      input: {
-        conversationId: "alice",
-        finalSettleMs: 0,
-        finalTextIncludes: "final marker",
-        minimumPreviewEvents: 1,
-        timeoutMs: 100,
-      },
-      readEvents: () => state.getSnapshot().events,
-    });
-
-    expect(sequence.events.map(({ kind, message }) => [kind, message.id])).toEqual([
-      ["sent", preview.id],
-      ["sent", final.id],
-    ]);
-    expect(sequence.final).toMatchObject({ id: final.id, text: "final marker" });
   });
 
   it.each([

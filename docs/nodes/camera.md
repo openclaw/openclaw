@@ -33,7 +33,7 @@ All camera access is gated behind a user-controlled setting per platform.
     - `facing`: `front|back` (default: `front`)
     - `maxWidth`: number (optional; default `1600`)
     - `quality`: `0..1` (optional; default `0.9`, clamped to `[0.05, 1.0]`)
-    - `format`: currently `jpg`
+    - `format`: `jpg` (the only supported value)
     - `delayMs`: number (optional; default `0`, internally capped at `10000`)
     - `deviceId`: string (optional; from `camera.list`)
   - Response payload: `format: "jpg"`, `base64`, `width`, `height`.
@@ -44,7 +44,7 @@ All camera access is gated behind a user-controlled setting per platform.
     - `facing`: `front|back` (default: `front`)
     - `durationMs`: number (default `3000`, clamped to `[250, 60000]`)
     - `includeAudio`: boolean (default `true`)
-    - `format`: currently `mp4`
+    - `format`: `mp4` (the only supported value)
     - `deviceId`: string (optional; from `camera.list`)
   - Response payload: `format: "mp4"`, `base64`, `durationMs`, `hasAudio`.
 
@@ -60,9 +60,12 @@ The easiest way to get media files is via the CLI helper, which writes decoded m
 openclaw nodes camera snap --node <id>                 # default: one node-selected photo
 openclaw nodes camera snap --node <id> --facing front
 openclaw nodes camera snap --node <id> --facing both   # front then back (2 saved paths)
-openclaw nodes camera clip --node <id> --duration 3000
+openclaw nodes camera clip --node <id> --duration 10s
 openclaw nodes camera clip --node <id> --no-audio
 ```
+
+`--duration` accepts a bare number of milliseconds (`3000`) or a unit suffix
+(`10s`, `1m`, `1h30m`). It defaults to `3000` (3 seconds).
 
 Without `--facing`, `nodes camera snap` captures one photo using the node's default camera and labels the saved artifact `unknown`. On non-Linux nodes, `--facing both` captures front then back and prints two saved paths. `--device-id` is valid without `--facing`; on non-Linux nodes, it cannot be combined with `--facing both`. Linux always sends one facing-less request and labels the artifact `unknown`, regardless of `--facing`. Output files are temporary (in the OS temp directory) unless you build your own wrapper.
 
@@ -121,7 +124,6 @@ openclaw nodes camera snap --node <id> --max-width 1280
 openclaw nodes camera snap --node <id> --delay-ms 2000
 openclaw nodes camera snap --node <id> --device-id <id>
 openclaw nodes camera clip --node <id> --duration 10s       # prints saved path
-openclaw nodes camera clip --node <id> --duration-ms 3000   # prints saved path (legacy flag)
 openclaw nodes camera clip --node <id> --device-id <id>
 openclaw nodes camera clip --node <id> --no-audio
 ```
@@ -129,6 +131,8 @@ openclaw nodes camera clip --node <id> --no-audio
 - `openclaw nodes camera snap` defaults to `maxWidth=1600` unless overridden.
 - `camera.snap` waits `delayMs` (default 2000ms, clamped to `[0, 10000]`) after warm-up/exposure settle before capturing.
 - Photo payloads are recompressed to keep base64 under 5MB.
+
+If a macOS external camera starts a photo session in portrait, OpenClaw selects an advertised landscape format with transposed dimensions and the same encoding, when one exists. Already-landscape, built-in, and Continuity Camera formats are unchanged. Without an exact counterpart, or if the camera cannot be reconfigured, capture keeps the negotiated format. `--max-width` still only limits the returned JPEG width; it does not choose a camera format.
 
 ### macOS physical PTZ
 
@@ -194,7 +198,7 @@ Requirements:
 - a `/dev/video*` device readable by the node-service user; on common distributions, add that user to the `video` group
 - for clips with the default `includeAudio: true`, a working PulseAudio server or PipeWire PulseAudio compatibility layer with a default source
 
-Linux returns capture-capable, readable V4L2 device paths from `camera.list`; FFmpeg probes each `/dev/video*` candidate and omits metadata or output-only nodes. Device `position` is `unknown`, so facing requests without `deviceId` produce one `unknown`-position photo or clip instead of claiming a front or back camera. Use `deviceId` when a host has multiple cameras. `camera.snap` uses FFmpeg input warm-up for `delayMs` and preserves aspect ratio while limiting width. `camera.clip` records microphone audio as the MP4 audio track; OpenClaw deliberately exposes no standalone microphone command.
+Linux returns capture-capable, readable V4L2 device paths from `camera.list`; FFmpeg checks each `/dev/video*` candidate and omits metadata or output-only nodes. Device `position` is `unknown`, so facing requests without `deviceId` produce one `unknown`-position photo or clip instead of claiming a front or back camera. Use `deviceId` when a host has multiple cameras. `camera.snap` uses FFmpeg input warm-up for `delayMs` and preserves aspect ratio while limiting width. `camera.clip` records microphone audio as the MP4 audio track; OpenClaw deliberately exposes no standalone microphone command.
 
 The plugin uses `libx264` for MP4 video and does not silently change codecs. An FFmpeg build without the required input or encoders returns `CAMERA_UNAVAILABLE`. Photos and clips that would exceed the 25MB base64 payload budget fail with `PAYLOAD_TOO_LARGE`.
 
@@ -220,3 +224,6 @@ Requires macOS **Screen Recording** permission (TCC).
 - [Image and media support](/nodes/images)
 - [Media understanding](/nodes/media-understanding)
 - [Location command](/nodes/location-command)
+- [Computer use](/nodes/computer-use)
+- [Node troubleshooting](/nodes/troubleshooting)
+- [Nodes overview](/nodes)

@@ -1,7 +1,16 @@
+import {
+  clampWidth,
+  clampHeight,
+  sidebarDock,
+  sidebarMainPanel,
+  sidebarSidePanels,
+  sidebarActivePanel,
+  isSidebarSlotVisible,
+} from "./sidebar-layout-geometry.ts";
 import type {
+  SidebarColumn,
   SidebarDock,
   SidebarLayout,
-  SidebarPanel,
   SidebarSlotId,
 } from "./sidebar-layout-types.ts";
 
@@ -13,41 +22,60 @@ export type {
   SidebarSlotId,
 } from "./sidebar-layout-types.ts";
 
+export {
+  sidebarDock,
+  sidebarMainPanel,
+  sidebarSidePanels,
+  sidebarActivePanel,
+  isSidebarSlotVisible,
+  fitSidebarLayout,
+  initializeBrowserSidebarWidth,
+  SIDEBAR_MIN_WIDTH_PX,
+  SIDEBAR_MIN_HEIGHT_PX,
+  SIDEBAR_NARROW_BREAKPOINT_PX,
+} from "./sidebar-layout-geometry.ts";
+
 const SIDEBAR_DEFAULT_WIDTH_PX = 480;
 const SIDEBAR_DEFAULT_HEIGHT_PX = 360;
 export const SIDEBAR_GEOMETRY_COMMIT_EVENT = "openclaw-sidebar-geometry-commit";
-export const SIDEBAR_MIN_WIDTH_PX = 260;
-export const SIDEBAR_MIN_HEIGHT_PX = 220;
-const SIDEBAR_MAX_WIDTH_PX = 1_200;
-const SIDEBAR_MAX_HEIGHT_PX = 800;
-const SIDEBAR_MAIN_MIN_WIDTH_PX = 312;
-export const SIDEBAR_NARROW_BREAKPOINT_PX = 680;
-const SIDEBAR_DIVIDER_WIDTH_PX = 4;
 
-function cloneLayout(layout: SidebarLayout): SidebarLayout {
-  return structuredClone(layout);
+function createSidebarColumn(): SidebarColumn {
+  return {
+    id: "side-panel-column",
+    side: "right",
+    panels: [],
+    activePanelId: "",
+    height: SIDEBAR_DEFAULT_HEIGHT_PX,
+    width: SIDEBAR_DEFAULT_WIDTH_PX,
+    browserWidthPending: true,
+  };
 }
 
-function clampWidth(width: number): number {
-  return Math.min(SIDEBAR_MAX_WIDTH_PX, Math.max(SIDEBAR_MIN_WIDTH_PX, width));
-}
-
-function clampHeight(height: number): number {
-  return Math.min(SIDEBAR_MAX_HEIGHT_PX, Math.max(SIDEBAR_MIN_HEIGHT_PX, height));
-}
-
-export function sidebarDock(layout: SidebarLayout): SidebarDock {
-  return layout.dock === "bottom" ? "bottom" : "right";
-}
-
-export function isSidebarSlotVisible(layout: SidebarLayout, slot: SidebarSlotId): boolean {
-  if (layout.open !== true) {
-    return false;
+/** Logical presentation, independent of responsive/narrow viewport projection. */
+export function sidebarDashboardPresentation(
+  layout: SidebarLayout,
+): "split" | "expanded" | undefined {
+  if (!isSidebarSlotVisible(layout, "dashboard")) {
+    return undefined;
   }
-  return layout.columns.some((column) => {
-    const active = column.panels.find((panel) => panel.id === column.activePanelId);
-    return active?.slot === slot;
-  });
+  return layout.expanded || layout.open !== true ? "expanded" : "split";
+}
+
+/** Open without changing panel identities, docking, dimensions, or other panel state. */
+export function openDashboardPresentation(
+  layout: SidebarLayout,
+  presentation: "split" | "expanded",
+): SidebarLayout {
+  let next = openSlot(layout, "dashboard");
+  if (presentation === "expanded") {
+    const dashboard = next.columns[0]?.panels.find((panel) => panel.slot === "dashboard");
+    if (dashboard) {
+      next = promoteSidebarPanel(next, dashboard.id);
+    }
+  } else if (sidebarMainPanel(next)?.slot === "dashboard") {
+    next = openSlot(next, "conversation");
+  }
+  return setSidebarExpanded(next, presentation === "expanded");
 }
 
 function nextPanelId(layout: SidebarLayout, slot: SidebarSlotId): string {
@@ -62,76 +90,119 @@ function nextPanelId(layout: SidebarLayout, slot: SidebarSlotId): string {
   return `${slot}-${suffix}`;
 }
 
-function removePanel(layout: SidebarLayout, panelId: string): SidebarPanel | null {
-  for (let columnIndex = 0; columnIndex < layout.columns.length; columnIndex += 1) {
-    const column = layout.columns[columnIndex]!;
+function removePanel(layout: SidebarLayout, panelId: string): void {
+  for (const column of layout.columns) {
     const panelIndex = column.panels.findIndex((panel) => panel.id === panelId);
     if (panelIndex < 0) {
       continue;
     }
-    const panel = column.panels.splice(panelIndex, 1)[0]!;
-    if (column.panels.length === 0) {
-      layout.columns.splice(columnIndex, 1);
-    } else if (column.activePanelId === panelId) {
-      column.activePanelId =
-        column.panels[Math.min(panelIndex, column.panels.length - 1)]?.id ?? "";
+    const sideIndex = column.panels
+      .filter((entry) => entry.id !== layout.mainPanelId)
+      .findIndex((entry) => entry.id === panelId);
+    column.panels.splice(panelIndex, 1);
+    if (column.activePanelId === panelId) {
+      const sidePanels = column.panels.filter((entry) => entry.id !== layout.mainPanelId);
+      column.activePanelId = sidePanels[Math.min(sideIndex, sidePanels.length - 1)]?.id ?? "";
     }
-    return panel;
+    return;
   }
-  return null;
+}
+
+export function ensureSidebarConversation(layout: SidebarLayout): SidebarLayout {
+  const next = structuredClone(layout);
+  const column = (next.columns[0] ??= createSidebarColumn());
+  let conversation = column.panels.find((panel) => panel.slot === "conversation");
+  if (!conversation) {
+    conversation = { id: nextPanelId(next, "conversation"), slot: "conversation" };
+    column.panels.push(conversation);
+  }
+  next.mainPanelId = sidebarMainPanel(next)?.id ?? conversation.id;
+  if (column.activePanelId === next.mainPanelId) {
+    column.activePanelId = sidebarSidePanels(next)[0]?.id ?? "";
+  }
+  return next;
+}
+
+export function promoteSidebarPanel(layout: SidebarLayout, panelId: string): SidebarLayout {
+  const target = layout.columns[0]?.panels.find((panel) => panel.id === panelId);
+  if (!target || sidebarMainPanel(layout)?.id === panelId) {
+    return structuredClone(layout);
+  }
+  const next = ensureSidebarConversation(layout);
+  const previousMainId = next.mainPanelId!;
+  next.mainPanelId = panelId;
+  next.columns[0]!.activePanelId = previousMainId;
+  next.open = true;
+  next.expanded = false;
+  delete next.expandedSide;
+  return next;
+}
+
+function selectPanel(layout: SidebarLayout, column: SidebarColumn, panelId: string): void {
+  column.activePanelId = panelId;
+  layout.open = true;
+  if (layout.expanded) {
+    layout.expanded = false;
+    delete layout.expandedSide;
+  }
 }
 
 export function openSlot(layout: SidebarLayout, slot: SidebarSlotId): SidebarLayout {
-  const next = cloneLayout(layout);
-  const existing = next.columns
-    .flatMap((column) => column.panels)
-    .find((panel) => panel.slot === slot);
-  if (existing) {
-    next.open = true;
-    const column = next.columns.find((entry) => entry.panels.includes(existing));
-    if (column) {
-      column.activePanelId = existing.id;
-    }
-    return next;
+  const next = structuredClone(layout);
+  if ((sidebarMainPanel(next)?.slot ?? "conversation") === slot) {
+    return next.expandedSide ? setSidebarExpanded(next, false) : next;
   }
-  const panel: SidebarPanel = { id: nextPanelId(next, slot), slot };
-  const column = next.columns[0];
-  if (column) {
+  const column =
+    next.columns.find((entry) => entry.panels.some((panel) => panel.slot === slot)) ??
+    (next.columns[0] ??= createSidebarColumn());
+  let panel = column.panels.find((entry) => entry.slot === slot);
+  if (!panel) {
+    panel = { id: nextPanelId(next, slot), slot };
     column.panels.push(panel);
-    column.activePanelId = panel.id;
-  } else {
-    next.columns = [
-      {
-        id: "side-panel-column",
-        side: "right",
-        panels: [panel],
-        activePanelId: panel.id,
-        height: SIDEBAR_DEFAULT_HEIGHT_PX,
-        width: SIDEBAR_DEFAULT_WIDTH_PX,
-      },
-    ];
   }
-  next.open = true;
+  selectPanel(next, column, panel.id);
   return next;
 }
 
 export function closeSlot(layout: SidebarLayout, slot: SidebarSlotId): SidebarLayout {
-  const next = cloneLayout(layout);
+  let next = structuredClone(layout);
   const panel = next.columns
     .flatMap((column) => column.panels)
     .find((entry) => entry.slot === slot);
   if (panel) {
+    if (next.expandedSide && panel.id === sidebarActivePanel(next)?.id) {
+      next = setSidebarExpanded(next, false);
+    }
+    if (slot === "conversation") {
+      if (panel.id !== next.mainPanelId) {
+        next.open = false;
+      }
+      return next;
+    }
+    if (panel.id === next.mainPanelId) {
+      next = ensureSidebarConversation(next);
+      next.mainPanelId = next.columns[0]!.panels.find((entry) => entry.slot === "conversation")!.id;
+    }
     removePanel(next, panel.id);
+    const column = next.columns[0];
+    if (column && !sidebarActivePanel(next)) {
+      column.activePanelId = sidebarSidePanels(next)[0]?.id ?? "";
+    }
+    if (sidebarSidePanels(next).length === 0) {
+      next.open = false;
+    }
+  }
+  if (next.columns.length === 0) {
+    next.open = false;
   }
   return next;
 }
 
 export function activatePanel(layout: SidebarLayout, panelId: string): SidebarLayout {
-  const next = cloneLayout(layout);
+  const next = structuredClone(layout);
   const column = next.columns.find((entry) => entry.panels.some((panel) => panel.id === panelId));
-  if (column) {
-    column.activePanelId = panelId;
-    next.open = true;
+  if (column && panelId !== next.mainPanelId) {
+    selectPanel(next, column, panelId);
   }
   return next;
 }
@@ -142,7 +213,7 @@ export function reorderPanel(
   targetPanelId: string,
   placement: "before" | "after",
 ): SidebarLayout {
-  const next = cloneLayout(layout);
+  const next = structuredClone(layout);
   const panels = next.columns[0]?.panels;
   if (!panels || panelId === targetPanelId) {
     return next;
@@ -159,15 +230,63 @@ export function reorderPanel(
 }
 
 export function setSidebarOpen(layout: SidebarLayout, open: boolean): SidebarLayout {
-  return { ...cloneLayout(layout), open };
+  const next = structuredClone(layout);
+  if (open) {
+    next.columns[0] ??= createSidebarColumn();
+  }
+  next.open = open;
+  if (open ? next.expanded : next.expandedSide) {
+    next.expanded = false;
+    delete next.expandedSide;
+  }
+  return next;
 }
 
 export function setSidebarExpanded(layout: SidebarLayout, expanded: boolean): SidebarLayout {
-  return { ...cloneLayout(layout), expanded };
+  // Restore split must reveal the side even when focus began with that panel closed.
+  const next = structuredClone(layout);
+  delete next.expandedSide;
+  return { ...next, expanded, ...(expanded ? { open: true } : {}) };
+}
+
+/** Focus in place: restoring must not leave the main and side views swapped. */
+export function toggleSidebarPanelExpanded(layout: SidebarLayout, panelId: string): SidebarLayout {
+  if (!sidebarSidePanels(layout).some((panel) => panel.id === panelId)) {
+    return structuredClone(layout);
+  }
+  if (layout.expanded && layout.expandedSide && sidebarActivePanel(layout)?.id === panelId) {
+    return setSidebarExpanded(layout, false);
+  }
+  const next = activatePanel(ensureSidebarConversation(layout), panelId);
+  next.expanded = true;
+  next.expandedSide = true;
+  return next;
+}
+
+const narrowPresentations = new WeakMap<SidebarLayout, SidebarLayout>();
+
+/**
+ * How a narrow pane shows a layout. It can only stack its side panel under the
+ * main view, which leaves a list-and-detail panel too little room, so an open
+ * Subagents or Processes panel is shown focused in place. The layout itself is
+ * unchanged: a wider pane shows that panel beside the main view again.
+ */
+export function presentNarrowSidebarLayout(layout: SidebarLayout): SidebarLayout {
+  const slot =
+    layout.open === true && !layout.expanded ? sidebarActivePanel(layout)?.slot : undefined;
+  if (slot !== "subagents" && slot !== "processes") {
+    return layout;
+  }
+  let presented = narrowPresentations.get(layout);
+  if (!presented) {
+    presented = { ...layout, expanded: true, expandedSide: true };
+    narrowPresentations.set(layout, presented);
+  }
+  return presented;
 }
 
 export function setSidebarDock(layout: SidebarLayout, dock: SidebarDock): SidebarLayout {
-  return { ...cloneLayout(layout), dock };
+  return { ...structuredClone(layout), dock };
 }
 
 export function resizeSidebarPanel(
@@ -175,49 +294,17 @@ export function resizeSidebarPanel(
   columnId: string,
   size: number,
 ): SidebarLayout {
-  const next = cloneLayout(layout);
+  const next = structuredClone(layout);
   const column = next.columns.find((entry) => entry.id === columnId);
   if (column && Number.isFinite(size)) {
     if (sidebarDock(next) === "bottom") {
       column.height = clampHeight(size);
     } else {
       column.width = clampWidth(size);
+      delete column.browserWidthPending;
     }
   }
   return next;
-}
-
-export function fitSidebarLayout(
-  layout: SidebarLayout,
-  availableWidth: number,
-): SidebarLayout | null {
-  const next = cloneLayout(layout);
-  if (!Number.isFinite(availableWidth) || availableWidth <= 0) {
-    return next;
-  }
-  const column = next.columns[0];
-  if (!column) {
-    return next;
-  }
-  next.columns = [column];
-  if (sidebarDock(next) === "bottom") {
-    column.height = clampHeight(column.height);
-    return next;
-  }
-  const maxColumnWidth = Math.max(
-    SIDEBAR_MIN_WIDTH_PX,
-    Math.min(SIDEBAR_MAX_WIDTH_PX, availableWidth * 0.6),
-  );
-  const budget = Math.max(0, availableWidth - SIDEBAR_MAIN_MIN_WIDTH_PX - SIDEBAR_DIVIDER_WIDTH_PX);
-  if (SIDEBAR_MIN_WIDTH_PX > budget) {
-    return null;
-  }
-  column.width = Math.min(maxColumnWidth, budget, clampWidth(column.width));
-  return next;
-}
-
-export function isSidebarRegionCollapsed(_layout: SidebarLayout, availableWidth: number): boolean {
-  return availableWidth < SIDEBAR_NARROW_BREAKPOINT_PX;
 }
 
 export { normalizeSidebarLayout } from "./sidebar-layout-normalize.ts";

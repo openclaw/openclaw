@@ -1,21 +1,34 @@
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ConfigFileSnapshot } from "../config/config.js";
-import { readConfigFileSnapshot, readConfigFileSnapshotForWrite } from "../config/config.js";
-import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
+import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
+import type {
+  ConfigFileSnapshot,
+  ReadConfigFileSnapshotWithPluginMetadataResult,
+} from "../config/config.js";
+import { readConfigFileSnapshotForWrite } from "../config/config.js";
+import { assertDeferredPluginMigrationConfigEditAllowed } from "../config/deferred-plugin-migration-config.js";
+import { configFailureHeading, isConfigReadFailure } from "../config/io.invalid-config.js";
+import { formatConfigIssueLines } from "../config/issue-format.js";
 import { renderConfigValidationIssueLines } from "../config/issue-location.js";
 import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
+import type { ConfigValidationIssue } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   coerceSecretRef,
+  isSecretRef,
   resolveSecretInputRef,
-  type PluginIntegrationSecretProviderConfig,
   type SecretRef,
 } from "../config/types.secrets.js";
-import { validateConfigObjectRawWithPlugins } from "../config/validation.js";
+import {
+  collectUnsupportedSecretRefPolicyIssues,
+  validateConfigObjectRawWithPlugins,
+} from "../config/validation.js";
+import { visitConfigValueTree } from "../config/value-tree.js";
+import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { type RuntimeEnv, defaultRuntime, writeRuntimeJson } from "../runtime.js";
+import { type RuntimeEnv, defaultRuntime } from "../runtime.js";
+import { assertSecureExecCommandPath } from "../secrets/exec-provider-path-validation.js";
 import {
   isPluginIntegrationSecretProviderConfig,
   resolveSecretProviderIntegrationConfig,
@@ -25,59 +38,49 @@ import {
   isValidExecSecretRefId,
   secretRefKey,
 } from "../secrets/ref-contract.js";
-import { resolveSecretRefValue } from "../secrets/resolve.js";
 import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
+import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
-import type { ConfigSetOperation } from "./config-cli-input.js";
+import type { ConfigMutationOptions, ConfigSetOperation } from "./config-cli-input.js";
+import { getAtPath } from "./config-cli-path.js";
 import { formatPluginPackagingRuntimeOutputRecoveryHint } from "./config-recovery-hints.js";
-import type { ConfigSetDryRunError } from "./config-set-dryrun.js";
-import { formatCliJsonFailure } from "./failure-output.js";
+import type { ConfigSetDryRunError, ConfigSetDryRunResult } from "./config-set-dryrun.js";
+import { writeInvalidConfigCliJson } from "./config-validation-output.js";
+import { exitCliAfterOutput } from "./one-shot-exit.js";
 
 function formatInvalidConfigRepairHint(
-  snapshot: Pick<ConfigFileSnapshot, "valid" | "issues" | "warnings" | "legacyIssues">,
+  snapshot: Pick<
+    ConfigFileSnapshot,
+    "valid" | "issues" | "warnings" | "legacyIssues" | "readError"
+  >,
   doctorMessage: string,
 ): string {
-  return isPluginPackagingRuntimeOutputInvalidConfigSnapshot(snapshot)
-    ? formatPluginPackagingRuntimeOutputRecoveryHint()
-    : `Run \`${formatCliCommand("openclaw doctor --fix")}\` ${doctorMessage}`;
+  return isConfigReadFailure(snapshot)
+    ? "Resolve the read error shown above, then retry."
+    : isPluginPackagingRuntimeOutputInvalidConfigSnapshot(snapshot)
+      ? formatPluginPackagingRuntimeOutputRecoveryHint()
+      : `Run \`${formatCliCommand("openclaw doctor --fix")}\` ${doctorMessage}`;
 }
 
 export function ensureValidConfigSnapshotForCli(
   snapshot: ConfigFileSnapshot,
   runtime: RuntimeEnv,
   options: { json?: boolean } = {},
-): boolean {
+): void {
   if (snapshot.valid) {
-    return true;
+    return;
   }
   if (options.json) {
-    writeRuntimeJson(runtime, {
-      ...formatCliJsonFailure(`OpenClaw config is invalid: ${shortenHomePath(snapshot.path)}`),
-      issues: normalizeConfigIssues(snapshot.issues),
-    });
-    runtime.exit(1);
-    return false;
+    writeInvalidConfigCliJson(runtime, snapshot);
+    exitCliAfterOutput(runtime, 1);
   }
-  runtime.error(`OpenClaw config is invalid: ${shortenHomePath(snapshot.path)}`);
+  runtime.error(`${configFailureHeading(snapshot)}: ${shortenHomePath(snapshot.path)}`);
   for (const line of renderConfigValidationIssueLines(snapshot)) {
     runtime.error(line);
   }
   runtime.error(formatInvalidConfigRepairHint(snapshot, "to repair, then retry."));
-  runtime.exit(1);
-  return false;
-}
-
-export async function loadValidConfig(
-  runtime: RuntimeEnv = defaultRuntime,
-  options: { observe?: boolean; json?: boolean } = {},
-) {
-  const snapshot =
-    options.observe === false
-      ? await readConfigFileSnapshot({ observe: false })
-      : await readConfigFileSnapshot();
-  ensureValidConfigSnapshotForCli(snapshot, runtime, options);
-  return snapshot;
+  exitCliAfterOutput(runtime, 1);
 }
 
 export async function loadValidConfigForWrite(runtime: RuntimeEnv = defaultRuntime) {
@@ -88,90 +91,116 @@ export async function loadValidConfigForWrite(runtime: RuntimeEnv = defaultRunti
 
 export { formatInvalidConfigRepairHint };
 
-export function strictlyValidateConfigSnapshotForCli(
-  snapshot: ConfigFileSnapshot,
-  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">,
-): ConfigFileSnapshot {
-  if (!snapshot.valid) {
+export async function finishConfigValidationForCli(
+  read: ReadConfigFileSnapshotWithPluginMetadataResult,
+): Promise<ConfigFileSnapshot> {
+  const { snapshot, strictIssues } = read;
+  if (!snapshot.valid || !snapshot.exists) {
     return snapshot;
   }
-  const validated = validateConfigObjectRawWithPlugins(snapshot.sourceConfig, {
-    semanticValidation: "strict",
-    pluginMetadataSnapshot,
-  });
-  return validated.ok ? snapshot : { ...snapshot, valid: false, issues: validated.issues };
+  if (!strictIssues) {
+    throw new Error("Config validation requires its prepared source result.");
+  }
+  const issues =
+    strictIssues.length === 0
+      ? await collectConfigSecretProviderErrors({ config: snapshot.runtimeConfig })
+      : strictIssues;
+  return issues.length === 0 ? snapshot : { ...snapshot, valid: false, issues };
 }
 
-function collectSecretRefsFromUnknown(value: unknown): SecretRef[] {
-  const refs: SecretRef[] = [];
-  const visit = (candidate: unknown) => {
-    const ref = coerceSecretRef(candidate);
-    if (ref) {
-      refs.push(ref);
-      return;
-    }
-    if (Array.isArray(candidate)) {
-      candidate.forEach(visit);
-    } else if (isPlainRecord(candidate)) {
-      Object.values(candidate).forEach(visit);
-    }
-  };
-  visit(value);
-  return refs;
+type ConfigMutationSecretSelection = ReturnType<typeof selectConfigMutationSecrets>;
+
+function pathContains(parent: readonly string[], child: readonly string[]): boolean {
+  return parent.length <= child.length && parent.every((part, index) => part === child[index]);
 }
 
-export function collectDryRunRefs(params: {
-  config: OpenClawConfig;
-  operations: ConfigSetOperation[];
-}): SecretRef[] {
+function selectConfigMutationSecrets(config: OpenClawConfig, operations: ConfigSetOperation[]) {
+  const paths = operations.map(({ setPath }) => setPath);
+  const changedProviders = new Set<string>();
+  const changedDefaults = new Set<string>();
+  let allProviders = false;
+  for (const path of paths) {
+    if (path[0] !== "secrets") {
+      continue;
+    }
+    if (path.length === 1 || path[1] === "providers") {
+      const alias = path[2];
+      if (alias === undefined) {
+        allProviders = true;
+      } else {
+        changedProviders.add(alias);
+      }
+    }
+    if (path.length === 1 || path[1] === "defaults") {
+      changedDefaults.add(path[2] ?? "*");
+    }
+  }
+
   const refsByKey = new Map<string, SecretRef>();
-  const targetPaths = new Set<string>();
-  const providerAliases = new Set<string>();
-  let includeAllDiscoveredRefs = false;
-
-  for (const operation of params.operations) {
-    if (operation.assignedRef) {
-      refsByKey.set(secretRefKey(operation.assignedRef), operation.assignedRef);
+  const record = (ref: SecretRef) => refsByKey.set(secretRefKey(ref), ref);
+  const defaults = config.secrets?.defaults;
+  const ownedPaths: string[][] = [];
+  const overlaps = (targetPath: string[]) =>
+    paths.some((path) => pathContains(path, targetPath) || pathContains(targetPath, path));
+  for (const target of discoverConfigSecretTargets(config)) {
+    ownedPaths.push(target.pathSegments);
+    if (target.refPathSegments) {
+      ownedPaths.push(target.refPathSegments);
     }
-    for (const ref of collectSecretRefsFromUnknown(operation.value)) {
-      refsByKey.set(secretRefKey(ref), ref);
-    }
-    if (operation.touchedSecretTargetPath) {
-      targetPaths.add(operation.touchedSecretTargetPath);
-    }
-    if (operation.touchedProviderAlias) {
-      providerAliases.add(operation.touchedProviderAlias);
-    }
-    includeAllDiscoveredRefs ||= operation.touchesAllSecretRefs === true;
-  }
-
-  if (!includeAllDiscoveredRefs && targetPaths.size === 0 && providerAliases.size === 0) {
-    return [...refsByKey.values()];
-  }
-
-  const defaults = params.config.secrets?.defaults;
-  for (const target of discoverConfigSecretTargets(params.config)) {
-    const { ref } = resolveSecretInputRef({
+    const { explicitRef, ref } = resolveSecretInputRef({
       value: target.value,
       refValue: target.refValue,
       defaults,
     });
+    if (!ref) {
+      continue;
+    }
+    const usesDefault = !isSecretRef(explicitRef ? target.refValue : target.value);
     if (
-      ref &&
-      (includeAllDiscoveredRefs ||
-        targetPaths.has(target.path) ||
-        providerAliases.has(ref.provider))
+      allProviders ||
+      changedProviders.has(ref.provider) ||
+      overlaps(target.pathSegments) ||
+      (target.refPathSegments && overlaps(target.refPathSegments)) ||
+      (usesDefault && (changedDefaults.has("*") || changedDefaults.has(ref.source)))
     ) {
-      refsByKey.set(secretRefKey(ref), ref);
+      record(ref);
     }
   }
-  return [...refsByKey.values()];
+
+  // Inspect only surviving values, never discarded batch assignments. Registry-owned
+  // fields above also preserve explicit sibling-ref precedence over inline fallbacks.
+  for (const rootPath of paths) {
+    visitConfigValueTree(
+      getAtPath(config, rootPath).value,
+      (candidate, path) => {
+        if (ownedPaths.some((ownedPath) => pathContains(ownedPath, path))) {
+          return false;
+        }
+        const ref = coerceSecretRef(candidate, defaults);
+        if (ref) {
+          record(ref);
+          return false;
+        }
+        return true;
+      },
+      rootPath,
+    );
+  }
+  const refs = [...refsByKey.values()];
+  return {
+    refs,
+    // Undefined selects every remaining provider after a collection replacement/deletion.
+    providerAliases: allProviders
+      ? undefined
+      : new Set([...changedProviders, ...refs.map((ref) => ref.provider)]),
+  };
 }
 
-export async function collectDryRunResolvabilityErrors(params: {
+async function collectDryRunResolvabilityErrors(params: {
   refs: SecretRef[];
   config: OpenClawConfig;
 }): Promise<ConfigSetDryRunError[]> {
+  const { resolveSecretRefValue } = await import("../secrets/resolve.js");
   const failures: ConfigSetDryRunError[] = [];
   for (const ref of params.refs) {
     try {
@@ -187,71 +216,39 @@ export async function collectDryRunResolvabilityErrors(params: {
   return failures;
 }
 
-export function collectDryRunStaticErrorsForSkippedExecRefs(params: {
+function collectDryRunStaticErrorsForSkippedExecRefs(params: {
   refs: SecretRef[];
   config: OpenClawConfig;
 }): ConfigSetDryRunError[] {
-  const failures: ConfigSetDryRunError[] = [];
-  for (const ref of params.refs) {
+  return params.refs.flatMap((ref): ConfigSetDryRunError[] => {
     const id = ref.id.trim();
     const refLabel = `${ref.source}:${ref.provider}:${id}`;
+    let message: string | undefined;
     if (!id) {
-      failures.push({
-        kind: "resolvability",
-        message: "Error: Secret reference id is empty.",
-        ref: refLabel,
-      });
-      continue;
+      message = "Error: Secret reference id is empty.";
+    } else if (!isValidExecSecretRefId(id)) {
+      message = `Error: ${formatExecSecretRefIdValidationMessage()} (ref: ${refLabel}).`;
+    } else {
+      const providerConfig = params.config.secrets?.providers?.[ref.provider];
+      if (!providerConfig) {
+        message = `Error: Secret provider "${ref.provider}" is not configured (ref: ${refLabel}).`;
+      } else if (providerConfig.source !== ref.source) {
+        message = `Error: Secret provider "${ref.provider}" has source "${providerConfig.source}" but ref requests "${ref.source}".`;
+      }
     }
-    if (!isValidExecSecretRefId(id)) {
-      failures.push({
-        kind: "resolvability",
-        message: `Error: ${formatExecSecretRefIdValidationMessage()} (ref: ${refLabel}).`,
-        ref: refLabel,
-      });
-      continue;
-    }
-    const providerConfig = params.config.secrets?.providers?.[ref.provider];
-    if (!providerConfig) {
-      failures.push({
-        kind: "resolvability",
-        message: `Error: Secret provider "${ref.provider}" is not configured (ref: ${refLabel}).`,
-        ref: refLabel,
-      });
-      continue;
-    }
-    if (providerConfig.source !== ref.source) {
-      failures.push({
-        kind: "resolvability",
-        message: `Error: Secret provider "${ref.provider}" has source "${providerConfig.source}" but ref requests "${ref.source}".`,
-        ref: refLabel,
-      });
-    }
-  }
-  return failures;
-}
-
-export function selectDryRunRefsForResolution(params: {
-  refs: SecretRef[];
-  allowExecInDryRun: boolean;
-}): { refsToResolve: SecretRef[]; skippedExecRefs: SecretRef[] } {
-  const refsToResolve: SecretRef[] = [];
-  const skippedExecRefs: SecretRef[] = [];
-  for (const ref of params.refs) {
-    (ref.source === "exec" && !params.allowExecInDryRun ? skippedExecRefs : refsToResolve).push(
-      ref,
-    );
-  }
-  return { refsToResolve, skippedExecRefs };
+    return message ? [{ kind: "resolvability", message, ref: refLabel }] : [];
+  });
 }
 
 function collectStrictConfigErrors(
   config: OpenClawConfig,
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">,
+  deferredPluginMigrations?: readonly DeferredPluginMigration[],
 ): ConfigSetDryRunError[] {
   const validated = validateConfigObjectRawWithPlugins(config, {
     semanticValidation: "strict",
     pluginMetadataSnapshot,
+    deferredPluginMigrations,
   });
   if (validated.ok) {
     return [];
@@ -265,8 +262,13 @@ function collectStrictConfigErrors(
 export function assertStrictConfigForMutation(
   config: OpenClawConfig,
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">,
+  deferredPluginMigrations?: readonly DeferredPluginMigration[],
 ): void {
-  const errors = collectStrictConfigErrors(config, pluginMetadataSnapshot);
+  const errors = collectStrictConfigErrors(
+    config,
+    pluginMetadataSnapshot,
+    deferredPluginMigrations,
+  );
   if (errors.length === 0) {
     return;
   }
@@ -275,129 +277,187 @@ export function assertStrictConfigForMutation(
   );
 }
 
-export function collectDryRunSchemaErrors(
-  config: OpenClawConfig,
-  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">,
-): ConfigSetDryRunError[] {
-  return collectStrictConfigErrors(config, pluginMetadataSnapshot);
-}
-
-function touchesSecretProviderCollection(path: readonly string[]): boolean {
-  return (
-    (path.length === 1 && path[0] === "secrets") ||
-    (path.length === 2 && path[0] === "secrets" && path[1] === "providers")
-  );
-}
-
-export function collectPluginIntegrationProviderErrors(params: {
+async function collectConfigSecretProviderErrors(params: {
   config: OpenClawConfig;
-  operations: ConfigSetOperation[];
-}): ConfigSetDryRunError[] {
+  selection?: ConfigMutationSecretSelection;
+}): Promise<ConfigValidationIssue[]> {
   const providers = params.config.secrets?.providers ?? {};
-  let validateAllProviders = false;
-  const touchedProviderAliases = new Set<string>();
-  for (const operation of params.operations) {
-    if (operation.touchedProviderAlias) {
-      touchedProviderAliases.add(operation.touchedProviderAlias);
-    }
-    if (operation.assignedRef) {
-      touchedProviderAliases.add(operation.assignedRef.provider);
-    }
-    for (const ref of collectSecretRefsFromUnknown(operation.value)) {
-      touchedProviderAliases.add(ref.provider);
-    }
-    validateAllProviders ||= touchesSecretProviderCollection(operation.setPath);
-  }
-  if (!validateAllProviders && touchedProviderAliases.size === 0) {
-    return [];
-  }
-  const integrationProviders: Array<{
-    alias: string;
-    provider: PluginIntegrationSecretProviderConfig;
-  }> = [];
+  const issues: ConfigValidationIssue[] = [];
+  let manifestRegistry: PluginMetadataSnapshot["manifestRegistry"] | undefined;
   for (const [alias, provider] of Object.entries(providers)) {
-    if (
-      (validateAllProviders || touchedProviderAliases.has(alias)) &&
-      isPluginIntegrationSecretProviderConfig(provider)
-    ) {
-      integrationProviders.push({ alias, provider });
+    if (params.selection?.providerAliases && !params.selection.providerAliases.has(alias)) {
+      continue;
+    }
+    const providerPath = `secrets.providers.${alias}`;
+    if (isPluginIntegrationSecretProviderConfig(provider)) {
+      // Preserve write-time manifest validation without adding executable-path
+      // policy to plugin integrations; activation owns their materialized command.
+      if (!params.selection) {
+        continue;
+      }
+      manifestRegistry ??= loadPluginMetadataSnapshot({
+        config: params.config,
+        env: process.env,
+      }).manifestRegistry;
+      const resolved = resolveSecretProviderIntegrationConfig({
+        manifestRegistry,
+        providerAlias: alias,
+        providerConfig: provider,
+        config: params.config,
+        env: process.env,
+      });
+      if (!resolved.ok) {
+        issues.push({ path: providerPath, message: resolved.reason });
+      }
+    } else if (isPlainRecord(provider) && "command" in provider) {
+      try {
+        await assertSecureExecCommandPath({
+          command: provider.command,
+          label: `${providerPath}.command`,
+          trustedDirs: provider.trustedDirs,
+        });
+      } catch (err) {
+        issues.push({ path: `${providerPath}.command`, message: formatErrorMessage(err) });
+      }
     }
   }
-  if (integrationProviders.length === 0) {
-    return [];
-  }
-  const manifestRegistry = loadPluginMetadataSnapshot({
-    config: params.config,
-    env: process.env,
-  }).manifestRegistry;
-  const errors: ConfigSetDryRunError[] = [];
-  for (const { alias, provider } of integrationProviders) {
-    const resolved = resolveSecretProviderIntegrationConfig({
-      manifestRegistry,
-      providerAlias: alias,
-      providerConfig: provider,
-      config: params.config,
-      env: process.env,
-    });
-    if (!resolved.ok) {
-      errors.push({ kind: "schema", message: `secrets.providers.${alias}: ${resolved.reason}` });
-    }
-  }
-  return errors;
+  return issues;
 }
 
-export function dedupeDryRunErrors(errors: ConfigSetDryRunError[]): ConfigSetDryRunError[] {
-  const deduped: ConfigSetDryRunError[] = [];
-  const seen = new Set<string>();
-  for (const error of errors) {
-    const key =
-      error.kind === "resolvability"
-        ? `${error.kind}\u0000${error.ref ?? ""}\u0000${error.message}`
-        : `${error.kind}\u0000${error.message}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      deduped.push(error);
+/** Validates one final candidate and decides whether the runner may preview, skip, or write it. */
+export async function validateConfigMutation(params: {
+  config: OpenClawConfig;
+  /** Keep authored model comparisons and their resolution environment together. */
+  modelValidation?: {
+    config: OpenClawConfig;
+    previousConfig: OpenClawConfig;
+    env: NodeJS.ProcessEnv;
+    previousEnv?: NodeJS.ProcessEnv;
+  };
+  previousConfig: OpenClawConfig;
+  operations: ConfigSetOperation[];
+  options: ConfigMutationOptions;
+  configPath: string;
+  unchanged: boolean;
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">;
+  deferredPluginMigrations?: readonly DeferredPluginMigration[];
+}): Promise<{ kind: "dry-run"; result: ConfigSetDryRunResult } | { kind: "unchanged" | "write" }> {
+  const { config, operations, options, pluginMetadataSnapshot } = params;
+  assertDeferredPluginMigrationConfigEditAllowed({
+    sourceConfig: params.previousConfig,
+    nextConfig: config,
+    pending: params.deferredPluginMigrations ?? [],
+    editedPaths: operations.map((operation) => operation.setPath),
+    unsetPaths: operations
+      .filter((operation) => operation.mutation === "delete")
+      .map((operation) => operation.setPath),
+  });
+  const policyIssues = formatConfigIssueLines(collectUnsupportedSecretRefPolicyIssues(config), "", {
+    normalizeRoot: true,
+  }).map((line) => line.trim());
+  const selection = selectConfigMutationSecrets(config, operations);
+  const providerErrors = formatConfigIssueLines(
+    await collectConfigSecretProviderErrors({ config, selection }),
+    "",
+  ).map((message): ConfigSetDryRunError => ({ kind: "schema", message }));
+  if (!options.dryRun) {
+    if (policyIssues.length > 0) {
+      throw new Error(
+        [
+          "Config policy validation failed: unsupported SecretRef usage was detected.",
+          ...policyIssues.slice(0, 5).map((issue) => `- ${issue}`),
+          ...(policyIssues.length > 5 ? [`- ... ${policyIssues.length - 5} more`] : []),
+        ].join("\n"),
+      );
+    }
+    if (providerErrors.length > 0) {
+      throw new Error(
+        [
+          "Config validation failed: SecretRef provider configuration is invalid.",
+          ...providerErrors.map((error) => `- ${error.message}`),
+        ].join("\n"),
+      );
+    }
+    if (params.unchanged) {
+      assertStrictConfigForMutation(
+        config,
+        pluginMetadataSnapshot,
+        params.deferredPluginMigrations,
+      );
+      return { kind: "unchanged" };
     }
   }
-  return deduped;
-}
 
-export function formatDryRunFailureMessage(params: {
-  errors: ConfigSetDryRunError[];
-  skippedExecRefs: number;
-}): string {
-  const missingPathErrors = params.errors.filter((error) => error.kind === "missing-path");
-  const schemaErrors = params.errors.filter((error) => error.kind === "schema");
-  const resolveErrors = params.errors.filter((error) => error.kind === "resolvability");
-  const modelErrors = params.errors.filter((error) => error.kind === "model");
-  const lines: string[] = missingPathErrors.map((error) => error.message);
-  if (schemaErrors.length > 0) {
-    lines.push(
-      "Dry run failed: config schema validation failed.",
-      ...schemaErrors.map((error) => `- ${error.message}`),
-    );
-  }
-  if (resolveErrors.length > 0) {
-    lines.push(
-      `Dry run failed: ${resolveErrors.length} SecretRef assignment(s) could not be resolved.`,
-      ...resolveErrors
-        .slice(0, 5)
-        .map((error) => `- ${error.ref ?? "<unknown-ref>"} -> ${error.message}`),
-    );
-    if (resolveErrors.length > 5) {
-      lines.push(`- ... ${resolveErrors.length - 5} more`);
+  const { checkTouchedTextModelRefs } = await import("./config-model-validation.js");
+  const modelCheck = await checkTouchedTextModelRefs({
+    ...(params.modelValidation ?? { config, previousConfig: params.previousConfig }),
+    touchedPaths: operations.map(({ setPath }) => setPath),
+    redactDependencyValues: true,
+  });
+  if (!options.dryRun) {
+    if (modelCheck.errors[0]) {
+      throw new Error(modelCheck.errors[0]);
     }
+    return { kind: "write" };
   }
-  if (modelErrors.length > 0) {
-    lines.push(
-      "Dry run failed: model reference validation failed.",
-      ...modelErrors.map((error) => `- ${error.message}`),
+
+  const inputModes = uniqueValues(operations.map(({ inputMode }) => inputMode));
+  const checksRefs = inputModes.some((mode) => mode !== "value");
+  const requiresFullSchema = operations.some(
+    (operation) =>
+      operation.inputMode === "unset" ||
+      ((operation.inputMode === "json" || operation.inputMode === "builder") &&
+        operation.schemaValidated !== true),
+  );
+  const refsToResolve: SecretRef[] = [];
+  const skippedExecRefs: SecretRef[] = [];
+  for (const ref of checksRefs ? selection.refs : []) {
+    (ref.source === "exec" && !options.allowExec ? skippedExecRefs : refsToResolve).push(ref);
+  }
+  const errors: ConfigSetDryRunError[] = modelCheck.errors.map((message) => ({
+    kind: "model",
+    message,
+  }));
+  if (!requiresFullSchema) {
+    errors.push(
+      ...policyIssues.map((message): ConfigSetDryRunError => ({ kind: "schema", message })),
     );
   }
-  if (params.skippedExecRefs > 0) {
-    lines.push(
-      `Dry run note: skipped ${params.skippedExecRefs} exec SecretRef resolvability check(s). Re-run with --allow-exec to execute exec providers during dry-run.`,
+  errors.push(...providerErrors);
+  if (requiresFullSchema) {
+    errors.push(
+      ...collectStrictConfigErrors(config, pluginMetadataSnapshot, params.deferredPluginMigrations),
     );
   }
-  return lines.join("\n");
+  if (checksRefs) {
+    errors.push(
+      ...collectDryRunStaticErrorsForSkippedExecRefs({ refs: skippedExecRefs, config }),
+      ...(await collectDryRunResolvabilityErrors({ refs: refsToResolve, config })),
+    );
+  }
+  const failures = dedupeByKey(errors, (error) =>
+    error.kind === "resolvability"
+      ? `${error.kind}\u0000${error.ref ?? ""}\u0000${error.message}`
+      : `${error.kind}\u0000${error.message}`,
+  );
+  return {
+    kind: "dry-run",
+    result: {
+      ok: failures.length === 0,
+      operations: operations.length,
+      configPath: params.configPath,
+      inputModes,
+      checks: {
+        schema: requiresFullSchema || policyIssues.length > 0 || providerErrors.length > 0,
+        resolvability: checksRefs || modelCheck.refsTotal > 0,
+        resolvabilityComplete:
+          (checksRefs || modelCheck.refsTotal > 0) &&
+          skippedExecRefs.length === 0 &&
+          modelCheck.refsChecked === modelCheck.refsTotal,
+      },
+      refsChecked: refsToResolve.length + modelCheck.refsChecked,
+      skippedExecRefs: skippedExecRefs.length,
+      ...(failures.length > 0 ? { errors: failures } : {}),
+    },
+  };
 }

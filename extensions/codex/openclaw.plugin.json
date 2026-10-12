@@ -1,9 +1,39 @@
 {
   "id": "codex",
+  "categories": ["agent-runtimes"],
+  "providers": ["codex"],
+  "syntheticAuthRefs": ["codex"],
+  "providerCatalogEntry": "./provider-discovery.ts",
+  "backupResources": [
+    {
+      "disposition": "regenerable",
+      "scope": "agent",
+      "relativePath": "codex-home/tmp/arg0"
+    },
+    {
+      "disposition": "regenerable",
+      "scope": "agent",
+      "relativePath": "codex-home/.tmp/plugins"
+    },
+    {
+      "disposition": "regenerable",
+      "scope": "agent",
+      "relativePath": "codex-home/.tmp/bundled-marketplaces"
+    }
+  ],
   "doctorContract": {
     "configRepair": true,
-    "stateMigrations": true
+    "stateMigrations": [
+      { "id": "codex-app-server-sidecars-to-plugin-state" },
+      { "id": "codex-native-task-assignments" },
+      {
+        "id": "codex-app-server-orphaned-session-bindings",
+        "doctorOnly": true,
+        "phase": "after-session-repair"
+      }
+    ]
   },
+  "doctorHealthChecks": true,
   "sessionRouteStateOwners": [
     {
       "id": "codex",
@@ -41,7 +71,7 @@
     "codex": {
       "capabilities": ["image"],
       "defaultModels": {
-        "image": "gpt-5.6-sol"
+        "image": "gpt-6-astra"
       }
     }
   },
@@ -61,6 +91,58 @@
       "name": "codex",
       "kind": "runtime-slash",
       "cliCommand": "plugins"
+    }
+  ],
+  "setup": {
+    "nativeSessionCatalog": {
+      "label": "Codex",
+      "legacyDefaultEnabled": true,
+      "description": "Existing native Codex conversations on this Gateway and eligible paired nodes.",
+      "nodeCommands": [
+        "codex.appServer.threads.list.v1",
+        "codex.appServer.thread.turns.list.v1",
+        "codex.sessionCatalog.transcript.read.v1",
+        "codex.terminal.resume.v1",
+        "codex.cli.sessions.list"
+      ]
+    }
+  },
+  "configGroups": [
+    {
+      "id": "dynamic-tools",
+      "title": "Dynamic tools",
+      "order": 10,
+      "properties": ["codexDynamicToolsLoading", "codexDynamicToolsExclude"]
+    },
+    {
+      "id": "native-sessions",
+      "title": "Native sessions",
+      "order": 20,
+      "properties": ["sessionCatalog", "supervision"]
+    },
+    {
+      "id": "model-discovery",
+      "title": "Model discovery",
+      "order": 30,
+      "properties": ["discovery"]
+    },
+    {
+      "id": "computer-use",
+      "title": "Computer use",
+      "order": 40,
+      "properties": ["computerUse"]
+    },
+    {
+      "id": "native-plugins",
+      "title": "Native plugins",
+      "order": 50,
+      "properties": ["codexPlugins"]
+    },
+    {
+      "id": "app-server-connection",
+      "title": "App Server connection",
+      "order": 60,
+      "properties": ["appServer"]
     }
   ],
   "configSchema": {
@@ -109,7 +191,7 @@
           "timeoutMs": {
             "type": "number",
             "minimum": 1,
-            "default": 2500
+            "default": 10000
           }
         }
       },
@@ -301,6 +383,15 @@
           "remoteWorkspaceRoot": {
             "type": "string"
           },
+          "nativeHookRelay": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["url", "credentialDirectory"],
+            "properties": {
+              "url": { "type": "string", "format": "uri" },
+              "credentialDirectory": { "type": "string" }
+            }
+          },
           "codeModeOnly": {
             "type": "boolean",
             "default": false
@@ -313,21 +404,6 @@
             "type": "number",
             "minimum": 1,
             "default": 60000
-          },
-          "turnCompletionIdleTimeoutMs": {
-            "type": "number",
-            "minimum": 1,
-            "default": 60000
-          },
-          "turnAssistantCompletionIdleTimeoutMs": {
-            "type": "number",
-            "minimum": 1,
-            "default": 10000
-          },
-          "postToolRawAssistantCompletionIdleTimeoutMs": {
-            "type": "number",
-            "minimum": 1,
-            "default": 300000
           },
           "approvalPolicy": {
             "type": "string",
@@ -342,6 +418,20 @@
             "enum": ["user", "auto_review", "guardian_subagent"]
           },
           "serviceTier": { "type": ["string", "null"] },
+          "enableUltrafast": { "type": "boolean", "default": true },
+          "cyberFailover": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "mode": { "type": "string", "enum": ["auto", "off"], "default": "auto" },
+              "model": {
+                "type": "string",
+                "minLength": 1,
+                "default": "gpt-daybreak-blue-latest"
+              },
+              "cooloffMs": { "type": "number", "minimum": 1, "default": 600000 }
+            }
+          },
           "networkProxy": {
             "type": "object",
             "additionalProperties": false,
@@ -442,7 +532,7 @@
     },
     "discovery.timeoutMs": {
       "label": "Discovery Timeout",
-      "help": "Maximum time to wait for Codex app-server model discovery before falling back to the bundled model list.",
+      "help": "Maximum time to wait for Codex app-server model discovery. The default allows Codex to finish its remote catalog refresh or native fallback; a timeout leaves native models unavailable until discovery succeeds.",
       "advanced": true
     },
     "computerUse": {
@@ -467,7 +557,7 @@
     },
     "computerUse.liveTestTimeoutMs": {
       "label": "Live Test Timeout",
-      "help": "Maximum time for the Computer Use list_apps readiness probe before status and startup treat the live test as failed.",
+      "help": "Maximum time for the Computer Use list_apps readiness check before status and startup treat the live test as failed.",
       "advanced": true
     },
     "computerUse.toolCallTimeoutMs": {
@@ -477,7 +567,7 @@
     },
     "computerUse.healthCheckEnabled": {
       "label": "Periodic Health Checks",
-      "help": "When true, run periodic Computer Use live probes on the configured cadence.",
+      "help": "When true, run periodic Computer Use live checks on the configured cadence.",
       "advanced": true
     },
     "computerUse.healthCheckIntervalMinutes": {
@@ -492,7 +582,7 @@
     },
     "computerUse.strictReadiness": {
       "label": "Strict Readiness",
-      "help": "When true, a failed Computer Use live probe stops Codex-mode startup. The default false value preserves existing enabled setups by continuing with a warning.",
+      "help": "When true, a failed Computer Use live check stops Codex-mode startup. The default false value preserves existing enabled setups by continuing with a warning.",
       "advanced": true
     },
     "computerUse.autoRepair": {
@@ -646,21 +736,6 @@
       "help": "Maximum time to wait for Codex app-server control-plane requests.",
       "advanced": true
     },
-    "appServer.turnCompletionIdleTimeoutMs": {
-      "label": "Turn Completion Idle Timeout",
-      "help": "Maximum quiet time after Codex accepts a turn or after a turn-scoped app-server request before OpenClaw interrupts the turn while waiting for turn/completed.",
-      "advanced": true
-    },
-    "appServer.turnAssistantCompletionIdleTimeoutMs": {
-      "label": "Assistant Completion Idle Timeout",
-      "help": "Short quiet-time guard after Codex reports a completed assistant message before OpenClaw releases the turn.",
-      "advanced": true
-    },
-    "appServer.postToolRawAssistantCompletionIdleTimeoutMs": {
-      "label": "Post-Tool Continuation Idle Timeout",
-      "help": "Completion-idle and progress guard after a tool handoff, native tool completion, or post-tool raw assistant progress while waiting for turn/completed. Defaults to 300000 ms when unset.",
-      "advanced": true
-    },
     "appServer.approvalPolicy": {
       "label": "Approval Policy",
       "help": "Codex native approval policy sent to thread start, resume, and turns.",
@@ -679,6 +754,11 @@
     "appServer.serviceTier": {
       "label": "Service Tier",
       "help": "Optional Codex app-server service tier. Use priority, flex, or null. Legacy fast is accepted as priority.",
+      "advanced": true
+    },
+    "appServer.enableUltrafast": {
+      "label": "Allow explicit Ultrafast (for supported models)",
+      "help": "Allow Ultrafast only when the effective shared Fast-mode selection is explicitly ultrafast and the authenticated app-server catalog advertises it for the selected native model. Unset or true permits explicit selection; false hides Ultrafast for the Codex runtime in the picker, sends ordinary Fast (priority) for an explicit selection, and skips the Ultrafast catalog check. Fast, Auto, and unspecified selections never automatically upgrade. Standard and inactive Auto remain off.",
       "advanced": true
     },
     "appServer.networkProxy": {

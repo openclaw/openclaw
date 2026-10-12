@@ -1,6 +1,3 @@
-/**
- * HTTP handler for serving bundled A2UI renderer assets.
- */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +6,8 @@ import {
   type A2uiHttpRequest,
   type A2uiHttpResponse,
 } from "./a2ui-route.js";
+import { A2UI_PATH } from "./a2ui-shared.js";
+import { resolveFileWithinRoot } from "./file-resolver.js";
 
 export { A2UI_PATH, CANVAS_HOST_PATH } from "./a2ui-shared.js";
 
@@ -67,17 +66,38 @@ async function resolveA2uiRootReal(): Promise<string | null> {
       const root = await resolveA2uiRoot();
       cachedA2uiRootReal = root ? await fs.realpath(root) : null;
       cachedA2uiResolvedAtMs = Date.now();
-      resolvingA2uiRoot = null;
       return cachedA2uiRootReal;
-    })();
+    })().finally(() => {
+      resolvingA2uiRoot = null;
+    });
   }
   return resolvingA2uiRoot;
 }
 
-/** Handles one HTTP request for the hosted A2UI asset surface. */
 export async function handleA2uiHttpRequest(
   req: A2uiHttpRequest,
   res: A2uiHttpResponse,
 ): Promise<boolean> {
   return await handleA2uiHttpRequestWithRootResolver(req, res, resolveA2uiRootReal);
+}
+
+/** Read an explicitly registered public renderer bundle without request or Gateway authority. */
+export async function readPublicA2uiResource(
+  resourcePath: string,
+): Promise<{ body: Uint8Array; contentType: string } | undefined> {
+  const root = await resolveA2uiRootReal();
+  const opened = root
+    ? await resolveFileWithinRoot(root, resourcePath.slice(A2UI_PATH.length))
+    : null;
+  if (!opened) {
+    return undefined;
+  }
+  try {
+    return {
+      body: await opened.handle.readFile(),
+      contentType: "application/javascript; charset=utf-8",
+    };
+  } finally {
+    await opened.handle.close();
+  }
 }

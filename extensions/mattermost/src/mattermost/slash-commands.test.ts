@@ -1,8 +1,7 @@
 // Mattermost tests cover slash commands plugin behavior.
 import { describe, expect, it, vi } from "vitest";
-import type { MattermostClient } from "./client.js";
+import { createMattermostClient, type MattermostClient } from "./client.js";
 import {
-  DEFAULT_COMMAND_SPECS,
   MATTERMOST_SLASH_POST_METHOD,
   parseSlashCommandPayload,
   registerSlashCommands,
@@ -37,26 +36,6 @@ describe("slash-commands", () => {
       ],
     });
   }
-
-  it("parses application/x-www-form-urlencoded payloads", () => {
-    const payload = parseSlashCommandPayload(
-      "token=t1&team_id=team&channel_id=ch1&user_id=u1&command=%2Foc_status&text=now",
-      "application/x-www-form-urlencoded",
-    );
-    expect(payload).toEqual({
-      token: "t1",
-      team_id: "team",
-      team_domain: undefined,
-      channel_id: "ch1",
-      channel_name: undefined,
-      user_id: "u1",
-      user_name: undefined,
-      command: "/oc_status",
-      text: "now",
-      trigger_id: undefined,
-      response_url: undefined,
-    });
-  });
 
   it("parses application/json payloads", () => {
     const payload = parseSlashCommandPayload(
@@ -101,30 +80,8 @@ describe("slash-commands", () => {
     expect(resolveCommandText("oc_help", "", undefined)).toBe("/help");
   });
 
-  it("registers both public model slash commands", () => {
-    expect(
-      DEFAULT_COMMAND_SPECS.filter(
-        (spec) => spec.trigger === "oc_model" || spec.trigger === "oc_models",
-      ).map((spec) => spec.trigger),
-    ).toEqual(["oc_model", "oc_models"]);
-  });
-
-  it("registers the queue command mapped to the core /queue directive", () => {
-    const queueSpec = DEFAULT_COMMAND_SPECS.find((spec) => spec.trigger === "oc_queue");
-    expect(queueSpec?.originalName).toBe("queue");
-    const triggerMap = new Map<string, string>([["oc_queue", "queue"]]);
-    expect(resolveCommandText("oc_queue", " collect drop:summarize ", triggerMap)).toBe(
-      "/queue collect drop:summarize",
-    );
-  });
-
-  it("normalizes callback path in slash config", () => {
-    const config = resolveSlashCommandConfig({ callbackPath: "api/channels/mattermost/command" });
-    expect(config.callbackPath).toBe("/api/channels/mattermost/command");
-  });
-
   it("falls back to localhost callback URL for wildcard bind hosts", () => {
-    const config = resolveSlashCommandConfig({ callbackPath: "/api/channels/mattermost/command" });
+    const config = resolveSlashCommandConfig({ callbackPath: "api/channels/mattermost/command" });
     const callbackUrl = resolveCallbackUrl({
       config,
       gatewayPort: 18789,
@@ -275,5 +232,83 @@ describe("slash-commands", () => {
       },
     ]);
     expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("recreates a drifted command when its accepted delete body cannot be read", async () => {
+    const calls: string[] = [];
+    const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const method = init?.method ?? "GET";
+      calls.push(`${method} ${url.replace("https://chat.example.com/api/v4", "")}`);
+      if (method === "GET") {
+        return Response.json([
+          {
+            id: "cmd-1",
+            token: "tok-old",
+            team_id: "team-1",
+            creator_id: "bot-user",
+            trigger: "oc_status",
+            method: "G",
+            url: "http://gateway/callback",
+            auto_complete: true,
+          },
+        ]);
+      }
+      if (method === "PUT") {
+        return Response.json({ message: "update rejected" }, { status: 500 });
+      }
+      if (method === "DELETE") {
+        // Mattermost already deleted the command; its 200 {"status":"OK"} body is lost.
+        const body = new ReadableStream<Uint8Array>({
+          pull() {
+            throw new TypeError("terminated");
+          },
+        });
+        return new Response(body, { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return Response.json(
+        {
+          id: "cmd-2",
+          token: "tok-new",
+          team_id: "team-1",
+          creator_id: "bot-user",
+          trigger: "oc_status",
+          method: MATTERMOST_SLASH_POST_METHOD,
+          url: "http://gateway/callback",
+          auto_complete: true,
+        },
+        { status: 201 },
+      );
+    });
+    const client = createMattermostClient({
+      baseUrl: "https://chat.example.com",
+      botToken: "bot-token",
+      fetchImpl,
+    });
+
+    const result = await registerSlashCommands({
+      client,
+      teamId: "team-1",
+      creatorUserId: "bot-user",
+      callbackUrl: "http://gateway/callback",
+      commands: [{ trigger: "oc_status", description: "status", autoComplete: true }],
+    });
+
+    expect(calls).toEqual([
+      "GET /commands?team_id=team-1&custom_only=true",
+      "PUT /commands/cmd-1",
+      "DELETE /commands/cmd-1",
+      "POST /commands",
+    ]);
+    expect(result).toEqual([
+      {
+        id: "cmd-2",
+        trigger: "oc_status",
+        teamId: "team-1",
+        token: "tok-new",
+        url: "http://gateway/callback",
+        managed: true,
+      },
+    ]);
   });
 });

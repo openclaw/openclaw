@@ -1,11 +1,20 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { listSessionTranscriptCorpusEntriesForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import type { SessionIngestionFileState } from "./dreaming-ingestion-state.js";
-import { removeBackfillDiaryEntries, writeBackfillDiaryEntries } from "./dreaming-narrative.js";
-import { previewGroundedRemMarkdown } from "./rem-evidence.js";
+import { removeBackfillDiaryEntries, writeBackfillDiaryEntries } from "./dreaming-dreams-file.js";
+import {
+  readSessionIngestionState,
+  writeSessionIngestionState,
+  type SessionIngestionFileState,
+} from "./dreaming-ingestion-state.js";
+import {
+  findForgottenMemorySessionIds,
+  recordMemoryEntryOrigins,
+  type MemoryEntryOrigin,
+} from "./memory-entry-origins.js";
+import { withMemoryMutationAuthority } from "./memory-mutation-authority.js";
+import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
+import { previewGroundedRemForFile } from "./rem-evidence.js";
 import type {
   SessionBackfillDay,
   SessionBackfillExecution,
@@ -13,6 +22,9 @@ import type {
 } from "./session-backfill-contract.js";
 import {
   drainSessionBackfill,
+  SESSION_BACKFILL_TOP_CANDIDATE_LIMIT,
+} from "./session-backfill-drain.js";
+import {
   markSessionBackfillRewindBaseline,
   recordSessionBackfillRewindBatch,
   resetSessionBackfillIngestionState,
@@ -20,31 +32,30 @@ import {
 } from "./session-backfill-lifecycle.js";
 import { normalizeSessionBackfillSelection } from "./session-backfill-selection.js";
 import {
-  SESSION_INGESTION_MAX_MESSAGES_PER_FILE,
   SESSION_INGESTION_MAX_MESSAGES_PER_SWEEP,
-  SESSION_INGESTION_MIN_MESSAGES_PER_FILE,
   SESSION_INGESTION_SCORE,
-  SESSION_CORPUS_RELATIVE_DIR,
   appendSessionCorpusLines,
   foreignSessionIngestionSource,
   mergeTrackedMessageHashes,
-  readSessionIngestionState,
+  resolveAdmissionPolicy,
+  resolveSessionIngestionFileCap,
   scanSessionIngestionSource,
+  sessionExclusionReasons,
   sessionIngestionSourceFromCorpus,
   trimTrackedSessionScopes,
-  writeSessionIngestionState,
   type SessionIngestionCandidate,
   type SessionIngestionSource,
+  type SessionAdmissionPolicy,
+  type SessionEntryOrigin,
 } from "./session-ingestion.js";
+import { buildPromotionMarker, hashMemoryContent } from "./short-term-promotion-memory-write.js";
 import {
   readShortTermRecallEntries,
-  recordGroundedShortTermCandidates,
+  recordShortTermRecalls,
   removeGroundedShortTermCandidates,
 } from "./short-term-promotion.js";
 
 const SESSION_BACKFILL_QUERY_PREFIX = "__dreaming_session_backfill__";
-const TOP_CANDIDATE_LIMIT = 5;
-const MAX_SESSION_BACKFILL_APPLY_BATCHES = 10_000;
 
 export type MemorySessionBackfillOptions = {
   agent?: string;
@@ -58,22 +69,16 @@ export type MemorySessionBackfillOptions = {
   json?: boolean;
 };
 
-type SessionBackfillCandidate = SessionIngestionCandidate;
-
-type SessionBackfillScan = {
-  candidates: SessionBackfillCandidate[];
-  contentHash: string;
-  lineCount: number;
-  mtimeMs: number;
-  progressBlockIndex?: number;
-  scannedEndIndex: number;
-  size: number;
+type SessionBackfillScan = Awaited<ReturnType<typeof scanSessionIngestionSource>> & {
+  fileState: SessionIngestionFileState;
   stateKey: string;
 };
 
 type RunSessionBackfillParams = {
+  assertCurrent?: () => void;
   agentId: string;
   workspaceDir: string;
+  pluginConfig?: Record<string, unknown>;
   from?: string;
   to?: string;
   limitDays?: number;
@@ -88,18 +93,24 @@ type RunSessionBackfillParams = {
 async function listSessionBackfillSources(params: {
   agentId: string;
   archiveFiles: string[];
+  admissionPolicy?: SessionAdmissionPolicy;
 }): Promise<SessionIngestionSource[]> {
   const corpus = await listSessionTranscriptCorpusEntriesForAgent(params.agentId, {
     includeRetainedSqlite: true,
   });
-  const sources = corpus
-    .map(sessionIngestionSourceFromCorpus)
-    .filter(
-      (entry): entry is SessionIngestionSource =>
-        entry !== null &&
-        !entry.buildOptions.generatedByDreamingNarrative &&
-        !entry.buildOptions.generatedByCronRun,
-    );
+  const forgottenSessionIds = await findForgottenMemorySessionIds({
+    agentId: params.agentId,
+    sessionIds: corpus.map((entry) => entry.sessionId),
+  });
+  const candidates = corpus
+    .map((entry) => sessionIngestionSourceFromCorpus(entry, "backfill"))
+    .filter((entry) => entry !== null);
+  const excludedReasons = sessionExclusionReasons(
+    candidates,
+    params.admissionPolicy,
+    forgottenSessionIds,
+  );
+  const sources = candidates.filter((source) => !excludedReasons.has(source));
   const canonicalPaths = new Set(sources.map((entry) => path.resolve(entry.absolutePath)));
   for (const archiveFile of params.archiveFiles) {
     // Foreign files do not inherit canonical session identity from a matching basename.
@@ -117,8 +128,8 @@ async function listSessionBackfillSources(params: {
 }
 
 function compareSessionBackfillCandidates(
-  a: SessionBackfillCandidate,
-  b: SessionBackfillCandidate,
+  a: SessionIngestionCandidate,
+  b: SessionIngestionCandidate,
 ): number {
   if (a.day !== b.day) {
     return a.day.localeCompare(b.day);
@@ -140,15 +151,9 @@ async function collectSessionBackfillCandidates(params: {
   to?: string;
   timezone?: string;
 }) {
-  const candidates: SessionBackfillCandidate[] = [];
+  const candidates: SessionIngestionCandidate[] = [];
   const scans: SessionBackfillScan[] = [];
-  const perFileCap = Math.min(
-    SESSION_INGESTION_MAX_MESSAGES_PER_FILE,
-    Math.max(
-      SESSION_INGESTION_MIN_MESSAGES_PER_FILE,
-      Math.ceil(SESSION_INGESTION_MAX_MESSAGES_PER_SWEEP / Math.max(1, params.sources.length)),
-    ),
-  );
+  const perFileCap = resolveSessionIngestionFileCap(params.sources.length);
 
   for (const source of params.sources) {
     const scan = await scanSessionIngestionSource({
@@ -174,22 +179,15 @@ async function collectSessionBackfillCandidates(params: {
       ...scan.candidates.toSorted(compareSessionBackfillCandidates).slice(0, perFileCap),
     );
     scans.push({
-      candidates: scan.candidates,
-      contentHash: scan.fileState.contentHash,
-      lineCount: scan.fileState.lineCount,
-      mtimeMs: scan.fileState.mtimeMs,
-      ...(scan.progressBlockIndex !== undefined
-        ? { progressBlockIndex: scan.progressBlockIndex }
-        : {}),
-      scannedEndIndex: scan.scannedEndIndex,
-      size: scan.fileState.size,
+      ...scan,
+      fileState: scan.fileState,
       stateKey: source.stateKey,
     });
   }
   const selected = candidates
     .toSorted(compareSessionBackfillCandidates)
     .slice(0, SESSION_INGESTION_MAX_MESSAGES_PER_SWEEP);
-  const byDay = new Map<string, SessionBackfillCandidate[]>();
+  const byDay = new Map<string, SessionIngestionCandidate[]>();
   for (const candidate of selected) {
     const bucket = byDay.get(candidate.day) ?? [];
     bucket.push(candidate);
@@ -201,118 +199,135 @@ async function collectSessionBackfillCandidates(params: {
 function mergeSessionBackfillFileProgress(params: {
   current: Record<string, SessionIngestionFileState>;
   scans: SessionBackfillScan[];
-  selectedDays: Array<{ candidates: SessionBackfillCandidate[] }>;
+  selectedHashes: ReadonlySet<string>;
 }): Record<string, SessionIngestionFileState> {
-  const selectedHashes = new Set(
-    params.selectedDays.flatMap((day) => day.candidates.map((candidate) => candidate.hash)),
-  );
   const files = { ...params.current };
   for (const scan of params.scans) {
     const firstUnselected = scan.candidates.find(
-      (candidate) => !selectedHashes.has(candidate.hash),
+      (candidate) => !params.selectedHashes.has(candidate.hash),
     );
     const progressStops = [
       scan.scannedEndIndex,
       ...(firstUnselected ? [firstUnselected.contentIndex] : []),
       ...(scan.progressBlockIndex !== undefined ? [scan.progressBlockIndex] : []),
     ];
+    // The full snapshot identity stays paired while only its consumption cursor rewinds.
+    // Session ingestion uses that snapshot as the append-prefix proof on the next scan.
     files[scan.stateKey] = {
-      mtimeMs: scan.mtimeMs,
-      size: scan.size,
-      contentHash: scan.contentHash,
-      lineCount: scan.lineCount,
+      ...scan.fileState,
       lastContentLine: Math.min(...progressStops),
     };
   }
   return files;
 }
 
-function summarizeDay(day: string, candidates: SessionBackfillCandidate[]): SessionBackfillDay {
+function summarizeDay(day: string, candidates: SessionIngestionCandidate[]): SessionBackfillDay {
   return {
     day,
     candidateCount: candidates.length,
-    topCandidates: candidates.slice(0, TOP_CANDIDATE_LIMIT).map((entry) => entry.snippet),
+    topCandidates: candidates
+      .slice(0, SESSION_BACKFILL_TOP_CANDIDATE_LIMIT)
+      .map((entry) => entry.snippet),
   };
 }
 
-function buildSummaryDiaryLines(day: SessionBackfillDay): string[] {
-  return [
-    `Session backfill found ${day.candidateCount} trusted candidate${day.candidateCount === 1 ? "" : "s"}.`,
-    ...day.topCandidates.map((candidate) => `- ${candidate}`),
-  ];
-}
-
-function groundedMarkdownToDiaryLines(markdown: string): string[] {
-  return markdown
-    .split(/\r?\n/)
-    .map((line) => line.replace(/^##\s+/, "").trimEnd())
-    .filter((line, index, lines) => !(line.length === 0 && lines[index - 1]?.length === 0));
-}
-
-async function buildRemDiaryEntries(params: {
-  days: Array<{ day: string; candidates: SessionBackfillCandidate[] }>;
-}): Promise<Array<{ isoDay: string; sourcePath: string; bodyLines: string[] }>> {
-  const scratchDir = await fs.mkdtemp(
-    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-session-backfill-"),
-  );
-  try {
-    const entries: Array<{ isoDay: string; sourcePath: string; bodyLines: string[] }> = [];
-    for (const day of params.days) {
-      const results = await appendSessionCorpusLines({
-        workspaceDir: scratchDir,
-        day: day.day,
-        lines: day.candidates,
-      });
-      if (results.length === 0) {
-        continue;
+async function buildSessionBackfillDiaryEntries(params: {
+  agentId: string;
+  days: Array<{ day: string; candidates: SessionIngestionCandidate[] }>;
+  rem?: boolean;
+}) {
+  const origins: MemoryEntryOrigin[] = [];
+  const markLine = (day: string, line: string, sources: SessionIngestionCandidate[]) => {
+    // Diary dedupe keeps identical day/text blocks; their marker must accumulate every source.
+    const entryKey = `memory:session-backfill:${hashMemoryContent(JSON.stringify([day, line]))}`;
+    for (const source of sources) {
+      const origin = source.sessionOrigin;
+      if (origin) {
+        origins.push({
+          entryKey,
+          ...origin,
+          sessionKey: origin.sessionKey ?? null,
+          originClass: source.provenance.originClass,
+          observedAt: source.provenance.observedAt,
+        });
       }
-      const corpusPath = path.join(scratchDir, SESSION_CORPUS_RELATIVE_DIR, `${day.day}.txt`);
-      const inputPath = path.join(scratchDir, "memory", `${day.day}.md`);
-      const corpus = await fs.readFile(corpusPath, "utf-8");
-      await fs.writeFile(inputPath, `## Session transcript\n\n${corpus}`);
-      const preview = await previewGroundedRemMarkdown({
-        workspaceDir: scratchDir,
-        inputPaths: [inputPath],
-      });
-      const file = preview.files.at(0);
-      const hasGroundedContent = Boolean(
-        file &&
-        (file.facts.length > 0 ||
-          file.reflections.length > 0 ||
-          file.memoryImplications.length > 0 ||
-          file.candidates.length > 0),
-      );
-      entries.push({
-        isoDay: day.day,
-        sourcePath: results[0]?.path ?? `memory/.dreams/session-corpus/${day.day}.txt`,
-        bodyLines:
-          hasGroundedContent && file
-            ? groundedMarkdownToDiaryLines(file.renderedMarkdown)
-            : buildSummaryDiaryLines(summarizeDay(day.day, day.candidates)),
-      });
     }
-    return entries;
-  } finally {
-    await fs.rm(scratchDir, { recursive: true, force: true });
-  }
+    return `${buildPromotionMarker(entryKey)}\n${line}`;
+  };
+  const entries = params.days.map(({ day, candidates }) => {
+    let bodyLines: string[] | undefined;
+    if (params.rem) {
+      const relPath = `memory/${day}.md`;
+      const file = previewGroundedRemForFile({
+        relPath,
+        content: `## Session transcript\n\n${candidates.map((candidate) => candidate.rendered).join("\n")}\n`,
+        formatItem: (line, refs) =>
+          markLine(
+            day,
+            line,
+            candidates.filter((_, index) =>
+              refs.some((ref) => {
+                // The virtual markdown input has a heading and blank line before its candidates.
+                const [start, end = start] = ref
+                  .slice(relPath.length + 1)
+                  .split("-")
+                  .map(Number);
+                return index + 3 >= start! && index + 3 <= end!;
+              }),
+            ),
+          ),
+      });
+      if (
+        file.facts.length ||
+        file.reflections.length ||
+        file.memoryImplications.length ||
+        file.candidates.length
+      ) {
+        bodyLines = file.renderedMarkdown.replace(/^##\s+/gm, "").split("\n");
+      }
+    }
+    bodyLines ??= [
+      `Session backfill found ${candidates.length} trusted candidate${candidates.length === 1 ? "" : "s"}.`,
+      ...candidates
+        .slice(0, SESSION_BACKFILL_TOP_CANDIDATE_LIMIT)
+        .map((candidate) => markLine(day, `- ${candidate.snippet}`, [candidate])),
+    ];
+    return { isoDay: day, sourcePath: `memory/.dreams/session-corpus/${day}.txt`, bodyLines };
+  });
+  // Reserve lineage before publication, even when subsequent corpus/staging work fails.
+  await recordMemoryEntryOrigins({ agentId: params.agentId, origins });
+  return entries;
 }
 
-function uniqueGroundedItems(results: MemorySearchResult[]): MemorySearchResult[] {
-  const seen = new Set<string>();
+function coalesceBackfillClaims(
+  results: Array<MemorySearchResult & { sessionOrigin?: SessionEntryOrigin }>,
+) {
+  const claims = new Map<
+    string,
+    Pick<MemorySearchResult, "path" | "startLine" | "endLine" | "snippet">
+  >();
   return results.flatMap((result) => {
     const snippet = result.snippet.replace(/^(?:Assistant|User):\s*/i, "").trim();
     const key = snippet.replace(/\s+/g, " ").toLowerCase();
-    if (!key || seen.has(key)) {
+    if (!key) {
       return [];
     }
-    seen.add(key);
-    return [{ ...result, snippet }];
+    const claim = claims.get(key) ?? {
+      path: result.path,
+      startLine: result.startLine,
+      endLine: result.endLine,
+      snippet,
+    };
+    claims.set(key, claim);
+    // Share the first citation for query/day dedupe, but retain each source's
+    // identity so coalescing a claim cannot discard its deletion lineage.
+    return [{ ...result, ...claim }];
   });
 }
 
 async function applySessionBackfillDays(params: {
   workspaceDir: string;
-  days: Array<{ day: string; candidates: SessionBackfillCandidate[] }>;
+  days: Array<{ day: string; candidates: SessionIngestionCandidate[] }>;
   nowMs: number;
   timezone?: string;
 }): Promise<number> {
@@ -326,22 +341,24 @@ async function applySessionBackfillDays(params: {
       day: day.day,
       lines: day.candidates,
     });
-    const grounded = uniqueGroundedItems(results);
+    const grounded = coalesceBackfillClaims(results);
     if (grounded.length === 0) {
       continue;
     }
-    // Standard grounded staging owns claim identity. Exact duplicates are
-    // collapsed here; claim-hash keying also converges the same fact across sources.
-    await recordGroundedShortTermCandidates({
+    await recordShortTermRecalls({
       workspaceDir: params.workspaceDir,
       query: `${SESSION_BACKFILL_QUERY_PREFIX}:${day.day}`,
-      items: grounded.map((result) => ({
+      signalType: "grounded",
+      results: grounded.map((result) => ({
+        source: "memory",
         path: result.path,
         startLine: result.startLine,
         endLine: result.endLine,
         snippet: result.snippet,
         score: SESSION_INGESTION_SCORE,
         dayBucket: day.day,
+        provenance: result.provenance,
+        sessionOrigin: result.sessionOrigin,
       })),
       dedupeByQueryPerDay: true,
       nowMs: params.nowMs,
@@ -355,7 +372,7 @@ async function applySessionBackfillDays(params: {
   return Math.max(0, after.length - before.length);
 }
 
-async function executeSessionBackfillCore(
+export async function executeSessionBackfillBatch(
   params: RunSessionBackfillParams,
 ): Promise<SessionBackfillExecution> {
   const workspaceDir = params.workspaceDir.trim();
@@ -365,42 +382,61 @@ async function executeSessionBackfillCore(
   if (params.rem && params.apply) {
     throw new Error("Memory session-backfill --rem cannot be combined with --apply.");
   }
+  // Acquire/release the workspace lease outside request authority so accepted cleanup settles.
+  const run = () => executeSessionBackfillBatchCore({ ...params, workspaceDir });
+  const assertCurrent = params.assertCurrent;
+  const execute = assertCurrent ? () => withMemoryMutationAuthority(assertCurrent, run) : run;
+  return params.apply || params.rem || params.rollback
+    ? withMemoryWorkspaceLock(workspaceDir, execute)
+    : execute();
+}
+
+async function executeSessionBackfillBatchCore(
+  params: RunSessionBackfillParams,
+): Promise<SessionBackfillExecution> {
+  const workspaceDir = params.workspaceDir;
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
   if (params.rollback) {
     // Backfill diary markers and grounded-only candidates are a shared artifact
     // class with rem-backfill; the stable removal APIs intentionally clear both.
-    const [diary, staged] = await Promise.all([
+    const removals = [
       removeBackfillDiaryEntries({ workspaceDir }),
       removeGroundedShortTermCandidates({ workspaceDir }),
-    ]);
-    const rewind = await rewindSessionBackfillIngestionState({
-      workspaceDir,
-      agentId: params.agentId,
-    });
-    if (!rewind.completeCoverage && (diary.removed > 0 || staged.removed > 0)) {
-      // Applies from before the rewind journal shipped have no owned offsets to restore.
-      // Without this agent-scoped reset, rollback deletes artifacts but re-apply finds nothing.
-      await resetSessionBackfillIngestionState({ workspaceDir, agentId: params.agentId });
-    }
-    await markSessionBackfillRewindBaseline({ workspaceDir, agentId: params.agentId });
-    return {
-      result: {
-        agentId: params.agentId,
+    ] as const;
+    try {
+      const [diary, staged] = await Promise.all(removals);
+      const rewind = await rewindSessionBackfillIngestionState({
         workspaceDir,
-        applied: false,
-        rem: false,
-        days: [],
-        candidateCount: 0,
-        stagedEntries: 0,
-        writtenDiaryEntries: 0,
-        replacedDiaryEntries: 0,
-        rollback: {
-          removedDiaryEntries: diary.removed,
-          removedStagedEntries: staged.removed,
+        agentId: params.agentId,
+      });
+      if (!rewind.completeCoverage && (diary.removed > 0 || staged.removed > 0)) {
+        // Applies from before the rewind journal shipped have no owned offsets to restore.
+        // Without this agent-scoped reset, rollback deletes artifacts but re-apply finds nothing.
+        await resetSessionBackfillIngestionState({ workspaceDir, agentId: params.agentId });
+      }
+      await markSessionBackfillRewindBaseline({ workspaceDir, agentId: params.agentId });
+      return {
+        result: {
+          agentId: params.agentId,
+          workspaceDir,
+          applied: false,
+          rem: false,
+          days: [],
+          candidateCount: 0,
+          stagedEntries: 0,
+          writtenDiaryEntries: 0,
+          replacedDiaryEntries: 0,
+          rollback: {
+            removedDiaryEntries: diary.removed,
+            removedStagedEntries: staged.removed,
+          },
         },
-      },
-      continuation: { advanced: false, hasMore: false },
-    };
+        continuation: { advanced: false, hasMore: false },
+      };
+    } finally {
+      // Keep request authority and the workspace lease until both accepted removals settle.
+      await Promise.allSettled(removals);
+    }
   }
 
   const { from, to, limitDays } = normalizeSessionBackfillSelection(params);
@@ -408,6 +444,7 @@ async function executeSessionBackfillCore(
   const sources = await listSessionBackfillSources({
     agentId: params.agentId,
     archiveFiles: params.archiveFiles ?? [],
+    admissionPolicy: resolveAdmissionPolicy(params.pluginConfig),
   });
   const collected = await collectSessionBackfillCandidates({
     sources,
@@ -439,13 +476,11 @@ async function executeSessionBackfillCore(
   let stagedEntries = 0;
 
   if (selectedDays.length > 0 && (params.rem || params.apply)) {
-    const diaryEntries = params.rem
-      ? await buildRemDiaryEntries({ days: selectedDays })
-      : selectedDays.map((entry) => ({
-          isoDay: entry.day,
-          sourcePath: `memory/.dreams/session-corpus/${entry.day}.txt`,
-          bodyLines: buildSummaryDiaryLines(summarizeDay(entry.day, entry.candidates)),
-        }));
+    const diaryEntries = await buildSessionBackfillDiaryEntries({
+      agentId: params.agentId,
+      days: selectedDays,
+      rem: params.rem,
+    });
     const diary = await writeBackfillDiaryEntries({
       workspaceDir,
       entries: diaryEntries,
@@ -493,7 +528,7 @@ async function executeSessionBackfillCore(
       files: mergeSessionBackfillFileProgress({
         current: state.files,
         scans: collected.scans,
-        selectedDays,
+        selectedHashes,
       }),
       seenMessages: trimTrackedSessionScopes(nextSeenMessages),
     });
@@ -515,30 +550,16 @@ async function executeSessionBackfillCore(
   };
 }
 
-export async function executeSessionBackfill(
-  params: RunSessionBackfillParams,
-): Promise<SessionBackfillResult> {
-  return (await executeSessionBackfillCore(params)).result;
-}
-
 // The CLI owns drain-to-completion. Cursor-driven clients must keep using
 // executeSessionBackfillBatch so one request remains one bounded transaction.
 export async function runSessionBackfill(
   params: RunSessionBackfillParams,
 ): Promise<SessionBackfillResult> {
   if (!params.apply || params.rollback) {
-    return (await executeSessionBackfillCore(params)).result;
+    return (await executeSessionBackfillBatch(params)).result;
   }
 
   return await drainSessionBackfill({
-    executeBatch: () => executeSessionBackfillCore(params),
-    maxBatches: MAX_SESSION_BACKFILL_APPLY_BATCHES,
-    topCandidateLimit: TOP_CANDIDATE_LIMIT,
+    executeBatch: () => executeSessionBackfillBatch(params),
   });
-}
-
-export async function executeSessionBackfillBatch(
-  params: RunSessionBackfillParams,
-): Promise<SessionBackfillExecution> {
-  return await executeSessionBackfillCore(params);
 }

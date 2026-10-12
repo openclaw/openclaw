@@ -3,17 +3,21 @@
 export {
   buildAcpResult,
   createAcpToolLifecycleTracker,
-  createAcpVisibleTextAccumulator,
   emitAcpAssistantDelta,
   emitAcpLifecycleEnd,
   emitAcpLifecycleError,
   emitAcpLifecycleStart,
   emitAcpPromptSubmitted,
   emitAcpRuntimeEvent,
+  resolveAcpLifecycleEndFields,
+} from "./acp-lifecycle.js";
+export { runAgentAttempt } from "./attempt-execution.js";
+export {
+  createAcpVisibleTextAccumulator,
+  sessionTranscriptHasContent,
+} from "./attempt-execution.helpers.js";
+export {
   persistAcpTurnTranscript,
   persistCliTurnTranscript,
   resolveCliTranscriptReplyText,
-  runAgentAttempt,
-  sessionFileHasContent,
-} from "./attempt-execution.js";
-export type { AcpToolLifecycleTracker } from "./attempt-execution.js";
+} from "./transcript-persistence.js";

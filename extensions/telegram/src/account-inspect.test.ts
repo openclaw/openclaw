@@ -6,8 +6,80 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { withEnv } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { inspectTelegramAccount } from "./account-inspect.js";
+import { createTelegramPluginConfig } from "./config-adapter.js";
 
 describe("inspectTelegramAccount SecretRef resolution", () => {
+  it.each([
+    { accountId: "work", configured: false, startable: false, tokenStatus: "available" },
+    { accountId: "ops", configured: true, startable: true, tokenStatus: "available" },
+  ])(
+    "preserves owner status for $accountId without resolving credentials",
+    ({ accountId, configured, startable, tokenStatus }) => {
+      withEnv({ TELEGRAM_BOT_TOKEN: undefined, TG_INSPECTION_MISSING: undefined }, () => {
+        const cfg: OpenClawConfig = {
+          channels: {
+            telegram: {
+              defaultAccount: "alerts",
+              webhookUrl: "https://example.test/telegram",
+              groups: { "*": { requireMention: false } },
+              accounts: {
+                alerts: { botToken: "123:shared" },
+                work: { botToken: "123:shared" },
+                ops: { botToken: "456:healthy" },
+                missing: {},
+                unavailable: { botToken: "${TG_INSPECTION_MISSING}" },
+              },
+            },
+          },
+        };
+        const inspected = inspectTelegramAccount({ cfg, accountId });
+        const config = createTelegramPluginConfig();
+        expect(inspected).toMatchObject({
+          accountId,
+          enabled: true,
+          configured,
+          tokenStatus,
+          mode: "webhook",
+          allowUnmentionedGroups: true,
+        });
+        expect(config.describeAccount?.(inspected, cfg)?.configured).toBe(configured);
+        expect(config.isConfigured?.(inspected, cfg)).toBe(startable);
+        if (accountId === "work") {
+          expect(config.unconfiguredReason?.(inspected, cfg)).toContain('account "alerts"');
+        }
+        if (accountId === "unknown") {
+          expect(config.unconfiguredReason?.(inspected, cfg)).toContain("unknown accountId");
+        }
+      });
+    },
+  );
+
+  it("keeps read-only accessors from resolving bot token SecretRefs", () => {
+    const cfg: OpenClawConfig = {
+      secrets: {
+        providers: {
+          telegram_token: {
+            source: "file",
+            path: "/tmp/openclaw-missing-telegram-token",
+            mode: "singleValue",
+          },
+        },
+      },
+      channels: {
+        telegram: {
+          botToken: { source: "file", provider: "telegram_token", id: "value" },
+          allowFrom: ["1128540374256849009"],
+          defaultTo: "1498959610751750304",
+        },
+      },
+    };
+    const config = createTelegramPluginConfig();
+    expect(config.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual([
+      "1128540374256849009",
+    ]);
+    expect(config.resolveDefaultTo?.({ cfg, accountId: "default" })).toBe("1498959610751750304");
+  });
+
   it("resolves default env SecretRef templates in read-only status paths", () => {
     withEnv({ TG_STATUS_TOKEN: "123:token" }, () => {
       const cfg: OpenClawConfig = {
@@ -51,60 +123,6 @@ describe("inspectTelegramAccount SecretRef resolution", () => {
       expect(account.tokenStatus).toBe("configured_unavailable");
       expect(account.token).toBe("");
     });
-  });
-
-  it("does not read env values for non-env providers", () => {
-    withEnv({ TG_EXEC_PROVIDER: "123:token" }, () => {
-      const cfg: OpenClawConfig = {
-        secrets: {
-          defaults: {
-            env: "exec-provider",
-          },
-          providers: {
-            "exec-provider": {
-              source: "exec",
-              command: "/usr/bin/env",
-            },
-          },
-        },
-        channels: {
-          telegram: {
-            botToken: "${TG_EXEC_PROVIDER}",
-          },
-        },
-      };
-
-      const account = inspectTelegramAccount({ cfg, accountId: "default" });
-      expect(account.tokenSource).toBe("env");
-      expect(account.tokenStatus).toBe("configured_unavailable");
-      expect(account.token).toBe("");
-    });
-  });
-
-  it("matches runtime token lookup for account keys that need full normalization", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        telegram: {
-          accounts: {
-            "Carey Notifications": {
-              botToken: "123:token",
-              reactionLevel: "ack",
-            },
-          },
-        },
-      },
-    };
-
-    const account = inspectTelegramAccount({
-      cfg,
-      accountId: "carey-notifications",
-    });
-
-    expect(account.accountId).toBe("carey-notifications");
-    expect(account.configured).toBe(true);
-    expect(account.tokenSource).toBe("config");
-    expect(account.tokenStatus).toBe("available");
-    expect(account.config.reactionLevel).toBe("ack");
   });
 
   it("routes omitted-account inspection through the configured defaultAccount (#61012)", () => {

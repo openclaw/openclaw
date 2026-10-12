@@ -64,10 +64,7 @@ struct ChatMarkdownList: Equatable {
 }
 
 struct ChatMarkdownListItem: Equatable {
-    enum Checkbox: Equatable {
-        case checked
-        case unchecked
-    }
+    typealias Checkbox = Markdown.Checkbox
 
     let checkbox: Checkbox?
     let content: [ChatMarkdownListItemContent]
@@ -92,6 +89,55 @@ enum ChatMarkdownBlockSyntax {
             || self.matches(line, #"^\s{0,3}((\*\s*){3,}|(-\s*){3,}|(_\s*){3,})$"#)
         return startsIndependentBlock
             || (includesSetextUnderline && self.matches(line, #"^\s{0,3}={3,}$"#))
+    }
+
+    static func isEscaped(at index: String.Index, in source: String) -> Bool {
+        let count = source[..<index].reversed().prefix { $0 == "\\" }.count
+        return count.isMultiple(of: 2) == false
+    }
+
+    static func codeSpans(in source: String, honoringEscapes: Bool) -> [Range<String.Index>] {
+        struct BacktickRun {
+            let start: String.Index
+            let end: String.Index
+            let length: Int
+            let canOpen: Bool
+        }
+
+        var runs: [BacktickRun] = []
+        var cursor = source.startIndex
+        while cursor < source.endIndex {
+            guard source[cursor] == "`" else {
+                cursor = source.index(after: cursor)
+                continue
+            }
+            let end = source[cursor...].prefix { $0 == "`" }.endIndex
+            runs.append(BacktickRun(
+                start: cursor,
+                end: end,
+                length: source.distance(from: cursor, to: end),
+                canOpen: !honoringEscapes || !self.isEscaped(at: cursor, in: source)))
+            cursor = end
+        }
+
+        var nextMatchingRun = [Int?](repeating: nil, count: runs.count)
+        var nextIndexByLength: [Int: Int] = [:]
+        for index in runs.indices.reversed() {
+            nextMatchingRun[index] = nextIndexByLength[runs[index].length]
+            nextIndexByLength[runs[index].length] = index
+        }
+
+        var spans: [Range<String.Index>] = []
+        var index = 0
+        while index < runs.count {
+            guard runs[index].canOpen, let closeIndex = nextMatchingRun[index] else {
+                index += 1
+                continue
+            }
+            spans.append(runs[index].start..<runs[closeIndex].end)
+            index = closeIndex + 1
+        }
+        return spans
     }
 
     private static func matches(_ line: String, _ pattern: String) -> Bool {
@@ -168,10 +214,22 @@ enum ChatMarkdownBlockSegmenter {
             document: document,
             isComplete: isComplete)
         var extractions = mathResult.extractions
+        var proseEnd = source.lines.count
 
         for child in document.children {
             guard let lineRange = source.lineRange(for: child.range) else { continue }
             if mathResult.protectedRanges.contains(where: { $0.contains(lineRange.lowerBound) }) {
+                continue
+            }
+
+            if !isComplete,
+               child is Markdown.Paragraph,
+               source.lines[lineRange].allSatisfy({ $0.trimmingCharacters(in: .whitespaces).hasPrefix("|") }),
+               source.lines[lineRange.upperBound...].allSatisfy({ $0.trimmingCharacters(in: .whitespaces).isEmpty })
+            {
+                // Pending headers and bare row-opening pipes must not enter
+                // prose: the parser can absorb them into a table on the next delta.
+                proseEnd = lineRange.lowerBound
                 continue
             }
 
@@ -192,18 +250,11 @@ enum ChatMarkdownBlockSegmenter {
             if let code = child as? Markdown.CodeBlock,
                let opener = FenceOpener.parse(source.lines[lineRange.lowerBound])
             {
-                let language = code.language?
-                    .split(whereSeparator: \.isWhitespace)
-                    .first
-                    .map { $0.lowercased() }
                 let closed = lineRange.count > 1
                     && opener.isClose(source.lines[lineRange.index(before: lineRange.endIndex)])
                 extractions.append(Extraction(
                     lineRange: lineRange,
-                    block: .code(ChatCodeBlock(
-                        language: language,
-                        code: self.dropStructuralCodeNewline(code.code),
-                        isComplete: closed || isComplete))))
+                    block: .code(self.codeBlock(code, isComplete: closed || isComplete))))
                 continue
             }
 
@@ -212,12 +263,6 @@ enum ChatMarkdownBlockSegmenter {
                     reportedRange: lineRange,
                     columnCount: table.maxColumnCount)
                 guard let rendered = self.table(table, source: source, lineRange: tableRange) else {
-                    continue
-                }
-                let trailingLines = source.lines[tableRange.upperBound...]
-                if !isComplete,
-                   trailingLines.allSatisfy({ $0.trimmingCharacters(in: .whitespaces).isEmpty })
-                {
                     continue
                 }
                 extractions.append(Extraction(lineRange: tableRange, block: .table(rendered)))
@@ -259,7 +304,7 @@ enum ChatMarkdownBlockSegmenter {
             return left.lineRange.upperBound > right.lineRange.upperBound
         }
 
-        let unfolded = self.unfold(extractions, source: source, isComplete: isComplete)
+        let unfolded = self.unfold(extractions, source: source, proseEnd: proseEnd, isComplete: isComplete)
         let blocks = self.foldDisclosures(unfolded)
         let reparsesListContent = blocks.contains { block in
             if case .list = block { return true }
@@ -268,7 +313,7 @@ enum ChatMarkdownBlockSegmenter {
         if blocks.count > 1 || reparsesListContent,
            self.containsReferenceLink(document, source: source)
         {
-            return self.proseOnly(source.lines)
+            return self.proseOnly(Array(source.lines[..<proseEnd]))
         }
         return blocks
     }
@@ -310,44 +355,36 @@ enum ChatMarkdownBlockSegmenter {
                 continue
             }
 
+            let lineRange: Range<Int>
+            let latex: String
             if let sameLineLatex = opener.sameLineLatex {
-                let lineRange = lineIndex..<(lineIndex + 1)
-                if sameLineLatex.utf8.count <= self.maxMathBytes {
-                    extractions.append(Extraction(
-                        lineRange: lineRange,
-                        block: .math(ChatMathBlock(latex: sameLineLatex, isComplete: true))))
-                } else {
-                    protectedRanges.append(lineRange)
+                lineRange = lineIndex..<(lineIndex + 1)
+                latex = sameLineLatex
+            } else {
+                let contentStart = lineIndex + 1
+                var closeIndex = contentStart
+                while closeIndex < source.lines.count,
+                      !opener.isClose(source.lines[closeIndex])
+                {
+                    closeIndex += 1
                 }
-                lineIndex += 1
-                continue
-            }
 
-            let contentStart = lineIndex + 1
-            var closeIndex = contentStart
-            while closeIndex < source.lines.count,
-                  !opener.isClose(source.lines[closeIndex])
-            {
-                closeIndex += 1
+                let closed = closeIndex < source.lines.count
+                guard closed || isComplete else {
+                    // The first unmatched opener owns the remaining stream. Stop
+                    // here so later opener-looking lines do not trigger rescans.
+                    protectedRanges.append(lineIndex..<source.lines.count)
+                    return MathExtractionResult(extractions: extractions, protectedRanges: protectedRanges)
+                }
+                lineRange = lineIndex..<(closed ? closeIndex + 1 : source.lines.count)
+                latex = source.lines[contentStart..<closeIndex]
+                    .joined(separator: "\n")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
             }
-
-            let closed = closeIndex < source.lines.count
-            guard closed || isComplete else {
-                // The first unmatched opener owns the remaining stream. Stop
-                // here so later opener-looking lines do not trigger rescans.
-                protectedRanges.append(lineIndex..<source.lines.count)
-                return MathExtractionResult(extractions: extractions, protectedRanges: protectedRanges)
-            }
-
-            let contentEnd = closed ? closeIndex : source.lines.count
-            let lineRange = lineIndex..<(closed ? closeIndex + 1 : source.lines.count)
-            let latex = source.lines[contentStart..<contentEnd]
-                .joined(separator: "\n")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
             if latex.utf8.count <= self.maxMathBytes {
                 extractions.append(Extraction(
                     lineRange: lineRange,
-                    block: .math(ChatMathBlock(latex: latex, isComplete: closed || isComplete))))
+                    block: .math(ChatMathBlock(latex: latex, isComplete: true))))
             } else {
                 protectedRanges.append(lineRange)
             }
@@ -431,8 +468,11 @@ enum ChatMarkdownBlockSegmenter {
         return raw.hasSuffix("]")
     }
 
-    private static func dropStructuralCodeNewline(_ code: String) -> String {
-        code.hasSuffix("\n") ? String(code.dropLast()) : code
+    private static func codeBlock(_ code: Markdown.CodeBlock, isComplete: Bool) -> ChatCodeBlock {
+        ChatCodeBlock(
+            language: code.language?.split(whereSeparator: \.isWhitespace).first.map { $0.lowercased() },
+            code: code.code.hasSuffix("\n") ? String(code.code.dropLast()) : code.code,
+            isComplete: isComplete)
     }
 
     private static func htmlBlockSource(
@@ -565,12 +605,9 @@ enum ChatMarkdownBlockSegmenter {
             var rawHTMLContext: ChatMarkdownRawHTMLContext?
 
             func flushSource() {
-                let trimmed = pendingSource.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty else {
-                    pendingSource = ""
-                    return
+                if !pendingSource.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    tokens.append(contentsOf: parseMarkdown(pendingSource))
                 }
-                tokens.append(contentsOf: parseMarkdown(pendingSource))
                 pendingSource = ""
             }
 
@@ -585,14 +622,9 @@ enum ChatMarkdownBlockSegmenter {
             }
 
             for (lineIndex, line) in lines.enumerated() {
-                if let context = rawHTMLContext {
+                if let context = rawHTMLContext ?? ChatMarkdownRawHTMLContext.opening(in: line) {
                     appendSourceLine(line, at: lineIndex)
-                    if context.closes(in: line) { rawHTMLContext = nil }
-                    continue
-                }
-                if let context = ChatMarkdownRawHTMLContext.opening(in: line) {
-                    appendSourceLine(line, at: lineIndex)
-                    if !context.closes(in: line) { rawHTMLContext = context }
+                    rawHTMLContext = context.closes(in: line) ? nil : context
                     continue
                 }
                 guard let tags = Self.tags(in: line) else {
@@ -694,12 +726,12 @@ enum ChatMarkdownBlockSegmenter {
                 options: [.regularExpression, .caseInsensitive]) != nil
             else { return nil }
 
-            let codeRanges = self.inlineCodeRanges(in: line)
+            let codeRanges = ChatMarkdownBlockSyntax.codeSpans(in: line, honoringEscapes: false)
             let fullRange = NSRange(line.startIndex..<line.endIndex, in: line)
             let matches = self.tagExpression.matches(in: line, range: fullRange)
             let tags = matches.compactMap { match -> Tag? in
                 guard let range = Range(match.range, in: line),
-                      !self.isEscaped(line, at: range.lowerBound),
+                      !ChatMarkdownBlockSyntax.isEscaped(at: range.lowerBound, in: line),
                       !codeRanges.contains(where: { $0.contains(range.lowerBound) })
                 else { return nil }
                 let raw = String(line[range])
@@ -721,58 +753,6 @@ enum ChatMarkdownBlockSegmenter {
                 if lower.hasPrefix("<details") { return .unsupportedDetailsOpen }
                 return .unsupportedSummary
             }
-        }
-
-        private static func isEscaped(_ line: String, at index: String.Index) -> Bool {
-            var cursor = index
-            var count = 0
-            while cursor > line.startIndex {
-                let previous = line.index(before: cursor)
-                guard line[previous] == "\\" else { break }
-                count += 1
-                cursor = previous
-            }
-            return count.isMultiple(of: 2) == false
-        }
-
-        private static func inlineCodeRanges(in line: String) -> [Range<String.Index>] {
-            var ranges: [Range<String.Index>] = []
-            var cursor = line.startIndex
-            while cursor < line.endIndex {
-                guard line[cursor] == "`" else {
-                    cursor = line.index(after: cursor)
-                    continue
-                }
-                let openerStart = cursor
-                var openerEnd = cursor
-                while openerEnd < line.endIndex, line[openerEnd] == "`" {
-                    openerEnd = line.index(after: openerEnd)
-                }
-                let runLength = line.distance(from: openerStart, to: openerEnd)
-                var search = openerEnd
-                var closeEnd: String.Index?
-                while search < line.endIndex {
-                    guard line[search] == "`" else {
-                        search = line.index(after: search)
-                        continue
-                    }
-                    let closeStart = search
-                    while search < line.endIndex, line[search] == "`" {
-                        search = line.index(after: search)
-                    }
-                    if line.distance(from: closeStart, to: search) == runLength {
-                        closeEnd = search
-                        break
-                    }
-                }
-                if let closeEnd {
-                    ranges.append(openerStart..<closeEnd)
-                    cursor = closeEnd
-                } else {
-                    cursor = openerEnd
-                }
-            }
-            return ranges
         }
     }
 
@@ -882,22 +862,10 @@ enum ChatMarkdownBlockSegmenter {
             itemCount += 1
             guard itemCount <= self.maxListItems else { return nil }
 
-            let checkbox: ChatMarkdownListItem.Checkbox? = switch item.checkbox {
-            case .checked?: .checked
-            case .unchecked?: .unchecked
-            case nil: nil
-            }
             var content: [ChatMarkdownListItemContent] = []
             for child in item.children {
                 if let code = child as? Markdown.CodeBlock {
-                    let language = code.language?
-                        .split(whereSeparator: \.isWhitespace)
-                        .first
-                        .map { $0.lowercased() }
-                    content.append(.code(ChatCodeBlock(
-                        language: language,
-                        code: self.dropStructuralCodeNewline(code.code),
-                        isComplete: true)))
+                    content.append(.code(self.codeBlock(code, isComplete: true)))
                 } else if child is Markdown.OrderedList || child is Markdown.UnorderedList {
                     guard let nested = self.list(
                         child,
@@ -913,7 +881,7 @@ enum ChatMarkdownBlockSegmenter {
                     content.append(.markdown(markdown))
                 }
             }
-            renderedItems.append(ChatMarkdownListItem(checkbox: checkbox, content: content))
+            renderedItems.append(ChatMarkdownListItem(checkbox: item.checkbox, content: content))
         }
         return ChatMarkdownList(kind: kind, items: renderedItems)
     }
@@ -1076,19 +1044,15 @@ enum ChatMarkdownBlockSegmenter {
         func tableLineRange(reportedRange: Range<Int>, columnCount: Int) -> Range<Int> {
             guard reportedRange.count > 1 else { return reportedRange }
             for delimiterIndex in reportedRange.dropFirst().indices
-                where self.isTableDelimiter(self.lines[delimiterIndex], columnCount: columnCount)
+                where self.isTableDelimiter(at: delimiterIndex, columnCount: columnCount)
             {
                 return reportedRange.index(before: delimiterIndex)..<reportedRange.upperBound
             }
             return reportedRange
         }
 
-        private func isTableDelimiter(_ line: String, columnCount: Int) -> Bool {
-            let trimmedLine = line.trimmingCharacters(in: .whitespaces)
-            var cells = trimmedLine.split(separator: "|", omittingEmptySubsequences: false)
-                .map { $0.trimmingCharacters(in: .whitespaces) }
-            if trimmedLine.hasPrefix("|"), cells.first?.isEmpty == true { cells.removeFirst() }
-            if trimmedLine.hasSuffix("|"), cells.last?.isEmpty == true { cells.removeLast() }
+        private func isTableDelimiter(at lineIndex: Int, columnCount: Int) -> Bool {
+            let cells = self.tableCells(at: lineIndex)
             return cells.count == columnCount && cells.allSatisfy {
                 $0.range(of: #"^:?-+:?$"#, options: .regularExpression) != nil
             }
@@ -1105,16 +1069,11 @@ enum ChatMarkdownBlockSegmenter {
             let character = line[afterIndent]
             guard character == "`" || character == "~" else { return nil }
 
-            var cursor = afterIndent
-            var count = 0
-            while cursor < line.endIndex, line[cursor] == character {
-                count += 1
-                cursor = line.index(after: cursor)
-            }
-            guard count >= 3 else { return nil }
-            let info = line[cursor...].trimmingCharacters(in: .whitespaces)
+            let fence = line[afterIndent...].prefix { $0 == character }
+            guard fence.count >= 3 else { return nil }
+            let info = line[fence.endIndex...].trimmingCharacters(in: .whitespaces)
             if character == "`", info.contains("`") { return nil }
-            return FenceOpener(character: character, count: count)
+            return FenceOpener(character: character, count: fence.count)
         }
 
         func isClose(_ line: String) -> Bool {
@@ -1122,23 +1081,13 @@ enum ChatMarkdownBlockSegmenter {
             guard indent <= 3, afterIndent < line.endIndex, line[afterIndent] == self.character else {
                 return false
             }
-            var cursor = afterIndent
-            var count = 0
-            while cursor < line.endIndex, line[cursor] == self.character {
-                count += 1
-                cursor = line.index(after: cursor)
-            }
-            return count >= self.count && line[cursor...].allSatisfy(\.isWhitespace)
+            let fence = line[afterIndent...].prefix { $0 == self.character }
+            return fence.count >= self.count && line[fence.endIndex...].allSatisfy(\.isWhitespace)
         }
 
         fileprivate static func leadingSpaces(of line: String) -> (count: Int, end: String.Index) {
-            var count = 0
-            var cursor = line.startIndex
-            while cursor < line.endIndex, line[cursor] == " " {
-                count += 1
-                cursor = line.index(after: cursor)
-            }
-            return (count, cursor)
+            let spaces = line.prefix { $0 == " " }
+            return (spaces.count, spaces.endIndex)
         }
     }
 }
@@ -1147,6 +1096,7 @@ extension ChatMarkdownBlockSegmenter {
     fileprivate static func unfold(
         _ extractions: [Extraction],
         source: SourceBuffer,
+        proseEnd: Int,
         isComplete: Bool) -> [UnfoldedBlock]
     {
         var unfolded: [UnfoldedBlock] = []
@@ -1178,7 +1128,7 @@ extension ChatMarkdownBlockSegmenter {
             proseStart = extraction.lineRange.upperBound
         }
 
-        appendProse(until: source.lines.count)
+        appendProse(until: proseEnd)
         return unfolded
     }
 }

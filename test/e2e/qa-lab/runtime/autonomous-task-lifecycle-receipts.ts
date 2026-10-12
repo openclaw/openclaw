@@ -1,4 +1,4 @@
-// QA Lab producer proves cron/task owner receipts through a real mock Gateway.
+// QA Lab producer proves cron receipts and admitted execution identity through a real mock Gateway.
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -9,10 +9,24 @@ import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
 } from "../../../../extensions/qa-lab/src/evidence-summary.js";
-import { startQaGatewayChild } from "../../../../extensions/qa-lab/src/gateway-child.js";
+import {
+  createQaGatewayChild,
+  type QaGatewayChild,
+} from "../../../../extensions/qa-lab/src/gateway-child.js";
 import { startQaMockOpenAiServer } from "../../../../extensions/qa-lab/src/providers/mock-openai/server.js";
-import type { AuditRunInspectResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import {
+  countExecutionContexts,
+  createMappedWebhookProof,
+  hasSqliteColumns,
+  inspectExecution,
+  parseAuditInspection,
+  requireOwnerDisplay,
+  stateDatabasePath,
+  waitFor,
+  type ExactOwnerRow,
+} from "./autonomous-task-lifecycle-receipts.fixtures.js";
 import { createQaScriptEvidenceWriter, type QaScriptEvidenceStatus } from "./script-evidence.js";
 
 const SCENARIO_ID = "autonomous-task-lifecycle-receipts";
@@ -26,29 +40,6 @@ type ProofResult = {
   durationMs: number;
   status: QaScriptEvidenceStatus;
 };
-type ExactOwnerRow = {
-  context_id: string;
-  execution_id: string;
-  run_id: string;
-  status: string;
-};
-type OwnerDisplayProducer = "cron-lifecycle" | "task-lifecycle" | "flow-lifecycle";
-
-function hasSqliteColumns(db: DatabaseSync, table: string, columns: readonly string[]): boolean {
-  const exists = db
-    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")
-    .get(table);
-  if (!exists) {
-    return false;
-  }
-  const present = new Set(
-    (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(
-      (row) => row.name,
-    ),
-  );
-  return columns.every((column) => present.has(column));
-}
-
 function parseOptions(argv: readonly string[]): ProducerOptions {
   const readValue = (name: string) => {
     const index = argv.indexOf(name);
@@ -64,45 +55,14 @@ function parseOptions(argv: readonly string[]): ProducerOptions {
   };
 }
 
-function parseJson<T>(raw: string, label: string): T {
-  try {
-    return JSON.parse(raw) as T;
-  } catch (error) {
-    throw new Error(`${label} was not JSON: ${formatErrorMessage(error)}`);
-  }
-}
-
 function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function stateDatabasePath(gateway: Awaited<ReturnType<typeof startQaGatewayChild>>): string {
-  const stateDir = gateway.runtimeEnv.OPENCLAW_STATE_DIR;
-  if (!stateDir) {
-    throw new Error("QA Gateway did not expose its isolated state directory");
-  }
-  return path.join(stateDir, "state", "openclaw.sqlite");
-}
-
-function countExecutionContexts(gateway: Awaited<ReturnType<typeof startQaGatewayChild>>): number {
-  const db = new DatabaseSync(stateDatabasePath(gateway), { readOnly: true });
-  try {
-    if (!hasSqliteColumns(db, "execution_identity_contexts", ["context_id"])) {
-      return 0;
-    }
-    const row = db.prepare("SELECT COUNT(*) AS count FROM execution_identity_contexts").get() as {
-      count: number;
-    };
-    return row.count;
-  } finally {
-    db.close();
-  }
-}
-
 function readCronOwnerRows(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
+  gateway: QaGatewayChild,
   jobId: string,
-): { cron: ExactOwnerRow; task: ExactOwnerRow } | undefined {
+): { cron: ExactOwnerRow } | undefined {
   const db = new DatabaseSync(stateDatabasePath(gateway), { readOnly: true });
   try {
     if (
@@ -112,8 +72,7 @@ function readCronOwnerRows(
         "owner_id",
         "context_id",
         "execution_id",
-      ]) ||
-      !hasSqliteColumns(db, "task_runs", ["task_id"])
+      ])
     ) {
       return undefined;
     }
@@ -130,29 +89,13 @@ function readCronOwnerRows(
          ORDER BY receipt.started_at_ms DESC LIMIT 1`,
       )
       .get(jobId) as ExactOwnerRow | undefined;
-    const task = db
-      .prepare(
-        `SELECT binding.context_id, binding.execution_id, context.run_id, task.status
-         FROM task_runs AS task
-         JOIN execution_owner_lifecycle_bindings AS binding
-           ON binding.owner_kind = 'task' AND binding.owner_id = task.task_id
-         JOIN execution_identity_contexts AS context
-           ON context.context_id = binding.context_id
-          AND context.execution_id = binding.execution_id
-         WHERE task.runtime = 'cron' AND task.source_id = ? AND task.ended_at IS NOT NULL
-         ORDER BY task.created_at DESC LIMIT 1`,
-      )
-      .get(jobId) as ExactOwnerRow | undefined;
-    return cron && task ? { cron, task } : undefined;
+    return cron ? { cron } : undefined;
   } finally {
     db.close();
   }
 }
 
-function readCronOwnerBindingDiagnostic(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
-  jobId: string,
-): unknown {
+function readCronOwnerBindingDiagnostic(gateway: QaGatewayChild, jobId: string): unknown {
   const db = new DatabaseSync(stateDatabasePath(gateway), { readOnly: true });
   try {
     return {
@@ -166,129 +109,52 @@ function readCronOwnerBindingDiagnostic(
            ORDER BY receipt.started_at_ms DESC LIMIT 1`,
         )
         .get(jobId),
-      task: db
-        .prepare(
-          `SELECT binding.context_id, binding.execution_id, task.status
-           FROM task_runs AS task
-           JOIN execution_owner_lifecycle_bindings AS binding
-             ON binding.owner_kind = 'task' AND binding.owner_id = task.task_id
-           WHERE task.runtime = 'cron' AND task.source_id = ?
-           ORDER BY task.created_at DESC LIMIT 1`,
-        )
-        .get(jobId),
     };
   } finally {
     db.close();
   }
 }
 
-function readCliOwnerRows(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
+function readAgentIdentity(
+  gateway: QaGatewayChild,
   runId: string,
-): { task: ExactOwnerRow } | undefined {
+): Omit<ExactOwnerRow, "status"> | undefined {
   const db = new DatabaseSync(stateDatabasePath(gateway), { readOnly: true });
   try {
-    if (
-      !hasSqliteColumns(db, "execution_identity_contexts", ["context_id", "execution_id"]) ||
-      !hasSqliteColumns(db, "execution_owner_lifecycle_bindings", [
-        "owner_kind",
-        "owner_id",
-        "context_id",
-        "execution_id",
-      ]) ||
-      !hasSqliteColumns(db, "task_runs", ["task_id"])
-    ) {
-      return undefined;
-    }
-    const task = db
+    return db
       .prepare(
-        `SELECT binding.context_id, binding.execution_id, context.run_id, task.status
-         FROM task_runs AS task
-         JOIN execution_owner_lifecycle_bindings AS binding
-           ON binding.owner_kind = 'task' AND binding.owner_id = task.task_id
-         JOIN execution_identity_contexts AS context
-           ON context.context_id = binding.context_id
-          AND context.execution_id = binding.execution_id
-         WHERE task.runtime = 'cli' AND task.run_id = ? AND task.ended_at IS NOT NULL
-         LIMIT 1`,
+        "SELECT context_id, execution_id, run_id FROM execution_identity_contexts WHERE run_id = ?",
       )
-      .get(runId) as ExactOwnerRow | undefined;
-    return task ? { task } : undefined;
+      .get(runId) as Omit<ExactOwnerRow, "status"> | undefined;
   } finally {
     db.close();
   }
 }
 
-async function waitFor<T>(label: string, read: () => T | undefined): Promise<T> {
-  const deadline = Date.now() + 30_000;
-  while (Date.now() < deadline) {
-    const value = read();
-    if (value !== undefined) {
-      return value;
-    }
-    await delay(50);
+function requireExecutionIdentity(
+  result: Awaited<ReturnType<typeof inspectExecution>>["json"],
+  executionId: string,
+): void {
+  if (result.identity.state !== "present" || result.identity.context.executionId !== executionId) {
+    throw new Error("inspection omitted the exact admitted execution identity");
   }
-  throw new Error(`timed out waiting for ${label}`);
-}
-
-function requireOwnerDisplay(result: AuditRunInspectResult, producer: OwnerDisplayProducer) {
-  const receipt = result.decisionDisplays.find(
-    (candidate) =>
-      candidate.provenance.state === "verified" && candidate.provenance.producer === producer,
-  );
-  if (
-    !receipt ||
-    receipt.enforcement.coverageState !== "attribution-only" ||
-    receipt.decision.outcome !== "not-applicable"
-  ) {
-    throw new Error(`inspection omitted exact attribution-only ${producer} display`);
-  }
-  return receipt;
-}
-
-async function inspectExecution(params: {
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>;
-  executionId: string;
-  producers: OwnerDisplayProducer[];
-  privateSentinels: string[];
-}) {
-  const jsonRaw = await params.gateway.runCli([
-    "audit",
-    "--execution",
-    params.executionId,
-    "--explain",
-    "--json",
-  ]);
-  const json = parseJson<AuditRunInspectResult>(jsonRaw, "owner lifecycle inspection");
-  for (const producer of params.producers) {
-    requireOwnerDisplay(json, producer);
-  }
-  for (const sentinel of params.privateSentinels) {
-    if (jsonRaw.includes(sentinel)) {
-      throw new Error(`owner receipt leaked private sentinel ${sentinel}`);
-    }
-  }
-  const human = await params.gateway.runCli([
-    "audit",
-    "--execution",
-    params.executionId,
-    "--explain",
-  ]);
-  for (const producer of params.producers) {
-    if (!human.includes(`Display producer: ${producer}`)) {
-      throw new Error(`human inspection omitted ${producer}`);
-    }
-  }
-  return { json, jsonRaw, human };
 }
 
 async function runProof(options: ProducerOptions): Promise<string> {
   const mock = await startQaMockOpenAiServer();
-  let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
+  const gatewayOwner = createQaGatewayChild();
+  let gateway: QaGatewayChild | undefined;
+  const webhook = createMappedWebhookProof(HOOK_TOKEN);
   try {
-    gateway = await startQaGatewayChild({
+    gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
       useRepoCli: true,
+      command: {
+        executablePath: process.execPath,
+        argsPrefix: [path.join(options.repoRoot, "dist/index.js")],
+        cwd: options.repoRoot,
+        usePackagedPlugins: true,
+      },
       providerBaseUrl: `${mock.baseUrl}/v1`,
       providerMode: "mock-openai",
       transportBaseUrl: "http://127.0.0.1",
@@ -303,6 +169,7 @@ async function runProof(options: ProducerOptions): Promise<string> {
           enabled: true,
           token: HOOK_TOKEN,
           mappings: [
+            webhook.mapping,
             {
               id: "qa-suppressed-source",
               match: { path: "suppressed" },
@@ -339,6 +206,8 @@ async function runProof(options: ProducerOptions): Promise<string> {
       throw new Error("pre-admission mapping suppression allocated execution identity");
     }
 
+    const webhookProof = await webhook.admit(gateway);
+
     const cronSentinel = `PRIVATE-CRON-${randomUUID()}`;
     const cronJob = (await gateway.call("cron.add", {
       name: "QA autonomous receipt",
@@ -350,9 +219,9 @@ async function runProof(options: ProducerOptions): Promise<string> {
       delivery: { mode: "none" },
     })) as { id: string };
     await gateway.call("cron.run", { id: cronJob.id, mode: "force" });
-    let cronRows: { cron: ExactOwnerRow; task: ExactOwnerRow };
+    let cronRows: { cron: ExactOwnerRow };
     try {
-      cronRows = await waitFor("terminal cron/task exact bindings", () =>
+      cronRows = await waitFor("terminal cron exact binding", () =>
         readCronOwnerRows(gateway!, cronJob.id),
       );
     } catch (error) {
@@ -361,19 +230,14 @@ async function runProof(options: ProducerOptions): Promise<string> {
         { cause: error },
       );
     }
-    if (
-      cronRows.cron.context_id !== cronRows.task.context_id ||
-      cronRows.cron.execution_id !== cronRows.task.execution_id
-    ) {
-      throw new Error("cron receipt/task rows did not retain one exact admitted execution");
-    }
     const cronInspection = await inspectExecution({
       gateway,
       executionId: cronRows.cron.execution_id,
-      producers: ["cron-lifecycle", "task-lifecycle"],
+      producers: ["cron-lifecycle"],
       privateSentinels: [cronSentinel],
     });
-    const cronCursorPage = parseJson<AuditRunInspectResult>(
+    requireExecutionIdentity(cronInspection.json, cronRows.cron.execution_id);
+    const cronCursorPage = parseAuditInspection(
       await gateway.runCli([
         "audit",
         "--execution",
@@ -401,57 +265,73 @@ async function runProof(options: ProducerOptions): Promise<string> {
       },
       { expectFinal: false },
     )) as { runId: string; status: string };
-    await gateway.call(
+    const terminal = (await gateway.call(
       "agent.wait",
       { runId: accepted.runId, timeoutMs: 30_000 },
       { timeoutMs: 35_000 },
-    );
-    const cliRows = await waitFor("terminal CLI task exact binding", () =>
-      readCliOwnerRows(gateway!, accepted.runId),
+    )) as { status: string };
+    if (terminal.status !== "ok") {
+      throw new Error(`Agent did not complete: ${JSON.stringify(terminal)}`);
+    }
+    const agentIdentity = await waitFor("admitted agent execution identity", () =>
+      readAgentIdentity(gateway!, accepted.runId),
     );
     const taskInspection = await inspectExecution({
       gateway,
-      executionId: cliRows.task.execution_id,
-      producers: ["task-lifecycle"],
+      executionId: agentIdentity.execution_id,
+      producers: [],
       privateSentinels: [taskSentinel],
     });
 
+    requireExecutionIdentity(taskInspection.json, agentIdentity.execution_id);
     const beforeRestart = JSON.stringify({
       cron: cronInspection.json,
       task: taskInspection.json,
+      webhooks: webhookProof.inspections,
     });
     await gateway.restartAfterStateMutation(async () => {});
     const cronAfter = await inspectExecution({
       gateway,
       executionId: cronRows.cron.execution_id,
-      producers: ["cron-lifecycle", "task-lifecycle"],
+      producers: ["cron-lifecycle"],
       privateSentinels: [cronSentinel],
     });
+    requireExecutionIdentity(cronAfter.json, cronRows.cron.execution_id);
     const taskAfter = await inspectExecution({
       gateway,
-      executionId: cliRows.task.execution_id,
-      producers: ["task-lifecycle"],
+      executionId: agentIdentity.execution_id,
+      producers: [],
       privateSentinels: [taskSentinel],
     });
-    const afterRestart = JSON.stringify({ cron: cronAfter.json, task: taskAfter.json });
+    requireExecutionIdentity(taskAfter.json, agentIdentity.execution_id);
+    const webhooksAfter = await webhookProof.verifyAfterRestart(gateway);
+    const afterRestart = JSON.stringify({
+      cron: cronAfter.json,
+      task: taskAfter.json,
+      webhooks: webhooksAfter.inspections,
+    });
     if (afterRestart !== beforeRestart) {
       throw new Error("owner lifecycle JSON changed across Gateway replacement");
     }
 
     const db = new DatabaseSync(stateDatabasePath(gateway), { readOnly: true });
-    let genericCount = 0;
+    let ownerDuplicateCount = 0;
     try {
-      if (hasSqliteColumns(db, "execution_decision_facts", ["receipt_id"])) {
-        genericCount = (
-          db.prepare("SELECT COUNT(*) AS count FROM execution_decision_facts").get() as {
-            count: number;
-          }
+      if (hasSqliteColumns(db, "execution_decision_facts", ["owner"])) {
+        ownerDuplicateCount = (
+          db
+            .prepare(
+              `SELECT COUNT(*) AS count
+               FROM execution_decision_facts
+               WHERE owner = 'cron_run_receipts'`,
+            )
+            .get() as { count: number }
         ).count;
       }
     } finally {
       db.close();
     }
-    if (genericCount !== 0) {
+    if (ownerDuplicateCount !== 0) {
       throw new Error("owner lifecycle rows were duplicated into execution_decision_facts");
     }
 
@@ -462,22 +342,29 @@ async function runProof(options: ProducerOptions): Promise<string> {
       `${JSON.stringify(
         {
           suppression: { httpStatus: 204, identityAllocation: 0 },
+          webhooks: webhookProof.contexts,
+          webhookAdmittedAfterRestart: webhooksAfter.admittedContext,
           cron: {
             contextId: cronRows.cron.context_id,
             executionId: cronRows.cron.execution_id,
-            statuses: [cronRows.cron.status, cronRows.task.status],
-            displayProducers: ["cron-lifecycle", "task-lifecycle"],
+            statuses: [cronRows.cron.status],
+            displayProducers: ["cron-lifecycle"],
           },
           task: {
-            contextId: cliRows.task.context_id,
-            executionId: cliRows.task.execution_id,
-            statuses: [cliRows.task.status],
-            displayProducers: ["task-lifecycle"],
+            contextId: agentIdentity.context_id,
+            executionId: agentIdentity.execution_id,
+            statuses: [terminal.status],
+            displayProducers: [],
           },
           cursorCompatibility: { cronPrefixAccepted: true },
           genericDuplicateAbsent: true,
           byteEquivalentAfterRestart: true,
-          privacy: { cronPromptAbsent: true, taskPromptAbsent: true },
+          privacy: {
+            cronPromptAbsent: true,
+            taskPromptAbsent: true,
+            webhookMappingRequestAndBodyAbsent: true,
+            auditLogLinesChecked: webhooksAfter.auditLogLinesChecked,
+          },
           resultSha256: sha256(afterRestart),
         },
         null,
@@ -485,9 +372,9 @@ async function runProof(options: ProducerOptions): Promise<string> {
       )}\n`,
       "utf8",
     );
-    return `cron=${cronRows.cron.execution_id}; task=${cliRows.task.execution_id}; suppression=204; restart sha256=${sha256(afterRestart)}`;
+    return `cron=${cronRows.cron.execution_id}; task=${agentIdentity.execution_id}; suppression=204; restart sha256=${sha256(afterRestart)}`;
   } finally {
-    await gateway?.stop().catch(() => undefined);
+    await stopQaGatewayFixture(gatewayOwner).catch(() => undefined);
     await mock.stop();
   }
 }
@@ -521,12 +408,11 @@ async function runProducer(options: ProducerOptions): Promise<QaEvidenceSummaryJ
       id: SCENARIO_ID,
       title: "Autonomous task lifecycle receipts",
       sourcePath: `qa/scenarios/runtime/${SCENARIO_ID}.yaml`,
-      docsRefs: ["docs/gateway/audit.md", "docs/automation/tasks.md"],
+      docsRefs: ["docs/gateway/audit.md", "docs/automation/cron-jobs.md"],
       codeRefs: [
         "src/audit/execution-decision-receipts.ts",
         "src/cron/store/run-receipt-store.ts",
-        "src/tasks/task-registry.store.sqlite.ts",
-        "src/tasks/task-flow-registry.store.sqlite.ts",
+        "src/infra/agent-run-registry.ts",
       ],
     },
   });
@@ -548,7 +434,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     .then((exitCode) => {
       process.exitCode = exitCode;
     })
-    .catch((error) => {
+    .catch((error: unknown) => {
       console.error(formatErrorMessage(error));
       process.exitCode = 1;
     });

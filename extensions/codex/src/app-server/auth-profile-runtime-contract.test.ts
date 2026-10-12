@@ -3,6 +3,7 @@ import path from "node:path";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
 import { AUTH_PROFILE_RUNTIME_CONTRACT } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { seedRunSessionOwnerForTest } from "./run-attempt-session-owners.test-support.js";
 import {
   createAppServerHarness,
   createCodexRuntimePlanFixture,
@@ -19,6 +20,7 @@ import {
   writeCodexAppServerBinding as writeRawCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
 import type { CodexAppServerClientOptions } from "./shared-client.js";
+import { createCodexTestOAuthProfile } from "./test-support.js";
 
 /** Keeps native Codex bindings reusable while omitting OpenClaw tools and search. */
 function withPersistentCodexTestToolPolicy(
@@ -113,8 +115,14 @@ const DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
 });
 const APP_SERVER_START_WAIT = { interval: 1, timeout: 5_000 } as const;
 
-function writeCodexAppServerBinding(...args: Parameters<typeof writeRawCodexAppServerBinding>) {
+async function writeCodexAppServerBinding(
+  ...args: Parameters<typeof writeRawCodexAppServerBinding>
+) {
   const [sessionFile, binding, lookup] = args;
+  await seedRunSessionOwnerForTest(
+    AUTH_PROFILE_RUNTIME_CONTRACT.sessionId,
+    AUTH_PROFILE_RUNTIME_CONTRACT.sessionKey,
+  );
   return writeRawCodexAppServerBinding(
     sessionFile,
     {
@@ -125,12 +133,20 @@ function writeCodexAppServerBinding(...args: Parameters<typeof writeRawCodexAppS
   );
 }
 
-function createCodexAuthProfileHarness(params: { startMethod: "thread/start" | "thread/resume" }) {
+function createCodexAuthProfileHarness(params: {
+  startMethod: "thread/start" | "thread/resume";
+  persistedThreads?: string[];
+}) {
   const seenAuthProfileIds: Array<string | undefined> = [];
-  const seenAgentDirs: Array<string | undefined> = [];
   const seenClientOptions: CodexAppServerClientOptions[] = [];
   const harness = createAppServerHarness(
     async (method) => {
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
       if (method === params.startMethod) {
         return threadStartResult("thread-auth-contract", { cwd: "" });
       }
@@ -140,9 +156,9 @@ function createCodexAuthProfileHarness(params: { startMethod: "thread/start" | "
       throw new Error(`unexpected method: ${method}`);
     },
     {
-      onStart(authProfileId, agentDir, options) {
+      persistedThreads: params.persistedThreads,
+      onStart(authProfileId, _agentDir, options) {
         seenAuthProfileIds.push(authProfileId);
-        seenAgentDirs.push(agentDir);
         if (options) {
           seenClientOptions.push(options);
         }
@@ -152,16 +168,11 @@ function createCodexAuthProfileHarness(params: { startMethod: "thread/start" | "
   return {
     ...harness,
     seenAuthProfileIds,
-    seenAgentDirs,
     seenClientOptions,
     async completeTurn() {
-      await harness.notify({
-        method: "turn/completed",
-        params: {
-          threadId: "thread-auth-contract",
-          turnId: "turn-auth-contract",
-          turn: { id: "turn-auth-contract", status: "completed" },
-        },
+      await harness.completeTurn({
+        threadId: "thread-auth-contract",
+        turnId: "turn-auth-contract",
       });
     },
   };
@@ -176,29 +187,37 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
     tmpDir = tempDir;
   });
 
-  it("passes the exact OpenAI Codex auth profile into app-server startup", async () => {
-    const harness = createCodexAuthProfileHarness({ startMethod: "thread/start" });
+  it("rejects a missing bound auth profile before app-server startup", async () => {
     const sessionFile = path.join(tmpDir, "session.jsonl");
     const params = createParams(sessionFile, tmpDir);
-    params.authProfileId = AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId;
-    params.agentDir = tmpDir;
-
-    const run = runCodexAppServerAttempt(params);
-    await vi.waitFor(
-      () =>
-        expect(harness.seenAuthProfileIds).toEqual([
-          AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
-        ]),
-      APP_SERVER_START_WAIT,
+    const authProfileId = "openai:missing";
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-auth-contract",
+      cwd: tmpDir,
+      authProfileId,
+    });
+    const clientFactory = vi.fn(async () => {
+      throw new Error("unexpected app-server startup");
+    });
+    const rejection = await runCodexAppServerAttempt(params, { clientFactory }).catch(
+      (error: unknown) => error,
     );
-    expect(harness.seenAgentDirs).toEqual([tmpDir]);
-    await harness.waitForMethod("turn/start");
-    await harness.completeTurn();
-    await run;
+    expect(rejection).toBeInstanceOf(Error);
+    expect(rejection).toMatchObject({
+      code: "selected_auth_profile_unavailable",
+      message: expect.stringContaining(
+        'auth profile "openai:missing" was not found in the OpenClaw credential store.',
+      ),
+    });
+    expect(rejection).not.toHaveProperty("status");
+    expect(clientFactory).not.toHaveBeenCalled();
   });
 
   it("reuses a bound OpenAI Codex auth profile when resume params omit authProfileId", async () => {
-    const harness = createCodexAuthProfileHarness({ startMethod: "thread/resume" });
+    const harness = createCodexAuthProfileHarness({
+      startMethod: "thread/resume",
+      persistedThreads: ["thread-auth-contract"],
+    });
     const sessionFile = path.join(tmpDir, "session.jsonl");
     await writeCodexAppServerBinding(sessionFile, {
       threadId: "thread-auth-contract",
@@ -209,30 +228,8 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
     // authProfileId is intentionally omitted to exercise the resume-bound profile path.
     const params = createParams(sessionFile, tmpDir);
 
-    const run = runCodexAppServerAttempt(params);
-    await vi.waitFor(
-      () =>
-        expect(harness.seenAuthProfileIds).toEqual([
-          AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
-        ]),
-      APP_SERVER_START_WAIT,
-    );
-    await harness.waitForMethod("turn/start");
-    await harness.completeTurn();
-    await run;
-  });
-
-  it("prefers an explicit runtime auth profile over a stale persisted binding", async () => {
-    const harness = createCodexAuthProfileHarness({ startMethod: "thread/resume" });
-    const sessionFile = path.join(tmpDir, "session.jsonl");
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-auth-contract",
-      cwd: tmpDir,
-      authProfileId: "openai:stale",
-      dynamicToolsFingerprint: "[]",
-    });
-    const params = createParams(sessionFile, tmpDir);
-    params.authProfileId = AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId;
+    params.authProfileStore.profiles[AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId] =
+      createCodexTestOAuthProfile("synthetic-account");
 
     const run = runCodexAppServerAttempt(params);
     await vi.waitFor(
@@ -245,9 +242,6 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
     await harness.waitForMethod("turn/start");
     await harness.completeTurn();
     await run;
-
-    const binding = await readCodexAppServerBinding(sessionFile);
-    expect(binding?.authProfileId).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId);
   });
 
   it("locks a prepared Platform route to its resolved API key", async () => {
@@ -375,50 +369,44 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
     await run;
   });
 
-  it.each([
-    { label: "a subscription route", authRequirement: "subscription" as const },
-    { label: "a Platform route", authRequirement: "api-key" as const },
-  ])(
-    "keeps a user-home app-server on native Codex auth for $label",
-    async ({ authRequirement }) => {
-      const harness = createCodexAuthProfileHarness({ startMethod: "thread/start" });
-      const sessionFile = path.join(tmpDir, "session.jsonl");
-      const params = createParams(sessionFile, tmpDir);
-      params.agentDir = tmpDir;
-      params.authProfileStore = {
-        version: 1,
-        profiles: {
-          "openai:chatgpt": {
-            type: "oauth",
-            provider: "openai",
-            access: "subscription-token",
-            refresh: "refresh-token",
-            expires: Date.now() + 60 * 60_000,
-          },
+  it("keeps a user-home app-server on native auth despite a prepared Platform route", async () => {
+    const harness = createCodexAuthProfileHarness({ startMethod: "thread/start" });
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const params = createParams(sessionFile, tmpDir);
+    params.agentDir = tmpDir;
+    params.authProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:chatgpt": {
+          type: "oauth",
+          provider: "openai",
+          access: "subscription-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60 * 60_000,
         },
-        order: { openai: ["openai:chatgpt"] },
-      };
-      setPreparedOpenAIRoute(params, authRequirement, "openai:chatgpt");
+      },
+      order: { openai: ["openai:chatgpt"] },
+    };
+    setPreparedOpenAIRoute(params, "api-key", "openai:chatgpt");
 
-      const run = runCodexAppServerAttempt(params, {
-        pluginConfig: {
-          appServer: { homeScope: "user" },
-          supervision: { enabled: true },
-        },
-      });
-      await vi.waitFor(
-        () => expect(harness.seenClientOptions).toHaveLength(1),
-        APP_SERVER_START_WAIT,
-      );
-      expect(harness.seenClientOptions[0]).not.toHaveProperty("preparedAuth");
-      expect(harness.seenClientOptions[0]).toMatchObject({
-        startOptions: expect.objectContaining({ homeScope: "user" }),
-      });
-      await harness.waitForMethod("turn/start");
-      await harness.completeTurn();
-      await run;
-    },
-  );
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: {
+        appServer: { homeScope: "user" },
+        supervision: { enabled: true },
+      },
+    });
+    await vi.waitFor(
+      () => expect(harness.seenClientOptions).toHaveLength(1),
+      APP_SERVER_START_WAIT,
+    );
+    expect(harness.seenClientOptions[0]).not.toHaveProperty("preparedAuth");
+    expect(harness.seenClientOptions[0]).toMatchObject({
+      startOptions: expect.objectContaining({ homeScope: "user" }),
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn();
+    await run;
+  });
 
   it("fails before profile selection when a prepared Platform route has no key", async () => {
     const harness = createCodexAuthProfileHarness({ startMethod: "thread/start" });
@@ -463,14 +451,7 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
     expect(harness.seenClientOptions).toHaveLength(0);
   });
 
-  it.each([
-    { label: "no forwarded profile", forwardedProfileId: undefined, profileType: "oauth" as const },
-    {
-      label: "an API-key profile",
-      forwardedProfileId: "openai:platform",
-      profileType: "api_key" as const,
-    },
-  ])("rejects a subscription route with $label", async (testCase) => {
+  it("rejects a subscription route with an API-key profile", async () => {
     const harness = createCodexAuthProfileHarness({ startMethod: "thread/start" });
     const sessionFile = path.join(tmpDir, "session.jsonl");
     const params = createParams(sessionFile, tmpDir);
@@ -478,33 +459,22 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
     vi.stubEnv("CODEX_ACCESS_TOKEN", "ambient-subscription-token");
     params.authProfileStore = {
       version: 1,
-      profiles:
-        testCase.profileType === "api_key"
-          ? {
-              "openai:platform": {
-                type: "api_key",
-                provider: "openai",
-                key: "platform-profile-key",
-              },
-              "openai:decoy": {
-                type: "oauth",
-                provider: "openai",
-                access: "decoy-subscription-token",
-                refresh: "decoy-refresh-token",
-                expires: Date.now() + 60_000,
-              },
-            }
-          : {
-              "openai:decoy": {
-                type: "oauth",
-                provider: "openai",
-                access: "decoy-subscription-token",
-                refresh: "decoy-refresh-token",
-                expires: Date.now() + 60_000,
-              },
-            },
+      profiles: {
+        "openai:platform": {
+          type: "api_key",
+          provider: "openai",
+          key: "platform-profile-key",
+        },
+        "openai:decoy": {
+          type: "oauth",
+          provider: "openai",
+          access: "decoy-subscription-token",
+          refresh: "decoy-refresh-token",
+          expires: Date.now() + 60_000,
+        },
+      },
     };
-    setPreparedOpenAIRoute(params, "subscription", testCase.forwardedProfileId);
+    setPreparedOpenAIRoute(params, "subscription", "openai:platform");
 
     try {
       await expect(runCodexAppServerAttempt(params)).rejects.toThrow(

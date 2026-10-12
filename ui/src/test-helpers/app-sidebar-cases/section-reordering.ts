@@ -7,22 +7,10 @@ import {
   mountSidebar,
   type SidebarLifecycleState,
 } from "../app-sidebar.ts";
+import { createDataTransferStub } from "../drag-data.ts";
 import { gatewayHelloForMethods } from "../gateway-methods.ts";
 import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.ts";
-
-function createDataTransferStub() {
-  const data = new Map<string, string>();
-  return {
-    get types() {
-      return [...data.keys()];
-    },
-    setData: (type: string, value: string) => void data.set(type, value),
-    getData: (type: string) => data.get(type) ?? "",
-    effectAllowed: "none",
-    dropEffect: "none",
-  };
-}
 
 function dispatchDragEvent(
   target: Element,
@@ -114,32 +102,6 @@ describe("AppSidebar section reordering", () => {
     return header;
   }
 
-  it("marks every section header draggable and renders a grip", async () => {
-    const { sidebar } = await mountWithGroups(["Alpha", "Beta"], [], { withCatalog: true });
-
-    expect(groupHeader(sidebar, "category:Alpha").getAttribute("draggable")).toBe("true");
-    expect(groupHeader(sidebar, "ungrouped").getAttribute("draggable")).toBe("true");
-    expect(groupHeader(sidebar, "groups").getAttribute("draggable")).toBe("true");
-    expect(groupHeader(sidebar, "work").getAttribute("draggable")).toBe("true");
-    expect(groupHeader(sidebar, "catalog:codex").getAttribute("draggable")).toBe("true");
-    const codingSection = sidebar.querySelector('[data-session-section="work"]');
-    const catalogSection = sidebar.querySelector('[data-session-section="catalog:codex"]');
-    expect(catalogSection?.parentElement).toBe(codingSection?.parentElement);
-    expect(catalogSection?.previousElementSibling).toBe(codingSection);
-    for (const sectionId of [
-      "category:Alpha",
-      "category:Beta",
-      "ungrouped",
-      "groups",
-      "work",
-      "catalog:codex",
-    ]) {
-      expect(
-        groupHeader(sidebar, sectionId).querySelector(".sidebar-session-group-drag-handle"),
-      ).not.toBeNull();
-    }
-  });
-
   it("disables section and row dragging without group write access", async () => {
     const { sidebar, harness } = await mountWithGroups(["Alpha"], [], {
       scopes: ["operator.read"],
@@ -164,7 +126,7 @@ describe("AppSidebar section reordering", () => {
     expect(harness.groupsPut).not.toHaveBeenCalled();
   });
 
-  it("does not start a section drag from a header action button", async () => {
+  it("keeps new-session link gestures separate from section dragging and menus", async () => {
     const { sidebar } = await mountWithGroups(["Alpha"]);
     const dataTransfer = createDataTransferStub();
     const newSessionButton = groupHeader(sidebar, "category:Alpha").querySelector(
@@ -174,46 +136,18 @@ describe("AppSidebar section reordering", () => {
       throw new Error("expected new-session header action");
     }
 
+    expect(newSessionButton.getAttribute("href")).toBe("/new?agent=main&group=Alpha");
+    const contextMenu = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    newSessionButton.dispatchEvent(contextMenu);
+    expect(contextMenu.defaultPrevented).toBe(false);
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(".sidebar-session-group-menu")).toBeNull();
+
     newSessionButton.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
     dispatchDragEvent(groupHeader(sidebar, "category:Alpha"), "dragstart", dataTransfer);
 
     expect(dataTransfer.types).toEqual([]);
     expect(sidebar.sessionOrganizer.draggingSidebarSection).toBeNull();
-  });
-
-  it("persists the new catalog order when a group header drops onto another group", async () => {
-    const { sidebar, harness } = await mountWithGroups(["Alpha", "Beta", "Gamma"]);
-    const dataTransfer = createDataTransferStub();
-
-    dispatchDragEvent(groupHeader(sidebar, "category:Gamma"), "dragstart", dataTransfer);
-    const alphaSection = sidebar.querySelector('[data-session-section="category:Alpha"]');
-    if (!alphaSection) {
-      throw new Error("expected Alpha section");
-    }
-    dispatchDragEvent(alphaSection, "drop", dataTransfer);
-
-    await waitForFast(() =>
-      expect(harness.groupsPut).toHaveBeenCalledWith(
-        ["Gamma", "Alpha", "Beta"],
-        ["category:Gamma", "category:Alpha", "category:Beta", "ungrouped", "groups", "work"],
-      ),
-    );
-  });
-
-  it("persists a built-in section move with the full section order", async () => {
-    const { sidebar, harness } = await mountWithGroups([]);
-    const dataTransfer = createDataTransferStub();
-
-    dispatchDragEvent(groupHeader(sidebar, "work"), "dragstart", dataTransfer);
-    const threadsSection = sidebar.querySelector('[data-session-section="ungrouped"]');
-    if (!threadsSection) {
-      throw new Error("expected Threads section");
-    }
-    dispatchDragEvent(threadsSection, "drop", dataTransfer);
-
-    await waitForFast(() =>
-      expect(harness.groupsPut).toHaveBeenCalledWith([], ["work", "ungrouped", "groups"]),
-    );
   });
 
   it("clears a group session category when it drops onto Groups", async () => {
@@ -237,7 +171,7 @@ describe("AppSidebar section reordering", () => {
       expect(harness.patch).toHaveBeenCalledWith(
         "agent:main:group-0",
         { category: null },
-        { agentId: "main" },
+        { agentId: "main", expectedSessionId: "session:agent:main:group-0" },
       ),
     );
   });

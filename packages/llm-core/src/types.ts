@@ -1,5 +1,15 @@
 import type { TSchema } from "typebox";
-// LLM Core type module defines shared TypeScript contracts.
+import type {
+  ModelDataCostRates,
+  ModelDataMediaInputConfig,
+  ModelDataRawPricingTier,
+  ModelDataThinkingFormat,
+  ModelDataThinkingLevel,
+  ModelDataThinkingLevelMap,
+  ModelRoutingMaxPrice,
+  ModelRoutingPercentiles,
+  ModelRoutingSortConfig,
+} from "./model-data.js";
 import type { AssistantMessageDiagnostic } from "./utils/diagnostics.js";
 export type { AssistantMessageDiagnostic, DiagnosticErrorInfo } from "./utils/diagnostics.js";
 
@@ -13,6 +23,7 @@ export type KnownApi =
   | "anthropic-messages"
   | "bedrock-converse-stream"
   | "google-generative-ai"
+  | "google-interactions"
   | "google-vertex";
 
 /** Provider API id; custom providers can use ids outside the built-in set. */
@@ -34,11 +45,11 @@ export type KnownImagesProvider = "openrouter";
 export type ImagesProvider = string;
 
 /** Normalized reasoning-effort levels shared across provider-specific knobs. */
-export type ThinkingLevel = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+export type ThinkingLevel = Exclude<ModelDataThinkingLevel, "off">;
 /** Model thinking setting including explicit disabled state. */
-export type ModelThinkingLevel = "off" | ThinkingLevel;
+export type ModelThinkingLevel = ModelDataThinkingLevel;
 /** Provider-specific values for normalized thinking levels. */
-export type ThinkingLevelMap = Partial<Record<ModelThinkingLevel, string | null>>;
+export type ThinkingLevelMap = ModelDataThinkingLevelMap;
 
 /** Token budgets for each thinking level (token-based providers only) */
 export interface ThinkingBudgets {
@@ -55,16 +66,13 @@ export type CacheRetention = "none" | "short" | "long";
 /** Streaming transport preference for providers that support multiple transports. */
 export type Transport = "sse" | "websocket" | "websocket-cached" | "auto";
 
-/** Helper for hooks that may be synchronous or asynchronous. */
 export type MaybePromise<T> = T | Promise<T>;
 
-/** Minimal HTTP response metadata surfaced through provider hooks. */
 export interface ProviderResponse {
   status: number;
   headers: Record<string, string>;
 }
 
-/** Request options shared by text streaming providers. */
 export interface StreamOptions {
   temperature?: number;
   maxTokens?: number;
@@ -118,6 +126,23 @@ export interface StreamOptions {
    */
   onResponse?: (response: ProviderResponse, model: Model) => void | Promise<void>;
   /**
+   * Observe a live response that accepts user input before generation finishes.
+   * `steer` resolves false only when the input was definitely not admitted;
+   * admitted input cannot be withdrawn. Providers settle pending submissions
+   * before closing the response and call the returned cleanup on closure.
+   */
+  onActiveResponse?: (control: {
+    steer(messages: readonly UserMessage[]): Promise<boolean>;
+    /** Read-only after closure: deferred input still needs an explicit continuation request. */
+    needsContinuation?: () => boolean;
+  }) => (() => void) | void;
+  /**
+   * The caller can execute completed async calls before generation finishes.
+   * Providers advertise async tools only with this host capability; this is
+   * independent of parallel execution of an ordinary completed tool batch.
+   */
+  asyncToolExecution?: boolean;
+  /**
    * Optional custom HTTP headers to include in API requests.
    * Merged with provider defaults; can override default headers.
    * Not supported by all providers (e.g., AWS Bedrock uses SDK auth).
@@ -128,10 +153,7 @@ export interface StreamOptions {
    * For example, OpenAI and Anthropic SDK clients default to 10 minutes.
    */
   timeoutMs?: number;
-  /**
-   * Maximum retry attempts for providers/SDKs that support client-side retries.
-   * For example, OpenAI and Anthropic SDK clients default to 2.
-   */
+  /** @deprecated Ignored by built-in text transports; retries are owned by the host runner. */
   maxRetries?: number;
   /**
    * Maximum delay in milliseconds to wait for a retry when the server requests a long wait.
@@ -151,7 +173,6 @@ export interface StreamOptions {
 
 export type ProviderStreamOptions = StreamOptions & Record<string, unknown>;
 
-/** Request options shared by image-generation providers. */
 export interface ImagesOptions {
   signal?: AbortSignal;
   apiKey?: string;
@@ -160,9 +181,6 @@ export interface ImagesOptions {
    * Return undefined to keep the payload unchanged.
    */
   onPayload?: (payload: unknown, model: ImagesModel) => MaybePromise<unknown>;
-  /**
-   * Optional callback invoked after an HTTP response is received.
-   */
   onResponse?: (response: ProviderResponse, model: ImagesModel) => void | Promise<void>;
   /**
    * Optional custom HTTP headers to include in API requests.
@@ -196,13 +214,13 @@ export type ProviderImagesOptions = ImagesOptions & Record<string, unknown>;
 
 /** Unified text options used by simple completion helpers. */
 export interface SimpleStreamOptions extends StreamOptions {
+  /** Optional processing tier; only providers supporting these tiers apply it. */
+  serviceTier?: "default" | "priority";
   reasoning?: ModelThinkingLevel;
   /** Custom token budgets for thinking levels (token-based providers only) */
   thinkingBudgets?: ThinkingBudgets;
 }
 
-// Generic StreamFunction with typed options.
-//
 // Contract:
 // - Must return an AssistantMessageEventStream.
 // - Once invoked, request/model/runtime failures should be encoded in the
@@ -233,14 +251,12 @@ export interface TextSignatureV1 {
   phase?: "commentary" | "final_answer";
 }
 
-/** Plain assistant/user text content block. */
 export interface TextContent {
   type: "text";
   text: string;
   textSignature?: string; // e.g., for OpenAI responses, message metadata (legacy id string or TextSignatureV1 JSON)
 }
 
-/** Provider reasoning/thinking content block, including opaque replay signatures. */
 export interface ThinkingContent {
   type: "thinking";
   thinking: string;
@@ -275,15 +291,21 @@ export interface ImageContent {
 
 /** Normalized assistant tool call emitted by providers or repaired from text. */
 export interface ToolCall {
+  /** The provider completed this call and permits generation to continue without its result. */
+  async?: true;
   type: "toolCall";
   id: string;
   name: string;
   arguments: Record<string, unknown>;
+  /**
+   * Producer-only cumulative argument JSON while the call streams. Producers remove it before
+   * `toolcall_end` or terminal cleanup; it never appears in final messages or transcripts.
+   */
+  partialJson?: string;
   thoughtSignature?: string; // Google-specific: opaque signature for reusing thought context
   executionMode?: "sequential" | "parallel";
 }
 
-/** Normalized token and cost accounting for a provider response. */
 export interface Usage {
   input: number;
   output: number;
@@ -309,30 +331,169 @@ export interface Usage {
   };
 }
 
-/** Normalized assistant stop reasons across text providers. */
+/** Per-million-token rates for separately billed token buckets. */
+export type ModelCostRates = ModelDataCostRates;
+
+/** One whole-request tier on the cache-inclusive prompt-token axis. */
+export type PricingTier = ModelCostRates & {
+  /** Half-open prompt-token interval `[start, end)`. */
+  range: [number, number];
+};
+
+export type RawPricingTier = ModelDataRawPricingTier;
+
+/** Normalized pricing used by token accounting and usage summaries. */
+export type ModelCostConfig = ModelCostRates & { tieredPricing?: PricingTier[] };
+export type RawModelCostConfig = ModelCostRates & { tieredPricing?: RawPricingTier[] };
+
 export type StopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
 
 /** Stable error codes for provider outcomes that cannot be replayed safely. */
 export const PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE = "PROVIDER_POST_DISPATCH_AMBIGUITY";
 export const PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE = "PROVIDER_FAILURE_WITH_OUTPUT";
+/** Pre-dispatch argument rejection; callers still enforce output and effect guards. */
+export const MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE = "malformed_tool_call_arguments";
 
-/** User turn in a text-model conversation. */
+export const DEFAULT_MISSING_TOOL_RESULT_TEXT =
+  "Tool call interrupted before a result was recorded; its outcome is unknown. Retry only if the operation is read-only or idempotent. If it may have had side effects, verify the current state first instead of repeating it.";
+
 export interface UserMessage {
   role: "user";
   content: string | (TextContent | ImageContent)[];
   timestamp: number; // Unix timestamp in milliseconds
+  /** Trusted runtime-context metadata; ordinary user messages omit it. */
+  runtimeContext?: {
+    /** Prefix-bound providers retain these messages across turns. */
+    retained?: boolean;
+  };
   /**
-   * Marks a user message that carries transient current-turn runtime context
-   * (e.g. an OpenClaw runtime-context carrier appended after the active user
-   * turn). Such messages are volatile — present only on the turn they belong to
-   * and stripped on replay — so providers must NOT anchor a prompt-cache
-   * breakpoint on them, or the breakpoint would land on bytes that change every
-   * turn. Anchoring stays on the last stable (non-carrier) user message.
+   * @deprecated Shipped through v2026.9.7. Use `runtimeContext`; remove after
+   * the minimum supported plugin API no longer includes that release.
    */
   runtimeContextCarrier?: boolean;
+  /**
+   * @deprecated Shipped through v2026.9.7. Use `runtimeContext.retained`;
+   * remove with `runtimeContextCarrier`.
+   */
+  runtimeContextCarrierRetained?: boolean;
+  /** Operator-authored text projected to system authority on capable routes. */
+  operatorMessage?: { turnScoped: boolean };
 }
 
-/** Assistant turn, including provider identity and final stop state. */
+export const RUNTIME_CONTEXT_CUSTOM_TYPE = "openclaw.runtime-context";
+export const RUNTIME_CONTEXT_BEGIN_MARKER = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>";
+export const RUNTIME_CONTEXT_END_MARKER = "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
+export const RUNTIME_CONTEXT_HEADER = "OpenClaw runtime context:";
+export const RUNTIME_CONTEXT_FOOTER = "End OpenClaw runtime context.";
+const ESCAPED_RUNTIME_CONTEXT_FOOTER = "[[RUNTIME_CONTEXT_FOOTER_ESCAPED]]";
+
+/** Identifies the exact delimiter envelope emitted by shipped transcript carriers. */
+export function hasLegacyRuntimeContextEnvelope(content: string): boolean {
+  return (
+    content.startsWith(`${RUNTIME_CONTEXT_BEGIN_MARKER}\n`) &&
+    content.endsWith(`\n${RUNTIME_CONTEXT_END_MARKER}`)
+  );
+}
+
+/** Prevent untrusted carrier content from terminating its provider projection. */
+export function escapeRuntimeContextFooter(content: string): string {
+  return content.replaceAll(RUNTIME_CONTEXT_FOOTER, ESCAPED_RUNTIME_CONTEXT_FOOTER);
+}
+
+/** Builds the human-readable projection used only at provider boundaries. */
+export function labelRuntimeContextText(content: string): string {
+  return `${RUNTIME_CONTEXT_HEADER}\n${escapeRuntimeContextFooter(content)}\n${RUNTIME_CONTEXT_FOOTER}`;
+}
+
+/** Labels runtime context once while preserving structured text blocks. */
+export function labelRuntimeContextContent(
+  content: string | TextContent[],
+): string | TextContent[] {
+  if (typeof content === "string") {
+    return labelRuntimeContextText(content);
+  }
+  if (content.length === 0) {
+    return [{ type: "text", text: `${RUNTIME_CONTEXT_HEADER}\n${RUNTIME_CONTEXT_FOOTER}` }];
+  }
+  return content.map((block, index) => ({
+    ...block,
+    text: [
+      ...(index === 0 ? [RUNTIME_CONTEXT_HEADER] : []),
+      escapeRuntimeContextFooter(block.text),
+      ...(index === content.length - 1 ? [RUNTIME_CONTEXT_FOOTER] : []),
+    ].join("\n"),
+  }));
+}
+
+/** Flattens already-labeled runtime context for string-only provider messages. */
+export function runtimeContextContentToText(content: string | TextContent[]): string {
+  return typeof content === "string" ? content : content.map((block) => block.text).join("\n");
+}
+
+/** Trusted per-turn OpenClaw context, projected by each provider at its valid authority level. */
+export type RuntimeContextMessage = Omit<UserMessage, "content"> & {
+  content: string | TextContent[];
+} & (
+    | { runtimeContext: NonNullable<UserMessage["runtimeContext"]> }
+    | { runtimeContextCarrier: true }
+  );
+
+/** Identifies trusted runtime context independently of its provider-compatible shape. */
+export function hasRuntimeContextMarker(message: {
+  role: string;
+  runtimeContext?: unknown;
+  runtimeContextCarrier?: unknown;
+}): boolean {
+  return (
+    message.role === "user" &&
+    (message.runtimeContext !== undefined || message.runtimeContextCarrier === true)
+  );
+}
+
+/** Distinguishes trusted runtime context while preserving user-role plugin compatibility. */
+export function isRuntimeContextMessage(message: {
+  role: string;
+  content?: unknown;
+  runtimeContext?: unknown;
+  runtimeContextCarrier?: unknown;
+}): message is RuntimeContextMessage {
+  const textOnlyContent =
+    typeof message.content === "string" ||
+    (Array.isArray(message.content) &&
+      message.content.every(
+        (part) =>
+          typeof part === "object" &&
+          part !== null &&
+          "type" in part &&
+          part.type === "text" &&
+          "text" in part &&
+          typeof part.text === "string",
+      ));
+  return textOnlyContent && hasRuntimeContextMarker(message);
+}
+
+/** Reads canonical metadata while accepting the shipped v2026.9.7 carrier fields. */
+export function readRuntimeContextMetadata(
+  message: RuntimeContextMessage,
+): NonNullable<UserMessage["runtimeContext"]> {
+  if (message.runtimeContext !== undefined) {
+    return message.runtimeContext;
+  }
+  return message.runtimeContextCarrierRetained === undefined
+    ? {}
+    : { retained: message.runtimeContextCarrierRetained };
+}
+
+/** Updates canonical retention and its shipped compatibility projection together. */
+export function setRuntimeContextRetention(
+  message: RuntimeContextMessage,
+  retained: boolean | undefined,
+): void {
+  message.runtimeContext = { ...readRuntimeContextMetadata(message), retained };
+  message.runtimeContextCarrier = true;
+  message.runtimeContextCarrierRetained = retained;
+}
+
 export type AssistantDeliveryTtsFacts = {
   tagged: true;
   text?: string;
@@ -347,9 +508,11 @@ export interface AssistantMessage {
   content: (TextContent | ThinkingContent | ToolCall)[];
   openclawDelivery?: {
     audioAsVoice?: true;
+    /** Exact media directives consumed by the managed-media transcript rewrite owner. */
+    mediaUrls?: string[];
     replyToCurrent?: true;
     replyToId?: string;
-    /** Provider text phase is unresolved until the assistant turn reaches terminal state. */
+    /** @deprecated Ignored; omit this field. Retained until the next Plugin SDK major. */
     textPhaseRequiresTerminal?: true;
     /** Parsed once at the assistant write boundary; delivery resolves policy from these facts. */
     tts?: AssistantDeliveryTtsFacts;
@@ -361,9 +524,11 @@ export interface AssistantMessage {
   responseId?: string; // Provider-specific response/message identifier when the upstream API exposes one
   providerReplay?: ProviderReplayState; // Opaque provider state carried into a compatible later request.
   turnId?: string; // Runtime-assigned stable turn identity when the provider does not expose one
-  diagnostics?: AssistantMessageDiagnostic[]; // Redacted provider/runtime diagnostics for failures and recoveries.
+  diagnostics?: AssistantMessageDiagnostic[]; // Redacted provider/runtime completion, failure, and recovery diagnostics.
   usage: Usage;
   stopReason: StopReason;
+  /** A completed provider response can explicitly request another inference with false. */
+  endTurn?: boolean;
   errorMessage?: string;
   errorCode?: string;
   errorType?: string;
@@ -371,34 +536,27 @@ export interface AssistantMessage {
   timestamp: number; // Unix timestamp in milliseconds
 }
 
-/** Tool result turn that answers a prior assistant tool call. */
 export interface ToolResultMessage<TDetails = unknown> {
   role: "toolResult";
   toolCallId: string;
   toolName: string;
-  content: (TextContent | ImageContent)[]; // Supports text and images
+  content: (TextContent | ImageContent)[];
   details?: TDetails;
   isError: boolean;
   timestamp: number; // Unix timestamp in milliseconds
 }
 
-/** Any text-model conversation message supported by LLM core. */
 export type Message = UserMessage | AssistantMessage | ToolResultMessage;
 
-/** Image request input content accepted by image providers. */
 export type ImagesInputContent = TextContent | ImageContent;
-/** Image response output content returned by image providers. */
 export type ImagesOutputContent = TextContent | ImageContent;
 
-/** Image-generation request context. */
 export interface ImagesContext {
   input: ImagesInputContent[];
 }
 
-/** Normalized image-generation stop reasons. */
 export type ImagesStopReason = "stop" | "error" | "aborted";
 
-/** Final image-generation response shape. */
 export interface AssistantImages {
   api: ImagesApi;
   provider: ImagesProvider;
@@ -411,14 +569,17 @@ export interface AssistantImages {
   timestamp: number; // Unix timestamp in milliseconds
 }
 
-/** Provider tool declaration with a TypeBox/JSON-schema parameter object. */
 export interface Tool<TParameters extends TSchema = TSchema> {
   name: string;
   description: string;
   parameters: TParameters;
+  /**
+   * `false` keeps calls synchronous where the provider can keep generating after a call
+   * (OpenAI async tools): the response pauses until earlier results are delivered.
+   */
+  async?: false;
 }
 
-/** Text-model request context shared by provider adapters. */
 export interface Context {
   systemPrompt?: string;
   messages: Message[];
@@ -457,11 +618,10 @@ export type AssistantMessageEvent =
   | { type: "error"; reason: Extract<StopReason, "aborted" | "error">; error: AssistantMessage };
 
 export interface AssistantMessageEventStreamContract extends AsyncIterable<AssistantMessageEvent> {
-  /** Queue one stream event for consumers. */
   push(event: AssistantMessageEvent): void;
   /** Complete the stream and optionally resolve the final message. */
   end(result?: AssistantMessage): void;
-  /** Final assistant message produced by the stream. */
+  /** Final assistant message produced independently of event iteration. */
   result(): Promise<AssistantMessage>;
 }
 
@@ -481,6 +641,10 @@ export interface OpenAICompletionsCompat {
   supportsDeveloperRole?: boolean;
   /** Whether the provider supports `reasoning_effort`. Default: auto-detected from URL. */
   supportsReasoningEffort?: boolean;
+  /** Provider-native reasoning efforts accepted by the model. Overrides known model defaults. */
+  supportedReasoningEfforts?: string[];
+  /** Per-level reasoning effort overrides, e.g. map "off" to "low" for models that cannot disable thinking. */
+  reasoningEffortMap?: Record<string, string>;
   /** Whether the provider supports `stream_options: { include_usage: true }` for token usage in streaming responses. Default: true. */
   supportsUsageInStreaming?: boolean;
   /** Which field to use for max tokens. Default: auto-detected from URL. */
@@ -494,14 +658,7 @@ export interface OpenAICompletionsCompat {
   /** Whether all replayed assistant messages must include an empty reasoning_content field when reasoning is enabled. Default: auto-detected from URL. */
   requiresReasoningContentOnAssistantMessages?: boolean;
   /** Format for reasoning/thinking parameter. "openai" uses reasoning_effort, "openrouter" uses reasoning: { effort }, "deepseek" uses thinking: { type } plus reasoning_effort, "together" uses reasoning: { enabled } plus reasoning_effort when supported, "zai" uses top-level enable_thinking: boolean, "qwen" uses top-level enable_thinking: boolean, and "qwen-chat-template" uses chat_template_kwargs.enable_thinking. Default: "openai". */
-  thinkingFormat?:
-    | "openai"
-    | "openrouter"
-    | "deepseek"
-    | "together"
-    | "zai"
-    | "qwen"
-    | "qwen-chat-template";
+  thinkingFormat?: ModelDataThinkingFormat;
   /** OpenRouter-specific routing preferences. Only used when baseUrl points to OpenRouter. */
   openRouterRouting?: OpenRouterRouting;
   /** Vercel AI Gateway routing preferences. Only used when baseUrl points to Vercel AI Gateway. */
@@ -524,14 +681,33 @@ export interface OpenAICompletionsCompat {
 
 /** Compatibility settings for OpenAI Responses APIs. */
 export interface OpenAIResponsesCompat {
+  /** Whether a compatible provider accepts the `strict` tool field. Default: auto-detected from the endpoint. */
+  supportsStrictMode?: boolean;
   /** Whether the provider supports the `developer` role (vs `system`). Default: true. */
   supportsDeveloperRole?: boolean;
+  /** Whether to send reasoning effort settings. Defaults to the model's known capabilities. */
+  supportsReasoningEffort?: boolean;
+  /** Provider-native reasoning efforts accepted by the model. Overrides known model defaults. */
+  supportedReasoningEfforts?: string[];
+  /** Per-level reasoning effort overrides, e.g. map "off" to "low" for models that cannot disable thinking. */
+  reasoningEffortMap?: Record<string, string>;
   /** Whether the model accepts the `temperature` parameter. Default: true. */
   supportsTemperature?: boolean;
   /** Whether to send the OpenAI `session_id` cache-affinity header from `options.sessionId` when caching is enabled. Default: true. */
   sendSessionIdHeader?: boolean;
   /** Whether the provider supports `prompt_cache_retention: "24h"`. Default: true. */
   supportsLongCacheRetention?: boolean;
+  /** Whether the provider honors top-level `instructions`. Defaults to true only for verified native routes (OpenAI, xAI); every other route defaults to false and embeds the system prompt in `input` unless set true here after verifying against that endpoint. */
+  supportsInstructions?: boolean;
+  /**
+   * Explicit opt-in for HTTP continuation (client-side delta + `previous_response_id`)
+   * on a custom/proxy OpenAI-Responses-compatible endpoint. A native `api.openai.com`
+   * connection is eligible by default; a custom endpoint carries no trust signal of
+   * its own, so this is the only path to eligibility there — set it once you've
+   * verified the backend correctly resolves `previous_response_id` and persists
+   * `store: true` turns. Default: false.
+   */
+  supportsResponsesContinuation?: boolean;
 }
 
 /** Compatibility settings for Anthropic Messages-compatible APIs. */
@@ -570,6 +746,7 @@ export interface AnthropicMessagesCompat {
  * OpenRouter provider routing preferences.
  * Controls which upstream providers OpenRouter routes requests to.
  * Sent as the `provider` field in the OpenRouter API request body.
+ * Own member declarations preserve existing module-augmentation semantics.
  * @see https://openrouter.ai/docs/guides/routing/provider-selection
  */
 export interface OpenRouterRouting {
@@ -592,53 +769,13 @@ export interface OpenRouterRouting {
   /** A list of quantization levels to filter providers by (e.g., ["fp16", "bf16", "fp8", "fp6", "int8", "int4", "fp4", "fp32"]). */
   quantizations?: string[];
   /** Sorting strategy. Can be a string (e.g., "price", "throughput", "latency") or an object with `by` and `partition`. */
-  sort?:
-    | string
-    | {
-        /** The sorting metric: "price", "throughput", "latency". */
-        by?: string;
-        /** Partitioning strategy: "model" (default) or "none". */
-        partition?: string | null;
-      };
+  sort?: string | ModelRoutingSortConfig;
   /** Maximum price per million tokens (USD). */
-  max_price?: {
-    /** Price per million prompt tokens. */
-    prompt?: number | string;
-    /** Price per million completion tokens. */
-    completion?: number | string;
-    /** Price per image. */
-    image?: number | string;
-    /** Price per audio unit. */
-    audio?: number | string;
-    /** Price per request. */
-    request?: number | string;
-  };
+  max_price?: ModelRoutingMaxPrice;
   /** Preferred minimum throughput (tokens/second). Can be a number (applies to p50) or an object with percentile-specific cutoffs. */
-  preferred_min_throughput?:
-    | number
-    | {
-        /** Minimum tokens/second at the 50th percentile. */
-        p50?: number;
-        /** Minimum tokens/second at the 75th percentile. */
-        p75?: number;
-        /** Minimum tokens/second at the 90th percentile. */
-        p90?: number;
-        /** Minimum tokens/second at the 99th percentile. */
-        p99?: number;
-      };
+  preferred_min_throughput?: number | ModelRoutingPercentiles;
   /** Preferred maximum latency (seconds). Can be a number (applies to p50) or an object with percentile-specific cutoffs. */
-  preferred_max_latency?:
-    | number
-    | {
-        /** Maximum latency in seconds at the 50th percentile. */
-        p50?: number;
-        /** Maximum latency in seconds at the 75th percentile. */
-        p75?: number;
-        /** Maximum latency in seconds at the 90th percentile. */
-        p90?: number;
-        /** Maximum latency in seconds at the 99th percentile. */
-        p99?: number;
-      };
+  preferred_max_latency?: number | ModelRoutingPercentiles;
 }
 
 /**
@@ -653,7 +790,6 @@ export interface VercelGatewayRouting {
   order?: string[];
 }
 
-// Model interface for the unified model system
 export interface Model<TApi extends Api = Api> {
   id: string;
   name: string;
@@ -667,12 +803,7 @@ export interface Model<TApi extends Api = Api> {
    */
   thinkingLevelMap?: ThinkingLevelMap;
   input: ("text" | "image")[];
-  cost: {
-    input: number; // $/million tokens
-    output: number; // $/million tokens
-    cacheRead: number; // $/million tokens
-    cacheWrite: number; // $/million tokens
-  };
+  cost: RawModelCostConfig;
   contextWindow?: number;
   /**
    * Optional effective runtime cap used for compaction/session budgeting.
@@ -689,21 +820,17 @@ export interface Model<TApi extends Api = Api> {
   /** Compatibility overrides for OpenAI-compatible APIs. If not set, auto-detected from baseUrl. */
   compat?: TApi extends "openai-completions"
     ? OpenAICompletionsCompat
-    : TApi extends "openai-responses"
+    : TApi extends
+          | "openai-responses"
+          | "azure-openai-responses"
+          | "openai-chatgpt-responses"
+          | "openai-codex-responses"
       ? OpenAIResponsesCompat
       : TApi extends "anthropic-messages"
         ? AnthropicMessagesCompat
         : never;
   /** Provider-documented media input limits used by attachment preprocessing. */
-  mediaInput?: {
-    image?: {
-      maxBytes?: number;
-      maxPixels?: number;
-      maxSidePx?: number;
-      preferredSidePx?: number;
-      tokenMode?: "tile" | "detail" | "provider";
-    };
-  };
+  mediaInput?: ModelDataMediaInputConfig;
 }
 
 export interface ImagesModel<TApi extends ImagesApi = ImagesApi> extends Omit<

@@ -1,7 +1,7 @@
 // Control UI tests cover memory engine ordering and serialized config writes.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -13,12 +13,12 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const uiProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "memory-settings-engine",
-);
+let uiProofArtifactDir: string;
+beforeEach(() => {
+  if (captureUiProofEnabled) {
+    uiProofArtifactDir = createControlUiE2eArtifactDir("memory-settings-engine");
+  }
+});
 
 function configResponse(engineId: string, hash: string) {
   const config = { plugins: { slots: { memory: engineId } } };
@@ -53,7 +53,7 @@ const memoryPlugins = [
 ];
 
 suite.define(() => {
-  it("keeps the default engine first and drains Off before selecting it", async () => {
+  it("config.set keeps the default engine first and drains Off before selecting it", async () => {
     await suite.withPage(
       {
         colorScheme: "dark",
@@ -74,11 +74,11 @@ suite.define(() => {
         const response = await page.goto(`${suite.server.baseUrl}settings/memory/settings`);
         expect(response?.status()).toBe(200);
 
-        const engineGroup = page.locator("wa-radio-group.settings-segmented").first();
+        const engineGroup = page.getByRole("radiogroup").first();
         await engineGroup.waitFor();
         await expect
           .poll(async () =>
-            (await engineGroup.locator("wa-radio").allTextContents()).map((label) => label.trim()),
+            (await engineGroup.locator("label").allTextContents()).map((label) => label.trim()),
           )
           .toEqual(["OpenClaw Memory", "Memory LanceDB", "Off"]);
 
@@ -94,7 +94,6 @@ suite.define(() => {
         const pendingOffSave = await gateway.waitForRequest("config.set");
         expect(pendingOffSave.params).toMatchObject({ baseHash: "memory-hash-1" });
         if (captureUiProofEnabled) {
-          await mkdir(uiProofArtifactDir, { recursive: true });
           await page
             .locator(".settings-page > .settings-section")
             .first()
@@ -103,7 +102,7 @@ suite.define(() => {
               path: path.join(uiProofArtifactDir, "00-off-write-draining.png"),
             });
         }
-        await gateway.resolveDeferred("config.set", { ok: true, hash: "mock-config-hash-1" });
+        await gateway.resolveDeferred("config.set");
         const enableRequest = await gateway.waitForRequest("plugins.setEnabled");
         expect(enableRequest.params).toEqual({ pluginId: "memory-core", enabled: true });
 
@@ -118,13 +117,12 @@ suite.define(() => {
           name: "OpenClaw Memory",
           exact: true,
         });
-        await expect.poll(() => selected.getAttribute("aria-checked")).toBe("true");
+        await expect.poll(() => selected.isChecked()).toBe(true);
         await expect
           .poll(() => page.getByText("Could not change the memory engine").count())
           .toBe(0);
 
         if (captureUiProofEnabled) {
-          await mkdir(uiProofArtifactDir, { recursive: true });
           await page
             .locator(".settings-page > .settings-section")
             .first()
@@ -173,10 +171,7 @@ suite.define(() => {
         const initialCatalogReads = (await gateway.getRequests("plugins.list")).length;
         await gateway.deferNext("plugins.setEnabled");
         await gateway.deferNext("config.get");
-        await page
-          .locator("wa-switch.settings-toggle")
-          .filter({ hasText: "Enable or disable Active memory" })
-          .click();
+        await toggle.click();
 
         const mutation = await gateway.waitForRequest("plugins.setEnabled");
         expect(mutation.params).toEqual({ pluginId: "active-memory", enabled: true });
@@ -202,7 +197,7 @@ suite.define(() => {
         await expect
           .poll(async () => (await gateway.getRequests("plugins.list")).length)
           .toBeGreaterThan(initialCatalogReads);
-        await expect.poll(() => toggle.getAttribute("aria-checked")).toBe("true");
+        await expect.poll(() => toggle.isChecked()).toBe(true);
         await page.getByText("Needs attention", { exact: true }).first().waitFor();
         await page
           .getByText(
@@ -213,7 +208,6 @@ suite.define(() => {
         expect(pageErrors).toEqual([]);
 
         if (captureUiProofEnabled) {
-          await mkdir(uiProofArtifactDir, { recursive: true });
           await page.locator("openclaw-memory-settings").screenshot({
             animations: "disabled",
             path: path.join(uiProofArtifactDir, "03-addon-committed-refresh-warning.png"),
@@ -246,23 +240,22 @@ suite.define(() => {
         const response = await page.goto(`${suite.server.baseUrl}settings/memory/settings`);
         expect(response?.status()).toBe(200);
 
-        const engineGroup = page.locator("wa-radio-group.settings-segmented").first();
+        const engineGroup = page.getByRole("radiogroup").first();
         await engineGroup.waitFor();
         await expect
           .poll(async () =>
-            (await engineGroup.locator("wa-radio").allTextContents()).map((label) => label.trim()),
+            (await engineGroup.locator("label").allTextContents()).map((label) => label.trim()),
           )
           .toEqual(["OpenClaw Memory (Unavailable)", "Memory LanceDB", "Off"]);
         await expect
           .poll(() =>
             engineGroup
               .getByRole("radio", { name: "OpenClaw Memory (Unavailable)", exact: true })
-              .getAttribute("aria-checked"),
+              .isChecked(),
           )
-          .toBe("true");
+          .toBe(true);
 
         if (captureUiProofEnabled) {
-          await mkdir(uiProofArtifactDir, { recursive: true });
           await page
             .locator(".settings-page > .settings-section")
             .first()

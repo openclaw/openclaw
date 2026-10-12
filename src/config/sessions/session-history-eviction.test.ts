@@ -1,7 +1,10 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import type { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 
 const evictionWarnSpy = vi.hoisted(() => vi.fn());
 vi.mock("../../logging/subsystem.js", async () => {
@@ -18,99 +21,294 @@ vi.mock("../../logging/subsystem.js", async () => {
     },
   };
 });
-import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
+import * as sqliteQueries from "../../infra/kysely-sync.js";
+import * as tmpDirOwner from "../../infra/tmp-openclaw-dir.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
+  closeOpenClawAgentDatabaseByPathAsync,
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
+import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.test-support.js";
 import type { TrajectoryEvent } from "../../trajectory/types.js";
+import * as diskBudgetModule from "./disk-budget.js";
 import { measureSessionPhysicalDiskUsage } from "./disk-budget.js";
 import {
   appendTranscriptMessage,
   deleteSessionEntryLifecycle,
+  loadTranscriptEventsSync,
   replaceSessionEntry,
+  replaceSessionEntrySync,
   resetSessionEntryLifecycle,
 } from "./session-accessor.js";
-import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import * as sessionLifecycleState from "./session-accessor.sqlite-lifecycle-state.js";
+import { createSessionHistoryBudgetFixture } from "./session-history-budget.test-support.js";
 import {
   enforceSqliteSessionHistoryDiskBudget,
   inspectSqliteSessionHistoryDiskBudget,
   kickSessionHistoryDiskBudgetMaintenance,
 } from "./session-history-eviction.js";
-import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { deriveSessionPredicateColumns } from "./session-predicate-columns.js";
+import * as workerReaders from "./session-transcript-worker-readers.js";
+import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 
 describe("SQLite historical session disk budget", () => {
   let testState: OpenClawTestState;
   let tempDir: string;
   let storePath: string;
+  const {
+    createHistoricalTranscript,
+    database,
+    settlePhysicalUsage,
+    setSessionUpdatedAt,
+    addRouteReference,
+    sessionExists,
+    readArchiveNames,
+  } = createSessionHistoryBudgetFixture(() => ({ storePath, tempDir }));
 
   beforeEach(async () => {
     testState = await createOpenClawTestState({
       prefix: "openclaw-session-history-budget-",
       layout: "state-only",
     });
+    vi.spyOn(tmpDirOwner, "resolvePreferredOpenClawTmpDir").mockReturnValue(testState.root);
     tempDir = testState.sessionsDir();
     fs.mkdirSync(tempDir, { recursive: true });
     storePath = path.join(tempDir, "sessions.json");
   });
 
   afterEach(async () => {
+    resetAgentRunRegistryForTest();
+    vi.restoreAllMocks();
     await enforceSqliteSessionHistoryDiskBudget({
       storePath,
       mode: "warn",
       maintenance: { maxDiskBytes: null, highWaterBytes: null },
     });
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     await testState.cleanup();
   });
 
-  it("evicts the oldest historical session and stops after reaching high water", async () => {
-    const sessionKey = "agent:main:history-order";
-    await createHistoricalTranscript({
-      content: "oldest " + "x".repeat(64 * 1024),
-      nextSessionId: "newer-history",
-      sessionId: "oldest-history",
-      sessionKey,
-      updatedAt: 10,
-    });
-    await appendTranscriptMessage(
-      { sessionId: "newer-history", sessionKey, storePath },
-      { message: { role: "user", content: "newer " + "y".repeat(64 * 1024) } },
+  it.each([
+    { oldestBytes: 64 * 1024, reclaimBytes: 1, capArchive: false, execution: "worker" },
+    {
+      oldestBytes: 8 * 1024 * 1024,
+      reclaimBytes: 4 * 1024 * 1024,
+      capArchive: true,
+      execution: "in-process",
+    },
+  ] as const)(
+    "evicts oldest history before the entry tier and reclaims $reclaimBytes bytes (cap archive: $capArchive, execution: $execution)",
+    async ({ oldestBytes, reclaimBytes, capArchive, execution }) => {
+      const sessionKey = "agent:main:history-order";
+      await createHistoricalTranscript({
+        content: "oldest " + "x".repeat(oldestBytes),
+        nextSessionId: "newer-history",
+        sessionId: "oldest-history",
+        sessionKey,
+        updatedAt: 10,
+      });
+      await appendTranscriptMessage(
+        { sessionId: "newer-history", sessionKey, storePath },
+        { message: { role: "user", content: "newer " + "y".repeat(64 * 1024) } },
+      );
+      await resetSessionEntryLifecycle({
+        storePath,
+        target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+        buildNextEntry: () => ({ sessionId: "live-history", updatedAt: 30 }),
+      });
+      if (capArchive) {
+        replaceSessionEntrySync(
+          { sessionKey, storePath },
+          {
+            sessionId: "live-history",
+            updatedAt: 30,
+            archivedAt: 40,
+            archiveReason: "active-session-cap",
+          },
+        );
+        expect(
+          sessionLifecycleState.readReferencedSessionIds(database(), undefined, ["oldest-history"]),
+        ).toEqual(new Set(["oldest-history"]));
+      }
+      setSessionUpdatedAt("newer-history", 20);
+      if (execution === "worker" && oldestBytes === 64 * 1024 && !capArchive) {
+        database().db.exec(`
+          WITH RECURSIVE entries(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM entries WHERE n < 5000)
+          INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
+          SELECT 'agent:main:unrelated-' || n, 'unrelated-' || n,
+            json_object('sessionId', 'unrelated-' || n, 'updatedAt', 1), 1 FROM entries;
+          UPDATE session_nodes SET entry_valid = 1;
+        `);
+      }
+      await closeOpenClawAgentDatabaseByPathAsync(database().path);
+      settlePhysicalUsage();
+      database().db.exec("ANALYZE; PRAGMA analysis_limit = 37;");
+      expect(
+        database()
+          .db.prepare("SELECT stat FROM sqlite_stat1 WHERE idx = ?")
+          .get("idx_agent_session_windows_updated_at"),
+      ).toEqual({ stat: expect.stringMatching(/^3\b/u) });
+      settlePhysicalUsage();
+      const before = await measureSessionPhysicalDiskUsage(storePath);
+      const highWaterBytes = before.totalBytes - reclaimBytes;
+
+      let reclamationWorkers = 0;
+      type ArchiveReply = {
+        type: string;
+        result?: { kind: string };
+      };
+      const archiveReplies: Array<{ worker: Worker; message: ArchiveReply }> = [];
+      const observeWorker = (worker: Worker) => {
+        worker.on("message", (message: ArchiveReply | null | undefined) => {
+          if (message?.type === "reclaimed" && message.result?.kind === "history-eviction") {
+            reclamationWorkers += 1;
+          }
+          if (message?.type === "done" || message?.type === "published") {
+            archiveReplies.push({ worker, message });
+          }
+        });
+      };
+      process.on("worker", observeWorker);
+      const references = vi.spyOn(sessionLifecycleState, "readReferencedSessionIds");
+      let result: Awaited<ReturnType<typeof enforceSqliteSessionHistoryDiskBudget>>;
+      try {
+        result = await enforceSqliteSessionHistoryDiskBudget({
+          storePath,
+          mode: "enforce",
+          ...(execution === "in-process" ? { reclamationMode: execution } : {}),
+          maintenance: {
+            maxDiskBytes: before.totalBytes - 1,
+            highWaterBytes,
+          },
+        });
+      } finally {
+        process.off("worker", observeWorker);
+      }
+
+      const hostDiscoveryScans = references.mock.calls.filter(
+        (call) => call[2] === undefined,
+      ).length;
+      const hostReferenceScans = references.mock.calls.length;
+      console.info("history eviction host reference scans", {
+        execution,
+        hostDiscoveryScans,
+        hostReferenceScans,
+      });
+      expect(hostDiscoveryScans).toBe(execution === "in-process" ? 1 : 0);
+      if (execution === "worker") {
+        expect(hostReferenceScans).toBe(0);
+      }
+      expect(reclamationWorkers).toBe(execution === "in-process" ? 0 : 1);
+      expect(archiveReplies.map(({ message }) => message.type)).toEqual(["done", "published"]);
+      expect(new Set(archiveReplies.map(({ worker }) => worker)).size).toBe(1);
+      expect(archiveReplies.every(({ worker }) => worker.threadId === -1)).toBe(true);
+      expect(result?.removedEntries).toBe(1);
+      expect(result?.totalBytesAfter).toBeLessThanOrEqual(highWaterBytes);
+      expect(result?.totalBytesAfter).toBe(
+        (await measureSessionPhysicalDiskUsage(storePath)).totalBytes,
+      );
+      expect(sessionExists("oldest-history")).toBe(false);
+      expect(sessionExists("newer-history")).toBe(true);
+      expect(sessionExists("live-history")).toBe(true);
+      expect(readArchiveNames("oldest-history")).toHaveLength(1);
+      expect(readArchiveNames("newer-history")).toHaveLength(0);
+      expect(
+        database()
+          .db.prepare("SELECT stat FROM sqlite_stat1 WHERE idx = ?")
+          .get("idx_agent_session_windows_updated_at"),
+      ).toEqual({ stat: expect.stringMatching(/^3\b/u) });
+      expect(database().db.prepare("PRAGMA analysis_limit").get()).toEqual({ analysis_limit: 37 });
+    },
+  );
+
+  it("pages past protected archives to evict cap-created sessions under pressure", async () => {
+    const capKey = "agent:main:explicit:cap-archived";
+    const manualKey = "agent:main:explicit:manual-archived";
+    const legacyKey = "agent:main:explicit:legacy-archived";
+    await replaceSessionEntry(
+      { sessionKey: capKey, storePath },
+      {
+        sessionId: "cap-archived",
+        updatedAt: 1,
+        archivedAt: 1,
+        archiveReason: "active-session-cap",
+      },
     );
-    await resetSessionEntryLifecycle({
-      storePath,
-      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-      buildNextEntry: () => ({ sessionId: "live-history", updatedAt: 30 }),
-    });
-    setSessionUpdatedAt("newer-history", 20);
+    await appendTranscriptMessage(
+      { sessionId: "cap-archived", sessionKey: capKey, storePath },
+      { message: { role: "user", content: "cap archive " + "x".repeat(64 * 1024) } },
+    );
+    await replaceSessionEntry(
+      { sessionKey: manualKey, storePath },
+      {
+        sessionId: "manual-archived",
+        updatedAt: 2,
+        archivedAt: 2,
+        archiveReason: "manual",
+      },
+    );
+    await appendTranscriptMessage(
+      { sessionId: "manual-archived", sessionKey: manualKey, storePath },
+      { message: { role: "user", content: "manual archive " + "y".repeat(64 * 1024) } },
+    );
+    await replaceSessionEntry(
+      { sessionKey: legacyKey, storePath },
+      { sessionId: "legacy-archived", updatedAt: 3, archivedAt: 3 },
+    );
+    for (let index = 0; index < 70; index += 1) {
+      await replaceSessionEntry(
+        { sessionKey: `agent:main:explicit:legacy-${index}`, storePath },
+        {
+          sessionId: `legacy-${index}`,
+          updatedAt: index + 4,
+          archivedAt: index + 4,
+        },
+      );
+    }
+    await replaceSessionEntry(
+      { sessionKey: capKey, storePath },
+      {
+        sessionId: "cap-archived",
+        updatedAt: 100,
+        archivedAt: 100,
+        archiveReason: "active-session-cap",
+        skillsSnapshot: { prompt: "retained archived instructions", skills: [] },
+      },
+    );
     settlePhysicalUsage();
     const before = await measureSessionPhysicalDiskUsage(storePath);
+    const maintenance = { maxDiskBytes: before.totalBytes - 1, highWaterBytes: 1 };
+    const execute = sqliteQueries.executeSqliteQuerySync;
+    vi.spyOn(sqliteQueries, "executeSqliteQuerySync").mockImplementation((db, query) => {
+      if (query.compile().sql.includes('order by "archived_at" asc')) {
+        throw new Error("Archived eviction scan ran on the calling thread");
+      }
+      return execute(db, query);
+    });
 
+    await expect(
+      inspectSqliteSessionHistoryDiskBudget({ storePath, mode: "enforce", maintenance }),
+    ).resolves.toMatchObject({ wouldMutate: true });
     const result = await enforceSqliteSessionHistoryDiskBudget({
       storePath,
       mode: "enforce",
-      maintenance: {
-        maxDiskBytes: before.totalBytes - 1,
-        highWaterBytes: before.totalBytes - 1,
-      },
+      maintenance,
     });
 
     expect(result?.removedEntries).toBe(1);
-    expect(result?.totalBytesAfter).toBeLessThanOrEqual(before.totalBytes - 1);
-    expect(result?.totalBytesAfter).toBe(
-      (await measureSessionPhysicalDiskUsage(storePath)).totalBytes,
-    );
-    expect(sessionExists("oldest-history")).toBe(false);
-    expect(sessionExists("newer-history")).toBe(true);
-    expect(sessionExists("live-history")).toBe(true);
-    expect(readArchiveNames("oldest-history")).toHaveLength(1);
-    expect(readArchiveNames("newer-history")).toHaveLength(0);
+    expect(sessionExists("cap-archived")).toBe(false);
+    expect(sessionExists("manual-archived")).toBe(true);
+    expect(sessionExists("legacy-archived")).toBe(true);
+    expect(sessionExists("legacy-69")).toBe(true);
+    expect(readArchiveNames("cap-archived")).toHaveLength(0);
   });
 
   it("remeasures incompressible archive publication before declaring high water", async () => {
@@ -164,8 +362,10 @@ describe("SQLite historical session disk budget", () => {
     const oldArchive = path.join(tempDir, archiveName);
     fs.writeFileSync(oldArchive, Buffer.alloc(256 * 1024));
     const before = await measureSessionPhysicalDiskUsage(storePath);
+    const readReferences = vi.spyOn(sessionLifecycleState, "readReferencedSessionIds");
 
     const result = await enforceSqliteSessionHistoryDiskBudget({
+      env: { OPENCLAW_STATE_DIR: testState.stateDir },
       storePath,
       mode: "enforce",
       maintenance: {
@@ -177,6 +377,7 @@ describe("SQLite historical session disk budget", () => {
     expect(result).toMatchObject({ removedEntries: 0, removedFiles: 1 });
     expect(fs.existsSync(oldArchive)).toBe(false);
     expect(sessionExists("archive-history")).toBe(true);
+    expect(readReferences.mock.calls.length).toBe(0);
   });
 
   it("prunes the canonical archive row and its derived file before searchable history", async () => {
@@ -208,6 +409,16 @@ describe("SQLite historical session disk budget", () => {
     settlePhysicalUsage();
     const before = await measureSessionPhysicalDiskUsage(storePath);
 
+    const cachedDatabase = database();
+    const rm = fs.promises.rm.bind(fs.promises);
+    const removeArchive = vi.spyOn(fs.promises, "rm").mockImplementation(async (...args) => {
+      if (args[0] === archivePath) {
+        expect(cachedDatabase.db.isOpen).toBe(true);
+        closeCachedOpenClawAgentDatabase(cachedDatabase, { eviction: true });
+        expect(cachedDatabase.db.isOpen).toBe(false);
+      }
+      return await rm(...args);
+    });
     const result = await enforceSqliteSessionHistoryDiskBudget({
       storePath,
       mode: "enforce",
@@ -219,6 +430,7 @@ describe("SQLite historical session disk budget", () => {
 
     expect(result).toMatchObject({ removedEntries: 0, removedFiles: 1 });
     expect(fs.existsSync(archivePath ?? "")).toBe(false);
+    expect(removeArchive).toHaveBeenCalledWith(archivePath);
     expect(
       database()
         .db.prepare("SELECT 1 FROM session_transcript_archives WHERE session_id = ?")
@@ -324,66 +536,375 @@ describe("SQLite historical session disk budget", () => {
     }
   });
 
-  it("preserves every generation of a recently active session under physical pressure", async () => {
-    const now = Date.now();
-    const dayMs = 24 * 60 * 60 * 1000;
-    const recentKey = "agent:main:recent-history";
-    const staleKey = "agent:main:stale-history";
+  it("preserves a generation admitted by owner key during archive preparation without host lifecycle reads", async () => {
+    const sessionKey = "agent:main:admission-during-archive";
+    const sessionId = "admission-during-archive-old";
     await createHistoricalTranscript({
-      content: "recent history " + "r".repeat(64 * 1024),
-      nextSessionId: "recent-live",
-      sessionId: "recent-old",
-      sessionKey: recentKey,
-      updatedAt: now - 8 * dayMs,
-    });
-    await replaceSessionEntry(
-      { sessionKey: recentKey, storePath },
-      { sessionId: "recent-live", updatedAt: now },
-    );
-    await createHistoricalTranscript({
-      content: "stale history " + "s".repeat(64 * 1024),
-      nextSessionId: "stale-live",
-      sessionId: "stale-old",
-      sessionKey: staleKey,
-      updatedAt: now - 8 * dayMs,
+      content: "history protected while its archive is prepared",
+      nextSessionId: "admission-during-archive-live",
+      sessionId,
+      sessionKey,
+      updatedAt: 1,
     });
     settlePhysicalUsage();
-    const before = await measureSessionPhysicalDiskUsage(storePath);
-
-    const result = await enforceSqliteSessionHistoryDiskBudget({
-      storePath,
-      mode: "enforce",
-      maintenance: {
-        maxDiskBytes: before.totalBytes - 1,
-        highWaterBytes: 0,
-        preserveRecentMs: 7 * dayMs,
+    const owner = database();
+    const archive = await import("./session-accessor.sqlite-archive.js");
+    const materialize = archive.materializeSessionHistoryEvictionPlan;
+    let admission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+    vi.spyOn(archive, "materializeSessionHistoryEvictionPlan").mockImplementationOnce(
+      async (input) => {
+        const prepared = await materialize(input);
+        expect(prepared?.archive?.bytes.byteLength).toBeGreaterThan(0);
+        admission = await beginSessionWorkAdmission({
+          scope: storePath,
+          identities: [sessionKey],
+          assertAllowed: () => {},
+        });
+        return prepared;
       },
-    });
+    );
+    const reads = trackSqliteStatementExecutions(owner.db, ["history"], (sql) =>
+      /^select\b/i.test(sql) &&
+      /"(?:session_windows|transcript_rewrite_watermarks|trajectory_runtime_events)"/.test(sql)
+        ? "history"
+        : null,
+    );
+    try {
+      expect(
+        await enforceSqliteSessionHistoryDiskBudget({
+          storePath,
+          mode: "enforce",
+          maintenance: { maxDiskBytes: 1, highWaterBytes: 1 },
+        }),
+      ).toMatchObject({ removedEntries: 0 });
+      expect(admission).toBeDefined();
+      expect(reads.counts.history).toBe(0);
+    } finally {
+      reads.restore();
+      admission?.release();
+    }
+    expect(sessionExists(sessionId)).toBe(true);
+    expect(loadTranscriptEventsSync({ sessionId, sessionKey, storePath })).not.toEqual([]);
+    expect(readArchiveNames(sessionId)).toEqual([]);
+  });
 
-    expect(result?.removedEntries).toBe(1);
-    expect(sessionExists("recent-old")).toBe(true);
-    expect(sessionExists("recent-live")).toBe(true);
-    expect(sessionExists("stale-old")).toBe(false);
-    expect(sessionExists("stale-live")).toBe(true);
+  it.each(["archivedAt", "pinnedAt", "age-retention", "manual", "recent"] as const)(
+    "rechecks %s on the logical owner before deleting an older generation",
+    async (field) => {
+      const sessionKey = "agent:main:archive-race";
+      await createHistoricalTranscript({
+        content: "keep this older generation",
+        nextSessionId: "race-live",
+        sessionId: "race-old",
+        sessionKey,
+        updatedAt: Date.now() - 8 * 24 * 60 * 60 * 1000,
+      });
+      replaceSessionEntrySync(
+        { sessionKey, storePath },
+        {
+          sessionId: "race-live",
+          updatedAt: Date.now() - 8 * 24 * 60 * 60 * 1000,
+          archivedAt: Date.now(),
+          archiveReason: "active-session-cap",
+        },
+      );
+      const reclamation = await import("./session-accessor.sqlite-reclamation-run.js");
+      const reclaim = reclamation.runSqliteSessionReclamation;
+      const historyRequests: string[] = [];
+      let protectionChanged = false;
+      vi.spyOn(reclamation, "runSqliteSessionReclamation").mockImplementation(async (params) => {
+        // Automatic entry planning shares this transport; inject only at the history attempt.
+        if (params.plan.kind === "history-eviction") {
+          historyRequests.push(params.plan.sessionId);
+          if (params.plan.sessionId === "race-old") {
+            expect(protectionChanged).toBe(false);
+            replaceSessionEntrySync(
+              { sessionKey, storePath },
+              {
+                sessionId: "race-live",
+                updatedAt: Date.now(),
+                ...(field === "age-retention" || field === "manual"
+                  ? { archivedAt: Date.now(), archiveReason: field }
+                  : field === "recent"
+                    ? {}
+                    : { [field]: Date.now() }),
+              },
+            );
+            protectionChanged = true;
+          }
+        }
+        return await reclaim(params);
+      });
+      expect(
+        await enforceSqliteSessionHistoryDiskBudget({
+          storePath,
+          mode: "enforce",
+          maintenance: {
+            maxDiskBytes: 1,
+            highWaterBytes: 1,
+            ...(field === "recent" ? { preserveRecentMs: 7 * 24 * 60 * 60 * 1000 } : {}),
+          },
+        }),
+      ).toMatchObject({ removedEntries: 0 });
+      expect(historyRequests).toEqual(["race-old"]);
+      expect(protectionChanged).toBe(true);
+      expect(
+        loadTranscriptEventsSync({ sessionId: "race-old", sessionKey, storePath }),
+      ).not.toEqual([]);
+      expect(readArchiveNames("race-old")).toEqual([]);
+      // An explicit operator delete still owns every generation, even when pinned or archived.
+      expect(
+        await deleteSessionEntryLifecycle({
+          storePath,
+          target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+          archiveTranscript: true,
+        }),
+      ).toMatchObject({ deleted: true });
+      expect(sessionExists("race-old")).toBe(false);
+    },
+  );
+
+  it.each([
+    { writerKind: "same connection", after: "discovery" },
+    { writerKind: "external connection", after: "materialization" },
+  ] as const)(
+    "rechecks cross-owner references written through a $writerKind after $after",
+    async ({ writerKind, after }) => {
+      const sessionKey = "agent:main:reference-race";
+      const referringKey = "agent:main:reference-survivor";
+      await createHistoricalTranscript({
+        content: "retain cross-owner history",
+        nextSessionId: "reference-live",
+        sessionId: "reference-old",
+        sessionKey,
+        updatedAt: Date.now(),
+      });
+      const archive = await import("./session-accessor.sqlite-archive.js");
+      const materialize = archive.materializeSessionHistoryEvictionPlan;
+      const addReference = () => {
+        const owner = database();
+        const writer =
+          writerKind === "external connection" ? new DatabaseSync(owner.path) : owner.db;
+        try {
+          const entryJson = JSON.stringify({
+            sessionId: "survivor-current",
+            updatedAt: 1,
+            usageFamilySessionIds: ["reference-old"],
+          });
+          const columns = deriveSessionPredicateColumns(entryJson);
+          writer
+            .prepare(
+              `INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at,
+                session_started_at, has_optional_references) VALUES (?, ?, ?, 1, ?, ?)`,
+            )
+            .run(
+              referringKey,
+              "survivor-current",
+              entryJson,
+              columns.session_started_at,
+              columns.has_optional_references,
+            );
+          // Complete the canonical writer's validity settlement for this healthy fixture row.
+          writer
+            .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
+            .run(referringKey);
+        } finally {
+          if (writer !== owner.db) {
+            writer.close();
+          }
+        }
+      };
+      if (after === "discovery") {
+        const createReaders = workerReaders.createSessionHistoryWorkerReaders;
+        vi.spyOn(workerReaders, "createSessionHistoryWorkerReaders").mockImplementation((run) => {
+          const readers = createReaders(run);
+          const discover = readers.readHistoricalEvictionCandidates;
+          readers.readHistoricalEvictionCandidates = async (input) => {
+            const candidates = await discover(input);
+            addReference();
+            return candidates;
+          };
+          return readers;
+        });
+      }
+      const materialization = vi
+        .spyOn(archive, "materializeSessionHistoryEvictionPlan")
+        .mockImplementationOnce(async (plan) => {
+          const prepared = await materialize(plan);
+          if (after === "materialization") {
+            addReference();
+          }
+          return prepared;
+        });
+      expect(
+        await enforceSqliteSessionHistoryDiskBudget({
+          storePath,
+          mode: "enforce",
+          maintenance: { maxDiskBytes: 1, highWaterBytes: 1 },
+        }),
+      ).toMatchObject({ removedEntries: 0 });
+      expect(materialization).toHaveBeenCalledOnce();
+      expect(
+        loadTranscriptEventsSync({ sessionId: "reference-old", sessionKey, storePath }),
+      ).not.toEqual([]);
+      expect(readArchiveNames("reference-old")).toEqual([]);
+      // Excluding the deliberately deleted owner must not exclude a surviving reference.
+      expect(
+        await deleteSessionEntryLifecycle({
+          storePath,
+          target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+          archiveTranscript: true,
+        }),
+      ).toMatchObject({ deleted: true });
+      expect(sessionExists("reference-old")).toBe(true);
+      expect(
+        loadTranscriptEventsSync({
+          sessionId: "reference-old",
+          sessionKey: referringKey,
+          storePath,
+        }),
+      ).not.toEqual([]);
+    },
+  );
+
+  it("coalesces forced kicks during and after a sweep until the one-minute interval expires", async () => {
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    const measurement = vi
+      .spyOn(diskBudgetModule, "measureSessionPhysicalDiskUsage")
+      .mockResolvedValue({
+        databaseMainBytes: 0,
+        databaseWalBytes: 0,
+        sessionFilesBytes: 0,
+        totalBytes: 0,
+      });
+    const maintenanceConfig = resolveMaintenanceConfigFromInput({
+      mode: "enforce",
+      maxDiskBytes: 1,
+      highWaterBytes: 1,
+    });
+    const kick = () =>
+      kickSessionHistoryDiskBudgetMaintenance({ storePath, force: true, maintenanceConfig });
+    const settle = async () => {
+      await enforceSqliteSessionHistoryDiskBudget({
+        storePath,
+        mode: "warn",
+        maintenance: { maxDiskBytes: null, highWaterBytes: null },
+      });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+    };
+    kick();
+    for (let index = 0; index < 10; index++) {
+      kick();
+    }
+    await settle();
+    expect(measurement).toHaveBeenCalledOnce();
+
+    clock.mockReturnValue(now + 59_999);
+    kick();
+    await settle();
+    expect(measurement).toHaveBeenCalledOnce();
+
+    clock.mockReturnValue(now + 60_000);
+    kick();
+    await settle();
+    expect(measurement).toHaveBeenCalledTimes(2);
+  });
+
+  it("backs off protected over-budget history and warns once while manual cleanup remains immediate", async () => {
+    await createHistoricalTranscript({
+      content: "protected history",
+      nextSessionId: "protected-live",
+      sessionId: "protected-old",
+      sessionKey: "agent:main:protected-history",
+      updatedAt: 1,
+    });
+    addRouteReference("agent:main:shared-history", "protected-old");
+    const settle = async () => {
+      await enforceSqliteSessionHistoryDiskBudget({
+        storePath,
+        mode: "warn",
+        maintenance: { maxDiskBytes: null, highWaterBytes: null },
+      });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+    };
+    await settle();
+    evictionWarnSpy.mockClear();
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    const references = vi.fn();
+    const createReaders = workerReaders.createSessionHistoryWorkerReaders;
+    vi.spyOn(workerReaders, "createSessionHistoryWorkerReaders").mockImplementation((run) => {
+      const readers = createReaders(run);
+      const discover = readers.readHistoricalEvictionCandidates;
+      readers.readHistoricalEvictionCandidates = (input) => {
+        references();
+        return discover(input);
+      };
+      return readers;
+    });
+    const maintenanceConfig = resolveMaintenanceConfigFromInput({
+      mode: "enforce",
+      maxDiskBytes: 1,
+      highWaterBytes: 1,
+    });
+    const kick = () =>
+      kickSessionHistoryDiskBudgetMaintenance({ storePath, force: true, maintenanceConfig });
+    await expect(
+      enforceSqliteSessionHistoryDiskBudget({
+        storePath,
+        mode: "enforce",
+        maintenance: maintenanceConfig,
+      }),
+    ).resolves.toMatchObject({ overBudget: true, removedEntries: 0 });
+    const firstScans = references.mock.calls.length;
+    expect(firstScans).toBeGreaterThan(0);
+    expect(evictionWarnSpy).toHaveBeenCalledOnce();
+    expect(evictionWarnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Raise session.maintenance.maxDiskBytes or export and delete"),
+      expect.objectContaining({ storePath, nextCheckAt: now + 30 * 60_000 }),
+    );
+
+    clock.mockReturnValue(now + 60_000);
+    for (let index = 0; index < 10; index++) {
+      kick();
+    }
+    await settle();
+    expect(references).toHaveBeenCalledTimes(firstScans);
+
+    await expect(
+      enforceSqliteSessionHistoryDiskBudget({
+        storePath,
+        mode: "enforce",
+        maintenance: maintenanceConfig,
+      }),
+    ).resolves.toMatchObject({ overBudget: true, removedEntries: 0 });
+    const manualScans = references.mock.calls.length;
+    expect(manualScans).toBeGreaterThan(firstScans);
+
+    clock.mockReturnValue(now + 31 * 60_000);
+    kick();
+    await settle();
+    expect(references.mock.calls.length).toBeGreaterThan(manualScans);
+    expect(evictionWarnSpy).toHaveBeenCalledOnce();
+    expect(sessionExists("protected-old")).toBe(true);
+    expect(sessionExists("protected-live")).toBe(true);
   });
 
   it("warns when a fire-and-forget budget sweep fails instead of swallowing it", async () => {
     evictionWarnSpy.mockClear();
-    // The kick gate reads maxDiskBytes twice synchronously; the queued sweep
-    // re-reads it asynchronously. Throwing on the later read rejects the
-    // fire-and-forget promise, exercising the catch path deterministically.
-    let maxDiskBytesReads = 0;
-    const maintenanceConfig = {
+    vi.spyOn(diskBudgetModule, "measureSessionPhysicalDiskUsage").mockRejectedValueOnce(
+      new Error("sweep exploded"),
+    );
+    const maintenanceConfig = resolveMaintenanceConfigFromInput({
       mode: "enforce",
+      maxDiskBytes: 1,
       highWaterBytes: 1,
-      get maxDiskBytes() {
-        maxDiskBytesReads += 1;
-        if (maxDiskBytesReads > 1) {
-          throw new Error("sweep exploded");
-        }
-        return 1;
-      },
-    } as never;
+    });
 
     kickSessionHistoryDiskBudgetMaintenance({ storePath, force: true, maintenanceConfig });
     await vi.waitFor(() => {
@@ -392,6 +913,36 @@ describe("SQLite historical session disk budget", () => {
         expect.objectContaining({ storePath }),
       );
     });
+  });
+
+  it("inspects history after the archive probe loses its cached handle", async () => {
+    await createHistoricalTranscript({
+      content: "inspect retained history",
+      nextSessionId: "inspect-live",
+      sessionId: "inspect-old",
+      sessionKey: "agent:main:inspect-history",
+      updatedAt: 1,
+    });
+    const databasePath = database().path;
+    const diskBudget = await import("./disk-budget.js");
+    const probe = diskBudget.hasRetainedSessionTranscriptArchives;
+    const probeSpy = vi
+      .spyOn(diskBudget, "hasRetainedSessionTranscriptArchives")
+      .mockImplementation(async (pathname) => {
+        const retained = await probe(pathname);
+        expect(await closeOpenClawAgentDatabaseByPathAsync(databasePath)).toBe(true);
+        return retained;
+      });
+
+    await expect(
+      inspectSqliteSessionHistoryDiskBudget({
+        storePath,
+        mode: "enforce",
+        maintenance: { maxDiskBytes: 1, highWaterBytes: 0 },
+      }),
+    ).resolves.toMatchObject({ wouldMutate: true });
+    expect(probeSpy).toHaveBeenCalledOnce();
+    expect(sessionExists("inspect-old")).toBe(true);
   });
 
   it("warn mode reports physical overage without extracting or deleting history", async () => {
@@ -421,91 +972,6 @@ describe("SQLite historical session disk budget", () => {
     expect(sessionExists("warn-old")).toBe(true);
     expect(readArchiveNames("warn-old")).toHaveLength(0);
   });
-
-  async function createHistoricalTranscript(params: {
-    content: string;
-    nextSessionId: string;
-    sessionId: string;
-    sessionKey: string;
-    updatedAt: number;
-  }): Promise<void> {
-    await replaceSessionEntry(
-      { sessionKey: params.sessionKey, storePath },
-      { sessionId: params.sessionId, updatedAt: params.updatedAt },
-    );
-    await appendTranscriptMessage(
-      { sessionId: params.sessionId, sessionKey: params.sessionKey, storePath },
-      { message: { role: "user", content: params.content } },
-    );
-    await resetSessionEntryLifecycle({
-      storePath,
-      target: { canonicalKey: params.sessionKey, storeKeys: [params.sessionKey] },
-      buildNextEntry: () => ({ sessionId: params.nextSessionId, updatedAt: params.updatedAt + 1 }),
-    });
-    setSessionUpdatedAt(params.sessionId, params.updatedAt);
-  }
-
-  function database() {
-    const target = resolveSqliteTargetFromSessionStorePath(storePath);
-    if (!target.path) {
-      throw new Error("expected SQLite database path");
-    }
-    return openOpenClawAgentDatabase({ agentId: target.agentId ?? "main", path: target.path });
-  }
-
-  function settlePhysicalUsage(): void {
-    const owner = database();
-    owner.walMaintenance.checkpoint();
-    const row = owner.db.prepare("PRAGMA freelist_count").get() as
-      | { freelist_count?: unknown }
-      | undefined;
-    const freePages = Number(row?.freelist_count ?? 0);
-    if (Number.isSafeInteger(freePages) && freePages > 0) {
-      owner.db.exec(`PRAGMA incremental_vacuum(${freePages});`);
-    }
-    owner.walMaintenance.checkpoint();
-  }
-
-  function setSessionUpdatedAt(sessionId: string, updatedAt: number): void {
-    const owner = database();
-    const db = getSessionKysely(owner.db);
-    executeSqliteQuerySync(
-      owner.db,
-      db
-        .updateTable("session_windows")
-        .set({ updated_at: updatedAt })
-        .where("session_id", "=", sessionId),
-    );
-  }
-
-  function addRouteReference(sessionKey: string, sessionId: string): void {
-    const owner = database();
-    const db = getSessionKysely(owner.db);
-    executeSqliteQuerySync(
-      owner.db,
-      db.insertInto("session_nodes").values({
-        session_key: sessionKey,
-        current_session_id: sessionId,
-        entry_json: "{}",
-        updated_at: Date.now(),
-      }),
-    );
-  }
-
-  function sessionExists(sessionId: string): boolean {
-    const owner = database();
-    const db = getSessionKysely(owner.db);
-    return (
-      executeSqliteQuerySync(
-        owner.db,
-        db.selectFrom("session_windows").select("session_id").where("session_id", "=", sessionId),
-      ).rows.length === 1
-    );
-  }
-
-  function readArchiveNames(sessionId: string): string[] {
-    return fs.readdirSync(tempDir).filter((name) => name.startsWith(`${sessionId}.jsonl.deleted.`));
-  }
 });
 
 function createTrajectoryEvent(sessionId: string, sessionKey: string): TrajectoryEvent {

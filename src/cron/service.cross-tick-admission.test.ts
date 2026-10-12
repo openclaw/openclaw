@@ -1,490 +1,180 @@
-// Scheduled work must use free shared-admission slots across timer ticks (#119083).
-import { afterEach, describe, expect, it, vi } from "vitest";
+// Timer producers and detached runs retain separate Gateway roots.
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import {
+  createCronRegressionState,
   createDueIsolatedJob,
-  noopLogger,
   setupCronRegressionFixtures,
 } from "../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../config/cron-limits.js";
 import {
+  beginGatewayRestartSignalAdmission,
   getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
-import { stop } from "./service/ops-lifecycle.js";
-import { createCronServiceState } from "./service/state.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
+import { start, stop } from "./service/ops-lifecycle.js";
+import { waitForCronRunQueue } from "./service/run-queue.js";
 import { onTimer } from "./service/timer.test-support.js";
 import { loadCronStore, saveCronStore } from "./store.js";
-import { cronStoreKey } from "./store/key.js";
-import {
-  claimCronRunReceiptInDatabase,
-  finishCronRunReceipt,
-  inspectActiveCronRunReceipt,
-  prepareCronRunReceiptClaim,
-  type CronRunReceiptHandle,
-} from "./store/run-receipt-store.js";
+import { inspectActiveCronRunReceipt } from "./store/run-receipt-store.test-support.js";
 import type { CronJob } from "./types.js";
 
 const fixtures = setupCronRegressionFixtures({
   prefix: "cron-service-cross-tick-admission-",
 });
 
-describe("cron service cross-tick bounded admission", () => {
+function dueJob(id: string, nowMs: number, nextRunAtMs = nowMs) {
+  return createDueIsolatedJob({ id, nowMs, nextRunAtMs });
+}
+
+async function seedJobs(jobs: CronJob[]) {
+  const store = fixtures.makeStorePath();
+  await saveCronStore(store.storePath, { version: 1, jobs });
+  return {
+    ...store,
+    receipt: (job: CronJob) =>
+      inspectActiveCronRunReceipt({ storePath: store.storePath, jobId: job.id }),
+  };
+}
+
+function blockedRuns(jobs: CronJob[]) {
+  const held = new Map(
+    jobs.map((job) => [
+      job.id,
+      {
+        started: createDeferred(),
+        result: createDeferred<{ status: "ok"; summary: string }>(),
+      },
+    ]),
+  );
+  const lookup = (job: CronJob) => {
+    const entry = held.get(job.id);
+    if (!entry) {
+      throw new Error(`unexpected cron job ${job.id}`);
+    }
+    return entry;
+  };
+  let active = 0;
+  let peakActive = 0;
+  return {
+    run: vi.fn(async ({ job }: { job: CronJob }) => {
+      const entry = lookup(job);
+      active++;
+      peakActive = Math.max(peakActive, active);
+      entry.started.resolve();
+      try {
+        return await entry.result.promise;
+      } finally {
+        active--;
+      }
+    }),
+    started: (job: CronJob) => lookup(job).started.promise,
+    release: (job: CronJob) => lookup(job).result.resolve({ status: "ok", summary: job.id }),
+    get peakActive() {
+      return peakActive;
+    },
+  };
+}
+
+describe("cron service cross-tick admission", () => {
   afterEach(() => {
     resetGatewayWorkAdmission();
     vi.useRealTimers();
   });
 
-  it("starts a later-due job while an earlier receipt-backed run is still active", async () => {
-    const store = fixtures.makeStorePath();
-    const t0 = Date.parse("2026-02-06T10:05:00.000Z");
-    const jobA = createDueIsolatedJob({
-      id: "cross-tick-a",
-      nowMs: t0,
-      nextRunAtMs: t0,
-    });
-    const jobB = createDueIsolatedJob({
-      id: "cross-tick-b",
-      nowMs: t0,
-      nextRunAtMs: t0 + 60_000,
-    });
-    await saveCronStore(store.storePath, { version: 1, jobs: [jobA, jobB] });
-
-    let now = t0;
-    let active = 0;
-    let peakActive = 0;
-    const aStarted = createDeferred();
-    const releaseA = createDeferred<{ status: "ok"; summary: string }>();
-    const bStarted = createDeferred();
-    const runIsolatedAgentJob = vi.fn(async ({ job }: { job: CronJob }) => {
-      active += 1;
-      peakActive = Math.max(peakActive, active);
-      try {
-        if (job.id === jobA.id) {
-          aStarted.resolve();
-          return await releaseA.promise;
-        }
-        bStarted.resolve();
-        return { status: "ok" as const, summary: "b done" };
-      } finally {
-        active -= 1;
-      }
-    });
-    const state = createCronServiceState({
-      cronEnabled: true,
-      storePath: store.storePath,
-      log: noopLogger,
-      nowMs: () => now,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob,
-    });
-    state.runAdmission.active = DEFAULT_CRON_MAX_CONCURRENT_RUNS - 2;
-
-    const tickA = onTimer(state);
-    try {
-      await aStarted.promise;
-      now = t0 + 60_000;
-      await onTimer(state);
-
-      await vi.waitFor(() => expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2), {
-        timeout: 500,
-      });
-      await bStarted.promise;
-      expect(peakActive).toBe(2);
-    } finally {
-      releaseA.resolve({ status: "ok", summary: "a done" });
-      await tickA;
-    }
-
-    const persisted = await loadCronStore(store.storePath);
-    expect(persisted.jobs.every((job) => job.state.queuedAtMs === undefined)).toBe(true);
-    expect(persisted.jobs.every((job) => job.state.runningAtMs === undefined)).toBe(true);
-    expect(persisted.jobs.every((job) => job.state.lastRunStatus === "ok")).toBe(true);
-    expect(state.activeTimerTicks).toBe(0);
-    expect(state.running).toBe(false);
-    stop(state);
-  });
-
-  it("keeps saturated work unreserved and its capacity wake independently admitted", async () => {
-    const store = fixtures.makeStorePath();
-    const t0 = Date.parse("2026-02-06T10:06:00.000Z");
-    const jobA = createDueIsolatedJob({
-      id: "saturated-a",
-      nowMs: t0,
-      nextRunAtMs: t0,
-    });
-    const jobB = createDueIsolatedJob({
-      id: "saturated-b",
-      nowMs: t0,
-      nextRunAtMs: t0,
-    });
-    const jobC = createDueIsolatedJob({
-      id: "saturated-later",
-      nowMs: t0,
-      nextRunAtMs: t0 + 60_000,
-    });
-    await saveCronStore(store.storePath, {
-      version: 1,
-      jobs: [jobA, jobB, jobC],
-    });
-
-    let now = t0;
-    let active = 0;
-    let peakActive = 0;
-    const bothStarted = createDeferred();
-    const releaseA = createDeferred<{ status: "ok"; summary: string }>();
-    const releaseB = createDeferred<{ status: "ok"; summary: string }>();
-    const cStarted = createDeferred();
-    const releaseC = createDeferred<{ status: "ok"; summary: string }>();
-    const runIsolatedAgentJob = vi.fn(async ({ job }: { job: CronJob }) => {
-      active += 1;
-      peakActive = Math.max(peakActive, active);
-      if (active === 2) {
-        bothStarted.resolve();
-      }
-      try {
-        if (job.id === jobA.id) {
-          return await releaseA.promise;
-        }
-        if (job.id === jobB.id) {
-          return await releaseB.promise;
-        }
-        cStarted.resolve();
-        return await releaseC.promise;
-      } finally {
-        active -= 1;
-      }
-    });
-    const state = createCronServiceState({
-      cronEnabled: true,
-      storePath: store.storePath,
-      log: noopLogger,
-      nowMs: () => now,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob,
-    });
-    state.runAdmission.active = DEFAULT_CRON_MAX_CONCURRENT_RUNS - 2;
-
-    const firstTick = onTimer(state);
-    await bothStarted.promise;
-    expect(
-      inspectActiveCronRunReceipt({
-        storePath: store.storePath,
-        jobId: jobA.id,
-      }),
-    ).toBeDefined();
-    expect(
-      inspectActiveCronRunReceipt({
-        storePath: store.storePath,
-        jobId: jobB.id,
-      }),
-    ).toBeDefined();
-    now = t0 + 60_000;
-
-    await Promise.all([onTimer(state), onTimer(state), onTimer(state)]);
-    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
-    expect(state.activeTimerTicks).toBe(1);
-    expect(state.runAdmission.waiters).toHaveLength(0);
-    expect(state.runAdmission.capacityListener).toBeTypeOf("function");
-    expect(state.queuedRunReservationsByJobId.has(jobC.id)).toBe(false);
-    expect(
-      inspectActiveCronRunReceipt({
-        storePath: store.storePath,
-        jobId: jobC.id,
-      }),
-    ).toBeUndefined();
-    const saturatedStore = await loadCronStore(store.storePath);
-    expect(saturatedStore.jobs.find((job) => job.id === jobC.id)?.state.queuedAtMs).toBeUndefined();
-    expect(
-      saturatedStore.jobs.find((job) => job.id === jobC.id)?.state.runningAtMs,
-    ).toBeUndefined();
-
-    releaseA.resolve({ status: "ok", summary: "a done" });
-    await cStarted.promise;
-    expect(getActiveGatewayRootWorkCount()).toBe(2);
-    expect(
-      inspectActiveCronRunReceipt({
-        storePath: store.storePath,
-        jobId: jobC.id,
-      }),
-    ).toBeDefined();
-    expect(state.runAdmission.capacityListener).toBeNull();
-    expect(peakActive).toBe(2);
-
-    releaseB.resolve({ status: "ok", summary: "b done" });
-    await firstTick;
-    expect(getActiveGatewayRootWorkCount()).toBe(1);
-    releaseC.resolve({ status: "ok", summary: "c done" });
-    await vi.waitFor(() => expect(state.activeTimerTicks).toBe(0));
-    expect(getActiveGatewayRootWorkCount()).toBe(0);
-    expect(state.queuedRunReservationsByJobId.size).toBe(0);
-    expect(
-      inspectActiveCronRunReceipt({
-        storePath: store.storePath,
-        jobId: jobC.id,
-      }),
-    ).toBeUndefined();
-    stop(state);
-  });
-
-  it("wakes unreserved receipt-free work when a partial batch releases capacity", async () => {
-    const store = fixtures.makeStorePath();
-    const t0 = Date.parse("2026-02-06T10:07:00.000Z");
-    const jobA = createDueIsolatedJob({
-      id: "partial-a",
-      nowMs: t0,
-      nextRunAtMs: t0,
-    });
-    const jobB = createDueIsolatedJob({
-      id: "partial-b",
-      nowMs: t0,
-      nextRunAtMs: t0,
-    });
-    const jobC = createDueIsolatedJob({
-      id: "partial-c",
-      nowMs: t0,
-      nextRunAtMs: t0,
-    });
-    await saveCronStore(store.storePath, {
-      version: 1,
-      jobs: [jobA, jobB, jobC],
-    });
-
-    let active = 0;
-    let peakActive = 0;
-    const firstTwoStarted = createDeferred();
-    const cStarted = createDeferred();
-    const releaseA = createDeferred<{ status: "ok"; summary: string }>();
-    const releaseB = createDeferred<{ status: "ok"; summary: string }>();
-    const releaseC = createDeferred<{ status: "ok"; summary: string }>();
-    const runIsolatedAgentJob = vi.fn(async ({ job }: { job: CronJob }) => {
-      active += 1;
-      peakActive = Math.max(peakActive, active);
-      if (active === 2) {
-        firstTwoStarted.resolve();
-      }
-      try {
-        if (job.id === jobA.id) {
-          return await releaseA.promise;
-        }
-        if (job.id === jobB.id) {
-          return await releaseB.promise;
-        }
-        cStarted.resolve();
-        return await releaseC.promise;
-      } finally {
-        active -= 1;
-      }
-    });
-    const state = createCronServiceState({
-      cronEnabled: true,
-      storePath: store.storePath,
-      log: noopLogger,
-      nowMs: () => t0,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob,
-    });
-    state.runAdmission.active = DEFAULT_CRON_MAX_CONCURRENT_RUNS - 2;
-
-    const firstTick = onTimer(state);
-    await firstTwoStarted.promise;
-    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
-    expect(state.runAdmission.capacityListener).toBeTypeOf("function");
-    expect(
-      inspectActiveCronRunReceipt({
-        storePath: store.storePath,
-        jobId: jobC.id,
-      }),
-    ).toBeUndefined();
-
-    releaseA.resolve({ status: "ok", summary: "a done" });
-    await cStarted.promise;
-    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(3);
-    expect(peakActive).toBe(2);
-    expect(
-      inspectActiveCronRunReceipt({
-        storePath: store.storePath,
-        jobId: jobC.id,
-      }),
-    ).toBeDefined();
-
-    releaseB.resolve({ status: "ok", summary: "b done" });
-    releaseC.resolve({ status: "ok", summary: "c done" });
-    await firstTick;
-    await vi.waitFor(() => expect(state.activeTimerTicks).toBe(0));
-    expect(state.runAdmission.active).toBe(DEFAULT_CRON_MAX_CONCURRENT_RUNS - 2);
-    expect(state.queuedRunReservationsByJobId.size).toBe(0);
-    stop(state);
-  });
-
-  it("rechecks a partial batch immediately when its only reservation conflicts", async () => {
-    const store = fixtures.makeStorePath();
-    const t0 = Date.parse("2026-02-06T10:07:30.000Z");
-    const conflicted = createDueIsolatedJob({
-      id: "partial-conflict",
-      nowMs: t0,
-      nextRunAtMs: t0,
-    });
-    const pending = createDueIsolatedJob({
-      id: "partial-after-conflict",
-      nowMs: t0,
-      nextRunAtMs: t0,
-    });
-    await saveCronStore(store.storePath, { version: 1, jobs: [conflicted, pending] });
-
-    const foreignStartedAtMs = t0 + 1;
-    const preparedForeignReceipt = prepareCronRunReceiptClaim({
-      storePath: store.storePath,
-      job: conflicted,
-      agentId: conflicted.agentId ?? "main",
-      startedAtMs: foreignStartedAtMs,
-    });
-    let foreignReceipt: CronRunReceiptHandle | undefined;
-    let nowCalls = 0;
-    const runIsolatedAgentJob = vi.fn(async ({ job }: { job: CronJob }) => {
-      expect(job.id).toBe(pending.id);
-      return { status: "ok" as const, summary: "pending done" };
-    });
-    const state = createCronServiceState({
-      cronEnabled: true,
-      storePath: store.storePath,
-      log: noopLogger,
-      nowMs: () => {
-        nowCalls += 1;
-        // The third scheduler time read occurs after due-job collection and
-        // immediately before receipt reservation. Simulate a sibling winning
-        // the durable owner race at that boundary.
-        if (nowCalls === 3) {
-          foreignReceipt = runOpenClawStateWriteTransaction(({ db }) => {
-            const receipt = claimCronRunReceiptInDatabase({
-              database: db,
-              prepared: preparedForeignReceipt,
-              resolveAgentId: (job) => job.agentId ?? "main",
-            });
-            db.prepare(
-              `UPDATE cron_jobs
-                  SET running_at_ms = ?,
-                      state_json = json_set(state_json, '$.runningAtMs', ?),
-                      updated_at = updated_at + 1
-                WHERE store_key = ? AND job_id = ?`,
-            ).run(
-              foreignStartedAtMs,
-              foreignStartedAtMs,
-              cronStoreKey(store.storePath),
-              conflicted.id,
-            );
-            return receipt;
-          });
-        }
-        return t0;
-      },
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob,
-    });
-    state.runAdmission.active = DEFAULT_CRON_MAX_CONCURRENT_RUNS - 1;
-
-    try {
-      await onTimer(state);
-
-      expect(foreignReceipt).toBeDefined();
-      expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
-      expect(state.runAdmission.active).toBe(DEFAULT_CRON_MAX_CONCURRENT_RUNS - 1);
-      expect(state.runAdmission.capacityListener).toBeNull();
-      expect(state.activeTimerTicks).toBe(0);
-      expect(
-        (await loadCronStore(store.storePath)).jobs.find((job) => job.id === pending.id)?.state,
-      ).toMatchObject({ lastRunStatus: "ok" });
-    } finally {
-      if (foreignReceipt) {
-        finishCronRunReceipt({
-          handle: foreignReceipt,
-          status: "interrupted",
-          finishedAtMs: t0 + 2,
-        });
-      }
-      stop(state);
-    }
-  });
-
   it("runs the next future wake under its own Gateway root while an earlier batch runs", async () => {
-    vi.useRealTimers();
-    const store = fixtures.makeStorePath();
     const t0 = Date.now();
-    const jobA = createDueIsolatedJob({
-      id: "timer-a",
-      nowMs: t0,
-      nextRunAtMs: t0,
-    });
+    const clock = createGatewaySchedulerClock(t0);
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    const jobA = dueJob("timer-a", t0);
     jobA.payload = { kind: "agentTurn", message: jobA.id, timeoutSeconds: 0 };
-    const jobB = createDueIsolatedJob({
-      id: "timer-b",
-      nowMs: t0,
-      nextRunAtMs: t0 + 500,
-    });
-    await saveCronStore(store.storePath, { version: 1, jobs: [jobA, jobB] });
+    const jobB = dueJob("timer-b", t0, t0 + 500);
+    const store = await seedJobs([jobA, jobB]);
 
-    let active = 0;
-    let peakActive = 0;
-    const aStarted = createDeferred();
-    const releaseA = createDeferred<{ status: "ok"; summary: string }>();
-    const bStarted = createDeferred();
-    const releaseB = createDeferred<{ status: "ok"; summary: string }>();
-    const runIsolatedAgentJob = vi.fn(async ({ job }: { job: CronJob }) => {
-      active += 1;
-      peakActive = Math.max(peakActive, active);
-      try {
-        if (job.id === jobA.id) {
-          aStarted.resolve();
-          return await releaseA.promise;
-        }
-        bStarted.resolve();
-        return await releaseB.promise;
-      } finally {
-        active -= 1;
-      }
-    });
-    const state = createCronServiceState({
-      cronEnabled: true,
+    const blocked = blockedRuns([jobA, jobB]);
+    const runIsolatedAgentJob = blocked.run;
+    const state = createCronRegressionState({
+      scheduler,
       storePath: store.storePath,
-      log: noopLogger,
-      nowMs: () => Date.now(),
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
+      nowMs: clock.clock.now,
       runIsolatedAgentJob,
     });
-    state.runAdmission.active = DEFAULT_CRON_MAX_CONCURRENT_RUNS - 2;
 
     const tickA = onTimer(state);
+    let tickB: ReturnType<typeof clock.advanceTo> = undefined;
     try {
-      await aStarted.promise;
-      await bStarted.promise;
+      await blocked.started(jobA);
+      const nextWakeAtMs = scheduler.nextWakeAtMs;
+      assert.isNotNull(nextWakeAtMs);
+      expect(nextWakeAtMs).toBeGreaterThanOrEqual(t0 + 500);
+      tickB = clock.advanceTo(nextWakeAtMs);
+      await blocked.started(jobB);
 
       expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
-      expect(peakActive).toBe(2);
-      expect(
-        inspectActiveCronRunReceipt({
-          storePath: store.storePath,
-          jobId: jobB.id,
-        }),
-      ).toBeDefined();
-      expect(getActiveGatewayRootWorkCount()).toBe(2);
+      expect(blocked.peakActive).toBe(2);
+      expect(store.receipt(jobB)).toBeDefined();
+      expect(getActiveGatewayRootWorkHolders().toSorted()).toEqual([
+        "cron:run (2)",
+        "cron:timer-tick (2)",
+      ]);
 
-      releaseA.resolve({ status: "ok", summary: "a done" });
+      blocked.release(jobA);
       await tickA;
-      expect(getActiveGatewayRootWorkCount()).toBe(1);
-      releaseB.resolve({ status: "ok", summary: "b done" });
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      expect(state.activeTimerTicks).toBe(1);
+      blocked.release(jobB);
+      await tickB;
+      await waitForCronRunQueue(state);
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
       expect(state.activeTimerTicks).toBe(0);
     } finally {
-      releaseA.resolve({ status: "ok", summary: "a cleanup" });
-      releaseB.resolve({ status: "ok", summary: "b cleanup" });
-      await tickA;
+      blocked.release(jobA);
+      blocked.release(jobB);
+      await Promise.all([tickA, tickB]);
       stop(state);
+      await scheduler.stop();
+    }
+  });
+  it("retires a suspended timer across a scheduler stop and restart", async () => {
+    let nowMs = Date.parse("2026-02-06T10:08:00.000Z");
+    const job = dueJob("retired-scheduler-timer", nowMs, nowMs + 1_000);
+    const store = await seedJobs([job]);
+
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+    const state = createCronRegressionState({
+      storePath: store.storePath,
+      nowMs: () => nowMs,
+      runIsolatedAgentJob,
+    });
+    await start(state);
+    const restartSignal = beginGatewayRestartSignalAdmission();
+    expect(restartSignal).not.toBeNull();
+    const retiredTimer = onTimer(state);
+
+    try {
+      stop(state);
+      await retiredTimer;
+      await start(state);
+      const restartedTimer = state.timer;
+      nowMs += 1_000;
+
+      expect(restartSignal?.rollback()).toBe(true);
+      await retiredTimer;
+
+      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+      expect(state.timer).toBe(restartedTimer);
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+      const persisted = await loadCronStore(store.storePath);
+      expect(persisted.jobs[0]?.state).toMatchObject({ nextRunAtMs: nowMs });
+      expect(persisted.jobs[0]?.state.queuedAtMs).toBeUndefined();
+      expect(persisted.jobs[0]?.state.runningAtMs).toBeUndefined();
+    } finally {
+      restartSignal?.rollback();
+      stop(state);
+      await retiredTimer;
     }
   });
 });

@@ -1,69 +1,31 @@
 import { randomUUID } from "node:crypto";
-import { watch } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, it } from "vitest";
-import { startQaGatewayChild, startQaMockOpenAiServer } from "../../../../extensions/qa-lab/api.js";
+import { describe, expect, it } from "vitest";
+import {
+  createQaGatewayChild,
+  startQaMockOpenAiServer,
+} from "../../../../extensions/qa-lab/api.js";
 import type {
   BoardWidgetAppViewResult,
   BoardWidgetPutResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import {
   TEST_TIMEOUT_MS,
   createChildEnv,
   startHttpFixture,
   stopChild,
+  waitForMcpFixtureGate,
   type GatewayHandle,
   type HttpFixture,
 } from "./gateway-node-mcp.test-support.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const GATE_WAIT_TIMEOUT_MS = 30_000;
 const APP_TOOL_NAME = "streamableHttp__parity_app";
 const POST_REVOCATION_MARKER = "post-revocation";
-
-async function waitForFile(filePath: string): Promise<void> {
-  try {
-    await fs.access(filePath);
-    return;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
-    }
-  }
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      watcher.close();
-      reject(new Error(`timed out waiting for fixture gate: ${path.basename(filePath)}`));
-    }, GATE_WAIT_TIMEOUT_MS);
-    timeout.unref();
-    const finish = (error?: unknown) => {
-      clearTimeout(timeout);
-      watcher.close();
-      error ? reject(error) : resolve();
-    };
-    const inspect = () => {
-      void fs.access(filePath).then(
-        () => finish(),
-        (error: NodeJS.ErrnoException) => {
-          if (error.code !== "ENOENT") {
-            finish(error);
-          }
-        },
-      );
-    };
-    const watcher = watch(path.dirname(filePath), (_event, filename) => {
-      if (!filename || filename.toString() === path.basename(filePath)) {
-        inspect();
-      }
-    });
-    watcher.once("error", finish);
-    inspect();
-  });
-}
 
 function requireMcpAppViewId(messages: unknown[]): string {
   for (const message of messages) {
@@ -106,7 +68,13 @@ function appConfig(cfg: OpenClawConfig, fixture: HttpFixture): OpenClawConfig {
         },
       },
     },
-    tools: { ...cfg.tools, profile: "full", toolSearch: false, codeMode: false },
+    tools: {
+      ...cfg.tools,
+      profile: "full",
+      toolSearch: false,
+      codeMode: false,
+      exec: { ...cfg.tools?.exec, mode: "ask" },
+    },
     channels: {},
   };
 }
@@ -129,11 +97,30 @@ async function postStandalone(params: {
   });
 }
 
+async function readStandaloneResource(params: {
+  gateway: GatewayHandle;
+  ticket: string;
+}): Promise<Response> {
+  return await fetch(new URL("/__openclaw__/mcp-app/view", params.gateway.baseUrl), {
+    method: "POST",
+    headers: {
+      Authorization: `MCP-App ${params.ticket}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      method: "resources/read",
+      params: { uri: "ui://parity/app" },
+    }),
+  });
+}
+
 describe("Gateway MCP App board grant revalidation", () => {
   it(
     "rejects a standalone tool call revoked during a real catalog refresh",
     { timeout: TEST_TIMEOUT_MS },
-    async () => {
+    async ({ signal, onTestFinished }) => {
+      // Finish hooks run in reverse order: join children before deleting their paths.
+      const tempDirs = useAutoCleanupTempDirTracker(onTestFinished);
       const repoRoot = process.cwd();
       const taskRoot = tempDirs.make("openclaw-mcp-app-grant-revalidation-");
       const fixtureRoot = path.join(taskRoot, "fixture");
@@ -150,11 +137,29 @@ describe("Gateway MCP App board grant revalidation", () => {
         "test/e2e/qa-lab/runtime/gateway-node-mcp.fixture.mjs",
       );
       let fixture: HttpFixture | undefined;
+      let startingFixture: Promise<HttpFixture> | undefined;
       let mock: Awaited<ReturnType<typeof startQaMockOpenAiServer>> | undefined;
+      const gatewayOwner = createQaGatewayChild();
       let gateway: GatewayHandle | undefined;
       let pendingCall: Promise<Response> | undefined;
       let proofError: unknown;
       const cleanupErrors: unknown[] = [];
+      let cleanupPromise: Promise<void> | undefined;
+      const cleanup = () =>
+        (cleanupPromise ??= (async () => {
+          const acquiredFixture = await startingFixture?.catch(() => undefined);
+          await fs.writeFile(releasePath, "released\n").catch(() => {});
+          await pendingCall?.catch(() => {});
+          const stopped = await Promise.allSettled([
+            stopQaGatewayFixture(gatewayOwner),
+            ...(acquiredFixture ? [stopChild(acquiredFixture)] : []),
+            ...(mock ? [Promise.resolve(mock.stop())] : []),
+          ]);
+          cleanupErrors.push(
+            ...stopped.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
+          );
+        })());
+      onTestFinished(cleanup);
 
       try {
         await Promise.all(
@@ -162,8 +167,9 @@ describe("Gateway MCP App board grant revalidation", () => {
             fs.mkdir(directory, { recursive: true }),
           ),
         );
-        fixture = await startHttpFixture({
+        startingFixture = startHttpFixture({
           fixturePath,
+          signal,
           labelPrefix: "session",
           env: createChildEnv({
             home: fixtureHome,
@@ -175,9 +181,10 @@ describe("Gateway MCP App board grant revalidation", () => {
             },
           }),
         });
+        fixture = await startingFixture;
         mock = await startQaMockOpenAiServer();
         const activeFixture = fixture;
-        gateway = await startQaGatewayChild({
+        gateway = await gatewayOwner.start({
           repoRoot,
           command: {
             executablePath: process.execPath,
@@ -256,6 +263,11 @@ describe("Gateway MCP App board grant revalidation", () => {
         const ticket = standaloneUrl.hash.slice(1);
         expect(ticket).not.toBe("");
 
+        const allowedResource = await readStandaloneResource({ gateway, ticket });
+        const allowedResourceBody: unknown = await allowedResource.json();
+        expect(allowedResource.status).toBe(200);
+        expect(JSON.stringify(allowedResourceBody)).toContain("Parity MCP App");
+
         await fs.writeFile(armPath, "armed\n");
         const notificationCall = await postStandalone({
           gateway,
@@ -265,7 +277,7 @@ describe("Gateway MCP App board grant revalidation", () => {
         expect(notificationCall.status).toBe(200);
 
         pendingCall = postStandalone({ gateway, ticket, marker: POST_REVOCATION_MARKER });
-        await waitForFile(startedPath);
+        await waitForMcpFixtureGate(startedPath, signal);
         await gateway.call("board.update", {
           sessionKey,
           ops: [{ kind: "widget_remove", name: widget.name }],
@@ -274,29 +286,28 @@ describe("Gateway MCP App board grant revalidation", () => {
 
         const denied = await pendingCall;
         const deniedBody: unknown = await denied.json();
+        const deniedResource = await readStandaloneResource({ gateway, ticket });
+        const deniedResourceBody: unknown = await deniedResource.json();
         const executedMarkers = await readExecutedMarkers(eventPath);
         expect({
           status: denied.status,
           error: isRecord(deniedBody) ? deniedBody.error : undefined,
+          resourceStatus: deniedResource.status,
+          resourceError: isRecord(deniedResourceBody) ? deniedResourceBody.error : undefined,
+          leakedResource: JSON.stringify(deniedResourceBody).includes("Parity MCP App"),
           postRevocationExecuted: executedMarkers.includes(POST_REVOCATION_MARKER),
         }).toEqual({
           status: 403,
           error: "MCP App widget grant is no longer active",
+          resourceStatus: 403,
+          resourceError: "MCP App widget grant is no longer active",
+          leakedResource: false,
           postRevocationExecuted: false,
         });
       } catch (error) {
         proofError = error;
       } finally {
-        await fs.writeFile(releasePath, "released\n").catch(() => {});
-        await pendingCall?.catch(() => {});
-        const stopped = await Promise.allSettled([
-          ...(gateway ? [Promise.resolve(gateway.stop())] : []),
-          ...(fixture ? [stopChild(fixture)] : []),
-          ...(mock ? [Promise.resolve(mock.stop())] : []),
-        ]);
-        cleanupErrors.push(
-          ...stopped.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
-        );
+        await cleanup();
       }
 
       const failures = proofError === undefined ? cleanupErrors : [proofError, ...cleanupErrors];

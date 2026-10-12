@@ -1,17 +1,30 @@
-// @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
+// @vitest-environment node
+import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../api/gateway.ts";
+import { createConnectionBootstrapCoordinator } from "../app/connection-bootstrap.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { createSessionCapability, type SessionCapability } from "../lib/sessions/index.ts";
+import type { SessionGateway } from "../lib/sessions/session-capability.ts";
 import type { SessionDataControllerHost } from "./session-data-controller-catalog.ts";
 import { SessionDataController } from "./session-data-controller.ts";
 
+const cleanups: Array<() => void> = [];
+
 afterEach(() => {
+  for (const cleanup of cleanups.splice(0)) {
+    cleanup();
+  }
+  vi.restoreAllMocks();
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
-function createFilteredSessionController(statusFilter: "archived" | "all", rowCount = 1) {
+function createFilteredSessionController(
+  statusFilter: "active" | "archived" | "all",
+  rowCount = 1,
+  includeActiveRows = false,
+) {
   vi.stubGlobal("document", {
     addEventListener: vi.fn(),
     removeEventListener: vi.fn(),
@@ -35,14 +48,16 @@ function createFilteredSessionController(statusFilter: "archived" | "all", rowCo
   const list = vi.fn(async (options?: Parameters<SessionCapability["list"]>[0]) => {
     const offset = options?.offset ?? 0;
     const limit = options?.limit ?? 60;
-    const sessions = rows.slice(offset, offset + limit);
+    const matchingRows =
+      options?.involvingMe || options?.ownerId ? rows.filter((_, index) => index % 2 === 0) : rows;
+    const sessions = matchingRows.slice(offset, offset + limit);
     const nextOffset = offset + sessions.length;
-    const hasMore = nextOffset < rows.length;
+    const hasMore = nextOffset < matchingRows.length;
     return {
       ts: 1,
       path: "",
       count: sessions.length,
-      totalCount: rows.length,
+      totalCount: matchingRows.length,
       nextOffset: hasMore ? nextOffset : null,
       hasMore,
       defaults: { modelProvider: null, model: null, contextTokens: null },
@@ -61,7 +76,7 @@ function createFilteredSessionController(statusFilter: "archived" | "all", rowCo
       const { archived, ...options } = (params ?? {}) as NonNullable<
         Parameters<SessionCapability["list"]>[0]
       > & { archived?: true | "all" };
-      if (!archived && !options.spawnedBy) {
+      if (!includeActiveRows && !archived && !options.spawnedBy) {
         return Promise.resolve({
           ts: 1,
           path: "",
@@ -76,23 +91,45 @@ function createFilteredSessionController(statusFilter: "archived" | "all", rowCo
       }) as Promise<T>;
     },
   } as GatewayBrowserClient;
+  const snapshot: SessionGateway["snapshot"] = {
+    phase: "connected",
+    client,
+    hello: null,
+    assistantAgentId: "main",
+    sessionKey: "agent:main:main",
+  };
+  const gatewayListeners = new Set<(next: SessionGateway["snapshot"]) => void>();
   const gateway = {
-    snapshot: {
-      phase: "connected",
-      client,
-      hello: null,
-      assistantAgentId: "main",
-      sessionKey: "agent:main:main",
+    snapshot,
+    subscribe(listener: (next: SessionGateway["snapshot"]) => void) {
+      gatewayListeners.add(listener);
+      return () => gatewayListeners.delete(listener);
     },
-    subscribe: () => () => undefined,
     subscribeEvents(listener: (event: GatewayEventFrame) => void) {
       eventListeners.add(listener);
       return () => eventListeners.delete(listener);
     },
   } as const;
-  const sessions = createSessionCapability(gateway);
   let selectedAgentId = "main";
+  const agentSelection = {
+    get state() {
+      return { selectedId: selectedAgentId, scopeId: selectedAgentId };
+    },
+    subscribe: () => () => undefined,
+  };
+  const connectionBootstrap = createConnectionBootstrapCoordinator();
+  const synchronizeBootstrap = (next: SessionGateway["snapshot"]) =>
+    connectionBootstrap.synchronize({ client: next.client, connected: next.phase === "connected" });
+  synchronizeBootstrap(snapshot);
+  const stopBootstrap = gateway.subscribe(synchronizeBootstrap);
+  const sessions = createSessionCapability(gateway, agentSelection, { connectionBootstrap });
+  cleanups.push(() => {
+    stopBootstrap();
+    sessions.dispose();
+    connectionBootstrap.reset();
+  });
   let selectedStatusFilter = statusFilter;
+  let membership = { ownerId: null as string | null, involvingMe: false };
   const agentsState = {
     connected: true,
     client,
@@ -103,6 +140,7 @@ function createFilteredSessionController(statusFilter: "archived" | "all", rowCo
   };
   const agentListeners = new Set<(state: ApplicationContext["agents"]["state"]) => void>();
   const context = {
+    connectionBootstrap,
     gateway,
     sessions,
     agents: {
@@ -112,16 +150,16 @@ function createFilteredSessionController(statusFilter: "archived" | "all", rowCo
         return () => agentListeners.delete(listener);
       },
     },
-    agentSelection: {
-      get state() {
-        return { selectedId: selectedAgentId, scopeId: selectedAgentId };
-      },
-      subscribe: () => () => undefined,
-    },
+    agentSelection,
   } as unknown as ApplicationContext;
+  let hostConnected = true;
   const host = {
-    isConnected: true,
+    get isConnected() {
+      return hostConnected;
+    },
     connected: true,
+    activeRouteId: "sessions",
+    getRouteSessionKey: () => context.gateway.snapshot.sessionKey.trim(),
     sessionDataContext: context,
     addController: () => undefined,
     removeController: () => undefined,
@@ -132,21 +170,39 @@ function createFilteredSessionController(statusFilter: "archived" | "all", rowCo
     promoteCreatedSession: () => undefined,
     selectedAgentIdForSessions: () => selectedAgentId,
     sidebarSessionStatusFilter: () => selectedStatusFilter,
+    sidebarSessionOwnerFilter: () => membership,
+    sessionCatalogIdsWithoutVisibleRows: () => [],
     querySelector: () => null,
   } satisfies SessionDataControllerHost;
   const controller = new SessionDataController(host);
 
   return {
+    context,
+    host,
+    disconnectHost: () => {
+      hostConnected = false;
+      controller.hostDisconnected();
+    },
     controller,
     list,
     resultForKeys,
+    reconnect: () => {
+      for (const phase of ["reconnecting", "connected"] as const) {
+        snapshot.phase = phase;
+        gatewayListeners.forEach((listener) => listener(snapshot));
+      }
+    },
+    selectMembership: async (filter: typeof membership) => {
+      membership = filter;
+      await controller.refreshSidebarSessions();
+    },
     selectAgent: (agentId: string) => {
       selectedAgentId = agentId;
       controller.synchronizeSessionScope();
     },
-    selectStatusFilter: (nextStatusFilter: "archived" | "all") => {
+    selectStatusFilter: (nextStatusFilter: "active" | "archived" | "all") => {
       selectedStatusFilter = nextStatusFilter;
-      controller.resetForStatusFilter(nextStatusFilter);
+      controller.resetSessionList();
     },
     publishSessionChanged: (payload: Record<string, unknown> = {}) => {
       const event = {
@@ -180,6 +236,238 @@ function createFilteredSessionController(statusFilter: "archived" | "all", rowCo
 }
 
 describe("filtered sidebar session event refresh", () => {
+  it("keeps shared group hydration when its first sidebar presenter disconnects", async () => {
+    const { controller, context, host, disconnectHost } = createFilteredSessionController("active");
+    const bootstrap = context.connectionBootstrap;
+    const client = context.gateway.snapshot.client;
+    bootstrap.setForegroundRoute("agent:main:pending");
+    const load = vi.spyOn(context.sessions, "groupsLoad");
+    const replacement = new SessionDataController({ ...host, isConnected: true });
+    try {
+      controller.hostConnected();
+      replacement.hostConnected();
+      expect(load).not.toHaveBeenCalled();
+      disconnectHost();
+      bootstrap.setForegroundPane({}, { sessionKey: "agent:main:pending", client, ready: true });
+      await bootstrap.run(context.sessions.groupsLoad, async () => {});
+      expect(load).toHaveBeenCalledOnce();
+    } finally {
+      replacement.hostDisconnected();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it.each(["archived", "all"] as const)(
+    "automatically rebinds the restored %s filter across controller reconnect",
+    async (statusFilter) => {
+      vi.useFakeTimers();
+      const { controller, list } = createFilteredSessionController(statusFilter);
+      try {
+        controller.hostConnected();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(list).toHaveBeenCalledOnce();
+        expect(list).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            agentId: "main",
+            archivedFilter: statusFilter,
+            excludeDock: true,
+          }),
+        );
+        expect(controller.sessionsResult?.sessions).toHaveLength(1);
+        controller.hostDisconnected();
+        controller.hostConnected();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(list).toHaveBeenCalledTimes(2);
+        expect(controller.sessionsResult?.sessions).toHaveLength(1);
+      } finally {
+        controller.hostDisconnected();
+      }
+    },
+  );
+
+  it.each(["active", "archived", "all"] as const)(
+    "keeps membership in the displayed %s query across refresh, pagination, and agent changes",
+    async (statusFilter) => {
+      vi.useFakeTimers();
+      const {
+        controller,
+        context,
+        list,
+        selectMembership,
+        selectAgent,
+        selectStatusFilter,
+        reconnect,
+        publishSessionChanged,
+        // Membership keeps the odd-numbered half, so four roster pages of rows
+        // leave two pages of matches -- enough that pagination is still real.
+      } = createFilteredSessionController(statusFilter, SIDEBAR_SESSION_ROSTER_LIMIT * 4, true);
+      const pageSize = SIDEBAR_SESSION_ROSTER_LIMIT;
+      controller.hostConnected();
+      try {
+        await selectMembership({ ownerId: null, involvingMe: true });
+        expect(controller.sessionsResult?.sessions).toHaveLength(pageSize);
+        expect(list).toHaveBeenLastCalledWith(
+          expect.objectContaining({ involvingMe: true, excludeDock: true }),
+        );
+        expect(controller.sessionsResult?.sessions.every((row) => row.updatedAt! % 2 === 1)).toBe(
+          true,
+        );
+
+        await controller.loadMoreSidebarSessions();
+        expect(controller.sessionsResult?.sessions).toHaveLength(pageSize * 2);
+        expect(list).toHaveBeenLastCalledWith(
+          expect.objectContaining({ involvingMe: true, offset: pageSize }),
+        );
+        await controller.refreshSidebarSessions();
+        expect(controller.sessionsResult?.sessions).toHaveLength(pageSize * 2);
+
+        list.mockClear();
+        publishSessionChanged();
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(list.mock.calls.some(([query]) => query?.involvingMe === true)).toBe(true);
+        expect(controller.sessionsResult?.sessions).toHaveLength(pageSize * 2);
+
+        list.mockClear();
+        reconnect();
+        await controller.refreshSidebarSessions();
+        expect(list.mock.calls.some(([query]) => query?.involvingMe === true)).toBe(true);
+        expect(controller.sessionsResult?.sessions).toHaveLength(pageSize * 2);
+
+        selectStatusFilter(statusFilter === "all" ? "archived" : "all");
+        await controller.refreshSidebarSessions();
+        expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ involvingMe: true }));
+        expect(controller.sessionsResult?.sessions).toHaveLength(pageSize);
+
+        selectAgent("research");
+        await controller.refreshSidebarSessions();
+        expect(list).toHaveBeenLastCalledWith(
+          expect.objectContaining({ agentId: "research", involvingMe: true }),
+        );
+        expect(controller.sessionsResult?.sessions).toHaveLength(pageSize);
+
+        // A mutation of the previous agent can settle after this selection.
+        const outcome = await context.sessions.reconcileMutation("main");
+        expect(outcome.status).toBe("refreshed");
+        expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ agentId: "main" }));
+        const readsAfterMutation = list.mock.calls.length;
+        await controller.refreshSidebarSessions("main");
+        controller.hostUpdated();
+        expect(list).toHaveBeenCalledTimes(readsAfterMutation);
+        expect(controller.sessionsAgentId).toBe("research");
+        await controller.loadMoreSidebarSessions();
+        expect(list).toHaveBeenLastCalledWith(
+          expect.objectContaining({ agentId: "research", involvingMe: true, offset: pageSize }),
+        );
+        expect(controller.sessionsResult?.sessions).toHaveLength(pageSize * 2);
+
+        await selectMembership({ ownerId: "profile-ada", involvingMe: false });
+        expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ ownerId: "profile-ada" }));
+        expect(list.mock.lastCall?.[0]?.involvingMe).toBeUndefined();
+        expect(controller.sessionsResult?.sessions).toHaveLength(pageSize);
+
+        await selectMembership({ ownerId: null, involvingMe: false });
+        expect(list.mock.lastCall?.[0]?.ownerId).toBeUndefined();
+        expect(list.mock.lastCall?.[0]?.involvingMe).toBeUndefined();
+      } finally {
+        controller.hostDisconnected();
+      }
+    },
+  );
+  it.each(["archived", "all"] as const)(
+    "clears a recovered %s list failure without erasing a same-text action failure",
+    async (statusFilter) => {
+      const { controller, list, selectStatusFilter } =
+        createFilteredSessionController(statusFilter);
+      controller.hostConnected();
+      list.mockRejectedValueOnce(new Error("Session request failed"));
+
+      await controller.refreshSidebarSessions();
+
+      expect(controller.sessionMutationError).toBe("Session request failed");
+
+      await controller.refreshSidebarSessions();
+
+      expect(controller.sessionMutationError).toBeNull();
+      expect(controller.sessionsResult?.sessions).toHaveLength(1);
+
+      list.mockRejectedValueOnce(new Error("Session request failed"));
+      await controller.refreshSidebarSessions();
+
+      const mutation = controller.beginSessionMutation();
+      expect(mutation).not.toBeNull();
+      controller.publishSessionMutationError(mutation!, new Error("Session request failed"));
+
+      list.mockRejectedValueOnce(new Error("Background session list failed"));
+      await controller.refreshSidebarSessions();
+      expect(controller.sessionMutationError).toBe("Session request failed");
+
+      await controller.refreshSidebarSessions();
+      expect(controller.sessionMutationError).toBe("Session request failed");
+
+      selectStatusFilter(statusFilter === "archived" ? "all" : "archived");
+      expect(controller.sessionMutationError).toBe("Session request failed");
+
+      controller.hostDisconnected();
+      expect(controller.sessionMutationError).toBeNull();
+    },
+  );
+
+  it.each(["archived", "all"] as const)(
+    "retires the %s list failure when its selected filter changes",
+    async (statusFilter) => {
+      const { controller, list, selectStatusFilter } =
+        createFilteredSessionController(statusFilter);
+      controller.hostConnected();
+      list.mockRejectedValueOnce(new Error("Retired session list failed"));
+
+      await controller.refreshSidebarSessions();
+      expect(controller.sessionMutationError).toBe("Retired session list failed");
+
+      selectStatusFilter(statusFilter === "archived" ? "all" : "archived");
+
+      expect(controller.sessionMutationError).toBeNull();
+      controller.hostDisconnected();
+    },
+  );
+
+  it("dismisses a filtered list failure without restoring it on recovery", async () => {
+    const { controller, list } = createFilteredSessionController("archived");
+    controller.hostConnected();
+    list.mockRejectedValueOnce(new Error("Dismissed session list failed"));
+
+    await controller.refreshSidebarSessions();
+    expect(controller.sessionMutationError).toBe("Dismissed session list failed");
+
+    controller.dismissSessionMutationError();
+    expect(controller.sessionMutationError).toBeNull();
+
+    await controller.refreshSidebarSessions();
+    expect(controller.sessionMutationError).toBeNull();
+    controller.hostDisconnected();
+  });
+
+  it("ignores a retired filter's delayed failure after the replacement scope binds", async () => {
+    const { controller, list, selectStatusFilter } = createFilteredSessionController("archived");
+    controller.hostConnected();
+    // Retire an issued request, not a refresh still queued behind startup.
+    await controller.refreshSidebarSessions();
+    list.mockClear();
+    let rejectList!: (error: Error) => void;
+    const delayedList = new Promise<Awaited<ReturnType<typeof list>>>((_, reject) => {
+      rejectList = reject;
+    });
+    list.mockImplementationOnce(async () => await delayedList);
+
+    const retiredRefresh = controller.refreshSidebarSessions();
+    expect(list).toHaveBeenCalledOnce();
+    selectStatusFilter("all");
+    rejectList(new Error("Retired archived request failed"));
+    await retiredRefresh;
+
+    expect(controller.sessionMutationError).toBeNull();
+    controller.hostDisconnected();
+  });
+
   it("evicts cached sessions when an agent leaves the authoritative roster", () => {
     const { controller, publishAgentRoster, resultForKeys } =
       createFilteredSessionController("all");
@@ -221,6 +509,7 @@ describe("filtered sidebar session event refresh", () => {
     "refreshes the %s list once for duplicate remote session events",
     async (statusFilter) => {
       vi.useFakeTimers();
+      vi.spyOn(Math, "random").mockReturnValue(0);
       const { controller, list, publishSessionChanged } =
         createFilteredSessionController(statusFilter);
       controller.hostConnected();
@@ -229,7 +518,7 @@ describe("filtered sidebar session event refresh", () => {
 
       publishSessionChanged();
       publishSessionChanged();
-      await vi.advanceTimersByTimeAsync(199);
+      await vi.advanceTimersByTimeAsync(4_999);
       expect(list).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1);
 
@@ -246,20 +535,22 @@ describe("filtered sidebar session event refresh", () => {
     "preserves every loaded %s page when a remote event replaces the list",
     async (statusFilter) => {
       vi.useFakeTimers();
+      // Two full roster pages, so the retained window still spans a real append.
+      const pageSize = SIDEBAR_SESSION_ROSTER_LIMIT;
       const { controller, list, publishSessionChanged } = createFilteredSessionController(
         statusFilter,
-        120,
+        pageSize * 2,
       );
       controller.hostConnected();
       await controller.refreshSidebarSessions();
-      expect(controller.sessionsResult?.sessions).toHaveLength(60);
+      expect(controller.sessionsResult?.sessions).toHaveLength(pageSize);
 
       await controller.loadMoreSidebarSessions();
-      expect(controller.sessionsResult?.sessions).toHaveLength(120);
+      expect(controller.sessionsResult?.sessions).toHaveLength(pageSize * 2);
       list.mockClear();
 
       publishSessionChanged();
-      await vi.advanceTimersByTimeAsync(200);
+      await vi.advanceTimersByTimeAsync(5_000);
 
       expect(list).toHaveBeenCalledOnce();
       expect(list).toHaveBeenCalledWith(
@@ -267,10 +558,10 @@ describe("filtered sidebar session event refresh", () => {
           agentId: "main",
           archivedFilter: statusFilter,
           includeLastMessage: true,
-          limit: 120,
+          limit: pageSize * 2,
         }),
       );
-      expect(controller.sessionsResult?.sessions).toHaveLength(120);
+      expect(controller.sessionsResult?.sessions).toHaveLength(pageSize * 2);
       controller.hostDisconnected();
     },
   );
@@ -283,7 +574,7 @@ describe("filtered sidebar session event refresh", () => {
     list.mockClear();
 
     publishSessionChanged({ sessionKey: "agent:research:remote-change", agentId: "research" });
-    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(5_000);
 
     expect(list).not.toHaveBeenCalled();
     controller.hostDisconnected();
@@ -300,30 +591,33 @@ describe("filtered sidebar session event refresh", () => {
     publishSessionChanged();
     selectAgent("research");
     list.mockClear();
-    await vi.advanceTimersByTimeAsync(200);
+    await vi.advanceTimersByTimeAsync(5_000);
 
     expect(list).not.toHaveBeenCalled();
     controller.hostDisconnected();
   });
 
   it("does not carry another filtered list's page depth across a filter change", async () => {
+    // The archived list grows to two pages; switching filters must start over
+    // at one page rather than inheriting that depth.
+    const pageSize = SIDEBAR_SESSION_ROSTER_LIMIT;
     const { controller, list, selectStatusFilter } = createFilteredSessionController(
       "archived",
-      120,
+      pageSize * 2,
     );
     controller.hostConnected();
     await controller.refreshSidebarSessions();
     await controller.loadMoreSidebarSessions();
-    expect(controller.sessionsResult?.sessions).toHaveLength(120);
+    expect(controller.sessionsResult?.sessions).toHaveLength(pageSize * 2);
     list.mockClear();
 
     selectStatusFilter("all");
     await controller.refreshSidebarSessions();
 
     expect(list).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "main", archivedFilter: "all", limit: 60 }),
+      expect.objectContaining({ agentId: "main", archivedFilter: "all", limit: pageSize }),
     );
-    expect(controller.sessionsResult?.sessions).toHaveLength(60);
+    expect(controller.sessionsResult?.sessions).toHaveLength(pageSize);
     controller.hostDisconnected();
   });
 
@@ -361,6 +655,7 @@ describe("filtered sidebar session event refresh", () => {
 
   it("bounds refresh latency while same-agent events continue arriving", async () => {
     vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
     const { controller, list, publishSessionChanged } = createFilteredSessionController("all");
     controller.hostConnected();
     await controller.refreshSidebarSessions();
@@ -368,7 +663,7 @@ describe("filtered sidebar session event refresh", () => {
 
     publishSessionChanged();
     for (let index = 0; index < 5; index += 1) {
-      await vi.advanceTimersByTimeAsync(199);
+      await vi.advanceTimersByTimeAsync(999);
       publishSessionChanged();
     }
     expect(list).not.toHaveBeenCalled();
@@ -387,7 +682,7 @@ describe("filtered sidebar session event refresh", () => {
 
     publishSessionChanged();
     controller.hostDisconnected();
-    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(5_000);
 
     expect(list).not.toHaveBeenCalled();
   });
@@ -415,7 +710,7 @@ describe("filtered sidebar session event refresh", () => {
     list.mockImplementationOnce(async () => await firstRefresh).mockResolvedValue(refreshedPage);
 
     publishSessionChanged();
-    await vi.advanceTimersByTimeAsync(200);
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(list).toHaveBeenCalledOnce();
 
     publishSessionChanged();
@@ -425,7 +720,9 @@ describe("filtered sidebar session event refresh", () => {
     expect(list).toHaveBeenCalledOnce();
 
     resolveFirstRefresh(refreshedPage);
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(list).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1);
 
     expect(list).toHaveBeenCalledTimes(2);
     expect(controller.sessionsResult?.sessions[0]?.updatedAt).toBe(2);

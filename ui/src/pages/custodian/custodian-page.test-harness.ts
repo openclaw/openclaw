@@ -28,6 +28,7 @@ type ContextHarness = {
   context: ApplicationContext;
   setGatewaySnapshot: (patch: Partial<ApplicationGatewaySnapshot>) => void;
   setGatewayToken: (token: string) => void;
+  setPathname: (pathname: string) => void;
   setChannelsConnected: (connected: boolean) => void;
   setChannelsSnapshot: (snapshot: ChannelsStatusSnapshot | null) => void;
   setChannelsError: (error: string | null) => void;
@@ -106,6 +107,7 @@ export function createContext(
     pairingBusyRequestId: null,
     whatsappLoginMessage: null,
     whatsappLoginQrDataUrl: null,
+    whatsappLoginSessionKey: null,
     whatsappLoginConnected: null,
     whatsappBusy: false,
   };
@@ -116,14 +118,22 @@ export function createContext(
     }
     return new Promise<void>(() => {});
   });
+  const routeListeners = new Set<() => void>();
   const context = {
     gateway,
+    router: {
+      getState: () => ({ location: { pathname: window.location.pathname } }),
+      subscribe: (listener: () => void) => {
+        routeListeners.add(listener);
+        return () => routeListeners.delete(listener);
+      },
+    },
     agents: {
       state: {
         agentsList: options.agentsList ?? {
           defaultId: "main",
           mainKey: "main",
-          scope: "agent",
+          scope: "global",
           agents: [{ id: "main", model: { primary: "openai/gpt-5.5" } }],
         },
       },
@@ -133,7 +143,7 @@ export function createContext(
       },
       refreshList: vi.fn(),
     },
-    agentSelection: { state: { selectedId: "main" } },
+    agentSelection: { state: { selectedId: "main" }, subscribe: () => () => {} },
     channels: {
       state: channelState,
       refresh: refreshChannels,
@@ -148,6 +158,12 @@ export function createContext(
   } as unknown as ApplicationContext;
   return {
     context,
+    setPathname: (pathname) => {
+      window.history.replaceState({}, "", pathname);
+      for (const listener of routeListeners) {
+        listener();
+      }
+    },
     setGatewaySnapshot: (patch) => {
       snapshot = { ...snapshot, ...patch };
       for (const listener of listeners) {

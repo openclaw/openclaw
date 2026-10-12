@@ -1,32 +1,14 @@
 import { createServer } from "node:http";
 import { describe, expect, it } from "vitest";
-import type { Model } from "../types.js";
+import type { OpenAICompletionsOptions } from "../provider-options.js";
+import { streamSimpleOpenAICompletions } from "../providers/openai-completions.js";
+import type { AssistantMessage, Model, SimpleStreamOptions } from "../types.js";
 import { createOpenAICompletionsTransportStreamFn } from "./openai-completions-transport.js";
 import { makeCompletionsModel } from "./openai-completions.test-support.js";
-import { buildOpenAISdkClientOptions } from "./openai-transport-params.js";
 
 const COLD_RUNNER_HTTP_TEST_TIMEOUT_MS = 300_000;
 
 describe("openai completions transport requests", () => {
-  it("passes provider request timeouts to the completions SDK client", () => {
-    const requestTimeoutMs = 900_000;
-    const model = {
-      id: "gpt-5.4-mini",
-      name: "GPT-5.4 Mini",
-      api: "openai-completions",
-      provider: "openai",
-      baseUrl: "https://api.openai.com/v1",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 200_000,
-      maxTokens: 8_192,
-      requestTimeoutMs,
-    } satisfies Model<"openai-completions"> & { requestTimeoutMs: number };
-
-    expect(buildOpenAISdkClientOptions(model).timeout).toBe(requestTimeoutMs);
-  });
-
   it.each([
     {
       api: "openai-completions" as const,
@@ -34,7 +16,7 @@ describe("openai completions transport requests", () => {
       createStream: createOpenAICompletionsTransportStreamFn,
     },
   ])(
-    "honors turn timeout and zero retries over real $api HTTP",
+    "honors turn timeout and pinned SDK retries over real $api HTTP",
     async (transport) => {
       const capturedTimeouts: Array<string | undefined> = [];
       const server = createServer((request, response) => {
@@ -80,7 +62,7 @@ describe("openai completions transport requests", () => {
             messages: [{ role: "user", content: "Reply OK", timestamp: Date.now() }],
             tools: [],
           },
-          { apiKey: "test-key", timeoutMs: 1_234, maxRetries: 0 },
+          { apiKey: "test-key", timeoutMs: 1_234 },
         );
 
         const eventTypes: string[] = [];
@@ -166,97 +148,197 @@ describe("openai completions transport requests", () => {
     }
   });
 
-  it("parses JSON chat completions returned to streaming requests", async () => {
-    let capturedStreamFlag: unknown;
-    const server = createServer((req, res) => {
-      let body = "";
-      req.setEncoding("utf8");
-      req.on("data", (chunk) => {
-        body += chunk;
-      });
-      req.on("end", () => {
-        capturedStreamFlag = (JSON.parse(body) as { stream?: unknown }).stream;
-        res.writeHead(200, {
-          "content-type": "application/json; charset=utf-8",
+  it.each(["managed", "direct"] as const)(
+    "preserves JSON completions and honors streaming controls (%s)",
+    async (mode) => {
+      const capturedRequests: Array<Record<string, unknown>> = [];
+      let includeTools = false;
+      let oversized = false;
+      let releaseBody: (() => void) | undefined;
+      const server = createServer((req, res) => {
+        let body = "";
+        req.setEncoding("utf8");
+        req.on("data", (chunk) => {
+          body += chunk;
         });
-        res.end(
-          JSON.stringify({
-            id: "chatcmpl-json-fallback",
-            object: "chat.completion",
-            model: "moonshotai/kimi-k2.6",
-            choices: [
-              {
-                index: 0,
-                message: {
-                  role: "assistant",
-                  reasoning_content: "Need a direct answer.",
-                  content: "live-ok",
-                },
-                finish_reason: "stop",
-              },
-            ],
-            usage: { prompt_tokens: 2, completion_tokens: 3, total_tokens: 5 },
-          }),
+        req.on("end", () => {
+          capturedRequests.push(JSON.parse(body) as Record<string, unknown>);
+          res.writeHead(200, {
+            "content-type": "application/json; charset=utf-8",
+          });
+          const responseBody = oversized
+            ? " ".repeat(16 * 1024 * 1024 + 1)
+            : JSON.stringify({
+                id: "chatcmpl-json-fallback",
+                object: "chat.completion",
+                model: "moonshotai/kimi-k2.6",
+                choices: [
+                  {
+                    index: 0,
+                    message: {
+                      role: "assistant",
+                      reasoning_content: "Need a direct answer.",
+                      content: "live-ok",
+                      ...(includeTools
+                        ? {
+                            tool_calls: [
+                              {
+                                id: "call_weather",
+                                type: "function",
+                                function: { name: "weather", arguments: '{"city":"Vienna"}' },
+                              },
+                              {
+                                id: "call_time",
+                                type: "function",
+                                function: { name: "time", arguments: '{"zone":"UTC"}' },
+                              },
+                            ],
+                          }
+                        : {}),
+                    },
+                    finish_reason: includeTools ? "tool_calls" : "stop",
+                  },
+                ],
+                usage: { prompt_tokens: 2, completion_tokens: 3, total_tokens: 5 },
+              });
+          if (capturedRequests.at(-1)?.stream === false) {
+            releaseBody = () => res.end(responseBody);
+            res.flushHeaders();
+          } else {
+            releaseBody = undefined;
+            res.end(responseBody);
+          }
+        });
+      });
+
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      try {
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          throw new Error("Missing loopback server address");
+        }
+        const model = makeCompletionsModel({
+          id: "moonshotai/kimi-k2.6",
+          name: "Kimi K2.6",
+          provider: "openrouter",
+          baseUrl: `http://127.0.0.1:${address.port}/v1`,
+          contextWindow: 256_000,
+          maxTokens: 16_384,
+          compat: {
+            supportsReasoningEffort: true,
+          },
+        });
+        const createStream =
+          mode === "managed"
+            ? createOpenAICompletionsTransportStreamFn()
+            : streamSimpleOpenAICompletions;
+        for (const scenario of [
+          { params: {}, options: {}, expected: true, tools: false },
+          { params: { streaming: false }, options: {}, expected: false, tools: false },
+          { params: {}, options: { streaming: false }, expected: false, tools: true },
+          {
+            params: { streaming: false },
+            options: { streaming: true },
+            expected: true,
+            tools: true,
+          },
+        ]) {
+          includeTools = scenario.tools;
+          const options: SimpleStreamOptions & Pick<OpenAICompletionsOptions, "streaming"> = {
+            apiKey: "test-key",
+            reasoning: "high",
+            ...scenario.options,
+            onResponse: () => {
+              releaseBody?.();
+            },
+          };
+          const stream = await createStream(
+            { ...model, params: scenario.params },
+            {
+              systemPrompt: "system",
+              messages: [{ role: "user", content: "Reply live-ok", timestamp: 1 }],
+              tools: [],
+            },
+            options,
+          );
+          let final: AssistantMessage | undefined;
+          const eventTypes: string[] = [];
+          for await (const event of stream) {
+            eventTypes.push(event.type);
+            if (event.type === "done") {
+              final = event.message;
+            }
+          }
+          const request = capturedRequests.at(-1);
+          expect(request?.stream).toBe(scenario.expected);
+          if (scenario.expected) {
+            expect(request?.stream_options).toEqual({ include_usage: true });
+          } else {
+            expect(request).not.toHaveProperty("stream_options");
+          }
+          expect(eventTypes).toContain("text_delta");
+          expect(eventTypes).toContain("thinking_delta");
+          expect(eventTypes[0]).toBe("start");
+          expect(eventTypes.at(-1)).toBe("done");
+          expect(final).toMatchObject({
+            responseId: "chatcmpl-json-fallback",
+            stopReason: includeTools ? "toolUse" : "stop",
+            usage: { input: 2, output: 3, totalTokens: 5 },
+          });
+          expect(final?.content).toEqual([
+            expect.objectContaining({
+              type: "thinking",
+              thinking: "Need a direct answer.",
+              thinkingSignature: "reasoning_content",
+            }),
+            expect.objectContaining({ type: "text", text: "live-ok" }),
+            ...(includeTools
+              ? [
+                  expect.objectContaining({
+                    type: "toolCall",
+                    id: "call_weather",
+                    name: "weather",
+                    arguments: { city: "Vienna" },
+                  }),
+                  expect.objectContaining({
+                    type: "toolCall",
+                    id: "call_time",
+                    name: "time",
+                    arguments: { zone: "UTC" },
+                  }),
+                ]
+              : []),
+          ]);
+          expect(eventTypes.filter((type) => type === "toolcall_end")).toHaveLength(
+            includeTools ? 2 : 0,
+          );
+        }
+        oversized = true;
+        const options: SimpleStreamOptions & Pick<OpenAICompletionsOptions, "streaming"> = {
+          apiKey: "test-key",
+          streaming: false,
+          onResponse: () => {
+            releaseBody?.();
+          },
+        };
+        const oversizedStream = await createStream(
+          model,
+          {
+            messages: [{ role: "user", content: "Reply OK", timestamp: 1 }],
+          },
+          options,
         );
-      });
-    });
-
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    try {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Missing loopback server address");
+        expect(await oversizedStream.result()).toMatchObject({
+          stopReason: "error",
+          errorMessage: expect.stringContaining("JSON response exceeds 16777216 bytes"),
+        });
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
       }
-      const model = makeCompletionsModel({
-        id: "moonshotai/kimi-k2.6",
-        name: "Kimi K2.6",
-        provider: "openrouter",
-        baseUrl: `http://127.0.0.1:${address.port}/v1`,
-        contextWindow: 256_000,
-        maxTokens: 16_384,
-        compat: {
-          supportsReasoningEffort: true,
-        },
-      });
-      const stream = createOpenAICompletionsTransportStreamFn()(
-        model,
-        {
-          systemPrompt: "system",
-          messages: [{ role: "user", content: "Reply live-ok", timestamp: Date.now() }],
-          tools: [],
-        } as never,
-        { apiKey: "test-key", reasoningEffort: "high" } as never,
-      );
-
-      let doneReason: string | undefined;
-      let thinking = "";
-      let text = "";
-      for await (const event of stream as AsyncIterable<{
-        type: string;
-        delta?: string;
-        reason?: string;
-      }>) {
-        if (event.type === "thinking_delta") {
-          thinking += event.delta ?? "";
-        }
-        if (event.type === "text_delta") {
-          text += event.delta ?? "";
-        }
-        if (event.type === "done") {
-          doneReason = event.reason;
-        }
-      }
-
-      expect(capturedStreamFlag).toBe(true);
-      expect(thinking).toBe("Need a direct answer.");
-      expect(text).toBe("live-ok");
-      expect(doneReason).toBe("stop");
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
-  });
+    },
+  );
 });

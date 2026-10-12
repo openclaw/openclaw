@@ -1,15 +1,20 @@
 // Cron tool type declarations shared with the cron tool implementation.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
-import type { CronCreatorAuthorityGrant } from "../../gateway/cron-creator-authority-grant.js";
+import type { CronCreatorAuthorityGrant } from "../../gateway/cron-creator-authority-grant.types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { callGatewayTool } from "./gateway.js";
 
 export type CronCreatorToolAllowlistEntry =
   | string
   | {
+      /** Canonical policy name persisted into toolsAllow caps. */
       name: string;
       pluginId?: string;
+      /** Runtime-specific alias the creator surface presented for this tool. */
+      aliasName?: string;
+      /** Restrict-only execution policy carried by a host-created alias projection. */
+      execTarget?: { host: "gateway"; ask?: "always" };
     };
 
 type CronToolsAllowCaptureProvenance = {
@@ -34,6 +39,8 @@ export type CronCreatorToolAuthoritySnapshot = Omit<
 > & {
   /** Gateway-process one-shot proof consumed only at the matching cron write. */
   grant: CronCreatorAuthorityGrant;
+  /** The creator captured runtime app authority (Codex apps); its default list stays concrete. */
+  holdsRuntimeAuthority?: true;
 };
 
 export type CronToolOptions = {
@@ -65,11 +72,6 @@ export type CronToolOptions = {
   creatorAuthorityUnavailableReason?: "queued-local-operator-configured-mcp";
   selfRemoveOnlyJobId?: string;
   runId?: string;
-};
-
-export type CronToolCallerScope = {
-  kind: "agentTool";
-  agentId: string;
 };
 
 export type GatewayToolCaller = typeof callGatewayTool;

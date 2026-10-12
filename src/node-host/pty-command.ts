@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { mergeProcessEnv } from "../infra/process-env.js";
 import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
 import { spawnTerminalPty } from "../process/terminal-pty.js";
@@ -15,7 +16,7 @@ export type NodePtyResumeParams = {
 
 type NodePtyInput = { kind: "data"; data: string } | { kind: "resize"; cols: number; rows: number };
 
-function resolvePtyCwd(candidate?: string): string {
+function resolvePtyCwd(candidate?: string, required = false): string {
   if (candidate && path.isAbsolute(candidate)) {
     try {
       if (fs.statSync(candidate).isDirectory()) {
@@ -25,72 +26,95 @@ function resolvePtyCwd(candidate?: string): string {
       // Missing/unreadable catalog cwd falls back to the node user's home.
     }
   }
+  if (required) {
+    throw new Error("INVALID_REQUEST: cwd must be an existing absolute directory on this node");
+  }
   return os.homedir();
+}
+
+function isPtyDimension(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 2000;
 }
 
 function decodePtyInput(payloadJSON: string): NodePtyInput | null {
   try {
     const value = JSON.parse(payloadJSON) as unknown;
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
+    if (!isRecord(value)) {
       return null;
     }
-    const input = value as Record<string, unknown>;
+    const input = value;
     if (input.kind === "data" && typeof input.data === "string") {
       return { kind: "data", data: input.data };
     }
-    if (
-      input.kind === "resize" &&
-      Number.isInteger(input.cols) &&
-      Number.isInteger(input.rows) &&
-      (input.cols as number) >= 1 &&
-      (input.cols as number) <= 2000 &&
-      (input.rows as number) >= 1 &&
-      (input.rows as number) <= 2000
-    ) {
-      return { kind: "resize", cols: input.cols as number, rows: input.rows as number };
+    if (input.kind === "resize" && isPtyDimension(input.cols) && isPtyDimension(input.rows)) {
+      return { kind: "resize", cols: input.cols, rows: input.rows };
     }
     return null;
   } catch {
     return null;
   }
+}
+
+function decodePtyParams(paramsJSON: string | null | undefined, action: "start" | "resume") {
+  let value: unknown;
+  try {
+    value = JSON.parse(paramsJSON ?? "");
+  } catch {
+    throw new Error(`INVALID_REQUEST: terminal ${action} params must be valid JSON`);
+  }
+  if (!isRecord(value)) {
+    throw new Error(`INVALID_REQUEST: terminal ${action} params must be an object`);
+  }
+  const allowed = new Set([
+    action === "start" ? "initialMessage" : "threadId",
+    "cwd",
+    "cols",
+    "rows",
+  ]);
+  const unknown = Object.keys(value).find((key) => !allowed.has(key));
+  if (unknown) {
+    throw new Error(`INVALID_REQUEST: unknown terminal ${action} parameter: ${unknown}`);
+  }
+  const dimension = (candidate: unknown, label: string) => {
+    if (!isPtyDimension(candidate)) {
+      throw new Error(`INVALID_REQUEST: ${label} must be an integer from 1 to 2000`);
+    }
+    return candidate;
+  };
+  if (
+    value.cwd !== undefined &&
+    (typeof value.cwd !== "string" || Buffer.byteLength(value.cwd, "utf8") > 4096)
+  ) {
+    throw new Error("INVALID_REQUEST: cwd must be a bounded string");
+  }
+  return {
+    record: value,
+    cwd: typeof value.cwd === "string" && value.cwd ? value.cwd : undefined,
+    cols: dimension(value.cols, "cols"),
+    rows: dimension(value.rows, "rows"),
+  };
 }
 
 export function decodeNodePtyResumeParams(
   paramsJSON: string | null | undefined,
   validateThreadId: (value: unknown) => string,
 ): NodePtyResumeParams {
-  let value: unknown;
-  try {
-    value = JSON.parse(paramsJSON ?? "");
-  } catch {
-    throw new Error("INVALID_REQUEST: terminal resume params must be valid JSON");
-  }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("INVALID_REQUEST: terminal resume params must be an object");
-  }
-  const record = value as Record<string, unknown>;
-  const allowed = new Set(["threadId", "cwd", "cols", "rows"]);
-  const unknown = Object.keys(record).find((key) => !allowed.has(key));
-  if (unknown) {
-    throw new Error(`INVALID_REQUEST: unknown terminal resume parameter: ${unknown}`);
-  }
-  const dimension = (candidate: unknown, label: string) => {
-    if (!Number.isInteger(candidate) || (candidate as number) < 1 || (candidate as number) > 2000) {
-      throw new Error(`INVALID_REQUEST: ${label} must be an integer from 1 to 2000`);
-    }
-    return candidate as number;
-  };
+  const { record, ...params } = decodePtyParams(paramsJSON, "resume");
+  return { threadId: validateThreadId(record.threadId), ...params };
+}
+
+export function decodeNodePtyStartParams(paramsJSON: string | null | undefined) {
+  const { record, cwd, ...size } = decodePtyParams(paramsJSON, "start");
   if (
-    record.cwd !== undefined &&
-    (typeof record.cwd !== "string" || Buffer.byteLength(record.cwd, "utf8") > 4096)
+    record.initialMessage !== undefined &&
+    (typeof record.initialMessage !== "string" || record.initialMessage.length > 16384)
   ) {
-    throw new Error("INVALID_REQUEST: cwd must be a bounded string");
+    throw new Error("INVALID_REQUEST: initialMessage must be a string of at most 16384 characters");
   }
   return {
-    threadId: validateThreadId(record.threadId),
-    ...(typeof record.cwd === "string" && record.cwd ? { cwd: record.cwd } : {}),
-    cols: dimension(record.cols, "cols"),
-    rows: dimension(record.rows, "rows"),
+    cwd: resolvePtyCwd(cwd, true),
+    ...size,
+    ...(typeof record.initialMessage === "string" ? { initialMessage: record.initialMessage } : {}),
   };
 }
 
@@ -100,6 +124,9 @@ export async function runNodePtyCommand(
     file: string;
     args: string[];
     cwd?: string;
+    /** Fresh starts require the selected directory; resume retains its home fallback. */
+    requiredCwd?: boolean;
+    assertCurrent?: () => void;
     env?: Record<string, string>;
     pathEnv?: string;
     cols: number;
@@ -117,14 +144,18 @@ export async function runNodePtyCommand(
     params.pathEnv ? { PATH: params.pathEnv } : undefined,
     { OPENCLAW_TERMINAL: "1" },
   ]);
-  const pty = await spawn({
-    file: params.file,
-    args: params.args,
-    cwd: resolvePtyCwd(params.cwd),
-    env,
-    cols: params.cols,
-    rows: params.rows,
-  });
+  params.assertCurrent?.();
+  const pty = await spawn(
+    {
+      file: params.file,
+      args: params.args,
+      cwd: resolvePtyCwd(params.cwd, params.requiredCwd),
+      env,
+      cols: params.cols,
+      rows: params.rows,
+    },
+    { abortSignal: io.signal, assertCurrent: params.assertCurrent },
+  );
   let outputQueue = Promise.resolve();
   let settled = false;
   const kill = () => pty.kill();

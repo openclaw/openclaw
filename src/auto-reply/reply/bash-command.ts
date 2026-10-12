@@ -1,12 +1,13 @@
-/** Handles /bash and ! shell command chat shortcuts. */
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { cancelBackgroundExecSession } from "../../agents/bash-process-control.js";
-import { getFinishedSession, getSession } from "../../agents/bash-process-registry.js";
+import {
+  acknowledgeNotifyOnExit,
+  getFinishedSession,
+  getSession,
+} from "../../agents/bash-process-registry.js";
+import { renderExecExitLabel } from "../../agents/bash-tools.exec-output.js";
 import { createExecTool } from "../../agents/bash-tools.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { isCommandFlagEnabled } from "../../config/commands.flags.js";
@@ -14,11 +15,13 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { clampInt } from "../../utils.js";
+import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { buildDisabledCommandReply } from "./command-gates.js";
 import { formatElevatedUnavailableMessage } from "./elevated-unavailable.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+import type { resolveElevatedPermissions } from "./reply-elevated.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 
 const CHAT_BASH_SCOPE_KEY = "chat:bash";
@@ -32,12 +35,10 @@ type BashRequest =
   | { action: "stop"; sessionId?: string };
 
 type ActiveBashJob =
-  | { state: "starting"; startedAt: number; command: string }
+  | { state: "starting" }
   | {
       state: "running";
       sessionId: string;
-      startedAt: number;
-      command: string;
     };
 
 let activeJob: ActiveBashJob | null = null;
@@ -66,14 +67,10 @@ function formatOutputBlock(text: string) {
   return `\`\`\`txt\n${trimmed}\n\`\`\``;
 }
 
-function parseBashRequest(raw: string): BashRequest | null {
-  const trimmed = raw.trimStart();
+function parseBashRequest(trimmed: string): BashRequest | null {
+  const match = trimmed.match(/^\/bash(?:\s*:\s*|\s+|$)([\s\S]*)$/i);
   let restSource;
-  if (normalizeLowercaseStringOrEmpty(trimmed).startsWith("/bash")) {
-    const match = trimmed.match(/^\/bash(?:\s*:\s*|\s+|$)([\s\S]*)$/i);
-    if (!match) {
-      return null;
-    }
+  if (match) {
     restSource = match[1] ?? "";
   } else if (trimmed.startsWith("!")) {
     restSource = trimmed.slice(1);
@@ -89,32 +86,15 @@ function parseBashRequest(raw: string): BashRequest | null {
     return { action: "help" };
   }
   const tokenMatch = rest.match(/^(\S+)(?:\s+([\s\S]+))?$/);
-  const token = normalizeOptionalString(tokenMatch?.[1]) ?? "";
   const remainder = normalizeOptionalString(tokenMatch?.[2]) ?? "";
-  const lowered = normalizeLowercaseStringOrEmpty(token);
-  if (lowered === "poll") {
-    return { action: "poll", sessionId: remainder || undefined };
-  }
-  if (lowered === "stop") {
-    return { action: "stop", sessionId: remainder || undefined };
+  const lowered = tokenMatch?.[1]?.toLowerCase() ?? "";
+  if (lowered === "poll" || lowered === "stop") {
+    return { action: lowered, sessionId: remainder || undefined };
   }
   if (lowered === "help") {
     return { action: "help" };
   }
   return { action: "run", command: rest };
-}
-
-function resolveRawCommandBody(params: {
-  ctx: MsgContext;
-  cfg: OpenClawConfig;
-  agentId?: string;
-  isGroup: boolean;
-}) {
-  const source = params.ctx.commandText ?? "";
-  const stripped = stripStructuralPrefixes(source);
-  return params.isGroup
-    ? stripMentions(stripped, params.ctx, params.cfg, params.agentId)
-    : stripped;
 }
 
 function getScopedSession(sessionId: string) {
@@ -129,55 +109,19 @@ function getScopedSession(sessionId: string) {
   return {};
 }
 
-function ensureActiveJobState() {
-  if (!activeJob) {
-    return null;
-  }
-  if (activeJob.state === "starting") {
-    return activeJob;
-  }
-  const { running, finished } = getScopedSession(activeJob.sessionId);
-  if (running) {
-    return activeJob;
-  }
-  if (finished) {
-    activeJob = null;
-    return null;
-  }
-  activeJob = null;
-  return null;
-}
-
-function buildUsageReply(): ReplyPayload {
-  return {
-    text: [
-      "⚙️ Usage:",
-      "- ! <command>",
-      "- !poll | ! poll",
-      "- !stop | ! stop",
-      "- /bash ... (alias; same subcommands as !)",
-    ].join("\n"),
-  };
-}
-
-/** Parses, authorizes, starts, polls, or stops chat-driven bash commands. */
 export async function handleBashChatCommand(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
   agentId?: string;
   sessionKey: string;
   isGroup: boolean;
-  elevated: {
-    enabled: boolean;
-    allowed: boolean;
-    failures: Array<{ gate: string; key: string }>;
-  };
+  elevated: ReturnType<typeof resolveElevatedPermissions>;
 }): Promise<ReplyPayload> {
   if (!isCommandFlagEnabled(params.cfg, "bash")) {
     return buildDisabledCommandReply({
       label: "bash",
       configKey: "bash",
-      docsUrl: "https://docs.openclaw.ai/tools/slash-commands#config",
+      docsUrl: "https://docs.openclaw.ai/tools/slash-commands#configuration",
     });
   }
 
@@ -191,7 +135,9 @@ export async function handleBashChatCommand(params: {
   if (!params.elevated.enabled || !params.elevated.allowed) {
     const runtimeSandboxed = resolveSandboxRuntimeStatus({
       cfg: params.cfg,
-      sessionKey: resolveRuntimePolicySessionKey({
+      agentId,
+      sessionKey: params.sessionKey,
+      classificationSessionKey: resolveRuntimePolicySessionKey({
         agentId,
         cfg: params.cfg,
         ctx: params.ctx,
@@ -207,78 +153,73 @@ export async function handleBashChatCommand(params: {
     };
   }
 
-  const rawBody = resolveRawCommandBody({
-    ctx: params.ctx,
-    cfg: params.cfg,
-    agentId,
-    isGroup: params.isGroup,
-  }).trim();
+  const stripped = stripStructuralPrefixes(params.ctx.commandText ?? "");
+  const rawBody = (
+    params.isGroup ? stripMentions(stripped, params.ctx, params.cfg, agentId) : stripped
+  ).trim();
   const request = parseBashRequest(rawBody);
   if (!request) {
     return { text: "⚠️ Unrecognized bash request." };
   }
 
-  const liveJob = ensureActiveJobState();
+  if (activeJob?.state === "running" && !getScopedSession(activeJob.sessionId).running) {
+    activeJob = null;
+  }
+  const liveJob = activeJob;
 
   if (request.action === "help") {
-    return buildUsageReply();
+    return {
+      text: [
+        "⚙️ Usage:",
+        "- ! <command>",
+        "- !poll | ! poll",
+        "- !stop | ! stop",
+        "- /bash ... (alias; same subcommands as !)",
+      ].join("\n"),
+    };
   }
 
-  if (request.action === "poll") {
-    const sessionId =
-      normalizeOptionalString(request.sessionId) ||
-      (liveJob?.state === "running" ? liveJob.sessionId : "");
+  if (request.action === "poll" || request.action === "stop") {
+    const sessionId = request.sessionId || (liveJob?.state === "running" ? liveJob.sessionId : "");
     if (!sessionId) {
       return { text: "⚙️ No active bash job." };
     }
     const { running, finished } = getScopedSession(sessionId);
-    if (running) {
-      const runtimeSec = Math.max(0, Math.floor((Date.now() - running.startedAt) / 1000));
-      const tail = running.tail || "(no output yet)";
-      return {
-        text: [
-          `⚙️ bash still running (session ${formatSessionSnippet(sessionId)}, ${runtimeSec}s).`,
-          formatOutputBlock(tail),
-          "Hint: !stop (or /bash stop)",
-        ].join("\n"),
-      };
-    }
-    if (finished) {
-      if (activeJob?.state === "running" && activeJob.sessionId === sessionId) {
-        activeJob = null;
-      }
-      const exitLabel = finished.exitSignal
-        ? `signal ${String(finished.exitSignal)}`
-        : `code ${String(finished.exitCode ?? 0)}`;
-      const prefix = finished.status === "completed" ? "⚙️" : "⚠️";
-      return {
-        text: [
-          `${prefix} bash finished (session ${formatSessionSnippet(sessionId)}).`,
-          `Exit: ${exitLabel}`,
-          formatOutputBlock(finished.aggregated || finished.tail),
-        ].join("\n"),
-      };
-    }
-    if (activeJob?.state === "running" && activeJob.sessionId === sessionId) {
+    if (!running && activeJob?.state === "running" && activeJob.sessionId === sessionId) {
       activeJob = null;
     }
-    return {
-      text: `⚙️ No bash session found for ${formatSessionSnippet(sessionId)}.`,
-    };
-  }
-
-  if (request.action === "stop") {
-    const sessionId =
-      normalizeOptionalString(request.sessionId) ||
-      (liveJob?.state === "running" ? liveJob.sessionId : "");
-    if (!sessionId) {
-      return { text: "⚙️ No active bash job." };
-    }
-    const { running } = getScopedSession(sessionId);
-    if (!running) {
-      if (activeJob?.state === "running" && activeJob.sessionId === sessionId) {
-        activeJob = null;
+    if (request.action === "poll") {
+      if (running) {
+        const runtimeSec = Math.max(0, Math.floor((Date.now() - running.startedAt) / 1000));
+        const tail = running.tail || "(no output yet)";
+        return {
+          text: [
+            `⚙️ bash still running (session ${formatSessionSnippet(sessionId)}, ${runtimeSec}s).`,
+            formatOutputBlock(tail),
+            "Hint: !stop (or /bash stop)",
+          ].join("\n"),
+        };
       }
+      if (finished) {
+        const exitLabel = renderExecExitLabel(finished);
+        const prefix = finished.terminalStatus === "completed" ? "⚙️" : "⚠️";
+        return setReplyPayloadMetadata(
+          {
+            text: [
+              `${prefix} bash finished (session ${formatSessionSnippet(sessionId)}).`,
+              `Exit: ${exitLabel}`,
+              formatOutputBlock(finished.aggregated || finished.tail),
+            ].join("\n"),
+          },
+          { onFinalDeliverySuccess: () => acknowledgeNotifyOnExit(finished) },
+        );
+      }
+      return {
+        text: `⚙️ No bash session found for ${formatSessionSnippet(sessionId)}.`,
+      };
+    }
+
+    if (!running) {
       return {
         text: `⚙️ No running bash job found for ${formatSessionSnippet(sessionId)}.`,
       };
@@ -298,7 +239,6 @@ export async function handleBashChatCommand(params: {
     };
   }
 
-  // request.action === "run"
   if (liveJob) {
     const label =
       liveJob.state === "running" ? formatSessionSnippet(liveJob.sessionId) : "starting";
@@ -307,15 +247,10 @@ export async function handleBashChatCommand(params: {
     };
   }
 
-  const commandText = request.command.trim();
-  if (!commandText) {
-    return buildUsageReply();
-  }
+  const commandText = request.command;
 
   activeJob = {
     state: "starting",
-    startedAt: Date.now(),
-    command: commandText,
   };
 
   try {
@@ -326,11 +261,14 @@ export async function handleBashChatCommand(params: {
     const notifyOnExitEmptySuccess = params.cfg.tools?.exec?.notifyOnExitEmptySuccess;
     const execTool = createExecTool({
       scopeKey: CHAT_BASH_SCOPE_KEY,
+      agentId,
       allowBackground: true,
       timeoutSec,
       sessionKey: params.sessionKey,
-      mainKey: params.cfg.session?.mainKey,
-      sessionScope: params.cfg.session?.scope,
+      eventRouting: {
+        mainKey: params.cfg.session?.mainKey,
+        sessionScope: params.cfg.session?.scope,
+      },
       notifyOnExit,
       notifyOnExitEmptySuccess,
       elevated: {
@@ -352,8 +290,6 @@ export async function handleBashChatCommand(params: {
       activeJob = {
         state: "running",
         sessionId,
-        startedAt: result.details.startedAt,
-        command: commandText,
       };
       const snippet = formatSessionSnippet(sessionId);
       logVerbose(`Started bash session ${snippet}: ${commandText}`);
@@ -362,9 +298,12 @@ export async function handleBashChatCommand(params: {
       };
     }
 
-    // Completed in foreground.
     activeJob = null;
-    const exitCode = result.details?.status === "completed" ? result.details.exitCode : 0;
+    const exitDetails =
+      result.details?.status === "completed" || result.details?.status === "failed"
+        ? result.details
+        : {};
+    const exitLabel = renderExecExitLabel(exitDetails);
     const output =
       result.details?.status === "completed"
         ? result.details.aggregated
@@ -372,7 +311,7 @@ export async function handleBashChatCommand(params: {
     return {
       text: [
         `⚙️ bash: ${commandText}`,
-        `Exit: ${exitCode}`,
+        `Exit: ${exitLabel}`,
         formatOutputBlock(output || "(no output)"),
       ].join("\n"),
     };

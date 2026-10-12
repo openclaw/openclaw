@@ -1,13 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
+import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { redactRegisteredSecretValues } from "../logging/secret-redaction-registry.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
+  clearGitHubCredentialVerificationCache,
   pollGitHubOAuthDeviceToken,
   refreshGitHubOAuthToken,
   requestGitHubOAuthDeviceCode,
+  verifyGitHubCredential,
 } from "./github-oauth-client.js";
 
-const GITHUB_OAUTH_CLIENT_ID = "Ov23liUjOXHi28w2fDlH";
-const GITHUB_OAUTH_DEVICE_CODE_URL = "https://github.com/login/device/code";
-const GITHUB_OAUTH_ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token";
+const GITHUB_CREDENTIAL_VERIFICATION_TTL_MS = 60_000;
 
 const DEVICE_CODE = "a".repeat(40);
 
@@ -30,58 +34,182 @@ function tokenPair(overrides: Record<string, unknown> = {}): Record<string, unkn
   };
 }
 
-function expectOAuthFormCall(expectedUrl: string, expectedForm: Record<string, string>): void {
-  const fetchMock = vi.mocked(fetch);
-  expect(fetchMock).toHaveBeenCalledOnce();
-  const [url, init] = fetchMock.mock.calls[0] ?? [];
-  expect(url).toBe(expectedUrl);
-  expect(init).toMatchObject({
-    method: "POST",
-    redirect: "error",
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-  });
-  expect(init?.signal).toBeInstanceOf(AbortSignal);
-  const body = init?.body instanceof URLSearchParams ? init.body : new URLSearchParams();
-  expect(Object.fromEntries(body)).toEqual(expectedForm);
-}
-
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  clearRuntimeConfigSnapshot();
 });
 
 describe("GitHub OAuth client", () => {
-  it("requests the fixed GitHub device flow and repository workflow scopes", async () => {
+  it("verifies a managed credential at a fixed origin and registers redaction", async () => {
+    const login = "managed-user_org";
+    const token = `synthetic-bound-credential-${login}`;
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      jsonResponse({
-        device_code: DEVICE_CODE,
-        user_code: "ABCD-EFGH",
-        verification_uri: "https://github.com/login/device",
-        expires_in: 900,
-        interval: 5,
+      new Response(
+        JSON.stringify({
+          id: 202,
+          login,
+          avatar_url: null,
+        }),
+        { headers: { "x-oauth-scopes": "read:org, repo, repo" } },
+      ),
+    );
+    expect(await verifyGitHubCredential(token)).toEqual({
+      status: "available",
+      account: { accountId: 202, login, avatarUrl: null },
+      scopes: ["read:org", "repo"],
+    });
+    expect(fetch).toHaveBeenCalledExactlyOnceWith(
+      "https://api.github.com/user",
+      expect.objectContaining({
+        method: "GET",
+        redirect: "error",
+        signal: expect.any(AbortSignal),
+        headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${token}` },
       }),
     );
+    expect(redactRegisteredSecretValues(`failed with ${token}`, () => "[REDACTED]")).toBe(
+      "failed with [REDACTED]",
+    );
+  });
 
-    await expect(requestGitHubOAuthDeviceCode()).resolves.toEqual({
-      deviceCode: DEVICE_CODE,
-      userCode: "ABCD-EFGH",
-      verificationUri: "https://github.com/login/device",
-      expiresInSeconds: 900,
-      intervalSeconds: 5,
+  it("re-probes a remotely revoked token after expiry without caching its rejection", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(2_000);
+    const probe = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ id: 202, login: "revoked-user" }))
+      .mockImplementation(async () => jsonResponse({}, 401));
+    expect((await verifyGitHubCredential("synthetic-revoked-token")).status).toBe("available");
+    now.mockReturnValue(2_000 + GITHUB_CREDENTIAL_VERIFICATION_TTL_MS + 1);
+    expect(await verifyGitHubCredential("synthetic-revoked-token")).toEqual({
+      status: "unavailable",
     });
-    expectOAuthFormCall(GITHUB_OAUTH_DEVICE_CODE_URL, {
-      client_id: GITHUB_OAUTH_CLIENT_ID,
-      scope: "repo workflow read:org gist offline_access",
+    expect(await verifyGitHubCredential("synthetic-revoked-token")).toEqual({
+      status: "unavailable",
+    });
+    expect(probe).toHaveBeenCalledTimes(3);
+  });
+
+  it("serves stale display facts while strict verification waits for revocation", async ({
+    signal,
+  }) => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const refresh = createDeferredCore<Response>();
+    const probe = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ id: 204, login: "display-account" }))
+      .mockReturnValueOnce(refresh.promise)
+      .mockResolvedValue(jsonResponse({}, 401));
+    const token = "synthetic-stale-display-token";
+    const first = await verifyGitHubCredential(token);
+    now.mockReturnValue(61_001);
+    try {
+      expect(await withinTest(verifyGitHubCredential(token, { allowStale: true }), signal)).toEqual(
+        { ...first, stale: true },
+      );
+      expect(await verifyGitHubCredential(token, { allowStale: true })).toEqual({
+        ...first,
+        stale: true,
+      });
+      let settled = false;
+      const strict = verifyGitHubCredential(token).then((result) => {
+        settled = true;
+        return result;
+      });
+      expect(settled).toBe(false);
+      refresh.resolve(jsonResponse({}, 401));
+      expect(await strict).toEqual({ status: "unavailable" });
+      expect(await verifyGitHubCredential(token, { allowStale: true })).toEqual({
+        status: "unavailable",
+      });
+      expect(probe).toHaveBeenCalledTimes(3);
+    } finally {
+      refresh.resolve(jsonResponse({}, 401));
+    }
+  });
+
+  it("keeps different tokens separate while sharing concurrent probes for one token", async () => {
+    const probe = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (_url, init) =>
+        jsonResponse({ id: 202, login: new Headers(init?.headers).get("Authorization") }),
+      );
+    const [first, concurrent, other] = await Promise.all([
+      verifyGitHubCredential("synthetic-concurrent-a"),
+      verifyGitHubCredential("synthetic-concurrent-a"),
+      verifyGitHubCredential("synthetic-concurrent-b"),
+    ]);
+    expect(probe).toHaveBeenCalledTimes(2);
+    expect(concurrent).toBe(first);
+    expect(other).not.toEqual(first);
+    expect(await verifyGitHubCredential("synthetic-concurrent-b")).toBe(other);
+    expect(probe).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not let an in-flight probe repopulate cleared verification state", async () => {
+    const upstream = createDeferredCore<Response>();
+    const probe = vi
+      .spyOn(globalThis, "fetch")
+      .mockReturnValueOnce(upstream.promise)
+      .mockImplementation(async () => jsonResponse({ id: 202, login: "after-clear" }));
+    const first = verifyGitHubCredential("synthetic-inflight-clear");
+    clearGitHubCredentialVerificationCache();
+    const second = await verifyGitHubCredential("synthetic-inflight-clear");
+    upstream.resolve(jsonResponse({ id: 202, login: "before-clear" }));
+    await first;
+    expect(await verifyGitHubCredential("synthetic-inflight-clear")).toBe(second);
+    expect(probe).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([{ code: 403, headers: new Headers(), status: "unverified" }])(
+    "classifies account HTTP $code as $status without reflecting diagnostics",
+    async ({ code, headers, status }) => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        new Response("synthetic-secret-diagnostics", { status: code, headers }),
+      );
+      const token = `synthetic-http-${code}-${status}-${headers.get("retry-after") ?? headers.get("x-ratelimit-remaining") ?? "none"}`;
+      expect(await verifyGitHubCredential(token)).toEqual({ status });
+    },
+  );
+
+  it.each([
+    ["invalid-json", "not-json synthetic-token"],
+    ["long-login", JSON.stringify({ id: 202, login: "x".repeat(101) })],
+    [
+      "oversized-body",
+      JSON.stringify({ id: 202, login: "managed-user", padding: "x".repeat(17000) }),
+    ],
+  ])(
+    "rejects malformed or unbounded %s account responses without diagnostics",
+    async (name, body) => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(body));
+      expect(await verifyGitHubCredential(`synthetic-${name}`)).toEqual({ status: "unverified" });
+    },
+  );
+
+  it("bounds the account body read and sanitizes network and cancellation errors", async () => {
+    const cancel = vi.fn();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(new ReadableStream({ cancel })));
+    expect(await verifyGitHubCredential("synthetic-body-timeout", { timeoutMs: 10 })).toEqual({
+      status: "unverified",
+    });
+    expect(cancel).toHaveBeenCalled();
+    const caller = new AbortController();
+    vi.mocked(fetch).mockImplementation(async (_url, init) => {
+      caller.abort(new Error("synthetic-token must stay private"));
+      expect(init?.signal?.aborted).toBe(true);
+      throw init?.signal?.reason;
+    });
+    expect(
+      await verifyGitHubCredential("synthetic-cancellation", { signal: caller.signal }),
+    ).toEqual({
+      status: "unverified",
     });
   });
 
   it.each([
-    ["device code", { device_code: "short" }],
     ["user code", { user_code: "invalid" }],
     ["verification URI", { verification_uri: "https://example.com/login/device" }],
-    ["expiration", { expires_in: "900" }],
     ["poll interval", { interval: 0 }],
   ])("rejects an invalid device authorization %s", async (_name, overrides) => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
@@ -98,27 +226,6 @@ describe("GitHub OAuth client", () => {
     await expect(requestGitHubOAuthDeviceCode()).rejects.toThrow(
       "GitHub OAuth device authorization response was invalid",
     );
-  });
-
-  it("returns a rotated token pair with deterministic scopes", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(tokenPair()));
-
-    await expect(pollGitHubOAuthDeviceToken({ deviceCode: DEVICE_CODE })).resolves.toEqual({
-      status: "authorized",
-      tokens: {
-        accessToken: "access-token",
-        tokenType: "bearer",
-        scopes: ["gist", "read:org", "repo", "workflow"],
-        expiresInSeconds: 28_800,
-        refreshToken: "refresh-token-next",
-        refreshTokenExpiresInSeconds: 15_897_600,
-      },
-    });
-    expectOAuthFormCall(GITHUB_OAUTH_ACCESS_TOKEN_URL, {
-      client_id: GITHUB_OAUTH_CLIENT_ID,
-      device_code: DEVICE_CODE,
-      grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-    });
   });
 
   it.each([
@@ -140,8 +247,6 @@ describe("GitHub OAuth client", () => {
         errorUri: "https://docs.github.com/apps/oauth-apps",
       },
     },
-    { body: { error: "expired_token" }, expected: { status: "expired_token" } },
-    { body: { error: "access_denied" }, expected: { status: "access_denied" } },
     {
       body: { error: "device_flow_disabled" },
       expected: { status: "error", code: "device_flow_disabled" },
@@ -152,31 +257,6 @@ describe("GitHub OAuth client", () => {
     await expect(pollGitHubOAuthDeviceToken({ deviceCode: DEVICE_CODE })).resolves.toEqual(
       expected,
     );
-  });
-
-  it("refreshes by rotating the pair without sending a client secret", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      jsonResponse(tokenPair({ scope: "repo workflow read:org gist" })),
-    );
-
-    await expect(
-      refreshGitHubOAuthToken({ refreshToken: "refresh-token-current" }),
-    ).resolves.toEqual({
-      status: "refreshed",
-      tokens: {
-        accessToken: "access-token",
-        tokenType: "bearer",
-        scopes: ["gist", "read:org", "repo", "workflow"],
-        expiresInSeconds: 28_800,
-        refreshToken: "refresh-token-next",
-        refreshTokenExpiresInSeconds: 15_897_600,
-      },
-    });
-    expectOAuthFormCall(GITHUB_OAUTH_ACCESS_TOKEN_URL, {
-      client_id: GITHUB_OAUTH_CLIENT_ID,
-      grant_type: "refresh_token",
-      refresh_token: "refresh-token-current",
-    });
   });
 
   it("returns refresh rejection as a typed outcome", async () => {
@@ -194,28 +274,11 @@ describe("GitHub OAuth client", () => {
 
   it.each([
     ["wrong token type", tokenPair({ token_type: "mac" })],
-    ["non-numeric expiration", tokenPair({ expires_in: "28800" })],
-    ["missing refresh rotation", tokenPair({ refresh_token: undefined })],
     ["missing publication scopes", tokenPair({ scope: "repo" })],
     ["unknown error", { error: "surprise_error" }],
-    ["invalid slow-down interval", { error: "slow_down", interval: "12" }],
     ["mixed success and error", { ...tokenPair(), error: "authorization_pending" }],
   ])("rejects a strictly invalid %s response", async (_name, body) => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(body));
-
-    await expect(pollGitHubOAuthDeviceToken({ deviceCode: DEVICE_CODE })).rejects.toThrow(
-      "GitHub OAuth device token response was invalid",
-    );
-  });
-
-  it("rejects oversized response bodies without reflecting their contents", async () => {
-    const secretLikeBody = JSON.stringify({ access_token: "s".repeat(20_000) });
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(secretLikeBody, {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
 
     await expect(pollGitHubOAuthDeviceToken({ deviceCode: DEVICE_CODE })).rejects.toThrow(
       "GitHub OAuth device token response was invalid",

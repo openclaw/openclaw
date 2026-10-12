@@ -179,14 +179,24 @@ struct DeviceIdentityStoreTests {
     }
 
     @Test
-    func `durable identity creation verifies persisted key material`() throws {
+    func `concurrent identity creation converges on persisted key material`() async throws {
         let fixture = DeviceIdentityMigrationFixture()
-        let identity = try fixture.load()
+        let databaseURL = fixture.databaseURL
+        let stateDirectory = fixture.destination
+        let identities = try await withThrowingTaskGroup(of: DeviceIdentity.self) { group in
+            for _ in 0..<4 {
+                group.addTask {
+                    try DeviceIdentitySQLiteStore.loadOrCreate(
+                        databaseURL: databaseURL,
+                        destinationStateDirURL: stateDirectory,
+                        profile: .primary)
+                }
+            }
+            return try await group.reduce(into: [DeviceIdentity]()) { $0.append($1) }
+        }
         let reloaded = try fixture.load()
-
-        #expect(reloaded.deviceId == identity.deviceId)
-        #expect(reloaded.publicKey == identity.publicKey)
-        #expect(reloaded.privateKey == identity.privateKey)
+        #expect(identities.count == 4)
+        #expect(identities.allSatisfy { $0 == reloaded })
     }
 
     @Test(.stateDirectoryIsolated)
@@ -468,20 +478,7 @@ struct DeviceIdentityStoreTests {
         #expect(directoryMode.intValue & 0o777 == 0o700)
         #expect(databaseMode.intValue & 0o777 == 0o600)
 
-        let coordinatorURLs = DeviceIdentitySQLiteStore.resolveDeviceIdentityCoordinatorURLs(
-            databaseURL: fixture.databaseURL,
-            destinationStateDirURL: fixture.destination,
-            uid: getuid())
-        #expect(coordinatorURLs.count == 1)
-        for coordinatorURL in coordinatorURLs {
-            let coordinatorDirectoryMode = try #require(
-                FileManager.default.attributesOfItem(
-                    atPath: coordinatorURL.deletingLastPathComponent().path)[.posixPermissions] as? NSNumber)
-            let coordinatorFileMode = try #require(
-                FileManager.default.attributesOfItem(atPath: coordinatorURL.path)[.posixPermissions] as? NSNumber)
-            #expect(coordinatorDirectoryMode.intValue & 0o777 == 0o700)
-            #expect(coordinatorFileMode.intValue & 0o777 == 0o600)
-        }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: fixture.destination.path) == ["openclaw.sqlite"])
     }
 
     @Test
@@ -749,6 +746,31 @@ struct DeviceIdentityStoreTests {
 
         #expect(FileManager.default.fileExists(atPath: source.identityURL.path))
         #expect(FileManager.default.fileExists(atPath: claimURL.path))
+    }
+
+    @Test
+    func `conflicting legacy sources across directories throw detailed diagnostic`() throws {
+        let fixture = DeviceIdentityMigrationFixture()
+        let material1 = DeviceIdentityStore.generateMaterial()
+        let material2 = DeviceIdentityStore.generateMaterial()
+        let json1 = try String(decoding: JSONEncoder().encode(material1.identity), as: UTF8.self)
+        let json2 = try String(decoding: JSONEncoder().encode(material2.identity), as: UTF8.self)
+        let source1 = try fixture.source("source1", contents: json1)
+        let source2 = try fixture.source("source2", contents: json2)
+
+        do {
+            _ = try fixture.load(sources: [source1, source2])
+            Issue.record("Expected conflicting sources to throw")
+        } catch let error as NSError {
+            #expect(error.localizedDescription.contains("Legacy device identity sources conflict across"))
+            #expect(error.localizedDescription.contains(source1.identityURL.path))
+            #expect(error.localizedDescription.contains(source2.identityURL.path))
+            #expect(error.localizedDescription.contains(material1.identity.deviceId))
+            #expect(error.localizedDescription.contains(material2.identity.deviceId))
+        }
+
+        #expect(FileManager.default.fileExists(atPath: source1.identityURL.path))
+        #expect(FileManager.default.fileExists(atPath: source2.identityURL.path))
     }
 
     @Test

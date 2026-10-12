@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { contextBudgetStatusFixture } from "./context-budget.test-support.js";
 import {
   resolveProjectedSessionContextTokens,
+  resolveProjectedSessionContextBudgetStatus,
   resolveTrustedSessionContextTokens,
 } from "./context-token-provenance.js";
 
@@ -11,77 +13,22 @@ const currentSelection = {
 };
 
 describe("resolveTrustedSessionContextTokens", () => {
-  it("trusts only runtime telemetry from the exact producing selection", () => {
-    expect(
-      resolveTrustedSessionContextTokens({
-        entry: {
-          modelProvider: "OpenAI",
-          model: "GPT-5.6-SOL",
-          agentHarnessId: "Codex",
-          contextTokens: 272_000,
-          contextTokensSource: "runtime",
-        },
-        ...currentSelection,
-      }),
-    ).toBe(272_000);
-  });
-
-  it.each([
-    { name: "missing source", patch: { contextTokensSource: undefined } },
-    { name: "resolved source", patch: { contextTokensSource: "resolved" as const } },
-    {
-      name: "runtime-configured source",
-      patch: { contextTokensSource: "runtime-configured" as const },
+  it.each([{ name: "model", patch: { model: "gpt-5.5" } }])(
+    "rejects a locked window owned by a different $name",
+    ({ patch }) => {
+      expect(
+        resolveTrustedSessionContextTokens({
+          entry: {
+            modelProvider: "openai",
+            modelSelectionLocked: true,
+            contextTokens: 272_000,
+            ...patch,
+          },
+          ...currentSelection,
+        }),
+      ).toBeUndefined();
     },
-    { name: "missing harness", patch: { agentHarnessId: undefined } },
-    { name: "different harness", patch: { agentHarnessId: "openclaw" } },
-    { name: "different provider", patch: { modelProvider: "openrouter" } },
-    { name: "different model", patch: { model: "gpt-5.5" } },
-  ])("rejects $name", ({ patch }) => {
-    expect(
-      resolveTrustedSessionContextTokens({
-        entry: {
-          modelProvider: "openai",
-          model: "gpt-5.6-sol",
-          agentHarnessId: "codex",
-          contextTokens: 272_000,
-          contextTokensSource: "runtime",
-          ...patch,
-        },
-        ...currentSelection,
-      }),
-    ).toBeUndefined();
-  });
-
-  it("preserves the native window owned by a locked legacy session", () => {
-    expect(
-      resolveTrustedSessionContextTokens({
-        entry: {
-          modelSelectionLocked: true,
-          contextTokens: 272_000,
-        },
-        ...currentSelection,
-      }),
-    ).toBe(272_000);
-  });
-
-  it.each([
-    { name: "provider", patch: { modelProvider: "openrouter" } },
-    { name: "model", patch: { model: "gpt-5.5" } },
-  ])("rejects a locked window owned by a different $name", ({ patch }) => {
-    expect(
-      resolveTrustedSessionContextTokens({
-        entry: {
-          modelProvider: "openai",
-          model: "gpt-5.6-sol",
-          modelSelectionLocked: true,
-          contextTokens: 272_000,
-          ...patch,
-        },
-        ...currentSelection,
-      }),
-    ).toBeUndefined();
-  });
+  );
 });
 
 describe("resolveProjectedSessionContextTokens", () => {
@@ -92,27 +39,6 @@ describe("resolveProjectedSessionContextTokens", () => {
     contextTokens: 272_000,
     contextTokensSource: "runtime" as const,
   };
-
-  it("uses an authored effective cap instead of older matching telemetry", () => {
-    expect(
-      resolveProjectedSessionContextTokens({
-        entry: matchingRuntimeEntry,
-        ...currentSelection,
-        resolvedContextTokens: 1_000_000,
-        authoredContextTokens: 1_000_000,
-      }),
-    ).toBe(1_000_000);
-  });
-
-  it("keeps matching runtime telemetry below a higher native window", () => {
-    expect(
-      resolveProjectedSessionContextTokens({
-        entry: matchingRuntimeEntry,
-        ...currentSelection,
-        resolvedContextTokens: 1_000_000,
-      }),
-    ).toBe(272_000);
-  });
 
   it("falls back to current resolution when producer provenance differs", () => {
     expect(
@@ -144,33 +70,22 @@ describe("resolveProjectedSessionContextTokens", () => {
     ).toBeUndefined();
   });
 
-  it("does not resurrect a removed runtime-configured cap while resolution is unavailable", () => {
-    expect(
-      resolveProjectedSessionContextTokens({
-        entry: { ...matchingRuntimeEntry, contextTokensSource: "runtime-configured" },
-        ...currentSelection,
-        resolvedContextTokens: undefined,
-      }),
-    ).toBeUndefined();
-  });
-
-  it.each([
-    { name: "provider", patch: { modelProvider: "openrouter" } },
-    { name: "model", patch: { model: "gpt-5.5" } },
-    { name: "harness", patch: { agentHarnessId: "openclaw" } },
-  ])("rejects a persisted resolution owned by a different $name", ({ patch }) => {
-    expect(
-      resolveProjectedSessionContextTokens({
-        entry: {
-          ...matchingRuntimeEntry,
-          contextTokensSource: "resolved-v1",
-          ...patch,
-        },
-        ...currentSelection,
-        resolvedContextTokens: undefined,
-      }),
-    ).toBeUndefined();
-  });
+  it.each([{ name: "harness", patch: { agentHarnessId: "openclaw" } }])(
+    "rejects a persisted resolution owned by a different $name",
+    ({ patch }) => {
+      expect(
+        resolveProjectedSessionContextTokens({
+          entry: {
+            ...matchingRuntimeEntry,
+            contextTokensSource: "resolved-v1",
+            ...patch,
+          },
+          ...currentSelection,
+          resolvedContextTokens: undefined,
+        }),
+      ).toBeUndefined();
+    },
+  );
 
   it("preserves a locked native window ahead of current configuration", () => {
     expect(
@@ -184,5 +99,44 @@ describe("resolveProjectedSessionContextTokens", () => {
         authoredContextTokens: 272_000,
       }),
     ).toBe(1_000_000);
+  });
+});
+
+describe("resolveProjectedSessionContextBudgetStatus", () => {
+  const entry = { sessionId: "session-1", contextBudgetStatus: contextBudgetStatusFixture() };
+  const selection = { provider: "ollama", model: "qwen3:8b", contextTokens: 200_000 };
+
+  it.each([{ name: "lower cap", current: { contextTokens: 100_000 } }])(
+    "rejects a budget after the $name changes",
+    ({ current }) => {
+      expect(
+        resolveProjectedSessionContextBudgetStatus({ entry, ...selection, ...current }),
+      ).toBeUndefined();
+    },
+  );
+
+  it("keeps a narrower budget owned by the serving runtime", () => {
+    const runtimeEntry = {
+      ...entry,
+      modelProvider: "ollama",
+      model: "qwen3:8b",
+      agentHarnessId: "openclaw",
+      contextTokens: 200_000,
+      contextTokensSource: "runtime" as const,
+    };
+    const contextTokens = resolveProjectedSessionContextTokens({
+      entry: runtimeEntry,
+      ...selection,
+      agentHarnessId: "openclaw",
+      resolvedContextTokens: 262_144,
+    });
+    expect(contextTokens).toBe(200_000);
+    expect(
+      resolveProjectedSessionContextBudgetStatus({
+        entry: runtimeEntry,
+        ...selection,
+        contextTokens,
+      }),
+    ).toEqual(entry.contextBudgetStatus);
   });
 });

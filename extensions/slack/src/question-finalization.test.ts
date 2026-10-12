@@ -59,7 +59,7 @@ describe("Slack question finalization", () => {
     const questionId = "ask_0123456789abcdef0123456789abcdef";
     const headers = Array.from({ length: 21 }, (_value, index) => `Column ${String(index)}`);
     const payload = {
-      channelData: { askUser: { questionId } },
+      channelData: { askUser: { questionId, optionValues: ["One", "Two"] } },
       presentation: {
         blocks: [
           {
@@ -146,7 +146,7 @@ describe("Slack question finalization", () => {
     const payload = {
       text: "Pick one",
       mediaUrl: "https://example.invalid/question-context.png",
-      channelData: { askUser: { questionId } },
+      channelData: { askUser: { questionId, optionValues: ["One", "Two"] } },
       presentation: {
         blocks: [
           {
@@ -220,7 +220,7 @@ describe("Slack question finalization", () => {
     const payload = {
       text: "Pick one",
       mediaUrl: "https://example.invalid/question-context.png",
-      channelData: { askUser: { questionId } },
+      channelData: { askUser: { questionId, optionValues: ["One", "Two"] } },
       presentation: {
         blocks: [
           {
@@ -318,7 +318,7 @@ describe("Slack question finalization", () => {
     const cfg = { channels: { slack: { botToken: "xoxb-test" } } };
     const payload = {
       text: "Pick one",
-      channelData: { askUser: { questionId } },
+      channelData: { askUser: { questionId, optionValues: ["One", "Two"] } },
       presentation: {
         blocks: [
           {
@@ -382,14 +382,18 @@ describe("Slack question finalization", () => {
       }
       return { ok: true, channel: "C123", ts };
     });
-    const sendSlack: typeof sendMessageSlack = async (to, text, options) =>
-      await sendMessageSlack(to, text, {
+    const sendSlack: typeof sendMessageSlack = async (to, text, options) => {
+      const sendOptions = {
         ...options,
         cfg,
         token: "xoxb-test",
         client,
         textLimit: 72,
-      });
+      };
+      // This presentation test uses method mocks rather than the real request boundary.
+      delete sendOptions.assertDirectAdapterHandoff;
+      return await sendMessageSlack(to, text, sendOptions);
+    };
 
     const batch = await sendDurableMessageBatch({
       cfg,

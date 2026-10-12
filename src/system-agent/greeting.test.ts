@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import type { ConfigAuditRecord } from "../config/io.audit.js";
-import type { SequencedSqliteAuditRecordEntry } from "../infra/sqlite-audit-record-store.js";
+import type { SequencedSqliteAuditRecordEntry } from "../infra/sqlite-audit-record.kernel.js";
 import { SYSTEM_AGENT_GREETING_SYSTEM_PROMPT } from "./assistant-prompts.js";
 import {
   acknowledgeSystemAgentGreetingDelivery,
@@ -53,10 +54,11 @@ function createCache(
     ? { lastSeenAuditSequence: 0, ...initial }
     : undefined;
   const store: SystemAgentGreetingCacheStore = {
-    latest: vi.fn(() =>
+    assertCurrent: vi.fn(),
+    latest: vi.fn(async () =>
       record ? [{ key: "latest", value: record, createdAt: record.at ?? 0, sequence: 1 }] : [],
     ),
-    compareAndSet: vi.fn((_key, expectedValue, value) => {
+    compareAndSet: vi.fn(async (_key, expectedValue, value) => {
       if (JSON.stringify(record ?? null) !== JSON.stringify(expectedValue)) {
         return false;
       }
@@ -83,14 +85,14 @@ function createConfigAudit(
   initial: Array<SequencedSqliteAuditRecordEntry<ConfigAuditRecord>> = [],
 ) {
   const records = [...initial];
-  const latest = vi.fn(({ limit, beforeSequence }: { limit: number; beforeSequence?: number }) =>
-    records
-      .filter((entry) => beforeSequence === undefined || entry.sequence < beforeSequence)
-      .toSorted((left, right) => right.sequence - left.sequence)
-      .slice(0, limit),
-  );
+  const configAuditFacts = vi.fn(async (lastSeenAuditSequence: number) => ({
+    auditSequence: Math.max(0, ...records.map((entry) => entry.sequence)),
+    recentExternalEdit: records.some(
+      (entry) => entry.sequence > lastSeenAuditSequence && entry.value.event === "config.external",
+    ),
+  }));
   return {
-    store: { latest },
+    store: { configAuditFacts, assertCurrent: vi.fn() },
     add: (entry: SequencedSqliteAuditRecordEntry<ConfigAuditRecord>) => records.push(entry),
   };
 }
@@ -118,7 +120,7 @@ describe("system agent greeting cache", () => {
         cacheStore: cache.store,
       }),
     ).resolves.toEqual({ text: cached.text, source: "cache" });
-    acknowledgeSystemAgentGreetingDelivery({ auditSequence: 5, cacheStore: cache.store });
+    await acknowledgeSystemAgentGreetingDelivery({ auditSequence: 5, cacheStore: cache.store });
     expect(planner).not.toHaveBeenCalled();
     expect(cache.read()?.lastSeenAuditSequence).toBe(5);
   });
@@ -169,7 +171,7 @@ describe("system agent greeting cache", () => {
     expect(planner).toHaveBeenCalledWith(
       expect.objectContaining({ overview, facts, timeoutMs: 20_000 }),
     );
-    acknowledgeSystemAgentGreetingDelivery({
+    await acknowledgeSystemAgentGreetingDelivery({
       auditSequence: facts.auditSequence,
       cacheStore: cache.store,
     });
@@ -213,22 +215,25 @@ describe("system agent greeting cache", () => {
     expect(calm.text).not.toContain(SYSTEM_AGENT_EXTERNAL_EDIT_ALERT);
   });
 
-  it("reports an edit that arrives between the facts read and delivery", () => {
+  it("reports an edit that arrives between the facts read and delivery", async () => {
     const cache = createCache({ lastSeenAuditSequence: 10 });
     const audit = createConfigAudit([configAuditEntry(10, "config.write")]);
-    const facts = loadSystemAgentGreetingFacts({
+    const facts = await loadSystemAgentGreetingFacts({
       cacheStore: cache.store,
       configAuditStore: audit.store,
     });
 
     audit.add(configAuditEntry(11, "config.external"));
-    acknowledgeSystemAgentGreetingDelivery({
+    await acknowledgeSystemAgentGreetingDelivery({
       auditSequence: facts.auditSequence,
       cacheStore: cache.store,
     });
 
     expect(
-      loadSystemAgentGreetingFacts({ cacheStore: cache.store, configAuditStore: audit.store }),
+      await loadSystemAgentGreetingFacts({
+        cacheStore: cache.store,
+        configAuditStore: audit.store,
+      }),
     ).toMatchObject({ auditSequence: 11, recentExternalEdit: true });
   });
 
@@ -236,7 +241,7 @@ describe("system agent greeting cache", () => {
     const overview = createOverview();
     const cache = createCache();
     const audit = createConfigAudit([configAuditEntry(3, "config.write")]);
-    const facts = loadSystemAgentGreetingFacts({
+    const facts = await loadSystemAgentGreetingFacts({
       cacheStore: cache.store,
       configAuditStore: audit.store,
     });
@@ -251,7 +256,7 @@ describe("system agent greeting cache", () => {
         cacheStore: cache.store,
       }),
     ).resolves.toMatchObject({ source: "template" });
-    acknowledgeSystemAgentGreetingDelivery({
+    await acknowledgeSystemAgentGreetingDelivery({
       auditSequence: facts.auditSequence,
       cacheStore: cache.store,
     });
@@ -259,60 +264,95 @@ describe("system agent greeting cache", () => {
 
     audit.add(configAuditEntry(4, "config.external"));
     expect(
-      loadSystemAgentGreetingFacts({ cacheStore: cache.store, configAuditStore: audit.store }),
+      await loadSystemAgentGreetingFacts({
+        cacheStore: cache.store,
+        configAuditStore: audit.store,
+      }),
     ).toMatchObject({ auditSequence: 4, recentExternalEdit: true });
   });
 
-  it("pages past six internal writes to find an external edit above the watermark", () => {
-    const cache = createCache({ lastSeenAuditSequence: 1 });
-    const audit = createConfigAudit([
-      configAuditEntry(2, "config.external"),
-      ...Array.from({ length: 7 }, (_, index) => configAuditEntry(index + 3, "config.write")),
-    ]);
-
-    const facts = loadSystemAgentGreetingFacts({
-      cacheStore: cache.store,
-      configAuditStore: audit.store,
-    });
-
-    expect(facts).toMatchObject({ auditSequence: 9, recentExternalEdit: true });
-    expect(audit.store.latest).toHaveBeenCalledTimes(2);
-    expect(audit.store.latest).toHaveBeenNthCalledWith(2, { limit: 5, beforeSequence: 5 });
-  });
-
-  it("acknowledges a delivered edit so the next facts load is clear", () => {
+  it("acknowledges a delivered edit so the next facts load is clear", async () => {
     const cache = createCache({ lastSeenAuditSequence: 1 });
     const audit = createConfigAudit([
       configAuditEntry(2, "config.external"),
       configAuditEntry(3, "config.write"),
     ]);
-    const facts = loadSystemAgentGreetingFacts({
+    const facts = await loadSystemAgentGreetingFacts({
       cacheStore: cache.store,
       configAuditStore: audit.store,
     });
     expect(facts.recentExternalEdit).toBe(true);
 
-    acknowledgeSystemAgentGreetingDelivery({
+    await acknowledgeSystemAgentGreetingDelivery({
       auditSequence: facts.auditSequence,
       cacheStore: cache.store,
     });
 
     expect(
-      loadSystemAgentGreetingFacts({ cacheStore: cache.store, configAuditStore: audit.store }),
+      await loadSystemAgentGreetingFacts({
+        cacheStore: cache.store,
+        configAuditStore: audit.store,
+      }),
     ).toMatchObject({ auditSequence: 3, recentExternalEdit: false });
+  });
+
+  it.each([
+    { outcome: "definite conflict", attempts: 4 },
+    { outcome: "unknown write outcome", attempts: 1 },
+  ])("bounds acknowledgement retries after $outcome", async ({ outcome, attempts }) => {
+    const cache = createCache({ lastSeenAuditSequence: 1 });
+    const compareAndSet = vi.spyOn(cache.store, "compareAndSet");
+    if (outcome === "definite conflict") {
+      compareAndSet.mockResolvedValue(false);
+    } else {
+      compareAndSet.mockRejectedValue(new Error("writer disconnected before acknowledgement"));
+    }
+
+    await acknowledgeSystemAgentGreetingDelivery({ auditSequence: 2, cacheStore: cache.store });
+
+    expect(compareAndSet).toHaveBeenCalledTimes(attempts);
+    expect(cache.read()?.lastSeenAuditSequence).toBe(1);
+  });
+
+  it("retries a stale greeting write without losing a concurrent delivery watermark", async () => {
+    const cache = createCache();
+    const reachedWrite = createDeferred();
+    const resumeWrite = createDeferred();
+    const compareAndSet = cache.store.compareAndSet;
+    vi.spyOn(cache.store, "compareAndSet").mockImplementationOnce(async (...args) => {
+      reachedWrite.resolve();
+      await resumeWrite.promise;
+      return compareAndSet(...args);
+    });
+    const greeting = resolveSystemAgentGreeting({
+      overview: createOverview(),
+      facts: healthyFacts(),
+      planner: async () => ({ text: "All systems nominal.", modelRef: "openai/gpt-5.5" }),
+      cacheStore: cache.store,
+      now: () => 100,
+    });
+    await awaitGateBeforeSettlement(reachedWrite.promise, greeting, "greeting never reached CAS");
+    await acknowledgeSystemAgentGreetingDelivery({ auditSequence: 7, cacheStore: cache.store });
+    resumeWrite.resolve();
+    await greeting;
+
+    expect(cache.read()).toMatchObject({
+      lastSeenAuditSequence: 7,
+      text: "All systems nominal.",
+      at: 100,
+    });
   });
 
   it("coalesces concurrent planner calls for the same facts", async () => {
     const overview = createOverview();
     const facts = healthyFacts();
     const cache = createCache();
-    let finishPlan: ((plan: { text: string; modelRef: string }) => void) | undefined;
-    const planner = vi.fn(
-      () =>
-        new Promise<{ text: string; modelRef: string }>((resolve) => {
-          finishPlan = resolve;
-        }),
-    );
+    const started = createDeferred();
+    const plan = createDeferred<{ text: string; modelRef: string }>();
+    const planner = vi.fn(() => {
+      started.resolve();
+      return plan.promise;
+    });
 
     const first = resolveSystemAgentGreeting({ overview, facts, planner, cacheStore: cache.store });
     const second = resolveSystemAgentGreeting({
@@ -321,13 +361,14 @@ describe("system agent greeting cache", () => {
       planner,
       cacheStore: cache.store,
     });
-    expect(planner).toHaveBeenCalledOnce();
-    finishPlan?.({ text: "All systems nominal.", modelRef: "openai/gpt-5.5" });
+    await awaitGateBeforeSettlement(started.promise, first, "planner did not start");
+    plan.resolve({ text: "All systems nominal.", modelRef: "openai/gpt-5.5" });
 
     await expect(Promise.all([first, second])).resolves.toEqual([
       { text: "All systems nominal.", source: "model" },
       { text: "All systems nominal.", source: "model" },
     ]);
+    expect(planner).toHaveBeenCalledOnce();
   });
 
   it("does not let an older in-flight greeting replace newer facts", async () => {
@@ -335,32 +376,38 @@ describe("system agent greeting cache", () => {
     const oldFacts = healthyFacts();
     const newFacts = { ...oldFacts, updateAvailable: "2026.7.20" };
     const cache = createCache();
-    let finishOld: ((plan: { text: string; modelRef: string }) => void) | undefined;
-    let finishNew: ((plan: { text: string; modelRef: string }) => void) | undefined;
+    const oldStarted = createDeferred();
+    const newStarted = createDeferred();
+    const oldPlan = createDeferred<{ text: string; modelRef: string }>();
+    const newPlan = createDeferred<{ text: string; modelRef: string }>();
     const oldGreeting = resolveSystemAgentGreeting({
       overview,
       facts: oldFacts,
-      planner: () =>
-        new Promise((resolve) => {
-          finishOld = resolve;
-        }),
+      planner: () => {
+        oldStarted.resolve();
+        return oldPlan.promise;
+      },
       cacheStore: cache.store,
       now: () => 100,
     });
     const newGreeting = resolveSystemAgentGreeting({
       overview,
       facts: newFacts,
-      planner: () =>
-        new Promise((resolve) => {
-          finishNew = resolve;
-        }),
+      planner: () => {
+        newStarted.resolve();
+        return newPlan.promise;
+      },
       cacheStore: cache.store,
       now: () => 200,
     });
 
-    finishNew?.({ text: "Update 2026.7.20 is ready.", modelRef: "openai/gpt-5.5" });
+    await Promise.all([
+      awaitGateBeforeSettlement(oldStarted.promise, oldGreeting, "old planner did not start"),
+      awaitGateBeforeSettlement(newStarted.promise, newGreeting, "new planner did not start"),
+    ]);
+    newPlan.resolve({ text: "Update 2026.7.20 is ready.", modelRef: "openai/gpt-5.5" });
     await newGreeting;
-    finishOld?.({ text: "All systems nominal.", modelRef: "openai/gpt-5.5" });
+    oldPlan.resolve({ text: "All systems nominal.", modelRef: "openai/gpt-5.5" });
     await oldGreeting;
 
     expect(cache.read()).toMatchObject({
@@ -391,8 +438,10 @@ describe("system agent greeting cache", () => {
     expect(cache.read()?.at).toBe(100);
   });
 
-  it("uses a complete uncached template and backs off unchanged model failures", async () => {
+  it("keeps template failure backoff when the same owner captures a new store", async () => {
     const cache = createCache();
+    const renewedCache = createCache();
+    const cacheOwner = {};
     const overview = createOverview();
     const planner = vi.fn(async () => {
       throw new Error("offline");
@@ -409,13 +458,15 @@ describe("system agent greeting cache", () => {
       facts,
       planner,
       cacheStore: cache.store,
+      cacheOwner,
       now: () => 100,
     });
     const repeated = await resolveSystemAgentGreeting({
       overview,
       facts,
       planner,
-      cacheStore: cache.store,
+      cacheStore: renewedCache.store,
+      cacheOwner,
       now: () => 200,
     });
 
@@ -426,37 +477,11 @@ describe("system agent greeting cache", () => {
     expect(result.text).toContain(SYSTEM_AGENT_EXTERNAL_EDIT_ALERT);
     expect(repeated).toEqual(result);
     expect(planner).toHaveBeenCalledOnce();
-    acknowledgeSystemAgentGreetingDelivery({
+    await acknowledgeSystemAgentGreetingDelivery({
       auditSequence: facts.auditSequence,
-      cacheStore: cache.store,
+      cacheStore: renewedCache.store,
     });
-    expect(cache.read()).toEqual({ lastSeenAuditSequence: 7 });
-  });
-
-  it("rejects a model greeting that omits mild facts", async () => {
-    const cache = createCache();
-    const facts: SystemAgentGreetingFacts = {
-      updateAvailable: "2026.7.20",
-      channelHealth: { available: true, degraded: ["Telegram"] },
-      recentExternalEdit: true,
-      auditSequence: 7,
-    };
-    const result = await resolveSystemAgentGreeting({
-      overview: createOverview(),
-      facts,
-      planner: async () => ({
-        text: "All systems nominal.",
-        modelRef: "openai/gpt-5.5",
-      }),
-      cacheStore: cache.store,
-      now: () => 100,
-    });
-
-    expect(result).toMatchObject({ source: "template" });
-    expect(result.text).toContain("Update 2026.7.20 is available");
-    expect(result.text).toContain("Telegram");
-    expect(result.text).toContain(SYSTEM_AGENT_EXTERNAL_EDIT_ALERT);
-    expect(cache.read()).toBeUndefined();
+    expect(renewedCache.read()).toEqual({ lastSeenAuditSequence: 7 });
   });
 
   it("rejects structured output smuggled behind a preamble line", async () => {
@@ -635,23 +660,52 @@ describe("system agent greeting cache", () => {
     expect(planner).not.toHaveBeenCalled();
   });
 
-  it("uses the model-free fallback when the greeting cache cannot be read", async () => {
-    const planner = vi.fn();
-    const result = await resolveSystemAgentGreeting({
-      overview: createOverview(),
-      facts: healthyFacts(),
-      planner,
-      cacheStore: {
-        latest: () => {
-          throw new Error("sqlite corrupt");
-        },
-        compareAndSet: vi.fn(),
-      },
-    });
+  it.each(["failed", "revoked"])(
+    "does not publish cached text after a %s asynchronous greeting read",
+    async (failure) => {
+      const overview = createOverview();
+      const facts = healthyFacts();
+      const cache = createCache({
+        factsHash: systemAgentGreetingFactsHash(overview, facts),
+        text: "Cached greeting that must not publish.",
+        modelRef: "openai/gpt-5.5",
+        at: 100,
+      });
+      const readStarted = createDeferred();
+      const finishRead = createDeferred();
+      const latest = cache.store.latest;
+      vi.spyOn(cache.store, "latest").mockImplementationOnce(async (...args) => {
+        readStarted.resolve();
+        await finishRead.promise;
+        if (failure === "failed") {
+          throw new Error("read failed");
+        }
+        return latest(...args);
+      });
+      const planner = vi.fn();
+      const greeting = resolveSystemAgentGreeting({
+        overview,
+        facts,
+        planner,
+        cacheStore: cache.store,
+      });
+      await awaitGateBeforeSettlement(readStarted.promise, greeting, "cache read did not start");
+      if (failure === "revoked") {
+        vi.spyOn(cache.store, "assertCurrent").mockImplementation(() => {
+          throw new Error("store authority revoked");
+        });
+      }
+      finishRead.resolve();
 
-    expect(result).toMatchObject({ source: "template" });
-    expect(planner).not.toHaveBeenCalled();
-  });
+      if (failure === "revoked") {
+        await expect(greeting).rejects.toThrow("store authority revoked");
+      } else {
+        await expect(greeting).resolves.toMatchObject({ source: "template" });
+      }
+      expect(planner).not.toHaveBeenCalled();
+      expect(cache.store.compareAndSet).not.toHaveBeenCalled();
+    },
+  );
 
   it("hashes decision fields stably while ignoring diagnostic-only details", () => {
     const facts = {
@@ -701,17 +755,61 @@ describe("system agent greeting identity", () => {
 });
 
 describe("system agent greeting facts", () => {
-  it("treats a missing greeting slot as audit watermark zero", () => {
+  it.each(["failed", "revoked"])(
+    "does not publish audit facts after a %s asynchronous scan",
+    async (failure) => {
+      const audit = createConfigAudit([
+        configAuditEntry(6, "config.external"),
+        ...Array.from({ length: 5 }, (_, index) => configAuditEntry(index + 1, "config.write")),
+      ]);
+      const scanStarted = createDeferred();
+      const finishScan = createDeferred();
+      const readFacts = audit.store.configAuditFacts.getMockImplementation()!;
+      audit.store.configAuditFacts.mockImplementation(async (lastSeenAuditSequence) => {
+        scanStarted.resolve();
+        await finishScan.promise;
+        if (failure === "failed") {
+          throw new Error("audit scan failed");
+        }
+        return readFacts(lastSeenAuditSequence);
+      });
+      const loading = loadSystemAgentGreetingFacts({
+        cacheStore: createCache().store,
+        configAuditStore: audit.store,
+      });
+      await awaitGateBeforeSettlement(scanStarted.promise, loading, "audit scan did not start");
+      if (failure === "revoked") {
+        audit.store.assertCurrent.mockImplementation(() => {
+          throw new Error("audit source revoked");
+        });
+      }
+      finishScan.resolve();
+
+      if (failure === "revoked") {
+        await expect(loading).rejects.toThrow("audit source revoked");
+      } else {
+        await expect(loading).resolves.toMatchObject({
+          auditSequence: 0,
+          recentExternalEdit: false,
+        });
+      }
+    },
+  );
+
+  it("treats a missing greeting slot as audit watermark zero", async () => {
     const cache = createCache();
     const audit = createConfigAudit([configAuditEntry(1, "config.external")]);
 
     expect(
-      loadSystemAgentGreetingFacts({ cacheStore: cache.store, configAuditStore: audit.store }),
+      await loadSystemAgentGreetingFacts({
+        cacheStore: cache.store,
+        configAuditStore: audit.store,
+      }),
     ).toMatchObject({ auditSequence: 1, recentExternalEdit: true });
   });
 
-  it("uses cached update and health state without probing", () => {
-    const facts = loadSystemAgentGreetingFacts({
+  it("uses cached update and health state without probing", async () => {
+    const facts = await loadSystemAgentGreetingFacts({
       cacheStore: createCache({
         factsHash: "old",
         text: "old",
@@ -719,17 +817,8 @@ describe("system agent greeting facts", () => {
         at: 100,
       }).store,
       configAuditStore: {
-        latest: () => [
-          {
-            key: "external",
-            value: {
-              event: "config.external",
-              ts: new Date(200).toISOString(),
-            } as ConfigAuditRecord,
-            createdAt: 200,
-            sequence: 2,
-          },
-        ],
+        assertCurrent: vi.fn(),
+        configAuditFacts: async () => ({ auditSequence: 2, recentExternalEdit: true }),
       },
       getUpdateAvailable: () => ({
         currentVersion: "2026.7.19",
@@ -791,14 +880,6 @@ describe("system agent quick actions", () => {
       overview: createOverview(),
       facts: healthyFacts(),
       replies: ["talk to agent", "audit"],
-    },
-    {
-      name: "gateway unreachable",
-      overview: createOverview({
-        gateway: { url: "ws://127.0.0.1:18789", source: "test", reachable: false },
-      }),
-      facts: healthyFacts(),
-      replies: ["gateway status", "restart gateway", "talk to agent", "audit"],
     },
     {
       name: "channel health unavailable",

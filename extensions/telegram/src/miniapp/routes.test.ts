@@ -1,12 +1,17 @@
 import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { connect, type Socket } from "node:net";
-import { Readable } from "node:stream";
+import { createServer, IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { connect, Socket } from "node:net";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  OpenClawPluginApi,
+  OpenClawPluginCommandDefinition,
+  PluginCommandContext,
+} from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { createMockIncomingRequest, withTempHome } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { registerTelegramMiniApp } from "../../miniapp-api.js";
 import {
   createTelegramMiniAppLaunchTickets,
   type TelegramMiniAppLaunchTickets,
@@ -15,7 +20,12 @@ import {
 type OpenClawPluginHttpRouteParams = Parameters<OpenClawPluginApi["registerHttpRoute"]>[0];
 
 const issueDeviceBootstrapToken = vi.hoisted(() =>
-  vi.fn(async () => ({ token: "issued", expiresAtMs: Date.now() + 600_000 })),
+  vi.fn<typeof import("openclaw/plugin-sdk/device-bootstrap").issueDeviceBootstrapToken>(
+    async () => ({
+      token: "issued",
+      expiresAtMs: Date.now() + 600_000,
+    }),
+  ),
 );
 const resolveTelegramMiniAppUrls = vi.hoisted(() =>
   vi.fn(async () => ({
@@ -76,7 +86,10 @@ class MockResponse extends EventEmitter {
   }
 }
 
-function createRoute(cfg: OpenClawConfig): OpenClawPluginHttpRouteParams {
+function createRoute(
+  cfg: OpenClawConfig,
+  currentConfig?: () => OpenClawConfig,
+): OpenClawPluginHttpRouteParams {
   let route: OpenClawPluginHttpRouteParams | null = null;
   const api = createTestPluginApi({
     config: cfg,
@@ -84,6 +97,13 @@ function createRoute(cfg: OpenClawConfig): OpenClawPluginHttpRouteParams {
       route = params;
     },
   });
+  if (currentConfig) {
+    api.runtime.config = {
+      current: currentConfig,
+      mutateConfigFile: vi.fn(),
+      replaceConfigFile: vi.fn(),
+    };
+  }
   registerTelegramMiniAppRoutes(api, launchTickets);
   if (!route) {
     throw new Error("expected miniapp route registration");
@@ -99,12 +119,12 @@ async function callRoute(params: {
   contentType?: string;
   ip?: string;
 }) {
-  const req = Readable.from(params.body ? [params.body] : []) as IncomingMessage;
+  const req = createMockIncomingRequest(params.body ? [params.body] : []);
   req.method = params.method;
   req.url = params.url;
   req.headers = params.contentType ? { "content-type": params.contentType } : {};
-  Object.defineProperty(req, "socket", {
-    value: { remoteAddress: params.ip ?? "203.0.113.10" },
+  Object.defineProperty(req.socket, "remoteAddress", {
+    value: params.ip ?? "203.0.113.10",
   });
   return await callRouteRequest(params.route, req);
 }
@@ -116,15 +136,11 @@ async function callRouteRequest(route: OpenClawPluginHttpRouteParams, req: Incom
 }
 
 function createPendingAuthRequest(ip: string): IncomingMessage {
-  const req = new Readable({
-    read() {
-      // Keep the body open so the canonical reader owns timeout settlement.
-    },
-  }) as IncomingMessage;
+  const req = new IncomingMessage(new Socket());
   req.method = "POST";
   req.url = "/__openclaw_tg_miniapp/auth";
   req.headers = { "content-type": "application/json" };
-  Object.defineProperty(req, "socket", { value: { remoteAddress: ip } });
+  Object.defineProperty(req.socket, "remoteAddress", { value: ip });
   return req;
 }
 
@@ -160,12 +176,6 @@ async function readSocketResponse(socket: Socket): Promise<string> {
     socket.on("end", finish);
     socket.on("close", finish);
     socket.on("error", reject);
-  });
-}
-
-function createRouteServer(route: OpenClawPluginHttpRouteParams): Server {
-  return createServer((req, res) => {
-    void route.handler(req, res);
   });
 }
 
@@ -220,19 +230,92 @@ describe("registerTelegramMiniAppRoutes", () => {
     });
 
     expect(res.statusCode).toBe(200);
-    expect(res.body).toContain('const accountId = "ops";');
-    expect(res.body).toContain("new URL(payload.controlUiUrl)");
     expect(resolveTelegramMiniAppUrls).not.toHaveBeenCalled();
   });
 
-  it("mints a control-ui bootstrap token for a valid owner request", async () => {
-    const route = createRoute(config());
+  it("recovers wildcard-only Control UI access with an explicit owner ID and rejects group launches", async () => {
+    const allowFrom = ["accessGroup:operators"];
+    const cfg: OpenClawConfig = {
+      accessGroups: {
+        operators: { type: "message.senders", members: { telegram: ["*"] } },
+      },
+      channels: {
+        telegram: {
+          botToken: BOT_TOKEN,
+          allowFrom: ["999999"],
+          accounts: { ops: { allowFrom } },
+        },
+      },
+      gateway: { tailscale: { mode: "funnel" } },
+    };
+    const commands: OpenClawPluginCommandDefinition[] = [];
+    const routes: OpenClawPluginHttpRouteParams[] = [];
+    registerTelegramMiniApp(
+      createTestPluginApi({
+        config: cfg,
+        registerCommand: (command) => commands.push(command),
+        registerHttpRoute: (route) => routes.push(route),
+      }),
+    );
+    const command = commands.find((entry) => entry.name === "controlui");
+    const route = routes.find((entry) => entry.path === "/__openclaw_tg_miniapp/");
+    if (!command || !route) {
+      throw new Error("expected registered Mini App command and route");
+    }
+    const context: PluginCommandContext = {
+      channel: "telegram",
+      isAuthorizedSender: true,
+      senderIsOwner: false,
+      commandBody: "/controlui",
+      config: cfg,
+      accountId: "ops",
+      from: "telegram:123456",
+      sessionKey: "telegram:direct:123456",
+      requestConversationBinding: async () => ({ status: "error", message: "unused" }),
+      detachConversationBinding: async () => ({ removed: false }),
+      getCurrentConversationBinding: async () => null,
+    };
+
+    const groupReply = await command.handler({
+      ...context,
+      from: "telegram:group:-100",
+      sessionKey: "telegram:group:-100",
+      senderIsOwner: true,
+    });
+    expect(groupReply.text).toContain("DM");
+    expect(groupReply.presentation).toBeUndefined();
+    expect(resolveTelegramMiniAppUrls).not.toHaveBeenCalled();
+    expect(issueDeviceBootstrapToken).not.toHaveBeenCalled();
+
+    const deniedReply = await command.handler(context);
+    expect(deniedReply.text).toContain("administrator");
+    expect(deniedReply.text).toContain("numeric Telegram user ID (123456)");
+    expect(deniedReply.text).toContain("allowFrom");
+    expect(deniedReply.text).toContain("commands.ownerAllowFrom");
+    expect(deniedReply.text).toContain("retry /controlui");
+    expect(deniedReply.presentation).toBeUndefined();
+    expect(resolveTelegramMiniAppUrls).not.toHaveBeenCalled();
+    expect(issueDeviceBootstrapToken).not.toHaveBeenCalled();
+
+    allowFrom.push("123456");
+    const reply = await command.handler(context);
+    const buttons = reply.presentation?.blocks.find((block) => block.type === "buttons");
+    const webAppUrl = buttons?.buttons[0]?.webApp?.url;
+    if (!webAppUrl) {
+      throw new Error("expected an owner DM Web App launch URL");
+    }
+    const launchUrl = new URL(webAppUrl);
+    const launchTicket = new URLSearchParams(launchUrl.hash.slice(1)).get("launchTicket");
     const res = await callRoute({
       route,
       method: "POST",
       url: "/__openclaw_tg_miniapp/auth",
       contentType: "application/json; charset=utf-8",
-      body: authBody({ nonce: "success" }),
+      body: JSON.stringify({
+        initData: signedInitData("123456", "registered-command"),
+        accountId: launchUrl.searchParams.get("accountId"),
+        launchTicket,
+      }),
     });
 
     expect(res.statusCode).toBe(200);
@@ -241,7 +324,9 @@ describe("registerTelegramMiniAppRoutes", () => {
       controlUiUrl: "https://host.tailnet.ts.net/openclaw",
       gatewayUrl: "wss://host.tailnet.ts.net",
     });
+    expect(issueDeviceBootstrapToken).toHaveBeenCalledTimes(1);
     expect(issueDeviceBootstrapToken).toHaveBeenCalledWith({
+      assertCurrent: expect.any(Function),
       profile: {
         roles: ["operator"],
         scopes: [
@@ -254,6 +339,173 @@ describe("registerTelegramMiniAppRoutes", () => {
         purpose: "control-ui",
       },
     });
+  });
+
+  it.each(
+    (["account", "command"] as const).flatMap((source) =>
+      (["*", "telegram"] as const).flatMap((channel) =>
+        [
+          { members: ["*"], allowed: false },
+          { members: ["@owner", "999999"], allowed: false },
+          { members: ["telegram:123456"], allowed: true },
+          { members: ["*", "tg:123456"], allowed: true },
+        ].map(({ members, allowed }) => ({ source, channel, members, allowed })),
+      ),
+    ),
+  )(
+    "requires explicit group ownership: $source / $channel / $members",
+    async ({ source, channel, members, allowed }) => {
+      const cfg = config([]);
+      cfg.accessGroups = {
+        operators: { type: "message.senders", members: { [channel]: members } },
+      };
+      if (source === "account") {
+        cfg.channels = {
+          telegram: {
+            botToken: BOT_TOKEN,
+            accounts: { ops: { allowFrom: ["accessGroup:operators"] } },
+          },
+        };
+      } else {
+        cfg.commands = { ownerAllowFrom: ["accessGroup:operators"] };
+      }
+      const commands: OpenClawPluginCommandDefinition[] = [];
+      registerTelegramMiniApp(
+        createTestPluginApi({
+          config: cfg,
+          registerCommand: (command) => commands.push(command),
+        }),
+      );
+      const command = commands.find((entry) => entry.name === "controlui");
+      if (!command) {
+        throw new Error("expected registered Mini App command");
+      }
+      const reply = await command.handler({
+        channel: "telegram",
+        isAuthorizedSender: true,
+        senderIsOwner: true,
+        commandBody: "/controlui",
+        config: cfg,
+        accountId: "ops",
+        from: "telegram:123456",
+        sessionKey: "telegram:direct:123456",
+        requestConversationBinding: async () => ({ status: "error", message: "unused" }),
+        detachConversationBinding: async () => ({ removed: false }),
+        getCurrentConversationBinding: async () => null,
+      });
+      if (allowed) {
+        expect(reply.presentation?.blocks).toEqual([expect.objectContaining({ type: "buttons" })]);
+      } else {
+        expect(reply.text).toContain("Restricted to the bot owner.");
+        expect(reply.presentation).toBeUndefined();
+      }
+
+      // A previously issued ticket must not bypass the auth route's owner check.
+      const res = await callRoute({
+        route: createRoute(cfg),
+        method: "POST",
+        url: "/__openclaw_tg_miniapp/auth",
+        contentType: "application/json",
+        body: authBody({ accountId: "ops", nonce: "group-owner" }),
+        ip: `203.0.113.${100 + signedNonceSequence}`,
+      });
+      expect(res.statusCode).toBe(allowed ? 200 : 403);
+      expect(issueDeviceBootstrapToken).toHaveBeenCalledTimes(allowed ? 1 : 0);
+      if (!allowed) {
+        expect(res.body).toBe("Restricted to the bot owner.");
+      }
+    },
+  );
+
+  it.each([
+    "body",
+    "published URL",
+    "bot token",
+    "credential",
+    "credential response",
+    "unchanged",
+  ] as const)("keeps owner authority current across the %s await", async (stage) => {
+    let currentConfig = config();
+    const route = createRoute(currentConfig, () => currentConfig);
+    const entered = Promise.withResolvers<void>();
+    const resume = Promise.withResolvers<void>();
+    let persistedTokens: number | undefined;
+    if (stage === "published URL" || stage === "bot token") {
+      resolveTelegramMiniAppUrls.mockImplementationOnce(async () => {
+        entered.resolve();
+        await resume.promise;
+        return {
+          pageUrl: "https://host.tailnet.ts.net/__openclaw_tg_miniapp/",
+          controlUiUrl: "https://host.tailnet.ts.net/openclaw",
+          gatewayUrl: "wss://host.tailnet.ts.net",
+        };
+      });
+    } else if (stage === "credential response") {
+      issueDeviceBootstrapToken.mockImplementationOnce(async () => {
+        entered.resolve();
+        await resume.promise;
+        return { token: "issued", expiresAtMs: Date.now() + 600_000 };
+      });
+    } else if (stage !== "body") {
+      const bootstrap = await vi.importActual<
+        typeof import("openclaw/plugin-sdk/device-bootstrap")
+      >("openclaw/plugin-sdk/device-bootstrap");
+      issueDeviceBootstrapToken.mockImplementationOnce((params) =>
+        withTempHome(async () => {
+          entered.resolve();
+          await resume.promise;
+          try {
+            return await bootstrap.issueDeviceBootstrapToken(params);
+          } finally {
+            persistedTokens = (await bootstrap.clearDeviceBootstrapTokens()).removed;
+          }
+        }),
+      );
+    }
+    const req = createPendingAuthRequest("203.0.113.60");
+    const pending = callRouteRequest(route, req);
+    try {
+      if (stage === "body") {
+        currentConfig = config(["999999"]);
+      }
+      req.push(Buffer.from(authBody({ nonce: `revoked-${stage}` })));
+      req.complete = true;
+      req.push(null);
+      if (stage !== "body") {
+        expect(
+          await Promise.race([
+            entered.promise.then(() => "entered"),
+            pending.then(() => "finished"),
+          ]),
+        ).toBe("entered");
+        if (stage === "bot token") {
+          currentConfig = {
+            ...config(),
+            channels: { telegram: { botToken: "replacement", allowFrom: ["123456"] } },
+          };
+        } else if (stage !== "unchanged") {
+          currentConfig = config(["999999"]);
+        }
+      }
+      resume.resolve();
+      const res = await pending;
+      expect(res.statusCode).toBe(stage === "unchanged" ? 200 : 403);
+      if (stage === "unchanged") {
+        expect(JSON.parse(res.body).bootstrapToken).toBeTypeOf("string");
+        expect(persistedTokens).toBe(1);
+      } else {
+        expect(res.body).toBe("Restricted to the bot owner.");
+        if (stage === "credential") {
+          expect(persistedTokens).toBe(0);
+        } else if (stage !== "credential response") {
+          expect(issueDeviceBootstrapToken).not.toHaveBeenCalled();
+        }
+      }
+    } finally {
+      resume.resolve();
+      req.destroy();
+      await pending;
+    }
   });
 
   it("rejects replayed init-data without minting again", async () => {
@@ -278,7 +530,7 @@ describe("registerTelegramMiniAppRoutes", () => {
     });
 
     expect(replay.statusCode).toBe(401);
-    expect(replay.body).toBe("This link expired. Reopen the dashboard from your bot chat.");
+    expect(replay.body).toBe("This link expired. Run /controlui again in your bot chat.");
     expect(issueDeviceBootstrapToken).toHaveBeenCalledTimes(1);
   });
 
@@ -348,7 +600,7 @@ describe("registerTelegramMiniAppRoutes", () => {
     });
 
     expect(res.statusCode).toBe(401);
-    expect(res.body).toBe("This link expired. Reopen the dashboard from your bot chat.");
+    expect(res.body).toBe("This link expired. Run /controlui again in your bot chat.");
     expect(issueDeviceBootstrapToken).not.toHaveBeenCalled();
   });
 
@@ -404,63 +656,65 @@ describe("registerTelegramMiniAppRoutes", () => {
     });
 
     expect(res.statusCode).toBe(401);
-    expect(res.body).toBe("This link expired. Reopen the dashboard from your bot chat.");
+    expect(res.body).toBe("This link expired. Run /controlui again in your bot chat.");
     expect(issueDeviceBootstrapToken).not.toHaveBeenCalled();
   });
 
-  it("rejects an oversized auth body and closes the request", async () => {
-    const route = createRoute(config());
-    const req = Readable.from(["x".repeat(4097)]) as IncomingMessage;
-    req.method = "POST";
-    req.url = "/__openclaw_tg_miniapp/auth";
-    req.headers = { "content-type": "application/json" };
-    Object.defineProperty(req, "socket", { value: { remoteAddress: "203.0.113.50" } });
-
-    const res = await callRouteRequest(route, req);
-
-    expect(res.statusCode).toBe(413);
-    expect(res.body).toBe("Payload too large");
-    expect(req.destroyed).toBe(true);
-    expectBodyReadListenersCleaned(req);
-    expect(issueDeviceBootstrapToken).not.toHaveBeenCalled();
-  });
-
-  it("flushes a real HTTP 413 response before closing an oversized auth request", async () => {
-    const server = createRouteServer(createRoute(config()));
-    let socket: Socket | undefined;
-    try {
-      const port = await listen(server);
-      socket = connect({ host: "127.0.0.1", port });
-      await new Promise<void>((resolve) => {
-        socket?.once("connect", resolve);
+  it.each(["content-length", "chunked"])(
+    "flushes HTTP 413 before closing an oversized %s auth request",
+    async (framing) => {
+      const route = createRoute(config());
+      const handled: Promise<unknown>[] = [];
+      let request: IncomingMessage | undefined;
+      const server = createServer((req, res) => {
+        request = req;
+        handled.push(Promise.resolve(route.handler(req, res)));
       });
+      let socket: Socket | undefined;
+      try {
+        const port = await listen(server);
+        socket = connect({ host: "127.0.0.1", port });
+        await new Promise<void>((resolve) => {
+          socket?.once("connect", resolve);
+        });
 
-      socket.write(
-        [
-          "POST /__openclaw_tg_miniapp/auth HTTP/1.1",
-          "Host: 127.0.0.1",
-          "Content-Type: application/json",
-          `Content-Length: ${AUTH_BODY_MAX_BYTES + 1}`,
-          "Connection: keep-alive",
-          "",
-          "{",
-        ].join("\r\n"),
-      );
+        socket.write(
+          [
+            "POST /__openclaw_tg_miniapp/auth HTTP/1.1",
+            "Host: 127.0.0.1",
+            "Content-Type: application/json",
+            framing === "content-length"
+              ? `Content-Length: ${AUTH_BODY_MAX_BYTES + 1}`
+              : "Transfer-Encoding: chunked",
+            "Connection: keep-alive",
+            "",
+            framing === "content-length"
+              ? "{"
+              : `${(AUTH_BODY_MAX_BYTES + 1).toString(16)}\r\n${"x".repeat(AUTH_BODY_MAX_BYTES + 1)}\r\n0\r\n\r\n`,
+          ].join("\r\n"),
+        );
 
-      const response = await readSocketResponse(socket);
-      const [, body = ""] = response.split("\r\n\r\n", 2);
+        const response = await readSocketResponse(socket);
+        const [, body = ""] = response.split("\r\n\r\n", 2);
 
-      expect(response).toContain("HTTP/1.1 413");
-      expect(response).toContain("Connection: close");
-      expect(body).toBe("Payload too large");
-      expect(issueDeviceBootstrapToken).not.toHaveBeenCalled();
-    } finally {
-      socket?.destroy();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
-  });
+        expect(response).toContain("HTTP/1.1 413");
+        expect(response).toContain("Connection: close");
+        expect(body).toBe("Payload too large");
+        expect(issueDeviceBootstrapToken).not.toHaveBeenCalled();
+        await Promise.all(handled);
+        expect(request?.socket.destroyed).toBe(true);
+        if (!request) {
+          throw new Error("expected auth request");
+        }
+        expectBodyReadListenersCleaned(request);
+      } finally {
+        socket?.destroy();
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    },
+  );
 
   it("settles an early client close without leaking request-body listeners", async () => {
     const route = createRoute(config());
@@ -476,24 +730,6 @@ describe("registerTelegramMiniAppRoutes", () => {
     expect(issueDeviceBootstrapToken).not.toHaveBeenCalled();
   });
 
-  it("times out a slow auth body and closes the request", async () => {
-    const route = createRoute(config());
-    const req = createPendingAuthRequest("203.0.113.52");
-    try {
-      const res = await callRouteRequest(route, req);
-
-      expect(res.statusCode).toBe(408);
-      expect(res.body).toBe("Request body timeout");
-      expect(req.destroyed).toBe(false);
-      res.emit("close");
-      expect(req.destroyed).toBe(true);
-      expectBodyReadListenersCleaned(req);
-      expect(issueDeviceBootstrapToken).not.toHaveBeenCalled();
-    } finally {
-      req.destroy();
-    }
-  }, 10_000);
-
   it("flushes a real HTTP 408 response before closing a stalled auth request", async () => {
     vi.useFakeTimers();
     let markRequestStarted: (() => void) | undefined;
@@ -501,8 +737,11 @@ describe("registerTelegramMiniAppRoutes", () => {
       markRequestStarted = resolve;
     });
     const route = createRoute(config());
+    const handled: Promise<unknown>[] = [];
+    let request: IncomingMessage | undefined;
     const server = createServer((req, res) => {
-      void route.handler(req, res);
+      request = req;
+      handled.push(Promise.resolve(route.handler(req, res)));
       markRequestStarted?.();
     });
     let socket: Socket | undefined;
@@ -535,6 +774,12 @@ describe("registerTelegramMiniAppRoutes", () => {
       expect(response).toContain("Connection: close");
       expect(body).toBe("Request body timeout");
       expect(issueDeviceBootstrapToken).not.toHaveBeenCalled();
+      await Promise.all(handled);
+      expect(request?.socket.destroyed).toBe(true);
+      if (!request) {
+        throw new Error("expected auth request");
+      }
+      expectBodyReadListenersCleaned(request);
     } finally {
       vi.useRealTimers();
       socket?.destroy();

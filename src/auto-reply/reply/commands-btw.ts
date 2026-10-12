@@ -1,6 +1,6 @@
 /** Handles /btw side-question commands against the active session context. */
 import { randomUUID } from "node:crypto";
-import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentDir } from "../../agents/agent-scope.js";
 import { runBtwSideQuestion } from "../../agents/btw.js";
 import { toolPolicyRestrictsTools } from "../../agents/tool-policy.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
@@ -11,11 +11,16 @@ import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
 } from "../../gateway/message-action-turn-capability.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { extractBtwQuestion } from "./btw-command.js";
 import { commandReply, defineAuthorizedTextCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
+import { resolveCurrentTurnImages } from "./current-turn-images.js";
 
 const BTW_USAGE = "Usage: /btw [side question]";
+
+const log = createSubsystemLogger("auto-reply/commands-btw");
 
 /** Command handler for /btw side questions. */
 export const handleBtwCommand: CommandHandler = defineAuthorizedTextCommand(
@@ -31,30 +36,26 @@ export const handleBtwCommand: CommandHandler = defineAuthorizedTextCommand(
       return commandReply("⚠️ /btw requires an active session with existing context.");
     }
 
-    const sessionAgentId = params.sessionKey
-      ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
-      : params.agentId;
-    const agentDir =
-      (sessionAgentId ? resolveAgentDir(params.cfg, sessionAgentId) : undefined) ?? params.agentDir;
+    const sessionAgentId = params.agentId;
+    const agentDir = params.agentDir ?? resolveAgentDir(params.cfg, sessionAgentId);
 
-    if (!agentDir) {
-      return commandReply(
-        "⚠️ /btw is unavailable because the active agent directory could not be resolved.",
+    const rejectQuestion = (text: string) =>
+      commandReply({ text, btw: { question }, isError: true });
+
+    if (toolPolicyRestrictsTools(params.ctx.ConversationToolPolicy)) {
+      return rejectQuestion(
+        "⚠️ /btw cannot enforce this conversation's tool policy. Ask in the main conversation or switch this session to the embedded runtime.",
       );
     }
 
-    if (toolPolicyRestrictsTools(params.ctx.ConversationToolPolicy)) {
-      return {
-        shouldContinue: false,
-        reply: {
-          text: "⚠️ /btw cannot enforce this conversation's tool policy. Ask in the main conversation or switch this session to the embedded runtime.",
-          btw: { question },
-          isError: true,
-        },
-      };
-    }
-
     try {
+      const { images } = await resolveCurrentTurnImages({
+        ctx: params.ctx,
+        cfg: params.cfg,
+        images: params.opts?.images,
+        imageOrder: params.opts?.imageOrder,
+        extractedFileImages: params.opts?.extractedFileImages,
+      });
       await params.typing?.startTypingLoop();
       const messageTo =
         params.ctx.OriginatingTo?.trim() || params.command.to || params.command.channelId;
@@ -96,10 +97,12 @@ export const handleBtwCommand: CommandHandler = defineAuthorizedTextCommand(
       try {
         reply = await runBtwSideQuestion({
           cfg: params.cfg,
+          agentId: sessionAgentId,
           agentDir,
           provider: params.provider,
           model: params.model,
           question,
+          images,
           sessionEntry: targetSessionEntry,
           sessionStore: params.sessionStore,
           sessionKey: params.sessionKey,
@@ -157,20 +160,12 @@ export const handleBtwCommand: CommandHandler = defineAuthorizedTextCommand(
       } finally {
         revokeMessageActionTurnCapability(messageActionTurnCapability);
       }
-      return {
-        shouldContinue: false,
-        reply: reply ? { ...reply, btw: { question } } : reply,
-      };
+      return commandReply(reply ? { ...reply, btw: { question } } : reply);
     } catch (error) {
-      const message = error instanceof Error ? error.message.trim() : "";
-      return {
-        shouldContinue: false,
-        reply: {
-          text: `⚠️ /btw failed${message ? `: ${message}` : "."}`,
-          btw: { question },
-          isError: true,
-        },
-      };
+      log.warn(`Side question failed: ${formatErrorMessage(error)}`);
+      return rejectQuestion(
+        "⚠️ Couldn't answer that side question. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+      );
     }
   },
 );

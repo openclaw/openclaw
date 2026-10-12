@@ -71,21 +71,12 @@ export type SourceDeliveryPlan = {
     force: boolean;
     requireExplicitTarget: boolean;
     requireExplicitTargetEvidence: boolean;
-    defaultTarget: boolean;
   };
   fallback: {
     directDelivery: boolean;
     skipWhenMessageToolSentToTarget: boolean;
-    bestEffort: boolean;
-  };
-  progress: {
-    allowCallbacksWhenSourceDeliverySuppressed: boolean;
   };
 };
-
-function isMessageToolOwnedDelivery(owner: SourceVisibleDeliveryOwner): boolean {
-  return owner === "message_tool" || owner === "message_tool_then_direct_fallback";
-}
 
 function normalizeDeliveryTarget(channel: string, to: string): string {
   const toTrimmed = to.trim();
@@ -124,13 +115,7 @@ function deliveryTargetsMatch(channel: string, targetTo: string, deliveryTo: str
   );
 }
 
-function normalizeDeliveryThreadId(threadId: string | number | undefined): string | undefined {
-  return stringifyRouteThreadId(threadId)?.trim() || undefined;
-}
-
-function extractTopicThreadId(targetTo: string): string | undefined {
-  return targetTo.match(/:topic:(\d+)$/i)?.[1];
-}
+const TOPIC_THREAD_SUFFIX = /:topic:(\d+)$/i;
 
 /** Compares a message-tool target with the required source delivery target. */
 export function sourceDeliveryTargetsMatch(
@@ -148,14 +133,21 @@ export function sourceDeliveryTargetsMatch(
   if (delivery.accountId && target.accountId && target.accountId !== delivery.accountId) {
     return false;
   }
-  // Strip :topic:NNN from message targets and normalize Feishu/Lark prefixes on
-  // both sides so source-delivery suppression compares canonical IDs.
-  if (!deliveryTargetsMatch(channel, target.to.replace(/:topic:\d+$/, ""), delivery.to)) {
+  const targetTo = target.to.trim();
+  const deliveryTo = delivery.to.trim();
+  const targetTopic = TOPIC_THREAD_SUFFIX.exec(targetTo);
+  const deliveryTopic = TOPIC_THREAD_SUFFIX.exec(deliveryTo);
+  if (
+    !deliveryTargetsMatch(
+      channel,
+      targetTopic ? targetTo.slice(0, targetTopic.index) : targetTo,
+      deliveryTopic ? deliveryTo.slice(0, deliveryTopic.index) : deliveryTo,
+    )
+  ) {
     return false;
   }
-  const deliveryThreadId = normalizeDeliveryThreadId(delivery.threadId);
-  const targetThreadId =
-    normalizeDeliveryThreadId(target.threadId) ?? extractTopicThreadId(target.to);
+  const deliveryThreadId = stringifyRouteThreadId(delivery.threadId) ?? deliveryTopic?.[1];
+  const targetThreadId = stringifyRouteThreadId(target.threadId) ?? targetTopic?.[1];
   if (!deliveryThreadId && !targetThreadId) {
     return true;
   }
@@ -163,71 +155,6 @@ export function sourceDeliveryTargetsMatch(
     return target.threadImplicit === true && target.threadSuppressed !== true;
   }
   return deliveryThreadId === targetThreadId;
-}
-
-/** Builds a source delivery plan from ownership and fallback inputs. */
-export function createSourceDeliveryPlan(params: {
-  owner: SourceVisibleDeliveryOwner;
-  reason: SourceDeliveryPlanReason;
-  target?: SourceDeliveryTarget;
-  messageToolEnabled?: boolean;
-  messageToolForced?: boolean;
-  requireExplicitMessageTarget?: boolean;
-  requireExplicitMessageTargetEvidence?: boolean;
-  directFallback?: boolean;
-  skipFallbackWhenMessageToolSentToTarget?: boolean;
-  fallbackBestEffort?: boolean;
-  allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
-}): SourceDeliveryPlan {
-  const messageToolOwnsDelivery = isMessageToolOwnedDelivery(params.owner);
-  const sourceReplyDeliveryMode = messageToolOwnsDelivery ? "message_tool_only" : undefined;
-  const directDelivery =
-    params.directFallback ??
-    (params.owner === "direct_fallback" || params.owner === "message_tool_then_direct_fallback");
-  return {
-    owner: params.owner,
-    reason: params.reason,
-    target: params.target ?? {},
-    normalFinal:
-      sourceReplyDeliveryMode === "message_tool_only" || params.owner === "none"
-        ? "private"
-        : "visible",
-    sourceReplyDeliveryMode,
-    messageTool: {
-      enabled: params.messageToolEnabled ?? messageToolOwnsDelivery,
-      force: params.messageToolForced ?? messageToolOwnsDelivery,
-      requireExplicitTarget: params.requireExplicitMessageTarget ?? false,
-      requireExplicitTargetEvidence: params.requireExplicitMessageTargetEvidence ?? false,
-      defaultTarget: Boolean(params.target?.channel || params.target?.to),
-    },
-    fallback: {
-      directDelivery,
-      skipWhenMessageToolSentToTarget:
-        params.skipFallbackWhenMessageToolSentToTarget ??
-        params.owner === "message_tool_then_direct_fallback",
-      bestEffort: params.fallbackBestEffort ?? false,
-    },
-    progress: {
-      allowCallbacksWhenSourceDeliverySuppressed:
-        params.allowProgressCallbacksWhenSourceDeliverySuppressed ?? false,
-    },
-  };
-}
-
-function resolveImplicitMessageToolDeliveryTarget(
-  plan: SourceDeliveryPlan,
-): SourceDeliveryMessageToolTarget | undefined {
-  if (!plan.target.channel || !plan.target.to) {
-    return undefined;
-  }
-  const threadId = stringifyRouteThreadId(plan.target.threadId);
-  return {
-    tool: "message",
-    provider: plan.target.channel,
-    ...(plan.target.accountId ? { accountId: plan.target.accountId } : {}),
-    ...(plan.target.to ? { to: plan.target.to } : {}),
-    ...(threadId ? { threadId } : {}),
-  };
 }
 
 /** Evaluates whether observed message-tool sends satisfy the source delivery plan. */
@@ -239,17 +166,27 @@ export function resolveSourceDeliveryOutcome(
   },
 ): SourceDeliveryOutcome {
   const didSendViaMessageTool = params.didSendViaMessageTool === true;
-  const explicitTargets = params.messageToolSentTargets ?? [];
+  let sentTargets = params.messageToolSentTargets ?? [];
   // Cron completion accounting needs concrete target evidence. Legacy
   // message-tool-owned flows may still use the plan target as the implicit send.
-  const sentTargets =
-    explicitTargets.length > 0
-      ? explicitTargets
-      : didSendViaMessageTool && !plan.messageTool.requireExplicitTargetEvidence
-        ? [resolveImplicitMessageToolDeliveryTarget(plan)].filter(
-            (target): target is SourceDeliveryMessageToolTarget => Boolean(target),
-          )
-        : [];
+  if (
+    sentTargets.length === 0 &&
+    didSendViaMessageTool &&
+    !plan.messageTool.requireExplicitTargetEvidence &&
+    plan.target.channel &&
+    plan.target.to
+  ) {
+    const threadId = stringifyRouteThreadId(plan.target.threadId);
+    sentTargets = [
+      {
+        tool: "message",
+        provider: plan.target.channel,
+        ...(plan.target.accountId ? { accountId: plan.target.accountId } : {}),
+        to: plan.target.to,
+        ...(threadId ? { threadId } : {}),
+      },
+    ];
+  }
   const visibleDeliveries = sentTargets.map((target) => ({
     via: "message_tool" as const,
     target,

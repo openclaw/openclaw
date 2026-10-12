@@ -1,5 +1,5 @@
-// Zalouser plugin module implements channel behavior.
-import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-outbound";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
@@ -8,8 +8,6 @@ import {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { resolveZalouserAccountSync, type ResolvedZalouserAccount } from "./accounts.js";
-import type { ChannelDirectoryEntry, ChannelPlugin } from "./channel-api.js";
-import { DEFAULT_ACCOUNT_ID } from "./channel-api.js";
 import {
   zalouserAuthAdapter,
   zalouserGroupsAdapter,
@@ -23,7 +21,7 @@ import {
   zalouserSecurityAdapter,
   zalouserThreadingAdapter,
 } from "./channel.adapters.js";
-import { listZalouserDirectoryGroupMembers } from "./directory.js";
+import { listZalouserDirectoryGroupMembers, mapZalouserDirectoryUser } from "./directory.js";
 import type { ZalouserProbeResult } from "./probe.js";
 import { createZalouserSetupWizardProxy, zalouserSetupContract } from "./setup-core.js";
 import { createZalouserPluginBase } from "./shared.js";
@@ -33,34 +31,6 @@ const loadZalouserChannelRuntime = createLazyRuntimeModule(() => import("./chann
 const zalouserSetupWizardProxy = createZalouserSetupWizardProxy(
   async () => (await import("./setup-surface.js")).zalouserSetupWizard,
 );
-
-function mapUser(params: {
-  id: string;
-  name?: string | null;
-  avatarUrl?: string | null;
-  raw?: unknown;
-}): ChannelDirectoryEntry {
-  return {
-    kind: "user",
-    id: params.id,
-    name: params.name ?? undefined,
-    avatarUrl: params.avatarUrl ?? undefined,
-    raw: params.raw,
-  };
-}
-
-function mapGroup(params: {
-  id: string;
-  name?: string | null;
-  raw?: unknown;
-}): ChannelDirectoryEntry {
-  return {
-    kind: "group",
-    id: params.id,
-    name: params.name ?? undefined,
-    raw: params.raw,
-  };
-}
 
 export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProbeResult> =
   createChatChannelPlugin({
@@ -80,38 +50,25 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
           if (!parsed?.userId) {
             return null;
           }
-          return mapUser({
-            id: parsed.userId,
-            name: parsed.displayName ?? null,
-            avatarUrl: parsed.avatar ?? null,
-            raw: parsed,
-          });
+          return mapZalouserDirectoryUser(parsed);
         },
         listPeers: async ({ cfg, accountId, query, limit }) => {
           const { listZaloFriendsMatching } = await loadZalouserChannelRuntime();
           const account = resolveZalouserAccountSync({ cfg, accountId });
           const friends = await listZaloFriendsMatching(account.profile, query);
-          const rows = friends.map((friend) =>
-            mapUser({
-              id: friend.userId,
-              name: friend.displayName ?? null,
-              avatarUrl: friend.avatar ?? null,
-              raw: friend,
-            }),
-          );
+          const rows = friends.map(mapZalouserDirectoryUser);
           return typeof limit === "number" && limit > 0 ? rows.slice(0, limit) : rows;
         },
         listGroups: async ({ cfg, accountId, query, limit }) => {
           const { listZaloGroupsMatching } = await loadZalouserChannelRuntime();
           const account = resolveZalouserAccountSync({ cfg, accountId });
           const groups = await listZaloGroupsMatching(account.profile, query);
-          const rows = groups.map((group) =>
-            mapGroup({
-              id: `group:${group.groupId}`,
-              name: group.name ?? null,
-              raw: group,
-            }),
-          );
+          const rows = groups.map((group) => ({
+            kind: "group" as const,
+            id: `group:${group.groupId}`,
+            name: group.name ?? undefined,
+            raw: group,
+          }));
           return typeof limit === "number" && limit > 0 ? rows.slice(0, limit) : rows;
         },
         listGroupMembers: async ({ cfg, accountId, groupId, limit }) => {

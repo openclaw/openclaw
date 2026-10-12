@@ -1,7 +1,8 @@
 // Shared target resolution applies plugin defaults, allowlists, prefixes, and
 // fallback errors for direct and loaded-channel send paths.
 import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import { resolveChannelAllowFrom } from "../../channels/account-resolution.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -18,7 +19,7 @@ export type OutboundTargetResolution = { ok: true; to: string } | { ok: false; e
 /**
  * Inputs shared by direct and heartbeat outbound target resolution.
  */
-type ResolveOutboundTargetParams = {
+export type ResolveOutboundTargetParams = {
   channel: string;
   to?: string;
   allowFrom?: string[];
@@ -27,37 +28,33 @@ type ResolveOutboundTargetParams = {
   mode?: ChannelOutboundTargetMode;
 };
 
-function buildWebChatDeliveryError(): Error {
-  return new Error(
-    `Delivering to WebChat is not supported via \`${formatCliCommand("openclaw agent")}\`; use WhatsApp/Telegram or run with --deliver=false.`,
-  );
-}
-
 /**
  * Resolves a target through a channel plugin or the generic fallback path.
  */
-export function resolveOutboundTargetWithPlugin(params: {
+export async function resolveOutboundTargetWithPlugin(params: {
   plugin: ChannelPlugin | undefined;
   target: ResolveOutboundTargetParams;
-  onMissingPlugin?: () => OutboundTargetResolution | undefined;
-}): OutboundTargetResolution | undefined {
+}): Promise<OutboundTargetResolution | undefined> {
   if (params.target.channel === INTERNAL_MESSAGE_CHANNEL) {
     return {
       ok: false,
-      error: buildWebChatDeliveryError(),
+      error: new Error(
+        `Delivering to WebChat is not supported via \`${formatCliCommand("openclaw agent")}\`; use WhatsApp/Telegram or run with --deliver=false.`,
+      ),
     };
   }
 
   const plugin = params.plugin;
   if (!plugin) {
-    return params.onMissingPlugin?.();
+    return undefined;
   }
 
   // Plugin defaults and allowlists can be account-scoped; resolve them before target validation.
   const allowFromRaw =
     params.target.allowFrom ??
-    (params.target.cfg && plugin.config.resolveAllowFrom
-      ? plugin.config.resolveAllowFrom({
+    (params.target.cfg
+      ? await resolveChannelAllowFrom({
+          plugin,
           cfg: params.target.cfg,
           accountId: params.target.accountId ?? undefined,
         })
@@ -96,21 +93,18 @@ export function resolveOutboundTargetWithPlugin(params: {
   }
 
   const resolveTarget = plugin.outbound?.resolveTarget;
-  if (resolveTarget) {
-    return resolveTarget({
-      cfg: params.target.cfg,
-      to: effectiveTo,
-      allowFrom,
-      accountId: params.target.accountId ?? undefined,
-      mode: params.target.mode ?? "explicit",
-    });
-  }
-
-  if (effectiveTo) {
-    return { ok: true, to: effectiveTo };
-  }
-  return {
-    ok: false,
-    error: missingTargetError(plugin.meta.label ?? params.target.channel, hint),
-  };
+  return resolveTarget
+    ? resolveTarget({
+        cfg: params.target.cfg,
+        to: effectiveTo,
+        allowFrom,
+        accountId: params.target.accountId ?? undefined,
+        mode: params.target.mode ?? "explicit",
+      })
+    : effectiveTo
+      ? { ok: true, to: effectiveTo }
+      : {
+          ok: false,
+          error: missingTargetError(plugin.meta.label ?? params.target.channel, hint),
+        };
 }

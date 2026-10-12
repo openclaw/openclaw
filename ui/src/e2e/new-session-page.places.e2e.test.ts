@@ -1,26 +1,41 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import {
   PICKED,
   WORKSPACE,
   captureNewSessionComposerUiProof,
   captureProjectUiProof,
   captureUiProofEnabled,
+  checkoutBaseRefInput,
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
   createdSessionListResult,
   installMockGateway,
-  newSessionComposerProofArtifactDir,
   pollLocatorText,
-  prepareNewSessionComposerUiProof,
-  prepareProjectUiProof,
-  projectProofArtifactDir,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
 
+async function captureFolderBrowser(page: Page, name: string) {
+  if (!captureUiProofEnabled) {
+    return;
+  }
+  const browser = page.locator(".new-session-page__browser");
+  const frame = await takeControlUiScreenshotFrame(
+    page,
+    browser,
+    [browser.getByRole("combobox"), browser.getByRole("button", { name: "Use this folder" })],
+    { animations: "disabled", viewport: { width: 1280, height: 900 } },
+  );
+  await writeFile(path.join(suite.artifactDir, name), frame.png);
+}
+
 suite.define(() => {
   it("keeps the pre-submit draft on the composer and creates exactly one session", async () => {
-    await prepareNewSessionComposerUiProof();
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -28,7 +43,7 @@ suite.define(() => {
       ...(captureUiProofEnabled
         ? {
             recordVideo: {
-              dir: newSessionComposerProofArtifactDir,
+              dir: path.join(suite.artifactDir, "new-session-slash-menu"),
               size: { height: 900, width: 1280 },
             },
           }
@@ -65,7 +80,10 @@ suite.define(() => {
       const slashMenu = page.locator("#chat-new-session-slash-menu-listbox");
       await pollLocatorText(slashMenu).toContain("/status");
       expect(await slashMenu.textContent()).not.toContain("/clear");
-      await captureNewSessionComposerUiProof(page, "slash-menu-open.png");
+      await captureNewSessionComposerUiProof(suite, page, "slash-menu-open.png", {
+        surface: slashMenu,
+        content: [slashMenu.getByRole("option").first()],
+      });
       if (captureUiProofEnabled) {
         await page.waitForTimeout(750);
       }
@@ -110,7 +128,6 @@ suite.define(() => {
   });
 
   it("drafts a session with a browsed folder and creates it on first message", async () => {
-    await prepareProjectUiProof();
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -118,7 +135,7 @@ suite.define(() => {
       ...(captureUiProofEnabled
         ? {
             recordVideo: {
-              dir: projectProofArtifactDir,
+              dir: path.join(suite.artifactDir, "project-registry"),
               size: { height: 900, width: 1280 },
             },
           }
@@ -152,6 +169,7 @@ suite.define(() => {
         "worktrees.branches": {
           branches: [{ kind: "local", name: "main" }],
           defaultBranch: "main",
+          headBranch: "main",
           repositoryStatus: "git",
         },
         "fs.listDir": {
@@ -164,6 +182,7 @@ suite.define(() => {
                 home: "/home/peter",
                 entries: [
                   { name: "packages", path: PICKED },
+                  { name: "tools", path: `${WORKSPACE}/tools` },
                   { name: ".git", path: `${WORKSPACE}/.git`, hidden: true },
                 ],
               },
@@ -192,18 +211,31 @@ suite.define(() => {
       await page.getByRole("heading", { name: "Main" }).waitFor();
       await page.locator(".new-session-page__message").waitFor();
 
-      // Incognito is a page-level choice on the far end of the same top rail
-      // as the shell controls, rather than an option inside the composer.
+      // Incognito stays at the page's top-right, independent of rail navigation.
       const incognitoToggle = page.getByRole("switch", { name: "Incognito" });
       const incognitoBox = await incognitoToggle.boundingBox();
-      const commandPaletteBox = await page
-        .getByRole("button", { name: "Open command palette" })
-        .boundingBox();
+      const pageBox = await page.locator(".new-session-page").boundingBox();
       expect(incognitoBox).not.toBeNull();
-      expect(commandPaletteBox).not.toBeNull();
-      expect(incognitoBox?.y).toBeCloseTo(commandPaletteBox?.y ?? 0, 0);
-      expect(incognitoBox?.x ?? 0).toBeGreaterThan((commandPaletteBox?.x ?? 0) + 100);
-      expect(await page.locator('.new-session-page__composer [role="switch"]').count()).toBe(0);
+      expect(pageBox).not.toBeNull();
+      expect(incognitoBox?.x ?? 0).toBeGreaterThan((pageBox?.x ?? 0) + (pageBox?.width ?? 0) / 2);
+      expect((incognitoBox?.x ?? 0) + (incognitoBox?.width ?? 0)).toBeLessThanOrEqual(
+        (pageBox?.x ?? 0) + (pageBox?.width ?? 0),
+      );
+      expect(incognitoBox?.y ?? 0).toBeGreaterThanOrEqual(pageBox?.y ?? 0);
+      expect(
+        await page
+          .locator(".new-session-page__composer")
+          .getByRole("switch", { name: "Incognito" })
+          .count(),
+      ).toBe(0);
+      const fastMode = page.locator('.new-session-page__composer [data-chat-speed-option="on"]');
+      expect(await fastMode.count()).toBe(1);
+      expect(await fastMode.getAttribute("aria-checked")).toBe("false");
+      expect(
+        await fastMode.evaluate((element) =>
+          element.classList.contains("chat-controls__speed-option"),
+        ),
+      ).toBe(true);
       expect(await incognitoToggle.getAttribute("aria-checked")).toBe("false");
       await incognitoToggle.click();
       await expect.poll(() => incognitoToggle.getAttribute("aria-checked")).toBe("true");
@@ -222,6 +254,9 @@ suite.define(() => {
       const footerBox = await page
         .locator(".new-session-page__composer .agent-chat__composer-footer")
         .boundingBox();
+      const actionsBox = await page
+        .locator(".new-session-page__composer .agent-chat__composer-actions")
+        .boundingBox();
       const attachmentButton = page.getByRole("button", { name: "Add attachment" });
       const attachmentBox = await attachmentButton.boundingBox();
       expect(heroBox).not.toBeNull();
@@ -230,7 +265,11 @@ suite.define(() => {
       expect(modelBox).not.toBeNull();
       expect(modelWrapperBox).not.toBeNull();
       expect(footerBox).not.toBeNull();
+      expect(actionsBox).not.toBeNull();
       expect(attachmentBox).not.toBeNull();
+      expect((incognitoBox?.y ?? 0) + (incognitoBox?.height ?? 0)).toBeLessThanOrEqual(
+        composerBox?.y ?? 0,
+      );
       expect((heroBox?.y ?? 0) + (heroBox?.height ?? 0)).toBeLessThanOrEqual(
         (triggersBox?.y ?? 0) + 1,
       );
@@ -260,35 +299,146 @@ suite.define(() => {
         (footerBox?.x ?? 0) + (footerBox?.width ?? 0) / 2,
       );
       expect(
-        (footerBox?.x ?? 0) +
-          (footerBox?.width ?? 0) -
-          ((modelWrapperBox?.x ?? 0) + (modelWrapperBox?.width ?? 0)),
+        (actionsBox?.x ?? 0) - ((modelWrapperBox?.x ?? 0) + (modelWrapperBox?.width ?? 0)),
       ).toBeLessThanOrEqual(12);
+      expect((modelWrapperBox?.x ?? 0) + (modelWrapperBox?.width ?? 0)).toBeLessThanOrEqual(
+        actionsBox?.x ?? 0,
+      );
+      expect((actionsBox?.x ?? 0) + (actionsBox?.width ?? 0)).toBeLessThanOrEqual(
+        (footerBox?.x ?? 0) + (footerBox?.width ?? 0) + 1,
+      );
       expect(triggersBox?.x).toBeCloseTo(composerBox?.x ?? 0, 0);
       expect(triggersBox?.width).toBeCloseTo(composerBox?.width ?? 0, 0);
       expect(composerBox?.width).toBeCloseTo(48 * 16, 0);
       expect(await page.locator(".new-session-page__message").getAttribute("rows")).toBe("1");
-      await captureProjectUiProof(page, "new-session-control-layout.png");
+      await captureProjectUiProof(suite, page, "new-session-control-layout.png");
+
+      await page.setViewportSize({ width: 393, height: 852 });
+      const mobileModelSettings = page.locator(
+        '.new-session-page__composer [data-chat-model-select="true"]',
+      );
+      const mobilePermission = page.locator(
+        '.new-session-page__composer [data-chat-permission-select="true"]',
+      );
+      const mobilePermissionIcon = mobilePermission.locator(".chat-controls__permission-icon svg");
+      const permissionIconCenterError = async () => {
+        const [triggerBox, iconBox] = await Promise.all([
+          mobilePermission.boundingBox(),
+          mobilePermissionIcon.boundingBox(),
+        ]);
+        if (!triggerBox || !iconBox) {
+          return Number.POSITIVE_INFINITY;
+        }
+        const x = iconBox.x + iconBox.width / 2 - (triggerBox.x + triggerBox.width / 2);
+        const y = iconBox.y + iconBox.height / 2 - (triggerBox.y + triggerBox.height / 2);
+        return Math.max(Math.abs(x), Math.abs(y));
+      };
+      await expect.poll(() => mobileModelSettings.isVisible()).toBe(true);
+      await expect.poll(permissionIconCenterError).toBeLessThanOrEqual(1);
+      const [mobileFooterBox, mobileModelSettingsBox] = await Promise.all([
+        page.locator(".new-session-page__composer .agent-chat__composer-footer").boundingBox(),
+        mobileModelSettings.boundingBox(),
+      ]);
+      expect(mobileFooterBox).not.toBeNull();
+      expect(mobileModelSettingsBox).not.toBeNull();
+      if (!mobileFooterBox || !mobileModelSettingsBox) {
+        throw new Error("expected mobile new-session composer controls");
+      }
+      expect(mobileModelSettingsBox.width).toBeGreaterThanOrEqual(44);
+      expect(mobileModelSettingsBox.height).toBeGreaterThanOrEqual(44);
+      expect(mobileModelSettingsBox.x).toBeGreaterThanOrEqual(mobileFooterBox.x);
+      expect(mobileModelSettingsBox.x + mobileModelSettingsBox.width).toBeLessThanOrEqual(
+        mobileFooterBox.x + mobileFooterBox.width,
+      );
+      await captureProjectUiProof(suite, page, "mobile-new-session-idle.png");
+      await mobilePermission.click();
+      await page.locator('[data-chat-permission-option="workspace"]').click();
+      await expect
+        .poll(() => mobilePermission.getAttribute("data-chat-select-value"))
+        .toBe("workspace");
+      await mobilePermission.click();
+      await expect
+        .poll(() => page.locator(".chat-controls__permission-option").first().isVisible())
+        .toBe(true);
+      await captureProjectUiProof(suite, page, "mobile-new-session-permissions-open.png", {
+        surface: page.locator('.chat-controls__permission-picker [part="menu"]'),
+        content: [page.locator(".chat-controls__permission-option").first()],
+      });
+      await page.keyboard.press("Escape");
+      await mobileModelSettings.click();
+      await expect.poll(() => page.locator(".chat-controls__model-menu").isVisible()).toBe(true);
+      const capturedModelOption = page
+        .locator(".chat-controls__model-picker[open] [data-chat-model-option]")
+        .first();
+      if (captureUiProofEnabled) {
+        await revealChatModelOption(capturedModelOption);
+      }
+      await captureProjectUiProof(suite, page, "mobile-new-session-model-open.png", {
+        surface: page.locator('.chat-controls__model-picker wa-popup [part="popup"]'),
+        content: [capturedModelOption],
+      });
+      expect(
+        await page
+          .locator(".chat-controls__model-menu")
+          .getByText(/Effort|Speed/)
+          .count(),
+      ).toBe(0);
+      await page.keyboard.press("Escape");
+      await page.locator('[data-chat-thinking-select="true"]').click();
+      await expect.poll(() => page.locator(".chat-controls__effort-menu").isVisible()).toBe(true);
+      await captureProjectUiProof(suite, page, "mobile-new-session-effort-open.png", {
+        surface: page.locator('.chat-controls__effort-picker wa-popup [part="popup"]'),
+        content: [fastMode],
+      });
+      await page.keyboard.press("Escape");
+      await page.setViewportSize({ width: 1280, height: 900 });
 
       const agentPicker = page.locator(".new-session-page__select--agent openclaw-agent-select");
       await agentPicker.locator(".agent-select__trigger").click();
       await pollLocatorText(agentPicker.locator(".agent-select__menu-title")).toBe("Agents");
-      await captureProjectUiProof(page, "new-session-agent-menu-label.png");
+      await captureProjectUiProof(suite, page, "new-session-agent-menu-label.png", {
+        surface: agentPicker.locator('wa-dropdown [part="menu"]'),
+        content: [agentPicker.locator(".agent-select__menu-title")],
+      });
       await page.keyboard.press("Escape");
 
       const whereSelect = page.locator("wa-popover.new-session-page__where-popover");
       const whereTrigger = page.locator("#new-session-where-trigger");
       await whereTrigger.click();
-      await pollLocatorText(whereSelect.locator(".new-session-page__menu-title").first()).toBe(
-        "Environments",
+      const environmentSearch = whereSelect.getByRole("searchbox", { name: "Search environments" });
+      await expect
+        .poll(() => environmentSearch.getAttribute("placeholder"))
+        .toBe("Search environments");
+      await expect
+        .poll(() => environmentSearch.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      const localEnvironment = whereSelect.locator('[data-value="gateway"]');
+      expect(await localEnvironment.getAttribute("aria-pressed")).toBe("true");
+      await environmentSearch.fill("no-such-environment");
+      await whereSelect
+        .getByRole("status")
+        .getByText("No matching environments", { exact: true })
+        .waitFor();
+      expect(await whereTrigger.locator(".new-session-page__trigger-label").textContent()).toBe(
+        "Local",
       );
-      await captureProjectUiProof(page, "new-session-environment-menu-label.png");
+      await environmentSearch.fill("");
+      await expect.poll(() => localEnvironment.isVisible()).toBe(true);
+      expect(await localEnvironment.getAttribute("aria-pressed")).toBe("true");
+      await captureProjectUiProof(suite, page, "new-session-environment-search.png", {
+        surface: whereSelect.locator('wa-popup.popover > [part="popup"]'),
+        content: [environmentSearch],
+      });
       await page.keyboard.press("Escape");
+      await expect.poll(() => whereTrigger.getAttribute("aria-expanded")).toBe("false");
+      await expect
+        .poll(() => page.evaluate(() => document.activeElement?.id))
+        .toBe("new-session-where-trigger");
 
       const projectSelect = page.locator("wa-popover.new-session-page__project-popover");
       const projectTrigger = page.locator("#new-session-project-trigger");
-      const detailSelect = page.locator("wa-popover.new-session-page__detail-popover");
-      const detailTrigger = page.locator("#new-session-detail-trigger");
+      const checkoutSelect = page.locator("wa-popover.new-session-page__checkout-popover");
+      const checkoutTrigger = page.locator("#new-session-checkout-trigger");
       await pollLocatorText(projectTrigger.locator(".new-session-page__trigger-label")).toBe(
         "openclaw",
       );
@@ -298,7 +448,10 @@ suite.define(() => {
       await pollLocatorText(projectSelect.locator(".new-session-page__menu-title").first()).toBe(
         "Projects",
       );
-      await captureProjectUiProof(page, "new-session-project-menu-label.png");
+      await captureProjectUiProof(suite, page, "new-session-project-menu-label.png", {
+        surface: projectSelect.locator('wa-popup.popover > [part="popup"]'),
+        content: [projectSelect.getByRole("button", { name: "Browse folders" })],
+      });
       await projectSelect.getByRole("button", { name: "Browse folders" }).click();
       await page.locator(".new-session-page__browser-entry", { hasText: "packages" }).click();
       await expect
@@ -316,28 +469,51 @@ suite.define(() => {
       );
 
       // Git-backed custom folders stay direct until the user explicitly chooses isolation.
-      await expect.poll(() => detailTrigger.getAttribute("data-worktree")).toBe("false");
-      await detailTrigger.click();
-      await expect.poll(() => detailTrigger.getAttribute("aria-expanded")).toBe("true");
-      await pollLocatorText(detailSelect.locator(".new-session-page__menu-title").first()).toBe(
-        "Branches",
+      await expect.poll(() => checkoutTrigger.getAttribute("data-worktree")).toBe("false");
+      await pollLocatorText(checkoutTrigger.locator(".new-session-page__trigger-label")).toBe(
+        "main",
       );
-      await captureProjectUiProof(page, "new-session-branch-menu-label.png");
-      const worktreeItem = detailSelect.getByRole("button", { name: "Worktree" });
+      await checkoutTrigger.click();
+      await expect.poll(() => checkoutTrigger.getAttribute("aria-expanded")).toBe("true");
+      await pollLocatorText(checkoutSelect.locator(".new-session-page__menu-title").first()).toBe(
+        "Checkout",
+      );
+      await captureProjectUiProof(suite, page, "new-session-checkout-menu-label.png", {
+        surface: checkoutSelect.locator('wa-popup.popover > [part="popup"]'),
+        content: [checkoutSelect.locator(".new-session-page__menu-title").first()],
+      });
+      const currentCheckout = checkoutSelect.locator('[data-value="checkout"]');
+      const worktreeItem = checkoutSelect.getByRole("button", {
+        name: "New worktree Isolated copy of the repo",
+        exact: true,
+      });
+      await expect.poll(() => currentCheckout.getAttribute("aria-pressed")).toBe("true");
       await expect.poll(() => worktreeItem.getAttribute("aria-pressed")).toBe("false");
       expect(await worktreeItem.isEnabled()).toBe(true);
       await worktreeItem.click();
-      await expect.poll(() => detailTrigger.getAttribute("data-worktree")).toBe("true");
+      await expect.poll(() => checkoutTrigger.getAttribute("data-worktree")).toBe("true");
+      await expect.poll(() => currentCheckout.getAttribute("aria-pressed")).toBe("false");
+      await pollLocatorText(checkoutTrigger.locator(".new-session-page__trigger-label")).toBe(
+        "New worktree",
+      );
+      await checkoutBaseRefInput(checkoutSelect).waitFor();
+      await checkoutSelect.getByLabel("Name", { exact: true }).waitFor();
+      await checkoutSelect
+        .getByText("Creates a branch from the session title in a separate checkout.", {
+          exact: true,
+        })
+        .waitFor();
       await page.keyboard.press("Escape");
-      await expect.poll(() => detailTrigger.getAttribute("aria-expanded")).toBe("false");
+      await expect.poll(() => checkoutTrigger.getAttribute("aria-expanded")).toBe("false");
       await expect
         .poll(() => page.evaluate(() => document.activeElement?.id))
-        .toBe("new-session-detail-trigger");
+        .toBe("new-session-checkout-trigger");
 
       // Pointer light-dismiss still retires the unified popover after its
       // asynchronous hide animation completes.
-      await detailTrigger.click();
-      const afterPointerHide = detailSelect.evaluate(
+      await checkoutTrigger.click();
+      await checkoutSelect.getByLabel("Name", { exact: true }).fill("release-proof");
+      const afterPointerHide = checkoutSelect.evaluate(
         (element) =>
           new Promise<void>((resolve) => {
             element.addEventListener("wa-after-hide", () => resolve(), { once: true });
@@ -345,7 +521,22 @@ suite.define(() => {
       );
       await page.locator(".agent-chat__welcome h2").click();
       await afterPointerHide;
-      await expect.poll(() => detailSelect.getAttribute("open")).toBeNull();
+      await expect.poll(() => checkoutSelect.getAttribute("open")).toBeNull();
+      await pollLocatorText(checkoutTrigger.locator(".new-session-page__trigger-label")).toBe(
+        "Worktree · release-proof",
+      );
+      expect(await checkoutTrigger.getAttribute("aria-label")).toBe(
+        "Checkout: Worktree · release-proof",
+      );
+      expect(await checkoutTrigger.getAttribute("title")).toBe(
+        "Checkout: Worktree · release-proof",
+      );
+      await checkoutTrigger.click();
+      expect(await checkoutSelect.getByLabel("Name", { exact: true }).inputValue()).toBe(
+        "release-proof",
+      );
+      await page.keyboard.press("Escape");
+      await expect.poll(() => checkoutSelect.getAttribute("open")).toBeNull();
 
       const message = page.locator(".new-session-page__message");
       await message.fill("fix the flaky test");
@@ -356,9 +547,10 @@ suite.define(() => {
         agentId: "main",
         message: "fix the flaky test",
         worktree: true,
-        worktreeBaseRef: "main",
+        worktreeName: "release-proof",
         cwd: PICKED,
       });
+      expect(createRequest.params).not.toHaveProperty("worktreeBaseRef");
 
       await expect
         .poll(() => new URL(page.url()).pathname)
@@ -369,14 +561,13 @@ suite.define(() => {
   });
 
   it("selects a registered project and submits its id at write scope", async () => {
-    await prepareProjectUiProof();
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
       ...(captureUiProofEnabled
         ? {
             recordVideo: {
-              dir: projectProofArtifactDir,
+              dir: path.join(suite.artifactDir, "project-registry"),
               size: { height: 900, width: 1280 },
             },
             viewport: { height: 900, width: 1280 },
@@ -442,12 +633,16 @@ suite.define(() => {
         .poll(async () => (await gateway.getRequests("worktrees.branches")).at(-1)?.params)
         .toEqual({ repoRoot: "/recorded/openclaw", includeRepositoryStatus: true });
 
-      await page.locator("#new-session-detail-trigger").click();
+      await page.locator("#new-session-checkout-trigger").click();
       await page
-        .locator("wa-popover.new-session-page__detail-popover")
-        .getByRole("button", { name: "Worktree" })
+        .locator("wa-popover.new-session-page__checkout-popover")
+        .getByRole("button", { name: "New worktree Isolated copy of the repo", exact: true })
         .click();
-      await captureProjectUiProof(page, "project-selected.png");
+      const checkout = page.locator("wa-popover.new-session-page__checkout-popover");
+      await captureProjectUiProof(suite, page, "project-selected.png", {
+        surface: checkout.locator('wa-popup [part="popup"]'),
+        content: [checkoutBaseRefInput(checkout)],
+      });
       await page.keyboard.press("Escape");
       await page.locator(".new-session-page__message").fill("inspect the project");
       await page.getByRole("button", { name: "Start session" }).click();
@@ -458,10 +653,118 @@ suite.define(() => {
         message: "inspect the project",
         projectId: "recorded-openclaw",
         worktree: true,
-        worktreeBaseRef: "main",
       });
+      expect(create.params).not.toHaveProperty("worktreeBaseRef");
       expect(create.params).not.toHaveProperty("cwd");
       expect(create.params).not.toHaveProperty("execNode");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("opens the typed folder exactly and filters folders for keyboard activation", async () => {
+    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      workspace: WORKSPACE,
+      workspaceGit: true,
+      methodResponses: {
+        "fs.listDir": {
+          cases: [
+            {
+              match: { path: WORKSPACE },
+              response: {
+                path: WORKSPACE,
+                home: WORKSPACE,
+                entries: [
+                  { name: "packages", path: PICKED },
+                  { name: "tools", path: `${WORKSPACE}/tools` },
+                  { name: ".git", path: `${WORKSPACE}/.git`, hidden: true },
+                ],
+              },
+            },
+            {
+              match: { path: PICKED },
+              response: { path: PICKED, parent: WORKSPACE, home: WORKSPACE, entries: [] },
+            },
+          ],
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      const place = page.locator("wa-popover.new-session-page__project-popover");
+      await page.locator("#new-session-project-trigger").click();
+      await place.getByRole("button", { name: "Browse folders" }).click();
+      await gateway.waitForRequest("fs.listDir");
+      const input = place.locator("input.new-session-page__browser-path");
+      await expect.poll(() => input.inputValue()).toBe(WORKSPACE);
+      // The draft path is set before the request finishes; filter only after its listing arrives.
+      await place.locator(".new-session-page__browser-entry", { hasText: "packages" }).waitFor();
+      await input.fill(WORKSPACE);
+      await input.press("Enter");
+      await gateway.waitForRequest("fs.listDir", { after: 1 });
+      await place.locator(".new-session-page__browser-loading").waitFor({ state: "hidden" });
+      await captureFolderBrowser(page, "folder-enter.png");
+      expect(await input.inputValue()).toBe(WORKSPACE);
+      expect((await gateway.getRequests("fs.listDir")).at(-1)?.params).toEqual({ path: WORKSPACE });
+      const requestsBefore = await gateway.getRequests("fs.listDir");
+      await input.fill(`${WORKSPACE}/pa`);
+      await expect
+        .poll(() => place.locator(".new-session-page__browser-entry").allTextContents())
+        .toEqual([expect.stringMatching(/^\s*packages\s*$/)]);
+      await page.screenshot({ path: path.join(suite.artifactDir, "folder-live-prefix.png") });
+      expect(await gateway.getRequests("fs.listDir")).toHaveLength(requestsBefore.length);
+      await input.press("ArrowDown");
+      await input.press("Enter");
+      await gateway.waitForRequest("fs.listDir", { match: { path: PICKED } });
+      await expect.poll(() => input.inputValue()).toBe(PICKED);
+      await input.fill(`${WORKSPACE}/zzz`);
+      await place.getByText("No matching folders", { exact: true }).waitFor();
+      await page.screenshot({ path: path.join(suite.artifactDir, "folder-live-no-matches.png") });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("opens HOME for a missing starting workspace and reports a typed missing folder", async () => {
+    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const home = "/home/test";
+    const gateway = await installMockGateway(page, {
+      workspace: "/state/workspace-main",
+      methodResponses: {
+        "fs.listDir": {
+          path: home,
+          home,
+          parent: "/home",
+          entries: [{ name: "projects", path: `${home}/projects` }],
+        },
+      },
+    });
+    const missing = { code: "INVALID_REQUEST", message: "ENOENT: no such file or directory" };
+    try {
+      await page.goto(`${suite.server.baseUrl}new?agent=main`);
+      await page.locator("#new-session-project-trigger").click();
+      await gateway.deferNext("fs.listDir");
+      await page.getByRole("button", { name: "Browse folders" }).click();
+      await gateway.waitForRequest("fs.listDir", { match: { path: "/state/workspace-main" } });
+      await gateway.rejectDeferred("fs.listDir", missing);
+      const browser = page.locator(".new-session-page__browser");
+      await browser.getByRole("option", { name: "projects", exact: true }).waitFor();
+      await captureFolderBrowser(page, "folder-start.png");
+      expect(await browser.getByRole("combobox").inputValue()).toBe(home);
+      expect(await browser.getByRole("alert").count()).toBe(0);
+
+      await gateway.deferNext("fs.listDir");
+      await browser.getByRole("combobox").fill("/missing");
+      await browser.getByRole("combobox").press("Enter");
+      await gateway.waitForRequest("fs.listDir", { match: { path: "/missing" } });
+      await gateway.rejectDeferred("fs.listDir", missing);
+      await browser.getByRole("alert").waitFor();
+      expect(await browser.getByRole("alert").textContent()).toBe("Couldn't list that folder.");
+      expect(await browser.getByRole("combobox").inputValue()).toBe("/missing");
     } finally {
       await context.close();
     }

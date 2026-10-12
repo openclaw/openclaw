@@ -1,6 +1,7 @@
 import Foundation
 import SwabbleKit
 import Testing
+import XCTest
 @testable import OpenClaw
 
 private actor VoiceWakeCommandBarrier {
@@ -52,36 +53,90 @@ private actor VoiceWakeCommandBarrier {
         #expect(manager.statusText == "Voice Wake isn’t supported on Simulator")
     }
 
-    @Test @MainActor func `handle recognition callback dispatches command`() async throws {
-        let manager = VoiceWakeManager()
+    @Test @MainActor func `command deduplication belongs to one recognition generation`() async throws {
+        let manager = VoiceWakeManager._test_withoutRestartDelays()
+        defer { manager.stop() }
         manager.triggerWords = ["openclaw"]
         manager.isEnabled = true
-
-        actor CaptureBox {
-            var value: String?
-            func set(_ next: String) {
-                self.value = next
+        manager.isListening = true
+        let originalGeneration = manager._test_recognitionGeneration()
+        let barrier = VoiceWakeCommandBarrier()
+        let firstDelivery = XCTestExpectation(description: "first command completed")
+        var enteredCommands = 0
+        var deliveries: [String] = []
+        manager.configure { command in
+            let first = enteredCommands == 0
+            enteredCommands += 1
+            if first {
+                await barrier.suspend()
             }
-        }
-        let capture = CaptureBox()
-        manager.configure { cmd in
-            await capture.set(cmd)
+            deliveries.append(command)
+            if first { firstDelivery.fulfill() }
         }
 
         let transcript = "openclaw hello"
         let triggerRange = try #require(transcript.range(of: "openclaw"))
-        let helloRange = try #require(transcript.range(of: "hello"))
+        let commandRange = try #require(transcript.range(of: "hello"))
         let segments = [
-            WakeWordSegment(text: "openclaw", start: 0.0, duration: 0.2, range: triggerRange),
-            WakeWordSegment(text: "hello", start: 0.8, duration: 0.2, range: helloRange),
+            WakeWordSegment(text: "openclaw", start: 0, duration: 0.2, range: triggerRange),
+            WakeWordSegment(text: "hello", start: 0.8, duration: 0.2, range: commandRange),
         ]
+        func receive(generation: UInt64) {
+            manager._test_handleRecognitionCallback(
+                transcript: transcript,
+                segments: segments,
+                errorText: nil,
+                recognitionGeneration: generation)
+        }
 
-        manager._test_handleRecognitionCallback(transcript: transcript, segments: segments, errorText: nil)
+        receive(generation: originalGeneration)
+        await barrier.waitUntilEntered()
+        receive(generation: originalGeneration)
+        await barrier.release()
+        #expect(await XCTWaiter.fulfillment(of: [firstDelivery], timeout: 5) == .completed)
+        #expect(await barrier.observedCancellation == false)
+        #expect(deliveries == ["hello"])
+
+        manager.stop()
+        manager.isEnabled = true
+        manager.isListening = true
+        manager.lastTriggeredCommand = nil
+        let nextDelivery = XCTestExpectation(description: "same command in replacement capture completed")
+        manager.configure { command in
+            deliveries.append(command)
+            nextDelivery.fulfill()
+        }
+
+        receive(generation: originalGeneration)
+        #expect(manager.lastTriggeredCommand == nil)
+        receive(generation: manager._test_recognitionGeneration())
+        #expect(await XCTWaiter.fulfillment(of: [nextDelivery], timeout: 5) == .completed)
+        #expect(deliveries == ["hello", "hello"])
         #expect(manager.lastTriggeredCommand == "hello")
-        #expect(manager.statusText == "Triggered")
+    }
 
-        try? await Task.sleep(nanoseconds: 300_000_000)
-        #expect(await capture.value == "hello")
+    @Test @MainActor func `failed Voice Wake delivery replaces the triggered status`() async throws {
+        let appModel = NodeAppModel()
+        let manager = appModel.voiceWake
+        manager.triggerWords = ["openclaw"]
+        manager.isEnabled = true
+
+        let transcript = "openclaw hello"
+        let triggerRange = try #require(transcript.range(of: "openclaw"))
+        let commandRange = try #require(transcript.range(of: "hello"))
+        manager._test_handleRecognitionCallback(
+            transcript: transcript,
+            segments: [
+                WakeWordSegment(text: "openclaw", start: 0, duration: 0.2, range: triggerRange),
+                WakeWordSegment(text: "hello", start: 0.8, duration: 0.2, range: commandRange),
+            ],
+            errorText: nil)
+
+        for _ in 0..<100 where manager.statusText == "Triggered" {
+            await Task.yield()
+        }
+
+        #expect(manager.statusText == "Gateway not connected")
     }
 
     @Test @MainActor func `suppression cancels an admitted command before dispatch`() async throws {
@@ -99,7 +154,11 @@ private actor VoiceWakeCommandBarrier {
         manager.isListening = true
         manager.configure { command in
             await barrier.suspend()
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled else {
+                throw NSError(domain: "VoiceWakeManagerStateTests", code: 1, userInfo: [
+                    NSLocalizedDescriptionKey: "Stale delivery failed",
+                ])
+            }
             await capture.set(command)
         }
 
@@ -115,7 +174,7 @@ private actor VoiceWakeCommandBarrier {
             errorText: nil)
         await barrier.waitUntilEntered()
 
-        manager.setSuppressedByPushToTalk(true)
+        manager.setSuppressed(true, reason: .pushToTalk)
         await barrier.release()
         for _ in 0..<100 {
             if await barrier.observedCancellation != nil {
@@ -126,6 +185,7 @@ private actor VoiceWakeCommandBarrier {
 
         #expect(await barrier.observedCancellation == true)
         #expect(await capture.value == nil)
+        #expect(manager.statusText == "Paused")
     }
 
     @Test @MainActor func `Voice Wake deactivates only its owned audio session`() {

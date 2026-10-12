@@ -1,26 +1,24 @@
-// Telegram helper module supports body helpers behavior.
-import type { Chat, Message, MessageOrigin, User } from "grammy/types";
+import type { Chat, Message, RichBlock, RichBlockCaption, RichText } from "grammy/types";
 import type {
   ChannelInboundMediaInput,
   NormalizedLocation,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
-  isRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { telegramHtmlToPlainTextFallback } from "../format.js";
 import { renderTelegramTextEntities } from "./inbound-text-entities.js";
 
 type TelegramMediaMessage = Pick<
   Message,
-  "photo" | "video" | "video_note" | "audio" | "voice" | "document" | "sticker"
+  "photo" | "video" | "video_note" | "animation" | "audio" | "voice" | "document" | "sticker"
 >;
 
 type TelegramMediaFileRef =
   | NonNullable<Message["photo"]>[number]
   | NonNullable<Message["video"]>
   | NonNullable<Message["video_note"]>
+  | NonNullable<Message["animation"]>
   | NonNullable<Message["audio"]>
   | NonNullable<Message["voice"]>
   | NonNullable<Message["document"]>
@@ -46,27 +44,17 @@ export function resolveTelegramPrimaryMedia(
   if (!msg) {
     return undefined;
   }
-  const photo = msg.photo?.[msg.photo.length - 1];
-  if (photo) {
-    return { kind: "image", fileRef: photo };
-  }
-  if (msg.video) {
-    return { kind: "video", fileRef: msg.video };
-  }
-  if (msg.video_note) {
-    return { kind: "video", fileRef: msg.video_note };
-  }
-  if (msg.audio) {
-    return { kind: "audio", fileRef: msg.audio };
-  }
-  if (msg.voice) {
-    return { kind: "audio", fileRef: msg.voice };
-  }
-  if (msg.document) {
-    return { kind: "document", fileRef: msg.document };
-  }
-  if (msg.sticker) {
-    return { kind: "sticker", fileRef: msg.sticker };
+  const candidates: Array<[TelegramMediaKind, TelegramMediaFileRef | undefined]> = [
+    ["image", msg.photo?.[msg.photo.length - 1]],
+    ["video", msg.video ?? msg.video_note ?? msg.animation],
+    ["audio", msg.audio ?? msg.voice],
+    ["document", msg.document],
+    ["sticker", msg.sticker],
+  ];
+  for (const [kind, fileRef] of candidates) {
+    if (fileRef) {
+      return { kind, fileRef };
+    }
   }
   return undefined;
 }
@@ -74,23 +62,12 @@ export function resolveTelegramPrimaryMedia(
 export function buildSenderLabel(msg: Message, senderId?: number | string) {
   const name = buildSenderName(msg);
   const username = msg.from?.username ? `@${msg.from.username}` : undefined;
-  let label = name;
-  if (name && username) {
-    label = `${name} (${username})`;
-  } else if (!name && username) {
-    label = username;
-  }
+  const label = name && username ? `${name} (${username})` : name || username;
   const normalizedSenderId =
     senderId != null ? normalizeOptionalString(String(senderId)) : undefined;
   const fallbackId = normalizedSenderId ?? (msg.from?.id != null ? String(msg.from.id) : undefined);
   const idPart = fallbackId ? `id:${fallbackId}` : undefined;
-  if (label && idPart) {
-    return `${label} ${idPart}`;
-  }
-  if (label) {
-    return label;
-  }
-  return idPart ?? "id:unknown";
+  return [label, idPart].filter(Boolean).join(" ") || "id:unknown";
 }
 
 export type TelegramTextEntity = NonNullable<Message["entities"]>[number];
@@ -100,7 +77,7 @@ const TELEGRAM_RICH_MESSAGE_PLACEHOLDER = "[unsupported Telegram rich_message re
 type TelegramTextMessage = Pick<
   Message,
   "text" | "caption" | "entities" | "caption_entities" | "poll"
-> & { rich_message?: unknown };
+> & { rich_message?: Message.RichMessageMessage["rich_message"] };
 
 function compactRichText(value: string): string {
   return value
@@ -110,88 +87,102 @@ function compactRichText(value: string): string {
     .join("\n");
 }
 
-function joinRichText(parts: string[], separator: string): string {
-  return parts.map(compactRichText).filter(Boolean).join(separator);
+function joinRichText(parts: string[]): string {
+  return parts.map(compactRichText).filter(Boolean).join("\n");
 }
 
-function renderRichInlineText(value: unknown): string {
+function renderRichInlineText(value: RichText | undefined): string {
+  if (value === undefined) {
+    return "";
+  }
   if (typeof value === "string") {
     return value;
   }
   if (Array.isArray(value)) {
     return value.map(renderRichInlineText).filter(Boolean).join("");
   }
-  if (!isRecord(value)) {
-    return "";
+  switch (value.type) {
+    case "anchor":
+      return "";
+    case "button":
+      return renderRichInlineText(value.button.text);
+    case "custom_emoji":
+      return value.alternative_text;
+    case "mathematical_expression":
+      return value.expression;
+    default:
+      return renderRichInlineText(value.text);
   }
-  const directText = value.text;
-  if (directText !== undefined) {
-    return renderRichInlineText(directText);
+}
+
+function renderRichCaption(caption: RichBlockCaption | undefined): string {
+  return caption
+    ? joinRichText([renderRichInlineText(caption.text), renderRichInlineText(caption.credit)])
+    : "";
+}
+
+function renderRichBlock(block: RichBlock): string {
+  switch (block.type) {
+    case "paragraph":
+    case "heading":
+    case "pre":
+    case "footer":
+    case "thinking":
+      return renderRichInlineText(block.text);
+    case "expandable_blockquote":
+    case "pullquote":
+      return renderRichCaption(block);
+    case "mathematical_expression":
+      return block.expression;
+    case "blockquote":
+      return joinRichText([renderRichInlineText(block.credit), renderRichBlocks(block.blocks)]);
+    case "collage":
+    case "slideshow":
+      return joinRichText([renderRichCaption(block.caption), renderRichBlocks(block.blocks)]);
+    case "details":
+      return joinRichText([renderRichInlineText(block.summary), renderRichBlocks(block.blocks)]);
+    case "list":
+      return joinRichText(
+        block.items.map((item) => joinRichText([item.label, renderRichBlocks(item.blocks)])),
+      );
+    case "table":
+      return joinRichText([
+        renderRichInlineText(block.caption),
+        ...block.cells.flatMap((row) => row.map((cell) => renderRichInlineText(cell.text))),
+      ]);
+    case "animation":
+    case "audio":
+    case "document":
+    case "map":
+    case "photo":
+    case "video":
+    case "voice_note":
+      return renderRichCaption(block.caption);
+    case "buttons":
+      return joinRichText(block.buttons.map((button) => renderRichInlineText(button.text)));
+    case "anchor":
+    case "divider":
+      return "";
   }
-  for (const key of ["alternative_text", "expression"] as const) {
-    const text = value[key];
-    if (typeof text === "string") {
-      return text;
-    }
-  }
+  block satisfies never;
   return "";
 }
 
-function renderRichBlocks(value: unknown): string {
-  if (Array.isArray(value)) {
-    return joinRichText(value.map(renderRichBlocks), "\n");
-  }
-  if (!isRecord(value)) {
-    return renderRichInlineText(value);
-  }
-  if (typeof value.markdown === "string") {
-    return value.markdown;
-  }
-  if (typeof value.html === "string") {
-    return telegramHtmlToPlainTextFallback(value.html);
-  }
-  const parts: string[] = [];
-  for (const key of [
-    "text",
-    "summary",
-    "label",
-    "title",
-    "subtitle",
-    "credit",
-    "expression",
-  ] as const) {
-    parts.push(renderRichInlineText(value[key]));
-  }
-  if (value.caption !== undefined) {
-    const caption = value.caption;
-    if (isRecord(caption) && caption.credit !== undefined) {
-      parts.push(
-        joinRichText(
-          [renderRichInlineText(caption.text), renderRichInlineText(caption.credit)],
-          "\n",
-        ),
-      );
-    } else {
-      parts.push(renderRichInlineText(caption));
-    }
-  }
-  for (const key of ["blocks", "items", "rows", "cells", "headers", "children"] as const) {
-    parts.push(renderRichBlocks(value[key]));
-  }
-  return joinRichText(parts, "\n");
+function renderRichBlocks(blocks: readonly RichBlock[]): string {
+  return joinRichText(blocks.map(renderRichBlock));
 }
 
 export function resolveTelegramRichMessagePlaceholder(
   msg: TelegramTextMessage,
 ): string | undefined {
-  return isRecord(msg.rich_message) ? TELEGRAM_RICH_MESSAGE_PLACEHOLDER : undefined;
+  return msg.rich_message ? TELEGRAM_RICH_MESSAGE_PLACEHOLDER : undefined;
 }
 
 export function resolveTelegramRichMessageText(msg: TelegramTextMessage): string | undefined {
-  if (!isRecord(msg.rich_message)) {
+  if (!msg.rich_message) {
     return undefined;
   }
-  return compactRichText(renderRichBlocks(msg.rich_message)) || undefined;
+  return renderRichBlocks(msg.rich_message.blocks) || undefined;
 }
 
 export function resolveTelegramRichMessageBody(msg: TelegramTextMessage): string | undefined {
@@ -252,28 +243,32 @@ export function getTelegramTextParts(msg: TelegramTextMessage): {
 
 export function joinTelegramTextParts(
   messages: readonly Message[],
-  separator: string,
+  separator: string | ((previous: Message) => string),
 ): { text: string; entities: TelegramTextEntity[] } {
   const textParts: string[] = [];
   const entities: TelegramTextEntity[] = [];
   let offset = 0;
+  let previous: Message | undefined;
 
   for (const message of messages) {
     const textPart = getTelegramTextParts(message);
     if (!textPart.text) {
       continue;
     }
-    if (textParts.length > 0) {
-      offset += separator.length;
+    if (previous) {
+      const gap = typeof separator === "string" ? separator : separator(previous);
+      textParts.push(gap);
+      offset += gap.length;
     }
     entities.push(
       ...textPart.entities.map((entity) => ({ ...entity, offset: entity.offset + offset })),
     );
     textParts.push(textPart.text);
     offset += textPart.text.length;
+    previous = message;
   }
 
-  return { text: textParts.join(separator), entities };
+  return { text: textParts.join(""), entities };
 }
 
 function isTelegramMentionWordChar(char: string | undefined): boolean {
@@ -306,7 +301,7 @@ function isBotCommandAddressedToMention(command: string, mention: string): boole
   return atIndex > 1;
 }
 
-export function hasBotMention(msg: Message, botUsername: string) {
+export function hasBotMention(msg: Message, botUsername: string, botId?: number) {
   const { text, entities } = getTelegramTextParts(msg);
   const mention = normalizeLowercaseStringOrEmpty(`@${botUsername}`);
   if (hasStandaloneTelegramMention(normalizeLowercaseStringOrEmpty(text), mention)) {
@@ -318,6 +313,10 @@ export function hasBotMention(msg: Message, botUsername: string) {
       return true;
     }
     if (ent.type === "bot_command" && isBotCommandAddressedToMention(slice, mention)) {
+      return true;
+    }
+    // Text mentions identify the bot by ID rather than username.
+    if (ent.type === "text_mention" && botId !== undefined && ent.user?.id === botId) {
       return true;
     }
   }
@@ -363,156 +362,72 @@ export type TelegramForwardedContext = {
   fromMessageId?: number;
 };
 
-function normalizeForwardedUserLabel(user: User) {
-  const name = [user.first_name, user.last_name].filter(Boolean).join(" ").trim();
-  const username = normalizeOptionalString(user.username);
-  const id = String(user.id);
-  const display =
-    (name && username
-      ? `${name} (@${username})`
-      : name || (username ? `@${username}` : undefined)) || `user:${id}`;
-  return { display, name: name || undefined, username, id };
-}
-
-function normalizeForwardedChatLabel(chat: Chat, fallbackKind: "chat" | "channel") {
-  const title = normalizeOptionalString(chat.title);
-  const username = normalizeOptionalString(chat.username);
-  const id = String(chat.id);
-  const display = title || (username ? `@${username}` : undefined) || `${fallbackKind}:${id}`;
-  return { display, title, username, id };
-}
-
-function buildForwardedContextFromUser(params: {
-  user: User;
-  date?: number;
-  type: string;
-}): TelegramForwardedContext | null {
-  const { display, name, username, id } = normalizeForwardedUserLabel(params.user);
-  if (!display) {
+export function normalizeForwardedContext(msg: Message): TelegramForwardedContext | null {
+  const origin = msg.forward_origin;
+  if (!origin) {
     return null;
   }
-  return {
-    from: display,
-    date: params.date,
-    fromType: params.type,
-    fromId: id,
-    fromUsername: username,
-    fromTitle: name,
-  };
-}
-
-function buildForwardedContextFromHiddenName(params: {
-  name?: string;
-  date?: number;
-  type: string;
-}): TelegramForwardedContext | null {
-  const trimmed = params.name?.trim();
-  if (!trimmed) {
-    return null;
-  }
-  return {
-    from: trimmed,
-    date: params.date,
-    fromType: params.type,
-    fromTitle: trimmed,
-  };
-}
-
-function buildForwardedContextFromChat(params: {
-  chat: Chat;
-  date?: number;
-  type: string;
-  signature?: string;
-  messageId?: number;
-}): TelegramForwardedContext | null {
-  const fallbackKind = params.type === "channel" ? "channel" : "chat";
-  const { display, title, username, id } = normalizeForwardedChatLabel(params.chat, fallbackKind);
-  if (!display) {
-    return null;
-  }
-  const signature = normalizeOptionalString(params.signature);
-  const from = signature ? `${display} (${signature})` : display;
-  const chatType = normalizeOptionalString(params.chat.type) as Chat["type"] | undefined;
-  return {
-    from,
-    date: params.date,
-    fromType: params.type,
-    fromId: id,
-    fromUsername: username,
-    fromTitle: title,
-    fromSignature: signature,
-    fromChatType: chatType,
-    fromMessageId: params.messageId,
-  };
-}
-
-function resolveForwardOrigin(origin: MessageOrigin): TelegramForwardedContext | null {
+  const context = { date: origin.date, fromType: origin.type };
   switch (origin.type) {
-    case "user":
-      return buildForwardedContextFromUser({
-        user: origin.sender_user,
-        date: origin.date,
-        type: "user",
-      });
-    case "hidden_user":
-      return buildForwardedContextFromHiddenName({
-        name: origin.sender_user_name,
-        date: origin.date,
-        type: "hidden_user",
-      });
+    case "user": {
+      const user = origin.sender_user;
+      const name = [user.first_name, user.last_name].filter(Boolean).join(" ").trim();
+      const username = normalizeOptionalString(user.username);
+      const id = String(user.id);
+      const from =
+        (name && username
+          ? `${name} (@${username})`
+          : name || (username ? `@${username}` : undefined)) || `user:${id}`;
+      return {
+        ...context,
+        from,
+        fromId: id,
+        fromUsername: username,
+        fromTitle: name || undefined,
+      };
+    }
+    case "hidden_user": {
+      const name = origin.sender_user_name?.trim();
+      return name ? { ...context, from: name, fromTitle: name } : null;
+    }
     case "chat":
-      return buildForwardedContextFromChat({
-        chat: origin.sender_chat,
-        date: origin.date,
-        type: "chat",
-        signature: origin.author_signature,
-      });
-    case "channel":
-      return buildForwardedContextFromChat({
-        chat: origin.chat,
-        date: origin.date,
-        type: "channel",
-        signature: origin.author_signature,
-        messageId: origin.message_id,
-      });
+    case "channel": {
+      const chat = origin.type === "channel" ? origin.chat : origin.sender_chat;
+      const title = normalizeOptionalString(chat.title);
+      const username = normalizeOptionalString(chat.username);
+      const id = String(chat.id);
+      const display = title || (username ? `@${username}` : undefined) || `${origin.type}:${id}`;
+      const signature = normalizeOptionalString(origin.author_signature);
+      return {
+        ...context,
+        from: signature ? `${display} (${signature})` : display,
+        fromId: id,
+        fromUsername: username,
+        fromTitle: title,
+        fromSignature: signature,
+        fromChatType: normalizeOptionalString(chat.type) as Chat["type"] | undefined,
+        fromMessageId: origin.type === "channel" ? origin.message_id : undefined,
+      };
+    }
     default:
       origin satisfies never;
       return null;
   }
 }
 
-export function normalizeForwardedContext(msg: Message): TelegramForwardedContext | null {
-  if (!msg.forward_origin) {
+export function extractTelegramLocation(msg: Message): NormalizedLocation | null {
+  const { venue } = msg;
+  const location = venue?.location ?? msg.location;
+  if (!location) {
     return null;
   }
-  return resolveForwardOrigin(msg.forward_origin);
-}
-
-export function extractTelegramLocation(msg: Message): NormalizedLocation | null {
-  const { venue, location } = msg;
-
-  if (venue) {
-    return {
-      latitude: venue.location.latitude,
-      longitude: venue.location.longitude,
-      accuracy: venue.location.horizontal_accuracy,
-      name: venue.title,
-      address: venue.address,
-      source: "place",
-      isLive: false,
-    };
-  }
-
-  if (location) {
-    const isLive = typeof location.live_period === "number" && location.live_period > 0;
-    return {
-      latitude: location.latitude,
-      longitude: location.longitude,
-      accuracy: location.horizontal_accuracy,
-      source: isLive ? "live" : "pin",
-      isLive,
-    };
-  }
-
-  return null;
+  const isLive = !venue && typeof location.live_period === "number" && location.live_period > 0;
+  return {
+    latitude: location.latitude,
+    longitude: location.longitude,
+    accuracy: location.horizontal_accuracy,
+    ...(venue ? { name: venue.title, address: venue.address } : {}),
+    source: venue ? "place" : isLive ? "live" : "pin",
+    isLive,
+  };
 }

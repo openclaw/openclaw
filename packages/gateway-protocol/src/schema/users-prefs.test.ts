@@ -3,8 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   GatewayErrorDetailCodes,
   GatewayErrorDetailsSchema,
+  normalizeUiAppearancePreference,
+  UI_APPEARANCE_PREFERENCE_KEYS,
   UserPrefsLimitExceededErrorDetailsSchema,
   UserProfileSchema,
+  UsersPrefsChangedEventSchema,
   UsersPrefsGetResultSchema,
   UsersPrefsSetResultSchema,
   validateUsersPrefsGetParams,
@@ -13,6 +16,96 @@ import {
 } from "../index.js";
 
 describe("user preference protocol schemas", () => {
+  it("normalizes only supported profile appearance values and canonicalizes accent colors", () => {
+    expect(normalizeUiAppearancePreference(UI_APPEARANCE_PREFERENCE_KEYS.theme, "absolutely")).toBe(
+      "absolutely",
+    );
+    expect(normalizeUiAppearancePreference(UI_APPEARANCE_PREFERENCE_KEYS.themeMode, "system")).toBe(
+      "system",
+    );
+    expect(normalizeUiAppearancePreference(UI_APPEARANCE_PREFERENCE_KEYS.accent, "#A1b2C3")).toBe(
+      "#a1b2c3",
+    );
+    expect(normalizeUiAppearancePreference(UI_APPEARANCE_PREFERENCE_KEYS.accent, "theme")).toBe(
+      "theme",
+    );
+    expect(normalizeUiAppearancePreference(UI_APPEARANCE_PREFERENCE_KEYS.fontUi, "geist")).toBe(
+      "geist",
+    );
+    expect(normalizeUiAppearancePreference(UI_APPEARANCE_PREFERENCE_KEYS.fontChat, "lora")).toBe(
+      "lora",
+    );
+    expect(normalizeUiAppearancePreference(UI_APPEARANCE_PREFERENCE_KEYS.fontUi, "system")).toBe(
+      "system",
+    );
+
+    for (const tabIcon of [
+      "default",
+      "agent",
+      "agent:rounded",
+      "agent:circle",
+      "lobster:crimson",
+      `lobster:${"a".repeat(48)}`,
+    ]) {
+      expect(normalizeUiAppearancePreference(UI_APPEARANCE_PREFERENCE_KEYS.tabIcon, tabIcon)).toBe(
+        tabIcon,
+      );
+    }
+
+    for (const [key, value] of [
+      [UI_APPEARANCE_PREFERENCE_KEYS.theme, "unsupported"],
+      [UI_APPEARANCE_PREFERENCE_KEYS.themeMode, "automatic"],
+      [UI_APPEARANCE_PREFERENCE_KEYS.accent, "#abc"],
+      [UI_APPEARANCE_PREFERENCE_KEYS.accent, "#12345g"],
+      [UI_APPEARANCE_PREFERENCE_KEYS.accent, { color: "#123456" }],
+      [UI_APPEARANCE_PREFERENCE_KEYS.theme, 42],
+      [UI_APPEARANCE_PREFERENCE_KEYS.fontUi, "theme"],
+      [UI_APPEARANCE_PREFERENCE_KEYS.fontChat, "unknown-font"],
+      [UI_APPEARANCE_PREFERENCE_KEYS.fontUi, "Geist, sans-serif"],
+      [UI_APPEARANCE_PREFERENCE_KEYS.fontChat, { family: "lora" }],
+      [UI_APPEARANCE_PREFERENCE_KEYS.tabIcon, "custom"],
+      [UI_APPEARANCE_PREFERENCE_KEYS.tabIcon, "agent:square"],
+      [UI_APPEARANCE_PREFERENCE_KEYS.tabIcon, "agent:triangle"],
+      [UI_APPEARANCE_PREFERENCE_KEYS.tabIcon, "agent:circle\n"],
+      [UI_APPEARANCE_PREFERENCE_KEYS.tabIcon, "lobster:"],
+      [UI_APPEARANCE_PREFERENCE_KEYS.tabIcon, "lobster:Crimson"],
+      [UI_APPEARANCE_PREFERENCE_KEYS.tabIcon, "lobster:crimson\n"],
+      [UI_APPEARANCE_PREFERENCE_KEYS.tabIcon, "lobster:../crimson"],
+      [UI_APPEARANCE_PREFERENCE_KEYS.tabIcon, "lobster:https://example.com/icon.png"],
+      [UI_APPEARANCE_PREFERENCE_KEYS.tabIcon, `lobster:${"a".repeat(49)}`],
+      [UI_APPEARANCE_PREFERENCE_KEYS.tabIcon, "Agent"],
+      [UI_APPEARANCE_PREFERENCE_KEYS.tabIcon, " agent "],
+      [UI_APPEARANCE_PREFERENCE_KEYS.tabIcon, null],
+      [UI_APPEARANCE_PREFERENCE_KEYS.tabIcon, 42],
+      [UI_APPEARANCE_PREFERENCE_KEYS.tabIcon, ["agent"]],
+      [UI_APPEARANCE_PREFERENCE_KEYS.tabIcon, { mode: "default" }],
+      [UI_APPEARANCE_PREFERENCE_KEYS.tabIcon, { mode: "agent" }],
+      [UI_APPEARANCE_PREFERENCE_KEYS.tabIcon, { mode: "custom", image: {} }],
+    ] as const) {
+      expect(normalizeUiAppearancePreference(key, value)).toBeUndefined();
+    }
+  });
+
+  it("bounds profile preference change events to their owning profile and written keys", () => {
+    expect(
+      Value.Check(UsersPrefsChangedEventSchema, {
+        profileId: "profile-1",
+        keys: [
+          UI_APPEARANCE_PREFERENCE_KEYS.accent,
+          UI_APPEARANCE_PREFERENCE_KEYS.fontUi,
+          UI_APPEARANCE_PREFERENCE_KEYS.fontChat,
+        ],
+      }),
+    ).toBe(true);
+    expect(Value.Check(UsersPrefsChangedEventSchema, { profileId: "", keys: [] })).toBe(false);
+    expect(
+      Value.Check(UsersPrefsChangedEventSchema, {
+        profileId: "profile-1",
+        keys: Array.from({ length: 33 }, (_, index) => `key-${index}`),
+      }),
+    ).toBe(false);
+  });
+
   it("bounds self-scoped preference requests", () => {
     const entries = Object.fromEntries(
       Array.from({ length: 32 }, (_, index) => [`key-${index}`, { index }]),
@@ -20,6 +113,13 @@ describe("user preference protocol schemas", () => {
     expect(validateUsersPrefsGetParams({})).toBe(true);
     expect(validateUsersPrefsGetParams({ keys: Object.keys(entries) })).toBe(true);
     expect(validateUsersPrefsSetParams({ entries })).toBe(true);
+    expect(validateUsersPrefsSetParams({ entries: {}, expectedEntries: entries })).toBe(true);
+    expect(validateUsersPrefsSetParams({ entries: {}, expectedEntries: { missing: null } })).toBe(
+      true,
+    );
+    expect(
+      validateUsersPrefsSetParams({ entries: {}, expectedEntries: { ...entries, overflow: true } }),
+    ).toBe(false);
     expect(validateUsersPrefsSetParams({ entries: { deleted: null } })).toBe(true);
     expect(validateUsersPrefsGetParams({ keys: [...Object.keys(entries), "overflow"] })).toBe(
       false,
@@ -51,6 +151,7 @@ describe("user preference protocol schemas", () => {
       Value.Check(UsersPrefsGetResultSchema, { status: "ok", entries: { theme: "claw" } }),
     ).toBe(true);
     expect(Value.Check(UsersPrefsSetResultSchema, { status: "ok" })).toBe(true);
+    expect(Value.Check(UsersPrefsSetResultSchema, { status: "conflict" })).toBe(true);
     expect(Value.Check(UsersPrefsSetResultSchema, { status: "no_durable_identity" })).toBe(true);
   });
 

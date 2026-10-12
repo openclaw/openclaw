@@ -9,9 +9,7 @@ import { createBuzzQaRelayDriver } from "./relay-client.js";
 
 type AdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
 type FactoryContext = Parameters<AdapterFactory["create"]>[0];
-type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>> & {
-  cleanupAfterGatewayStop?: () => Promise<void>;
-};
+type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>>;
 
 const BUZZ_GATEWAY_ACCOUNT_ID = "default";
 const BUZZ_MESSAGE_ID_MAPPING_TIMEOUT_MS = 5_000;
@@ -54,11 +52,16 @@ export async function createBuzzQaTransportAdapter(
   context: FactoryContext,
 ): Promise<AdapterDefinition> {
   const options = context.adapterOptions ?? {};
-  const requestedCredentialSource = options.credentialSource?.trim().toLowerCase() || "file";
-  if (requestedCredentialSource !== "file" && requestedCredentialSource !== "convex") {
+  const credentialFile = options.credentialFile?.trim();
+  const requestedCredentialSource =
+    options.credentialSource?.trim().toLowerCase() || (credentialFile ? "file" : undefined);
+  if (
+    requestedCredentialSource !== undefined &&
+    requestedCredentialSource !== "file" &&
+    requestedCredentialSource !== "convex"
+  ) {
     throw new Error('Buzz QA credential source must be "file" or "convex".');
   }
-  const credentialFile = options.credentialFile?.trim();
   if (requestedCredentialSource === "file" && !credentialFile) {
     throw new Error("Buzz QA file credentials require --credential-file <path>.");
   }
@@ -76,7 +79,7 @@ export async function createBuzzQaTransportAdapter(
       : undefined;
   const lease = await context.credentials.acquire({
     kind: "buzz",
-    source: requestedCredentialSource === "convex" ? "convex" : "env",
+    source: requestedCredentialSource === "file" ? "env" : requestedCredentialSource,
     role: options.credentialRole,
     resolveEnvPayload: () => {
       if (!fileCredentials) {
@@ -203,8 +206,7 @@ export async function createBuzzQaTransportAdapter(
       }) as Pick<OpenClawConfig, "channels" | "messages">,
     waitReady: async ({ gateway, timeoutMs, pollIntervalMs }) =>
       await waitForBuzzChannelRunning({
-        // Buzz is currently single-account; the QA bus keeps its portable SUT
-        // label while Gateway status reports the plugin's canonical account id.
+        // QA config uses the default account; the bus keeps its portable SUT label.
         accountId: BUZZ_GATEWAY_ACCOUNT_ID,
         gateway,
         timeoutMs,

@@ -1,4 +1,3 @@
-// Whatsapp helper module supports directory config behavior.
 import {
   listResolvedDirectoryGroupEntriesFromMapKeys,
   listResolvedDirectoryUserEntriesFromAllowFrom,
@@ -19,7 +18,7 @@ import {
   WhatsAppConnectionOwnerBusyError,
   type WhatsAppConnectionOwnerLease,
 } from "./connection-owner.js";
-import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "./normalize.js";
+import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "./normalize-target.js";
 import {
   createWaDirectorySocket,
   waitForCredsSaveQueueWithTimeout,
@@ -29,17 +28,10 @@ import { closeWhatsAppSocketAndWait } from "./socket-close.js";
 
 type WhatsAppDirectoryAccount = WhatsAppAccountConfig & { accountId: string };
 
-function resolveWhatsAppDirectoryAccount(
-  cfg: DirectoryConfigParams["cfg"],
-  accountId?: string | null,
-): WhatsAppDirectoryAccount {
-  return resolveMergedWhatsAppAccountConfig({ cfg, accountId });
-}
-
 export async function listWhatsAppDirectoryPeersFromConfig(params: DirectoryConfigParams) {
   return listResolvedDirectoryUserEntriesFromAllowFrom<WhatsAppDirectoryAccount>({
     ...params,
-    resolveAccount: resolveWhatsAppDirectoryAccount,
+    resolveAccount: (cfg, accountId) => resolveMergedWhatsAppAccountConfig({ cfg, accountId }),
     resolveAllowFrom: (account) => account.allowFrom,
     normalizeId: (entry) => {
       const normalized = normalizeWhatsAppTarget(entry);
@@ -54,7 +46,7 @@ export async function listWhatsAppDirectoryPeersFromConfig(params: DirectoryConf
 export async function listWhatsAppDirectoryGroupsFromConfig(params: DirectoryConfigParams) {
   return listResolvedDirectoryGroupEntriesFromMapKeys<WhatsAppDirectoryAccount>({
     ...params,
-    resolveAccount: resolveWhatsAppDirectoryAccount,
+    resolveAccount: (cfg, accountId) => resolveMergedWhatsAppAccountConfig({ cfg, accountId }),
     resolveGroups: (account) => account.groups,
   });
 }
@@ -93,23 +85,27 @@ async function fetchLiveGroups(
   sock: GroupFetchSocket,
   params: DirectoryConfigParams,
 ): Promise<ChannelDirectoryEntry[]> {
-  const groups = await sock.groupFetchAllParticipating();
-  const query = params.query?.trim().toLowerCase() ?? "";
-  const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : undefined;
-  const entries = Object.entries(groups)
-    .map(([jid, metadata]) => ({
-      kind: "group" as const,
-      id: jid,
-      name: metadata?.subject?.trim() || undefined,
-    }))
-    .filter((entry) => {
-      if (!query) {
-        return true;
-      }
-      return entry.id.toLowerCase().includes(query) || entry.name?.toLowerCase().includes(query);
-    })
-    .toSorted((left, right) => left.id.localeCompare(right.id));
-  return limit ? entries.slice(0, limit) : entries;
+  try {
+    const groups = await sock.groupFetchAllParticipating();
+    const query = params.query?.trim().toLowerCase() ?? "";
+    const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : undefined;
+    const entries = Object.entries(groups)
+      .map(([jid, metadata]) => ({
+        kind: "group" as const,
+        id: jid,
+        name: metadata?.subject?.trim() || undefined,
+      }))
+      .filter((entry) => {
+        if (!query) {
+          return true;
+        }
+        return entry.id.toLowerCase().includes(query) || entry.name?.toLowerCase().includes(query);
+      })
+      .toSorted((left, right) => left.id.localeCompare(right.id));
+    return limit ? entries.slice(0, limit) : entries;
+  } catch (error) {
+    throw unavailable("lookup_failed", "WhatsApp live group lookup failed.", error);
+  }
 }
 
 function unavailable(
@@ -124,15 +120,12 @@ type StandaloneSocket = Awaited<ReturnType<typeof createWaDirectorySocket>>;
 
 type ManagedStandaloneCleanup = {
   authDir: string;
-  inFlight: Promise<void> | null;
   ownerLease: WhatsAppConnectionOwnerLease;
-  retryTimer: ReturnType<typeof setTimeout> | null;
   sock: StandaloneSocket | null;
   socketClosed: boolean;
 };
 
 const pendingStandaloneCleanups = new Map<string, ManagedStandaloneCleanup>();
-const STANDALONE_CLEANUP_RETRY_MS = 1_000;
 
 async function completeStandaloneCleanup(cleanup: ManagedStandaloneCleanup): Promise<void> {
   if (cleanup.sock && !cleanup.socketClosed) {
@@ -152,43 +145,6 @@ async function completeStandaloneCleanup(cleanup: ManagedStandaloneCleanup): Pro
   if (pendingStandaloneCleanups.get(cleanup.authDir) === cleanup) {
     pendingStandaloneCleanups.delete(cleanup.authDir);
   }
-  if (cleanup.retryTimer) {
-    clearTimeout(cleanup.retryTimer);
-    cleanup.retryTimer = null;
-  }
-}
-
-function runStandaloneCleanup(cleanup: ManagedStandaloneCleanup): Promise<void> {
-  if (cleanup.inFlight) {
-    return cleanup.inFlight;
-  }
-  const task = completeStandaloneCleanup(cleanup).finally(() => {
-    if (cleanup.inFlight === task) {
-      cleanup.inFlight = null;
-    }
-  });
-  cleanup.inFlight = task;
-  return task;
-}
-
-function scheduleStandaloneCleanupRetry(cleanup: ManagedStandaloneCleanup): void {
-  if (cleanup.retryTimer) {
-    return;
-  }
-  cleanup.retryTimer = setTimeout(() => {
-    cleanup.retryTimer = null;
-    void runStandaloneCleanup(cleanup).catch(() => {
-      scheduleStandaloneCleanupRetry(cleanup);
-    });
-  }, STANDALONE_CLEANUP_RETRY_MS);
-  // Gateway processes stay alive and retry; standalone CLI processes may exit.
-  // A later process safely reclaims the unchanged lock from the definitely dead PID.
-  cleanup.retryTimer.unref?.();
-}
-
-function retainStandaloneCleanup(cleanup: ManagedStandaloneCleanup): void {
-  pendingStandaloneCleanups.set(cleanup.authDir, cleanup);
-  scheduleStandaloneCleanupRetry(cleanup);
 }
 
 async function finishStandaloneCleanupOrThrow(
@@ -196,9 +152,10 @@ async function finishStandaloneCleanupOrThrow(
   operationError?: unknown,
 ): Promise<void> {
   try {
-    await runStandaloneCleanup(cleanup);
+    await completeStandaloneCleanup(cleanup);
   } catch (cleanupError) {
-    retainStandaloneCleanup(cleanup);
+    // Keep credentials exclusively owned; the next lookup retries cleanup.
+    pendingStandaloneCleanups.set(cleanup.authDir, cleanup);
     const cause =
       operationError === undefined
         ? cleanupError
@@ -207,16 +164,12 @@ async function finishStandaloneCleanupOrThrow(
             "WhatsApp live group lookup and cleanup failed",
             { cause: operationError },
           );
-    throw cleanupUnavailable(cause);
+    throw unavailable(
+      "cleanup_failed",
+      "WhatsApp live group lookup could not safely close its standalone connection.",
+      cause,
+    );
   }
-}
-
-function cleanupUnavailable(error: unknown): WhatsAppDirectoryUnavailableError {
-  return unavailable(
-    "cleanup_failed",
-    "WhatsApp live group lookup could not safely close its standalone connection.",
-    error,
-  );
 }
 
 async function finishPriorStandaloneCleanup(authDir: string): Promise<void> {
@@ -224,18 +177,13 @@ async function finishPriorStandaloneCleanup(authDir: string): Promise<void> {
   if (!cleanup) {
     return;
   }
-  try {
-    await runStandaloneCleanup(cleanup);
-  } catch (error) {
-    scheduleStandaloneCleanupRetry(cleanup);
-    throw cleanupUnavailable(error);
-  }
+  await finishStandaloneCleanupOrThrow(cleanup);
 }
 
 async function listGroupsThroughStandaloneOwner(
   params: DirectoryConfigParams,
 ): Promise<ChannelDirectoryEntry[]> {
-  const account = resolveWhatsAppDirectoryAccount(params.cfg, params.accountId);
+  const account = resolveMergedWhatsAppAccountConfig(params);
   const authDir = resolveWhatsAppAuthDir({
     cfg: params.cfg,
     accountId: account.accountId,
@@ -261,9 +209,7 @@ async function listGroupsThroughStandaloneOwner(
 
   const cleanup: ManagedStandaloneCleanup = {
     authDir,
-    inFlight: null,
     ownerLease,
-    retryTimer: null,
     sock: null,
     socketClosed: true,
   };
@@ -304,11 +250,7 @@ async function listGroupsThroughStandaloneOwner(
       );
     }
 
-    try {
-      groups = await fetchLiveGroups(cleanup.sock, params);
-    } catch (error) {
-      throw unavailable("lookup_failed", "WhatsApp live group lookup failed.", error);
-    }
+    groups = await fetchLiveGroups(cleanup.sock, params);
   } catch (error) {
     await finishStandaloneCleanupOrThrow(cleanup, error);
     throw error;
@@ -333,9 +275,5 @@ export async function listWhatsAppDirectoryGroupsLive(
       "WhatsApp live groups are unavailable while the gateway connection is offline.",
     );
   }
-  try {
-    return await fetchLiveGroups(sock, params);
-  } catch (error) {
-    throw unavailable("lookup_failed", "WhatsApp live group lookup failed.", error);
-  }
+  return await fetchLiveGroups(sock, params);
 }

@@ -1,14 +1,28 @@
-/** Runs prompt assembly, admission, submission, and prompt-local recovery. */
 import { formatErrorMessage } from "../../../infra/errors.js";
 import {
-  buildHeartbeatOutcomeContext,
-  claimHeartbeatOutcomeForRun,
-} from "../../../infra/heartbeat-outcome-store.js";
+  mergeAgentRunAttemptTerminal,
+  projectAgentRunAttemptTerminal,
+  setAgentRunAttemptTerminalFailure,
+  type AgentRunAttemptFailureSource,
+} from "../../agent-run-terminal-outcome.js";
+import { resolvePendingRuntimeContextReplay } from "../../internal-runtime-context.js";
+import {
+  createCompactionRequestBudget,
+  type CompactionRequestBudget,
+} from "../../sessions/compaction/request-budget.js";
+import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
 import { releasePendingAgentSteeringItems } from "../../subagents/registry/subagent-registry.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { log } from "../logger.js";
+import {
+  persistToolResultProjections,
+  persistSessionSystemPrompt,
+} from "../session-prompt-state.js";
 import { resolveEmbeddedAgentApiKey } from "../stream-resolution.js";
+import { createAbortableError, isOpenClawAbortableWrapper } from "./abortable.js";
 import { runEmbeddedAttemptBeforeAgentRun } from "./attempt-before-agent-run.js";
+import { logDecisionToolRequest } from "./attempt-decision-diagnostics.js";
+import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
 import {
   prepareEmbeddedAttemptPromptAssembly,
   prepareEmbeddedAttemptPromptContext,
@@ -19,246 +33,193 @@ import {
 } from "./attempt-prompt-preflight.js";
 import {
   handleEmbeddedAttemptPromptError,
-  prepareEmbeddedAttemptPromptExecution,
   submitEmbeddedAttemptPrompt,
 } from "./attempt-prompt-submit.js";
-import {
-  applyPromptBuildToolsAllow,
-  observeEmbeddedAttemptPrompt,
-} from "./attempt-prompt-support.js";
+import { observeEmbeddedAttemptPrompt } from "./attempt-prompt-support.js";
+import type { PreparedStreamRuntime } from "./attempt-stream-runtime.types.js";
 import { removeTrailingMidTurnPrecheckAssistantError } from "./attempt-transcript-helpers.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
+import { estimateToolSchemaTokenPressure } from "./preemptive-compaction.js";
+import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparation.js";
 
-type PromptAssemblyInput = Parameters<typeof prepareEmbeddedAttemptPromptAssembly>[0];
 type PromptAssemblyResult = Awaited<ReturnType<typeof prepareEmbeddedAttemptPromptAssembly>>;
-type PromptContextInput = Parameters<typeof prepareEmbeddedAttemptPromptContext>[0];
-type PromptContextResult = ReturnType<typeof prepareEmbeddedAttemptPromptContext>;
-type PromptErrorInput = Parameters<typeof handleEmbeddedAttemptPromptError>[0];
-type PromptExecutionInput = Parameters<typeof prepareEmbeddedAttemptPromptExecution>[0];
-type PromptObservationInput = Parameters<typeof observeEmbeddedAttemptPrompt>[0];
-type PromptPreflightInput = Parameters<typeof prepareEmbeddedAttemptPromptPreflight>[0];
-type PromptSubmissionInput = Parameters<typeof submitEmbeddedAttemptPrompt>[0];
-type BeforeAgentRunOutcome = NonNullable<
-  Awaited<ReturnType<typeof runEmbeddedAttemptBeforeAgentRun>>
->;
-type PromptPhaseState = Omit<PromptPreflightInput["state"], "skipPromptSubmission">;
+type PromptPreflightState = Parameters<typeof prepareEmbeddedAttemptPromptPreflight>[0]["state"];
 
-type PromptAssemblyPhaseInput = Omit<
-  PromptAssemblyInput,
-  | "attempt"
-  | "activeSession"
-  | "sessionManager"
-  | "applyPromptBuildToolsAllow"
-  | "setLeasedSteering"
->;
-type PromptContextPhaseInput = Omit<
-  PromptContextInput,
-  "attempt" | "messages" | "prompt" | "replaceSessionMessages"
->;
-type PromptExecutionPhaseInput = Omit<
-  PromptExecutionInput,
-  "attempt" | "prompt" | "skipPromptSubmission"
->;
-type PromptObservationPhaseInput = Omit<
-  PromptObservationInput,
-  | "attempt"
-  | "contextTokenBudget"
-  | "effectivePrompt"
-  | "hookMessagesForCurrentPrompt"
-  | "imageCount"
-  | "llmBoundaryPromptForPrecheck"
-  | "promptForModel"
-  | "promptSubmissionRuntimeOnly"
-  | "reserveTokens"
-  | "sessionMessages"
-  | "skipPromptSubmission"
-  | "systemPromptForHook"
-  | "transcriptLeafId"
->;
-type PromptToolSurface = ReturnType<typeof applyPromptBuildToolsAllow>;
-type PromptPreflightPhaseInput = Omit<
-  PromptPreflightInput,
-  | "attempt"
-  | "activeContextEngine"
-  | "contextTokenBudget"
-  | "hookMessagesForCurrentPrompt"
-  | "promptForPrecheck"
-  | "reserveTokens"
-  | "sessionMessageCount"
-  | "state"
-  | "systemPrompt"
-  | "toolResultMaxChars"
+export type EmbeddedAttemptPromptState = Pick<
+  PromptPreflightState,
+  "contextBudgetStatus" | "preflightRecovery"
 > & {
-  activeContextEngine?: PromptPreflightInput["activeContextEngine"];
+  finalPromptText?: string;
+  yieldAborted: boolean;
 };
-type PromptSubmissionPhaseInput = Pick<
-  PromptSubmissionInput,
-  | "promptActiveSession"
-  | "sessionPromptState"
-  | "toolResultPromptProjectionState"
-  | "trajectoryRecorder"
->;
-type WithOwnedTranscriptWrite = <T>(operation: () => Promise<T> | T) => Promise<T>;
 
-export async function runEmbeddedAttemptPromptPhase(input: {
-  attempt: PromptAssemblyInput["attempt"];
-  activeSession: PromptAssemblyInput["activeSession"];
-  sessionManager: PromptAssemblyInput["sessionManager"];
-  withOwnedTranscriptWrite: WithOwnedTranscriptWrite;
-  getCompactionReserveTokens: () => number;
-  emptyExplicitToolAllowlistError?: Error;
-  assembly: PromptAssemblyPhaseInput;
-  context: PromptContextPhaseInput;
-  execution: PromptExecutionPhaseInput;
-  googlePromptCache: {
-    extraParams: Parameters<typeof prepareGooglePromptCacheStreamFn>[0]["extraParams"];
-    signal: AbortSignal;
+export async function runEmbeddedAttemptPromptPhase(
+  input: EmbeddedAttemptExecutionPhaseInput & { preparedStreamRuntime: PreparedStreamRuntime },
+  promptState: EmbeddedAttemptPromptState,
+): Promise<{ promptStartedAt: number; transcriptLeafId: string | null }> {
+  const { attempt, isRawModelRun, prepared, preparedStreamRuntime, runAbortController } = input;
+  const { sessionRuntime, promptToolPolicy } = prepared;
+  const {
+    agentSession: { activeSession, hookRunner, setActiveSessionSystemPrompt, settingsManager },
+    boundary: {
+      boundaryTimezone,
+      includeBoundaryTimestamp,
+      orphanRepair,
+      setCurrentUserTimestampOverride,
+    },
+    cacheTrace,
+    contextGuards,
+    preparedUserTurnMessage,
+    sessionManager,
+    sessionPromptState,
+    state: sessionRuntimeState,
+    toolResultPromptProjectionState,
+    trajectoryRecorder,
+    transcriptPolicy: { appendOnlyRuntimeContext, inHistorySystemUpdates },
+    transport: {
+      effectiveAgentTransport,
+      effectiveExtraParams,
+      streamStrategy,
+      compactionReplayEnabled,
+    },
+  } = sessionRuntime;
+  const { effectiveFsWorkspaceOnly, effectiveWorkspace, sandbox, sessionAgentId } = input.setup;
+  const {
+    history: { contextEnginePromptAuthority, unwindowedContextEngineMessagesForPrecheck },
+    promptActiveSession,
+    stream: { stopAcceptingSteerMessages },
+  } = preparedStreamRuntime;
+  const { withOwnedTranscriptWrite } = input.sessionLock;
+  const withTranscriptWrite = <T>(write: () => Promise<T>) =>
+    withOwnedTranscriptWrite(() => withSessionManagerAppend(sessionManager, write));
+  const observeForegroundRequests = (
+    onRequest: NonNullable<PreparedStreamRuntime["cache"]["onModelRequest"]>,
+  ) => {
+    const streamFn = activeSession.agent.streamFn;
+    activeSession.agent.streamFn = (model, context, options) => {
+      if (!activeSession.isCompacting) {
+        onRequest(model, context);
+      }
+      return streamFn(model, context, options);
+    };
   };
-  observation: PromptObservationPhaseInput;
-  toolPolicy: {
-    baseline: Parameters<typeof applyPromptBuildToolsAllow>[0]["baseline"];
-    effectiveTools: Array<{ name: string }>;
-    uncompactedEffectiveTools: Array<{ name: string }>;
-    tools: Array<{ name: string }>;
-    toolSearchCatalogRef?: Parameters<typeof applyPromptBuildToolsAllow>[0]["catalogRef"];
-    codeModeControlsEnabled: boolean;
-    coreReadAuthorized: boolean;
-    forceToolNames?: readonly string[];
-  };
-  preflight: PromptPreflightPhaseInput;
-  submission: PromptSubmissionPhaseInput;
-  lifecycle: {
-    readState: () => PromptPhaseState;
-    writeState: (state: PromptPhaseState) => void;
-    getPrePromptMessageCount: () => number;
-    setPrePromptMessageCount: (count: number) => void;
-    setCurrentUserTimestampOverride: (
-      override: PromptContextResult["currentUserTimestampOverride"],
-    ) => void;
-    setPromptCacheChangesForTurn: (
-      changes: PromptAssemblyResult["promptCacheChangesForTurn"],
-    ) => void;
-    setCodeModeReconciliationReadAuthorized: (value: boolean) => void;
-    setFinalPromptText: (prompt: string) => void;
-    markBeforeAgentRunBlocked: (outcome: BeforeAgentRunOutcome) => void;
-    markYieldAborted: () => void;
-    isRunBudgetTimeoutAbort: (error: unknown) => boolean;
-    readYieldState: () => Pick<
-      PromptErrorInput,
-      "yieldAbortSettled" | "yieldDetected" | "yieldMessage"
-    >;
-    stopAcceptingSteerMessages: () => void;
-    takePendingMidTurnPrecheckRequest: () => MidTurnPrecheckRequest | null | undefined;
-  };
-}): Promise<{ promptStartedAt: number }> {
-  const { activeSession, attempt, sessionManager } = input;
+  const { diagnosticTrace, runTrace } = input.diagnostics;
+  const { systemPromptReport, runtimeInfo } = prepared.systemPrompt;
+  let systemPromptText = sessionRuntimeState.systemPromptText;
+  const toolSearchCompacted = prepared.toolCatalog.toolSearch.compacted;
   let skipPromptSubmission = false;
   let leasedSteering: PromptAssemblyResult["leasedSteering"];
 
-  const patchState = (patch: Partial<PromptPhaseState>) => {
-    input.lifecycle.writeState({ ...input.lifecycle.readState(), ...patch });
+  const setFailure = (error: unknown, source: AgentRunAttemptFailureSource | null) => {
+    input.state.terminal = setAgentRunAttemptTerminalFailure(
+      input.state.terminal,
+      error !== null && error !== undefined ? { error, source: source ?? "prompt" } : null,
+    );
   };
-  const publishDispatchState = (state: PromptPreflightInput["state"]) => {
-    const { skipPromptSubmission: nextSkipPromptSubmission, ...phaseState } = state;
-    skipPromptSubmission = nextSkipPromptSubmission;
-    input.lifecycle.writeState(phaseState);
+  const publishDispatchState = (state: PromptPreflightState) => {
+    skipPromptSubmission = state.skipPromptSubmission;
+    promptState.contextBudgetStatus = state.contextBudgetStatus;
+    promptState.preflightRecovery = state.preflightRecovery;
+    setFailure(state.promptError, state.promptErrorSource);
   };
-  const releaseLeasedSteering = (error?: unknown) => {
+  const releaseLeasedSteering = async (error?: unknown) => {
     if (!leasedSteering) {
       return;
     }
-    releasePendingAgentSteeringItems({
+    await releasePendingAgentSteeringItems({
       runIds: leasedSteering.runIds,
       leaseId: leasedSteering.leaseId,
       error: error ? formatErrorMessage(error) : undefined,
     });
     leasedSteering = undefined;
   };
-  const handleMidTurnPrecheckRequest = (request: MidTurnPrecheckRequest) => {
-    const outcome = handleEmbeddedAttemptMidTurnPrecheck({
+  const handleMidTurnPrecheckRequest = async (request: MidTurnPrecheckRequest) => {
+    const outcome = await handleEmbeddedAttemptMidTurnPrecheck({
       attempt,
       request,
-      sessionAgentId: input.context.sessionAgentId,
+      sessionAgentId,
       sessionManager,
-      prePromptMessageCount: input.lifecycle.getPrePromptMessageCount(),
+      toolResultPromptProjectionState,
+      prePromptMessageCount: sessionRuntimeState.prePromptMessageCount,
       replaceSessionMessages: (messages) => {
         activeSession.agent.state.messages = messages;
       },
     });
-    patchState({
-      preflightRecovery: outcome.preflightRecovery,
-      ...(outcome.promptError
-        ? { promptError: outcome.promptError, promptErrorSource: "precheck" }
-        : {}),
-    });
+    promptState.preflightRecovery = outcome.preflightRecovery;
+    if (outcome.promptError) {
+      setFailure(outcome.promptError, "precheck");
+    }
   };
 
   const promptStartedAt = Date.now();
-  if (input.emptyExplicitToolAllowlistError) {
-    patchState({
-      promptError: input.emptyExplicitToolAllowlistError,
-      promptErrorSource: "precheck",
-    });
-    skipPromptSubmission = true;
-    log.warn(`[tools] ${input.emptyExplicitToolAllowlistError.message}`);
-  }
 
-  let promptToolSurface: PromptToolSurface | undefined;
-  const promptAssembly = await prepareEmbeddedAttemptPromptAssembly({
-    attempt,
-    activeSession,
-    sessionManager,
-    ...input.assembly,
-    applyPromptBuildToolsAllow: (toolsAllow) => {
-      promptToolSurface = applyPromptBuildToolsAllow({
-        session: activeSession,
-        toolsAllow,
-        baseline: input.toolPolicy.baseline,
-        effectiveTools: input.toolPolicy.effectiveTools,
-        uncompactedEffectiveTools: input.toolPolicy.uncompactedEffectiveTools,
-        tools: input.toolPolicy.tools,
-        catalogRef: input.toolPolicy.toolSearchCatalogRef,
-        codeModeControlsEnabled: input.toolPolicy.codeModeControlsEnabled,
-        coreReadAuthorized: input.toolPolicy.coreReadAuthorized,
-        forceToolNames: input.toolPolicy.forceToolNames,
-      });
-      input.lifecycle.setCodeModeReconciliationReadAuthorized(promptToolSurface.coreReadAuthorized);
-      return promptToolSurface.activeToolNames;
-    },
-    setLeasedSteering: (lease) => {
-      leasedSteering = lease;
-    },
-  });
-  const { hookCtx, promptBuildPrependContext, promptBuildAppendContext, transcriptLeafId } =
-    promptAssembly;
-  leasedSteering = promptAssembly.leasedSteering ?? leasedSteering;
-  input.lifecycle.setPromptCacheChangesForTurn(promptAssembly.promptCacheChangesForTurn);
-
+  let transcriptLeafId: string | null = null;
   try {
-    const heartbeatOutcomeContext =
-      attempt.trigger === "user" && attempt.sessionKey
-        ? buildHeartbeatOutcomeContext(
-            claimHeartbeatOutcomeForRun({
-              agentId: input.context.sessionAgentId,
-              sessionKey: attempt.sessionKey,
-              storePath: attempt.sessionTarget?.storePath,
-              runId: attempt.runId,
-            }),
-          )
-        : undefined;
-    const promptContext = prepareEmbeddedAttemptPromptContext({
+    const promptAssembly = await prepareEmbeddedAttemptPromptAssembly({
       attempt,
-      ...(heartbeatOutcomeContext ? { heartbeatOutcomeContext } : {}),
+      activeSession,
+      sessionManager,
+      hookRunner,
+      hookAgentId: sessionAgentId,
+      diagnosticTrace,
+      isRawModelRun,
+      ...(orphanRepair ? { orphanRepair } : {}),
+      sessionAgentId,
+      runtimeModel: runtimeInfo.model,
+      systemPromptText,
+      runAbortSignal: input.runAbortController.signal,
+      setActiveSessionSystemPrompt,
+      applyPromptBuildToolsAllow: (toolsAllow, decisionIsCurrent) => {
+        // Hook authority follows reachable capabilities, not just provider-visible controls.
+        return promptToolPolicy.apply(toolsAllow, decisionIsCurrent).callableToolNames;
+      },
+      prepareSystemPrompt: async (currentSystemPrompt) => {
+        const refresh = await prepared.systemPrompt.prepareToolPrompt?.(
+          promptToolPolicy.current.effectiveTools,
+        );
+        return refresh ? refresh(currentSystemPrompt) : currentSystemPrompt;
+      },
+      setLeasedSteering: (lease) => {
+        leasedSteering = lease;
+      },
+    });
+    systemPromptText = sessionRuntimeState.systemPromptText;
+    if (prepared.toolCatalog.emptyExplicitToolAllowlistError) {
+      setFailure(prepared.toolCatalog.emptyExplicitToolAllowlistError, "precheck");
+      skipPromptSubmission = true;
+      log.warn(`[tools] ${prepared.toolCatalog.emptyExplicitToolAllowlistError.message}`);
+    }
+    const { hookCtx, promptBuildPrependContext, promptBuildAppendContext } = promptAssembly;
+    transcriptLeafId = promptAssembly.transcriptLeafId;
+    leasedSteering = promptAssembly.leasedSteering ?? leasedSteering;
+
+    const promptContext = await prepareEmbeddedAttemptPromptContext({
+      sessionVersion: sessionManager.getHeader()?.version,
+      attempt,
+      capabilityToolNames: prepared.toolCatalog.toolSearchRunPlan.capabilityToolNames,
       messages: activeSession.messages,
       prompt: promptAssembly,
       replaceSessionMessages: (messages) => {
         activeSession.agent.state.messages = messages;
       },
-      ...input.context,
+      appendOnlyRuntimeContext,
+      inHistorySystemUpdates,
+      ...(boundaryTimezone ? { boundaryTimezone } : {}),
+      includeBoundaryTimestamp,
+      isRawModelRun,
+      ...(preparedUserTurnMessage ? { preparedUserTurnMessage } : {}),
+      sessionAgentId,
+      ...(systemPromptReport ? { systemPromptReport } : {}),
+      systemPromptText,
+      toolResultPromptProjectionState,
     });
+    if (runAbortController.signal.aborted) {
+      throw createAbortableError(runAbortController.signal);
+    }
+    promptAssembly.assertHostActive?.();
     const { hookMessagesForCurrentPrompt, promptForModel, systemPromptForHook } = promptContext;
-    input.lifecycle.setPrePromptMessageCount(promptContext.prePromptMessageCount);
-    input.lifecycle.setCurrentUserTimestampOverride(promptContext.currentUserTimestampOverride);
+    sessionRuntimeState.prePromptMessageCount = promptContext.prePromptMessageCount;
+    setCurrentUserTimestampOverride(promptContext.currentUserTimestampOverride);
     const beforeAgentRunOutcome =
       attempt.operation === "settled-tool-finalization"
         ? undefined
@@ -267,18 +228,15 @@ export async function runEmbeddedAttemptPromptPhase(input: {
             activeSession,
             hookContext: hookCtx,
             hookMessages: hookMessagesForCurrentPrompt,
-            hookRunner: input.assembly.hookRunner,
+            hookRunner,
             modelPrompt: promptForModel,
             sessionManager,
             systemPrompt: systemPromptForHook,
-            withOwnedTranscriptWrite: input.withOwnedTranscriptWrite,
+            withOwnedTranscriptWrite,
           });
     if (beforeAgentRunOutcome) {
-      input.lifecycle.markBeforeAgentRunBlocked(beforeAgentRunOutcome);
-      patchState({
-        promptError: beforeAgentRunOutcome.promptError,
-        promptErrorSource: "hook:before_agent_run",
-      });
+      input.state.beforeAgentRunBlockedBy = beforeAgentRunOutcome.blockedBy;
+      setFailure(beforeAgentRunOutcome.promptError, "hook:before_agent_run");
       skipPromptSubmission = true;
     }
 
@@ -290,21 +248,21 @@ export async function runEmbeddedAttemptPromptPhase(input: {
           resolvedApiKey,
           authStorage: attempt.authStorage,
         }),
-        extraParams: input.googlePromptCache.extraParams,
+        extraParams: effectiveExtraParams,
         model: attempt.model,
         modelId: attempt.modelId,
         provider: attempt.provider,
         sessionManager: {
-          appendCustomEntry: async (customType, data) => {
-            await input.withOwnedTranscriptWrite(() => {
-              sessionManager.appendCustomEntry(customType, data);
+          appendCustomEntryAsync: async (customType, data) => {
+            await withTranscriptWrite(async () => {
+              runAbortController.signal.throwIfAborted();
+              await sessionManager.appendCustomEntryAsync(customType, data);
             });
           },
           getEntries: () => sessionManager.getEntries(),
         },
-        signal: input.googlePromptCache.signal,
+        signal: runAbortController.signal,
         streamFn: activeSession.agent.streamFn,
-        systemPrompt: input.assembly.systemPromptText,
       });
       if (googlePromptCacheStreamFn) {
         activeSession.agent.streamFn = googlePromptCacheStreamFn;
@@ -312,54 +270,119 @@ export async function runEmbeddedAttemptPromptPhase(input: {
     }
 
     const imageResult = await prepareEmbeddedAttemptPromptExecution({
-      ...input.execution,
+      mediaOwnerAgentId: sessionAgentId,
+      effectiveFsWorkspaceOnly,
+      effectiveWorkspace,
+      sandbox,
       attempt,
       prompt: promptContext.promptSubmission.prompt,
       skipPromptSubmission,
     });
-    const reserveTokens = input.getCompactionReserveTokens();
-    let state: PromptPreflightInput["state"] = {
-      ...input.lifecycle.readState(),
+    const reserveTokens = settingsManager.getCompactionReserveTokens();
+    const terminal = projectAgentRunAttemptTerminal(input.state.terminal);
+    let state: PromptPreflightState = {
+      contextBudgetStatus: promptState.contextBudgetStatus,
+      preflightRecovery: promptState.preflightRecovery,
+      promptError: terminal.promptError,
+      promptErrorSource: terminal.promptErrorSource,
       skipPromptSubmission: observeEmbeddedAttemptPrompt({
-        ...input.observation,
-        ...(promptToolSurface
-          ? {
-              effectiveTools: promptToolSurface.effectiveTools,
-              tools: promptToolSurface.tools,
-              uncompactedEffectiveTools: promptToolSurface.uncompactedEffectiveTools,
-            }
-          : {}),
+        ...promptContext,
+        cacheTrace,
+        diagnosticTrace,
+        hookAgentId: sessionAgentId,
+        hookRunner,
+        isRawModelRun,
+        runTrace,
+        streamStrategy,
+        systemPromptText,
+        toolSearchCompacted,
+        trajectoryRecorder,
+        transport: effectiveAgentTransport,
+        effectiveTools: promptToolPolicy.current.effectiveTools,
+        tools: promptToolPolicy.current.tools,
+        uncompactedEffectiveTools: promptToolPolicy.current.uncompactedEffectiveTools,
         attempt,
-        contextTokenBudget: promptContext.contextTokenBudget,
-        effectivePrompt: promptContext.effectivePrompt,
-        hookMessagesForCurrentPrompt: promptContext.hookMessagesForCurrentPrompt,
         imageCount: imageResult.images.length,
-        llmBoundaryPromptForPrecheck: promptContext.llmBoundaryPromptForPrecheck,
-        promptForModel: promptContext.promptForModel,
-        promptSubmissionRuntimeOnly: promptContext.promptSubmission.runtimeOnly,
         reserveTokens,
         sessionMessages: activeSession.messages,
         skipPromptSubmission,
-        systemPromptForHook: promptContext.systemPromptForHook,
         transcriptLeafId,
       }).skipPromptSubmission,
     };
     // Publish each admission transition before the next fallible phase so outer cleanup sees it.
     publishDispatchState(state);
 
-    const { activeContextEngine, ...preflight } = input.preflight;
+    let compactionRequestBudget: CompactionRequestBudget | undefined;
+    if (!state.skipPromptSubmission) {
+      const userTurnRecorder = attempt.userTurnTranscriptRecorder;
+      const pendingUserIdempotencyKey =
+        attempt.skipPreparedUserTurnMessage !== true && userTurnRecorder?.hasPersisted() === true
+          ? (userTurnRecorder.getPersistedMessage?.() ?? userTurnRecorder.message)?.idempotencyKey
+          : undefined;
+      const foregroundBudget = {
+        contextWindow: promptContext.contextTokenBudget,
+        reserveTokens,
+      };
+      const pendingContextMessages = promptContext.runtimeContextMessageForCurrentTurn
+        ? [promptContext.runtimeContextMessageForCurrentTurn]
+        : [];
+      compactionRequestBudget = createCompactionRequestBudget({
+        ...foregroundBudget,
+        systemPrompt: promptContext.systemPromptForHook,
+        tools: activeSession.agent.state.tools,
+        pendingPrompt: promptContext.llmBoundaryPromptForPrecheck,
+        pendingImageCount: imageResult.images.length,
+        // The SDK replaces the queued reservation at submission. Transient
+        // installation remains separate because that carrier never enters its queue.
+        ...(appendOnlyRuntimeContext
+          ? {
+              pendingQueuedContextMessages: resolvePendingRuntimeContextReplay({
+                messages: activeSession.messages,
+                pendingContextMessages,
+                persistedUserIdempotencyKey: pendingUserIdempotencyKey,
+              }).pendingContextMessages,
+            }
+          : { pendingContextMessages }),
+        pendingAdditivePrompt: [promptBuildPrependContext, promptBuildAppendContext]
+          .filter(Boolean)
+          .join("\n\n"),
+        pendingUserIdempotencyKey,
+      });
+      attempt.onCompactionRequestBudget?.(compactionRequestBudget);
+      // Summarization has its own prompt/model; it cannot replace foreground accounting.
+      observeForegroundRequests((_model, context) => {
+        attempt.onCompactionRequestBudget?.(
+          createCompactionRequestBudget({
+            ...foregroundBudget,
+            systemPrompt: context.systemPrompt,
+            tools: context.tools,
+          }),
+        );
+      });
+    }
+
     state = await prepareEmbeddedAttemptPromptPreflight({
-      ...preflight,
+      appendOnlyRuntimeContext,
+      compactionReplayEnabled,
+      contextEnginePromptAuthority,
+      includeBoundaryTimestamp,
+      ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
+      ...(unwindowedContextEngineMessagesForPrecheck
+        ? { unwindowedContextEngineMessagesForPrecheck }
+        : {}),
       attempt,
-      ...(activeContextEngine ? { activeContextEngine } : {}),
       contextTokenBudget: promptContext.contextTokenBudget,
       hookMessagesForCurrentPrompt: promptContext.hookMessagesForCurrentPrompt,
       promptForPrecheck: promptContext.llmBoundaryPromptForPrecheck,
+      pendingInputTokens: compactionRequestBudget?.pendingTokens,
       reserveTokens,
       sessionMessageCount: activeSession.messages.length,
       state,
       systemPrompt: promptContext.systemPromptForHook,
       toolResultMaxChars: promptContext.promptToolResultMaxChars,
+      // Use the installed model-facing tool surface (same source as the compaction
+      // request budget) so client tools appended by attempt-client-tools are counted.
+      toolSchemaTokens: estimateToolSchemaTokenPressure(activeSession.agent.state.tools),
     });
     publishDispatchState(state);
 
@@ -369,27 +392,103 @@ export async function runEmbeddedAttemptPromptPhase(input: {
         attempt,
         activeSession,
         contextTokenBudget: promptContext.contextTokenBudget,
+        compactionRequestBudget,
+        onModelRequest: preparedStreamRuntime.cache.onModelRequest,
         images: imageResult.images,
         ...(leasedSteering ? { leasedSteering } : {}),
         modelPrompt: promptContext.promptForModel,
-        onFinalPromptText: input.lifecycle.setFinalPromptText,
+        onFinalPromptText: (prompt) => {
+          promptState.finalPromptText = prompt;
+        },
+        assertHostActive: promptAssembly.assertHostActive,
+        withTranscriptWrite,
+        getUserTranscriptContexts: sessionRuntime.boundary.getUserTranscriptContexts,
+        preparePrimaryModelRequest: () =>
+          promptToolPolicy.prepareForDispatch(async () => {
+            promptAssembly.decisionPrefilter.restrictionApplied = false;
+            promptAssembly.decisionPrefilter.status = "retained";
+            promptAssembly.decisionPrefilter.reason = "selection-changed";
+            const refresh = await prepared.systemPrompt.prepareToolPrompt?.(
+              promptToolPolicy.current.effectiveTools,
+            );
+            input.runAbortController.signal.throwIfAborted();
+            promptAssembly.assertHostActive?.();
+            const refreshedPrompt = refresh?.(activeSession.agent.state.systemPrompt);
+            const projection =
+              refreshedPrompt !== undefined && sessionRuntime.prepareSystemPromptUpdate
+                ? await sessionRuntime.prepareSystemPromptUpdate(
+                    refreshedPrompt,
+                    refresh?.freshlyRendered === true,
+                  )
+                : undefined;
+            if (refreshedPrompt !== undefined && !projection) {
+              setActiveSessionSystemPrompt(refreshedPrompt);
+            }
+            return () => ({
+              tools: activeSession.agent.state.tools.slice(),
+              systemPrompt: projection?.systemPrompt ?? activeSession.agent.state.systemPrompt,
+              ...(projection
+                ? {
+                    promptUpdate: {
+                      update: projection.update,
+                      commit: () => {
+                        projection.commit();
+                        setActiveSessionSystemPrompt(projection.systemPrompt);
+                      },
+                    },
+                  }
+                : {}),
+            });
+          }),
+        onPrimaryModelRequest: (tools) => {
+          logDecisionToolRequest({
+            decision: promptAssembly.decisionPrefilter,
+            baseline: promptToolPolicy.readDecisionBaseline(),
+            readFinal: () => tools,
+            requiredNames: promptToolPolicy.decisionRequiredNames,
+            trace: runTrace,
+          });
+        },
         onSteeringAcknowledged: () => {
           leasedSteering = undefined;
+        },
+        persistToolResultProjections: async () => {
+          if (
+            !isRawModelRun &&
+            (inHistorySystemUpdates || toolResultPromptProjectionState.frozen.size > 0)
+          ) {
+            await withTranscriptWrite(async () => {
+              runAbortController.signal.throwIfAborted();
+              await persistToolResultProjections(
+                toolResultPromptProjectionState,
+                (customType, data) => sessionManager.appendCustomEntryAsync(customType, data),
+              );
+              if (sessionRuntime.prepareSystemPromptUpdate) {
+                await persistSessionSystemPrompt(sessionPromptState, (customType, data) =>
+                  sessionManager.appendCustomEntryAsync(customType, data),
+                );
+              }
+            });
+          }
         },
         ...(promptBuildPrependContext ? { prependContext: promptBuildPrependContext } : {}),
         ...(promptContext.runtimeContextMessageForCurrentTurn
           ? { runtimeContextMessage: promptContext.runtimeContextMessageForCurrentTurn }
           : {}),
         runtimeOnly: promptContext.promptSubmission.runtimeOnly === true,
+        setNextUserMessagePersistence: sessionManager.setNextUserMessagePersistence,
         systemPrompt: promptContext.systemPromptForHook,
         toolResultAggregateMaxChars: promptContext.promptToolResultAggregateMaxChars,
         toolResultMaxChars: promptContext.promptToolResultMaxChars,
         transcriptLeafId,
         transcriptPrompt: promptContext.promptForSession,
-        ...input.submission,
+        appendOnlyRuntimeContext,
+        promptActiveSession,
+        toolResultPromptProjectionState,
+        trajectoryRecorder,
       });
     } else {
-      releaseLeasedSteering(state.promptError ?? "prompt submission skipped");
+      await releaseLeasedSteering(state.promptError ?? "prompt submission skipped");
     }
     publishDispatchState(state);
   } catch (error) {
@@ -398,40 +497,48 @@ export async function runEmbeddedAttemptPromptPhase(input: {
       attempt,
       error,
       handleMidTurnPrecheckRequest,
-      markYieldAborted: input.lifecycle.markYieldAborted,
+      markYieldAborted: () => {
+        promptState.yieldAborted = true;
+        input.state.terminal = mergeAgentRunAttemptTerminal(input.state.terminal, {
+          kind: "aborted",
+          source: "yield_cleanup",
+        });
+      },
       releaseLeasedSteering,
-      withOwnedTranscriptWrite: input.withOwnedTranscriptWrite,
+      withOwnedTranscriptWrite,
       ...input.lifecycle.readYieldState(),
     });
     // The timeout owner records its terminal before aborting the prompt. That
     // abort is not a provider failure and must leave timeout salvage eligible.
     if (
       promptErrorOutcome.promptFailure &&
-      !input.lifecycle.isRunBudgetTimeoutAbort(promptErrorOutcome.promptFailure.error)
+      !(
+        projectAgentRunAttemptTerminal(input.state.terminal).timedOutByRunBudget &&
+        isOpenClawAbortableWrapper(promptErrorOutcome.promptFailure.error) &&
+        promptErrorOutcome.promptFailure.error instanceof Error &&
+        promptErrorOutcome.promptFailure.error.cause === runAbortController.signal.reason
+      )
     ) {
-      patchState({
-        promptError: promptErrorOutcome.promptFailure.error,
-        promptErrorSource: promptErrorOutcome.promptFailure.source,
-      });
+      setFailure(promptErrorOutcome.promptFailure.error, promptErrorOutcome.promptFailure.source);
     }
   } finally {
-    input.lifecycle.stopAcceptingSteerMessages();
+    stopAcceptingSteerMessages();
     log.debug(
       `embedded run prompt end: runId=${attempt.runId} sessionId=${attempt.sessionId} durationMs=${Date.now() - promptStartedAt}`,
     );
   }
 
-  const pendingMidTurnPrecheckRequest = input.lifecycle.takePendingMidTurnPrecheckRequest();
+  const pendingMidTurnPrecheckRequest = contextGuards.takePendingMidTurnPrecheckRequest();
   if (pendingMidTurnPrecheckRequest) {
-    await input.withOwnedTranscriptWrite(() => {
-      removeTrailingMidTurnPrecheckAssistantError({ activeSession, sessionManager });
-      const state = input.lifecycle.readState();
-      if (!state.preflightRecovery && state.promptErrorSource !== "precheck") {
-        patchState({ promptError: null, promptErrorSource: null });
-        handleMidTurnPrecheckRequest(pendingMidTurnPrecheckRequest);
+    await withTranscriptWrite(async () => {
+      await removeTrailingMidTurnPrecheckAssistantError({ activeSession, sessionManager });
+      const terminal = projectAgentRunAttemptTerminal(input.state.terminal);
+      if (!promptState.preflightRecovery && terminal.promptErrorSource !== "precheck") {
+        setFailure(null, null);
+        await handleMidTurnPrecheckRequest(pendingMidTurnPrecheckRequest);
       }
     });
   }
 
-  return { promptStartedAt };
+  return { promptStartedAt, transcriptLeafId };
 }

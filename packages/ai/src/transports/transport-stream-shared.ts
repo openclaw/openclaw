@@ -1,8 +1,3 @@
-/**
- * Shared transport-stream normalization helpers.
- *
- * Sanitizes provider payloads, merges metadata, and formats streamed assistant events.
- */
 import type {
   AssistantMessage,
   Model,
@@ -11,22 +6,28 @@ import type {
   Usage,
 } from "@openclaw/llm-core";
 import { asNonArrayRecord, asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { racePromiseWithAbortSignal } from "../../../retry/src/index.js";
+import { getAiTransportHost } from "../host.js";
+import {
+  appendAssistantMessageDiagnostic,
+  createAssistantMessageDiagnostic,
+  projectDiagnosticValue,
+} from "../utils/diagnostics.js";
 import { createAssistantMessageEventStream } from "../utils/event-stream.js";
+import { shortHash } from "../utils/hash.js";
 import { headersToRecord } from "../utils/headers.js";
+import { repairJson } from "../utils/json-parse.js";
 import { projectProviderError, type ProviderErrorProjection } from "../utils/provider-error.js";
+import { isTransientNetworkError } from "../utils/retryable-network-errors.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
+import { createZeroUsage } from "../utils/usage.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 
-type ContextUsage = NonNullable<Usage["contextUsage"]>;
-
-type TransportUsage = {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  contextUsage?: ContextUsage;
-  totalTokens: number;
-  cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+type TransportUsage = Pick<
+  Usage,
+  "input" | "output" | "cacheRead" | "cacheWrite" | "contextUsage" | "totalTokens"
+> & {
+  cost: Pick<Usage["cost"], "input" | "output" | "cacheRead" | "cacheWrite" | "total">;
 };
 
 export type WritableTransportStream = Pick<
@@ -68,16 +69,82 @@ export function coerceTransportToolCallArguments(argumentsValue: unknown): Recor
   return {};
 }
 
-/** Admit only complete object-shaped terminal tool arguments; partial parsing is preview-only. */
+/** Stable terminal fact: presentation must not infer unfinished calls from provider prose. */
+export class IncompleteToolCallError extends Error {
+  readonly code = "incomplete_tool_call";
+}
+
+const MALFORMED_TOOL_CALL_TERMINAL_ERROR_CODE = "malformed_tool_call_arguments";
+
+/**
+ * Bounded, content-free diagnostics for a rejected terminal argument buffer. Carried as the
+ * error `cause` and mirrored onto the error's `errorCode` / `errorBody` fields so
+ * `projectProviderError` surfaces them on the terminal assistant message.
+ */
+type MalformedToolCallArgumentsDiagnostics = {
+  code: typeof MALFORMED_TOOL_CALL_TERMINAL_ERROR_CODE;
+  argumentChars: number;
+  argumentHash: string;
+  repairAttempted: boolean;
+};
+
+function createMalformedToolCallArgumentsError(
+  value: unknown,
+  errorMessage: string,
+  repairAttempted: boolean,
+): Error {
+  const text = typeof value === "string" ? value : undefined;
+  const diagnostics: MalformedToolCallArgumentsDiagnostics = {
+    code: MALFORMED_TOOL_CALL_TERMINAL_ERROR_CODE,
+    argumentChars: text?.length ?? 0,
+    argumentHash: text === undefined ? "" : shortHash(text),
+    repairAttempted,
+  };
+  const error = new Error(errorMessage, { cause: diagnostics });
+  Object.assign(error, {
+    errorCode: MALFORMED_TOOL_CALL_TERMINAL_ERROR_CODE,
+    errorBody: JSON.stringify(diagnostics),
+  });
+  return error;
+}
+
+/**
+ * Repair a complete-but-invalid terminal argument buffer. Anthropic fine-grained tool
+ * streaming skips server-side JSON validation, so a finished tool_use block can carry raw
+ * control characters or invalid escapes inside string values. Only string-literal repairs
+ * are applied and every valid escape is preserved as written; truncated or non-object
+ * buffers stay rejected so a cut-off write never executes with partial arguments.
+ */
+function repairTerminalToolCallArguments(value: string): Record<string, unknown> | null {
+  const repaired = repairJson(value, { preserveValidControlEscapes: true });
+  if (repaired === value) {
+    return null;
+  }
+  return parseJsonObjectPreservingUnsafeIntegers(repaired);
+}
+
+/**
+ * Admit only complete object-shaped terminal tool arguments; partial parsing is preview-only.
+ * `repairStringLiterals` opts a stream whose provider may deliver unvalidated tool input into
+ * string-literal repair before rejection.
+ */
 export function parseTerminalToolCallArguments(
   value: unknown,
   errorMessage = MALFORMED_TOOL_CALL_TERMINAL_ERROR_MESSAGE,
+  options?: { repairStringLiterals?: boolean },
 ): Record<string, unknown> {
   const parsed = parseJsonObjectPreservingUnsafeIntegers(value);
-  if (!parsed) {
-    throw new Error(errorMessage);
+  if (parsed) {
+    return parsed;
   }
-  return parsed;
+  const repairStringLiterals = options?.repairStringLiterals === true && typeof value === "string";
+  if (repairStringLiterals) {
+    const repaired = repairTerminalToolCallArguments(value);
+    if (repaired) {
+      return repaired;
+    }
+  }
+  throw createMalformedToolCallArgumentsError(value, errorMessage, repairStringLiterals);
 }
 
 /** Validate a complete sibling set before mutating any call into executable state. */
@@ -85,9 +152,11 @@ export function finalizeTerminalToolCallArguments<T extends { arguments: Record<
   calls: readonly T[],
   readArguments: (call: T) => unknown,
   errorMessage?: string,
+  options?: { repairStringLiterals?: boolean },
 ): void {
   const validated = calls.map(
-    (call) => [call, parseTerminalToolCallArguments(readArguments(call), errorMessage)] as const,
+    (call) =>
+      [call, parseTerminalToolCallArguments(readArguments(call), errorMessage, options)] as const,
   );
   for (const [call, argumentsValue] of validated) {
     call.arguments = argumentsValue;
@@ -98,40 +167,25 @@ export function mergeTransportHeaders(
   ...headerSources: Array<Record<string, string> | undefined>
 ): Record<string, string> | undefined {
   const merged: Record<string, string> = {};
+  const namesByLowercase = new Map<string, string>();
   for (const headers of headerSources) {
-    if (headers) {
-      Object.assign(merged, headers);
+    for (const [name, value] of Object.entries(headers ?? {})) {
+      // HTTP header names are case-insensitive. Remove the earlier spelling so
+      // fetch cannot combine a protected replacement with its stale value.
+      const lowercaseName = name.toLowerCase();
+      const previousName = namesByLowercase.get(lowercaseName);
+      if (previousName && previousName !== name) {
+        delete merged[previousName];
+      }
+      merged[name] = value;
+      namesByLowercase.set(lowercaseName, name);
     }
   }
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
-export function mergeTransportMetadata<T extends Record<string, unknown>>(
-  payload: T,
-  metadata?: Record<string, string>,
-): T {
-  if (!metadata || Object.keys(metadata).length === 0) {
-    return payload;
-  }
-  const existingMetadata = asOptionalRecord(payload.metadata) as Record<string, string> | undefined;
-  return {
-    ...payload,
-    metadata: {
-      ...existingMetadata,
-      ...metadata,
-    },
-  };
-}
-
 export function createEmptyTransportUsage(): TransportUsage {
-  return {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 0,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-  };
+  return createZeroUsage();
 }
 
 export function createWritableTransportEventStream() {
@@ -157,6 +211,59 @@ export function transportAbortError(signal?: AbortSignal): Error {
   return reason instanceof Error && typeof (reason as { code?: unknown }).code === "string"
     ? reason
     : new Error("Request was aborted");
+}
+
+const MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 12;
+const MODEL_STREAM_COOPERATIVE_YIELD_MAX_EVENTS = 64;
+
+type ModelStreamCooperativeScheduler = {
+  afterEvent: () => Promise<void>;
+};
+
+export function throwIfModelStreamAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw transportAbortError(signal);
+  }
+}
+
+export function createModelStreamCooperativeScheduler(
+  signal?: AbortSignal,
+): ModelStreamCooperativeScheduler {
+  let lastYieldedAt = Date.now();
+  let eventsSinceYield = 0;
+  return {
+    async afterEvent() {
+      throwIfModelStreamAborted(signal);
+      eventsSinceYield += 1;
+      const now = Date.now();
+      if (
+        eventsSinceYield < MODEL_STREAM_COOPERATIVE_YIELD_MAX_EVENTS &&
+        now - lastYieldedAt < MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS
+      ) {
+        return;
+      }
+      eventsSinceYield = 0;
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+      throwIfModelStreamAborted(signal);
+      // Time waiting for the yield does not consume the next work budget.
+      lastYieldedAt = Date.now();
+    },
+  };
+}
+
+/** Keep ready provider events from monopolizing the main loop, including ignored events. */
+export async function* iterateModelStream<T>(
+  events: AsyncIterable<T> | Iterable<T>,
+  signal?: AbortSignal,
+): AsyncGenerator<T> {
+  const scheduler = createModelStreamCooperativeScheduler(signal);
+  for await (const event of events) {
+    throwIfModelStreamAborted(signal);
+    yield event;
+    await scheduler.afterEvent();
+  }
 }
 
 export type ProviderAcceptance =
@@ -233,25 +340,9 @@ async function awaitProviderLifecycleCallback(
     return;
   }
   const callbackPromise = Promise.resolve().then(callback);
-  if (!signal) {
-    await callbackPromise;
-    return;
-  }
-  let onAbort: (() => void) | undefined;
-  try {
-    await Promise.race([
-      callbackPromise,
-      new Promise<never>((_resolve, reject) => {
-        onAbort = () => reject(transportAbortError(signal));
-        signal.addEventListener("abort", onAbort, { once: true });
-      }),
-    ]);
-  } finally {
-    if (onAbort) {
-      signal.removeEventListener("abort", onAbort);
-    }
-  }
-  if (signal.aborted) {
+  getAiTransportHost().observePendingProviderWork?.(callbackPromise);
+  await racePromiseWithAbortSignal(callbackPromise, signal, transportAbortError);
+  if (signal?.aborted) {
     throw transportAbortError(signal);
   }
 }
@@ -260,7 +351,9 @@ function startProviderStreamCancellation(cancelStream: ProviderStreamCancel, err
   const reason = error instanceof Error ? error : new Error(String(error));
   try {
     // The lifecycle failure remains authoritative. Cleanup must not delay or replace it.
-    void Promise.resolve(cancelStream(reason)).catch(() => undefined);
+    const pending = Promise.resolve(cancelStream(reason));
+    void pending.catch(() => undefined);
+    getAiTransportHost().observePendingProviderWork?.(pending);
   } catch {
     // A synchronous cleanup failure cannot replace the lifecycle failure either.
   }
@@ -400,7 +493,7 @@ export function finalizeTransportStream(params: {
   stream.end();
 }
 
-/** @deprecated Use projectProviderError. v2026.7.2-beta.5 compatibility; remove after 2026.10. */
+/** Assign terminal fields and record silent transport failures before partial-call cleanup. */
 export function assignTransportErrorDetails(
   output: AssistantMessage,
   error: unknown,
@@ -408,6 +501,22 @@ export function assignTransportErrorDetails(
 ): ProviderErrorProjection {
   const projection = projectProviderError(error, signal);
   Object.assign(output, projection);
+  if (
+    projection.stopReason === "error" &&
+    output.content.length === 0 &&
+    isTransientNetworkError(projectDiagnosticValue(error)) &&
+    !output.diagnostics?.some((diagnostic) => diagnostic.type === "provider_transport_failure")
+  ) {
+    // Recovery consumes this fact, not error-text guesses. Reuse the bounded,
+    // redacted terminal message so diagnostics cannot expose the original throw.
+    appendAssistantMessageDiagnostic(
+      output,
+      createAssistantMessageDiagnostic("provider_transport_failure", projection.errorMessage, {
+        eventsEmitted: false,
+        phase: "before_message_stream_start",
+      }),
+    );
+  }
   return projection;
 }
 
@@ -419,8 +528,8 @@ export function failTransportStream(params: {
   cleanup?: () => void;
 }): void {
   const { stream, output, signal, error, cleanup } = params;
-  cleanup?.();
   const projection = assignTransportErrorDetails(output, error, signal);
+  cleanup?.();
   stream.push({ type: "error", reason: projection.stopReason, error: output });
   stream.end();
 }

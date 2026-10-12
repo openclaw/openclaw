@@ -1,72 +1,47 @@
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import * as sessionAccessor from "../config/sessions/session-accessor.js";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import {
-  persistSessionTranscriptTurn,
-  replaceTranscriptEvents,
-  upsertSessionEntryCore,
-} from "../config/sessions/session-accessor.js";
-import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
+import { visitSessionMessagesAsync } from "./session-transcript-native.test-support.js";
 import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
-import { readSessionMessagesAroundIdWithStatsAsync } from "./session-transcript-anchor-reader.js";
-import {
+  readRecentSessionMessagesWithStatsAsync,
   readSessionMessageByIdAsync,
   readSessionMessageCountAsync,
+  readSessionTranscriptAccountingAsync,
   readSessionMessagesAsync,
+  readSessionMessagesAroundIdWithStatsAsync,
   readSessionMessagesPageWithStatsAsync,
-  readLatestSessionUsageFromTranscriptAsync,
-  type SessionTranscriptReadScope,
+  readSessionMessagesWithSourceAsync,
 } from "./session-transcript-readers.js";
-import {
-  readSessionTitleFieldsFromTranscript,
-  readSessionTitleFieldsFromTranscriptBatch,
-} from "./session-transcript-title-reader.js";
-
-vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/sessions/session-accessor.js")>();
-  return {
-    ...actual,
-    readSessionTranscriptMessageEventPage: vi.fn(actual.readSessionTranscriptMessageEventPage),
-    readSessionTranscriptMessageEvents: vi.fn(actual.readSessionTranscriptMessageEvents),
-    readSessionTranscriptTitleProbeBatch: vi.fn(actual.readSessionTranscriptTitleProbeBatch),
-    readSessionTranscriptWatermark: vi.fn(actual.readSessionTranscriptWatermark),
-    readSessionTranscriptWatermarkBatch: vi.fn(actual.readSessionTranscriptWatermarkBatch),
-  };
-});
-
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+import { readLatestSessionUsageFromTranscriptAsync } from "./session-transcript-usage.js";
 
 describe("session transcript reader facade", () => {
   let tempDir: string;
   let storePath: string;
-  let envSnapshot: ReturnType<typeof captureEnv>;
+  let state: OpenClawTestState;
 
-  beforeEach(() => {
-    vi.clearAllMocks();
-    envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-    tempDir = tempDirs.make("openclaw-transcript-readers-");
+  beforeEach(async () => {
+    state = await createOpenClawTestState({
+      prefix: "openclaw-transcript-readers-",
+      layout: "state-only",
+    });
+    tempDir = state.stateDir;
     storePath = path.join(tempDir, "sessions.json");
-    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
   });
 
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    envSnapshot.restore();
+  afterEach(async () => {
+    await state.cleanup();
   });
 
-  async function writeTranscript(
-    sessionId: string,
-    events: unknown[],
-  ): Promise<SessionTranscriptReadScope> {
+  async function writeTranscript(sessionId: string, events: unknown[]) {
     const scope = {
       agentId: "main",
       sessionId,
@@ -74,23 +49,6 @@ describe("session transcript reader facade", () => {
       storePath,
     };
     await replaceTranscriptEvents(scope, events);
-    return scope;
-  }
-
-  async function writeSqliteMessages(
-    sessionId: string,
-    messages: Array<{ content: unknown; provenance?: unknown; role: string }>,
-  ): Promise<SessionTranscriptReadScope> {
-    const scope = {
-      agentId: "main",
-      sessionId,
-      sessionKey: `agent:main:${sessionId}`,
-      storePath,
-    };
-    await persistSessionTranscriptTurn(scope, {
-      messages: messages.map((message) => ({ message })),
-      touchSessionEntry: false,
-    });
     return scope;
   }
 
@@ -105,56 +63,44 @@ describe("session transcript reader facade", () => {
       .run(sessionId);
   }
 
-  function extractReferenceText(message: unknown): string | null {
-    if (!message || typeof message !== "object" || Array.isArray(message)) {
-      return null;
-    }
-    const content = (message as { content?: unknown }).content;
-    if (typeof content === "string") {
-      return content.trim() || null;
-    }
-    if (!Array.isArray(content)) {
-      return null;
-    }
-    const text = content
-      .map((entry) =>
-        entry && typeof entry === "object" && typeof (entry as { text?: unknown }).text === "string"
-          ? (entry as { text: string }).text
-          : "",
-      )
-      .filter((part) => part.trim())
-      .join("\n")
-      .trim();
-    return text || null;
-  }
-
-  async function readFullScanTitleFields(scope: SessionTranscriptReadScope) {
-    const messages = await readSessionMessagesAsync(scope, {
-      mode: "full",
-      reason: "title probe parity reference",
-    });
-    const firstUser = messages.find(
-      (message) =>
-        message &&
-        typeof message === "object" &&
-        !Array.isArray(message) &&
-        (message as { role?: unknown }).role === "user" &&
-        (message as { provenance?: { kind?: unknown } }).provenance?.kind !== "inter_session",
+  test("prepares byte, usage and taint facts without host transcript SQL", async () => {
+    const events = [
+      { type: "session", id: "accounting", version: 3 },
+      {
+        type: "message",
+        id: "user",
+        parentId: null,
+        message: { role: "user", content: "question" },
+      },
+      {
+        type: "message",
+        id: "answer",
+        parentId: "user",
+        message: {
+          role: "assistant",
+          content: "answer",
+          usage: { input: 200, output: 7 },
+          __openclaw: { turnTainted: true },
+        },
+      },
+    ];
+    const scope = await writeTranscript("accounting", events);
+    const options = { includeByteSize: true, includeUsage: true, includeTurnTaint: true };
+    await readSessionTranscriptAccountingAsync(scope, options);
+    const hostSql = observeHostDataSql();
+    const result = await readSessionTranscriptAccountingAsync(scope, options).finally(() =>
+      hostSql.restore(),
     );
-    return {
-      firstUserMessage: firstUser ? extractReferenceText(firstUser) : null,
-      lastMessagePreview: messages.toReversed().map(extractReferenceText).find(Boolean) ?? null,
-    };
-  }
-
-  function boundedPageEventReadCount(): number {
-    return vi
-      .mocked(sessionAccessor.readSessionTranscriptMessageEventPage)
-      .mock.results.reduce(
-        (total, result) => total + (result.type === "return" ? result.value.events.length : 0),
-        0,
-      );
-  }
+    expect(hostSql.queries).toEqual([]);
+    expect(result).toEqual({
+      byteSize: events
+        .slice(1)
+        .reduce((bytes, event) => bytes + Buffer.byteLength(JSON.stringify(event)) + 1, 0),
+      eventCount: 2,
+      turnTainted: true,
+      usage: { promptTokens: 200, outputTokens: 7, trailingMessages: [] },
+    });
+  });
 
   test("reads active-branch messages and message ids through a scope", async () => {
     const scope = await writeTranscript("reader-active-branch", [
@@ -181,7 +127,18 @@ describe("session transcript reader facade", () => {
 
     await expect(
       readSessionMessagesAsync(scope, { mode: "full", reason: "facade active branch test" }),
-    ).resolves.toMatchObject([{ content: "root prompt" }, { content: "active answer" }]);
+    ).resolves.toMatchObject([
+      { content: "root prompt", __openclaw: { id: "root", seq: 1 } },
+      { content: "active answer", __openclaw: { id: "active", seq: 2 } },
+    ]);
+    const visited: Array<{ message: unknown; seq: number }> = [];
+    await expect(
+      visitSessionMessagesAsync(scope, (message, seq) => visited.push({ message, seq })),
+    ).resolves.toBe(2);
+    expect(visited).toEqual([
+      { message: { role: "user", content: "root prompt" }, seq: 1 },
+      { message: { role: "assistant", content: "active answer" }, seq: 2 },
+    ]);
     await expect(readSessionMessageCountAsync(scope)).resolves.toBe(2);
     await expect(readSessionMessageByIdAsync(scope, "active")).resolves.toMatchObject({
       found: true,
@@ -201,6 +158,165 @@ describe("session transcript reader facade", () => {
       totalMessages: 2,
     });
   });
+
+  test("bounds source pages and freezes their sequence across appends", async () => {
+    const sessionId = "reader-source-pages";
+    const scope = await writeTranscript(sessionId, [
+      { type: "session", version: 3, id: sessionId },
+      ...Array.from({ length: 260 }, (_, index) => ({
+        type: "message",
+        id: `message-${index}`,
+        parentId: index === 0 ? null : `message-${index - 1}`,
+        message: { role: "user", content: `prompt ${index}` },
+      })),
+    ]);
+    let page = await readSessionMessagesWithSourceAsync(scope, { mode: "page" });
+    expect(page.messages).toHaveLength(128);
+    expect(page.nextCursor).toBeDefined();
+    expect(page.snapshot).toMatchObject({ totalMessages: 260 });
+    const firstCursor = page.nextCursor;
+    const snapshot = page.snapshot;
+    const messages = [...page.messages];
+
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "appended",
+          parentId: "message-259",
+          message: { role: "assistant", content: "appended after the first page" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    expect(await readSessionMessageCountAsync(scope)).toBe(261);
+    while (page.nextCursor) {
+      page = await readSessionMessagesWithSourceAsync(scope, {
+        mode: "page",
+        cursor: page.nextCursor,
+      });
+      expect(page.messages.length).toBeLessThanOrEqual(128);
+      expect(page.snapshot).toEqual(snapshot);
+      messages.push(...page.messages);
+    }
+    expect(
+      messages.map((message) => (message as { __openclaw: { id: string } })["__openclaw"].id),
+    ).toEqual(Array.from({ length: 260 }, (_, index) => `message-${index}`));
+
+    await replaceTranscriptEvents(scope, [
+      { type: "session", version: 3, id: sessionId },
+      {
+        type: "message",
+        id: "replacement",
+        parentId: null,
+        message: { role: "user", content: "new transcript" },
+      },
+    ]);
+    await expect(
+      readSessionMessagesWithSourceAsync(scope, { mode: "page", cursor: firstCursor }),
+    ).rejects.toMatchObject({
+      name: "SessionTranscriptProjectionUnavailableError",
+      reason: "window-changed",
+    });
+  });
+
+  test("bounds source pages by bytes and rejects a message larger than one page", async () => {
+    const sessionId = "reader-source-page-bytes";
+    const content = "a".repeat(3 * 1024 * 1024);
+    const scope = await writeTranscript(sessionId, [
+      { type: "session", version: 3, id: sessionId },
+      ...Array.from({ length: 3 }, (_, index) => ({
+        type: "message",
+        id: `large-${index}`,
+        parentId: index === 0 ? null : `large-${index - 1}`,
+        message: { role: "user", content },
+      })),
+    ]);
+    expect(await readSessionMessageCountAsync(scope)).toBe(3);
+    const first = await readSessionMessagesWithSourceAsync(scope, { mode: "page" });
+    expect(first.messages).toHaveLength(2);
+    expect(first.nextCursor).toBeDefined();
+    const last = await readSessionMessagesWithSourceAsync(scope, {
+      mode: "page",
+      cursor: first.nextCursor,
+    });
+    expect(last.messages).toHaveLength(1);
+    expect(last.nextCursor).toBeUndefined();
+    for (const page of [first, last]) {
+      expect(Buffer.byteLength(JSON.stringify(page.messages))).toBeLessThan(8 * 1024 * 1024);
+      for (const message of page.messages) {
+        expect((message as { content: string }).content).toBe(content);
+      }
+    }
+
+    await replaceTranscriptEvents(scope, [
+      { type: "session", version: 3, id: sessionId },
+      {
+        type: "message",
+        id: "oversized",
+        parentId: null,
+        message: { role: "user", content: "b".repeat(8 * 1024 * 1024) },
+      },
+    ]);
+    expect(await readSessionMessageCountAsync(scope)).toBe(1);
+    await expect(readSessionMessagesWithSourceAsync(scope, { mode: "page" })).rejects.toThrow(
+      "Transcript source message exceeds the 8388608-byte page limit",
+    );
+  });
+
+  test.each(["visitor"] as const)(
+    "acquires messages incrementally and releases the cursor after %s failure",
+    async (failure) => {
+      const sessionId = `reader-stream-${failure}`;
+      const scope = await writeTranscript(sessionId, [
+        { type: "session", version: 3, id: sessionId },
+        {
+          type: "message",
+          id: "first",
+          parentId: null,
+          message: { role: "user", content: "first prompt" },
+        },
+        {
+          type: "message",
+          id: "later",
+          parentId: "first",
+          message: { role: "assistant", content: "later answer" },
+        },
+      ]);
+      const database = openOpenClawAgentDatabase({
+        agentId: "main",
+        path: path.join(tempDir, "openclaw-agent.sqlite"),
+      });
+      // Keep the ready projection, but poison a later payload: an early abort must never parse it.
+      database.db
+        .prepare(
+          `UPDATE transcript_events SET event_json = '{malformed'
+           WHERE session_id = ? AND seq = (
+             SELECT MAX(seq) FROM transcript_events WHERE session_id = ?
+           )`,
+        )
+        .run(sessionId, sessionId);
+      const stopped = new Error("visitor stopped");
+      const visited: Array<{ message: unknown; seq: number }> = [];
+      const traversal = visitSessionMessagesAsync(scope, (message, seq) => {
+        expect(database.db.isTransaction).toBe(true);
+        visited.push({ message, seq });
+        if (failure === "visitor") {
+          throw stopped;
+        }
+      });
+      if (failure === "visitor") {
+        await expect(traversal).rejects.toBe(stopped);
+      } else {
+        await expect(traversal).rejects.toBeInstanceOf(SyntaxError);
+      }
+      expect(visited).toEqual([{ message: { role: "user", content: "first prompt" }, seq: 1 }]);
+      expect(database.db.isTransaction).toBe(false);
+      // A surviving read cursor prevents checkpointing even after transaction rollback.
+      expect(database.db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()).toMatchObject({
+        busy: 0,
+      });
+    },
+  );
 
   test("preserves Date.parse semantics for numeric-looking record timestamps", async () => {
     const scope = await writeTranscript("reader-numeric-looking-timestamps", [
@@ -229,40 +345,6 @@ describe("session transcript reader facade", () => {
     ]);
   });
 
-  test("finds an anchored reset-archive message by historical session id", async () => {
-    const sessionId = "reader-file-archive-anchor";
-    const scope = await writeTranscript(sessionId, [
-      { type: "session", version: 3, id: sessionId },
-      {
-        type: "message",
-        id: "active-message",
-        parentId: null,
-        message: { role: "user", content: "active prompt" },
-      },
-    ]);
-    fs.writeFileSync(
-      path.join(tempDir, `${sessionId}.jsonl.reset.2026-07-12T17-00-00.000Z`),
-      `${JSON.stringify({ type: "session", version: 3, id: sessionId })}\n${JSON.stringify({
-        type: "message",
-        id: "archived-message",
-        parentId: null,
-        message: { role: "user", content: "archived prompt" },
-      })}\n`,
-      "utf-8",
-    );
-
-    await expect(
-      readSessionMessagesAroundIdWithStatsAsync(scope, {
-        messageId: "archived-message",
-        maxMessages: 1,
-        allowResetArchiveFallback: true,
-      }),
-    ).resolves.toMatchObject({
-      found: true,
-      messages: [{ content: "archived prompt" }],
-    });
-  });
-
   test("keeps SQLite precedence by ignoring an obsolete active JSONL during archive fallback", async () => {
     const sessionId = "reader-reset-archive-only";
     const scope = {
@@ -281,6 +363,19 @@ describe("session transcript reader facade", () => {
       line("retained archive"),
     );
 
+    for (const allowResetArchiveFallback of [false, undefined]) {
+      await expect(
+        readSessionMessagesPageWithStatsAsync(scope, {
+          offset: 0,
+          maxMessages: 1,
+          allowResetArchiveFallback,
+        }),
+      ).rejects.toMatchObject({
+        name: "SessionTranscriptStorageUnavailableError",
+        reason: "database-missing",
+      });
+    }
+
     await expect(
       readSessionMessagesAsync(scope, {
         mode: "full",
@@ -288,41 +383,19 @@ describe("session transcript reader facade", () => {
         allowResetArchiveFallback: true,
       }),
     ).resolves.toMatchObject([{ content: "retained archive" }]);
-  });
-
-  test("does not fall back to stored custom transcript paths after SQLite migration", async () => {
-    const sessionId = "reader-legacy-custom-path";
-    const sessionKey = `agent:main:telegram:group:1:topic:9`;
-    const transcriptPath = path.join(tempDir, "legacy", "custom-topic.jsonl");
-    fs.mkdirSync(path.dirname(transcriptPath), { recursive: true });
-    fs.writeFileSync(
-      transcriptPath,
-      `${JSON.stringify({ type: "session", version: 1, id: sessionId })}\n${JSON.stringify({
-        type: "message",
-        id: "u1",
-        message: { role: "user", content: "legacy prompt" },
-      })}\n${JSON.stringify({
-        type: "message",
-        id: "a1",
-        message: { role: "assistant", content: "legacy answer" },
-      })}\n`,
-      "utf-8",
-    );
-    await upsertSessionEntryCore(
-      { sessionKey, storePath },
-      {
-        sessionId,
-        sessionFile: transcriptPath,
-        updatedAt: 10,
-      },
-    );
-
     await expect(
-      readSessionMessagesAsync(
-        { agentId: "main", sessionId, sessionKey, storePath },
-        { mode: "full", reason: "no legacy fallback test" },
-      ),
-    ).resolves.toEqual([]);
+      readRecentSessionMessagesWithStatsAsync(scope, {
+        maxMessages: 1,
+        allowResetArchiveFallback: true,
+      }),
+    ).resolves.toMatchObject({ messages: [{ content: "retained archive" }] });
+    await expect(
+      readSessionMessagesPageWithStatsAsync(scope, {
+        offset: 0,
+        maxMessages: 1,
+        allowResetArchiveFallback: true,
+      }),
+    ).resolves.toMatchObject({ messages: [{ content: "retained archive" }] });
   });
 
   test("reads SQLite-only transcript rows without a JSONL mirror", async () => {
@@ -421,431 +494,6 @@ describe("session transcript reader facade", () => {
     });
   });
 
-  test("keeps bounded title fields at full-scan parity", async () => {
-    const scope = await writeSqliteMessages(
-      "reader-title-parity",
-      Array.from({ length: 105 }, (_, index) => {
-        if (index === 60) {
-          return { role: "user", content: "late prompt" };
-        }
-        if (index === 102) {
-          return { role: "assistant", content: "last visible" };
-        }
-        return { role: "assistant", content: index > 102 ? " " : `reply ${String(index)}` };
-      }),
-    );
-    const reference = await readFullScanTitleFields(scope);
-    expect(reference).toEqual({
-      firstUserMessage: "late prompt",
-      lastMessagePreview: "last visible",
-    });
-    vi.clearAllMocks();
-
-    expect(readSessionTitleFieldsFromTranscript(scope)).toEqual(reference);
-    expect(sessionAccessor.readSessionTranscriptMessageEvents).not.toHaveBeenCalled();
-  });
-
-  test("falls back to the canonical visible window for reset transcripts", async () => {
-    const sessionId = "reader-title-reset-window";
-    const scope = await writeTranscript(sessionId, [
-      { type: "session", version: 3, id: sessionId },
-      {
-        type: "message",
-        id: "old",
-        parentId: null,
-        message: { role: "user", content: "hidden old prompt" },
-      },
-      {
-        type: "message",
-        id: "kept-user",
-        parentId: "old",
-        message: { role: "user", content: "kept prompt" },
-      },
-      {
-        type: "message",
-        id: "kept-assistant",
-        parentId: "kept-user",
-        message: { role: "assistant", content: "kept answer" },
-      },
-      {
-        type: "reset",
-        id: "reset-boundary",
-        parentId: "kept-assistant",
-        firstKeptEntryId: "kept-user",
-      },
-      {
-        type: "message",
-        id: "post-reset",
-        parentId: "reset-boundary",
-        message: { role: "assistant", content: "newest answer" },
-      },
-    ]);
-    expect(readSessionTitleFieldsFromTranscriptBatch([scope])).toEqual([
-      { firstUserMessage: "kept prompt", lastMessagePreview: "newest answer" },
-    ]);
-  });
-
-  test("degrades single title reads while the projection rebuilds", async () => {
-    const scope = await writeSqliteMessages("reader-title-single-rebuilding", [
-      { role: "user", content: "single prompt" },
-      { role: "assistant", content: "single reply" },
-    ]);
-    markProjectionNeedsRebuild(scope.sessionId);
-
-    let fields: ReturnType<typeof readSessionTitleFieldsFromTranscript> | undefined;
-    try {
-      fields = readSessionTitleFieldsFromTranscript(scope);
-    } finally {
-      await waitForSessionTranscriptIndexReconcile({
-        agentId: "main",
-        path: path.join(tempDir, "openclaw-agent.sqlite"),
-      });
-    }
-    expect(fields).toEqual({
-      firstUserMessage: null,
-      lastMessagePreview: null,
-    });
-  });
-
-  test("isolates a rebuilding projection to one title row and heals on refresh", async () => {
-    const scopes: SessionTranscriptReadScope[] = [];
-    for (const label of ["first", "rebuilding", "last"]) {
-      scopes.push(
-        await writeSqliteMessages(`reader-title-${label}`, [
-          { role: "user", content: `${label} prompt` },
-          { role: "assistant", content: `${label} reply` },
-        ]),
-      );
-    }
-    const databasePath = path.join(tempDir, "openclaw-agent.sqlite");
-    markProjectionNeedsRebuild("reader-title-rebuilding");
-
-    expect(readSessionTitleFieldsFromTranscriptBatch(scopes)).toEqual([
-      { firstUserMessage: "first prompt", lastMessagePreview: "first reply" },
-      { firstUserMessage: null, lastMessagePreview: null },
-      { firstUserMessage: "last prompt", lastMessagePreview: "last reply" },
-    ]);
-
-    await waitForSessionTranscriptIndexReconcile({ agentId: "main", path: databasePath });
-    expect(readSessionTitleFieldsFromTranscriptBatch(scopes)).toEqual([
-      { firstUserMessage: "first prompt", lastMessagePreview: "first reply" },
-      { firstUserMessage: "rebuilding prompt", lastMessagePreview: "rebuilding reply" },
-      { firstUserMessage: "last prompt", lastMessagePreview: "last reply" },
-    ]);
-  });
-
-  test.each(["watermarkBatch", "titleProbeBatch", "watermark", "messageEventPage"] as const)(
-    "degrades only the unavailable scope when %s throws",
-    async (faultSource) => {
-      const actual = await vi.importActual<typeof import("../config/sessions/session-accessor.js")>(
-        "../config/sessions/session-accessor.js",
-      );
-      const brokenSessionId = `reader-title-${faultSource}-broken`;
-      const scopes: SessionTranscriptReadScope[] = [];
-      for (const label of ["first", "broken", "last"]) {
-        scopes.push(
-          await writeSqliteMessages(`reader-title-${faultSource}-${label}`, [
-            { role: "user", content: `${label} prompt` },
-            { role: "assistant", content: `${label} reply` },
-          ]),
-        );
-      }
-      if (faultSource === "watermarkBatch") {
-        readSessionTitleFieldsFromTranscriptBatch(scopes);
-      }
-
-      const watermarkBatch = vi.mocked(sessionAccessor.readSessionTranscriptWatermarkBatch);
-      const titleProbeBatch = vi.mocked(sessionAccessor.readSessionTranscriptTitleProbeBatch);
-      const watermark = vi.mocked(sessionAccessor.readSessionTranscriptWatermark);
-      const messageEventPage = vi.mocked(sessionAccessor.readSessionTranscriptMessageEventPage);
-      const unavailable = () =>
-        new sessionAccessor.SessionTranscriptProjectionUnavailableError(brokenSessionId);
-      try {
-        if (faultSource === "watermarkBatch") {
-          watermarkBatch.mockImplementation((readScopes) => {
-            if (readScopes.some((scope) => scope.sessionId === brokenSessionId)) {
-              throw unavailable();
-            }
-            return actual.readSessionTranscriptWatermarkBatch(readScopes);
-          });
-          watermark.mockImplementation((scope) => {
-            if (scope.sessionId === brokenSessionId) {
-              throw unavailable();
-            }
-            return actual.readSessionTranscriptWatermark(scope);
-          });
-        } else if (faultSource === "titleProbeBatch") {
-          titleProbeBatch.mockImplementation((readScopes) => {
-            if (readScopes.some((scope) => scope.sessionId === brokenSessionId)) {
-              throw unavailable();
-            }
-            return actual.readSessionTranscriptTitleProbeBatch(readScopes);
-          });
-          messageEventPage.mockImplementation((scope, options) => {
-            if (scope.sessionId === brokenSessionId) {
-              throw unavailable();
-            }
-            return actual.readSessionTranscriptMessageEventPage(scope, options);
-          });
-        } else {
-          titleProbeBatch.mockImplementation((readScopes) =>
-            actual
-              .readSessionTranscriptTitleProbeBatch(readScopes)
-              .map((probe, index) =>
-                readScopes[index]?.sessionId === brokenSessionId ? undefined : probe,
-              ),
-          );
-          if (faultSource === "watermark") {
-            watermark.mockImplementation((scope) => {
-              if (scope.sessionId === brokenSessionId) {
-                throw unavailable();
-              }
-              return actual.readSessionTranscriptWatermark(scope);
-            });
-          } else {
-            messageEventPage.mockImplementation((scope, options) => {
-              if (scope.sessionId === brokenSessionId) {
-                throw unavailable();
-              }
-              return actual.readSessionTranscriptMessageEventPage(scope, options);
-            });
-          }
-        }
-
-        expect(readSessionTitleFieldsFromTranscriptBatch(scopes)).toEqual([
-          { firstUserMessage: "first prompt", lastMessagePreview: "first reply" },
-          { firstUserMessage: null, lastMessagePreview: null },
-          { firstUserMessage: "last prompt", lastMessagePreview: "last reply" },
-        ]);
-      } finally {
-        watermarkBatch.mockImplementation(actual.readSessionTranscriptWatermarkBatch);
-        titleProbeBatch.mockImplementation(actual.readSessionTranscriptTitleProbeBatch);
-        watermark.mockImplementation(actual.readSessionTranscriptWatermark);
-        messageEventPage.mockImplementation(actual.readSessionTranscriptMessageEventPage);
-      }
-    },
-  );
-
-  test("isolates a batch failure when separate scopes share a session id", async () => {
-    const actual = await vi.importActual<typeof import("../config/sessions/session-accessor.js")>(
-      "../config/sessions/session-accessor.js",
-    );
-    const sessionId = "reader-title-duplicate-session-id";
-    const scopes = [
-      { agentId: "main", sessionId, sessionKey: "agent:main:duplicate-title" },
-      { agentId: "work", sessionId, sessionKey: "agent:work:duplicate-title" },
-    ];
-    for (const [index, scope] of scopes.entries()) {
-      await persistSessionTranscriptTurn(scope, {
-        messages: [
-          { message: { role: "user", content: `prompt ${index}` } },
-          { message: { role: "assistant", content: `reply ${index}` } },
-        ],
-        touchSessionEntry: false,
-      });
-    }
-    const titleProbeBatch = vi.mocked(sessionAccessor.readSessionTranscriptTitleProbeBatch);
-    const messageEventPage = vi.mocked(sessionAccessor.readSessionTranscriptMessageEventPage);
-    try {
-      titleProbeBatch.mockImplementation(() => {
-        throw new sessionAccessor.SessionTranscriptProjectionUnavailableError(sessionId);
-      });
-      messageEventPage.mockImplementation((scope, options) => {
-        if (scope.agentId === "work") {
-          throw new sessionAccessor.SessionTranscriptProjectionUnavailableError(sessionId);
-        }
-        return actual.readSessionTranscriptMessageEventPage(scope, options);
-      });
-
-      expect(readSessionTitleFieldsFromTranscriptBatch(scopes)).toEqual([
-        { firstUserMessage: "prompt 0", lastMessagePreview: "reply 0" },
-        { firstUserMessage: null, lastMessagePreview: null },
-      ]);
-    } finally {
-      titleProbeBatch.mockImplementation(actual.readSessionTranscriptTitleProbeBatch);
-      messageEventPage.mockImplementation(actual.readSessionTranscriptMessageEventPage);
-    }
-  });
-
-  test("bounds title probe reads independently of transcript length", async () => {
-    const probeReadCount = async (sessionId: string, messageCount: number) => {
-      const scope = await writeSqliteMessages(
-        sessionId,
-        Array.from({ length: messageCount }, () => ({ role: "assistant", content: " " })),
-      );
-      vi.clearAllMocks();
-
-      expect(readSessionTitleFieldsFromTranscript(scope)).toEqual({
-        firstUserMessage: null,
-        lastMessagePreview: null,
-      });
-      expect(sessionAccessor.readSessionTranscriptMessageEvents).not.toHaveBeenCalled();
-      expect(
-        vi
-          .mocked(sessionAccessor.readSessionTranscriptMessageEventPage)
-          .mock.calls.map(([, options]) => options.maxMessages),
-      ).toEqual([20, 80, 20, 80]);
-      return boundedPageEventReadCount();
-    };
-
-    await expect(probeReadCount("reader-title-bounded-101", 101)).resolves.toBe(200);
-    await expect(probeReadCount("reader-title-bounded-201", 201)).resolves.toBe(200);
-  });
-
-  test("reuses cached SQLite title fields while the transcript watermark is unchanged", async () => {
-    const scope = await writeSqliteMessages("reader-title-cache-warm", [
-      { role: "user", content: "cached prompt" },
-      { role: "assistant", content: "cached reply" },
-    ]);
-    expect(readSessionTitleFieldsFromTranscript(scope)).toEqual({
-      firstUserMessage: "cached prompt",
-      lastMessagePreview: "cached reply",
-    });
-    vi.clearAllMocks();
-
-    expect(readSessionTitleFieldsFromTranscript(scope)).toEqual({
-      firstUserMessage: "cached prompt",
-      lastMessagePreview: "cached reply",
-    });
-    expect(sessionAccessor.readSessionTranscriptMessageEventPage).not.toHaveBeenCalled();
-  });
-
-  test("skips batch title probes while every cached transcript watermark is unchanged", async () => {
-    const scope = await writeSqliteMessages("reader-title-batch-cache-warm", [
-      { role: "user", content: "cached batch prompt" },
-      { role: "assistant", content: "cached batch reply" },
-    ]);
-    expect(readSessionTitleFieldsFromTranscriptBatch([scope])).toEqual([
-      { firstUserMessage: "cached batch prompt", lastMessagePreview: "cached batch reply" },
-    ]);
-    vi.clearAllMocks();
-
-    expect(readSessionTitleFieldsFromTranscriptBatch([scope])).toEqual([
-      { firstUserMessage: "cached batch prompt", lastMessagePreview: "cached batch reply" },
-    ]);
-    expect(sessionAccessor.readSessionTranscriptWatermarkBatch).toHaveBeenCalledOnce();
-    expect(sessionAccessor.readSessionTranscriptWatermark).not.toHaveBeenCalled();
-    expect(sessionAccessor.readSessionTranscriptTitleProbeBatch).not.toHaveBeenCalled();
-    expect(sessionAccessor.readSessionTranscriptMessageEventPage).not.toHaveBeenCalled();
-  });
-
-  test("resolves SQLite store ownership once for a multi-row transcript batch", async () => {
-    const scopes: SessionTranscriptReadScope[] = [];
-    for (let index = 0; index < 30; index += 1) {
-      scopes.push(
-        await writeSqliteMessages(`reader-title-target-batch-${index}`, [
-          { role: "user", content: `prompt ${index}` },
-          { role: "assistant", content: `reply ${index}` },
-        ]),
-      );
-    }
-    const prepareSpy = vi.spyOn(DatabaseSync.prototype, "prepare");
-    try {
-      expect(sessionAccessor.readSessionTranscriptTitleProbeBatch(scopes)).toHaveLength(30);
-      const titleSchemaReads = prepareSpy.mock.calls.filter(([sql]) =>
-        sql.toLowerCase().includes("pragma user_version"),
-      );
-      expect(titleSchemaReads).toHaveLength(1);
-
-      prepareSpy.mockClear();
-      expect(sessionAccessor.readSessionTranscriptWatermarkBatch(scopes)).toHaveLength(30);
-      const watermarkSchemaReads = prepareSpy.mock.calls.filter(([sql]) =>
-        sql.toLowerCase().includes("pragma user_version"),
-      );
-      expect(watermarkSchemaReads).toHaveLength(1);
-    } finally {
-      prepareSpy.mockRestore();
-    }
-  });
-
-  test("reprobes cached batch title fields after an append advances max seq", async () => {
-    const sessionId = "reader-title-batch-cache-append";
-    const scope = await writeSqliteMessages(sessionId, [
-      { role: "user", content: "batch append prompt" },
-      { role: "assistant", content: "first batch reply" },
-    ]);
-    expect(readSessionTitleFieldsFromTranscriptBatch([scope])[0]?.lastMessagePreview).toBe(
-      "first batch reply",
-    );
-    await persistSessionTranscriptTurn(
-      { agentId: "main", sessionId, sessionKey: `agent:main:${sessionId}`, storePath },
-      {
-        messages: [{ message: { role: "assistant", content: "appended batch reply" } }],
-        touchSessionEntry: false,
-      },
-    );
-    vi.clearAllMocks();
-
-    expect(readSessionTitleFieldsFromTranscriptBatch([scope])[0]?.lastMessagePreview).toBe(
-      "appended batch reply",
-    );
-    expect(sessionAccessor.readSessionTranscriptWatermarkBatch).toHaveBeenCalledOnce();
-    expect(sessionAccessor.readSessionTranscriptWatermark).not.toHaveBeenCalled();
-    expect(sessionAccessor.readSessionTranscriptTitleProbeBatch).toHaveBeenCalledOnce();
-    expect(sessionAccessor.readSessionTranscriptMessageEventPage).not.toHaveBeenCalled();
-  });
-
-  test("invalidates cached SQLite title fields after an append advances max seq", async () => {
-    const sessionId = "reader-title-cache-append";
-    const scope = await writeSqliteMessages(sessionId, [
-      { role: "user", content: "append prompt" },
-      { role: "assistant", content: "first reply" },
-    ]);
-    expect(readSessionTitleFieldsFromTranscript(scope).lastMessagePreview).toBe("first reply");
-    await persistSessionTranscriptTurn(
-      { agentId: "main", sessionId, sessionKey: `agent:main:${sessionId}`, storePath },
-      {
-        messages: [{ message: { role: "assistant", content: "appended reply" } }],
-        touchSessionEntry: false,
-      },
-    );
-    vi.clearAllMocks();
-
-    expect(readSessionTitleFieldsFromTranscript(scope).lastMessagePreview).toBe("appended reply");
-    expect(sessionAccessor.readSessionTranscriptMessageEventPage).toHaveBeenCalled();
-  });
-
-  test("invalidates cached SQLite title fields after the rewrite generation changes", async () => {
-    const sessionId = "reader-title-cache-generation";
-    const scope = await writeSqliteMessages(sessionId, [
-      { role: "user", content: "generation prompt" },
-      { role: "assistant", content: "generation reply" },
-    ]);
-    expect(readSessionTitleFieldsFromTranscript(scope).firstUserMessage).toBe("generation prompt");
-    openOpenClawAgentDatabase({
-      agentId: "main",
-      path: path.join(tempDir, "openclaw-agent.sqlite"),
-    })
-      .db.prepare("UPDATE transcript_rewrite_watermarks SET generation = ? WHERE session_id = ?")
-      .run("f".repeat(32), sessionId);
-    vi.clearAllMocks();
-
-    expect(readSessionTitleFieldsFromTranscript(scope)).toEqual({
-      firstUserMessage: "generation prompt",
-      lastMessagePreview: "generation reply",
-    });
-    expect(sessionAccessor.readSessionTranscriptMessageEventPage).toHaveBeenCalled();
-  });
-
-  test("returns missing title fields when the bounded head and tail caps miss", async () => {
-    const scope = await writeSqliteMessages(
-      "reader-title-cap-miss",
-      Array.from({ length: 201 }, (_, index) =>
-        index === 100
-          ? { role: "user", content: "outside both probes" }
-          : { role: "assistant", content: " " },
-      ),
-    );
-    vi.clearAllMocks();
-
-    expect(readSessionTitleFieldsFromTranscript(scope)).toEqual({
-      firstUserMessage: null,
-      lastMessagePreview: null,
-    });
-    expect(sessionAccessor.readSessionTranscriptMessageEvents).not.toHaveBeenCalled();
-    expect(boundedPageEventReadCount()).toBe(200);
-  });
-
   test("promotes SQLite message idempotency into transcript metadata", async () => {
     const sessionId = "reader-sqlite-idempotency";
     const scope = {
@@ -885,39 +533,6 @@ describe("session transcript reader facade", () => {
     ]);
   });
 
-  test("uses structured SQLite identity", async () => {
-    const sessionId = "reader-marker-only";
-    const markerStorePath = path.join(
-      tempDir,
-      "agents",
-      "marker-agent",
-      "sessions",
-      "sessions.json",
-    );
-    const writeScope = {
-      agentId: "marker-agent",
-      sessionId,
-      sessionKey: "agent:marker-agent:main",
-      storePath: markerStorePath,
-    };
-    await persistSessionTranscriptTurn(writeScope, {
-      messages: [
-        {
-          eventId: "marker-message",
-          message: { role: "user", content: "marker scoped prompt" },
-        },
-      ],
-      touchSessionEntry: false,
-    });
-    await expect(
-      readSessionMessagesAsync(writeScope, { mode: "full", reason: "sqlite identity read test" }),
-    ).resolves.toMatchObject([{ content: "marker scoped prompt" }]);
-    await expect(readSessionMessageByIdAsync(writeScope, "marker-message")).resolves.toMatchObject({
-      found: true,
-      seq: 1,
-    });
-  });
-
   test("waits for an in-flight SQLite projection before counting messages", async () => {
     const sessionId = "reader-sqlite-rebuilding-count";
     const scope = {
@@ -943,115 +558,11 @@ describe("session transcript reader facade", () => {
     });
     markProjectionNeedsRebuild(sessionId);
 
-    await expect(readSessionMessageCountAsync(scope)).resolves.toBe(2);
-  });
-
-  test("projects SQLite transcript reads to the active branch", async () => {
-    const sessionId = "reader-sqlite-branch";
-    const scope = {
-      agentId: "main",
-      sessionId,
-      sessionKey: `agent:main:${sessionId}`,
-      storePath,
-    };
-    await persistSessionTranscriptTurn(scope, {
-      messages: [
-        {
-          eventId: "root",
-          parentId: null,
-          message: { role: "user", content: "branch prompt" },
-        },
-        {
-          eventId: "inactive",
-          parentId: "root",
-          message: { role: "assistant", content: "stale branch" },
-        },
-        {
-          eventId: "active",
-          parentId: "root",
-          message: { role: "assistant", content: "active branch" },
-        },
-      ],
-      touchSessionEntry: false,
-    });
-    await waitForSessionTranscriptIndexReconcile({
-      agentId: "main",
-      path: path.join(tempDir, "openclaw-agent.sqlite"),
-    });
-
-    const messages = await readSessionMessagesAsync(scope, {
-      mode: "full",
-      reason: "sqlite branch facade test",
-    });
-
-    expect(messages).toMatchObject([{ content: "branch prompt" }, { content: "active branch" }]);
-    expect(
-      messages.map((message) => (message as { __openclaw?: { id?: string } })["__openclaw"]?.id),
-    ).toEqual(["root", "active"]);
-    expect(
-      messages.map((message) => (message as { __openclaw?: { seq?: number } })["__openclaw"]?.seq),
-    ).toEqual([1, 2]);
-    await expect(readSessionMessageCountAsync(scope)).resolves.toBe(2);
-  });
-
-  test("pages SQLite transcript messages through the reader facade", async () => {
-    const sessionId = "reader-sqlite-page";
-    const scope = {
-      agentId: "main",
-      sessionId,
-      sessionKey: `agent:main:${sessionId}`,
-      storePath,
-    };
-    await persistSessionTranscriptTurn(scope, {
-      messages: [
-        { message: { role: "user", content: "first" } },
-        { message: { role: "assistant", content: "second" } },
-        { message: { role: "user", content: "third" } },
-        { message: { role: "assistant", content: "fourth" } },
-      ],
-      touchSessionEntry: false,
-    });
-
-    const page = await readSessionMessagesPageWithStatsAsync(scope, {
-      maxMessages: 2,
-      offset: 1,
-    });
-
-    expect(page.totalMessages).toBe(4);
-    expect(page.messages.map((message) => (message as { content?: string }).content)).toEqual([
-      "second",
-      "third",
-    ]);
-    expect(
-      page.messages.map(
-        (message) => (message as { __openclaw?: { seq?: number } })["__openclaw"]?.seq,
-      ),
-    ).toEqual([2, 3]);
-  });
-
-  test("honors agent ids when no store path or session file is provided", async () => {
-    const sessionId = "reader-agent-scope";
-    await persistSessionTranscriptTurn(
-      { agentId: "agent-one", sessionId, sessionKey: "agent:agent-one:main" },
-      {
-        messages: [
-          {
-            eventId: "agent-message",
-            message: { role: "user", content: "agent scoped prompt" },
-          },
-        ],
-        touchSessionEntry: false,
-      },
-    );
-    const scope = { agentId: "agent-one", sessionId };
-
-    await expect(readSessionMessageCountAsync(scope)).resolves.toBe(1);
-    await expect(readSessionMessageByIdAsync(scope, "agent-message")).resolves.toMatchObject({
-      found: true,
-      seq: 1,
-    });
+    const visited: unknown[] = [];
     await expect(
-      readSessionMessagesAsync(scope, { mode: "full", reason: "facade agent scope test" }),
-    ).resolves.toMatchObject([{ content: "agent scoped prompt" }]);
+      visitSessionMessagesAsync(scope, (message) => visited.push(message)),
+    ).rejects.toBeInstanceOf(SessionTranscriptProjectionUnavailableError);
+    expect(visited).toEqual([]);
+    await expect(readSessionMessageCountAsync(scope)).resolves.toBe(2);
   });
 });

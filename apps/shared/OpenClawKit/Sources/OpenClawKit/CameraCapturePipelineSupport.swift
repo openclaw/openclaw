@@ -85,29 +85,6 @@ public enum CameraCapturePipelineSupport {
         }
     }
 
-    public static func prepareWarmMovieSession(
-        options: CameraMovieSessionOptions,
-        pickCamera: (_ preferFrontCamera: Bool, _ deviceId: String?) throws -> AVCaptureDevice,
-        mapSetupError: (CameraSessionConfigurationError) -> Error) async throws
-        -> (session: AVCaptureSession, output: AVCaptureMovieFileOutput)
-    {
-        try Task.checkCancellation()
-        let prepared = try self.prepareMovieSession(
-            options: options,
-            pickCamera: pickCamera,
-            mapSetupError: mapSetupError)
-        try Task.checkCancellation()
-        prepared.session.startRunning()
-        do {
-            try await self.warmUpCaptureSession()
-            try Task.checkCancellation()
-        } catch {
-            prepared.session.stopRunning()
-            throw error
-        }
-        return prepared
-    }
-
     public static func withWarmMovieSession<T>(
         options: CameraMovieSessionOptions,
         pickCamera: (_ preferFrontCamera: Bool, _ deviceId: String?) throws -> AVCaptureDevice,

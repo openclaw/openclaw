@@ -1,48 +1,12 @@
 import AppKit
 import Foundation
 
-enum SoundEffectCatalog {
-    /// All discoverable system sound names, with "Glass" pinned first.
-    static let systemOptions: [String] = {
-        var names = Set(Self.discoveredSoundMap.keys).union(Self.fallbackNames)
-        names.remove("Glass")
-        let sorted = names.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
-        return ["Glass"] + sorted
-    }()
-
-    static func displayName(for raw: String) -> String {
-        raw
-    }
-
-    static func url(for name: String) -> URL? {
-        self.discoveredSoundMap[name]
-    }
-
-    // MARK: - Internals
+@MainActor
+enum SoundEffectPlayer {
+    private static var lastSound: NSSound?
 
     private static let allowedExtensions: Set<String> = [
         "aif", "aiff", "caf", "wav", "m4a", "mp3",
-    ]
-
-    private static let fallbackNames: [String] = [
-        "Glass", // default
-        "Ping",
-        "Pop",
-        "Frog",
-        "Submarine",
-        "Funk",
-        "Tink",
-        "Basso",
-        "Blow",
-        "Bottle",
-        "Hero",
-        "Morse",
-        "Purr",
-        "Sosumi",
-        "Mail Sent",
-        "New Mail",
-        "Mail Scheduled",
-        "Mail Fetch Error",
     ]
 
     private static let searchRoots: [URL] = [
@@ -71,20 +35,11 @@ enum SoundEffectCatalog {
         }
         return map
     }()
-}
-
-@MainActor
-enum SoundEffectPlayer {
-    private static var lastSound: NSSound?
 
     static func sound(named name: String) -> NSSound? {
-        if let named = NSSound(named: NSSound.Name(name)) {
-            return named
+        NSSound(named: NSSound.Name(name)) ?? self.discoveredSoundMap[name].flatMap {
+            NSSound(contentsOf: $0, byReference: false)
         }
-        if let url = SoundEffectCatalog.url(for: name) {
-            return NSSound(contentsOf: url, byReference: false)
-        }
-        return nil
     }
 
     static func sound(from bookmark: Data) -> NSSound? {

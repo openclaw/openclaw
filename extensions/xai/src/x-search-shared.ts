@@ -1,28 +1,19 @@
-// Xai plugin module implements x search shared behavior.
-import { wrapWebContent } from "openclaw/plugin-sdk/provider-web-search";
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { XAI_DEFAULT_MODEL_ID } from "../model-definitions.js";
 import {
   requestXaiResponsesTool,
+  resolveXaiToolDefaultReasoningEffort,
   requireXaiResponseTextCitationsAndInline,
   resolveXaiResponsesEndpoint,
 } from "./responses-tool-shared.js";
 import {
-  coerceXaiToolConfig,
   resolveNormalizedXaiToolModel,
   resolvePositiveIntegerToolConfig,
 } from "./tool-config-shared.js";
-import type { XaiWebSearchResponse } from "./web-search-shared.js";
+import { buildXaiWebSearchPayload, type XaiWebSearchResponse } from "./web-search-shared.js";
 
 export const XAI_DEFAULT_X_SEARCH_MODEL = XAI_DEFAULT_MODEL_ID;
 const XAI_X_SEARCH_MAX_CONTENT_CHARS = 20_000;
-
-type XaiXSearchConfig = {
-  apiKey?: unknown;
-  baseUrl?: unknown;
-  model?: unknown;
-  inlineCitations?: unknown;
-  maxTurns?: unknown;
-};
 
 export type XaiXSearchOptions = {
   query: string;
@@ -34,17 +25,6 @@ export type XaiXSearchOptions = {
   enableVideoUnderstanding?: boolean;
 };
 
-type XaiXSearchResult = {
-  content: string;
-  citations: string[];
-  inlineCitations?: XaiWebSearchResponse["inline_citations"];
-  truncated?: true;
-};
-
-function resolveXaiXSearchConfig(config?: Record<string, unknown>): XaiXSearchConfig {
-  return coerceXaiToolConfig(config) as XaiXSearchConfig;
-}
-
 export function resolveXaiXSearchModel(config?: Record<string, unknown>): string {
   return resolveNormalizedXaiToolModel({
     config,
@@ -53,11 +33,11 @@ export function resolveXaiXSearchModel(config?: Record<string, unknown>): string
 }
 
 export function resolveXaiXSearchEndpoint(config?: Record<string, unknown>): string {
-  return resolveXaiResponsesEndpoint(resolveXaiXSearchConfig(config).baseUrl);
+  return resolveXaiResponsesEndpoint(asNonArrayRecord(config).baseUrl);
 }
 
 export function resolveXaiXSearchInlineCitations(config?: Record<string, unknown>): boolean {
-  return resolveXaiXSearchConfig(config).inlineCitations === true;
+  return asNonArrayRecord(config).inlineCitations === true;
 }
 
 export function resolveXaiXSearchMaxTurns(config?: Record<string, unknown>): number | undefined {
@@ -87,20 +67,7 @@ export function buildXaiXSearchPayload(params: {
   options?: XaiXSearchOptions;
 }): Record<string, unknown> {
   return {
-    query: params.query,
-    provider: "xai",
-    model: params.model,
-    tookMs: params.tookMs,
-    externalContent: {
-      untrusted: true,
-      source: "x_search",
-      provider: "xai",
-      wrapped: true,
-    },
-    content: wrapWebContent(params.content, "web_search"),
-    citations: params.citations,
-    ...(params.inlineCitations ? { inlineCitations: params.inlineCitations } : {}),
-    ...(params.truncated ? { truncated: true } : {}),
+    ...buildXaiWebSearchPayload({ ...params, provider: "xai", source: "x_search" }),
     ...(params.options?.allowedXHandles?.length
       ? { allowedXHandles: params.options.allowedXHandles }
       : {}),
@@ -123,14 +90,14 @@ export async function requestXaiXSearch(params: {
   maxTurns?: number;
   options: XaiXSearchOptions;
   signal?: AbortSignal;
-}): Promise<XaiXSearchResult> {
+}) {
   params.signal?.throwIfAborted();
   return await requestXaiResponsesTool(
     {
       ...params,
       inputText: params.options.query,
       tools: [buildXSearchTool(params.options)],
-      reasoningEffort: params.model === XAI_DEFAULT_X_SEARCH_MODEL ? "none" : undefined,
+      reasoningEffort: resolveXaiToolDefaultReasoningEffort(params.model, "none"),
       errorLabel: "xAI X search failed",
     },
     (data) =>

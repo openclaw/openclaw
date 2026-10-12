@@ -1,13 +1,42 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { openRootFileSync } from "./boundary-file-read.js";
+import { sha256FileSync } from "./crypto-digest.js";
 
 /** SQLite main database plus every journal-mode sidecar that can contain database pages. */
 const SQLITE_DATABASE_FILE_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
+export const SQLITE_SIDECAR_SUFFIXES = SQLITE_DATABASE_FILE_SUFFIXES.slice(1);
 // SQLite WAL format: https://sqlite.org/fileformat2.html#walformat defines a 32-byte header.
 const SQLITE_WAL_HEADER_BYTES = 32;
-const SQLITE_SIDECAR_HASH_BUFFER_BYTES = 1024 * 1024;
+const APPLE_DOUBLE_MAGIC = Buffer.from([0x00, 0x05, 0x16, 0x07]);
+
+/** AppleDouble files start with 00 05 16 07; the `._*.sqlite` name alone is not enough. */
+export function isAppleDoubleMetadataFile(pathname: string): boolean {
+  const basename = path.basename(pathname);
+  if (!basename.startsWith("._") || !basename.endsWith(".sqlite")) {
+    return false;
+  }
+  const opened = openRootFileSync({
+    absolutePath: pathname,
+    rootPath: path.dirname(pathname),
+    boundaryLabel: "SQLite metadata directory",
+    rejectHardlinks: false,
+  });
+  if (!opened.ok) {
+    return false;
+  }
+  try {
+    const header = Buffer.alloc(APPLE_DOUBLE_MAGIC.length);
+    const bytesRead = fs.readSync(opened.fd, header, 0, header.length, 0);
+    return bytesRead === header.length && header.equals(APPLE_DOUBLE_MAGIC);
+  } catch {
+    return false;
+  } finally {
+    fs.closeSync(opened.fd);
+  }
+}
+
 const sqliteFilesLog = createSubsystemLogger("state/sqlite");
 
 class SqliteOrphanedSidecarsError extends Error {
@@ -31,21 +60,11 @@ export function resolveSqliteDatabaseFilePaths(pathname: string): string[] {
   return SQLITE_DATABASE_FILE_SUFFIXES.map((suffix) => `${pathname}${suffix}`);
 }
 
-function sha256FileSync(pathname: string): string {
-  const descriptor = fs.openSync(pathname, "r");
-  const digest = createHash("sha256");
-  const buffer = Buffer.allocUnsafe(SQLITE_SIDECAR_HASH_BUFFER_BYTES);
-  try {
-    while (true) {
-      const bytesRead = fs.readSync(descriptor, buffer, 0, buffer.length, null);
-      if (bytesRead === 0) {
-        return digest.digest("hex");
-      }
-      digest.update(buffer.subarray(0, bytesRead));
-    }
-  } finally {
-    fs.closeSync(descriptor);
-  }
+export function hasOrphanedSqliteSidecars(pathname: string): boolean {
+  return (
+    !fs.existsSync(pathname) &&
+    SQLITE_SIDECAR_SUFFIXES.some((suffix) => fs.existsSync(`${pathname}${suffix}`))
+  );
 }
 
 function findMatchingOrphanedSidecarCopy(

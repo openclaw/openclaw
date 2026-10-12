@@ -1,15 +1,39 @@
 // Control UI config module wires vite behavior.
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { brotliCompressSync, constants as zlibConstants } from "node:zlib";
 import { gzip } from "pako";
-import type { Plugin, UserConfig } from "vite";
-import { controlUiCodeSplitting } from "./config/control-ui-chunking.ts";
+import {
+  runnerImport,
+  type Plugin,
+  type ResolveModulePreloadDependenciesFn,
+  type UserConfig,
+} from "vite";
+import { mermaidClassicBundlePlugin } from "../packages/mermaid-renderer/vite-plugin.ts";
+import { CONTROL_UI_LOCALE_ENTRIES } from "../scripts/lib/control-ui-i18n-config.ts";
+import {
+  CONTROL_UI_BUILD_ID_ATTRIBUTE,
+  isControlUiVersionedPublicAsset,
+} from "../src/gateway/control-ui-root-assets.ts";
+import {
+  collectControlUiBootAssets,
+  controlUiBootPreloadsPlugin,
+} from "./config/control-ui-boot-preloads.ts";
+import {
+  controlUiCodeSplitting,
+  controlUiIsolatedDesktopRuntimePlugin,
+  controlUiLocaleConfigHintsChunkPrefix,
+} from "./config/control-ui-chunking.ts";
+import { createControlUiDevGateway } from "./config/control-ui-dev-gateway.ts";
 import { controlUiHoverGuardPlugin } from "./config/control-ui-hover-guard.ts";
 import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
+import { controlUiSocialCardPlugin } from "./config/control-ui-social-card.ts";
+import { controlUiSolidPlugin } from "./config/control-ui-solid.ts";
+import { controlUiWebAwesomePageRulePlugin } from "./config/control-ui-web-awesome-page-rule.ts";
 import { normalizeControlUiBuildInfo } from "./src/build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "./src/build-info.ts";
 
@@ -19,11 +43,12 @@ const outDir = path.resolve(here, "../dist/control-ui");
 const CONTROL_UI_GIT_READ_TIMEOUT_MS = 2_000;
 const require = createRequire(import.meta.url);
 const json5EsmPath = require.resolve("json5/dist/index.mjs");
+
 type ControlUiViteAlias = {
   find: string | RegExp;
   replacement: string;
 };
-const commonJsOptimizeDeps = [
+export const commonJsOptimizeDeps = [
   "highlight.js/lib/core",
   "highlight.js/lib/languages/bash",
   "highlight.js/lib/languages/cpp",
@@ -73,10 +98,51 @@ export function createControlUiPrecompressedAssetVariants(
     {
       fileName: `${fileName}.gz`,
       // Host zlib is byte-unstable across supported runtimes; pako's classic hash is canonical.
-      source: Buffer.from(gzip(body, { level: 9, legacyHash: true })),
+      // Smaller deflate blocks reduce startup JavaScript size and encoder memory.
+      source: Buffer.from(gzip(body, { level: 9, legacyHash: true, memLevel: 6 })),
     },
   ];
 }
+
+function escapeControlUiAssetRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+const controlUiLocaleAssetPatterns = CONTROL_UI_LOCALE_ENTRIES.map(({ locale }) => ({
+  locale,
+  base: new RegExp(`^assets/${escapeControlUiAssetRegExp(locale)}-[^/]+\\.js$`, "u"),
+  configHints: new RegExp(
+    `^assets/${controlUiLocaleConfigHintsChunkPrefix}${escapeControlUiAssetRegExp(locale)}-[^/]+\\.js$`,
+    "u",
+  ),
+}));
+
+function controlUiLocaleFromAssetPath(file: string, kind: "base" | "configHints"): string | null {
+  return (
+    controlUiLocaleAssetPatterns.find(({ [kind]: pattern }) => pattern.test(file))?.locale ?? null
+  );
+}
+
+export const resolveControlUiModulePreloadDependencies: ResolveModulePreloadDependenciesFn = (
+  filename,
+  deps,
+  context,
+) => {
+  if (context.hostType !== "js") {
+    return deps;
+  }
+  const locale = controlUiLocaleFromAssetPath(filename, "base");
+  if (!locale) {
+    return deps;
+  }
+  const matchingHint = deps.find(
+    (dep) => controlUiLocaleFromAssetPath(dep, "configHints") === locale,
+  );
+  if (!matchingHint) {
+    return deps;
+  }
+  return deps.filter((dep) => dep !== filename && dep !== matchingHint);
+};
 
 function normalizeBase(input: string): string {
   const trimmed = input.trim();
@@ -307,17 +373,25 @@ function sourcePackageAlias(packageId: string, subpath?: string): ControlUiViteA
 export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
   return [
     sourcePackageAlias("normalization-core", "agent-id"),
+    sourcePackageAlias("normalization-core", "code-points"),
+    sourcePackageAlias("normalization-core", "grapheme"),
+    sourcePackageAlias("normalization-core", "json-coercion"),
     sourcePackageAlias("normalization-core", "json-schema"),
     sourcePackageAlias("normalization-core", "markdown-plain-text"),
     sourcePackageAlias("normalization-core", "number-coercion"),
     sourcePackageAlias("normalization-core", "phone-presentation"),
     sourcePackageAlias("normalization-core", "record-coerce"),
     sourcePackageAlias("normalization-core", "result"),
+    sourcePackageAlias("normalization-core", "stable-stringify"),
     sourcePackageAlias("normalization-core", "string-coerce"),
     sourcePackageAlias("normalization-core", "string-normalization"),
     sourcePackageAlias("normalization-core", "utf16-slice"),
+    sourcePackageAlias("normalization-core", "uuid"),
     sourcePackageAlias("normalization-core"),
     sourcePackageAlias("session-url-contract", "parse"),
+    sourcePackageAlias("session-url-contract", "session-key-normalization"),
+    sourcePackageAlias("session-url-contract", "share-build"),
+    sourcePackageAlias("session-url-contract", "public-share"),
     sourcePackageAlias("session-url-contract"),
     sourcePackageAlias("workboard-contract"),
   ];
@@ -386,68 +460,231 @@ export function controlUiBrowserOnlySharedModuleAliases(): Plugin {
   };
 }
 
-function controlUiServiceWorkerBuildIdPlugin(buildId: string, buildOutDir: string): Plugin {
+function controlUiBuildOutputPlugin(buildId: string): Plugin {
+  let publicAssets: string[] = [];
+  let cacheId: string | undefined;
   return {
-    name: "control-ui-service-worker-build-id",
+    name: "control-ui-build-output",
     apply: "build",
-    closeBundle() {
+    configResolved(config) {
+      const publicDir = config.build.copyPublicDir && config.publicDir;
+      const publicContent = publicDir ? collectControlUiPublicAssets(publicDir) : undefined;
+      publicAssets = publicContent?.paths ?? [];
+      // Public bytes can change during same-commit source rebuilds; the runtime
+      // build identity stays separate from this immutable URL namespace.
+      cacheId = publicContent ? `${buildId}-${publicContent.hash}` : undefined;
+    },
+    transformIndexHtml: {
+      order: "post",
+      handler(html) {
+        // Vite recreates the module entry tag from a fixed attribute set. Finalize every script
+        // after synthesis so Cloudflare Rocket Loader cannot defer the Control UI boot sequence.
+        const marked = html.replace(
+          /<script\b(?![^>]*\bdata-cfasync\s*=)/giu,
+          '<script data-cfasync="false"',
+        );
+        return cacheId
+          ? marked.replace(/<html\b/iu, `<html ${CONTROL_UI_BUILD_ID_ATTRIBUTE}="${cacheId}"`)
+          : marked;
+      },
+    },
+    async writeBundle({ dir: buildOutDir }, bundle) {
+      if (!buildOutDir) {
+        this.error("Control UI build requires an output directory");
+      }
+      const logger = this.environment.logger;
+      let completed = 0;
+      let sidecars = 0;
+      let lastProgressAt = performance.now();
+      logger.info("Control UI precompression: starting");
+      for (const output of Object.values(bundle)) {
+        // Vite's post-build import analysis rewrites lazy preload markers in a
+        // later generateBundle hook. Read from disk here so sidecars always
+        // encode the exact final bytes that the identity response serves.
+        const source = fs.readFileSync(path.join(buildOutDir, output.fileName));
+        const variants = createControlUiPrecompressedAssetVariants(output.fileName, source);
+        if (variants.length === 0) {
+          continue;
+        }
+        for (const variant of variants) {
+          fs.writeFileSync(path.join(buildOutDir, variant.fileName), variant.source);
+        }
+        // Only completed writes renew activity; a blocked compression/write must
+        // remain silent so the caller's existing watchdog can still terminate it.
+        completed++;
+        sidecars += variants.length;
+        const now = performance.now();
+        if (now - lastProgressAt >= 10_000) {
+          logger.info(
+            `Control UI precompression: ${completed} assets (${sidecars} sidecars) written`,
+          );
+          lastProgressAt = now;
+        }
+      }
+      logger.info(`Control UI precompression complete: ${completed} assets (${sidecars} sidecars)`);
+      for (const asset of publicAssets) {
+        const fontStylesheet = asset.startsWith("fonts/") && asset.endsWith(".css");
+        if (!fontStylesheet && asset !== "manifest.webmanifest") {
+          continue;
+        }
+        const filePath = path.join(buildOutDir, asset);
+        const assetSource = fs.readFileSync(filePath, "utf8");
+        if (fontStylesheet) {
+          // Relative CSS URLs do not inherit their parent stylesheet's query.
+          const versioned = assetSource.replace(
+            /url\("([^"/?#]+\.woff2)"\)/gu,
+            `url("$1?v=${cacheId}")`,
+          );
+          fs.writeFileSync(filePath, versioned);
+        } else {
+          const manifest = JSON.parse(assetSource) as { icons: Array<{ src: string }> };
+          for (const icon of manifest.icons) {
+            icon.src += `?v=${cacheId}`;
+          }
+          fs.writeFileSync(filePath, `${JSON.stringify(manifest, null, 2)}\n`);
+        }
+      }
       const swPath = path.join(buildOutDir, "sw.js");
       const publicSwPath = path.join(here, "public/sw.js");
       const source = fs.readFileSync(publicSwPath, "utf8");
       const placeholder = '"__OPENCLAW_CONTROL_UI_BUILD_ID__"';
-      const updated = source.replace(placeholder, JSON.stringify(buildId));
-      if (updated === source) {
-        throw new Error(`Control UI service worker build id placeholder missing in ${swPath}`);
+      // Embed only build-owned HTML, never a fetched Gateway document (which may
+      // contain identity, route metadata, or an HTTP login response). The measured
+      // route graph also warms assets loaded before the first worker controls a tab.
+      const bootAssets = collectControlUiBootAssets(bundle);
+      const offlineShell = {
+        html: fs.readFileSync(path.join(buildOutDir, "index.html"), "utf8"),
+        // Public fonts and theme styles are selected at runtime by preferences.
+        // Keep this bounded build inventory, not all lazy pages, locales, or plugins.
+        assets: [
+          ...new Set([
+            ...bootAssets.chat,
+            ...bootAssets.new,
+            ...bootAssets.login,
+            ...publicAssets.filter(
+              (asset) => /\.(?:css|woff2)$/u.test(asset) && isControlUiVersionedPublicAsset(asset),
+            ),
+          ]),
+        ]
+          .toSorted()
+          .map((file) => ({
+            path: file.startsWith("assets/")
+              ? file
+              : `${file}?v=${encodeURIComponent(cacheId ?? "")}`,
+            integrity:
+              "sha256-" +
+              createHash("sha256")
+                .update(fs.readFileSync(path.join(buildOutDir, file)))
+                .digest("base64"),
+          })),
+      };
+      // Same-commit source rebuilds must not pair a new document with an old shell.
+      const { module: csp } = await runnerImport<typeof import("../src/gateway/control-ui-csp.ts")>(
+        path.join(repoRoot, "src/gateway/control-ui-csp.ts"),
+        { configFile: false, resolve: { alias: resolveSourcePackageAliasesForVite() } },
+      );
+      const offlineBuild = {
+        ...offlineShell,
+        csp: csp.buildControlUiCspHeader({
+          inlineScriptHashes: csp.computeInlineScriptHashes(offlineShell.html),
+        }),
+        publicAssetVersion: cacheId,
+        publicAssets: publicAssets.filter(isControlUiVersionedPublicAsset),
+        id: createHash("sha256").update(JSON.stringify(offlineShell)).digest("hex").slice(0, 16),
+      };
+      const offlinePlaceholder = "const OFFLINE_BOOT = null;";
+      if (!source.includes(placeholder) || !source.includes(offlinePlaceholder)) {
+        throw new Error(`Control UI service worker build placeholders missing in ${swPath}`);
       }
+      const updated = source
+        .replace(placeholder, JSON.stringify(buildId))
+        .replace(offlinePlaceholder, () => `const OFFLINE_BOOT = ${JSON.stringify(offlineBuild)};`);
       fs.mkdirSync(buildOutDir, { recursive: true });
       fs.writeFileSync(swPath, updated);
     },
   };
 }
 
-function controlUiPrecompressedAssetsPlugin(buildOutDir: string): Plugin {
-  return {
-    name: "control-ui-precompressed-assets",
-    apply: "build",
-    writeBundle(_options, bundle) {
-      for (const output of Object.values(bundle)) {
-        // Vite's post-build import analysis rewrites lazy preload markers in a
-        // later generateBundle hook. Read from disk here so sidecars always
-        // encode the exact final bytes that the identity response serves.
-        const source = fs.readFileSync(path.join(buildOutDir, output.fileName));
-        for (const variant of createControlUiPrecompressedAssetVariants(output.fileName, source)) {
-          fs.writeFileSync(path.join(buildOutDir, variant.fileName), variant.source);
-        }
+function collectControlUiPublicAssets(publicDir: string): { paths: string[]; hash: string } {
+  const paths: string[] = [];
+  const hash = createHash("sha256");
+  const visit = (directory: string) => {
+    for (const entry of fs
+      .readdirSync(directory, { withFileTypes: true })
+      .toSorted((a, b) => a.name.localeCompare(b.name))) {
+      const filePath = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        visit(filePath);
+        continue;
       }
-    },
+      // Source maps are diagnostics, not runtime dependencies of an open document.
+      const assetPath = path.relative(publicDir, filePath).split(path.sep).join("/");
+      if (entry.name.endsWith(".map") || assetPath === "sw.js") {
+        continue;
+      }
+      if (!entry.isFile() || entry.isSymbolicLink()) {
+        throw new Error(`Unsafe Control UI build asset: ${filePath}`);
+      }
+      const source = fs.readFileSync(filePath);
+      paths.push(assetPath);
+      const digest = createHash("sha256").update(source).digest("hex");
+      hash.update(`${assetPath}\0${source.byteLength}\0${digest}\n`);
+    }
   };
+  visit(publicDir);
+  return { paths, hash: hash.digest("hex") };
 }
 
-export default function controlUiViteConfig(options: { outDir?: string } = {}): UserConfig {
+export default function controlUiViteConfig(
+  options: { outDir?: string; command?: "serve" | "build" } = {},
+): UserConfig {
   const envBase = process.env.OPENCLAW_CONTROL_UI_BASE_PATH?.trim();
   const base = envBase ? normalizeBase(envBase) : "./";
   const bootstrapConfigPath =
     base === "./" ? "/control-ui-config.json" : `${base}control-ui-config.json`;
   const buildInfo = resolveControlUiBuildInfo();
-  const buildOutDir = options.outDir ?? outDir;
+  const devGateway =
+    options.command === "serve"
+      ? createControlUiDevGateway(process.env.OPENCLAW_UI_DEV_GATEWAY_URL)
+      : undefined;
+  const staticImports = new Map<string, readonly string[]>();
+  const resolveModulePreloadDependencies: ResolveModulePreloadDependenciesFn = (
+    filename,
+    deps,
+    context,
+  ) => {
+    const pending = resolveControlUiModulePreloadDependencies(filename, deps, context);
+    if (context.hostType !== "js") {
+      return pending;
+    }
+    // The executing importer has already loaded its direct static JS imports.
+    // Keep the lazy target, its other dependencies, and Vite's CSS preloads.
+    const loaded = staticImports.get(context.hostId);
+    return loaded ? pending.filter((dep) => !loaded.includes(dep)) : pending;
+  };
   return {
     base,
+    worker: {
+      format: "iife",
+      plugins: () => [mermaidClassicBundlePlugin()],
+      rolldownOptions: {
+        output: { codeSplitting: false },
+      },
+    },
     define: {
       "globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO": JSON.stringify(buildInfo),
+      "globalThis.OPENCLAW_UI_DEV_GATEWAY": devGateway
+        ? JSON.stringify(devGateway.gateway)
+        : "undefined",
     },
     publicDir: path.resolve(here, "public"),
     css: {
       postcss: {
-        plugins: [controlUiHoverGuardPlugin()],
+        plugins: [controlUiHoverGuardPlugin(), controlUiWebAwesomePageRulePlugin()],
       },
     },
     optimizeDeps: {
-      include: [
-        "ipaddr.js",
-        "lit/directives/repeat.js",
-        "markdown-it-task-lists",
-        ...commonJsOptimizeDeps,
-      ],
+      include: ["ipaddr.js", "lit/directives/repeat.js", ...commonJsOptimizeDeps],
     },
     resolve: {
       alias: [
@@ -458,9 +695,16 @@ export default function controlUiViteConfig(options: { outDir?: string } = {}): 
       ],
     },
     build: {
-      outDir: buildOutDir,
+      target: ["chrome147", "firefox150", "safari26.2"],
+      outDir: options.outDir ?? outDir,
       emptyOutDir: true,
-      sourcemap: true,
+      // Release packages omit maps; keep generating them without advertising dead URLs.
+      // Source builds retain automatic debugger discovery.
+      sourcemap: buildInfo.release ? "hidden" : true,
+      modulePreload: {
+        polyfill: true,
+        resolveDependencies: resolveModulePreloadDependencies,
+      },
       rolldownOptions: {
         // Explicit groups do not absorb each other's dependencies. These settings
         // preserve execution order while keeping the startup chunks bounded.
@@ -474,18 +718,37 @@ export default function controlUiViteConfig(options: { outDir?: string } = {}): 
       chunkSizeWarningLimit: 1024,
     },
     server: {
-      host: true,
+      host: devGateway ? "127.0.0.1" : true,
       port: 5173,
       strictPort: true,
+      ...(devGateway ? { proxy: devGateway.proxy } : {}),
     },
     plugins: [
+      controlUiSolidPlugin(),
+      mermaidClassicBundlePlugin(),
+      controlUiIsolatedDesktopRuntimePlugin(),
+      {
+        name: "control-ui-static-import-preloads",
+        generateBundle(_options, bundle) {
+          staticImports.clear();
+          for (const chunk of Object.values(bundle)) {
+            if (chunk.type === "chunk") {
+              staticImports.set(chunk.fileName, chunk.imports);
+            }
+          }
+        },
+      },
+      controlUiSocialCardPlugin(),
       controlUiLocaleModulesPlugin(),
       controlUiBrowserOnlySharedModuleAliases(),
-      controlUiPrecompressedAssetsPlugin(buildOutDir),
-      controlUiServiceWorkerBuildIdPlugin(buildInfo.buildId, buildOutDir),
+      controlUiBootPreloadsPlugin(),
+      controlUiBuildOutputPlugin(buildInfo.buildId),
       {
         name: "control-ui-dev-stubs",
         configureServer(server) {
+          if (devGateway) {
+            return;
+          }
           server.middlewares.use(bootstrapConfigPath, (_req, res) => {
             res.setHeader("Content-Type", "application/json");
             res.end(

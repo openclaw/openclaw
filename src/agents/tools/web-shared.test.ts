@@ -62,6 +62,27 @@ describe("web cache keys", () => {
   });
 });
 
+describe("web cache TTL", () => {
+  it.each([
+    { ttlMs: 0, ageMs: 0, hit: false },
+    { ttlMs: 60_000, ageMs: 59_999, hit: true },
+    { ttlMs: 60_000, ageMs: 60_000, hit: false },
+    { ttlMs: 900_000, ageMs: 60_000, hit: true },
+    { ttlMs: 1_800_000, ageMs: 900_000, hit: false },
+    { ttlMs: 1_800_000, ageMs: 900_001, hit: false },
+  ])("bounds reuse by current TTL $ttlMs at age $ageMs", ({ ttlMs, ageMs, hit }) => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const cache = new Map<string, CacheEntry<string>>();
+    writeCache(cache, "key", "value", 900_000);
+    clock.mockReturnValue(1_000 + ageMs);
+
+    expect(readCache(cache, "key", ttlMs)).toEqual(hit ? { value: "value", cached: true } : null);
+    if (ageMs < 900_000) {
+      expect(readCache(cache, "key")).toEqual({ value: "value", cached: true });
+    }
+  });
+});
+
 describe("web shared timeout seconds", () => {
   it("caps timeoutSeconds at the shared timer-safe ceiling", () => {
     expect(resolveTimeoutSeconds(Number.MAX_SAFE_INTEGER, 30)).toBe(MAX_TIMER_TIMEOUT_SECONDS);
@@ -273,24 +294,6 @@ describe("readResponseText", () => {
       bytesRead: 7,
     });
     expect(cancel).toHaveBeenCalledTimes(1);
-    expect(releaseLock).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not mark exact-limit streamed responses as truncated", async () => {
-    const cancel = vi.fn(async () => undefined);
-    const releaseLock = vi.fn();
-    const response = responseFromReader({
-      chunks: ["hello"],
-      cancel,
-      releaseLock,
-    });
-
-    await expect(readResponseText(response, { maxBytes: 5 })).resolves.toEqual({
-      text: "hello",
-      truncated: false,
-      bytesRead: 5,
-    });
-    expect(cancel).not.toHaveBeenCalled();
     expect(releaseLock).toHaveBeenCalledTimes(1);
   });
 

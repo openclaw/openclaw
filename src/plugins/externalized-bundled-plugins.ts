@@ -1,13 +1,11 @@
-// Defines metadata for bundled plugins that are installed externally.
-type ExternalizedBundledPluginPreferredSource = "npm" | "clawhub";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 
 export type ExternalizedBundledPluginBridge = {
   /** Plugin id used while the plugin was bundled in core. */
   bundledPluginId: string;
   /** Plugin id declared by the external package. Defaults to bundledPluginId. */
   pluginId?: string;
-  /** Preferred external source when migrating the bundled plugin out. Defaults to npm. */
-  preferredSource?: ExternalizedBundledPluginPreferredSource;
   /** npm spec OpenClaw can install when migrating the bundled plugin out. */
   npmSpec?: string;
   /** Catalog integrity pin for npmSpec; only valid for that exact spec. */
@@ -28,61 +26,37 @@ export type ExternalizedBundledPluginBridge = {
   preferOver?: readonly string[];
 };
 
-function normalizePluginId(value: string | undefined): string {
-  return value?.trim() ?? "";
-}
-
-function normalizeOptionalSpec(value: string | undefined): string {
-  return value?.trim() ?? "";
-}
-
-export function getExternalizedBundledPluginPreferredSource(
-  bridge: ExternalizedBundledPluginBridge,
-): ExternalizedBundledPluginPreferredSource {
-  if (bridge.preferredSource === "clawhub") {
-    return "clawhub";
-  }
-  if (bridge.preferredSource === "npm") {
-    return "npm";
-  }
-  return normalizeOptionalSpec(bridge.clawhubSpec) && !normalizeOptionalSpec(bridge.npmSpec)
-    ? "clawhub"
-    : "npm";
-}
-
 export function getExternalizedBundledPluginNpmSpec(
   bridge: ExternalizedBundledPluginBridge,
 ): string {
-  return normalizeOptionalSpec(bridge.npmSpec);
+  return normalizeOptionalString(bridge.npmSpec) ?? "";
 }
 
 export function getExternalizedBundledPluginClawHubSpec(
   bridge: ExternalizedBundledPluginBridge,
 ): string {
-  return normalizeOptionalSpec(bridge.clawhubSpec);
+  return normalizeOptionalString(bridge.clawhubSpec) ?? "";
 }
 
 export function getExternalizedBundledPluginTargetId(
   bridge: ExternalizedBundledPluginBridge,
 ): string {
-  return normalizePluginId(bridge.pluginId) || normalizePluginId(bridge.bundledPluginId);
+  return (
+    normalizeOptionalString(bridge.pluginId) ??
+    normalizeOptionalString(bridge.bundledPluginId) ??
+    ""
+  );
 }
 
 export function getExternalizedBundledPluginLookupIds(
   bridge: ExternalizedBundledPluginBridge,
 ): readonly string[] {
-  return Array.from(
-    new Set(
-      [
-        bridge.bundledPluginId,
-        bridge.pluginId,
-        ...(bridge.legacyPluginIds ?? []),
-        ...(bridge.channelIds ?? []),
-      ]
-        .map(normalizePluginId)
-        .filter(Boolean),
-    ),
-  );
+  return normalizeUniqueTrimmedStringList([
+    bridge.bundledPluginId,
+    bridge.pluginId,
+    ...(bridge.legacyPluginIds ?? []),
+    ...(bridge.channelIds ?? []),
+  ]);
 }
 
 export function getExternalizedBundledPluginLegacyPathSuffix(

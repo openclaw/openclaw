@@ -7,7 +7,7 @@ import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
-import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
+import { discoverAuthStorageFacts, discoverModels } from "./agent-model-discovery.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { sanitizeSessionHistory } from "./embedded-agent-runner/replay-history.js";
 import {
@@ -15,7 +15,6 @@ import {
   isLiveProfileKeyModeEnabled,
   isLiveTestEnabled,
   logLiveProgress,
-  requiresLiveProfileCredential,
   readLiveTestConfig,
   resolveLiveCredentialPrecedence,
   type CompleteSimpleContent,
@@ -248,7 +247,7 @@ describeLive("tool replay repair live", () => {
         await ensureOpenClawModelsJson(cfg);
 
         const agentDir = resolveDefaultAgentDir(cfg);
-        const authStorage = discoverAuthStorage(agentDir);
+        const { authStorage } = await discoverAuthStorageFacts(agentDir);
         const modelRegistry = discoverModels(authStorage, agentDir);
         const model =
           (modelRegistry.find(target.provider, target.modelId) as Model | null) ??
@@ -274,10 +273,7 @@ describeLive("tool replay repair live", () => {
           return;
         }
 
-        if (
-          requiresLiveProfileCredential(model.provider, REQUIRE_PROFILE_KEYS) &&
-          !apiKeyInfo.source.startsWith("profile:")
-        ) {
+        if (REQUIRE_PROFILE_KEYS && !apiKeyInfo.source.startsWith("profile:")) {
           logProgress(
             `[tool-replay-repair] skip ${target.ref} (non-profile credential source: ${apiKeyInfo.source})`,
           );
@@ -361,7 +357,7 @@ describeLive("tool replay repair live", () => {
         await ensureOpenClawModelsJson(cfg);
 
         const agentDir = resolveDefaultAgentDir(cfg);
-        const authStorage = discoverAuthStorage(agentDir);
+        const { authStorage } = await discoverAuthStorageFacts(agentDir);
         const modelRegistry = discoverModels(authStorage, agentDir);
         const model =
           (modelRegistry.find(target.provider, target.modelId) as Model | null) ??
@@ -387,10 +383,7 @@ describeLive("tool replay repair live", () => {
           return;
         }
 
-        if (
-          requiresLiveProfileCredential(model.provider, REQUIRE_PROFILE_KEYS) &&
-          !apiKeyInfo.source.startsWith("profile:")
-        ) {
+        if (REQUIRE_PROFILE_KEYS && !apiKeyInfo.source.startsWith("profile:")) {
           logProgress(
             `[tool-replay-repair] skip ${target.ref} (non-profile credential source: ${apiKeyInfo.source})`,
           );

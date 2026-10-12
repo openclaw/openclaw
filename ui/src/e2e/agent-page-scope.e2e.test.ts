@@ -1,10 +1,18 @@
 // Control UI E2E tests cover chip-selected page scope and the all-agents escape.
-import { mkdir } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
-import { expect, it } from "vitest";
-import { installMockGateway, type MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import {
+  installMockGateway,
+  waitForControlUiRoute,
+  type MockGatewayControls,
+} from "../test-helpers/control-ui-e2e.ts";
+import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { openHomeFullPage } from "./sidebar-navigation.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI agent page scope",
@@ -14,7 +22,12 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "agent-page-scope");
+let proofDir: string;
+beforeEach(() => {
+  if (captureUiProof) {
+    proofDir = createControlUiE2eArtifactDir("agent-page-scope");
+  }
+});
 
 function requestParams(request: { params?: unknown }): Record<string, unknown> {
   return request.params && typeof request.params === "object"
@@ -38,7 +51,6 @@ async function screenshot(page: Page, name: string) {
   if (!captureUiProof) {
     return;
   }
-  await mkdir(proofDir, { recursive: true });
   await page.screenshot({
     animations: "disabled",
     fullPage: true,
@@ -68,6 +80,149 @@ const multiAgentRoster = [
 ];
 
 suite.define(() => {
+  it("follows the visible catalog groups when selecting an agent with the keyboard", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1440 } },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          featureMethods: ["cron.list"],
+          methodResponses: {
+            "agents.list": {
+              defaultId: "main",
+              mainKey: "main",
+              scope: "per-sender",
+              agents: [
+                multiAgentRoster[0],
+                { id: "alpha", name: "Needle Alpha" },
+                { id: "charlie", name: "Needle Charlie" },
+              ],
+            },
+            "cron.list": cronListResponseFixture({
+              jobs: [
+                {
+                  id: "bravo",
+                  name: "Needle Bravo",
+                  enabled: true,
+                  createdAtMs: 0,
+                  updatedAtMs: 0,
+                  schedule: { kind: "every", everyMs: 60_000 },
+                  sessionTarget: "main",
+                  wakeMode: "next-heartbeat",
+                  payload: { kind: "systemEvent", text: "Prepare the sample report." },
+                  state: {},
+                },
+              ],
+              snapshotRevision: "palette-group-order",
+              total: 1,
+              offset: 0,
+              limit: 50,
+              hasMore: false,
+              nextOffset: null,
+            }),
+            "sessions.list": { ts: 1, path: "", count: 0, defaults: {}, sessions: [] },
+            "sessions.usage": emptyUsage,
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}usage`);
+        await gateway.waitForRequest("agents.list");
+        await page.keyboard.press("ControlOrMeta+k");
+        const input = page.locator(".cmd-palette__input");
+        await input.fill("Needle");
+        await page.getByRole("option", { name: "Needle Bravo", exact: true }).waitFor();
+        const options = page.locator("openclaw-command-palette").getByRole("option");
+        await expect
+          .poll(async () =>
+            (await options.allTextContents()).map((text) => text.replace(/\s+/g, " ").trim()),
+          )
+          .toEqual(["Needle Alpha alpha", "Needle Charlie charlie", "Needle Bravo"]);
+        await input.press("ArrowDown");
+        await expect.poll(() => options.nth(1).getAttribute("aria-selected")).toBe("true");
+        await screenshot(page, "09-palette-keyboard-group-order.png");
+        await input.press("Enter");
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/agents/charlie");
+      },
+    );
+  });
+
+  it.each(["ordinary reload", "route before hello"])(
+    "opens a named agent from the palette without changing the chat agent (%s)",
+    async (ordering) => {
+      await suite.withPage(
+        { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1440 } },
+        async ({ page }) => {
+          const gateway = await installMockGateway(page, {
+            deferredMethods: ordering === "route before hello" ? ["connect"] : [],
+            methodResponses: {
+              "agents.list": {
+                defaultId: "main",
+                mainKey: "main",
+                scope: "per-sender",
+                agents: multiAgentRoster,
+              },
+              "sessions.usage": emptyUsage,
+            },
+          });
+          await page.goto(`${suite.server.baseUrl}usage`);
+          if (ordering === "route before hello") {
+            await gateway.waitForRequest("connect");
+            await gateway.resolveDeferred("connect");
+          }
+          await gateway.waitForRequest("agents.list");
+          const sidebar = page.locator("openclaw-app-sidebar");
+          await expect
+            .poll(async () =>
+              (await sidebar.locator(".sidebar-agent-card__name").textContent())?.trim(),
+            )
+            .toBe("Main");
+          await page.keyboard.press("ControlOrMeta+k");
+          await page.locator(".cmd-palette__input").fill("Reviewer");
+          const result = page.getByRole("option", { name: "Reviewer reviewer", exact: true });
+          await result.waitFor();
+          await screenshot(page, "07-palette-reviewer-result.png");
+          await result.click();
+          const selectedAgent = page.locator(".settings-sidebar openclaw-agent-select");
+          await selectedAgent.waitFor();
+          await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/agents/reviewer");
+          await expect
+            .poll(() =>
+              selectedAgent.evaluate((picker) => (picker as HTMLElement & { value: string }).value),
+            )
+            .toBe("reviewer");
+          await screenshot(page, "08-palette-selected-agent.png");
+          await page.reload();
+          if (ordering === "route before hello") {
+            await gateway.waitForRequest("connect");
+            // The route can settle before hello; its explicit target must survive
+            // until the canonical roster arrives from the new connection.
+            await waitForControlUiRoute(page, {
+              pathname: "/settings/agents/reviewer",
+              routeId: "agents",
+            });
+            await gateway.resolveDeferred("connect");
+          }
+          await expect
+            .poll(() =>
+              selectedAgent.evaluate((picker) => (picker as HTMLElement & { value: string }).value),
+            )
+            .toBe("reviewer");
+          await waitForRequest(
+            gateway,
+            "models.list",
+            (params) => params.agentId === "reviewer" && params.view === "configured",
+          );
+          await screenshot(page, "10-reloaded-reviewer.png");
+          await page.goBack();
+          await expect.poll(() => new URL(page.url()).pathname).toBe("/usage");
+          await expect
+            .poll(async () =>
+              (await sidebar.locator(".sidebar-agent-card__name").textContent())?.trim(),
+            )
+            .toBe("Main");
+        },
+      );
+    },
+  );
+
   it("preserves an in-flight canonical roster refresh while chat startup is delayed", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1440 } },
@@ -86,13 +241,13 @@ suite.define(() => {
         await gateway.resolveDeferred("chat.startup", {
           messages: [],
           metadata: { models: [] },
-          sessionId: "control-ui-e2e-session",
+          sessionId: "session:agent:main:main",
           thinkingLevel: null,
         });
         await gateway.resolveDeferred("agents.list", {
           defaultId: "research",
           mainKey: "main",
-          scope: "agent",
+          scope: "per-sender",
           agents: [{ id: "research", name: "Research" }],
         });
 
@@ -107,9 +262,6 @@ suite.define(() => {
   });
 
   it("keeps a refreshed canonical roster while chat startup remains delayed", async () => {
-    if (captureUiProof) {
-      await mkdir(proofDir, { recursive: true });
-    }
     await suite.withPage(
       {
         locale: "en-US",
@@ -127,7 +279,7 @@ suite.define(() => {
             "agents.list": {
               defaultId: "research",
               mainKey: "main",
-              scope: "agent",
+              scope: "per-sender",
               agents: [
                 { id: "research", name: "Research" },
                 { id: "writer", name: "Writer" },
@@ -149,7 +301,7 @@ suite.define(() => {
         await gateway.resolveDeferred("chat.startup", {
           messages: [],
           metadata: { models: [] },
-          sessionId: "control-ui-e2e-session",
+          sessionId: "session:agent:main:main",
           thinkingLevel: null,
         });
 
@@ -183,7 +335,15 @@ suite.define(() => {
         await agentMenu.getByText("Research", { exact: true }).waitFor();
         await agentMenu.getByText("Writer", { exact: true }).waitFor();
         expect(await agentMenu.getByText("Stale Main", { exact: true }).count()).toBe(0);
-        await screenshot(page, "00-refreshed-roster-wins.png");
+        if (captureUiProof) {
+          await writeFile(
+            path.join(proofDir, "00-refreshed-roster-wins.png"),
+            await takeControlUiViewportScreenshot(page, agentMenu.locator('[part="menu"]'), [
+              agentMenu.getByText("Research", { exact: true }),
+              agentMenu.getByText("Writer", { exact: true }),
+            ]),
+          );
+        }
       },
     );
   });
@@ -201,19 +361,19 @@ suite.define(() => {
             "agents.list": {
               defaultId: "main",
               mainKey: "main",
-              scope: "agent",
+              scope: "per-sender",
               agents: multiAgentRoster,
             },
             "chat.startup": {
               agentsList: {
                 defaultId: "main",
                 mainKey: "main",
-                scope: "agent",
+                scope: "per-sender",
                 agents: multiAgentRoster,
               },
               messages: [],
               metadata: { models: [] },
-              sessionId: "control-ui-e2e-session",
+              sessionId: "session:agent:main:main",
               thinkingLevel: null,
             },
             "sessions.list": {
@@ -232,8 +392,8 @@ suite.define(() => {
         const sidebar = page.locator("openclaw-app-sidebar");
         await sidebar.getByRole("button", { name: /Switch agent/ }).click();
         const agentMenu = sidebar.locator("wa-dropdown.sidebar-agent-menu");
-        // The card sits at the top of the sidebar: the menu drops below it so the
-        // agent you clicked (and its checkmark row) stays visible.
+        // The compact avatar stays visible above its menu. Viewport padding may
+        // shift the menu's left edge inside the rail without detaching it.
         await expect
           .poll(async () => {
             const [card, menu] = await Promise.all([
@@ -243,9 +403,13 @@ suite.define(() => {
             if (!card || !menu) {
               return null;
             }
-            return { belowCard: menu.y >= card.y + card.height, leftAligned: menu.x <= card.x + 4 };
+            return {
+              belowCard: menu.y >= card.y + card.height,
+              anchoredToCard: menu.x <= card.x + card.width && menu.x + menu.width >= card.x,
+              inViewport: menu.x >= 0 && menu.x + menu.width <= page.viewportSize()!.width,
+            };
           })
-          .toEqual({ belowCard: true, leftAligned: true });
+          .toEqual({ belowCard: true, anchoredToCard: true, inViewport: true });
         await agentMenu.locator('wa-dropdown-item[value="agent:writer"]').click();
         await waitForRequest(gateway, "sessions.list", (params) => params.agentId === "writer");
         await expect
@@ -254,7 +418,7 @@ suite.define(() => {
           )
           .toBe("Writer");
 
-        await sidebar.getByRole("link", { name: "Home" }).click();
+        await openHomeFullPage(page, "writer");
         await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/writer");
         await sidebar.locator(".sidebar-identity-card").click();
         await sidebar
@@ -295,7 +459,7 @@ suite.define(() => {
             "agents.list": {
               defaultId: "main",
               mainKey: "main",
-              scope: "agent",
+              scope: "per-sender",
               agents: multiAgentRoster,
             },
             "sessions.list": {

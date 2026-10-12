@@ -1,134 +1,60 @@
+import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-// Control UI module implements tool display behavior.
 import SHARED_TOOL_DISPLAY_JSON from "../../../../apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json" with { type: "json" };
+import { unwrapToolCallForDisplay } from "../../../../src/agents/tool-display-call.js";
 import {
   defaultTitle,
-  formatToolDetailText,
   normalizeToolDisplayName,
   resolveToolVerbAndDetailForArgs,
-  type ToolDisplaySpec as ToolDisplaySpecBase,
+  type ToolDisplaySpec,
 } from "../../../../src/agents/tool-display-common.js";
 import type { ToolDetailMode } from "../../../../src/agents/tool-display-exec.js";
 import type { ControlUiEmbedSandboxMode } from "../../../../src/gateway/control-ui-bootstrap-contract.js";
+import { resolveToolDisplayIcon } from "./tool-display-icon.ts";
 
 const A2UI_PATH = "/__openclaw__/a2ui";
 const CANVAS_HOST_PATH = "/__openclaw__/canvas";
 const CANVAS_CAPABILITY_PATH_PREFIX = "/__openclaw__/cap";
 
-type ToolDisplaySpec = ToolDisplaySpecBase & {
-  icon?: string;
-};
-
-type SharedToolDisplaySpec = ToolDisplaySpecBase & {
-  emoji?: string;
-};
-
-type SharedToolDisplayConfig = {
-  version?: number;
-  fallback?: SharedToolDisplaySpec;
-  tools?: Record<string, SharedToolDisplaySpec>;
-};
-
 type ToolDisplay = {
   name: string;
-  icon: ChatToolIconName;
-  title: string;
+  icon: ReturnType<typeof resolveToolDisplayIcon>;
   label: string;
-  verb?: string;
   detail?: string;
 };
 
 export type EmbedSandboxMode = ControlUiEmbedSandboxMode;
-type ChatToolIconName = string;
 
-const EMOJI_ICON_MAP: Record<string, ChatToolIconName> = {
-  "🧩": "puzzle",
-  "🛠️": "wrench",
-  "🧰": "wrench",
-  "📖": "fileText",
-  "✍️": "edit",
-  "📝": "penLine",
-  "📎": "paperclip",
-  "🌐": "globe",
-  "📺": "monitor",
-  "🧾": "fileText",
-  "🔐": "settings",
-  "💻": "monitor",
-  "🔌": "plug",
-  "💬": "messageSquare",
-};
-
-function iconForEmoji(emoji?: string): ChatToolIconName {
-  if (!emoji) {
-    return "puzzle";
-  }
-  return EMOJI_ICON_MAP[emoji] ?? "puzzle";
-}
-
-function convertSpec(spec?: SharedToolDisplaySpec): ToolDisplaySpec {
-  return {
-    icon: iconForEmoji(spec?.emoji),
-    title: spec?.title,
-    label: spec?.label,
-    detailKeys: spec?.detailKeys,
-    actions: spec?.actions,
-  };
-}
-
-const SHARED_TOOL_DISPLAY_CONFIG = SHARED_TOOL_DISPLAY_JSON as SharedToolDisplayConfig;
-const FALLBACK = convertSpec(SHARED_TOOL_DISPLAY_CONFIG.fallback ?? { emoji: "🧩" });
-const TOOL_MAP: Record<string, ToolDisplaySpec> = Object.fromEntries(
-  Object.entries(SHARED_TOOL_DISPLAY_CONFIG.tools ?? {}).map(([key, spec]) => [
-    key,
-    convertSpec(spec),
-  ]),
-);
+const FALLBACK = SHARED_TOOL_DISPLAY_JSON.fallback;
+const TOOL_MAP: Record<string, ToolDisplaySpec> = SHARED_TOOL_DISPLAY_JSON.tools;
 
 function shortenHomeInString(input: string): string {
-  if (!input) {
-    return input;
-  }
-
   // Browser-safe home shortening: avoid importing Node-only helpers (keeps Vite builds working in Docker/CI).
-  const patterns = [
-    { re: /^\/Users\/[^/]+(\/|$)/, replacement: "~$1" }, // macOS
-    { re: /^\/home\/[^/]+(\/|$)/, replacement: "~$1" }, // Linux
-    { re: /^C:\\Users\\[^\\]+(\\|$)/i, replacement: "~$1" }, // Windows
-  ] as const;
-
-  for (const pattern of patterns) {
-    if (pattern.re.test(input)) {
-      return input.replace(pattern.re, pattern.replacement);
-    }
-  }
-
-  return input;
+  return input
+    .replace(/^\/(?:Users|home)\/[^/]+(\/|$)/, "~$1")
+    .replace(/^[A-Za-z]:\\Users\\[^\\]+(\\|$)/i, "~$1");
 }
 
 export function resolveToolDisplay(params: {
   name?: string;
   args?: unknown;
-  meta?: string;
   detailMode?: ToolDetailMode;
 }): ToolDisplay {
-  const name = normalizeToolDisplayName(params.name);
+  const call = unwrapToolCallForDisplay({ name: params.name, args: params.args });
+  const name = normalizeToolDisplayName(call.name);
   const key = normalizeLowercaseStringOrEmpty(name);
   const spec = TOOL_MAP[key];
-  const icon = spec?.icon ?? FALLBACK.icon ?? "puzzle";
-  const title = spec?.title ?? defaultTitle(name);
-  const label = spec?.label ?? title;
-  const toolDisplayParts = resolveToolVerbAndDetailForArgs({
+  const icon = resolveToolDisplayIcon(name);
+  const label = spec?.label ?? spec?.title ?? defaultTitle(name);
+  let { detail } = resolveToolVerbAndDetailForArgs({
     toolKey: key,
-    args: params.args,
-    meta: params.meta,
+    args: call.args,
     spec,
     fallbackDetailKeys: FALLBACK.detailKeys,
     detailMode: "first",
     toolDetailMode: params.detailMode,
     detailCoerce: { includeFalsy: true },
   });
-  const { verb } = toolDisplayParts;
-  let { detail } = toolDisplayParts;
 
   if (detail) {
     detail = shortenHomeInString(detail);
@@ -137,15 +63,13 @@ export function resolveToolDisplay(params: {
   return {
     name,
     icon,
-    title,
     label,
-    verb,
     detail,
   };
 }
 
 export function formatToolDetail(display: ToolDisplay): string | undefined {
-  return formatToolDetailText(display.detail, { prefixWithWith: true });
+  return display.detail ? `with ${display.detail}` : undefined;
 }
 
 function isCanvasHttpPath(pathname: string): boolean {
@@ -157,29 +81,20 @@ function isCanvasHttpPath(pathname: string): boolean {
   );
 }
 
-function isExternalHttpUrl(entry: URL): boolean {
-  return entry.protocol === "http:" || entry.protocol === "https:";
-}
-
 function sanitizeCanvasEntryUrl(
   rawEntryUrl: string,
   allowExternalEmbedUrls = false,
 ): string | undefined {
-  try {
-    const entry = new URL(rawEntryUrl, "http://localhost");
-    if (entry.origin !== "http://localhost") {
-      if (!allowExternalEmbedUrls || !isExternalHttpUrl(entry)) {
-        return undefined;
-      }
-      return entry.toString();
-    }
-    if (!isCanvasHttpPath(entry.pathname)) {
-      return undefined;
-    }
-    return `${entry.pathname}${entry.search}${entry.hash}`;
-  } catch {
+  const entry = URL.parse(rawEntryUrl, "http://localhost");
+  if (!entry) {
     return undefined;
   }
+  if (entry.origin !== "http://localhost") {
+    return allowExternalEmbedUrls && isHttpUrl(entry) ? entry.toString() : undefined;
+  }
+  return isCanvasHttpPath(entry.pathname)
+    ? `${entry.pathname}${entry.search}${entry.hash}`
+    : undefined;
 }
 
 /**
@@ -233,18 +148,10 @@ export function resolveEmbedSandbox(
   mode: EmbedSandboxMode | null | undefined,
   ceiling?: "strict" | "scripts",
 ): string {
-  if (ceiling === "strict" || (ceiling === "scripts" && mode === "strict")) {
+  if (ceiling === "strict" || mode === "strict") {
     return "";
   }
-  if (ceiling === "scripts") {
-    return "allow-scripts";
-  }
-  switch (mode) {
-    case "strict":
-      return "";
-    case "trusted":
-      return "allow-scripts allow-same-origin";
-    default:
-      return "allow-scripts";
-  }
+  return mode === "trusted" && ceiling !== "scripts"
+    ? "allow-scripts allow-same-origin"
+    : "allow-scripts";
 }

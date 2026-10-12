@@ -1,6 +1,7 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { ControlUiBuildInfo } from "../build-info.ts";
+import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   captureUnionProof,
   createSidebarFooterProofSuite,
@@ -30,10 +31,7 @@ async function closeIdentityMenu(page: Page, sidebar: Locator) {
 
 async function assertSingleAccountTarget(page: Page, sidebar: Locator) {
   const identity = sidebar.locator(".sidebar-identity-card");
-  const parts = [
-    identity.locator("openclaw-viewer-avatar"),
-    identity.locator(".sidebar-identity-card__name"),
-  ];
+  const parts = [identity.locator("openclaw-viewer-avatar"), identity];
   for (const part of parts) {
     await part.click();
     await expect.poll(() => sidebar.locator("wa-dropdown.sidebar-identity-menu").count()).toBe(1);
@@ -41,14 +39,33 @@ async function assertSingleAccountTarget(page: Page, sidebar: Locator) {
   }
 }
 
-async function assertIdentityMenuContract(sidebar: Locator, menu: Locator) {
+async function assertIdentityMenuContract(menu: Locator) {
   expect(await menu.locator('wa-dropdown-item[value="command:recent-activity"]').count()).toBe(0);
   expect(
     await menu.evaluate((dropdown) => dropdown.closest("openclaw-menu-surface") !== null),
   ).toBe(false);
 }
 
-async function runAccountFooterProof(page: Page, sidebar: Locator, branch: "feature" | "main") {
+async function expectRailConnectionStatus(footer: Locator, kind: string, label: string) {
+  const identity = footer.locator(".sidebar-identity-card");
+  await expect.poll(() => identity.getAttribute("data-connection-status")).toBe(kind);
+  expect(await identity.isVisible()).toBe(true);
+  expect(await identity.getAttribute("aria-label")).toBe(
+    `Identity and app menu for Riley: ${label}`,
+  );
+  expect(await identity.getAttribute("title")).toBe(`Identity and app menu for Riley: ${label}`);
+  const lifecycle = footer.locator(":scope > [role=status]");
+  expect(await lifecycle.count()).toBe(1);
+  expect(await lifecycle.textContent()).toBe(label);
+  expect(await identity.getByRole("status").count()).toBe(0);
+}
+
+async function runAccountFooterProof(
+  suite: ReturnType<typeof createSidebarFooterProofSuite>,
+  page: Page,
+  sidebar: Locator,
+  branch: "feature" | "main",
+) {
   const footer = sidebar.locator(".sidebar-footer-bar");
   const identity = sidebar.locator(".sidebar-identity-card");
   await assertSingleAccountTarget(page, sidebar);
@@ -56,23 +73,27 @@ async function runAccountFooterProof(page: Page, sidebar: Locator, branch: "feat
   for (const theme of ["light", "dark"] as const) {
     await setSidebarProofTheme(page, theme);
     await page.mouse.move(0, 0);
-    await captureUnionProof(page, "sidebar-account-footer", `${branch}-${theme}-footer.png`, [
-      footer,
-    ]);
+    await captureUnionProof(
+      suite,
+      page,
+      "sidebar-account-footer",
+      `${branch}-${theme}-footer.png`,
+      [footer],
+    );
 
     await identity.focus();
     await page.keyboard.press("Enter");
     const menu = sidebar.locator("wa-dropdown.sidebar-identity-menu");
     const menuSurface = menu.locator('[part="menu"]');
     await menu.waitFor();
-    await assertIdentityMenuContract(sidebar, menu);
+    await assertIdentityMenuContract(menu);
 
     const buildLabel = (
-      await menu.getByRole("link", { name: "Control UI build details" }).textContent()
+      await menu.getByRole("menuitem", { name: "Control UI build details" }).textContent()
     )?.trim();
     const buildPrefix = branch === "main" ? "git@0123456" : "feat/sidebar-f…@0123456";
     expect(buildLabel?.startsWith(`${buildPrefix} · `)).toBe(true);
-    const buildLink = menu.getByRole("link", { name: "Control UI build details" });
+    const buildLink = menu.getByRole("menuitem", { name: "Control UI build details" });
     const buildTooltip = sidebar.locator("openclaw-sidebar-build-chip openclaw-tooltip wa-tooltip");
     const buildTooltipCard = sidebar.locator(".sidebar-build-hover-card");
     await page.clock.install();
@@ -80,24 +101,33 @@ async function runAccountFooterProof(page: Page, sidebar: Locator, branch: "feat
     await page.clock.runFor(300);
     await page.mouse.move(0, 0);
     await page.clock.runFor(300);
-    expect(await buildTooltip.getAttribute("open")).toBeNull();
+    expect(await buildTooltip.count()).toBe(0);
     await buildLink.hover();
     await page.clock.runFor(600);
     await expect.poll(() => buildTooltip.getAttribute("open")).not.toBeNull();
     await page.clock.resume();
-    await captureUnionProof(page, "build-chip-hover-intent", `${branch}-${theme}-intent-open.png`, [
-      footer,
-      menuSurface,
-      buildTooltipCard,
-    ]);
+    await captureUnionProof(
+      suite,
+      page,
+      "build-chip-hover-intent",
+      `${branch}-${theme}-intent-open.png`,
+      [footer, menuSurface, buildTooltipCard],
+    );
     await page.mouse.move(0, 0);
     await buildTooltipCard.waitFor({ state: "hidden" });
-    await captureUnionProof(page, "sidebar-account-footer", `${branch}-${theme}-menu-default.png`, [
-      footer,
-      menuSurface,
-    ]);
+    await captureUnionProof(
+      suite,
+      page,
+      "sidebar-account-footer",
+      `${branch}-${theme}-menu-default.png`,
+      [footer, menuSurface],
+    );
 
     const settings = menu.locator('wa-dropdown-item[value="command:settings"]');
+    const settingsShortcut = settings.locator(".session-menu__shortcut");
+    expect(
+      await settingsShortcut.evaluate((element) => getComputedStyle(element).fontFamily),
+    ).toMatch(/^system-ui,/u);
     const settingsRestBackground = await settings.evaluate(
       (element) => getComputedStyle(element).backgroundColor,
     );
@@ -107,6 +137,7 @@ async function runAccountFooterProof(page: Page, sidebar: Locator, branch: "feat
       .poll(() => settings.evaluate((element) => getComputedStyle(element).backgroundColor))
       .not.toBe(settingsRestBackground);
     await captureUnionProof(
+      suite,
       page,
       "sidebar-account-footer",
       `${branch}-${theme}-menu-settings-hover.png`,
@@ -116,6 +147,7 @@ async function runAccountFooterProof(page: Page, sidebar: Locator, branch: "feat
     const usage = menu.locator('wa-dropdown-item[value="command:usage"]');
     await usage.focus();
     await captureUnionProof(
+      suite,
       page,
       "sidebar-account-footer",
       `${branch}-${theme}-menu-usage-focus.png`,
@@ -132,6 +164,7 @@ async function runAccountFooterProof(page: Page, sidebar: Locator, branch: "feat
     const submenu = help.locator('[part="submenu"]');
     await submenu.waitFor({ state: "visible" });
     await captureUnionProof(
+      suite,
       page,
       "sidebar-account-footer",
       `${branch}-${theme}-menu-help-submenu.png`,
@@ -152,31 +185,142 @@ async function runAccountFooterProof(page: Page, sidebar: Locator, branch: "feat
   }
 }
 
+const featureBuild = buildInfo("feat/sidebar-footer");
+const gatewayBuild = {
+  serverVersion: featureBuild.version ?? undefined,
+  serverBuildId: featureBuild.buildId,
+};
 const suite = createSidebarFooterProofSuite(
   "Control UI sidebar account footer feature build E2E",
-  buildInfo("feat/sidebar-footer"),
+  featureBuild,
 );
 
 suite.define(() => {
-  it("keeps the feature account target, identity menu, and visual states coherent", async () => {
-    const opened = await openSidebarFooterProofPage(suite);
+  it("labels the lifecycle status on the account icon and retries through its menu", async () => {
+    const opened = await openSidebarFooterProofPage(suite, {
+      ...gatewayBuild,
+      awaitInitialRoster: false,
+      gatewaySuspensionPhase: "prepared",
+    });
     try {
-      await runAccountFooterProof(opened.page, opened.sidebar, "feature");
+      const { gateway, page, sidebar } = opened;
+      const footer = sidebar.locator(".sidebar-footer-bar");
+      await setSidebarProofTheme(page, "dark");
+      await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
+      await waitForControlUiGatewayReady(page);
+      await expectRailConnectionStatus(footer, "suspended", "Suspended");
+      const inbox = footer.locator("openclaw-sidebar-attention");
+      expect(await inbox.getByRole("status").count()).toBe(1);
+      expect(await inbox.getByRole("status").textContent()).toBe(
+        await inbox.locator(".sidebar-issues-button").getAttribute("aria-label"),
+      );
+      await gateway.emitGatewayEvent("gateway.suspension", { phase: "accepting" });
+      await expect.poll(() => footer.locator(".gateway-status").count()).toBe(0);
+
+      for (const [phase, label] of [
+        ["preparing", "Suspending…"],
+        ["draining", "Suspending…"],
+        ["prepared", "Suspended"],
+      ] as const) {
+        await gateway.emitGatewayEvent("gateway.suspension", { phase });
+        await expectRailConnectionStatus(
+          footer,
+          phase === "prepared" ? "suspended" : "suspending",
+          label,
+        );
+        await captureUnionProof(
+          suite,
+          page,
+          "sidebar-account-footer",
+          `feature-dark-${phase}.png`,
+          [footer],
+        );
+      }
+      await sidebar.locator(".sidebar-identity-card").click();
+      await sidebar.locator('wa-dropdown-item[value="command:settings"]').click();
+      const settingsStatus = page.locator(".settings-sidebar .gateway-status__label");
+      await expect.poll(() => settingsStatus.textContent()).toBe("Suspended");
+      await captureUnionProof(
+        suite,
+        page,
+        "sidebar-account-footer",
+        "feature-dark-settings-suspended.png",
+        [page.locator(".settings-sidebar__footer")],
+      );
+      await gateway.emitGatewayEvent("gateway.suspension", { phase: "accepting" });
+      await expect.poll(() => settingsStatus.count()).toBe(0);
+      await page.locator(".settings-sidebar__back").click();
+      await sidebar.waitFor();
+      await gateway.emitGatewayEvent("gateway.suspension", { phase: "prepared" });
+      await expectRailConnectionStatus(footer, "suspended", "Suspended");
+
+      await gateway.setOnline(false);
+      await expectRailConnectionStatus(footer, "reconnecting", "Reconnecting…");
+      expect(await footer.locator(".gateway-status").count()).toBe(1);
+      expect(await footer.getByText("Offline", { exact: true }).count()).toBe(0);
+      await expect.poll(() => page.title()).toContain("(Disconnected)");
+      await captureUnionProof(suite, page, "sidebar-account-footer", "feature-dark-offline.png", [
+        footer,
+      ]);
+
+      const socketCount = await gateway.getSocketCount();
+      await footer
+        .getByRole("button", {
+          name: "Identity and app menu for Riley: Reconnecting…",
+          exact: true,
+        })
+        .click();
+      const retry = sidebar.locator('wa-dropdown-item[value="command:retry-connect"]');
+      await retry.waitFor();
+      await retry.click();
+      await expect
+        .poll(() => gateway.getSocketCount(), { timeout: 10_000 })
+        .toBeGreaterThan(socketCount);
+
+      await gateway.setOnline(true);
+      await expectRailConnectionStatus(footer, "suspended", "Suspended");
+      await gateway.emitGatewayEvent("gateway.suspension", { phase: "accepting" });
+      await expect
+        .poll(() => footer.locator(".gateway-status").count(), { timeout: 10_000 })
+        .toBe(0);
+      await expect.poll(() => page.title()).not.toContain("Disconnected");
+      await gateway.emitGatewayEvent("gateway.suspension", { phase: "prepared" });
+      await gateway.emitGatewayEvent("shutdown", {
+        reason: "gateway restart",
+        restartExpectedMs: 5_000,
+      });
+      await expectRailConnectionStatus(footer, "restarting", "Restarting…");
+      await captureUnionProof(
+        suite,
+        page,
+        "sidebar-account-footer",
+        "feature-dark-restarting.png",
+        [footer],
+      );
+    } finally {
+      await suite.closeBrowserContext(opened.context);
+    }
+  });
+
+  it("keeps the feature account target, identity menu, and visual states coherent", async () => {
+    const opened = await openSidebarFooterProofPage(suite, gatewayBuild);
+    try {
+      await runAccountFooterProof(suite, opened.page, opened.sidebar, "feature");
     } finally {
       await suite.closeBrowserContext(opened.context);
     }
   });
 
   it("navigates from the build link without opening its hovercard", async () => {
-    const opened = await openSidebarFooterProofPage(suite);
+    const opened = await openSidebarFooterProofPage(suite, gatewayBuild);
     try {
       const { page, sidebar } = opened;
       await sidebar.locator(".sidebar-identity-card").click();
-      const buildLink = sidebar.getByRole("link", {
+      const buildLink = sidebar.getByRole("menuitem", {
         name: "Control UI build details",
         exact: true,
       });
-      const tooltip = sidebar.locator("openclaw-sidebar-build-chip openclaw-tooltip wa-tooltip");
+      const tooltip = sidebar.locator("openclaw-sidebar-build-chip openclaw-tooltip");
       await tooltip.evaluate((element) => {
         document.documentElement.dataset.buildTooltipOpenedByClick = "false";
         element.addEventListener(

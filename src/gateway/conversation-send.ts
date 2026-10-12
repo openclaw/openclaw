@@ -1,106 +1,55 @@
 import type { ConversationSendResult } from "../../packages/gateway-protocol/src/schema/agent.js";
 import {
   ConversationDeliveryInputError,
+  getConversationDeliveryOperation,
   type ConversationDeliveryRecord,
 } from "../config/sessions/conversation-delivery-store.js";
 import {
-  resolveConversation,
-  resolveConversationRegistryScope,
+  readConversation,
+  prepareConversationRegistryScope,
 } from "../config/sessions/conversation-registry.js";
 import { resolveConversationRouteFingerprint } from "../config/sessions/conversation-route-fingerprint.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   ConversationDeliveryRejectedError,
-  defaultConversationDeliveryDeps,
+  resultFromExistingOperation,
   sendGatewayConversationMessage,
-  type ConversationDeliveryDeps,
 } from "../infra/outbound/conversation-delivery.js";
 import {
   ConversationInputError,
   ConversationOperationConflictError,
 } from "./conversation-errors.js";
 import {
-  assertConversationDeliveryAttemptAuthorized,
+  withAuthorizedConversationDelivery,
+  assertConversationDeliveryRouteAuthorized,
   assertConversationRouteEligibleForAgent,
 } from "./conversation-route-ownership.js";
 
-type ConversationSendDeps = ConversationDeliveryDeps & {
-  resolveConversation: typeof resolveConversation;
-};
-
-const defaultDeps: ConversationSendDeps = {
-  ...defaultConversationDeliveryDeps,
-  resolveConversation,
-};
-
-function resultForCompletedOperation(
-  operation: ConversationDeliveryRecord,
-): ConversationSendResult | undefined {
-  const base = {
-    conversationRef: operation.conversationRef,
-    channel: operation.channel,
-    ...(operation.queueId ? { queueId: operation.queueId } : {}),
-  };
-  switch (operation.status) {
-    case "sent":
-    case "replied":
-      return {
-        ...base,
-        status: "sent",
-        ...(operation.platformMessageId || operation.preparedMessageId
-          ? { messageId: operation.platformMessageId ?? operation.preparedMessageId }
-          : {}),
-      };
-    case "queued":
-      return {
-        ...base,
-        status: "queued",
-        ...(operation.preparedMessageId ? { messageId: operation.preparedMessageId } : {}),
-      };
-    case "suppressed":
-      return { ...base, status: "suppressed" };
-    case "rejected":
-      throw new ConversationDeliveryRejectedError(
-        operation.rejectionError ?? "Conversation delivery was permanently rejected",
-      );
-    case "unknown":
-      return { ...base, status: "unknown" };
-    case "created":
-      return undefined;
-  }
-  return operation.status satisfies never;
-}
-
 /** Performs one durable conversation send inside the Gateway channel owner. */
-export async function runGatewayConversationSend(
-  params: {
-    config: OpenClawConfig;
-    readCurrentConfig?: () => OpenClawConfig;
-    agentId: string;
-    senderIsOwner: boolean;
-    sourceSessionKey?: string;
-    operationId: string;
-    conversationRef: string;
-    message: string;
-    signal?: AbortSignal;
-  },
-  deps: ConversationSendDeps = defaultDeps,
-): Promise<ConversationSendResult> {
-  const scope = resolveConversationRegistryScope(params);
+export async function runGatewayConversationSend(params: {
+  config: OpenClawConfig;
+  readCurrentConfig?: () => OpenClawConfig;
+  agentId: string;
+  senderIsOwner: boolean;
+  sourceSessionKey?: string;
+  operationId: string;
+  conversationRef: string;
+  message: string;
+  signal?: AbortSignal;
+}): Promise<ConversationSendResult> {
+  const scope = await prepareConversationRegistryScope(params);
+  params.signal?.throwIfAborted();
   try {
-    const prior = deps.getOperation(scope, params.operationId);
-    let operation: ConversationDeliveryRecord | undefined;
-    if (prior) {
-      operation = deps.beginOperation(scope, {
-        operationId: params.operationId,
+    const operation: ConversationDeliveryRecord | undefined =
+      await getConversationDeliveryOperation(scope, params.operationId, {
         operationKind: "send",
         conversationRef: params.conversationRef,
         ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
         message: params.message,
-      }).record;
-    }
+      });
 
-    const conversation = deps.resolveConversation(scope, params.conversationRef);
+    const conversation = await readConversation(scope, params.conversationRef);
+    params.signal?.throwIfAborted();
     if (!conversation) {
       throw new ConversationInputError(
         `Conversation not found: ${params.conversationRef} (use conversations_list)`,
@@ -113,42 +62,59 @@ export async function runGatewayConversationSend(
       conversation,
     });
     const routeFingerprint = resolveConversationRouteFingerprint(conversation);
-    if (operation) {
-      const completed = resultForCompletedOperation(operation);
-      if (completed) {
-        return completed;
-      }
-    }
-    const sent = await sendGatewayConversationMessage({
-      deps,
-      context: {
-        agentId: params.agentId,
-        ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
-        config: currentConfig,
-        senderIsOwner: params.senderIsOwner,
-      },
-      conversation,
-      message: params.message,
-      operationId: params.operationId,
-      operationKind: "send",
-      routeFingerprint,
-      onDeliveryAttempt: async () => {
-        assertConversationDeliveryAttemptAuthorized({
-          config: params.readCurrentConfig?.() ?? currentConfig,
+    const authority = {
+      conversationRef: conversation.conversationRef,
+      expectedRouteFingerprint: routeFingerprint,
+    };
+    // Completed retries retain persisted metadata and bypass current delivery-store resolution.
+    const completed = operation ? resultFromExistingOperation(operation) : undefined;
+    const sent =
+      completed ??
+      (await sendGatewayConversationMessage({
+        scope,
+        context: {
           agentId: params.agentId,
-          conversationRef: conversation.conversationRef,
-          expectedRouteFingerprint: routeFingerprint,
-          scope,
-          resolveConversation: deps.resolveConversation,
-        });
-      },
-      ...(operation ? { operation } : {}),
-      ...(params.signal ? { signal: params.signal } : {}),
-    });
+          ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
+          config: currentConfig,
+          senderIsOwner: params.senderIsOwner,
+        },
+        conversation,
+        message: params.message,
+        operationId: params.operationId,
+        operationKind: "send",
+        routeFingerprint,
+        authority,
+        assertCurrent: () => {
+          params.signal?.throwIfAborted();
+          assertConversationDeliveryRouteAuthorized({
+            ...authority,
+            config: params.readCurrentConfig?.() ?? currentConfig,
+            agentId: params.agentId,
+            conversation,
+          });
+        },
+        withDirectAdapterHandoff: (initiate) =>
+          withAuthorizedConversationDelivery(
+            {
+              ...authority,
+              config: currentConfig,
+              readCurrentConfig: params.readCurrentConfig,
+              agentId: params.agentId,
+              scope,
+            },
+            () => {
+              params.signal?.throwIfAborted();
+              return initiate();
+            },
+          ),
+        ...(operation ? { operation } : {}),
+        ...(params.signal ? { signal: params.signal } : {}),
+      }));
+    const resultConversation = completed ? completed.operation : conversation;
     return {
       status: sent.deliveryStatus,
-      conversationRef: conversation.conversationRef,
-      channel: conversation.channel,
+      conversationRef: resultConversation.conversationRef,
+      channel: resultConversation.channel,
       ...(sent.messageId ? { messageId: sent.messageId } : {}),
       ...(sent.operation.queueId ? { queueId: sent.operation.queueId } : {}),
     };

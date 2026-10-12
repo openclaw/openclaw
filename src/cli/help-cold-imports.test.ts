@@ -1,6 +1,7 @@
 // Help cold import tests cover root help output without loading heavy command modules.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 
 const loaded = vi.hoisted(() => {
   const modules = new Set<string>();
@@ -102,27 +103,6 @@ vi.mock("../commands/export-trajectory.js", () => {
   return { exportTrajectoryCommand: vi.fn(async () => {}) };
 });
 
-vi.mock("../commands/tasks.js", () => {
-  loaded.mark("tasks-command");
-  return {
-    tasksAuditCommand: vi.fn(async () => {}),
-    tasksCancelCommand: vi.fn(async () => {}),
-    tasksListCommand: vi.fn(async () => {}),
-    tasksMaintenanceCommand: vi.fn(async () => {}),
-    tasksNotifyCommand: vi.fn(async () => {}),
-    tasksShowCommand: vi.fn(async () => {}),
-  };
-});
-
-vi.mock("../commands/flows.js", () => {
-  loaded.mark("flows-command");
-  return {
-    flowsCancelCommand: vi.fn(async () => {}),
-    flowsListCommand: vi.fn(async () => {}),
-    flowsShowCommand: vi.fn(async () => {}),
-  };
-});
-
 vi.mock("../commands/configure.commands.js", () => {
   loaded.mark("configure-command");
   return { configureCommandFromSectionsArg: vi.fn(async () => {}) };
@@ -148,17 +128,22 @@ vi.mock("../commands/agent-via-gateway.js", () => {
   return { agentCliCommand: vi.fn(async () => {}) };
 });
 
+vi.mock("../commands/agent-exec.js", () => {
+  loaded.mark("agent-exec-command");
+  return { agentExecCommand: vi.fn(async () => {}) };
+});
+
 vi.mock("../commands/agents.commands.add.js", () => {
   loaded.mark("agents-add-command");
   return { agentsAddCommand: vi.fn(async () => {}) };
 });
 
-vi.mock("../commands/agents.commands.bind.js", () => {
+vi.mock("../commands/agents.commands.bind.js", async (importOriginal) => {
   loaded.mark("agents-bind-command");
   return {
+    ...(await importOriginal<typeof import("../commands/agents.commands.bind.js")>()),
     agentsBindingsCommand: vi.fn(async () => {}),
-    agentsBindCommand: vi.fn(async () => {}),
-    agentsUnbindCommand: vi.fn(async () => {}),
+    agentsUpdateBindingsCommand: vi.fn(async () => {}),
   };
 });
 
@@ -272,8 +257,6 @@ describe("subcommand help cold imports", () => {
     expect(loaded.modules).not.toContain("sessions-command");
     expect(loaded.modules).not.toContain("sessions-cleanup-command");
     expect(loaded.modules).not.toContain("export-trajectory-command");
-    expect(loaded.modules).not.toContain("tasks-command");
-    expect(loaded.modules).not.toContain("flows-command");
   });
 
   it("keeps configure help out of configure action/wizard modules", async () => {
@@ -311,23 +294,27 @@ describe("subcommand help cold imports", () => {
     expect(loaded.modules).not.toContain("default-runtime");
   });
 
-  it("keeps agents help out of agent action modules", async () => {
-    const { registerAgentsCommands } = await import("./program/register.agent.js");
-    const { registerAgentTurnCommand } = await import("./program/register.agent-turn.js");
-    const program = makeProgram();
+  it.each(["agent", "agent exec", "agents"])(
+    "keeps %s help out of agent action modules",
+    async (command) => {
+      const { registerAgentsCommands } = await import("./program/register.agent.js");
+      const { registerAgentTurnCommand } = await import("./program/register.agent-turn.js");
+      const program = makeProgram();
 
-    registerAgentTurnCommand(program, { agentChannelOptions: "last|telegram|discord" });
-    registerAgentsCommands(program);
-    await expectHelpExit(program, ["agents", "--help"]);
+      registerAgentTurnCommand(program, { agentChannelOptions: "last|telegram|discord" });
+      registerAgentsCommands(program);
+      await expectHelpExit(program, [...command.split(" "), "--help"]);
 
-    expect(loaded.modules).not.toContain("agent-via-gateway-command");
-    expect(loaded.modules).not.toContain("agents-add-command");
-    expect(loaded.modules).not.toContain("agents-bind-command");
-    expect(loaded.modules).not.toContain("agents-delete-command");
-    expect(loaded.modules).not.toContain("agents-identity-command");
-    expect(loaded.modules).not.toContain("agents-list-command");
-    expect(loaded.modules).not.toContain("default-runtime");
-  });
+      expect(loaded.modules).not.toContain("agent-via-gateway-command");
+      expect(loaded.modules).not.toContain("agent-exec-command");
+      expect(loaded.modules).not.toContain("agents-add-command");
+      expect(loaded.modules).not.toContain("agents-bind-command");
+      expect(loaded.modules).not.toContain("agents-delete-command");
+      expect(loaded.modules).not.toContain("agents-identity-command");
+      expect(loaded.modules).not.toContain("agents-list-command");
+      expect(loaded.modules).not.toContain("default-runtime");
+    },
+  );
 
   it("keeps secrets help out of secrets action modules", async () => {
     const { registerSecretsCli } = await import("./secrets-cli.js");

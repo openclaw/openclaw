@@ -4,293 +4,361 @@ read_when:
   - Diagnosing a newer database schema error
   - Checking database compatibility before an update or downgrade
   - Proposing a SQLite or persistent-store change
+  - Preparing storage operations for another database backend
   - Recovering a database for an older OpenClaw release
 title: "Database schemas"
 ---
 
-OpenClaw stores control-plane state in a global SQLite database and agent data in one SQLite database per agent. Schema migrations run forward when a database opens. Older OpenClaw builds refuse databases written by a newer schema.
-
-## Database layout
-
-| Scope                | Default path                                               | Contents                                                                                              |
-| -------------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| Global control plane | `~/.openclaw/state/openclaw.sqlite`                        | Shared configuration state, registries, approvals, plugin state, and shared runtime state             |
-| Per-agent data plane | `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` | Sessions, transcripts, memory indexes, auth state, conversation state, and agent-scoped runtime state |
-
-A few high-volume or lifecycle-specific features use dedicated SQLite stores, including the task registry and trajectory data.
-
-## Versioning contract
-
-Each database records its schema in two places:
-
-- `PRAGMA user_version` is the SQLite schema version.
-- The primary `schema_meta` row records `role`, `agent_id`, `schema_version`, and `app_version`. `app_version` is the OpenClaw build that last wrote the schema metadata.
-
-OpenClaw applies forward-only migrations when it opens an older supported database. It refuses a database whose `user_version` is newer than the running build and reports a `newer schema version` error. The Gateway checks all registered databases before startup. `openclaw update` also refuses a package or source target whose declared schema support is older than an on-disk database. Target packages published before schema metadata was added cannot be preflighted.
-
-Changes may stay at the same schema version only when downgraded readers remain safe. New tables qualify because older builds ignore them. An explicitly compatible column on an existing table qualifies only when its declaration is exactly one bare nullable SQLite `STRICT` datatype: `ANY`, `BLOB`, `INT`, `INTEGER`, `REAL`, or `TEXT`. The declaration cannot have a default, `NOT NULL`, a primary or unique key, a check, a reference, a collation, a generated expression, or another suffix. Constrained existing-table additions require a schema-version bump or a companion table instead.
-
-Matching numeric versions are necessary but not sufficient. A release can add a lazy or startup-repairable table, column, index, or trigger without advancing `user_version`, so two databases at the same version can still have different shapes. OpenClaw validates the canonical table definitions, constraints, indexes, triggers, virtual tables, and table options owned by the running release.
-
-The placement-move table uses this same-version rule for its nullable bare
-`abandon_source INTEGER` column. The feature lazily ensures the column on first
-move use. `NULL` means ordinary reconcile-first movement; `1` records the
-operator's explicit offline-device abandonment decision so restart recovery
-cannot accidentally resume remote reconciliation. Older readers ignore the
-column and can reopen the same database safely.
-
-Conversation associations use the same rule for the nullable bare
-`route_context_json TEXT` column. The database-open repair ensures the column
-for updated binaries. Older readers ignore it and can reopen and update the
-same database safely; their association update invalidates context captured by
-a newer writer so it cannot be replayed after re-upgrade.
-
-User profiles use the same rule for the nullable bare `user_profiles.role TEXT`
-column in state schema 9. Operator-role assignment lazily ensures the column on
-first use. Older readers ignore the column and can reopen the same database
-safely.
-
-Installing OpenClaw manually through npm bypasses the updater guard. Database open checks still refuse an incompatible build.
-
-## Review checkpoint for material changes
-
-Before implementing a material SQLite or persistent-store change, open or link a maintainer discussion and record acceptance of the design. A schema-version bump is always material, but a change can be material even when the numeric version stays the same.
-
-Treat a change as material when it introduces or materially changes any of these:
-
-- a table, dedicated database, durable projection, cache, index, or other persisted representation
-- which data is canonical, derived, reconstructible, retained, deleted, exported, or visible after restart
-- user-visible persistence semantics, including a second interpretation of existing durable data
-- migration, backfill, repair, downgrade, rollback, retention, compaction, or corruption recovery
-- transaction boundaries, writer ownership, concurrency, locking, publication fencing, or reader consistency
-- read, write, disk, startup, or maintenance cost enough to affect the store's operating model
-
-The discussion should identify the owning store and lifecycle, the problem being solved, alternatives that avoid new persistence, canonical versus derived data, schema and upgrade/downgrade behavior, retention and deletion behavior, concurrency and recovery invariants, performance/storage impact, rollback plan, and validation limits. The implementing PR must link the accepted decision.
-
-The checkpoint normally does not apply to a read-only query that preserves existing semantics, a bounded query-plan improvement with no material write/disk tradeoff, routine maintenance of an existing approved schema, or tests, generated baselines, and documentation that only follow an already accepted design. A mechanical migration or repair still links the decision that approved its persistent contract.
-
-For an urgent data-loss, security, or recovery fix, a maintainer may authorize a narrowly scoped exception before implementation. The appropriate public or private review record must capture the reason, temporary scope, rollback and validation plan, and any follow-up needed for the full design decision. The exception accelerates the design record; it does not waive review before merge.
-
-## Preflight a target release
-
-Before activating or rolling back a release, run that target release's CLI against one explicit copied state database:
-
-```bash
-openclaw database preflight <copied-state.sqlite> --json
-```
-
-The command does not read the default state directory or mutate the supplied file. It opens the supplied consolidated file as immutable/read-only, compares the target release's own schema contract, and reports one status:
-
-- `exact`: the copied database matches the target release's runtime schema. Feature-local tables that are intentionally absent until first use do not require repair.
-- `startup-repairable`: the numeric version matches and a runtime-owned additive difference remains; startup needs a write to converge the shape.
-- `migration-required`: the database is older than the target release.
-- `incompatible`: the database is newer, or its same-version shape has blocking drift such as an unexpected column.
-- `indeterminate`: the file, integrity metadata, or ownership metadata could not be verified.
-
-JSON output is identified by `schema: "openclaw.state-schema-preflight.v1"`.
-
-Use a SQLite online backup or another WAL-aware snapshot produced while the source is safely coordinated. The resulting preflight input must be one consolidated file with no sibling `-wal`, `-shm`, or `-journal`; sidecars make the result `indeterminate`. Do not copy only the main `.sqlite` file from an active WAL database. Preflight the exact runtime that will be activated; a package version or numeric schema version alone does not prove same-version shape compatibility.
-
-## Agent schema history
-
-| Version | Change                                                                                                                                                                                                                                                 | First release                                   |
-| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------- |
-| 1       | Initial per-agent store ([#88349](https://github.com/openclaw/openclaw/pull/88349))                                                                                                                                                                    | `v2026.5.30-beta.1`, stable through `v2026.7.1` |
-| 2       | Memory index identity ([#104449](https://github.com/openclaw/openclaw/pull/104449))                                                                                                                                                                    | `v2026.7.2-beta.1`                              |
-| 4       | Sessions and transcripts moved into SQLite ([#98236](https://github.com/openclaw/openclaw/pull/98236))                                                                                                                                                 | `v2026.7.2-beta.1`                              |
-| 5-6     | Terminal freshness and state lifecycle ([#104859](https://github.com/openclaw/openclaw/pull/104859))                                                                                                                                                   | `v2026.7.2-beta.1`                              |
-| 7       | Per-entry lifecycle status projection ([#106151](https://github.com/openclaw/openclaw/pull/106151))                                                                                                                                                    | `v2026.7.2-beta.1`                              |
-| 8       | Per-transcript session provenance ([#106766](https://github.com/openclaw/openclaw/pull/106766))                                                                                                                                                        | `v2026.7.2-beta.2`                              |
-| 9       | `STRICT` tables ([#108663](https://github.com/openclaw/openclaw/pull/108663))                                                                                                                                                                          | `v2026.7.2-beta.2`                              |
-| 10      | Materialized active transcript paths ([#108851](https://github.com/openclaw/openclaw/pull/108851))                                                                                                                                                     | Unreleased                                      |
-| 11      | Durable delivery, conversation addresses, and heartbeat outcomes ([#109636](https://github.com/openclaw/openclaw/pull/109636), [#95838](https://github.com/openclaw/openclaw/pull/95838), [#109999](https://github.com/openclaw/openclaw/pull/109999)) | Unreleased                                      |
-| 12      | Session-owned ACP parent-stream events                                                                                                                                                                                                                 | Unreleased                                      |
-| 13      | Durable transcript rewrite watermarks                                                                                                                                                                                                                  | Unreleased                                      |
-| 14      | Logical session nodes, generation windows, and node-owned artifact foreign keys                                                                                                                                                                        | Unreleased                                      |
-| 15      | Board and session-sharing tables                                                                                                                                                                                                                       | Unreleased                                      |
-| 16      | Legacy top-level transcript media fields retired                                                                                                                                                                                                       | Unreleased                                      |
-| 17      | Tenant-free per-agent lease table retired after the last writer and routing arm were removed ([#121113](https://github.com/openclaw/openclaw/pull/121113), [#121615](https://github.com/openclaw/openclaw/pull/121615))                                | Unreleased                                      |
-
-Version 3 was an unshipped development step folded into version 4.
-
-## State schema history
-
-| Version | Change                                                                                                                                                                                                                                           | First release       |
-| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------- |
-| 1       | Initial shared state database                                                                                                                                                                                                                    | `v2026.5.30-beta.1` |
-| 2       | Metadata-only message audit events ([#103903](https://github.com/openclaw/openclaw/pull/103903))                                                                                                                                                 | `v2026.7.2-beta.1`  |
-| 3       | `STRICT` tables and schema-drift hardening ([#108663](https://github.com/openclaw/openclaw/pull/108663))                                                                                                                                         | `v2026.7.2-beta.2`  |
-| 4       | Session watch provenance replaces encoded sentinel rows                                                                                                                                                                                          | Unreleased          |
-| 5       | Durable cloud-worker result references on pending workspace fences ([`7a7d6bb`](https://github.com/openclaw/openclaw/commit/7a7d6bb51f42bd896de2b8a4df2ee66f3dce0a21), [#110952](https://github.com/openclaw/openclaw/pull/110952))              | `v2026.7.2-beta.4`  |
-| 6       | Every committed shared-state table becomes part of the canonical runtime schema ([`509a5f0`](https://github.com/openclaw/openclaw/commit/509a5f03737642fec4a940e6d605887f7957ddc8), [#113473](https://github.com/openclaw/openclaw/pull/113473)) | `v2026.7.2-beta.5`  |
-| 7       | Retired inferred-commitment storage removed                                                                                                                                                                                                      | Unreleased          |
-| 8       | Cloud-worker placement execution modes and mode-aware turn claims                                                                                                                                                                                | Unreleased          |
-| 9       | In-root agent database registry paths stored relative to the state directory                                                                                                                                                                     | Unreleased          |
-
-### State schema 9
-
-Schema 9 stores an `agent_databases.path` value relative to the state directory when the registered agent database is inside that directory. During migration, a foreign default-layout row is re-anchored to the in-root counterpart when that file exists. It is deleted only when the same agent already holds its in-root registration, because dual default-layout registrations cannot produce a valid combined session list. Otherwise, the absolute row is preserved, so genuine external registrations are never deleted. This keeps a copied state directory self-contained without dropping supported external database paths.
-
-## Integrity checks
-
-| When                                        | Check                                                           |
-| ------------------------------------------- | --------------------------------------------------------------- |
-| Every open                                  | Validate the `schema_meta` table and primary metadata row       |
-| Before a pending migration                  | Run a full integrity, foreign-key, role, schema, and index scan |
-| Gateway background verifier                 | Run the full scan about once daily and log results              |
-| Doctor, backup verification, and compaction | Run the full scan before accepting or rewriting the database    |
-
-The Gateway startup preflight reads schema headers only. `openclaw database preflight` performs the release-local shape comparison for an explicit copied file. The background verifier owns the slower recurring full scan for live databases that do not need migration.
-Quarantine decisions live only in a dedicated `openclaw-quarantine.sqlite` store, so they survive damage to the databases being quarantined. Verification results are logged.
-
-## Troubleshooting
-
-### Why you cannot go back after updating to 2026.7.2
-
-Every release through `v2026.7.1` used agent schema 1 and state schema 1. The 2026.7.2 release train (starting with `v2026.7.2-beta.1`) migrates your databases forward on first start. That migration is one-way: the data is rewritten into the newer schema, and installing an older OpenClaw afterwards does not undo it. The older build refuses to start with a `newer schema version` error that names the build that owns the database.
-
-Downgrading the binary never downgrades the data. If you must run a release older than 2026.7.2 after updating, you have three options:
-
-1. Restore a backup taken before the update. [Create and verify backups](/cli/backup) before major updates.
-2. Run the older build against a separate state directory (`OPENCLAW_STATE_DIR`). It starts fresh; your migrated data stays untouched for when you return to the newer build.
-3. Follow the manual downgrade procedure below. It is unsupported and risks data loss without a verified backup.
-
-Since 2026.7.2, `openclaw update` refuses to install a release that cannot open your current databases, so the updater will not put you in this situation. Installing an older version manually through npm bypasses that guard; the databases still refuse the old binary, but only after it is installed.
-
-### The Gateway refuses to start with a newer schema version error
-
-A newer OpenClaw build wrote your databases, and the running build is older. The error names the refusing install — release version, commit, and install root — plus the schema it supports and the schema it found.
-
-Act on the install root, not the version. One release version string spans many `main` commits, schema levels, and same-version schema shapes, so two installs can both call themselves `2026.7.2` and still disagree about a database. A prerelease version may not exist on the `latest` npm tag at all: check `npm view openclaw dist-tags` before reinstalling, because the tag carrying the schema you need may be `beta`, and reinstalling from `latest` can move you further away.
-
-A linked source checkout is the case where the commit misleads: `openclaw --version` reports the checkout's git HEAD, but the code actually executing is whatever `dist/` was last built. If the install root is a checkout, rebuild it (`pnpm build`) before concluding the version is wrong.
-
-Open the database with a build that supports its schema, or point the older build at a separate `OPENCLAW_STATE_DIR`. Do not edit the database to silence the error.
-
-### A database is quarantined after integrity verification failed
-
-The background verifier proved the file is corrupt, and every open now fails fast instead of rescanning. Restore the database from a backup or repair it, then run `openclaw doctor --fix` to clear the quarantine record. Doctor reports an explicit error if the quarantine record itself cannot be cleared; rerun it until it reports clean.
-
-## Downgrades are unsupported
-
-Manual schema downgrades are for agents and operators who accept the risk. [Create and verify a backup](/cli/backup) before editing any database. Stop the Gateway and every process that can open the database.
-
-The general procedure is:
-
-1. Read the target release's schema and migrations.
-2. In one transaction, drop every table, index, trigger, and column introduced after the target version.
-3. Set `PRAGMA user_version` and `schema_meta.schema_version` to the target version.
-4. Run the target release's full database verification before starting the Gateway.
-
-### Example: state schema 9 to 8
-
-Schema 8 expects every `agent_databases.path` value to be absolute. Before lowering `user_version`, inspect each registry row on the same platform that wrote it. Leave absolute external paths unchanged; replace every relative path with its platform-native absolute form by resolving it against the state directory that owns `state/openclaw.sqlite`. Then set both `PRAGMA user_version` and `schema_meta.schema_version` to 8 in the same transaction.
-
-Do not lower the version while relative registry rows remain. A schema 8 build interprets them relative to its process working directory rather than the copied state directory.
-
-### Example: state schema 7 to 6
-
-Schema 7 removed the retired shared commitments table. A schema 6 build still requires that canonical table, so a manual downgrade must recreate its exact empty schema before lowering the version.
-
-Run equivalent SQL against the global state database after inspecting the exact schema that wrote it:
-
-```sql
-BEGIN IMMEDIATE;
-
-CREATE TABLE commitments (
-  id TEXT NOT NULL PRIMARY KEY,
-  agent_id TEXT NOT NULL,
-  session_key TEXT NOT NULL,
-  channel TEXT NOT NULL,
-  account_id TEXT,
-  recipient_id TEXT,
-  thread_id TEXT,
-  sender_id TEXT,
-  kind TEXT NOT NULL,
-  sensitivity TEXT NOT NULL,
-  source TEXT NOT NULL,
-  status TEXT NOT NULL,
-  reason TEXT NOT NULL,
-  suggested_text TEXT NOT NULL,
-  dedupe_key TEXT NOT NULL,
-  confidence REAL NOT NULL,
-  due_earliest_ms INTEGER NOT NULL,
-  due_latest_ms INTEGER NOT NULL,
-  due_timezone TEXT NOT NULL,
-  source_message_id TEXT,
-  source_run_id TEXT,
-  created_at_ms INTEGER NOT NULL,
-  updated_at_ms INTEGER NOT NULL,
-  attempts INTEGER NOT NULL,
-  last_attempt_at_ms INTEGER,
-  sent_at_ms INTEGER,
-  dismissed_at_ms INTEGER,
-  snoozed_until_ms INTEGER,
-  expired_at_ms INTEGER,
-  record_json TEXT NOT NULL
-) STRICT;
-
-CREATE INDEX idx_commitments_scope_due
-  ON commitments(agent_id, session_key, status, due_earliest_ms, due_latest_ms);
-
-CREATE INDEX idx_commitments_status_due
-  ON commitments(status, due_earliest_ms, due_latest_ms);
-
-CREATE INDEX idx_commitments_scope_dedupe
-  ON commitments(agent_id, session_key, channel, dedupe_key, status);
-
-CREATE INDEX idx_commitments_agent_due
-  ON commitments(agent_id, status, due_earliest_ms, due_latest_ms, session_key);
-
-CREATE INDEX idx_commitments_agent_sent
-  ON commitments(agent_id, status, sent_at_ms, session_key);
-
-PRAGMA user_version = 6;
-UPDATE schema_meta
-SET schema_version = 6,
-    updated_at = unixepoch('now') * 1000
-WHERE meta_key = 'primary';
-
-COMMIT;
-```
-
-The recreated table starts empty because schema 7 discarded the retired rows. A botched downgrade means restore from the verified backup.
-
-### Example: agent schema 17 to 16
-
-Schema 17 removed the tenant-free per-agent lease table. A schema 16 build still requires that canonical table, so a manual downgrade must recreate its exact schema before lowering the version.
-
-Run equivalent SQL against each affected per-agent database after inspecting the exact schema that wrote it:
-
-```sql
-BEGIN IMMEDIATE;
-
-CREATE TABLE state_leases (
-  scope TEXT NOT NULL,
-  lease_key TEXT NOT NULL,
-  owner TEXT NOT NULL,
-  expires_at INTEGER,
-  heartbeat_at INTEGER,
-  payload_json TEXT,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL,
-  PRIMARY KEY (scope, lease_key)
-) STRICT;
-
-CREATE INDEX idx_agent_state_leases_expiry
-  ON state_leases(expires_at, scope, lease_key)
-  WHERE expires_at IS NOT NULL;
-
-CREATE INDEX idx_agent_state_leases_owner
-  ON state_leases(owner, updated_at DESC);
-
-PRAGMA user_version = 16;
-UPDATE schema_meta
-SET schema_version = 16,
-    updated_at = unixepoch('now') * 1000
-WHERE meta_key = 'primary';
-
-COMMIT;
-```
-
-The recreated table starts empty because schema 17 has no agent-DB lease tenants to preserve. A botched downgrade means restore from the verified backup.
+OpenClaw stores control-plane state in the shared state database and agent data in one SQLite database per agent. Schema migrations run forward when a database opens. Older OpenClaw builds refuse databases written by a newer schema.
+
+The Gateway process is the single owner of every OpenClaw database and its state.
+Its workers and native handles share that ownership. Committed write receipts
+invalidate in-process row caches before their next use; a cache without complete
+writer coverage must use a direct read instead. Runtime reads do not probe foreign
+commits with `PRAGMA data_version`, version observations, or foreign-observation
+scopes. SQLite statements outside an open read transaction already see committed
+data. A single-statement read needs no explicit transaction; multi-statement reads
+keep a transaction when their results require one consistent snapshot.
+CLI, Doctor, cron, and plugin child processes must route mutations through the
+Gateway or acquire exclusive ownership while it is stopped. First admission,
+migration, repair, and final live-authority checks retain their existing owners.
+
+Once Gateway startup holds exclusive state ownership, it inspects the previous
+Gateway lease directly in a read-only worker instead of copying the shared
+database. Fresh or unverifiable owners still prevent startup; Doctor's schema
+repair admission keeps its private snapshot.
+
+Borrowed worker transactions obtain their initial host grant before `BEGIN
+IMMEDIATE`; writes with domain or publication facts still revalidate those facts
+at commit. Transcript-index preflight and sweep instead admit one bounded derived
+maintenance effect before attempting a nonblocking `BEGIN IMMEDIATE`. They reread
+all source rows inside that transaction and make no host requests while holding
+the writer lock. Contention returns pending work to the existing yielding drain,
+which obtains fresh grants on its next attempt. The final grant linearizes this
+internal maintenance against subsequent revocation; it is never retained across
+asynchronous work or a lock wait. Schemas, stored formats, retention, permissions,
+and update behavior are unchanged.
+
+Database-fact readers do not contact the host inside a transaction. Missing writer
+registrations or unpublished facts remain unknown until the transaction closes;
+schema readers retain their conservative snapshot validation. The next read
+outside the transaction can refresh those facts through the existing owner.
+
+Native SQLite initialization reads the loaded library's version and extension
+capability in one query before admitting real state databases. Auth-profile
+readers install their lock-wait timeout at connection open.
+Quarantine decision readers and writers set their existing lock-wait timeout at connection
+open. The quarantine store's format is admitted once per physical database per
+process, while existing guards retain the indexed durable quarantine-row lookup
+in one SQLite snapshot and validate any recorded file generation.
+A separate inspection process can admit a target before the Gateway's verifier
+confirms corruption; its next guard must observe that recorded refusal even when
+the target's physical identity is unchanged. Quarantine rows retain their pathname
+scope, and aliases still share physical format, schema, and integrity facts.
+The persisted schema, WAL safety, and recovery behavior are unchanged.
+
+Agent database opens apply private file and directory modes. Warm reads and writes
+reuse the open connection without inspecting or repairing those modes again;
+permission drift is repaired on the next open or by explicit maintenance. Retained
+operations also reuse their admitted file identity. A replacement after admission
+does not redirect that operation to the replacement file; the next admission or
+open detects it through the database lifecycle owner. Commit authority checks and
+Doctor's explicit verification remain in place.
+
+Managed writes publish committed facts before their public observers. Private
+receipts distinguish explicit absence from incomplete coverage and preserve known
+commits independently of reply delivery. See
+[committed facts and completeness](/reference/database-schemas/worker-access#committed-facts-and-completeness)
+for ordering, rollback, and the writer families that still retain native guards.
+
+SQLite format, schema-version, integrity, canonical-index, and
+table-existence validation runs once per physical database per process load,
+on its first admission. The admitted facts are shared with all workers and
+handles, including later opens and reopens after idle close. File identity uses
+volume, inode, and stable birthtime captured once with `fstat` on the retained
+admission descriptor, not SQL. Admission lookups and established borrowers reuse
+those shared facts without checking the pathname again. Native open and reopen
+still identify replacement files, and creation witnesses retain their physical
+file check. A replaced or
+restored file needs its own first validation. Migration and repair owners validate
+their changes and publish the new facts after successful DDL settlement; later
+runtime consumers do not recheck them. Doctor and explicit verification retain
+their checks, and observed corruption still revokes admission.
+
+Shared-state and agent read-only connections reuse bounded prepared statements
+under their native connection lifecycle. Prepared-statement reuse alone does not
+retain query results. Schema-fact lookups use the process's admitted facts without
+SQL. Writer receipts invalidate cached row results across connections without
+querying `data_version`, `schema_version`, `user_version`, or the catalog again.
+Current-row authority checks remain at their effect boundaries. Cached rows inside
+an active SQLite snapshot use that snapshot's identity and the connection's local
+mutation revision. They never carry a current committed-write revision or become
+reusable after the snapshot ends. Autocommit caches use the owning writer's receipts.
+Closing a connection clears its prepared statements
+and row caches, while physical-database admission survives for the process lifetime.
+
+Worker dispatch carries snapshots prepared by the admission owner when it publishes
+facts or writer custody. Unchanged requests reuse the registry revision without
+scanning every database or rebuilding fact maps. Shared revocation cells still
+invalidate transferred facts immediately; retirement removes the published snapshot.
+This changes no schema, stored bytes, or update behavior.
+
+Shared-state content-version checks reuse the physical database's admitted version
+facts across handles and workers. Ordinary commits, transactions, and connection
+closure do not force another marker read. The migration owner publishes replacement
+facts with its committed schema. Observed DDL without replacement facts expires
+the content-version admission: an unchanged catalog shape does not prove that the
+`config_machine_state` marker survived. The next owner lookup validates it once,
+and later opens reuse the result. A historical snapshot keeps its own marker facts;
+publication requires a positive match with the current committed admission. Each
+caller still applies its published-version floor. Schema versions, stored bytes,
+and upgrade or downgrade behavior are unchanged.
+
+New agent readers reuse the process's schema admission. Shared-state worker reads
+consume writer-invalidated cache facts or current rows without a freshness probe.
+Point transcript statistics, mutation clocks, pending-archive checks, and
+hot/cold watermarks use a single statement's snapshot; composite reads retain
+their read transaction, and hot transcript reads reuse an existing transaction
+without a nested savepoint. Yielding write admission restores its temporary busy
+timeout once, immediately after acquiring the write transaction, and carries an
+inherited lock deadline without rereading the connection's timeout. FIFO,
+lock-wait budgets, schemas, stored data, and update behavior are unchanged.
+
+Activity-summary batches read metadata, ancestry, and bounded messages in one
+native snapshot. Transcript appends fold an existing window's recency into their
+final mutation-watermark write; rejected duplicates still record attempt recency.
+Connections retain their owner-set busy timeout and skip unchanged assignments.
+The audit writer retains the earliest expiry and skips empty pruning until it is
+due, invalidating that fact on rollback or maintenance. Audit retention, transcript
+timestamp semantics, schemas, and update behavior are unchanged.
+
+The admitted catalog includes index names and trigger definitions alongside tables.
+Canonical session validation consumes these definitions without another catalog scan.
+First canonical index admission shares the schema contract reader's batched metadata snapshot
+instead of querying each table and index separately. Shadowed PRAGMA names retain
+native inspection during that validation. Authorization, initial drift detection,
+transactional repair, and integrity checks remain with their existing owners.
+First-use schema owners skip additive DDL only when all their tables and indexes
+are present in the published facts. Missing objects use the existing installation
+transaction, which publishes the new schema facts on commit; rollback cannot
+publish a schema that did not commit. Ordinary connection replacement and data
+commits do not repeat schema validation. Schemas, stored bytes, and update behavior
+are unchanged.
+
+Admitted schema facts survive data-only transaction settlement. Committed write
+receipts invalidate cached row facts. A settled write releases its receipt fence
+even when an independent read cursor remains open on the same connection. Active
+write cursors and explicit transactions retain their fence until settlement.
+Rejected writer discovery leaves no native mutation depth behind, so a later
+committed write still invalidates cached rows.
+This changes no schema, stored data, or update behavior. Transaction-local views of
+schema facts end with their SQLite snapshot; the next transaction consumes the
+process's published facts without repeating validation.
+
+Progress-card writes reuse the transaction's admitted table facts. The schema owner creates the lazy table only when it is absent and publishes the committed facts for every handle and worker. A rolled-back installation remains absent until the next normal installation transaction. Stored cards, revision tombstones, schema versions, and upgrade or downgrade behavior are unchanged.
+
+The agent-database execution owner retains up to four idle physical-agent executors in least-recently-used order. Borrowing an executor refreshes its independent 30-minute idle timeout; a fifth idle executor evicts the least recently used one. Configuration changes to the agent roster or storage paths leave existing executors to expire normally. Already-admitted work retains its original physical store; new requests resolve the current configuration. Explicit database closure and Gateway shutdown still revoke and drain the existing lifecycle resources. This changes no schema, stored bytes, or update behavior.
+
+Creating an agent database at an admitted absent path revokes the previous file's
+retained validation before worker preparation. A recreated file cannot borrow that
+proof even if Linux reuses its inode. Ordinary reopen still reuses live proof,
+and fresh stores keep their canonical certification. Receipt identifiers survive
+worker transfers so alias publication revokes superseded proof while preserving
+acknowledged copies. Later revocation still refuses publication. Schemas, stored
+bytes, and update behavior are unchanged.
+
+Retaining an already-open agent handle holds its lifetime without querying SQLite. Writer receipts invalidate its cached row facts; schema facts come from process-wide admission. Canonical readiness invalidates its clean-store decision when the owning writer changes the store.
+
+The agent ID and role in `schema_meta` describe the physical store's fixed schema
+owner. Creation and migration validate and publish these facts for every handle
+and worker; ordinary commits do not require another ownership-metadata read.
+Observed DDL without owner-published replacement metadata expires that admission,
+even when the recreated table has the same definition: its primary row must be
+validated once by the next owner lookup. Historical metadata stays with its
+snapshot until positively matched to current committed admission. External row
+edits do not reassign an admitted store. Live session permissions, lease ownership,
+and caller authority retain their current-row checks. Dynamic authorizers retain
+native metadata reads. This changes no schema, stored bytes, or update behavior.
+
+Registry discovery reuses successful migration checks for the admitted schema
+generation. The minute retention sweep reads deletion history in a worker and
+shares one matcher across its agent stores; live deletion status and lifecycle
+commit guards still apply. Cron registry retention validates the complete listing
+in its reader worker and returns only cron-run entries to the Gateway; ordinary
+session metadata stays in the worker. Legacy watch-marker discovery uses an indexed prefix
+range. Retention continues as rows age, even without writes; schema, upgrade, and
+retention policies are unchanged.
+
+Session row-facts reads reuse a canonical continuation's existing transaction
+instead of nesting a savepoint. Reads without an active transaction still open
+one so entry metadata, board presence, and transcript watermarks share a snapshot.
+Board presence travels in the exact-entry query, including its single-key error
+fallback, instead of a separate Board read.
+
+Placement projections read placement, move, pending-result, journal, and environment
+facts in one statement per bounded batch. Batches share the existing read
+transaction; journal and result-claim checks consume those same snapshot facts.
+Optional columns come from admitted schema facts and refresh with that owner.
+
+Shared-state read operations retain their admission revision through their
+synchronous domain read. ACP metadata reuses at most 128 rows per connection
+under that revision; writer receipts, schema changes, and close
+invalidate reuse. Transactions and pinned or authorizer-controlled reads still
+query SQLite. Supplied shared-state writers reuse their selected handle and check
+ownership after `BEGIN`, without a duplicate pre-transaction row read or schema
+validation.
+Stored bytes, schemas, permissions, and update behavior are unchanged.
+
+Exact entry and participant readers retain their last result at the admitted
+connection revision. Repeated reads reuse those facts until an owning writer's
+receipt, rollback, schema change, or connection retirement invalidates them.
+Session revision guards and maintenance snapshots retain their mutation and
+snapshot predicates; transaction entry, rollback, and settlement retain their
+existing invalidation without foreign-commit probing.
+No schema, stored bytes, permissions, or update behavior change.
+Returned entries and participant identities remain caller-owned. Transcript
+watermark reads select the hot generation and the retained cold or hot sequence
+in one statement; hot-only readers keep their existing meaning. These query
+changes preserve schemas, stored bytes, live authority, and update behavior.
+
+Display-history readers resolve selected activity anchors by session and event ID,
+retaining the sequence fence inside the same read snapshot. These point lookups
+use the existing primary key and require no schema or data migration.
+
+Session entry writes batch their saved snapshot fields in one upsert, preserving
+per-field revision triggers and rollback.
+
+Canonical main-key policy, external-supervision ownership, and the machine-owned
+TTS preference path are loaded once for the physical database and shared across
+handles and workers. Their owning writers publish committed replacements;
+unrelated writes do not invalidate these facts. The Gateway owns runtime writes.
+Other processes must use that owner or run while it is stopped, except established
+updater handoff, restart-sentinel, and update-finalization writers, which retain their
+own lifecycle fences. Ownership claims require exclusive offline custody. Explicit
+ownership inspection and Doctor still read the database, and live lifecycle and lease checks
+remain at effect boundaries. Cached policy facts do not grant canonical admission
+or continuation authority. Main-key writer publications carry a host revision, so
+workers can retain an absent publication without polling after unrelated writes.
+Nested workers forward only the host completeness they actually received. The shared
+generation layout keeps write receipts in slot 5 and host-publication completeness
+in slot 6; these independent witnesses never share a counter.
+Present main-key values are data facts: unrelated DDL cannot retire a committed
+config postimage. A missing policy row stays with the connection's read revision
+until the schema owner's seed or canonical writer makes the policy available.
+Uncertain rollback can discard a data fact and require one repair read before reuse.
+
+Concurrent Windows handoff initializers share the existing writer admission lock
+until private file publication finishes, preserving the single-link file check
+without quarantining another initializer's in-progress publication.
+
+The Mentions Inbox retains its committed head through the same physical owner.
+An unchanged head skips snapshot worker dispatch. A changed or uncertain mutation
+reads the head and retained sources in one atomic query before resuming its FIFO;
+an unknown write outcome never authorizes replay. Session-entry mutation generations
+live in JavaScript beside their connection. TEMP triggers observe exact session
+and participant writes, and rollback invalidates generations without selecting a
+TEMP counter row. Auth-profile readers use admitted catalog facts for tables,
+views, and absence instead of querying the catalog for each read. These changes
+preserve schemas, stored bytes, durability, retention, permissions, and update behavior.
+
+The device-pair notifier retains an empty subscriber and delivery-receipt state
+for its service lifetime, so idle scheduled scans do not reread both stores.
+Its own writes across Gateway and agent registries invalidate that fact, including
+uncertain outcomes, and service restart reloads it. Active notifications retain
+their current subscription checks and delivery receipts; persisted subscriptions
+and receipt retention are unchanged.
+
+The Gateway does not schedule daily full-database scans. Admission-requested
+background checks stay limited to the requested agent database: `quick_check`
+for clean restart proof, or a full check after proven same-boot process death or
+native WAL admission without a verification receipt while the verifier is running.
+See [integrity admission and Doctor maintenance](/reference/database-schemas/integrity-and-recovery#integrity-checks)
+for the provenance requirements and operator-requested verification.
+
+Two mechanisms back that contract. CI runs
+`scripts/check-native-state-schema-version.mjs`, which fails the build when the
+Swift and TypeScript state-database contracts declare different schema versions.
+[`openclaw doctor --fix`](/cli/doctor) owns file-to-SQLite migrations and records a
+receipt for each one in the shared `migration_runs` and `migration_sources` tables.
+
+Execution step receipts are separate from these persisted import receipts.
+A step blocked by an earlier refusal includes optional `originatingRefusal`
+fields `stepId`, `code`, and `message` naming the first failure. See
+[legacy state migration](/cli/doctor/state-migrations) for how to resolve it.
+
+This page is an index. The reference is documented on focused pages, one per
+reader job. Open the page that matches your task and stay there.
+
+| Page                                                                                           | Read it when                                                                                             |
+| ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| [Database layout](/reference/database-schemas/layout)                                          | The two database roles, their on-disk paths, and the tables behind individual features.                  |
+| [Versioning contract](/reference/database-schemas/versioning)                                  | How schema versions are recorded, when a bump is required, and how updaters cross one.                   |
+| [Per-person and companion storage](/reference/database-schemas/personal-data)                  | Personal GitHub connections, personal model accounts, and Apple companion delivery journals.             |
+| [Storage changes and release preflight](/reference/database-schemas/storage-changes)           | Preparing for another backend, the material-change review checkpoint, and `openclaw database preflight`. |
+| [Database access in workers](/reference/database-schemas/worker-access)                        | Moving runtime reads and writes off the Gateway main thread while preserving their owners.               |
+| [Worker migration inventory](/reference/database-schemas/worker-access-inventory)              | Reproducing the synchronous-access inventory and choosing the next migration.                            |
+| [Agent schema history](/reference/database-schemas/agent-schema-history)                       | Per-agent database schema versions, their changes, and their first releases.                             |
+| [State schema history](/reference/database-schemas/state-schema-history)                       | Shared state database schema versions, their changes, and their first releases.                          |
+| [Integrity, troubleshooting, and recovery](/reference/database-schemas/integrity-and-recovery) | Integrity checks, common database errors, and the supported downgrade recovery path.                     |
+
+## Related
+
+- [Backups](/install/backups) — archives, per-database snapshots, scheduling, and offsite copies for the databases described here
+- [Updating](/install/updating) — updating safely, including the verified backup to take before a schema bump, and the rollback strategy
+- [Doctor](/gateway/doctor) — the repair and migration tool that fixes stale config/state and reports health problems
+- [`openclaw doctor`](/cli/doctor) — CLI reference for the command that runs those migrations
+- [`openclaw update`](/cli/update) — CLI reference for the updater that preflights schema support
+
+## Where each section moved
+
+Every section heading from the previous single-page version keeps its anchor
+here, so an existing link such as
+`/reference/database-schemas#schema-bumps-and-older-updaters` still resolves. Each entry points at the
+page that now holds the content.
+
+- <a id="database-layout" />[Database layout](/reference/database-schemas/layout#database-layout)
+- <a id="plugin-state-listing-index" />[Plugin state listing index](/reference/database-schemas/layout#plugin-state-listing-index)
+- <a id="mentions-inbox" />[Mentions Inbox](/reference/database-schemas/layout#mentions-inbox)
+- <a id="acp-replay-accounting" />[ACP replay accounting](/reference/database-schemas/layout#acp-replay-accounting)
+- <a id="meeting-transcript-tables" />[Meeting transcript tables](/reference/database-schemas/layout#meeting-transcript-tables)
+- <a id="meeting_transcript_sessions" />[`meeting_transcript_sessions`](/reference/database-schemas/layout#meeting_transcript_sessions)
+- <a id="meeting_transcript_utterances" />[`meeting_transcript_utterances`](/reference/database-schemas/layout#meeting_transcript_utterances)
+- <a id="meeting_transcript_summaries" />[`meeting_transcript_summaries`](/reference/database-schemas/layout#meeting_transcript_summaries)
+- <a id="update-run-ledger" />[Update run ledger](/reference/database-schemas/layout#update-run-ledger)
+- <a id="cloud-repository-workspaces" />[Cloud repository workspaces](/reference/database-schemas/layout#cloud-repository-workspaces)
+- <a id="versioning-contract" />[Versioning contract](/reference/database-schemas/versioning#versioning-contract)
+- <a id="schema-bumps-and-older-updaters" />[Schema bumps and older updaters](/reference/database-schemas/versioning#schema-bumps-and-older-updaters)
+- <a id="profile-owned-skill-library" />[Profile-owned skill library](/reference/database-schemas/versioning#profile-owned-skill-library)
+- <a id="personal-github-connections-and-publication" />[Personal GitHub connections and publication](/reference/database-schemas/personal-data#personal-github-connections-and-publication)
+- <a id="personal-model-accounts" />[Personal model accounts](/reference/database-schemas/personal-data#personal-model-accounts)
+- <a id="apple-companion-delivery-journals" />[Apple companion delivery journals](/reference/database-schemas/personal-data#apple-companion-delivery-journals)
+- <a id="preparing-for-another-database-backend" />[Preparing for another database backend](/reference/database-schemas/storage-changes#preparing-for-another-database-backend)
+- <a id="keep-operations-at-the-owning-store" />[Keep operations at the owning store](/reference/database-schemas/storage-changes#keep-operations-at-the-owning-store)
+- <a id="preserve-the-data-and-concurrency-contracts" />[Preserve the data and concurrency contracts](/reference/database-schemas/storage-changes#preserve-the-data-and-concurrency-contracts)
+- <a id="keep-engine-specific-capabilities-owned" />[Keep engine-specific capabilities owned](/reference/database-schemas/storage-changes#keep-engine-specific-capabilities-owned)
+- <a id="review-checkpoint-for-material-changes" />[Review checkpoint for material changes](/reference/database-schemas/storage-changes#review-checkpoint-for-material-changes)
+- <a id="preflight-a-target-release" />[Preflight a target release](/reference/database-schemas/storage-changes#preflight-a-target-release)
+  - <a id="preflight-an-explicit-agent-copy" />[Preflight an explicit agent copy](/reference/database-schemas/storage-changes#preflight-an-explicit-agent-copy)
+- <a id="agent-schema-history" />[Agent schema history](/reference/database-schemas/agent-schema-history#agent-schema-history)
+- <a id="creator-namespace-migration" />[Creator namespace migration](/reference/database-schemas/agent-schema-history#creator-namespace-migration)
+- <a id="participant-identity-migration" />[Participant identity migration](/reference/database-schemas/agent-schema-history#participant-identity-migration)
+- <a id="state-schema-history" />[State schema history](/reference/database-schemas/state-schema-history#state-schema-history)
+- <a id="state-schema-16" />[State schema 16](/reference/database-schemas/state-schema-history#state-schema-16)
+- <a id="state-schema-15" />[State schema 15](/reference/database-schemas/state-schema-history#state-schema-15)
+- <a id="state-schema-13" />[State schema 13](/reference/database-schemas/state-schema-history#state-schema-13)
+- <a id="state-schema-11" />[State schema 11](/reference/database-schemas/state-schema-history#state-schema-11)
+- <a id="state-schema-9" />[State schema 9](/reference/database-schemas/state-schema-history#state-schema-9)
+- <a id="integrity-checks" />[Integrity checks](/reference/database-schemas/integrity-and-recovery#integrity-checks)
+- <a id="troubleshooting" />[Troubleshooting](/reference/database-schemas/integrity-and-recovery#troubleshooting)
+- <a id="why-you-cannot-go-back-after-updating-to-2026.7.2" /><a id="why-you-cannot-go-back-after-updating-to-2026-7-2" />[Why you cannot go back after updating to 2026.7.2](/reference/database-schemas/integrity-and-recovery#why-you-cannot-go-back-after-updating-to-2026-7-2)
+- <a id="the-gateway-refuses-to-start-with-a-newer-schema-version-error" />[The Gateway refuses to start with a newer schema version error](/reference/database-schemas/integrity-and-recovery#the-gateway-refuses-to-start-with-a-newer-schema-version-error)
+- <a id="a-database-is-quarantined-after-integrity-verification-failed" />[A database is quarantined after integrity verification failed](/reference/database-schemas/integrity-and-recovery#a-database-is-quarantined-after-integrity-verification-failed)
+- <a id="downgrades-are-unsupported" />[Downgrades are unsupported](/reference/database-schemas/integrity-and-recovery#downgrades-are-unsupported)
+- <a id="example-state-schema-13-to-12" />[Example: state schema 13 to 12](/reference/database-schemas/integrity-and-recovery#example-state-schema-13-to-12)
+- <a id="example-state-schema-12-to-11" />[Example: state schema 12 to 11](/reference/database-schemas/integrity-and-recovery#example-state-schema-12-to-11)
+- <a id="example-state-schema-11-to-10" />[Example: state schema 11 to 10](/reference/database-schemas/integrity-and-recovery#example-state-schema-11-to-10)
+- <a id="example-state-schema-10-to-9" />[Example: state schema 10 to 9](/reference/database-schemas/integrity-and-recovery#example-state-schema-10-to-9)
+- <a id="example-state-schema-9-to-8" />[Example: state schema 9 to 8](/reference/database-schemas/integrity-and-recovery#example-state-schema-9-to-8)
+- <a id="example-state-schema-7-to-6" />[Example: state schema 7 to 6](/reference/database-schemas/integrity-and-recovery#example-state-schema-7-to-6)
+- <a id="example-agent-schema-17-to-16" />[Example: agent schema 17 to 16](/reference/database-schemas/integrity-and-recovery#example-agent-schema-17-to-16)
+- <a id="downgrade-recovery" />[Downgrade recovery](/reference/database-schemas/integrity-and-recovery#downgrade-recovery)

@@ -5,7 +5,7 @@ import { readTcpPortEnv } from "../env-limits.mjs";
 
 async function loadCallGateway() {
   const candidates = readdirSync("/app/dist")
-    .filter((name) => /^call(?:\.runtime)?-[A-Za-z0-9_-]+\.js$/.test(name))
+    .filter((name) => /^call(?:\.runtime)?-[A-Za-z0-9_-]+\.m?js$/.test(name))
     .toSorted();
   for (const name of candidates) {
     const mod = await import(pathToFileURL(`/app/dist/${name}`).href);
@@ -18,7 +18,11 @@ async function loadCallGateway() {
 
 const DEFAULT_RAW_SCHEMA_ERROR =
   "400 The following tools cannot be used with reasoning.effort 'minimal': web_search.";
-const DEFAULT_GATEWAY_SCHEMA_ERROR = "provider rejected the request schema or tool payload";
+const GATEWAY_SCHEMA_ERRORS = [
+  String.raw`LLM request rejected: The following tools cannot be used with reasoning\.effort \'minimal\'\: web\_search\.`,
+  "provider rejected the request schema or tool payload",
+  "The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the Control UI.",
+];
 const SUCCESS_MARKER = "OPENCLAW_SCHEMA_E2E_OK";
 
 function readExpectedRawSchemaError() {
@@ -74,12 +78,13 @@ function validateRejectResult(result, expectedRawSchemaError = readExpectedRawSc
   const errorText = stringifyError(result.error);
   if (
     !errorText.includes(expectedRawSchemaError) &&
-    !errorText.includes(DEFAULT_GATEWAY_SCHEMA_ERROR)
+    !GATEWAY_SCHEMA_ERRORS.some((message) => errorText.includes(message))
   ) {
     throw new Error(
-      `reject mode failed for an unexpected reason; expected ${JSON.stringify(
+      `reject mode failed for an unexpected reason; expected one of ${JSON.stringify([
         expectedRawSchemaError,
-      )} or ${JSON.stringify(DEFAULT_GATEWAY_SCHEMA_ERROR)} in ${JSON.stringify(errorText)}`,
+        ...GATEWAY_SCHEMA_ERRORS,
+      ])} in ${JSON.stringify(errorText)}`,
     );
   }
   return errorText;
@@ -177,9 +182,6 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
 }
 
 export const testing = {
-  DEFAULT_GATEWAY_SCHEMA_ERROR,
-  DEFAULT_RAW_SCHEMA_ERROR,
-  SUCCESS_MARKER,
   resolveGatewayPort,
   validateSuccessResult,
   validateRejectResult,

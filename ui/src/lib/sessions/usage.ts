@@ -1,15 +1,16 @@
 import type { SessionUsageTimeSeries } from "../../../../src/shared/session-usage-timeseries-types.js";
 import type { SessionsUsageResult } from "../../../../src/shared/usage-types.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { SessionRequestClient } from "./session-capability.ts";
 
-type SessionRequestClient = Pick<GatewayBrowserClient, "request">;
+export type SessionUsageTarget = { key: string; agentId?: string };
 
-type SessionUsageQuery = {
+export type SessionUsageQuery = {
   startDate: string;
   endDate: string;
   scope: "instance" | "family";
   timeZone: "local" | "utc";
   agentId?: string;
+  creatorKey?: string;
 };
 
 function formatUtcOffset(timezoneOffsetMinutes: number): string {
@@ -23,7 +24,7 @@ function formatUtcOffset(timezoneOffsetMinutes: number): string {
     : `UTC${sign}${hours}:${minutes.toString().padStart(2, "0")}`;
 }
 
-export function buildSessionUsageDateParams(timeZone: "local" | "utc") {
+function buildSessionUsageDateParams(timeZone: "local" | "utc") {
   return timeZone === "utc"
     ? { mode: "utc" }
     : {
@@ -33,40 +34,42 @@ export function buildSessionUsageDateParams(timeZone: "local" | "utc") {
       };
 }
 
-function buildSessionUsageParams(query: SessionUsageQuery): Record<string, unknown> {
-  return {
-    startDate: query.startDate,
-    endDate: query.endDate,
-    ...(query.agentId ? { agentId: query.agentId } : { agentScope: "all" }),
-    ...buildSessionUsageDateParams(query.timeZone),
-    groupBy: query.scope,
-    limit: 1000,
-    includeContextWeight: true,
-  };
-}
-
 export function requestSessionUsage(
   client: SessionRequestClient,
   query: SessionUsageQuery,
+  options?: { key?: string; includeContextWeight?: boolean; signal?: AbortSignal },
 ): Promise<SessionsUsageResult> {
-  return client.request<SessionsUsageResult>("sessions.usage", buildSessionUsageParams(query));
+  const key = options?.key;
+  const params = {
+    startDate: query.startDate,
+    endDate: query.endDate,
+    ...(query.agentId ? { agentId: query.agentId } : key ? {} : { agentScope: "all" }),
+    ...buildSessionUsageDateParams(query.timeZone),
+    ...(query.creatorKey ? { creatorKey: query.creatorKey } : {}),
+    groupBy: query.scope,
+    ...(key ? { key, limit: 1 } : { limit: 1000 }),
+    includeContextWeight: options?.includeContextWeight === true,
+  };
+  return options?.signal
+    ? client.request<SessionsUsageResult>("sessions.usage", params, { signal: options.signal })
+    : client.request<SessionsUsageResult>("sessions.usage", params);
 }
 
 export function requestSessionUsageTimeSeries(
   client: SessionRequestClient,
-  key: string,
+  target: SessionUsageTarget,
 ): Promise<SessionUsageTimeSeries | null> {
   return client
-    .request<SessionUsageTimeSeries | undefined>("sessions.usage.timeseries", { key })
+    .request<SessionUsageTimeSeries | undefined>("sessions.usage.timeseries", target)
     .then((result) => result ?? null);
 }
 
 export function requestSessionUsageLogs(
   client: SessionRequestClient,
-  key: string,
+  target: SessionUsageTarget,
 ): Promise<{ logs?: unknown }> {
   return client.request<{ logs?: unknown }>("sessions.usage.logs", {
-    key,
+    ...target,
     limit: 1000,
   });
 }

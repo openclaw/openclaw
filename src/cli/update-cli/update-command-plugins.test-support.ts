@@ -1,11 +1,5 @@
-import {
-  buildInvalidConfigPostCoreUpdateResult,
-  collectMissingPluginInstallPayloads,
-  resolvePostSyncPluginUpdateSkipIds,
-} from "./update-command-plugins-internals.js";
+import { collectMissingPluginInstallPayloads } from "../../plugins/payload-verification.js";
 
 export const testing = {
-  buildInvalidConfigPostCoreUpdateResult,
   collectMissingPluginInstallPayloads,
-  resolvePostSyncPluginUpdateSkipIds,
 };

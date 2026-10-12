@@ -1,17 +1,30 @@
-import type { Model } from "@openclaw/llm-core";
-import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import type { BetaContextManagementConfig } from "@anthropic-ai/sdk/resources/beta/messages/messages.js";
+import type { TextBlockParam } from "@anthropic-ai/sdk/resources/messages.js";
+import { supportsClaudeServerCompaction, type Model } from "@openclaw/llm-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { getAiTransportHost } from "../host.js";
+import type { AnthropicContextManagementOptions } from "../provider-options.js";
+import { isAnthropicOAuthApiKey } from "../providers/anthropic-auth-headers.js";
+import {
+  ANTHROPIC_CLAUDE_CODE_VERSION,
+  resolveClaudeOpus5ModelIdentity,
+  resolveClaudeSonnet55ModelIdentity,
+  usesClaudeFable5MessagesContract,
+} from "../providers/anthropic-model-contract.js";
+import {
+  ANTHROPIC_SERVER_SIDE_FALLBACK_BETA,
+  ANTHROPIC_SERVER_SIDE_FALLBACKS,
+} from "../providers/anthropic-server-fallback.js";
 import { resolveCacheRetention } from "../providers/cache-retention.js";
+import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import {
   splitSystemPromptCacheBoundary,
   stripSystemPromptCacheBoundary,
+  stripSystemPromptRelocatableBoundary,
 } from "../utils/system-prompt-cache-boundary.js";
-/**
- * Anthropic-family request payload policy helpers.
- * Applies service-tier and cache-control markers only when provider endpoint
- * capabilities allow them.
- */
 import { resolveProviderEndpoint, resolveProviderRequestCapabilities } from "./host-policy.js";
+import { parsePositiveInteger } from "./transport-utils.js";
 
 /** @deprecated Anthropic-family provider payload helper; do not use from third-party plugins. */
 type AnthropicServiceTier = "auto" | "standard_only";
@@ -26,6 +39,7 @@ type AnthropicPayloadPolicyInput = {
   api?: string;
   baseUrl?: string;
   cacheRetention?: "short" | "long" | "none";
+  cacheTtlPruning?: AnthropicContextManagementOptions["cacheTtlPruning"];
   contextWindow?: unknown;
   enableCacheControl?: boolean;
   enableServerCompaction?: boolean;
@@ -36,62 +50,63 @@ type AnthropicPayloadPolicyInput = {
 
 const ANTHROPIC_CACHE_CONTROL_LIMIT = 4;
 const ANTHROPIC_COMPACT_THRESHOLD_MIN = 50_000;
+// `instructions` replaces Anthropic's default summarizer prompt. The default can
+// call a tool instead of summarizing, which returns a compaction block with null content.
+const ANTHROPIC_COMPACTION_INSTRUCTIONS =
+  "Summarize the transcript inside <summary></summary> tags. Include the current state, " +
+  "decisions, and next steps needed to continue the task in the next context window. " +
+  "Do not call any tools while writing this summary; respond with text only.";
 
 /** @deprecated Anthropic-family provider payload helper; do not use from third-party plugins. */
-type AnthropicPayloadPolicy = {
-  allowsServiceTier: boolean;
-  cacheControl: AnthropicEphemeralCacheControl | undefined;
-  compactThreshold: number;
-  serviceTier: AnthropicServiceTier | undefined;
-  useServerCompaction: boolean;
-};
-
-function parsePositiveInteger(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
-    return Math.floor(value);
-  }
-  return typeof value === "string" ? parseStrictPositiveInteger(value) : undefined;
-}
+type AnthropicPayloadPolicy = ReturnType<typeof resolveAnthropicPayloadPolicy>;
 
 /** Resolve the Anthropic input-token trigger, including the API's minimum. */
-function resolveAnthropicCompactThreshold(contextWindow: unknown, configured: unknown): number {
+function resolveAnthropicCompactThreshold(
+  model: { contextTokens?: unknown; contextWindow?: unknown },
+  configured: unknown,
+): number {
   const configuredThreshold = parsePositiveInteger(configured);
   if (configuredThreshold !== undefined) {
     return Math.max(ANTHROPIC_COMPACT_THRESHOLD_MIN, configuredThreshold);
   }
-  const resolvedContextWindow = parsePositiveInteger(contextWindow);
-  return Math.max(
-    ANTHROPIC_COMPACT_THRESHOLD_MIN,
-    resolvedContextWindow === undefined
-      ? ANTHROPIC_COMPACT_THRESHOLD_MIN
-      : Math.floor(resolvedContextWindow * 0.7),
-  );
+  const contextTokens = parsePositiveInteger(model.contextTokens);
+  const contextWindow = parsePositiveInteger(model.contextWindow);
+  // A configured input cap is the budget client compaction honors; trigger inside it.
+  const effectiveBudget =
+    contextTokens && contextWindow
+      ? Math.min(contextTokens, contextWindow)
+      : (contextTokens ?? contextWindow ?? 0);
+  return Math.max(ANTHROPIC_COMPACT_THRESHOLD_MIN, Math.floor(effectiveBudget * 0.7));
 }
 
 /** Resolve the server-compaction gate and effective threshold for an Anthropic route. */
 export function resolveAnthropicServerCompactionPlan(
   model: {
+    id?: string;
+    params?: Record<string, unknown>;
     provider?: unknown;
     api?: unknown;
     baseUrl?: string;
+    contextTokens?: unknown;
     contextWindow?: unknown;
   },
   extraParams?: Record<string, unknown>,
+  apiKey?: string,
 ): { enabled: boolean; threshold?: number } {
-  const provider = normalizeOptionalLowercaseString(model.provider);
-  const api = normalizeOptionalLowercaseString(model.api);
-  const endpointClass = resolveProviderEndpoint(model).endpointClass;
+  const configured = extraParams?.anthropicServerCompaction;
+  // Documented models default on; explicit true keeps the prior opt-in for other Claude models.
   const enabled =
-    extraParams?.anthropicServerCompaction === true &&
-    provider === "anthropic" &&
-    api === "anthropic-messages" &&
-    (endpointClass === "default" || endpointClass === "anthropic-public");
+    configured !== false &&
+    (configured === true || supportsClaudeServerCompaction(model)) &&
+    !isAnthropicOAuthApiKey(apiKey) &&
+    normalizeOptionalLowercaseString(model.api) === "anthropic-messages" &&
+    isDirectAnthropicModel(model);
   return {
     enabled,
     ...(enabled
       ? {
           threshold: resolveAnthropicCompactThreshold(
-            model.contextWindow,
+            model,
             extraParams?.anthropicCompactThreshold,
           ),
         }
@@ -99,19 +114,50 @@ export function resolveAnthropicServerCompactionPlan(
   };
 }
 
-function resolveBaseUrlHostname(baseUrl: string): string | undefined {
-  try {
-    return new URL(baseUrl).hostname;
-  } catch {
-    return undefined;
-  }
+export function isDirectAnthropicModel(
+  model: { provider?: unknown; baseUrl?: string },
+  env: { ANTHROPIC_BASE_URL?: string } = process.env,
+): boolean {
+  const baseUrl = model.baseUrl?.trim() || env.ANTHROPIC_BASE_URL?.trim();
+  const endpointModel = baseUrl === model.baseUrl ? model : { ...model, baseUrl };
+  const endpointClass = resolveProviderEndpoint(endpointModel).endpointClass;
+  return (
+    normalizeOptionalLowercaseString(model.provider) === "anthropic" &&
+    (endpointClass === "anthropic-public" ||
+      (endpointClass === "default" &&
+        (!baseUrl || URL.parse(baseUrl)?.hostname === "api.anthropic.com")))
+  );
+}
+
+// Proxies reject this first-party beta; callers additionally exclude OAuth requests.
+export function supportsAnthropicServerSideFallback(model: Model<"anthropic-messages">): boolean {
+  return (
+    (usesClaudeFable5MessagesContract(model) ||
+      resolveClaudeOpus5ModelIdentity(model) !== undefined ||
+      resolveClaudeSonnet55ModelIdentity(model) !== undefined) &&
+    isDirectAnthropicModel(model)
+  );
+}
+
+export function isAnthropicServerToolClearingEnabled(
+  model: { provider?: unknown; api?: unknown; baseUrl?: string },
+  apiKey?: string,
+): boolean {
+  const resolvedApiKey = apiKey && getAiTransportHost().resolveSecretSentinel(apiKey);
+  // Only a prepared direct API-key request can take ownership away from client pruning.
+  return (
+    Boolean(resolvedApiKey?.trim()) &&
+    !isAnthropicOAuthApiKey(resolvedApiKey) &&
+    normalizeOptionalLowercaseString(model.api) === "anthropic-messages" &&
+    isDirectAnthropicModel(model)
+  );
 }
 
 function isLongTtlEligibleEndpoint(baseUrl: string | undefined): boolean {
   if (typeof baseUrl !== "string") {
     return false;
   }
-  const hostname = resolveBaseUrlHostname(baseUrl);
+  const hostname = URL.parse(baseUrl)?.hostname;
   if (!hostname) {
     return false;
   }
@@ -142,9 +188,86 @@ export function resolveAnthropicEphemeralCacheControl(
   return { type: "ephemeral", ...(ttl ? { ttl } : {}) };
 }
 
-function applyAnthropicCacheControlToSystem(
+export function resolveAnthropicCacheOptions(
+  model: Model<"anthropic-messages">,
+  cacheRetention?: "short" | "long" | "none",
+) {
+  const supportsLongCacheRetention =
+    model.compat?.supportsLongCacheRetention ?? model.provider !== "fireworks";
+  const baseUrl =
+    model.baseUrl?.trim() || process.env.ANTHROPIC_BASE_URL?.trim() || "https://api.anthropic.com";
+  const cacheControl = resolveAnthropicEphemeralCacheControl(baseUrl, cacheRetention);
+  return {
+    cacheControl:
+      cacheControl && !supportsLongCacheRetention ? { type: "ephemeral" as const } : cacheControl,
+    supportsCacheControlOnTools:
+      model.compat?.supportsCacheControlOnTools ?? model.provider !== "fireworks",
+  };
+}
+
+export function buildAnthropicSystemBlocks(
+  systemPrompt: string | undefined,
+  isOAuthToken: boolean,
+  cacheControl: AnthropicEphemeralCacheControl | undefined,
+  claudeCodeVersion = ANTHROPIC_CLAUDE_CODE_VERSION,
+): TextBlockParam[] | undefined {
+  const blocks: TextBlockParam[] = systemPrompt
+    ? [{ type: "text", text: sanitizeSurrogates(systemPrompt) }]
+    : [];
+  normalizeAnthropicSystemBlocks(blocks, cacheControl);
+  if (systemPrompt && blocks.length === 0) {
+    blocks.push({ type: "text", text: "" });
+  }
+  if (isOAuthToken) {
+    // The stable application prompt covers the OAuth preamble too; keep slots for history.
+    const identityCacheControl = blocks.some((block) => block.cache_control)
+      ? undefined
+      : cacheControl;
+    blocks.unshift(
+      {
+        type: "text",
+        text: `x-anthropic-billing-header: cc_version=${claudeCodeVersion}; cc_entrypoint=sdk-cli;`,
+      },
+      {
+        type: "text",
+        text: "You are Claude Code, Anthropic's official CLI for Claude.",
+        ...(identityCacheControl ? { cache_control: identityCacheControl } : {}),
+      },
+    );
+  }
+  return blocks.length > 0 ? blocks : undefined;
+}
+
+/** Allocate tool and history checkpoints around the prepared stable system blocks. */
+export function applyAnthropicRequestCacheControl(
+  payload: { system?: unknown; tools?: unknown; messages?: unknown },
+  cacheControl: AnthropicEphemeralCacheControl | undefined,
+  supportsCacheControlOnTools: boolean,
+  cacheBreakpointOptOutMessageIndexes: ReadonlySet<number> = new Set(),
+): void {
+  if (!cacheControl) {
+    return;
+  }
+  if (supportsCacheControlOnTools && Array.isArray(payload.tools)) {
+    const lastTool = payload.tools.at(-1);
+    if (isRecord(lastTool)) {
+      lastTool.cache_control = cacheControl;
+    }
+  }
+  const usedMarkers =
+    countAnthropicCacheControlMarkers(payload.system) +
+    countAnthropicCacheControlMarkers(payload.tools);
+  applyAnthropicCacheControlToMessages(
+    payload.messages,
+    cacheControl,
+    ANTHROPIC_CACHE_CONTROL_LIMIT - usedMarkers,
+    cacheBreakpointOptOutMessageIndexes,
+  );
+}
+
+function normalizeAnthropicSystemBlocks(
   system: unknown,
-  cacheControl: AnthropicEphemeralCacheControl,
+  cacheControl: AnthropicEphemeralCacheControl | undefined,
 ): void {
   if (!Array.isArray(system)) {
     return;
@@ -157,11 +280,20 @@ function applyAnthropicCacheControlToSystem(
       continue;
     }
     const record = block as Record<string, unknown>;
-    if (record.type !== "text" || typeof record.text !== "string") {
+    const blockText = record.text;
+    if (record.type !== "text" || typeof blockText !== "string") {
       normalizedBlocks.push(block);
       continue;
     }
-    const split = splitSystemPromptCacheBoundary(record.text);
+    if (!cacheControl) {
+      record.text = stripSystemPromptCacheBoundary(blockText);
+      continue;
+    }
+    // This transport relocates nothing, so the relocatable marker must not
+    // survive into the payload; the cache boundary stays for the breakpoint.
+    const text = stripSystemPromptRelocatableBoundary(blockText);
+    record.text = text;
+    const split = splitSystemPromptCacheBoundary(text);
     if (!split) {
       if (record.cache_control === undefined) {
         record.cache_control = cacheControl;
@@ -186,27 +318,13 @@ function applyAnthropicCacheControlToSystem(
     }
   }
 
-  system.splice(0, system.length, ...normalizedBlocks);
-}
-
-function stripAnthropicSystemPromptBoundary(system: unknown): void {
-  if (!Array.isArray(system)) {
-    return;
-  }
-
-  for (const block of system) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const record = block as Record<string, unknown>;
-    if (record.type === "text" && typeof record.text === "string") {
-      record.text = stripSystemPromptCacheBoundary(record.text);
-    }
+  if (cacheControl) {
+    system.splice(0, system.length, ...normalizedBlocks);
   }
 }
 
 /** Apply one shared deepest-stable-message cache breakpoint policy. */
-export function applyAnthropicCacheControlToMessages(
+function applyAnthropicCacheControlToMessages(
   messages: unknown,
   cacheControl: AnthropicEphemeralCacheControl,
   markerLimit: number,
@@ -216,68 +334,42 @@ export function applyAnthropicCacheControlToMessages(
     return;
   }
 
-  let fallbackToolResult: Record<string, unknown> | undefined;
-
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const message = messages[i];
-    if (!message || typeof message !== "object") {
-      continue;
-    }
-
-    const record = message as Record<string, unknown>;
-    if (record.role !== "user" || cacheBreakpointOptOutMessageIndexes.has(i)) {
+  let stableEnd = messages.length;
+  for (const index of cacheBreakpointOptOutMessageIndexes) {
+    stableEnd = Math.min(stableEnd, index);
+  }
+  let marked = 0;
+  for (let i = stableEnd - 1; i >= 0 && marked < Math.min(markerLimit, 2); i--) {
+    const record = messages[i];
+    if (!isRecord(record) || record.role !== "user") {
       continue;
     }
 
     const content = record.content;
-    if (typeof content === "string") {
-      if (fallbackToolResult && markerLimit === 1) {
-        fallbackToolResult.cache_control = cacheControl;
-        return;
-      }
-      record.content = [
-        {
-          type: "text",
-          text: content,
-          cache_control: cacheControl,
-        },
-      ];
-      if (fallbackToolResult && markerLimit > 1) {
-        fallbackToolResult.cache_control = cacheControl;
-      }
-      return;
-    }
-
-    if (!Array.isArray(content)) {
+    const blocks = typeof content === "string" ? [{ type: "text", text: content }] : content;
+    if (!Array.isArray(blocks)) {
       continue;
     }
 
-    for (let j = content.length - 1; j >= 0; j--) {
-      const block = content[j];
-      if (!block || typeof block !== "object") {
+    for (let j = blocks.length - 1; j >= 0; j--) {
+      const blockRecord = blocks[j];
+      if (!isRecord(blockRecord)) {
         continue;
       }
-
-      const blockRecord = block as Record<string, unknown>;
-      if (blockRecord.type === "text" || blockRecord.type === "image") {
-        if (fallbackToolResult && markerLimit === 1) {
-          fallbackToolResult.cache_control = cacheControl;
-          return;
-        }
+      if (
+        blockRecord.type === "text" ||
+        blockRecord.type === "image" ||
+        blockRecord.type === "tool_result"
+      ) {
+        // Keep a prior write reachable beyond the 20-block lookback, before transient context.
         blockRecord.cache_control = cacheControl;
-        if (fallbackToolResult && markerLimit > 1) {
-          fallbackToolResult.cache_control = cacheControl;
+        if (typeof content === "string") {
+          record.content = blocks;
         }
-        return;
-      }
-      if (blockRecord.type === "tool_result" && fallbackToolResult === undefined) {
-        fallbackToolResult = blockRecord;
+        marked++;
+        break;
       }
     }
-  }
-
-  if (fallbackToolResult) {
-    fallbackToolResult.cache_control = cacheControl;
   }
 }
 
@@ -296,10 +388,7 @@ function countAnthropicCacheControlMarkers(blocks: unknown): number {
 }
 
 /** @deprecated Anthropic-family provider payload helper; do not use from third-party plugins. */
-export function resolveAnthropicPayloadPolicy(
-  input: AnthropicPayloadPolicyInput,
-  model?: Model,
-): AnthropicPayloadPolicy {
+export function resolveAnthropicPayloadPolicy(input: AnthropicPayloadPolicyInput, model?: Model) {
   const capabilities = resolveProviderRequestCapabilities(
     {
       provider: input.provider,
@@ -320,13 +409,210 @@ export function resolveAnthropicPayloadPolicy(
         : undefined,
     compactThreshold:
       serverCompactionPlan.threshold ??
-      resolveAnthropicCompactThreshold(
-        input.contextWindow,
-        input.extraParams?.anthropicCompactThreshold,
-      ),
+      resolveAnthropicCompactThreshold(input, input.extraParams?.anthropicCompactThreshold),
     serviceTier: input.serviceTier,
     useServerCompaction: input.enableServerCompaction === true && serverCompactionPlan.enabled,
+    ...(input.cacheTtlPruning &&
+    normalizeOptionalLowercaseString(input.api) === "anthropic-messages" &&
+    isDirectAnthropicModel(input)
+      ? {
+          toolClearing: {
+            trigger: Math.max(
+              50_000,
+              Math.floor((parsePositiveInteger(input.contextWindow) ?? 0) * 0.3),
+            ),
+            clearAtLeast: Math.max(
+              12_500,
+              Math.floor((parsePositiveInteger(input.contextWindow) ?? 0) * 0.05),
+            ),
+            tools: input.cacheTtlPruning.tools,
+          },
+        }
+      : {}),
   };
+}
+
+type AnthropicContextManagementPayload = {
+  context_management?: unknown;
+  tools?: unknown;
+  messages?: unknown;
+};
+
+function resolveToolClearingExclusions(
+  payload: AnthropicContextManagementPayload,
+  filter: NonNullable<AnthropicPayloadPolicy["toolClearing"]>["tools"],
+): string[] {
+  const compile = (patterns: string[] | undefined) =>
+    (patterns ?? [])
+      .map((pattern) => pattern.trim().toLowerCase())
+      .filter(Boolean)
+      .map(
+        (pattern) =>
+          new RegExp(`^${pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replaceAll("\\*", ".*")}$`),
+      );
+  const allow = compile(filter?.allow);
+  const deny = compile(filter?.deny);
+  if (allow.length === 0 && deny.length === 0) {
+    return [];
+  }
+  const excluded = new Set(
+    filter?.deny?.map((name) => name.trim()).filter((name) => name && !name.includes("*")),
+  );
+  const candidates = new Set<string>();
+  for (const tool of Array.isArray(payload.tools) ? payload.tools : []) {
+    if (isRecord(tool) && typeof tool.name === "string") {
+      candidates.add(tool.name);
+    }
+  }
+  // Pruning filters apply to history too: removing a tool must not make its results clearable.
+  for (const message of Array.isArray(payload.messages) ? payload.messages : []) {
+    if (!isRecord(message) || !Array.isArray(message.content)) {
+      continue;
+    }
+    for (const block of message.content) {
+      if (isRecord(block) && block.type === "tool_use" && typeof block.name === "string") {
+        candidates.add(block.name);
+      }
+    }
+  }
+  for (const toolName of candidates) {
+    const name = toolName.trim().toLowerCase();
+    if (
+      deny.some((pattern) => pattern.test(name)) ||
+      (allow.length > 0 && !allow.some((pattern) => pattern.test(name)))
+    ) {
+      excluded.add(toolName);
+    }
+  }
+  return [...excluded].toSorted();
+}
+
+function applyAnthropicContextManagementEdits(
+  payload: AnthropicContextManagementPayload,
+  policy: AnthropicPayloadPolicy,
+): void {
+  if (payload.context_management !== undefined) {
+    return;
+  }
+  const edits: NonNullable<BetaContextManagementConfig["edits"]> = [];
+  if (policy.toolClearing) {
+    edits.push({
+      type: "clear_tool_uses_20250919",
+      trigger: { type: "input_tokens", value: policy.toolClearing.trigger },
+      keep: { type: "tool_uses", value: 3 },
+      clear_at_least: { type: "input_tokens", value: policy.toolClearing.clearAtLeast },
+      exclude_tools: resolveToolClearingExclusions(payload, policy.toolClearing.tools),
+      clear_tool_inputs: false,
+    });
+  }
+  // Clear cheap-to-discard tool results before asking the server to summarize the remaining context.
+  if (policy.useServerCompaction) {
+    edits.push({
+      type: "compact_20260112",
+      trigger: { type: "input_tokens", value: policy.compactThreshold },
+      instructions: ANTHROPIC_COMPACTION_INSTRUCTIONS,
+    });
+  }
+  if (edits.length > 0) {
+    payload.context_management = { edits };
+  }
+}
+
+export function applyAnthropicContextManagementToRequest(
+  payload: AnthropicContextManagementPayload,
+  model: Model,
+  options: AnthropicContextManagementOptions | undefined,
+  directApiKeyBetaHeader: string | undefined,
+): void {
+  if (
+    directApiKeyBetaHeader === undefined ||
+    (!options?.cacheTtlPruning && !options?.anthropicServerCompaction)
+  ) {
+    return;
+  }
+  applyAnthropicContextManagementEdits(
+    payload,
+    resolveAnthropicPayloadPolicy({
+      ...model,
+      // This adapter owns the wire API; simple-dispatch aliases remain on the replay identity.
+      api: "anthropic-messages",
+      // Provider wrappers resolve the default; replay capture keys on this explicit option.
+      enableServerCompaction: options?.anthropicServerCompaction === true,
+      extraParams: { ...options },
+      cacheTtlPruning: options?.cacheTtlPruning,
+    }),
+  );
+}
+
+export function resolveAnthropicRequestBetaHeader(
+  payload: AnthropicContextManagementPayload & { fallbacks?: unknown },
+  directApiKeyBetaHeader: string | undefined,
+): string | undefined {
+  if (directApiKeyBetaHeader === undefined) {
+    return directApiKeyBetaHeader;
+  }
+  const edits = isRecord(payload.context_management) ? payload.context_management.edits : undefined;
+  const betas = new Set(
+    directApiKeyBetaHeader
+      .split(",")
+      .map((beta) => beta.trim())
+      .filter(Boolean),
+  );
+  // Payload-required betas must survive model and per-request header overrides.
+  if (payload.fallbacks === ANTHROPIC_SERVER_SIDE_FALLBACKS) {
+    betas.add(ANTHROPIC_SERVER_SIDE_FALLBACK_BETA);
+  }
+  if (
+    Array.isArray(payload.messages) &&
+    payload.messages.some(
+      (message) =>
+        isRecord(message) && message.role === "system" && message.clear_at === "next_user_message",
+    )
+  ) {
+    betas.add("mid-conversation-system-clear-at-2026-08-21");
+  }
+  for (const edit of Array.isArray(edits) ? edits : []) {
+    if (!isRecord(edit)) {
+      continue;
+    }
+    if (edit.type === "clear_tool_uses_20250919") {
+      betas.add("context-management-2025-06-27");
+    } else if (edit.type === "compact_20260112") {
+      betas.add("compact-2026-01-12");
+    }
+  }
+  return [...betas].join(",");
+}
+
+export function logAnthropicContextEdits(event: unknown): void {
+  if (!isRecord(event) || !isRecord(event.context_management)) {
+    return;
+  }
+  const edits = event.context_management.applied_edits;
+  let clearedTools = 0;
+  let clearedTokens = 0;
+  for (const edit of Array.isArray(edits) ? edits : []) {
+    if (
+      !isRecord(edit) ||
+      edit.type !== "clear_tool_uses_20250919" ||
+      typeof edit.cleared_tool_uses !== "number" ||
+      !Number.isSafeInteger(edit.cleared_tool_uses) ||
+      edit.cleared_tool_uses < 0 ||
+      typeof edit.cleared_input_tokens !== "number" ||
+      !Number.isSafeInteger(edit.cleared_input_tokens) ||
+      edit.cleared_input_tokens < 0
+    ) {
+      continue;
+    }
+    clearedTools = Math.min(Number.MAX_SAFE_INTEGER, clearedTools + edit.cleared_tool_uses);
+    clearedTokens = Math.min(Number.MAX_SAFE_INTEGER, clearedTokens + edit.cleared_input_tokens);
+  }
+  if (clearedTools > 0 || clearedTokens > 0) {
+    getAiTransportHost().logInfo(
+      "anthropic",
+      `server-side context edit: cleared ${clearedTools} tool results (${clearedTokens} input tokens)`,
+    );
+  }
 }
 
 /** @deprecated Anthropic-family provider payload helper; do not use from third-party plugins. */
@@ -343,34 +629,14 @@ export function applyAnthropicPayloadPolicyToParams(
     payloadObj.service_tier = policy.serviceTier;
   }
 
-  if (policy.cacheControl) {
-    applyAnthropicCacheControlToSystem(payloadObj.system, policy.cacheControl);
-  } else {
-    stripAnthropicSystemPromptBoundary(payloadObj.system);
-  }
+  normalizeAnthropicSystemBlocks(payloadObj.system, policy.cacheControl);
 
-  if (policy.useServerCompaction && payloadObj.context_management === undefined) {
-    payloadObj.context_management = {
-      edits: [
-        {
-          type: "compact_20260112",
-          trigger: { type: "input_tokens", value: policy.compactThreshold },
-        },
-      ],
-    };
-  }
+  applyAnthropicContextManagementEdits(payloadObj, policy);
 
-  if (!policy.cacheControl) {
-    return;
-  }
-
-  const usedMarkers =
-    countAnthropicCacheControlMarkers(payloadObj.system) +
-    countAnthropicCacheControlMarkers(payloadObj.tools);
-  applyAnthropicCacheControlToMessages(
-    payloadObj.messages,
+  applyAnthropicRequestCacheControl(
+    payloadObj,
     policy.cacheControl,
-    ANTHROPIC_CACHE_CONTROL_LIMIT - usedMarkers,
+    false,
     cacheBreakpointOptOutMessageIndexes,
   );
 }

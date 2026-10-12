@@ -1,10 +1,8 @@
-// Whatsapp plugin module implements approval handler behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import {
   buildChannelApprovalExpiredText,
   buildChannelApprovalResolvedText,
   createChannelApprovalNativeRuntimeAdapter,
-  type PendingApprovalView,
   resolvePreparedApprovalAccountId,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
@@ -12,24 +10,18 @@ import {
   buildApprovalReactionPendingContent,
   type ApprovalReactionPendingContent,
 } from "openclaw/plugin-sdk/approval-reaction-runtime";
-import type {
-  ExecApprovalRequest,
-  PluginApprovalRequest,
-} from "openclaw/plugin-sdk/approval-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { resolveDefaultWhatsAppAccountId } from "./accounts.js";
 import {
   registerWhatsAppApprovalReactionTarget,
   unregisterWhatsAppApprovalReactionTarget,
 } from "./approval-reactions.js";
-import { normalizeWhatsAppMessagingTarget } from "./normalize.js";
+import { normalizeWhatsAppMessagingTarget } from "./normalize-target.js";
 import { getWhatsAppRuntime } from "./runtime.js";
 import { sendMessageWhatsApp, sendTypingWhatsApp } from "./send.js";
 
 const log = createSubsystemLogger("whatsapp/approvals");
 
-type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
-type WhatsAppPendingDelivery = ApprovalReactionPendingContent;
 type PreparedWhatsAppApprovalTarget = {
   to: string;
   accountId: string;
@@ -44,29 +36,20 @@ type WhatsAppFinalPayload = {
   text: string;
 };
 
-function buildPendingPayload(params: {
-  request: ApprovalRequest;
-  view: PendingApprovalView;
-  nowMs: number;
-}): WhatsAppPendingDelivery {
-  return buildApprovalReactionPendingContent(params);
-}
-
 export const whatsappApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
-  WhatsAppPendingDelivery,
+  ApprovalReactionPendingContent,
   PreparedWhatsAppApprovalTarget,
   PendingWhatsAppApprovalEntry,
   true,
   WhatsAppFinalPayload
 >({
-  eventKinds: ["exec", "plugin"],
+  eventKinds: ["exec", "plugin", "system-agent"],
   availability: {
     isConfigured: ({ context }) => Boolean(context),
     shouldHandle: ({ context }) => Boolean(context),
   },
   presentation: {
-    buildPendingPayload: ({ request, nowMs, view }) =>
-      buildPendingPayload({ request, view, nowMs }),
+    buildPendingPayload: buildApprovalReactionPendingContent,
     buildResolvedResult: ({ request, resolved, view }) => ({
       kind: "update",
       payload: { text: buildChannelApprovalResolvedText({ request, resolved, view }) },
@@ -139,8 +122,8 @@ export const whatsappApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
     },
   },
   interactions: {
-    bindPending: ({ entry, request, view, pendingPayload }) =>
-      registerWhatsAppApprovalReactionTarget({
+    bindPending: async ({ entry, request, view, pendingPayload }) =>
+      (await registerWhatsAppApprovalReactionTarget({
         accountId: entry.accountId,
         remoteJid: entry.remoteJid,
         messageId: entry.messageId,
@@ -148,23 +131,11 @@ export const whatsappApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
         approvalKind: view.approvalKind,
         allowedDecisions: pendingPayload.reactionPayload.allowedDecisions,
         ttlMs: Math.max(1, view.expiresAtMs - Date.now()),
-      })
+      }))
         ? true
         : null,
-    unbindPending: ({ entry }) => {
-      unregisterWhatsAppApprovalReactionTarget({
-        accountId: entry.accountId,
-        remoteJid: entry.remoteJid,
-        messageId: entry.messageId,
-      });
-    },
-    cancelDelivered: ({ entry }) => {
-      unregisterWhatsAppApprovalReactionTarget({
-        accountId: entry.accountId,
-        remoteJid: entry.remoteJid,
-        messageId: entry.messageId,
-      });
-    },
+    unbindPending: ({ entry }) => unregisterWhatsAppApprovalReactionTarget(entry),
+    cancelDelivered: ({ entry }) => unregisterWhatsAppApprovalReactionTarget(entry),
   },
   observe: {
     onDeliveryError: ({ error, request }) => {

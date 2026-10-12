@@ -46,22 +46,42 @@ function requireSpawnCall(callIndex = 0): SpawnCall {
 async function executeHandoff(
   mode: "park" | "reload" | "start-after-exit",
   launchctlStub: string,
-  systemOwnership: "absent" | "loaded" = "absent",
+  systemOwnership: "absent" | "loaded" | "interrupted extraction" = "absent",
 ): Promise<{
   calls: string[];
   exitCode: number;
   log: string;
 }> {
   const noWaitPid = 0;
-  const stubDir = fs.mkdtempSync(path.join(os.tmpdir(), "launchd-stub-"));
+  const stubDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "launchd-stub-")));
   try {
     const home = path.join(stubDir, "home");
+    const stateDir = path.join(home, ".openclaw");
+    const systemDaemonsDir = path.join(stubDir, "LaunchDaemons");
+    const handoffEnv = {
+      HOME: home,
+      OPENCLAW_PROFILE: "default",
+      OPENCLAW_STATE_DIR: stateDir,
+      BOUNDARY_SERVICE: "synthetic-service",
+    };
+    vi.stubGlobal("process", {
+      ...process,
+      env: {
+        PATH: `${stubDir}:/usr/bin:/bin`,
+        TMPDIR: stubDir,
+        BOUNDARY_PARENT: "synthetic-parent",
+      },
+    });
     const callsPath = path.join(stubDir, "launchctl.calls");
-    fs.mkdirSync(path.join(home, ".openclaw", "logs"), { recursive: true });
+    fs.mkdirSync(path.join(stateDir, "logs"), { recursive: true });
+    fs.mkdirSync(systemDaemonsDir);
     fs.writeFileSync(
       path.join(stubDir, "launchctl"),
       `#!/bin/sh
+LAUNCHCTL_CALLS_PATH="$TMPDIR/launchctl.calls"
+LAUNCHCTL_STUB_DIR="$TMPDIR"
 printf '%s\\n' "$*" >> "$LAUNCHCTL_CALLS_PATH"
+printf '%s:%s:%s\\n' "\${BOUNDARY_PARENT+present}" "\${BOUNDARY_SERVICE+present}" "\${OPENCLAW_PROFILE+present}" >> "$TMPDIR/environment.calls"
 if [ "$1" = "print" ] && [ "$2" = "system/ai.openclaw.gateway" ]; then
   ${systemOwnership === "loaded" ? "exit 0" : "printf 'Could not find service\\n' >&2; exit 113"}
 fi
@@ -71,22 +91,44 @@ ${launchctlStub}
     fs.chmodSync(path.join(stubDir, "launchctl"), 0o755);
     fs.writeFileSync(path.join(stubDir, "sleep"), "#!/bin/sh\nexit 0\n");
     fs.chmodSync(path.join(stubDir, "sleep"), 0o755);
+    const parser = path.join(stubDir, "plutil");
+    if (systemOwnership === "interrupted extraction") {
+      fs.writeFileSync(
+        path.join(systemDaemonsDir, "owner.plist"),
+        '<plist version="1.0"><dict><key>Label</key><string>ai.openclaw.gateway</string></dict></plist>',
+      );
+      fs.writeFileSync(
+        parser,
+        `#!/bin/sh
+for last; do :; done
+if [ "$last" != '-' ]; then exit 1; fi
+if [ "$1" = '-extract' ]; then kill -TERM "$$"; fi
+exec /usr/bin/plutil "$@"
+`,
+        { mode: 0o755 },
+      );
+    }
 
     spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock, once: vi.fn() });
     if (mode === "park") {
       scheduleDetachedLaunchdMaintenancePark({
-        env: { HOME: home, OPENCLAW_PROFILE: "default" },
+        env: handoffEnv,
         waitForPid: noWaitPid,
       });
     } else {
       scheduleDetachedLaunchdRestartHandoff({
-        env: { HOME: home, OPENCLAW_PROFILE: "default" },
+        env: handoffEnv,
         mode,
         waitForPid: noWaitPid,
       });
     }
-    const [, args] = requireSpawnCall();
-    const script = args[1];
+    const [, args, options] = requireSpawnCall();
+    const script = args[1]
+      ?.replaceAll("/Library/LaunchDaemons", `'${systemDaemonsDir.replaceAll("'", "'\\''")}'`)
+      .replaceAll(
+        "/usr/bin/plutil",
+        systemOwnership === "interrupted extraction" ? parser : "/usr/bin/plutil",
+      );
     if (!script) {
       throw new Error("expected generated restart script");
     }
@@ -101,16 +143,11 @@ ${launchctlStub}
           "handoff-test",
           "gui/501/test.label",
           "gui/501",
-          "/tmp/test.plist",
+          path.join(stubDir, "test.plist"),
           String(noWaitPid),
         ],
         {
-          env: {
-            ...process.env,
-            LAUNCHCTL_CALLS_PATH: callsPath,
-            LAUNCHCTL_STUB_DIR: stubDir,
-            PATH: `${stubDir}:${process.env.PATH}`,
-          },
+          env: options.env,
         },
       );
     } catch (error) {
@@ -121,17 +158,21 @@ ${launchctlStub}
       exitCode = code;
     }
 
+    const envCalls = fs
+      .readFileSync(path.join(stubDir, "environment.calls"), "utf8")
+      .trim()
+      .split("\n");
+    expect(envCalls.length).toBeGreaterThan(0);
+    expect(envCalls.every((call) => call === "::")).toBe(true);
     const calls = fs
       .readFileSync(callsPath, "utf8")
       .trim()
       .split("\n")
       .filter((call) => call !== "print system/ai.openclaw.gateway");
-    const log = fs.readFileSync(
-      path.join(home, ".openclaw", "logs", "gateway-restart.log"),
-      "utf8",
-    );
+    const log = fs.readFileSync(path.join(stateDir, "logs", "gateway-restart.log"), "utf8");
     return { calls, exitCode, log };
   } finally {
+    vi.unstubAllGlobals();
     fs.rmSync(stubDir, { recursive: true, force: true });
   }
 }
@@ -179,25 +220,6 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(unrefMock).toHaveBeenCalledTimes(1);
   });
 
-  it("uses the service target for start-after-exit mode", () => {
-    spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock, once: vi.fn() });
-
-    scheduleDetachedLaunchdRestartHandoff({
-      env: {
-        HOME: "/Users/test",
-        OPENCLAW_PROFILE: "default",
-      },
-      mode: "start-after-exit",
-    });
-
-    const [, args] = requireSpawnCall();
-    expect(args[1]).toContain('if launchctl kickstart "$service_target"; then');
-    expect(args[1]).toContain('if launchctl bootstrap "$domain" "$plist_path"; then');
-    expect(args[1]).not.toContain('kickstart -k "$service_target"');
-    expect(args[1]).not.toContain('if launchctl start "$label"; then');
-    expect(args[1]).not.toContain('basename "$service_target"');
-  });
-
   it("kickstarts after exit without replacing a running KeepAlive process", async () => {
     const result = await executeHandoff(
       "start-after-exit",
@@ -212,18 +234,28 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(result.log).toContain("restart done");
   });
 
-  it("refuses detached activation when the system domain owns the label", async () => {
-    const result = await executeHandoff(
-      "start-after-exit",
-      'case "$1" in enable|kickstart) exit 0 ;; *) exit 1 ;; esac',
-      "loaded",
-    );
+  it.for(["loaded", "interrupted extraction"] as const)(
+    "refuses detached activation for %s ownership",
+    async (scenario, context) => {
+      if (scenario === "interrupted extraction" && process.platform !== "darwin") {
+        context.skip();
+      }
+      const result = await executeHandoff(
+        "start-after-exit",
+        'case "$1" in enable|kickstart) exit 0 ;; *) exit 1 ;; esac',
+        scenario,
+      );
 
-    expect(result.exitCode).toBe(78);
-    expect(result.calls).toEqual([]);
-    expect(result.log).toContain("restart blocked");
-    expect(result.log).toContain("loaded system LaunchDaemon system/ai.openclaw.gateway");
-  });
+      expect(result.exitCode).toBe(78);
+      expect(result.calls).toEqual([]);
+      expect(result.log).toContain("restart blocked");
+      expect(result.log).toContain(
+        scenario === "loaded"
+          ? "loaded system LaunchDaemon system/ai.openclaw.gateway"
+          : "could not inspect system LaunchDaemon plist",
+      );
+    },
+  );
 
   it("parks the service with bootout after the caller exits", async () => {
     const result = await executeHandoff(
@@ -253,8 +285,8 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(args[1]).toContain('launchctl enable "$service_target"');
     expect(args[1]).toContain('launchctl bootout "$service_target"');
     // The unload poll must outlast launchd's ExitTimeOut SIGKILL ceiling plus
-    // margin (#110137): 35 × 1s vs the old 15 × 0.2s stop window.
-    expect(args[1]).toContain('bootout_wait_count="35"');
+    // margin (#110137): 345 × 1s vs the old 15 × 0.2s stop window.
+    expect(args[1]).toContain('bootout_wait_count="345"');
     expect(args[1]).toContain('if ! launchctl print "$service_target" >/dev/null 2>&1; then');
     expect(args[1]).toContain("sleep 1");
     // Bootstrap failures retry; kickstart -k only fires while the label is
@@ -363,7 +395,7 @@ esac`,
     expect(args[1]).not.toContain("/tmp/evil-bin");
     expect(args[1]).not.toContain("/tmp/evil.dylib");
     expect(args[1]).not.toContain("/tmp/evil-npmrc");
-    expect(options.env.OPENCLAW_PROFILE).toBe("default");
+    expect(options.env.OPENCLAW_PROFILE).toBeUndefined();
     expect(options.env.PATH).not.toBe("/tmp/evil-bin");
     expect(options.env.DYLD_INSERT_LIBRARIES).toBeUndefined();
     expect(options.env.NPM_CONFIG_GLOBALCONFIG).toBeUndefined();

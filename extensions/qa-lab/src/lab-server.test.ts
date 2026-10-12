@@ -4,9 +4,17 @@ import { createServer, request as httpRequest } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+  withinTest,
+} from "openclaw/plugin-sdk/test-fixtures";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { writeQaLabSuiteResultFixture } from "./lab-server-suite.test-support.js";
 import { resolveUiAssetVersion } from "./lab-server-ui.js";
 import { startQaLabServer, type QaLabServerStartParams } from "./lab-server.js";
+import * as suiteSummary from "./suite-summary.js";
 
 const qaChannelMock = vi.hoisted(() => ({
   resolveAccount: vi.fn(),
@@ -42,127 +50,13 @@ vi.mock("openclaw/plugin-sdk/qa-channel", () => ({
   setQaChannelRuntime: qaChannelMock.setRuntime,
 }));
 
-const captureMock = vi.hoisted(() => {
-  const sessions: Array<Record<string, unknown>> = [];
-  const events: Array<Record<string, unknown>> = [];
-
-  const readMeta = (event: Record<string, unknown>) => {
-    try {
-      return typeof event.metaJson === "string"
-        ? (JSON.parse(event.metaJson) as Record<string, unknown>)
-        : {};
-    } catch {
-      return {};
-    }
-  };
-  const countValues = (values: Array<string | undefined>) =>
-    Object.entries(
-      values.reduce<Record<string, number>>((acc, value) => {
-        if (value) {
-          acc[value] = (acc[value] ?? 0) + 1;
-        }
-        return acc;
-      }, {}),
-    ).map(([value, count]) => ({ value, count }));
-  const countMatching = <T>(values: T[], predicate: (value: T) => boolean) => {
-    let count = 0;
-    for (const value of values) {
-      if (predicate(value)) {
-        count += 1;
-      }
-    }
-    return count;
-  };
-
-  const store = {
-    upsertSession(session: Record<string, unknown>) {
-      sessions.push({ ...session });
-    },
-    recordEvent(event: Record<string, unknown>) {
-      events.push({ ...event });
-    },
-    listSessions(limit: number) {
-      return sessions.slice(0, limit).map((session) =>
-        Object.assign({}, session, {
-          eventCount: countMatching(events, (event) => event.sessionId === session.id),
-        }),
-      );
-    },
-    getSessionEvents(sessionId: string, limit: number) {
-      return events.filter((event) => event.sessionId === sessionId).slice(0, limit);
-    },
-    summarizeSessionCoverage(sessionId: string) {
-      const selected = events.filter((event) => event.sessionId === sessionId);
-      const metas = selected.map(readMeta);
-      return {
-        sessionId,
-        totalEvents: selected.length,
-        unlabeledEventCount: countMatching(metas, (meta) => !meta.provider && !meta.model),
-        providers: countValues(metas.map((meta) => meta.provider as string | undefined)),
-        apis: countValues(metas.map((meta) => meta.api as string | undefined)),
-        models: countValues(metas.map((meta) => meta.model as string | undefined)),
-        hosts: countValues(selected.map((event) => event.host as string | undefined)),
-        localPeers: countValues(
-          selected
-            .map((event) => event.host as string | undefined)
-            .filter((host) => host?.startsWith("127.0.0.1:")),
-        ),
-      };
-    },
-    queryPreset(preset: string, sessionId?: string) {
-      if (preset !== "double-sends") {
-        return [];
-      }
-      const selected = events.filter((event) => !sessionId || event.sessionId === sessionId);
-      const counts = selected.reduce<Record<string, number>>((acc, event) => {
-        const host = typeof event.host === "string" ? event.host : "";
-        if (host) {
-          acc[host] = (acc[host] ?? 0) + 1;
-        }
-        return acc;
-      }, {});
-      return Object.entries(counts)
-        .filter(([, duplicateCount]) => duplicateCount > 1)
-        .map(([host, duplicateCount]) => ({ host, duplicateCount }));
-    },
-    readBlob() {
-      return null;
-    },
-    close: vi.fn(),
-    deleteSessions(sessionIds: string[]) {
-      const ids = new Set(sessionIds);
-      for (let index = sessions.length - 1; index >= 0; index -= 1) {
-        if (ids.has(String(sessions[index]?.id))) {
-          sessions.splice(index, 1);
-        }
-      }
-      return { deleted: sessionIds.length };
-    },
-    purgeAll() {
-      sessions.splice(0);
-      events.splice(0);
-      return { deletedSessions: 0, deletedEvents: 0 };
-    },
-  };
-
-  return {
-    acquire: vi.fn(() => ({
-      store,
-      release: store.close,
-    })),
-    store,
-    reset() {
-      sessions.splice(0);
-      events.splice(0);
-      captureMock.acquire.mockClear();
-      store.close.mockClear();
-    },
-  };
+const captureMock = await vi.hoisted(async () => {
+  const { createQaLabCaptureMock } = await import("./lab-server-capture.test-support.js");
+  return createQaLabCaptureMock();
 });
 
 vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
-  acquireDebugProxyCaptureStore: captureMock.acquire,
-  getDebugProxyCaptureStore: () => captureMock.store,
+  acquireDebugProxyCaptureStoreAsync: captureMock.acquire,
   resolveDebugProxySettings: () => ({
     proxyUrl: process.env.OPENCLAW_DEBUG_PROXY_URL ?? "",
     sessionId: "qa-lab-test",
@@ -170,6 +64,27 @@ vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
 }));
 
 const cleanups: Array<() => Promise<void>> = [];
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
+
+async function makeTempDir(prefix: string) {
+  const dir = await mkdtemp(path.join(os.tmpdir(), prefix));
+  cleanups.push(() => rm(dir, { recursive: true, force: true }));
+  return dir;
+}
+
+async function postLabJson(baseUrl: string, route: string, body: unknown) {
+  return fetch(`${baseUrl}${route}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
 
 async function startQaLabServerForTest(params?: QaLabServerStartParams) {
   return await startQaLabServer({
@@ -275,29 +190,6 @@ async function waitForRunnerCatalog(baseUrl: string, timeoutMs = 5_000) {
   return catalog;
 }
 
-async function waitForFileContent(filePath: string, expected: string, timeoutMs = 5_000) {
-  let content: string | undefined;
-  await vi.waitFor(
-    async () => {
-      try {
-        content = await readFile(filePath, "utf8");
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-          throw error;
-        }
-      }
-      if (content !== expected) {
-        throw new Error(`file did not reach expected content: ${filePath}`);
-      }
-    },
-    { interval: 1, timeout: timeoutMs },
-  );
-  if (content === undefined) {
-    throw new Error(`file did not reach expected content: ${filePath}`);
-  }
-  return content;
-}
-
 async function expectFileMissing(filePath: string): Promise<void> {
   try {
     await readFile(filePath, "utf8");
@@ -318,10 +210,7 @@ async function createQaLabRepoRootFixture(params?: {
     missing?: boolean;
   }>;
 }) {
-  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-lab-repo-root-"));
-  cleanups.push(async () => {
-    await rm(repoRoot, { recursive: true, force: true });
-  });
+  const repoRoot = await makeTempDir("qa-lab-repo-root-");
   await mkdir(path.join(repoRoot, "dist"), { recursive: true });
   await mkdir(path.join(repoRoot, "extensions/qa-lab/web/dist"), { recursive: true });
   const models =
@@ -345,67 +234,61 @@ async function createQaLabRepoRootFixture(params?: {
   return repoRoot;
 }
 
-type QaLabSuiteScenarioFixture = {
-  name: string;
-  status: "pass" | "fail" | "skip";
-  steps: unknown[];
-  details?: string;
-};
-
-async function createQaLabSuiteResultFixture(params?: {
-  scenarios?: QaLabSuiteScenarioFixture[];
-  watchUrl?: string;
-}) {
-  const outputDir = await mkdtemp(path.join(os.tmpdir(), "qa-lab-suite-result-"));
-  cleanups.push(async () => {
-    await rm(outputDir, { recursive: true, force: true });
-  });
-  const scenarios = params?.scenarios ?? [
-    { name: "Channel chat baseline", status: "pass" as const, steps: [] },
-  ];
-  const report = "# QA report\n";
-  const evidencePath = path.join(outputDir, "qa-evidence.json");
-  const reportPath = path.join(outputDir, "qa-suite-report.md");
-  const summaryPath = path.join(outputDir, "qa-suite-summary.json");
-  await Promise.all([
-    writeFile(
-      evidencePath,
-      JSON.stringify({
-        entries: scenarios.map((scenario) => ({ result: { status: scenario.status } })),
-      }),
-      "utf8",
-    ),
-    writeFile(reportPath, report, "utf8"),
-    writeFile(
-      summaryPath,
-      JSON.stringify({
-        run: { status: "completed" },
-        counts: {
-          total: scenarios.length,
-          passed: scenarios.filter((scenario) => scenario.status === "pass").length,
-          failed: scenarios.filter((scenario) => scenario.status === "fail").length,
-          skipped: scenarios.filter((scenario) => scenario.status === "skip").length,
+async function writeEvidenceFixture(
+  evidenceDir: string,
+  id: string,
+  artifactPaths: string[],
+  artifactKind = "log",
+) {
+  await writeFile(
+    path.join(evidenceDir, "qa-evidence.json"),
+    JSON.stringify({
+      kind: "openclaw.qa.evidence-summary",
+      schemaVersion: 2,
+      generatedAt: "2026-06-17T12:00:00.000Z",
+      evidenceMode: "full",
+      entries: [
+        {
+          test: { kind: "vitest-test", id, title: id },
+          coverage: [{ id: "qa.artifact", role: "primary" }],
+          execution: {
+            runner: "vitest",
+            environment: { ref: "server-test", os: process.platform, nodeVersion: process.version },
+            provider: {
+              id: "mock-openai",
+              live: false,
+              model: { name: "mock-openai/gpt-5.6-luna", ref: "mock-openai/gpt-5.6-luna" },
+            },
+            packageSource: { kind: "source-checkout" },
+            artifacts: artifactPaths.map((artifactPath) => ({
+              kind: artifactKind,
+              path: artifactPath,
+              source: "vitest",
+            })),
+          },
+          result: { status: "pass" },
         },
-        scenarios,
-      }),
-      "utf8",
-    ),
-  ]);
-  return {
-    evidencePath,
-    outputDir,
-    report,
-    reportPath,
-    scenarios,
-    summaryPath,
-    ...(params?.watchUrl ? { watchUrl: params.watchUrl } : {}),
-  };
+      ],
+    }),
+    "utf8",
+  );
 }
 
 describe("qa-lab server", () => {
+  it("returns reachable IPv6 listen and advertised URLs", async () => {
+    const lab = await startQaLabServerForTest({ host: "::1", port: 0 });
+    cleanups.push(lab.stop);
+
+    for (const baseUrl of [lab.listenUrl, lab.baseUrl]) {
+      const response = await fetch(`${baseUrl}/healthz`);
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({ ok: true, status: "live" });
+    }
+  });
+
   it("returns a 500 JSON response when a shared bus route rejects", async () => {
     const lab = await startQaLabServerForTest();
-    cleanups.push(async () => await lab.stop());
+    cleanups.push(lab.stop);
     const requestError = new Error("combined snapshot unavailable");
     lab.state.getSnapshot = () => {
       throw requestError;
@@ -420,26 +303,20 @@ describe("qa-lab server", () => {
 
   it("dispatches explicit mixed-kind selections through the suite planner", async () => {
     const lab = await startQaLabServerForTest();
-    cleanups.push(async () => {
-      await lab.stop();
-    });
+    cleanups.push(lab.stop);
     suiteLaunchMock.runQaSuite.mockResolvedValue({
       executionKind: "suite",
       expectedCells: [],
       observedCells: [],
-      result: await createQaLabSuiteResultFixture(),
+      result: await writeQaLabSuiteResultFixture(await makeTempDir("qa-lab-suite-result-")),
     });
 
-    const response = await fetch(`${lab.baseUrl}/api/scenario/suite`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        channelDriver: "crabline",
-        providerMode: "live-frontier",
-        primaryModel: "openai/gpt-5.6-luna",
-        alternateModel: "openai/gpt-5.6-luna",
-        scenarioIds: ["dm-chat-baseline", "browser-talk-start-stop"],
-      }),
+    const response = await postLabJson(lab.baseUrl, "/api/scenario/suite", {
+      channelDriver: "crabline",
+      providerMode: "live-frontier",
+      primaryModel: "openai/gpt-5.6-luna",
+      alternateModel: "openai/gpt-5.6-luna",
+      scenarioIds: ["dm-chat-baseline", "browser-talk-start-stop"],
     });
 
     expect(response.status).toBe(202);
@@ -508,10 +385,8 @@ describe("qa-lab server", () => {
     "marks $label suite results failed while preserving generated artifacts",
     async ({ status }) => {
       const lab = await startQaLabServerForTest();
-      cleanups.push(async () => {
-        await lab.stop();
-      });
-      const result = await createQaLabSuiteResultFixture({
+      cleanups.push(lab.stop);
+      const result = await writeQaLabSuiteResultFixture(await makeTempDir("qa-lab-suite-result-"), {
         scenarios: [{ name: "Channel chat baseline", status, steps: [] }],
       });
       suiteLaunchMock.runQaSuite.mockResolvedValue({
@@ -521,14 +396,10 @@ describe("qa-lab server", () => {
         result,
       });
 
-      const response = await fetch(`${lab.baseUrl}/api/scenario/suite`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          channelDriver: "crabline",
-          providerMode: "live-frontier",
-          scenarioIds: ["dm-chat-baseline"],
-        }),
+      const response = await postLabJson(lab.baseUrl, "/api/scenario/suite", {
+        channelDriver: "crabline",
+        providerMode: "live-frontier",
+        scenarioIds: ["dm-chat-baseline"],
       });
 
       expect(response.status).toBe(202);
@@ -582,10 +453,8 @@ describe("qa-lab server", () => {
     "fails closed on an $label suite summary while preserving artifacts",
     async (invalidResult) => {
       const lab = await startQaLabServerForTest();
-      cleanups.push(async () => {
-        await lab.stop();
-      });
-      const result = await createQaLabSuiteResultFixture();
+      cleanups.push(lab.stop);
+      const result = await writeQaLabSuiteResultFixture(await makeTempDir("qa-lab-suite-result-"));
       await writeFile(result.summaryPath, invalidResult.summary, "utf8");
       suiteLaunchMock.runQaSuite.mockResolvedValue({
         executionKind: "flow",
@@ -594,14 +463,10 @@ describe("qa-lab server", () => {
         result,
       });
 
-      const response = await fetch(`${lab.baseUrl}/api/scenario/suite`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          channelDriver: "crabline",
-          providerMode: "live-frontier",
-          scenarioIds: ["dm-chat-baseline"],
-        }),
+      const response = await postLabJson(lab.baseUrl, "/api/scenario/suite", {
+        channelDriver: "crabline",
+        providerMode: "live-frontier",
+        scenarioIds: ["dm-chat-baseline"],
       });
 
       expect(response.status).toBe(202);
@@ -618,10 +483,8 @@ describe("qa-lab server", () => {
 
   it("keeps implicit suites green for catalog-verified report-only optional skips", async () => {
     const lab = await startQaLabServerForTest();
-    cleanups.push(async () => {
-      await lab.stop();
-    });
-    const result = await createQaLabSuiteResultFixture({
+    cleanups.push(lab.stop);
+    const result = await writeQaLabSuiteResultFixture(await makeTempDir("qa-lab-suite-result-"), {
       scenarios: [
         { name: "Channel chat baseline", status: "pass", steps: [] },
         {
@@ -639,14 +502,10 @@ describe("qa-lab server", () => {
       result,
     });
 
-    const response = await fetch(`${lab.baseUrl}/api/scenario/suite`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        profile: "all",
-        channelDriver: "crabline",
-        providerMode: "live-frontier",
-      }),
+    const response = await postLabJson(lab.baseUrl, "/api/scenario/suite", {
+      profile: "all",
+      channelDriver: "crabline",
+      providerMode: "live-frontier",
     });
 
     expect(response.status).toBe(202);
@@ -661,24 +520,20 @@ describe("qa-lab server", () => {
 
   it("keeps mock providers independent from real channel adapters", async () => {
     const lab = await startQaLabServerForTest();
-    cleanups.push(async () => {
-      await lab.stop();
-    });
+    cleanups.push(lab.stop);
     suiteLaunchMock.runQaSuite.mockResolvedValue({
       executionKind: "flow",
       expectedCells: [],
       observedCells: [],
-      result: await createQaLabSuiteResultFixture({ watchUrl: "http://runtime-watch.invalid" }),
+      result: await writeQaLabSuiteResultFixture(await makeTempDir("qa-lab-suite-result-"), {
+        watchUrl: "http://runtime-watch.invalid",
+      }),
     });
 
-    const response = await fetch(`${lab.baseUrl}/api/scenario/suite`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        channelDriver: "live",
-        providerMode: "mock-openai",
-        scenarioIds: ["dm-chat-baseline"],
-      }),
+    const response = await postLabJson(lab.baseUrl, "/api/scenario/suite", {
+      channelDriver: "live",
+      providerMode: "mock-openai",
+      scenarioIds: ["dm-chat-baseline"],
     });
 
     expect(response.status).toBe(202);
@@ -703,26 +558,20 @@ describe("qa-lab server", () => {
   it("launches a plural-only catalog scenario on its selected live channel", async () => {
     liveTransportMock.adapterFactories[0]!.matches.mockReturnValue(true);
     const lab = await startQaLabServerForTest();
-    cleanups.push(async () => {
-      await lab.stop();
-    });
+    cleanups.push(lab.stop);
     suiteLaunchMock.runQaSuite.mockResolvedValue({
       executionKind: "flow",
       expectedCells: [],
       observedCells: [],
-      result: await createQaLabSuiteResultFixture(),
+      result: await writeQaLabSuiteResultFixture(await makeTempDir("qa-lab-suite-result-")),
     });
 
-    const response = await fetch(`${lab.baseUrl}/api/scenario/suite`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        profile: "all",
-        channel: "buzz",
-        channelDriver: "live",
-        providerMode: "mock-openai",
-        scenarioIds: ["channel-canary"],
-      }),
+    const response = await postLabJson(lab.baseUrl, "/api/scenario/suite", {
+      profile: "all",
+      channel: "buzz",
+      channelDriver: "live",
+      providerMode: "mock-openai",
+      scenarioIds: ["channel-canary"],
     });
 
     expect(response.status).toBe(202);
@@ -752,11 +601,19 @@ describe("qa-lab server", () => {
     );
   });
 
-  it("allows only one concurrent request to commit a resolved suite plan", async () => {
+  it("allows only one concurrent request to commit a resolved suite plan", async ({ signal }) => {
+    const summaryValidated = Promise.withResolvers<number>();
+    const readSummary = suiteSummary.readQaSuiteFailedOrSkippedScenarioCountFromFile;
+    using _ = vi
+      .spyOn(suiteSummary, "readQaSuiteFailedOrSkippedScenarioCountFromFile")
+      .mockImplementation((...args) => {
+        const validation = readSummary(...args);
+        // Returning the same promise lets the server publish status before this test resumes.
+        void validation.then(summaryValidated.resolve, summaryValidated.reject);
+        return validation;
+      });
     const lab = await startQaLabServerForTest();
-    cleanups.push(async () => {
-      await lab.stop();
-    });
+    cleanups.push(lab.stop);
     let finishSuite: ((value: unknown) => void) | undefined;
     suiteLaunchMock.runQaSuite.mockImplementation(
       () =>
@@ -765,14 +622,10 @@ describe("qa-lab server", () => {
         }),
     );
     const request = () =>
-      fetch(`${lab.baseUrl}/api/scenario/suite`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          channelDriver: "crabline",
-          providerMode: "live-frontier",
-          scenarioIds: ["dm-chat-baseline"],
-        }),
+      postLabJson(lab.baseUrl, "/api/scenario/suite", {
+        channelDriver: "crabline",
+        providerMode: "live-frontier",
+        scenarioIds: ["dm-chat-baseline"],
       });
 
     const responses = await Promise.all([request(), request()]);
@@ -785,27 +638,20 @@ describe("qa-lab server", () => {
       executionKind: "flow",
       expectedCells: [],
       observedCells: [],
-      result: await createQaLabSuiteResultFixture(),
+      result: await writeQaLabSuiteResultFixture(await makeTempDir("qa-lab-suite-result-")),
     });
-    await vi.waitFor(async () => {
-      const bootstrap = (await (await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`)).json()) as {
-        runner: { status: string };
-      };
-      expect(bootstrap.runner.status).toBe("completed");
-    });
+    await withinTest(summaryValidated.promise, signal);
+    const bootstrap = (await (await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`)).json()) as {
+      runner: { status: string };
+    };
+    expect(bootstrap.runner.status).toBe("completed");
   });
 
   it("rejects empty and unknown explicit selections before dispatch", async () => {
     const lab = await startQaLabServerForTest();
-    cleanups.push(async () => {
-      await lab.stop();
-    });
+    cleanups.push(lab.stop);
     for (const scenarioIds of [[], ["missing-scenario"]]) {
-      const response = await fetch(`${lab.baseUrl}/api/scenario/suite`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ scenarioIds }),
-      });
+      const response = await postLabJson(lab.baseUrl, "/api/scenario/suite", { scenarioIds });
       expect(response.status).toBe(400);
     }
     expect(suiteLaunchMock.runQaSuite).not.toHaveBeenCalled();
@@ -814,28 +660,24 @@ describe("qa-lab server", () => {
   it("returns the resolved runtime-pair-lane plan and launches it with independent live transport", async () => {
     liveTransportMock.adapterFactories[0]!.matches.mockReturnValue(true);
     const lab = await startQaLabServerForTest();
-    cleanups.push(async () => {
-      await lab.stop();
-    });
+    cleanups.push(lab.stop);
     suiteLaunchMock.runQaSuite.mockResolvedValue({
       executionKind: "flow",
       expectedCells: [],
       observedCells: [],
-      result: await createQaLabSuiteResultFixture({ watchUrl: lab.baseUrl }),
+      result: await writeQaLabSuiteResultFixture(await makeTempDir("qa-lab-suite-result-"), {
+        watchUrl: lab.baseUrl,
+      }),
     });
 
-    const response = await fetch(`${lab.baseUrl}/api/scenario/suite`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        profile: "all",
-        channel: "telegram",
-        channelDriver: "live",
-        evidenceMode: "slim",
-        providerMode: "mock-openai",
-        runtimePair: ["openclaw", "codex"],
-        runtimePairLane: "core",
-      }),
+    const response = await postLabJson(lab.baseUrl, "/api/scenario/suite", {
+      profile: "all",
+      channel: "telegram",
+      channelDriver: "live",
+      evidenceMode: "slim",
+      providerMode: "mock-openai",
+      runtimePair: ["openclaw", "codex"],
+      runtimePairLane: "core",
     });
 
     expect(response.status).toBe(202);
@@ -868,20 +710,14 @@ describe("qa-lab server", () => {
 
   it("returns explicit exclusions and errors without launching unsupported execution kinds", async () => {
     const lab = await startQaLabServerForTest();
-    cleanups.push(async () => {
-      await lab.stop();
-    });
+    cleanups.push(lab.stop);
 
-    const response = await fetch(`${lab.baseUrl}/api/scenario/suite`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        profile: "all",
-        channelDriver: "qa-channel",
-        providerMode: "live-frontier",
-        runtimePair: ["openclaw", "codex"],
-        scenarioIds: ["browser-talk-start-stop"],
-      }),
+    const response = await postLabJson(lab.baseUrl, "/api/scenario/suite", {
+      profile: "all",
+      channelDriver: "qa-channel",
+      providerMode: "live-frontier",
+      runtimePair: ["openclaw", "codex"],
+      scenarioIds: ["browser-talk-start-stop"],
     });
 
     expect(response.status).toBe(400);
@@ -906,20 +742,14 @@ describe("qa-lab server", () => {
 
   it("enforces explicit execution.channel through the shared suite channel planner", async () => {
     const lab = await startQaLabServerForTest();
-    cleanups.push(async () => {
-      await lab.stop();
-    });
+    cleanups.push(lab.stop);
 
-    const response = await fetch(`${lab.baseUrl}/api/scenario/suite`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        profile: "all",
-        channel: "telegram",
-        channelDriver: "crabline",
-        providerMode: "live-frontier",
-        scenarioIds: ["matrix-room-block-streaming"],
-      }),
+    const response = await postLabJson(lab.baseUrl, "/api/scenario/suite", {
+      profile: "all",
+      channel: "telegram",
+      channelDriver: "crabline",
+      providerMode: "live-frontier",
+      scenarioIds: ["matrix-room-block-streaming"],
     });
 
     expect(response.status).toBe(400);
@@ -1049,10 +879,7 @@ describe("qa-lab server", () => {
   });
 
   it("serves bootstrap state and message state", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "qa-lab-test-"));
-    cleanups.push(async () => {
-      await rm(tempDir, { recursive: true, force: true });
-    });
+    const tempDir = await makeTempDir("qa-lab-test-");
     const outputPath = path.join(tempDir, "self-check.md");
     const repoRoot = await createQaLabRepoRootFixture();
 
@@ -1065,9 +892,7 @@ describe("qa-lab server", () => {
         "https://gateway.example.test/?token=qa-token&api_key=qa-api-key&id_token=qa-id-token&panel=chat#token=fragment-token",
       embeddedGateway: "disabled",
     });
-    cleanups.push(async () => {
-      await lab.stop();
-    });
+    cleanups.push(lab.stop);
 
     const bootstrapResponse = await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`);
     expect(bootstrapResponse.status).toBe(200);
@@ -1157,54 +982,13 @@ describe("qa-lab server", () => {
     const evidenceDir = path.join(repoRoot, ".artifacts", "qa-e2e", "server");
     await mkdir(evidenceDir, { recursive: true });
     await writeFile(path.join(evidenceDir, "artifact.log"), "streamed body\n", "utf8");
-    await writeFile(
-      path.join(evidenceDir, "qa-evidence.json"),
-      `${JSON.stringify(
-        {
-          kind: "openclaw.qa.evidence-summary",
-          schemaVersion: 2,
-          generatedAt: "2026-06-17T12:00:00.000Z",
-          evidenceMode: "full",
-          entries: [
-            {
-              test: {
-                kind: "vitest-test",
-                id: "qa-lab.server-artifact",
-                title: "Server artifact",
-              },
-              coverage: [{ id: "qa.artifact", role: "primary" }],
-              execution: {
-                runner: "vitest",
-                environment: {
-                  ref: "server-test",
-                  os: "darwin",
-                  nodeVersion: "v24.0.0",
-                },
-                provider: {
-                  id: "mock-openai",
-                  live: false,
-                  model: { name: "mock-openai/gpt-5.6-luna", ref: "mock-openai/gpt-5.6-luna" },
-                },
-                packageSource: { kind: "source-checkout" },
-                artifacts: [{ kind: "log", path: "artifact.log", source: "vitest" }],
-              },
-              result: { status: "pass" },
-            },
-          ],
-        },
-        null,
-        2,
-      )}\n`,
-      "utf8",
-    );
+    await writeEvidenceFixture(evidenceDir, "qa-lab.server-artifact", ["artifact.log"], "gif-log");
     const lab = await startQaLabServerForTest({
       host: "127.0.0.1",
       port: 0,
       repoRoot,
     });
-    cleanups.push(async () => {
-      await lab.stop();
-    });
+    cleanups.push(lab.stop);
     const evidenceUrl = new URL("/api/evidence", lab.baseUrl);
     evidenceUrl.searchParams.set("path", ".artifacts/qa-e2e/server/qa-evidence.json");
 
@@ -1216,7 +1000,12 @@ describe("qa-lab server", () => {
         counts: {
           pass: 1,
         },
-        entries: [{ id: "qa-lab.server-artifact" }],
+        entries: [
+          {
+            id: "qa-lab.server-artifact",
+            artifacts: [{ kind: "gif-log", mediaKind: "text", preview: "streamed body\n" }],
+          },
+        ],
       },
     });
 
@@ -1284,10 +1073,7 @@ describe("qa-lab server", () => {
     const undeclaredResponse = await fetchWithRetry(undeclaredUrl.toString());
     expect(undeclaredResponse.status).toBe(403);
 
-    const outsideDir = await mkdtemp(path.join(os.tmpdir(), "qa-lab-outside-artifact-"));
-    cleanups.push(async () => {
-      await rm(outsideDir, { recursive: true, force: true });
-    });
+    const outsideDir = await makeTempDir("qa-lab-outside-artifact-");
     const outsideArtifact = path.join(outsideDir, "outside.log");
     await writeFile(outsideArtifact, "outside\n", "utf8");
     const outsideUrl = new URL(artifactUrl);
@@ -1309,50 +1095,11 @@ describe("qa-lab server", () => {
     await writeFile(path.join(evidenceDir, "short-read.log"), readBoundaryText, "utf8");
     await writeFile(path.join(evidenceDir, "split.log"), `${splitPrefix}😀tail`, "utf8");
     await writeFile(path.join(evidenceDir, "complete.log"), `${completePrefix}😀tail`, "utf8");
-    await writeFile(
-      path.join(evidenceDir, "qa-evidence.json"),
-      `${JSON.stringify(
-        {
-          kind: "openclaw.qa.evidence-summary",
-          schemaVersion: 2,
-          generatedAt: "2026-07-16T00:00:00.000Z",
-          evidenceMode: "full",
-          entries: [
-            {
-              test: {
-                kind: "vitest-test",
-                id: "qa-lab.utf8-preview-boundary",
-                title: "UTF-8 preview boundary",
-              },
-              coverage: [{ id: "qa.evidence-preview", role: "primary" }],
-              execution: {
-                runner: "vitest",
-                environment: {
-                  ref: "utf8-preview-test",
-                  os: process.platform,
-                  nodeVersion: process.version,
-                },
-                provider: {
-                  id: "mock-openai",
-                  live: false,
-                  model: { name: "mock-openai/gpt-5.6-luna", ref: "mock-openai/gpt-5.6-luna" },
-                },
-                packageSource: { kind: "source-checkout" },
-                artifacts: [
-                  { kind: "log", path: "short-read.log", source: "vitest" },
-                  { kind: "log", path: "split.log", source: "vitest" },
-                  { kind: "log", path: "complete.log", source: "vitest" },
-                ],
-              },
-              result: { status: "pass" },
-            },
-          ],
-        },
-        null,
-        2,
-      )}\n`,
-      "utf8",
-    );
+    await writeEvidenceFixture(evidenceDir, "qa-lab.utf8-preview-boundary", [
+      "short-read.log",
+      "split.log",
+      "complete.log",
+    ]);
 
     const realOpen = fs.open;
     const readPositions = new Map<string, number[]>();
@@ -1380,9 +1127,7 @@ describe("qa-lab server", () => {
       port: 0,
       repoRoot,
     });
-    cleanups.push(async () => {
-      await lab.stop();
-    });
+    cleanups.push(lab.stop);
     const evidenceUrl = new URL("/api/evidence", lab.baseUrl);
     evidenceUrl.searchParams.set("path", ".artifacts/qa-e2e/utf8-preview/qa-evidence.json");
 
@@ -1405,9 +1150,7 @@ describe("qa-lab server", () => {
 
   it("returns controlled errors for malformed JSON body reads", async () => {
     const lab = await startQaLabServerForTest();
-    cleanups.push(async () => {
-      await lab.stop();
-    });
+    cleanups.push(lab.stop);
 
     const response = await fetch(`${lab.baseUrl}/api/inbound/message`, {
       method: "POST",
@@ -1424,10 +1167,7 @@ describe("qa-lab server", () => {
   });
 
   it("anchors direct self-check runs under the explicit repo root by default", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-lab-self-check-root-"));
-    cleanups.push(async () => {
-      await rm(repoRoot, { recursive: true, force: true });
-    });
+    const repoRoot = await makeTempDir("qa-lab-self-check-root-");
 
     const lab = await startQaLabServerForTest({
       host: "127.0.0.1",
@@ -1436,9 +1176,7 @@ describe("qa-lab server", () => {
       embeddedGateway: "disabled",
       selfCheckWaitTimeoutMs: 1,
     });
-    cleanups.push(async () => {
-      await lab.stop();
-    });
+    cleanups.push(lab.stop);
 
     const result = await lab.runSelfCheck();
     expect(path.dirname(result.outputPath)).toBe(path.join(repoRoot, ".artifacts", "qa-e2e"));
@@ -1453,9 +1191,7 @@ describe("qa-lab server", () => {
       embeddedGateway: "disabled",
       sendKickoffOnStart: true,
     });
-    cleanups.push(async () => {
-      await autoKickoffLab.stop();
-    });
+    cleanups.push(autoKickoffLab.stop);
 
     const autoSnapshot = (await (
       await fetchWithRetry(`${autoKickoffLab.baseUrl}/api/state`)
@@ -1471,9 +1207,7 @@ describe("qa-lab server", () => {
       port: 0,
       embeddedGateway: "disabled",
     });
-    cleanups.push(async () => {
-      await manualLab.stop();
-    });
+    cleanups.push(manualLab.stop);
 
     const kickoffResponse = await fetch(`${manualLab.baseUrl}/api/kickoff`, {
       method: "POST",
@@ -1530,9 +1264,7 @@ describe("qa-lab server", () => {
       controlUiProxyTarget: `http://127.0.0.1:${address.port}/`,
       controlUiProxyToken: "proxy-token",
     });
-    cleanups.push(async () => {
-      await lab.stop();
-    });
+    cleanups.push(lab.stop);
 
     const bootstrap = (await (await fetchWithRetry(`${lab.listenUrl}/api/bootstrap`)).json()) as {
       controlUiUrl: string | null;
@@ -1554,10 +1286,7 @@ describe("qa-lab server", () => {
   });
 
   it("serves the built QA UI bundle when available", async () => {
-    const uiDistDir = await mkdtemp(path.join(os.tmpdir(), "qa-lab-ui-dist-"));
-    cleanups.push(async () => {
-      await rm(uiDistDir, { recursive: true, force: true });
-    });
+    const uiDistDir = await makeTempDir("qa-lab-ui-dist-");
     await writeFile(
       path.join(uiDistDir, "index.html"),
       "<!doctype html><html><head><title>QA Lab</title></head><body><div id='app'></div></body></html>",
@@ -1569,9 +1298,7 @@ describe("qa-lab server", () => {
       port: 0,
       uiDistDir,
     });
-    cleanups.push(async () => {
-      await lab.stop();
-    });
+    cleanups.push(lab.stop);
 
     const rootResponse = await fetchWithRetry(`${lab.baseUrl}/`);
     expect(rootResponse.status).toBe(200);
@@ -1597,9 +1324,7 @@ describe("qa-lab server", () => {
       port: 0,
       repoRoot,
     });
-    cleanups.push(async () => {
-      await lab.stop();
-    });
+    cleanups.push(lab.stop);
 
     const rootResponse = await fetchWithRetry(`${lab.baseUrl}/`);
     expect(rootResponse.status).toBe(200);
@@ -1618,10 +1343,7 @@ describe("qa-lab server", () => {
   });
 
   it("does not eagerly load the runner model catalog before bootstrap is requested", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-lab-lazy-catalog-"));
-    cleanups.push(async () => {
-      await rm(repoRoot, { recursive: true, force: true });
-    });
+    const repoRoot = await makeTempDir("qa-lab-lazy-catalog-");
     const markerPath = path.join(repoRoot, "runner-catalog-hit.txt");
 
     await mkdir(path.join(repoRoot, "dist"), { recursive: true });
@@ -1654,9 +1376,7 @@ describe("qa-lab server", () => {
       port: 0,
       repoRoot,
     });
-    cleanups.push(async () => {
-      await lab.stop();
-    });
+    cleanups.push(lab.stop);
 
     await expectFileMissing(markerPath);
 
@@ -1668,25 +1388,25 @@ describe("qa-lab server", () => {
     expect(await readFile(markerPath, "utf8")).toContain("models list --all --json");
   });
 
-  it("aborts an in-flight runner model catalog when the lab stops", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-lab-abort-catalog-"));
-    cleanups.push(async () => {
-      await rm(repoRoot, { recursive: true, force: true });
-    });
+  it("aborts an in-flight runner model catalog when the lab stops", async ({ signal }) => {
+    const repoRoot = await makeTempDir("qa-lab-abort-catalog-");
     const markerPath = path.join(repoRoot, "runner-catalog-started.txt");
     const stoppedPath = path.join(repoRoot, "runner-catalog-stopped.txt");
 
     await mkdir(path.join(repoRoot, "dist"), { recursive: true });
     await mkdir(path.join(repoRoot, "extensions/qa-lab/web/dist"), { recursive: true });
+    await writeFile(path.join(repoRoot, "dist/package.json"), '{"type":"module"}');
     await writeFile(
       path.join(repoRoot, "dist/index.js"),
       [
-        'const fs = require("node:fs");',
+        'import fs from "node:fs";',
+        fixtureReceiptClientSource(receipts.endpoint),
         "process.on('SIGTERM', () => {",
         `  fs.writeFileSync(${JSON.stringify(stoppedPath)}, "terminated", "utf8");`,
         "  process.exit(0);",
         "});",
         `fs.writeFileSync(${JSON.stringify(markerPath)}, process.env.OPENCLAW_CODEX_DISCOVERY_LIVE || "", "utf8");`,
+        `sendReceipt(${JSON.stringify(markerPath)}, "started");`,
         "setInterval(() => {}, 1000);",
       ].join("\n"),
       "utf8",
@@ -1711,12 +1431,14 @@ describe("qa-lab server", () => {
 
     const bootstrapResponse = await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`);
     expect(bootstrapResponse.status).toBe(200);
-    expect(await waitForFileContent(markerPath, "0")).toBe("0");
+    await withinTest(receipts.waitFor(markerPath, "started"), signal);
+    expect(await readFile(markerPath, "utf8")).toBe("0");
 
     await lab.stop();
     stopped = true;
     if (process.platform !== "win32") {
-      expect(await waitForFileContent(stoppedPath, "terminated")).toBe("terminated");
+      // stop joins the catalog command's close, after its SIGTERM handler writes this marker.
+      expect(await readFile(stoppedPath, "utf8")).toBe("terminated");
     }
   });
 
@@ -1726,9 +1448,7 @@ describe("qa-lab server", () => {
       port: 0,
       embeddedGateway: "disabled",
     });
-    cleanups.push(async () => {
-      await lab.stop();
-    });
+    cleanups.push(lab.stop);
 
     await fetch(`${lab.baseUrl}/api/inbound/message`, {
       method: "POST",
@@ -1755,9 +1475,7 @@ describe("qa-lab server", () => {
       port: 0,
       embeddedGateway: "disabled",
     });
-    cleanups.push(async () => {
-      await lab.stop();
-    });
+    cleanups.push(lab.stop);
 
     const initialOutcomes = (await (
       await fetchWithRetry(`${lab.baseUrl}/api/outcomes`)
@@ -1817,11 +1535,32 @@ describe("qa-lab server", () => {
     ]);
   });
 
-  it("serves proxy capture sessions, events, and query rows", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "qa-lab-capture-"));
+  it("serves a new capture request after an earlier acquisition rejects", async () => {
+    captureMock.acquire.mockRejectedValueOnce(new Error("capture acquisition failed"));
+    const lab = await startQaLabServerForTest({ host: "127.0.0.1", port: 0 });
+    let stopped = false;
     cleanups.push(async () => {
-      await rm(tempDir, { recursive: true, force: true });
+      if (!stopped) {
+        await lab.stop();
+      }
     });
+
+    const failed = await fetchWithRetry(`${lab.baseUrl}/api/capture/sessions`);
+    expect(failed.status).toBe(500);
+    expect(await failed.json()).toEqual({ error: "capture acquisition failed" });
+    expect(captureMock.acquire).toHaveBeenCalledTimes(1);
+
+    const recovered = await fetchWithRetry(`${lab.baseUrl}/api/capture/sessions`);
+    expect(recovered.status).toBe(200);
+    expect(await recovered.json()).toEqual({ sessions: [] });
+    expect(captureMock.acquire).toHaveBeenCalledTimes(2);
+
+    await lab.stop();
+    stopped = true;
+    expect(captureMock.store.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("serves proxy capture sessions, events, and query rows", async () => {
     const store = captureMock.store;
     store.upsertSession({
       id: "qa-capture-session",
@@ -1830,48 +1569,29 @@ describe("qa-lab server", () => {
       sourceScope: "openclaw",
       sourceProcess: "openclaw",
     });
-    store.recordEvent({
-      sessionId: "qa-capture-session",
-      ts: Date.now(),
-      sourceScope: "openclaw",
-      sourceProcess: "openclaw",
-      protocol: "https",
-      direction: "outbound",
-      kind: "request",
-      flowId: "flow-1",
-      method: "POST",
-      host: "api.example.com",
-      path: "/v1/send",
-      dataText: '{"hello":"world"}',
-      dataSha256: "abc",
-      metaJson: JSON.stringify({
-        provider: "openai",
-        api: "responses",
-        model: "gpt-5.6-luna",
-        captureOrigin: "shared-fetch",
-      }),
-    });
-    store.recordEvent({
-      sessionId: "qa-capture-session",
-      ts: Date.now() + 1,
-      sourceScope: "openclaw",
-      sourceProcess: "openclaw",
-      protocol: "https",
-      direction: "outbound",
-      kind: "request",
-      flowId: "flow-2",
-      method: "POST",
-      host: "api.example.com",
-      path: "/v1/send",
-      dataText: '{"hello":"world"}',
-      dataSha256: "abc",
-      metaJson: JSON.stringify({
-        provider: "openai",
-        api: "responses",
-        model: "gpt-5.6-luna",
-        captureOrigin: "shared-fetch",
-      }),
-    });
+    for (const index of [0, 1]) {
+      store.recordEvent({
+        sessionId: "qa-capture-session",
+        ts: Date.now() + index,
+        sourceScope: "openclaw",
+        sourceProcess: "openclaw",
+        protocol: "https",
+        direction: "outbound",
+        kind: "request",
+        flowId: `flow-${index + 1}`,
+        method: "POST",
+        host: "api.example.com",
+        path: "/v1/send",
+        dataText: '{"hello":"world"}',
+        dataSha256: "abc",
+        metaJson: JSON.stringify({
+          provider: "openai",
+          api: "responses",
+          model: "gpt-5.6-luna",
+          captureOrigin: "shared-fetch",
+        }),
+      });
+    }
     store.recordEvent({
       sessionId: "qa-capture-session",
       ts: Date.now() + 2,

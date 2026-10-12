@@ -1,19 +1,25 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
+  controlUiBundledGatewayUrl,
   controlUiSessionUrl,
   installMockGateway,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { readThemedPopupPaint } from "./popup-theme.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI session activity feed capture",
   startServerBeforeBrowser: true,
 });
 
-const outputDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/session-activity-feed");
+let outputDir: string;
+beforeEach(() => {
+  outputDir = createControlUiE2eArtifactDir("session-activity-feed");
+});
+const proofPhase = process.env.OPENCLAW_MENU_THEME_PROOF_PHASE;
 
 suite.define(() => {
   it("captures online, global activity, and person-filtered activity surfaces", async () => {
@@ -25,7 +31,28 @@ suite.define(() => {
         viewport: { height: 900, width: 1280 },
       },
       async ({ page }) => {
+        await page.route("**/plugins/geolocation/lookup?ip=203.0.113.20", async (route) => {
+          await route.fulfill({
+            contentType: "application/json",
+            json: {
+              found: true,
+              city: "Vienna",
+              region: "Vienna",
+              attribution: { text: "IP Geolocation by DB-IP", url: "https://db-ip.com" },
+            },
+          });
+        });
         const current = new Date();
+        const since = new Date(
+          current.getFullYear(),
+          current.getMonth(),
+          current.getDate() - 7,
+        ).getTime();
+        const until = new Date(
+          current.getFullYear(),
+          current.getMonth(),
+          current.getDate() + 1,
+        ).getTime();
         // Keep the automation fixtures on one local calendar day in every timezone.
         const now = new Date(
           current.getFullYear(),
@@ -40,22 +67,199 @@ suite.define(() => {
         const incidentNotesKey = "agent:main:incident-notes";
         const automationKeys = [designKey, gatewayHandoffKey, nightlyMaintenanceKey];
         const nonAutomationKeys = [releaseKey, incidentNotesKey];
+        const sessionList = {
+          activityPulse: {
+            since,
+            until,
+            buckets: [0, 0, 0, 0, 0, 0, 5, 0],
+            sessions: 5,
+            started: 0,
+            people: 3,
+            running: 1,
+          },
+          peopleIncomplete: true,
+          people: [
+            {
+              identity: { type: "profile", id: "profile-alice" },
+              label: "Alice Chen",
+              sessionCount: 3,
+            },
+            {
+              identity: { type: "profile", id: "profile-bob" },
+              label: "Bob Rivera",
+              sessionCount: 2,
+            },
+            {
+              identity: { type: "profile", id: "profile-carol" },
+              label: "Carol Singh",
+              sessionCount: 2,
+            },
+          ],
+          peopleSessionCount: 5,
+          count: 5,
+          creators: [
+            { id: "profile-alice", label: "Alice Chen" },
+            { id: "profile-bob", label: "Bob Rivera" },
+            { id: "profile-carol", label: "Carol Singh" },
+          ],
+          defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
+          path: "",
+          sessions: [
+            {
+              key: releaseKey,
+              kind: "direct",
+              displayName: "Release readiness",
+              agentId: "main",
+              channel: "webchat",
+              createdActor: {
+                type: "human",
+                id: "profile-alice",
+                identity: { type: "profile", id: "profile-alice" },
+                label: "Alice Chen",
+              },
+              owner: {
+                actor: {
+                  type: "human",
+                  id: "profile-alice",
+                  identity: { type: "profile", id: "profile-alice" },
+                  label: "Alice Chen",
+                },
+              },
+              participants: [
+                { identity: { type: "profile", id: "profile-bob" }, label: "Bob Rivera" },
+              ],
+              activeRunIds: ["mock run:a/b"],
+              hasActiveRun: true,
+              observerDigest: {
+                headline: "Waiting on a fictional mock approval",
+                health: "waiting-on-user",
+                revision: 1,
+                runId: "mock run:a/b",
+                updatedAt: now - 4 * 60_000,
+              },
+              status: "running",
+              updatedAt: now - 4 * 60_000,
+            },
+            {
+              key: designKey,
+              kind: "direct",
+              displayName: "Control UI design review",
+              agentId: "main",
+              createdActor: {
+                type: "human",
+                id: "profile-bob",
+                identity: { type: "profile", id: "profile-bob" },
+                label: "Bob Rivera",
+              },
+              owner: {
+                actor: {
+                  type: "human",
+                  id: "profile-bob",
+                  identity: { type: "profile", id: "profile-bob" },
+                  label: "Bob Rivera",
+                },
+              },
+              createdVia: "cron",
+              participants: [
+                { identity: { type: "profile", id: "profile-alice" }, label: "Alice Chen" },
+              ],
+              hasAutomation: true,
+              updatedAt: now - 42 * 60_000,
+            },
+            {
+              key: gatewayHandoffKey,
+              kind: "direct",
+              displayName: "Gateway handoff",
+              agentId: "main",
+              createdActor: {
+                type: "human",
+                id: "profile-carol",
+                identity: { type: "profile", id: "profile-carol" },
+                label: "Carol Singh",
+              },
+              owner: {
+                actor: {
+                  type: "human",
+                  id: "profile-carol",
+                  identity: { type: "profile", id: "profile-carol" },
+                  label: "Carol Singh",
+                },
+              },
+              createdVia: "cron",
+              hasAutomation: true,
+              updatedAt: now - 2 * 60 * 60_000,
+            },
+            {
+              key: nightlyMaintenanceKey,
+              kind: "direct",
+              displayName: "Nightly mock maintenance",
+              agentId: "main",
+              createdActor: {
+                type: "human",
+                id: "profile-carol",
+                identity: { type: "profile", id: "profile-carol" },
+                label: "Carol Singh",
+              },
+              owner: {
+                actor: {
+                  type: "human",
+                  id: "profile-carol",
+                  identity: { type: "profile", id: "profile-carol" },
+                  label: "Carol Singh",
+                },
+              },
+              createdVia: "cron",
+              hasAutomation: true,
+              updatedAt: now - 3 * 60 * 60_000,
+            },
+            {
+              key: incidentNotesKey,
+              kind: "direct",
+              displayName: "Incident follow-up",
+              agentId: "main",
+              createdActor: {
+                type: "human",
+                id: "profile-alice",
+                identity: { type: "profile", id: "profile-alice" },
+                label: "Alice Chen",
+              },
+              owner: {
+                actor: {
+                  type: "human",
+                  id: "profile-alice",
+                  identity: { type: "profile", id: "profile-alice" },
+                  label: "Alice Chen",
+                },
+              },
+              updatedAt: now - 50 * 60 * 60_000,
+            },
+          ],
+          ts: now,
+        };
         await installMockGateway(page, {
           hasMultipleSessionSharingIdentities: true,
           presenceUsers: [
-            { self: true, id: "profile-self", name: "Operator" },
+            {
+              self: true,
+              id: "profile-self",
+              identity: { type: "profile", id: "profile-self" },
+              name: "Operator",
+            },
             {
               id: "profile-alice",
+              identity: { type: "profile", id: "profile-alice" },
               name: "Alice Chen",
               email: "alice@example.test",
               host: "Alice's MacBook Pro",
               platform: "macOS 26.5",
               deviceFamily: "Mac",
+              ip: "203.0.113.20",
               lastInputSeconds: 32,
               watchedSessions: [releaseKey, designKey],
             },
             {
               id: "profile-bob",
+              identity: { type: "profile", id: "profile-bob" },
               name: "Bob Rivera",
               email: "bob@example.test",
               host: "Bob's Mac Studio",
@@ -66,12 +270,14 @@ suite.define(() => {
             },
             {
               id: "profile-carol",
+              identity: { type: "profile", id: "profile-carol" },
               name: "Carol Singh",
               lastInputSeconds: 14,
               watchedSessions: [releaseKey],
             },
             {
               id: "profile-dan",
+              identity: { type: "profile", id: "profile-dan" },
               name: "Dan Wu",
               lastInputSeconds: 70,
               watchedSessions: [designKey],
@@ -79,91 +285,29 @@ suite.define(() => {
           ],
           methodResponses: {
             "sessions.list": {
-              count: 5,
-              creators: [
-                { id: "profile-alice", label: "Alice Chen" },
-                { id: "profile-bob", label: "Bob Rivera" },
-                { id: "profile-carol", label: "Carol Singh" },
+              cases: [
+                {
+                  match: { involvingProfileId: "profile-carol" },
+                  response: {
+                    ...sessionList,
+                    count: 2,
+                    sessions: sessionList.sessions.filter((row) =>
+                      [gatewayHandoffKey, nightlyMaintenanceKey].includes(row.key),
+                    ),
+                  },
+                },
+                {
+                  match: { involvingProfileId: "profile-alice" },
+                  response: {
+                    ...sessionList,
+                    count: 3,
+                    sessions: sessionList.sessions.filter((row) =>
+                      [releaseKey, designKey, incidentNotesKey].includes(row.key),
+                    ),
+                  },
+                },
+                { response: sessionList },
               ],
-              defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
-              path: "",
-              sessions: [
-                {
-                  key: releaseKey,
-                  kind: "direct",
-                  displayName: "Release readiness",
-                  agentId: "main",
-                  channel: "webchat",
-                  createdActor: { type: "human", id: "profile-alice", label: "Alice Chen" },
-                  owner: {
-                    actor: { type: "human", id: "profile-alice", label: "Alice Chen" },
-                  },
-                  participants: [{ type: "human", id: "profile-bob", label: "Bob Rivera" }],
-                  activeRunIds: ["mock run:a/b"],
-                  hasActiveRun: true,
-                  observerDigest: {
-                    headline: "Waiting on a fictional mock approval",
-                    health: "waiting-on-user",
-                    revision: 1,
-                    runId: "mock run:a/b",
-                    updatedAt: now - 4 * 60_000,
-                  },
-                  status: "running",
-                  updatedAt: now - 4 * 60_000,
-                },
-                {
-                  key: designKey,
-                  kind: "direct",
-                  displayName: "Control UI design review",
-                  agentId: "main",
-                  createdActor: { type: "human", id: "profile-bob", label: "Bob Rivera" },
-                  owner: {
-                    actor: { type: "human", id: "profile-bob", label: "Bob Rivera" },
-                  },
-                  createdVia: "cron",
-                  participants: [{ type: "human", id: "profile-alice", label: "Alice Chen" }],
-                  hasAutomation: true,
-                  updatedAt: now - 42 * 60_000,
-                },
-                {
-                  key: gatewayHandoffKey,
-                  kind: "direct",
-                  displayName: "Gateway handoff",
-                  agentId: "main",
-                  createdActor: { type: "human", id: "profile-carol", label: "Carol Singh" },
-                  owner: {
-                    actor: { type: "human", id: "profile-carol", label: "Carol Singh" },
-                  },
-                  createdVia: "cron",
-                  hasAutomation: true,
-                  updatedAt: now - 2 * 60 * 60_000,
-                },
-                {
-                  key: nightlyMaintenanceKey,
-                  kind: "direct",
-                  displayName: "Nightly mock maintenance",
-                  agentId: "main",
-                  createdActor: { type: "human", id: "profile-carol", label: "Carol Singh" },
-                  owner: {
-                    actor: { type: "human", id: "profile-carol", label: "Carol Singh" },
-                  },
-                  createdVia: "cron",
-                  hasAutomation: true,
-                  updatedAt: now - 3 * 60 * 60_000,
-                },
-                {
-                  key: incidentNotesKey,
-                  kind: "direct",
-                  displayName: "Incident follow-up",
-                  agentId: "main",
-                  createdActor: { type: "human", id: "profile-alice", label: "Alice Chen" },
-                  owner: {
-                    actor: { type: "human", id: "profile-alice", label: "Alice Chen" },
-                  },
-                  updatedAt: now - 50 * 60 * 60_000,
-                },
-              ],
-              ts: now,
             },
           },
           sessionKey: releaseKey,
@@ -171,13 +315,17 @@ suite.define(() => {
 
         const response = await page.goto(controlUiSessionUrl(suite.server.baseUrl, releaseKey));
         expect(response?.status()).toBe(200);
-        const onlineToggle = page.getByRole("button", { name: "Online", exact: true });
+        const onlineView = page.locator('[data-navigation-view="online"]');
+        await onlineView.click();
+        await expect.poll(() => onlineView.getAttribute("aria-pressed")).toBe("true");
+        const onlineToggle = page
+          .locator(".sidebar-online")
+          .getByRole("button", { name: "Online", exact: true });
         await expect.poll(() => onlineToggle.getAttribute("aria-expanded")).toBe("true");
-        await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(4);
-        await mkdir(outputDir, { recursive: true });
+        await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(5);
         await page.locator(".sidebar").screenshot({
           animations: "disabled",
-          path: path.join(outputDir, "01-sidebar-online-default-open-light.png"),
+          path: path.join(outputDir, "01-sidebar-online-selected-open-light.png"),
         });
 
         await onlineToggle.focus();
@@ -188,10 +336,10 @@ suite.define(() => {
           .poll(() =>
             page.locator(".sidebar-online .viewer-facepile").getAttribute("data-viewer-count"),
           )
-          .toBe("4");
+          .toBe("5");
         await expect
           .poll(() => page.locator(".sidebar-online .viewer-avatar--overflow").textContent())
-          .toContain("+2");
+          .toContain("+3");
         await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
         await page.locator(".sidebar").screenshot({
           animations: "disabled",
@@ -207,22 +355,47 @@ suite.define(() => {
         await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
 
         await page.reload();
+        // View selection is transient. The saved section collapse remains until Online is selected,
+        // and selecting Online deliberately expands its roster.
+        expect(
+          await page.evaluate(() =>
+            JSON.parse(
+              localStorage.getItem("openclaw:sidebar:sessions:collapsed-sections") ?? "[]",
+            ),
+          ),
+        ).toEqual(expect.arrayContaining(["work", "online"]));
+        await onlineView.click();
+        await expect.poll(() => onlineToggle.getAttribute("aria-expanded")).toBe("true");
+        await onlineToggle.focus();
+        await page.keyboard.press("Enter");
         await expect.poll(() => onlineToggle.getAttribute("aria-expanded")).toBe("false");
         await page.emulateMedia({ colorScheme: "dark" });
         await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");
         await page.locator(".sidebar").screenshot({
           animations: "disabled",
-          path: path.join(outputDir, "03-sidebar-online-persisted-collapsed-dark.png"),
+          path: path.join(outputDir, "03-sidebar-online-collapsed-dark.png"),
         });
         await onlineToggle.focus();
         await page.keyboard.press("Space");
         await expect.poll(() => onlineToggle.getAttribute("aria-expanded")).toBe("true");
-        await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(4);
+        await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(5);
         await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
         await page.locator(".sidebar").screenshot({
           animations: "disabled",
           path: path.join(outputDir, "04-sidebar-online-user-expanded-dark.png"),
         });
+
+        await page.evaluate(
+          ({ gatewayUrl }) => {
+            localStorage.setItem(
+              `openclaw.control.settings.v1:${gatewayUrl}`,
+              JSON.stringify({ gatewayUrl, theme: "dash", themeMode: "dark" }),
+            );
+          },
+          { gatewayUrl: controlUiBundledGatewayUrl(suite.server.baseUrl) },
+        );
+        await page.reload();
+        await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe("dash");
 
         await page.evaluate(() => {
           const app = document.querySelector("openclaw-app") as HTMLElement & {
@@ -233,13 +406,19 @@ suite.define(() => {
         await waitForControlUiRoute(page, { pathname: "/activity", routeId: "activity" });
         const activityPage = page.locator("openclaw-activity-page");
         await expect.poll(() => activityPage.count()).toBe(1);
-        const titleLeft = await activityPage
-          .locator(".page-title")
+        await activityPage.locator(".activity-pulse__bars").waitFor();
+        expect(await activityPage.locator(".activity-pulse__bars > span").count()).toBe(
+          sessionList.activityPulse.buckets.length,
+        );
+        // The title sits centered in the toolbar row; the intro copy and the
+        // mode tabs share the content's left edge below it.
+        const introLeft = await activityPage
+          .locator(".page-sub")
           .evaluate((element) => element.getBoundingClientRect().left);
         const tabsLeft = await activityPage
           .locator(".activity-mode-tabs")
           .evaluate((element) => element.getBoundingClientRect().left);
-        expect(Math.abs(titleLeft - tabsLeft)).toBeLessThanOrEqual(8);
+        expect(Math.abs(introLeft - tabsLeft)).toBeLessThanOrEqual(8);
         await activityPage.locator(".activity-feed__people-trigger").click();
         await expect
           .poll(() =>
@@ -250,6 +429,15 @@ suite.define(() => {
               .count(),
           )
           .toBe(3);
+        const peoplePopover = activityPage.locator("wa-popover.activity-feed__people-popover");
+        const peoplePaint = await readThemedPopupPaint(peoplePopover, "body");
+        if (proofPhase) {
+          await page.screenshot({
+            animations: "disabled",
+            path: path.join(outputDir, `05-people-menu-${proofPhase}.png`),
+          });
+        }
+        expect(peoplePaint.actual).toEqual(peoplePaint.expected);
         await page.keyboard.press("Escape");
         const activityFeed = activityPage.locator(".activity-feed");
         const activitySession = (key: string) =>
@@ -305,13 +493,15 @@ suite.define(() => {
           path: path.join(outputDir, "05-global-activity.png"),
         });
 
+        await onlineView.click();
         await page.locator('[data-online-user-id="profile-alice"]').click();
-        await expect
-          .poll(() => new URL(page.url()).searchParams.get("person"))
-          .toBe("profile-alice");
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/activity/profile-alice");
         await expect
           .poll(() => activityPage.locator('[data-activity-identity="profile-alice"]').isVisible())
           .toBe(true);
+        const attributionIcon = activityPage.locator(".activity-feed__device-attribution");
+        await expect.poll(() => attributionIcon.locator("svg").count()).toBe(1);
+        await expect.poll(async () => (await attributionIcon.boundingBox())?.width).toBe(16);
         await expect
           .poll(() =>
             activityPage.locator(".activity-feed__viewing-list .activity-feed__session").count(),
@@ -323,12 +513,10 @@ suite.define(() => {
         });
 
         await activityPage.locator(".activity-feed__people-clear").click();
-        await expect.poll(() => new URL(page.url()).searchParams.get("person")).toBeNull();
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/activity");
         await activityPage.locator(".activity-feed__people-trigger").click();
         await activityPage.locator('[data-activity-person="profile-carol"]').click();
-        await expect
-          .poll(() => new URL(page.url()).searchParams.get("person"))
-          .toBe("profile-carol");
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/activity/profile-carol");
         await expect.poll(() => activitySession(nightlyMaintenanceKey).count()).toBe(1);
         await expect
           .poll(() =>
@@ -343,7 +531,7 @@ suite.define(() => {
         });
 
         await activityPage.locator(".activity-feed__people-clear").click();
-        await expect.poll(() => new URL(page.url()).searchParams.get("person")).toBeNull();
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/activity");
         await page.setViewportSize({ height: 844, width: 390 });
 
         const peopleControl = activityPage.locator(".activity-feed__people-control");
@@ -352,14 +540,19 @@ suite.define(() => {
           .evaluateAll((buttons) =>
             buttons.map((button) => Math.round(button.getBoundingClientRect().top)),
           );
-        const [timeFilterBox, peopleControlBox] = await Promise.all([
-          timeFilter.boundingBox(),
-          peopleControl.boundingBox(),
-        ]);
         expect(new Set(timeButtonTops)).toHaveLength(1);
-        expect(timeFilterBox).not.toBeNull();
-        expect(peopleControlBox).not.toBeNull();
-        expect(Math.abs(timeFilterBox!.y - peopleControlBox!.y)).toBeLessThan(2);
+        await expect
+          .poll(async () => {
+            const [timeFilterBox, peopleControlBox] = await Promise.all([
+              timeFilter.boundingBox(),
+              peopleControl.boundingBox(),
+            ]);
+            if (!timeFilterBox || !peopleControlBox) {
+              return Number.POSITIVE_INFINITY;
+            }
+            return Math.abs(timeFilterBox.y - peopleControlBox.y);
+          })
+          .toBeLessThan(2);
         const automationGroupChildTops = await automationGroup
           .locator(":scope > *")
           .evaluateAll((children) =>
@@ -379,9 +572,7 @@ suite.define(() => {
         ).toEqual({ backgroundColor: "rgba(0, 0, 0, 0)", borderTopWidth: "0px" });
         await activityPage.locator(".activity-feed__people-trigger").click();
         await activityPage.locator('[data-activity-person="profile-carol"]').click();
-        await expect
-          .poll(() => new URL(page.url()).searchParams.get("person"))
-          .toBe("profile-carol");
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/activity/profile-carol");
         await expect.poll(() => activitySession(nightlyMaintenanceKey).count()).toBe(1);
         await expect
           .poll(() => activityFeed.locator('[data-activity-created-via="cron"]').count())

@@ -1,12 +1,13 @@
 // Xai tests cover model id plugin behavior.
 import { describe, expect, it } from "vitest";
-import { normalizeXaiModelId } from "./api.js";
+import { normalizeXaiModelId } from "./model-id.js";
 
 describe("normalizeXaiModelId", () => {
   it("normalizes family-specific aliases but preserves the global alias", () => {
     expect(normalizeXaiModelId("grok-4.3-latest")).toBe("grok-4.3");
     expect(normalizeXaiModelId("grok-latest")).toBe("grok-latest");
     expect(normalizeXaiModelId("grok-4.5-latest")).toBe("grok-4.5");
+    expect(normalizeXaiModelId("grok-4.7-latest")).toBe("grok-4.7");
   });
 
   it("normalizes the current Grok Build alias", () => {

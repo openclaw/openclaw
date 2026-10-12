@@ -3,138 +3,78 @@
 // Kept apart from the active-events reader so cache validation stays a
 // dependency-light import for gateway callers.
 import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
+  createSqliteQueryCache,
   getNodeSqliteKysely,
+  prepareSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
-import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
-  openOpenClawAgentDatabase,
-  type OpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+  withOpenClawAgentDatabaseReadOnly,
+  type OpenClawAgentReadOnlyDatabase,
+} from "../../state/openclaw-agent-db-readonly.js";
+import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.sqlite-contract.js";
 import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
-  type SessionSqliteTargetResolutionCache,
 } from "./session-accessor.sqlite-scope.js";
+import type { SessionTranscriptWatermark } from "./session-accessor.sqlite-transcript-watermark-read.js";
+import { readSessionActorTransactionState } from "./session-actor-transaction.js";
+import { readTranscriptContextFacts } from "./session-transcript-context-facts.js";
 
-type WatermarkDatabase = Pick<
-  OpenClawAgentKyselyDatabase,
-  "session_windows" | "transcript_events" | "transcript_rewrite_watermarks"
->;
+const retainedWatermarkQuery = createSqliteQueryCache((database) => {
+  const db = getNodeSqliteKysely<DB>(database);
+  return prepareSqliteQueryTakeFirstSync<
+    string,
+    { generation: string | null; max_seq: number | null }
+  >(database, (parameter) => {
+    const sessionId = parameter((value) => value);
+    return db.selectNoFrom((eb) => [
+      eb.fn
+        .coalesce(
+          eb
+            .selectFrom("session_transcript_cold_archives")
+            .select("last_seq")
+            .where("session_id", "=", sessionId),
+          eb
+            .selectFrom("transcript_events")
+            .select((inner) => inner.fn.max<number>("seq").as("max_seq"))
+            .where("session_id", "=", sessionId),
+        )
+        .as("max_seq"),
+      eb
+        .selectFrom("transcript_rewrite_watermarks")
+        .select("generation")
+        .where("session_id", "=", sessionId)
+        .as("generation"),
+    ]);
+  });
+});
 
-export type SessionTranscriptWatermark = {
-  generation: string | null;
-  maxSeq: number | null;
-};
-
-const SESSION_TRANSCRIPT_WATERMARK_QUERY_CHUNK_SIZE = 400;
+/** Read hot generation and retained cold position together on the admitted snapshot. */
+export function readSessionTranscriptWatermarkInDatabase(
+  database: OpenClawAgentReadOnlyDatabase,
+  sessionId: string,
+): SessionTranscriptWatermark {
+  const actor = readSessionActorTransactionState(database, { sessionId });
+  if (actor) {
+    return { ...actor.hot.transcript.watermark };
+  }
+  const context = readTranscriptContextFacts(database, sessionId);
+  if (context) {
+    return { generation: context.version.generation, maxSeq: context.version.rawSeq };
+  }
+  const row = retainedWatermarkQuery(database.db)(sessionId);
+  return { generation: row?.generation ?? null, maxSeq: row?.max_seq ?? null };
+}
 
 /** Reads the append and rewrite tokens that validate transcript-derived caches. */
 export function readSessionTranscriptWatermark(
   scope: SessionTranscriptReadScope,
 ): SessionTranscriptWatermark {
   const resolved = resolveSqliteTranscriptReadScope(scope);
-  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  const db = getNodeSqliteKysely<WatermarkDatabase>(database.db);
-  const maxSeq = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db
-      .selectFrom("transcript_events")
-      .select((eb) => eb.fn.max<number>("seq").as("max_seq"))
-      .where("session_id", "=", resolved.sessionId),
-  )?.max_seq;
-  const generation = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db
-      .selectFrom("transcript_rewrite_watermarks")
-      .select("generation")
-      .where("session_id", "=", resolved.sessionId),
-  )?.generation;
-  return { generation: generation ?? null, maxSeq: maxSeq ?? null };
-}
-
-function readSessionTranscriptWatermarkChunk(
-  database: OpenClawAgentDatabase,
-  sessionIds: readonly string[],
-): Map<string, SessionTranscriptWatermark> {
-  const db = getNodeSqliteKysely<WatermarkDatabase>(database.db);
-  const rows = executeSqliteQuerySync(
-    database.db,
-    db
-      .selectFrom("session_windows as window")
-      .leftJoin(
-        "transcript_rewrite_watermarks as rewrite",
-        "rewrite.session_id",
-        "window.session_id",
-      )
-      .select((eb) => [
-        "window.session_id",
-        "rewrite.generation",
-        eb
-          .selectFrom("transcript_events as event")
-          .select((inner) => inner.fn.max<number>("event.seq").as("max_seq"))
-          .whereRef("event.session_id", "=", "window.session_id")
-          .as("max_seq"),
-      ])
-      .where("window.session_id", "in", sessionIds),
-  ).rows;
-  return new Map(
-    rows.map((row) => [
-      row.session_id,
-      {
-        generation: row.generation ?? null,
-        maxSeq: row.max_seq ?? null,
-      },
-    ]),
+  const result = withOpenClawAgentDatabaseReadOnly(
+    (database) => readSessionTranscriptWatermarkInDatabase(database, resolved.sessionId),
+    toDatabaseOptions(resolved),
   );
-}
-
-/** Reads cache-validation tokens in one statement per opened store and SQLite-sized chunk. */
-export function readSessionTranscriptWatermarkBatch(
-  scopes: readonly SessionTranscriptReadScope[],
-): SessionTranscriptWatermark[] {
-  const results: Array<SessionTranscriptWatermark | undefined> = Array.from({
-    length: scopes.length,
-  });
-  const groups = new Map<
-    string,
-    { database: OpenClawAgentDatabase; items: Array<{ index: number; sessionId: string }> }
-  >();
-  const targetCache: SessionSqliteTargetResolutionCache = new Map();
-  for (const [index, scope] of scopes.entries()) {
-    const resolved = resolveSqliteTranscriptReadScope(scope, targetCache);
-    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-    const group = groups.get(database.path) ?? { database, items: [] };
-    group.items.push({ index, sessionId: resolved.sessionId });
-    groups.set(database.path, group);
-  }
-  for (const group of groups.values()) {
-    const sessionIds = [...new Set(group.items.map((item) => item.sessionId))];
-    const watermarks = new Map<string, SessionTranscriptWatermark>();
-    for (
-      let offset = 0;
-      offset < sessionIds.length;
-      offset += SESSION_TRANSCRIPT_WATERMARK_QUERY_CHUNK_SIZE
-    ) {
-      const chunk = sessionIds.slice(
-        offset,
-        offset + SESSION_TRANSCRIPT_WATERMARK_QUERY_CHUNK_SIZE,
-      );
-      for (const [sessionId, watermark] of readSessionTranscriptWatermarkChunk(
-        group.database,
-        chunk,
-      )) {
-        watermarks.set(sessionId, watermark);
-      }
-    }
-    for (const item of group.items) {
-      results[item.index] = watermarks.get(item.sessionId) ?? {
-        generation: null,
-        maxSeq: null,
-      };
-    }
-  }
-  return results.map((result) => result ?? { generation: null, maxSeq: null });
+  return result.found ? result.value : { generation: null, maxSeq: null };
 }

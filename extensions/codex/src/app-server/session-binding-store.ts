@@ -1,29 +1,28 @@
-/** Lazy store facade that keeps binding schema/auth code off plugin startup. */
-import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+/** Binding reads with lazy mutation, lease, and auth machinery. */
 import {
   createCodexManagedThreadStore,
   type CodexManagedThreadStore,
-  type StoredCodexManagedThread,
 } from "./managed-thread-store.js";
 import {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
   CODEX_APP_SERVER_BINDING_NAMESPACE,
 } from "./session-binding-meta.js";
-import type { CodexAppServerBindingStore, StoredCodexAppServerBinding } from "./session-binding.js";
+import {
+  readCurrentNativePendingAssignments,
+  readCurrentCodexAppServerBinding,
+  readCurrentCodexAppServerBindingAsync,
+  readCurrentCodexAppServerBindings,
+  readCurrentCodexNativeSubagentSubmissions,
+} from "./session-binding-record.js";
+import type { CodexAppServerBindingStore, CodexBindingStateStore } from "./session-binding.js";
 
 export { CODEX_APP_SERVER_BINDING_MAX_ENTRIES, CODEX_APP_SERVER_BINDING_NAMESPACE };
 export type { StoredCodexAppServerBinding } from "./session-binding.js";
 
-/** Defers schema compilation and auth loading until the first binding operation. */
+/** Keeps lifecycle/auth loading behind mutations while sharing the canonical read codec. */
 export function createLazyCodexAppServerBindingStore(
-  state: Pick<
-    PluginStateSyncKeyedStore<StoredCodexAppServerBinding>,
-    "entries" | "lookup" | "update"
-  >,
-  managedThreadState?: Pick<
-    PluginStateSyncKeyedStore<StoredCodexManagedThread>,
-    "entries" | "registerIfAbsent"
-  >,
+  state: CodexBindingStateStore,
+  managedThreadState?: Parameters<typeof createCodexManagedThreadStore>[0],
 ): CodexAppServerBindingStore {
   let resolved: Promise<CodexAppServerBindingStore> | undefined;
   const store = () =>
@@ -35,17 +34,26 @@ export function createLazyCodexAppServerBindingStore(
     : undefined;
   return {
     ...(managedThreads ? { managedThreads } : {}),
-    read: async (identity) => (await store()).read(identity),
+    read: (identity) => readCurrentCodexAppServerBinding(state, identity),
+    readAsync: (identity) => readCurrentCodexAppServerBindingAsync(state.asyncReads, identity),
+    readMany: (identities) => readCurrentCodexAppServerBindings(state.asyncReads, identities),
+    readNativeSubagentAssignments: (identity, owner) =>
+      readCurrentNativePendingAssignments(state.asyncReads, identity, owner),
+    readNativeSubagentSubmissions: (identity, owner) =>
+      readCurrentCodexNativeSubagentSubmissions(state.asyncReads, identity, owner),
     hasOtherThreadOwner: async (threadId, currentIdentity) =>
       (await store()).hasOtherThreadOwner(threadId, currentIdentity),
-    mutate: async (identity, mutation) => (await store()).mutate(identity, mutation),
+    mutate: async (identity, mutation, assertCurrent, authority) =>
+      (await store()).mutate(identity, mutation, assertCurrent, authority),
     prepareSessionGenerationReclaim: async (identity) =>
       (await store()).prepareSessionGenerationReclaim(identity),
-    adoptSessionGeneration: async (identity, previousSessionId) =>
-      (await store()).adoptSessionGeneration(identity, previousSessionId),
+    adoptSessionGeneration: async (identity, previousSessionId, assertCurrent, authority) =>
+      (await store()).adoptSessionGeneration(identity, previousSessionId, assertCurrent, authority),
     resetSessionGeneration: async (identity) => (await store()).resetSessionGeneration(identity),
     retireSessionGeneration: async (identity) => (await store()).retireSessionGeneration(identity),
+    withSessionDeletion: async (identity, assertCurrent, run) =>
+      (await store()).withSessionDeletion(identity, assertCurrent, run),
     withThreadArchiveFence: async (run) => (await store()).withThreadArchiveFence(run),
-    withLease: async (identity, run) => (await store()).withLease(identity, run),
+    withLease: async (identity, run, options) => (await store()).withLease(identity, run, options),
   };
 }

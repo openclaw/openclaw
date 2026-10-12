@@ -1,26 +1,23 @@
-// Provider catalog helpers normalize, hash, and expose model catalogs for provider plugins.
 import { createHash } from "node:crypto";
-import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
-import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
-import type {
-  ModelCatalogCost,
-  ModelCatalogMediaInputConfig,
-  ModelCatalogModel,
-  ModelCatalogTieredCost,
-} from "@openclaw/model-catalog-core/model-catalog-types";
+import { addAbortListener } from "node:events";
 import { findNormalizedProviderKey } from "@openclaw/model-catalog-core/provider-id";
 import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "../../packages/normalization-core/src/number-coercion.js";
-import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
 import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import type { ProviderPlugin } from "../plugins/types.js";
+import {
+  consumeLiveCatalogRefresh,
+  recordLiveCatalogExpiry,
+} from "../plugins/provider-catalog-expiry.js";
+import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import type { ModelProviderConfig } from "./provider-model-shared.js";
+
+export { normalizeOpenRouterModelReasoning } from "@openclaw/model-catalog-core/model-catalog-normalize";
 
 export type {
   ProviderCatalogContext,
@@ -28,10 +25,16 @@ export type {
   ProviderCatalogResult,
 } from "../plugins/types.js";
 
+export { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
+
 export {
-  buildPairedProviderApiKeyCatalog,
+  buildManifestModelProviderConfig,
+  buildManifestProviderCatalogFamily,
   buildSingleProviderApiKeyCatalog,
   findCatalogTemplate,
+  readManifestProviderDefaultModelRef,
+  resolveFirstProviderCatalogAuth,
+  type ManifestProviderCatalogEntry,
 } from "../plugins/provider-catalog.js";
 
 /**
@@ -55,62 +58,156 @@ export type ConfiguredProviderCatalogEntry = {
 type LiveCatalogCacheEntry<T> = {
   expiresAt: number;
   value: Promise<T>;
+  controller: AbortController;
+  consumers: number;
+  settled: boolean;
+  retained: boolean;
+  waiters?: Set<Deferred<T>>;
 };
 
 const LIVE_CATALOG_CACHE_MAX_ENTRIES = 100;
-const liveCatalogCache = new Map<string, LiveCatalogCacheEntry<unknown>>();
+const liveCatalogCache = new Map<string, unknown>();
+
+async function consumeLiveCatalog<T>(entry: LiveCatalogCacheEntry<T>, signal?: AbortSignal) {
+  signal?.throwIfAborted();
+  entry.controller.signal.throwIfAborted();
+  entry.consumers += 1;
+  const pending = signal && !entry.settled ? createDeferredCore<T>() : undefined;
+  if (pending) {
+    (entry.waiters ??= new Set()).add(pending);
+  }
+  let released = false;
+  const release = () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    if (pending) {
+      entry.waiters?.delete(pending);
+    }
+    entry.consumers -= 1;
+    // A shared load belongs to all its callers, never the first caller's deadline.
+    if (!entry.settled && entry.consumers === 0) {
+      entry.controller.abort(signal?.reason);
+    }
+  };
+  let listener: Disposable | undefined;
+  try {
+    if (signal && pending) {
+      // Match throwIfAborted(): cancellation preserves arbitrary caller-owned reasons.
+      listener = addAbortListener(signal, () => {
+        // Release before a same-turn completion can retain an abandoned load.
+        release();
+        pending.reject(signal.reason);
+      });
+    }
+    // Promise.race keeps a canceled caller's reactions until the shared load settles.
+    // Removable waiters release its reason and async context while other callers wait.
+    const value = await (pending?.promise ?? entry.value);
+    if (entry.retained) {
+      recordLiveCatalogExpiry(entry.expiresAt);
+    }
+    return value;
+  } finally {
+    listener?.[Symbol.dispose]();
+    release();
+  }
+}
 
 function buildLiveCatalogCacheKey(parts: readonly unknown[]): string {
   return createHash("sha256").update(JSON.stringify(parts)).digest("hex");
 }
 
 /**
- * Caches one live catalog load promise by stable key parts for a short TTL.
+ * Shares pending loads and caches successful values for a short TTL after completion.
  */
 export async function getCachedLiveCatalogValue<T>(params: {
   /** Stable JSON-serializable values that identify one provider/config catalog load. */
   keyParts: readonly unknown[];
   /** Loader for the live catalog value when no fresh cache entry exists. */
-  load: () => Promise<T>;
+  load: (signal?: AbortSignal) => Promise<T>;
+  /** Cancels this consumer; shared I/O stops only when its last consumer leaves. */
+  signal?: AbortSignal;
   /** Optional predicate for values that are healthy enough to retain. */
   shouldCache?: (value: T) => boolean;
-  /** Cache lifetime in milliseconds; defaults to a short provider-discovery TTL. */
+  /** Successful-value cache lifetime in milliseconds; defaults to a short discovery TTL. */
   ttlMs?: number;
   /** Test hook for deterministic cache expiry. */
   now?: () => number;
 }): Promise<T> {
+  params.signal?.throwIfAborted();
   const rawNow = params.now?.() ?? Date.now();
   const ttlMs = params.ttlMs ?? 30_000;
+  const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: rawNow });
+  // Uncached callers must neither reuse nor disturb an existing entry.
+  if (expiresAt === undefined) {
+    return await params.load(params.signal);
+  }
   const key = buildLiveCatalogCacheKey(params.keyParts);
+  const refresh = consumeLiveCatalogRefresh(key);
   const existing = liveCatalogCache.get(key) as LiveCatalogCacheEntry<T> | undefined;
   if (existing) {
-    if (isFutureDateTimestampMs(existing.expiresAt, { nowMs: rawNow })) {
-      return await existing.value;
+    // An abandoned load may ignore abort; a new caller must not inherit its cancellation.
+    if (
+      !existing.controller.signal.aborted &&
+      (!refresh || !existing.settled) &&
+      isFutureDateTimestampMs(existing.expiresAt, { nowMs: rawNow })
+    ) {
+      return await consumeLiveCatalog(existing, params.signal);
     }
     liveCatalogCache.delete(key);
   }
-  const value = params.load();
-  const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: rawNow });
-  if (expiresAt !== undefined) {
-    // Auth-scoped live provider catalogs can vary by token; keep this
-    // process-local cache bounded so discovery cannot grow without limit.
-    pruneMapToMaxSize(liveCatalogCache, LIVE_CATALOG_CACHE_MAX_ENTRIES - 1);
-    liveCatalogCache.set(key, {
-      expiresAt,
-      value,
-    });
-  }
-  try {
-    const resolved = await value;
-    if (params.shouldCache && !params.shouldCache(resolved)) {
-      liveCatalogCache.delete(key);
+  const completion = createDeferredCore<T>();
+  // Signaled callers observe their own waiter; an abandoned shared rejection still needs an owner.
+  void completion.promise.catch(() => undefined);
+  const entry: LiveCatalogCacheEntry<T> = {
+    expiresAt,
+    controller: new AbortController(),
+    consumers: 0,
+    settled: false,
+    retained: false,
+    value: completion.promise,
+  };
+  // Auth-scoped catalogs vary by token. Bound retained entries without rejecting
+  // new catalogs or canceling consumers of an evicted load.
+  pruneMapToMaxSize(liveCatalogCache, LIVE_CATALOG_CACHE_MAX_ENTRIES - 1);
+  liveCatalogCache.set(key, entry);
+  const consumed = consumeLiveCatalog(entry, params.signal);
+  void (async () => {
+    let retain = false;
+    try {
+      entry.controller.signal.throwIfAborted();
+      const resolved = await params.load(entry.controller.signal);
+      retain = !entry.controller.signal.aborted && (params.shouldCache?.(resolved) ?? true);
+      if (retain) {
+        // A slow success gets a complete TTL without reviving an evicted entry.
+        const completedExpiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, {
+          nowMs: params.now?.() ?? Date.now(),
+        });
+        retain = completedExpiresAt !== undefined;
+        if (completedExpiresAt !== undefined) {
+          entry.expiresAt = completedExpiresAt;
+        }
+      }
+      completion.resolve(resolved);
+      for (const waiter of entry.waiters ?? []) {
+        waiter.resolve(resolved);
+      }
+    } catch (error) {
+      completion.reject(error);
+      for (const waiter of entry.waiters ?? []) {
+        waiter.reject(error);
+      }
+    } finally {
+      entry.waiters = undefined;
+      entry.retained = retain;
+      entry.settled = true;
+      if (!retain && liveCatalogCache.get(key) === entry) {
+        liveCatalogCache.delete(key);
+      }
     }
-    return resolved;
-  } catch (err) {
-    // Failed live discovery should not poison later retries for the same provider/config.
-    liveCatalogCache.delete(key);
-    throw err;
-  }
+  })();
+  return await consumed;
 }
 
 /**
@@ -118,224 +215,6 @@ export async function getCachedLiveCatalogValue<T>(params: {
  */
 export function clearLiveCatalogCacheForTests(): void {
   liveCatalogCache.clear();
-}
-
-function countRawManifestCatalogModels(catalog: unknown): number | undefined {
-  if (!catalog || typeof catalog !== "object") {
-    return undefined;
-  }
-  const models = (catalog as { models?: unknown }).models;
-  return Array.isArray(models) ? models.length : undefined;
-}
-
-/** Reads a provider's normalized manifest default as a fully qualified model ref. */
-export function readManifestProviderDefaultModelRef(
-  manifest: unknown,
-  providerId: string,
-): string | undefined {
-  const catalog = (manifest as { modelCatalog?: { providers?: Record<string, unknown> } })
-    ?.modelCatalog?.providers?.[providerId];
-  const defaultModel = normalizeOptionalString(
-    (catalog as { defaultModel?: unknown })?.defaultModel,
-  );
-  return defaultModel ? buildModelCatalogRef(providerId, defaultModel) : undefined;
-}
-
-function cloneManifestCatalogTieredCost(
-  tier: ModelCatalogTieredCost,
-): NonNullable<ModelDefinitionConfig["cost"]["tieredPricing"]>[number] {
-  return {
-    input: tier.input,
-    output: tier.output,
-    cacheRead: tier.cacheRead,
-    cacheWrite: tier.cacheWrite,
-    range: tier.range.length === 1 ? [tier.range[0]] : [tier.range[0], tier.range[1]],
-  };
-}
-
-function cloneManifestCatalogCost(cost: ModelCatalogCost): ModelDefinitionConfig["cost"] {
-  return {
-    input: cost.input ?? 0,
-    output: cost.output ?? 0,
-    cacheRead: cost.cacheRead ?? 0,
-    cacheWrite: cost.cacheWrite ?? 0,
-    ...(cost.tieredPricing
-      ? { tieredPricing: cost.tieredPricing.map(cloneManifestCatalogTieredCost) }
-      : {}),
-  };
-}
-
-function buildManifestCatalogModelInput(model: ModelCatalogModel): ModelDefinitionConfig["input"] {
-  if (model.input?.includes("document")) {
-    throw new Error(
-      `Manifest modelCatalog row ${model.id} uses unsupported runtime input document`,
-    );
-  }
-  return model.input?.filter((item): item is "text" | "image" => item !== "document") ?? ["text"];
-}
-
-function cloneManifestCatalogMediaInput(
-  mediaInput?: ModelCatalogMediaInputConfig,
-): ModelDefinitionConfig["mediaInput"] | undefined {
-  if (!mediaInput?.image) {
-    return undefined;
-  }
-  return {
-    image: { ...mediaInput.image },
-  };
-}
-
-function buildManifestCatalogModel(
-  providerId: string,
-  model: ModelCatalogModel,
-): ModelDefinitionConfig {
-  if (model.contextWindow === undefined) {
-    throw new Error(`Manifest modelCatalog row ${model.id} is missing contextWindow`);
-  }
-  if (model.maxTokens === undefined) {
-    throw new Error(`Manifest modelCatalog row ${model.id} is missing maxTokens`);
-  }
-  const id = normalizeConfiguredProviderCatalogModelId(providerId, model.id, {
-    allowManifestNormalization: false,
-  });
-  return {
-    id,
-    name: model.name ?? id,
-    ...(model.api ? { api: model.api } : {}),
-    ...(model.baseUrl ? { baseUrl: model.baseUrl } : {}),
-    reasoning: model.reasoning ?? false,
-    input: buildManifestCatalogModelInput(model),
-    cost: cloneManifestCatalogCost(model.cost ?? {}),
-    contextWindow: model.contextWindow,
-    ...(model.contextTokens !== undefined ? { contextTokens: model.contextTokens } : {}),
-    maxTokens: model.maxTokens,
-    ...(model.thinkingLevelMap ? { thinkingLevelMap: { ...model.thinkingLevelMap } } : {}),
-    ...(model.headers ? { headers: { ...model.headers } } : {}),
-    ...(model.compat ? { compat: { ...model.compat } } : {}),
-    ...(model.mediaInput ? { mediaInput: cloneManifestCatalogMediaInput(model.mediaInput) } : {}),
-  };
-}
-
-/**
- * Converts a plugin manifest modelCatalog provider into runtime provider config.
- */
-export function buildManifestModelProviderConfig(params: {
-  /** Provider id that owns the manifest catalog rows. */
-  providerId: string;
-  /** Raw manifest modelCatalog provider block to normalize into runtime config. */
-  catalog: unknown;
-}): ModelProviderConfig {
-  const catalog = normalizeModelCatalog(
-    { providers: { [params.providerId]: params.catalog } },
-    { ownedProviders: new Set([params.providerId]) },
-  )?.providers?.[params.providerId];
-  if (!catalog) {
-    throw new Error(`Missing modelCatalog.providers.${params.providerId}`);
-  }
-  if (!catalog.baseUrl) {
-    throw new Error(`Missing modelCatalog.providers.${params.providerId}.baseUrl`);
-  }
-  const rawModelCount = countRawManifestCatalogModels(params.catalog);
-  if (rawModelCount !== undefined && rawModelCount !== catalog.models.length) {
-    throw new Error(`Invalid modelCatalog.providers.${params.providerId}.models`);
-  }
-  return {
-    baseUrl: catalog.baseUrl,
-    ...(catalog.api ? { api: catalog.api } : {}),
-    ...(catalog.headers ? { headers: { ...catalog.headers } } : {}),
-    models: catalog.models.map((model) => buildManifestCatalogModel(params.providerId, model)),
-  };
-}
-
-export type ManifestProviderCatalogSurface = {
-  id: string;
-  label: string;
-  catalog: unknown;
-};
-
-export type ManifestProviderCatalogEntry = {
-  id: string;
-  label: string;
-  baseUrl: string;
-  models: ModelProviderConfig["models"];
-  buildProvider: () => ModelProviderConfig;
-};
-
-/** Projects an ordered family of manifest catalogs into static provider and model surfaces. */
-export function buildManifestProviderCatalogFamily(params: {
-  surfaces: readonly ManifestProviderCatalogSurface[];
-  docsPath?: string;
-}) {
-  const entries: ManifestProviderCatalogEntry[] = params.surfaces.map((surface) => {
-    const buildProvider = () =>
-      buildManifestModelProviderConfig({
-        providerId: surface.id,
-        catalog: surface.catalog,
-      });
-    const provider = buildProvider();
-    return {
-      id: surface.id,
-      label: surface.label,
-      baseUrl: provider.baseUrl,
-      models: provider.models,
-      buildProvider,
-    };
-  });
-  const staticDiscovery: ProviderPlugin[] = entries.map(({ id, label, buildProvider }) => ({
-    id,
-    label,
-    docsPath: params.docsPath ?? "/providers/models",
-    auth: [],
-    staticCatalog: {
-      order: "simple",
-      run: async () => ({ provider: buildProvider() }),
-    },
-  }));
-
-  return {
-    entries,
-    staticDiscovery,
-    staticCatalog: async () => ({
-      providers: Object.fromEntries(entries.map(({ id, buildProvider }) => [id, buildProvider()])),
-    }),
-    augmentModelCatalog: () =>
-      entries.flatMap(({ id: provider, models }) =>
-        models.map((entry) => ({
-          provider,
-          id: entry.id,
-          name: entry.name,
-          reasoning: entry.reasoning,
-          input: [...entry.input],
-          contextWindow: entry.contextWindow,
-        })),
-      ),
-  };
-}
-
-/** Builds one normalized runtime model row from a provider manifest catalog entry. */
-export function buildManifestModelDefinition(params: {
-  /** Provider id that owns the manifest catalog row. */
-  providerId: string;
-  /** Raw manifest modelCatalog provider block that contains the row. */
-  catalog: unknown;
-  /** Optional provider policy applied after manifest normalization. */
-  decorate?: (model: ModelDefinitionConfig) => ModelDefinitionConfig;
-}): (model: unknown) => ModelDefinitionConfig {
-  if (!params.catalog || typeof params.catalog !== "object" || Array.isArray(params.catalog)) {
-    throw new Error(`Missing modelCatalog.providers.${params.providerId}`);
-  }
-  const catalog = params.catalog;
-  return (rawModel) => {
-    const provider = buildManifestModelProviderConfig({
-      providerId: params.providerId,
-      catalog: { ...catalog, models: [rawModel] },
-    });
-    const model = provider.models[0];
-    if (!model) {
-      throw new Error(`Missing modelCatalog.providers.${params.providerId}.models[0]`);
-    }
-    return params.decorate?.(model) ?? model;
-  };
 }
 
 function normalizeConfiguredCatalogModelInput(

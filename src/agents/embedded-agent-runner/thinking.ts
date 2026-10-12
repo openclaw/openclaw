@@ -1,12 +1,13 @@
-/**
- * Sanitizes reasoning/thinking blocks for replay and recovery.
- */
+import { getEventStreamCompletion } from "@openclaw/ai/internal/runtime";
 import { collectErrorGraphCandidates, formatErrorMessage } from "../../infra/errors.js";
 import type { AssistantMessageEvent } from "../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
+import { runPluginStreamConsumer } from "../../plugins/plugin-instance-scope.js";
+import { captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
 import type { AgentMessage, StreamFn } from "../runtime/index.js";
 import { isAssistantMessageWithContent, isThinkingBlock } from "../thinking-signatures.js";
 import { log } from "./logger.js";
+import { wrapStreamObjectSettlement } from "./run/stream-wrapper.js";
 
 type AssistantContentBlock = Extract<AgentMessage, { role: "assistant" }>["content"][number];
 type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
@@ -21,8 +22,16 @@ type RecoverySessionMeta = {
   onRecoveredAnthropicThinking?: (recovery: AnthropicThinkingRecovery) => void | Promise<void>;
 };
 
+type ThinkingRecoveryRequest = {
+  sessionMeta: RecoverySessionMeta;
+  retry: () => ReturnType<StreamFn>;
+  notify: () => Promise<void>;
+  trackRecovery: ReturnType<typeof captureAsyncWorkTracker>;
+  readNotification: () => Promise<void> | undefined;
+};
+
 const THINKING_BLOCK_ERROR_PATTERN =
-  /(?:thinking|redacted_thinking).*?(?:cannot be modified|signature|invalid|missing|empty|blank)|(?:signature|invalid|missing|empty|blank).*?(?:thinking|redacted_thinking)/i;
+  /(?:thinking|redacted_thinking).*?\b(?:cannot be modified|signature|invalid|missing|empty|blank)\b|\b(?:signature|invalid|missing|empty|blank)\b.*?(?:thinking|redacted_thinking)/i;
 const OMITTED_ASSISTANT_REASONING_TEXT = "[assistant reasoning omitted]";
 
 function isToolCallBlock(block: AssistantContentBlock): boolean {
@@ -33,22 +42,7 @@ function isToolCallBlock(block: AssistantContentBlock): boolean {
   return type === "toolCall" || type === "tool_use" || type === "function_call";
 }
 
-function hasAssistantToolCall(message: AssistantMessage): boolean {
-  return message.content.some((block) => isToolCallBlock(block));
-}
-
-function isToolResultMessage(message: AgentMessage): boolean {
-  return (
-    Boolean(message) &&
-    typeof message === "object" &&
-    (message as { role?: unknown }).role === "toolResult"
-  );
-}
-
 function isSignedThinkingBlock(block: AssistantContentBlock): boolean {
-  if (!isThinkingBlock(block)) {
-    return false;
-  }
   const record = block as {
     type?: unknown;
     signature?: unknown;
@@ -63,24 +57,36 @@ function isSignedThinkingBlock(block: AssistantContentBlock): boolean {
   );
 }
 
-function hasMeaningfulText(block: AssistantContentBlock): boolean {
-  if (!block || typeof block !== "object" || (block as { type?: unknown }).type !== "text") {
-    return false;
+function mapAssistantMessages(
+  messages: AgentMessage[],
+  transform: (message: AssistantMessage, index: number) => AgentMessage,
+): AgentMessage[] {
+  let touched = false;
+  const out: AgentMessage[] = [];
+  for (const [index, message] of messages.entries()) {
+    const next = isAssistantMessageWithContent(message) ? transform(message, index) : message;
+    touched ||= next !== message;
+    out.push(next);
   }
-  return typeof (block as { text?: unknown }).text === "string"
-    ? (block as { text: string }).text.trim().length > 0
-    : false;
+  return touched ? out : messages;
 }
 
-function buildOmittedAssistantReasoningContent(): AssistantContentBlock[] {
-  // Provider converters drop blank text blocks; keep this neutral text non-empty so the assistant turn survives replay.
-  return [{ type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT } as AssistantContentBlock];
+function filterAssistantContent(
+  message: AssistantMessage,
+  keepBlock: (block: AssistantContentBlock) => boolean,
+): AssistantMessage {
+  const content = message.content.filter(keepBlock);
+  return content.length === message.content.length
+    ? message
+    : {
+        ...message,
+        // Provider converters drop blank blocks; preserve the assistant turn with nonempty text.
+        content:
+          content.length > 0 ? content : [{ type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT }],
+      };
 }
 
 function hasReplayableThinkingSignature(block: AssistantContentBlock): boolean {
-  if (!isThinkingBlock(block)) {
-    return false;
-  }
   const record = block as {
     data?: unknown;
     signature?: unknown;
@@ -91,261 +97,87 @@ function hasReplayableThinkingSignature(block: AssistantContentBlock): boolean {
     (block as { type?: unknown }).type === "redacted_thinking"
       ? [record.data, record.signature, record.thinkingSignature, record.thought_signature]
       : [record.signature, record.thinkingSignature, record.thought_signature];
-  return candidates.some((signature) => {
-    return typeof signature === "string" && signature.trim().length > 0;
-  });
+  return candidates.some(
+    (signature) => typeof signature === "string" && signature.trim().length > 0,
+  );
 }
 
 /**
- * Strip thinking blocks with clearly invalid replay signatures.
- *
- * Anthropic and Bedrock reject persisted thinking blocks when the signature is
- * absent, empty, or blank. They are also the authority for opaque signature
- * validity, so this intentionally avoids local length or shape heuristics.
- *
- * By default, the latest assistant turn is exempt: providers reject modified
- * latest thinking blocks, so corrupted latest turns must flow through recovery
- * rather than being rewritten before the request. Callers that append a new
- * user turn before provider replay can disable that exemption because the
- * stored assistant turn is no longer latest in the outbound request.
+ * Providers decide opaque signature validity; only missing or blank signatures are stripped.
+ * Preserve the latest assistant turn for provider recovery unless the caller appends a user turn.
  */
 export function stripInvalidThinkingSignatures(
   messages: AgentMessage[],
   options: { preserveLatestAssistant?: boolean } = {},
 ): AgentMessage[] {
-  const preserveLatestAssistant = options.preserveLatestAssistant ?? true;
-  let latestAssistantIndex = -1;
-  if (preserveLatestAssistant) {
-    for (let i = messages.length - 1; i >= 0; i -= 1) {
-      const message = messages.at(i);
-      if (message && isAssistantMessageWithContent(message)) {
-        latestAssistantIndex = i;
-        break;
-      }
-    }
-  }
-
-  let touched = false;
-  const out: AgentMessage[] = [];
-
-  for (const [i, message] of messages.entries()) {
-    if (!isAssistantMessageWithContent(message)) {
-      out.push(message);
-      continue;
-    }
-    if (i === latestAssistantIndex) {
-      out.push(message);
-      continue;
-    }
-
-    const nextContent: AssistantContentBlock[] = [];
-    let changed = false;
-    for (const block of message.content) {
-      if (!isThinkingBlock(block) || hasReplayableThinkingSignature(block)) {
-        nextContent.push(block);
-        continue;
-      }
-      changed = true;
-      touched = true;
-    }
-
-    if (!changed) {
-      out.push(message);
-      continue;
-    }
-
-    out.push({
-      ...message,
-      content: nextContent.length > 0 ? nextContent : buildOmittedAssistantReasoningContent(),
-    });
-  }
-
-  return touched ? out : messages;
+  const latestAssistantIndex =
+    (options.preserveLatestAssistant ?? true)
+      ? messages.findLastIndex(isAssistantMessageWithContent)
+      : -1;
+  return mapAssistantMessages(messages, (message, index) =>
+    index === latestAssistantIndex
+      ? message
+      : filterAssistantContent(
+          message,
+          (block) => !isThinkingBlock(block) || hasReplayableThinkingSignature(block),
+        ),
+  );
 }
 
 /**
- * Strip `type: "thinking"` and `type: "redacted_thinking"` content blocks from
- * all assistant messages except the latest one.
- *
- * Thinking blocks in the latest assistant turn are preserved verbatim so
- * providers that require replay signatures can continue the conversation.
- *
- * If a non-latest assistant message becomes empty after stripping, it is
- * replaced with a synthetic non-empty text block to preserve turn structure
- * through provider adapters that filter blank text blocks.
- *
- * Returns the original array reference when nothing was changed (callers can
- * use reference equality to skip downstream work).
+ * Keep the latest turn's replay signatures and preserve empty turns with placeholder text.
+ * Unchanged history retains its original array identity.
  */
 export function dropThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
-  let latestAssistantIndex = -1;
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const message = messages.at(i);
-    if (message && isAssistantMessageWithContent(message)) {
-      latestAssistantIndex = i;
-      break;
-    }
-  }
-
-  let touched = false;
-  const out: AgentMessage[] = [];
-  for (const [i, msg] of messages.entries()) {
-    if (!isAssistantMessageWithContent(msg)) {
-      out.push(msg);
-      continue;
-    }
-    if (i === latestAssistantIndex) {
-      out.push(msg);
-      continue;
-    }
-    const nextContent: AssistantContentBlock[] = [];
-    let changed = false;
-    for (const block of msg.content) {
-      if (isThinkingBlock(block)) {
-        touched = true;
-        changed = true;
-        continue;
-      }
-      nextContent.push(block);
-    }
-    if (!changed) {
-      out.push(msg);
-      continue;
-    }
-    const content = nextContent.length > 0 ? nextContent : buildOmittedAssistantReasoningContent();
-    out.push({ ...msg, content });
-  }
-  return touched ? out : messages;
+  const latestAssistantIndex = messages.findLastIndex(isAssistantMessageWithContent);
+  return mapAssistantMessages(messages, (message, index) =>
+    index === latestAssistantIndex ? message : stripThinkingBlocksFromMessage(message),
+  );
 }
 
-function shouldPreserveCurrentToolTurnReasoning(
-  messages: AgentMessage[],
-  index: number,
-  latestUserIndex: number,
-): boolean {
-  const message = messages.at(index);
-  if (
-    !message ||
-    index < latestUserIndex ||
-    !isAssistantMessageWithContent(message) ||
-    !hasAssistantToolCall(message)
-  ) {
-    return false;
-  }
-
-  for (let i = index - 1; i >= 0; i -= 1) {
-    const role = messages.at(i)?.role;
-    if (role === "user") {
-      break;
-    }
-    if (role === "assistant") {
-      return false;
-    }
-  }
-
-  for (let i = index + 1; i < messages.length; i += 1) {
-    const next = messages.at(i);
-    const role = next?.role;
-    if (next && isToolResultMessage(next)) {
-      return true;
-    }
-    if (role === "user") {
-      return false;
-    }
-  }
-
-  return false;
+function findCurrentToolTurnAssistantIndex(messages: AgentMessage[]): number {
+  const latestUserIndex = messages.findLastIndex((message) => message?.role === "user");
+  // Even an assistant without content ends the first-assistant eligibility window.
+  const index = messages.findIndex(
+    (message, candidateIndex) => candidateIndex > latestUserIndex && message?.role === "assistant",
+  );
+  const message = messages[index];
+  return message &&
+    isAssistantMessageWithContent(message) &&
+    message.content.some(isToolCallBlock) &&
+    messages.some(
+      (next, nextIndex) =>
+        nextIndex > index && next && typeof next === "object" && next.role === "toolResult",
+    )
+    ? index
+    : -1;
 }
 
 export function shouldPreserveLatestAssistantThinking(messages: AgentMessage[]): boolean {
-  let latestAssistantIndex = -1;
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages.at(index);
-    if (message && isAssistantMessageWithContent(message)) {
-      latestAssistantIndex = index;
-      break;
-    }
-  }
-  if (latestAssistantIndex < 0) {
-    return false;
-  }
-  if (latestAssistantIndex === messages.length - 1) {
-    return true;
-  }
-
-  let latestUserIndex = -1;
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (messages.at(index)?.role === "user") {
-      latestUserIndex = index;
-      break;
-    }
-  }
-  return shouldPreserveCurrentToolTurnReasoning(messages, latestAssistantIndex, latestUserIndex);
+  const latestAssistantIndex = messages.findLastIndex(isAssistantMessageWithContent);
+  return (
+    latestAssistantIndex >= 0 &&
+    (latestAssistantIndex === messages.length - 1 ||
+      latestAssistantIndex === findCurrentToolTurnAssistantIndex(messages))
+  );
 }
 
 export function stripThinkingBlocksFromMessage(message: AgentMessage): AgentMessage {
   if (!isAssistantMessageWithContent(message)) {
     return message;
   }
-  const nextContent = message.content.filter((block) => !isThinkingBlock(block));
-  if (nextContent.length === message.content.length) {
-    return message;
-  }
-  return {
-    ...message,
-    content: nextContent.length > 0 ? nextContent : buildOmittedAssistantReasoningContent(),
-  };
+  return filterAssistantContent(message, (block) => !isThinkingBlock(block));
 }
 
 function stripAllThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
-  let touched = false;
-  const out: AgentMessage[] = [];
-  for (const message of messages) {
-    const stripped = stripThinkingBlocksFromMessage(message);
-    if (stripped === message) {
-      out.push(stripped);
-      continue;
-    }
-    touched = true;
-    out.push(stripped);
-  }
-  return touched ? out : messages;
+  return mapAssistantMessages(messages, stripThinkingBlocksFromMessage);
 }
 
 export function dropReasoningFromHistory(messages: AgentMessage[]): AgentMessage[] {
-  let latestUserIndex = -1;
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (messages.at(index)?.role === "user") {
-      latestUserIndex = index;
-      break;
-    }
-  }
-
-  let touched = false;
-  const out: AgentMessage[] = [];
-  for (const [index, message] of messages.entries()) {
-    if (!isAssistantMessageWithContent(message)) {
-      out.push(message);
-      continue;
-    }
-    if (shouldPreserveCurrentToolTurnReasoning(messages, index, latestUserIndex)) {
-      out.push(message);
-      continue;
-    }
-
-    const nextContent = message.content.filter((block) => !isThinkingBlock(block));
-    if (nextContent.length === message.content.length) {
-      out.push(message);
-      continue;
-    }
-
-    touched = true;
-    out.push({
-      ...message,
-      content: nextContent.length > 0 ? nextContent : buildOmittedAssistantReasoningContent(),
-    });
-  }
-  return touched ? out : messages;
+  const currentToolTurnAssistantIndex = findCurrentToolTurnAssistantIndex(messages);
+  return mapAssistantMessages(messages, (message, index) =>
+    index === currentToolTurnAssistantIndex ? message : stripThinkingBlocksFromMessage(message),
+  );
 }
 
 export function assessLastAssistantMessage(message: AgentMessage): RecoveryAssessment {
@@ -357,7 +189,6 @@ export function assessLastAssistantMessage(message: AgentMessage): RecoveryAsses
   }
 
   let hasSignedThinking = false;
-  let hasUnsignedThinking = false;
   let hasNonThinkingContent = false;
   let hasEmptyTextBlock = false;
 
@@ -366,34 +197,29 @@ export function assessLastAssistantMessage(message: AgentMessage): RecoveryAsses
       return "incomplete-thinking";
     }
     if (isThinkingBlock(block)) {
-      if (isSignedThinkingBlock(block)) {
-        hasSignedThinking = true;
-      } else {
-        hasUnsignedThinking = true;
+      if (!isSignedThinkingBlock(block)) {
+        return "incomplete-thinking";
       }
+      hasSignedThinking = true;
       continue;
     }
     hasNonThinkingContent = true;
-    if ((block as { type?: unknown }).type === "text" && !hasMeaningfulText(block)) {
+    if (block.type === "text" && (typeof block.text !== "string" || !block.text.trim())) {
       hasEmptyTextBlock = true;
     }
   }
 
-  if (hasUnsignedThinking) {
-    return "incomplete-thinking";
-  }
-  if (hasSignedThinking && !hasNonThinkingContent) {
-    return "incomplete-text";
-  }
-  if (hasSignedThinking && hasEmptyTextBlock) {
+  if (hasSignedThinking && (!hasNonThinkingContent || hasEmptyTextBlock)) {
     return "incomplete-text";
   }
   return "valid";
 }
 
-function shouldRecoverAnthropicThinkingError(
+function beginAnthropicThinkingRecovery(
   error: unknown,
   sessionMeta: RecoverySessionMeta,
+  stage: "request rejected" | "stream error" | "error during stream",
+  yieldedOutput = false,
 ): boolean {
   // Provider detail survives genericization in different carriers across the
   // Anthropic SDK, failover wrapping, and terminal stream messages.
@@ -405,15 +231,26 @@ function shouldRecoverAnthropicThinkingError(
     current.errorBody,
     current.message,
   ]);
-  for (const candidate of candidates) {
-    if (
-      typeof candidate === "string" &&
-      shouldRecoverAnthropicThinkingErrorMessage(candidate, sessionMeta)
-    ) {
-      return true;
-    }
+  if (
+    !candidates.some(
+      (candidate) =>
+        typeof candidate === "string" &&
+        shouldRecoverAnthropicThinkingErrorMessage(candidate, sessionMeta),
+    )
+  ) {
+    return false;
   }
-  return false;
+  if (yieldedOutput) {
+    log.warn(
+      `[session-recovery] Anthropic thinking error occurred after streaming began; skipping retry to avoid duplicate chunks: sessionId=${sessionMeta.id}`,
+    );
+    return false;
+  }
+  sessionMeta.recoveredAnthropicThinking = true;
+  log.warn(
+    `[session-recovery] Anthropic thinking ${stage}; retrying once without thinking blocks: sessionId=${sessionMeta.id}`,
+  );
+  return true;
 }
 
 function shouldRecoverAnthropicThinkingErrorMessage(
@@ -454,19 +291,16 @@ async function notifyRecoveredAnthropicThinking(
 }
 
 function isSuccessfulRecoveryRetryResult(message: AssistantMessage | undefined): boolean {
-  if (!message) {
-    return false;
-  }
-  return message.stopReason !== "error" && message.stopReason !== "aborted";
+  return Boolean(message && message.stopReason !== "error" && message.stopReason !== "aborted");
 }
 
 function wrapRetryStreamWithRecoveryNotification(
   retryStream: ReturnType<StreamFn>,
-  notify: () => Promise<void>,
+  recovery: ThinkingRecoveryRequest,
 ): ReturnType<StreamFn> {
   if (retryStream instanceof Promise) {
     return retryStream.then((resolved) =>
-      wrapRetryStreamWithRecoveryNotification(resolved as ReturnType<StreamFn>, notify),
+      wrapRetryStreamWithRecoveryNotification(resolved as ReturnType<StreamFn>, recovery),
     ) as ReturnType<StreamFn>;
   }
   const resultMethod = Reflect.get(retryStream, "result");
@@ -474,16 +308,47 @@ function wrapRetryStreamWithRecoveryNotification(
     return retryStream;
   }
   const result = resultMethod.bind(retryStream) as () => Promise<AssistantMessage>;
-  let notified = false;
-  Reflect.set(retryStream, "result", async () => {
-    const message = await result();
-    if (!notified && isSuccessfulRecoveryRetryResult(message)) {
-      notified = true;
-      await notify();
-    }
-    return message;
-  });
-  return retryStream;
+  let completion: Promise<AssistantMessage> | undefined;
+  const finish = () => {
+    completion ??= recovery.trackRecovery(() =>
+      Promise.resolve().then(async () => {
+        const message = await result();
+        if (isSuccessfulRecoveryRetryResult(message)) {
+          await recovery.notify();
+        }
+        return message;
+      }),
+    );
+    void completion.catch(() => {});
+    return completion;
+  };
+  return settleRecoveryStream(retryStream, finish, recovery.readNotification);
+}
+
+function settleRecoveryStream(
+  stream: Awaited<ReturnType<StreamFn>>,
+  result: () => Promise<AssistantMessage>,
+  readNotification: () => Promise<void> | undefined,
+): Awaited<ReturnType<StreamFn>> {
+  stream.result = result;
+  const settle = () =>
+    result().then(
+      () => undefined,
+      () => undefined,
+    );
+  let producerCompleted = false;
+  const markProducerCompleted = () => {
+    producerCompleted = true;
+  };
+  void getEventStreamCompletion(stream)?.then(markProducerCompleted, markProducerCompleted);
+  // A partial-only consumer can close without waiting for ordinary provider work.
+  // Completed producers may still be scheduling their admitted repair notification.
+  return wrapStreamObjectSettlement(
+    stream,
+    settle,
+    (event) => event.type === "done" || event.type === "error",
+    () => readNotification() ?? (producerCompleted ? settle() : Promise.resolve()),
+  );
 }
 
 async function retryStreamWithoutThinking(
@@ -492,85 +357,66 @@ async function retryStreamWithoutThinking(
   notify: () => Promise<void>,
 ): Promise<AssistantMessage> {
   const retryStream = retry();
-  const resolvedRetry = retryStream instanceof Promise ? await retryStream : retryStream;
-  for await (const chunk of resolvedRetry as AsyncIterable<unknown>) {
-    outer.push(chunk as Parameters<typeof outer.push>[0]);
-  }
-  const result = await (resolvedRetry as { result?: () => Promise<AssistantMessage> }).result?.();
-  if (isSuccessfulRecoveryRetryResult(result)) {
-    await notify();
-  }
-  return result as AssistantMessage;
+  return await runPluginStreamConsumer(retryStream, async () => {
+    const resolvedRetry = await retryStream;
+    for await (const chunk of resolvedRetry as AsyncIterable<unknown>) {
+      outer.push(chunk as Parameters<typeof outer.push>[0]);
+    }
+    const result = await (resolvedRetry as { result?: () => Promise<AssistantMessage> }).result?.();
+    if (isSuccessfulRecoveryRetryResult(result)) {
+      await notify();
+    }
+    return result as AssistantMessage;
+  });
 }
 
 async function pumpStreamWithRecovery(
   outer: ReturnType<typeof createAssistantMessageEventStream>,
   stream: ReturnType<StreamFn>,
-  sessionMeta: RecoverySessionMeta,
-  retry: () => ReturnType<StreamFn>,
-  notify: () => Promise<void>,
+  recovery: ThinkingRecoveryRequest,
 ): Promise<AssistantMessage> {
+  const { sessionMeta, retry, notify } = recovery;
   let yieldedOutput = false;
+  const recover = (error: unknown, stage: "stream error" | "error during stream") =>
+    beginAnthropicThinkingRecovery(error, sessionMeta, stage, yieldedOutput)
+      ? retryStreamWithoutThinking(outer, retry, notify)
+      : undefined;
   try {
-    const resolved = stream instanceof Promise ? await stream : stream;
-    for await (const chunk of resolved as AsyncIterable<unknown>) {
-      if (isAssistantMessageErrorEvent(chunk)) {
-        if (shouldRecoverAnthropicThinkingError(chunk.error, sessionMeta)) {
-          if (yieldedOutput) {
-            log.warn(
-              `[session-recovery] Anthropic thinking error occurred after streaming began; skipping retry to avoid duplicate chunks: sessionId=${sessionMeta.id}`,
-            );
-          } else {
-            sessionMeta.recoveredAnthropicThinking = true;
-            log.warn(
-              `[session-recovery] Anthropic thinking stream error; retrying once without thinking blocks: sessionId=${sessionMeta.id}`,
-            );
-            return retryStreamWithoutThinking(outer, retry, notify);
+    return await runPluginStreamConsumer(stream, async () => {
+      const resolved = await stream;
+      for await (const chunk of resolved as AsyncIterable<unknown>) {
+        if (isAssistantMessageErrorEvent(chunk)) {
+          const recovered = recover(chunk.error, "stream error");
+          if (recovered) {
+            return recovered;
           }
+        } else {
+          yieldedOutput = true;
         }
-      } else {
-        yieldedOutput = true;
+        outer.push(chunk as Parameters<typeof outer.push>[0]);
       }
-      outer.push(chunk as Parameters<typeof outer.push>[0]);
-    }
-    const result = await (resolved as { result?: () => Promise<AssistantMessage> }).result?.();
-    return result as AssistantMessage;
+      const result = await (resolved as { result?: () => Promise<AssistantMessage> }).result?.();
+      return result as AssistantMessage;
+    });
   } catch (error: unknown) {
-    if (!shouldRecoverAnthropicThinkingError(error, sessionMeta)) {
-      throw error;
+    const recovered = recover(error, "error during stream");
+    if (recovered) {
+      return recovered;
     }
-    if (yieldedOutput) {
-      log.warn(
-        `[session-recovery] Anthropic thinking error occurred after streaming began; skipping retry to avoid duplicate chunks: sessionId=${sessionMeta.id}`,
-      );
-      throw error;
-    }
-    sessionMeta.recoveredAnthropicThinking = true;
-    log.warn(
-      `[session-recovery] Anthropic thinking error during stream; retrying once without thinking blocks: sessionId=${sessionMeta.id}`,
-    );
-    return retryStreamWithoutThinking(outer, retry, notify);
+    throw error;
   }
 }
 
 function createRecoveryStream(
   stream: Awaited<ReturnType<StreamFn>>,
-  sessionMeta: RecoverySessionMeta,
-  retry: () => ReturnType<StreamFn>,
-  notify: () => Promise<void>,
+  recovery: ThinkingRecoveryRequest,
 ): Awaited<ReturnType<StreamFn>> {
   const outer = createAssistantMessageEventStream();
-  const finalResultPromise = pumpStreamWithRecovery(
-    outer,
-    stream,
-    sessionMeta,
-    retry,
-    notify,
-  ).finally(() => {
-    outer.end();
-  });
-  outer.result = () => finalResultPromise;
-  return outer;
+  const finalResultPromise = recovery.trackRecovery(() =>
+    pumpStreamWithRecovery(outer, stream, recovery).finally(() => outer.end()),
+  );
+  void finalResultPromise.catch(() => {});
+  return settleRecoveryStream(outer, () => finalResultPromise, recovery.readNotification);
 }
 
 export function wrapAnthropicStreamWithRecovery(
@@ -578,6 +424,7 @@ export function wrapAnthropicStreamWithRecovery(
   sessionMeta: RecoverySessionMeta,
 ): StreamFn {
   return (model, context, options) => {
+    const trackRecovery = captureAsyncWorkTracker();
     const requestMeta: RecoverySessionMeta = {
       id: sessionMeta.id,
       onRecoveredAnthropicThinking: sessionMeta.onRecoveredAnthropicThinking,
@@ -593,28 +440,35 @@ export function wrapAnthropicStreamWithRecovery(
       };
       return innerStreamFn(model, nextContext, options);
     };
-    const notify = () =>
-      notifyRecoveredAnthropicThinking(requestMeta, {
-        originalMessages,
-        cleanedMessages: stripAllThinkingBlocks(originalMessages),
-      });
+    let notification: Promise<void> | undefined;
+    const readNotification = () => notification;
+    const notify = () => {
+      notification ??= trackRecovery(() =>
+        Promise.resolve().then(() =>
+          notifyRecoveredAnthropicThinking(requestMeta, {
+            originalMessages,
+            cleanedMessages: stripAllThinkingBlocks(originalMessages),
+          }),
+        ),
+      );
+      return notification;
+    };
 
+    const recovery = { sessionMeta: requestMeta, retry, notify, trackRecovery, readNotification };
     const stream = innerStreamFn(model, context, options);
     if (stream instanceof Promise) {
-      return stream.then(
-        (resolved) => createRecoveryStream(resolved, requestMeta, retry, notify),
-        (error: unknown) => {
-          if (!shouldRecoverAnthropicThinkingError(error, requestMeta)) {
-            throw error;
-          }
-          requestMeta.recoveredAnthropicThinking = true;
-          log.warn(
-            `[session-recovery] Anthropic thinking request rejected; retrying once without thinking blocks: sessionId=${requestMeta.id}`,
-          );
-          return wrapRetryStreamWithRecoveryNotification(retry(), notify);
-        },
+      return runPluginStreamConsumer(stream, () =>
+        stream.then(
+          (resolved) => createRecoveryStream(resolved, recovery),
+          (error: unknown) => {
+            if (!beginAnthropicThinkingRecovery(error, requestMeta, "request rejected")) {
+              throw error;
+            }
+            return wrapRetryStreamWithRecoveryNotification(retry(), recovery);
+          },
+        ),
       ) as ReturnType<StreamFn>;
     }
-    return createRecoveryStream(stream, requestMeta, retry, notify);
+    return createRecoveryStream(stream, recovery);
   };
 }

@@ -1,22 +1,42 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type {
   HostedOutboundMediaChunkRecord,
   HostedOutboundMediaMetaRecord,
 } from "./outbound-media.js";
-// Outbound media tests cover plugin media attachment normalization and access policy.
+import type { PluginStateKeyedStore } from "./plugin-state-runtime.js";
 import {
   createPluginStateKeyedStoreForTests,
+  createPluginStateSyncKeyedStoreForTests,
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  openOpenClawStateDatabase,
   resetPluginStateStoreForTests,
+  type OpenClawStateKyselyDatabaseForTests,
 } from "./plugin-state-test-runtime.js";
 const loadWebMediaMock = vi.hoisted(() => vi.fn());
 type OutboundMediaModule = typeof import("./outbound-media.js");
 let createHostedOutboundMediaStore: OutboundMediaModule["createHostedOutboundMediaStore"];
-let loadOutboundMediaFromUrl: OutboundMediaModule["loadOutboundMediaFromUrl"];
+function imageMedia(bytes = "image-bytes") {
+  return { buffer: Buffer.from(bytes), kind: "image", contentType: "image/png" };
+}
+
+function prepare(
+  store: ReturnType<OutboundMediaModule["createHostedOutboundMediaStore"]>,
+  mediaUrl = "https://example.com/photo.png",
+) {
+  return store.prepareUrl({
+    mediaUrl,
+    routePath: "/hook/media/",
+    publicBaseUrl: "https://gateway.example.com",
+    maxBytes: 1024,
+  });
+}
+
 beforeAll(async () => {
   const webMedia = await import("./web-media.js");
   vi.spyOn(webMedia, "loadWebMedia").mockImplementation(loadWebMediaMock);
-  ({ createHostedOutboundMediaStore, loadOutboundMediaFromUrl } =
-    await import("./outbound-media.js"));
+  ({ createHostedOutboundMediaStore } = await import("./outbound-media.js"));
 });
 afterAll(() => {
   vi.restoreAllMocks();
@@ -28,96 +48,8 @@ beforeEach(() => {
   vi.useRealTimers();
 });
 
-describe("loadOutboundMediaFromUrl", () => {
-  it("forwards media limits, local roots, and image optimization to loadWebMedia", async () => {
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: Buffer.from("x"),
-      kind: "image",
-      contentType: "image/png",
-      fileName: "floor-plan.png",
-    });
-
-    await loadOutboundMediaFromUrl("file:///tmp/image.png", {
-      maxBytes: 1024,
-      mediaLocalRoots: ["/tmp/workspace-agent"],
-      optimizeImages: false,
-    });
-
-    expect(loadWebMediaMock).toHaveBeenCalledWith("file:///tmp/image.png", {
-      maxBytes: 1024,
-      localRoots: ["/tmp/workspace-agent"],
-      optimizeImages: false,
-    });
-  });
-
-  it("keeps options optional", async () => {
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: Buffer.from("x"),
-      kind: "image",
-      contentType: "image/png",
-    });
-
-    await loadOutboundMediaFromUrl("https://example.com/image.png");
-
-    expect(loadWebMediaMock).toHaveBeenCalledWith("https://example.com/image.png", {});
-  });
-
-  it("keeps local roots when host read capability is provided", async () => {
-    const mediaReadFile = vi.fn(async () => Buffer.from("x"));
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: Buffer.from("x"),
-      kind: "image",
-      contentType: "image/png",
-    });
-
-    await loadOutboundMediaFromUrl("/Users/peter/Pictures/image.png", {
-      maxBytes: 2048,
-      mediaLocalRoots: ["/tmp/workspace-agent"],
-      mediaReadFile,
-    });
-
-    expect(loadWebMediaMock).toHaveBeenCalledWith("/Users/peter/Pictures/image.png", {
-      maxBytes: 2048,
-      localRoots: ["/tmp/workspace-agent"],
-      readFile: mediaReadFile,
-      hostReadCapability: true,
-    });
-  });
-
-  it("rejects host read capability without explicit local roots", async () => {
-    await expect(
-      loadOutboundMediaFromUrl("/Users/peter/Pictures/image.png", {
-        maxBytes: 2048,
-        mediaReadFile: async () => Buffer.from("x"),
-      }),
-    ).rejects.toThrow("Host media read requires explicit localRoots");
-  });
-
-  it("allows explicit any opt-in for host read capability", async () => {
-    const mediaReadFile = vi.fn(async () => Buffer.from("x"));
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: Buffer.from("x"),
-      kind: "image",
-      contentType: "image/png",
-    });
-
-    await loadOutboundMediaFromUrl("/Users/peter/Pictures/image.png", {
-      maxBytes: 2048,
-      mediaLocalRoots: "any",
-      mediaReadFile,
-    });
-
-    expect(loadWebMediaMock).toHaveBeenCalledWith("/Users/peter/Pictures/image.png", {
-      maxBytes: 2048,
-      localRoots: "any",
-      readFile: mediaReadFile,
-      hostReadCapability: true,
-    });
-  });
-});
-
 describe("createHostedOutboundMediaStore", () => {
-  function createStoreFixture(namespace = "hosted-media") {
+  function createStoreFixture(namespace = "hosted-media", bulkReads = true) {
     const metadataStore = createPluginStateKeyedStoreForTests<HostedOutboundMediaMetaRecord>(
       "fixture-plugin",
       {
@@ -137,7 +69,7 @@ describe("createHostedOutboundMediaStore", () => {
       chunkStore,
       store: createHostedOutboundMediaStore({
         metadataStore,
-        chunkStore,
+        chunkStore: bulkReads ? chunkStore : { ...chunkStore, lookupMany: undefined },
         ttlMs: 120_000,
         resolveExpiresAtMs: () => Date.now() + 120_000,
         createId: () => "abc123abc123abc123abc123",
@@ -153,21 +85,30 @@ describe("createHostedOutboundMediaStore", () => {
     return createStoreFixture(namespace).store;
   }
 
-  it("stores hosted media chunks and reads them back", async () => {
+  it("releases a failed read acquisition so deletion can reclaim its rows", async () => {
+    loadWebMediaMock.mockResolvedValueOnce(imageMedia());
+    const { metadataStore, chunkStore, store } = createStoreFixture("failed-reader-media");
+    await prepare(store);
+    const failure = new Error("metadata read failed");
+    vi.spyOn(metadataStore, "lookup").mockRejectedValueOnce(failure);
+
+    await expect(store.read("abc123abc123abc123abc123")).rejects.toBe(failure);
+    await store.delete("abc123abc123abc123abc123");
+
+    expect(await metadataStore.entries()).toEqual([]);
+    expect(await chunkStore.entries()).toEqual([]);
+  });
+
+  it("stores hosted media chunks and reads them back through point reads", async () => {
     loadWebMediaMock.mockResolvedValueOnce({
       buffer: Buffer.from("image-bytes"),
       kind: "image",
       contentType: "image/png",
       fileName: "floor-plan.png",
     });
-    const store = createStore();
+    const { store } = createStoreFixture("hosted-media", false);
 
-    const url = await store.prepareUrl({
-      mediaUrl: "https://example.com/photo.png",
-      routePath: "/hook/media/",
-      publicBaseUrl: "https://gateway.example.com",
-      maxBytes: 1024,
-    });
+    const url = await prepare(store);
     const entry = await store.read("abc123abc123abc123abc123");
 
     expect(url).toBe(
@@ -217,18 +158,9 @@ describe("createHostedOutboundMediaStore", () => {
   });
 
   it("does not return metadata when deletion starts during lookup", async () => {
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: Buffer.from("image-bytes"),
-      kind: "image",
-      contentType: "image/png",
-    });
+    loadWebMediaMock.mockResolvedValueOnce(imageMedia());
     const { metadataStore, store } = createStoreFixture("pending-metadata-media");
-    await store.prepareUrl({
-      mediaUrl: "https://example.com/photo.png",
-      routePath: "/hook/media/",
-      publicBaseUrl: "https://gateway.example.com",
-      maxBytes: 1024,
-    });
+    await prepare(store);
     const originalLookup = metadataStore.lookup.bind(metadataStore);
     let markLookupStarted: (() => void) | undefined;
     let releaseLookup: (() => void) | undefined;
@@ -254,18 +186,9 @@ describe("createHostedOutboundMediaStore", () => {
   });
 
   it("lets an admitted complete read finish before deleting its chunks", async () => {
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: Buffer.from("image-bytes"),
-      kind: "image",
-      contentType: "image/png",
-    });
+    loadWebMediaMock.mockResolvedValueOnce(imageMedia());
     const { chunkStore, metadataStore, store } = createStoreFixture("atomic-reader-media");
-    await store.prepareUrl({
-      mediaUrl: "https://example.com/photo.png",
-      routePath: "/hook/media/",
-      publicBaseUrl: "https://gateway.example.com",
-      maxBytes: 1024,
-    });
+    await prepare(store);
     const originalLookup = metadataStore.lookup.bind(metadataStore);
     let markLookupStarted: (() => void) | undefined;
     let releaseLookup: (() => void) | undefined;
@@ -297,43 +220,11 @@ describe("createHostedOutboundMediaStore", () => {
   });
 
   it("reads hosted metadata without hydrating chunk rows", async () => {
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: Buffer.from("image-bytes"),
-      kind: "image",
-      contentType: "image/png",
-    });
-    const metadataStore = createPluginStateKeyedStoreForTests<HostedOutboundMediaMetaRecord>(
-      "fixture-plugin",
-      {
-        namespace: "metadata-only-media",
-        maxEntries: 10,
-      },
-    );
-    const chunkStore = createPluginStateKeyedStoreForTests<HostedOutboundMediaChunkRecord>(
-      "fixture-plugin",
-      {
-        namespace: "metadata-only-media-chunks",
-        maxEntries: 100,
-      },
-    );
-    const store = createHostedOutboundMediaStore({
-      metadataStore,
-      chunkStore,
-      ttlMs: 120_000,
-      resolveExpiresAtMs: () => Date.now() + 120_000,
-      createId: () => "abc123abc123abc123abc123",
-      createToken: () => "token123",
-      rawChunkBytes: 4,
-      maxEntries: 10,
-      maxChunkRows: 100,
-    });
-    await store.prepareUrl({
-      mediaUrl: "https://example.com/photo.png",
-      routePath: "/hook/media/",
-      publicBaseUrl: "https://gateway.example.com",
-      maxBytes: 1024,
-    });
+    loadWebMediaMock.mockResolvedValueOnce(imageMedia());
+    const { chunkStore, store } = createStoreFixture("metadata-only-media");
+    await prepare(store);
     const chunkLookup = vi.spyOn(chunkStore, "lookup");
+    const chunkBulkLookup = vi.spyOn(chunkStore, "lookupMany");
 
     await expect(store.readMetadata("abc123abc123abc123abc123")).resolves.toMatchObject({
       routePath: "/hook/media/",
@@ -342,46 +233,13 @@ describe("createHostedOutboundMediaStore", () => {
       byteLength: Buffer.byteLength("image-bytes"),
     });
     expect(chunkLookup).not.toHaveBeenCalled();
-  });
-
-  it("forwards local media access into hosted media preparation", async () => {
-    const mediaReadFile = vi.fn(async () => Buffer.from("image-bytes"));
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: Buffer.from("image-bytes"),
-      kind: "image",
-      contentType: "image/png",
-    });
-    const store = createStore();
-
-    await store.prepareUrl({
-      mediaUrl: "/workspace/photo.png",
-      routePath: "/hook/media/",
-      publicBaseUrl: "https://gateway.example.com",
-      maxBytes: 1024,
-      mediaAccess: {
-        localRoots: ["/workspace"],
-        readFile: mediaReadFile,
-        workspaceDir: "/workspace",
-      },
-    });
-
-    expect(loadWebMediaMock).toHaveBeenCalledWith("/workspace/photo.png", {
-      maxBytes: 1024,
-      localRoots: ["/workspace"],
-      readFile: mediaReadFile,
-      hostReadCapability: true,
-      workspaceDir: "/workspace",
-    });
+    expect(chunkBulkLookup).not.toHaveBeenCalled();
   });
 
   it("keeps metadata long enough to clean up expired chunk rows", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1000);
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: Buffer.from("image-bytes"),
-      kind: "image",
-      contentType: "image/png",
-    });
+    loadWebMediaMock.mockResolvedValueOnce(imageMedia());
     const metadataStore = createPluginStateKeyedStoreForTests<HostedOutboundMediaMetaRecord>(
       "fixture-plugin",
       { namespace: "ttl-media", maxEntries: 10 },
@@ -402,16 +260,47 @@ describe("createHostedOutboundMediaStore", () => {
       maxChunkRows: 100,
     });
 
-    await store.prepareUrl({
-      mediaUrl: "https://example.com/photo.png",
-      routePath: "/hook/media/",
-      publicBaseUrl: "https://gateway.example.com",
-      maxBytes: 1024,
-    });
+    await prepare(store);
+    const { db } = openOpenClawStateDatabase();
+    const sql = getNodeSqliteKysely<OpenClawStateKyselyDatabaseForTests>(db);
+    const persistedTtls = executeSqliteQuerySync(
+      db,
+      sql
+        .selectFrom("plugin_state_entries")
+        .select("namespace")
+        .select((eb) => eb("expires_at", "-", eb.ref("created_at")).as("ttlMs"))
+        .where("plugin_id", "=", "fixture-plugin")
+        .where("namespace", "in", ["ttl-media", "ttl-media-chunks"])
+        .orderBy("namespace")
+        .orderBy("entry_key"),
+    ).rows;
+    expect(persistedTtls).toEqual([
+      { namespace: "ttl-media", ttlMs: 200 },
+      { namespace: "ttl-media-chunks", ttlMs: 100 },
+      { namespace: "ttl-media-chunks", ttlMs: 100 },
+      { namespace: "ttl-media-chunks", ttlMs: 100 },
+    ]);
+    // Keep physical expiry independent of the parent test's logical media clock.
+    executeSqliteQuerySync(
+      db,
+      sql
+        .updateTable("plugin_state_entries")
+        .set({ expires_at: vi.getRealSystemTime() + 86_400_000 })
+        .where("plugin_id", "=", "fixture-plugin")
+        .where("namespace", "in", ["ttl-media", "ttl-media-chunks"]),
+    );
     expect(await metadataStore.entries()).toHaveLength(1);
     expect(await chunkStore.entries()).toHaveLength(3);
 
     vi.setSystemTime(1101);
+    executeSqliteQuerySync(
+      db,
+      sql
+        .updateTable("plugin_state_entries")
+        .set({ expires_at: 1 })
+        .where("plugin_id", "=", "fixture-plugin")
+        .where("namespace", "=", "ttl-media-chunks"),
+    );
     expect(await metadataStore.entries()).toHaveLength(1);
     expect(await chunkStore.entries()).toEqual([]);
     await store.cleanupExpired(1101);
@@ -419,62 +308,10 @@ describe("createHostedOutboundMediaStore", () => {
     expect(await chunkStore.entries()).toEqual([]);
   });
 
-  it("deletes all chunks for one hosted entry", async () => {
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: Buffer.from("image-bytes"),
-      kind: "image",
-      contentType: "image/png",
-    });
-    const store = createStore();
-
-    await store.prepareUrl({
-      mediaUrl: "https://example.com/photo.png",
-      routePath: "/hook/media/",
-      publicBaseUrl: "https://gateway.example.com",
-      maxBytes: 1024,
-    });
-    await store.delete("abc123abc123abc123abc123");
-
-    expect(await store.read("abc123abc123abc123abc123")).toBeNull();
-  });
-
   it("retains metadata until a failed chunk cleanup can be retried", async () => {
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: Buffer.from("image-bytes"),
-      kind: "image",
-      contentType: "image/png",
-    });
-    const metadataStore = createPluginStateKeyedStoreForTests<HostedOutboundMediaMetaRecord>(
-      "fixture-plugin",
-      {
-        namespace: "retry-delete-media",
-        maxEntries: 10,
-      },
-    );
-    const chunkStore = createPluginStateKeyedStoreForTests<HostedOutboundMediaChunkRecord>(
-      "fixture-plugin",
-      {
-        namespace: "retry-delete-media-chunks",
-        maxEntries: 100,
-      },
-    );
-    const store = createHostedOutboundMediaStore({
-      metadataStore,
-      chunkStore,
-      ttlMs: 120_000,
-      resolveExpiresAtMs: () => Date.now() + 120_000,
-      createId: () => "abc123abc123abc123abc123",
-      createToken: () => "token123",
-      rawChunkBytes: 4,
-      maxEntries: 10,
-      maxChunkRows: 100,
-    });
-    await store.prepareUrl({
-      mediaUrl: "https://example.com/photo.png",
-      routePath: "/hook/media/",
-      publicBaseUrl: "https://gateway.example.com",
-      maxBytes: 1024,
-    });
+    loadWebMediaMock.mockResolvedValueOnce(imageMedia());
+    const { metadataStore, chunkStore, store } = createStoreFixture("retry-delete-media");
+    await prepare(store);
     const originalDelete = chunkStore.delete.bind(chunkStore);
     let deleteCalls = 0;
     vi.spyOn(chunkStore, "delete").mockImplementation(async (key) => {
@@ -526,17 +363,8 @@ describe("createHostedOutboundMediaStore", () => {
       maxChunkRows: 1,
       overflowPolicy: "reject-new",
     });
-    loadWebMediaMock.mockResolvedValue({
-      buffer: Buffer.from("image-bytes"),
-      kind: "image",
-      contentType: "image/png",
-    });
-    await store.prepareUrl({
-      mediaUrl: "https://example.com/first.png",
-      routePath: "/hook/media/",
-      publicBaseUrl: "https://gateway.example.com",
-      maxBytes: 1024,
-    });
+    loadWebMediaMock.mockResolvedValue(imageMedia());
+    await prepare(store, "https://example.com/first.png");
     let releaseDelete: (() => void) | undefined;
     let markDeleteStarted: (() => void) | undefined;
     const deleteStarted = new Promise<void>((resolve) => {
@@ -554,12 +382,7 @@ describe("createHostedOutboundMediaStore", () => {
 
     const deletion = store.delete("111111111111111111111111");
     await deleteStarted;
-    const replacement = store.prepareUrl({
-      mediaUrl: "https://example.com/second.png",
-      routePath: "/hook/media/",
-      publicBaseUrl: "https://gateway.example.com",
-      maxBytes: 1024,
-    });
+    const replacement = prepare(store, "https://example.com/second.png");
     let replacementSettled = false;
     void replacement.then(
       () => {
@@ -603,24 +426,10 @@ describe("createHostedOutboundMediaStore", () => {
       maxEntries: 2,
       maxChunkRows: 4,
     });
-    loadWebMediaMock.mockResolvedValue({
-      buffer: Buffer.from("image-bytes"),
-      kind: "image",
-      contentType: "image/png",
-    });
+    loadWebMediaMock.mockResolvedValue(imageMedia());
 
-    await store.prepareUrl({
-      mediaUrl: "https://example.com/first.png",
-      routePath: "/hook/media/",
-      publicBaseUrl: "https://gateway.example.com",
-      maxBytes: 1024,
-    });
-    await store.prepareUrl({
-      mediaUrl: "https://example.com/second.png",
-      routePath: "/hook/media/",
-      publicBaseUrl: "https://gateway.example.com",
-      maxBytes: 1024,
-    });
+    await prepare(store, "https://example.com/first.png");
+    await prepare(store, "https://example.com/second.png");
 
     expect(await store.read("111111111111111111111111")).toBeNull();
     expect(await store.read("222222222222222222222222")).not.toBeNull();
@@ -657,17 +466,8 @@ describe("createHostedOutboundMediaStore", () => {
       maxChunkRows: 1,
       overflowPolicy: "reject-new",
     });
-    loadWebMediaMock.mockResolvedValue({
-      buffer: Buffer.from("x"),
-      kind: "image",
-      contentType: "image/png",
-    });
-    await store.prepareUrl({
-      mediaUrl: "https://example.com/live.png",
-      routePath: "/hook/media/",
-      publicBaseUrl: "https://gateway.example.com",
-      maxBytes: 1024,
-    });
+    loadWebMediaMock.mockResolvedValue(imageMedia("x"));
+    await prepare(store, "https://example.com/live.png");
     await metadataStore.register(`media:${corruptId}:meta`, {
       id: liveId,
       routePath: "/hook/media/",
@@ -678,75 +478,11 @@ describe("createHostedOutboundMediaStore", () => {
       byteLength: 1,
     });
 
-    await expect(
-      store.prepareUrl({
-        mediaUrl: "https://example.com/rejected.png",
-        routePath: "/hook/media/",
-        publicBaseUrl: "https://gateway.example.com",
-        maxBytes: 1024,
-      }),
-    ).rejects.toThrow("hosted outbound media capacity is full");
+    await expect(prepare(store, "https://example.com/rejected.png")).rejects.toThrow(
+      "hosted outbound media capacity is full",
+    );
     expect(await store.read(liveId)).not.toBeNull();
     expect(await metadataStore.lookup(`media:${corruptId}:meta`)).toBeUndefined();
-  });
-
-  it("rejects overflow without revoking existing live URLs", async () => {
-    let idCounter = 0;
-    const ids = [
-      "111111111111111111111111",
-      "222222222222222222222222",
-      "333333333333333333333333",
-    ];
-    const store = createHostedOutboundMediaStore({
-      metadataStore: createPluginStateKeyedStoreForTests("fixture-plugin", {
-        namespace: "reject-capacity-media",
-        maxEntries: 2,
-        overflowPolicy: "reject-new",
-      }),
-      chunkStore: createPluginStateKeyedStoreForTests("fixture-plugin", {
-        namespace: "reject-capacity-media-chunks",
-        maxEntries: 2,
-        overflowPolicy: "reject-new",
-      }),
-      ttlMs: 120_000,
-      resolveExpiresAtMs: () => Date.now() + 120_000,
-      createId: () => ids[idCounter++] ?? "ffffffffffffffffffffffff",
-      createToken: () => "token123",
-      rawChunkBytes: 4,
-      maxEntries: 2,
-      maxChunkRows: 2,
-      overflowPolicy: "reject-new",
-    });
-    loadWebMediaMock.mockResolvedValue({
-      buffer: Buffer.from("x"),
-      kind: "image",
-      contentType: "image/png",
-    });
-
-    await store.prepareUrl({
-      mediaUrl: "https://example.com/first.png",
-      routePath: "/hook/media/",
-      publicBaseUrl: "https://gateway.example.com",
-      maxBytes: 1024,
-    });
-    await store.prepareUrl({
-      mediaUrl: "https://example.com/second.png",
-      routePath: "/hook/media/",
-      publicBaseUrl: "https://gateway.example.com",
-      maxBytes: 1024,
-    });
-
-    await expect(
-      store.prepareUrl({
-        mediaUrl: "https://example.com/third.png",
-        routePath: "/hook/media/",
-        publicBaseUrl: "https://gateway.example.com",
-        maxBytes: 1024,
-      }),
-    ).rejects.toThrow("hosted outbound media capacity is full");
-    expect(await store.read(ids[0] ?? "")).not.toBeNull();
-    expect(await store.read(ids[1] ?? "")).not.toBeNull();
-    expect(await store.read(ids[2] ?? "")).toBeNull();
   });
 
   it("serializes concurrent reject-new preparations without evicting live URLs", async () => {
@@ -776,31 +512,12 @@ describe("createHostedOutboundMediaStore", () => {
       maxChunkRows: 2,
       overflowPolicy: "reject-new",
     });
-    loadWebMediaMock.mockResolvedValue({
-      buffer: Buffer.from("x"),
-      kind: "image",
-      contentType: "image/png",
-    });
+    loadWebMediaMock.mockResolvedValue(imageMedia("x"));
 
-    await store.prepareUrl({
-      mediaUrl: "https://example.com/existing.png",
-      routePath: "/hook/media/",
-      publicBaseUrl: "https://gateway.example.com",
-      maxBytes: 1024,
-    });
+    await prepare(store, "https://example.com/existing.png");
     const results = await Promise.allSettled([
-      store.prepareUrl({
-        mediaUrl: "https://example.com/second.png",
-        routePath: "/hook/media/",
-        publicBaseUrl: "https://gateway.example.com",
-        maxBytes: 1024,
-      }),
-      store.prepareUrl({
-        mediaUrl: "https://example.com/third.png",
-        routePath: "/hook/media/",
-        publicBaseUrl: "https://gateway.example.com",
-        maxBytes: 1024,
-      }),
+      prepare(store, "https://example.com/second.png"),
+      prepare(store, "https://example.com/third.png"),
     ]);
 
     expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
@@ -808,60 +525,6 @@ describe("createHostedOutboundMediaStore", () => {
     expect(await store.read(ids[0] ?? "")).not.toBeNull();
     const liveNewEntries = await Promise.all(ids.slice(1).map(async (id) => await store.read(id)));
     expect(liveNewEntries.filter(Boolean)).toHaveLength(1);
-  });
-
-  it("rejects chunk-only overflow without revoking existing live URLs", async () => {
-    let idCounter = 0;
-    const ids = ["111111111111111111111111", "222222222222222222222222"];
-    const store = createHostedOutboundMediaStore({
-      metadataStore: createPluginStateKeyedStoreForTests("fixture-plugin", {
-        namespace: "reject-chunk-capacity-media",
-        maxEntries: 3,
-        overflowPolicy: "reject-new",
-      }),
-      chunkStore: createPluginStateKeyedStoreForTests("fixture-plugin", {
-        namespace: "reject-chunk-capacity-media-chunks",
-        maxEntries: 2,
-        overflowPolicy: "reject-new",
-      }),
-      ttlMs: 120_000,
-      resolveExpiresAtMs: () => Date.now() + 120_000,
-      createId: () => ids[idCounter++] ?? "ffffffffffffffffffffffff",
-      createToken: () => "token123",
-      rawChunkBytes: 4,
-      maxEntries: 3,
-      maxChunkRows: 2,
-      overflowPolicy: "reject-new",
-    });
-    loadWebMediaMock
-      .mockResolvedValueOnce({
-        buffer: Buffer.from("x"),
-        kind: "image",
-        contentType: "image/png",
-      })
-      .mockResolvedValueOnce({
-        buffer: Buffer.from("12345"),
-        kind: "image",
-        contentType: "image/png",
-      });
-
-    await store.prepareUrl({
-      mediaUrl: "https://example.com/existing.png",
-      routePath: "/hook/media/",
-      publicBaseUrl: "https://gateway.example.com",
-      maxBytes: 1024,
-    });
-    await expect(
-      store.prepareUrl({
-        mediaUrl: "https://example.com/rejected.png",
-        routePath: "/hook/media/",
-        publicBaseUrl: "https://gateway.example.com",
-        maxBytes: 1024,
-      }),
-    ).rejects.toThrow("hosted outbound media capacity is full");
-
-    expect(await store.read(ids[0] ?? "")).not.toBeNull();
-    expect(await store.read(ids[1] ?? "")).toBeNull();
   });
 
   it("rolls back only new chunks when reject-new backing capacity races", async () => {
@@ -892,135 +555,196 @@ describe("createHostedOutboundMediaStore", () => {
       overflowPolicy: "reject-new",
     });
     loadWebMediaMock
-      .mockResolvedValueOnce({
-        buffer: Buffer.from("x"),
-        kind: "image",
-        contentType: "image/png",
-      })
-      .mockResolvedValueOnce({
-        buffer: Buffer.from("12345"),
-        kind: "image",
-        contentType: "image/png",
-      });
+      .mockResolvedValueOnce(imageMedia("x"))
+      .mockResolvedValueOnce(imageMedia("12345"));
 
-    await store.prepareUrl({
-      mediaUrl: "https://example.com/existing.png",
-      routePath: "/hook/media/",
-      publicBaseUrl: "https://gateway.example.com",
-      maxBytes: 1024,
-    });
-    await expect(
-      store.prepareUrl({
-        mediaUrl: "https://example.com/racing.png",
-        routePath: "/hook/media/",
-        publicBaseUrl: "https://gateway.example.com",
-        maxBytes: 1024,
-      }),
-    ).rejects.toThrow("reached its 2-row limit");
+    await prepare(store, "https://example.com/existing.png");
+    await expect(prepare(store, "https://example.com/racing.png")).rejects.toThrow(
+      "reached its 2-row limit",
+    );
 
     expect(await store.read(ids[0] ?? "")).not.toBeNull();
     expect(await store.read(ids[1] ?? "")).toBeNull();
     expect(await chunkStore.entries()).toHaveLength(1);
   });
+});
 
-  it("removes written chunks when metadata registration fails", async () => {
-    const metadataStore = createPluginStateKeyedStoreForTests<HostedOutboundMediaMetaRecord>(
-      "fixture-plugin",
-      {
-        namespace: "rollback-media",
-        maxEntries: 10,
-      },
-    );
-    const chunkStore = createPluginStateKeyedStoreForTests<HostedOutboundMediaChunkRecord>(
-      "fixture-plugin",
-      {
-        namespace: "rollback-media-chunks",
-        maxEntries: 100,
-      },
-    );
+describe("hosted media bulk read error order", () => {
+  afterEach(() => resetPluginStateStoreForTests());
+  it("preserves early exits, cleanup, and reached errors", async () => {
+    await withOpenClawTestState({ label: "hosted-media-bulk-errors" }, async () => {
+      for (const early of ["missing", "invalid-index", "invalid-bytes", "valid"]) {
+        const metadataStore = createPluginStateKeyedStoreForTests<HostedOutboundMediaMetaRecord>(
+          "fixture-plugin",
+          { namespace: `meta-${early}`, maxEntries: 10 },
+        );
+        const chunkStore = createPluginStateKeyedStoreForTests<HostedOutboundMediaChunkRecord>(
+          "fixture-plugin",
+          { namespace: `chunks-${early}`, maxEntries: 10 },
+        );
+        const id = "abc123abc123abc123abc123";
+        const key = (index: number) => `media:${id}:chunk:${String(index).padStart(4, "0")}`;
+        await metadataStore.register(`media:${id}:meta`, {
+          id,
+          routePath: "/media/",
+          token: "synthetic-token",
+          expiresAt: Date.now() + 60_000,
+          chunkCount: 2,
+          byteLength: 8,
+        });
+        if (early !== "missing") {
+          await chunkStore.register(key(0), {
+            id,
+            index: early === "invalid-index" ? -1 : 0,
+            dataBase64: Buffer.from(early === "invalid-bytes" ? "x" : "1234").toString("base64"),
+          });
+        }
+        const { db } = openOpenClawStateDatabase();
+        // Seed corruption before a keyed write receipt can cache a valid chunk.
+        db.prepare(
+          "INSERT INTO plugin_state_entries (plugin_id, namespace, entry_key, value_json, created_at, expires_at) VALUES (?, ?, ?, ?, ?, NULL)",
+        ).run("fixture-plugin", `chunks-${early}`, key(1), "invalid JSON", Date.now());
+        const store = createHostedOutboundMediaStore({
+          metadataStore,
+          chunkStore,
+          ttlMs: 60_000,
+          resolveExpiresAtMs: () => Date.now() + 60_000,
+          rawChunkBytes: 4,
+          maxEntries: 10,
+          maxChunkRows: 10,
+        });
+        if (early === "valid") {
+          await expect(store.read(id)).rejects.toMatchObject({
+            code: "PLUGIN_STATE_CORRUPT",
+            operation: "lookup",
+          });
+          expect(await metadataStore.entries()).toHaveLength(1);
+        } else {
+          await expect(store.read(id)).resolves.toBeNull();
+          expect(await metadataStore.entries()).toEqual([]);
+          expect(await chunkStore.entries()).toEqual([]);
+        }
+      }
+    });
+  });
+});
+
+describe("hosted outbound media retention and aggregate capacity", () => {
+  const MEDIA_ID = "abc123abc123abc123abc123";
+  // Keep backing expiry independent of the logical URL/grace window.
+  const PHYSICAL_TTL_MS = 120_000;
+  const LOGICAL_TTL_MS = 100;
+
+  function createClockedStateStore<T>(
+    options: Parameters<typeof createPluginStateSyncKeyedStoreForTests>[1],
+  ): PluginStateKeyedStore<T> {
+    // Native workers have a real clock; retention fixtures need SQLite and media on one fake clock.
+    const store = createPluginStateSyncKeyedStoreForTests<T>("fixture-plugin", options);
+    return {
+      register: async (...args) => store.register(...args),
+      registerIfAbsent: async (...args) => store.registerIfAbsent(...args),
+      lookup: async (...args) => store.lookup(...args),
+      consume: async (...args) => store.consume(...args),
+      delete: async (key) => store.delete(key),
+      entries: async () => store.entries(),
+      clear: async () => store.clear(),
+    };
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    loadWebMediaMock.mockResolvedValue(imageMedia());
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("denies new reads at logical expiry and deletes rows after serving grace", async () => {
+    const metadataStore = createClockedStateStore<HostedOutboundMediaMetaRecord>({
+      namespace: "retained-ttl-media",
+      maxEntries: 10,
+    });
+    const chunkStore = createClockedStateStore<HostedOutboundMediaChunkRecord>({
+      namespace: "retained-ttl-media-chunks",
+      maxEntries: 100,
+    });
     const store = createHostedOutboundMediaStore({
-      metadataStore: {
-        ...metadataStore,
-        register: async () => {
-          throw new Error("metadata write failed");
-        },
-      },
+      metadataStore,
       chunkStore,
-      ttlMs: 120_000,
-      resolveExpiresAtMs: () => Date.now() + 120_000,
-      createId: () => "333333333333333333333333",
+      ttlMs: PHYSICAL_TTL_MS,
+      postExpiryRetentionMs: 100,
+      resolveExpiresAtMs: () => Date.now() + LOGICAL_TTL_MS,
+      createId: () => MEDIA_ID,
       createToken: () => "token123",
       rawChunkBytes: 4,
       maxEntries: 10,
       maxChunkRows: 100,
     });
-    loadWebMediaMock.mockResolvedValue({
-      buffer: Buffer.from("image-bytes"),
-      kind: "image",
-      contentType: "image/png",
-    });
 
-    await expect(
-      store.prepareUrl({
-        mediaUrl: "https://example.com/photo.png",
-        routePath: "/hook/media/",
-        publicBaseUrl: "https://gateway.example.com",
-        maxBytes: 1024,
-      }),
-    ).rejects.toThrow("metadata write failed");
+    await prepare(store);
+    vi.setSystemTime(1_101);
+    await expect(store.readMetadata(MEDIA_ID)).resolves.toBeNull();
+    await store.cleanupExpired();
+    expect(await metadataStore.entries()).toHaveLength(1);
+    expect(await chunkStore.entries()).toHaveLength(3);
 
-    expect(await chunkStore.entries()).toHaveLength(0);
+    vi.setSystemTime(1_201);
+    await store.cleanupExpired();
+    expect(await metadataStore.entries()).toEqual([]);
+    expect(await chunkStore.entries()).toEqual([]);
   });
 
-  it("cleans chunks after helper-owned metadata expiry", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date(1_000));
-    try {
-      const chunkStore = createPluginStateKeyedStoreForTests<HostedOutboundMediaChunkRecord>(
-        "fixture-plugin",
-        {
-          namespace: "expiry-media-chunks",
-          maxEntries: 100,
-        },
-      );
-      const store = createHostedOutboundMediaStore({
-        metadataStore: createPluginStateKeyedStoreForTests<HostedOutboundMediaMetaRecord>(
-          "fixture-plugin",
-          {
-            namespace: "expiry-media",
-            maxEntries: 10,
-          },
-        ),
-        chunkStore,
-        ttlMs: 1_000,
-        resolveExpiresAtMs: (ttlMs) => Date.now() + ttlMs,
-        createId: () => "444444444444444444444444",
-        createToken: () => "token123",
-        rawChunkBytes: 4,
-        maxEntries: 10,
-        maxChunkRows: 100,
-      });
-      loadWebMediaMock.mockResolvedValue({
-        buffer: Buffer.from("image-bytes"),
+  it("rejects an individually oversized entry before evicting live capabilities", async () => {
+    let id = 0;
+    const ids = ["333333333333333333333333", "444444444444444444444444"];
+    const store = createHostedOutboundMediaStore({
+      metadataStore: createPluginStateKeyedStoreForTests("fixture-plugin", {
+        namespace: "evicting-byte-media",
+        maxEntries: 2,
+      }),
+      chunkStore: createPluginStateKeyedStoreForTests("fixture-plugin", {
+        namespace: "evicting-byte-media-chunks",
+        maxEntries: 4,
+      }),
+      ttlMs: 120_000,
+      resolveExpiresAtMs: () => Date.now() + 120_000,
+      createId: () => ids[id++] ?? "ffffffffffffffffffffffff",
+      createToken: () => "token123",
+      rawChunkBytes: 4,
+      maxEntries: 2,
+      maxChunkRows: 4,
+      maxTotalBytes: 5,
+      overflowPolicy: "evict-oldest",
+    });
+    loadWebMediaMock
+      .mockResolvedValueOnce({
+        buffer: Buffer.from("abc"),
+        kind: "image",
+        contentType: "image/png",
+      })
+      .mockResolvedValueOnce({
+        buffer: Buffer.from("abcdef"),
         kind: "image",
         contentType: "image/png",
       });
 
-      await store.prepareUrl({
-        mediaUrl: "https://example.com/photo.png",
+    await store.prepareUrl({
+      mediaUrl: "https://example.com/first.png",
+      routePath: "/hook/media/",
+      publicBaseUrl: "https://gateway.example.com",
+      maxBytes: 10,
+    });
+    await expect(
+      store.prepareUrl({
+        mediaUrl: "https://example.com/oversized.png",
         routePath: "/hook/media/",
         publicBaseUrl: "https://gateway.example.com",
-        maxBytes: 1024,
-      });
-      expect(await chunkStore.entries()).toHaveLength(3);
-
-      vi.setSystemTime(new Date(3_000));
-      await store.cleanupExpired();
-
-      expect(await chunkStore.entries()).toHaveLength(0);
-      expect(await store.read("444444444444444444444444")).toBeNull();
-    } finally {
-      vi.useRealTimers();
-    }
+        maxBytes: 10,
+      }),
+    ).rejects.toThrow("payload exceeds aggregate byte capacity");
+    expect(await store.read(ids[0] ?? "")).not.toBeNull();
+    expect(await store.read(ids[1] ?? "")).toBeNull();
   });
 });

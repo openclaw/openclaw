@@ -1,16 +1,6 @@
-/**
- * Atomic lane-configuration publication.
- *
- * Round-4 review (fiducian-spencer-001) asked specifically for a regression
- * that "would fail if any member drains during publication before the group is
- * installed, not just a post-state assertion". A post-state check is too weak:
- * work admitted above budget during the publication window can complete before
- * the assertion runs, leaving final counts looking correct.
- *
- * These tests therefore observe PEAK concurrency across the window, using tasks
- * that park so nothing can retire before it is counted.
- */
+// Atomic publication installs all capacities before dispatch.
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import {
   clearCommandLane,
   enqueueCommandInLane,
@@ -36,22 +26,6 @@ function clearCommandLaneGroup(group: string): void {
   publishLaneConfiguration({ clearGroups: [group] });
 }
 
-function gate() {
-  let release!: () => void;
-  const promise = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  return { promise, release };
-}
-
-async function settle(): Promise<void> {
-  for (let i = 0; i < 5; i++) {
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
-  }
-}
-
 beforeEach(() => {
   resetAllLanes();
   clearCommandLaneGroup(GROUP);
@@ -66,26 +40,26 @@ afterEach(() => {
 
 describe("publishLaneConfiguration", () => {
   test("no member dispatches above budget DURING publication", async () => {
-    // Both lanes start closed with work already queued, so the only thing that
-    // can release them is publication itself. If publication widened a lane and
-    // drained it before installing the group — what the sequential per-lane
-    // setter does — the two lanes would admit up to 8 + 4 = 12 tasks.
+    // A per-lane drain before group installation would admit 8 + 4 tasks.
     setCommandLaneConcurrency(CRON, 0);
     setCommandLaneConcurrency(HOOK, 0);
 
     let active = 0;
     let peak = 0;
-    const gates: Array<{ release: () => void }> = [];
+    const publishedStarts = createDeferred();
+    const gates: Array<{ resolve: () => void }> = [];
     const runs: Array<Promise<unknown>> = [];
     const park = (lane: string) => {
-      const g = gate();
+      const g = createDeferred();
       gates.push(g);
       runs.push(
         enqueueCommandInLane(lane, async () => {
           active += 1;
-          // Peak is sampled on entry, before anything can retire, so work
-          // admitted inside the publication window cannot escape the count.
+          // Sample before any task can retire to catch transient over-admission.
           peak = Math.max(peak, active);
+          if (active >= 8) {
+            publishedStarts.resolve();
+          }
           await g.promise;
           active -= 1;
         }),
@@ -97,30 +71,37 @@ describe("publishLaneConfiguration", () => {
     for (let i = 0; i < 6; i++) {
       park(HOOK);
     }
-    await settle();
     expect(active).toBe(0); // nothing may run before publication
+    expect(getCommandLaneSnapshot(CRON).activeCount).toBe(0);
+    expect(getCommandLaneSnapshot(HOOK).activeCount).toBe(0);
 
-    publishLaneConfiguration({
-      lanes: { [CRON]: 8, [HOOK]: 4 },
-      groups: {
-        [GROUP]: {
-          budget: 8,
-          members: [CRON, HOOK],
-          reservations: { [HOOK]: 1 },
+    try {
+      publishLaneConfiguration({
+        lanes: { [CRON]: 8, [HOOK]: 4 },
+        groups: {
+          [GROUP]: {
+            budget: 8,
+            members: [CRON, HOOK],
+            reservations: { [HOOK]: 1 },
+          },
         },
-      },
-    });
-    await settle();
+      });
 
-    // The assertion the review asked for: peak, not final state.
-    expect(peak).toBeLessThanOrEqual(8);
-    // And not vacuous — publication must actually have dispatched to the cap.
-    expect(peak).toBe(8);
+      await withTestTimeout(
+        publishedStarts.promise,
+        1_000,
+        "publication did not start the shared group budget",
+      );
 
-    for (const g of gates) {
-      g.release();
+      expect(peak).toBe(8);
+    } finally {
+      for (const g of gates) {
+        g.resolve();
+      }
+      clearCommandLane(CRON);
+      clearCommandLane(HOOK);
+      await Promise.allSettled(runs);
     }
-    await Promise.all(runs);
   });
 
   test("commit dispatch uses group order rather than publication object order", async () => {
@@ -128,12 +109,15 @@ describe("publishLaneConfiguration", () => {
     setCommandLaneConcurrency(HOOK, 0);
 
     const starts: string[] = [];
-    const cronGate = gate();
-    const hookGate = gate();
+    const cronStarted = createDeferred();
+    const hookStarted = createDeferred();
+    const cronGate = createDeferred();
+    const hookGate = createDeferred();
     const olderCron = enqueueCommandInLane(
       CRON,
       async () => {
         starts.push(CRON);
+        cronStarted.resolve();
         await cronGate.promise;
       },
       { priority: "background" },
@@ -142,26 +126,40 @@ describe("publishLaneConfiguration", () => {
       HOOK,
       async () => {
         starts.push(HOOK);
+        hookStarted.resolve();
         await hookGate.promise;
       },
       { priority: "background" },
     );
 
-    // Deliberately publish HOOK first in both objects. The older CRON head must
-    // still own the single shared slot.
-    publishLaneConfiguration({
-      lanes: { [HOOK]: 1, [CRON]: 1 },
-      groups: { [GROUP]: { budget: 1, members: [HOOK, CRON] } },
-    });
-    await settle();
-    expect(starts).toEqual([CRON]);
+    try {
+      // HOOK is published first; the older CRON head must still win.
+      publishLaneConfiguration({
+        lanes: { [HOOK]: 1, [CRON]: 1 },
+        groups: { [GROUP]: { budget: 1, members: [HOOK, CRON] } },
+      });
+      await withTestTimeout(
+        cronStarted.promise,
+        1_000,
+        "publication did not start the older cron task",
+      );
+      expect(starts).toEqual([CRON]);
 
-    cronGate.release();
-    await olderCron;
-    await settle();
-    expect(starts).toEqual([CRON, HOOK]);
-    hookGate.release();
-    await newerHook;
+      cronGate.resolve();
+      await olderCron;
+      await withTestTimeout(
+        hookStarted.promise,
+        1_000,
+        "cron completion did not start the queued hook",
+      );
+      expect(starts).toEqual([CRON, HOOK]);
+    } finally {
+      cronGate.resolve();
+      hookGate.resolve();
+      clearCommandLane(CRON);
+      clearCommandLane(HOOK);
+      await Promise.allSettled([olderCron, newerHook]);
+    }
   });
 
   test("moving a busy member wakes queued work in its previous group", async () => {
@@ -170,19 +168,16 @@ describe("publishLaneConfiguration", () => {
       groups: { [GROUP]: { budget: 1, members: [CRON, HOOK] } },
     });
 
-    const cronGate = gate();
+    const cronGate = createDeferred();
     const cronRun = enqueueCommandInLane(CRON, async () => await cronGate.promise);
-    const hookGate = gate();
+    const hookGate = createDeferred();
     const hookRun = enqueueCommandInLane(HOOK, async () => await hookGate.promise);
-    await settle();
     expect(getCommandLaneSnapshot(HOOK)).toMatchObject({ activeCount: 0, queuedCount: 1 });
 
-    // CRON's active task stops counting against the old group as soon as it is
-    // moved. That newly free old-group capacity must wake HOOK immediately.
+    // Moving active CRON work must immediately free its old group for HOOK.
     publishLaneConfiguration({
       groups: { [MOVED_GROUP]: { budget: 1, members: [CRON, DELIVERY] } },
     });
-    await settle();
     expect(getCommandLaneSnapshot(HOOK)).toMatchObject({
       group: GROUP,
       activeCount: 1,
@@ -190,55 +185,16 @@ describe("publishLaneConfiguration", () => {
     });
     expect(getCommandLaneSnapshot(CRON).group).toBe(MOVED_GROUP);
 
-    cronGate.release();
-    hookGate.release();
+    cronGate.resolve();
+    hookGate.resolve();
     await Promise.all([cronRun, hookRun]);
   });
 
-  test("a rejected configuration does not leave lanes widened and dispatching", async () => {
-    setCommandLaneConcurrency(CRON, 0);
-    const gates = Array.from({ length: 4 }, () => gate());
-    const runs = gates.map((g) => enqueueCommandInLane(CRON, async () => await g.promise));
-    await settle();
-
-    // sum(reservations) > budget is rejected. Validation must happen before any
-    // drain, or the lane is left open at width 8 governed by no group at all.
-    expect(() =>
-      publishLaneConfiguration({
-        lanes: { [CRON]: 8 },
-        groups: {
-          [GROUP]: {
-            budget: 2,
-            members: [CRON, HOOK],
-            reservations: { [CRON]: 2, [HOOK]: 1 },
-          },
-        },
-      }),
-    ).toThrow(/reserves 3 slots but its budget is 2/);
-    await settle();
-
-    expect(getCommandLaneSnapshot(CRON).activeCount).toBe(0);
-
-    for (const g of gates) {
-      g.release();
-    }
-    // The lane never opened, so this work is still queued. resetAllLanes
-    // PRESERVES queued entries by design, so it would never settle these —
-    // clearCommandLane rejects them instead.
-    clearCommandLane(CRON);
-    await Promise.allSettled(runs);
-  });
-
   test("a rejected configuration does not leave lane maxima mutated", async () => {
-    // Stronger than asserting activeCount === 0 after the throw: that only
-    // proves no commit-time drain ran, not that the lane was left alone. If
-    // phase 1 widens a lane and group validation then throws, the lane sits at
-    // the new width governed by NO group, and the next unrelated drain trigger
-    // dispatches the preserved queue ungoverned.
+    // Reject before mutating: a later enqueue must not dispatch the preserved queue.
     setCommandLaneConcurrency(CRON, 0);
-    const gates = Array.from({ length: 4 }, () => gate());
+    const gates = Array.from({ length: 4 }, () => createDeferred());
     const runs = gates.map((g) => enqueueCommandInLane(CRON, async () => await g.promise));
-    await settle();
     expect(getCommandLaneSnapshot(CRON).maxConcurrent).toBe(0);
 
     expect(() =>
@@ -253,32 +209,24 @@ describe("publishLaneConfiguration", () => {
         },
       }),
     ).toThrow(/reserves 3 slots but its budget is 2/);
-    await settle();
 
-    // The lane must be exactly as it was before the rejected publish.
     expect(getCommandLaneSnapshot(CRON).maxConcurrent).toBe(0);
     expect(getCommandLaneSnapshot(CRON).group).toBeUndefined();
 
-    // And a later drain trigger must not dispatch the queue that was preserved
-    // across the failed publish.
-    const extra = gate();
+    const extra = createDeferred();
     const extraRun = enqueueCommandInLane(CRON, async () => await extra.promise);
-    await settle();
     expect(getCommandLaneSnapshot(CRON).activeCount).toBe(0);
 
     for (const g of gates) {
-      g.release();
+      g.resolve();
     }
-    extra.release();
+    extra.resolve();
     clearCommandLane(CRON);
     await Promise.allSettled([...runs, extraRun]);
   });
 
   test("a rejected replacement does not tear down the existing group first", async () => {
-    // costaff round-5: combining clearGroups with an invalid replacement is the
-    // worst case — the old group could be removed before the new one throws,
-    // leaving BOTH lane width and group membership partially committed. Phase 0
-    // validation has to run before the clear, not just before the install.
+    // Validate before clearing the old group or changing its members' widths.
     publishLaneConfiguration({
       lanes: { [CRON]: 8, [HOOK]: 1 },
       groups: {
@@ -301,7 +249,6 @@ describe("publishLaneConfiguration", () => {
       }),
     ).toThrow(/reserves 2 slots but its budget is 1/);
 
-    // Everything must be exactly as before: group intact, width untouched.
     expect(getCommandLaneSnapshot(CRON).group).toBe(GROUP);
     expect(getCommandLaneSnapshot(CRON).groupBudget).toBe(8);
     expect(getCommandLaneSnapshot(CRON).maxConcurrent).toBe(8);
@@ -309,30 +256,23 @@ describe("publishLaneConfiguration", () => {
   });
 
   test("publication wakes members when a replacement frees capacity", async () => {
-    // costaff round-5: the exported primitive's "replace" semantics were not
-    // self-waking. publishLaneConfiguration drains at commit, but a direct
-    // A publication that widens a budget or drops a reservation would
-    // leave queued members stuck until some unrelated enqueue poked the lane.
+    // Budget expansion must wake queued work without another enqueue.
     setCommandLaneConcurrency(CRON, 8);
     setCommandLaneConcurrency(HOOK, 1);
     setCommandLaneGroup(GROUP, { budget: 2, members: [CRON, HOOK] });
 
-    const gates = Array.from({ length: 5 }, () => gate());
+    const gates = Array.from({ length: 5 }, () => createDeferred());
     const runs = gates.map((g) => enqueueCommandInLane(CRON, async () => await g.promise));
-    await settle();
     expect(getCommandLaneSnapshot(CRON).activeCount).toBe(2);
     expect(getCommandLaneSnapshot(CRON).queuedCount).toBe(3);
 
-    // Widen the budget via the bare primitive — no publication involved.
     setCommandLaneGroup(GROUP, { budget: 5, members: [CRON, HOOK] });
-    await settle();
 
-    // The queued work must start on the replacement itself.
     expect(getCommandLaneSnapshot(CRON).activeCount).toBe(5);
     expect(getCommandLaneSnapshot(CRON).queuedCount).toBe(0);
 
     for (const g of gates) {
-      g.release();
+      g.resolve();
     }
     await Promise.all(runs);
   });
@@ -345,30 +285,27 @@ describe("publishLaneConfiguration", () => {
       },
     });
 
-    const gates = Array.from({ length: 3 }, () => gate());
+    const gates = Array.from({ length: 3 }, () => createDeferred());
     const runs = gates.map((g) => enqueueCommandInLane(CRON, async () => await g.promise));
-    await settle();
     expect(getCommandLaneSnapshot(CRON).activeCount).toBe(3);
 
-    // Narrowing mid-flight cannot evict running work, but it must not admit
-    // more: the group is already over its new budget.
+    // Narrowing cannot evict running work or admit more while over budget.
     publishLaneConfiguration({
       lanes: { [CRON]: 8, [HOOK]: 1 },
       groups: {
         [GROUP]: { budget: 2, members: [CRON, HOOK], reservations: { [HOOK]: 1 } },
       },
     });
-    const extra = gate();
+    const extra = createDeferred();
     const blocked = enqueueCommandInLane(CRON, async () => await extra.promise);
-    await settle();
 
     expect(getCommandLaneSnapshot(CRON).activeCount).toBe(3);
     expect(getCommandLaneSnapshot(CRON).blockedBy).toBe("group-budget");
 
     for (const g of gates) {
-      g.release();
+      g.resolve();
     }
-    extra.release();
+    extra.resolve();
     clearCommandLane(CRON);
     await Promise.allSettled([...runs, blocked]);
   });

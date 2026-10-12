@@ -1,3 +1,5 @@
+import type { SessionTranscriptVisibleMessageDeltaLimits } from "./session-accessor.sqlite-contract.js";
+
 const VISIBLE_MESSAGE_CURSOR_VERSION = 1;
 export const DEFAULT_VISIBLE_MESSAGE_MAX_MESSAGES = 1_000;
 export const DEFAULT_VISIBLE_MESSAGE_MAX_BYTES = 1_000_000;
@@ -26,6 +28,23 @@ export function normalizeVisibleMessageLimit(
   return resolved;
 }
 
+export function normalizeVisibleDeltaLimits(limits: SessionTranscriptVisibleMessageDeltaLimits) {
+  return {
+    maxMessages: normalizeVisibleMessageLimit(
+      limits.maxMessages,
+      DEFAULT_VISIBLE_MESSAGE_MAX_MESSAGES,
+      MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
+      "maxMessages",
+    ),
+    maxBytes: normalizeVisibleMessageLimit(
+      limits.maxBytes,
+      DEFAULT_VISIBLE_MESSAGE_MAX_BYTES,
+      MAX_VISIBLE_MESSAGE_MAX_BYTES,
+      "maxBytes",
+    ),
+  };
+}
+
 export function encodeVisibleMessageCursor(cursor: VisibleMessageCursor): string {
   return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
 }
@@ -36,7 +55,9 @@ export function createVisibleMessageCursor(params: {
   sessionId: string;
 }): VisibleMessageCursor {
   return {
-    ...params,
+    agentId: params.agentId,
+    generation: params.generation,
+    sessionId: params.sessionId,
     lastEventSeq: -1,
     lastMessagePosition: -1,
     version: VISIBLE_MESSAGE_CURSOR_VERSION,
@@ -44,29 +65,41 @@ export function createVisibleMessageCursor(params: {
 }
 
 export function parseVisibleMessageCursor(value: string): VisibleMessageCursor | undefined {
-  // The cursor is a continuation hint, not an authorization token. Every field
-  // is revalidated against the current scope, generation, and projection.
+  // Accept only exact encoder output so aliases and unknown fields cannot resume or be re-emitted.
+  // The caller still revalidates this continuation hint against the current scope and projection.
   if (value.length > 4_096) {
     return undefined;
   }
   try {
-    const parsed = JSON.parse(
-      Buffer.from(value, "base64url").toString("utf8"),
-    ) as Partial<VisibleMessageCursor>;
+    const bytes = Buffer.from(value, "base64url");
+    if (bytes.toString("base64url") !== value) {
+      return undefined;
+    }
+    const parsed = JSON.parse(bytes.toString("utf8")) as Partial<VisibleMessageCursor>;
     if (
       parsed.version !== VISIBLE_MESSAGE_CURSOR_VERSION ||
       typeof parsed.agentId !== "string" ||
       typeof parsed.sessionId !== "string" ||
       typeof parsed.generation !== "string" ||
+      typeof parsed.lastEventSeq !== "number" ||
       !Number.isSafeInteger(parsed.lastEventSeq) ||
-      (parsed.lastEventSeq ?? -2) < -1 ||
+      parsed.lastEventSeq < -1 ||
+      typeof parsed.lastMessagePosition !== "number" ||
       !Number.isSafeInteger(parsed.lastMessagePosition) ||
-      (parsed.lastMessagePosition ?? -2) < -1 ||
+      parsed.lastMessagePosition < -1 ||
       (parsed.lastEventSeq === -1) !== (parsed.lastMessagePosition === -1)
     ) {
       return undefined;
     }
-    return parsed as VisibleMessageCursor;
+    const cursor: VisibleMessageCursor = {
+      agentId: parsed.agentId,
+      generation: parsed.generation,
+      sessionId: parsed.sessionId,
+      lastEventSeq: parsed.lastEventSeq,
+      lastMessagePosition: parsed.lastMessagePosition,
+      version: parsed.version,
+    };
+    return encodeVisibleMessageCursor(cursor) === value ? cursor : undefined;
   } catch {
     return undefined;
   }

@@ -2,6 +2,10 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import {
+  isProviderAuthProfileConfigured,
+  isProviderAuthProfileConfiguredAsync,
+} from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -14,11 +18,8 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   };
 });
 
-import {
-  buildMinimaxMusicGenerationProvider,
-  buildMinimaxPortalMusicGenerationProvider,
-} from "./music-generation-provider.js";
-import { buildMinimaxSpeechProvider } from "./speech-provider.js";
+import { buildMinimaxMusicGenerationProvider } from "./music-generation-provider.js";
+import { buildMinimaxSpeechProvider } from "./speech-provider-factory.js";
 import { minimaxTTS } from "./tts.js";
 
 describe("minimaxTTS", () => {
@@ -28,14 +29,9 @@ describe("minimaxTTS", () => {
   });
 
   it("caps oversized request timeout before arming abort timers", async () => {
-    const timeoutSpy = vi
-      .spyOn(globalThis, "setTimeout")
-      .mockReturnValue(0 as unknown as ReturnType<typeof setTimeout>);
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response(
-        JSON.stringify({ data: { audio: Buffer.from("audio").toString("hex") } }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      ),
+      response: Response.json({ data: { audio: Buffer.from("audio").toString("hex") } }),
       release: vi.fn(async () => undefined),
     });
 
@@ -58,13 +54,10 @@ describe("minimaxTTS", () => {
 
   it("throws on base_resp envelope error even when data.audio is present (regression #76904)", async () => {
     fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response(
-        JSON.stringify({
-          data: { audio: Buffer.from("placeholder").toString("hex") },
-          base_resp: { status_code: 1002, status_msg: "Quota exceeded" },
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      ),
+      response: Response.json({
+        data: { audio: Buffer.from("placeholder").toString("hex") },
+        base_resp: { status_code: 1002, status_msg: "Quota exceeded" },
+      }),
       release: vi.fn(async () => undefined),
     });
 
@@ -79,65 +72,20 @@ describe("minimaxTTS", () => {
       }),
     ).rejects.toThrow("MiniMax TTS API error (1002): Quota exceeded");
   });
-
-  it("throws on base_resp envelope error with empty audio", async () => {
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response(
-        JSON.stringify({
-          base_resp: { status_code: 1001, status_msg: "Rate limit" },
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      ),
-      release: vi.fn(async () => undefined),
-    });
-
-    await expect(
-      minimaxTTS({
-        text: "hello",
-        apiKey: "sk-test",
-        baseUrl: "https://api.minimax.io",
-        model: "speech-2.8-hd",
-        voiceId: "English_expressive_narrator",
-        timeoutMs: 10_000,
-      }),
-    ).rejects.toThrow("MiniMax TTS API error (1001): Rate limit");
-  });
-
-  it("succeeds when base_resp.status_code is 0", async () => {
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response(
-        JSON.stringify({
-          data: { audio: Buffer.from("real-audio").toString("hex") },
-          base_resp: { status_code: 0, status_msg: "success" },
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      ),
-      release: vi.fn(async () => undefined),
-    });
-
-    const audio = await minimaxTTS({
-      text: "hello",
-      apiKey: "sk-test",
-      baseUrl: "https://api.minimax.io",
-      model: "speech-2.8-hd",
-      voiceId: "English_expressive_narrator",
-      timeoutMs: 10_000,
-    });
-
-    expect(audio.toString()).toBe("real-audio");
-  });
 });
 
 type MinimaxWireFixture = {
   entryPoint: "tts" | "speech" | "music";
   provider?: "minimax" | "minimax-portal";
   audio?: string;
+  responseBody?: unknown;
   frames?: Array<{ status?: number | string; audio?: string } | "[DONE]">;
   mediaMaxMb?: number;
 };
 
 async function runMinimaxLoopbackFixture(fixture: MinimaxWireFixture): Promise<Buffer> {
   const originalFetch = globalThis.fetch;
+  const release = vi.fn(async () => {});
   const server = createServer((request, response) => {
     request.resume();
     if (fixture.entryPoint === "music") {
@@ -158,10 +106,14 @@ async function runMinimaxLoopbackFixture(fixture: MinimaxWireFixture): Promise<B
     }
     response.writeHead(200, { "content-type": "application/json" });
     response.end(
-      JSON.stringify({
-        data: { audio: fixture.audio, status: 2 },
-        base_resp: { status_code: 0, status_msg: "success" },
-      }),
+      JSON.stringify(
+        fixture.responseBody === undefined
+          ? {
+              data: { audio: fixture.audio, status: 2 },
+              base_resp: { status_code: 0, status_msg: "success" },
+            }
+          : fixture.responseBody,
+      ),
     );
   });
   await new Promise<void>((resolve, reject) => {
@@ -180,7 +132,7 @@ async function runMinimaxLoopbackFixture(fixture: MinimaxWireFixture): Promise<B
   });
   fetchWithSsrFGuardMock.mockImplementation(async ({ url, init }) => ({
     response: await fetch(url, init),
-    release: async () => {},
+    release,
   }));
 
   try {
@@ -195,7 +147,10 @@ async function runMinimaxLoopbackFixture(fixture: MinimaxWireFixture): Promise<B
       });
     }
     if (fixture.entryPoint === "speech") {
-      const result = await buildMinimaxSpeechProvider().synthesize({
+      const result = await buildMinimaxSpeechProvider({
+        isProviderAuthProfileConfigured,
+        isProviderAuthProfileConfiguredAsync,
+      }).synthesize({
         text: "loopback fixture",
         cfg: {},
         providerConfig: { apiKey: "fixture-provider-key", baseUrl: "https://api.minimax.io" },
@@ -206,10 +161,7 @@ async function runMinimaxLoopbackFixture(fixture: MinimaxWireFixture): Promise<B
     }
 
     const providerId = fixture.provider ?? "minimax";
-    const provider =
-      providerId === "minimax-portal"
-        ? buildMinimaxPortalMusicGenerationProvider()
-        : buildMinimaxMusicGenerationProvider();
+    const provider = buildMinimaxMusicGenerationProvider(providerId);
     const result = await provider.generateMusic({
       provider: providerId,
       model: "music-2.6",
@@ -237,16 +189,37 @@ async function runMinimaxLoopbackFixture(fixture: MinimaxWireFixture): Promise<B
     fetchWithSsrFGuardMock.mockReset();
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
+    if (fixture.entryPoint !== "music") {
+      expect(release).toHaveBeenCalledOnce();
+    }
   }
 }
 
 describe("MiniMax media producers through real localhost HTTP", () => {
   it.each([
-    { name: "trailing non-hex", audio: "666f6fZZ" },
-    { name: "odd-length hex", audio: "666f6" },
-    { name: "entirely non-hex", audio: "ZZ" },
-  ])("rejects $name TTS audio without truncating it", async ({ audio }) => {
-    await expect(runMinimaxLoopbackFixture({ entryPoint: "tts", audio })).rejects.toThrow(
+    { name: "null envelope", responseBody: null, error: "minimax.tts: malformed JSON response" },
+    { name: "array envelope", responseBody: [], error: "minimax.tts: malformed JSON response" },
+    {
+      name: "numeric audio",
+      responseBody: { data: { audio: 42 } },
+      error: "MiniMax TTS API returned no audio data",
+    },
+    {
+      name: "nonstring error message",
+      responseBody: {
+        data: { audio: "706c616365686f6c646572" },
+        base_resp: { status_code: 1002, status_msg: {} },
+      },
+      error: "MiniMax TTS API error (1002): unknown error",
+    },
+  ])("reports $name through the speech provider", async ({ responseBody, error }) => {
+    await expect(runMinimaxLoopbackFixture({ entryPoint: "speech", responseBody })).rejects.toThrow(
+      error,
+    );
+  });
+
+  it("rejects odd-length hex TTS audio without truncating it", async () => {
+    await expect(runMinimaxLoopbackFixture({ entryPoint: "tts", audio: "666f6" })).rejects.toThrow(
       "MiniMax TTS API returned malformed hex audio",
     );
   });

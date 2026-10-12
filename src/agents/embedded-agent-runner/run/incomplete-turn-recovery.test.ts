@@ -3,11 +3,13 @@ import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import {
   resolveEmptyResponseRetryInstruction,
   resolveReasoningOnlyRetryInstruction,
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./incomplete-turn-recovery.js";
+import { resolveIncompleteTurnPayloadText } from "./incomplete-turn-resolution.js";
 
 const EMPTY_RESPONSE_RETRY_INSTRUCTION =
   "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
@@ -31,6 +33,95 @@ function emptyAttempt(assistant = emptyAssistant()) {
 }
 
 describe("incomplete-turn recovery policy", () => {
+  it("does not request a visible continuation for an authored speech-only answer", () => {
+    const assistant = emptyAssistant({
+      content: [
+        { type: "thinking", thinking: "Prepare a spoken greeting.", thinkingSignature: "" },
+        { type: "text", text: "" },
+      ],
+      openclawDelivery: { tts: { tagged: true, text: "Have a lovely day." } },
+    });
+
+    expect(
+      resolveReasoningOnlyRetryInstruction({
+        modelApi: "openai-completions",
+        aborted: false,
+        timedOut: false,
+        attempt: emptyAttempt(assistant),
+      }),
+    ).toBeNull();
+  });
+
+  it.each([
+    { terminalReplyExpectation: "required", owner: "unfinished lifecycle item" },
+    { terminalReplyExpectation: "optional", owner: "async tool" },
+    { terminalReplyExpectation: "optional", owner: "active lifecycle item" },
+    { terminalReplyExpectation: "optional", owner: "unfinished lifecycle item" },
+  ] as const)(
+    "keeps $owner out of completed silence (reply=$terminalReplyExpectation)",
+    ({ terminalReplyExpectation, owner }) => {
+      const assistant = emptyAssistant({ content: [{ type: "text", text: "NO_REPLY" }] });
+      const attempt = makeEmbeddedRunnerAttempt({
+        assistantTexts: ["NO_REPLY"],
+        lastAssistant: assistant,
+        currentAttemptAssistant: assistant,
+        toolMetas: [
+          { toolName: "image_generate", asyncStarted: owner === "async tool", replaySafe: false },
+        ],
+        itemLifecycle: {
+          startedCount: 1,
+          completedCount: owner === "async tool" ? 1 : 0,
+          activeCount: owner === "active lifecycle item" ? 1 : 0,
+        },
+        replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+        currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+      });
+      const state = { payloadCount: 0, aborted: false, timedOut: false, attempt };
+      // Silence must not steal completion ownership from background work. Nor
+      // may it trigger a replay or a spurious warning while that owner continues.
+      expect(
+        shouldTreatEmptyAssistantReplyAsSilent({
+          ...state,
+          allowEmptyAssistantReplyAsSilent: true,
+          terminalReplyExpectation,
+        }),
+      ).toBe(false);
+      expect(resolveEmptyResponseRetryInstruction(state)).toBeNull();
+      expect(resolveIncompleteTurnPayloadText({ ...state, externalAbort: false })).toBeNull();
+    },
+  );
+
+  it.each([
+    { name: "visible terminal stop", text: "The final answer.", stopReason: "stop" },
+    { name: "failed terminal sentinel", text: "NO_REPLY", stopReason: "error" },
+    { name: "aborted terminal sentinel", text: "NO_REPLY", stopReason: "aborted" },
+  ] as const)("does not revive earlier silence after $name", ({ text, stopReason }) => {
+    const assistant = emptyAssistant({ content: [{ type: "text", text }], stopReason });
+    const attempt = emptyAttempt(assistant);
+    attempt.assistantTexts = ["NO_REPLY"];
+    expect(
+      shouldTreatEmptyAssistantReplyAsSilent({
+        allowEmptyAssistantReplyAsSilent: true,
+        terminalReplyExpectation: "optional",
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBe(false);
+    if (stopReason === "error") {
+      expect(
+        resolveIncompleteTurnPayloadText({
+          payloadCount: 0,
+          aborted: false,
+          externalAbort: false,
+          timedOut: false,
+          attempt,
+        }),
+      ).toContain("couldn't generate a response");
+    }
+  });
+
   it.each([
     {
       name: "zero-token Anthropic stop",
@@ -41,33 +132,7 @@ describe("incomplete-turn recovery policy", () => {
         provider: "anthropic",
         model: "claude-opus-4.7",
         content: [],
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-      }),
-    },
-    {
-      name: "Anthropic-compatible positive-output stop",
-      provider: "sub2api",
-      modelId: "claude-opus-4-7",
-      modelApi: "anthropic-messages",
-      assistant: emptyAssistant({
-        api: "anthropic-messages",
-        provider: "sub2api",
-        model: "claude-opus-4-7",
-        usage: {
-          input: 2048,
-          output: 3100,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 5148,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+        usage: createZeroUsageFixture(),
       }),
     },
     {
@@ -133,72 +198,5 @@ describe("incomplete-turn recovery policy", () => {
         attempt: emptyAttempt(assistant),
       }),
     ).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
-  });
-
-  it("treats reply-optional post-tool empty stops as silent after side effects", () => {
-    const assistant = emptyAssistant();
-    const attempt = makeEmbeddedRunnerAttempt({
-      assistantTexts: [],
-      toolMetas: [{ toolName: "sessions", meta: "patch archived", replaySafe: false }],
-      lastAssistant: assistant,
-      currentAttemptAssistant: assistant,
-    });
-
-    expect(
-      shouldTreatEmptyAssistantReplyAsSilent({
-        allowEmptyAssistantReplyAsSilent: true,
-        terminalReplyExpectation: "optional",
-        payloadCount: 0,
-        aborted: false,
-        timedOut: false,
-        attempt,
-      }),
-    ).toBe(true);
-    expect(
-      shouldTreatEmptyAssistantReplyAsSilent({
-        allowEmptyAssistantReplyAsSilent: true,
-        terminalReplyExpectation: "required",
-        payloadCount: 0,
-        aborted: false,
-        timedOut: false,
-        attempt,
-      }),
-    ).toBe(false);
-  });
-
-  it.each([
-    {
-      name: "tool failure",
-      attempt: makeEmbeddedRunnerAttempt({
-        assistantTexts: [],
-        toolMetas: [
-          { toolName: "sessions", meta: "patch failed", replaySafe: false, isError: true },
-        ],
-        lastToolError: { toolName: "sessions", error: "patch failed" },
-        lastAssistant: emptyAssistant(),
-      }),
-      aborted: false,
-    },
-    {
-      name: "assistant error",
-      attempt: emptyAttempt(emptyAssistant({ stopReason: "error" })),
-      aborted: false,
-    },
-    {
-      name: "caller abort",
-      attempt: emptyAttempt(emptyAssistant({ stopReason: "error" })),
-      aborted: true,
-    },
-  ])("does not treat $name as intentional silence", ({ attempt, aborted }) => {
-    expect(
-      shouldTreatEmptyAssistantReplyAsSilent({
-        allowEmptyAssistantReplyAsSilent: true,
-        terminalReplyExpectation: "optional",
-        payloadCount: 0,
-        aborted,
-        timedOut: false,
-        attempt,
-      }),
-    ).toBe(false);
   });
 });

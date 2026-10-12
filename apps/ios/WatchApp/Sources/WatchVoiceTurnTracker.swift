@@ -19,8 +19,7 @@ struct WatchVoiceTurnTracker: Codable, Equatable {
             return nil
         }
 
-        self.commandId = nil
-        self.isAwaitingReply = false
+        self.cancel()
         return text
     }
 
@@ -87,15 +86,11 @@ struct WatchVoiceTurnState: Codable, Equatable {
         self.startedAtMs = nil
     }
 
-    mutating func expireIfNeeded(nowMs: Int64) {
-        guard self.tracker.isAwaitingReply,
-              let startedAtMs,
-              nowMs >= startedAtMs,
-              nowMs - startedAtMs >= Self.timeoutMs
-        else {
-            return
-        }
+    @discardableResult
+    mutating func expireIfNeeded(nowMs: Int64) -> Bool {
+        guard self.remainingTimeoutMs(nowMs: nowMs) == 0 else { return false }
         self.cancel()
+        return true
     }
 
     func remainingTimeoutMs(nowMs: Int64) -> Int64? {
@@ -120,22 +115,26 @@ extension WatchInboxStore {
     }
 
     func consume(chatCompletion message: WatchChatCompletionMessage) {
+        let nowMs = WatchVoiceTurnState.nowMs()
+        self.expireVoiceTurnIfNeeded(nowMs: nowMs)
         let previousState = self.voiceTurnState
-        self.voiceTurnState.receive(message, nowMs: WatchVoiceTurnState.nowMs())
+        self.voiceTurnState.receive(message, nowMs: nowMs)
         guard self.voiceTurnState != previousState else { return }
-        self.persistVoiceTurnState()
+        self.persistState()
     }
 
     func beginVoiceTurn(commandId: String) {
         self.voiceTurnState.begin(commandId: commandId, nowMs: WatchVoiceTurnState.nowMs())
-        self.persistVoiceTurnState()
+        self.persistState()
     }
 
     func takeVoiceReply() -> String? {
+        let nowMs = WatchVoiceTurnState.nowMs()
+        self.expireVoiceTurnIfNeeded(nowMs: nowMs)
         let previousState = self.voiceTurnState
-        let reply = self.voiceTurnState.takeReply(nowMs: WatchVoiceTurnState.nowMs())
+        let reply = self.voiceTurnState.takeReply(nowMs: nowMs)
         if self.voiceTurnState != previousState {
-            self.persistVoiceTurnState()
+            self.persistState()
         }
         return reply
     }
@@ -143,20 +142,29 @@ extension WatchInboxStore {
     func cancelVoiceTurn() {
         guard self.voiceTurnState.isAwaitingReply || self.voiceTurnState.completion != nil else { return }
         self.voiceTurnState.cancel()
-        self.persistVoiceTurnState()
+        self.persistState()
     }
 
     func voiceReplyTimeoutNanoseconds() -> UInt64? {
-        let previousState = self.voiceTurnState
         let nowMs = WatchVoiceTurnState.nowMs()
-        self.voiceTurnState.expireIfNeeded(nowMs: nowMs)
-        if self.voiceTurnState != previousState {
-            self.persistVoiceTurnState()
-        }
+        self.expireVoiceTurnIfNeeded(nowMs: nowMs)
         guard let remainingMs = self.voiceTurnState.remainingTimeoutMs(nowMs: nowMs) else {
             return nil
         }
         return UInt64(remainingMs) * 1_000_000
+    }
+
+    func expireVoiceTurnIfNeeded(nowMs: Int64) {
+        let commandId = self.voiceTurnState.tracker.commandId
+        guard self.voiceTurnState.expireIfNeeded(nowMs: nowMs) else { return }
+        guard self.canPresentChatDelivery(commandId: commandId) else {
+            self.persistState()
+            return
+        }
+        // Only readback expires; the message may already be delivered or still running.
+        self.markAppCommandBlocked(
+            .sendChat,
+            reason: String(localized: "Spoken reply timed out. Check Chat on iPhone."))
     }
 }
 #endif

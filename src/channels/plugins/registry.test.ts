@@ -1,8 +1,12 @@
 // Registry tests cover channel plugin registry installation, lookup, and reset behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import type { PluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import {
   getChannelPlugin,
   getLoadedChannelPlugin,
@@ -20,58 +24,49 @@ vi.mock("./bundled.js", () => ({
       : undefined,
 }));
 
-function withMalformedChannels(registry: PluginRegistry): PluginRegistry {
-  const malformed = { ...registry } as PluginRegistry;
-  (malformed as { channels?: unknown }).channels = undefined;
-  return malformed;
-}
-
 afterEach(() => {
   resetPluginRuntimeStateForTest();
 });
 
 describe("listChannelPlugins", () => {
-  it("returns an empty list when runtime registry has no channels field", () => {
-    const malformedRegistry = withMalformedChannels(createEmptyPluginRegistry());
-    setActivePluginRegistry(malformedRegistry);
-
-    expect(listChannelPlugins()).toStrictEqual([]);
-  });
-
-  it("falls back to bundled channel plugins for direct lookups before registry bootstrap", () => {
-    setActivePluginRegistry(createEmptyPluginRegistry());
-
-    expect(getChannelPlugin("fallback")?.meta.label).toBe("fallback");
-    expect(resolveChannelPluginRegistration("fallback")).toMatchObject({
-      origin: "bundled",
-      plugin: {
-        id: "fallback",
-      },
-    });
-  });
-
-  it("does not let a loaded external override inherit bundled fallback provenance", () => {
+  it("keeps the scoped channel implementation and its registration provenance together", () => {
+    const root = createChannelTestPluginBase({ id: "fallback", label: "Root" });
+    const scoped = createChannelTestPluginBase({ id: "fallback", label: "Scoped" });
+    const resolveChannelRuntime = vi.fn();
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "root", plugin: root, origin: "bundled", source: "root" }]),
+    );
     const registry = createEmptyPluginRegistry();
     registry.channels = [
       {
-        pluginId: "external-fallback",
-        plugin: {
-          id: "fallback",
-          meta: { label: "external fallback" },
-        } as never,
+        pluginId: "scoped",
+        plugin: scoped,
         origin: "config",
-        source: "test",
+        source: "scoped",
+        resolveChannelRuntime,
       },
     ];
-    setActivePluginRegistry(registry);
 
-    expect(resolveChannelPluginRegistration("fallback")).toMatchObject({
-      origin: "config",
-      plugin: {
-        meta: {
-          label: "external fallback",
-        },
-      },
+    withPluginRuntimeRegistryScope(registry, () => {
+      expect(resolveChannelPluginRegistration("fallback")).toEqual({
+        plugin: scoped,
+        origin: "config",
+        resolveChannelRuntime,
+      });
+      expect(getChannelPlugin("fallback")).toBe(scoped);
+    });
+    expect(getChannelPlugin("fallback")).toBe(root);
+  });
+
+  it("preserves unrelated root and bundled addressability inside an empty CLI handle", () => {
+    const root = createChannelTestPluginBase({ id: "root-only" });
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "root-only", plugin: root, source: "root" }]),
+    );
+
+    withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), () => {
+      expect(getChannelPlugin("root-only")).toBe(root);
+      expect(resolveChannelPluginRegistration("fallback")?.origin).toBe("bundled");
     });
   });
 

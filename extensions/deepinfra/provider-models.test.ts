@@ -1,20 +1,16 @@
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-// Deepinfra tests cover provider models plugin behavior.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const isProviderApiKeyConfiguredMock = vi.hoisted(() => vi.fn<(p: unknown) => boolean>());
+// mock-isolation: Discovery tests control credential availability without reading host auth state.
 vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
-  isProviderApiKeyConfigured: isProviderApiKeyConfiguredMock,
+  isProviderApiKeyConfiguredAsync: async (params: unknown) =>
+    isProviderApiKeyConfiguredMock(params),
 }));
 
-import {
-  buildDeepInfraModelDefinition,
-  DEEPINFRA_DEFAULT_MODEL_REF,
-  DEEPINFRA_MODEL_CATALOG,
-  discoverDeepInfraModels,
-  discoverDeepInfraSurfaces,
-  hasDeepInfraApiKey,
-} from "./provider-models.js";
+import { buildDeepInfraProvider } from "./api.js";
+import { discoverDeepInfraModels, discoverDeepInfraSurfaces } from "./provider-models.js";
+import { DEEPINFRA_MODEL_CATALOG } from "./provider-static-catalog.js";
 
 const DEEPINFRA_MODELS_URL =
   "https://api.deepinfra.com/v1/openai/models?sort_by=openclaw&filter=with_meta";
@@ -45,23 +41,8 @@ function makeAgentModelEntry(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function jsonResponse(payload: unknown, init: ResponseInit = {}): Response {
-  return new Response(JSON.stringify(payload), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-    ...init,
-  });
-}
-
-function expectedStaticChatCatalog() {
-  // Mirror the production mapping (provider-catalog.ts / discoverDeepInfraModels)
-  // so per-family compat tagging (e.g. thinkingFormat) stays in one place.
-  return DEEPINFRA_MODEL_CATALOG.map(buildDeepInfraModelDefinition);
-}
-
-function expectedLiveChatCatalog(liveModels: ReturnType<typeof expectedStaticChatCatalog>) {
-  const liveIds = new Set(liveModels.map((model) => model.id));
-  return [...liveModels, ...expectedStaticChatCatalog().filter((model) => !liveIds.has(model.id))];
+function surfaceEntry(id: string, tags: string[], metadata: Record<string, unknown> = {}) {
+  return makeAgentModelEntry({ id, metadata: { tags, ...metadata } });
 }
 
 async function withFetchPathTest(
@@ -69,449 +50,200 @@ async function withFetchPathTest(
   envOverrides: Record<string, string | undefined>,
   runAssertions: () => Promise<void>,
 ) {
-  const env = { ...process.env };
-  delete process.env.NODE_ENV;
-  delete process.env.VITEST;
   for (const [key, value] of Object.entries(envOverrides)) {
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      Reflect.set(process.env, key, value);
-    }
+    vi.stubEnv(key, value);
   }
   vi.stubGlobal("fetch", mockFetch);
-
   try {
     await runAssertions();
   } finally {
-    for (const key of Object.keys(envOverrides)) {
-      if (env[key] === undefined) {
-        delete process.env[key];
-      } else {
-        Reflect.set(process.env, key, env[key]);
-      }
-    }
-    if (env.NODE_ENV !== undefined) {
-      process.env.NODE_ENV = env.NODE_ENV;
-    }
-    if (env.VITEST !== undefined) {
-      process.env.VITEST = env.VITEST;
-    }
+    vi.unstubAllEnvs();
     vi.unstubAllGlobals();
   }
 }
 
-function requireFirstFetchCall(mockFetch: ReturnType<typeof vi.fn>): [unknown, unknown] {
-  const [call] = mockFetch.mock.calls;
-  if (!call) {
-    throw new Error("expected DeepInfra models fetch call");
-  }
-  return call as [unknown, unknown];
+afterEach(() => {
+  clearLiveCatalogCacheForTests();
+  vi.restoreAllMocks();
+});
+
+function mockProjectionFetch(projection: () => Promise<Response> | Response) {
+  return vi.fn(async (url: string) => {
+    if (url === "https://api.deepinfra.com/models/list") {
+      return Response.json([
+        {
+          model_name: "fixture/native-only",
+          pricing: { type: "tokens", cents_per_input_token: 0.0002, cents_per_output_token: 0.001 },
+        },
+      ]);
+    }
+    expect(url).toBe(DEEPINFRA_MODELS_URL);
+    return projection();
+  });
 }
 
-describe("buildDeepInfraModelDefinition", () => {
-  it("tags DeepSeek-family models with thinkingFormat 'deepseek'", () => {
-    const built = buildDeepInfraModelDefinition({
-      id: "deepseek-ai/DeepSeek-V4-Flash",
-      name: "DeepSeek V4 Flash",
-    } as never);
-    expect(built.compat?.thinkingFormat).toBe("deepseek");
-    expect(built.compat?.supportsUsageInStreaming).toBe(true);
+describe("DeepInfra pre-auth discovery", () => {
+  it("stays offline with a blank environment key and no saved profile", async () => {
+    const mockFetch = vi.fn();
+    await withFetchPathTest(mockFetch, {}, async () => {
+      expect((await discoverDeepInfraSurfaces({ env: { DEEPINFRA_API_KEY: "   " } })).live).toBe(
+        false,
+      );
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
   });
 
-  it("leaves non-DeepSeek families without a thinkingFormat", () => {
-    for (const id of ["openai/gpt-oss-120b", "Qwen/Qwen3-Max", "zai-org/GLM-5.2"]) {
-      const built = buildDeepInfraModelDefinition({ id, name: id } as never);
-      expect(built.compat?.thinkingFormat).toBeUndefined();
-    }
-  });
-
-  it("preserves an explicitly configured thinkingFormat", () => {
-    const built = buildDeepInfraModelDefinition({
-      id: "deepseek-ai/DeepSeek-V3.2",
-      name: "DeepSeek V3.2",
-      compat: { thinkingFormat: "openai" },
-    } as never);
-    expect(built.compat?.thinkingFormat).toBe("openai");
-  });
-
-  it("tags the static manifest DeepSeek models", () => {
-    const deepseekModels = DEEPINFRA_MODEL_CATALOG.map(buildDeepInfraModelDefinition).filter(
-      (model) => model.id.toLowerCase().startsWith("deepseek-ai/"),
-    );
-    expect(deepseekModels.length).toBeGreaterThan(0);
-    for (const model of deepseekModels) {
-      expect(model.compat?.thinkingFormat).toBe("deepseek");
-    }
-  });
-});
-
-describe("DEEPINFRA_MODELS_URL", () => {
-  it("points at /v1/openai/models with the openclaw sort + filter=with_meta gate", () => {
-    expect(DEEPINFRA_MODELS_URL).toBe(
-      "https://api.deepinfra.com/v1/openai/models?sort_by=openclaw&filter=with_meta",
-    );
-  });
-});
-
-describe("hasDeepInfraApiKey", () => {
-  it("returns true via env var, false on missing / blank", () => {
-    expect(hasDeepInfraApiKey({ env: { DEEPINFRA_API_KEY: "sk-x" } })).toBe(true);
-    expect(hasDeepInfraApiKey({ env: { DEEPINFRA_API_KEY: "" } })).toBe(false);
-    expect(hasDeepInfraApiKey({ env: { DEEPINFRA_API_KEY: "   " } })).toBe(false);
-    expect(hasDeepInfraApiKey({ env: {} })).toBe(false);
-  });
-
-  it("falls back to the auth-profile store when no env var is set", () => {
+  it("discovers with a saved profile when the environment has no key", async () => {
     isProviderApiKeyConfiguredMock.mockReturnValue(true);
-
-    expect(hasDeepInfraApiKey({ env: {}, agentDir: "/tmp/openclaw-agent" })).toBe(true);
-
-    expect(isProviderApiKeyConfiguredMock).toHaveBeenCalledTimes(1);
+    const mockFetch = mockProjectionFetch(() => Response.json({ data: [makeAgentModelEntry()] }));
+    await withFetchPathTest(mockFetch, {}, async () => {
+      expect(
+        (await discoverDeepInfraSurfaces({ env: {}, agentDir: "/tmp/openclaw-agent" })).live,
+      ).toBe(true);
+    });
     expect(isProviderApiKeyConfiguredMock).toHaveBeenCalledWith({
       provider: "deepinfra",
       agentDir: "/tmp/openclaw-agent",
     });
   });
+});
 
-  it("accepts config-backed provider API keys before probing the profile store", () => {
-    expect(
-      hasDeepInfraApiKey({
-        env: {},
-        agentDir: "/tmp/openclaw-agent",
-        config: {
-          models: {
-            providers: {
-              deepinfra: {
-                apiKey: { source: "env", provider: "default", id: "CUSTOM_DEEPINFRA_KEY" },
-              },
+describe("discoverDeepInfraModels", () => {
+  it("preserves bundled reasoning and compat while keeping live model facts authoritative", async () => {
+    const rows = [
+      surfaceEntry("deepseek-ai/DeepSeek-V4-Pro", ["chat"], {
+        context_length: 96000,
+        max_tokens: 4096,
+        pricing: { input_tokens: 4, output_tokens: 8, cache_read_tokens: 0.4 },
+      }),
+      surfaceEntry("stepfun-ai/Step-3.7-Flash", ["chat", "vlm", "vision"], {
+        context_length: 192000,
+        max_tokens: 16384,
+        pricing: { input_tokens: 0.2, output_tokens: 1.15 },
+      }),
+      surfaceEntry("deepseek-ai/DeepSeek-V3.2", ["chat", "reasoning"]),
+      surfaceEntry("unlisted/no-reasoning", ["chat"]),
+      surfaceEntry("unlisted/with-reasoning", ["chat", "reasoning_effort"]),
+    ];
+    const mockFetch = mockProjectionFetch(vi.fn().mockResolvedValue(Response.json({ data: rows })));
+    DEEPINFRA_MODEL_CATALOG.push(DEEPINFRA_MODEL_CATALOG[0]!);
+
+    try {
+      await withFetchPathTest(mockFetch, { DEEPINFRA_API_KEY: "sk-test" }, async () => {
+        const models = await discoverDeepInfraModels();
+
+        expect(models.slice(0, rows.length)).toMatchObject([
+          {
+            id: "deepseek-ai/DeepSeek-V4-Pro",
+            reasoning: true,
+            input: ["text"],
+            contextWindow: 96000,
+            maxTokens: 4096,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            compat: {
+              codeMode: "capable",
+              supportsUsageInStreaming: true,
+              thinkingFormat: "deepseek",
             },
           },
-        },
-      }),
-    ).toBe(true);
-
-    expect(isProviderApiKeyConfiguredMock).not.toHaveBeenCalled();
-  });
-
-  it("short-circuits on env var and skips the profile-store probe", () => {
-    isProviderApiKeyConfiguredMock.mockReturnValue(true);
-
-    expect(
-      hasDeepInfraApiKey({
-        env: { DEEPINFRA_API_KEY: "sk-x" },
-        agentDir: "/tmp/openclaw-agent",
-      }),
-    ).toBe(true);
-
-    expect(isProviderApiKeyConfiguredMock).not.toHaveBeenCalled();
-  });
-
-  it("returns false when env is empty and the auth-profile store has no deepinfra profile", () => {
-    isProviderApiKeyConfiguredMock.mockReturnValue(false);
-
-    expect(hasDeepInfraApiKey({ env: {}, agentDir: "/tmp/openclaw-agent" })).toBe(false);
-
-    expect(isProviderApiKeyConfiguredMock).toHaveBeenCalledWith({
-      provider: "deepinfra",
-      agentDir: "/tmp/openclaw-agent",
-    });
-  });
-});
-
-describe("discoverDeepInfraModels (chat-only shim)", () => {
-  it("returns static catalog in test environment", async () => {
-    const models = await discoverDeepInfraModels({ env: { VITEST: "true" } });
-    const modelIds = models.map((m) => m.id);
-    const streamingUsageIncompatibleModelIds = models
-      .filter((m) => !m.compat?.supportsUsageInStreaming)
-      .map((m) => m.id);
-
-    expect(DEEPINFRA_DEFAULT_MODEL_REF).toBe("deepinfra/deepseek-ai/DeepSeek-V4-Flash");
-    expect(models).toStrictEqual(expectedStaticChatCatalog());
-    expect(modelIds).toStrictEqual(expectedStaticChatCatalog().map((model) => model.id));
-    expect(streamingUsageIncompatibleModelIds).toStrictEqual([]);
-  });
-
-  it("fetches the openclaw-projection endpoint and parses chat-surface entries when an API key is configured", async () => {
-    const mockFetch = vi.fn().mockResolvedValue(jsonResponse({ data: [makeAgentModelEntry()] }));
-
-    await withFetchPathTest(mockFetch, { DEEPINFRA_API_KEY: "sk-test" }, async () => {
-      const models = await discoverDeepInfraModels();
-      expect(mockFetch).toHaveBeenCalledOnce();
-      const [fetchUrl, fetchInit] = requireFirstFetchCall(mockFetch);
-      const fetchSignal = Reflect.get(fetchInit ?? {}, "signal");
-      const fetchHeaders = Reflect.get(fetchInit ?? {}, "headers");
-      expect(fetchUrl).toBe(DEEPINFRA_MODELS_URL);
-      expect(fetchSignal).toBeInstanceOf(AbortSignal);
-      expect(fetchHeaders).toBeInstanceOf(Headers);
-      expect((fetchHeaders as Headers).get("Accept")).toBe("application/json");
-      expect(models).toEqual(
-        expectedLiveChatCatalog([
           {
-            id: "openai/gpt-oss-120b",
-            name: "openai/gpt-oss-120b",
+            id: "stepfun-ai/Step-3.7-Flash",
             reasoning: true,
             input: ["text", "image"],
-            contextWindow: 131072,
-            maxTokens: 65536,
-            cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
-            compat: { supportsUsageInStreaming: true },
+            contextWindow: 192000,
+            maxTokens: 16384,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           },
-        ]),
-      );
-    });
+          { id: "deepseek-ai/DeepSeek-V3.2", reasoning: false },
+          { id: "unlisted/no-reasoning", reasoning: false },
+          { id: "unlisted/with-reasoning", reasoning: true },
+        ]);
+        expect(new Set(models.map((model) => model.id)).size).toBe(models.length);
+      });
+    } finally {
+      DEEPINFRA_MODEL_CATALOG.pop();
+    }
   });
 
-  it("skips entries with no metadata or no surface tag, and deduplicates ids", async () => {
-    const mockFetch = vi.fn().mockResolvedValue(
-      jsonResponse({
-        data: [
-          { id: "BAAI/bge-m3", object: "model", metadata: null },
-          makeAgentModelEntry({
-            id: "untagged/model",
-            metadata: { context_length: 1, max_tokens: 1, pricing: {}, tags: [] },
-          }),
-          makeAgentModelEntry(),
-          makeAgentModelEntry(),
-        ],
-      }),
+  it("ignores untagged entries and prototype tags, and deduplicates tags and ids", async () => {
+    const mockFetch = mockProjectionFetch(
+      vi.fn().mockResolvedValue(
+        Response.json({
+          data: [
+            { id: "BAAI/bge-m3", object: "model", metadata: null },
+            makeAgentModelEntry({
+              id: "untagged/model",
+              metadata: { context_length: 1, max_tokens: 1, pricing: {}, tags: [] },
+            }),
+            surfaceEntry("openai/gpt-oss-120b", [
+              "chat",
+              "constructor",
+              "toString",
+              "__proto__",
+              "chat",
+            ]),
+            makeAgentModelEntry(),
+          ],
+        }),
+      ),
     );
 
     await withFetchPathTest(mockFetch, { DEEPINFRA_API_KEY: "sk-test" }, async () => {
       const models = await discoverDeepInfraModels();
-      expect(models.map((m) => m.id)).toEqual(
-        expectedLiveChatCatalog([
-          {
-            id: "openai/gpt-oss-120b",
-            name: "openai/gpt-oss-120b",
-            reasoning: true,
-            input: ["text", "image"],
-            contextWindow: 131072,
-            maxTokens: 65536,
-            cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
-            compat: { supportsUsageInStreaming: true },
-          },
-        ]).map((model) => model.id),
-      );
+      expect(models.map((m) => m.id)).toEqual(["openai/gpt-oss-120b"]);
     });
   });
 
-  it("falls back to the static catalog when no API key is configured (skips network entirely)", async () => {
-    const mockFetch = vi.fn();
-
-    await withFetchPathTest(mockFetch, { DEEPINFRA_API_KEY: undefined }, async () => {
-      const models = await discoverDeepInfraModels();
-      expect(mockFetch).not.toHaveBeenCalled();
-      expect(models.map((m) => m.id)).toEqual(expectedStaticChatCatalog().map((model) => model.id));
+  it("rejects malformed tags without caching partial metadata", async () => {
+    const mockFetch = mockProjectionFetch(
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          Response.json({
+            data: [makeAgentModelEntry(), { id: "broken/model", metadata: { tags: [42] } }],
+          }),
+        )
+        .mockResolvedValueOnce(
+          Response.json({ data: [makeAgentModelEntry({ id: "recovered/model" })] }),
+        ),
+    );
+    await withFetchPathTest(mockFetch, { DEEPINFRA_API_KEY: "sk-test" }, async () => {
+      await expect(discoverDeepInfraModels()).rejects.toThrow("metadata discovery unavailable");
+      expect((await discoverDeepInfraModels()).map((model) => model.id)).toEqual([
+        "recovered/model",
+      ]);
+      expect(mockFetch).toHaveBeenCalledTimes(3);
     });
   });
 
-  it("falls back to the static catalog on network errors", async () => {
-    const mockFetch = vi.fn().mockRejectedValue(new Error("network error"));
+  it("retains and caches a successful empty catalog", async () => {
+    const mockFetch = mockProjectionFetch(
+      vi
+        .fn()
+        .mockResolvedValueOnce(Response.json({ data: [] }))
+        .mockResolvedValueOnce(
+          Response.json({ data: [makeAgentModelEntry({ id: "recovered/model" })] }),
+        ),
+    );
 
     await withFetchPathTest(mockFetch, { DEEPINFRA_API_KEY: "sk-test" }, async () => {
-      const models = await discoverDeepInfraModels();
-      expect(models.map((m) => m.id)).toEqual(expectedStaticChatCatalog().map((model) => model.id));
-    });
-  });
-
-  it("falls back to the static catalog on non-2xx HTTP responses", async () => {
-    const mockFetch = vi.fn().mockResolvedValue(new Response("", { status: 503 }));
-
-    await withFetchPathTest(mockFetch, { DEEPINFRA_API_KEY: "sk-test" }, async () => {
-      const models = await discoverDeepInfraModels();
-      expect(models.map((m) => m.id)).toEqual(expectedStaticChatCatalog().map((model) => model.id));
-    });
-  });
-
-  it("falls back without caching malformed successful model list payloads", async () => {
-    const mockFetch = vi
-      .fn()
-      .mockResolvedValueOnce(jsonResponse({ data: {} }))
-      .mockResolvedValueOnce(
-        jsonResponse({ data: [makeAgentModelEntry({ id: "recovered/model" })] }),
-      );
-
-    await withFetchPathTest(mockFetch, { DEEPINFRA_API_KEY: "sk-test" }, async () => {
-      expect((await discoverDeepInfraModels()).map((m) => m.id)).toEqual(
-        expectedStaticChatCatalog().map((model) => model.id),
-      );
-      expect((await discoverDeepInfraModels()).map((m) => m.id)).toEqual(
-        expectedLiveChatCatalog([
-          {
-            id: "recovered/model",
-            name: "recovered/model",
-            reasoning: true,
-            input: ["text", "image"],
-            contextWindow: 131072,
-            maxTokens: 65536,
-            cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
-            compat: { supportsUsageInStreaming: true },
-          },
-        ]).map((model) => model.id),
-      );
-      expect(mockFetch).toHaveBeenCalledTimes(2);
-    });
-  });
-
-  it("caches successful discovery responses only", async () => {
-    const mockFetch = vi
-      .fn()
-      .mockResolvedValueOnce(jsonResponse({ data: [makeAgentModelEntry({ id: "first/model" })] }))
-      .mockResolvedValueOnce(jsonResponse({ data: [makeAgentModelEntry({ id: "second/model" })] }));
-
-    await withFetchPathTest(mockFetch, { DEEPINFRA_API_KEY: "sk-test" }, async () => {
-      const expectedIds = expectedLiveChatCatalog([
-        {
-          id: "first/model",
-          name: "first/model",
-          reasoning: true,
-          input: ["text", "image"],
-          contextWindow: 131072,
-          maxTokens: 65536,
-          cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
-          compat: { supportsUsageInStreaming: true },
-        },
-      ]).map((model) => model.id);
-      expect((await discoverDeepInfraModels()).map((m) => m.id)).toEqual(expectedIds);
-      expect((await discoverDeepInfraModels()).map((m) => m.id)).toEqual(expectedIds);
-      expect(mockFetch).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  it("does not cache successful responses that produce no live catalog rows", async () => {
-    const mockFetch = vi
-      .fn()
-      .mockResolvedValueOnce(jsonResponse({ data: [] }))
-      .mockResolvedValueOnce(
-        jsonResponse({ data: [makeAgentModelEntry({ id: "recovered/model" })] }),
-      );
-
-    await withFetchPathTest(mockFetch, { DEEPINFRA_API_KEY: "sk-test" }, async () => {
-      expect((await discoverDeepInfraModels()).map((m) => m.id)).toEqual(
-        expectedStaticChatCatalog().map((model) => model.id),
-      );
-      expect((await discoverDeepInfraModels()).map((m) => m.id)).toEqual(
-        expectedLiveChatCatalog([
-          {
-            id: "recovered/model",
-            name: "recovered/model",
-            reasoning: true,
-            input: ["text", "image"],
-            contextWindow: 131072,
-            maxTokens: 65536,
-            cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
-            compat: { supportsUsageInStreaming: true },
-          },
-        ]).map((model) => model.id),
-      );
+      expect(await discoverDeepInfraModels()).toEqual([]);
+      expect(await discoverDeepInfraModels()).toEqual([]);
       expect(mockFetch).toHaveBeenCalledTimes(2);
     });
   });
 });
 
 describe("discoverDeepInfraSurfaces (per-surface bucketing)", () => {
-  it("buckets dynamic entries by short-alias surface tag", async () => {
-    const mockFetch = vi.fn().mockResolvedValue(
-      jsonResponse({
-        data: [
-          makeAgentModelEntry({
-            id: "anthropic/claude-sonnet-4-6",
-            metadata: {
-              description: "claude sonnet 4.6",
-              context_length: 200000,
-              max_tokens: 8192,
-              pricing: { input_tokens: 3, output_tokens: 15 },
-              tags: ["chat", "vlm", "vision", "prompt_cache"],
-            },
-          }),
-          makeAgentModelEntry({
-            id: "BAAI/bge-m3",
-            metadata: {
-              description: "bge-m3",
-              pricing: { input_tokens: 0.01 },
-              tags: ["embed"],
-            },
-          }),
-          makeAgentModelEntry({
-            id: "black-forest-labs/FLUX-1-schnell",
-            metadata: {
-              description: "FLUX schnell",
-              pricing: { per_image_unit: 0.003 },
-              tags: ["image-gen"],
-              default_width: 1024,
-              default_height: 1024,
-              default_iterations: 4,
-            },
-          }),
-          makeAgentModelEntry({
-            id: "Wan-AI/Wan2.6-T2V",
-            metadata: {
-              description: "Wan T2V",
-              pricing: { output_seconds: 0.05 },
-              tags: ["video-gen"],
-            },
-          }),
-          makeAgentModelEntry({
-            id: "Qwen/Qwen3-TTS",
-            metadata: {
-              description: "Qwen3 TTS",
-              pricing: { input_characters: 0.65 },
-              tags: ["tts"],
-            },
-          }),
-          makeAgentModelEntry({
-            id: "openai/whisper-large-v3-turbo",
-            metadata: {
-              description: "whisper",
-              pricing: { input_seconds: 0.00004 },
-              tags: ["stt"],
-            },
-          }),
-        ],
-      }),
-    );
-
-    await withFetchPathTest(mockFetch, { DEEPINFRA_API_KEY: "sk-test" }, async () => {
-      const catalog = await discoverDeepInfraSurfaces();
-      expect(catalog.live).toBe(true);
-      expect(catalog.chat.map((m) => m.id)).toEqual(["anthropic/claude-sonnet-4-6"]);
-      expect(catalog.vlm.map((m) => m.id)).toEqual(["anthropic/claude-sonnet-4-6"]);
-      expect(catalog.embed.map((m) => m.id)).toEqual(["BAAI/bge-m3"]);
-      expect(catalog.imageGen.map((m) => m.id)).toEqual(["black-forest-labs/FLUX-1-schnell"]);
-      expect(catalog.imageGen[0]?.defaultWidth).toBe(1024);
-      expect(catalog.imageGen[0]?.pricing.per_image_unit).toBe(0.003);
-      expect(catalog.videoGen.map((m) => m.id)).toEqual(["Wan-AI/Wan2.6-T2V"]);
-      expect(catalog.tts.map((m) => m.id)).toEqual(["Qwen/Qwen3-TTS"]);
-      expect(catalog.stt.map((m) => m.id)).toEqual(["openai/whisper-large-v3-turbo"]);
-    });
-  });
-
   it("drops malformed live numeric metadata", async () => {
     const mockFetch = vi.fn().mockResolvedValue(
-      jsonResponse({
+      Response.json({
         data: [
-          makeAgentModelEntry({
-            id: "bad/chat",
-            metadata: {
-              description: "bad chat",
-              context_length: -1,
-              max_tokens: 1.5,
-              pricing: { input_tokens: 3, output_tokens: 15 },
-              tags: ["chat"],
-            },
-          }),
-          makeAgentModelEntry({
-            id: "bad/image",
-            metadata: {
-              description: "bad image",
-              pricing: { per_image_unit: 0.003 },
-              tags: ["image-gen"],
-              default_width: Number.POSITIVE_INFINITY,
-              default_height: 1024.5,
-              default_iterations: 0,
-            },
+          surfaceEntry("bad/chat", ["chat"], { context_length: -1, max_tokens: 1.5 }),
+          surfaceEntry("bad/image", ["image-gen"], {
+            default_width: Number.POSITIVE_INFINITY,
+            default_height: 1024.5,
+            default_iterations: 0,
           }),
         ],
       }),
@@ -529,25 +261,134 @@ describe("discoverDeepInfraSurfaces (per-surface bucketing)", () => {
       expect(catalog.imageGen[0]?.defaultIterations).toBeUndefined();
     });
   });
+});
 
-  it("returns the manifest static fallback (live=false) when no API key is configured", async () => {
-    const mockFetch = vi.fn();
+describe("DeepInfra native runtime prices", () => {
+  it.each([
+    { metadata: 503, pricing: 503 },
+    { metadata: 503, pricing: 200 },
+    { metadata: 200, pricing: 503 },
+  ])("keeps the public builder advisory for $metadata/$pricing", async (scenario) => {
+    const mockFetch = vi.fn(async (url: string) => {
+      const metadata = url === DEEPINFRA_MODELS_URL;
+      const status = metadata ? scenario.metadata : scenario.pricing;
+      if (status !== 200) {
+        return new Response("unavailable", { status });
+      }
+      return Response.json(
+        metadata
+          ? { data: [makeAgentModelEntry({ id: "fixture/public-model" })] }
+          : [
+              {
+                model_name: "fixture/public-model",
+                pricing: {
+                  type: "tokens",
+                  cents_per_input_token: 0.0002,
+                  cents_per_output_token: 0.001,
+                },
+              },
+            ],
+      );
+    });
+    await withFetchPathTest(mockFetch, {}, async () => {
+      const provider = await buildDeepInfraProvider({ hasApiKey: true });
+      expect(provider.models.map((model) => model.id)).toEqual(
+        expect.arrayContaining(DEEPINFRA_MODEL_CATALOG.map((model) => model.id)),
+      );
+      if (scenario.metadata === 200) {
+        expect(provider.models.find((model) => model.id === "fixture/public-model")?.cost).toEqual({
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+        });
+      }
+    });
+  });
 
-    await withFetchPathTest(mockFetch, { DEEPINFRA_API_KEY: undefined }, async () => {
-      const catalog = await discoverDeepInfraSurfaces();
-      expect(catalog.live).toBe(false);
-      expect(catalog.chat.length).toBeGreaterThan(0);
-      // Non-chat surfaces in the static fallback live in TS constants because
-      // the manifest schema only validates chat-shaped rows.
-      expect(catalog.imageGen.map((m) => m.id)).toContain("black-forest-labs/FLUX-1-schnell");
-      expect(catalog.tts.map((m) => m.id)).toContain("Qwen/Qwen3-TTS");
-      expect(catalog.stt.map((m) => m.id)).toContain("openai/whisper-large-v3-turbo");
-      // No static video-gen fallback — live discovery picks up text-to-video
-      // models when the backend tags them. The live-discovery test above
-      // covers the video-gen bucketing path.
-      expect(catalog.videoGen).toEqual([]);
-      expect(catalog.embed.map((m) => m.id)).toContain("BAAI/bge-m3");
-      expect(mockFetch).not.toHaveBeenCalled();
+  it("rejects malformed native pricing and recovers without refetching metadata", async () => {
+    let nativeCalls = 0;
+    const mockFetch = vi.fn(async (url: string) => {
+      if (url === DEEPINFRA_MODELS_URL) {
+        return Response.json({ data: [makeAgentModelEntry({ id: "fixture/recovered" })] });
+      }
+      expect(url).toBe("https://api.deepinfra.com/models/list");
+      return Response.json([
+        {
+          model_name: "fixture/recovered",
+          pricing: {
+            type: "tokens",
+            cents_per_input_token: ++nativeCalls === 1 ? -1 : 0.0002,
+            cents_per_output_token: 0.001,
+          },
+        },
+      ]);
+    });
+    await withFetchPathTest(mockFetch, {}, async () => {
+      await expect(discoverDeepInfraModels({ hasApiKey: true })).rejects.toThrow(
+        "Native DeepInfra pricing is malformed or has no usable schedules",
+      );
+      const recovered = await discoverDeepInfraModels({ hasApiKey: true });
+      expect(recovered[0]?.cost).toEqual({ input: 2, output: 10, cacheRead: 0, cacheWrite: 0 });
+      expect(recovered.map((model) => model.id)).toEqual(["fixture/recovered"]);
+      expect(await discoverDeepInfraModels({ hasApiKey: true })).toEqual(recovered);
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  it("uses native DeepInfra discounts and omits qualified prices without changing metadata", async () => {
+    const nativePricing = {
+      type: "tokens",
+      cents_per_input_token: 0.0002,
+      cents_per_output_token: 0.001,
+      rate_per_input_token_cached: 0.2,
+      discount: 0.5,
+      discount_ends_at: null,
+    };
+    const mockFetch = vi.fn(async (url: string, _init?: RequestInit) => {
+      if (url === DEEPINFRA_MODELS_URL) {
+        return Response.json({
+          data: ["fixture/paid", "fixture/qualified", "fixture/absent"].map((id) =>
+            makeAgentModelEntry({ id }),
+          ),
+        });
+      }
+      expect(url).toBe("https://api.deepinfra.com/models/list");
+      return Response.json([
+        { model_name: "fixture/paid", pricing: nativePricing },
+        {
+          model_name: "fixture/qualified",
+          pricing: { ...nativePricing, full: "Higher rates above a context threshold" },
+        },
+        { model_name: DEEPINFRA_MODEL_CATALOG[0]!.id, pricing: nativePricing },
+      ]);
+    });
+    await withFetchPathTest(mockFetch, {}, async () => {
+      const models = await discoverDeepInfraModels({ hasApiKey: true });
+      expect(models.slice(0, 3).map((model) => model.id)).toEqual([
+        "fixture/paid",
+        "fixture/qualified",
+        "fixture/absent",
+      ]);
+      expect(models[0]).toMatchObject({
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 131072,
+        maxTokens: 65536,
+        cost: { input: 1, output: 5, cacheRead: 0.2, cacheWrite: 0 },
+      });
+      for (const model of models) {
+        expect(model.cost).toEqual(
+          model.id === "fixture/paid" || model.id === DEEPINFRA_MODEL_CATALOG[0]!.id
+            ? { input: 1, output: 5, cacheRead: 0.2, cacheWrite: 0 }
+            : { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        );
+      }
+      expect(await discoverDeepInfraModels({ hasApiKey: true })).toEqual(models);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      for (const [, init] of mockFetch.mock.calls) {
+        expect(new Headers(init?.headers).has("authorization")).toBe(false);
+      }
     });
   });
 });

@@ -1,9 +1,12 @@
 #if os(iOS)
+import ImageIO
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 @MainActor
 struct ChatComposerTextViewIOS: UIViewRepresentable {
+    @Environment(\.isEnabled) private var effectiveEnvironmentEnabled
     @Binding var text: String
     var focusRequested: Bool
     var isEnabled: Bool
@@ -12,6 +15,12 @@ struct ChatComposerTextViewIOS: UIViewRepresentable {
     var onFocusChange: (Bool) -> Void
     var onHistoryUp: (Bool) -> Bool
     var onHistoryDown: () -> Bool
+    /// Nil leaves paste entirely to UIKit.
+    var onPasteImageAttachment: ((_ data: Data, _ fileName: String, _ mimeType: String) -> Void)?
+
+    private var interactionEnabled: Bool {
+        self.isEnabled && self.effectiveEnvironmentEnabled
+    }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -21,24 +30,17 @@ struct ChatComposerTextViewIOS: UIViewRepresentable {
         let textView = ChatComposerTextViewIOSFactory.makeConfiguredTextView()
         textView.delegate = context.coordinator
         textView.text = self.text
-        self.configureHistoryHandlers(textView)
+        self.configureInputHandlers(textView)
         return textView
     }
 
     func updateUIView(_ textView: ChatComposerUITextView, context: Context) {
         context.coordinator.parent = self
-        textView.isEditable = self.isEnabled
-        textView.isSelectable = self.isEnabled
-        self.configureHistoryHandlers(textView)
+        context.coordinator.scheduleInteractionUpdate(textView)
+        self.configureInputHandlers(textView)
 
-        // UIKit owns user-initiated focus. A false focus request is not a blur request;
-        // conflating the two cancels a tap before SwiftUI observes first-responder state.
-        if self.focusRequested, self.isEnabled, !textView.isFirstResponder {
-            textView.becomeFirstResponder()
-        } else if !self.isEnabled, textView.isFirstResponder {
-            textView.resignFirstResponder()
-        }
-
+        // Publishing native input can re-enter SwiftUI with the previous rendered value.
+        guard !context.coordinator.isReportingTextChange else { return }
         let isEcho = context.coordinator.lastReportedText == self.text
         if textView.isFirstResponder, isEcho {
             return
@@ -56,9 +58,10 @@ struct ChatComposerTextViewIOS: UIViewRepresentable {
         context.coordinator.lastReportedText = self.text
     }
 
-    private func configureHistoryHandlers(_ textView: ChatComposerUITextView) {
+    private func configureInputHandlers(_ textView: ChatComposerUITextView) {
         textView.onHistoryUp = self.onHistoryUp
         textView.onHistoryDown = self.onHistoryDown
+        textView.onPasteImageAttachment = self.onPasteImageAttachment
     }
 
     func sizeThatFits(
@@ -78,10 +81,49 @@ struct ChatComposerTextViewIOS: UIViewRepresentable {
     final class Coordinator: NSObject, UITextViewDelegate {
         var parent: ChatComposerTextViewIOS
         var isProgrammaticUpdate = false
+        private(set) var isReportingTextChange = false
         var lastReportedText: String?
+        private var interactionUpdateScheduled = false
 
         init(_ parent: ChatComposerTextViewIOS) {
             self.parent = parent
+        }
+
+        func scheduleInteractionUpdate(_ textView: ChatComposerUITextView) {
+            guard !self.interactionUpdateScheduled else { return }
+            self.interactionUpdateScheduled = true
+            // Disabling a focused UITextView synchronously resigns first responder.
+            // Inside updateUIView that re-enters SwiftUI's responder graph and can
+            // spin in AttributeGraph. Apply UIKit state after the graph update,
+            // reading the latest parent so a queued disable cannot outlive recovery.
+            DispatchQueue.main.async { [weak self, weak textView] in
+                guard let self else { return }
+                self.interactionUpdateScheduled = false
+                guard let textView else { return }
+                let isEnabled = self.parent.interactionEnabled
+                if textView.isEditable != isEnabled {
+                    textView.isEditable = isEnabled
+                }
+                if textView.isSelectable != isEnabled {
+                    textView.isSelectable = isEnabled
+                }
+                // UIKit owns user-initiated focus; false is not a blur request.
+                if self.parent.focusRequested, isEnabled,
+                   !textView.isFirstResponder
+                {
+                    textView.becomeFirstResponder()
+                } else if !isEnabled, textView.isFirstResponder {
+                    textView.resignFirstResponder()
+                }
+            }
+        }
+
+        func textViewShouldBeginEditing(_ textView: UITextView) -> Bool {
+            self.parent.interactionEnabled
+        }
+
+        func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
+            self.parent.interactionEnabled
         }
 
         func textViewDidBeginEditing(_ textView: UITextView) {
@@ -94,6 +136,8 @@ struct ChatComposerTextViewIOS: UIViewRepresentable {
 
         func textViewDidChange(_ textView: UITextView) {
             guard !self.isProgrammaticUpdate, textView.isFirstResponder else { return }
+            self.isReportingTextChange = true
+            defer { self.isReportingTextChange = false }
             self.lastReportedText = textView.text
             self.parent.text = textView.text
             textView.invalidateIntrinsicContentSize()
@@ -105,6 +149,13 @@ struct ChatComposerTextViewIOS: UIViewRepresentable {
 final class ChatComposerUITextView: UITextView {
     var onHistoryUp: ((Bool) -> Bool)?
     var onHistoryDown: (() -> Bool)?
+    var onPasteImageAttachment: ((_ data: Data, _ fileName: String, _ mimeType: String) -> Void)?
+
+    override var accessibilityTraits: UIAccessibilityTraits {
+        // Preserve UIKit's dynamic keyboard-focus traits when exposing disabled input.
+        get { self.isEditable ? super.accessibilityTraits : super.accessibilityTraits.union(.notEnabled) }
+        set { super.accessibilityTraits = newValue }
+    }
 
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         var unhandledPresses = presses
@@ -116,6 +167,33 @@ final class ChatComposerUITextView: UITextView {
         }
         guard !unhandledPresses.isEmpty else { return }
         super.pressesBegan(unhandledPresses, with: event)
+    }
+
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        // UITextView offers Paste only for text; screenshots and copied photos are image-only.
+        // `hasImages` inspects types without reading contents, so it does not trigger the paste prompt.
+        if action == #selector(self.paste(_:)), self.isEditable, self.onPasteImageAttachment != nil,
+           UIPasteboard.general.hasImages
+        {
+            return true
+        }
+        return super.canPerformAction(action, withSender: sender)
+    }
+
+    override func paste(_ sender: Any?) {
+        if !self.pasteImageAttachments(from: UIPasteboard.general) {
+            super.paste(sender)
+        }
+    }
+
+    /// Internal so tests can use a private pasteboard instead of the general one.
+    func pasteImageAttachments(from pasteboard: UIPasteboard) -> Bool {
+        guard let onPasteImageAttachment = self.onPasteImageAttachment, pasteboard.hasImages else { return false }
+        let attachments = ChatComposerPasteSupport.imageAttachments(from: pasteboard)
+        for attachment in attachments {
+            onPasteImageAttachment(attachment.data, attachment.fileName, attachment.mimeType)
+        }
+        return !attachments.isEmpty
     }
 
     /// Internal for focused responder-level keyboard routing coverage.
@@ -139,6 +217,30 @@ final class ChatComposerUITextView: UITextView {
         let location = min(max(self.selectedRange.location, 0), (self.text as NSString).length)
         let prefix = (self.text as NSString).substring(to: location)
         return !prefix.contains("\n") && !prefix.contains("\r")
+    }
+}
+
+enum ChatComposerPasteSupport {
+    typealias ImageAttachment = (data: Data, fileName: String, mimeType: String)
+
+    /// Upload transcoding decodes with ImageIO, so skip image types it cannot read, such as SVG.
+    private static let decodableTypes = Set(CGImageSourceCopyTypeIdentifiers() as? [String] ?? [])
+
+    /// Keeps each item's first decodable image representation, in the order the source app offered them.
+    static func imageAttachments(from pasteboard: UIPasteboard) -> [ImageAttachment] {
+        (0..<pasteboard.numberOfItems).compactMap { index in
+            let itemSet = IndexSet(integer: index)
+            for identifier in pasteboard.types(forItemSet: itemSet)?.first ?? [] {
+                guard self.decodableTypes.contains(identifier), let type = UTType(identifier),
+                      let mimeType = type.preferredMIMEType,
+                      let data = pasteboard.data(forPasteboardType: identifier, inItemSet: itemSet)?.first,
+                      !data.isEmpty
+                else { continue }
+                let fileExtension = type.preferredFilenameExtension ?? "img"
+                return (data: data, fileName: "pasted-image-\(index + 1).\(fileExtension)", mimeType: mimeType)
+            }
+            return nil
+        }
     }
 }
 

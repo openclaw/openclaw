@@ -1,0 +1,178 @@
+.plugin-session-summary {
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+  color: var(--text);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.plugin-session-summary__progress {
+  min-width: 0;
+  padding: var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--bg-muted);
+}
+
+.plugin-session-summary__history {
+  display: grid;
+  gap: 18px;
+}
+
+.plugin-session-summary__history > h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.plugin-session-summary__message {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.plugin-session-summary__message-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.plugin-session-summary__avatar,
+.plugin-session-summary__avatar .chat-author-avatar,
+.plugin-session-summary__avatar openclaw-agent-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  overflow: hidden;
+  border-radius: 50%;
+}
+
+.plugin-session-summary__avatar .chat-author-avatar__image,
+.plugin-session-summary__avatar .chat-author-avatar__initials {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
+}
+
+.plugin-session-summary__avatar .chat-author-avatar__initials {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-hover);
+  color: var(--text);
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.plugin-session-summary__avatar .chat-author-avatar__fallback,
+.plugin-session-summary__avatar .chat-author-avatar.is-fallback .chat-author-avatar__image {
+  display: none;
+}
+
+.plugin-session-summary__avatar .chat-author-avatar.is-fallback .chat-author-avatar__fallback {
+  display: inline-flex;
+}
+
+.plugin-session-summary__unknown {
+  display: inline-flex;
+  color: var(--muted);
+}
+
+.plugin-session-summary__unknown svg {
+  width: 15px;
+  height: 15px;
+}
+
+.plugin-session-summary__role {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 0.76rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plugin-session-summary__message-header time {
+  flex: none;
+  color: var(--muted);
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
+
+.plugin-session-summary__message .sidebar-markdown {
+  min-width: 0;
+  margin-inline-start: 32px;
+  overflow-wrap: anywhere;
+  font-size: 0.78rem;
+  line-height: 1.55;
+}
+
+.plugin-session-summary__message .sidebar-markdown :is(h1, h2, h3, h4, h5, h6) {
+  margin: 12px 0 6px;
+  font-size: 0.84rem;
+  line-height: 1.4;
+}
+
+.plugin-session-summary__message .sidebar-markdown :is(p, ul, ol, blockquote, pre) {
+  margin: 0 0 8px;
+}
+
+.plugin-session-summary__message .sidebar-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.plugin-session-summary__message .sidebar-markdown pre {
+  max-width: 100%;
+  overflow-x: auto;
+  font-size: 0.72rem;
+}
+
+.plugin-session-summary > .btn {
+  justify-self: start;
+}
+
+.plugin-session-summary__progress .session-progress-card--board {
+  padding: 0;
+}
+
+.plugin-session-summary__progress .session-progress-card__heading {
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-bottom: 12px;
+  color: var(--text);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.plugin-session-summary__progress .session-progress-card__heading-actions {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 400;
+}
+
+.plugin-session-summary__progress .session-progress-card__body {
+  display: grid;
+  gap: 12px;
+}
+
+.plugin-session-summary__progress .session-progress-card__markdown + .session-progress-card__steps {
+  margin-top: 0;
+}
+
+.plugin-session-summary__progress .session-progress-card__step {
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.plugin-session-summary__progress .session-progress-card__step-marker {
+  margin-top: 2px;
+}

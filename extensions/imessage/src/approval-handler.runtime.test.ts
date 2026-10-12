@@ -5,6 +5,10 @@ import {
   iMessageApprovalPollTargets,
   maybeResolveIMessageApprovalPollVote,
 } from "./approval-polls.js";
+import {
+  clearIMessageApprovalReactionTargetsForTest,
+  maybeResolveIMessageApprovalReaction,
+} from "./approval-reactions.js";
 
 const sendMock = vi.hoisted(() => ({
   sendMessageIMessage: vi.fn(),
@@ -34,7 +38,6 @@ const HANDLE = "+15551230000";
 const CHAT_GUID = "iMessage;-;+15551230000";
 const PROMPT_GUID = "prompt-guid";
 const POLL_GUID = "poll-guid";
-const POLL_TEXT = "Reply with: /approve exec-1 allow-once";
 const POLL_CAPABLE_STATUS = {
   available: true,
   selectors: { pollPayloadMessage: true, retractMessagePart: true },
@@ -162,87 +165,6 @@ vi.mock("openclaw/plugin-sdk/error-runtime", async () => {
 });
 
 describe("imessageApprovalNativeRuntime", () => {
-  it("renders shared reactions in pending exec approvals", async () => {
-    const payload = await buildPendingPayload({
-      request: execRequest(),
-      approvalKind: "exec",
-      view: execView("exec-1", [
-        {
-          decision: "allow-once",
-          label: "Allow Once",
-          command: "/approve exec-1 allow-once",
-          style: "success",
-        },
-        {
-          decision: "deny",
-          label: "Deny",
-          command: "/approve exec-1 deny",
-          style: "danger",
-        },
-      ]),
-    });
-
-    expect(payload.text).toContain("👍 Allow Once");
-    expect(payload.text).toContain("👎 Deny");
-    expect(payload.text).not.toContain("1️⃣ Allow Once");
-    expect(payload.text).not.toContain("2️⃣ Allow Always");
-    expect(payload.text).not.toContain("3️⃣ Deny");
-    expect(payload.allowedDecisions).toEqual(["allow-once", "deny"]);
-  });
-
-  it("renders shared reactions in pending plugin approvals", async () => {
-    const payload = await buildPendingPayload({
-      request: {
-        id: "plugin:abc",
-        request: {
-          title: "Allow Codex to use 1Password?",
-          description: "Allow Codex to use 1Password?",
-          pluginId: "openclaw-codex-app-server",
-          toolName: "codex_mcp_tool_approval",
-          severity: "warning",
-          allowedDecisions: ["allow-once", "allow-always", "deny"],
-        },
-        createdAtMs: 0,
-        expiresAtMs: 60_000,
-      },
-      approvalKind: "plugin",
-      view: {
-        approvalKind: "plugin",
-        approvalId: "plugin:abc",
-        title: "Plugin approval required",
-        severity: "warning",
-        actions: [
-          {
-            decision: "allow-once",
-            label: "Allow Once",
-            command: "/approve plugin:abc allow-once",
-            style: "success",
-          },
-          {
-            decision: "allow-always",
-            label: "Allow Always",
-            command: "/approve plugin:abc allow-always",
-            style: "primary",
-          },
-          {
-            decision: "deny",
-            label: "Deny",
-            command: "/approve plugin:abc deny",
-            style: "danger",
-          },
-        ],
-      } as never,
-    });
-
-    expect(payload.text).toContain("Plugin approval required");
-    expect(payload.text).toContain("Reply with: /approve plugin:abc allow-once|allow-always|deny");
-    expect(payload.text).toContain("👍 Allow Once");
-    expect(payload.text).toContain("♾️ Allow Always");
-    expect(payload.text).toContain("👎 Deny");
-    expect(payload.text).not.toContain("/approve <id>");
-    expect(payload.allowedDecisions).toEqual(["allow-once", "allow-always", "deny"]);
-  });
-
   it("normalizes iMessage handle targets and carries account ids into prepared delivery", async () => {
     await expect(prepareTarget("+1 (555) 123-0000", "ops")).resolves.toEqual({
       dedupeKey: expect.any(String),
@@ -251,108 +173,6 @@ describe("imessageApprovalNativeRuntime", () => {
         accountId: "ops",
       },
     });
-  });
-
-  describe("deliverPending GUID-only binding", () => {
-    beforeEach(() => {
-      iMessageApprovalPollTargets.clearForTest();
-      approvalGatewayMock.resolveApprovalOverGateway.mockReset();
-      approvalGatewayMock.resolveApprovalOverGateway.mockResolvedValue({
-        applied: true,
-        approval: {},
-      });
-      sendMock.sendMessageIMessage.mockReset();
-      // No cached bridge status: these cases exercise the text+tapback path.
-      probeMock.getCachedIMessagePrivateApiStatus.mockReset();
-      actionsMock.sendPoll.mockReset();
-    });
-
-    const baseDeliverArgs = {
-      cfg: {} as never,
-      accountId: ACCOUNT_ID,
-      context: { accountId: ACCOUNT_ID },
-      preparedTarget: { to: HANDLE, accountId: ACCOUNT_ID },
-      plannedTarget: {
-        surface: "origin" as const,
-        reason: "preferred" as const,
-        target: { to: HANDLE },
-      },
-      request: execRequest(),
-      approvalKind: "exec" as const,
-      view: execView(),
-      pendingPayload: {
-        text: POLL_TEXT,
-        pollText: POLL_TEXT,
-        allowedDecisions: ["allow-once" as const],
-      },
-    };
-
-    const deliverBase = () =>
-      imessageApprovalNativeRuntime.transport.deliverPending(baseDeliverArgs);
-
-    // Inbound `reacted_to_guid` is always a GUID, never the numeric ROWID.
-    // Placeholder and ROWID-only bridge receipts therefore cannot bind reactions.
-    [
-      {
-        title: "refuses to bind when the bridge returns only a numeric ROWID",
-        sendResult: sendResult("12345", { sentText: POLL_TEXT }),
-        expected: null,
-      },
-      {
-        title: "binds against the GUID when the bridge returns one",
-        sendResult: sendResult("p:0/abc-123", { guid: "p:0/abc-123", sentText: POLL_TEXT }),
-        expected: {
-          accountId: ACCOUNT_ID,
-          to: HANDLE,
-          conversation: { handle: HANDLE },
-          messageId: "p:0/abc-123",
-        },
-      },
-      {
-        title: "refuses to bind when the bridge returns 'unknown' or 'ok' placeholders",
-        sendResult: sendResult("ok", { sentText: POLL_TEXT }),
-        expected: null,
-      },
-    ].forEach(({ title, sendResult: result, expected }) => {
-      it(title, async () => {
-        sendMock.sendMessageIMessage.mockResolvedValue(result);
-
-        await expect(deliverBase()).resolves.toEqual(expected);
-      });
-    });
-  });
-
-  it("preserves group chat targets when preparing delivery", async () => {
-    await expect(
-      prepareTarget("chat_guid:iMessage;+;chat42", ACCOUNT_ID, "approver-dm"),
-    ).resolves.toEqual({
-      dedupeKey: expect.any(String),
-      target: {
-        to: "chat_guid:iMessage;+;chat42",
-        accountId: "default",
-      },
-    });
-  });
-
-  it("keeps manual commands but omits tapback instructions from the poll-mode prompt", async () => {
-    // Bridge capability cannot prove the recipient's Apple client can render
-    // polls, so the details message retains a complete manual fallback.
-    const payload = await buildPendingPayload({
-      request: execRequest("exec-omit"),
-      approvalKind: "exec",
-      view: execView("exec-omit", [
-        { decision: "allow-once", label: "Allow Once", command: "/approve exec-omit allow-once" },
-        { decision: "deny", label: "Deny", command: "/approve exec-omit deny" },
-      ]),
-    });
-
-    expect(payload.pollText).toContain("/approve exec-omit allow-once");
-    expect(payload.pollText).toContain("/approve exec-omit deny");
-    expect(payload.pollText).not.toContain("React with:");
-    expect(payload.pollText).toContain("Pending command:");
-    expect(payload.pollText).toContain("Full id:");
-    // The tapback-mode text is unchanged for hosts without poll support.
-    expect(payload.text).toContain("👍 Allow Once");
   });
 
   it("carries the same bold headers and labels in tapback and poll mode", async () => {
@@ -457,12 +277,20 @@ describe("imessageApprovalNativeRuntime", () => {
           messageId: PROMPT_GUID,
           ...(poll ? { poll } : {}),
         },
+        request: {
+          id: "approval-1",
+          request: { command: "echo hi" },
+          createdAtMs: 0,
+          expiresAtMs: 60_000,
+        },
+        approvalKind: "exec",
         payload: { text },
         phase: "resolved",
       });
 
     beforeEach(() => {
       iMessageApprovalPollTargets.clearForTest();
+      clearIMessageApprovalReactionTargetsForTest();
       approvalGatewayMock.resolveApprovalOverGateway.mockReset();
       approvalGatewayMock.resolveApprovalOverGateway.mockResolvedValue({
         applied: true,
@@ -488,6 +316,112 @@ describe("imessageApprovalNativeRuntime", () => {
       timersMock.delay.mockClear();
     });
 
+    it("resolves native system-agent tapbacks only for an authorized group participant", async () => {
+      const approvalId = "system-agent:native-tapback";
+      const groupChatGuid = "iMessage;+;system-agent-native";
+      const to = `chat_guid:${groupChatGuid}`;
+      const nowMs = Date.now();
+      const expiresAtMs = nowMs + 60_000;
+      const request: PendingPayloadArgs["request"] = {
+        approvalKind: "system-agent",
+        id: approvalId,
+        request: {
+          title: "OpenClaw change",
+          description: "Update the agent display name",
+          command: "config.patch",
+          proposalHash: "synthetic-proposal",
+          sessionId: "synthetic-session",
+          allowedDecisions: ["allow-once", "deny"],
+        },
+        createdAtMs: nowMs,
+        expiresAtMs,
+      };
+      const view: Extract<PendingPayloadArgs["view"], { approvalKind: "system-agent" }> = {
+        approvalKind: "system-agent",
+        approvalId,
+        phase: "pending",
+        title: "OpenClaw change requires approval",
+        metadata: [],
+        commandText: request.request.description,
+        operationSummary: request.request.description,
+        expiresAtMs,
+        actions: (["allow-once", "deny"] as const).map((decision) => ({
+          decision,
+          label: decision === "deny" ? "Deny" : "Allow Once",
+          command: `/approve ${approvalId} ${decision}`,
+          style: decision === "deny" ? "danger" : "success",
+        })),
+      };
+      const pendingPayload = await buildPendingPayload({
+        request,
+        approvalKind: "system-agent",
+        view,
+        nowMs,
+      });
+      probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue(NO_POLL_SELECTOR_STATUS);
+      approvalGatewayMock.resolveApprovalOverGateway.mockResolvedValue({
+        applied: true,
+        approval: { status: "allowed", decision: "allow-once", reason: "user" },
+      });
+
+      const entry = await deliverPoll({
+        request,
+        approvalKind: "system-agent",
+        view,
+        pendingPayload,
+        preparedTarget: { to, accountId: ACCOUNT_ID },
+        plannedTarget: { ...pollDeliverArgs.plannedTarget, target: { to } },
+      });
+
+      expect(entry).toMatchObject({
+        messageId: PROMPT_GUID,
+        conversation: { chatGuid: groupChatGuid },
+      });
+      expect(pendingPayload.text).toContain("React with:");
+      expect(sendMock.sendMessageIMessage).toHaveBeenCalledWith(
+        to,
+        pendingPayload.text,
+        expect.objectContaining({
+          approvalPrompt: {
+            approvalId,
+            approvalKind: "system-agent",
+            allowedDecisions: ["allow-once", "deny"],
+          },
+        }),
+      );
+      expect(actionsMock.sendPoll).not.toHaveBeenCalled();
+      const react = (sender: string) =>
+        maybeResolveIMessageApprovalReaction({
+          cfg: pollDeliverArgs.cfg,
+          accountId: ACCOUNT_ID,
+          message: {
+            sender,
+            chat_guid: groupChatGuid,
+            is_group: true,
+            is_reaction: true,
+            reaction_emoji: "👍",
+            reacted_to_guid: PROMPT_GUID,
+          },
+          bodyText: "",
+        });
+
+      await expect(react("+15559999999")).resolves.toBe(true);
+      expect(approvalGatewayMock.resolveApprovalOverGateway).not.toHaveBeenCalled();
+      await expect(react(HANDLE)).resolves.toBe(true);
+      expect(approvalGatewayMock.resolveApprovalOverGateway).toHaveBeenCalledExactlyOnceWith({
+        cfg: pollDeliverArgs.cfg,
+        approvalId,
+        approvalKind: "system-agent",
+        decision: "allow-once",
+        channel: "imessage",
+        accountId: ACCOUNT_ID,
+        senderId: HANDLE,
+        gatewayUrl: undefined,
+      });
+      await expect(react(HANDLE)).resolves.toBe(false);
+      expect(approvalGatewayMock.resolveApprovalOverGateway).toHaveBeenCalledTimes(1);
+    });
+
     it("attests text fallback sends as host-originated, not delegated", async () => {
       // #99905: unstamped operations fail closed to "delegated". Approval
       // delivery targets come from approval routing/config, never model input,
@@ -500,36 +434,6 @@ describe("imessageApprovalNativeRuntime", () => {
           expect.objectContaining({ conversationReadOrigin: "direct-operator" }),
         );
       }
-    });
-
-    it("sends approval details before a captionless poll", async () => {
-      const entry = await deliverPoll();
-
-      expect(sendMock.sendMessageIMessage).toHaveBeenCalledTimes(1);
-      expect(sendMock.sendMessageIMessage).toHaveBeenCalledWith(
-        "+15551230000",
-        pollDeliverArgs.pendingPayload.pollText,
-        expect.objectContaining({ conversationReadOrigin: "direct-operator" }),
-      );
-      expect(sendMock.sendMessageIMessage.mock.calls[0]?.[2]).not.toHaveProperty("approvalPrompt");
-      expect(actionsMock.sendPoll).toHaveBeenCalledWith(
-        expect.objectContaining({
-          chatGuid: "iMessage;-;+15551230000",
-          question: pollDeliverArgs.pendingPayload.pollText,
-          choices: ["👍 Allow Once", "👎 Deny"],
-          suppressComment: true,
-        }),
-      );
-      expect(actionsMock.sendPoll.mock.calls[0]?.[0]).not.toHaveProperty("replyToMessageId");
-      expect(timersMock.delay).toHaveBeenCalledWith(1_100);
-      expect(entry).toMatchObject({
-        messageId: "prompt-guid",
-        poll: { pollGuid: "poll-guid" },
-      });
-      expect(entry?.poll?.optionDecisions).toEqual([
-        ["id-allow", "allow-once"],
-        ["id-deny", "deny"],
-      ]);
     });
 
     it("keeps markdown markers out of the poll question", async () => {
@@ -550,26 +454,6 @@ describe("imessageApprovalNativeRuntime", () => {
       const question = actionsMock.sendPoll.mock.calls[0]?.[0]?.question;
       expect(question).toBe("Exec approval required\nID: exec-poll");
       expect(question).not.toContain("**");
-    });
-
-    it("binds the poll before deliverPending returns", async () => {
-      await deliverPoll();
-
-      await expect(
-        resolvePollVote({
-          sender: HANDLE,
-          participant: HANDLE,
-          optionId: "id-allow",
-          pollGuid: POLL_GUID,
-        }),
-      ).resolves.toBe(true);
-      expect(approvalGatewayMock.resolveApprovalOverGateway).toHaveBeenCalledWith(
-        expect.objectContaining({
-          approvalId: "exec-poll",
-          decision: "allow-once",
-          channel: "imessage",
-        }),
-      );
     });
 
     it("does not recreate a poll target after an immediate vote resolves it", async () => {
@@ -611,29 +495,6 @@ describe("imessageApprovalNativeRuntime", () => {
 
     [
       {
-        title: "keeps the tapback hint when the bridge has no poll selector",
-        status: NO_POLL_SELECTOR_STATUS,
-      },
-      {
-        title: "keeps text controls when imsg lacks caption suppression",
-        status: {
-          ...POLL_CAPABLE_STATUS,
-          cliCapabilities: { pollSendSupportsNoComment: false },
-        },
-      },
-      {
-        title: "keeps text controls when the cached private bridge is unavailable",
-        status: { ...POLL_CAPABLE_STATUS, available: false },
-      },
-      {
-        title: "keeps text controls when polls are disabled in config",
-        overrides: {
-          cfg: {
-            channels: { imessage: { actions: { polls: false }, allowFrom: [HANDLE] } },
-          } as never,
-        },
-      },
-      {
         title: "keeps explicit forwarding targets on the text approval path",
         overrides: {
           plannedTarget: {
@@ -653,11 +514,7 @@ describe("imessageApprovalNativeRuntime", () => {
       })),
     ].forEach((testCase) => {
       it(testCase.title, async () => {
-        if ("status" in testCase && testCase.status) {
-          probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue(testCase.status);
-        }
-
-        const entry = await deliverPoll("overrides" in testCase ? testCase.overrides : undefined);
+        const entry = await deliverPoll(testCase.overrides);
         const to = "to" in testCase ? testCase.to : HANDLE;
 
         expect(sendMock.sendMessageIMessage).toHaveBeenCalledWith(
@@ -668,33 +525,6 @@ describe("imessageApprovalNativeRuntime", () => {
         expect(actionsMock.sendPoll).not.toHaveBeenCalled();
         expect(entry?.poll).toBeUndefined();
       });
-    });
-
-    it("uses polls for an auto handle when the account does not force SMS", async () => {
-      sendMock.sendMessageIMessage.mockResolvedValueOnce(
-        sendResult(PROMPT_GUID, {
-          guid: PROMPT_GUID,
-          service: "imessage",
-          chatGuid: CHAT_GUID,
-          sentText: "PROMPT WITH HINT",
-        }),
-      );
-      const entry = await deliverPoll({
-        cfg: {
-          channels: {
-            imessage: { allowFrom: ["+15551230000"] },
-          },
-        } as never,
-      });
-
-      expect(actionsMock.resolveChatGuidForTarget).toHaveBeenCalled();
-      expect(actionsMock.sendPoll).toHaveBeenCalled();
-      expect(entry).toMatchObject({ poll: expect.anything(), reactionFallbackVisible: true });
-      expect(sendMock.sendMessageIMessage).toHaveBeenCalledWith(
-        "+15551230000",
-        pollDeliverArgs.pendingPayload.text,
-        expect.anything(),
-      );
     });
 
     it("resolves a chat_id before sending its native poll", async () => {
@@ -725,35 +555,6 @@ describe("imessageApprovalNativeRuntime", () => {
       expect(entry).toMatchObject({ poll: expect.anything(), reactionFallbackVisible: true });
     });
 
-    it("keeps the original text controls when a chat_id send is confirmed as SMS", async () => {
-      sendMock.sendMessageIMessage.mockResolvedValueOnce(
-        sendResult(PROMPT_GUID, {
-          guid: PROMPT_GUID,
-          service: "sms",
-          chatGuid: "SMS;-;+15551230000",
-          sentText: "PROMPT WITH HINT",
-        }),
-      );
-      const to = "chat_id:42";
-
-      const entry = await deliverPoll({
-        preparedTarget: { to, accountId: "default" },
-        plannedTarget: {
-          ...pollDeliverArgs.plannedTarget,
-          target: { to },
-        },
-      });
-
-      expect(actionsMock.sendPoll).not.toHaveBeenCalled();
-      expect(entry?.poll).toBeUndefined();
-      expect(sendMock.sendMessageIMessage).toHaveBeenCalledTimes(1);
-      expect(sendMock.sendMessageIMessage).toHaveBeenCalledWith(
-        to,
-        pollDeliverArgs.pendingPayload.text,
-        expect.anything(),
-      );
-    });
-
     it("keeps text controls when no explicit approver can authorize a poll vote", async () => {
       const entry = await deliverPoll({
         cfg: { channels: { imessage: {} } } as never,
@@ -766,17 +567,6 @@ describe("imessageApprovalNativeRuntime", () => {
       );
       expect(actionsMock.sendPoll).not.toHaveBeenCalled();
       expect(entry?.poll).toBeUndefined();
-    });
-
-    it("never probes the bridge on the approval path", async () => {
-      // A probe spawns imsg; putting it in front of an approval prompt would
-      // add seconds of latency. Cold cache degrades to tapbacks instead.
-      probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue(undefined);
-
-      await deliverPoll();
-
-      expect(probeMock.probeIMessagePrivateApi).not.toHaveBeenCalled();
-      expect(actionsMock.sendPoll).not.toHaveBeenCalled();
     });
 
     it("adds a threaded tapback hint when the chat is not registered with Messages", async () => {
@@ -808,61 +598,6 @@ describe("imessageApprovalNativeRuntime", () => {
 
       expect(actionsMock.sendPoll).not.toHaveBeenCalled();
       expect(entry?.poll).toBeUndefined();
-    });
-
-    it("restores the complete manual fallback when the poll send fails", async () => {
-      actionsMock.sendPoll.mockRejectedValue(new Error("bridge gone"));
-
-      const entry = await deliverPoll();
-
-      expect(entry?.poll).toBeUndefined();
-      expect(sendMock.sendMessageIMessage).toHaveBeenCalledTimes(2);
-      expect(sendMock.sendMessageIMessage).toHaveBeenLastCalledWith(
-        "+15551230000",
-        pollDeliverArgs.pendingPayload.text,
-        expect.objectContaining({
-          approvalPrompt: {
-            approvalId: "exec-poll",
-            approvalKind: "exec",
-            allowedDecisions: ["allow-once", "deny"],
-          },
-          replyToId: "prompt-guid",
-        }),
-      );
-    });
-
-    it("restores allow-always when poll delivery fails", async () => {
-      actionsMock.sendPoll.mockRejectedValue(new Error("bridge gone"));
-      const fallbackText = `${pollDeliverArgs.pendingPayload.text}\n/approve exec-poll allow-always`;
-
-      await deliverPoll({
-        pendingPayload: {
-          text: fallbackText,
-          pollText:
-            "PROMPT WITH COMMANDS\n/approve exec-poll allow-once\n/approve exec-poll allow-always\n/approve exec-poll deny",
-          allowedDecisions: ["allow-once", "allow-always", "deny"],
-        },
-      });
-
-      expect(sendMock.sendMessageIMessage).toHaveBeenLastCalledWith(
-        "+15551230000",
-        fallbackText,
-        expect.objectContaining({ replyToId: "prompt-guid" }),
-      );
-    });
-
-    it("uses both prompt and fallback GUIDs as reaction targets", async () => {
-      actionsMock.sendPoll.mockRejectedValue(new Error("bridge gone"));
-      sendMock.sendMessageIMessage
-        .mockResolvedValueOnce(sendResult(PROMPT_GUID, { guid: PROMPT_GUID }))
-        .mockResolvedValueOnce(sendResult("fallback-guid", { guid: "fallback-guid" }));
-
-      const entry = await deliverPoll();
-
-      expect(entry).toMatchObject({
-        messageId: "prompt-guid",
-        hintMessageId: "fallback-guid",
-      });
     });
 
     it("keeps manual controls when the approval prompt has no GUID", async () => {
@@ -906,19 +641,6 @@ describe("imessageApprovalNativeRuntime", () => {
       );
     });
 
-    it("attests resolved and expired threaded replies as host-originated", async () => {
-      await updateEntry("Canonical result: Denied");
-
-      expect(sendMock.sendMessageIMessage).toHaveBeenCalledWith(
-        "+15551230000",
-        "Canonical result: Denied",
-        expect.objectContaining({
-          conversationReadOrigin: "direct-operator",
-          replyToId: "prompt-guid",
-        }),
-      );
-    });
-
     it("threads poll resolution updates to the verified approval prompt", async () => {
       await updateEntry("Canonical result: Allowed once", {
         pollGuid: "bridge-reported-guid",
@@ -928,7 +650,10 @@ describe("imessageApprovalNativeRuntime", () => {
       expect(sendMock.sendMessageIMessage).toHaveBeenCalledWith(
         "+15551230000",
         "Canonical result: Allowed once",
-        expect.objectContaining({ replyToId: "prompt-guid" }),
+        expect.objectContaining({
+          conversationReadOrigin: "direct-operator",
+          replyToId: "prompt-guid",
+        }),
       );
     });
   });

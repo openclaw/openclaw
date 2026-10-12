@@ -1,23 +1,37 @@
 // Vitest cron config wires the cron test shard.
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
-export function createCronVitestConfig(env?: Record<string, string | undefined>) {
+export function createCronVitestConfig(
+  env?: Record<string, string | undefined>,
+): ReturnType<typeof createScopedVitestConfig> {
   const config = createScopedVitestConfig(["src/cron/**/*.test.ts"], {
     dir: "src",
     env,
+    intersectIncludeFile: true,
     name: "cron",
+    pool: "forks",
     passWithNoTests: true,
   });
-  config.test = {
-    ...config.test,
-    maxWorkers: 1,
-    fileParallelism: false,
-    sequence: {
-      ...config.test?.sequence,
-      groupOrder: 1,
+  return {
+    ...config,
+    test: {
+      ...config.test,
+      // Native SQLite workers compare hrtime deadlines with this host. Only
+      // scheduling clocks may advance independently of those worker deadlines.
+      fakeTimers: {
+        toFake: [
+          "Date",
+          "setTimeout",
+          "clearTimeout",
+          "setInterval",
+          "clearInterval",
+          "setImmediate",
+          "clearImmediate",
+          "performance",
+        ],
+      },
     },
   };
-  return config;
 }
 
 export default createCronVitestConfig();

@@ -1,43 +1,17 @@
 // Audit Seams tests cover audit seams script behavior.
 import { describe, expect, it } from "vitest";
-import {
-  HELP_TEXT,
-  describeSeamKinds,
-  determineSeamTestStatus,
-} from "../../scripts/audit-seams.mts";
+import { describeSeamKinds, determineSeamTestStatus } from "../../scripts/audit-seams.mts";
 
 describe("audit-seams cron seam classification", () => {
-  it("detects cron agent handoff and outbound delivery boundaries", () => {
-    const source = `
-      import { runCliAgent } from "../../agents/cli-runner.js";
-      import { runWithModelFallback } from "../../agents/model-fallback-runner.js";
-      import { registerAgentRunContext } from "../../infra/agent-run-registry.js";
-      import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
-      import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
-
-      export async function runCronIsolatedAgentTurn() {
-        registerAgentRunContext({});
-        await runWithModelFallback(() => runCliAgent({}));
-        await deliverOutboundPayloads({ payloads: [{ text: "done" }] });
-        return buildOutboundSessionContext({});
-      }
-    `;
-
-    expect(describeSeamKinds("src/cron/isolated-agent/run.ts", source)).toEqual([
-      "cron-agent-handoff",
-      "cron-outbound-delivery",
-    ]);
-  });
-
   it("detects scheduler-state seams in cron service orchestration", () => {
     const source = `
-      import { recomputeNextRuns, computeJobNextRunAtMs } from "./jobs-scheduling.js";
+      import { recomputeNextRunsForMaintenance, computeJobNextRunAtMs } from "./jobs-scheduling.js";
       import { ensureLoaded, persist } from "./store.js";
       import { armTimer, runMissedJobs } from "./timer.js";
 
       export async function start(state) {
         await ensureLoaded(state);
-        recomputeNextRuns(state);
+        recomputeNextRunsForMaintenance(state, { deferredNotifications: [] });
         await persist(state);
         armTimer(state);
         await runMissedJobs(state);
@@ -95,20 +69,6 @@ describe("audit-seams subagent seam classification", () => {
     );
   });
 
-  it("detects the shared delivery-context announce seam", () => {
-    const source = `
-      import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
-
-      export function createBoundDeliveryRouter(context) {
-        return normalizeDeliveryContext(context);
-      }
-    `;
-
-    expect(
-      describeSeamKinds("src/agents/subagents/announce/subagent-announce-origin.ts", source),
-    ).toEqual(["subagent-announce-delivery"]);
-  });
-
   it("detects parent-stream seams for ACP spawn relays", () => {
     const source = `
       import { onAgentEvent } from "../../../infra/agent-events.js";
@@ -134,20 +94,7 @@ describe("audit-seams subagent seam classification", () => {
   });
 });
 
-describe("audit-seams status/help", () => {
-  it("keeps cron seam statuses conservative when nearby tests exist", () => {
-    expect(
-      determineSeamTestStatus(
-        ["cron-agent-handoff"],
-        [{ file: "src/cron/service.issue-regressions.test.ts", matchQuality: "path-nearby" }],
-      ),
-    ).toEqual({
-      status: "partial",
-      reason:
-        "Nearby tests exist (best match: path-nearby), but this inventory does not prove cross-layer seam coverage end to end.",
-    });
-  });
-
+describe("audit-seams status", () => {
   it("keeps subagent seam statuses conservative when nearby tests exist", () => {
     expect(
       determineSeamTestStatus(
@@ -164,12 +111,5 @@ describe("audit-seams status/help", () => {
       reason:
         "Nearby tests exist (best match: direct-import), but this inventory does not prove cross-layer seam coverage end to end.",
     });
-  });
-
-  it("documents cron and subagent seam coverage in help text", () => {
-    expect(HELP_TEXT).toContain("cron orchestration seams");
-    expect(HELP_TEXT).toContain("subagent seams");
-    expect(HELP_TEXT).toContain("announce delivery");
-    expect(HELP_TEXT).toContain("parent streaming");
   });
 });

@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" fill="none">
+  <defs>
+    <linearGradient id="ink" x1="0" y1="1000" x2="1600" y2="0" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#a6a6b8"/>
+      <stop offset="0.7" stop-color="#cb8394"/>
+      <stop offset="1" stop-color="#a6a6b8"/>
+    </linearGradient>
+    <radialGradient id="quiet">
+      <stop offset="0.15" stop-color="white" stop-opacity="0"/>
+      <stop offset="0.8" stop-color="white" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="white"/>
+    </radialGradient>
+    <mask id="edges"><path fill="url(#quiet)" d="M0 0h1600v1000H0z"/></mask>
+  </defs>
+  <g stroke="url(#ink)" stroke-width="2" opacity="0.1" mask="url(#edges)">
+    <path d="M825-180 1420 415Q1530 525 1640 415L1775 280M790-165 1395 440Q1530 575 1665 440L1800 305M755-150 1370 465Q1530 625 1690 465L1825 330M720-135 1345 490Q1530 675 1715 490L1850 355M685-120 1320 515Q1530 725 1740 515L1875 380"/>
+<path d="M1090-90 955 45Q845 155 955 265L1640 950M1115-65 1005 45Q895 155 1005 265L1665 925M1140-40 1055 45Q945 155 1055 265L1690 900M1165-15 1105 45Q995 155 1105 265L1715 875M1190 10 1155 45Q1045 155 1155 265L1740 850"/>
+<path d="M-165 875 70 640Q155 555 240 640L680 1080M-140 900 95 665Q155 605 215 665L655 1105M-115 925 120 690Q155 655 190 690L630 1130M-90 950 145 715Q155 705 165 715L605 1155"/>
+  </g>
+</svg>

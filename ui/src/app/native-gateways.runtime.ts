@@ -1,3 +1,6 @@
+import { registerListener } from "../../../src/shared/listeners.js";
+import { webKitHostWindow } from "./native-webkit-bridge.ts";
+
 export type NativeGateway = {
   id: string;
   name: string;
@@ -8,26 +11,15 @@ export type NativeGateway = {
 };
 
 export type NativeGatewaysSnapshot = { gateways: NativeGateway[]; currentId: string };
-type NativeGatewaysMessage =
-  | { type: "select" | "open-window" | "set-primary"; id: string }
-  | { type: "open-settings" };
 type NativeGatewaysWindow = Window & {
   __OPENCLAW_NATIVE_GATEWAYS__?: unknown;
-  webkit?: {
-    messageHandlers?: { openclawGateways?: { postMessage(message: NativeGatewaysMessage): void } };
-  };
 };
 
 const NATIVE_GATEWAYS_CHANGED_EVENT = "openclaw:native-gateways-changed";
 
-export type NativeGatewaysCapability = {
-  readonly snapshot: NativeGatewaysSnapshot | null;
-  subscribe(listener: (snapshot: NativeGatewaysSnapshot) => void): () => void;
-  select(id: string): void;
-  openWindow(id: string): void;
-  setPrimary(id: string): void;
-  openSettings(): void;
-};
+export type NativeGatewaysCapability = NonNullable<
+  ReturnType<typeof createNativeGatewaysCapability>
+>;
 
 function snapshotFrom(value: unknown): NativeGatewaysSnapshot | null {
   if (!value || typeof value !== "object") {
@@ -40,18 +32,16 @@ function snapshotFrom(value: unknown): NativeGatewaysSnapshot | null {
     : null;
 }
 
-function createNativeGatewaysCapability(): NativeGatewaysCapability | null {
+function createNativeGatewaysCapability() {
   if (typeof window === "undefined") {
     return null;
   }
   const nativeWindow = window as NativeGatewaysWindow;
-  const handler = nativeWindow.webkit?.messageHandlers?.openclawGateways;
+  const handler = webKitHostWindow()?.webkit?.messageHandlers?.openclawGateways;
   if (!handler?.postMessage) {
     return null;
   }
   const post = handler.postMessage.bind(handler);
-  const postWithId = (type: "select" | "open-window" | "set-primary", id: string) =>
-    post({ type, id });
   let snapshot = snapshotFrom(nativeWindow["__OPENCLAW_NATIVE_GATEWAYS__"]);
   const listeners = new Set<(snapshot: NativeGatewaysSnapshot) => void>();
   const onChange = (event: Event) => {
@@ -67,20 +57,20 @@ function createNativeGatewaysCapability(): NativeGatewaysCapability | null {
     get snapshot() {
       return snapshot;
     },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    select: (id) => postWithId("select", id),
-    openWindow: (id) => postWithId("open-window", id),
-    setPrimary: (id) => postWithId("set-primary", id),
+    subscribe: (listener: (snapshot: NativeGatewaysSnapshot) => void) =>
+      registerListener(listeners, listener),
+    select: (id: string) => post({ type: "select", id }),
+    openWindow: (id: string) => post({ type: "open-window", id }),
+    setPrimary: (id: string) => post({ type: "set-primary", id }),
+    reconnect: (id: string) => post({ type: "reconnect", id }),
+    reconnectCancel: (id: string) => post({ type: "reconnect-cancel", id }),
     openSettings: () => post({ type: "open-settings" }),
   };
 }
 
 let singleton: NativeGatewaysCapability | null | undefined;
 
-// Chat-chunk-owned so this capability never enters the QA-smoke startup bundle.
+// Loaded by native chat features and sidebar menus, outside the startup bundle.
 export function nativeGatewaysCapability(): NativeGatewaysCapability | null {
   if (singleton === undefined) {
     singleton = createNativeGatewaysCapability();

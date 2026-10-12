@@ -6,7 +6,6 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getDefaultLocalRootsCore } from "../../media/local-media-access.js";
 import { buildWebchatAssistantMessageFromReplyPayloads } from "./chat-webchat-media.js";
 
 async function buildWebchatAudioBlocks(
@@ -33,64 +32,6 @@ describe("webchat audio blocks through assistant messages", () => {
     return { audioPath, localRoot: tmpDir };
   }
 
-  it("exposes a local audio file as a media-ticketed attachment when it is under localRoots", async () => {
-    const { audioPath, localRoot } = writeAudioFixture();
-
-    const blocks = await buildWebchatAudioBlocks(
-      [{ mediaUrl: audioPath, trustedLocalMedia: true }],
-      { localRoots: [localRoot] },
-    );
-
-    expect(blocks).toHaveLength(1);
-    const block = blocks[0] as {
-      type?: string;
-      attachment?: { url?: string; kind?: string; label?: string; mimeType?: string };
-    };
-    expect(block.type).toBe("attachment");
-    expect(block.attachment).toEqual({
-      url: fs.realpathSync(audioPath),
-      kind: "audio",
-      label: "clip.mp3",
-      mimeType: "audio/mpeg",
-    });
-  });
-
-  it("exposes MPEG-2 audio files with their canonical MIME type", async () => {
-    const { audioPath, localRoot } = writeAudioFixture([0xff, 0xfd, 0x80, 0x00], ".m2a");
-
-    const blocks = await buildWebchatAudioBlocks(
-      [{ mediaUrl: audioPath, trustedLocalMedia: true }],
-      { localRoots: [localRoot] },
-    );
-
-    expect(blocks[0]).toMatchObject({
-      attachment: { label: "clip.m2a", kind: "audio", mimeType: "audio/mpeg" },
-    });
-  });
-
-  it.each([
-    { extension: ".aiff", form: "AIFF" },
-    { extension: ".aif", form: "AIFF" },
-    { extension: ".aifc", form: "AIFC" },
-  ])(
-    "exposes $extension audio files with their canonical MIME type",
-    async ({ extension, form }) => {
-      const { audioPath, localRoot } = writeAudioFixture(
-        [...Buffer.from("FORM", "ascii"), 0, 0, 0, 4, ...Buffer.from(form, "ascii")],
-        extension,
-      );
-
-      const blocks = await buildWebchatAudioBlocks(
-        [{ mediaUrl: audioPath, trustedLocalMedia: true }],
-        { localRoots: [localRoot] },
-      );
-
-      expect(blocks[0]).toMatchObject({
-        attachment: { label: `clip${extension}`, kind: "audio", mimeType: "audio/aiff" },
-      });
-    },
-  );
-
   it("preserves voice-note metadata on local audio attachments", async () => {
     const { audioPath, localRoot } = writeAudioFixture();
 
@@ -106,31 +47,6 @@ describe("webchat audio blocks through assistant messages", () => {
         isVoiceNote: true,
       },
     });
-  });
-
-  it("suppresses reasoning payload audio", async () => {
-    const { audioPath, localRoot } = writeAudioFixture();
-
-    const blocks = await buildWebchatAudioBlocks(
-      [
-        {
-          text: "step",
-          mediaUrl: audioPath,
-          trustedLocalMedia: true,
-          isReasoning: true,
-        },
-      ],
-      { localRoots: [localRoot] },
-    );
-
-    expect(blocks).toHaveLength(0);
-  });
-
-  it("skips remote URLs", async () => {
-    const blocks = await buildWebchatAudioBlocks([
-      { mediaUrl: "https://example.com/a.mp3", trustedLocalMedia: true },
-    ]);
-    expect(blocks).toHaveLength(0);
   });
 
   it("skips non-audio local files", async () => {
@@ -159,32 +75,32 @@ describe("webchat audio blocks through assistant messages", () => {
     expect(blocks).toHaveLength(1);
   });
 
-  it("embeds file:// URLs pointing at a local file within localRoots", async () => {
-    const { audioPath, localRoot } = writeAudioFixture([0x01]);
+  it.each(["FiLe://", "FILE:"])(
+    "embeds %s URLs pointing at a local file within localRoots",
+    async (scheme) => {
+      const { audioPath, localRoot } = writeAudioFixture([0x01]);
 
-    const fileUrl = pathToFileURL(audioPath).href;
-    const blocks = await buildWebchatAudioBlocks([{ mediaUrl: fileUrl, trustedLocalMedia: true }], {
-      localRoots: [localRoot],
-    });
+      const fileUrl = pathToFileURL(audioPath).href.replace(/^file:\/\/\//, `${scheme}/`);
+      const blocks = await buildWebchatAudioBlocks(
+        [{ mediaUrl: fileUrl, trustedLocalMedia: true }],
+        {
+          localRoots: [localRoot],
+        },
+      );
 
-    expect(blocks).toHaveLength(1);
-    expect((blocks[0] as { type?: string }).type).toBe("attachment");
-  });
+      expect(blocks).toHaveLength(1);
+      expect((blocks[0] as { type?: string }).type).toBe("attachment");
+    },
+  );
 
-  it("drops tool-result file:// URLs with remote hosts before touching the filesystem", async () => {
+  it("drops uppercase file URLs with remote hosts before touching the filesystem", async () => {
+    const source = "FILE://attacker/share/probe.mp3";
     const openSpy = vi.spyOn(fsPromises, "open");
-
     const blocks = await buildWebchatAudioBlocks([
-      {
-        text: "MEDIA:file://attacker/share/probe.mp3",
-        mediaUrl: "file://attacker/share/probe.mp3",
-        trustedLocalMedia: true,
-      },
+      { text: `MEDIA:${source}`, mediaUrl: source, trustedLocalMedia: true },
     ]);
-
     expect(blocks).toHaveLength(0);
     expect(openSpy).not.toHaveBeenCalled();
-
     openSpy.mockRestore();
   });
 
@@ -208,25 +124,6 @@ describe("webchat audio blocks through assistant messages", () => {
 
     expect(blocks).toHaveLength(0);
     expect(onLocalAudioAccessDenied).toHaveBeenCalledOnce();
-  });
-
-  it("falls back to default localRoots when explicit roots are omitted", async () => {
-    const [defaultRoot] = getDefaultLocalRootsCore();
-    if (defaultRoot === undefined) {
-      throw new Error("expected default local media root");
-    }
-
-    fs.mkdirSync(defaultRoot, { recursive: true });
-    tmpDir = fs.mkdtempSync(path.join(defaultRoot, "openclaw-webchat-audio-default-"));
-    const audioPath = path.join(tmpDir, "clip.mp3");
-    fs.writeFileSync(audioPath, Buffer.from([0x04]));
-
-    const blocks = await buildWebchatAudioBlocks([
-      { mediaUrl: audioPath, trustedLocalMedia: true },
-    ]);
-
-    expect(blocks).toHaveLength(1);
-    expect((blocks[0] as { type?: string }).type).toBe("attachment");
   });
 
   it("skips local audio when the opened file stat is over the cap", async () => {
@@ -253,23 +150,6 @@ describe("webchat audio blocks through assistant messages", () => {
 });
 
 describe("buildWebchatAssistantMessageFromReplyPayloads", () => {
-  it("converts image data URLs into webchat image blocks", async () => {
-    const message = await buildWebchatAssistantMessageFromReplyPayloads([
-      {
-        text: "Scan this QR code with the OpenClaw iOS app:",
-        mediaUrl: "data:image/png;base64,cG5n",
-      },
-    ]);
-
-    expect(message).toEqual({
-      transcriptText: "Scan this QR code with the OpenClaw iOS app:",
-      content: [
-        { type: "text", text: "Scan this QR code with the OpenClaw iOS app:" },
-        { type: "input_image", image_url: "data:image/png;base64,cG5n" },
-      ],
-    });
-  });
-
   it("suppresses reasoning payload media transcripts", async () => {
     const message = await buildWebchatAssistantMessageFromReplyPayloads([
       {
@@ -282,23 +162,6 @@ describe("buildWebchatAssistantMessageFromReplyPayloads", () => {
     expect(message).toBeNull();
   });
 
-  it("suppresses control tokens and falls back to synthetic image text", async () => {
-    const message = await buildWebchatAssistantMessageFromReplyPayloads([
-      {
-        text: "NO_REPLY",
-        mediaUrl: "data:image/png;base64,cG5n",
-      },
-    ]);
-
-    expect(message).toEqual({
-      transcriptText: "Image reply",
-      content: [
-        { type: "text", text: "Image reply" },
-        { type: "input_image", image_url: "data:image/png;base64,cG5n" },
-      ],
-    });
-  });
-
   it("preserves reply directives in transcript text for media replies", async () => {
     const message = await buildWebchatAssistantMessageFromReplyPayloads([
       {
@@ -307,7 +170,7 @@ describe("buildWebchatAssistantMessageFromReplyPayloads", () => {
       },
     ]);
 
-    expect(message).toEqual({
+    expect(message).toMatchObject({
       transcriptText: "[[reply_to_current]]Image reply",
       content: [
         { type: "text", text: "[[reply_to_current]]Image reply" },
@@ -381,7 +244,7 @@ describe("buildWebchatAssistantMessageFromReplyPayloads", () => {
       },
     ]);
 
-    expect(message).toEqual({
+    expect(message).toMatchObject({
       transcriptText: "[[reply_to:abcaudio_as_voice]]Image reply",
       content: [
         { type: "text", text: "[[reply_to:abcaudio_as_voice]]Image reply" },

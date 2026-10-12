@@ -1,26 +1,26 @@
 import { toStructuredErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type { ClientOptions, WebSocket } from "ws";
+import { z } from "zod";
+import type {
+  GatewayWebSocketClientOptions,
+  WebSocket,
+} from "../../packages/gateway-client/src/websocket.js";
 import type {
   WorkerConnectParams,
-  WorkerHeartbeatParams,
   WorkerHelloOk,
   WorkerProtocolCloseReason,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { BackoffPolicy } from "../infra/backoff.js";
+import { redactSensitiveText } from "../logging/redact.js";
+import { workerProtocolObject } from "./protocol-record.js";
 import type { WorkerConnectionEndpoint } from "./worker-connection-endpoint.js";
-
-const FENCED_CLOSE_REASONS = new Set<WorkerProtocolCloseReason>([
-  "credential-replaced",
-  "owner-epoch-mismatch",
-]);
 
 export type WorkerFencedReason = "credential-replaced" | "owner-epoch-mismatch";
 
 export function isFencedCloseReason(
   reason: WorkerProtocolCloseReason,
 ): reason is WorkerFencedReason {
-  return FENCED_CLOSE_REASONS.has(reason);
+  return reason === "credential-replaced" || reason === "owner-epoch-mismatch";
 }
 
 export type WorkerConnectionState =
@@ -33,10 +33,10 @@ export type WorkerConnectionState =
   | { kind: "failed"; error: Error }
   | { kind: "stopped" };
 
-export type WorkerConnectionExit =
-  | { kind: "fenced"; reason: WorkerFencedReason }
-  | { kind: "failed"; error: Error }
-  | { kind: "stopped" };
+export type WorkerConnectionExit = Extract<
+  WorkerConnectionState,
+  { kind: "fenced" | "failed" | "stopped" }
+>;
 
 export type WorkerConnectionOptions = {
   endpoint: WorkerConnectionEndpoint;
@@ -45,8 +45,7 @@ export type WorkerConnectionOptions = {
   admissionTimeoutMs?: number;
   admissionDeadlineMs?: number;
   requestTimeoutMs?: number;
-  createSocket?: (url: string, options: ClientOptions) => WebSocket;
-  heartbeatStatus?: () => WorkerHeartbeatParams["status"];
+  createSocket?: (url: string, options: GatewayWebSocketClientOptions) => WebSocket;
   onConnectionFailure?: (error: Error | undefined) => void;
 };
 
@@ -74,11 +73,33 @@ export class WorkerAdmissionError extends Error {
   }
 }
 
+// One worker admission window; the launch adapter also uses it to cap re-arms
+// within the minted credential's lifetime.
+export const WORKER_ADMISSION_DEADLINE_MS = 120_000;
+
 export class WorkerAdmissionDeadlineExceededError extends Error {
-  constructor() {
-    super("worker admission deadline exceeded");
+  constructor(diagnosis: string) {
+    super(diagnosis);
     this.name = "WorkerAdmissionDeadlineExceededError";
   }
+}
+
+// Only the initial admission boundary can author this result. A reconnect deadline
+// after execution started cannot prove that replaying the turn is safe.
+export const WorkerAdmissionDeadlineResultSchema = workerProtocolObject({
+  status: z.literal("not-started"),
+  reason: z.literal("admission-deadline"),
+  errorText: z
+    .string()
+    .min(1)
+    .refine((value) => Buffer.byteLength(value, "utf8") <= 4_096 && !/[\r\n\0]/u.test(value)),
+});
+export type WorkerAdmissionDeadlineResult = z.infer<typeof WorkerAdmissionDeadlineResultSchema>;
+
+export function parseWorkerAdmissionDeadlineResult(
+  value: unknown,
+): WorkerAdmissionDeadlineResult | undefined {
+  return WorkerAdmissionDeadlineResultSchema.safeParse(value).data;
 }
 
 export class WorkerFencedError extends Error {
@@ -98,21 +119,49 @@ export function resolvePositiveTimeout(value: number | undefined, fallback: numb
   return value;
 }
 
-export function toWorkerConnectionError(error: unknown): Error {
-  return toStructuredErrorObject(error);
-}
-
 export function formatWorkerConnectionFailure(
-  endpoint: WorkerConnectionEndpoint,
+  options: WorkerConnectionOptions,
   error: unknown,
+  attempts?: number,
 ): string {
-  const target =
-    endpoint.kind === "websocket"
-      ? truncateUtf16Safe(new URL(endpoint.url).host, 128)
-      : truncateUtf16Safe(endpoint.socketPath, 128);
+  const endpoint = options.endpoint;
+  let address: string;
+  if (endpoint.kind === "websocket") {
+    const url = new URL(endpoint.url);
+    address = `${url.hostname}:${url.port || (url.protocol === "wss:" ? "443" : "80")}`;
+  } else {
+    address = endpoint.socketPath;
+  }
+  const target = truncateUtf16Safe(address, 128);
+  let detail = toStructuredErrorObject(error).message;
+  const access = endpoint.kind === "websocket" ? endpoint.cloudflareAccess : undefined;
+  const credentials = [
+    options.connectParams.admission.credential,
+    ...(access ? [access.clientId, access.clientSecret] : []),
+  ];
+  // Scrub before truncating so a cut credential cannot escape into stderr or IPC.
+  for (const credential of credentials) {
+    for (const value of [
+      credential,
+      encodeURIComponent(credential),
+      JSON.stringify(credential).slice(1, -1),
+    ]) {
+      if (value) {
+        detail = detail.replaceAll(value, "[REDACTED]");
+      }
+    }
+  }
+  if (endpoint.kind === "websocket") {
+    detail = detail.replaceAll(endpoint.url, target);
+  }
   const cause =
-    truncateUtf16Safe(toWorkerConnectionError(error).message.replace(/\s+/gu, " ").trim(), 160) ||
-    "connection failed";
+    truncateUtf16Safe(
+      redactSensitiveText(detail, { mode: "tools" }).replace(/\s+/gu, " ").trim(),
+      160,
+    ) || "connection failed";
+  if (attempts !== undefined) {
+    return `worker admission deadline exceeded after ${attempts} attempts to ${target}: ${cause}`;
+  }
   const hint =
     endpoint.kind === "websocket"
       ? "check TLS pin/publicUrl configuration"

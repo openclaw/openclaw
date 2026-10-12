@@ -3,154 +3,126 @@
  */
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import {
+  type AgentAssistantSourceReceipt,
+  bindAgentAssistantSource,
+} from "../infra/agent-events.js";
+import {
   handleAgentEnd,
   handleAgentStart,
   handleCompactionEnd,
   handleCompactionStart,
 } from "./embedded-agent-subscribe.handlers.lifecycle.js";
 import {
-  capturePendingAssistantUsage,
   handleMessageStart,
-  preservePendingAssistantUsage,
-  resetPendingAssistantUsage,
   handleMessageEnd,
 } from "./embedded-agent-subscribe.handlers.messages.lifecycle.js";
+import { isSubscribeTranscriptOnlyOpenClawAssistantMessage } from "./embedded-agent-subscribe.handlers.messages.stream.js";
 import { handleMessageUpdate } from "./embedded-agent-subscribe.handlers.messages.update.js";
-import {
-  handleToolExecutionEnd,
-  handleToolExecutionStart,
-  handleToolExecutionUpdate,
-} from "./embedded-agent-subscribe.handlers.tools.js";
+import { handleToolExecutionEnd } from "./embedded-agent-subscribe.handlers.tools.completion.js";
+import { handleToolExecutionUpdate } from "./embedded-agent-subscribe.handlers.tools.progress.js";
+import { handleToolExecutionStart } from "./embedded-agent-subscribe.handlers.tools.start.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
-import type { AgentMessage } from "./runtime/index.js";
+import { recordEmbeddedToolTrajectoryEvent } from "./embedded-agent-subscribe.trajectory.js";
+import { prepareToolResult } from "./embedded-agent-tool-results.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
 
 /** Create the serialized event dispatcher for subscribed embedded-agent sessions. */
 export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscribeContext) {
-  const scheduleEvent = (
-    evt: AgentSessionEvent,
-    handler: () => void | Promise<void>,
-    options?: { detach?: boolean },
-  ): void | Promise<void> => {
-    // Most stream events must preserve order across async formatting and flush
-    // work. A detached event may run after the chain without blocking delivery.
+  let assistantSource: AgentAssistantSourceReceipt | undefined;
+  const scheduleEvent = (evt: AgentSessionEvent, handler: () => unknown): void | Promise<void> => {
+    const onError = (err: unknown) => {
+      ctx.log.debug(`${evt.type} handler failed: ${String(err)}`);
+    };
+    // Tool-result delivery must settle before later assistant or terminal events;
+    // suppression flags would discard those events instead of preserving order.
     const run = () => {
       try {
+        if (evt.type !== "message_update") {
+          ctx.flushAssistantStream();
+        }
         return handler();
       } catch (err) {
-        ctx.log.debug(`${evt.type} handler failed: ${String(err)}`);
+        onError(err);
+        return undefined;
       }
     };
 
-    if (!ctx.state.pendingEventChain) {
-      const result = run();
-      if (!isPromiseLike<void>(result)) {
-        return;
-      }
-      const task = result
-        .catch((err: unknown) => {
-          ctx.log.debug(`${evt.type} handler failed: ${String(err)}`);
-        })
-        .finally(() => {
-          if (ctx.state.pendingEventChain === task) {
-            ctx.state.pendingEventChain = null;
-          }
-        });
-      if (!options?.detach) {
-        ctx.state.pendingEventChain = task;
-        return task;
-      }
+    const result = ctx.state.pendingEventChain ? ctx.state.pendingEventChain.then(run) : run();
+    if (!isPromiseLike(result)) {
       return;
     }
 
-    const task = ctx.state.pendingEventChain
-      .then(() => run())
-      .catch((err: unknown) => {
-        ctx.log.debug(`${evt.type} handler failed: ${String(err)}`);
-      })
+    const task = Promise.resolve(result)
+      .then(() => {}, onError)
       .finally(() => {
         if (ctx.state.pendingEventChain === task) {
           ctx.state.pendingEventChain = null;
         }
       });
-    if (!options?.detach) {
-      ctx.state.pendingEventChain = task;
-      return task;
-    }
+    ctx.state.pendingEventChain = task;
+    return task;
   };
 
   return (evt: AgentSessionEvent) => {
+    if (
+      (evt.type === "message_start" ||
+        evt.type === "message_update" ||
+        evt.type === "message_end") &&
+      evt.message.role === "assistant" &&
+      !isSubscribeTranscriptOnlyOpenClawAssistantMessage(evt.message)
+    ) {
+      if (evt.type === "message_start" || !assistantSource) {
+        assistantSource = {};
+      }
+      bindAgentAssistantSource(evt.message, assistantSource);
+    }
+    // Model facts advance before persistence, independently of queued reply delivery.
+    ctx.captureModelEvent(evt);
+    // Capture tool facts before reply delivery can delay their lifecycle handlers.
+    const readResult =
+      evt.type === "tool_execution_end" ? prepareToolResult(evt.result) : undefined;
+    recordEmbeddedToolTrajectoryEvent(ctx, evt, readResult);
     switch (evt.type) {
       case "message_start":
-        // Delivery from the previous message may still be queued, but usage is
-        // message-scoped. Reset only its accounting boundary synchronously so
-        // this message's streamed usage cannot inherit the prior commit state.
-        resetPendingAssistantUsage(ctx, evt.message as AgentMessage);
-        void scheduleEvent(evt, () => {
-          handleMessageStart(ctx, evt as never);
-        });
+        void scheduleEvent(evt, () => handleMessageStart(ctx, evt));
         return;
       case "message_update":
-        // AgentSession persists message_end after this listener returns, while
-        // delivery handlers may still be queued. Capture usage synchronously so
-        // the following final snapshot can be repaired before persistence.
-        capturePendingAssistantUsage(ctx, evt as never);
-        void scheduleEvent(evt, () => {
-          handleMessageUpdate(ctx, evt as never);
-        });
+        void scheduleEvent(evt, () => handleMessageUpdate(ctx, evt));
         return;
       case "message_end":
-        if ((evt.message as AgentMessage)?.role === "assistant") {
-          preservePendingAssistantUsage(
-            evt.message as Extract<AgentMessage, { role: "assistant" }>,
-            ctx.state.pendingAssistantUsage,
-          );
-        }
+        void scheduleEvent(evt, () => handleMessageEnd(ctx, evt));
+        return;
+      case "turn_start":
+        // Async tool fragments share one provider turn; only a new model call starts a batch.
         void scheduleEvent(evt, () => {
-          return handleMessageEnd(ctx, evt as never);
+          ctx.state.turnToolsOnlySourceProgress = undefined;
         });
+        return;
+      case "turn_end":
+        void scheduleEvent(evt, () => ctx.noteLastAssistant(evt.message));
         return;
       case "tool_execution_start":
-        void scheduleEvent(evt, () => {
-          return handleToolExecutionStart(ctx, evt as never);
-        });
+        void scheduleEvent(evt, () => handleToolExecutionStart(ctx, evt));
         return;
       case "tool_execution_update":
-        void scheduleEvent(evt, () => {
-          handleToolExecutionUpdate(ctx, evt as never);
-        });
+        void scheduleEvent(evt, () => handleToolExecutionUpdate(ctx, evt));
         return;
       case "tool_execution_end":
-        void scheduleEvent(
-          evt,
-          async () => {
-            await handleToolExecutionEnd(ctx, evt as never);
-          },
-          { detach: true },
-        );
+        void scheduleEvent(evt, () => handleToolExecutionEnd(ctx, evt, readResult!));
         return;
       case "agent_start":
-        void scheduleEvent(evt, () => {
-          handleAgentStart(ctx);
-        });
+        void scheduleEvent(evt, () => handleAgentStart(ctx));
         return;
       case "compaction_start":
-        void scheduleEvent(evt, () => {
-          handleCompactionStart(ctx, {
-            type: "compaction_start",
-            reason: evt.reason,
-          });
-        });
+        void scheduleEvent(evt, () => handleCompactionStart(ctx, evt));
         return;
       case "compaction_end":
-        void scheduleEvent(evt, () => {
-          handleCompactionEnd(ctx, evt);
-        });
+        // The attempt's replacement hook already recorded its private commit fact.
+        // Keep public completion timing and standalone subscriber counting unchanged.
+        void scheduleEvent(evt, () => handleCompactionEnd(ctx, evt));
         return;
       case "agent_end":
-        return scheduleEvent(evt, () => {
-          return handleAgentEnd(ctx, evt as never);
-        });
+        return scheduleEvent(evt, () => handleAgentEnd(ctx, evt));
       default:
     }
   };

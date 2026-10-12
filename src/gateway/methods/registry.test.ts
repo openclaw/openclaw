@@ -4,44 +4,104 @@
 import { describe, expect, it } from "vitest";
 import { ADMIN_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
 import type { GatewayRequestHandler } from "../server-methods/types.js";
-import { isSessionProfileDependentMethod } from "../session-sharing-target-input.js";
-import { listCoreGatewayMethodNames } from "./core-descriptors.js";
+import { isSessionProfileDependentMethod } from "../session-method-policy.js";
+import { listCoreGatewayMethodNames } from "./core-method-policy.js";
 import {
-  createCoreGatewayMethodDescriptors,
-  createGatewayMethodRegistry,
-  createPluginGatewayMethodDescriptors,
   createPluginGatewayMethodDescriptor,
-} from "./registry.js";
+  type GatewayMethodDescriptorInput,
+} from "./descriptor.js";
+import { createCoreGatewayMethodDescriptors, createGatewayMethodRegistry } from "./registry.js";
 
 const handler: GatewayRequestHandler = ({ respond }) => respond(true, { ok: true });
 
 describe("gateway method registry", () => {
-  it("indexes handlers, scopes, startup state, and control-plane metadata", () => {
+  it("requires a profile for session-scoped plugin and core methods", () => {
+    const sessionAccess = {
+      mode: "write" as const,
+      allowOwnSessionScope: true,
+      requiredTool: "example",
+    };
+    const plugin = createPluginGatewayMethodDescriptor({
+      pluginId: "example",
+      name: "example.session",
+      handler,
+      scope: WRITE_SCOPE,
+      sessionAccess,
+    });
     const registry = createGatewayMethodRegistry([
+      plugin,
       {
-        name: "example.read",
+        name: "core.session",
         handler,
-        scope: READ_SCOPE,
+        scope: WRITE_SCOPE,
         owner: { kind: "core", area: "test" },
+        sessionAccess,
       },
-      {
+    ]);
+    expect(registry.requiresAuthenticatedProfile("example.session")).toBe(true);
+    expect(registry.requiresAuthenticatedProfile("core.session")).toBe(true);
+    expect(registry.getSessionAccess?.("example.session")).toEqual(sessionAccess);
+    expect(() =>
+      createGatewayMethodRegistry([{ ...plugin, profileAccess: "independent" }]),
+    ).toThrow("authenticated profile");
+    expect(() => createGatewayMethodRegistry([{ ...plugin, scope: READ_SCOPE }])).toThrow(
+      "operator.write",
+    );
+    expect(() =>
+      createGatewayMethodRegistry([{ ...plugin, scope: "operator.sessions.write" }]),
+    ).toThrow("operator.write");
+  });
+  it.each(["enumerable", "non-enumerable", "inherited"])(
+    "indexes handlers, scopes, startup state, and control-plane metadata from %s properties",
+    (properties) => {
+      const writeDescriptor: GatewayMethodDescriptorInput = {
         name: "example.write",
         handler,
         scope: WRITE_SCOPE,
         owner: { kind: "core", area: "test" },
+      };
+      const policy = {
         startup: "unavailable-until-sidecars",
+        lifetime: "observation",
         controlPlaneWrite: true,
         advertise: false,
-      },
-    ]);
+      } satisfies Pick<
+        GatewayMethodDescriptorInput,
+        "startup" | "lifetime" | "controlPlaneWrite" | "advertise"
+      >;
+      if (properties === "inherited") {
+        Object.setPrototypeOf(writeDescriptor, policy);
+      } else {
+        Object.defineProperties(
+          writeDescriptor,
+          Object.fromEntries(
+            Object.entries(policy).map(([key, value]) => [
+              key,
+              { value, enumerable: properties === "enumerable" },
+            ]),
+          ),
+        );
+      }
+      const registry = createGatewayMethodRegistry([
+        {
+          name: "example.read",
+          handler,
+          scope: READ_SCOPE,
+          owner: { kind: "core", area: "test" },
+        },
+        writeDescriptor,
+      ]);
 
-    expect(registry.listMethods()).toEqual(["example.read", "example.write"]);
-    expect(registry.listAdvertisedMethods()).toEqual(["example.read"]);
-    expect(registry.getHandler("example.read")).toBe(handler);
-    expect(registry.getScope("example.write")).toBe(WRITE_SCOPE);
-    expect(registry.isStartupUnavailable("example.write")).toBe(true);
-    expect(registry.isControlPlaneWrite("example.write")).toBe(true);
-  });
+      expect(registry.listMethods()).toEqual(["example.read", "example.write"]);
+      expect(registry.listAdvertisedMethods()).toEqual(["example.read"]);
+      expect(registry.getHandler("example.read")).toBe(handler);
+      expect(registry.getScope("example.write")).toBe(WRITE_SCOPE);
+      expect(registry.isStartupUnavailable("example.write")).toBe(true);
+      expect(registry.isObservation("example.write")).toBe(true);
+      expect(registry.isObservation("example.read")).toBe(false);
+      expect(registry.isControlPlaneWrite("example.write")).toBe(true);
+    },
+  );
 
   it("rejects duplicate method names", () => {
     expect(() =>
@@ -60,6 +120,15 @@ describe("gateway method registry", () => {
         },
       ]),
     ).toThrow("gateway method already registered: example.duplicate");
+  });
+
+  it("rejects unknown core handlers while accepting hidden core methods", () => {
+    expect(() => createCoreGatewayMethodDescriptors({ "example.unknown": handler })).toThrow(
+      "gateway method handler is missing a descriptor: example.unknown",
+    );
+    expect(createCoreGatewayMethodDescriptors({ "config.openFile": handler })).toMatchObject([
+      { name: "config.openFile", advertise: false, handler },
+    ]);
   });
 
   it("coerces reserved plugin namespaces to admin scope", () => {
@@ -96,17 +165,17 @@ describe("gateway method registry", () => {
     expect(registry.getScope("exec.approvals.get")).toBe("operator.approvals");
   });
 
-  it("defaults handler-only plugin registries to admin scope", () => {
-    const descriptors = createPluginGatewayMethodDescriptors({
-      gatewayHandlers: { "legacy.ping": handler },
-    });
+  it("defaults plugin methods without an explicit scope to admin", () => {
+    const descriptors = [
+      createPluginGatewayMethodDescriptor({ pluginId: "demo", name: "demo.ping", handler }),
+    ];
 
     const registry = createGatewayMethodRegistry(descriptors);
 
-    expect(registry.listMethods()).toEqual(["legacy.ping"]);
-    expect(registry.getHandler("legacy.ping")).toBe(handler);
-    expect(registry.getScope("legacy.ping")).toBe(ADMIN_SCOPE);
-    expect(registry.requiresAuthenticatedProfile("legacy.ping")).toBe(true);
+    expect(registry.listMethods()).toEqual(["demo.ping"]);
+    expect(registry.getHandler("demo.ping")).toBe(handler);
+    expect(registry.getScope("demo.ping")).toBe(ADMIN_SCOPE);
+    expect(registry.requiresAuthenticatedProfile("demo.ping")).toBe(true);
   });
 
   it("classifies every core method and defaults non-core owners fail-closed", () => {
@@ -132,6 +201,11 @@ describe("gateway method registry", () => {
     }
     expect(registry.requiresAuthenticatedProfile("users.self")).toBe(false);
     expect(registry.requiresAuthenticatedProfile("status")).toBe(false);
+    // talk.config projects the caller's profile accent; a pending GitHub
+    // identity sync must complete before the handler runs.
+    expect(registry.requiresAuthenticatedProfile("talk.config")).toBe(true);
+    expect(registry.requiresAuthenticatedProfile("talk.voice.get")).toBe(true);
+    expect(registry.requiresAuthenticatedProfile("talk.voice.set")).toBe(true);
     for (const method of listCoreGatewayMethodNames().filter(isSessionProfileDependentMethod)) {
       expect(registry.requiresAuthenticatedProfile(method), method).toBe(true);
     }
@@ -144,6 +218,9 @@ describe("gateway method registry", () => {
     expect(registry.requiresAuthenticatedProfile("approval.history")).toBe(false);
     expect(registry.requiresAuthenticatedProfile("board.data.read")).toBe(false);
     expect(registry.requiresAuthenticatedProfile("board.prompt.authorize")).toBe(false);
+    expect(registry.requiresAuthenticatedProfile("talk.client.create")).toBe(false);
+    expect(registry.requiresAuthenticatedProfile("talk.session.steer")).toBe(false);
+    expect(registry.requiresAuthenticatedProfile("wake")).toBe(false);
     expect(registry.requiresAuthenticatedProfile("aux.identity.read")).toBe(true);
   });
 });

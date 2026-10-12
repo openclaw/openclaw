@@ -1,7 +1,3 @@
-/**
- * Resolves ClickClack account configuration from root channel config, named
- * account overrides, and secret-provider references.
- */
 import {
   createAccountListHelpers,
   hasConfiguredAccountValue,
@@ -10,12 +6,12 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/acco
 import { resolveNormalizedAccountEntry } from "openclaw/plugin-sdk/account-resolution-runtime";
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
-import { resolveDefaultSecretProviderAlias } from "openclaw/plugin-sdk/provider-auth";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import {
   normalizeSecretInputString,
   resolveSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
+import { canResolveEnvSecretRefInReadOnlyPath } from "openclaw/plugin-sdk/secret-ref-readonly";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   ClickClackAccountConfig,
@@ -68,6 +64,9 @@ function mergeClickClackGroups(
       merged.set(key, {
         ...merged.get(key),
         ...(value.requireMention !== undefined ? { requireMention: value.requireMention } : {}),
+        ...(value.requireMentionInBotThreads !== undefined
+          ? { requireMentionInBotThreads: value.requireMentionInBotThreads }
+          : {}),
         ...(value.mentionPatterns !== undefined ? { mentionPatterns: value.mentionPatterns } : {}),
         ...(value.allowBots !== undefined ? { allowBots: value.allowBots } : {}),
         ...(mergedBotLoopProtection ? { botLoopProtection: mergedBotLoopProtection } : {}),
@@ -107,6 +106,38 @@ export function resolveClickClackAccountConfig(
     };
   }
   return mergedWithGroups;
+}
+
+function resolveClickClackAccountEndpoints(config: ClickClackAccountConfig) {
+  const baseUrl = config.baseUrl?.trim().replace(/\/$/, "") ?? "";
+  return { baseUrl, apiEndpoint: config.apiBaseUrl?.trim().replace(/\/$/, "") || baseUrl };
+}
+
+/** Pins inbound authority to the configured identity that started the transport. */
+export function isClickClackAccountCurrent(params: {
+  cfg: CoreConfig;
+  account: ResolvedClickClackAccount;
+}): boolean {
+  const { cfg, account } = params;
+  if (
+    !cfg.channels?.clickclack ||
+    cfg.channels.clickclack.enabled === false ||
+    !listClickClackAccountIds(cfg).includes(account.accountId)
+  ) {
+    return false;
+  }
+  const current = resolveClickClackAccountConfig(cfg, account.accountId);
+  const endpoints = resolveClickClackAccountEndpoints(current);
+  // Startup resolves workspace selectors and discovers optional bot identity.
+  // Compare the authored selectors, not those transport-resolved replacements.
+  return (
+    current.enabled !== false &&
+    Boolean(endpoints.baseUrl && current.workspace?.trim()) &&
+    endpoints.baseUrl === account.baseUrl &&
+    endpoints.apiEndpoint === account.apiEndpoint &&
+    current.workspace?.trim() === account.config.workspace?.trim() &&
+    normalizeOptionalString(current.botUserId) === normalizeOptionalString(account.config.botUserId)
+  );
 }
 
 function resolveClickClackToken(params: {
@@ -160,24 +191,20 @@ function resolveClickClackToken(params: {
         : { token: "", tokenSource: "none", tokenStatus: "missing" };
     }
     if (resolved.status === "configured_unavailable" && resolved.ref.source === "env") {
-      const providerConfig = params.cfg.secrets?.providers?.[resolved.ref.provider];
-      if (providerConfig) {
+      if (!canResolveEnvSecretRefInReadOnlyPath({ cfg: params.cfg, ...resolved.ref })) {
+        const providerConfig = params.cfg.secrets?.providers?.[resolved.ref.provider];
+        if (!providerConfig) {
+          throw new Error(
+            `Secret provider "${resolved.ref.provider}" is not configured (ref: env:${resolved.ref.provider}:${resolved.ref.id}).`,
+          );
+        }
         if (providerConfig.source !== "env") {
           throw new Error(
             `Secret provider "${resolved.ref.provider}" has source "${providerConfig.source}" but ref requests "env".`,
           );
         }
-        if (providerConfig.allowlist && !providerConfig.allowlist.includes(resolved.ref.id)) {
-          throw new Error(
-            `Environment variable "${resolved.ref.id}" is not allowlisted in secrets.providers.${resolved.ref.provider}.allowlist.`,
-          );
-        }
-      } else if (
-        resolved.ref.provider !==
-        resolveDefaultSecretProviderAlias({ secrets: params.cfg.secrets }, "env")
-      ) {
         throw new Error(
-          `Secret provider "${resolved.ref.provider}" is not configured (ref: env:${resolved.ref.provider}:${resolved.ref.id}).`,
+          `Environment variable "${resolved.ref.id}" is not allowlisted in secrets.providers.${resolved.ref.provider}.allowlist.`,
         );
       }
       const token = normalizeSecretInputString((params.env ?? process.env)[resolved.ref.id]);
@@ -196,10 +223,6 @@ function resolveClickClackToken(params: {
   return { token: resolved.value, tokenSource: "config", tokenStatus: "available" };
 }
 
-/**
- * Builds the normalized account snapshot used by gateway, outbound delivery,
- * status reporting, and channel routing.
- */
 export function resolveClickClackAccount(params: {
   cfg: CoreConfig;
   accountId?: string | null;
@@ -209,7 +232,7 @@ export function resolveClickClackAccount(params: {
   const merged = resolveClickClackAccountConfig(params.cfg, accountId);
   const baseEnabled = params.cfg.channels?.clickclack?.enabled !== false;
   const enabled = baseEnabled && merged.enabled !== false;
-  const baseUrl = merged.baseUrl?.trim().replace(/\/$/, "") ?? "";
+  const { baseUrl, apiEndpoint } = resolveClickClackAccountEndpoints(merged);
   const token = resolveClickClackToken({
     cfg: params.cfg,
     value: merged.token,
@@ -220,7 +243,6 @@ export function resolveClickClackAccount(params: {
   const workspace = merged.workspace?.trim() ?? "";
   const discussionsWorkspace = merged.discussions?.workspace?.trim() || workspace;
   const controlUrlBase = merged.discussions?.controlUrlBase?.trim();
-  const apiEndpoint = merged.apiBaseUrl?.trim().replace(/\/$/, "") || baseUrl;
   return {
     accountId,
     enabled,
@@ -257,6 +279,7 @@ export function resolveClickClackAccount(params: {
       section: merged.discussions?.section?.trim() || DEFAULT_DISCUSSIONS_SECTION,
     },
     requireMention: merged.requireMention === true,
+    requireMentionInBotThreads: merged.requireMentionInBotThreads,
     mentionPatterns: merged.mentionPatterns ?? [],
     allowBots: merged.allowBots ?? false,
     botLoopProtection: merged.botLoopProtection,
@@ -269,10 +292,6 @@ export function resolveClickClackAccount(params: {
   };
 }
 
-/**
- * Returns all enabled accounts, including the implicit default account when
- * legacy top-level ClickClack config is present.
- */
 export function listEnabledClickClackAccounts(cfg: CoreConfig): ResolvedClickClackAccount[] {
   return listClickClackAccountIds(cfg)
     .map((accountId) => resolveClickClackAccount({ cfg, accountId }))

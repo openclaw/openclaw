@@ -1,6 +1,8 @@
+import type {
+  SessionContext as CoreSessionContext,
+  SessionTreeEntry,
+} from "../../../packages/agent-core/src/harness/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { ImageContent, TextContent } from "../../llm/types.js";
-import type { AgentMessage } from "../runtime/index.js";
 
 export interface SessionHeader {
   type: "session";
@@ -25,76 +27,55 @@ export interface SessionEntryBase {
   appendMode?: "side";
 }
 
-export interface SessionMessageEntry extends SessionEntryBase {
-  type: "message";
-  message: AgentMessage;
-}
+type CoreSessionEntry<Type extends SessionTreeEntry["type"]> = Extract<
+  SessionTreeEntry,
+  { type: Type }
+>;
 
-export interface ThinkingLevelChangeEntry extends SessionEntryBase {
-  type: "thinking_level_change";
-  thinkingLevel: string;
-}
+export interface SessionMessageEntry extends CoreSessionEntry<"message"> {}
 
-export interface ModelChangeEntry extends SessionEntryBase {
-  type: "model_change";
-  provider: string;
-  modelId: string;
-}
+export interface ThinkingLevelChangeEntry extends CoreSessionEntry<"thinking_level_change"> {}
 
-export interface CompactionEntry<T = unknown> extends SessionEntryBase {
-  type: "compaction";
-  summary: string;
-  firstKeptEntryId: string;
-  tokensBefore: number;
+export interface ModelChangeEntry extends CoreSessionEntry<"model_change"> {}
+
+export interface CompactionEntry<T = unknown> extends Omit<
+  CoreSessionEntry<"compaction">,
+  "details"
+> {
+  __openclaw?: { runId?: string; itemId?: string };
+  /** Context estimate after compaction, retained with its ordinary transcript marker. */
+  tokensAfter?: number;
   /** Extension-specific data, such as artifact indexes or version markers. */
   details?: T;
-  /** True for extension-generated compaction entries. */
-  fromHook?: boolean;
 }
 
-export type ResetReason = "new" | "reset" | "idle" | "daily" | "cron-stale";
+export type ResetReason = CoreSessionEntry<"reset">["reason"];
 
-export interface ResetEntry extends SessionEntryBase {
-  type: "reset";
-  reason: ResetReason;
-  firstKeptEntryId?: string;
-}
+export interface ResetEntry extends CoreSessionEntry<"reset"> {}
 
-export interface BranchSummaryEntry<T = unknown> extends SessionEntryBase {
-  type: "branch_summary";
-  fromId: string;
-  summary: string;
+export interface BranchSummaryEntry<T = unknown> extends Omit<
+  CoreSessionEntry<"branch_summary">,
+  "details"
+> {
   /** Extension-specific data that is not sent to the model. */
   details?: T;
-  /** True for extension-generated branch summaries. */
-  fromHook?: boolean;
 }
 
 /** Extension state that is persisted but excluded from model context. */
-export interface CustomEntry<T = unknown> extends SessionEntryBase {
-  type: "custom";
-  customType: string;
+export interface CustomEntry<T = unknown> extends Omit<CoreSessionEntry<"custom">, "data"> {
   data?: T;
 }
 
-export interface LabelEntry extends SessionEntryBase {
-  type: "label";
-  targetId: string;
-  label: string | undefined;
-}
+export interface LabelEntry extends CoreSessionEntry<"label"> {}
 
-export interface SessionInfoEntry extends SessionEntryBase {
-  type: "session_info";
-  name?: string;
-}
+export interface SessionInfoEntry extends CoreSessionEntry<"session_info"> {}
 
 /** Extension message that participates in model context. */
-export interface CustomMessageEntry<T = unknown> extends SessionEntryBase {
-  type: "custom_message";
-  customType: string;
-  content: string | (TextContent | ImageContent)[];
+export interface CustomMessageEntry<T = unknown> extends Omit<
+  CoreSessionEntry<"custom_message">,
+  "details"
+> {
   details?: T;
-  display: boolean;
 }
 
 export type SessionEntry =
@@ -113,6 +94,8 @@ export type FileEntry = SessionHeader | SessionEntry;
 
 export type AppendPersistenceOptions = {
   appendIntent?: "active-branch";
+  /** Synchronous fresh SQLite message assertion; never serialized into an entry. */
+  beforeFreshMessageCommit?: () => void;
   config?: OpenClawConfig;
   idempotencyLookup?: "scan" | "scan-assistant" | "caller-checked";
   invalidateSerializedPrefixCache?: boolean;
@@ -125,23 +108,11 @@ export interface SessionTreeNode {
   labelTimestamp?: string;
 }
 
-export interface SessionContext {
-  messages: AgentMessage[];
-  thinkingLevel: string;
-  model: { provider: string; modelId: string } | null;
-}
+export interface SessionContext extends CoreSessionContext {}
 
 export type PreservedOpaqueFileEntry = {
   index: number;
   record: unknown;
 };
 
-export type SessionLeafControl = {
-  type: "leaf";
-  id: string;
-  parentId: string | null;
-  timestamp: string;
-  targetId: string | null;
-  appendParentId?: string | null;
-  appendMode?: "side";
-};
+export type SessionLeafControl = Extract<SessionTreeEntry, { type: "leaf" }>;

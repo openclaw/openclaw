@@ -1,32 +1,13 @@
-/* @vitest-environment jsdom */
-
-import { expectDefined } from "@openclaw/normalization-core";
-import { render } from "lit";
+import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { CostDailyEntry, UsageAggregates, UsageSessionEntry, UsageTotals } from "./types.ts";
-import { renderUsageHeatmap } from "./view-heatmap.ts";
-import {
-  renderDailyChartCompact,
-  renderCostBreakdownCompact,
-  renderCostWindowComparison,
-  renderFilterChips,
-  renderSessionsCard,
-  renderUsageInsights,
-} from "./view-overview.ts";
-
-const totals: UsageTotals = {
-  input: 100,
-  output: 40,
-  cacheRead: 300,
-  cacheWrite: 600,
-  totalTokens: 1040,
-  totalCost: 0,
-  inputCost: 0,
-  outputCost: 0,
-  cacheReadCost: 0,
-  cacheWriteCost: 0,
-  missingCostEntries: 0,
-};
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
+import type { UsageAggregates, UsageProps, UsageSessionEntry } from "./types.ts";
+import { totals, dailyEntry } from "./usage-chart.test-support.ts";
+import { CostBreakdownCompact } from "./view-chart.tsx";
+import { renderCostWindowComparison, renderFilterChips, UsageInsights } from "./view-overview.tsx";
+import { SessionsCard } from "./view-sessions-card.tsx";
+import { createUsageProps } from "./view.test-support.ts";
 
 const aggregates = {
   messages: {
@@ -49,39 +30,10 @@ const aggregates = {
   daily: [],
 } as unknown as UsageAggregates;
 
-function dailyEntry(date: string, totalTokens: number, totalCost = 0): CostDailyEntry {
-  return {
-    ...totals,
-    date,
-    input: totalTokens,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens,
-    totalCost,
-  };
-}
-
-function renderDailyChart(
-  daily: CostDailyEntry[],
-  onSelectDay = vi.fn<(day: string, shiftKey: boolean) => void>(),
-) {
-  const container = document.createElement("div");
-  document.body.append(container);
-  render(
-    renderDailyChartCompact(daily, [], "tokens", "total", () => {}, onSelectDay),
-    container,
-  );
-  return {
-    container,
-    onSelectDay,
-    bars: Array.from(container.querySelectorAll<HTMLElement>(".daily-bar-wrapper")),
-  };
-}
-
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 function directText(element: Element | null | undefined): string | undefined {
@@ -104,34 +56,55 @@ function getSummaryCards(container: HTMLElement): Array<{
   }));
 }
 
-describe("renderUsageInsights", () => {
-  it("renders overview hints as focusable tooltip anchors", () => {
+describe("UsageInsights", () => {
+  it("renders overview hints as focusable tooltip anchors and identifies agents in the breakdown", async () => {
     const container = document.createElement("div");
     document.body.append(container);
+    const [currentTotals, setCurrentTotals] = createSignal(totals);
+    const [currentAggregates, setCurrentAggregates] = createSignal({
+      ...aggregates,
+      byAgent: [
+        { agentId: "main", totals },
+        { agentId: "research", totals },
+      ],
+    });
 
-    render(
-      renderUsageInsights(
-        totals,
-        aggregates,
-        {
-          durationSumMs: 0,
-          durationCount: 0,
-          avgDurationMs: 0,
-          errorRate: 0,
-        },
-        false,
-        true,
-        [],
-        1,
-        1,
-      ),
-      container,
+    mountSolid(
+      () =>
+        UsageInsights({
+          get totals() {
+            return currentTotals();
+          },
+          get aggregates() {
+            return currentAggregates();
+          },
+          stats: {
+            durationCount: 0,
+            avgDurationMs: 0,
+            errorRate: 0,
+          },
+          showCostHint: false,
+          showCostShares: true,
+          errorHours: [],
+          sessionCount: 1,
+          totalSessions: 1,
+        }),
+      { container },
     );
+    flush();
 
     const buttons = [...container.querySelectorAll<HTMLButtonElement>("button.usage-summary-hint")];
     const tooltips = [...container.querySelectorAll("openclaw-tooltip")];
     expect(buttons).toHaveLength(9);
     expect(tooltips).toHaveLength(9);
+    await Promise.all(
+      [...container.querySelectorAll("openclaw-agent-row-chip")].map((chip) => chip.updateComplete),
+    );
+    expect(
+      [...container.querySelectorAll(".usage-list-item .agent-row-chip")].map((chip) =>
+        chip.getAttribute("data-agent-id"),
+      ),
+    ).toEqual(["main", "research"]);
     expect(
       buttons.every(
         (button) =>
@@ -153,31 +126,52 @@ describe("renderUsageInsights", () => {
       }),
     ).toBe(true);
 
-    buttons[0]?.click();
-    expect(document.activeElement).toBe(buttons[0]);
+    await Promise.all(tooltips.map((tooltip) => tooltip.updateComplete));
+    const button = buttons[0]!;
+    const tooltip = button.closest("openclaw-tooltip")!;
+    button.click();
+    await tooltip.updateComplete;
+    const popup = tooltip.shadowRoot?.querySelector("wa-tooltip");
+    expect(popup).toBeTruthy();
+    expect(document.activeElement).toBe(button);
+
+    setCurrentTotals((current) => ({ ...current, totalCost: 12 }));
+    setCurrentAggregates((current) => ({
+      ...current,
+      messages: { ...current.messages, total: 8 },
+    }));
+    flush();
+    expect(container.querySelector("#usage-summary-hint-messages")).toBe(button);
+    expect(button.closest("openclaw-tooltip")).toBe(tooltip);
+    expect(tooltip.shadowRoot?.querySelector("wa-tooltip")).toBe(popup);
+    expect(document.activeElement).toBe(button);
+    expect(
+      button.closest(".usage-summary-card")?.querySelector(".usage-summary-value")?.textContent,
+    ).toBe("8");
   });
 
   it("includes cache writes in cache-hit-rate denominator", () => {
     const container = document.createElement("div");
 
-    render(
-      renderUsageInsights(
-        totals,
-        aggregates,
-        {
-          durationSumMs: 0,
-          durationCount: 0,
-          avgDurationMs: 0,
-          errorRate: 0,
-        },
-        false,
-        true,
-        [],
-        1,
-        1,
-      ),
-      container,
+    mountSolid(
+      () =>
+        UsageInsights({
+          totals,
+          aggregates,
+          stats: {
+            durationCount: 0,
+            avgDurationMs: 0,
+            errorRate: 0,
+          },
+          showCostHint: false,
+          showCostShares: true,
+          errorHours: [],
+          sessionCount: 1,
+          totalSessions: 1,
+        }),
+      { container },
     );
+    flush();
 
     expect(getSummaryCards(container).filter((card) => card.title === "Cache Hit Rate")).toEqual([
       {
@@ -202,24 +196,25 @@ describe("renderUsageInsights", () => {
       ],
     } as UsageAggregates;
 
-    render(
-      renderUsageInsights(
-        costTotals,
-        costAggregates,
-        {
-          durationSumMs: 0,
-          durationCount: 0,
-          avgDurationMs: 0,
-          errorRate: 0,
-        },
-        false,
-        true,
-        [],
-        1,
-        1,
-      ),
-      container,
+    mountSolid(
+      () =>
+        UsageInsights({
+          totals: costTotals,
+          aggregates: costAggregates,
+          stats: {
+            durationCount: 0,
+            avgDurationMs: 0,
+            errorRate: 0,
+          },
+          showCostHint: false,
+          showCostShares: true,
+          errorHours: [],
+          sessionCount: 1,
+          totalSessions: 1,
+        }),
+      { container },
     );
+    flush();
 
     const providerCard = Array.from(container.querySelectorAll(".usage-insight-card")).find(
       (card) => card.querySelector(".usage-insight-title")?.textContent === "Top Providers",
@@ -241,84 +236,56 @@ describe("renderUsageInsights", () => {
       ],
     } as UsageAggregates;
 
-    render(
-      renderUsageInsights(
-        costTotals,
-        costAggregates,
-        {
-          durationSumMs: 0,
-          durationCount: 0,
-          avgDurationMs: 0,
-          errorRate: 0,
-        },
-        false,
-        false,
-        [],
-        1,
-        1,
-      ),
-      container,
+    mountSolid(
+      () =>
+        UsageInsights({
+          totals: costTotals,
+          aggregates: costAggregates,
+          stats: {
+            durationCount: 0,
+            avgDurationMs: 0,
+            errorRate: 0,
+          },
+          showCostHint: false,
+          showCostShares: false,
+          errorHours: [],
+          sessionCount: 1,
+          totalSessions: 1,
+        }),
+      { container },
     );
+    flush();
 
     expect(container.textContent).not.toContain("1000.0% of cost");
-  });
-});
-
-describe("renderUsageHeatmap", () => {
-  it("renders the selected activity range from usage cost data", () => {
-    const container = document.createElement("div");
-    render(
-      renderUsageHeatmap(
-        [dailyEntry("2026-07-08", 10), dailyEntry("2026-07-09", 20)],
-        "2025-07-11",
-        "2026-07-09",
-      ),
-      container,
-    );
-
-    expect(container.querySelector(".settings-section__heading")?.textContent?.trim()).toBe(
-      "Token Activity",
-    );
-    expect(container.querySelectorAll(".usage-heatmap__cell")).toHaveLength(52 * 7);
-    expect(container.querySelector(".usage-heatmap__cell--l4 title")?.textContent).toContain(
-      "20 tokens",
-    );
-  });
-
-  it("keeps short ranges at their natural cell width", () => {
-    const container = document.createElement("div");
-    render(
-      renderUsageHeatmap([dailyEntry("2026-08-01", 20)], "2026-08-01", "2026-08-01"),
-      container,
-    );
-
-    expect(
-      container
-        .querySelector<SVGElement>(".usage-heatmap__svg")
-        ?.style.getPropertyValue("--usage-heatmap-width"),
-    ).toBe("44px");
   });
 });
 
 describe("usage overview presentation owners", () => {
   it.each(["tokens", "cost"] as const)("preserves ordered %s breakdown categories", (mode) => {
     const container = document.createElement("div");
-    render(
-      renderCostBreakdownCompact(
-        {
-          ...totals,
-          totalCost: 1,
-          outputCost: 0.2,
-          inputCost: 0.1,
-          cacheWriteCost: 0.3,
-          cacheReadCost: 0.4,
-        },
-        mode,
-      ),
-      container,
+    mountSolid(
+      () =>
+        CostBreakdownCompact({
+          totals: {
+            ...totals,
+            totalCost: 1,
+            outputCost: 0.2,
+            inputCost: 0.1,
+            cacheWriteCost: 0.3,
+            cacheReadCost: 0.4,
+          },
+          mode,
+        }),
+      { container },
     );
+    flush();
 
-    const categories = ["output", "input", "cache-write", "cache-read"];
+    const categories = [
+      "usage-token-output",
+      "usage-token-input",
+      "usage-token-cache-write",
+      "usage-token-cache-read",
+    ];
     expect(
       [...container.querySelectorAll(".cost-breakdown-bar .cost-segment")].map((segment) =>
         categories.find((category) => segment.classList.contains(category)),
@@ -340,19 +307,22 @@ describe("usage overview presentation owners", () => {
     const onClearDays = vi.fn();
     const onClearHours = vi.fn();
     const onClearSessions = vi.fn();
-    render(
-      renderFilterChips(
-        ["2026-08-01"],
-        [8],
-        ["agent:main:usage"],
-        [{ key: "agent:main:usage", label: "Usage thread" } as UsageSessionEntry],
-        onClearDays,
-        onClearHours,
-        onClearSessions,
-        vi.fn(),
-      ),
-      container,
+    const props = createUsageProps();
+    Object.assign(props.filters, {
+      selectedDays: ["2026-08-01"],
+      selectedHours: [8],
+      selectedSessions: ["agent:main:usage"],
+    });
+    Object.assign(props.callbacks.filters, { onClearDays, onClearHours, onClearSessions });
+    mountSolid(
+      () =>
+        renderFilterChips(
+          [{ key: "agent:main:usage", label: "Usage thread" } as UsageSessionEntry],
+          props,
+        ),
+      { container },
     );
+    flush();
 
     const chips = [...container.querySelectorAll<HTMLElement>(".filter-chip")];
     expect(chips.map((chip) => chip.querySelector("button")?.getAttribute("aria-label"))).toEqual([
@@ -368,162 +338,24 @@ describe("usage overview presentation owners", () => {
   });
 });
 
-describe("renderDailyChartCompact", () => {
-  it("keeps day selection operable with mouse and keyboard", () => {
-    const { bars, onSelectDay } = renderDailyChart([dailyEntry("2026-05-04", 500, 0.2)]);
-    const bar = expectDefined(bars[0], "daily usage bar");
-
-    bar.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
-    expect(onSelectDay).toHaveBeenCalledWith("2026-05-04", true);
-
-    bar.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }));
-    expect(onSelectDay).toHaveBeenCalledWith("2026-05-04", false);
-
-    const space = new KeyboardEvent("keydown", {
-      bubbles: true,
-      cancelable: true,
-      key: " ",
-      shiftKey: true,
-    });
-    bar.dispatchEvent(space);
-    expect(space.defaultPrevented).toBe(true);
-    expect(onSelectDay).toHaveBeenCalledWith("2026-05-04", true);
-  });
-
-  it("labels the chart scale with the selected metric", () => {
-    const container = document.createElement("div");
-    render(
-      renderDailyChartCompact(
-        [dailyEntry("2026-05-03", 500, 1), dailyEntry("2026-05-04", 1_000, 2)],
-        [],
-        "cost",
-        "total",
-        () => {},
-        () => {},
-      ),
-      container,
-    );
-
-    expect(
-      Array.from(container.querySelectorAll(".daily-chart-scale span")).map(
-        (entry) => entry.textContent,
-      ),
-    ).toEqual(["$2.00", "$1.00", "$0.00"]);
-    expect(container.querySelector(".daily-chart-scale-badge")).toBeNull();
-  });
-
-  it("labels the true midpoint of a compressed chart scale", () => {
-    const container = document.createElement("div");
-    render(
-      renderDailyChartCompact(
-        [dailyEntry("2026-05-03", 500, 1), dailyEntry("2026-05-04", 1_000, 100)],
-        [],
-        "cost",
-        "total",
-        () => {},
-        () => {},
-      ),
-      container,
-    );
-
-    expect(
-      Array.from(container.querySelectorAll(".daily-chart-scale span")).map((entry) =>
-        entry.textContent?.trim(),
-      ),
-    ).toEqual(["$100.00", "$25.00", "$0.00"]);
-    expect(container.querySelector(".daily-chart-scale-badge")?.textContent?.trim()).toBe("√");
-  });
-
-  it("preserves sub-cent values in chart scale labels", () => {
-    const container = document.createElement("div");
-    render(
-      renderDailyChartCompact(
-        [dailyEntry("2026-05-03", 500, 0.004), dailyEntry("2026-05-04", 1_000, 0.008)],
-        [],
-        "cost",
-        "total",
-        () => {},
-        () => {},
-      ),
-      container,
-    );
-
-    expect(
-      Array.from(container.querySelectorAll(".daily-chart-scale span")).map((entry) =>
-        entry.textContent?.trim(),
-      ),
-    ).toEqual(["$0.0080", "$0.0040", "$0.00"]);
-  });
-
-  it("normalizes a nonzero micro-cost bar to the labeled maximum", () => {
-    const container = document.createElement("div");
-    const microCostDay = {
-      ...dailyEntry("2026-05-04", 1_000, 0.00001),
-      inputCost: 0.000004,
-      outputCost: 0.000006,
-    };
-    render(
-      renderDailyChartCompact(
-        [microCostDay],
-        [],
-        "cost",
-        "by-type",
-        () => {},
-        () => {},
-      ),
-      container,
-    );
-
-    expect(
-      Array.from(container.querySelectorAll(".daily-chart-scale span")).map((entry) =>
-        entry.textContent?.trim(),
-      ),
-    ).toEqual(["$0.000010", "$0.000005", "$0.00"]);
-    expect(container.querySelector<HTMLElement>(".daily-bar")?.style.height).toBe("200px");
-    expect(container.querySelector(".daily-bar-total")?.textContent?.trim()).toBe("$0.000010");
-    const tooltip = container.querySelector<HTMLElement & { content: string }>("openclaw-tooltip");
-    expect(tooltip?.content).toContain("$0.000010");
-    expect(tooltip?.content).toContain("Output $0.000006");
-    expect(tooltip?.content).toContain("Input $0.000004");
-    expect(container.querySelector(".daily-chart-scale-badge")).toBeNull();
-  });
-
-  it("reserves the totals row when dense ranges hide bar totals", () => {
-    const container = document.createElement("div");
-    const daily = Array.from({ length: 15 }, (_, index) =>
-      dailyEntry(`2026-05-${String(index + 1).padStart(2, "0")}`, 1_000, index + 1),
-    );
-    render(
-      renderDailyChartCompact(
-        daily,
-        [],
-        "cost",
-        "total",
-        () => {},
-        () => {},
-      ),
-      container,
-    );
-
-    expect(container.querySelectorAll(".daily-bar-total--placeholder")).toHaveLength(15);
-  });
-});
-
 describe("renderCostWindowComparison", () => {
   it("shows the selected range and shorter calendar periods", () => {
     const container = document.createElement("div");
-    render(
-      renderCostWindowComparison(
-        [
-          dailyEntry("2026-06-01", 100, 1),
-          dailyEntry("2026-06-25", 400, 4),
-          dailyEntry("2026-07-01", 500, 5),
-        ],
-        "2026-06-01",
-        "2026-07-01",
-      ),
-      container,
+    mountSolid(
+      () =>
+        renderCostWindowComparison(
+          [
+            dailyEntry("2026-06-01", 100, 1),
+            dailyEntry("2026-06-25", 400, 4),
+            dailyEntry("2026-07-01", 500, 5),
+          ],
+          "2026-06-01",
+          "2026-07-01",
+          "local",
+        ),
+      { container },
     );
+    flush();
 
     const cards = Array.from(container.querySelectorAll(".cost-window-card")).map((card) => ({
       label: card.querySelector(".cost-window-card__label")?.textContent?.trim(),
@@ -539,14 +371,17 @@ describe("renderCostWindowComparison", () => {
 
   it("preserves sub-cent totals and daily averages", () => {
     const container = document.createElement("div");
-    render(
-      renderCostWindowComparison(
-        [dailyEntry("2026-07-01", 300, 0.003)],
-        "2026-06-02",
-        "2026-07-01",
-      ),
-      container,
+    mountSolid(
+      () =>
+        renderCostWindowComparison(
+          [dailyEntry("2026-07-01", 300, 0.003)],
+          "2026-06-02",
+          "2026-07-01",
+          "local",
+        ),
+      { container },
     );
+    flush();
 
     const range = container.querySelector(".cost-window-card--range");
     expect(range?.querySelector(".cost-window-card__value")?.textContent?.trim()).toBe("$0.0030");
@@ -554,10 +389,243 @@ describe("renderCostWindowComparison", () => {
   });
 });
 
-describe("renderSessionsCard", () => {
+describe("SessionsCard", () => {
   const noop = () => {};
+  const renderCard = (
+    sessions: UsageSessionEntry[],
+    options: {
+      selected?: string[];
+      days?: string[];
+      tokens?: boolean;
+      sort?: UsageProps["display"]["sessionSort"];
+      direction?: UsageProps["display"]["sessionSortDir"];
+      recent?: string[];
+      tab?: UsageProps["display"]["sessionsTab"];
+      onSelect?: UsageProps["callbacks"]["details"]["onSelectSession"];
+      totalSessions?: number;
+    } = {},
+  ) => {
+    const container = document.createElement("div");
+    const props = createUsageProps();
+    props.filters.selectedSessions = options.selected ?? [];
+    props.filters.selectedDays = options.days ?? [];
+    Object.assign(props.display, {
+      chartMode: options.tokens === false ? "cost" : "tokens",
+      sessionSort: options.sort ?? "tokens",
+      sessionSortDir: options.direction ?? "desc",
+      recentSessions: options.recent ?? [],
+      sessionsTab: options.tab ?? "all",
+    });
+    props.callbacks.details.onSelectSession = options.onSelect ?? noop;
+    mountSolid(
+      () =>
+        SessionsCard({
+          sessions,
+          usage: props,
+          totalSessions: options.totalSessions ?? sessions.length,
+        }),
+      { container },
+    );
+    flush();
+    return container;
+  };
 
-  it("renders named native session toggles while preserving shift selection and separate copy", () => {
+  it("preserves sort focus while changing the row order", () => {
+    const base = createUsageProps();
+    const [display, setDisplay] = createSignal(base.display);
+    const usage = {
+      ...base,
+      get display() {
+        return display();
+      },
+      callbacks: {
+        ...base.callbacks,
+        display: {
+          ...base.callbacks.display,
+          onChange: (patch: Partial<UsageProps["display"]>) =>
+            setDisplay((current) => ({ ...current, ...patch })),
+        },
+      },
+    };
+    const sessions = [
+      {
+        key: "alpha",
+        label: "Alpha",
+        updatedAt: 2,
+        usage: { ...totals, totalTokens: 100, totalCost: 1 },
+      },
+      {
+        key: "beta",
+        label: "Beta",
+        updatedAt: 1,
+        usage: { ...totals, totalTokens: 50, totalCost: 5 },
+      },
+    ];
+    const container = document.body.appendChild(document.createElement("div"));
+    mountSolid(() => SessionsCard({ sessions, usage, totalSessions: sessions.length }), {
+      container,
+    });
+    flush();
+    const select = container.querySelector<HTMLSelectElement>(".sessions-sort select")!;
+    select.focus();
+    for (const [sort, first] of [
+      ["cost", "Beta"],
+      ["recent", "Alpha"],
+    ] as const) {
+      select.value = sort;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+      flush();
+      expect(container.querySelector(".sessions-sort select")).toBe(select);
+      expect(document.activeElement).toBe(select);
+      expect(select.value).toBe(sort);
+      expect(container.querySelector(".session-bar-title")?.textContent).toBe(first);
+    }
+  });
+
+  it("identifies mixed-agent sessions", async () => {
+    const container = renderCard([
+      { key: "agent:main:one", agentId: "main", usage: null },
+      { key: "agent:research:two", agentId: "research", usage: null },
+    ]);
+    document.body.append(container);
+    await Promise.all(
+      [...container.querySelectorAll("openclaw-agent-row-chip")].map((chip) => chip.updateComplete),
+    );
+    expect(
+      [...container.querySelectorAll(".session-bar-row .agent-row-chip")].map((chip) =>
+        chip.getAttribute("data-agent-id"),
+      ),
+    ).toEqual(["main", "research"]);
+  });
+
+  const shownCountCases: Array<{
+    name: string;
+    sessionCount: number;
+    options?: Parameters<typeof renderCard>[1];
+    shown: number;
+    header: string;
+    empty?: string;
+    more?: string;
+    primaryLabels?: string[];
+    selectedLabel?: string;
+  }> = [
+    {
+      name: "empty All list",
+      sessionCount: 0,
+      shown: 0,
+      header: "0 shown",
+      empty: "No sessions in range",
+    },
+    {
+      name: "All list below the display cap",
+      sessionCount: 3,
+      shown: 3,
+      header: "3 shown",
+    },
+    {
+      name: "All list above the display cap",
+      sessionCount: 51,
+      shown: 50,
+      header: "50 shown · 51 total",
+      more: "+1 more",
+    },
+    {
+      name: "empty Recently viewed list",
+      sessionCount: 3,
+      options: { tab: "recent" },
+      shown: 0,
+      header: "0 shown · 3 total",
+      empty: "No recent sessions",
+    },
+    {
+      name: "Recently viewed list with a separate selected comparison",
+      sessionCount: 3,
+      options: {
+        tab: "recent",
+        recent: ["session-2", "missing", "session-0"],
+        selected: ["session-0", "session-1"],
+      },
+      shown: 2,
+      header: "2 shown · 3 total",
+      primaryLabels: ["Session 2", "Session 0"],
+      selectedLabel: "Selected (2)",
+    },
+    {
+      name: "Recently viewed list whose keys no longer match",
+      sessionCount: 3,
+      options: { tab: "recent", recent: ["missing"] },
+      shown: 0,
+      header: "0 shown · 3 total",
+      empty: "No recent sessions",
+    },
+    {
+      name: "filtered All list with its original total",
+      sessionCount: 3,
+      options: { totalSessions: 7 },
+      shown: 3,
+      header: "3 shown · 7 total",
+    },
+    {
+      name: "filtered Recently viewed list with its original total",
+      sessionCount: 3,
+      options: { tab: "recent", recent: ["session-1", "missing"], totalSessions: 7 },
+      shown: 1,
+      header: "1 shown · 7 total",
+      primaryLabels: ["Session 1"],
+    },
+  ];
+
+  it.each(shownCountCases)("reports the rows shown in the $name", (scenario) => {
+    const sessions: UsageSessionEntry[] = Array.from(
+      { length: scenario.sessionCount },
+      (_, index) => ({
+        key: `session-${index}`,
+        label: `Session ${index}`,
+        usage: {
+          ...totals,
+          input: 100 - index,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 100 - index,
+        },
+      }),
+    );
+    const container = renderCard(sessions, scenario.options);
+    const primaryList = container.querySelector(".sessions-card > .session-bars");
+    expect(primaryList?.querySelectorAll(".session-bar-row").length ?? 0).toBe(scenario.shown);
+    expect(
+      container
+        .querySelector(".sessions-card-header .sessions-card-count")
+        ?.textContent?.replace(/\s+/g, " ")
+        .trim(),
+    ).toBe(scenario.header);
+    expect(container.querySelector(".usage-empty-block")?.textContent?.trim()).toBe(scenario.empty);
+    expect(container.querySelector(".usage-more-sessions")?.textContent?.trim()).toBe(
+      scenario.more,
+    );
+    expect(
+      container.querySelector(".sessions-selected-group .sessions-card-count")?.textContent?.trim(),
+    ).toBe(scenario.selectedLabel);
+    if (scenario.primaryLabels) {
+      expect(
+        [...(primaryList?.querySelectorAll(".session-bar-title") ?? [])].map((label) =>
+          label.textContent?.trim(),
+        ),
+      ).toEqual(scenario.primaryLabels);
+    }
+  });
+
+  it.each([
+    { copied: true, feedback: "Copied!" },
+    { copied: false, feedback: "Copy failed" },
+  ])("keeps session selection separate while showing $feedback", async ({ copied, feedback }) => {
+    const writeText = vi.fn(async () => {
+      if (!copied) {
+        throw new Error("Clipboard access denied");
+      }
+    });
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
     const container = document.createElement("div");
     document.body.append(container);
     const onSelectSession = vi.fn<(key: string, shiftKey: boolean) => void>();
@@ -576,26 +644,13 @@ describe("renderSessionsCard", () => {
       },
     ] as UsageSessionEntry[];
 
-    render(
-      renderSessionsCard(
-        sessions,
-        ["agent:main:selected"],
-        [],
-        true,
-        "tokens",
-        "desc",
-        [],
-        "all",
-        onSelectSession,
-        noop,
-        noop,
-        noop,
-        [],
-        sessions.length,
-        noop,
-      ),
+    const props = createUsageProps();
+    props.filters.selectedSessions = ["agent:main:selected"];
+    props.callbacks.details.onSelectSession = onSelectSession;
+    mountSolid(() => SessionsCard({ sessions, usage: props, totalSessions: sessions.length }), {
       container,
-    );
+    });
+    flush();
 
     const rows = [...container.querySelectorAll<HTMLElement>(".session-bar-row")];
     const selected = rows[0]?.querySelector<HTMLButtonElement>(".session-bar-selection");
@@ -610,16 +665,44 @@ describe("renderSessionsCard", () => {
     expect(document.activeElement).toBe(next);
     next?.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
     expect(onSelectSession).toHaveBeenCalledOnce();
-    expect(onSelectSession).toHaveBeenCalledWith("agent:main:next", true);
+    expect(onSelectSession).toHaveBeenCalledWith(
+      "agent:main:next",
+      true,
+      sessions.map((s) => s.key),
+    );
 
-    rows[0]?.querySelector<HTMLButtonElement>(".session-bar-actions button")?.click();
+    const copyButton = rows[0]?.querySelector<HTMLButtonElement>(".session-bar-actions button");
+    copyButton?.click();
+    await vi.waitFor(() => {
+      expect(copyButton?.textContent?.trim()).toBe(feedback);
+      expect(copyButton?.getAttribute("aria-label")).toBeNull();
+    });
+    expect(writeText).toHaveBeenCalledWith("Selected thread");
     expect(onSelectSession).toHaveBeenCalledOnce();
     rows[0]?.querySelector<HTMLElement>(".session-bar-value")?.click();
-    expect(onSelectSession).toHaveBeenCalledWith("agent:main:selected", false);
+    expect(onSelectSession).toHaveBeenCalledWith(
+      "agent:main:selected",
+      false,
+      sessions.map((s) => s.key),
+    );
   });
 
-  it("sorts cost by the selected day values when day filters are active", () => {
-    const container = document.createElement("div");
+  it.each([
+    {
+      tokens: true,
+      sort: "cost",
+      names: ["Day winner", "All time winner"],
+      values: ["10", "30"],
+      avg: "20",
+    },
+    {
+      tokens: false,
+      sort: "tokens",
+      names: ["All time winner", "Day winner"],
+      values: ["$1.00", "$10.00"],
+      avg: "$5.50",
+    },
+  ] as const)("uses selected-day display and sort metrics independently (%j)", (scenario) => {
     const sessions: UsageSessionEntry[] = [
       {
         key: "all-time-winner",
@@ -629,7 +712,10 @@ describe("renderSessionsCard", () => {
           ...totals,
           totalCost: 100,
           totalTokens: 100,
-          dailyBreakdown: [{ date: "2026-02-05", cost: 1, tokens: 1 }],
+          dailyBreakdown: [
+            { ...totals, date: "2026-02-05", cost: 1, tokens: 30 },
+            { ...totals, date: "2026-02-04", cost: 90, tokens: 900 },
+          ],
         },
       } as UsageSessionEntry,
       {
@@ -640,35 +726,195 @@ describe("renderSessionsCard", () => {
           ...totals,
           totalCost: 50,
           totalTokens: 50,
-          dailyBreakdown: [{ date: "2026-02-05", cost: 10, tokens: 10 }],
+          dailyBreakdown: [{ ...totals, date: "2026-02-05", cost: 10, tokens: 10 }],
         },
       } as UsageSessionEntry,
     ];
 
-    render(
-      renderSessionsCard(
-        sessions,
-        [],
-        ["2026-02-05"],
-        false,
-        "cost",
-        "desc",
-        [],
-        "all",
-        noop,
-        noop,
-        noop,
-        noop,
-        [],
-        sessions.length,
-        noop,
-      ),
-      container,
-    );
-
-    const titles = Array.from(container.querySelectorAll(".session-bar-title")).map((el) =>
-      el.textContent?.trim(),
-    );
-    expect(titles.slice(0, 2)).toEqual(["Day winner", "All time winner"]);
+    const container = renderCard(sessions, { ...scenario, days: ["2026-02-05"] });
+    expect(
+      [...container.querySelectorAll(".session-bar-title")].map((el) => el.textContent?.trim()),
+    ).toEqual(scenario.names);
+    expect(
+      [...container.querySelectorAll(".session-bar-value")].map((el) => el.textContent?.trim()),
+    ).toEqual(scenario.values);
+    expect(
+      container
+        .querySelector(".sessions-card-stats span")
+        ?.textContent?.replace(/\s+/g, " ")
+        .trim(),
+    ).toBe(`${scenario.avg} avg`);
   });
+
+  it("reads each daily bucket once across sorting, totals, recent and selected rows", () => {
+    const reads = { dates: 0, tokens: 0, cost: 0 };
+    const sessions = Array.from({ length: 3 }, (_, index): UsageSessionEntry => ({
+      key: `session-${index}`,
+      label: `Session ${index}`,
+      usage: {
+        ...totals,
+        totalTokens: (index + 1) * 100,
+        dailyBreakdown: ["2026-02-04", "2026-02-05"].map((date) =>
+          Object.assign(
+            {
+              get date() {
+                reads.dates += 1;
+                return date;
+              },
+              get tokens() {
+                reads.tokens += 1;
+                return (index + 1) * 10;
+              },
+              get cost() {
+                reads.cost += 1;
+                return 3 - index;
+              },
+            },
+            totals,
+          ),
+        ),
+      },
+    }));
+    const container = renderCard(sessions, {
+      days: ["2026-02-05"],
+      sort: "cost",
+      selected: ["session-0", "session-2"],
+      recent: ["session-2", "session-0"],
+      tab: "recent",
+    });
+    expect(
+      [...container.querySelectorAll(".session-bar-title")].map((el) => el.textContent?.trim()),
+    ).toEqual(["Session 2", "Session 0", "Session 0", "Session 2"]);
+    expect(
+      [...container.querySelectorAll(".session-bar-value")].map((el) => el.textContent?.trim()),
+    ).toEqual(["30", "10", "10", "30"]);
+    expect(
+      container
+        .querySelector(".sessions-card-stats span")
+        ?.textContent?.replace(/\s+/g, " ")
+        .trim(),
+    ).toBe("20 avg");
+    expect(reads.dates).toBeLessThanOrEqual(6);
+    expect(reads.tokens).toBeLessThanOrEqual(3);
+    expect(reads.cost).toBeLessThanOrEqual(3);
+  });
+
+  it.each([true, false])(
+    "preserves missing, empty, unmatched and zero daily values (tokens=%s)",
+    (tokens) => {
+      const sessions: UsageSessionEntry[] = [
+        { key: "missing-usage", usage: null },
+        { key: "missing-breakdown", usage: { ...totals, totalTokens: 10, totalCost: 1 } },
+        {
+          key: "empty-breakdown",
+          usage: { ...totals, totalTokens: 20, totalCost: 2, dailyBreakdown: [] },
+        },
+        {
+          key: "unmatched",
+          usage: {
+            ...totals,
+            totalTokens: 900,
+            totalCost: 90,
+            dailyBreakdown: [{ ...totals, date: "2026-02-04", tokens: 300, cost: 30 }],
+          },
+        },
+        {
+          key: "zero",
+          usage: {
+            ...totals,
+            totalTokens: 500,
+            totalCost: 50,
+            dailyBreakdown: [{ ...totals, date: "2026-02-05", tokens: 0, cost: 0 }],
+          },
+        },
+        {
+          key: "duplicate-days",
+          usage: {
+            ...totals,
+            totalTokens: 60,
+            totalCost: 6,
+            dailyBreakdown: [
+              { ...totals, date: "2026-02-05", tokens: 2, cost: 0.2 },
+              { ...totals, date: "2026-02-05", tokens: 3, cost: 0.3 },
+            ],
+          },
+        },
+      ];
+      const values = (container: HTMLElement) =>
+        Object.fromEntries(
+          [...container.querySelectorAll(".session-bar-row")].map((row) => [
+            row.getAttribute("title"),
+            row.querySelector(".session-bar-value")?.textContent?.trim(),
+          ]),
+        );
+      const formatted = (amounts: number[]) =>
+        Object.fromEntries(
+          sessions.map((session, index) => [
+            session.key,
+            tokens ? String(amounts[index]) : `$${amounts[index]!.toFixed(2)}`,
+          ]),
+        );
+      expect(values(renderCard(sessions, { tokens, days: ["2026-02-05", "2026-02-05"] }))).toEqual(
+        formatted(tokens ? [0, 10, 20, 0, 0, 5] : [0, 1, 2, 0, 0, 0.5]),
+      );
+      expect(values(renderCard(sessions, { tokens }))).toEqual(
+        formatted(tokens ? [0, 10, 20, 900, 500, 60] : [0, 1, 2, 90, 50, 6]),
+      );
+    },
+  );
+
+  it.each(["desc", "asc"] as const)(
+    "preserves ties, duplicate keys and each selection group's %s order",
+    (direction) => {
+      const sessions: UsageSessionEntry[] = [
+        { key: "shared", label: "Alpha", updatedAt: 1, usage: { ...totals, totalTokens: 10 } },
+        { key: "shared", label: "Beta", updatedAt: 1, usage: { ...totals, totalTokens: 10 } },
+        { key: "newest", label: "Newest", updatedAt: 2, usage: { ...totals, totalTokens: 10 } },
+        { key: "other", label: "Other", updatedAt: 0, usage: { ...totals, totalTokens: 10 } },
+      ];
+      const titles = (container: Element) =>
+        [...container.querySelectorAll(".session-bar-title")].map((entry) =>
+          entry.textContent?.trim(),
+        );
+      expect(titles(renderCard(sessions, { direction }))).toEqual(
+        direction === "desc"
+          ? ["Newest", "Alpha", "Beta", "Other"]
+          : ["Other", "Beta", "Alpha", "Newest"],
+      );
+      expect(sessions.map((session) => session.label)).toEqual([
+        "Alpha",
+        "Beta",
+        "Newest",
+        "Other",
+      ]);
+      const onSelect = vi.fn();
+      const container = renderCard(sessions, {
+        direction,
+        tab: "recent",
+        recent: ["shared", "newest", "shared"],
+        selected: ["shared", "newest"],
+        onSelect,
+      });
+      const recent = container.querySelector(".session-bars--recent")!;
+      const selected = container.querySelector(".session-bars--selected")!;
+      expect(titles(recent)).toEqual(
+        direction === "desc" ? ["Beta", "Newest", "Beta"] : ["Alpha", "Newest", "Alpha"],
+      );
+      expect(titles(selected)).toEqual(
+        direction === "desc" ? ["Newest", "Alpha", "Beta"] : ["Beta", "Alpha", "Newest"],
+      );
+      recent
+        .querySelector(".session-bar-selection")!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
+      expect(onSelect).toHaveBeenLastCalledWith("shared", true, ["shared", "newest", "shared"]);
+      selected
+        .querySelector(".session-bar-selection")!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
+      expect(onSelect).toHaveBeenLastCalledWith(
+        direction === "desc" ? "newest" : "shared",
+        true,
+        direction === "desc" ? ["newest", "shared", "shared"] : ["shared", "shared", "newest"],
+      );
+    },
+  );
 });

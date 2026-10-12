@@ -1,18 +1,16 @@
-// Local notification command for paired nodes.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { type Command, Option } from "commander";
-import { randomIdempotencyKey } from "../../gateway/call.js";
 import { defaultRuntime } from "../../runtime.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import {
+  buildNodeInvokeParams,
   callNodesGatewayCli,
   nodesCallOpts,
-  parseOptionalNodePositiveInteger,
+  parseOptionalNodeInteger,
   resolveCliNodeId,
 } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
 
-/** Register node notification command. */
 export function registerNodesNotifyCommand(nodes: Command) {
   nodesCallOpts(
     nodes
@@ -37,17 +35,14 @@ export function registerNodesNotifyCommand(nodes: Command) {
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 15000)", "15000")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("notify", async () => {
-          const nodeId = await resolveCliNodeId(opts, normalizeOptionalString(opts.node) ?? "");
           const title = normalizeOptionalString(opts.title) ?? "";
           const body = normalizeOptionalString(opts.body) ?? "";
           if (!title && !body) {
             throw new Error("missing --title or --body");
           }
-          const invokeTimeout = parseOptionalNodePositiveInteger(
-            opts.invokeTimeout,
-            "--invoke-timeout",
-          );
-          const invokeParams: Record<string, unknown> = {
+          const invokeTimeout = parseOptionalNodeInteger(opts.invokeTimeout, "--invoke-timeout");
+          const nodeId = await resolveCliNodeId(opts, opts.node ?? "");
+          const invokeParams = buildNodeInvokeParams({
             nodeId,
             command: "system.notify",
             params: {
@@ -57,11 +52,9 @@ export function registerNodesNotifyCommand(nodes: Command) {
               priority: opts.priority,
               delivery: opts.delivery,
             },
-            idempotencyKey: opts.idempotencyKey ?? randomIdempotencyKey(),
-          };
-          if (typeof invokeTimeout === "number" && Number.isFinite(invokeTimeout)) {
-            invokeParams.timeoutMs = invokeTimeout;
-          }
+            idempotencyKey: opts.idempotencyKey,
+            timeoutMs: invokeTimeout,
+          });
 
           const result = await callNodesGatewayCli("node.invoke", opts, invokeParams);
           if (opts.json) {

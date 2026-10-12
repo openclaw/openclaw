@@ -1,13 +1,11 @@
-/**
- * Shared web tool cache, timeout, and response helpers.
- *
- * Keeps web_fetch and web_search providers aligned on bounded IO and cache semantics.
- */
-import { decodeTextPrefix } from "@openclaw/normalization-core";
+import { consumeResponseBytes, decodeTextPrefix } from "@openclaw/normalization-core";
 import {
   asDateTimestampMs,
+  asFiniteNumber,
+  asPositiveFiniteNumber,
   MAX_TIMER_TIMEOUT_SECONDS,
   resolveExpiresAtMsFromDurationMs,
+  resolveIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 export type CacheEntry<T> = {
@@ -21,20 +19,16 @@ export const DEFAULT_CACHE_TTL_MINUTES = 15;
 const DEFAULT_CACHE_MAX_ENTRIES = 100;
 
 export function resolveTimeoutSeconds(value: unknown, fallback: number): number {
-  const parsed = typeof value === "number" && Number.isFinite(value) ? value : fallback;
-  return Math.min(MAX_TIMER_TIMEOUT_SECONDS, Math.max(1, Math.floor(parsed)));
+  return resolveIntegerOption(value, fallback, { min: 1, max: MAX_TIMER_TIMEOUT_SECONDS });
 }
 
 export function resolvePositiveTimeoutSeconds(value: unknown, fallback: number): number {
-  const parsed =
-    typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
-  return Math.min(MAX_TIMER_TIMEOUT_SECONDS, Math.max(1, Math.floor(parsed)));
+  return resolveTimeoutSeconds(asPositiveFiniteNumber(value), fallback);
 }
 
 export function resolveCacheTtlMs(value: unknown, fallbackMinutes: number): number {
-  const minutes =
-    typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : fallbackMinutes;
-  return Math.round(minutes * 60_000);
+  const minutes = asFiniteNumber(value);
+  return Math.round((minutes === undefined ? fallbackMinutes : Math.max(0, minutes)) * 60_000);
 }
 
 export function normalizeCacheKey(value: string): string {
@@ -46,17 +40,19 @@ export function normalizeCacheKey(value: string): string {
 export function readCache<T>(
   cache: Map<string, CacheEntry<T>>,
   key: string,
+  ttlMs = Infinity,
 ): { value: T; cached: boolean } | null {
   const entry = cache.get(key);
-  if (!entry) {
+  if (!entry || ttlMs <= 0) {
     return null;
   }
   const now = asDateTimestampMs(Date.now());
-  if (now === undefined || now > entry.expiresAt) {
+  if (now === undefined || now >= entry.expiresAt) {
     cache.delete(key);
     return null;
   }
-  return { value: entry.value, cached: true };
+  // A caller can shorten reuse without evicting an entry still valid for others.
+  return now - entry.insertedAt < ttlMs ? { value: entry.value, cached: true } : null;
 }
 
 export function writeCache<T>(
@@ -167,26 +163,9 @@ function sniffCharset(contentType: string | null, bytes: Uint8Array): string | u
   return undefined;
 }
 
-function concatBytes(parts: Uint8Array[], totalBytes: number): Uint8Array {
-  if (parts.length === 1 && parts[0]?.byteLength === totalBytes) {
-    return parts[0];
-  }
-  const bytes = new Uint8Array(totalBytes);
-  let offset = 0;
-  for (const part of parts) {
-    bytes.set(part, offset);
-    offset += part.byteLength;
-  }
-  return bytes;
-}
-
-function responseContentType(res: Response): string | null {
-  const headers = (res as { headers?: { get?: (name: string) => string | null } }).headers;
-  return typeof headers?.get === "function" ? headers.get("content-type") : null;
-}
-
 function decodeResponseBytes(res: Response, bytes: Uint8Array, truncated = false): string {
-  const contentType = responseContentType(res);
+  const headers = res.headers;
+  const contentType = typeof headers?.get === "function" ? headers.get("content-type") : null;
   const charset = sniffCharset(contentType, bytes);
   try {
     return decodeTextPrefix(bytes, { encoding: charset ?? "utf-8", truncated });
@@ -199,71 +178,28 @@ export async function readResponseText(
   res: Response,
   options?: { maxBytes?: number },
 ): Promise<ReadResponseTextResult> {
-  const maxBytesRaw = options?.maxBytes;
-  const maxBytes =
-    typeof maxBytesRaw === "number" && Number.isFinite(maxBytesRaw) && maxBytesRaw > 0
-      ? Math.floor(maxBytesRaw)
-      : undefined;
+  const maxBytesRaw = asPositiveFiniteNumber(options?.maxBytes);
+  const maxBytes = maxBytesRaw === undefined ? undefined : Math.floor(maxBytesRaw);
 
   const body = res.body;
-  if (
-    maxBytes &&
-    body &&
-    typeof body === "object" &&
-    "getReader" in body &&
-    typeof (body as { getReader: () => unknown }).getReader === "function"
-  ) {
-    const reader = (body as ReadableStream<Uint8Array>).getReader();
+  if (maxBytes && body && typeof body === "object" && typeof body.getReader === "function") {
+    const reader = body.getReader();
     let bytesRead = 0;
     let truncated = false;
     const parts: Uint8Array[] = [];
 
     try {
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) {
-          break;
-        }
-        if (!value || value.byteLength === 0) {
-          continue;
-        }
-
-        let chunk = value;
-        if (bytesRead + chunk.byteLength > maxBytes) {
-          const remaining = Math.max(0, maxBytes - bytesRead);
-          if (remaining <= 0) {
-            truncated = true;
-            break;
-          }
-          chunk = chunk.subarray(0, remaining);
-          truncated = true;
-        }
-
-        bytesRead += chunk.byteLength;
-        parts.push(chunk);
-
-        if (truncated) {
-          break;
-        }
-        if (bytesRead >= maxBytes) {
-          // Reached the byte cap. A body that is exactly maxBytes bytes is
-          // complete only once EOF confirms it. Keep the conservative result
-          // if that confirming read fails or the body continues.
-          truncated = true;
-          while (true) {
-            const { done: atEnd, value: extra } = await reader.read();
-            if (atEnd) {
-              truncated = false;
-              break;
-            }
-            if (extra && extra.byteLength > 0) {
-              truncated = true;
-              break;
-            }
-          }
-          break;
-        }
-      }
+      const result = await consumeResponseBytes({
+        maxBytes,
+        read: () => reader.read(),
+        onChunk: (chunk) => {
+          // The shared size includes overflow; report only the retained bytes.
+          bytesRead += chunk.byteLength;
+          parts.push(chunk);
+        },
+        onLimit: () => undefined,
+      });
+      truncated = result.truncated;
     } catch {
       // Stream errors mean the accumulated bytes are only a partial body.
       truncated = true;
@@ -281,23 +217,22 @@ export async function readResponseText(
       }
     }
 
-    const bytes = concatBytes(parts, bytesRead);
+    const bytes =
+      parts.length === 1 && parts[0]?.byteLength === bytesRead
+        ? parts[0]
+        : Buffer.concat(parts, bytesRead);
     return { text: decodeResponseBytes(res, bytes, truncated), truncated, bytesRead };
   }
 
   if (maxBytes) {
-    if (res instanceof Response && res.body === null) {
-      return { text: "", truncated: false, bytesRead: 0 };
-    }
-    // Whole-body fallbacks allocate before returning, so they cannot honor a byte cap.
-    // Fail closed instead of making maxBytes a returned-text limit only.
-    return { text: "", truncated: true, bytesRead: 0 };
+    // Whole-body fallbacks cannot honor a byte cap. Only a native bodyless
+    // response is known complete without reading; other fallbacks fail closed.
+    return { text: "", truncated: !(res instanceof Response && res.body === null), bytesRead: 0 };
   }
 
-  const readBytes = (res as { arrayBuffer?: () => Promise<ArrayBuffer> }).arrayBuffer;
-  if (typeof readBytes === "function") {
+  if (typeof res.arrayBuffer === "function") {
     try {
-      const bytes = new Uint8Array(await readBytes.call(res));
+      const bytes = new Uint8Array(await res.arrayBuffer());
       return {
         text: decodeResponseBytes(res, bytes),
         truncated: false,

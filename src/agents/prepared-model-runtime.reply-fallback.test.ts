@@ -1,0 +1,331 @@
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveModelFallbackOptions } from "../auto-reply/reply/agent-runner-run-params.js";
+import { runPreparedReply } from "../auto-reply/reply/get-reply-run.js";
+import type { RunPreparedReplyParams } from "../auto-reply/reply/get-reply-run.types.js";
+import { bindPreparedReplyDispatchRuntime } from "../auto-reply/reply/prepared-reply-dispatch-context.js";
+import type { FollowupRun } from "../auto-reply/reply/queue.js";
+import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { listRuntimePluginIdsFromRegistry } from "../plugins/active-runtime-registry.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { recordAgentDatabaseAdmissions } from "../state/agent-database-admission.js";
+import * as agentScope from "./agent-scope.js";
+import { createContextEngineLogicalTurnLease } from "./harness/context-engine-logical-turn.js";
+import {
+  resolveAgentRuntimePluginLoadPlan,
+  resolveAgentRuntimePluginSelections,
+} from "./harness/runtime-plugin-load-plan.js";
+import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
+import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
+import { getPreparedModelRuntimePluginGeneration } from "./prepared-model-runtime-generation-scope.js";
+import {
+  acquireAgentRunPreparedModelRuntime,
+  loadPublishedGatewayReplyDispatchRuntime,
+  refreshPreparedModelRuntimeSnapshots,
+} from "./prepared-model-runtime.js";
+
+const reply = vi.hoisted(() => ({ context: vi.fn(), execute: vi.fn() }));
+vi.mock("../auto-reply/reply/get-reply-run-context.js", () => ({
+  prepareReplyRunContext: reply.context,
+}));
+vi.mock("../auto-reply/reply/get-reply-run-admission.js", () => ({
+  prepareReplyRunAdmission: async (context: unknown) => context,
+}));
+vi.mock("../auto-reply/reply/get-reply-run-execute.js", () => ({
+  executePreparedReplyRun: reply.execute,
+}));
+
+const { mocks } = usePreparedModelRuntimeHarness();
+
+describe("prepared reply fallback ownership", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const actual = await vi.importActual<typeof import("./agent-scope.js")>("./agent-scope.js");
+    vi.spyOn(agentScope, "resolveAgentConfig").mockImplementation(actual.resolveAgentConfig);
+    vi.spyOn(agentScope, "resolveAgentModelFallbacksOverride").mockImplementation(
+      actual.resolveAgentModelFallbacksOverride,
+    );
+    vi.spyOn(agentScope, "resolveEffectiveModelFallbacks").mockImplementation(
+      actual.resolveEffectiveModelFallbacks,
+    );
+    vi.spyOn(agentScope, "resolveModelFallbackAvailability").mockImplementation(
+      actual.resolveModelFallbackAvailability,
+    );
+    vi.spyOn(agentScope, "resolveSubagentSpawnModelFallbacksOverride").mockImplementation(
+      actual.resolveSubagentSpawnModelFallbacksOverride,
+    );
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it("publishes healthy configured runtimes while a divergent agent is refused", async () => {
+    mocks.configuredAgentIds = ["main", "cleaner"];
+    recordAgentDatabaseAdmissions([
+      {
+        agentId: "cleaner",
+        paths: ["/synthetic/agents/cleaner/openclaw-agent.cleaner.sqlite"],
+        embeddedOwnerId: "main",
+        code: "agent-database-ownership-mismatch",
+        reason: "Refused agent cleaner: its database belongs to main.",
+        repairHint: "Quarantine the cleaner copy and restart.",
+      },
+    ]);
+    await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });
+    await expect(
+      loadPublishedGatewayReplyDispatchRuntime({ agentId: "main" }),
+    ).resolves.toMatchObject({ agentId: "main" });
+    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(1);
+  });
+
+  it("admits a nested reply after its configured context engine falls back to legacy", async () => {
+    const config: OpenClawConfig = {
+      agents: { defaults: { model: "initial/model" } },
+      plugins: {
+        allow: ["initial", "selected", "unavailable-context"],
+        slots: { memory: "none", contextEngine: "unavailable-context" },
+        entries: { "unavailable-context": { enabled: true } },
+      },
+    };
+    const metadata = createPluginMetadataSnapshot({
+      config,
+      manifestRegistry: { plugins: [], diagnostics: [] },
+    });
+    mocks.configuredAgentIds = ["default", "secondary"];
+    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() =>
+      createEmptyPluginRegistry(),
+    );
+    await refreshPreparedModelRuntimeSnapshots(config, {
+      gatewayLifecycle: true,
+      catalogMode: "static",
+      allowGatewaySubagentBinding: true,
+      pluginMetadataSnapshot: metadata,
+    });
+    const dispatch = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "secondary" }))!;
+    reply.context.mockResolvedValue({
+      kind: "run",
+      workspaceDir: dispatch.workspaceDir,
+      thinkingRuntime: "openclaw",
+    });
+    const warning = vi.fn();
+    reply.execute.mockImplementation(async () => {
+      const pluginGeneration = getPreparedModelRuntimePluginGeneration()!;
+      expect(pluginGeneration).not.toBe(dispatch.pluginGeneration);
+      const contextEngine = await createContextEngineLogicalTurnLease({
+        config,
+        identity: { runId: "reply-context-fallback", sessionId: "reply-context-fallback" },
+        agentDir: dispatch.agentDir,
+        workspaceDir: dispatch.workspaceDir,
+        warn: warning,
+      });
+      try {
+        expect(contextEngine.effectiveEngineId).toBe("legacy");
+        expect(contextEngine.degradedReason).toBe(
+          'context engine "unavailable-context" is not registered',
+        );
+        await using nested = await acquireAgentRunPreparedModelRuntime(
+          {
+            config,
+            agentId: dispatch.agentId,
+            agentDir: dispatch.agentDir,
+            workspaceDir: dispatch.workspaceDir,
+            allowGatewaySubagentBinding: true,
+            runtimePluginSelections: [
+              { provider: "selected", modelId: "model", runtime: "openclaw" },
+            ],
+          },
+          { pluginGeneration },
+        );
+        expect(nested.pluginGeneration).toBe(pluginGeneration);
+        return { text: "reply admitted with legacy context" };
+      } finally {
+        await contextEngine.dispose();
+      }
+    });
+    const execute = bindPreparedReplyDispatchRuntime(dispatch, () =>
+      runPreparedReply({ provider: "selected", model: "model" } as RunPreparedReplyParams),
+    );
+
+    await expect(execute()).resolves.toEqual({ text: "reply admitted with legacy context" });
+    expect(warning).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining('Context engine "unavailable-context" degraded to "legacy"'),
+    );
+    expect(config.plugins?.slots?.contextEngine).toBe("unavailable-context");
+  });
+
+  it.each([
+    { scope: "per-agent subagent", source: "auto", locked: false },
+    { scope: "fallback-only subagent", source: "auto", locked: false },
+    { scope: "subagent", source: "user", locked: false },
+    { scope: "subagent", source: "auto", locked: true },
+    { scope: "agent", source: "auto", locked: false, failedHarness: "unrelated/model" },
+    { scope: "agent", source: "auto", locked: false, failedHarness: "selected/model" },
+  ] as const)(
+    "admits $scope routes with source=$source, locked=$locked, failedHarness=$failedHarness without widening execution policy",
+    async (scenario) => {
+      const { scope, source, locked } = scenario;
+      const failedHarness = "failedHarness" in scenario ? scenario.failedHarness : undefined;
+      const config: OpenClawConfig = {
+        agents: {
+          entries: {
+            default:
+              scope === "per-agent subagent" || scope === "fallback-only subagent"
+                ? {
+                    subagents: {
+                      model: {
+                        ...(scope === "per-agent subagent" ? { primary: "selected/model" } : {}),
+                        fallbacks: ["fallback/model"],
+                      },
+                    },
+                  }
+                : {},
+          },
+          defaults: {
+            ...(failedHarness
+              ? { models: { [failedHarness]: { agentRuntime: { id: "broken-harness" } } } }
+              : {}),
+            model: {
+              primary: "initial/model",
+              fallbacks: scope === "agent" ? ["fallback/model"] : [],
+            },
+            subagents: {
+              model: {
+                primary: "selected/model",
+                fallbacks: scope === "per-agent subagent" ? [] : ["fallback/model"],
+              },
+            },
+          },
+        },
+        plugins: {
+          allow: ["initial", "selected", "fallback", "broken-harness"],
+          slots: { memory: "none" },
+        },
+      };
+      const manifests: PluginManifestRecord[] = ["initial", "selected", "fallback"].map((id) => ({
+        id,
+        name: id,
+        origin: "bundled",
+        channels: [],
+        providers: [id],
+        cliBackends: [],
+        skills: [],
+        hooks: [],
+        rootDir: `/plugins/${id}`,
+        source: `/plugins/${id}/index.js`,
+        manifestPath: `/plugins/${id}/openclaw.plugin.json`,
+        activation: { onStartup: false, onProviders: [id] },
+      }));
+      const metadata = createPluginMetadataSnapshot({
+        config,
+        manifestRegistry: {
+          plugins: [
+            ...manifests,
+            {
+              ...manifests[0]!,
+              id: "broken-harness",
+              providers: [],
+              activation: { onStartup: false, onAgentHarnesses: ["broken-harness"] },
+            },
+          ],
+          diagnostics: [],
+        },
+      });
+      mocks.configuredAgentIds = ["default"];
+      mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation((params) => {
+        const registry = createEmptyPluginRegistry();
+        const plan = resolveAgentRuntimePluginLoadPlan({
+          config,
+          workspaceDir: "/tmp/unused-workspace",
+          metadataSnapshot: metadata,
+          basePluginIds: params.reusableRegistry
+            ? listRuntimePluginIdsFromRegistry(params.reusableRegistry)
+            : [],
+          selections: resolveAgentRuntimePluginSelections(config, params.selections ?? []),
+        });
+        registry.plugins.push(
+          ...(plan.pluginIds ?? []).map((id) =>
+            createPluginRecord({
+              id,
+              origin: "bundled",
+              ...(id === "broken-harness"
+                ? {
+                    status: "error",
+                    error: "Synthetic missing runtime export",
+                    failurePhase: "load",
+                  }
+                : {}),
+            }),
+          ),
+        );
+        return registry;
+      });
+      await refreshPreparedModelRuntimeSnapshots(config, {
+        gatewayLifecycle: true,
+        catalogMode: "static",
+        allowGatewaySubagentBinding: true,
+        pluginMetadataSnapshot: metadata,
+      });
+      const dispatch = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }))!;
+      const run = {
+        config,
+        agentId: "default",
+        agentDir: dispatch.agentDir,
+        workspaceDir: dispatch.workspaceDir,
+        provider: "selected",
+        model: "model",
+        sessionKey: scope === "agent" ? "agent:default:main" : "agent:default:subagent:test",
+        hasSessionModelOverride: true,
+        modelOverrideSource: source,
+        modelSelectionLocked: locked,
+        hasAutoFallbackProvenance: true,
+      } as FollowupRun["run"];
+      reply.context.mockResolvedValue({ kind: "run", workspaceDir: dispatch.workspaceDir });
+      reply.execute.mockImplementation(async () => {
+        const pluginGeneration = getPreparedModelRuntimePluginGeneration()!;
+        const candidates = resolveModelCandidateChain({
+          ...resolveModelFallbackOptions(run),
+          manifestPlugins: metadata.plugins,
+        });
+        expect(candidates.map((candidate) => candidate.provider)).toEqual(
+          source === "user" || locked ? ["selected"] : ["selected", "fallback"],
+        );
+        const nested = await acquireAgentRunPreparedModelRuntime(
+          {
+            config,
+            agentId: run.agentId,
+            agentDir: run.agentDir,
+            workspaceDir: run.workspaceDir,
+            allowGatewaySubagentBinding: true,
+            runtimePluginSelections: candidates.map((candidate) => ({
+              provider: candidate.provider,
+              modelId: candidate.model,
+            })),
+          },
+          { pluginGeneration },
+        );
+        if (failedHarness === "selected/model") {
+          await expect(
+            ensureSelectedAgentHarnessPlugin({
+              config,
+              provider: run.provider,
+              modelId: run.model,
+              workspaceDir: dispatch.workspaceDir,
+              pluginRegistry: nested.snapshot.pluginRegistry,
+            }),
+          ).rejects.toThrow("reason=owner-plugin-degraded, ownerPluginId=broken-harness");
+        }
+        await nested[Symbol.asyncDispose]();
+        return { text: "fallback admitted" };
+      });
+      const execute = bindPreparedReplyDispatchRuntime(dispatch, () =>
+        runPreparedReply({ provider: run.provider, model: run.model } as RunPreparedReplyParams),
+      );
+
+      await expect(execute()).resolves.toEqual({ text: "fallback admitted" });
+      expect(reply.execute).toHaveBeenCalledOnce();
+    },
+  );
+});

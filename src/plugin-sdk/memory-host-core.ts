@@ -1,16 +1,14 @@
-/**
- * Public SDK facade for memory host runtime core and public artifact discovery.
- */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sameFileIdentity, type FileIdentityStat } from "@openclaw/fs-safe/advanced";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { sha256Hex, sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import { syncDirectoryIfSupported } from "../infra/directory-durability.js";
 import { isMissingPathError } from "../infra/errors.js";
 import { withFileLock } from "../infra/file-lock.js";
-import { sameFileIdentity, type FileIdentityStat } from "../infra/fs-safe-advanced.js";
-import { FsSafeError, root as createFsSafeRoot } from "../infra/fs-safe.js";
+import { FsSafeError, root as createFsSafeRoot, walkDirectory } from "../infra/fs-safe.js";
 import {
   MAX_MEMORY_HOST_PUBLIC_EXPORT_BYTES,
   serializeMemoryHostEventExport,
@@ -25,6 +23,7 @@ import {
   memoryHostEventExportOwnerContent,
   publishMemoryHostEventArtifact,
   rewriteMemoryHostEventArtifactIfUnchanged,
+  type MemoryHostEventExportOwner,
 } from "./memory-host-event-export.js";
 
 const MEMORY_HOST_EVENTS_FILENAME = "memory-host-events.jsonl";
@@ -58,14 +57,9 @@ function isWorkspaceWriteUnavailable(error: unknown, seen = new Set<unknown>()):
   return isWorkspaceWriteUnavailable((error as { cause?: unknown }).cause, seen);
 }
 
-async function resolveMemoryHostEventExportOwner(workspaceDir: string): Promise<{
-  queueKey: string;
-  lockTarget: string;
-  relativePath: string;
-  ownerRelativePath: string;
-  stateHash: string;
-  workspaceHash: string;
-}> {
+async function resolveMemoryHostEventExportOwner(
+  workspaceDir: string,
+): Promise<MemoryHostEventExportOwner> {
   const requestedStateDir = path.resolve(resolveStateDir());
   await fs.mkdir(requestedStateDir, { recursive: true, mode: 0o700 });
   const stateDir = await fs.realpath(requestedStateDir);
@@ -82,9 +76,24 @@ async function resolveMemoryHostEventExportOwner(workspaceDir: string): Promise<
   };
 }
 
+function readMemoryHostEventArtifactText(
+  workspaceRoot: Awaited<ReturnType<typeof createFsSafeRoot>>,
+  relativePath: string,
+) {
+  return workspaceRoot.readText(relativePath).catch((error: unknown) => {
+    if (isMissingPathError(error)) {
+      return undefined;
+    }
+    if (isRejectedWorkspaceArtifactPath(error)) {
+      return null;
+    }
+    throw error;
+  });
+}
+
 async function readMemoryHostEventExportOwnership(
   workspaceRoot: Awaited<ReturnType<typeof createFsSafeRoot>>,
-  owner: Awaited<ReturnType<typeof resolveMemoryHostEventExportOwner>>,
+  owner: MemoryHostEventExportOwner,
 ): Promise<
   | {
       kind: "owned";
@@ -95,18 +104,9 @@ async function readMemoryHostEventExportOwnership(
     }
   | { kind: "missing" }
   | { kind: "orphan"; ownerContent: string }
-  | { kind: "pending-missing"; ownerContent: string }
   | { kind: "foreign" }
 > {
-  const content = await workspaceRoot.readText(owner.ownerRelativePath).catch((error: unknown) => {
-    if (isMissingPathError(error)) {
-      return undefined;
-    }
-    if (isRejectedWorkspaceArtifactPath(error)) {
-      return null;
-    }
-    throw error;
-  });
+  const content = await readMemoryHostEventArtifactText(workspaceRoot, owner.ownerRelativePath);
   if (content === null) {
     return { kind: "foreign" };
   }
@@ -120,36 +120,27 @@ async function readMemoryHostEventExportOwnership(
     return { kind: "foreign" };
   }
   if (
-    !parsed ||
-    typeof parsed !== "object" ||
-    Array.isArray(parsed) ||
-    (parsed as { schemaVersion?: unknown }).schemaVersion !== 3 ||
-    (parsed as { kind?: unknown }).kind !== "openclaw-memory-host-events-export" ||
-    (parsed as { stateHash?: unknown }).stateHash !== owner.stateHash ||
-    (parsed as { workspaceHash?: unknown }).workspaceHash !== owner.workspaceHash ||
-    ((parsed as { contentSha256?: unknown }).contentSha256 !== undefined &&
-      typeof (parsed as { contentSha256?: unknown }).contentSha256 !== "string") ||
-    ((parsed as { pendingContentSha256?: unknown }).pendingContentSha256 !== undefined &&
-      typeof (parsed as { pendingContentSha256?: unknown }).pendingContentSha256 !== "string") ||
-    ((parsed as { contentSha256?: unknown }).contentSha256 === undefined &&
-      (parsed as { pendingContentSha256?: unknown }).pendingContentSha256 === undefined) ||
-    ((parsed as { fileDev?: unknown }).fileDev === undefined) !==
-      ((parsed as { fileIno?: unknown }).fileIno === undefined) ||
-    ((parsed as { fileDev?: unknown }).fileDev !== undefined &&
-      (typeof (parsed as { fileDev?: unknown }).fileDev !== "string" ||
-        !/^\d+$/u.test((parsed as { fileDev: string }).fileDev) ||
-        typeof (parsed as { fileIno?: unknown }).fileIno !== "string" ||
-        !/^\d+$/u.test((parsed as { fileIno: string }).fileIno)))
+    !isRecord(parsed) ||
+    parsed.schemaVersion !== 3 ||
+    parsed.kind !== "openclaw-memory-host-events-export" ||
+    parsed.stateHash !== owner.stateHash ||
+    parsed.workspaceHash !== owner.workspaceHash ||
+    (parsed.contentSha256 !== undefined && typeof parsed.contentSha256 !== "string") ||
+    (parsed.pendingContentSha256 !== undefined &&
+      typeof parsed.pendingContentSha256 !== "string") ||
+    (parsed.contentSha256 === undefined && parsed.pendingContentSha256 === undefined) ||
+    (parsed.fileDev === undefined) !== (parsed.fileIno === undefined) ||
+    (parsed.fileDev !== undefined &&
+      (typeof parsed.fileDev !== "string" ||
+        !/^\d+$/u.test(parsed.fileDev) ||
+        typeof parsed.fileIno !== "string" ||
+        !/^\d+$/u.test(parsed.fileIno)))
   ) {
     return { kind: "foreign" };
   }
   const storedIdentity =
-    typeof (parsed as { fileDev?: unknown }).fileDev === "string" &&
-    typeof (parsed as { fileIno?: unknown }).fileIno === "string"
-      ? {
-          dev: BigInt((parsed as { fileDev: string }).fileDev),
-          ino: BigInt((parsed as { fileIno: string }).fileIno),
-        }
+    typeof parsed.fileDev === "string" && typeof parsed.fileIno === "string"
+      ? { dev: BigInt(parsed.fileDev), ino: BigInt(parsed.fileIno) }
       : undefined;
   let openedExport: Awaited<ReturnType<typeof workspaceRoot.open>> | undefined;
   try {
@@ -164,36 +155,26 @@ async function readMemoryHostEventExportOwnership(
     }
   }
   if (!openedExport) {
-    return typeof (parsed as { pendingContentSha256?: unknown }).pendingContentSha256 === "string"
-      ? { kind: "pending-missing", ownerContent: content }
-      : { kind: "orphan", ownerContent: content };
+    return { kind: "orphan", ownerContent: content };
   }
-  let exportContent: string;
+  let exportContent: string | undefined;
   const exportIdentity: FileIdentityStat = {
     dev: openedExport.stat.dev,
     ino: openedExport.stat.ino,
   };
   const identityOwned =
     storedIdentity !== undefined && sameFileIdentity(storedIdentity, exportIdentity);
-  try {
+  {
+    await using exportOwner = openedExport;
     if (openedExport.stat.size > MAX_MEMORY_HOST_PUBLIC_EXPORT_BYTES) {
-      return identityOwned
-        ? {
-            kind: "owned",
-            content: undefined,
-            identity: exportIdentity,
-            ownerContent: content,
-            needsFinalize: true,
-          }
-        : { kind: "foreign" };
+      exportContent = undefined;
+    } else {
+      exportContent = await exportOwner.handle.readFile({ encoding: "utf8" });
     }
-    exportContent = await openedExport.handle.readFile({ encoding: "utf8" });
-  } finally {
-    await openedExport.handle.close().catch(() => undefined);
   }
-  const exportSha256 = sha256Hex(exportContent);
-  const currentSha256 = (parsed as { contentSha256?: string }).contentSha256;
-  const pendingSha256 = (parsed as { pendingContentSha256?: string }).pendingContentSha256;
+  const exportSha256 = exportContent === undefined ? undefined : sha256Hex(exportContent);
+  const currentSha256 = parsed.contentSha256;
+  const pendingSha256 = parsed.pendingContentSha256;
   // Hash-only markers never reach the owned branch; only the persisted inode
   // identity authorizes later mutation of this workspace artifact.
   return identityOwned
@@ -202,7 +183,10 @@ async function readMemoryHostEventExportOwnership(
         content: exportContent,
         identity: exportIdentity,
         ownerContent: content,
-        needsFinalize: exportSha256 !== currentSha256 || pendingSha256 !== undefined,
+        needsFinalize:
+          exportContent === undefined ||
+          exportSha256 !== currentSha256 ||
+          pendingSha256 !== undefined,
       }
     : { kind: "foreign" };
 }
@@ -221,24 +205,8 @@ export type {
   MemoryPromptSectionBuilder,
 } from "../plugins/memory-state.js";
 export { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
-export { resolveSessionAgentId } from "../agents/agent-scope.js";
+export { resolveSessionAgentId } from "./agent-scope-runtime.js";
 export { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
-
-async function listMarkdownFilesRecursive(rootDir: string): Promise<string[]> {
-  const entries = await fs.readdir(rootDir, { withFileTypes: true }).catch(() => []);
-  const files: string[] = [];
-  for (const entry of entries) {
-    const fullPath = path.join(rootDir, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...(await listMarkdownFilesRecursive(fullPath)));
-      continue;
-    }
-    if (entry.isFile() && entry.name.endsWith(".md")) {
-      files.push(fullPath);
-    }
-  }
-  return files.toSorted((left, right) => left.localeCompare(right));
-}
 
 async function materializeMemoryHostEventExport(params: {
   workspaceDir: string;
@@ -267,7 +235,7 @@ async function materializeMemoryHostEventExport(params: {
   return memoryHostEventExportQueue.enqueue(owner.queueKey, async () => {
     const absolutePath = path.join(workspaceKey, ...owner.relativePath.split("/"));
     return await withFileLock(owner.lockTarget, MEMORY_HOST_EVENT_EXPORT_LOCK_OPTIONS, async () => {
-      const storedEvents = listStoredMemoryHostEvents({
+      const storedEvents = await listStoredMemoryHostEvents({
         workspaceDir: workspaceKey,
         limit: MAX_MEMORY_HOST_PUBLIC_EXPORT_EVENTS,
       });
@@ -282,52 +250,22 @@ async function materializeMemoryHostEventExport(params: {
       const contentSha256 = sha256Hex(content);
       let publishedIdentity: FileIdentityStat | undefined;
       if (ownership.kind === "missing") {
-        const existing = await workspaceRoot
-          .readText(owner.relativePath)
-          .catch((error: unknown) => {
-            if (isMissingPathError(error)) {
-              return undefined;
-            }
-            if (isRejectedWorkspaceArtifactPath(error)) {
-              return null;
-            }
-            throw error;
-          });
+        const existing = await readMemoryHostEventArtifactText(workspaceRoot, owner.relativePath);
         if (existing !== undefined) {
           return undefined;
         }
-        try {
+      }
+      try {
+        if (ownership.kind !== "owned") {
           const pendingOwnerContent = memoryHostEventExportOwnerContent(owner, {
             pendingSha256: contentSha256,
           });
-          await workspaceRoot.create(owner.ownerRelativePath, pendingOwnerContent, {
-            mkdir: true,
-            mode: 0o600,
-          });
-          await syncDirectoryIfSupported(path.dirname(absolutePath));
-          publishedIdentity = await publishMemoryHostEventArtifact({
-            workspaceRoot,
-            owner,
-            absolutePath,
-            expectedOwnerContent: pendingOwnerContent,
-            content,
-            contentSha256,
-          });
-          if (!publishedIdentity) {
-            return undefined;
-          }
-        } catch (error) {
-          if (isWorkspaceWriteUnavailable(error)) {
-            return undefined;
-          }
-          throw error;
-        }
-      } else if (ownership.kind === "pending-missing" || ownership.kind === "orphan") {
-        try {
-          const pendingOwnerContent = memoryHostEventExportOwnerContent(owner, {
-            pendingSha256: contentSha256,
-          });
-          if (
+          if (ownership.kind === "missing") {
+            await workspaceRoot.create(owner.ownerRelativePath, pendingOwnerContent, {
+              mkdir: true,
+              mode: 0o600,
+            });
+          } else if (
             !(await rewriteMemoryHostEventArtifactIfUnchanged({
               workspaceRoot,
               relativePath: owner.ownerRelativePath,
@@ -349,90 +287,63 @@ async function materializeMemoryHostEventExport(params: {
           if (!publishedIdentity) {
             return undefined;
           }
-        } catch (error) {
-          if (isWorkspaceWriteUnavailable(error)) {
-            return undefined;
+        } else {
+          publishedIdentity = ownership.identity;
+          let expectedOwnerContent = ownership.ownerContent;
+          if (ownership.content !== content) {
+            const updateOwnerContent = memoryHostEventExportOwnerContent(owner, {
+              pendingSha256: contentSha256,
+              identity: ownership.identity,
+              ...(ownership.content === undefined
+                ? {}
+                : { currentSha256: sha256Hex(ownership.content) }),
+            });
+            if (
+              !(await rewriteMemoryHostEventArtifactIfUnchanged({
+                workspaceRoot,
+                relativePath: owner.ownerRelativePath,
+                expectedContent: expectedOwnerContent,
+                nextContent: updateOwnerContent,
+              }))
+            ) {
+              return undefined;
+            }
+            await syncDirectoryIfSupported(path.dirname(absolutePath));
+            if (
+              !(await rewriteMemoryHostEventArtifactIfUnchanged({
+                workspaceRoot,
+                relativePath: owner.relativePath,
+                expectedIdentity: ownership.identity,
+                nextContent: content,
+              }))
+            ) {
+              return undefined;
+            }
+            await syncDirectoryIfSupported(path.dirname(absolutePath));
+            expectedOwnerContent = updateOwnerContent;
           }
-          throw error;
+          if (ownership.content !== content || ownership.needsFinalize) {
+            if (
+              !(await rewriteMemoryHostEventArtifactIfUnchanged({
+                workspaceRoot,
+                relativePath: owner.ownerRelativePath,
+                expectedContent: expectedOwnerContent,
+                nextContent: memoryHostEventExportOwnerContent(owner, {
+                  currentSha256: contentSha256,
+                  identity: ownership.identity,
+                }),
+              }))
+            ) {
+              return undefined;
+            }
+            await syncDirectoryIfSupported(path.dirname(absolutePath));
+          }
         }
-      } else if (ownership.content !== content) {
-        publishedIdentity = ownership.identity;
-        try {
-          const updateOwnerContent = memoryHostEventExportOwnerContent(owner, {
-            pendingSha256: contentSha256,
-            identity: ownership.identity,
-            ...(ownership.content === undefined
-              ? {}
-              : { currentSha256: sha256Hex(ownership.content) }),
-          });
-          const currentOwnerContent = memoryHostEventExportOwnerContent(owner, {
-            currentSha256: contentSha256,
-            identity: ownership.identity,
-          });
-          if (
-            !(await rewriteMemoryHostEventArtifactIfUnchanged({
-              workspaceRoot,
-              relativePath: owner.ownerRelativePath,
-              expectedContent: ownership.ownerContent,
-              nextContent: updateOwnerContent,
-            }))
-          ) {
-            return undefined;
-          }
-          await syncDirectoryIfSupported(path.dirname(absolutePath));
-          if (
-            !(await rewriteMemoryHostEventArtifactIfUnchanged({
-              workspaceRoot,
-              relativePath: owner.relativePath,
-              expectedIdentity: ownership.identity,
-              nextContent: content,
-            }))
-          ) {
-            return undefined;
-          }
-          await syncDirectoryIfSupported(path.dirname(absolutePath));
-          if (
-            !(await rewriteMemoryHostEventArtifactIfUnchanged({
-              workspaceRoot,
-              relativePath: owner.ownerRelativePath,
-              expectedContent: updateOwnerContent,
-              nextContent: currentOwnerContent,
-            }))
-          ) {
-            return undefined;
-          }
-          await syncDirectoryIfSupported(path.dirname(absolutePath));
-        } catch (error) {
-          if (isWorkspaceWriteUnavailable(error)) {
-            return undefined;
-          }
-          throw error;
+      } catch (error) {
+        if (isWorkspaceWriteUnavailable(error)) {
+          return undefined;
         }
-      } else if (ownership.needsFinalize) {
-        publishedIdentity = ownership.identity;
-        try {
-          if (
-            !(await rewriteMemoryHostEventArtifactIfUnchanged({
-              workspaceRoot,
-              relativePath: owner.ownerRelativePath,
-              expectedContent: ownership.ownerContent,
-              nextContent: memoryHostEventExportOwnerContent(owner, {
-                currentSha256: contentSha256,
-                identity: ownership.identity,
-              }),
-            }))
-          ) {
-            return undefined;
-          }
-          await syncDirectoryIfSupported(path.dirname(absolutePath));
-        } catch (error) {
-          if (isWorkspaceWriteUnavailable(error)) {
-            return undefined;
-          }
-          throw error;
-        }
-      } else {
-        publishedIdentity = ownership.identity;
+        throw error;
       }
       if (storedEvents.length === 0 || !publishedIdentity) {
         return undefined;
@@ -455,6 +366,21 @@ async function listMemoryWorkspacePublicArtifacts(params: {
   agentIds: string[];
 }): Promise<MemoryPluginPublicArtifact[]> {
   const artifacts: MemoryPluginPublicArtifact[] = [];
+  const addArtifact = (
+    kind: MemoryPluginPublicArtifact["kind"],
+    relativePath: string,
+    absolutePath: string,
+    contentType: MemoryPluginPublicArtifact["contentType"] = "markdown",
+  ) => {
+    artifacts.push({
+      kind,
+      workspaceDir: params.workspaceDir,
+      relativePath,
+      absolutePath,
+      agentIds: [...params.agentIds],
+      contentType,
+    });
+  };
   const workspaceEntries = new Set(
     (await fs.readdir(params.workspaceDir, { withFileTypes: true }).catch(() => []))
       .filter((entry) => entry.isFile())
@@ -463,48 +389,33 @@ async function listMemoryWorkspacePublicArtifacts(params: {
 
   if (workspaceEntries.has("MEMORY.md")) {
     const absolutePath = path.join(params.workspaceDir, "MEMORY.md");
-    artifacts.push({
-      kind: "memory-root",
-      workspaceDir: params.workspaceDir,
-      relativePath: "MEMORY.md",
-      absolutePath,
-      agentIds: [...params.agentIds],
-      contentType: "markdown",
-    });
+    addArtifact("memory-root", "MEMORY.md", absolutePath);
   }
 
   const memoryDir = path.join(params.workspaceDir, "memory");
-  for (const absolutePath of await listMarkdownFilesRecursive(memoryDir)) {
+  const memoryFiles = await walkDirectory(memoryDir, {
+    symlinks: "skip",
+    include: (entry) => entry.kind === "file" && entry.name.endsWith(".md"),
+  });
+  for (const { path: absolutePath } of memoryFiles.entries.toSorted((left, right) =>
+    left.path.localeCompare(right.path),
+  )) {
     const relativePath = path.relative(params.workspaceDir, absolutePath).replace(/\\/g, "/");
-    artifacts.push({
-      kind: relativePath.startsWith("memory/dreaming/") ? "dream-report" : "daily-note",
-      workspaceDir: params.workspaceDir,
+    addArtifact(
+      relativePath.startsWith("memory/dreaming/") ? "dream-report" : "daily-note",
       relativePath,
       absolutePath,
-      agentIds: [...params.agentIds],
-      contentType: "markdown",
-    });
+    );
   }
 
   const eventExport = await materializeMemoryHostEventExport({
     workspaceDir: params.workspaceDir,
   });
   if (eventExport) {
-    artifacts.push({
-      kind: "event-log",
-      workspaceDir: params.workspaceDir,
-      relativePath: eventExport.relativePath,
-      absolutePath: eventExport.absolutePath,
-      agentIds: [...params.agentIds],
-      contentType: "json",
-    });
+    addArtifact("event-log", eventExport.relativePath, eventExport.absolutePath, "json");
   }
 
-  const deduped = new Map<string, MemoryPluginPublicArtifact>();
-  for (const artifact of artifacts) {
-    deduped.set(`${artifact.workspaceDir}\0${artifact.relativePath}\0${artifact.kind}`, artifact);
-  }
-  return [...deduped.values()];
+  return artifacts;
 }
 
 /** Lists public memory artifacts across all configured memory workspaces. */

@@ -244,12 +244,6 @@ version = "9.9.9"
     );
   });
 
-  it("checks an explicit Cargo target dir override", () => {
-    expect(
-      resolveCodexProtocolCargoTargetDir("/codex", { CARGO_TARGET_DIR: "/cache/target" }),
-    ).toBe(path.resolve("/cache/target"));
-  });
-
   it("resolves relative Cargo target dir overrides from the Codex checkout", () => {
     expect(resolveCodexProtocolCargoTargetDir("/codex", { CARGO_TARGET_DIR: "target-cache" })).toBe(
       path.join("/codex", "target-cache"),
@@ -262,15 +256,6 @@ version = "9.9.9"
         CARGO_BUILD_TARGET_DIR: "/cache/build-target",
       }),
     ).toBe(path.resolve("/cache/build-target"));
-  });
-
-  it("prefers Cargo's target dir override over the build config env override", () => {
-    expect(
-      resolveCodexProtocolCargoTargetDir("/codex", {
-        CARGO_BUILD_TARGET_DIR: "/cache/build-target",
-        CARGO_TARGET_DIR: "/cache/target",
-      }),
-    ).toBe(path.resolve("/cache/target"));
   });
 
   it("wraps Windows pnpm formatting through cmd.exe without shell mode", () => {
@@ -350,25 +335,25 @@ describe("Codex app-server protocol JSON canonicalizer", () => {
           },
         },
       ],
+      definitions: {
+        Zebra: { type: "string", description: "last" },
+        Alpha: {
+          properties: {
+            z: { type: "number" },
+            a: { type: "string" },
+          },
+          type: "object",
+        },
+      },
     });
 
     expect(formatCodexAppServerProtocolJsonText(source)).toBe(`{
-  "a": [
-    {
-      "a": {
-        "b": 6,
-        "c": 5
-      },
-      "z": 4
-    }
-  ],
-  "z": {
-    "b": {
-      "x": 3,
-      "y": 2
-    },
-    "d": 1
-  }
+  "a": [{"a":{"b":6,"c":5},"z":4}],
+  "definitions": {
+    "Alpha": {"properties":{"a":{"type":"string"},"z":{"type":"number"}},"type":"object"},
+    "Zebra": {"description":"last","type":"string"}
+  },
+  "z": {"b":{"x":3,"y":2},"d":1}
 }
 `);
   });

@@ -3,19 +3,20 @@ import {
   type DispatchProcessedNote,
 } from "../../auto-reply/reply/dispatch-processed-outcome.js";
 import { clearChannelHistoryIfEnabled } from "../../auto-reply/reply/history.js";
-import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import {
   createDiagnosticTraceContextFromActiveScope,
   runWithDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { getPluginServiceSchedulerBinding } from "../../plugins/service-scheduler-binding.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { getAgentDatabaseStartupAdmission } from "../../state/agent-database-startup.js";
 import { isRecentOutboundMessageIdentity } from "../message/outbound-echo.js";
 import { recordChannelBotPairLoopAndCheckSuppression } from "./bot-loop-protection.js";
 import {
   EMPTY_CHANNEL_TURN_DISPATCH_COUNTS,
   hasVisibleChannelTurnDispatch,
   type ChannelTurnDispatchResultLike,
-  type ChannelTurnVisibleDeliverySignals,
 } from "./dispatch-result.js";
 import { deliverPendingDeliveryNotice } from "./pending-delivery-notice.js";
 import type {
@@ -27,19 +28,22 @@ import type {
   PreparedChannelTurn,
 } from "./types.js";
 
-const NO_ADDITIONAL_DELIVERY_SIGNALS: ChannelTurnVisibleDeliverySignals = {};
 const log = createSubsystemLogger("channels/turn/execution");
 
-function emit(params: {
-  log?: (event: ChannelTurnLogEvent) => void;
-  event: Omit<ChannelTurnLogEvent, "channel" | "accountId">;
-  channel: string;
-  accountId?: string;
-}) {
+function emit(
+  params: Pick<
+    PreparedChannelTurn,
+    "log" | "channel" | "accountId" | "messageId" | "ctxPayload" | "routeSessionKey" | "admission"
+  >,
+  event: Pick<ChannelTurnLogEvent, "stage" | "event"> & Partial<ChannelTurnLogEvent>,
+) {
   params.log?.({
     channel: params.channel,
     accountId: params.accountId,
-    ...params.event,
+    messageId: params.messageId,
+    sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
+    admission: params.admission?.kind ?? "dispatch",
+    ...event,
   });
 }
 
@@ -52,21 +56,6 @@ function clearPendingHistoryAfterTurn(params?: ChannelTurnHistoryFinalizeOptions
     historyKey: params.historyKey,
     limit: params.limit,
   });
-}
-
-function resolveObserveOnlyDispatchResult<TDispatchResult>(
-  params: PreparedChannelTurn<TDispatchResult>,
-): TDispatchResult {
-  return (params.observeOnlyDispatchResult ?? {
-    queuedFinal: false,
-    counts: EMPTY_CHANNEL_TURN_DISPATCH_COUNTS,
-  }) as TDispatchResult;
-}
-
-function isSystemChannelTurn(ctx: FinalizedMsgContext): boolean {
-  return (
-    ctx.Provider === "heartbeat" || ctx.Provider === "cron-event" || ctx.Provider === "exec-event"
-  );
 }
 
 function resolveRecordSessionKey<TDispatchResult>(
@@ -96,7 +85,10 @@ function maybeWarnZeroCountVisibleDispatch<TDispatchResult>(
     log?: (event: ChannelTurnLogEvent) => void;
   },
 ): void {
-  if (params.admission?.kind === "observeOnly" || isSystemChannelTurn(params.ctxPayload)) {
+  if (
+    params.admission?.kind === "observeOnly" ||
+    params.ctxPayload.InternalTurnSource !== undefined
+  ) {
     return;
   }
   const dispatchResult = params.dispatchResult as ChannelTurnDispatchResultLike;
@@ -104,7 +96,7 @@ function maybeWarnZeroCountVisibleDispatch<TDispatchResult>(
     return;
   }
   // The canonical visible signal includes observed delivery paths with zero queued counts.
-  if (hasVisibleChannelTurnDispatch(dispatchResult, NO_ADDITIONAL_DELIVERY_SIGNALS)) {
+  if (hasVisibleChannelTurnDispatch(dispatchResult)) {
     return;
   }
   // The processed outcome names the dispatch branch that produced the silence,
@@ -121,40 +113,25 @@ function maybeWarnZeroCountVisibleDispatch<TDispatchResult>(
         params.ctxPayload.SessionKey ?? params.routeSessionKey
       } cause=${cause ?? "unknown"}`,
   );
-  emit({
-    ...params,
-    event: {
-      stage: "dispatch",
-      event: "warning",
-      messageId: params.messageId,
-      sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
-      admission: params.admission?.kind ?? "dispatch",
-      reason: "zero-count-visible-dispatch",
-    },
+  emit(params, {
+    stage: "dispatch",
+    event: "warning",
+    reason: "zero-count-visible-dispatch",
   });
 }
 
-function resolveBotLoopProtectionDrop<TDispatchResult>(
+function dropPreparedChannelTurn<TDispatchResult>(
   params: PreparedChannelTurn<TDispatchResult>,
-): ChannelTurnResult<TDispatchResult> | undefined {
-  if (!params.botLoopProtection) {
-    return undefined;
-  }
-  const botLoopResult = recordChannelBotPairLoopAndCheckSuppression(params.botLoopProtection);
-  if (!botLoopResult.suppressed) {
-    return undefined;
-  }
-  const admission: ChannelTurnAdmission = { kind: "drop", reason: "bot-loop-protection" };
-  emit({
-    ...params,
-    event: {
-      stage: "authorize",
-      event: "drop",
-      messageId: params.messageId,
-      sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
-      admission: admission.kind,
-      reason: admission.reason,
-    },
+  reason: "bot-loop-protection" | "outbound-echo",
+  messageId = params.messageId,
+): ChannelTurnResult<TDispatchResult> {
+  const admission: ChannelTurnAdmission = { kind: "drop", reason };
+  emit(params, {
+    stage: "authorize",
+    event: "drop",
+    messageId,
+    admission: admission.kind,
+    reason: admission.reason,
   });
   return {
     admission,
@@ -200,24 +177,7 @@ function resolveOutboundEchoDrop<TDispatchResult>(
   if (!matchedMessageId && !matchesSource) {
     return undefined;
   }
-  const admission: ChannelTurnAdmission = { kind: "drop", reason: "outbound-echo" };
-  emit({
-    ...params,
-    event: {
-      stage: "authorize",
-      event: "drop",
-      messageId: params.messageId ?? matchedMessageId,
-      sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
-      admission: admission.kind,
-      reason: admission.reason,
-    },
-  });
-  return {
-    admission,
-    dispatched: false,
-    ctxPayload: params.ctxPayload,
-    routeSessionKey: params.routeSessionKey,
-  };
+  return dropPreparedChannelTurn(params, "outbound-echo", params.messageId ?? matchedMessageId);
 }
 
 export async function runPreparedChannelTurnCore<
@@ -245,8 +205,11 @@ async function runPreparedChannelTurnCoreInTrace<
     await params.runDispatchLifecycle?.onDispatchSkipped("outboundEcho");
     return outboundEchoDrop;
   }
-  const botLoopDrop = resolveBotLoopProtectionDrop(params);
-  if (botLoopDrop) {
+  if (
+    params.botLoopProtection &&
+    recordChannelBotPairLoopAndCheckSuppression(params.botLoopProtection).suppressed
+  ) {
+    const botLoopDrop = dropPreparedChannelTurn(params, "bot-loop-protection");
     clearPendingHistoryAfterTurn(params.history);
     await params.runDispatchLifecycle?.onDispatchSkipped("botLoopProtection");
     return botLoopDrop;
@@ -257,27 +220,38 @@ async function runPreparedChannelTurnCoreInTrace<
   // path before the next group turn can replay stale context.
   try {
     const recordSessionKey = resolveRecordSessionKey(params);
-    if (params.ctxPayload.SessionTranscriptContext) {
-      const { mergeSessionTranscriptContext } =
-        await import("../inbound-event/session-transcript-context.runtime.js");
-      await mergeSessionTranscriptContext({
-        agentId: params.ctxPayload.AgentId,
-        ctx: params.ctxPayload,
-        sessionKey: recordSessionKey,
-        storePath: params.storePath,
-      });
-    }
-    emit({
-      ...params,
-      event: {
-        stage: "record",
-        event: "start",
-        messageId: params.messageId,
-        sessionKey: recordSessionKey,
+    const emitStage = (
+      stage: "record" | "dispatch",
+      event: "start" | "done" | "error",
+      error?: unknown,
+    ) =>
+      emit(params, {
+        stage,
+        event,
+        ...(stage === "record" ? { sessionKey: recordSessionKey } : {}),
         admission: admission.kind,
-      },
-    });
+        ...(event === "error" ? { error } : {}),
+      });
     try {
+      const agentId =
+        params.ctxPayload.AgentId ?? parseAgentSessionKey(params.routeSessionKey)?.agentId;
+      if (agentId) {
+        await getAgentDatabaseStartupAdmission()?.waitForAgentPreparation(agentId, {
+          signal: getPluginServiceSchedulerBinding()?.().signal,
+        });
+      }
+      if (params.ctxPayload.SessionTranscriptContext) {
+        const { mergeSessionTranscriptContext } =
+          await import("../inbound-event/session-transcript-context.runtime.js");
+        await mergeSessionTranscriptContext({
+          agentId: params.ctxPayload.AgentId,
+          ctx: params.ctxPayload,
+          sessionKey: recordSessionKey,
+          storePath: params.storePath,
+        });
+      }
+      emitStage("record", "start");
+      params.assertAuthority?.();
       await params.recordInboundSession({
         storePath: params.storePath,
         sessionKey: recordSessionKey,
@@ -287,31 +261,13 @@ async function runPreparedChannelTurnCoreInTrace<
         updateLastRoute: params.record?.updateLastRoute,
         onRecordError: params.record?.onRecordError ?? (() => undefined),
         trackSessionMetaTask: params.record?.trackSessionMetaTask,
+        assertAuthority: params.assertAuthority,
       });
-      emit({
-        ...params,
-        event: {
-          stage: "record",
-          event: "done",
-          messageId: params.messageId,
-          sessionKey: recordSessionKey,
-          admission: admission.kind,
-        },
-      });
+      emitStage("record", "done");
       await params.afterRecord?.();
       await deliverPendingDeliveryNotice(recordSessionKey, params.storePath);
     } catch (err) {
-      emit({
-        ...params,
-        event: {
-          stage: "record",
-          event: "error",
-          messageId: params.messageId,
-          sessionKey: recordSessionKey,
-          admission: admission.kind,
-          error: err,
-        },
-      });
+      emitStage("record", "error", err);
       try {
         await params.onPreDispatchFailure?.(err);
       } catch {
@@ -320,26 +276,21 @@ async function runPreparedChannelTurnCoreInTrace<
       throw err;
     }
 
-    emit({
-      ...params,
-      event: {
-        stage: "dispatch",
-        event: "start",
-        messageId: params.messageId,
-        sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
-        admission: admission.kind,
-      },
-    });
+    emitStage("dispatch", "start");
     let dispatchResult: TDispatchResult;
     try {
-      if (admission.kind === "observeOnly" && !options.suppressObserveOnlyDispatch) {
-        await params.runDispatch();
-      } else if (admission.kind === "observeOnly") {
-        await params.runDispatchLifecycle?.onDispatchSkipped("observeOnly");
-      }
+      params.assertAuthority?.();
       let processedOutcome: DispatchProcessedNote | undefined;
       if (admission.kind === "observeOnly") {
-        dispatchResult = resolveObserveOnlyDispatchResult(params);
+        if (options.suppressObserveOnlyDispatch) {
+          await params.runDispatchLifecycle?.onDispatchSkipped("observeOnly");
+        } else {
+          await params.runDispatch();
+        }
+        dispatchResult = (params.observeOnlyDispatchResult ?? {
+          queuedFinal: false,
+          counts: EMPTY_CHANNEL_TURN_DISPATCH_COUNTS,
+        }) as TDispatchResult;
       } else {
         // The sink carries the dispatch's terminal outcome to the warning below
         // without widening the plugin-visible dispatch result contract.
@@ -354,29 +305,10 @@ async function runPreparedChannelTurnCoreInTrace<
         processedOutcome,
       });
     } catch (err) {
-      emit({
-        ...params,
-        event: {
-          stage: "dispatch",
-          event: "error",
-          messageId: params.messageId,
-          sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
-          admission: admission.kind,
-          error: err,
-        },
-      });
+      emitStage("dispatch", "error", err);
       throw err;
     }
-    emit({
-      ...params,
-      event: {
-        stage: "dispatch",
-        event: "done",
-        messageId: params.messageId,
-        sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
-        admission: admission.kind,
-      },
-    });
+    emitStage("dispatch", "done");
 
     return {
       admission,

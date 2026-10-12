@@ -1,11 +1,44 @@
 ---
 name: control-ui-e2e
-description: Use when testing, fixing, or extending the OpenClaw Control UI GUI with Vitest + Playwright end-to-end checks, mocked Gateway WebSocket flows, mocked dashboard runs, screenshots/videos, or agent-verifiable browser proof.
+description: Use when designing, testing, fixing, or extending the OpenClaw Control UI GUI, including UI stress-test galleries with feedback inputs, Vitest + Playwright end-to-end checks, mocked Gateway flows, screenshots/videos, or agent-verifiable browser proof.
 ---
 
 # Control UI E2E
 
-Use this for Control UI changes that need a real browser flow with deterministic Gateway data.
+Use this for Control UI design feedback and real browser flows with deterministic Gateway data.
+
+## UI Stress Test
+
+For substantial UI changes, build a local HTML stress-test gallery early so the
+user can compare meaningful states and give feedback against concrete examples.
+Use it when changing layouts, interactions, or components with multiple states;
+small copy or icon edits can skip it when a gallery adds no useful comparison.
+
+1. Derive examples from the affected components and their data contracts. Cover
+   the relevant normal, loading, empty, error, unavailable, permission, selected,
+   and expanded states, plus long text or dense content where they stress the
+   layout. Show mutually exclusive states separately; label proposed states that
+   the current implementation does not support.
+2. Build one browser-openable HTML overview with stable example IDs, short state
+   labels, and enough context to understand each example. Prefer real components
+   and deterministic mock fixtures. Label static or approximate renderings and
+   link to the running UI for interactions they cannot reproduce. Keep generated
+   galleries in task-owned artifact storage rather than committing them by default.
+3. Give every example a labeled feedback input. Persist feedback locally across
+   refreshes using a gallery-specific storage key and stable example IDs. Include
+   a **Copy feedback** action that exports the example IDs, state labels, and
+   comments as Markdown or plain text for the user to return to the conversation.
+4. Open the gallery in the available preview browser and share its URL or file
+   path. Keep the same gallery and example IDs during iteration, preserving
+   existing comments as examples change. Apply the user's feedback to both the
+   gallery and the implementation so they remain comparable.
+5. Before requesting feedback, inspect the rendered examples at relevant viewport
+   sizes and verify that feedback survives a refresh and exports with the correct
+   example labels. Report any unsupported states or preview limitations.
+
+The gallery supports design review; it does not replace focused behavior tests
+or inspected before/after proof from the running UI. Preserve final proof using
+the fresh capture directories described below, separately from the evolving gallery.
 
 ## Test Shape
 
@@ -28,20 +61,32 @@ node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --c
 pnpm test:ui:e2e
 ```
 
-Do not install dependencies into a linked/sparse worktree. For broad GUI proof
-or dependency-heavy checks, use a prepared normal checkout on the current
-dedicated Linux worker when it has browser support; otherwise use
-Testbox/Crabbox instead of running a wide lane on a workstation.
+Use an existing ready dependency installation or a prepared normal checkout;
+do not reconcile a shared install while other jobs use it. Follow
+`$openclaw-testing`: trusted development proof may run locally, and remote
+proof needs a browser/platform, clean-environment, or source-isolation reason.
 
 ## Visual Proof Default
 
-When running mocked Control UI/dashboard validation for a user-facing feature, produce visual proof by default unless the user explicitly opts out.
+For appearance changes, capture inspected before/after visual evidence. For
+other behavior, use the clearest appropriate boundary proof; a video and a
+screenshot set are not mandatory when assertions already demonstrate the change.
 
 - Keep the Vitest E2E assertions deterministic; do not commit generated screenshots or videos.
+- The shared suite disables Chromium partial rasterization and GPU rasterization to avoid observed paint-history-dependent edge pixels. Exact repeat comparisons are still required before claiming reproducibility.
+- For transient states such as **Saved**, install `page.clock` before the fixture, pause it with `pauseVirtualClock`, and advance only the fixture work needed to enter that state. `setFixedTime` alone does not pause timers. Capture readiness uses native layout delivery without advancing the fixture clock.
+- For stills, use `takeControlUiScreenshotFrame` from `ui/src/test-helpers/control-ui-e2e-screenshot.ts` with explicit semantic content and `animations: "disabled"`. Pass viewport changes and the intended scroll target through its `viewport`/`scrollTo` options; it verifies retained centering, viewport/scroll-clip intersection, and settled layout, fonts, and visible images.
+- Pass all related element locators in `elements`, then save the returned page PNG and crops from that single frame. Crops enclose fractional bounds in measured PNG pixels; dimensions and unchanged bounds are asserted. Do not combine separate page and locator screenshots as same-frame evidence.
+- The default current-frame mode and existing viewport/element helpers preserve recording and sampled animation behavior. Static preparation stays active through bounds measurement and the unclipped capture; full-page proofs must fit the viewport-frame dimensions.
 - After or alongside the focused E2E test, run the mocked Control UI app when available, for example `pnpm dev:ui:mock -- --port <port>`.
-- Drive Chromium with Playwright against the local mock URL and capture a video plus screenshots for each meaningful state: initial view, interaction input, result state, and final/paginated/selected state.
+- Drive Chromium with Playwright against the local mock URL. Capture the states
+  needed to demonstrate the change, using screenshots or a short video.
 - Use `browser.newContext({ recordVideo: { dir, size }, viewport })`, `page.screenshot({ path })`, and close the context before reporting the video path.
-- Put artifacts under `.artifacts/control-ui-e2e/<short-feature-name>/` or another clearly named local temp directory, and report the absolute paths in the final answer.
+- The session-host command-state proof uses viewport-only captures, verified with Playwright 1.62.1 and Chrome 151.0.7922.34 (Linux real Gateway; macOS arm64 synthetic reproduction). Other recording owners have not been migrated or certified by this fix; verify their required screenshot content and finalized video separately. See [the verified capture path and upstream limitation](https://docs.openclaw.ai/reference/test#screenshots-during-chromium-recordings).
+- Allocate retained proof with `createControlUiE2eArtifactDir(scope, parentDir?)` from `ui/src/test-helpers/control-ui-e2e-artifacts.ts`. Each call atomically creates a fresh directory and logs its actual path. An explicit parent wins, then the trimmed existing `OPENCLAW_UI_E2E_ARTIFACT_DIR`, then the repository's `.artifacts/control-ui-e2e` parent. Existing custom output controls select parents; do not add or rewrite env vars to enable capture.
+- Allocate during the test/scenario or `beforeEach`, once per attempt; standalone scripts allocate once per invocation. Pass the owner explicitly to shared capture helpers. Keep the original gates, feature/stage names, viewports, waits, and recording options. Use distinct filenames for distinct stages and keep screenshots, reports, and video together.
+- Retain successful and failed evidence. Report actual allocated paths, including relocated filename overrides. Manually delete only exact owned directories after review; never clear shared parents before a replay. Disposable build/media fixtures and owned temporary raw video may keep their cleanup. New synthetic captures do not recover overwritten evidence.
+- Timeout diagnostics use fresh children beneath their existing diagnostic parent. Mantis retains every capture attempt under an invocation-owned directory and refuses to overwrite reports. Real-Gateway suites, `chat-outbox-*`, and `chat-attachment-read-lifecycle` remain separate owners; coordinate before claiming replay-safe retention there.
 - Treat recording as validation, not only demo capture. If the recorder fails or shows surprising behavior, stop, fix the behavior, add or update a regression test, then rerecord.
 - If visual proof is blocked, state the exact blocker and still report the textual E2E evidence.
 
@@ -67,11 +112,36 @@ await page.getByText("Done.").waitFor();
 
 Extend `installMockGateway` with typed scenario options or method responses when a new flow needs more Gateway surface.
 
+## Run Inspector evidence
+
+Use `withControlUiRunInspector` from `ui/src/test-helpers/control-ui-run-inspector.ts`
+for collection. It owns a separate page, closes it on success or failure, and leaves
+the caller's Chat page and unsent draft in place. Use `preparePage` for a mock
+Gateway or the campaign's existing per-tab authentication setup; a shared browser
+context does not copy another tab's session-storage token.
+The helper uses `RunInspectorSelector` and `activityRunInspectorSelectorHref` from
+the rendered component's model, including a selected receipt's decision cursor.
+
+The rendered panel's `data-run-id` and `data-execution-id` identify the returned
+present identity, not just the requested URL. The selected detail's
+`data-receipt-selector-id` is `DecisionReceiptDisplayV1.selectorId`. Missing or
+ambiguous identity and missing selected receipts must not be treated as matches.
+These decision selectors are separate from the optional terminal transcript key
+`agent.wait.terminalReceipt.assistantTranscriptIdempotencyKey`; never manufacture
+that key from a DOM selector or history row, or claim its absence is repaired by
+Inspector evidence. For sidebar run state, the current accessible label is
+`Active run`, not `Running`.
+
 ## Standalone Recording
+
+For narrated captions, eased target zooms, or fast-forwarded pauses, use the
+[proof-video dev skill](../proof-video/SKILL.md). Its standalone template records
+raw evidence plus a cue sidecar and renders a captioned MP4 with system ffmpeg;
+keep the raw capture and attach the inspected polished video.
 
 When recording an already-running mocked Control UI URL, use a temporary Playwright script or `playwright test` spec and keep the recording flow focused:
 
 - Open the mock URL, interact through stable `data-*` selectors or user-facing role selectors, and wait on asserted states instead of relying on fixed sleeps.
 - Assert both visible UI state and mocked Gateway traffic for request-driven flows. For example, verify the expected count/row is visible and that `sessions.list` was called with the expected `search`, `offset`, and `limit`.
 - Use short sleeps only after assertions to make the captured video readable.
-- Store the generated video under `.artifacts/control-ui-e2e/<feature>/`; do not commit it.
+- Store the generated video in the invocation's fresh allocated directory; do not commit it or remove older captures.

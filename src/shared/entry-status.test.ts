@@ -3,8 +3,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { evaluateEntryRequirementsForCurrentPlatform } from "./entry-status.js";
 
-function setPlatform(platform: NodeJS.Platform): void {
-  mockProcessPlatform(platform);
+type EntryParams = Parameters<typeof evaluateEntryRequirementsForCurrentPlatform>[0];
+
+function evaluate(overrides: Partial<EntryParams>) {
+  return evaluateEntryRequirementsForCurrentPlatform({
+    always: false,
+    entry: {},
+    hasLocalBin: () => false,
+    isEnvSatisfied: () => false,
+    isConfigSatisfied: () => false,
+    ...overrides,
+  });
 }
 
 afterEach(() => {
@@ -13,14 +22,13 @@ afterEach(() => {
 
 describe("shared/entry-status", () => {
   it("combines metadata presentation fields with evaluated requirements", () => {
-    setPlatform("linux");
+    mockProcessPlatform("linux");
 
-    const result = evaluateEntryRequirementsForCurrentPlatform({
-      always: false,
+    const result = evaluate({
       entry: {
         metadata: {
           emoji: "🦀",
-          homepage: "https://openclaw.ai",
+          homepage: " https://openclaw.ai ",
           requires: {
             bins: ["bun"],
             anyBins: ["ffmpeg", "sox"],
@@ -38,7 +46,6 @@ describe("shared/entry-status", () => {
       remote: {
         hasAnyBin: (bins) => bins.includes("sox"),
       },
-      isEnvSatisfied: () => false,
       isConfigSatisfied: (path) => path === "gateway.bind",
     });
 
@@ -64,17 +71,15 @@ describe("shared/entry-status", () => {
     });
   });
 
-  it("uses process.platform in the current-platform wrapper", () => {
-    setPlatform("darwin");
+  it("evaluates OS requirements against process.platform", () => {
+    mockProcessPlatform("darwin");
 
-    const result = evaluateEntryRequirementsForCurrentPlatform({
-      always: false,
+    const result = evaluate({
       entry: {
         metadata: {
           os: ["darwin"],
         },
       },
-      hasLocalBin: () => false,
       isEnvSatisfied: () => true,
       isConfigSatisfied: () => true,
     });
@@ -83,10 +88,10 @@ describe("shared/entry-status", () => {
     expect(result.missing.os).toStrictEqual([]);
   });
 
-  it("pulls metadata and frontmatter from entry objects in the entry wrapper", () => {
-    setPlatform("linux");
+  it("combines frontmatter presentation with always-on requirements", () => {
+    mockProcessPlatform("linux");
 
-    const result = evaluateEntryRequirementsForCurrentPlatform({
+    const result = evaluate({
       always: true,
       entry: {
         metadata: {
@@ -99,9 +104,6 @@ describe("shared/entry-status", () => {
           emoji: "🙂",
         },
       },
-      hasLocalBin: () => false,
-      isEnvSatisfied: () => false,
-      isConfigSatisfied: () => false,
     });
 
     expect(result).toEqual({
@@ -126,34 +128,42 @@ describe("shared/entry-status", () => {
     });
   });
 
-  it("returns empty requirements when metadata and frontmatter are missing", () => {
-    setPlatform("linux");
-
-    const result = evaluateEntryRequirementsForCurrentPlatform({
-      always: false,
-      entry: {},
-      hasLocalBin: () => false,
-      isEnvSatisfied: () => false,
-      isConfigSatisfied: () => false,
+  it.each([
+    {
+      name: "blank metadata suppresses frontmatter",
+      entry: {
+        metadata: { emoji: "", homepage: "   " },
+        frontmatter: { emoji: "🙂", homepage: "https://example.com" },
+      },
+      emoji: undefined,
+      homepage: undefined,
+    },
+    {
+      name: "URL alias is trimmed when higher-priority fields are absent",
+      entry: { frontmatter: { emoji: " ", url: " https://openclaw.ai/install " } },
+      emoji: " ",
+      homepage: "https://openclaw.ai/install",
+    },
+    {
+      name: "blank homepage suppresses lower-priority aliases",
+      entry: {
+        frontmatter: {
+          homepage: " ",
+          website: "https://docs.openclaw.ai",
+          url: "https://openclaw.ai/install",
+        },
+      },
+      emoji: undefined,
+      homepage: undefined,
+    },
+  ])("preserves presentation precedence: $name", ({ entry, emoji, homepage }) => {
+    const result = evaluate({
+      entry,
     });
 
-    expect(result).toEqual({
-      required: {
-        bins: [],
-        anyBins: [],
-        env: [],
-        config: [],
-        os: [],
-      },
-      missing: {
-        bins: [],
-        anyBins: [],
-        env: [],
-        config: [],
-        os: [],
-      },
-      requirementsSatisfied: true,
-      configChecks: [],
-    });
+    expect(result.emoji).toBe(emoji);
+    expect(result.homepage).toBe(homepage);
+    expect(Object.hasOwn(result, "emoji")).toBe(emoji !== undefined);
+    expect(Object.hasOwn(result, "homepage")).toBe(homepage !== undefined);
   });
 });

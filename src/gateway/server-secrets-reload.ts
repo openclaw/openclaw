@@ -1,6 +1,9 @@
-// Owns serialized secrets snapshot replacement and exact channel-account lifecycle recovery.
+// Owns serialized secrets snapshot replacement and dependent runtime lifecycle recovery.
+import {
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isTruthyEnvValue } from "../infra/env.js";
 import {
   isTrustedSecretSurfaceUnavailableError,
   listActiveCredentialDegradedOwners,
@@ -18,18 +21,15 @@ import {
   type GatewayReloadPlan,
 } from "./config-reload-plan.js";
 import type { ChannelAutostartSuppression, createChannelManager } from "./server-channels.js";
+import { refreshModelRuntimeAfterHotReload } from "./server-reload-model-runtime-scope.js";
 import {
-  captureSharedGatewaySessionGenerationOwnership,
-  claimSharedGatewaySessionGenerationIfOwned,
   disconnectStaleSharedGatewayAuthClients,
-  finalizeOwnedSharedGatewaySessionGeneration,
-  isSharedGatewaySessionGenerationOwnershipCurrent,
-  replaceOwnedSharedGatewaySessionGenerationState,
   type SharedGatewayAuthClient,
   type SharedGatewaySessionGenerationOwnership,
   type SharedGatewaySessionGenerationState,
 } from "./server-shared-auth-generation.js";
-import type { ActivateRuntimeSecrets } from "./server-startup-config.js";
+import { isChannelStartupSuppressedByEnvironment } from "./server-sidecar-startup-mode.js";
+import type { ActivateRuntimeSecrets } from "./server-startup-config.types.js";
 
 type ReloadSecretsResult = { warningCount: number };
 type ReloadSecretsOptions = { forceColdRefKeys?: ReadonlySet<string>; joinInFlight?: boolean };
@@ -38,6 +38,12 @@ type ReloadChannelTarget = {
   accountId?: string;
   credentialOwnerId?: string;
   inspectOnly?: boolean;
+};
+type SecretsReloadPublication = {
+  publishedSnapshotRevision: number;
+  generationOwnership: SharedGatewaySessionGenerationOwnership;
+  modelPublication: Promise<void>;
+  isCurrent: () => boolean;
 };
 
 export type GatewaySecretsReloaderParams = {
@@ -54,38 +60,33 @@ export type GatewaySecretsReloaderParams = {
   logChannels: { info: (message: string) => void };
 };
 
-async function activateSnapshotIfCurrent(
-  snapshot: PreparedSecretsRuntimeSnapshot,
-  expectedRevision: number,
-  options: { canActivate: () => boolean; onActivated: () => void },
-): Promise<number | null> {
-  const runtime = await import("../secrets/runtime.js");
-  if (
-    !options.canActivate() ||
-    !runtime.activateSecretsRuntimeSnapshotIfCurrent(snapshot, expectedRevision)
-  ) {
-    return null;
-  }
-  options.onActivated();
-  return runtime.getActiveSecretsRuntimeSnapshotRevision();
-}
-
-async function restoreSnapshotIfCurrent(
-  snapshot: PreparedSecretsRuntimeSnapshot,
-  expectedRevision: number,
-  ownedSnapshot: PreparedSecretsRuntimeSnapshot,
-  onActivated: () => void,
-): Promise<void> {
-  const runtime = await import("../secrets/runtime.js");
-  if (runtime.restoreSecretsRuntimeSnapshotIfCurrent(snapshot, expectedRevision, ownedSnapshot)) {
-    onActivated();
-  }
-}
-
 /** Keeps snapshot CAS, generation ownership, and exact account recovery in one transaction. */
 export function createGatewaySecretsReloader(params: GatewaySecretsReloaderParams) {
   const buildReloadPlan = params.buildReloadPlan ?? buildGatewayReloadPlan;
   const manager = params.channelManager;
+  const capturePublication = (
+    generationOwnership: SharedGatewaySessionGenerationOwnership,
+  ): SecretsReloadPublication => {
+    const publishedSnapshotRevision = getActiveSecretsRuntimeSnapshotRevisionState();
+    const runtimeConfig = getRuntimeConfigSnapshot();
+    if (!runtimeConfig) {
+      throw new Error("Secrets runtime activation did not publish config.");
+    }
+    const isCurrent = () =>
+      getActiveSecretsRuntimeSnapshotRevisionState() === publishedSnapshotRevision &&
+      getRuntimeConfigSnapshot() === runtimeConfig &&
+      params.sharedGatewaySessionGenerationState.owns(generationOwnership);
+    // This publisher retires captured model config synchronously at the secrets commit edge.
+    // Observe rejection immediately: activation may throw before the normal tail can await it.
+    const modelPublication = refreshModelRuntimeAfterHotReload({
+      config: runtimeConfig,
+      agentIds: undefined,
+      pluginMetadataSnapshot: undefined,
+      isPublicationCurrent: isCurrent,
+    });
+    void modelPublication.catch(() => undefined);
+    return { publishedSnapshotRevision, generationOwnership, modelPublication, isCurrent };
+  };
   let reloadInFlight: Promise<ReloadSecretsResult> | null = null;
   const runExclusiveReload = (
     fn: () => Promise<ReloadSecretsResult>,
@@ -110,28 +111,34 @@ export function createGatewaySecretsReloader(params: GatewaySecretsReloaderParam
   return (reloadOptions?: ReloadSecretsOptions) =>
     runExclusiveReload(async () => {
       let transaction:
-        | {
+        | (SecretsReloadPublication & {
             previousSnapshot: PreparedSecretsRuntimeSnapshot;
+            previousRuntimeSourceConfig: OpenClawConfig | undefined;
             previousGeneration: string | undefined;
             previousRequiredGeneration: string | undefined | null;
             prepared: PreparedSecretsRuntimeSnapshot;
             plan: GatewayReloadPlan;
             credentialOwners: DegradedSecretOwner[];
-            nextGeneration: string | undefined;
             generationChanged: boolean;
-            generationOwnership: SharedGatewaySessionGenerationOwnership;
-            publishedSnapshotRevision: number;
-          }
+          })
         | undefined;
       const touchedTargets: Array<{ target: ReloadChannelTarget; restarted: boolean }> = [];
       const startTarget = ({ channel, accountId }: ReloadChannelTarget) =>
         accountId
-          ? manager.startChannel(channel, accountId, { preserveManualStop: true })
-          : manager.startChannel(channel);
+          ? manager.startChannel(channel, accountId, {
+              reason: "secrets-reload",
+              preserveManualStop: true,
+            })
+          : manager.startChannel(channel, undefined, { reason: "secrets-reload" });
       const stopTarget = ({ channel, accountId }: ReloadChannelTarget) =>
         accountId
           ? manager.stopChannel(channel, accountId, { manual: false })
           : manager.stopChannel(channel);
+      const assertGenerationOwned = () => {
+        if (!transaction?.isCurrent()) {
+          throw new Error("secrets.reload was superseded by a newer config write");
+        }
+      };
 
       try {
         for (;;) {
@@ -140,9 +147,9 @@ export function createGatewaySecretsReloader(params: GatewaySecretsReloaderParam
             throw new Error("Secrets runtime snapshot is not active.");
           }
           const previousRevision = getActiveSecretsRuntimeSnapshotRevisionState();
-          const previousOwnership = captureSharedGatewaySessionGenerationOwnership(
-            params.sharedGatewaySessionGenerationState,
-          );
+          // Credential refresh must not promote catalog defaults into authored transport policy.
+          const previousRuntimeSourceConfig = getRuntimeConfigSourceSnapshot() ?? undefined;
+          const previousOwnership = params.sharedGatewaySessionGenerationState.capture();
           const previousGeneration = previousOwnership.generation;
           const previousRequiredGeneration = params.sharedGatewaySessionGenerationState.required;
           const prepared = await params.activateRuntimeSecrets(previousSnapshot.sourceConfig, {
@@ -160,80 +167,60 @@ export function createGatewaySecretsReloader(params: GatewaySecretsReloaderParam
           // File diagnostics have channel-owned lifetimes; capture each CAS attempt
           // immediately before publication so a superseded attempt cannot reuse owners.
           const credentialOwners = listActiveCredentialDegradedOwners();
-          let publishedSnapshotRevision: number | null = null;
-          let generationOwnership: SharedGatewaySessionGenerationOwnership | null = null;
           const claimGeneration = () => {
-            publishedSnapshotRevision = getActiveSecretsRuntimeSnapshotRevisionState();
-            generationOwnership = claimSharedGatewaySessionGenerationIfOwned(
-              params.sharedGatewaySessionGenerationState,
+            const generationOwnership = params.sharedGatewaySessionGenerationState.claim(
               previousOwnership,
               nextGeneration,
             );
+            if (!generationOwnership) {
+              throw new Error("Secrets runtime activation did not publish ownership.");
+            }
+            if (previousGeneration !== nextGeneration) {
+              disconnectStaleSharedGatewayAuthClients({
+                state: params.sharedGatewaySessionGenerationState,
+                clients: params.clients,
+                expectedGeneration: nextGeneration,
+                revokeSource: false,
+              });
+            }
+            transaction = {
+              ...capturePublication(generationOwnership),
+              previousSnapshot,
+              previousRuntimeSourceConfig,
+              previousGeneration,
+              previousRequiredGeneration,
+              prepared,
+              plan,
+              credentialOwners,
+              generationChanged: previousGeneration !== nextGeneration,
+            };
           };
           const ownsPreviousGeneration = () =>
-            isSharedGatewaySessionGenerationOwnershipCurrent(
-              params.sharedGatewaySessionGenerationState,
-              previousOwnership,
-            );
-          const activateIfCurrent = params.activateRuntimeSecrets.activatePreparedSnapshotIfCurrent;
-          if (activateIfCurrent) {
-            const activated = await activateIfCurrent(
-              prepared,
-              previousRevision,
-              { reason: "reload", activate: true },
-              claimGeneration,
-              ownsPreviousGeneration,
-            );
-            if (!activated) {
-              continue;
-            }
-          } else {
-            publishedSnapshotRevision = await activateSnapshotIfCurrent(
-              prepared,
-              previousRevision,
-              {
-                canActivate: ownsPreviousGeneration,
-                onActivated: claimGeneration,
-              },
-            );
-            if (publishedSnapshotRevision === null) {
-              continue;
-            }
+            params.sharedGatewaySessionGenerationState.owns(previousOwnership);
+          const activated = await params.activateRuntimeSecrets.activatePreparedSnapshotIfCurrent(
+            prepared,
+            previousRevision,
+            {
+              reason: "reload",
+              activate: true,
+              runtimeSourceConfig: previousRuntimeSourceConfig,
+            },
+            claimGeneration,
+            ownsPreviousGeneration,
+          );
+          if (!activated) {
+            continue;
           }
-          if (publishedSnapshotRevision === null || generationOwnership === null) {
+          if (!transaction) {
             throw new Error("Secrets runtime activation did not publish ownership.");
           }
-          transaction = {
-            previousSnapshot,
-            previousGeneration,
-            previousRequiredGeneration,
-            prepared,
-            plan,
-            credentialOwners,
-            nextGeneration,
-            generationChanged: previousGeneration !== nextGeneration,
-            generationOwnership,
-            publishedSnapshotRevision,
-          };
-          if (
-            !isSharedGatewaySessionGenerationOwnershipCurrent(
-              params.sharedGatewaySessionGenerationState,
-              generationOwnership,
-            )
-          ) {
-            throw new Error("secrets.reload was superseded by a newer config write");
-          }
+          assertGenerationOwned();
           break;
         }
 
-        const { prepared, plan, credentialOwners, generationOwnership, nextGeneration } =
-          transaction;
-        if (transaction.generationChanged) {
-          disconnectStaleSharedGatewayAuthClients({
-            clients: params.clients,
-            expectedGeneration: nextGeneration,
-          });
-        }
+        const { prepared, plan, credentialOwners, generationOwnership, isCurrent } = transaction;
+        await transaction.modelPublication;
+        assertGenerationOwned();
         const targets: ReloadChannelTarget[] = [...plan.restartChannels].map((channel) => ({
           channel,
         }));
@@ -287,10 +274,7 @@ export function createGatewaySecretsReloader(params: GatewaySecretsReloaderParam
         );
         if (restartTargets.length > 0) {
           const restartChannels = [...new Set(restartTargets.map(({ channel }) => channel))];
-          if (
-            isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
-            isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS)
-          ) {
+          if (isChannelStartupSuppressedByEnvironment()) {
             throw new Error(
               `secrets.reload requires restarting channels: ${restartChannels.join(", ")}`,
             );
@@ -304,16 +288,6 @@ export function createGatewaySecretsReloader(params: GatewaySecretsReloaderParam
           for (const target of restartTargets) {
             const { channel, accountId, credentialOwnerId, inspectOnly } = target;
             const label = accountId ? `${channel} account ${accountId}` : `${channel} channel`;
-            const assertGenerationOwned = () => {
-              if (
-                !isSharedGatewaySessionGenerationOwnershipCurrent(
-                  params.sharedGatewaySessionGenerationState,
-                  generationOwnership,
-                )
-              ) {
-                throw new Error("secrets.reload was superseded by a newer config write");
-              }
-            };
             assertGenerationOwned();
             params.logChannels.info(
               `${inspectOnly ? "reinspecting" : "restarting"} ${label} after secrets reload`,
@@ -353,39 +327,57 @@ export function createGatewaySecretsReloader(params: GatewaySecretsReloaderParam
           }
         }
         if (
-          !finalizeOwnedSharedGatewaySessionGeneration(
-            params.sharedGatewaySessionGenerationState,
-            generationOwnership,
-          )
+          !isCurrent() ||
+          !params.sharedGatewaySessionGenerationState.finalize(generationOwnership, {
+            previous: transaction.previousSnapshot.config,
+            next: prepared.config,
+          })
         ) {
           throw new Error("secrets.reload was superseded by a newer config write");
         }
         return { warningCount: prepared.warnings.length };
       } catch (error) {
-        let generationRestored = false;
         if (transaction) {
           const failedTransaction = transaction;
-          await restoreSnapshotIfCurrent(
-            failedTransaction.previousSnapshot,
-            failedTransaction.publishedSnapshotRevision,
-            failedTransaction.prepared,
-            () => {
-              generationRestored = replaceOwnedSharedGatewaySessionGenerationState(
-                params.sharedGatewaySessionGenerationState,
-                failedTransaction.generationOwnership,
-                {
-                  current: failedTransaction.previousGeneration,
-                  required: failedTransaction.previousRequiredGeneration,
+          let restoration: SecretsReloadPublication | undefined;
+          try {
+            await params.activateRuntimeSecrets.restoreSnapshotIfCurrent(
+              failedTransaction.previousSnapshot,
+              failedTransaction.publishedSnapshotRevision,
+              failedTransaction.prepared,
+              {
+                onActivated: () => {
+                  const generationRestored = params.sharedGatewaySessionGenerationState.replace(
+                    failedTransaction.generationOwnership,
+                    {
+                      current: failedTransaction.previousGeneration,
+                      required: failedTransaction.previousRequiredGeneration,
+                    },
+                  );
+                  if (generationRestored && failedTransaction.generationChanged) {
+                    disconnectStaleSharedGatewayAuthClients({
+                      state: params.sharedGatewaySessionGenerationState,
+                      clients: params.clients,
+                      expectedGeneration: failedTransaction.previousGeneration,
+                      transition: {
+                        previous: failedTransaction.prepared.config,
+                        next: failedTransaction.previousSnapshot.config,
+                      },
+                    });
+                  }
+                  // Restoration can preserve newer credential state; rebuild from what actually won,
+                  // not the predecessor snapshot. A newer config publication still fences this tail.
+                  restoration = capturePublication(
+                    params.sharedGatewaySessionGenerationState.capture(),
+                  );
                 },
-              );
-            },
-          );
-        }
-        if (generationRestored && transaction?.generationChanged) {
-          disconnectStaleSharedGatewayAuthClients({
-            clients: params.clients,
-            expectedGeneration: transaction.previousGeneration,
-          });
+                runtimeSourceConfig: failedTransaction.previousRuntimeSourceConfig,
+              },
+            );
+            await restoration?.modelPublication;
+          } catch {
+            params.logChannels.info("failed to restore model runtime after secrets reload");
+          }
         }
         // Generation fences snapshot rollback, never exact-account liveness recovery.
         for (const { target, restarted } of touchedTargets) {

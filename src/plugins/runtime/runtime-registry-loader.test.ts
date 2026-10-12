@@ -2,7 +2,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  loadOpenClawPlugins: vi.fn<typeof import("../loader.js").loadOpenClawPlugins>(),
+  loadAndActivateRootPluginRegistry:
+    vi.fn<typeof import("../loader.js").loadAndActivateRootPluginRegistry>(),
   resolveConfiguredChannelPluginIds:
     vi.fn<typeof import("../channel-plugin-ids.js").resolveConfiguredChannelPluginIds>(),
   resolveChannelPluginIds:
@@ -17,11 +18,6 @@ const mocks = vi.hoisted(() => ({
     vi.fn<typeof import("../../config/plugin-auto-enable.js").applyPluginAutoEnable>(),
   resolvePluginMetadataSnapshot:
     vi.fn<typeof import("../plugin-metadata-snapshot.js").resolvePluginMetadataSnapshot>(),
-  isPluginMetadataSnapshotCompatible:
-    vi.fn<typeof import("../plugin-metadata-snapshot.js").isPluginMetadataSnapshotCompatible>(),
-  rebasePluginMetadataSnapshotManifestRegistry: vi.fn<
-    typeof import("../plugin-metadata-snapshot.js").rebasePluginMetadataSnapshotManifestRegistry
-  >((snapshot) => snapshot),
   listAgentEntries: vi.fn<typeof import("../../agents/agent-scope.js").listAgentEntries>(() => []),
   resolveAgentWorkspaceDir: vi.fn<
     typeof import("../../agents/agent-scope.js").resolveAgentWorkspaceDir
@@ -41,21 +37,25 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../loader.js", () => ({
-  loadOpenClawPlugins: (...args: Parameters<typeof mocks.loadOpenClawPlugins>) =>
-    mocks.loadOpenClawPlugins(...args),
+  loadAndActivateRootPluginRegistry: (
+    ...args: Parameters<typeof mocks.loadAndActivateRootPluginRegistry>
+  ) => mocks.loadAndActivateRootPluginRegistry(...args),
 }));
 
+// mock-isolation: Loader scope uses fixture channel ids without persisted channel discovery.
 vi.mock("../channel-plugin-ids.js", () => ({
-  resolveConfiguredChannelPluginIds: (
+  resolveConfiguredChannelPluginIdsAsync: async (
     ...args: Parameters<typeof mocks.resolveConfiguredChannelPluginIds>
   ) => mocks.resolveConfiguredChannelPluginIds(...args),
   resolveChannelPluginIds: (...args: Parameters<typeof mocks.resolveChannelPluginIds>) =>
     mocks.resolveChannelPluginIds(...args),
 }));
 
+// mock-isolation: Loader scope uses fixture plugin ids without installed-plugin discovery.
 vi.mock("../effective-plugin-ids.js", () => ({
-  resolveEffectivePluginIds: (...args: Parameters<typeof mocks.resolveEffectivePluginIds>) =>
-    mocks.resolveEffectivePluginIds(...args),
+  resolveEffectivePluginIdsAsync: async (
+    ...args: Parameters<typeof mocks.resolveEffectivePluginIds>
+  ) => mocks.resolveEffectivePluginIds(...args),
 }));
 
 vi.mock("../gateway-startup-plugin-ids.js", () => ({
@@ -69,16 +69,17 @@ vi.mock("../../config/plugin-auto-enable.js", () => ({
     mocks.applyPluginAutoEnable(...args),
 }));
 
-vi.mock("../plugin-metadata-snapshot.js", () => ({
+vi.mock("../../config/io.plugin-metadata.js", () => ({
+  resolveConfigWidePluginMetadataSnapshot: (
+    ...args: Parameters<typeof mocks.resolvePluginMetadataSnapshot>
+  ) => mocks.resolvePluginMetadataSnapshot(...args),
+}));
+
+vi.mock("../plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugin-metadata-snapshot.js")>()),
   resolvePluginMetadataSnapshot: (
     ...args: Parameters<typeof mocks.resolvePluginMetadataSnapshot>
   ) => mocks.resolvePluginMetadataSnapshot(...args),
-  isPluginMetadataSnapshotCompatible: (
-    ...args: Parameters<typeof mocks.isPluginMetadataSnapshotCompatible>
-  ) => mocks.isPluginMetadataSnapshotCompatible(...args),
-  rebasePluginMetadataSnapshotManifestRegistry: (
-    ...args: Parameters<typeof mocks.rebasePluginMetadataSnapshotManifestRegistry>
-  ) => mocks.rebasePluginMetadataSnapshotManifestRegistry(...args),
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
@@ -125,7 +126,7 @@ function useMemoryProviderOwner(params: {
 }
 
 function requireLoadOptions(): Record<string, unknown> {
-  const options = mocks.loadOpenClawPlugins.mock.calls[0]?.[0];
+  const options = mocks.loadAndActivateRootPluginRegistry.mock.calls[0]?.[0];
   if (!options) {
     throw new Error("expected plugin load options");
   }
@@ -147,7 +148,6 @@ describe("ensurePluginRegistryLoaded", () => {
       },
       manifestRegistry: { plugins: [], diagnostics: [] },
     } as never);
-    mocks.isPluginMetadataSnapshotCompatible.mockReturnValue(true);
     mocks.applyPluginAutoEnable.mockImplementation((params) => ({
       config: params.config ?? {},
       changes: [],
@@ -155,11 +155,16 @@ describe("ensurePluginRegistryLoaded", () => {
     }));
   });
 
-  it("loads configured channel owners through the canonical root loader", () => {
+  it("loads configured channel owners through the canonical root loader", async () => {
+    const env = { HOME: "/tmp/openclaw-home" };
     const config = { channels: { demo: { enabled: true } } };
     mocks.resolveConfiguredChannelPluginIds.mockReturnValue(["demo-channel"]);
 
-    ensurePluginRegistryLoaded({ scope: "configured-channels", config: config as never });
+    await ensurePluginRegistryLoaded({
+      scope: "configured-channels",
+      config: config as never,
+      env,
+    });
 
     expect(mocks.resolveConfiguredChannelPluginIds).toHaveBeenCalledWith(
       expect.objectContaining({ config, workspaceDir: "/resolved-workspace" }),
@@ -173,23 +178,24 @@ describe("ensurePluginRegistryLoaded", () => {
     );
   });
 
-  it("keeps an empty configured-channel scope empty", () => {
+  it("keeps an empty configured-channel scope empty", async () => {
     mocks.resolveConfiguredChannelPluginIds.mockReturnValue([]);
 
-    ensurePluginRegistryLoaded({ scope: "configured-channels", config: {} });
+    await ensurePluginRegistryLoaded({ scope: "configured-channels", config: {} });
 
     expect(requireLoadOptions().onlyPluginIds).toEqual([]);
   });
 
-  it("loads effective plugin ids for the all scope", () => {
+  it("loads effective plugin ids for the all scope", async () => {
+    const env = { HOME: "/tmp/openclaw-home" };
     const config = { plugins: { enabled: true } };
     mocks.resolveEffectivePluginIds.mockReturnValue(["demo", "memory-core"]);
 
-    ensurePluginRegistryLoaded({ scope: "all", config });
+    await ensurePluginRegistryLoaded({ scope: "all", config, env });
 
     expect(mocks.resolveEffectivePluginIds).toHaveBeenCalledWith({
       config,
-      env: process.env,
+      env,
       workspaceDir: "/resolved-workspace",
     });
     expect(requireLoadOptions()).toEqual(
@@ -200,7 +206,125 @@ describe("ensurePluginRegistryLoaded", () => {
     );
   });
 
-  it("loads only the selected memory backend and embedding provider owners", () => {
+  it("loads only matching configured sandbox backend owners, never unrelated broken plugins", async () => {
+    const config = {
+      agents: {
+        defaults: { sandbox: { backend: "sandbox-owner" } },
+        entries: { research: { sandbox: { backend: "research-owner" } } },
+      },
+      plugins: {
+        entries: {
+          "sandbox-owner": { enabled: true },
+          "research-owner": { enabled: true },
+          "broken-plugin": { enabled: true },
+        },
+      },
+    };
+    mocks.resolvePluginMetadataSnapshot.mockReturnValue({
+      index: {
+        installRecords: {},
+        plugins: ["sandbox-owner", "research-owner", "broken-plugin"].map((pluginId) => ({
+          pluginId,
+          startup: { sidecar: false, memory: false, agentHarnesses: [] },
+        })),
+      },
+      manifestRegistry: { plugins: [], diagnostics: [] },
+    } as never);
+    mocks.loadAndActivateRootPluginRegistry.mockImplementationOnce(async (options) => {
+      if (options?.onlyPluginIds?.includes("broken-plugin")) {
+        throw new Error("unrelated plugin failed to initialize");
+      }
+      return undefined as never;
+    });
+
+    await expect(
+      ensurePluginRegistryLoaded({ scope: "sandbox-backends", config }),
+    ).resolves.toBeUndefined();
+    expect(requireLoadOptions().onlyPluginIds).toEqual(["research-owner", "sandbox-owner"]);
+    expect(mocks.resolveEffectivePluginIds).not.toHaveBeenCalled();
+  });
+
+  it("loads installed persisted sandbox owners after configuration switches to Docker", async () => {
+    const config = {
+      agents: { defaults: { sandbox: { backend: "docker" } } },
+      plugins: {
+        entries: {
+          openshell: { enabled: true },
+          "broken-plugin": { enabled: true },
+        },
+      },
+    };
+    mocks.resolvePluginMetadataSnapshot.mockReturnValue({
+      index: {
+        installRecords: {},
+        plugins: ["openshell", "broken-plugin"].map((pluginId) => ({
+          pluginId,
+          startup: { sidecar: false, memory: false, agentHarnesses: [] },
+        })),
+      },
+      manifestRegistry: { plugins: [], diagnostics: [] },
+    } as never);
+
+    await ensurePluginRegistryLoaded({
+      scope: "sandbox-backends",
+      config,
+      persistedSandboxBackendIds: ["openshell", "docker", "missing-owner"],
+    });
+
+    expect(requireLoadOptions().onlyPluginIds).toEqual(["openshell"]);
+  });
+
+  it.each([undefined, "docker", "podman", "ssh"])(
+    "does not activate plugins for the built-in sandbox backend %s",
+    async (backend) => {
+      mocks.resolvePluginMetadataSnapshot.mockReturnValue({
+        index: {
+          installRecords: {},
+          plugins: ["docker", "podman", "ssh"].map((pluginId) => ({
+            pluginId,
+            startup: { sidecar: false, memory: false, agentHarnesses: [] },
+          })),
+        },
+        manifestRegistry: { plugins: [], diagnostics: [] },
+      } as never);
+
+      await ensurePluginRegistryLoaded({
+        scope: "sandbox-backends",
+        config: { agents: { defaults: { sandbox: { backend } } } },
+      });
+
+      expect(requireLoadOptions().onlyPluginIds).toEqual([]);
+      expect(mocks.resolveEffectivePluginIds).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not guess a differently named sandbox backend owner", async () => {
+    mocks.resolvePluginMetadataSnapshot.mockReturnValue({
+      index: {
+        installRecords: {},
+        plugins: [
+          {
+            pluginId: "actual-owner",
+            startup: { sidecar: false, memory: false, agentHarnesses: [] },
+          },
+        ],
+      },
+      manifestRegistry: { plugins: [], diagnostics: [] },
+    } as never);
+
+    await ensurePluginRegistryLoaded({
+      scope: "sandbox-backends",
+      config: {
+        agents: { defaults: { sandbox: { backend: "different-backend" } } },
+        plugins: { entries: { "actual-owner": { enabled: true } } },
+      },
+    });
+
+    expect(requireLoadOptions().onlyPluginIds).toEqual([]);
+  });
+
+  it("loads only the selected memory backend and embedding provider owners", async () => {
+    const env = { HOME: "/tmp/openclaw-home" };
     const config = {
       memory: { search: { provider: "openai" } },
       plugins: {
@@ -211,7 +335,7 @@ describe("ensurePluginRegistryLoaded", () => {
     };
     mocks.collectConfiguredMemoryEmbeddingProviderIds.mockReturnValue(new Set(["openai"]));
 
-    ensurePluginRegistryLoaded({ scope: "memory", config });
+    await ensurePluginRegistryLoaded({ scope: "memory", config, env });
 
     expect(mocks.collectConfiguredMemoryEmbeddingProviderIds).toHaveBeenCalledWith(config);
     expect(requireLoadOptions()).toEqual(
@@ -235,7 +359,7 @@ describe("ensurePluginRegistryLoaded", () => {
       contract: "embeddingProviders" as const,
       pluginId: "llama-cpp",
     },
-  ])("loads the $pluginId owner for the $adapterId memory adapter", (provider) => {
+  ])("loads the $pluginId owner for the $adapterId memory adapter", async (provider) => {
     const config = {
       memory: { search: { provider: provider.adapterId } },
       plugins: { slots: { memory: "memory-core" } },
@@ -245,14 +369,14 @@ describe("ensurePluginRegistryLoaded", () => {
     );
     useMemoryProviderOwner(provider);
 
-    ensurePluginRegistryLoaded({ scope: "memory", config });
+    await ensurePluginRegistryLoaded({ scope: "memory", config });
 
     expect(requireLoadOptions().onlyPluginIds).toEqual(
       [provider.pluginId, "memory-core"].toSorted(),
     );
   });
 
-  it("keeps a denied memory provider owner denied", () => {
+  it("keeps a denied memory provider owner denied", async () => {
     const config = {
       memory: { search: { provider: "gemini" } },
       plugins: {
@@ -268,7 +392,7 @@ describe("ensurePluginRegistryLoaded", () => {
       pluginId: "google",
     });
 
-    ensurePluginRegistryLoaded({ scope: "memory", config });
+    await ensurePluginRegistryLoaded({ scope: "memory", config });
 
     const options = requireLoadOptions();
     expect(options.onlyPluginIds).toEqual(["google", "memory-core"]);
@@ -276,7 +400,7 @@ describe("ensurePluginRegistryLoaded", () => {
     expect(options.activationSourceConfig).toEqual(config);
   });
 
-  it("keeps an explicitly disabled memory provider owner disabled", () => {
+  it("keeps an explicitly disabled memory provider owner disabled", async () => {
     const config = {
       memory: { search: { provider: "local" } },
       plugins: {
@@ -291,7 +415,7 @@ describe("ensurePluginRegistryLoaded", () => {
       pluginId: "llama-cpp",
     });
 
-    ensurePluginRegistryLoaded({ scope: "memory", config });
+    await ensurePluginRegistryLoaded({ scope: "memory", config });
 
     const options = requireLoadOptions();
     expect(options.onlyPluginIds).toEqual(["llama-cpp", "memory-core"]);
@@ -299,10 +423,10 @@ describe("ensurePluginRegistryLoaded", () => {
     expect(options.activationSourceConfig).toEqual(config);
   });
 
-  it("keeps an empty memory scope empty when no backend is selected", () => {
+  it("keeps an empty memory scope empty when no backend is selected", async () => {
     mocks.collectConfiguredMemoryEmbeddingProviderIds.mockReturnValue(new Set());
 
-    ensurePluginRegistryLoaded({
+    await ensurePluginRegistryLoaded({
       scope: "memory",
       config: { plugins: { slots: { memory: "none" } } },
     });

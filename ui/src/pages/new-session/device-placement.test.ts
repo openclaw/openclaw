@@ -1,6 +1,10 @@
 // @vitest-environment node
-import { describe, expect, it } from "vitest";
-import { projectDevicePlacements } from "./device-placement.ts";
+import { beforeEach, describe, expect, it } from "vitest";
+import { i18n } from "../../i18n/index.ts";
+import {
+  projectDevicePlacements,
+  resolveAutomaticDevicePlacementDisabledReason,
+} from "./device-placement.ts";
 import type { DraftEnvironment } from "./discovery.ts";
 
 const updateIssue = {
@@ -25,13 +29,24 @@ function node(overrides: Partial<DraftEnvironment>): DraftEnvironment {
 }
 
 describe("device placement projection", () => {
+  beforeEach(async () => {
+    await i18n.setLocale("en");
+  });
+
   it.each([
     {
       name: "available host",
       environment: node({}),
       selectable: true,
       reason: undefined,
-      facts: ["Worker slots 1/2", "macOS", "Camera"],
+      facts: ["macOS", "Camera"],
+    },
+    {
+      name: "ignores unknown capabilities that match object prototype properties",
+      environment: node({ capabilities: ["constructor", "__proto__", "camera.snap"] }),
+      selectable: true,
+      reason: undefined,
+      facts: ["macOS", "Camera"],
     },
     {
       name: "saturated host",
@@ -39,7 +54,6 @@ describe("device placement projection", () => {
       selectable: false,
       reason: "No worker slots are available. Wait for a slot or pick another device.",
       facts: [
-        "Worker slots 0/2",
         "No worker slots are available. Wait for a slot or pick another device.",
         "macOS",
         "Camera",
@@ -73,9 +87,9 @@ describe("device placement projection", () => {
       environment: node({ sessionHost: false, workerSlots: undefined }),
       selectable: false,
       reason:
-        "Session hosting is disabled. Run openclaw connect --service --session-host on the device.",
+        "Session hosting is disabled. On the paired device, run openclaw config set nodeHost.workerRuns.enabled true, then openclaw node install --force.",
       facts: [
-        "Session hosting is disabled. Run openclaw connect --service --session-host on the device.",
+        "Session hosting is disabled. On the paired device, run openclaw config set nodeHost.workerRuns.enabled true, then openclaw node install --force.",
         "macOS",
         "Camera",
       ],
@@ -88,13 +102,12 @@ describe("device placement projection", () => {
         "Update required: run openclaw update, then reconnect. For a headless node, run openclaw node restart.",
       facts: [
         "Update required: run openclaw update, then reconnect. For a headless node, run openclaw node restart.",
-        "Worker slots 1/2",
         "macOS",
         "Camera",
       ],
     },
   ])("projects $name with one canonical eligibility decision", (testCase) => {
-    expect(projectDevicePlacements([testCase.environment])).toEqual([
+    expect(projectDevicePlacements([testCase.environment])).toMatchObject([
       {
         deviceId: "runner",
         label: "Build runner",
@@ -114,6 +127,28 @@ describe("device placement projection", () => {
     ).toEqual([]);
   });
 
+  it("shows the host's actionable failure before generic offline or disabled-host hints", () => {
+    const message = "state directory /srv/node is group-writable; run chmod go-w /srv/node";
+    const environments = [
+      node({
+        status: "available",
+        sessionHost: false,
+        workerSlots: undefined,
+        issues: [{ code: "worker-host-unavailable", message }],
+      }),
+    ];
+    const devices = projectDevicePlacements(environments);
+
+    expect(devices[0]).toMatchObject({
+      selectable: false,
+      disabledReason: message,
+      hideDetails: false,
+      remediation: undefined,
+      facts: [message, "macOS", "Camera"],
+    });
+    expect(resolveAutomaticDevicePlacementDisabledReason(environments, devices)).toBe(message);
+  });
+
   it("adds short device ids only when labels collide", () => {
     expect(
       projectDevicePlacements([
@@ -130,53 +165,72 @@ describe("device placement projection", () => {
 
   it.each([
     {
-      name: "remote execution remains available when every worker slot is occupied",
+      name: "an undeclared command fails closed even when worker slots are free",
       requirement: {
         requiredNodeCommands: ["codex.exec-server.stdio.v1"],
         consumesWorkerSlot: false,
       },
       environment: {
-        workerSlots: { total: 2, available: 0 },
-        invocableCommands: ["codex.exec-server.stdio.v1"],
+        invocableCommands: ["camera.snap"],
+        requiredNodeCommand: {
+          command: "codex.exec-server.stdio.v1",
+          state: "undeclared" as const,
+        },
       },
-      selectable: true,
-    },
-    {
-      name: "worker turns remain unavailable when every worker slot is occupied",
-      requirement: { requiredNodeCommands: [], consumesWorkerSlot: true },
-      environment: { workerSlots: { total: 2, available: 0 } },
       selectable: false,
-      reason: /worker slots/i,
+      reason:
+        "Make codex.exec-server.stdio.v1 available on this device, then reconnect, or pick another device.",
     },
     {
-      name: "declaring a command does not grant Gateway invocation authority",
+      name: "a pending-approval command reports awaiting pairing approval",
       requirement: {
         requiredNodeCommands: ["codex.exec-server.stdio.v1"],
         consumesWorkerSlot: false,
       },
       environment: {
-        capabilities: ["codex.exec-server.stdio.v1"],
-        invocableCommands: [],
+        requiredNodeCommand: {
+          command: "codex.exec-server.stdio.v1",
+          state: "pending-approval" as const,
+        },
       },
       selectable: false,
-      reason: /enable|approv/i,
+      reason:
+        "Ask an administrator to approve the pending codex.exec-server.stdio.v1 request, or pick another device.",
     },
     {
-      name: "missing command authority fails closed even when worker slots are free",
+      name: "missing command state fails closed",
       requirement: {
         requiredNodeCommands: ["codex.exec-server.stdio.v1"],
         consumesWorkerSlot: false,
       },
-      environment: { invocableCommands: ["camera.snap"] },
+      environment: {},
       selectable: false,
-      reason: /enable|approv/i,
+      reason: "The selected runner isn't ready yet. Try again in a moment.",
     },
   ])("$name", ({ requirement, environment, selectable, reason }) => {
     const [device] = projectDevicePlacements([node(environment)], requirement);
 
     expect(device?.selectable).toBe(selectable);
     if (reason) {
-      expect(device?.disabledReason).toMatch(reason);
+      expect(device?.disabledReason).toBe(reason);
     }
   });
+
+  it.each(["pending-approval", "undeclared", "unauthorized", "invocable"] as const)(
+    "uses Gateway command remediation without changing %s eligibility",
+    (state) => {
+      const message = "Enable the codex plugin on this node with openclaw plugins enable codex.";
+      const [device] = projectDevicePlacements(
+        [
+          node({
+            requiredNodeCommand: { command: "codex.exec-server.stdio.v1", state, message },
+          }),
+        ],
+        { requiredNodeCommands: ["codex.exec-server.stdio.v1"], consumesWorkerSlot: false },
+      );
+
+      expect(device?.selectable).toBe(state === "invocable");
+      expect(device?.disabledReason).toBe(state === "invocable" ? undefined : message);
+    },
+  );
 });

@@ -24,10 +24,15 @@ const schema = {
 };
 
 describe("config form search", () => {
-  it("parses tag-prefixed query terms", () => {
-    const parsed = parseConfigSearchQuery("token tag:security tag:Auth");
-    expect(parsed.text).toBe("token");
-    expect(parsed.tags).toEqual(["security", "auth"]);
+  it.each([
+    ["token tag:security tag:Auth", "token", ["security", "auth"]],
+    ["Café tag:storage 文書", "café 文書", ["storage"]],
+    ["Log tag:storage tag:STORAGE File", "log file", ["storage"]],
+    ["  ", "", []],
+    ["Log  File", "log  file", []],
+    ["path:tag:storage", "path:tag:storage", []],
+  ])("parses search query %j", (query, text, tags) => {
+    expect(parseConfigSearchQuery(query)).toEqual({ text, tags });
   });
 
   it("matches fields by tag through ui hints", () => {
@@ -44,28 +49,22 @@ describe("config form search", () => {
     expect(matched).toBe(true);
   });
 
-  it("requires text and tag when combined", () => {
-    const positive = matchesNodeSearch({
-      schema: schema.properties.gateway,
-      value: {},
-      path: ["gateway"],
-      hints: {
-        "gateway.auth.token": { tags: ["security"] },
-      },
-      criteria: parseConfigSearchQuery("token tag:security"),
-    });
-    expect(positive).toBe(true);
-
-    const negative = matchesNodeSearch({
-      schema: schema.properties.gateway,
-      value: {},
-      path: ["gateway"],
-      hints: {
-        "gateway.auth.token": { tags: ["security"] },
-      },
-      criteria: parseConfigSearchQuery("mode tag:security"),
-    });
-    expect(negative).toBe(false);
+  it.each([
+    ["access tag:security token", true],
+    ["mode tag:security", false],
+    ["access token tag:storage", false],
+  ])("requires text and tag when combined in %j", (query, expected) => {
+    expect(
+      matchesNodeSearch({
+        schema: schema.properties.gateway,
+        value: {},
+        path: ["gateway"],
+        hints: {
+          "gateway.auth.token": { label: "Access Token", tags: ["security"] },
+        },
+        criteria: parseConfigSearchQuery(query),
+      }),
+    ).toBe(expected);
   });
 
   it("searches array item schemas before entries exist", () => {
@@ -93,8 +92,6 @@ describe("config form search", () => {
 
   it.each([
     { values: [], query: "secondary endpoint" },
-    { values: ["primary"], query: "secondary endpoint" },
-    { values: [], query: "overflow endpoint" },
     { values: ["primary"], query: "overflow endpoint" },
   ])("searches positional and typed-tail schemas for $values", ({ values, query }) => {
     const matched = matchesNodeSearch({

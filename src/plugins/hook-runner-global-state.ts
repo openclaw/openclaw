@@ -22,19 +22,18 @@ type HookRunnerGlobalState = {
 
 const hookRunnerGlobalStateKey = Symbol.for("openclaw.plugins.hook-runner-global-state");
 
-export function getHookRunnerGlobalState(): HookRunnerGlobalState {
-  return resolveGlobalSingleton<HookRunnerGlobalState>(
-    hookRunnerGlobalStateKey,
-    () => ({
-      hookRunner: null,
-      registry: null,
-    }),
-    (state) => {
-      state.registry = null;
-    },
-    "plugin-registry",
-  );
-}
+// Lifecycle resets mutate this shared slot in place, including across source/built copies.
+export const hookRunnerGlobalState = resolveGlobalSingleton<HookRunnerGlobalState>(
+  hookRunnerGlobalStateKey,
+  () => ({
+    hookRunner: null,
+    registry: null,
+  }),
+  (state) => {
+    state.registry = null;
+  },
+  "plugin-registry",
+);
 
 function resolveRootHookRegistry(
   state: HookRunnerGlobalState,
@@ -123,12 +122,13 @@ function overlayHookRegistries(
 
 function resolveHookRegistry(state: HookRunnerGlobalState): TrustedPolicyHookRunnerRegistry | null {
   const generationRegistry = getPluginRuntimeGenerationRegistry();
-  if (generationRegistry) {
+  if (generationRegistry && !isPluginRegistryRetired(generationRegistry)) {
     return generationRegistry;
   }
+  const requestRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? null;
   return overlayHookRegistries(
     resolveRootHookRegistry(state),
-    getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? null,
+    requestRegistry && !isPluginRegistryRetired(requestRegistry) ? requestRegistry : null,
   );
 }
 
@@ -155,6 +155,7 @@ export function createLiveHookRegistryFacade(
 
 /** Get the registry view that backs global hook dispatch. */
 export function getGlobalHookRunnerRegistry(): TrustedPolicyHookRunnerRegistry | null {
-  const state = getHookRunnerGlobalState();
-  return resolveHookRegistry(state) ? createLiveHookRegistryFacade(state) : null;
+  return resolveHookRegistry(hookRunnerGlobalState)
+    ? createLiveHookRegistryFacade(hookRunnerGlobalState)
+    : null;
 }

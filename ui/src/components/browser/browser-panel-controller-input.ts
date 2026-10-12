@@ -1,16 +1,21 @@
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import type { AnnotationStroke } from "./browser-annotation.ts";
-import type { BrowserInspectedNode, BrowserPanelTab } from "./browser-client.ts";
+import type {
+  BrowserRequestClient,
+  BrowserInspectedNode,
+  BrowserPanelTab,
+} from "./browser-client.ts";
 import {
   clickBrowserCoords,
   inspectBrowserElementAt,
+  insertBrowserText,
   isBrowserEvaluateDisabledError,
   pressBrowserKey,
   scrollBrowserBy,
 } from "./browser-client.ts";
 import type { BrowserPanelOperationOwnership } from "./browser-panel-operation-ownership.ts";
 import type { BrowserPanelPendingInput } from "./browser-panel-pending-input.ts";
+import type { BrowserPanelStream } from "./browser-panel-stream.ts";
 import {
   browserPanelInspectHighlightRegion,
   browserPanelNormalizedPoint,
@@ -22,6 +27,8 @@ import {
 } from "./browser-panel-surface.ts";
 
 const INSPECT_THROTTLE_MS = 120;
+const STREAM_WHEEL_INTERVAL_MS = 50;
+const SNAPSHOT_WHEEL_INTERVAL_MS = 150;
 
 type BrowserPanelInputState = {
   mode: "interact" | "annotate" | "inspect";
@@ -37,6 +44,7 @@ type BrowserPanelInputState = {
 };
 
 interface BrowserPanelInputHost extends BrowserPanelInputState {
+  readonly stream: Pick<BrowserPanelStream, "ownsView">;
   readonly host: {
     readonly renderRoot: HTMLElement | DocumentFragment;
     readonly updateComplete: Promise<boolean>;
@@ -54,24 +62,55 @@ interface BrowserPanelInputHost extends BrowserPanelInputState {
     value: BrowserPanelInputState[Key],
   ): void;
   runAction(
-    action: (client: GatewayBrowserClient) => Promise<void>,
+    action: (client: BrowserRequestClient) => Promise<void>,
     refreshView?: boolean,
   ): Promise<boolean>;
   reportError(error: unknown): void;
   exitCaptureModes(): void;
 }
 
+type BrowserPanelDrawingGesture = {
+  pointerId: number;
+  captureTarget: HTMLElement;
+  stroke: AnnotationStroke;
+};
+
 /** Owns pointer, keyboard, annotation, and inspection input for the browser surface. */
 export class BrowserPanelInputController {
-  private drawingStroke: AnnotationStroke | null = null;
+  // An annotation stroke belongs to one pointer until that owner or the panel lifecycle ends.
+  private drawingGesture: BrowserPanelDrawingGesture | null = null;
   private suppressStageClick = false;
   private inspectionError: string | null = null;
+  private pendingClick: Promise<boolean> | null = null;
+  private clickSequence = 0;
+  private inputGeneration = 0;
+  private pendingText: Promise<boolean | undefined> | null = null;
+  private compositionCurrent: (() => boolean) | null = null;
+  private touchScroll: {
+    pointerId: number;
+    startX: number;
+    startY: number;
+    point: { x: number; y: number };
+    scrolling: boolean;
+    current: () => boolean;
+  } | null = null;
 
   constructor(private readonly host: BrowserPanelInputHost) {}
 
   resetCaptureState(): void {
     this.host.pendingInput.clearInput();
-    this.drawingStroke = null;
+    this.cancelOverlayPointerGesture();
+    this.pendingClick = null;
+    this.pendingText = null;
+    this.compositionCurrent = null;
+    this.touchScroll = null;
+    const input = this.host.host.renderRoot.querySelector<HTMLTextAreaElement>(".bp-input");
+    if (input) {
+      input.value = "";
+      input.blur();
+    }
+    this.clickSequence += 1;
+    this.inputGeneration += 1;
   }
 
   private stageElement(): HTMLElement | null {
@@ -88,44 +127,71 @@ export class BrowserPanelInputController {
 
   handleStageClick(event: MouseEvent): void {
     if (this.suppressStageClick) {
-      // The click that follows an inspect-capture pointerdown lands after the
-      // mode already returned to interact; it must not reach the remote page.
+      // Inspect capture and touch scrolling must not also click the remote page.
       this.suppressStageClick = false;
       return;
     }
     if (this.host.mode !== "interact") {
       return;
     }
-    // Keep keyboard forwarding live after a click; the canvas itself is not
-    // focusable, so focus the surrounding viewport explicitly.
+    // The empty input gives WebKit native Paste commands for the remote page.
     this.host.host.renderRoot
-      .querySelector<HTMLElement>(".bp-viewport")
+      .querySelector<HTMLElement>(".bp-input")
       ?.focus({ preventScroll: true });
     const point = this.remotePoint(event);
     const targetId = this.host.activeTargetId;
-    if (!point || !targetId) {
+    const client = this.host.operations.captureClient();
+    if (!point || !targetId || !client) {
       return;
     }
-    void this.host.runAction((client) =>
-      clickBrowserCoords(client, { targetId, x: point.x, y: point.y }),
-    );
+    const epoch = this.host.operations.epoch;
+    const generation = this.inputGeneration;
+    const click = () => {
+      if (
+        this.inputGeneration !== generation ||
+        !this.host.operations.isLive(epoch, client) ||
+        this.host.activeTargetId !== targetId ||
+        this.host.mode !== "interact"
+      ) {
+        return Promise.resolve(false);
+      }
+      return this.host.runAction((actionClient) =>
+        clickBrowserCoords(actionClient, { targetId, x: point.x, y: point.y }),
+      );
+    };
+    this.clickSequence += 1;
+    // Preserve click order and failure: a failed click can leave the previous field focused.
+    const previous = this.pendingText
+      ? Promise.all([this.pendingClick, this.pendingText])
+      : this.pendingClick;
+    this.pendingClick = previous ? previous.then(click) : click();
   }
 
   handleWheel(event: WheelEvent): void {
+    if (this.queueScroll(event.deltaX, event.deltaY)) {
+      event.preventDefault();
+    }
+  }
+
+  private queueScroll(horizontal: number, vertical: number): boolean {
     if (this.host.mode !== "interact" || !this.host.view) {
-      return;
+      return false;
     }
     const client = this.host.operations.captureClient();
     const targetId = this.host.activeTargetId;
-    if (!client || !targetId) {
-      return;
+    if (!client || !targetId || this.host.view.targetId !== targetId) {
+      return false;
     }
-    event.preventDefault();
     const epoch = this.host.operations.epoch;
-    this.host.pendingInput.queueWheel(event.deltaX, event.deltaY, 150, (deltaX, deltaY) => {
+    // Match the live stream's frame cadence; screenshot fallback keeps its lower request rate.
+    const interval = this.host.stream.ownsView(targetId)
+      ? STREAM_WHEEL_INTERVAL_MS
+      : SNAPSHOT_WHEEL_INTERVAL_MS;
+    this.host.pendingInput.queueWheel(horizontal, vertical, interval, (deltaX, deltaY) => {
       if (
         !this.host.operations.isLive(epoch, client) ||
         this.host.activeTargetId !== targetId ||
+        this.host.view?.targetId !== targetId ||
         this.host.mode !== "interact"
       ) {
         return;
@@ -142,22 +208,204 @@ export class BrowserPanelInputController {
         await scrollBrowserBy(actionClient, { targetId, deltaX, deltaY });
       });
     });
+    return true;
+  }
+
+  private captureInputCurrent(): () => boolean {
+    const client = this.host.operations.captureClient();
+    const targetId = this.host.activeTargetId;
+    const epoch = this.host.operations.epoch;
+    const generation = this.inputGeneration;
+    const clickSequence = this.clickSequence;
+    return () =>
+      Boolean(
+        client &&
+        targetId &&
+        this.host.operations.isLive(epoch, client) &&
+        this.host.activeTargetId === targetId &&
+        this.host.view?.targetId === targetId &&
+        this.inputGeneration === generation &&
+        this.clickSequence === clickSequence &&
+        this.host.mode === "interact",
+      );
+  }
+
+  handleTouchPointerDown(event: PointerEvent): void {
+    if (this.touchScroll) {
+      return;
+    }
+    this.suppressStageClick = false;
+    // Pen contact drags scroll like fingers; mouse drags stay clicks and wheel scrolls.
+    if (
+      (event.pointerType !== "touch" && event.pointerType !== "pen") ||
+      this.host.mode !== "interact"
+    ) {
+      return;
+    }
+    const point = this.remotePoint(event);
+    const current = this.captureInputCurrent();
+    if (point && current()) {
+      this.touchScroll = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        point,
+        scrolling: false,
+        current,
+      };
+    }
+  }
+
+  handleTouchPointerMove(event: PointerEvent): void {
+    const gesture = this.touchScroll;
+    if (!gesture || gesture.pointerId !== event.pointerId || !gesture.current()) {
+      return;
+    }
+    if (
+      !gesture.scrolling &&
+      Math.hypot(event.clientX - gesture.startX, event.clientY - gesture.startY) < 8
+    ) {
+      return;
+    }
+    const point = this.remotePoint(event);
+    if (!point) {
+      return;
+    }
+    event.preventDefault();
+    gesture.scrolling = true;
+    this.suppressStageClick = true;
+    this.queueScroll(gesture.point.x - point.x, gesture.point.y - point.y);
+    gesture.point = point;
+  }
+
+  handleTouchPointerEnd(event: PointerEvent): void {
+    if (this.touchScroll?.pointerId === event.pointerId) {
+      this.touchScroll = null;
+    }
+  }
+
+  handleCompositionStart(): void {
+    this.compositionCurrent = this.captureInputCurrent();
+  }
+
+  handleCompositionEnd(event: CompositionEvent): void {
+    const current = this.compositionCurrent;
+    this.compositionCurrent = null;
+    if (current?.() && event.data) {
+      this.runAfterClick((client, targetId) =>
+        insertBrowserText(client, { targetId, text: event.data }),
+      );
+    }
+    if (event.currentTarget instanceof HTMLTextAreaElement) {
+      event.currentTarget.value = "";
+    }
+  }
+
+  handleTextInput(event: InputEvent): void {
+    // Let the IME own its local composition; only its final text goes to the remote field.
+    if (event.isComposing || this.compositionCurrent) {
+      return;
+    }
+    if (event.type === "beforeinput" && !event.cancelable) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const input = event.currentTarget;
+    const text = event.data ?? (input instanceof HTMLTextAreaElement ? input.value : "");
+    if (event.inputType === "insertReplacementText") {
+      // The empty proxy cannot identify the remote range a local correction would replace.
+      this.host.setState("noticeText", t("browser.manualTextCorrection"));
+    } else if (["insertText", "insertFromPaste"].includes(event.inputType) && text) {
+      this.runAfterClick((client, targetId) => insertBrowserText(client, { targetId, text }));
+    } else {
+      const key =
+        event.inputType === "deleteContentBackward"
+          ? "Backspace"
+          : event.inputType === "deleteContentForward"
+            ? "Delete"
+            : event.inputType === "insertLineBreak" || event.inputType === "insertParagraph"
+              ? "Enter"
+              : null;
+      if (key) {
+        this.runAfterClick((client, targetId) => pressBrowserKey(client, { targetId, key }));
+      }
+    }
+    // insertFromComposition follows compositionend on WebKit; the end event already sent it.
+    if (input instanceof HTMLTextAreaElement) {
+      input.value = "";
+    }
   }
 
   handleViewportKeydown(event: KeyboardEvent): void {
     if (this.host.mode !== "interact" || !this.host.view) {
       return;
     }
-    if (event.metaKey || event.ctrlKey || event.altKey) {
+    if (
+      event.isComposing ||
+      event.keyCode === 229 ||
+      this.compositionCurrent ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.altKey
+    ) {
       return;
     }
     const key = event.key;
-    const targetId = this.host.activeTargetId;
-    if (!browserPanelShouldForwardKey(key) || !targetId) {
+    if (!browserPanelShouldForwardKey(key)) {
       return;
     }
     event.preventDefault();
-    void this.host.runAction((client) => pressBrowserKey(client, { targetId, key }));
+    this.runAfterClick((client, targetId) => pressBrowserKey(client, { targetId, key }));
+  }
+
+  handleViewportPaste(event: ClipboardEvent): void {
+    // Clipboard bytes belong to the remote field, never the local textarea or chat.
+    event.preventDefault();
+    event.stopPropagation();
+    if (!event.clipboardData?.types.includes("text/plain")) {
+      return;
+    }
+    const text = event.clipboardData.getData("text/plain");
+    if (text) {
+      this.runAfterClick((client, targetId) => insertBrowserText(client, { targetId, text }));
+    }
+  }
+
+  private runAfterClick(
+    action: (client: BrowserRequestClient, targetId: string) => Promise<void>,
+  ): void {
+    const targetId = this.host.activeTargetId;
+    const client = this.host.operations.captureClient();
+    if (
+      !client ||
+      !targetId ||
+      this.host.view?.targetId !== targetId ||
+      this.host.mode !== "interact"
+    ) {
+      return;
+    }
+    const epoch = this.host.operations.epoch;
+    const generation = this.inputGeneration;
+    const run = (): Promise<boolean> | undefined => {
+      if (
+        !this.host.operations.isLive(epoch, client) ||
+        this.host.activeTargetId !== targetId ||
+        this.host.view?.targetId !== targetId ||
+        this.host.mode !== "interact" ||
+        this.inputGeneration !== generation
+      ) {
+        return undefined;
+      }
+      return this.host.runAction((actionClient) => action(actionClient, targetId));
+    };
+    const click = this.pendingClick;
+    const afterClick = () =>
+      click ? click.then((succeeded) => (succeeded ? run() : undefined)) : run();
+    // Text, deletion and submit must reach the same focused field in input order.
+    this.pendingText = this.pendingText
+      ? this.pendingText.then(afterClick)
+      : Promise.resolve(afterClick());
   }
 
   handleOverlayPointerDown(event: PointerEvent): void {
@@ -166,27 +414,47 @@ export class BrowserPanelInputController {
       void this.sendAnnotation({ element: this.host.inspected });
       return;
     }
-    if (this.host.mode !== "annotate") {
+    if (this.host.mode !== "annotate" || event.button !== 0 || this.drawingGesture) {
       return;
     }
     const point = browserPanelNormalizedPoint(this.stageElement(), event);
     if (!point) {
       return;
     }
-    (event.target as HTMLElement).setPointerCapture?.(event.pointerId);
-    this.drawingStroke = { points: [point] };
-    this.host.setState("strokes", [...this.host.strokes, this.drawingStroke]);
+    const captureTarget =
+      event.currentTarget instanceof HTMLElement
+        ? event.currentTarget
+        : event.target instanceof HTMLElement
+          ? event.target
+          : null;
+    if (!captureTarget) {
+      return;
+    }
+    event.preventDefault();
+    try {
+      captureTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // Detached and synthetic targets can reject capture; owner filtering still applies.
+    }
+    const gesture = {
+      pointerId: event.pointerId,
+      captureTarget,
+      stroke: { points: [point] },
+    };
+    this.drawingGesture = gesture;
+    this.host.setState("strokes", [...this.host.strokes, gesture.stroke]);
     this.paintOverlay();
   }
 
   handleOverlayPointerMove(event: PointerEvent): void {
     if (this.host.mode === "annotate") {
-      if (!this.drawingStroke) {
+      const gesture = this.drawingGesture;
+      if (!gesture || event.pointerId !== gesture.pointerId) {
         return;
       }
       const point = browserPanelNormalizedPoint(this.stageElement(), event);
       if (point) {
-        this.drawingStroke.points.push(point);
+        gesture.stroke.points.push(point);
         this.paintOverlay();
       }
       return;
@@ -196,8 +464,25 @@ export class BrowserPanelInputController {
     }
   }
 
-  handleOverlayPointerUp(): void {
-    this.drawingStroke = null;
+  handleOverlayPointerUp(event: PointerEvent): void {
+    if (event.pointerId === this.drawingGesture?.pointerId) {
+      this.drawingGesture = null;
+    }
+  }
+
+  cancelOverlayPointerGesture(): void {
+    const gesture = this.drawingGesture;
+    this.drawingGesture = null;
+    if (!gesture) {
+      return;
+    }
+    try {
+      if (gesture.captureTarget.hasPointerCapture(gesture.pointerId)) {
+        gesture.captureTarget.releasePointerCapture(gesture.pointerId);
+      }
+    } catch {
+      // Capture may already be gone because its canvas was detached.
+    }
   }
 
   private queueInspect(event: PointerEvent): void {
@@ -247,18 +532,19 @@ export class BrowserPanelInputController {
   }
 
   undoStroke(): void {
+    this.cancelOverlayPointerGesture();
     this.host.setState("strokes", this.host.strokes.slice(0, -1));
-    this.drawingStroke = null;
     this.paintOverlay();
   }
 
   clearStrokes(): void {
+    this.cancelOverlayPointerGesture();
     this.host.setState("strokes", []);
-    this.drawingStroke = null;
     this.paintOverlay();
   }
 
   async sendAnnotation(params: { element?: BrowserInspectedNode | null }): Promise<void> {
+    this.cancelOverlayPointerGesture();
     const view = this.host.view;
     const tab = this.host.tabs.find((entry) => entry.id === this.host.activeTargetId);
     const element = params.element ?? null;
@@ -279,14 +565,12 @@ export class BrowserPanelInputController {
       this.host.reportError(error);
       return;
     }
-    if (result === "unhandled") {
+    if (result !== "accepted") {
       this.host.setState("noticeText", null);
-      this.host.setState("errorText", t("browser.noChatTarget"));
-      return;
-    }
-    if (result === "rejected") {
-      this.host.setState("noticeText", null);
-      this.host.setState("errorText", t("browser.annotationLimitReached"));
+      this.host.setState(
+        "errorText",
+        t(result === "unhandled" ? "browser.noChatTarget" : "browser.annotationLimitReached"),
+      );
       return;
     }
     this.host.setState("errorText", null);

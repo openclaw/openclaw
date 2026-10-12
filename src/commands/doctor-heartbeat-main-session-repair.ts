@@ -1,123 +1,52 @@
-/** Doctor repair for main sessions accidentally occupied by synthetic heartbeat transcripts. */
 import fs from "node:fs";
 import { StringDecoder } from "node:string_decoder";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
-import type { note } from "../../packages/terminal-core/src/note.js";
-import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
+import { isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { formatSessionArchiveTimestamp } from "../config/sessions/artifacts.js";
-import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import {
   resolveSessionFilePathCore,
   type resolveSessionFilePathOptions,
 } from "../config/sessions/paths.js";
+import { applySessionEntryLifecycleMutation } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { updateLegacySessionStore } from "../infra/state-migrations.legacy-session-store.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { clearTuiLastSessionPointers } from "../tui/tui-last-session.js";
+import type { DoctorPrompter } from "./doctor-prompter.js";
+import { countLabel } from "./doctor-state-integrity-format.js";
 
-/** Chunk size for sync transcript scans. */
 const TRANSCRIPT_SCAN_CHUNK_BYTES = 64 * 1024;
 // Cap incomplete/complete JSONL records so a missing newline or huge line cannot
 // recreate full-file allocation after chunked reads. Oversized records fail closed.
 const TRANSCRIPT_RECORD_MAX_CHARS = 256 * 1024;
 
-type DoctorPrompterLike = {
-  confirmRuntimeRepair: (params: {
-    message: string;
-    initialValue?: boolean;
-    requiresInteractiveConfirmation?: boolean;
-  }) => Promise<boolean>;
-  note?: typeof note;
-};
+type HeartbeatMainSessionStore =
+  | { kind: "legacy"; path: string }
+  | { kind: "sqlite"; agentId: string; path: string };
 
 type TranscriptHeartbeatSummary = {
-  inspectedMessages: number;
-  userMessages: number;
   heartbeatUserMessages: number;
   nonHeartbeatUserMessages: number;
-  assistantMessages: number;
-  heartbeatOkAssistantMessages: number;
 };
-
-type HeartbeatMainSessionRepairCandidate = {
-  reason: "metadata" | "transcript";
-  summary?: TranscriptHeartbeatSummary;
-};
-
-type HeartbeatMainSessionRepairDeclined = {
-  declineReason: "record-too-large";
-  reason?: undefined;
-};
-
-function countLabel(count: number, singular: string, plural = `${singular}s`): string {
-  return `${count} ${count === 1 ? singular : plural}`;
-}
-
-function sessionEntryHasSyntheticHeartbeatOwnership(entry: SessionEntry): boolean {
-  return (
-    typeof entry.heartbeatIsolatedBaseSessionKey === "string" &&
-    entry.heartbeatIsolatedBaseSessionKey.trim().length > 0
-  );
-}
-
-function parseTranscriptMessageLine(line: string): { role: string; content?: unknown } | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(line);
-  } catch {
-    return null;
-  }
-  const record = asNullableObjectRecord(parsed);
-  if (!record) {
-    return null;
-  }
-  const nested = asNullableObjectRecord(record.message);
-  const message = nested ?? record;
-  const role = message.role;
-  if (typeof role !== "string") {
-    return null;
-  }
-  return { role, content: message.content };
-}
 
 function accumulateTranscriptHeartbeatMessage(
   summary: TranscriptHeartbeatSummary,
   line: string,
 ): void {
-  const trimmed = line.trim();
-  if (!trimmed) {
+  const record = asNullableObjectRecord(safeParseJson(line.trim()));
+  const message = asNullableObjectRecord(record?.message) ?? record;
+  if (message?.role !== "user") {
     return;
   }
-  const message = parseTranscriptMessageLine(trimmed);
-  if (!message) {
-    return;
-  }
-  summary.inspectedMessages += 1;
-  if (message.role === "user") {
-    summary.userMessages += 1;
-    if (isHeartbeatUserMessage(message)) {
-      summary.heartbeatUserMessages += 1;
-    } else {
-      summary.nonHeartbeatUserMessages += 1;
-    }
-    return;
-  }
-  if (message.role === "assistant") {
-    summary.assistantMessages += 1;
-    if (isHeartbeatOkResponse(message)) {
-      summary.heartbeatOkAssistantMessages += 1;
-    }
+  if (isHeartbeatUserMessage({ role: message.role, content: message.content })) {
+    summary.heartbeatUserMessages += 1;
+  } else {
+    summary.nonHeartbeatUserMessages += 1;
   }
 }
 
-/**
- * Scans a transcript JSONL file in fixed-size chunks so doctor repair never loads
- * the whole file into a single string (large poisoned heartbeat transcripts).
- *
- * Incomplete lines are retained only up to TRANSCRIPT_RECORD_MAX_CHARS; larger
- * records decline classification so repair stays fail-closed.
- */
+// Chunked reads bound memory even for poisoned transcripts; oversized records decline repair.
 function scanTranscriptHeartbeatMessages(
   transcriptPath: string,
 ): TranscriptHeartbeatSummary | "record-too-large" | null {
@@ -128,12 +57,8 @@ function scanTranscriptHeartbeatMessages(
     return null;
   }
   const summary: TranscriptHeartbeatSummary = {
-    inspectedMessages: 0,
-    userMessages: 0,
     heartbeatUserMessages: 0,
     nonHeartbeatUserMessages: 0,
-    assistantMessages: 0,
-    heartbeatOkAssistantMessages: 0,
   };
   try {
     const decoder = new StringDecoder("utf8");
@@ -169,55 +94,38 @@ function scanTranscriptHeartbeatMessages(
   } finally {
     fs.closeSync(fd);
   }
-  return summary.inspectedMessages > 0 ? summary : null;
+  return summary;
 }
 
-function summarizeTranscriptHeartbeatMessages(
-  transcriptPath: string,
-): TranscriptHeartbeatSummary | null {
-  const scan = scanTranscriptHeartbeatMessages(transcriptPath);
-  return scan === "record-too-large" ? null : scan;
-}
-
-/**
- * Detects main-session entries that are safe to archive because they only contain heartbeat turns.
- *
- * Metadata ownership is preferred, but transcript inspection catches older stores that lack the
- * heartbeat isolation marker while still containing no human user messages.
- */
+// Older stores can contain only heartbeat turns without the isolation marker.
 function resolveHeartbeatMainSessionRepairCandidate(params: {
   entry: SessionEntry | undefined;
   transcriptPath?: string;
-}): HeartbeatMainSessionRepairCandidate | HeartbeatMainSessionRepairDeclined | null {
+}): { reason: string } | "record-too-large" | null {
   const { entry, transcriptPath } = params;
-  if (!entry) {
+  if (!entry || entry.lastInteractionAt !== undefined) {
     return null;
   }
-  const hasNoRecordedHumanInteraction = entry.lastInteractionAt === undefined;
-  if (!hasNoRecordedHumanInteraction) {
-    return null;
-  }
-  const hasSyntheticHeartbeatOwnership = sessionEntryHasSyntheticHeartbeatOwnership(entry);
-  if (hasSyntheticHeartbeatOwnership && !transcriptPath) {
-    return { reason: "metadata" };
-  }
+  const hasSyntheticHeartbeatOwnership =
+    typeof entry.heartbeatIsolatedBaseSessionKey === "string" &&
+    entry.heartbeatIsolatedBaseSessionKey.trim().length > 0;
   if (!transcriptPath) {
-    return null;
+    return hasSyntheticHeartbeatOwnership ? { reason: "heartbeat metadata" } : null;
   }
   const summary = scanTranscriptHeartbeatMessages(transcriptPath);
   if (summary === "record-too-large") {
-    return { declineReason: "record-too-large" };
+    return summary;
   }
   if (!summary) {
     return null;
   }
-  if (
-    summary.heartbeatUserMessages > 0 &&
-    summary.userMessages === summary.heartbeatUserMessages &&
-    summary.nonHeartbeatUserMessages === 0
-  ) {
+  if (summary.heartbeatUserMessages > 0 && summary.nonHeartbeatUserMessages === 0) {
     // A human message must block repair; moving a real conversation would break resume semantics.
-    return { reason: hasSyntheticHeartbeatOwnership ? "metadata" : "transcript", summary };
+    return {
+      reason: hasSyntheticHeartbeatOwnership
+        ? "heartbeat metadata"
+        : `${summary.heartbeatUserMessages} heartbeat-only user message(s)`,
+    };
   }
   return null;
 }
@@ -233,11 +141,8 @@ function resolveHeartbeatMainRecoveryKey(params: {
   }
   const stamp = formatSessionArchiveTimestamp(params.nowMs).toLowerCase();
   const base = `agent:${parsed.agentId}:heartbeat-recovered-${stamp}`;
-  if (!params.isSessionKeyOccupied(base)) {
-    return base;
-  }
-  for (let index = 2; index <= 100; index += 1) {
-    const candidate = `${base}-${index}`;
+  for (let index = 1; index <= 100; index += 1) {
+    const candidate = index === 1 ? base : `${base}-${index}`;
     if (!params.isSessionKeyOccupied(candidate)) {
       return candidate;
     }
@@ -245,50 +150,19 @@ function resolveHeartbeatMainRecoveryKey(params: {
   return null;
 }
 
-/** Moves a poisoned main-session entry to a recovery key without overwriting existing entries. */
-function moveHeartbeatMainSessionEntry(params: {
-  store: Record<string, SessionEntry>;
-  mainKey: string;
-  recoveredKey: string;
-}): boolean {
-  const entry = params.store[params.mainKey];
-  if (!entry || params.store[params.recoveredKey]) {
-    return false;
-  }
-  params.store[params.recoveredKey] = entry;
-  delete params.store[params.mainKey];
-  return true;
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.doctorHeartbeatMainSessionRepairTestApi")
-  ] = {
-    TRANSCRIPT_RECORD_MAX_CHARS,
-    moveHeartbeatMainSessionEntry,
-    resolveHeartbeatMainSessionRepairCandidate,
-    summarizeTranscriptHeartbeatMessages,
-  };
-}
-
-/**
- * Prompts to archive a heartbeat-owned main session and clears stale TUI restore state.
- *
- * The session store is rechecked inside the update transaction so concurrent session activity
- * prevents moving a newly-human main session.
- */
+// Recheck inside the update transaction so concurrent human activity prevents archival.
 export async function repairHeartbeatPoisonedMainSession(params: {
-  cfg: OpenClawConfig;
+  mainKey: string;
   mainEntry?: SessionEntry;
   isSessionKeyOccupied: (sessionKey: string) => boolean;
-  absoluteStorePath: string;
+  store: HeartbeatMainSessionStore;
   stateDir: string;
   sessionPathOpts: ReturnType<typeof resolveSessionFilePathOptions>;
-  prompter: DoctorPrompterLike;
+  prompter: Pick<DoctorPrompter, "confirmRuntimeRepair">;
   warnings: string[];
   changes: string[];
 }): Promise<boolean> {
-  const mainKey = resolveMainSessionKey(params.cfg);
+  const mainKey = params.mainKey;
   const mainEntry = params.mainEntry;
   if (!mainEntry?.sessionId) {
     return false;
@@ -303,6 +177,9 @@ export async function repairHeartbeatPoisonedMainSession(params: {
   } catch {
     transcriptPath = undefined;
   }
+  if (transcriptPath && !fs.existsSync(transcriptPath)) {
+    transcriptPath = undefined;
+  }
   const candidate = resolveHeartbeatMainSessionRepairCandidate({
     entry: mainEntry,
     transcriptPath,
@@ -310,7 +187,7 @@ export async function repairHeartbeatPoisonedMainSession(params: {
   if (!candidate) {
     return false;
   }
-  if ("declineReason" in candidate) {
+  if (candidate === "record-too-large") {
     params.warnings.push(
       `- Skipped heartbeat main-session recovery for ${mainKey}: the transcript contains a JSONL record larger than ${TRANSCRIPT_RECORD_MAX_CHARS} characters, so doctor left it unchanged.`,
     );
@@ -326,13 +203,9 @@ export async function repairHeartbeatPoisonedMainSession(params: {
     );
     return false;
   }
-  const reason =
-    candidate.reason === "metadata"
-      ? "heartbeat metadata"
-      : `${candidate.summary?.heartbeatUserMessages ?? 0} heartbeat-only user message(s)`;
   params.warnings.push(
     [
-      `- Main session ${mainKey} appears to be a heartbeat-owned session (${reason}).`,
+      `- Main session ${mainKey} appears to be a heartbeat-owned session (${candidate.reason}).`,
       `  Doctor can move it to ${recoveredKey} and let the next interactive launch create a fresh main session.`,
     ].join("\n"),
   );
@@ -344,26 +217,47 @@ export async function repairHeartbeatPoisonedMainSession(params: {
     return false;
   }
   let movedEntry: SessionEntry | undefined;
-  await updateLegacySessionStore(params.absoluteStorePath, (currentStore) => {
-    const currentEntry = currentStore[mainKey];
-    const currentCandidate = resolveHeartbeatMainSessionRepairCandidate({
-      entry: currentEntry,
-      transcriptPath,
+  if (params.store.kind === "sqlite") {
+    const result = await applySessionEntryLifecycleMutation({
+      agentId: params.store.agentId,
+      removals: [
+        {
+          archiveRemovedTranscript: false,
+          expectedEntry: mainEntry,
+          sessionKey: mainKey,
+        },
+      ],
+      skipMaintenance: true,
+      storePath: params.store.path,
+      upserts: [{ entry: mainEntry, requiresRemovalSessionKey: mainKey, sessionKey: recoveredKey }],
     });
-    if (!currentCandidate || "declineReason" in currentCandidate) {
-      return;
+    if (result.removedSessionKeys.includes(mainKey)) {
+      movedEntry = mainEntry;
     }
-    if (moveHeartbeatMainSessionEntry({ store: currentStore, mainKey, recoveredKey })) {
-      movedEntry = currentEntry;
-    }
-  });
+  } else {
+    await updateLegacySessionStore(params.store.path, (currentStore) => {
+      const currentEntry = currentStore[mainKey];
+      const currentCandidate = resolveHeartbeatMainSessionRepairCandidate({
+        entry: currentEntry,
+        transcriptPath,
+      });
+      if (!currentCandidate || currentCandidate === "record-too-large") {
+        return;
+      }
+      if (currentEntry && !currentStore[recoveredKey]) {
+        currentStore[recoveredKey] = currentEntry;
+        delete currentStore[mainKey];
+        movedEntry = currentEntry;
+      }
+    });
+  }
   if (!movedEntry) {
     params.warnings.push(`- Main session ${mainKey} changed before repair could move it.`);
     return false;
   }
   let clearedPointers = 0;
   try {
-    clearedPointers = clearTuiLastSessionPointers({
+    clearedPointers = await clearTuiLastSessionPointers({
       stateDir: params.stateDir,
       sessionKeys: new Set([mainKey]),
     });

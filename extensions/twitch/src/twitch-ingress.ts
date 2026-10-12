@@ -22,12 +22,6 @@ type TwitchIngressPayload = {
 
 type TwitchIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "onAdoptionFinalizing">;
 
-type TwitchIngress = {
-  accept: (message: TwitchChatMessage) => Promise<void>;
-  start: () => void;
-  stop: () => Promise<void>;
-};
-
 const TwitchIngressPermanentError = createChannelIngressError("TwitchIngressPermanentError");
 
 function inspectTwitchIngressEvent(event: unknown): { eventId: string; laneKey: string } {
@@ -48,15 +42,13 @@ function inspectTwitchIngressEvent(event: unknown): { eventId: string; laneKey: 
 }
 
 function deserializeTwitchIngressEvent(rawEvent: string): unknown {
-  let parsed: unknown;
   try {
-    parsed = JSON.parse(rawEvent);
+    return JSON.parse(rawEvent);
   } catch (error) {
     throw new TwitchIngressPermanentError("Twitch ingress event JSON is invalid.", {
       cause: error,
     });
   }
-  return parsed;
 }
 
 function normalizeClaimedTwitchMessage(event: unknown, claimedId: string): TwitchChatMessage {
@@ -99,7 +91,7 @@ export function createTwitchIngress(options: {
   deliver: (message: TwitchChatMessage, lifecycle: TwitchIngressLifecycle) => Promise<void>;
   queue?: ChannelIngressQueue<TwitchIngressPayload>;
   pollIntervalMs?: number;
-}): TwitchIngress {
+}) {
   const queue =
     options.queue ??
     getTwitchRuntime().state.openChannelIngressQueue<TwitchIngressPayload>({
@@ -138,6 +130,8 @@ export function createTwitchIngress(options: {
             handedOff = true;
             lifecycle.onDeferred();
           },
+          onDeferredHeartbeat: () => lifecycle.onDeferredHeartbeat?.(),
+          deferredHeartbeatIntervalMs: lifecycle.deferredHeartbeatIntervalMs,
           onAbandoned: async () => {
             handedOff = true;
             await lifecycle.onAbandoned();
@@ -181,7 +175,7 @@ export function createTwitchIngress(options: {
   let stopTask: Promise<void> | undefined;
 
   return {
-    accept: (message) => {
+    accept: (message: TwitchChatMessage) => {
       if (stopped) {
         return Promise.reject(stoppedError());
       }

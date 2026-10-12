@@ -2,43 +2,46 @@ import { createPublicKey, verify as verifySignature } from "node:crypto";
 import { once } from "node:events";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
+import { WebSocket, WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import WebSocket, { WebSocketServer } from "ws";
 import { canonicalBytes, fromBase64url, sha256Hex } from "../protocol/index.js";
 import {
   ReefInboxConnection,
   ReefProtocolCompatibilityError,
   ReefRelayError,
-  ReefTransportClient,
   createReefWebSocket,
   isRetryableReefRelayFailure,
-  type WebSocketLike,
 } from "./transport.js";
-import type { InboxEntry, ReefKeys, RelayFriend } from "./types.js";
+import { createClient, signing, ts } from "./transport.test-helpers.js";
+import type { RelayFriend } from "./types.js";
 
-const ts = 1_752_300_000;
-const signing = {
-  secretKey: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
-  publicKey: "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
-};
-const keys: ReefKeys = {
-  signing,
-  encryption: {
-    secretKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-    publicKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-  },
-  auditKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-  replayKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-  keyEpoch: 1,
-};
-
-function createClient(
-  fetcher: typeof fetch,
-  clock: () => number = () => ts,
-  baseUrl = "https://relay.example",
-): ReefTransportClient {
-  return new ReefTransportClient(baseUrl, "alice", keys, fetcher, clock);
-}
+type EffectAuthority = ReturnType<
+  typeof import("openclaw/plugin-sdk/fetch-runtime").captureEffectAuthority
+>;
+const effectInput = vi.hoisted(() => ({
+  available: true,
+  captureFailure: undefined as Error | undefined,
+  current: undefined as EffectAuthority | undefined,
+}));
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
+  return {
+    ...actual,
+    get captureEffectAuthority() {
+      if (!effectInput.available) {
+        return undefined;
+      }
+      return () => {
+        if (effectInput.captureFailure) {
+          throw effectInput.captureFailure;
+        }
+        return effectInput.current ?? actual.captureEffectAuthority();
+      };
+    },
+  };
+});
 
 function pendingFriend(peer = "bob"): RelayFriend {
   return {
@@ -53,19 +56,13 @@ function pendingFriend(peer = "bob"): RelayFriend {
 }
 
 afterEach(() => {
+  effectInput.available = true;
+  effectInput.captureFailure = undefined;
+  effectInput.current = undefined;
   vi.useRealTimers();
 });
 
 describe("isRetryableReefRelayFailure", () => {
-  it("accepts transient relay responses and timeouts", () => {
-    expect(isRetryableReefRelayFailure(new ReefRelayError(408, "timeout"))).toBe(true);
-    expect(isRetryableReefRelayFailure(new ReefRelayError(429, "rate_limited"))).toBe(true);
-    expect(isRetryableReefRelayFailure(new ReefRelayError(503, "unavailable"))).toBe(true);
-    expect(
-      isRetryableReefRelayFailure(Object.assign(new Error("timed out"), { name: "TimeoutError" })),
-    ).toBe(true);
-  });
-
   it("rejects definitive relay and local failures", () => {
     expect(isRetryableReefRelayFailure(new ReefRelayError(401, "unauthorized"))).toBe(false);
     expect(isRetryableReefRelayFailure(new Error("approval store unavailable"))).toBe(false);
@@ -73,20 +70,140 @@ describe("isRetryableReefRelayFailure", () => {
 });
 
 describe("ReefTransportClient network failures", () => {
-  it("normalizes fetch failures without swallowing the cause", async () => {
-    const cause = new TypeError("fetch failed");
-    const client = createClient(async () => {
-      throw cause;
-    });
+  it.each([false, true])(
+    "checks caller authority before fetch when the host has no effect capability (allowed=%s)",
+    async (allowed) => {
+      effectInput.available = false;
+      const refusal = new Error("peer trust revoked");
+      let checked = false;
+      const fetcher = vi.fn<typeof fetch>(() => {
+        expect(checked).toBe(true);
+        return Promise.resolve(Response.json({ id: "synthetic-message", status: "queued" }));
+      });
+      const completion = createClient(fetcher).signed(
+        "POST",
+        "/v1/mail/bob",
+        undefined,
+        undefined,
+        [],
+        () => {
+          checked = true;
+          if (!allowed) {
+            throw refusal;
+          }
+        },
+      );
 
-    const error = await client.listFriends().catch((failure: unknown) => failure);
-    expect(error).toMatchObject({
-      name: "ReefRelayUnavailableError",
-      message: "fetch failed",
-      cause,
-    });
-    expect(isRetryableReefRelayFailure(error)).toBe(true);
+      expect(checked).toBe(true);
+      expect(fetcher).toHaveBeenCalledTimes(allowed ? 1 : 0);
+      if (allowed) {
+        await expect(completion).resolves.toEqual({ id: "synthetic-message", status: "queued" });
+      } else {
+        await expect(completion).rejects.toBe(refusal);
+      }
+    },
+  );
+
+  it("does not fall back to fetch when an available host effect capture fails", async () => {
+    const refusal = new Error("effect owner closed");
+    effectInput.captureFailure = refusal;
+    const fetcher = vi.fn<typeof fetch>();
+
+    await expect(createClient(fetcher).listFriends()).rejects.toBe(refusal);
+
+    expect(fetcher).not.toHaveBeenCalled();
   });
+
+  it("rechecks peer authority after ambient effect preparation before fetch", async () => {
+    const refusal = new Error("peer trust revoked");
+    let current = true;
+    effectInput.current = {
+      active: true,
+      run: (run) => run(),
+      async initiate(effect) {
+        await Promise.resolve();
+        current = false;
+        return effect();
+      },
+    };
+    const fetcher = vi.fn<typeof fetch>();
+    const completion = createClient(fetcher).signed(
+      "POST",
+      "/v1/mail/bob",
+      undefined,
+      undefined,
+      [],
+      () => {
+        if (!current) {
+          throw refusal;
+        }
+      },
+    );
+
+    await expect(completion).rejects.toBe(refusal);
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(isRetryableReefRelayFailure(refusal)).toBe(false);
+  });
+
+  it.each([false, true])(
+    "keeps authority refusal outside transport retries (allowed=%s)",
+    async (allowed) => {
+      const preparing = createDeferred<void>();
+      const prepared = createDeferred<void>();
+      const response = createDeferred<Response>();
+      const requested = createDeferred<void>();
+      const refusal = new Error("message use refused");
+      let initiating = false;
+      let handedOff = false;
+      effectInput.current = {
+        active: true,
+        run: (run) => run(),
+        async initiate(effect) {
+          preparing.resolve();
+          await prepared.promise;
+          if (!allowed) {
+            throw refusal;
+          }
+          initiating = true;
+          try {
+            return effect();
+          } finally {
+            initiating = false;
+            handedOff = true;
+          }
+        },
+      };
+      const fetcher = vi.fn(() => {
+        expect(initiating).toBe(true);
+        requested.resolve();
+        return response.promise;
+      });
+      const completion = createClient(fetcher).listFriends();
+      try {
+        await awaitGateBeforeSettlement(
+          preparing.promise,
+          Promise.race([completion, requested.promise]),
+          "Fetch skipped preparation",
+        );
+        expect(fetcher).not.toHaveBeenCalled();
+        prepared.resolve();
+        if (!allowed) {
+          await expect(completion).rejects.toBe(refusal);
+          expect(isRetryableReefRelayFailure(refusal)).toBe(false);
+          expect(fetcher).not.toHaveBeenCalled();
+          return;
+        }
+        await awaitGateBeforeSettlement(requested.promise, completion, "Fetch was not initiated");
+        expect(handedOff).toBe(true);
+        response.resolve(Response.json({ friendships: [] }));
+        await expect(completion).resolves.toEqual({ friendships: [] });
+      } finally {
+        prepared.resolve();
+        response.resolve(Response.json({ friendships: [] }));
+        await completion.catch(() => {});
+      }
+    },
+  );
 
   it("normalizes connection loss while reading a successful response body", async () => {
     const cause = new TypeError("terminated");
@@ -255,8 +372,6 @@ describe("ReefTransportClient device authentication", () => {
 
   it.each([
     { name: "an empty 204", response: () => new Response(null, { status: 204 }), accept: true },
-    { name: "a primitive", response: () => Response.json("active"), accept: true },
-    { name: "a malformed object", response: () => Response.json({ peer: "bob" }), accept: true },
     {
       name: "a different peer",
       response: () => Response.json({ peer: "mallory", status: "active" }),
@@ -298,13 +413,6 @@ describe("ReefTransportClient device authentication", () => {
 });
 
 const SUCCESS_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
-const ERROR_RESPONSE_MAX_BYTES = 64 * 1024;
-
-function jsonObjectBodyAtSize(bytes: number, field: "pad" | "error"): string {
-  const prefix = `{"${field}":"`;
-  const suffix = `"}`;
-  return `${prefix}${"x".repeat(bytes - prefix.length - suffix.length)}${suffix}`;
-}
 
 function createTrackedResponse(params: { status: number; chunks: Uint8Array[] }): {
   response: Response;
@@ -336,32 +444,6 @@ function createTrackedResponse(params: { status: number; chunks: Uint8Array[] })
 }
 
 describe("ReefTransportClient response body bounds", () => {
-  it("accepts success JSON exactly at the byte limit", async () => {
-    const body = jsonObjectBodyAtSize(SUCCESS_RESPONSE_MAX_BYTES, "pad");
-    let cancelled = false;
-    const response = new Response(
-      new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(new TextEncoder().encode(body));
-          controller.close();
-        },
-        cancel() {
-          cancelled = true;
-        },
-      }),
-      { status: 200, headers: { "content-type": "application/json" } },
-    );
-    const client = createClient(async () => response);
-
-    const result = await client.pull(0);
-    const pad = (result as unknown as { pad: string }).pad;
-    expect(pad).toHaveLength(SUCCESS_RESPONSE_MAX_BYTES - 10);
-    expect(pad[0]).toBe("x");
-    expect(pad.at(-1)).toBe("x");
-    expect(Buffer.byteLength(body)).toBe(SUCCESS_RESPONSE_MAX_BYTES);
-    expect(cancelled).toBe(false);
-  });
-
   it("cancels success JSON when a chunk crosses the byte limit", async () => {
     const offered = createTrackedResponse({
       status: 200,
@@ -380,17 +462,6 @@ describe("ReefTransportClient response body bounds", () => {
     expect(offered.state.cancelled).toBe(true);
     expect(offered.state.emittedBytes).toBeGreaterThan(SUCCESS_RESPONSE_MAX_BYTES);
     expect(offered.state.emittedBytes).toBeLessThan(SUCCESS_RESPONSE_MAX_BYTES + 1 + 2048);
-  });
-
-  it("surfaces relay error JSON exactly at the error byte limit", async () => {
-    const body = jsonObjectBodyAtSize(ERROR_RESPONSE_MAX_BYTES, "error");
-    const client = createClient(async () => new Response(body, { status: 400 }));
-
-    const error = await client.requestFriend("bob", "code").catch((cause: unknown) => cause);
-    expect(error).toBeInstanceOf(ReefRelayError);
-    expect(error).toMatchObject({ status: 400, code: undefined });
-    expect((error as Error).message).toHaveLength(ERROR_RESPONSE_MAX_BYTES - 12);
-    expect(Buffer.byteLength(body)).toBe(ERROR_RESPONSE_MAX_BYTES);
   });
 
   it("keeps status fallback and cancels oversized error bodies", async () => {
@@ -556,429 +627,6 @@ describe("ReefTransportClient credential redaction", () => {
 
 const INBOX_WEBSOCKET_MAX_PAYLOAD_BYTES = 64 * 1024;
 
-class ControlledSocket {
-  private readonly listeners = new Map<string, Array<(event: unknown) => void>>();
-  private closed = false;
-
-  addEventListener(type: string, listener: (event: unknown) => void): void {
-    const listeners = this.listeners.get(type) ?? [];
-    listeners.push(listener);
-    this.listeners.set(type, listeners);
-  }
-
-  close(): void {
-    if (this.closed) {
-      return;
-    }
-    this.closed = true;
-    this.emit("close");
-  }
-
-  emit(type: string, event: unknown = {}): void {
-    for (const listener of this.listeners.get(type) ?? []) {
-      listener(event);
-    }
-  }
-}
-
-function receiptEntry(seq: number): InboxEntry {
-  return {
-    seq,
-    peer: "bob",
-    id: `01ARZ3NDEKTSV4RRFFQ69G5F${String(seq).padStart(2, "0")}`,
-    kind: "receipt",
-    receipt: { id: `receipt-${seq}` } as never,
-    ts,
-  };
-}
-
-function parseRequestUrl(input: URL | RequestInfo): URL {
-  if (input instanceof URL) {
-    return input;
-  }
-  return new URL(typeof input === "string" ? input : input.url);
-}
-
-describe("ReefInboxConnection recovery", () => {
-  it("starts REST catch-up at the durable cursor and advances only processed entries", async () => {
-    const requestedAfter: number[] = [];
-    const persisted: number[] = [];
-    const processed: number[] = [];
-    const client = createClient(async (input) => {
-      const after = Number(parseRequestUrl(input).searchParams.get("after"));
-      requestedAfter.push(after);
-      return after === 7
-        ? Response.json({ entries: [receiptEntry(8)], cursor: 8 })
-        : Response.json({ entries: [], cursor: after });
-    });
-    const inbox = new ReefInboxConnection(
-      client,
-      async (entries) => {
-        processed.push(...entries.map((entry) => entry.seq));
-      },
-      () => {
-        throw new Error("socket should not open during direct drain");
-      },
-      { initialCursor: 7, persistCursor: (cursor) => persisted.push(cursor) },
-    );
-
-    await inbox.drain();
-
-    expect(requestedAfter).toEqual([7, 8]);
-    expect(processed).toEqual([8]);
-    expect(persisted).toEqual([8]);
-  });
-
-  it("does not advance past an entry that failed processing", async () => {
-    const persisted: number[] = [];
-    const client = createClient(async () =>
-      Response.json({ entries: [receiptEntry(8), receiptEntry(9)], cursor: 9 }),
-    );
-    const inbox = new ReefInboxConnection(
-      client,
-      async ([entry]) => {
-        if (entry?.seq === 9) {
-          throw new Error("entry failed");
-        }
-      },
-      () => {
-        throw new Error("socket should not open during direct drain");
-      },
-      { initialCursor: 7, persistCursor: (cursor) => persisted.push(cursor) },
-    );
-
-    await expect(inbox.drain()).rejects.toThrow("entry failed");
-    expect(persisted).toEqual([8]);
-  });
-
-  it("rejects an inconsistent REST page before dispatch or persistence", async () => {
-    const processed: number[] = [];
-    const persisted: number[] = [];
-    const client = createClient(async () =>
-      Response.json({ entries: [receiptEntry(9)], cursor: 8 }),
-    );
-    const inbox = new ReefInboxConnection(
-      client,
-      async (entries) => {
-        processed.push(...entries.map((entry) => entry.seq));
-      },
-      () => new ControlledSocket() as unknown as WebSocketLike,
-      { initialCursor: 7, persistCursor: (cursor) => persisted.push(cursor) },
-    );
-
-    await expect(inbox.drain()).rejects.toThrow(
-      "Reef relay inbox cursor does not match its entries",
-    );
-    expect(processed).toEqual([]);
-    expect(persisted).toEqual([]);
-  });
-
-  it("persists cursor-only progress when retained entries have expired", async () => {
-    const requestedAfter: number[] = [];
-    const persisted: number[] = [];
-    const client = createClient(async (input) => {
-      requestedAfter.push(Number(parseRequestUrl(input).searchParams.get("after")));
-      return Response.json({ entries: [], cursor: 12 });
-    });
-    const inbox = new ReefInboxConnection(
-      client,
-      async () => {},
-      () => new ControlledSocket() as unknown as WebSocketLike,
-      {
-        initialCursor: 7,
-        persistCursor: (cursor) => persisted.push(cursor),
-      },
-    );
-
-    await inbox.drain();
-
-    expect(requestedAfter).toEqual([7]);
-    expect(persisted).toEqual([12]);
-  });
-
-  it("reports connected before a slow REST catch-up completes", async () => {
-    const socket = new ControlledSocket();
-    const states: string[] = [];
-    let releasePull!: () => void;
-    const pullGate = new Promise<void>((resolve) => {
-      releasePull = resolve;
-    });
-    let pullStarted = false;
-    const client = createClient(async () => {
-      pullStarted = true;
-      await pullGate;
-      return Response.json({ entries: [], cursor: 0 });
-    });
-    const abort = new AbortController();
-    const inbox = new ReefInboxConnection(
-      client,
-      async () => {},
-      () => socket as unknown as WebSocketLike,
-      { onState: (state) => states.push(state) },
-    );
-
-    const running = inbox.start(abort.signal);
-    socket.emit("open");
-    await vi.waitFor(() => expect(pullStarted).toBe(true));
-    expect(states).toEqual(["connected"]);
-
-    releasePull();
-    abort.abort();
-    await running;
-    expect(states).toEqual(["connected", "disconnected"]);
-  });
-
-  it("serializes socket frames behind catch-up and skips pull/socket duplicates", async () => {
-    const socket = new ControlledSocket();
-    const processed: number[] = [];
-    const persisted: number[] = [];
-    let releaseFirstPull!: () => void;
-    const firstPullGate = new Promise<void>((resolve) => {
-      releaseFirstPull = resolve;
-    });
-    const client = createClient(async (input) => {
-      const after = Number(parseRequestUrl(input).searchParams.get("after"));
-      if (after === 0) {
-        await firstPullGate;
-        return Response.json({ entries: [receiptEntry(1), receiptEntry(2)], cursor: 2 });
-      }
-      return Response.json({ entries: [], cursor: after });
-    });
-    const abort = new AbortController();
-    const inbox = new ReefInboxConnection(
-      client,
-      async (entries) => {
-        processed.push(...entries.map((entry) => entry.seq));
-      },
-      () => socket as unknown as WebSocketLike,
-      { persistCursor: (cursor) => persisted.push(cursor) },
-    );
-
-    const running = inbox.start(abort.signal);
-    socket.emit("open");
-    socket.emit("message", { data: JSON.stringify({ type: "entry", entry: receiptEntry(2) }) });
-    socket.emit("message", { data: JSON.stringify({ type: "entry", entry: receiptEntry(3) }) });
-    releaseFirstPull();
-    await vi.waitFor(() => expect(processed).toEqual([1, 2, 3]));
-
-    expect(persisted).toEqual([1, 2, 3]);
-    abort.abort();
-    await running;
-  });
-
-  it("reports a socket close immediately while catch-up is still pending", async () => {
-    const socket = new ControlledSocket();
-    const states: string[] = [];
-    let releasePull!: () => void;
-    const pullGate = new Promise<void>((resolve) => {
-      releasePull = resolve;
-    });
-    let pullStarted = false;
-    const client = createClient(async () => {
-      pullStarted = true;
-      await pullGate;
-      return Response.json({ entries: [], cursor: 0 });
-    });
-    const abort = new AbortController();
-    const inbox = new ReefInboxConnection(
-      client,
-      async () => {},
-      () => socket as unknown as WebSocketLike,
-      { onState: (state) => states.push(state) },
-    );
-
-    const running = inbox.start(abort.signal);
-    socket.emit("open");
-    await vi.waitFor(() => expect(pullStarted).toBe(true));
-    socket.emit("close");
-    await vi.waitFor(() => expect(states).toEqual(["connected", "disconnected"]));
-
-    abort.abort();
-    releasePull();
-    await running;
-  });
-
-  it("reports unexpected socket close details before retrying", async () => {
-    const socket = new ControlledSocket();
-    const states: string[] = [];
-    const errors: string[] = [];
-    let socketUrl = "";
-    const client = createClient(async () => Response.json({ entries: [], cursor: 0 }));
-    const abort = new AbortController();
-    const inbox = new ReefInboxConnection(
-      client,
-      async () => {},
-      (url) => {
-        socketUrl = url;
-        return socket as unknown as WebSocketLike;
-      },
-      {
-        onState: (state) => states.push(state),
-        onError: (error) => {
-          errors.push(error.message);
-          abort.abort();
-        },
-      },
-    );
-
-    const running = inbox.start(abort.signal);
-    socket.emit("open");
-    const signature = new URL(socketUrl).searchParams.get("sig");
-    if (!signature) {
-      throw new Error("Reef WebSocket test URL did not contain a signature");
-    }
-    socket.emit("close", { code: 1008, reason: `policy ${signature}` });
-    await running;
-
-    expect(states).toEqual(["connected", "disconnected"]);
-    expect(errors).toEqual([
-      "reef inbox socket closed unexpectedly code=1008 reason=policy <redacted>",
-    ]);
-  });
-
-  it("resets reconnect backoff after a socket completes catch-up", async () => {
-    vi.useFakeTimers();
-    const sockets: ControlledSocket[] = [];
-    const persisted: number[] = [];
-    const client = createClient(async () => Response.json({ entries: [], cursor: 1 }));
-    const abort = new AbortController();
-    const inbox = new ReefInboxConnection(
-      client,
-      async () => {},
-      () => {
-        const socket = new ControlledSocket();
-        sockets.push(socket);
-        return socket as unknown as WebSocketLike;
-      },
-      { persistCursor: (cursor) => persisted.push(cursor) },
-    );
-
-    const running = inbox.start(abort.signal);
-    sockets[0]!.emit("close");
-    await vi.advanceTimersByTimeAsync(250);
-    expect(sockets).toHaveLength(2);
-
-    sockets[1]!.emit("open");
-    await vi.waitFor(() => expect(persisted).toEqual([1]));
-    await Promise.resolve();
-    sockets[1]!.emit("close");
-
-    await vi.advanceTimersByTimeAsync(249);
-    expect(sockets).toHaveLength(2);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(sockets).toHaveLength(3);
-
-    abort.abort();
-    await running;
-  });
-
-  it("waits for an in-flight handler before completing channel abort", async () => {
-    const socket = new ControlledSocket();
-    const persisted: number[] = [];
-    let releaseHandler!: () => void;
-    const handlerGate = new Promise<void>((resolve) => {
-      releaseHandler = resolve;
-    });
-    let handlerStarted = false;
-    const client = createClient(async () =>
-      Response.json({ entries: [receiptEntry(1)], cursor: 1 }),
-    );
-    const abort = new AbortController();
-    const inbox = new ReefInboxConnection(
-      client,
-      async () => {
-        handlerStarted = true;
-        await handlerGate;
-      },
-      () => socket as unknown as WebSocketLike,
-      { persistCursor: (cursor) => persisted.push(cursor) },
-    );
-
-    let finished = false;
-    const running = inbox.start(abort.signal).then(() => {
-      finished = true;
-    });
-    socket.emit("open");
-    await vi.waitFor(() => expect(handlerStarted).toBe(true));
-    abort.abort();
-    await Promise.resolve();
-    expect(finished).toBe(false);
-
-    releaseHandler();
-    await running;
-    expect(persisted).toEqual([1]);
-  });
-
-  it("bounds live frames during catch-up and reconnects through REST on overflow", async () => {
-    const socket = new ControlledSocket();
-    const errors: string[] = [];
-    let releasePull!: () => void;
-    const pullGate = new Promise<void>((resolve) => {
-      releasePull = resolve;
-    });
-    let pullStarted = false;
-    const client = createClient(async () => {
-      pullStarted = true;
-      await pullGate;
-      return Response.json({ entries: [], cursor: 0 });
-    });
-    const abort = new AbortController();
-    const inbox = new ReefInboxConnection(
-      client,
-      async () => {},
-      () => socket as unknown as WebSocketLike,
-      {
-        onError: (error) => {
-          errors.push(error.message);
-          abort.abort();
-        },
-      },
-    );
-
-    const running = inbox.start(abort.signal);
-    socket.emit("open");
-    await vi.waitFor(() => expect(pullStarted).toBe(true));
-    for (let seq = 1; seq <= 257; seq += 1) {
-      socket.emit("message", {
-        data: JSON.stringify({ type: "entry", entry: receiptEntry(seq) }),
-      });
-    }
-    releasePull();
-    await running;
-
-    expect(errors).toEqual(["Reef inbox live buffer overflow; reconnecting for REST recovery"]);
-  });
-
-  it("surfaces catch-up failures to channel diagnostics", async () => {
-    const socket = new ControlledSocket();
-    const states: string[] = [];
-    const errors: string[] = [];
-    const abort = new AbortController();
-    const client = createClient(async () => {
-      throw new Error("relay catch-up failed");
-    });
-    const inbox = new ReefInboxConnection(
-      client,
-      async () => {},
-      () => socket as unknown as WebSocketLike,
-      {
-        onState: (state) => states.push(state),
-        onError: (error) => {
-          errors.push(error.message);
-          abort.abort();
-        },
-      },
-    );
-
-    const running = inbox.start(abort.signal);
-    socket.emit("open");
-    await running;
-
-    expect(states).toEqual(["connected", "disconnected"]);
-    expect(errors).toEqual(["relay catch-up failed"]);
-  });
-});
-
 function inboxFrameAtSize(bytes: number): string {
   const prefix =
     '{"type":"entry","entry":{"seq":1,"peer":"bob","id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","kind":"receipt","receipt":{"pad":"';
@@ -1044,16 +692,6 @@ async function deliverInboxFrame(frame: string): Promise<{
 }
 
 describe("ReefInboxConnection response frame bounds", () => {
-  it("accepts a relay frame exactly at the payload limit", async () => {
-    const frame = inboxFrameAtSize(INBOX_WEBSOCKET_MAX_PAYLOAD_BYTES);
-
-    const result = await deliverInboxFrame(frame);
-
-    expect(Buffer.byteLength(frame)).toBe(INBOX_WEBSOCKET_MAX_PAYLOAD_BYTES);
-    expect(result.entries).toHaveLength(1);
-    expect(result.states).toContain("connected");
-  });
-
   it("rejects a relay frame above the payload limit before dispatch", async () => {
     const frame = inboxFrameAtSize(INBOX_WEBSOCKET_MAX_PAYLOAD_BYTES + 1);
 

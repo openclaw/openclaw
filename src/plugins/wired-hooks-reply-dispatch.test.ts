@@ -3,7 +3,14 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { buildTestCtx } from "../auto-reply/reply/test-ctx.js";
+import type {
+  PluginHookRegistrationOptions,
+  PluginHookReplyDispatchContext,
+} from "./hook-types.js";
+import { createHookRunner } from "./hooks.js";
 import { createHookRunnerWithRegistry } from "./hooks.test-fixtures.js";
+import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
+import { createPluginRecord } from "./status.test-fixtures.js";
 
 const replyDispatchEvent = {
   ctx: buildTestCtx({ SessionKey: "agent:test:session", BodyForAgent: "hello" }),
@@ -34,66 +41,51 @@ function firstErrorLog(logger: { error: ReturnType<typeof vi.fn> }) {
   return logger.error.mock.calls[0];
 }
 
+function createRegisteredReplyHook(eligibleDispatchKinds: unknown) {
+  const builder = createTestPluginRegistry();
+  const api = builder.createApi(createPluginRecord({ id: "scoped-dispatch", origin: "bundled" }), {
+    config: {},
+  });
+  const result = { handled: true, queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
+  const handler = vi.fn(() => result);
+  const options: PluginHookRegistrationOptions<"reply_dispatch"> = {};
+  // JavaScript plugins can supply invalid metadata despite the typed registration contract.
+  Reflect.set(options, "eligibleDispatchKinds", eligibleDispatchKinds);
+  api.on("reply_dispatch", handler, options);
+  return { handler, result, runner: createHookRunner(builder.registry) };
+}
+
 describe("reply_dispatch hook runner", () => {
-  it("stops at the first handler that claims reply dispatch", async () => {
-    const first = vi.fn().mockResolvedValue({
-      handled: true,
-      queuedFinal: true,
-      counts: { tool: 0, block: 1, final: 1 },
-    });
-    const second = vi.fn().mockResolvedValue({
-      handled: true,
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    });
-    const { runner } = createHookRunnerWithRegistry([
-      { hookName: "reply_dispatch", handler: first },
-      { hookName: "reply_dispatch", handler: second },
-    ]);
+  it.each([
+    { dispatchKind: "agent", eligible: false },
+    { dispatchKind: "acp", eligible: true },
+    { dispatchKind: "unknown-runtime", eligible: true },
+  ])(
+    "keeps invocation and presence checks aligned for $dispatchKind",
+    async ({ dispatchKind, eligible }) => {
+      const { handler, result, runner } = createRegisteredReplyHook(["acp"]);
+      const ctx: PluginHookReplyDispatchContext = { ...replyDispatchCtx };
+      Reflect.set(ctx, "dispatchKind", dispatchKind);
 
-    const result = await runner.runReplyDispatch(replyDispatchEvent, replyDispatchCtx);
+      expect(runner.hasHooks("reply_dispatch", ctx)).toBe(eligible);
+      await expect(runner.runReplyDispatch(replyDispatchEvent, ctx)).resolves.toEqual(
+        eligible ? result : undefined,
+      );
+      expect(handler).toHaveBeenCalledTimes(eligible ? 1 : 0);
+    },
+  );
 
-    expect(result).toEqual({
-      handled: true,
-      queuedFinal: true,
-      counts: { tool: 0, block: 1, final: 1 },
-    });
-    expect(first).toHaveBeenCalledTimes(1);
-    expect(second).not.toHaveBeenCalled();
-  });
+  it.each([undefined, ["acp", "unknown-runtime"]].map((eligibility) => ({ eligibility })))(
+    "keeps omitted or malformed dispatch eligibility unscoped ($eligibility)",
+    async ({ eligibility }) => {
+      const { handler, result, runner } = createRegisteredReplyHook(eligibility);
+      const ctx: PluginHookReplyDispatchContext = { ...replyDispatchCtx, dispatchKind: "agent" };
 
-  it("continues to the next handler when a higher-priority handler throws", async () => {
-    const logger = {
-      warn: vi.fn(),
-      error: vi.fn(),
-    };
-    const failing = vi.fn().mockRejectedValue(new Error("boom"));
-    const succeeding = vi.fn().mockResolvedValue({
-      handled: true,
-      queuedFinal: false,
-      counts: { tool: 1, block: 0, final: 0 },
-    });
-    const { runner } = createHookRunnerWithRegistry(
-      [
-        { hookName: "reply_dispatch", handler: failing },
-        { hookName: "reply_dispatch", handler: succeeding },
-      ],
-      { logger },
-    );
-
-    const result = await runner.runReplyDispatch(replyDispatchEvent, replyDispatchCtx);
-
-    expect(result).toEqual({
-      handled: true,
-      queuedFinal: false,
-      counts: { tool: 1, block: 0, final: 0 },
-    });
-    expect(logger.error).toHaveBeenCalledTimes(1);
-    expect(firstErrorLog(logger)).toEqual([
-      "[hooks] reply_dispatch handler from test-plugin failed: boom",
-    ]);
-    expect(succeeding).toHaveBeenCalledTimes(1);
-  });
+      expect(runner.hasHooks("reply_dispatch", { dispatchKind: "agent" })).toBe(true);
+      await expect(runner.runReplyDispatch(replyDispatchEvent, ctx)).resolves.toEqual(result);
+      expect(handler).toHaveBeenCalledOnce();
+    },
+  );
 
   it("honors per-hook registration timeouts and continues to the next handler", async () => {
     vi.useFakeTimers();

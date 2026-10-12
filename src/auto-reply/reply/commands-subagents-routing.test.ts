@@ -1,4 +1,4 @@
-// Tests subagent routing commands and active focus handoff.
+// Tests subagent inspection command routing and authorization.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -9,20 +9,14 @@ import {
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext } from "../templating.js";
-import {
-  resolveHandledPrefix,
-  resolveRequesterSessionKey,
-  resolveSubagentsAction,
-} from "./commands-subagents-dispatch.js";
+import { handleAcpCommand } from "./commands-acp.js";
 import { handleSubagentsCommand } from "./commands-subagents.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
-const COMMAND = "/subagents";
+const readContextMock = vi.hoisted(() => vi.fn());
 
-const listControlledSubagentRunsMock = vi.hoisted(() => vi.fn(() => []));
-
-vi.mock("./commands-subagents-control.runtime.js", () => ({
-  listControlledSubagentRuns: listControlledSubagentRunsMock,
+vi.mock("../../agents/subagents/registry/subagent-control-scope.js", () => ({
+  buildControlledSubagentRunsReadContext: readContextMock,
 }));
 
 const formatAllowFrom = ({ allowFrom }: { allowFrom: Array<string | number> }) => {
@@ -123,45 +117,21 @@ describe("subagents command dispatch", () => {
     }
   });
 
-  it("prefers native command target session keys", () => {
-    const params = buildParams("/subagents list", {
-      CommandSource: "native",
-      CommandTargetSessionKey: "agent:main:main",
-      SessionKey: "agent:main:slack:slash:u1",
-    });
-    expect(resolveRequesterSessionKey(params)).toBe("agent:main:main");
+  it.each(["/unknown"])("does not dispatch unrelated command %s", async (command) => {
+    expect(await handleSubagentsCommand(buildParams(command), true)).toBeNull();
+    expect(readContextMock).not.toHaveBeenCalled();
   });
 
-  it("falls back to the current session for text commands", () => {
-    const params = buildParams("/subagents list", {
-      CommandSource: "text",
-      SessionKey: "agent:main:whatsapp:direct:u1",
-      CommandTargetSessionKey: "agent:main:main",
-    });
-    expect(resolveRequesterSessionKey(params)).toBe("agent:main:whatsapp:direct:u1");
+  it.each(["steer 1 continue"])("shows %s help without reading session state", async (action) => {
+    const params = buildParams(`/subagents ${action}`, { SessionKey: "" });
+    const result = await handleSubagentsCommand(params, true);
+    expect(result?.reply?.text).toContain("/subagents list");
+    expect(result?.reply?.text).toContain("/session unbind");
+    expect(readContextMock).not.toHaveBeenCalled();
   });
 
-  it("maps slash aliases to the right handled prefix", () => {
-    expect(resolveHandledPrefix("/subagents list")).toBe(COMMAND);
-    expect(resolveHandledPrefix("/kill 1")).toBeNull();
-    expect(resolveHandledPrefix("/steer 1 continue")).toBeNull();
-    expect(resolveHandledPrefix("/unknown")).toBeNull();
-  });
-
-  it("maps prefixes and args to subagent actions", () => {
-    const listTokens = ["list"];
-    expect(resolveSubagentsAction({ handledPrefix: COMMAND, restTokens: listTokens })).toBe("list");
-    expect(listTokens).toStrictEqual([]);
-
-    const steerTokens = ["steer", "1", "continue"];
-    expect(resolveSubagentsAction({ handledPrefix: COMMAND, restTokens: steerTokens })).toBeNull();
-    expect(steerTokens).toEqual(["steer", "1", "continue"]);
-  });
-
-  it("returns null for invalid /subagents actions", () => {
-    const restTokens = ["foo"];
-    expect(resolveSubagentsAction({ handledPrefix: COMMAND, restTokens })).toBeNull();
-    expect(restTokens).toEqual(["foo"]);
+  it.each(["/acpXYZ"])("does not dispatch ACP lookalike %s", async (command) => {
+    expect(await handleAcpCommand(buildParams(command), true)).toBeNull();
   });
 
   it("rejects native subagents commands from non-owner senders when the plugin enforces owner-only commands", async () => {
@@ -199,6 +169,6 @@ describe("subagents command dispatch", () => {
     expect(auth.senderIsOwner).toBe(false);
     expect(auth.isAuthorizedSender).toBe(false);
     expect(result).toEqual({ shouldContinue: false });
-    expect(listControlledSubagentRunsMock).not.toHaveBeenCalled();
+    expect(readContextMock).not.toHaveBeenCalled();
   });
 });

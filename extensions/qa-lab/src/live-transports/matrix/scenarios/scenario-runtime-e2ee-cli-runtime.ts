@@ -1,13 +1,13 @@
-// Qa Matrix plugin module implements CLI runtime setup for E2EE scenarios.
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir } from "node:fs/promises";
 import path from "node:path";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { runMatrixQaOpenClawCli, startMatrixQaOpenClawCli } from "./scenario-runtime-cli.js";
 import {
   assertMatrixQaPrivatePathMode,
-  buildMatrixQaEmptyMatrixCliConfig,
-} from "./scenario-runtime-e2ee-cli-shared.js";
+  createMatrixQaOpenClawCliRuntime,
+  runMatrixQaOpenClawCli,
+} from "./scenario-runtime-cli.js";
+import { buildMatrixQaCliE2eeAccountConfig } from "./scenario-runtime-e2ee-cli-config.js";
+import { buildMatrixQaEmptyMatrixCliConfig } from "./scenario-runtime-e2ee-cli-shared.js";
 import {
   requireMatrixQaCliRuntimeEnv,
   requireMatrixQaE2eeOutputDir,
@@ -21,93 +21,20 @@ export async function createMatrixQaCliSelfVerificationRuntime(params: {
   deviceId: string;
   userId: string;
 }) {
-  const outputDir = requireMatrixQaE2eeOutputDir(params.context);
-  const rootDir = await mkdtemp(
-    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-matrix-cli-qa-"),
-  );
-  const artifactDir = path.join(
-    outputDir,
-    "cli-self-verification",
-    randomUUID().replaceAll("-", "").slice(0, 12),
-  );
-  const stateDir = path.join(rootDir, "state");
-  const configPath = path.join(rootDir, "config.json");
-  await chmod(rootDir, 0o700).catch(() => undefined);
-  await assertMatrixQaPrivatePathMode(rootDir, "Matrix QA CLI temp directory");
-  await mkdir(artifactDir, { mode: 0o700, recursive: true });
-  await chmod(artifactDir, 0o700).catch(() => undefined);
-  await assertMatrixQaPrivatePathMode(artifactDir, "Matrix QA CLI artifact directory");
-  await mkdir(stateDir, { mode: 0o700, recursive: true });
-  await chmod(stateDir, 0o700).catch(() => undefined);
-  await assertMatrixQaPrivatePathMode(stateDir, "Matrix QA CLI state directory");
-  await writeFile(
-    configPath,
-    `${JSON.stringify(
-      {
-        plugins: {
-          allow: ["matrix"],
-          entries: {
-            matrix: { enabled: true },
-          },
-        },
-        channels: {
-          matrix: {
-            defaultAccount: params.accountId,
-            accounts: {
-              [params.accountId]: {
-                accessToken: params.accessToken,
-                deviceId: params.deviceId,
-                encryption: true,
-                homeserver: params.context.baseUrl,
-                initialSyncLimit: 0,
-                name: "Matrix QA CLI self-verification",
-                network: {
-                  dangerouslyAllowPrivateNetwork: true,
-                },
-                startupVerification: "off",
-                userId: params.userId,
-              },
-            },
-          },
-        },
-      },
-      null,
-      2,
-    )}\n`,
-    { flag: "wx", mode: 0o600 },
-  );
-  await assertMatrixQaPrivatePathMode(configPath, "Matrix QA CLI config file");
-  const env = {
-    ...requireMatrixQaCliRuntimeEnv(params.context),
-    FORCE_COLOR: "0",
-    NO_COLOR: "1",
-    OPENCLAW_CONFIG_PATH: configPath,
-    OPENCLAW_NO_AUTO_UPDATE: "1",
-    OPENCLAW_STATE_DIR: stateDir,
-  };
-  const run = async (args: string[], timeoutMs = params.context.timeoutMs, stdin?: string) =>
-    await runMatrixQaOpenClawCli({
-      args,
-      env,
-      stdin,
-      timeoutMs,
-    });
-  const start = (args: string[], timeoutMs = params.context.timeoutMs) =>
-    startMatrixQaOpenClawCli({
-      args,
-      env,
-      timeoutMs,
-    });
-  return {
-    configPath,
-    dispose: async () => {
-      await rm(rootDir, { force: true, recursive: true });
-    },
-    run,
-    rootDir: artifactDir,
-    start,
-    stateDir,
-  };
+  return await createMatrixQaCliE2eeSetupRuntime({
+    artifactLabel: "cli-self-verification",
+    context: params.context,
+    initialConfig: buildMatrixQaCliE2eeAccountConfig({
+      accountId: params.accountId,
+      accessToken: params.accessToken,
+      baseUrl: params.context.baseUrl,
+      deviceId: params.deviceId,
+      encryption: true,
+      initialSyncLimit: 0,
+      name: "Matrix QA CLI self-verification",
+      userId: params.userId,
+    }),
+  });
 }
 
 export async function createMatrixQaCliE2eeSetupRuntime(params: {
@@ -115,61 +42,22 @@ export async function createMatrixQaCliE2eeSetupRuntime(params: {
   context: MatrixQaScenarioContext;
   initialConfig?: Record<string, unknown>;
 }) {
-  const outputDir = requireMatrixQaE2eeOutputDir(params.context);
-  const rootDir = await mkdtemp(
-    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-matrix-e2ee-setup-qa-"),
-  );
-  const artifactDir = path.join(
-    outputDir,
-    params.artifactLabel,
-    randomUUID().replaceAll("-", "").slice(0, 12),
-  );
-  const stateDir = path.join(rootDir, "state");
-  const configPath = path.join(rootDir, "config.json");
-  await chmod(rootDir, 0o700).catch(() => undefined);
-  await assertMatrixQaPrivatePathMode(rootDir, "Matrix QA CLI temp directory");
-  await mkdir(artifactDir, { mode: 0o700, recursive: true });
-  await chmod(artifactDir, 0o700).catch(() => undefined);
-  await assertMatrixQaPrivatePathMode(artifactDir, "Matrix QA CLI artifact directory");
-  await mkdir(stateDir, { mode: 0o700, recursive: true });
-  await chmod(stateDir, 0o700).catch(() => undefined);
-  await assertMatrixQaPrivatePathMode(stateDir, "Matrix QA CLI state directory");
-  await writeFile(
-    configPath,
-    `${JSON.stringify(params.initialConfig ?? buildMatrixQaEmptyMatrixCliConfig(), null, 2)}\n`,
-    { flag: "wx", mode: 0o600 },
-  );
-  await assertMatrixQaPrivatePathMode(configPath, "Matrix QA CLI config file");
-  const env = {
-    ...requireMatrixQaCliRuntimeEnv(params.context),
-    FORCE_COLOR: "0",
-    NO_COLOR: "1",
-    OPENCLAW_CONFIG_PATH: configPath,
-    OPENCLAW_NO_AUTO_UPDATE: "1",
-    OPENCLAW_STATE_DIR: stateDir,
-  };
-  const run = async (args: string[], timeoutMs = params.context.timeoutMs, stdin?: string) =>
-    await runMatrixQaOpenClawCli({
-      args,
-      env,
-      stdin,
-      timeoutMs,
-    });
-  const start = (args: string[], timeoutMs = params.context.timeoutMs) =>
-    startMatrixQaOpenClawCli({
-      args,
-      env,
-      timeoutMs,
-    });
+  const runtime = await createMatrixQaOpenClawCliRuntime({
+    artifactLabel: params.artifactLabel,
+    initialConfig: params.initialConfig ?? buildMatrixQaEmptyMatrixCliConfig(),
+    kind: "e2ee-setup",
+    outputDir: requireMatrixQaE2eeOutputDir(params.context),
+    runtimeEnv: () => requireMatrixQaCliRuntimeEnv(params.context),
+  });
   return {
-    configPath,
-    dispose: async () => {
-      await rm(rootDir, { force: true, recursive: true });
-    },
-    run,
-    rootDir: artifactDir,
-    start,
-    stateDir,
+    configPath: runtime.configPath,
+    dispose: runtime.dispose,
+    run: (args: string[], timeoutMs = params.context.timeoutMs, stdin?: string) =>
+      runtime.run(args, { stdin, timeoutMs }),
+    rootDir: runtime.artifactDir,
+    start: (args: string[], timeoutMs = params.context.timeoutMs) =>
+      runtime.start(args, { timeoutMs }),
+    stateDir: runtime.stateDir,
   };
 }
 

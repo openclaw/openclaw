@@ -19,53 +19,18 @@
   background: var(--bg-elevated);
   color: var(--text);
   box-shadow: var(--shadow-sm);
-  animation: menu-in 140ms var(--ease-out);
-}
-
-.sidebar-issues-panel__backdrop,
-.sidebar-issues-panel__grabber {
-  display: none;
-}
-
-.shell--mobile-nav .sidebar-issues-panel__backdrop {
-  position: fixed;
-  z-index: 120;
-  inset: 0;
-  display: block;
-  width: 100%;
-  height: 100%;
-  padding: 0;
-  border: 0;
-  background: color-mix(in srgb, black 42%, transparent);
-  animation: fade-in 140ms var(--ease-out);
 }
 
 .shell--mobile-nav .sidebar-issues-panel {
-  inset: auto 0 0 !important;
-  width: 100%;
-  block-size: 68dvh;
-  max-block-size: calc(100dvh - env(safe-area-inset-top, 0px));
-  padding-block-end: env(safe-area-inset-bottom, 0px);
+  inset: auto var(--safe-area-right) calc(100% - var(--shell-canvas-height)) var(--safe-area-left) !important;
+  width: auto;
+  block-size: calc(var(--shell-canvas-height) * 0.68);
+  max-block-size: calc(var(--shell-canvas-height) - var(--safe-area-top));
+  padding-block-end: var(--shell-safe-area-bottom);
   border-width: 1px 0 0;
   border-radius: var(--radius-xl) var(--radius-xl) 0 0;
-  animation: sidebar-issues-sheet-in 180ms var(--ease-out);
-}
-
-.shell--mobile-nav .sidebar-issues-panel__grabber {
-  display: block;
-  width: 36px;
-  height: 4px;
-  flex: none;
-  align-self: center;
-  margin-block: 8px 2px;
-  border-radius: var(--radius-full);
-  background: var(--border-strong);
-}
-
-@keyframes sidebar-issues-sheet-in {
-  from {
-    transform: translateY(100%);
-  }
+  background: var(--secondary);
+  animation: sidebar-sheet-in 240ms cubic-bezier(0.32, 0.72, 0, 1);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -81,7 +46,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 8px 12px;
+  padding: 12px;
   background: var(--secondary);
 }
 
@@ -101,55 +66,53 @@
   color: var(--muted);
 }
 
-.sidebar-issues-panel__heading-icon svg {
-  width: 16px;
-  height: 16px;
+.sidebar-issues-panel__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-inline-start: auto;
 }
 
-.sidebar-issues-panel__ask {
-  flex: 0 0 32px;
-}
-
-.sidebar-issues-panel__ask svg {
-  width: 20px;
-  height: 20px;
+.sidebar-issues-panel__dismiss-shown {
+  min-height: 28px;
 }
 
 .sidebar-issues-panel__mobile-close {
   display: none;
 }
 
-.shell--mobile-nav .sidebar-issues-panel__mobile-close {
+.shell--mobile-nav .sidebar-issues-panel__header-actions .sidebar-brand__icon {
   display: inline-grid;
+  width: 36px;
+  height: 36px;
   place-items: center;
-}
-
-.shell--mobile-nav .sidebar-issues-panel__ask {
-  position: absolute;
-  z-index: 3;
-  inset-inline-end: 12px;
-  inset-block-end: calc(12px + env(safe-area-inset-bottom, 0px));
-  width: 40px;
-  height: 40px;
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
-  background: var(--bg-elevated);
-  box-shadow: var(--shadow-sm);
+  background: color-mix(in srgb, var(--text) 3%, transparent);
+  transition: transform 140ms var(--ease-out);
 }
 
-.shell--mobile-nav .sidebar-issues-panel__ask:hover,
-.shell--mobile-nav .sidebar-issues-panel__ask:focus-visible {
-  background: var(--bg-hover);
+.shell--mobile-nav .sidebar-issues-panel__header-actions .sidebar-brand__icon:active {
+  transform: scale(0.97);
 }
 
-.shell--mobile-nav .sidebar-issues-panel__list {
-  padding-block-end: 58px;
-  scroll-padding-block-end: 58px;
+.shell--mobile-nav .sidebar-issues-panel__dismiss {
+  width: 40px;
+  height: 40px;
+  flex-basis: 40px;
+}
+
+.shell--mobile-nav .sidebar-issues-panel__dismiss-shown {
+  min-height: 40px;
 }
 
 /* Hub-tab strip (shared hub-tabs.css owns the tab look); this block only
    places it in the popover: the track hairline doubles as the header/list
    separator, so it must span the full panel width. */
+:root[data-theme-mode="dark"] .sidebar-issues-panel__tabs.hub-tabs {
+  --track-color: color-mix(in srgb, var(--border-strong) 60%, transparent);
+}
+
 .sidebar-issues-panel__tabs {
   display: block;
   flex: none;
@@ -159,14 +122,28 @@
 
 .sidebar-issues-panel__tabs::part(tabs) {
   box-sizing: border-box;
-  width: 100%;
+  flex-shrink: 0;
+  width: max-content;
+  min-width: 100%;
   padding-inline: 8px;
+}
+
+.shell--mobile-nav .sidebar-issues-panel__tabs::part(tabs) {
+  gap: 0;
+  padding-inline: 0;
+}
+
+.sidebar-issues-panel__tabs wa-tab.hub-tab {
+  /* Keep labels and counts whole; Web Awesome scrolls the row when they no longer fit. */
+  flex: 1 0 auto;
 }
 
 .sidebar-issues-panel__tabs wa-tab.hub-tab::part(base) {
   /* Popover tabs are tap targets (mobile sheet); keep a taller hit area than
      the page-hub sub tabs. */
-  padding-block: 6px 9px;
+  width: 100%;
+  justify-content: center;
+  padding-block: 8px 11px;
 }
 
 .sidebar-issues-panel__list-wrap {
@@ -175,6 +152,7 @@
   min-height: 0;
   flex: 1 1 auto;
   overflow: hidden;
+  background: var(--bg-elevated);
 }
 
 .sidebar-issues-panel__list {
@@ -228,20 +206,21 @@
   align-items: center;
   justify-content: center;
   flex-direction: column;
-  gap: 5px;
+  gap: 4px;
   padding: 24px;
   color: var(--muted);
+  font-size: var(--control-ui-text-sm);
   text-align: center;
 }
 
 .sidebar-issues-panel__empty strong {
   color: var(--text-strong);
-  font-size: var(--control-ui-text-sm);
+  font-size: var(--control-ui-text-md);
 }
 
 .sidebar-issues-panel__empty-icon {
   display: inline-flex;
-  margin-block-end: 3px;
+  margin-block-end: 12px;
   color: var(--muted);
 }
 
@@ -270,6 +249,24 @@
 
 .sidebar-issues-panel__update {
   display: block;
+}
+
+.sidebar-issues-panel__mentions-note {
+  display: grid;
+  flex: none;
+  justify-items: start;
+  gap: 8px;
+  padding: 10px 12px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+footer.sidebar-issues-panel__mentions-note {
+  padding: 12px;
+  border-block-start: 1px solid var(--border);
+  font-size: var(--control-ui-text-sm);
 }
 
 .sidebar-issues-panel__update > .sidebar-issues-panel__details {
@@ -305,15 +302,16 @@
 }
 
 .sidebar-issues-panel__summary:hover,
-.sidebar-issues-panel__details[open] > .sidebar-issues-panel__summary {
-  background: var(--bg-hover);
-}
-
+.sidebar-issues-panel__details[open] > .sidebar-issues-panel__summary,
 .sidebar-issues-panel__details[open] {
   background: var(--bg-hover);
 }
 
-.sidebar-issues-panel__summary:focus-visible {
+.sidebar-issues-panel__summary:focus-visible,
+.sidebar-issues-panel__action:focus-visible,
+.sidebar-issues-panel__navigation-link:focus-visible,
+.sidebar-issues-panel__dismiss:focus-visible,
+.sidebar-approval-row__open-session:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
@@ -365,11 +363,6 @@
   color: var(--text);
 }
 
-.sidebar-issues-panel__action:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 .sidebar-issues-panel__icon {
   display: inline-grid;
   width: 28px;
@@ -380,6 +373,7 @@
   color: color-mix(in srgb, var(--muted) 72%, transparent);
 }
 
+.sidebar-issues-panel__heading-icon svg,
 .sidebar-issues-panel__icon svg,
 .sidebar-issues-panel__chevron svg {
   width: 16px;
@@ -433,13 +427,20 @@
   align-items: center;
   gap: 8px;
   color: inherit;
-  text-decoration: none;
+}
+
+.sidebar-issues-panel__summary--navigation {
+  position: relative;
+}
+
+.sidebar-issues-panel__navigation-link::after {
+  position: absolute;
+  inset: 0;
+  content: "";
 }
 
 .sidebar-issues-panel__navigation-link:focus-visible {
   border-radius: var(--radius-sm);
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 .sidebar-issues-panel__entity {
@@ -464,6 +465,8 @@
 }
 
 .sidebar-issues-panel__dismiss {
+  position: relative;
+  z-index: 1;
   display: inline-grid;
   width: 24px;
   height: 24px;
@@ -475,10 +478,7 @@
   background: transparent;
   color: var(--muted);
   cursor: var(--cursor-action);
-  opacity: 0;
-  pointer-events: none;
   transition:
-    opacity var(--duration-fast) ease,
     background var(--duration-fast) ease,
     color var(--duration-fast) ease;
 }
@@ -488,26 +488,11 @@
   height: 14px;
 }
 
-.sidebar-issues-panel__summary:focus-within .sidebar-issues-panel__dismiss {
-  opacity: 1;
-  pointer-events: auto;
-}
-
 @media (hover: hover) {
-  .sidebar-issues-panel__summary:hover .sidebar-issues-panel__dismiss {
-    opacity: 1;
-    pointer-events: auto;
-  }
-
   .sidebar-issues-panel__dismiss:hover {
     background: var(--bg-hover);
     color: var(--text-strong);
   }
-}
-
-.sidebar-issues-panel__dismiss:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 .sidebar-issues-panel__chevron {
@@ -538,15 +523,19 @@
   gap: 8px;
 }
 
-.sidebar-update-card__compact-reason {
+.sidebar-update-card__compact-reason,
+.sidebar-mention-row__excerpt {
   display: -webkit-box;
   overflow: hidden;
-  margin: 0;
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
   line-height: 1.4;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+}
+
+.sidebar-update-card__compact-reason {
+  margin: 0;
 }
 
 .sidebar-update-card__compact-actions {
@@ -562,14 +551,44 @@
 }
 
 .sidebar-update-card__review--primary {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--accent-foreground);
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--primary-foreground);
 }
 
 .sidebar-update-card__review--primary:hover {
-  background: var(--accent-hover);
-  color: var(--accent-foreground);
+  background: var(--primary-hover);
+  color: var(--primary-foreground);
+}
+
+.sidebar-issues-panel__notification-meta .sidebar-issues-panel__state {
+  flex: 0 1 auto;
+}
+
+.sidebar-issues-panel__age {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  white-space: nowrap;
+}
+
+.sidebar-mention-row__excerpt {
+  margin: 6px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.sidebar-mention-row__actions {
+  margin-block-start: 8px;
+}
+
+.sidebar-mention-row__actions a {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+
+.shell--mobile-nav .sidebar-mention-row__actions .sidebar-issues-panel__action {
+  min-height: 40px;
 }
 
 .sidebar-approval-row {
@@ -703,11 +722,6 @@
 .sidebar-approval-row__open-session:hover {
   background: var(--bg-hover);
   color: var(--text);
-}
-
-.sidebar-approval-row__open-session:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 .sidebar-approval-row__open-session svg {

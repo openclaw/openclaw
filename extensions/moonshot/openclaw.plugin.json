@@ -1,5 +1,6 @@
 {
   "id": "moonshot",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },
@@ -32,7 +33,7 @@
   "modelPricing": {
     "providers": {
       "moonshot": {
-        "openRouter": {
+        "modelsDev": {
           "provider": "moonshotai"
         },
         "liteLLM": {
@@ -42,6 +43,9 @@
     }
   },
   "modelCatalog": {
+    "modelsDev": {
+      "moonshot": "moonshotai"
+    },
     "aliases": {
       "moonshotai": {
         "provider": "moonshot"
@@ -79,7 +83,7 @@
               "input": 3,
               "output": 15,
               "cacheRead": 0.3,
-              "cacheWrite": 0
+              "cacheWrite": 3
             },
             "compat": {
               "supportsReasoningEffort": true,
@@ -211,6 +215,14 @@
       }
     }
   },
+  "configGroups": [
+    {
+      "id": "web-search",
+      "title": "Web search",
+      "order": 10,
+      "properties": ["webSearch"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

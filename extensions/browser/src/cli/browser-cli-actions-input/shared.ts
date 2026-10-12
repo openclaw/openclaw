@@ -1,79 +1,75 @@
-/**
- * Shared helpers for Browser CLI action subcommands.
- */
+import { isUtf8 } from "node:buffer";
 import fs from "node:fs/promises";
-import type { Command } from "commander";
-import { addTimerTimeoutGraceMs } from "openclaw/plugin-sdk/number-runtime";
-import { BROWSER_ACTION_TRANSPORT_SLACK_MS } from "../../browser/act-policy.js";
-import { callBrowserRequest, type BrowserParentOpts } from "../browser-cli-shared.js";
+import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
+import { FsSafeError, readRegularFile } from "openclaw/plugin-sdk/security-runtime";
+import { asRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveBrowserActRequestTimeoutMs } from "../../browser/act-policy.js";
+import type { browserAct } from "../../browser/client-actions.js";
+import type { BrowserActRequest, BrowserFormField } from "../../browser/client-actions.types.js";
+import { normalizeBrowserFormFields } from "../../browser/form-fields.js";
 import {
-  danger,
-  defaultRuntime,
-  normalizeBrowserFormField,
-  normalizeBrowserFormFieldValue,
-  type BrowserFormField,
-} from "../core-api.js";
+  callBrowserRequest,
+  printBrowserJsonResult,
+  type BrowserParentOpts,
+} from "../browser-cli-shared.js";
 
-type BrowserActionContext = {
+type BrowserActionResult = Awaited<ReturnType<typeof browserAct>>;
+
+/** Execute and present an action, preserving recorded interruptions and child failures. */
+export async function runBrowserAction(params: {
   parent: BrowserParentOpts;
-  profile: string | undefined;
-};
-
-const DEFAULT_BROWSER_ACTION_TIMEOUT_MS = 20000;
-
-/** Adds gateway slack to a Browser action timeout so route work can finish cleanly. */
-export function withBrowserActionTimeoutSlack(timeoutMs: number | undefined): number {
-  return (
-    addTimerTimeoutGraceMs(
-      timeoutMs ?? DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
-      BROWSER_ACTION_TRANSPORT_SLACK_MS,
-    ) ?? 1
-  );
-}
-
-/** Resolves inherited Browser action context from a commander command. */
-export function resolveBrowserActionContext(
-  cmd: Command,
-  parentOpts: (cmd: Command) => BrowserParentOpts,
-): BrowserActionContext {
-  const parent = parentOpts(cmd);
-  const profile = parent?.browserProfile;
-  return { parent, profile };
-}
-
-/** Calls the Browser /act route for one CLI action body. */
-export async function callBrowserAct<T = unknown>(params: {
-  parent: BrowserParentOpts;
-  profile?: string;
-  body: Record<string, unknown>;
-  timeoutMs?: number;
-}): Promise<T> {
-  return await callBrowserRequest<T>(
+  body: BrowserActRequest;
+  successMessage?: string | ((result: BrowserActionResult) => string);
+}): Promise<void> {
+  const result = await callBrowserRequest<BrowserActionResult>(
     params.parent,
     {
       method: "POST",
       path: "/act",
-      query: params.profile ? { profile: params.profile } : undefined,
+      query: params.parent.browserProfile ? { profile: params.parent.browserProfile } : undefined,
       body: params.body,
     },
-    { timeoutMs: withBrowserActionTimeoutSlack(params.timeoutMs) },
+    { timeoutMs: resolveBrowserActRequestTimeoutMs(params.body) },
   );
-}
-
-/** Writes Browser action output as JSON or a terse success message. */
-export function logBrowserActionResult(
-  parent: BrowserParentOpts,
-  result: unknown,
-  successMessage: string,
-) {
-  if (parent?.json) {
-    defaultRuntime.writeJson(result);
-    return;
+  const { parent, successMessage } = params;
+  const failures = (result.results ?? []).flatMap((entry, index) =>
+    entry.ok ? [] : [`action ${index + 1}: ${entry.error ?? "failed"}`],
+  );
+  if (!printBrowserJsonResult(parent, result)) {
+    if (failures.length) {
+      defaultRuntime.error(danger(`batch failed: ${failures.join("; ")}`));
+    }
+    if (result.blockedByDialog) {
+      const pending = asRecord(asRecord(result.browserState).dialogs).pending;
+      const ids = Array.isArray(pending)
+        ? pending.flatMap((dialog) => {
+            const id = readStringField(asRecord(dialog), "id");
+            return id ? [JSON.stringify(id)] : [];
+          })
+        : [];
+      defaultRuntime.log(
+        `Action blocked by a modal dialog${ids.length ? ` (${ids.join(", ")})` : ""}. Use openclaw browser dialog --accept or --dismiss${ids.length ? " --dialog-id <id>" : ""} to continue.`,
+      );
+    } else if (result.aborted) {
+      const { reason, afterAction, skipped } = result.aborted;
+      defaultRuntime.log(
+        `Batch stopped after action ${afterAction}: page ${reason === "navigation" ? "navigated" : "closed"}; ${skipped} action(s) skipped. Take a fresh snapshot before continuing.`,
+      );
+    } else if (!failures.length) {
+      if (successMessage !== undefined) {
+        defaultRuntime.log(
+          typeof successMessage === "function" ? successMessage(result) : successMessage,
+        );
+      } else {
+        defaultRuntime.writeJson(result.result ?? null);
+      }
+    }
   }
-  defaultRuntime.log(successMessage);
+  if (failures.length) {
+    defaultRuntime.exit(1);
+  }
 }
 
-/** Requires and trims an element ref, exiting through the CLI runtime on failure. */
 export function requireRef(ref: string | undefined) {
   const refValue = typeof ref === "string" ? ref.trim() : "";
   if (!refValue) {
@@ -84,11 +80,29 @@ export function requireRef(ref: string | undefined) {
   return refValue;
 }
 
-async function readFile(path: string): Promise<string> {
-  return await fs.readFile(path, "utf8");
+async function readActionsFile(filePath: string): Promise<string> {
+  try {
+    // Preserve existing symlinked inputs while rejecting oversized files and FIFOs.
+    const { buffer } = await readRegularFile({
+      filePath: await fs.realpath(filePath),
+      maxBytes: ACTIONS_INPUT_MAX_BYTES,
+    });
+    return decodeJsonInput(buffer, "--actions-file");
+  } catch (cause) {
+    if (cause instanceof FsSafeError && cause.code === "too-large") {
+      throw createActionsInputTooLargeError("--actions-file", cause);
+    }
+    throw cause;
+  }
 }
 
-/** Reads and validates JSON form-field descriptors from inline text or a file. */
+function decodeJsonInput(buffer: Buffer, source: string): string {
+  if (!isUtf8(buffer)) {
+    throw new Error(`${source} must be valid UTF-8.`);
+  }
+  return buffer.toString("utf8");
+}
+
 export async function readFields(opts: {
   fields?: string;
   fieldsFile?: string;
@@ -96,61 +110,52 @@ export async function readFields(opts: {
   if (opts.fields !== undefined && opts.fieldsFile !== undefined) {
     throw new Error("Specify only one of --fields or --fields-file");
   }
-  const payload = opts.fieldsFile ? await readFile(opts.fieldsFile) : (opts.fields ?? "");
+  const payload = opts.fieldsFile
+    ? decodeJsonInput(await fs.readFile(opts.fieldsFile), "--fields-file")
+    : (opts.fields ?? "");
+  return normalizeBrowserFormFields(parseBrowserInputArray(payload, "fields"));
+}
+
+export function parseBrowserInputArray(payload: string, kind: "fields" | "actions"): unknown[] {
   if (!payload.trim()) {
-    throw new Error("fields are required");
+    throw new Error(`${kind} are required`);
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(payload);
   } catch (cause) {
-    throw new Error("fields must be valid JSON.", { cause });
+    throw new Error(`${kind} must be valid JSON${kind === "fields" ? "." : ""}`, { cause });
   }
   if (!Array.isArray(parsed)) {
-    throw new Error("fields must be an array");
+    throw new Error(`${kind} must be ${kind === "fields" ? "an array" : "a JSON array"}`);
   }
-  return parsed.map((entry, index) => {
-    if (!entry || typeof entry !== "object") {
-      throw new Error(`fields[${index}] must be an object`);
-    }
-    const rec = entry as Record<string, unknown>;
-    const parsedField = normalizeBrowserFormField(rec);
-    if (!parsedField) {
-      throw new Error(`fields[${index}] must include ref`);
-    }
-    if (
-      rec.value === undefined ||
-      rec.value === null ||
-      normalizeBrowserFormFieldValue(rec.value) !== undefined
-    ) {
-      return parsedField;
-    }
-    throw new Error(`fields[${index}].value must be string, number, boolean, or null`);
-  });
+  return parsed;
 }
 
-/** Cap on batch action JSON read from stdin; keeps a runaway pipe from filling memory. */
-const ACTIONS_STDIN_MAX_BYTES = 1_000_000;
+const ACTIONS_INPUT_MAX_BYTES = 1_000_000;
 
-/** Reads stdin to a UTF-8 string, throwing once the byte cap is exceeded. */
-async function readStdinText(
-  stream: NodeJS.ReadableStream = process.stdin,
-  maxBytes = ACTIONS_STDIN_MAX_BYTES,
-): Promise<string> {
+function createActionsInputTooLargeError(source: string, cause?: unknown): FsSafeError {
+  return new FsSafeError(
+    "too-large",
+    `${source} exceeds ${ACTIONS_INPUT_MAX_BYTES} bytes. Split the batch plan into smaller files or run multiple openclaw browser batch commands.`,
+    { cause },
+  );
+}
+
+async function readStdinText(): Promise<string> {
   const chunks: Buffer[] = [];
   let total = 0;
-  for await (const chunk of stream) {
+  for await (const chunk of process.stdin) {
     const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     total += buf.length;
-    if (total > maxBytes) {
-      throw new Error(`actions stdin exceeds ${maxBytes} bytes.`);
+    if (total > ACTIONS_INPUT_MAX_BYTES) {
+      throw createActionsInputTooLargeError("--actions-file - stdin");
     }
     chunks.push(buf);
   }
-  return Buffer.concat(chunks).toString("utf8");
+  return decodeJsonInput(Buffer.concat(chunks), "--actions-file - stdin");
 }
 
-/** Reads raw batch actions JSON from inline text, a file path, or stdin (`-`). */
 export async function readActionsPayload(opts: {
   actions?: string;
   actionsFile?: string;
@@ -159,7 +164,9 @@ export async function readActionsPayload(opts: {
     throw new Error("Specify only one of --actions or --actions-file");
   }
   if (opts.actionsFile) {
-    return opts.actionsFile === "-" ? await readStdinText() : await readFile(opts.actionsFile);
+    return opts.actionsFile === "-"
+      ? await readStdinText()
+      : await readActionsFile(opts.actionsFile);
   }
   return opts.actions ?? "";
 }

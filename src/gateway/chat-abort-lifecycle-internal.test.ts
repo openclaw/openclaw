@@ -1,0 +1,489 @@
+import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  bindChatAbortTerminalDispatch,
+  isCurrentChatAbortExecution,
+  markChatAbortTerminalPersistenceError,
+  runWithChatAbortExecution,
+  waitForChatAbortControllerRemoval,
+} from "./chat-abort-lifecycle-internal.js";
+import {
+  abortChatRunById,
+  registerChatAbortController,
+  removeChatAbortControllerEntry,
+  type ChatAbortControllerEntry,
+} from "./chat-abort.js";
+import { renewChatRunExecutionDeadline } from "./chat-run-deadline.js";
+import { createChatRunState } from "./server-chat-state.js";
+
+function registeredRun(onRemoved?: () => void) {
+  const entries = new Map<string, ChatAbortControllerEntry>();
+  const runId = "terminal-drain";
+  const registration = registerChatAbortController({
+    chatAbortControllers: entries,
+    runId,
+    sessionId: "terminal-session",
+    sessionKey: "agent:main:terminal",
+    timeoutMs: 60_000,
+    onRemoved,
+  });
+  const entry = registration.entry;
+  if (!entry) {
+    throw new Error("Expected a registered run");
+  }
+  const drain = () =>
+    waitForChatAbortControllerRemoval({
+      entries,
+      targets: [{ runId, entry }],
+      timeoutMs: 1_000,
+    });
+  return { entries, runId, entry, registration, drain };
+}
+
+it.each(["settled", "pending", "failed"] as const)(
+  "checks %s terminal ownership after registration removal",
+  async (state) => {
+    const { entries, runId, entry, drain } = registeredRun();
+    if (state === "pending") {
+      entry.projectSessionTerminalPending = true;
+    } else if (state === "failed") {
+      markChatAbortTerminalPersistenceError(entry, new Error("terminal write failed"));
+    }
+    removeChatAbortControllerEntry(entries, runId, entry);
+    expect(await drain()).toBe(state === "settled");
+  },
+);
+
+it("releases the reserved terminal owner when no lifecycle subscriber adopts it", async () => {
+  const { entries, runId, entry, drain } = registeredRun();
+  const result = drain();
+  expect(
+    abortChatRunById(
+      {
+        chatAbortControllers: entries,
+        chatRunState: createChatRunState(),
+        removeChatRun: () => undefined,
+        agentRunSeq: new Map(),
+        broadcast: () => {},
+        nodeSendToSession: () => {},
+      },
+      { runId, sessionKey: entry.sessionKey },
+    ),
+  ).toEqual({ aborted: true });
+  expect(await result).toBe(true);
+  expect(entries.has(runId)).toBe(false);
+});
+
+it("marks only the captured registration when an abort listener replaces the run", () => {
+  const { entries, runId, entry } = registeredRun();
+  let replacement: ChatAbortControllerEntry | undefined;
+  entry.controller.signal.addEventListener("abort", () => {
+    entries.delete(runId);
+    replacement = registerChatAbortController({
+      chatAbortControllers: entries,
+      runId,
+      sessionId: entry.sessionId,
+      sessionKey: entry.sessionKey,
+      timeoutMs: 60_000,
+    }).entry;
+  });
+  const broadcast = vi.fn(() => {
+    expect(entry.terminalOutcomeObserved).toBe(true);
+    expect(replacement?.terminalOutcomeObserved).toBeUndefined();
+  });
+  expect(
+    abortChatRunById(
+      {
+        chatAbortControllers: entries,
+        chatRunState: createChatRunState(),
+        removeChatRun: () => undefined,
+        agentRunSeq: new Map(),
+        broadcast,
+        nodeSendToSession: () => {},
+      },
+      { runId, sessionKey: entry.sessionKey },
+    ),
+  ).toEqual({ aborted: true });
+  expect(broadcast).toHaveBeenCalledOnce();
+  expect(replacement).toBeDefined();
+  expect(entries.get(runId)).toBe(replacement);
+});
+
+it.each(["fulfilled", "rejected"] as const)(
+  "drains a promise-only registration after it is %s",
+  async (outcome) => {
+    const onRemoved = vi.fn();
+    const { entries, runId, entry, registration, drain } = registeredRun(onRemoved);
+    const persistence = createDeferred();
+    entry.projectSessionTerminalPersistence = persistence.promise;
+    const result = drain();
+    registration.cleanup();
+    expect(entries.get(runId)).toBe(entry);
+    expect(onRemoved).not.toHaveBeenCalled();
+    if (outcome === "fulfilled") {
+      persistence.resolve();
+    } else {
+      persistence.reject(new Error("terminal write failed"));
+    }
+    expect(await result).toBe(outcome === "fulfilled");
+    expect(entries.has(runId)).toBe(false);
+    expect(onRemoved).toHaveBeenCalledOnce();
+  },
+);
+
+it.each(["fulfilled", "rejected"] as const)(
+  "does not retire a replacement persistence owner when an older write is %s",
+  async (outcome) => {
+    const { entries, runId, entry, registration, drain } = registeredRun();
+    const previous = createDeferred();
+    const current = createDeferred();
+    entry.projectSessionTerminalPersistence = previous.promise;
+    registration.cleanup();
+    entry.projectSessionTerminalPersistence = current.promise;
+    if (outcome === "fulfilled") {
+      previous.resolve();
+    } else {
+      previous.reject(new Error("older terminal write failed"));
+    }
+    await previous.promise.catch(() => {});
+    await Promise.resolve();
+    expect(entries.get(runId)).toBe(entry);
+    const result = drain();
+    registration.cleanup();
+    current.resolve();
+    expect(await result).toBe(true);
+  },
+);
+
+it.each(["settled", "pending", "writing", "failed", "dispatch-failed"] as const)(
+  "self-drain preserves %s terminal ownership and still joins its sibling",
+  async (state) => {
+    const { entries, runId, entry, registration } = registeredRun();
+    const sibling = registerChatAbortController({
+      chatAbortControllers: entries,
+      runId: "sibling-tail",
+      sessionId: entry.sessionId,
+      sessionKey: entry.sessionKey,
+      kind: "agent",
+      timeoutMs: 60_000,
+    });
+    const siblingEntry = sibling.entry!;
+    const releaseSibling = createDeferred();
+    const selectedSibling = createDeferred();
+    const siblingWork = runWithChatAbortExecution(
+      siblingEntry,
+      async () => {
+        sibling.cleanup();
+        await releaseSibling.promise;
+      },
+      sibling.cleanup,
+    );
+    const terminalWrite = createDeferred();
+    void terminalWrite.promise.catch(() => {});
+    let drainDone = false;
+    const ownWork = runWithChatAbortExecution(
+      entry,
+      async () => {
+        if (state === "pending") {
+          entry.projectSessionTerminalPending = true;
+        }
+        if (state === "writing") {
+          entry.projectSessionTerminalPersistence = terminalWrite.promise;
+        }
+        if (state === "failed") {
+          markChatAbortTerminalPersistenceError(entry, new Error("write failed"));
+        }
+        if (state === "dispatch-failed") {
+          bindChatAbortTerminalDispatch([entry], Promise.resolve(), {
+            failure: { error: new Error("terminal dispatch failed") },
+          });
+        }
+        const draining = waitForChatAbortControllerRemoval({
+          entries,
+          targets: [
+            { runId, entry },
+            { runId: "sibling-tail", entry: siblingEntry },
+          ],
+          timeoutMs: 1_000,
+        });
+        selectedSibling.resolve();
+        expect(await draining).toBe(state === "settled");
+        drainDone = true;
+        entry.projectSessionTerminalPending = false;
+        entry.projectSessionTerminalPersistence = undefined;
+        markChatAbortTerminalPersistenceError(entry, undefined);
+        registration.cleanup();
+      },
+      registration.cleanup,
+    );
+    await selectedSibling.promise;
+    expect(drainDone).toBe(false);
+    releaseSibling.resolve();
+    if (state === "writing") {
+      terminalWrite.reject(new Error("terminal write failed"));
+    }
+    await Promise.all([ownWork, siblingWork]);
+    expect(entries.size).toBe(0);
+  },
+);
+
+it.each(["before waiting", "while waiting"] as const)(
+  "cancels an unbounded removal wait %s without retiring raw execution",
+  async (when) => {
+    const { entries, runId, entry, registration } = registeredRun();
+    const finish = createDeferred();
+    const execution = runWithChatAbortExecution(
+      entry,
+      async () => {
+        registration.cleanup();
+        await finish.promise;
+      },
+      registration.cleanup,
+    );
+    const cancellation = new AbortController();
+    const reason = new Error("Removal wait owner retired");
+    if (when === "before waiting") {
+      cancellation.abort(reason);
+    }
+    try {
+      const draining = waitForChatAbortControllerRemoval({
+        entries,
+        targets: [{ runId, entry }],
+        timeoutMs: null,
+        signal: cancellation.signal,
+      });
+      const rejected = expect(draining).rejects.toMatchObject({
+        name: "AbortError",
+        cause: reason,
+      });
+      if (when === "while waiting") {
+        cancellation.abort(reason);
+      }
+      await rejected;
+      expect(entries.get(runId)).toBe(entry);
+      expect(entry.executionSettlement?.status).toBe("pending");
+      expect(entry.controller.signal.aborted).toBe(false);
+
+      const resumed = waitForChatAbortControllerRemoval({
+        entries,
+        targets: [{ runId, entry }],
+        timeoutMs: null,
+        signal: new AbortController().signal,
+      });
+      finish.resolve();
+      await execution;
+      expect(await resumed).toBe(true);
+      expect(entries.has(runId)).toBe(false);
+    } finally {
+      finish.resolve();
+      await execution;
+    }
+  },
+);
+
+it("does not let an inherited continuation exclude a rejected execution owner", async () => {
+  const { entries, runId, entry, registration } = registeredRun();
+  const resume = createDeferred();
+  let inherited: Promise<boolean> | undefined;
+  const failure = new Error("execution disposal rejected");
+  const execution = runWithChatAbortExecution(
+    entry,
+    async () => {
+      inherited = resume.promise.then(() => isCurrentChatAbortExecution(entry));
+      registration.cleanup();
+      throw failure;
+    },
+    registration.cleanup,
+  );
+  await expect(execution).rejects.toBe(failure);
+  resume.resolve();
+  expect(await inherited).toBe(false);
+  expect(entries.get(runId)).toBe(entry);
+  expect(entry.executionSettlement?.status).toBe("rejected");
+});
+
+it("settles an expired timeout receipt while retaining pending raw execution", async () => {
+  const { entries, runId, entry, registration } = registeredRun();
+  const finish = createDeferred();
+  const execution = runWithChatAbortExecution(
+    entry,
+    async () => {
+      await finish.promise;
+      registration.cleanup();
+    },
+    registration.cleanup,
+  );
+  let receipts = 0;
+  expect(
+    registration.deferTimeoutCompletion(() => {
+      receipts += 1;
+    }),
+  ).toBe(true);
+  const receipt = entry.pendingTimeoutCompletion;
+  if (!receipt) {
+    throw new Error("Expected the owned timeout receipt");
+  }
+  receipt.expiresAtMs = 0;
+  try {
+    expect(removeChatAbortControllerEntry(entries, runId, entry)).toBe(false);
+    expect(receipts).toBe(1);
+    expect(entries.get(runId)).toBe(entry);
+    expect(entry.executionSettlement?.status).toBe("pending");
+    expect(entry.pendingTimeoutCompletion).toBeUndefined();
+  } finally {
+    finish.resolve();
+    await execution;
+  }
+  expect(entries.has(runId)).toBe(false);
+  expect(receipts).toBe(1);
+});
+
+it("rejects public Stop after logical cleanup while retaining raw disposal", async () => {
+  const { entries, runId, entry, registration } = registeredRun();
+  const finish = createDeferred();
+  const execution = runWithChatAbortExecution(
+    entry,
+    async () => {
+      registration.cleanup();
+      await finish.promise;
+    },
+    registration.cleanup,
+  );
+  const events: string[] = [];
+  try {
+    expect(entry.executionSettlement?.status).toBe("pending");
+    expect(
+      abortChatRunById(
+        {
+          chatAbortControllers: entries,
+          chatRunState: createChatRunState(),
+          agentRunSeq: new Map(),
+          removeChatRun: () => undefined,
+          broadcast: () => events.push("broadcast"),
+          nodeSendToSession: () => events.push("node"),
+        },
+        { runId, sessionKey: entry.sessionKey, stopReason: "rpc" },
+      ),
+    ).toEqual({ aborted: false });
+    expect(entry.controller.signal.aborted).toBe(false);
+    expect(entries.get(runId)).toBe(entry);
+    expect(events).toEqual([]);
+  } finally {
+    finish.resolve();
+    await execution;
+  }
+  expect(entries.has(runId)).toBe(false);
+});
+
+it("joins its own terminal write without waiting for its own raw completion", async () => {
+  const { entries, runId, entry, registration } = registeredRun();
+  const persistence = createDeferred();
+  await runWithChatAbortExecution(
+    entry,
+    async () => {
+      entry.projectSessionTerminalPersistence = persistence.promise;
+      registration.cleanup();
+      const draining = waitForChatAbortControllerRemoval({
+        entries,
+        targets: [{ runId, entry }],
+        timeoutMs: 1_000,
+      });
+      persistence.resolve();
+      expect(await draining).toBe(true);
+      expect(entry.executionSettlement?.status).toBe("pending");
+    },
+    registration.cleanup,
+  );
+  expect(entries.has(runId)).toBe(false);
+});
+
+describe("renewChatRunExecutionDeadline", () => {
+  const TIMEOUT_MS = 120_000;
+  const RUN_ID = "run-1";
+
+  function register(entries: Map<string, ChatAbortControllerEntry>, now: number) {
+    return registerChatAbortController({
+      chatAbortControllers: entries,
+      runId: RUN_ID,
+      sessionId: "session-1",
+      sessionKey: "agent:main",
+      timeoutMs: TIMEOUT_MS,
+      kind: "chat-send",
+      now,
+    });
+  }
+
+  function renew(
+    entries: Map<string, ChatAbortControllerEntry>,
+    controller: AbortController,
+    now: number,
+  ) {
+    return renewChatRunExecutionDeadline({
+      entries,
+      runId: RUN_ID,
+      controller,
+      timeoutMs: TIMEOUT_MS,
+      now,
+    });
+  }
+
+  it("extends an executing run's deadline", () => {
+    const entries = new Map<string, ChatAbortControllerEntry>();
+    const now = Date.now();
+    const registration = register(entries, now);
+    registration.markExecutionStarted();
+    const before = entries.get(RUN_ID)?.expiresAtMs ?? 0;
+
+    expect(renew(entries, registration.controller, now + TIMEOUT_MS)).toBe(true);
+    expect(entries.get(RUN_ID)?.expiresAtMs ?? 0).toBeGreaterThan(before);
+  });
+
+  it("declines before execution starts", () => {
+    const entries = new Map<string, ChatAbortControllerEntry>();
+    const now = Date.now();
+    const registration = register(entries, now);
+
+    expect(renew(entries, registration.controller, now)).toBe(false);
+  });
+
+  it("declines once the run is aborted", () => {
+    const entries = new Map<string, ChatAbortControllerEntry>();
+    const now = Date.now();
+    const registration = register(entries, now);
+    registration.markExecutionStarted();
+    registration.controller.abort();
+
+    expect(renew(entries, registration.controller, now)).toBe(false);
+  });
+
+  it("never revives a run the deadline sweep has already condemned", () => {
+    const entries = new Map<string, ChatAbortControllerEntry>();
+    const now = Date.now();
+    const registration = register(entries, now);
+    registration.markExecutionStarted();
+    const expired = (entries.get(RUN_ID)?.expiresAtMs ?? 0) + 1;
+
+    expect(renew(entries, registration.controller, expired)).toBe(false);
+  });
+
+  it("never shortens a deadline", () => {
+    const entries = new Map<string, ChatAbortControllerEntry>();
+    const now = Date.now();
+    const registration = register(entries, now);
+    registration.markExecutionStarted();
+    const before = entries.get(RUN_ID)?.expiresAtMs ?? 0;
+
+    expect(renew(entries, registration.controller, now)).toBe(false);
+    expect(entries.get(RUN_ID)?.expiresAtMs ?? 0).toBe(before);
+  });
+
+  it("declines for a superseded or removed registration", () => {
+    const entries = new Map<string, ChatAbortControllerEntry>();
+    const now = Date.now();
+    const registration = register(entries, now);
+    registration.markExecutionStarted();
+    removeChatAbortControllerEntry(entries, RUN_ID);
+
+    expect(renew(entries, registration.controller, now + TIMEOUT_MS)).toBe(false);
+  });
+});

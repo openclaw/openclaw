@@ -1,6 +1,7 @@
 import { normalizeRouteBasePath } from "@openclaw/uirouter";
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
+  CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE,
   CONTROL_UI_ENVIRONMENT_ATTRIBUTE,
   CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE,
   type ControlUiBootstrapConfig,
@@ -8,46 +9,36 @@ import {
   type ControlUiEnvironment,
   type ControlUiPluginFrameGrantAck,
 } from "../../../src/gateway/control-ui-bootstrap-contract.js";
+import { CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS } from "../../../src/gateway/control-ui-plugin-frame-contract.js";
+import { registerListener } from "../../../src/shared/listeners.js";
+import { uiDevGatewayResourceUrl } from "../dev-gateway.ts";
 import { normalizeAssistantIdentity } from "../lib/assistant-identity.ts";
-import { resolveControlUiAuthCandidates } from "./control-ui-auth.ts";
-
-type ApplicationConfigAuthSource = {
-  hello?: { auth?: { deviceToken?: string | null } | null } | null;
-  settings?: { token?: string | null } | null;
-  password?: string | null;
-};
+import { resolveControlUiAuthCandidates, type ControlUiAuthSource } from "./control-ui-auth.ts";
+import { applyControlUiOperatorSeamColor } from "./control-ui-presentation.ts";
+import { canReloadControlUiDocument } from "./document-reload-guard.ts";
 
 type ApplicationConfig = {
-  assistantIdentity: {
-    agentId: string | null;
-    name: string;
-    avatar: string | null;
-    avatarSource: string | null;
-    avatarStatus: "none" | "local" | "remote" | "data" | null;
-    avatarReason: string | null;
-  };
+  assistantIdentity: ReturnType<typeof normalizeAssistantIdentity>;
   serverVersion: string | null;
   serverBuildId?: string | null;
   devGitBranch: string | null;
   environment: ControlUiEnvironment | null;
-  localMediaPreviewRoots: string[];
   embedSandboxMode: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls: boolean;
   automaticallyFetchFavicons: boolean;
+  communityInvite: boolean;
+  chatBubblesEnabled?: boolean;
+  /** Null until the serving Gateway publishes its bootstrap policy. */
+  newSessionModelDefaults?: "last-used" | "configured" | null;
   terminalEnabled: boolean;
+  uploadsEnabled: boolean;
   cliAgentsEnabled?: boolean;
+  pluginAssetsRequireAuth: boolean;
   pluginFrameGrants: ControlUiPluginFrameGrantAck[];
+  pluginControlUiModules: NonNullable<ControlUiBootstrapConfig["pluginControlUiModules"]>;
 };
 
-export type ApplicationConfigCapability = {
-  readonly current: ApplicationConfig;
-  refresh: (options?: {
-    auth?: ApplicationConfigAuthSource;
-    skipWithoutAuthCandidate?: boolean;
-    signal?: AbortSignal;
-  }) => Promise<ApplicationConfig | null>;
-  subscribe: (listener: (config: ApplicationConfig) => void) => () => void;
-};
+export type ApplicationConfigCapability = ReturnType<typeof createApplicationConfigCapability>;
 
 function readDocumentTerminalEnabled(): boolean | null {
   if (typeof document === "undefined") {
@@ -63,16 +54,25 @@ const DEFAULT_APPLICATION_CONFIG: ApplicationConfig = {
   serverBuildId: null,
   devGitBranch: null,
   environment: null,
-  localMediaPreviewRoots: [],
   embedSandboxMode: "strict",
   allowExternalEmbedUrls: false,
   automaticallyFetchFavicons: false,
+  communityInvite: false,
+  chatBubblesEnabled: false,
+  newSessionModelDefaults: null,
   terminalEnabled: readDocumentTerminalEnabled() ?? false,
+  uploadsEnabled: true,
   cliAgentsEnabled: false,
+  pluginAssetsRequireAuth: true,
   pluginFrameGrants: [],
+  pluginControlUiModules: [],
 };
 
-function loadControlUiPresentation(environment: ControlUiEnvironment | null, seamColor?: string) {
+function loadControlUiPresentation(
+  environment: ControlUiEnvironment | null,
+  seamColor: string | undefined,
+  isCurrent: () => boolean,
+) {
   const root = document.documentElement;
   if (
     environment ||
@@ -81,7 +81,11 @@ function loadControlUiPresentation(environment: ControlUiEnvironment | null, sea
     root.style.getPropertyValue("--ring")
   ) {
     void import("./control-ui-environment-presentation.runtime.ts").then(
-      ({ applyControlUiPresentation }) => applyControlUiPresentation({ environment, seamColor }),
+      ({ applyControlUiPresentation }) => {
+        if (isCurrent()) {
+          applyControlUiPresentation({ environment, seamColor });
+        }
+      },
     );
   }
 }
@@ -100,46 +104,49 @@ function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): Applicati
     serverBuildId: parsed.serverBuildId ?? null,
     devGitBranch: parsed.devGitBranch?.trim() || null,
     environment: parsed.environment ?? null,
-    localMediaPreviewRoots: parsed.localMediaPreviewRoots ?? [],
     embedSandboxMode: parsed.embedSandbox ?? "scripts",
     allowExternalEmbedUrls: Boolean(parsed.allowExternalEmbedUrls),
     automaticallyFetchFavicons: Boolean(parsed.automaticallyFetchFavicons),
+    communityInvite: parsed.communityInvite === true,
+    chatBubblesEnabled: parsed.chatBubblesEnabled === true,
+    newSessionModelDefaults: parsed.newSessionModelDefaults ?? "last-used",
     terminalEnabled: Boolean(parsed.terminalEnabled),
+    uploadsEnabled: parsed.uploadsEnabled !== false,
     cliAgentsEnabled: Boolean(parsed.cliAgentsEnabled),
-    pluginFrameGrants: (parsed.pluginFrameGrants ?? []).filter(
-      (grant): grant is ControlUiPluginFrameGrantAck =>
-        typeof grant?.pluginId === "string" &&
-        typeof grant.path === "string" &&
-        (grant.match === "exact" || grant.match === "prefix"),
-    ),
+    pluginAssetsRequireAuth: parsed.pluginAssetsRequireAuth !== false,
+    pluginControlUiModules: parsed.pluginControlUiModules ?? [],
+    pluginFrameGrants: (parsed.pluginFrameGrants ?? [])
+      .filter(
+        (grant): grant is ControlUiPluginFrameGrantAck =>
+          typeof grant?.pluginId === "string" &&
+          typeof grant.path === "string" &&
+          (grant.match === "exact" || grant.match === "prefix"),
+      )
+      .map((grant) => ({
+        pluginId: grant.pluginId,
+        path: uiDevGatewayResourceUrl(grant.path),
+        match: grant.match,
+      })),
   };
 }
 
 async function loadApplicationConfig(params: {
-  resourceBasePath: string;
-  auth?: ApplicationConfigAuthSource;
-  skipWithoutAuthCandidate?: boolean;
+  url: string;
+  authCandidates: readonly string[];
   signal?: AbortSignal;
-}): Promise<ApplicationConfig | null> {
+}): Promise<{ config: ApplicationConfig; seamColor?: string } | null> {
   if (typeof window === "undefined" || typeof fetch !== "function") {
     return null;
   }
 
-  const url = `${normalizeRouteBasePath(params.resourceBasePath)}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`;
-
   try {
-    const sameOrigin = new URL(url, window.location.origin).origin === window.location.origin;
-    const authCandidates = sameOrigin ? resolveControlUiAuthCandidates(params.auth ?? {}) : [];
-    if (params.skipWithoutAuthCandidate && sameOrigin && !authCandidates.length) {
-      return null;
-    }
     let res: Response | null = null;
-    for (const candidate of authCandidates.length ? authCandidates : [""]) {
+    for (const candidate of params.authCandidates.length ? params.authCandidates : [""]) {
       const headers: Record<string, string> = { Accept: "application/json" };
       if (candidate) {
         headers.Authorization = `Bearer ${candidate}`;
       }
-      res = await fetch(url, {
+      res = await fetch(params.url, {
         method: "GET",
         headers,
         credentials: "same-origin",
@@ -156,9 +163,7 @@ async function loadApplicationConfig(params: {
       return null;
     }
     const parsed = (await res.json()) as ControlUiBootstrapConfig;
-    const config = normalizeApplicationConfig(parsed);
-    loadControlUiPresentation(config.environment, parsed.seamColor);
-    return config;
+    return { config: normalizeApplicationConfig(parsed), seamColor: parsed.seamColor };
   } catch {
     return null;
   }
@@ -166,9 +171,12 @@ async function loadApplicationConfig(params: {
 
 export function createApplicationConfigCapability(params: {
   resourceBasePath: string;
-  auth?: ApplicationConfigAuthSource;
-}): ApplicationConfigCapability {
+  getAuth?: () => ControlUiAuthSource;
+}) {
   let current = DEFAULT_APPLICATION_CONFIG;
+  let authVersion = 0;
+  let refreshVersion = 0;
+  let publishedVersion = 0;
   const environmentAttribute = document.documentElement.getAttribute(
     CONTROL_UI_ENVIRONMENT_ATTRIBUTE,
   );
@@ -177,44 +185,115 @@ export function createApplicationConfigCapability(params: {
       ...current,
       environment: JSON.parse(environmentAttribute),
     };
-    loadControlUiPresentation(current.environment);
   }
-  let currentAuth = params.auth;
-  let refreshVersion = 0;
+  const url = `${normalizeRouteBasePath(params.resourceBasePath)}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`;
+  const sameOrigin = new URL(url, window.location.origin).origin === window.location.origin;
+  const resolveAuth = () =>
+    sameOrigin ? resolveControlUiAuthCandidates(params.getAuth?.() ?? {}) : [];
+  const embedded = sameOrigin
+    ? document.documentElement.getAttribute(CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE)
+    : null;
+  let loadedAt = Number.NEGATIVE_INFINITY;
+  let seamColor: string | undefined;
+  if (embedded) {
+    const parsed: ControlUiBootstrapConfig = JSON.parse(embedded);
+    if (
+      normalizeRouteBasePath(parsed.basePath) === normalizeRouteBasePath(params.resourceBasePath)
+    ) {
+      current = normalizeApplicationConfig(parsed);
+      loadedAt = Date.now();
+      seamColor = parsed.seamColor;
+    }
+  }
+  applyControlUiOperatorSeamColor(seamColor);
+  loadControlUiPresentation(current.environment, seamColor, () => publishedVersion === 0);
+  // Navigation credentials need not match a bearer selected by the app.
+  let authCandidates: string[] = [];
+  let pending: { signal?: AbortSignal; promise: Promise<ApplicationConfig | null> } | undefined;
   const listeners = new Set<(config: ApplicationConfig) => void>();
 
   return {
     get current() {
       return current;
     },
-    async refresh(options) {
-      currentAuth = options?.auth ?? currentAuth;
+    async refresh(options?: { ifNeeded?: boolean; signal?: AbortSignal }) {
+      // Queued bootstrap work cannot own credentials: plugin activation may
+      // request its asset grant before that queue reaches the config refresh.
+      const candidates = resolveAuth();
+      if (
+        candidates.length !== authCandidates.length ||
+        candidates.some((candidate, index) => candidate !== authCandidates[index])
+      ) {
+        // Credential changes retire both cached config and in-flight authority.
+        authCandidates = candidates;
+        authVersion++;
+        loadedAt = Number.NEGATIVE_INFINITY;
+        pending = undefined;
+      }
+      if (pending && pending.signal === options?.signal) {
+        return pending.promise;
+      }
+      if (options?.ifNeeded && Date.now() - loadedAt < CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS / 2) {
+        return current;
+      }
       const version = ++refreshVersion;
-      const next = await loadApplicationConfig({
-        resourceBasePath: params.resourceBasePath,
-        auth: currentAuth,
-        skipWithoutAuthCandidate: options?.skipWithoutAuthCandidate,
-        signal: options?.signal,
-      });
-      if (!next || version !== refreshVersion) {
-        return null;
-      }
-      const documentTerminalEnabled = readDocumentTerminalEnabled();
-      if (documentTerminalEnabled !== null && next.terminalEnabled !== documentTerminalEnabled) {
-        // CSP headers cannot change on a live document. Reload in either
-        // direction so the document and accepted terminal state stay aligned.
-        window.location.reload();
+      const authority = authVersion;
+      const signal = options?.signal;
+      const isCurrent = () => {
+        const liveCandidates = resolveAuth();
+        return (
+          authority === authVersion &&
+          !signal?.aborted &&
+          candidates.length === liveCandidates.length &&
+          candidates.every((candidate, index) => candidate === liveCandidates[index])
+        );
+      };
+      const promise = loadApplicationConfig({
+        url,
+        authCandidates: candidates,
+        signal,
+      }).then((loaded) => {
+        if (!loaded || !isCurrent()) {
+          return null;
+        }
+        const next = loaded.config;
+        // Independent callers keep their own abort signals and valid results;
+        // only the newest successful request publishes shared presentation.
+        if (version < publishedVersion) {
+          return next;
+        }
+        publishedVersion = version;
+        loadControlUiPresentation(
+          next.environment,
+          loaded.seamColor,
+          () => isCurrent() && version === publishedVersion,
+        );
+        const documentTerminalEnabled = readDocumentTerminalEnabled();
+        if (documentTerminalEnabled !== null && next.terminalEnabled !== documentTerminalEnabled) {
+          // CSP headers cannot change on a live document. Reload in either
+          // direction so the document and accepted terminal state stay aligned.
+          if (canReloadControlUiDocument()) {
+            window.location.reload();
+          }
+          return next;
+        }
+        current = next;
+        loadedAt = Date.now();
+        for (const listener of listeners) {
+          listener(current);
+        }
         return next;
+      });
+      pending = { promise, signal };
+      try {
+        return await promise;
+      } finally {
+        if (pending?.promise === promise) {
+          pending = undefined;
+        }
       }
-      current = next;
-      for (const listener of listeners) {
-        listener(current);
-      }
-      return next;
     },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: (listener: (config: ApplicationConfig) => void) =>
+      registerListener(listeners, listener),
   };
 }

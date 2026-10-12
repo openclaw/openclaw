@@ -3,15 +3,18 @@ import {
   setReplyPayloadMetadata,
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
+import { assertReplyPayloadSessionWriterDeliveryAuthorized } from "../../auto-reply/reply/session-writer-delivery-authority.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-completion.js";
 import type { ChannelDeliveryInfo } from "./types.js";
 
 type DirectPendingFinalCustody = Pick<ChannelDeliveryInfo, "bindPendingFinalDelivery"> & {
+  assertPlatformSendAuthorized: () => void;
   onPlatformSendDispatch: () => Promise<void>;
 };
 
 export const NO_PENDING_FINAL_CUSTODY: DirectPendingFinalCustody = {
+  assertPlatformSendAuthorized: () => undefined,
   onPlatformSendDispatch: () => Promise.resolve(),
 };
 
@@ -22,25 +25,34 @@ export function resolvePendingFinalCompletion(payload: ReplyPayload) {
 
 export function createDirectPendingFinalCustody(
   payload: ReplyPayload,
+  fallbackStorePath?: string,
 ): DirectPendingFinalCustody | undefined {
   const completion = resolvePendingFinalCompletion(payload);
-  if (!completion) {
+  const authority = getReplyPayloadMetadata(payload)?.sessionWriterDeliveryAuthority;
+  if (!completion && !authority) {
     return undefined;
   }
-  const { kind: _kind, ...identity } = completion;
+  const identity = completion ? (({ kind: _kind, ...value }) => value)(completion) : undefined;
   let firstDispatch = true;
   let admissionTail = Promise.resolve();
   return {
     bindPendingFinalDelivery: (nextPayload) =>
       setReplyPayloadMetadata(nextPayload, {
-        pendingFinalDeliveryCompletion: identity,
+        ...(identity ? { pendingFinalDeliveryCompletion: identity } : {}),
+        ...(authority ? { sessionWriterDeliveryAuthority: authority } : {}),
       }),
+    assertPlatformSendAuthorized: () =>
+      assertReplyPayloadSessionWriterDeliveryAuthorized(payload, fallbackStorePath),
     onPlatformSendDispatch: () => {
       const expectedStates = firstDispatch
         ? (["prepared", "queued"] as const)
         : (["unknown"] as const);
       firstDispatch = false;
       const admission = admissionTail.then(async () => {
+        assertReplyPayloadSessionWriterDeliveryAuthorized(payload, fallbackStorePath);
+        if (!completion) {
+          return;
+        }
         const result = await settlePendingFinalDelivery(completion, "unknown", expectedStates);
         if (result.state !== "unknown") {
           throw new PlatformMessageNotDispatchedError(
@@ -59,6 +71,7 @@ export function createDirectPendingFinalCustody(
 export function toCoreManagedDeliveryInfo(info: ChannelDeliveryInfo) {
   return {
     kind: info.kind,
+    ...(info.participant ? { participant: info.participant } : {}),
     ...(info.assistantMessageIndex === undefined
       ? {}
       : { assistantMessageIndex: info.assistantMessageIndex }),

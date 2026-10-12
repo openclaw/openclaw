@@ -1,15 +1,16 @@
-// Channel policy helpers evaluate plugin channel runtime policy and operator-facing warnings.
 import { asNullableRecord as asObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeStringEntries,
   uniqueStrings,
 } from "../../packages/normalization-core/src/string-normalization.js";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import { parseAccessGroupAllowFromEntry } from "../channels/allow-from.js";
 import {
   createAllowlistProviderRestrictSendersWarningCollector,
   createConditionalWarningCollector,
 } from "../channels/plugins/group-policy-warnings.js";
 import type { ChannelSecurityAdapter } from "../channels/plugins/types.adapters.js";
+import type { ChannelSecurityDmPolicy } from "../channels/plugins/types.core.js";
 import { collectProviderDangerousNameMatchingScopes } from "../config/dangerous-name-matching.js";
 import type { GroupPolicy } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -49,6 +50,8 @@ export {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
   resolveChannelGroupToolsPolicy,
+  resolveChannelGroups,
+  resolveChannelGroupsConfigPath,
   resolveToolsBySender,
   type ChannelGroupPolicy,
 } from "../config/group-policy.js";
@@ -130,37 +133,21 @@ export function evaluateSenderGroupAccessForPolicy(params: {
   isSenderAllowed: (senderId: string, allowFrom: string[]) => boolean;
 }): SenderGroupAccessDecision {
   const providerMissingFallbackApplied = Boolean(params.providerMissingFallbackApplied);
+  let reason: SenderGroupAccessDecision["reason"] = "allowed";
   if (params.groupPolicy === "disabled") {
-    return {
-      allowed: false,
-      groupPolicy: params.groupPolicy,
-      providerMissingFallbackApplied,
-      reason: "disabled",
-    };
-  }
-  if (params.groupPolicy === "allowlist") {
+    reason = "disabled";
+  } else if (params.groupPolicy === "allowlist") {
     if (params.groupAllowFrom.length === 0) {
-      return {
-        allowed: false,
-        groupPolicy: params.groupPolicy,
-        providerMissingFallbackApplied,
-        reason: "empty_allowlist",
-      };
-    }
-    if (!params.isSenderAllowed(params.senderId, params.groupAllowFrom)) {
-      return {
-        allowed: false,
-        groupPolicy: params.groupPolicy,
-        providerMissingFallbackApplied,
-        reason: "sender_not_allowlisted",
-      };
+      reason = "empty_allowlist";
+    } else if (!params.isSenderAllowed(params.senderId, params.groupAllowFrom)) {
+      reason = "sender_not_allowlisted";
     }
   }
   return {
-    allowed: true,
+    allowed: reason === "allowed",
     groupPolicy: params.groupPolicy,
     providerMissingFallbackApplied,
-    reason: "allowed",
+    reason,
   };
 }
 
@@ -244,19 +231,15 @@ export function collectStandardAllowlistLists(
 
 function stripMutableAllowEntryPrefixes(value: string, prefixes: readonly string[]): string {
   let current = value;
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const prefix of prefixes) {
-      if (current.slice(0, prefix.length).toLowerCase() !== prefix.toLowerCase()) {
-        continue;
-      }
-      current = current.slice(prefix.length).trim();
-      changed = true;
-      break;
+  for (;;) {
+    const prefix = prefixes.find(
+      (candidate) => current.slice(0, candidate.length).toLowerCase() === candidate.toLowerCase(),
+    );
+    if (prefix === undefined) {
+      return current;
     }
+    current = current.slice(prefix.length).trim();
   }
-  return current;
 }
 
 /** Build a mutable-name detector by stripping channel prefixes and recognizing stable IDs. */
@@ -267,7 +250,7 @@ export function buildMutableAllowEntryDetector(params: {
   const prefixes = (params.prefixes ?? []).filter((prefix) => prefix.length > 0);
   return (entry) => {
     const text = entry.trim();
-    if (!text || text === "*") {
+    if (!text || text === "*" || parseAccessGroupAllowFromEntry(text) !== null) {
       return false;
     }
     const normalized = stripMutableAllowEntryPrefixes(text, prefixes);
@@ -395,6 +378,7 @@ export function createRestrictSendersChannelSecurity<
   approveHint?: string;
   /** Normalizes configured DM allowlist entries before sender matching. */
   normalizeDmEntry?: (raw: string) => string;
+  classifyEntryAuthentication?: ChannelSecurityDmPolicy["classifyEntryAuthentication"];
   /** Allows non-default accounts to inherit shared defaults from the default account. */
   inheritSharedDefaultsFromDefaultAccount?: boolean;
   dmRouting?: ChannelSecurityAdapter<ResolvedAccount>["dmRouting"];
@@ -411,7 +395,7 @@ export function createRestrictSendersChannelSecurity<
       mentionGated: params.mentionGated,
     }),
     checkId: `channels.${params.channelKey}.groups.open`,
-    severity: "critical",
+    severity: "warn",
     title: params.findingTitle ?? `${params.surface} security warning`,
   });
   return {
@@ -426,6 +410,7 @@ export function createRestrictSendersChannelSecurity<
       approveChannelId: params.approveChannelId,
       approveHint: params.approveHint,
       normalizeEntry: params.normalizeDmEntry,
+      classifyEntryAuthentication: params.classifyEntryAuthentication,
       inheritSharedDefaultsFromDefaultAccount: params.inheritSharedDefaultsFromDefaultAccount,
     }),
     ...(params.dmRouting ? { dmRouting: params.dmRouting } : {}),

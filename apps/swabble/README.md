@@ -87,10 +87,12 @@ All commands accept Commander runtime flags (`-v/--verbose`, `--json-output`, `-
 - Transcripts persist to `~/Library/Application Support/swabble/transcripts.log`.
 
 ## Hook protocol
-When a wake-gated transcript passes min_chars & cooldown, swabble runs:
+`serve` runs the hook when a wake-gated transcript meets `hook.minCharacters` after wake-word removal and `hook.cooldownSeconds` has elapsed since the previous hook completed:
 ```
 <command> <args...> "<prefix><text>"
 ```
+`test-hook` invokes the configured hook directly, including short text, for manual verification.
+
 Environment variables:
 - `SWABBLE_TEXT` — stripped transcript (wake word removed)
 - `SWABBLE_PREFIX` — rendered prefix (hostname substituted)
@@ -104,7 +106,7 @@ Environment variables:
 ## Development
 - Format: `./scripts/format.sh` (uses the repository SwiftFormat policy)
 - Lint: `./scripts/lint.sh` (uses local `.swiftlint.yml`)
-- Tests: `swift test` (uses swift-testing package)
+- Tests: `swift test` (XCTest)
 
 ## Roadmap
 - launchd control (load/bootout, PID + status socket)

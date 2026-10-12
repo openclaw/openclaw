@@ -4,7 +4,7 @@ import Testing
 @testable import OpenClaw
 @testable import OpenClawKit
 
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
 struct GatewayChannelConnectTests {
     private actor NonCooperativeGate {
         private var isOpen = false
@@ -385,19 +385,20 @@ struct GatewayChannelConnectTests {
             Task { try await channel.connect() }
         }
         await gate.waitUntilStarted()
-        try await AsyncTimeout.withTimeout(
-            seconds: 2,
-            onTimeout: {
-                NSError(
-                    domain: "GatewayChannelConnectTests",
-                    code: 1,
-                    userInfo: [NSLocalizedDescriptionKey: "retry callers did not join the shared connect attempt"])
-            },
-            operation: {
-                while await channel._test_connectWaiterCount() < retries.count {
-                    await Task.yield()
-                }
-            })
+        do {
+            try await TestWait.state("shared retry callers") {
+                await channel._test_connectWaiterCount() >= retries.count
+            }
+        } catch {
+            await gate.open()
+            retries.forEach { $0.cancel() }
+            for retry in retries {
+                _ = await retry.result
+            }
+            await channel._test_setConnectFailureBackoffWaitHandler(nil)
+            await channel.shutdown()
+            throw error
+        }
         #expect(session.snapshotMakeCount() == 1)
         await gate.open()
 
@@ -410,6 +411,46 @@ struct GatewayChannelConnectTests {
         await channel.shutdown()
 
         #expect(session.snapshotMakeCount() == 2)
+    }
+
+    @Test(arguments: [false, true])
+    func `startup readiness clears recorded connect failure delays`(alreadyWaiting: Bool) async throws {
+        let gate = NonCooperativeGate()
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(receiveHook: { _, _ in throw URLError(.cannotConnectToHost) })
+        })
+        let channel = try GatewayChannelActor(
+            url: #require(URL(string: "ws://example.invalid")),
+            token: nil,
+            session: WebSocketSessionBox(session: session),
+            connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions)
+        try await self.withChannel(channel) { channel in
+            await #expect(throws: (any Error).self) { try await channel.connect() }
+            #expect(session.snapshotMakeCount() == 1)
+            await channel._test_setConnectFailureBackoffWaitHandler {
+                if !alreadyWaiting {
+                    Issue.record("Startup retry waited on stale connect-failure backoff")
+                    throw CancellationError()
+                }
+                await gate.wait()
+                try Task.checkCancellation()
+            }
+
+            let retry: Task<Void, Error>
+            if alreadyWaiting {
+                retry = Task { try await channel.connect() }
+                await gate.waitUntilStarted()
+                let wait = await channel.connectFailureBackoffWaitTask
+                await channel.clearConnectFailureBackoff()
+                #expect(wait?.isCancelled == true)
+                await gate.open()
+            } else {
+                await channel.clearConnectFailureBackoff()
+                retry = Task { try await channel.connect() }
+            }
+            await #expect(throws: (any Error).self) { try await retry.value }
+            #expect(session.snapshotMakeCount() == 2)
+        }
     }
 
     @Test func `shutdown during connect backoff does not create a socket`() async throws {
@@ -499,6 +540,70 @@ struct GatewayChannelConnectTests {
         #expect(retryTask.snapshotSendCount() == 1)
         await channel._test_setConnectAttemptFinishedHandler(nil)
         await channel.shutdown()
+    }
+
+    enum ConnectEntryPoint: CaseIterable, Sendable {
+        case connect, request, send
+    }
+
+    @Test(arguments: ConnectEntryPoint.allCases)
+    func `connect entry points preserve handshake error context`(entryPoint: ConnectEntryPoint) async throws {
+        let underlying = URLError(.cannotConnectToHost)
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(receiveHook: { _, _ in throw underlying })
+        })
+        let url = try #require(URL(string: "wss://gateway.example.invalid"))
+        let channel = GatewayChannelActor(
+            url: url, token: nil, session: WebSocketSessionBox(session: session),
+            connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions)
+        var caught: (any Error)?
+        do {
+            switch entryPoint {
+            case .connect:
+                try await channel.connect()
+            case .request:
+                _ = try await channel.request(method: "health", params: nil)
+            case .send:
+                try await channel.send(method: "health", params: nil)
+            }
+        } catch {
+            caught = error
+        }
+        await channel.shutdown()
+
+        let error = try #require(caught) as NSError
+        #expect(error.domain == NSURLErrorDomain)
+        #expect(error.code == underlying.errorCode)
+        #expect(error
+            .localizedDescription == "connect to gateway @ \(url.absoluteString): \(underlying.localizedDescription)")
+    }
+
+    @Test func `missing challenge reaches the typed timeout mapper`() async throws {
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(receiveHook: { _, _ in
+                try await Task.sleep(for: .seconds(60))
+                return .data(GatewayWebSocketTestSupport.connectChallengeData())
+            })
+        })
+        let channel = try GatewayChannelActor(
+            url: #require(URL(string: "wss://gateway.example.ts.net")),
+            token: nil,
+            session: WebSocketSessionBox(session: session),
+            connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions)
+        try await self.withChannel(channel) { channel in
+            do {
+                try await channel.connect()
+                Issue.record("missing challenge unexpectedly connected")
+            } catch {
+                let nsError = error as NSError
+                #expect(nsError.domain == URLError.errorDomain)
+                #expect(nsError.code == URLError.timedOut.rawValue)
+                let problem = try #require(GatewayConnectionProblemMapper.map(error: error))
+                #expect(problem.kind == .timeout)
+                #expect(problem.retryable)
+                #expect(!problem.pauseReconnect)
+            }
+        }
     }
 
     @Test func `default operator connect scopes preserve pairing and admin`() async throws {

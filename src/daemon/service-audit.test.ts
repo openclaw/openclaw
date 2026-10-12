@@ -1,329 +1,183 @@
-// Daemon service audit tests cover installed service inspection and warnings.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import "./test-helpers/service-audit-mocks.js";
 import {
   auditGatewayServiceConfig,
   checkTokenDrift,
-  SERVICE_AUDIT_CODES,
+  needsNodeRuntimeMigration,
+  SERVICE_AUDIT_CODES as codes,
 } from "./service-audit.js";
 import { buildServiceEnvironment } from "./service-env.js";
-import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
+import {
+  execSystemctlUserMock,
+  hasIssue,
+  resetServiceAuditMocks,
+  resolveBunRuntimeInfoMock,
+  resolveNodeRuntimeInfoMock,
+} from "./test-helpers/service-audit-fixtures.js";
 
-const execSystemctlUser = vi.hoisted(() =>
-  vi.fn<
-    (
-      env: NodeJS.ProcessEnv,
-      args: string[],
-      timeoutMs?: number,
-    ) => Promise<{ stdout: string; stderr: string; code: number }>
-  >(),
-);
+type AuditOptions = Parameters<typeof auditGatewayServiceConfig>[0];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+beforeEach(resetServiceAuditMocks);
 
-vi.mock("./systemd-exec.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./systemd-exec.js")>()),
-  execSystemctlUser,
-}));
+function audit(
+  command: Partial<NonNullable<AuditOptions["command"]>> = {},
+  options: Partial<Omit<AuditOptions, "command">> = {},
+) {
+  return auditGatewayServiceConfig({
+    env: { HOME: "/tmp" },
+    platform: "linux",
+    ...options,
+    command: {
+      programArguments: ["/usr/bin/node", "gateway"],
+      environment: { PATH: "/usr/local/bin:/usr/bin:/bin" },
+      ...command,
+    },
+  });
+}
 
-function buildMinimalServicePath(options: {
-  platform: NodeJS.Platform;
-  env: Record<string, string | undefined>;
-}): string {
-  const servicePath = buildServiceEnvironment({
-    env: options.env,
-    platform: options.platform,
-    port: 18789,
-  }).PATH;
+function minimalPath(platform: NodeJS.Platform, env: AuditOptions["env"]) {
+  const servicePath = buildServiceEnvironment({ platform, env, port: 18789 }).PATH;
   if (!servicePath) {
     throw new Error("expected managed service PATH");
   }
   return servicePath;
 }
 
-function hasIssue(
-  audit: Awaited<ReturnType<typeof auditGatewayServiceConfig>>,
-  code: (typeof SERVICE_AUDIT_CODES)[keyof typeof SERVICE_AUDIT_CODES],
-) {
-  return audit.issues.some((issue) => issue.code === code);
-}
+describe("auditGatewayServiceConfig runtime", () => {
+  const auditBun = () =>
+    audit({ programArguments: ["/opt/homebrew/bin/bun", "gateway"] }, { platform: "darwin" });
 
-function createGatewayAudit({
-  expectedGatewayToken,
-  expectedManagedServiceEnvKeys,
-  path: pathLocal = "/usr/local/bin:/usr/bin:/bin",
-  serviceToken,
-  extraEnvironment,
-  environmentValueSources,
-}: {
-  expectedGatewayToken?: string;
-  expectedManagedServiceEnvKeys?: Iterable<string>;
-  path?: string;
-  serviceToken?: string;
-  extraEnvironment?: Record<string, string>;
-  environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource>;
-} = {}) {
-  return auditGatewayServiceConfig({
-    env: { HOME: "/tmp" },
-    platform: "linux",
-    expectedGatewayToken,
-    expectedManagedServiceEnvKeys,
-    command: {
-      programArguments: ["/usr/bin/node", "gateway"],
-      environment: {
-        PATH: pathLocal,
-        ...(serviceToken ? { OPENCLAW_GATEWAY_TOKEN: serviceToken } : {}),
-        ...extraEnvironment,
-      },
-      ...(environmentValueSources ? { environmentValueSources } : {}),
+  it.each([undefined, "Cannot use SQLite library /opt/broken/libsqlite3.dylib: missing file."])(
+    "reports unsupported Bun with SQLite selection error %s",
+    async (sqliteSelectionError) => {
+      const sqliteVersion = sqliteSelectionError ? null : "3.51.2";
+      resolveBunRuntimeInfoMock.mockResolvedValue({
+        version: sqliteSelectionError ? "1.4.2" : "1.4.0",
+        sqliteVersion,
+        sqliteProbe: {
+          available: !sqliteSelectionError,
+          version: sqliteVersion,
+          text: !sqliteSelectionError,
+          blob: !sqliteSelectionError,
+          json: !sqliteSelectionError,
+        },
+        nodeSharedSqlite: false,
+        status: "unsupported",
+        sqliteSelectionError,
+      });
+      const result = await auditBun();
+      expect(result.issues).toContainEqual(
+        expect.objectContaining({
+          code: codes.gatewayRuntimeBun,
+          message: expect.stringContaining("Bun 1.4+ with WAL-reset-safe node:sqlite is required"),
+          detail: sqliteSelectionError
+            ? `/opt/homebrew/bin/bun: ${sqliteSelectionError}`
+            : "/opt/homebrew/bin/bun",
+        }),
+      );
     },
-  });
-}
-
-async function writeSystemdUnitForAudit(
-  home: string,
-  lines: string[],
-  unitName = "openclaw-gateway.service",
-) {
-  const unitDir = path.join(home, ".config", "systemd", "user");
-  const unitPath = path.join(unitDir, unitName);
-  await fs.mkdir(unitDir, { recursive: true });
-  await fs.writeFile(
-    unitPath,
-    [
-      "[Unit]",
-      "Description=OpenClaw Gateway",
-      "[Service]",
-      ...lines,
-      "ExecStart=/usr/bin/node gateway",
-      "",
-      "[Install]",
-      "WantedBy=default.target",
-      "",
-    ].join("\n"),
-    "utf8",
   );
-}
 
-function expectTokenAudit(
-  audit: Awaited<ReturnType<typeof auditGatewayServiceConfig>>,
-  {
-    embedded,
-    mismatch,
-  }: {
-    embedded: boolean;
-    mismatch: boolean;
-  },
-) {
-  expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayTokenEmbedded)).toBe(embedded);
-  expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayTokenMismatch)).toBe(mismatch);
-}
-
-describe("auditGatewayServiceConfig", () => {
-  beforeEach(() => {
-    execSystemctlUser.mockReset();
-    execSystemctlUser.mockResolvedValue({ stdout: "", stderr: "systemd unavailable", code: 1 });
-  });
-
-  it("flags bun runtime", async () => {
-    const audit = await auditGatewayServiceConfig({
-      env: { HOME: "/tmp" },
-      platform: "darwin",
-      command: {
-        programArguments: ["/opt/homebrew/bin/bun", "gateway"],
-        environment: { PATH: "/usr/bin:/bin" },
-      },
-    });
-    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayRuntimeBun)).toBe(true);
-    expect(
-      audit.issues.find((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeBun)?.message,
-    ).toContain("runtime state requires node:sqlite");
-  });
-
-  it("flags version-managed node paths", async () => {
-    const audit = await auditGatewayServiceConfig({
-      env: { HOME: "/tmp" },
-      platform: "darwin",
-      command: {
-        programArguments: ["/Users/test/.nvm/versions/node/v22.0.0/bin/node", "gateway"],
-        environment: {
-          PATH: "/usr/bin:/bin:/Users/test/.nvm/versions/node/v22.0.0/bin",
-        },
-      },
-    });
-    expect(
-      audit.issues.some(
-        (issue) => issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeNodeVersionManager,
-      ),
-    ).toBe(true);
-    expect(
-      audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayPathNonMinimal),
-    ).toBe(true);
-    expect(
-      audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayPathMissingDirs),
-    ).toBe(true);
-  });
-
-  it("accepts Linux minimal PATH with user directories", async () => {
-    const env = { HOME: "/tmp/openclaw-testuser", PNPM_HOME: "/opt/pnpm" };
-    const minimalPath = buildMinimalServicePath({ platform: "linux", env });
-    const audit = await auditGatewayServiceConfig({
-      env,
-      platform: "linux",
-      command: {
-        programArguments: ["/usr/bin/node", "gateway"],
-        environment: { PATH: minimalPath },
-      },
-    });
-
-    expect(
-      audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayPathNonMinimal),
-    ).toBe(false);
-    expect(
-      audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayPathMissingDirs),
-    ).toBe(false);
-  });
-
-  it("accepts canonical macOS gateway service PATH without user-bin defaults", async () => {
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-home-"));
-    try {
-      const servicePath = buildMinimalServicePath({ platform: "darwin", env: { HOME: home } });
-      expect(servicePath).toBe(
-        "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-      );
-
-      const audit = await auditGatewayServiceConfig({
-        env: { HOME: home },
-        platform: "darwin",
-        command: {
-          programArguments: ["/usr/bin/node", "gateway"],
-          environment: { PATH: servicePath },
-        },
-      });
-
-      expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayPathMissingDirs)).toBe(false);
-    } finally {
-      await fs.rm(home, { recursive: true, force: true });
-    }
-  });
-
-  it("requires Homebrew directories in canonical macOS gateway service PATH", async () => {
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-home-"));
-    try {
-      const audit = await auditGatewayServiceConfig({
-        env: { HOME: home },
-        platform: "darwin",
-        command: {
-          programArguments: ["/usr/bin/node", "gateway"],
-          environment: { PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" },
-        },
-      });
-
-      const issue = audit.issues.find(
-        (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayPathMissingDirs,
-      );
-      expect(issue?.message).toContain("/opt/homebrew/bin");
-      expect(issue?.message).toContain("/opt/homebrew/sbin");
-    } finally {
-      await fs.rm(home, { recursive: true, force: true });
-    }
-  });
-
-  it("still requires explicit env-configured tool roots in gateway service PATH", async () => {
-    const audit = await auditGatewayServiceConfig({
-      env: { HOME: "/tmp/openclaw-testuser", PNPM_HOME: "/opt/pnpm" },
-      platform: "linux",
-      command: {
-        programArguments: ["/usr/bin/node", "gateway"],
-        environment: { PATH: "/usr/local/bin:/usr/bin:/bin" },
-      },
-    });
-
-    const issue = audit.issues.find(
-      (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayPathMissingDirs,
+  it("reports a failed Bun probe without recommending runtime migration", async () => {
+    const error = new Error("Bun runtime probe failed at /opt/bun (cwd /root): EACCES");
+    resolveBunRuntimeInfoMock.mockResolvedValue({ status: "probe-failed", error });
+    const result = await auditBun();
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        code: codes.gatewayRuntimeProbeFailed,
+        detail: error.message,
+      }),
     );
-    expect(issue?.message).toContain("/opt/pnpm");
+    expect(needsNodeRuntimeMigration(result.issues)).toBe(false);
+    expect(hasIssue(result, codes.gatewayRuntimeBun)).toBe(false);
   });
 
-  it("flags stale Linux version-manager and package-manager PATH entries", async () => {
-    const env = { HOME: "/tmp/openclaw-testuser-nonminimal" };
-    const minimalPath = buildMinimalServicePath({ platform: "linux", env });
-    const staleEntries = [
-      `${env.HOME}/.volta/bin`,
-      `${env.HOME}/.asdf/shims`,
-      `${env.HOME}/.nvm/current/bin`,
-      `${env.HOME}/.local/share/fnm/current/bin`,
-      `${env.HOME}/.fnm/current/bin`,
-      `${env.HOME}/.local/share/pnpm`,
-      "/opt/pnpm/bin",
-    ];
-    const audit = await auditGatewayServiceConfig({
-      env,
-      platform: "linux",
-      command: {
-        programArguments: ["/usr/bin/node", "gateway"],
-        environment: { PATH: [minimalPath, ...staleEntries].join(":") },
-      },
+  it("flags a supported Node version whose SQLite decoder truncates TEXT", async () => {
+    const capabilityError =
+      "Node 26.8.1: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.16+/26.1+ or a build with the fix";
+    resolveNodeRuntimeInfoMock.mockResolvedValue({
+      version: "26.8.1",
+      sqliteVersion: "3.53.4",
+      sqliteProbe: { available: true, version: "3.53.4", text: false, blob: true, json: true },
+      nodeSharedSqlite: false,
+      status: "unsupported",
+      capabilityError,
     });
-
-    const issue = audit.issues.find(
-      (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayPathNonMinimal,
+    const result = await audit();
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        code: codes.gatewayRuntimeNode,
+        message: capabilityError,
+        detail: "/usr/bin/node",
+      }),
     );
-    expect(issue?.detail).toContain(`${env.HOME}/.volta/bin`);
-    expect(issue?.detail).toContain(`${env.HOME}/.local/share/fnm/current/bin`);
-    expect(issue?.detail).toContain(`${env.HOME}/.local/share/pnpm`);
-    expect(issue?.detail).toContain("/opt/pnpm/bin");
+    expect(needsNodeRuntimeMigration(result.issues)).toBe(true);
   });
 
-  it("accepts an expected active OpenClaw bin even when it looks package-managed", async () => {
+  it("reports a capable vendor Node as a note without requesting migration", async () => {
+    const note = "Node 24.15.0: unsupported version, capability check passed.";
+    resolveNodeRuntimeInfoMock.mockResolvedValue({
+      version: "24.15.0",
+      sqliteVersion: "3.53.4",
+      sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+      nodeSharedSqlite: false,
+      status: "supported",
+      note,
+    });
+    const result = await audit();
+    expect(result.runtimeNote).toBe(note);
+    expect(hasIssue(result, codes.gatewayRuntimeNode)).toBe(false);
+    expect(needsNodeRuntimeMigration(result.issues)).toBe(false);
+  });
+
+  it("preserves Node probe failure and timeout without requesting migration", async () => {
+    const error = new Error("Node runtime check failed: access denied");
+    resolveNodeRuntimeInfoMock.mockResolvedValue({ status: "probe-failed", error });
+    const result = await audit({ environment: undefined }, { timeoutMs: 1234 });
+    expect(resolveNodeRuntimeInfoMock).toHaveBeenCalledWith(
+      "/usr/bin/node",
+      { HOME: "/tmp" },
+      1234,
+    );
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        code: codes.gatewayRuntimeProbeFailed,
+        detail: error.message,
+      }),
+    );
+    expect(needsNodeRuntimeMigration(result.issues)).toBe(false);
+  });
+});
+
+describe("auditGatewayServiceConfig PATH", () => {
+  it("flags version-managed runtimes and missing macOS system directories", async () => {
+    const bin = "/Users/test/.nvm/versions/node/v22.0.0/bin";
+    const result = await audit(
+      {
+        programArguments: [`${bin}/node`, "gateway"],
+        environment: { PATH: `/usr/bin:/bin:${bin}` },
+      },
+      { platform: "darwin" },
+    );
+    expect(hasIssue(result, codes.gatewayRuntimeNodeVersionManager)).toBe(true);
+    expect(hasIssue(result, codes.gatewayPathNonMinimal)).toBe(true);
+    const issue = result.issues.find((entry) => entry.code === codes.gatewayPathMissingDirs);
+    expect(issue?.message).toContain("/opt/homebrew/bin");
+    expect(issue?.message).toContain("/opt/homebrew/sbin");
+  });
+
+  it("allows the expected active bin while rejecting unrelated manager paths", async () => {
+    const env = { HOME: "/Users/testuser" };
     const expectedServicePath = [
       "/opt/homebrew/opt/node/bin",
       "/Users/testuser/Library/pnpm",
-      "/opt/homebrew/bin",
-      "/opt/homebrew/sbin",
-      "/usr/local/bin",
-      "/usr/bin",
-      "/bin",
-      "/usr/sbin",
-      "/sbin",
+      minimalPath("darwin", env),
     ].join(":");
-
-    const audit = await auditGatewayServiceConfig({
-      env: { HOME: "/Users/testuser" },
-      platform: "darwin",
-      expectedServicePath,
-      command: {
-        programArguments: [
-          "/opt/homebrew/opt/node/bin/node",
-          "/opt/openclaw/dist/index.js",
-          "gateway",
-        ],
-        environment: { PATH: expectedServicePath },
-      },
-    });
-
-    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayPathMissingDirs)).toBe(false);
-    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayPathNonMinimal)).toBe(false);
-  });
-
-  it("still flags unrelated non-minimal PATH entries beside the expected active bin", async () => {
-    const expectedServicePath = [
-      "/opt/homebrew/opt/node/bin",
-      "/Users/testuser/Library/pnpm",
-      "/opt/homebrew/bin",
-      "/opt/homebrew/sbin",
-      "/usr/local/bin",
-      "/usr/bin",
-      "/bin",
-      "/usr/sbin",
-      "/sbin",
-    ].join(":");
-
-    const audit = await auditGatewayServiceConfig({
-      env: { HOME: "/Users/testuser" },
-      platform: "darwin",
-      expectedServicePath,
-      command: {
+    const result = await audit(
+      {
         programArguments: [
           "/opt/homebrew/opt/node/bin/node",
           "/opt/openclaw/dist/index.js",
@@ -331,597 +185,331 @@ describe("auditGatewayServiceConfig", () => {
         ],
         environment: { PATH: `${expectedServicePath}:/Users/testuser/.asdf/shims` },
       },
-    });
-
-    const issue = audit.issues.find(
-      (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayPathNonMinimal,
+      { env, platform: "darwin", expectedServicePath },
     );
-    expect(issue?.detail).not.toContain("/Users/testuser/Library/pnpm");
-    expect(issue?.detail).toContain("/Users/testuser/.asdf/shims");
+    expect(hasIssue(result, codes.gatewayPathMissingDirs)).toBe(false);
+    expect(result.issues.find((entry) => entry.code === codes.gatewayPathNonMinimal)?.detail).toBe(
+      "/Users/testuser/.asdf/shims",
+    );
   });
 
-  it("accepts Linux fnm aliases/default without requiring the legacy current symlink", async () => {
-    const env = {
-      HOME: "/tmp/openclaw-testuser",
-      FNM_DIR: "/tmp/openclaw-testuser/.local/share/fnm",
-    };
-    const pathParts = buildMinimalServicePath({ platform: "linux", env })
-      .split(":")
-      .filter((entry) => !entry.includes("/fnm/current/bin"));
-    const audit = await auditGatewayServiceConfig({
-      env,
-      platform: "linux",
-      command: {
-        programArguments: ["/usr/bin/node", "gateway"],
-        environment: { PATH: pathParts.join(":") },
-      },
-    });
+  it.each(["current/bin", "aliases/default/bin"])(
+    "accepts fnm without the equivalent %s",
+    async (omitted) => {
+      const env = {
+        HOME: "/tmp/openclaw-testuser",
+        FNM_DIR: "/tmp/openclaw-testuser/.local/share/fnm",
+      };
+      const servicePath = minimalPath("linux", env)
+        .split(":")
+        .filter((entry) => !entry.endsWith(`/fnm/${omitted}`))
+        .join(":");
+      const result = await audit({ environment: { PATH: servicePath } }, { env });
+      expect(hasIssue(result, codes.gatewayPathMissingDirs)).toBe(false);
+    },
+  );
+});
 
-    expect(
-      audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayPathMissingDirs),
-    ).toBe(false);
-  });
-
-  it("accepts Linux fnm current symlink without requiring aliases/default", async () => {
-    const env = {
-      HOME: "/tmp/openclaw-testuser",
-      FNM_DIR: "/tmp/openclaw-testuser/.local/share/fnm",
-    };
-    const pathParts = buildMinimalServicePath({ platform: "linux", env })
-      .split(":")
-      .filter((entry) => !entry.includes("/fnm/aliases/default/bin"));
-    const audit = await auditGatewayServiceConfig({
-      env,
-      platform: "linux",
-      command: {
-        programArguments: ["/usr/bin/node", "gateway"],
-        environment: { PATH: pathParts.join(":") },
-      },
-    });
-
-    expect(
-      audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayPathMissingDirs),
-    ).toBe(false);
-  });
-
-  it("treats zsh -lc LaunchAgent commands as opaque for the gateway token audit", async () => {
-    const audit = await auditGatewayServiceConfig({
-      env: { HOME: "/tmp" },
-      platform: "darwin",
-      expectedPort: 18889,
-      command: {
-        programArguments: [
-          "/bin/zsh",
-          "-lc",
-          "exec /usr/bin/node /opt/openclaw/dist/index.js gateway --port 18890",
-        ],
+describe("auditGatewayServiceConfig command", () => {
+  it.each([
+    ["/usr/local/bin/helper", "-lc", true],
+    ["/bin/zsh", "-l", true],
+  ] as const)("audits gateway tokens for %s %s", async (executable, flag, missing) => {
+    const result = await audit(
+      {
+        programArguments: [executable, flag, "exec node gateway --port 18890"],
         environment: {},
       },
-    });
-
-    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayCommandMissing)).toBe(false);
-    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayPortMismatch)).toBe(false);
-    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayPathMissing)).toBe(true);
+      { platform: "darwin", expectedPort: 18889 },
+    );
+    expect(hasIssue(result, codes.gatewayCommandMissing)).toBe(missing);
+    expect(hasIssue(result, codes.gatewayPortMismatch)).toBe(false);
+    expect(hasIssue(result, codes.gatewayPathMissing)).toBe(true);
   });
 
   it.each([
-    ["non-shell command", ["/usr/local/bin/helper", "-lc", "exec node gateway"]],
-    ["shell without an inline-command flag", ["/bin/zsh", "-l", "exec node gateway"]],
-  ])("keeps exact gateway token audit for %s", async (_name, programArguments) => {
-    const audit = await auditGatewayServiceConfig({
-      env: { HOME: "/tmp" },
-      platform: "darwin",
-      command: {
-        programArguments,
-        environment: {},
-      },
-    });
-
-    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayCommandMissing)).toBe(true);
-  });
-
-  it("flags gateway service port drift from the expected config port", async () => {
-    const audit = await auditGatewayServiceConfig({
-      env: { HOME: "/tmp" },
-      platform: "win32",
-      expectedPort: 18888,
-      command: {
-        programArguments: ["/usr/bin/node", "entry.js", "gateway", "--port", "18789"],
-        environment: {},
-      },
-    });
-
-    const issue = audit.issues.find(
-      (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayPortMismatch,
+    { args: ["--port", "18789", "--port=18888"], detail: undefined },
+    { args: ["--port", "--port=18888"], detail: "--port=18888 -> 18888" },
+  ])("audits the final unconsumed port flag: $args", async ({ args, detail }) => {
+    const result = await audit(
+      { programArguments: ["/usr/bin/node", "entry.js", "gateway", ...args], environment: {} },
+      { platform: "win32", expectedPort: 18888 },
     );
-    expect(issue).toStrictEqual({
-      code: SERVICE_AUDIT_CODES.gatewayPortMismatch,
-      message: "Gateway service port does not match current gateway config.",
-      detail: "18789 -> 18888",
-      level: "recommended",
-    });
-  });
-
-  it("flags explicit invalid gateway service ports", async () => {
-    const audit = await auditGatewayServiceConfig({
-      env: { HOME: "/tmp" },
-      platform: "win32",
-      expectedPort: 18888,
-      command: {
-        programArguments: ["/usr/bin/node", "entry.js", "gateway", "--port=65536"],
-        environment: {},
-      },
-    });
-
-    const issue = audit.issues.find(
-      (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayPortMismatch,
-    );
-    expect(issue).toStrictEqual({
-      code: SERVICE_AUDIT_CODES.gatewayPortMismatch,
-      message: "Gateway service port does not match current gateway config.",
-      detail: "65536 -> 18888",
-      level: "recommended",
-    });
-  });
-
-  it("accepts gateway service ports that match the expected config port", async () => {
-    const audit = await auditGatewayServiceConfig({
-      env: { HOME: "/tmp" },
-      platform: "win32",
-      expectedPort: 18888,
-      command: {
-        programArguments: ["/usr/bin/node", "entry.js", "gateway", "--port=18888"],
-        environment: {},
-      },
-    });
-
-    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayPortMismatch)).toBe(false);
-  });
-
-  it("audits the final repeated gateway port flag", async () => {
-    const audit = await auditGatewayServiceConfig({
-      env: { HOME: "/tmp" },
-      platform: "win32",
-      expectedPort: 18888,
-      command: {
-        programArguments: [
-          "/usr/bin/node",
-          "entry.js",
-          "gateway",
-          "--port",
-          "18789",
-          "--port=18888",
-        ],
-        environment: {},
-      },
-    });
-
-    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayPortMismatch)).toBe(false);
-  });
-
-  it("does not reinterpret a consumed gateway port value as another flag", async () => {
-    const audit = await auditGatewayServiceConfig({
-      env: { HOME: "/tmp" },
-      platform: "win32",
-      expectedPort: 18888,
-      command: {
-        programArguments: ["/usr/bin/node", "entry.js", "gateway", "--port", "--port=18888"],
-        environment: {},
-      },
-    });
-
-    const issue = audit.issues.find(
-      (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayPortMismatch,
-    );
-    expect(issue?.detail).toBe("--port=18888 -> 18888");
-  });
-
-  it("flags gateway token mismatch when service token is stale", async () => {
-    const audit = await createGatewayAudit({
-      expectedGatewayToken: "new-token",
-      serviceToken: "old-token",
-    });
-    expectTokenAudit(audit, { embedded: true, mismatch: true });
-  });
-
-  it.each([
-    {
-      name: "uses manager KillMode instead of the base unit",
-      unit: [
-        "After=network-online.target",
-        "Wants=network-online.target",
-        "RestartSec=5",
-        "KillMode=control-group",
-      ],
-      manager: [
-        "KillMode=process",
-        "RestartUSec=5s",
-        "After=network-online.target",
-        "Wants=network-online.target",
-      ],
-      code: SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone,
-      expected: true,
-    },
-    {
-      name: "uses manager RestartUSec instead of the base unit",
-      unit: [
-        "After=network-online.target",
-        "Wants=network-online.target",
-        "RestartSec=100ms",
-        "KillMode=control-group",
-      ],
-      manager: [
-        "Wants=network-online.target",
-        "KillMode=control-group",
-        "RestartUSec=5s",
-        "After=network-online.target",
-      ],
-      code: SERVICE_AUDIT_CODES.systemdRestartSec,
-      expected: false,
-    },
-    {
-      name: "uses manager After dependencies absent from the base unit",
-      unit: ["Wants=network-online.target", "RestartSec=5", "KillMode=control-group"],
-      manager: [
-        "RestartUSec=5s",
-        "After=basic.target network-online.target",
-        "KillMode=control-group",
-        "Wants=network-online.target",
-      ],
-      code: SERVICE_AUDIT_CODES.systemdAfterNetworkOnline,
-      expected: false,
-    },
-    {
-      name: "does not refill missing manager Wants from the base unit",
-      unit: [
-        "After=network-online.target",
-        "Wants=network-online.target",
-        "RestartSec=5",
-        "KillMode=control-group",
-      ],
-      manager: [
-        "After=network-online.target",
-        "RestartUSec=5s",
-        "Wants=basic.target",
-        "KillMode=control-group",
-      ],
-      code: SERVICE_AUDIT_CODES.systemdWantsNetworkOnline,
-      expected: true,
-    },
-  ])("respects systemd manager authority: $name", async ({ unit, manager, code, expected }) => {
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-manager-"));
-    try {
-      const unitName = "openclaw-audit.service";
-      const env = { HOME: home, OPENCLAW_SYSTEMD_UNIT: unitName };
-      await writeSystemdUnitForAudit(home, unit, unitName);
-      execSystemctlUser.mockResolvedValueOnce({
-        stdout: manager.join("\n"),
-        stderr: "",
-        code: 0,
+    const issue = result.issues.find((entry) => entry.code === codes.gatewayPortMismatch);
+    if (detail === undefined) {
+      expect(issue).toBeUndefined();
+    } else {
+      expect(issue).toStrictEqual({
+        code: codes.gatewayPortMismatch,
+        message: "Gateway service port does not match current gateway config.",
+        detail,
+        level: "recommended",
       });
-
-      const audit = await auditGatewayServiceConfig({
-        env,
-        platform: "linux",
-        timeoutMs: 321,
-        command: {
-          programArguments: ["/usr/bin/node", "gateway"],
-          environment: { PATH: "/usr/bin:/bin" },
-        },
-      });
-
-      expect(hasIssue(audit, code)).toBe(expected);
-      expect(execSystemctlUser).toHaveBeenCalledExactlyOnceWith(
-        env,
-        ["show", unitName, "--no-page", "--property", "After,Wants,RestartUSec,KillMode"],
-        321,
-      );
-    } finally {
-      await fs.rm(home, { recursive: true, force: true });
     }
   });
+});
 
-  it.each(["process", "none"])(
-    `warns when KillMode is %s in explicit unit file`,
+describe("auditGatewayServiceConfig environment sources", () => {
+  it.each([
+    { source: undefined, token: "old-token", embedded: true, mismatch: true },
+    { source: "inline-and-file", token: "new-token", embedded: true, mismatch: false },
+    { source: "file", token: "old-token", embedded: false, mismatch: false },
+  ] as const)(
+    "reports only exposed values for source $source",
+    async ({ source, token, embedded, mismatch }) => {
+      const result = await audit(
+        {
+          environment: {
+            PATH: "/usr/local/bin:/usr/bin:/bin",
+            OPENCLAW_GATEWAY_TOKEN: token,
+            OPENCLAW_GATEWAY_PASSWORD: "active-password",
+            OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "OPENROUTER_API_KEY",
+            OPENROUTER_API_KEY: "or-test",
+            TAVILY_API_KEY: "tvly-test",
+            HTTP_PROXY: "http://proxy.local:7890",
+            HTTPS_PROXY: "https://proxy.local:7890",
+            NO_PROXY: "localhost,127.0.0.1",
+            https_proxy: "https://lowercase.local:7890",
+          },
+          environmentValueSources:
+            source === undefined
+              ? undefined
+              : {
+                  OPENCLAW_GATEWAY_TOKEN: source,
+                  OPENCLAW_GATEWAY_PASSWORD: source,
+                  openrouter_api_key: source,
+                  tavily_api_key: source,
+                  http_proxy: source,
+                  https_proxy: source,
+                  no_proxy: source,
+                },
+        },
+        { expectedGatewayToken: "new-token", expectedManagedServiceEnvKeys: ["TAVILY_API_KEY"] },
+      );
+      expect(hasIssue(result, codes.gatewayTokenEmbedded)).toBe(embedded);
+      expect(hasIssue(result, codes.gatewayTokenMismatch)).toBe(mismatch);
+      expect(hasIssue(result, codes.gatewayPasswordEmbedded)).toBe(embedded);
+      const managed = result.issues.find((entry) => entry.code === codes.gatewayManagedEnvEmbedded);
+      const proxy = result.issues.find((entry) => entry.code === codes.gatewayProxyEnvEmbedded);
+      if (embedded) {
+        expect(managed?.environmentKeys).toEqual(["OPENROUTER_API_KEY", "TAVILY_API_KEY"]);
+        expect(proxy?.environmentKeys).toEqual([
+          "HTTPS_PROXY",
+          "HTTP_PROXY",
+          "NO_PROXY",
+          "https_proxy",
+        ]);
+        expect(proxy?.detail).toContain("HTTPS_PROXY");
+      } else {
+        expect(managed).toBeUndefined();
+        expect(proxy).toBeUndefined();
+      }
+      expect(JSON.stringify(result.issues)).not.toMatch(
+        /old-token|new-token|active-password|tvly-test|or-test|proxy\.local|lowercase\.local/,
+      );
+    },
+  );
+});
+
+describe("checkTokenDrift", () => {
+  it("normalizes whitespace before comparing tokens", () => {
+    expect(
+      checkTokenDrift({ serviceToken: "same-token\r\n", configToken: " same-token " }),
+    ).toBeNull();
+  });
+  it("detects token drift without choosing an installation action", () => {
+    expect(checkTokenDrift({ serviceToken: "old-token", configToken: "new-token" })).toStrictEqual({
+      code: codes.gatewayTokenDrift,
+      message:
+        "Config token differs from service token. The daemon will use the old token after restart.",
+      level: "recommended",
+    });
+  });
+});
+
+describe("auditGatewayServiceConfig systemd", () => {
+  let home: string;
+  let unitPath: string;
+  beforeEach(() => {
+    home = tempDirs.make("openclaw-service-audit-");
+    unitPath = path.join(home, ".config/systemd/user/openclaw-audit.service");
+  });
+  const env = () => ({ HOME: home, OPENCLAW_SYSTEMD_UNIT: "openclaw-audit.service" });
+  const auditUnit = (timeoutMs?: number) => audit({}, { env: env(), timeoutMs });
+  async function writeUnit(lines: string[]) {
+    await fs.mkdir(path.dirname(unitPath), { recursive: true });
+    await fs.writeFile(
+      unitPath,
+      [
+        "[Unit]",
+        "Description=OpenClaw Gateway",
+        "[Service]",
+        ...lines,
+        "ExecStart=/usr/bin/node gateway",
+        "",
+        "[Install]",
+        "WantedBy=default.target",
+        "",
+      ].join("\n"),
+    );
+  }
+  function manager(lines: string[]) {
+    execSystemctlUserMock.mockResolvedValueOnce({
+      stdout: lines.join("\n"),
+      stderr: "",
+      code: 0,
+      termination: "exit",
+    });
+  }
+  const systemdCodes = (result: Awaited<ReturnType<typeof audit>>) =>
+    result.issues.filter((issue) => issue.code.startsWith("systemd-")).map((issue) => issue.code);
+
+  it.each([
+    {
+      unit: ["KillMode=mixed"],
+      effective: ["KillMode=control-group"],
+      expected: [
+        codes.systemdStopTimeout,
+        codes.systemdAfterNetworkOnline,
+        codes.systemdWantsNetworkOnline,
+        codes.systemdRestartSec,
+        codes.systemdKillModeControlGroup,
+      ],
+    },
+    {
+      unit: ["Wants=network-online.target", "RestartSec=100ms", "KillMode=control-group"],
+      effective: [
+        "After=basic.target network-online.target",
+        "Wants=basic.target",
+        "RestartUSec=5s",
+        "KillMode=mixed",
+      ],
+      expected: [codes.systemdStopTimeout, codes.systemdWantsNetworkOnline],
+    },
+  ])("uses manager settings wholesale over $unit", async ({ unit, effective, expected }) => {
+    await writeUnit(unit);
+    manager(["LoadState=loaded", ...effective]);
+    expect(systemdCodes(await auditUnit(321))).toEqual(expected);
+    expect(execSystemctlUserMock).toHaveBeenCalledExactlyOnceWith(
+      env(),
+      [
+        "show",
+        "openclaw-audit.service",
+        "--no-page",
+        "--property",
+        "After,Wants,RestartUSec,KillMode,LoadState,TimeoutStopUSec",
+      ],
+      321,
+    );
+  });
+
+  it("does not repair masked manager defaults or fall back to the base unit", async () => {
+    await writeUnit(["KillMode=control-group"]);
+    manager([
+      "Wants=",
+      "After=",
+      "LoadState=masked",
+      "RestartUSec=100ms",
+      "KillMode=control-group",
+    ]);
+    expect(systemdCodes(await auditUnit())).toEqual([]);
+  });
+
+  it.each(["none", ""])(
+    "warns about base-unit KillMode=%s when the manager is unavailable",
     async (killMode) => {
-      const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-killmode-"));
-      await writeSystemdUnitForAudit(home, [
+      await writeUnit([
         "After=network-online.target",
         "Wants=network-online.target",
         "RestartSec=5",
         `KillMode=${killMode}`,
       ]);
-
-      const audit = await auditGatewayServiceConfig({
-        env: { HOME: home },
-        platform: "linux",
-        command: {
-          programArguments: ["/usr/bin/node", "gateway"],
-          environment: { PATH: "/usr/bin:/bin" },
-        },
-      });
+      const result = await auditUnit();
       expect(
-        audit.issues.some(
-          (entry) => entry.code === SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone,
+        hasIssue(
+          result,
+          killMode ? codes.systemdKillModeProcessOrNone : codes.systemdKillModeControlGroup,
         ),
       ).toBe(true);
-      expect(execSystemctlUser).toHaveBeenCalledWith({ HOME: home }, expect.any(Array), 10_000);
     },
   );
 
-  it("does not warn when KillMode is control-group", async () => {
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-killmode-"));
-    await writeSystemdUnitForAudit(home, [
+  it("finds credentials in an orphaned backup without revealing them", async () => {
+    await fs.mkdir(path.dirname(unitPath), { recursive: true });
+    await fs.writeFile(
+      `${unitPath}.bak`,
+      'Environment = "OPENCLAW_GATEWAY_TOKEN=audit-token" SAFE=kept \\\n  "OPENCLAW_GATEWAY_PASSWORD=audit-password"\n',
+      { mode: 0o600 },
+    );
+    const result = await auditGatewayServiceConfig({
+      env: env(),
+      platform: "linux",
+      command: null,
+    });
+    expect(
+      result.issues.find((entry) => entry.code === codes.systemdUnitBackupUnsafe),
+    ).toMatchObject({
+      level: "recommended",
+      detail: expect.stringContaining("OPENCLAW_GATEWAY_PASSWORD, OPENCLAW_GATEWAY_TOKEN"),
+    });
+    expect(JSON.stringify(result.issues)).not.toMatch(/audit-token|audit-password/);
+  });
+
+  it("flags permissive backup modes without embedded credentials", async () => {
+    await writeUnit([
       "After=network-online.target",
       "Wants=network-online.target",
       "RestartSec=5",
       "KillMode=control-group",
     ]);
-    const audit = await auditGatewayServiceConfig({
-      env: { HOME: home },
-      platform: "linux",
-      command: {
-        programArguments: ["/usr/bin/node", "gateway"],
-        environment: { PATH: "/usr/bin:/bin" },
-      },
-    });
+    await fs.writeFile(`${unitPath}.bak`, "Environment=OPERATOR_SETTING=kept\n");
+    await fs.chmod(`${unitPath}.bak`, 0o644);
+    const result = await auditUnit();
     expect(
-      audit.issues.some((entry) => entry.code === SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone),
-    ).toBe(false);
+      result.issues.find((entry) => entry.code === codes.systemdUnitBackupUnsafe),
+    ).toMatchObject({
+      level: "recommended",
+      detail: expect.stringContaining("mode: 644"),
+    });
   });
+});
 
-  it("accepts systemd RestartSec values with seconds suffixes", async () => {
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-restartsec-"));
-    await writeSystemdUnitForAudit(home, [
-      "After=network-online.target",
-      "Wants=network-online.target",
-      "RestartSec=5s",
-      "KillMode=control-group",
-    ]);
-    const audit = await auditGatewayServiceConfig({
+describe("systemd shutdown timeout audit", () => {
+  it.each([
+    { name: "unlimited base timeout", base: "infinity", expected: false },
+    { name: "disabled base timeout", base: "0", expected: false },
+    { name: "invalid base timeout", base: "invalid", expected: true },
+  ])("reports a drain requirement for $name", async ({ base, expected }) => {
+    const home = tempDirs.make("openclaw-stop-timeout-audit-");
+    const unitPath = path.join(home, ".config/systemd/user/openclaw-gateway.service");
+    await fs.mkdir(path.dirname(unitPath), { recursive: true });
+    await fs.writeFile(
+      unitPath,
+      [
+        "[Unit]",
+        "After=network-online.target",
+        "Wants=network-online.target",
+        "[Service]",
+        "ExecStart=/usr/bin/node gateway",
+        "RestartSec=5",
+        "KillMode=mixed",
+        `TimeoutStopSec=${base}`,
+      ].join("\n"),
+    );
+
+    const result = await auditGatewayServiceConfig({
       env: { HOME: home },
       platform: "linux",
-      command: {
-        programArguments: ["/usr/bin/node", "gateway"],
-        environment: { PATH: "/usr/bin:/bin" },
-      },
+      command: null,
     });
-    expect(hasIssue(audit, SERVICE_AUDIT_CODES.systemdRestartSec)).toBe(false);
-  });
-
-  it("flags embedded service token even when it matches config token", async () => {
-    const audit = await createGatewayAudit({
-      expectedGatewayToken: "new-token",
-      serviceToken: "new-token",
-    });
-    expectTokenAudit(audit, { embedded: true, mismatch: false });
-  });
-
-  it("does not flag token issues when service token is not embedded", async () => {
-    const audit = await createGatewayAudit({
-      expectedGatewayToken: "new-token",
-    });
-    expectTokenAudit(audit, { embedded: false, mismatch: false });
-  });
-
-  it("does not treat EnvironmentFile-backed tokens as embedded", async () => {
-    const audit = await createGatewayAudit({
-      expectedGatewayToken: "new-token",
-      serviceToken: "old-token",
-      environmentValueSources: {
-        OPENCLAW_GATEWAY_TOKEN: "file",
-      },
-    });
-    expectTokenAudit(audit, { embedded: false, mismatch: false });
-  });
-
-  it("treats tokens present inline and in EnvironmentFile as embedded", async () => {
-    const audit = await createGatewayAudit({
-      expectedGatewayToken: "new-token",
-      serviceToken: "old-token",
-      environmentValueSources: {
-        OPENCLAW_GATEWAY_TOKEN: "inline-and-file",
-      },
-    });
-    expectTokenAudit(audit, { embedded: true, mismatch: true });
-  });
-
-  it("flags inline managed service env values from the service key list", async () => {
-    const audit = await createGatewayAudit({
-      extraEnvironment: {
-        OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "TAVILY_API_KEY,OPENROUTER_API_KEY",
-        TAVILY_API_KEY: "tvly-test",
-        OPENROUTER_API_KEY: "or-test",
-      },
-    });
-
-    const issue = audit.issues.find(
-      (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayManagedEnvEmbedded,
-    );
-    expect(issue?.detail).toContain("OPENROUTER_API_KEY");
-    expect(issue?.detail).toContain("TAVILY_API_KEY");
-    expect(issue?.environmentKeys).toEqual(["OPENROUTER_API_KEY", "TAVILY_API_KEY"]);
-  });
-
-  it("flags inline managed values expected by the current install plan for old services", async () => {
-    const audit = await createGatewayAudit({
-      expectedManagedServiceEnvKeys: ["TAVILY_API_KEY"],
-      extraEnvironment: {
-        TAVILY_API_KEY: "tvly-test",
-      },
-    });
-
-    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayManagedEnvEmbedded)).toBe(true);
-  });
-
-  it("does not flag managed env values loaded from EnvironmentFile", async () => {
-    const audit = await createGatewayAudit({
-      expectedManagedServiceEnvKeys: ["TAVILY_API_KEY"],
-      extraEnvironment: {
-        TAVILY_API_KEY: "tvly-test",
-      },
-      environmentValueSources: {
-        TAVILY_API_KEY: "file",
-      },
-    });
-
-    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayManagedEnvEmbedded)).toBe(false);
-  });
-
-  it("flags managed env values present inline even when an EnvironmentFile overrides them", async () => {
-    const audit = await createGatewayAudit({
-      expectedManagedServiceEnvKeys: ["TAVILY_API_KEY"],
-      extraEnvironment: {
-        TAVILY_API_KEY: "tvly-test",
-      },
-      environmentValueSources: {
-        TAVILY_API_KEY: "inline-and-file",
-      },
-    });
-
-    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayManagedEnvEmbedded)).toBe(true);
-  });
-
-  it("flags inline proxy environment values embedded in the service", async () => {
-    const audit = await createGatewayAudit({
-      extraEnvironment: {
-        HTTP_PROXY: "http://proxy.local:7890",
-        HTTPS_PROXY: "https://proxy.local:7890",
-        NO_PROXY: "localhost,127.0.0.1",
-      },
-    });
-
-    const issue = audit.issues.find(
-      (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayProxyEnvEmbedded,
-    );
-    expect(issue?.detail).toContain("HTTP_PROXY");
-    expect(issue?.detail).toContain("HTTPS_PROXY");
-    expect(issue?.detail).toContain("NO_PROXY");
-    expect(issue?.environmentKeys).toEqual(["HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY"]);
-  });
-
-  it("flags lowercase inline proxy environment values using portable key names", async () => {
-    const audit = await createGatewayAudit({
-      extraEnvironment: {
-        https_proxy: "https://proxy.local:7890",
-      },
-    });
-
-    const issue = audit.issues.find(
-      (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayProxyEnvEmbedded,
-    );
-    expect(issue?.detail).toContain("HTTPS_PROXY");
-    expect(issue?.environmentKeys).toEqual(["https_proxy"]);
-  });
-
-  it("does not flag proxy values loaded only from EnvironmentFile", async () => {
-    const audit = await createGatewayAudit({
-      extraEnvironment: {
-        HTTP_PROXY: "http://proxy.local:7890",
-      },
-      environmentValueSources: {
-        HTTP_PROXY: "file",
-      },
-    });
-
-    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayProxyEnvEmbedded)).toBe(false);
-  });
-
-  it("flags proxy values present inline even when an EnvironmentFile overrides them", async () => {
-    const audit = await createGatewayAudit({
-      extraEnvironment: {
-        HTTP_PROXY: "http://proxy.local:7890",
-      },
-      environmentValueSources: {
-        HTTP_PROXY: "inline-and-file",
-      },
-    });
-
-    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayProxyEnvEmbedded)).toBe(true);
-  });
-
-  it("matches managed and proxy source metadata keys case-insensitively", async () => {
-    const audit = await createGatewayAudit({
-      expectedManagedServiceEnvKeys: ["TAVILY_API_KEY"],
-      extraEnvironment: {
-        TAVILY_API_KEY: "tvly-test",
-        HTTPS_PROXY: "https://proxy.local:7890",
-      },
-      environmentValueSources: {
-        tavily_api_key: "file",
-        https_proxy: "file",
-      },
-    });
-
-    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayManagedEnvEmbedded)).toBe(false);
-    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayProxyEnvEmbedded)).toBe(false);
-  });
-});
-
-describe("checkTokenDrift", () => {
-  it("returns null when both tokens are undefined", () => {
-    const result = checkTokenDrift({ serviceToken: undefined, configToken: undefined });
-    expect(result).toBeNull();
-  });
-
-  it("returns null when both tokens are empty strings", () => {
-    const result = checkTokenDrift({ serviceToken: "", configToken: "" });
-    expect(result).toBeNull();
-  });
-
-  it("returns null when tokens match", () => {
-    const result = checkTokenDrift({ serviceToken: "same-token", configToken: "same-token" });
-    expect(result).toBeNull();
-  });
-
-  it("returns null when tokens match but service token has trailing newline", () => {
-    const result = checkTokenDrift({ serviceToken: "same-token\n", configToken: "same-token" });
-    expect(result).toBeNull();
-  });
-
-  it("returns null when tokens match but have surrounding whitespace", () => {
-    const result = checkTokenDrift({ serviceToken: "  same-token  ", configToken: "same-token" });
-    expect(result).toBeNull();
-  });
-
-  it("returns null when both tokens have different whitespace padding", () => {
-    const result = checkTokenDrift({
-      serviceToken: "same-token\r\n",
-      configToken: " same-token ",
-    });
-    expect(result).toBeNull();
-  });
-
-  it("detects drift when config has token but service has different token", () => {
-    const result = checkTokenDrift({ serviceToken: "old-token", configToken: "new-token" });
-    expect(result).toStrictEqual({
-      code: SERVICE_AUDIT_CODES.gatewayTokenDrift,
-      message:
-        "Config token differs from service token. The daemon will use the old token after restart.",
-      detail: "Run `openclaw gateway install --force` to sync the token.",
-      level: "recommended",
-    });
-  });
-
-  it("returns null when config has token but service has no token", () => {
-    const result = checkTokenDrift({ serviceToken: undefined, configToken: "new-token" });
-    expect(result).toBeNull();
-  });
-
-  it("returns null when service has token but config does not", () => {
-    // This is not really drift - service will work, just config is incomplete
-    const result = checkTokenDrift({ serviceToken: "service-token", configToken: undefined });
-    expect(result).toBeNull();
-  });
-});
-
-describe("legacy gateway service version metadata", () => {
-  it("does not treat install-time version metadata as runtime truth", async () => {
-    const legacyAudit = await createGatewayAudit({
-      extraEnvironment: { OPENCLAW_SERVICE_VERSION: "2026.4.15-beta.1" },
-    });
-    const canonicalAudit = await createGatewayAudit();
-
-    expect(legacyAudit).toEqual(canonicalAudit);
+    const issue = result.issues.find((entry) => entry.code === "systemd-stop-timeout");
+    expect(Boolean(issue)).toBe(expected);
+    if (expected) {
+      expect(issue).toMatchObject({
+        message: expect.stringContaining("TimeoutStopSec=330"),
+        detail: expect.stringContaining(unitPath),
+        level: "recommended",
+      });
+    }
   });
 });

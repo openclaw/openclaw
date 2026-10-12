@@ -1,0 +1,481 @@
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { sql } from "kysely";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  iterateSqliteQuerySync,
+} from "../../infra/kysely-sync.js";
+import { withCurrentProjectionSnapshot } from "./session-accessor.sqlite-active-projection.js";
+import type {
+  SessionTranscriptBoundedActiveContext,
+  SessionTranscriptReadScope,
+  TranscriptEvent,
+} from "./session-accessor.sqlite-contract.js";
+import { iterateUnindexedActiveTranscriptNavigation } from "./session-accessor.sqlite-history-navigation.js";
+import {
+  getActiveTranscriptKysely,
+  type CurrentTranscriptProjection,
+} from "./session-accessor.sqlite-projection-read.js";
+import {
+  readUnindexedHistoryControls,
+  resolveTranscriptBoundaryWindow,
+} from "./session-accessor.sqlite-reset-window.js";
+import type { ResolvedTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
+import {
+  DEFAULT_VISIBLE_MESSAGE_MAX_BYTES,
+  DEFAULT_VISIBLE_MESSAGE_MAX_MESSAGES,
+  MAX_VISIBLE_MESSAGE_MAX_BYTES,
+  MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
+  normalizeVisibleMessageLimit,
+} from "./session-accessor.sqlite-visible-cursor.js";
+import { selectBoundedContextRows } from "./session-bounded-context-selection.js";
+import { readCacheTtlProjectionPrefix } from "./session-cache-ttl-prefix.js";
+import { isIndexedSessionEntry } from "./session-entry-codec.js";
+import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
+import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
+import { transcriptEventJsonSql, transcriptEventResetNavigationSql } from "./transcript-payload.js";
+import { assertTranscriptNavigationValid } from "./transcript-predicate-fields.js";
+
+function readBoundedRetentionRanges(
+  projection: CurrentTranscriptProjection,
+  rows: Array<{ event: TranscriptEvent; seq: number }>,
+  headerOffset: number,
+): SessionTranscriptBoundedActiveContext["firstKeptRanges"] {
+  const sequences = new Map<string, number>();
+  const cuts = rows.flatMap(({ event, seq }, endIndex) => {
+    const entry = asOptionalRecord(event);
+    if (typeof entry?.id !== "string") {
+      return [];
+    }
+    if (!projection.hasUnindexedPrefix || !sequences.has(entry.id)) {
+      sequences.set(entry.id, seq);
+    }
+    return (entry.type === "compaction" || entry.type === "reset") &&
+      typeof entry.firstKeptEntryId === "string"
+      ? [{ id: entry.id, firstKeptEntryId: entry.firstKeptEntryId, endIndex, seq }]
+      : [];
+  });
+  const missing = [...new Set(cuts.map((cut) => cut.firstKeptEntryId))].filter(
+    (id) => !sequences.has(id),
+  );
+  if (missing.length > 0) {
+    const lastSelectedSeq = rows.reduce((maximum, row) => Math.max(maximum, row.seq), -Infinity);
+    const db = getActiveTranscriptKysely(projection.database);
+    const anchors = executeSqliteQuerySync(
+      projection.database.db,
+      db
+        .selectFrom("transcript_event_identities as identity")
+        .innerJoin("session_transcript_active_events as active", (join) =>
+          join
+            .onRef("active.session_id", "=", "identity.session_id")
+            .onRef("active.event_seq", "=", "identity.seq"),
+        )
+        .select(["identity.event_id", "identity.seq"])
+        .where("identity.session_id", "=", projection.resolved.sessionId)
+        .where("identity.event_id", "in", missing)
+        .where("identity.seq", "<=", lastSelectedSeq),
+    ).rows;
+    for (const anchor of anchors) {
+      sequences.set(anchor.event_id, anchor.seq);
+    }
+  }
+  if (projection.hasUnindexedPrefix && cuts.length > 0) {
+    // Imported duplicates can precede an indexed owner or the selected byte window.
+    const unresolved = new Set(cuts.map((cut) => cut.firstKeptEntryId));
+    for (const row of iterateUnindexedActiveTranscriptNavigation(projection, {
+      eventIds: [...unresolved],
+      maxRawSeq: cuts.reduce((maximum, cut) => Math.max(maximum, cut.seq), -Infinity) - 1,
+      first: true,
+    })) {
+      const id = typeof row.event.id === "string" ? row.event.id : undefined;
+      if (id === undefined || !unresolved.delete(id)) {
+        continue;
+      }
+      const selectedSeq = sequences.get(id);
+      if (selectedSeq === undefined || row.event_seq < selectedSeq) {
+        sequences.set(id, row.event_seq);
+      }
+      if (unresolved.size === 0) {
+        break;
+      }
+    }
+  }
+  const ranges: SessionTranscriptBoundedActiveContext["firstKeptRanges"] = new Map();
+  for (const cut of cuts) {
+    const firstSeq = sequences.get(cut.firstKeptEntryId);
+    if (firstSeq === undefined || (projection.hasUnindexedPrefix && firstSeq >= cut.seq)) {
+      continue;
+    }
+    // An injected boundary can precede the sorted rows, so honor its first-match position.
+    let start = cut.endIndex > 0 && rows[0]!.seq >= firstSeq ? 0 : Math.min(1, cut.endIndex);
+    let end = start === 0 ? 0 : cut.endIndex;
+    while (start < end) {
+      const middle = Math.floor((start + end) / 2);
+      if (rows[middle]!.seq < firstSeq) {
+        start = middle + 1;
+      } else {
+        end = middle;
+      }
+    }
+    ranges.set(cut.id, {
+      startIndex: start + headerOffset,
+      endIndex: cut.endIndex + headerOffset,
+    });
+  }
+  return ranges;
+}
+
+function readUnindexedLogicalParents(
+  projection: CurrentTranscriptProjection,
+  contextSequences: number[],
+  payloads: Map<number, TranscriptEvent>,
+): Map<string, string | null> {
+  const parents = new Map<string, string | null>();
+  if (contextSequences.length === 0) {
+    return parents;
+  }
+  const rows = executeSqliteQuerySync(
+    projection.database.db,
+    getActiveTranscriptKysely(projection.database)
+      .selectFrom("session_transcript_active_events as active")
+      .leftJoin("session_transcript_active_events as previous", (join) =>
+        join
+          .onRef("previous.session_id", "=", "active.session_id")
+          .on((eb) => eb("previous.active_position", "=", eb("active.active_position", "-", 1))),
+      )
+      .leftJoin("transcript_events as parent", (join) =>
+        join
+          .onRef("parent.session_id", "=", "previous.session_id")
+          .onRef("parent.seq", "=", "previous.event_seq"),
+      )
+      .select((eb) => [
+        "active.event_seq",
+        "previous.event_seq as parent_seq",
+        eb.fn
+          .coalesce(transcriptEventResetNavigationSql("parent"), eb.val("null"))
+          .as("parent_json"),
+      ])
+      .where("active.session_id", "=", projection.resolved.sessionId)
+      .where("active.event_seq", "in", contextSequences),
+  ).rows;
+  for (const row of rows) {
+    const entry = asOptionalRecord(payloads.get(row.event_seq));
+    if (typeof entry?.id !== "string") {
+      continue;
+    }
+    const parent =
+      row.parent_seq === null ? undefined : asOptionalRecord(JSON.parse(row.parent_json));
+    parents.set(entry.id, typeof parent?.id === "string" ? parent.id : null);
+  }
+  return parents;
+}
+
+/** Reads one byte-bounded active branch without materializing abandoned transcript history. */
+export function readSessionTranscriptBoundedActiveContextCore(
+  scope: SessionTranscriptReadScope,
+  options: {
+    maxBytes: number;
+    maxEvents: number;
+    ignoreReadFence?: boolean;
+    readOnly?: boolean;
+    resolvedScope?: ResolvedTranscriptReadScope;
+    transaction?: CurrentTranscriptProjection["database"];
+    onRead?: (projection: CurrentTranscriptProjection) => void;
+  },
+): SessionTranscriptBoundedActiveContext {
+  const maxBytes = normalizeVisibleMessageLimit(
+    options.maxBytes,
+    DEFAULT_VISIBLE_MESSAGE_MAX_BYTES,
+    MAX_VISIBLE_MESSAGE_MAX_BYTES,
+    "maxBytes",
+  );
+  const maxEvents = normalizeVisibleMessageLimit(
+    options.maxEvents,
+    DEFAULT_VISIBLE_MESSAGE_MAX_MESSAGES,
+    MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
+    "maxEvents",
+  );
+  const read = (projection: CurrentTranscriptProjection): SessionTranscriptBoundedActiveContext => {
+    const db = getActiveTranscriptKysely(projection.database);
+    const fence = options.ignoreReadFence
+      ? undefined
+      : resolveSqliteSessionTranscriptReadFence({
+          database: projection.database,
+          ...projection.resolved,
+        });
+    const transcript = db
+      .selectFrom("transcript_events")
+      .where("session_id", "=", projection.resolved.sessionId);
+    // Migrated transcripts may place a delivery mirror before the header or lack the auxiliary
+    // identity rows entirely. Select the canonical stored event by type so runtime keeps its version.
+    const header = executeSqliteQueryTakeFirstSync(
+      projection.database.db,
+      transcript
+        .select([
+          "seq",
+          "navigation_valid",
+          /* kysely-allow-raw: reject an oversized header before acquiring its JSON payload. */
+          sql<number>`${transcriptEventReadBytesSql()} + 1`.as("serialized_bytes"),
+        ])
+        .where((eb) =>
+          eb.or([eb("navigation_type", "=", "session"), eb("navigation_valid", "=", 0)]),
+        )
+        .orderBy("seq", "asc")
+        .limit(1),
+    );
+    assertTranscriptNavigationValid(header?.navigation_valid);
+    const headerBytes = header?.serialized_bytes ?? 0;
+    // Explicit reset retention wins over ordinary exclusion. The window owner
+    // selects paired entries; only its newest candidates can fit this bounded read.
+    const retained =
+      resolveTranscriptBoundaryWindow(
+        projection,
+        "context",
+        fence?.beforeRawSeq,
+      )?.keptMessagePositions.slice(-(maxEvents + 1)) ?? [];
+    const metadata = iterateSqliteQuerySync(
+      projection.database.db,
+      db
+        .selectFrom("session_transcript_active_events as active")
+        .innerJoin("transcript_events as event", (join) =>
+          join
+            .onRef("event.session_id", "=", "active.session_id")
+            .onRef("event.seq", "=", "active.event_seq"),
+        )
+        .select([
+          "active.event_seq",
+          "active.active_position",
+          /* kysely-allow-raw: active-context byte caps exclude rows before fetching or parsing. */
+          sql<number>`${transcriptEventReadBytesSql("event")} + 1`.as("serialized_bytes"),
+        ])
+        .where("active.session_id", "=", projection.resolved.sessionId)
+        .$if(fence !== undefined, (query) =>
+          query.where("active.event_seq", "<", fence!.beforeRawSeq),
+        )
+        .where((eb) =>
+          retained.length > 0
+            ? eb.or([
+                eb("active.context_eligible", "=", 1),
+                eb("active.message_position", "in", retained),
+              ])
+            : eb("active.context_eligible", "=", 1),
+        )
+        .orderBy("active.active_position", "desc")
+        .limit(maxEvents + 1),
+    );
+    const selection = selectBoundedContextRows(metadata, headerBytes, { maxBytes, maxEvents });
+    const { selectedRows } = selection;
+    let { serializedBytes, truncated } = selection;
+    const selectedSequences = selectedRows.map((row) => row.event_seq);
+    let boundary = executeSqliteQueryTakeFirstSync(
+      projection.database.db,
+      db
+        .selectFrom(
+          db
+            .selectFrom("transcript_event_identities as identity")
+            .innerJoin("session_transcript_active_events as active", (join) =>
+              join
+                .onRef("active.session_id", "=", "identity.session_id")
+                .onRef("active.event_seq", "=", "identity.seq"),
+            )
+            .select((eb) => [
+              "active.active_position",
+              "identity.seq",
+              eb.fn.count<number>("identity.seq").over().as("boundary_count"),
+            ])
+            .where("identity.session_id", "=", projection.resolved.sessionId)
+            .where("identity.event_type", "in", ["compaction", "reset"])
+            .$if(fence !== undefined, (query) =>
+              query.where("identity.seq", "<", fence!.beforeRawSeq),
+            )
+            .orderBy("active.active_position", "desc")
+            .limit(1)
+            .as("boundary"),
+        )
+        .innerJoin("transcript_events as event", (join) =>
+          join
+            .on("event.session_id", "=", projection.resolved.sessionId)
+            .onRef("event.seq", "=", "boundary.seq"),
+        )
+        .select([
+          "boundary.active_position",
+          "boundary.seq",
+          "boundary.boundary_count",
+          /* kysely-allow-raw: count boundaries without carrying payloads through the window query. */
+          sql<number>`${transcriptEventReadBytesSql("event")} + 1`.as("serialized_bytes"),
+        ]),
+    );
+    let boundaryCount = boundary?.boundary_count ?? 0;
+    if (projection.hasUnindexedPrefix) {
+      for (const row of readUnindexedHistoryControls(projection, fence?.beforeRawSeq)) {
+        if (
+          (row.event.type !== "compaction" && row.event.type !== "reset") ||
+          (fence !== undefined && row.event_seq >= fence.beforeRawSeq)
+        ) {
+          continue;
+        }
+        boundaryCount += 1;
+        if (!boundary || row.active_position > boundary.active_position) {
+          boundary = {
+            active_position: row.active_position,
+            seq: row.event_seq,
+            serialized_bytes: row.serialized_bytes,
+            boundary_count: boundaryCount,
+          };
+        }
+      }
+    }
+    const contextSequences = selectedSequences.toSorted((left, right) => left - right);
+    let injectedBoundarySeq: number | undefined;
+    if (boundary && !selectedSequences.includes(boundary.seq)) {
+      if (serializedBytes + boundary.serialized_bytes <= maxBytes) {
+        injectedBoundarySeq = boundary.seq;
+        contextSequences.unshift(boundary.seq);
+        serializedBytes += boundary.serialized_bytes;
+      } else {
+        truncated = true;
+      }
+    }
+    const payloadSequences = header ? [header.seq, ...contextSequences] : contextSequences;
+    // One payload read follows all byte decisions; header-first ordering also supports migrated mirrors.
+    const payloads = new Map<number, TranscriptEvent>(
+      (payloadSequences.length === 0
+        ? []
+        : executeSqliteQuerySync(
+            projection.database.db,
+            transcript
+              .select(["seq", transcriptEventJsonSql(projection.database.db).as("event_json")])
+              .where("seq", "in", payloadSequences),
+          ).rows
+      ).map((row) => [row.seq, JSON.parse(row.event_json)]),
+    );
+    // Retain logical ancestry across the byte cutoff without loading parent payloads.
+    // Raw parent_id can point into an abandoned branch after a leaf control.
+    const parents = projection.hasUnindexedPrefix
+      ? readUnindexedLogicalParents(projection, contextSequences, payloads)
+      : new Map(
+          (contextSequences.length === 0
+            ? []
+            : executeSqliteQuerySync(
+                projection.database.db,
+                db
+                  .selectFrom("session_transcript_active_events as active")
+                  .innerJoin("transcript_event_identities as entry", (join) =>
+                    join
+                      .onRef("entry.session_id", "=", "active.session_id")
+                      .onRef("entry.seq", "=", "active.event_seq"),
+                  )
+                  .leftJoin("session_transcript_active_events as previous", (join) =>
+                    join
+                      .onRef("previous.session_id", "=", "active.session_id")
+                      .on((eb) =>
+                        eb("previous.active_position", "=", eb("active.active_position", "-", 1)),
+                      ),
+                  )
+                  .leftJoin("transcript_event_identities as parent", (join) =>
+                    join
+                      .onRef("parent.session_id", "=", "previous.session_id")
+                      .onRef("parent.seq", "=", "previous.event_seq"),
+                  )
+                  .select(["entry.event_id", "parent.event_id as parent_id"])
+                  .where("active.session_id", "=", projection.resolved.sessionId)
+                  .where("active.event_seq", "in", contextSequences),
+              ).rows
+          ).map((row) => [row.event_id, row.parent_id]),
+        );
+    const events: TranscriptEvent[] = header ? [payloads.get(header.seq)!] : [];
+    const rows = contextSequences.map((seq) => ({ event: payloads.get(seq)!, seq }));
+    const opaqueParents = new Map<string, string | null>();
+    let previousId: unknown;
+    for (const { event, seq } of rows) {
+      const entry = asOptionalRecord(event);
+      if (seq === injectedBoundarySeq) {
+        previousId = entry?.id;
+      } else if (entry && "id" in entry && "parentId" in entry) {
+        // Omitted display payloads retain an opaque ancestry link, never a fabricated event.
+        if (
+          typeof previousId === "string" &&
+          typeof entry.parentId === "string" &&
+          entry.parentId !== previousId
+        ) {
+          opaqueParents.set(entry.parentId, previousId);
+        }
+        previousId = entry.id;
+      }
+      events.push(event);
+    }
+    const firstSelected = selectedRows.findLast(
+      (row) => typeof asOptionalRecord(payloads.get(row.event_seq))?.id === "string",
+    );
+    const anchorEntry = firstSelected
+      ? asOptionalRecord(payloads.get(firstSelected.event_seq))
+      : undefined;
+    const injectedEntry =
+      injectedBoundarySeq === undefined
+        ? undefined
+        : asOptionalRecord(payloads.get(injectedBoundarySeq));
+    const anchors = [
+      ...(boundary && isIndexedSessionEntry(injectedEntry) && injectedEntry.type === "compaction"
+        ? [{ activePosition: boundary.active_position, id: injectedEntry.id, entry: injectedEntry }]
+        : []),
+      ...(firstSelected && typeof anchorEntry?.id === "string"
+        ? [
+            {
+              activePosition: firstSelected.active_position,
+              id: anchorEntry.id,
+              entry: anchorEntry,
+            },
+          ]
+        : []),
+    ];
+    const cacheTtlProjectionPrefixes = anchors.flatMap((anchor) => {
+      const prefix = readCacheTtlProjectionPrefix(projection, {
+        ...anchor,
+        beforeRawSeq: fence?.beforeRawSeq,
+      });
+      return prefix ? [prefix] : [];
+    });
+    const activeLeafEntryId = fence
+      ? fence.admission.effectiveParentId
+      : projection.state.leafEventId;
+    if (activeLeafEntryId && previousId !== activeLeafEntryId) {
+      opaqueParents.set(activeLeafEntryId, typeof previousId === "string" ? previousId : null);
+    }
+    // Retention moves forward from a cut; append ancestry moves backward. Keep both
+    // outside the byte-counted events so excluded payloads cannot change either boundary.
+    const firstKeptRanges = readBoundedRetentionRanges(projection, rows, header ? 1 : 0);
+    const version = projection.version;
+    const consumed = options.onRead?.(projection);
+    if (isPromiseLike(consumed)) {
+      void Promise.resolve(consumed).catch(() => {});
+      throw new Error("Transcript snapshot consumers must remain synchronous");
+    }
+    return {
+      version,
+      activeLeafEntryId,
+      opaqueParents,
+      parents,
+      firstKeptRanges,
+      persistedSuffixStartSeq: contextSequences[0] ?? (header ? header.seq + 1 : 0),
+      boundaryCount,
+      events,
+      cacheTtlProjectionPrefixes,
+      serializedBytes,
+      totalEvents: projection.state.activeEventCount,
+      transcriptMutationAt: version.updatedAt,
+      truncated,
+      ...(!truncated &&
+      !fence &&
+      !projection.hasUnindexedPrefix &&
+      selectedRows.length === projection.state.activeEventCount
+        ? { completeActivePath: true as const }
+        : {}),
+    };
+  };
+  return withCurrentProjectionSnapshot(scope, read, {
+    readOnly: options.readOnly,
+    resolvedScope: options.resolvedScope,
+    transaction: options.transaction,
+  });
+}

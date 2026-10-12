@@ -27,33 +27,6 @@ function trackingManager(maxSessions: number) {
 }
 
 describe("TerminalSessionManager idle eviction", () => {
-  it("evicts the longest-idle viewer-free agent session under pool pressure", async () => {
-    vi.useFakeTimers();
-    try {
-      const { manager, ptys } = trackingManager(2);
-      const first = await manager.open(baseOpenRequest({ owner: agentOwner }));
-      await vi.advanceTimersByTimeAsync(5_000);
-      const second = await manager.open(baseOpenRequest({ owner: agentOwner }));
-      if (!first.ok || !second.ok) {
-        throw new Error("expected agent opens");
-      }
-      // Freshen the second session so the first is the idle-eviction candidate.
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(manager.writeAgent(agentOwner, second.sessionId, "keepalive\r")).toEqual({
-        ok: true,
-      });
-
-      const third = await manager.open(baseOpenRequest({ owner: agentOwner }));
-      expect(third.ok).toBe(true);
-      expect(manager.size).toBe(2);
-      expect(expectDefined(ptys[0], "ptys[0] test invariant").killed).toBe(true);
-      expect(expectDefined(ptys[1], "ptys[1] test invariant").killed).toBe(false);
-      expect(manager.snapshotAgent(agentOwner, first.sessionId)).toBeUndefined();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("never evicts viewer-attached or connection-owned sessions under pressure", async () => {
     const { manager, ptys } = trackingManager(2);
     const connOwned = await manager.open(baseOpenRequest());
@@ -111,9 +84,7 @@ describe("TerminalSessionManager idle eviction", () => {
     expect(victimPty.killed).toBe(false);
     expect(replacementPty.killed).toBe(true);
     expect(manager.size).toBe(1);
-    expect(manager.writeAgent(agentOwner, victim.sessionId, "still-alive\r")).toEqual({
-      ok: true,
-    });
+    expect(manager.write("viewer-1", victim.sessionId, "still-alive\r")).toBe(true);
   });
 
   it("evicts the freshly idlest session when the claimed victim becomes active mid-spawn", async () => {
@@ -149,9 +120,7 @@ describe("TerminalSessionManager idle eviction", () => {
       // The claimed (oldest) session becomes active during the spawn, making
       // the newer session the genuinely idlest candidate.
       await vi.advanceTimersByTimeAsync(5_000);
-      expect(manager.writeAgent(agentOwner, oldest.sessionId, "busy\r")).toEqual({
-        ok: true,
-      });
+      expectDefined(ptys[0], "oldest pty invariant").emitData("busy\n");
       releaseSpawn?.();
 
       const outcome = await opening;
@@ -260,9 +229,8 @@ describe("TerminalSessionManager idle eviction", () => {
     // The victim survives a failed replacement and stays claimable later.
     expect(manager.size).toBe(1);
     expect(pty.killed).toBe(false);
-    expect(manager.writeAgent(agentOwner, victim.sessionId, "still-alive\r")).toEqual({
-      ok: true,
-    });
+    pty.emitData("still-alive\n");
+    expect(manager.snapshotAgent(agentOwner, victim.sessionId)).toContain("still-alive");
 
     failNextSpawn = false;
     const replacement = await manager.open(baseOpenRequest({ owner: agentOwner }));

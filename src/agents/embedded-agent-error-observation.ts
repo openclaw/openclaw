@@ -2,10 +2,11 @@ import { stableStringify } from "@openclaw/normalization-core";
 /**
  * Builds structured observations for embedded-agent API/text failures.
  */
+import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { readLoggingConfig } from "../logging/config.js";
-import { redactIdentifier } from "../logging/redact-identifier.js";
 import { getDefaultRedactPatterns, redactSensitiveText } from "../logging/redact.js";
 import {
   classifyProviderRuntimeFailureKind,
@@ -13,6 +14,7 @@ import {
   parseApiErrorInfo,
   type ProviderRuntimeFailureKind,
 } from "./embedded-agent-helpers.js";
+import type { PreparedProviderFailoverOwner } from "./failover/provider-patterns.js";
 
 const MAX_OBSERVATION_INPUT_CHARS = 64_000;
 const MAX_FINGERPRINT_MESSAGE_CHARS = 8_000;
@@ -31,14 +33,6 @@ const RAW_ERROR_CONSOLE_SUPPRESSED_FAILURE_KINDS = new Set<ProviderRuntimeFailur
   "upstream_html",
 ]);
 
-function resolveConfiguredRedactPatterns(): string[] {
-  const configured = readLoggingConfig()?.redactPatterns;
-  if (!Array.isArray(configured)) {
-    return [];
-  }
-  return configured.filter((pattern): pattern is string => typeof pattern === "string");
-}
-
 function truncateForObservation(text: string | undefined, maxChars: number): string | undefined {
   const trimmed = text?.trim();
   if (!trimmed) {
@@ -48,13 +42,8 @@ function truncateForObservation(text: string | undefined, maxChars: number): str
 }
 
 function boundObservationInput(text: string | undefined): string | undefined {
-  const trimmed = text?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  return trimmed.length > MAX_OBSERVATION_INPUT_CHARS
-    ? truncateUtf16Safe(trimmed, MAX_OBSERVATION_INPUT_CHARS)
-    : trimmed;
+  const trimmed = normalizeOptionalString(text);
+  return trimmed ? truncateUtf16Safe(trimmed, MAX_OBSERVATION_INPUT_CHARS) : undefined;
 }
 
 function replaceRequestIdPreview(
@@ -72,8 +61,9 @@ function redactObservationText(text: string | undefined): string | undefined {
     return text;
   }
   // Observation logs must stay redacted even when operators disable general-purpose
-  // log redaction, otherwise raw provider payloads leak back into always-on logs.
-  const configuredPatterns = resolveConfiguredRedactPatterns();
+  // log redaction, otherwise raw provider payloads leak back into always-on logs. The default
+  // policy includes its programmatic matchers, not only the configurable string sources.
+  const configuredPatterns = filterStringEntries(readLoggingConfig()?.redactPatterns);
   return redactSensitiveText(text, {
     mode: "tools",
     patterns: [
@@ -100,9 +90,7 @@ function buildObservationFingerprint(params: {
   message?: string;
 }): string | null {
   const boundedMessage =
-    params.message && params.message.length > MAX_FINGERPRINT_MESSAGE_CHARS
-      ? truncateUtf16Safe(params.message, MAX_FINGERPRINT_MESSAGE_CHARS)
-      : params.message;
+    params.message && truncateUtf16Safe(params.message, MAX_FINGERPRINT_MESSAGE_CHARS);
   const structured =
     params.httpCode || params.type || boundedMessage
       ? stableStringify({
@@ -122,7 +110,7 @@ function buildObservationFingerprint(params: {
 
 export function buildApiErrorObservationFields(
   rawError?: string,
-  opts?: { provider?: string },
+  opts?: { provider?: string; providerOwner?: PreparedProviderFailoverOwner },
 ): {
   rawErrorPreview?: string;
   rawErrorHash?: string;
@@ -162,12 +150,15 @@ export function buildApiErrorObservationFields(
         ? redactIdentifier(rawFingerprint, { len: 12 })
         : undefined,
       httpCode: parsed?.httpCode,
-      providerRuntimeFailureKind: classifyProviderRuntimeFailureKind({
-        status: parsed?.httpCode ? Number(parsed.httpCode) : undefined,
-        message: trimmed,
-        provider: opts?.provider,
-      }),
-      providerErrorType: parsed?.type,
+      providerRuntimeFailureKind: classifyProviderRuntimeFailureKind(
+        {
+          status: parsed?.httpCode ? Number(parsed.httpCode) : undefined,
+          message: trimmed,
+          provider: opts?.providerOwner?.id ?? opts?.provider,
+        },
+        { providerPlugin: opts?.providerOwner ?? null },
+      ),
+      providerErrorType: redactObservationText(parsed?.type),
       providerErrorMessagePreview: truncateForObservation(
         redactedProviderMessage,
         PROVIDER_ERROR_PREVIEW_MAX_CHARS,
@@ -181,7 +172,7 @@ export function buildApiErrorObservationFields(
 
 export function buildTextObservationFields(
   text?: string,
-  opts?: { provider?: string },
+  opts?: { provider?: string; providerOwner?: PreparedProviderFailoverOwner },
 ): {
   textPreview?: string;
   textHash?: string;

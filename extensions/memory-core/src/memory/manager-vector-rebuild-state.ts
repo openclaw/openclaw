@@ -1,17 +1,10 @@
 // Memory Core plugin module owns persisted vector completeness state.
 import type { DatabaseSync } from "node:sqlite";
-import {
-  MEMORY_INDEX_META_TABLE,
-  type MemoryVectorIndexState,
-} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { MEMORY_INDEX_META_TABLE } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
+import type { MemoryVectorIndexState } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { tableExists } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 
-const VECTOR_REBUILD_META_KEY = "memory_vector_rebuild_v1";
-
-function vectorTableExists(db: DatabaseSync, tableName: string): boolean {
-  return Boolean(
-    db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(tableName),
-  );
-}
+export const VECTOR_REBUILD_META_KEY = "memory_vector_rebuild_v1";
 
 export function markMemoryVectorIndexClean(db: DatabaseSync): void {
   db.prepare(
@@ -27,16 +20,6 @@ export function markMemoryVectorRebuildRequired(db: DatabaseSync): void {
   ).run(VECTOR_REBUILD_META_KEY);
 }
 
-export function requiresMemoryVectorRebuild(params: {
-  db: DatabaseSync;
-  vectorTable: string;
-  metaVectorDims?: number;
-  hasSemanticChunks: boolean;
-}): boolean {
-  const state = resolvePersistedMemoryVectorIndexState(params).state;
-  return state === "incomplete" || state === "unverified";
-}
-
 export function resolvePersistedMemoryVectorIndexState(params: {
   db: DatabaseSync;
   vectorTable: string;
@@ -46,17 +29,31 @@ export function resolvePersistedMemoryVectorIndexState(params: {
   const row = params.db
     .prepare(`SELECT value FROM ${MEMORY_INDEX_META_TABLE} WHERE key = ?`)
     .get(VECTOR_REBUILD_META_KEY) as { value?: unknown } | undefined;
-  if (row?.value === "1") {
+  return resolveMemoryVectorIndexState({
+    marker: row?.value,
+    hasVectorTable: tableExists(params.db, params.vectorTable),
+    metaVectorDims: params.metaVectorDims,
+    hasSemanticChunks: params.hasSemanticChunks,
+  });
+}
+
+export function resolveMemoryVectorIndexState(params: {
+  marker: unknown;
+  hasVectorTable: boolean;
+  metaVectorDims?: number;
+  hasSemanticChunks: boolean;
+}): MemoryVectorIndexState {
+  if (params.marker === "1") {
     return { state: "incomplete" };
   }
-  if (!vectorTableExists(params.db, params.vectorTable)) {
+  if (!params.hasVectorTable) {
     return params.metaVectorDims && params.hasSemanticChunks
       ? { state: "incomplete" }
       : { state: "empty" };
   }
   // The clean marker is published with the vector table. A later first
   // incremental write can populate that table without rewriting vectorDims.
-  if (row?.value === "clean") {
+  if (params.marker === "clean") {
     return params.hasSemanticChunks ? { state: "complete" } : { state: "empty" };
   }
   if (params.hasSemanticChunks && !params.metaVectorDims) {

@@ -3,7 +3,16 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { prepareCliBundleMcpCaptureAttempt, prepareCliBundleMcpConfig } from "./bundle-mcp.js";
+import {
+  cliBundleMcpHarness,
+  cliNativeMcpPolicyContext,
+  setupCliBundleMcpTestHarness,
+  writeCliMcpPolicyProbeServer,
+} from "./bundle-mcp.test-support.js";
+
+setupCliBundleMcpTestHarness();
 
 describe("prepareCliBundleMcpConfig gemini", () => {
   it("disables Gemini native web search without bundle MCP", async () => {
@@ -79,52 +88,54 @@ describe("prepareCliBundleMcpConfig gemini", () => {
     await prepared.cleanup?.();
   });
 
-  it("translates user mcp.servers transport fields in Gemini system settings", async () => {
+  it("projects canonical allow and deny sets into Gemini settings", async () => {
+    const serverPath = await writeCliMcpPolicyProbeServer();
+    const config: OpenClawConfig = {
+      plugins: { enabled: false },
+      tools: { allow: ["docs__read_docs"], deny: ["docs__delete_docs"] },
+      mcp: { servers: { docs: { command: process.execPath, args: [serverPath] } } },
+    };
     const prepared = await prepareCliBundleMcpConfig({
       enabled: true,
       mode: "gemini-system-settings",
-      backend: {
-        command: "gemini",
-        args: ["--prompt", "{prompt}"],
-      },
-      workspaceDir: "/tmp/openclaw-bundle-mcp-gemini",
-      config: {
-        plugins: { enabled: false },
-        mcp: {
-          servers: {
-            context7: {
-              transport: "streamable-http",
-              url: "https://mcp.context7.com/mcp",
-              headers: {
-                Authorization: "Bearer ${CONTEXT7_API_KEY}",
-              },
-            },
+      backend: { command: "gemini" },
+      workspaceDir: cliBundleMcpHarness.bundleProbeWorkspaceDir,
+      config,
+      nativeMcpPolicy: cliNativeMcpPolicyContext(config, "gemini-policy"),
+    });
+    const raw = JSON.parse(
+      await fs.readFile(prepared.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH as string, "utf-8"),
+    ) as { mcpServers?: { docs?: { includeTools?: string[]; excludeTools?: string[] } } };
+    expect(raw.mcpServers?.docs).toMatchObject({
+      includeTools: ["read_docs"],
+      excludeTools: ["app_docs", "delete_docs", "task_docs"],
+    });
+    await prepared.cleanup?.();
+  });
+
+  it("omits a server when configured and policy allowlists do not overlap", async () => {
+    const serverPath = await writeCliMcpPolicyProbeServer();
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "gemini-system-settings",
+      backend: { command: "gemini" },
+      workspaceDir: cliBundleMcpHarness.bundleProbeWorkspaceDir,
+      exclusiveConfig: {
+        mcpServers: {
+          docs: {
+            command: process.execPath,
+            args: [serverPath],
+            includeTools: ["legacy_only"],
+            toolFilter: { include: ["read_docs"] },
           },
         },
       },
-      env: {
-        CONTEXT7_API_KEY: "ctx7-test",
-      },
     });
-
-    expect(prepared.env?.CONTEXT7_API_KEY).toBe("ctx7-test");
-    expect(typeof prepared.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH).toBe("string");
-    // User OpenClaw transport names are normalized to Gemini's expected schema.
     const raw = JSON.parse(
       await fs.readFile(prepared.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH as string, "utf-8"),
-    ) as {
-      mcp?: { allowed?: string[] };
-      mcpServers?: Record<
-        string,
-        { type?: string; transport?: string; url?: string; headers?: Record<string, string> }
-      >;
-    };
-    expect(raw.mcp?.allowed).toEqual(["context7"]);
-    expect(raw.mcpServers?.context7?.type).toBe("http");
-    expect(raw.mcpServers?.context7?.transport).toBeUndefined();
-    expect(raw.mcpServers?.context7?.url).toBe("https://mcp.context7.com/mcp");
-    expect(raw.mcpServers?.context7?.headers?.Authorization).toBe("Bearer ctx7-test");
-
+    ) as { mcp?: { allowed?: string[] }; mcpServers?: Record<string, unknown> };
+    expect(raw.mcp?.allowed).not.toContain("docs");
+    expect(raw.mcpServers?.docs).toBeUndefined();
     await prepared.cleanup?.();
   });
 

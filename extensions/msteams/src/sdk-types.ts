@@ -44,13 +44,14 @@ type MSTeamsActivity = {
   name?: string;
   membersAdded?: Array<{ id?: string; name?: string }>;
   membersRemoved?: Array<{ id?: string; name?: string }>;
+  reactionsAdded?: Array<{ type?: string }>;
+  reactionsRemoved?: Array<{ type?: string }>;
   replyToId?: string;
   [key: string]: unknown;
 };
 
 /** Structural alias for ActivityParams — avoids tsgo resolution bugs with the bundled @microsoft/teams.api package. */
 type MSTeamsActivityParams = { type?: string; [key: string]: unknown };
-/** Structural alias for ActivityLike. */
 export type MSTeamsActivityLike = MSTeamsActivityParams | string;
 
 type MSTeamsStreamer = {

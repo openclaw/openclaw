@@ -1,11 +1,7 @@
-// Venice plugin entrypoint registers its OpenClaw integration.
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
-import {
-  applyModelCompatPatch,
-  type ModelCompatConfig,
-} from "openclaw/plugin-sdk/provider-model-shared";
+import { applyModelCompatPatch } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { VENICE_MODEL_DISCOVERY_OPTIONS } from "./models.js";
+import { VENICE_BASE_URL, VENICE_MODEL_DISCOVERY_OPTIONS } from "./models.js";
 import { applyVeniceConfig } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildStaticVeniceProvider } from "./provider-catalog.js";
@@ -21,14 +17,6 @@ const XAI_UNSUPPORTED_SCHEMA_KEYWORDS = [
   "minContains",
   "maxContains",
 ] as const;
-
-function applyXaiModelCompat<T extends { compat?: unknown }>(model: T): T {
-  return applyModelCompatPatch(model as T & { compat?: ModelCompatConfig }, {
-    toolSchemaProfile: "xai",
-    unsupportedToolSchemaKeywords: [...XAI_UNSUPPORTED_SCHEMA_KEYWORDS],
-    toolCallArgumentsEncoding: "html-entities",
-  }) as T;
-}
 
 function isXaiBackedVeniceModel(modelId: string): boolean {
   return normalizeLowercaseStringOrEmpty(modelId).includes("grok");
@@ -52,16 +40,33 @@ export default defineSingleProviderPluginEntry({
       noteTitle: "Venice AI",
     },
     catalog: {
+      discoveryMode: "strict",
       buildProvider: buildStaticVeniceProvider,
       liveModelDiscovery: VENICE_MODEL_DISCOVERY_OPTIONS,
     },
-    normalizeResolvedModel: ({ modelId, model }) =>
-      isXaiBackedVeniceModel(modelId) ? applyXaiModelCompat(model) : undefined,
-    wrapStreamFn: (ctx) => createVeniceStreamWrapper(ctx.streamFn, ctx.thinkingLevel),
+    normalizeResolvedModel: ({ modelId, model }) => {
+      const normalized = isXaiBackedVeniceModel(modelId)
+        ? applyModelCompatPatch(model, {
+            toolSchemaProfile: "xai",
+            unsupportedToolSchemaKeywords: [...XAI_UNSUPPORTED_SCHEMA_KEYWORDS],
+            toolCallArgumentsEncoding: "html-entities",
+          })
+        : model;
+      return model.api === "openai-completions" &&
+        model.baseUrl?.trim().replace(/\/+$/u, "") === VENICE_BASE_URL
+        ? applyModelCompatPatch(normalized, {
+            supportsPromptCacheKey: model.compat?.supportsPromptCacheKey ?? true,
+            supportsLongCacheRetention: model.compat?.supportsLongCacheRetention ?? false,
+          })
+        : normalized;
+    },
+    wrapStreamFn: (ctx) => createVeniceStreamWrapper(ctx.streamFn),
     resolveUsageAuth: async (ctx) => {
-      const apiKey = ctx.resolveApiKeyFromConfigAndStore({
-        envDirect: [ctx.env.VENICE_API_KEY],
-      });
+      const apiKey = (
+        await ctx.resolveApiKeyCandidatesFromConfigAndStore?.({
+          envDirect: [ctx.env.VENICE_API_KEY],
+        })
+      )?.[0];
       return apiKey ? { token: apiKey } : null;
     },
     fetchUsageSnapshot: async (ctx) =>

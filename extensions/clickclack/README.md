@@ -18,7 +18,7 @@ openclaw channels add clickclack --code 'https://clickclack.example.com/#XXXX-XX
 
 Split-origin and path-mounted ClickClack deployments generate an exact
 `/api/bot-setup-codes/claim#CODE` endpoint. OpenClaw validates the versioned
-claim response and saves its canonical API base.
+claim response and saves its normalized API base URL.
 
 For manual token setup:
 
@@ -104,7 +104,7 @@ category changes remain reflected in the channel, but session archive, restore,
 reset, and deletion never archive or replace it. ClickClack owns channel archive
 and restore independently. `workspace`
 defaults to the account workspace, and `section` defaults to `Sessions`.
-`controlUrlBase` adds canonical `/chat/<agent>/<session-ref>` links to the
+`controlUrlBase` adds standard `/chat/<agent>/<session-ref>` links to the
 OpenClaw Control UI, preserving base paths. Main sessions use `/chat/<agent>`.
 
 ClickClack-managed embed URLs explicitly advertise host-theme support. The
@@ -119,8 +119,8 @@ not have an account selector.
 Messages in the managed channel run in a stable side session under the same
 agent id as the attached main session. The plugin installs a scoped host grant
 for `sessions_history`, `session_status`, and `sessions_send` between that side
-session and its attached main session, so `tools.sessions.visibility` can stay
-at its safer default `tree`. A second host-side policy blocks session discovery
+session and its attached main session, so `tools.sessions.visibility` can be set
+explicitly to `tree` for narrower access than the default `all`. A second host-side policy blocks session discovery
 and alternate targets; the side-agent prompt is not the authorization boundary.
 The agent still needs those three tools in its effective tool allowlist.
 
@@ -131,7 +131,7 @@ and scoped grant. The previous side session cannot access the new main session.
 Messages arriving through an inactive, disabled, or retargeted managed
 binding are dropped instead of falling back to the account's normal channel
 routing. Released bindings leave a durable revoked-channel marker so delayed
-realtime events remain fail-closed. Remote ownership is keyed by ClickClack
+realtime events are still rejected. Remote ownership is keyed by ClickClack
 server and channel id, so renaming the local account cannot turn a managed
 channel into an ordinary one.
 

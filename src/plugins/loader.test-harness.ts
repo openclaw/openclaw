@@ -6,7 +6,6 @@ import { expect } from "vitest";
 import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
-import type { DetachedTaskLifecycleRuntime } from "../tasks/detached-task-runtime-contract.js";
 import { withEnv } from "../test-utils/env.js";
 import {
   getRegisteredEmbeddingProvider,
@@ -64,26 +63,6 @@ export function expectGlobalHookRunner(
   }
   expect(typeof runner.hasHooks).toBe("function");
   return runner;
-}
-
-export function createDetachedTaskRuntimeStub(id: string): DetachedTaskLifecycleRuntime {
-  const fail = (name: string): never => {
-    throw new Error(`detached runtime ${id} should not execute ${name} in this test`);
-  };
-  return {
-    createQueuedTaskRun: () => fail("createQueuedTaskRun"),
-    createRunningTaskRun: () => fail("createRunningTaskRun"),
-    startTaskRunByRunId: () => fail("startTaskRunByRunId"),
-    recordTaskRunProgressByRunId: () => fail("recordTaskRunProgressByRunId"),
-    finalizeTaskRunByRunId: () => fail("finalizeTaskRunByRunId"),
-    completeTaskRunByRunId: () => fail("completeTaskRunByRunId"),
-    failTaskRunByRunId: () => fail("failTaskRunByRunId"),
-    setDetachedTaskDeliveryStatusByRunId: () => fail("setDetachedTaskDeliveryStatusByRunId"),
-    cancelDetachedTaskRunById: async () => ({
-      found: true,
-      cancelled: true,
-    }),
-  };
 }
 
 export function writeFixtureText(rootDir: string, relativePath: string, body: string) {
@@ -224,6 +203,7 @@ export function writeBundledPlugin(params: {
 export function makeOpenClawDevSourceRoot() {
   const root = makePluginLoaderTempDir();
   fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }), "utf-8");
+  fs.writeFileSync(path.join(root, "pnpm-workspace.yaml"), "packages: [extensions/*]\n");
   mkdirSafe(path.join(root, "src"));
   mkdirSafe(path.join(root, "extensions"));
   return root;
@@ -513,7 +493,7 @@ export function expectPluginSourcePrecedence(
     expectedDisabledOrigin: string;
     label: string;
     expectedDisabledError?: string;
-    expectDuplicateWarning?: boolean;
+    expectedDuplicateLevel?: "warn" | "info" | null;
   },
 ) {
   const entries = registry.plugins.filter((entry) => entry.id === scenario.pluginId);
@@ -521,16 +501,16 @@ export function expectPluginSourcePrecedence(
   const loaded = entries[0];
   expect(loaded?.origin, scenario.label).toBe(scenario.expectedLoadedOrigin);
   expect(loaded?.status, scenario.label).toBe("loaded");
-  const expectedWarning =
+  const expectedMessage =
     scenario.expectedDisabledError ??
     `${scenario.expectedDisabledOrigin} plugin will be overridden by ${scenario.expectedLoadedOrigin} plugin`;
-  const hasDuplicateWarning = registry.diagnostics.some(
+  const hasDuplicateDiagnostic = registry.diagnostics.some(
     (diag) =>
-      diag.level === "warn" &&
+      diag.level === (scenario.expectedDuplicateLevel ?? "warn") &&
       diag.pluginId === scenario.pluginId &&
-      diag.message.includes(expectedWarning),
+      diag.message.includes(expectedMessage),
   );
-  expect(hasDuplicateWarning, scenario.label).toBe(scenario.expectDuplicateWarning ?? true);
+  expect(hasDuplicateDiagnostic, scenario.label).toBe(scenario.expectedDuplicateLevel !== null);
 }
 
 export function expectPluginOriginAndStatus(params: {

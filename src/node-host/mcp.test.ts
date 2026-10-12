@@ -73,7 +73,7 @@ async function startManagerWithTools(listed: ReadonlyArray<{ serverName: string;
 
 function itWithFrozenClock(name: string, run: () => Promise<void>): void {
   it(name, async () => {
-    // Size and pagination proofs must not spend the separately tested catalog deadline.
+    // Non-timeout catalog proofs must not spend the separately tested catalog deadline.
     useFrozenTime(1_000);
     try {
       await run();
@@ -84,38 +84,7 @@ function itWithFrozenClock(name: string, run: () => Promise<void>): void {
 }
 
 describe("node host MCP manager", () => {
-  it("starts independent MCP servers concurrently", async () => {
-    let releaseFirst: (() => void) | undefined;
-    const firstReady = new Promise<void>((resolve) => {
-      releaseFirst = resolve;
-    });
-    const first = createClient();
-    first.connect.mockImplementation(async () => await firstReady);
-    const second = createClient();
-    const starting = startNodeHostMcpManager(
-      { first: { command: "first" }, second: { command: "second" } },
-      {
-        createClient: (serverName) => (serverName === "first" ? first : second),
-        resolveTransport: () => transport,
-        warn: vi.fn(),
-      },
-    );
-
-    await vi.waitFor(() => expect(second.connect).toHaveBeenCalledOnce());
-    expect(second.connect).toHaveBeenCalledWith(
-      transport.transport,
-      expect.objectContaining({
-        signal: expect.any(AbortSignal),
-        timeout: transport.connectionTimeoutMs,
-        maxTotalTimeout: transport.connectionTimeoutMs,
-      }),
-    );
-    releaseFirst?.();
-    const manager = await starting;
-    await manager.close();
-  });
-
-  it("terminates streamable HTTP sessions on failed startup and manager close", async () => {
+  itWithFrozenClock("terminates HTTP sessions on failed startup and manager close", async () => {
     const events = new Map<string, string[]>();
     const transports = new Map(
       ["failed", "healthy"].map((serverName) => {

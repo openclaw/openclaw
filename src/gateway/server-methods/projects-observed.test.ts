@@ -5,21 +5,23 @@ import {
   PROJECTS_LIST_MAX_IDENTITY_PROBES,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { bindSessionRowProjection } from "../session-row-projection-access.js";
+import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
 import { createProjectsHandlers } from "./projects.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
-
-type ProjectWorktreeService = Parameters<typeof createProjectsHandlers>[0];
 
 const seededSessions = vi.hoisted(() => ({
   store: {} as Record<string, SessionEntry>,
 }));
 
-vi.mock("../session-utils.js", () => ({
-  loadCombinedSessionStoreForGatewayCore: () => ({ store: seededSessions.store }),
+// mock-isolation: Supply observed session rows without opening real session stores.
+vi.mock("./projects-session-store.js", () => ({
+  loadProjectSessionStore: () => seededSessions.store,
 }));
 
 vi.mock("../../projects/project-registry.js", () => ({
-  listProjectRegistry: () => [],
+  listProjectRegistry: async () => [],
   ProjectCheckoutError: class ProjectCheckoutError extends Error {},
   registerProjectRegistry: vi.fn(),
   removeProjectRegistry: vi.fn(),
@@ -59,7 +61,7 @@ function assertObservedProjectsPayload(
 
 async function listObservedProjects(params: {
   service: {
-    listRegistryRecords: () => unknown[];
+    listRegistryRecords: () => Promise<unknown[]>;
     resolveRepositoryIdentity: (checkoutPath: string) => Promise<{
       checkoutRoot: string;
       repoRoot: string;
@@ -69,16 +71,29 @@ async function listObservedProjects(params: {
   };
   client?: GatewayClient;
 }) {
-  const handlers = createProjectsHandlers(params.service as never);
-  const responses: Parameters<RespondFn>[] = [];
-  await handlers["projects.list"]?.({
-    params: { includeObserved: true },
-    respond: (...response: Parameters<RespondFn>) => responses.push(response),
-    context: {
-      getRuntimeConfig: () => ({ agents: { list: [{ id: "main", default: true }] } }),
-    } as GatewayRequestContext,
-    client: params.client ?? authenticatedClient("operator@example.com"),
+  const handlers = createProjectsHandlers({
+    listRegistryRecords: params.service.listRegistryRecords,
+    resolveRepositoryIdentities: (roots: string[]) =>
+      Promise.all(
+        roots.map((root) => params.service.resolveRepositoryIdentity(root).catch(() => undefined)),
+      ),
   } as never);
+  const responses: Parameters<RespondFn>[] = [];
+  const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+  const projection = createSessionRowProjectionFixture({ cfg, store: {}, modelCatalog: [] });
+  try {
+    await handlers["projects.list"]?.({
+      params: { includeObserved: true },
+      respond: (...response: Parameters<RespondFn>) => responses.push(response),
+      context: bindSessionRowProjection(
+        { getRuntimeConfig: () => cfg },
+        () => projection,
+      ) as GatewayRequestContext,
+      client: params.client ?? authenticatedClient("operator@example.com"),
+    } as never);
+  } finally {
+    projection.dispose();
+  }
   expect(responses).toHaveLength(1);
   const response = responses[0];
   if (!response) {
@@ -94,7 +109,47 @@ beforeEach(() => {
 });
 
 describe("projects.list observed projects", () => {
-  it.each([["operator.write"], ["operator.admin"]])(
+  it("deduplicates admitted paths and preserves result order when a checkout is unavailable", async () => {
+    seededSessions.store = Object.fromEntries(
+      Array.from({ length: 5_000 }, (_, index) => [
+        `agent:main:session-${index}`,
+        { sessionId: `session-${index}`, updatedAt: index, execCwd: `/repos/${index % 8}` },
+      ]),
+    );
+    const resolveRepositoryIdentity = vi.fn(async (checkoutPath: string) => {
+      if (checkoutPath === "/repos/3") {
+        throw new Error("checkout unavailable");
+      }
+      return {
+        checkoutRoot: checkoutPath.replace("/repos/", "/physical/"),
+        repoRoot: "/physical/main",
+        originUrl: "https://example.test/project.git",
+        fingerprint: "project",
+      };
+    });
+
+    await expect(
+      listObservedProjects({
+        service: { listRegistryRecords: async () => [], resolveRepositoryIdentity },
+      }),
+    ).resolves.toEqual([
+      {
+        name: "7",
+        originUrl: "https://example.test/project.git",
+        lastUsedAt: 4_999,
+        checkouts: [7, 6, 5, 4, 2, 1, 0].map((index) => ({
+          runnerId: "gateway",
+          path: `/physical/${index}`,
+        })),
+      },
+    ]);
+    expect(resolveRepositoryIdentity).toHaveBeenCalledTimes(8);
+    expect(new Set(resolveRepositoryIdentity.mock.calls.map(([checkout]) => checkout)).size).toBe(
+      8,
+    );
+  });
+
+  it.each([["operator.write"]])(
     "returns detailed observed projects to %s callers",
     async (scope) => {
       seededSessions.store = {
@@ -124,7 +179,7 @@ describe("projects.list observed projects", () => {
 
       await expect(
         listObservedProjects({
-          service: { listRegistryRecords: () => [], resolveRepositoryIdentity },
+          service: { listRegistryRecords: async () => [], resolveRepositoryIdentity },
           client: authenticatedClient(`${scope}@example.com`, [scope]),
         }),
       ).resolves.toEqual([
@@ -148,13 +203,13 @@ describe("projects.list observed projects", () => {
         sessionId: "visible",
         updatedAt: 200,
         visibility: "shared",
-        createdActor: { type: "human", id: "owner@example.com" },
+        createdActor: { type: "human", source: "profile", id: "owner@example.com" },
       },
       "agent:main:private": {
         sessionId: "private",
         updatedAt: 300,
         visibility: "draft",
-        createdActor: { type: "human", id: "owner@example.com" },
+        createdActor: { type: "human", source: "profile", id: "owner@example.com" },
       },
     };
     const worktree = (name: string, ownerId: string, lastActiveAt: number) => ({
@@ -186,7 +241,7 @@ describe("projects.list observed projects", () => {
       originUrl: `https://example.test${checkoutPath}.git`,
       fingerprint: checkoutPath,
     }));
-    const service = { listRegistryRecords: () => worktrees, resolveRepositoryIdentity };
+    const service = { listRegistryRecords: async () => worktrees, resolveRepositoryIdentity };
 
     const viewer = (await listObservedProjects({
       service,
@@ -224,7 +279,7 @@ describe("projects.list observed projects", () => {
 
     const projects = (await listObservedProjects({
       service: {
-        listRegistryRecords: () => [],
+        listRegistryRecords: async () => [],
         resolveRepositoryIdentity: async (checkoutPath: string) => ({
           checkoutRoot: checkoutPath,
           repoRoot: checkoutPath,
@@ -261,7 +316,7 @@ describe("projects.list observed projects", () => {
 
     const projects = (await listObservedProjects({
       service: {
-        listRegistryRecords: () => worktrees,
+        listRegistryRecords: async () => worktrees,
         resolveRepositoryIdentity: async (checkoutPath: string) => ({
           checkoutRoot: checkoutPath,
           repoRoot: checkoutPath,
@@ -289,20 +344,20 @@ describe("projects.list observed projects", () => {
         { sessionId: `session-${index}`, updatedAt: index, execCwd: `/repos/${index}` },
       ]),
     );
-    const resolveRepositoryIdentity = vi.fn<ProjectWorktreeService["resolveRepositoryIdentity"]>(
-      async (_checkoutPath) => {
-        throw new Error("checkout unavailable");
-      },
-    );
+    const resolveRepositoryIdentity = vi.fn<
+      Parameters<typeof listObservedProjects>[0]["service"]["resolveRepositoryIdentity"]
+    >(async (_checkoutPath) => {
+      throw new Error("checkout unavailable");
+    });
 
     await expect(
       listObservedProjects({
-        service: { listRegistryRecords: () => [], resolveRepositoryIdentity },
+        service: { listRegistryRecords: async () => [], resolveRepositoryIdentity },
       }),
     ).resolves.toEqual([]);
     expect(resolveRepositoryIdentity).toHaveBeenCalledTimes(PROJECTS_LIST_MAX_IDENTITY_PROBES);
     expect(resolveRepositoryIdentity.mock.calls.length).toBeLessThanOrEqual(rawCandidateLimit);
-    expect(resolveRepositoryIdentity.mock.calls[0]?.[0]).toBe(`/repos/${rawCandidateLimit + 4}`);
+    expect(resolveRepositoryIdentity).toHaveBeenCalledWith(`/repos/${rawCandidateLimit + 4}`);
     expect(resolveRepositoryIdentity).not.toHaveBeenCalledWith("/repos/0");
   });
 });

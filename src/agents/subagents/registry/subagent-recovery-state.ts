@@ -2,7 +2,19 @@ import type { SessionEntry } from "../../../config/sessions.js";
 import { isAgentEventLifecycleGenerationCurrent } from "../../../infra/agent-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
+export function isQuietSubagentRestartContinuation(entry: SubagentRunRecord): boolean {
+  return (
+    !entry.collect &&
+    entry.expectsCompletionMessage === false &&
+    entry.completionTarget === "parent" &&
+    entry.execution.interruptionReason === "gateway-restart"
+  );
+}
+
 export function shouldSuppressSubagentRecoverySessionEffects(entry: SubagentRunRecord): boolean {
+  if (entry.execution.suppressSessionEffects === true) {
+    return true;
+  }
   if (entry.killIntent) {
     const killLifecycleGeneration = entry.killIntent.lifecycleGeneration;
     return (
@@ -10,9 +22,6 @@ export function shouldSuppressSubagentRecoverySessionEffects(entry: SubagentRunR
       killLifecycleGeneration.length === 0 ||
       !isAgentEventLifecycleGenerationCurrent(killLifecycleGeneration)
     );
-  }
-  if (entry.execution.suppressSessionEffects === true) {
-    return true;
   }
   const lifecycleGeneration = entry.execution.restartRecovery?.lifecycleGeneration;
   return (

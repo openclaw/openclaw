@@ -1,49 +1,539 @@
+import { expectDefined } from "@openclaw/normalization-core";
 /* @vitest-environment jsdom */
-
 import { render } from "lit";
+import { createComponent, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveThemeBranding } from "../../../../../packages/gateway-protocol/src/theme.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../../api/types.ts";
+import { currentThemeBranding, setCurrentThemeBranding } from "../../../app/theme-branding.ts";
+import { resolveAvatarHat } from "../../../components/agent-avatar-hat.ts";
+import { latestBrowserTabCards } from "../../../lib/chat/browser-tab-preview.ts";
+import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
+import * as artworkLoader from "../../plugins/icon-loader.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
-import { renderTranscriptSearch, toggleTranscriptSearch } from "./chat-thread-interactions.ts";
+import { getChatSessionProjection, reduceChatSessionProjection } from "../history-merge.ts";
+import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
+import { handleAgentEvent } from "../tool-stream.ts";
+import { ChatThread } from "./chat-thread-view.tsx";
 import { renderChatThread } from "./chat-thread.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
+  requireElement,
   resetTranscriptTestDom,
   threadProps,
 } from "./chat-transcript.test-support.ts";
 
-function requireElement(container: ParentNode, selector: string): HTMLElement {
-  const element = container.querySelector<HTMLElement>(selector);
-  if (!element) {
-    throw new Error(`expected ${selector}`);
-  }
-  return element;
-}
-
-function requireClosest(element: Element, selector: string): HTMLElement {
-  const closest = element.closest<HTMLElement>(selector);
-  if (!closest) {
-    throw new Error(`expected closest ${selector}`);
-  }
-  return closest;
-}
-
-function touchPointerUp(element: Element): void {
-  const event = new Event("pointerup", { bubbles: true });
-  Object.defineProperty(event, "pointerType", { value: "touch" });
-  element.dispatchEvent(event);
+async function mountThread(props: Parameters<typeof renderChatThread>[0]) {
+  const transcript = createTestTranscript();
+  const container = document.body.appendChild(document.createElement("div"));
+  render(renderChatThread(props, transcript), container);
+  transcript.hostConnected();
+  transcript.hostUpdated();
+  await flushDeferredRowPrune();
+  return { container, transcript };
 }
 
 describe("chat transcript rendering", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
 
-  it("renders canonical archive attribution as a timestamped notice without a speech bubble", async () => {
-    const sessionKey = "agent:main:archived-notice";
-    const archivedSession: GatewaySessionRow = {
+  it("announces an appended reply in the same native render commit", () => {
+    const initial = threadProps("native-announcement", "agent:main:main", [
+      { role: "user", content: "Question", timestamp: 1_000 },
+    ]);
+    const [props, setProps] = createSignal(initial);
+    const transcript = createTestTranscript();
+    const view = mountSolid(() =>
+      createComponent(ChatThread, {
+        get props() {
+          return props();
+        },
+        transcript,
+      }),
+    );
+    try {
+      transcript.hostConnected();
+      flush();
+      expect(view.container.querySelector(".chat-transcript-announcement")?.textContent).toBe("");
+      setProps({
+        ...initial,
+        messages: [
+          ...initial.messages,
+          {
+            role: "assistant",
+            content: "The completed reply",
+            timestamp: 2_000,
+          },
+        ],
+      });
+      flush();
+      expect(view.container.querySelector(".chat-transcript-announcement")?.textContent).toBe(
+        "The completed reply",
+      );
+    } finally {
+      transcript.hostDisconnected();
+    }
+  });
+
+  it.each([
+    ["blob:configured-agent", "gutter", "props"],
+    ["blob:configured-agent", "gutter", "roster"],
+    ["blob:configured-agent", "gutter", null],
+    ["🦉", "gutter", "fallback-agent"],
+    ["🤖", "gutter", null],
+    [null, "gutter", null],
+    ["blob:configured-agent", "none", null],
+    ["blob:configured-agent", "footer", null],
+  ] as const)(
+    "keeps avatar %s and %s placement consistent across saved and streaming replies (emoji from %s)",
+    async (avatar, avatarPlacement, emojiSource) => {
+      const now = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+      const props = threadProps("pane-agent-avatar");
+      props.userId = avatarPlacement === "footer" ? null : "synthetic-owner";
+      props.assistantAvatar = emojiSource === "props" ? "🦉" : avatar;
+      props.assistantAvatarUrl = avatar?.startsWith("blob:") ? avatar : null;
+      props.agents =
+        emojiSource === "roster" ? [{ id: "main", identity: { emoji: "🦉" } }] : undefined;
+      if (avatar === null) {
+        props.currentAgentId = undefined;
+        props.fullMessageAgentId = "forge";
+      }
+      if (emojiSource === "fallback-agent") {
+        props.currentAgentId = undefined;
+        props.fullMessageAgentId = "writer";
+        props.assistantAvatar = null;
+        props.agents = [
+          { id: "main", identity: { avatarUrl: "/avatar/main", emoji: "🦞" } },
+          { id: "writer", identity: { emoji: "🦉" } },
+        ];
+      }
+      if (avatarPlacement === "none") {
+        props.sessionKey = "agent:main:subagent:avatar-test";
+      }
+      props.stream = "Reply in progress";
+      props.streamStartedAt = 5_000;
+      props.runActive = true;
+      const container = document.body.appendChild(document.createElement("div"));
+      const transcript = createTestTranscript();
+      try {
+        render(renderChatThread(props, transcript), container);
+        transcript.hostConnected();
+        transcript.hostUpdated();
+        await flushDeferredRowPrune();
+        expect(
+          container.querySelector(".chat-thread")?.classList.contains("chat-thread--direct"),
+        ).toBe(avatarPlacement !== "gutter");
+        const replies = container.querySelectorAll(".chat-group.assistant");
+        expect(replies).toHaveLength(3);
+        for (const reply of replies) {
+          const slot = reply.querySelector(".chat-avatar-slot, .chat-avatar.assistant");
+          if (avatarPlacement !== "gutter") {
+            expect(slot).toBeNull();
+          } else if (avatar === null) {
+            await vi.waitFor(() =>
+              expect(slot?.querySelector(".identity-avatar__agent-face")).not.toBeNull(),
+            );
+          } else if (avatar.startsWith("blob:")) {
+            const image = slot?.querySelector("img.chat-avatar.assistant");
+            expect(image?.getAttribute("src")).toBe(avatar);
+            expect(image?.getAttribute("alt")).toBe(props.assistantName);
+            image?.dispatchEvent(new Event("load"));
+            expect(slot?.classList.contains("is-fallback")).toBe(false);
+            image?.dispatchEvent(new Event("error"));
+            expect(slot?.classList.contains("is-fallback")).toBe(true);
+            if (emojiSource) {
+              expect(slot?.querySelector("[data-avatar]")?.getAttribute("data-avatar")).toBe("🦉");
+            } else {
+              await vi.waitFor(() =>
+                expect(slot?.querySelector(".identity-avatar__agent-face")).not.toBeNull(),
+              );
+            }
+          } else {
+            expect(slot?.querySelector("img")).toBeNull();
+            expect(slot?.querySelector("[data-avatar]")?.getAttribute("data-avatar")).toBe(avatar);
+          }
+        }
+        if (emojiSource === "props") {
+          props.assistantAvatar = "🦊";
+          render(renderChatThread(props, transcript), container);
+          transcript.hostUpdated();
+          await flushDeferredRowPrune();
+          expect(
+            [...container.querySelectorAll(".chat-avatar.assistant [data-avatar]")].map((element) =>
+              element.getAttribute("data-avatar"),
+            ),
+          ).toEqual(["🦊", "🦊", "🦊"]);
+        }
+        if (avatar === null) {
+          const faces = () =>
+            [
+              ...container.querySelectorAll(".chat-avatar.assistant .identity-avatar__agent-face"),
+            ].map((element) => element.outerHTML);
+          const original = faces();
+          expect(original).toHaveLength(3);
+          expect(new Set(original).size).toBe(1);
+          props.fullMessageAgentId = "scout";
+          render(renderChatThread(props, transcript), container);
+          transcript.hostUpdated();
+          await flushDeferredRowPrune();
+          await vi.waitFor(() => {
+            expect(faces()).toHaveLength(3);
+            expect(new Set(faces()).size).toBe(1);
+            expect(faces()[0]).not.toBe(original[0]);
+          });
+          props.fullMessageAgentId = "forge";
+          render(renderChatThread(props, transcript), container);
+          transcript.hostUpdated();
+          await flushDeferredRowPrune();
+          await vi.waitFor(() => expect(faces()).toEqual(original));
+        }
+      } finally {
+        transcript.hostDisconnected();
+        container.remove();
+        now.mockRestore();
+      }
+    },
+  );
+
+  it("refreshes settled avatar hats when only plugin artwork or hat selection changes", async () => {
+    const previousBranding = currentThemeBranding();
+    const now = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+    const fetchArtwork = vi
+      .spyOn(artworkLoader, "fetchPluginThemeArtworkBlobUrl")
+      .mockImplementation(async ({ url }) => `blob:${url}`);
+    let branding = resolveThemeBranding({
+      mascot: "claw",
+      critters: [],
+      avatarHat: "beret",
+      artwork: { hats: { beret: { url: "/hat?v=1" } } },
+    });
+    const agentId = expectDefined(
+      Array.from({ length: 100 }, (_, index) => `agent-${index}`).find((id) =>
+        resolveAvatarHat(id, branding),
+      ),
+      "agent wearing a hat",
+    );
+    const props = threadProps("pane-artwork-refresh", `agent:${agentId}:main`, [
+      { role: "assistant", content: "A settled reply", timestamp: 1_000 },
+    ]);
+    props.currentAgentId = agentId;
+    props.fullMessageAgentId = agentId;
+    props.userId = "synthetic-owner";
+    props.assistantAvatar = "🦀";
+    props.branding = branding;
+    const container = document.body.appendChild(document.createElement("div"));
+    const transcript = createTestTranscript();
+    const draw = async () => {
+      setCurrentThemeBranding(props.branding!);
+      render(renderChatThread(props, transcript), container);
+      transcript.hostUpdated();
+      await vi.dynamicImportSettled();
+      flush();
+    };
+    try {
+      await draw();
+      transcript.hostConnected();
+      expect(container.querySelector(".identity-avatar__hat-img")?.getAttribute("src")).toBe(
+        "blob:/hat?v=1",
+      );
+      branding = { ...branding, artwork: { hats: { beret: { url: "/hat?v=2" } } } };
+      props.branding = branding;
+      await draw();
+      expect(container.querySelector(".identity-avatar__hat-img")?.getAttribute("src")).toBe(
+        "blob:/hat?v=2",
+      );
+      props.branding = { ...branding, avatarHat: "crown" };
+      await draw();
+      expect(container.querySelector(".identity-avatar__hat--crown svg")).not.toBeNull();
+      expect(container.querySelector(".identity-avatar__hat-img")).toBeNull();
+    } finally {
+      setCurrentThemeBranding(previousBranding);
+      transcript.hostDisconnected();
+      container.remove();
+      fetchArtwork.mockRestore();
+      now.mockRestore();
+    }
+  });
+
+  it("keeps one inline compaction row through completion and history refresh", async () => {
+    const props: ReturnType<typeof threadProps> = {
+      ...threadProps("pane-compaction"),
+      runWorking: true,
+      compactionStatus: {
+        phase: "active",
+        runId: "compact-run",
+        startedAt: 5_000,
+        completedAt: null,
+      },
+    };
+    const container = document.createElement("div");
+    document.body.append(container);
+    const transcript = createTestTranscript();
+    const rerender = () => {
+      render(renderChatThread(props, transcript), container);
+      transcript.hostUpdated();
+    };
+    try {
+      rerender();
+      transcript.hostConnected();
+      await flushDeferredRowPrune();
+      const marker = requireElement(container, ".chat-compaction");
+      const glyph = requireElement(marker, ".chat-compaction__glyph");
+      expect(marker.textContent).toContain("Compacting context");
+      expect(container.querySelector(".chat-working-indicator")).toBeNull();
+      props.compactionStatus = {
+        phase: "complete",
+        runId: "compact-run",
+        startedAt: 5_000,
+        completedAt: 6_000,
+      };
+      rerender();
+      expect(container.querySelector(".chat-compaction")).toBe(marker);
+      expect(marker.textContent).toContain("Context compacted");
+      const owner = {
+        sessionKey: props.sessionKey,
+        chatMessages: props.messages,
+        compactionStatus: props.compactionStatus,
+      };
+      getChatSessionProjection(owner, {
+        sessionKey: props.sessionKey,
+        activeLeafEntryId: "previous",
+      });
+      const messages = [
+        ...props.messages,
+        {
+          role: "custom",
+          customType: "openclaw.context-compaction",
+          content: "Context compacted",
+          __openclaw: { id: "compacted-item", runId: "compact-run" },
+          timestamp: 6_000,
+        },
+      ];
+      reduceChatSessionProjection(
+        owner,
+        { type: "snapshotLoaded", messages },
+        {
+          scope: { sessionKey: props.sessionKey, activeLeafEntryId: "compacted-item" },
+        },
+      );
+      props.messages = owner.chatMessages;
+      props.compactionStatus = owner.compactionStatus;
+      rerender();
+      expect(container.querySelectorAll(".chat-compaction")).toHaveLength(1);
+      expect(container.querySelector(".chat-compaction")).toBe(marker);
+      expect(marker.querySelector(".chat-compaction__glyph")).toBe(glyph);
+      expect(container.textContent?.match(/Context compacted/g)).toHaveLength(1);
+      props.compactionStatus = null;
+      rerender();
+      expect(container.querySelector(".chat-compaction")).toBe(marker);
+      props.messages = [
+        ...props.messages,
+        { role: "assistant", content: "Next reply", timestamp: 9_000 },
+      ];
+      rerender();
+      expect(container.querySelector(".chat-compaction")).toBe(marker);
+    } finally {
+      transcript.hostDisconnected();
+      container.remove();
+    }
+  });
+
+  it("keeps repeated compactions in one run distinct during history adoption", async () => {
+    const persisted = (itemId: string, timestamp: number) => ({
+      role: "custom",
+      customType: "openclaw.context-compaction",
+      content: "Context compacted",
+      __openclaw: { id: itemId, runId: "same-run", itemId },
+      timestamp,
+    });
+    const props = threadProps("pane-repeated-compaction", "agent:main:main", [
+      persisted("first", 1_000),
+    ]);
+    props.compactionStatus = {
+      phase: "active",
+      runId: "same-run",
+      itemId: "second",
+      startedAt: 2_000,
+      completedAt: null,
+    };
+    const container = document.body.appendChild(document.createElement("div"));
+    const transcript = createTestTranscript();
+    const rerender = () => {
+      render(renderChatThread(props, transcript), container);
+      transcript.hostUpdated();
+    };
+    try {
+      rerender();
+      transcript.hostConnected();
+      await flushDeferredRowPrune();
+      const active = requireElement(container, ".chat-compaction--active");
+      expect(container.querySelectorAll(".chat-compaction")).toHaveLength(2);
+      props.messages = [...props.messages, persisted("second", 3_000)];
+      rerender();
+      expect(container.querySelectorAll(".chat-compaction")).toHaveLength(2);
+      expect(active.isConnected).toBe(true);
+      expect(active.classList.contains("chat-compaction--complete")).toBe(true);
+      expect(container.querySelector(".chat-compaction--active")).toBeNull();
+    } finally {
+      transcript.hostDisconnected();
+      container.remove();
+    }
+  });
+
+  it("keeps exact-run usage visible through final event batching and later corrections", async () => {
+    const runId = "watched-run";
+    const sessionKey = "global";
+    const host = createHost({ sessionKey, chatRunId: runId });
+    const props = threadProps("pane-run-usage", sessionKey, [
+      {
+        role: "user",
+        content: "Check the workspace",
+        timestamp: 1_000,
+        __openclaw: { idempotencyKey: `${runId}:user` },
+      },
+      { role: "assistant", content: "Workspace checked", timestamp: 2_000, runId },
+    ]);
+    props.gatewayClient = createTestGatewayClient(() => null);
+    props.currentAgentId = "first";
+    props.runId = runId;
+    props.runWorking = true;
+    props.selectedSession = {
       key: sessionKey,
       kind: "direct",
+      updatedAt: 1,
+      status: "done",
+      lastRunId: "previous-run",
+      endedAt: 1,
+      runtimeMs: 1,
+      outputTokens: 10,
+    };
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const rerender = () => {
+      props.runUsageById = host.chatRunUsageById;
+      render(renderChatThread(props, transcript), container);
+      transcript.hostUpdated();
+    };
+    handleAgentEvent(
+      host,
+      agentEvent("sibling-run", 1, "usage", { outputTokens: 900 }, sessionKey),
+    );
+    rerender();
+    transcript.hostConnected();
+    await flushDeferredRowPrune();
+    expect(container.querySelector(".chat-working-indicator__tokens")).toBeNull();
+
+    handleAgentEvent(host, agentEvent(runId, 1, "usage", { outputTokens: 6_900 }, sessionKey));
+    rerender();
+    expect(requireElement(container, ".chat-working-indicator__tokens").textContent).toBe(
+      "6.9k output tokens",
+    );
+    // Final usage and lifecycle can share one browser render; neither may discard the count.
+    handleAgentEvent(host, agentEvent(runId, 2, "usage", { outputTokens: 6_950 }, sessionKey));
+    handleAgentEvent(host, agentEvent(runId, 3, "lifecycle", { phase: "end" }, sessionKey));
+    props.runId = null;
+    props.runWorking = false;
+    props.selectedSession = {
+      ...props.selectedSession,
+      lastRunId: runId,
+      endedAt: 16_000,
+      runtimeMs: 14_000,
+    };
+    rerender();
+    expect(requireElement(container, ".chat-turn-recap").textContent).toContain("7k output tokens");
+    handleAgentEvent(host, agentEvent(runId, 4, "usage", { outputTokens: 7_094 }, sessionKey));
+    rerender();
+    expect(requireElement(container, ".chat-turn-recap").textContent).toContain(
+      "7.1k output tokens",
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("sibling-run", 2, "usage", { outputTokens: 1_000 }, sessionKey),
+    );
+    rerender();
+    expect(requireElement(container, ".chat-turn-recap").textContent).toContain(
+      "7.1k output tokens",
+    );
+    for (const replaceOwner of [
+      () => {
+        props.currentAgentId = "second";
+      },
+      () => {
+        props.gatewayClient = createTestGatewayClient(() => null);
+      },
+    ]) {
+      replaceOwner();
+      rerender();
+      expect(container.querySelector(".chat-turn-recap")).toBeNull();
+      props.currentAgentId = "first";
+      props.runId = runId;
+      props.runWorking = true;
+      rerender();
+      props.runId = null;
+      props.runWorking = false;
+      rerender();
+      expect(requireElement(container, ".chat-turn-recap").textContent).toContain(
+        "7.1k output tokens",
+      );
+    }
+    props.messages = [
+      ...props.messages,
+      { role: "assistant", content: "Background reply", timestamp: 20_000, runId: "sibling-run" },
+    ];
+    rerender();
+    expect(container.querySelector(".chat-turn-recap")).toBeNull();
+    transcript.hostDisconnected();
+  });
+
+  it.each([true, false])(
+    "keeps browser cards visible with capture limited to the active pane (%s)",
+    async (active) => {
+      const messages = [
+        { role: "user", content: "Open the example", timestamp: 1_000 },
+        {
+          role: "toolResult",
+          toolCallId: "browser-call",
+          toolName: "browser",
+          timestamp: 2_000,
+          content: "Opened",
+          details: {
+            browserTab: {
+              profile: "managed",
+              target: "host",
+              targetId: "tab-1",
+              url: "https://example.com",
+              title: "Example",
+            },
+          },
+        },
+        { role: "assistant", content: "Done.", timestamp: 3_000 },
+      ];
+      const props = {
+        ...threadProps("pane-browser-work", "agent:main:dashboard:browser", messages),
+        latestBrowserTabs: active ? latestBrowserTabCards(messages, []) : undefined,
+        showToolCalls: true,
+      };
+      const transcript = createTestTranscript();
+      const container = document.body.appendChild(document.createElement("div"));
+      render(renderChatThread(props, transcript), container);
+      transcript.hostUpdated();
+      transcript.hostConnected();
+      await flushDeferredRowPrune();
+      expect(container.querySelector(".chat-work-group")).not.toBeNull();
+      expect(container.querySelectorAll("openclaw-browser-tab-card")).toHaveLength(1);
+      expect(container.querySelector("openclaw-browser-tab-card")?.latest).toBe(active);
+      transcript.hostDisconnected();
+    },
+  );
+
+  it("renders canonical archive attribution as a timestamped notice without a speech bubble", async () => {
+    const sessionKey = "agent:work:main";
+    const archivedSession: GatewaySessionRow = {
+      key: "global",
+      kind: "global",
       updatedAt: 2_000,
       archived: true,
       archivedAt: 2_000,
@@ -63,6 +553,7 @@ describe("chat transcript rendering", () => {
         { role: "user", content: "Before archive", timestamp: 1_000 },
         { role: "assistant", content: "After archive", timestamp: 3_000 },
       ]),
+      selectedSession: archivedSession,
       sessions,
     };
     const rerender = () => {
@@ -88,12 +579,25 @@ describe("chat transcript rendering", () => {
       ...archivedSession,
       archivedBy: { type: "human", id: "profile-bob" },
     };
+    props.selectedSession = sessions.sessions[0];
     rerender();
     expect(requireElement(container, ".chat-notice").textContent).toContain(
       "Archived by profile-bob",
     );
 
+    sessions.sessions[0] = {
+      ...archivedSession,
+      archivedBy: undefined,
+      archiveReason: "active-session-cap",
+    };
+    props.selectedSession = sessions.sessions[0];
+    rerender();
+    expect(requireElement(container, ".chat-notice").textContent).toContain(
+      "Automatically archived because the active-session limit was reached",
+    );
+
     sessions.sessions[0] = { ...archivedSession, archivedBy: undefined };
+    props.selectedSession = sessions.sessions[0];
     rerender();
     expect(container.querySelector(".chat-notice")).toBeNull();
 
@@ -103,311 +607,78 @@ describe("chat transcript rendering", () => {
       archivedAt: undefined,
       archivedBy: undefined,
     };
+    props.selectedSession = sessions.sessions[0];
     rerender();
     expect(container.querySelector(".chat-notice")).toBeNull();
     transcript.hostDisconnected();
   });
 
-  it("reveals touched metadata across stored and live groups within one transcript", async () => {
-    const firstTranscript = createTestTranscript();
-    const secondTranscript = createTestTranscript();
-    const firstContainer = document.body.appendChild(document.createElement("div"));
-    const secondContainer = document.body.appendChild(document.createElement("div"));
-    const firstProps = {
-      ...threadProps("pane-touch-first", "agent:main:first", [
-        { role: "user", content: "Stored message", timestamp: 1_000 },
-      ]),
-      stream: "Live reply",
-      streamStartedAt: 2_000,
-    };
-    const secondProps = threadProps("pane-touch-second", "agent:main:second", [
-      { role: "assistant", content: "Other transcript", timestamp: 3_000 },
-    ]);
-    render(renderChatThread(firstProps, firstTranscript), firstContainer);
-    render(renderChatThread(secondProps, secondTranscript), secondContainer);
-    firstTranscript.hostConnected();
-    secondTranscript.hostConnected();
-    firstTranscript.hostUpdated();
-    secondTranscript.hostUpdated();
-    await flushDeferredRowPrune();
-
-    const storedGroup = requireElement(firstContainer, ".chat-group.user");
-    const storedBubble = requireElement(storedGroup, ".chat-bubble");
-    const streamBubble = requireElement(firstContainer, ".chat-bubble.streaming");
-    const streamGroup = requireClosest(streamBubble, ".chat-group--with-footer");
-    const secondGroup = requireElement(secondContainer, ".chat-group.assistant");
-
-    storedBubble.dispatchEvent(new Event("pointerup", { bubbles: true }));
-    expect(storedGroup.classList.contains("chat-group--meta-revealed")).toBe(false);
-
-    touchPointerUp(storedBubble);
-    expect(storedGroup.classList.contains("chat-group--meta-revealed")).toBe(true);
-
-    touchPointerUp(streamBubble);
-    expect(storedGroup.classList.contains("chat-group--meta-revealed")).toBe(false);
-    expect(streamGroup.classList.contains("chat-group--meta-revealed")).toBe(true);
-
-    touchPointerUp(requireElement(secondGroup, ".chat-bubble"));
-    expect(secondGroup.classList.contains("chat-group--meta-revealed")).toBe(true);
-    expect(streamGroup.classList.contains("chat-group--meta-revealed")).toBe(true);
-
-    touchPointerUp(requireElement(secondGroup, ".chat-copy-btn"));
-    expect(secondGroup.classList.contains("chat-group--meta-revealed")).toBe(true);
-
-    touchPointerUp(requireElement(secondGroup, ".chat-bubble"));
-    expect(secondGroup.classList.contains("chat-group--meta-revealed")).toBe(false);
-    firstTranscript.hostDisconnected();
-    secondTranscript.hostDisconnected();
-  });
-
-  it("resolves persisted replies to their source and highlights it on click", async () => {
-    const transcript = createTestTranscript();
-    const container = document.body.appendChild(document.createElement("div"));
-    const props = threadProps("pane-reply-preview", "agent:main:main", [
-      {
-        role: "assistant",
-        content: "The original answer",
-        __openclaw: { id: "source-message" },
-        timestamp: 1_000,
-      },
-      {
-        role: "user",
-        content: "Follow up",
-        __openclaw: { id: "reply-message", replyToId: "source-message" },
-        timestamp: 2_000,
-      },
-    ]);
-    render(renderChatThread(props, transcript), container);
-    transcript.hostConnected();
-    transcript.hostUpdated();
-    await flushDeferredRowPrune();
-
-    const preview = container.querySelector<HTMLButtonElement>(".chat-reply-preview--message");
-    expect(preview?.textContent).toContain("Replying to Molty");
-    expect(preview?.textContent).toContain("The original answer");
-    expect(preview?.textContent).not.toContain("source-message");
-
-    preview?.click();
-    await Promise.resolve();
-
-    const sourceBubble = [...container.querySelectorAll<HTMLElement>(".chat-bubble")].find(
-      (bubble) => bubble.dataset.entryId === "source-message",
-    );
-    expect(sourceBubble?.classList.contains("chat-bubble--reply-target")).toBe(true);
-    transcript.hostDisconnected();
-  });
-
-  it("hydrates an unloaded reply preview without inserting its source row", async () => {
-    const transcript = createTestTranscript();
-    const container = document.body.appendChild(document.createElement("div"));
-    let resolvedMessage: unknown = undefined;
-    const request = vi.fn();
-    const open = vi.fn();
+  it("leaves interrupted status to the composer when a turn has no assistant reply", async () => {
     const props = {
-      ...threadProps("pane-reply-hydration", "agent:main:main", [
+      ...threadProps("pane-interrupted-empty", "agent:main:main", [
+        { role: "user", content: "Earlier task", timestamp: 1_000 },
+        { role: "assistant", content: "Earlier reply", timestamp: 2_000 },
         {
           role: "user",
-          content: "Follow up",
-          __openclaw: { id: "reply-message", replyToId: "source-message" },
-          timestamp: 2_000,
+          content: "Stop this task",
+          timestamp: 3_000,
+          __openclaw: { idempotencyKey: "run-2:user" },
         },
       ]),
-      replyMessageAccess: {
-        revision: 0,
-        navigationId: null,
-        read: () => resolvedMessage,
-        request,
-        open,
+      runStatus: {
+        phase: "interrupted" as const,
+        runId: "run-2",
+        sessionKey: "agent:main:main",
+        occurredAt: 4_000,
       },
     };
-    const rerender = () => {
-      render(renderChatThread(props, transcript), container);
-      transcript.hostUpdated();
-    };
-    rerender();
-    transcript.hostConnected();
-    await flushDeferredRowPrune();
 
-    expect(request).toHaveBeenCalledWith("source-message");
-    expect(container.querySelector("[data-entry-id='source-message']")).toBeNull();
+    const { container, transcript } = await mountThread(props);
 
-    resolvedMessage = {
-      role: "assistant",
-      content: "The original answer",
-      __openclaw: { id: "source-message" },
-      timestamp: 1_000,
-    };
-    props.replyMessageAccess.revision += 1;
-    rerender();
-
-    const preview = container.querySelector<HTMLButtonElement>(".chat-reply-preview--message");
-    expect(preview?.textContent).toContain("Replying to Molty");
-    expect(preview?.textContent).toContain("The original answer");
-    preview?.click();
-    expect(open).toHaveBeenCalledWith("source-message");
+    expect(container.querySelector(".chat-turn-terminal-status--interrupted")).toBeNull();
     transcript.hostDisconnected();
   });
 
-  it("clears search before navigating to a filtered reply target", async () => {
-    const transcript = createTestTranscript();
-    const searchContainer = document.body.appendChild(document.createElement("div"));
-    const threadContainer = document.body.appendChild(document.createElement("div"));
-    const open = vi.fn();
-    const paneId = "pane-filtered-reply-navigation";
-    const props = {
-      ...threadProps(paneId, "agent:main:main", [
-        {
-          role: "assistant",
-          content: "The original answer",
-          __openclaw: { id: "source-message" },
-          timestamp: 1_000,
-        },
-        {
-          role: "user",
-          content: "Follow up",
-          __openclaw: {
-            id: "reply-message",
-            replyToId: "source-message",
-            replyToPreview: { text: "The original answer", senderLabel: "Molty" },
-          },
-          timestamp: 2_000,
-        },
-      ]),
-      replyMessageAccess: {
-        revision: 0,
-        navigationId: null,
-        read: () => undefined,
-        request: vi.fn(),
-        open,
-      },
-    };
-    const rerender = () => {
-      render(renderTranscriptSearch(paneId, rerender), searchContainer);
-      render(
-        renderChatThread({ ...props, onRequestUpdate: rerender }, transcript),
-        threadContainer,
-      );
-      transcript.hostUpdated();
-    };
-    toggleTranscriptSearch(paneId, rerender);
-    rerender();
-    transcript.hostConnected();
-    const input = searchContainer.querySelector<HTMLInputElement>("input");
-    expect(input).not.toBeNull();
-    input!.value = "Follow up";
-    input!.dispatchEvent(new Event("input", { bubbles: true }));
-    await flushDeferredRowPrune();
-
-    expect(threadContainer.querySelector("[data-entry-id='source-message']")).toBeNull();
-    const preview = threadContainer.querySelector<HTMLButtonElement>(
-      ".chat-reply-preview--message",
-    );
-    expect(preview).not.toBeNull();
-    preview!.click();
-
-    expect(open).toHaveBeenCalledWith("source-message");
-    expect(searchContainer.querySelector("input")).toBeNull();
-    transcript.hostDisconnected();
-  });
-
-  it("loads a truncated assistant message once and keeps the full text visible", async () => {
-    const transcript = createTestTranscript();
-    const container = document.body.appendChild(document.createElement("div"));
-    const loadFullAssistantMessage = vi.fn().mockResolvedValue({
-      ok: true,
-      message: { role: "assistant", content: "Complete assistant content." },
-    });
-    function rerender() {
-      render(renderChatThread(props, transcript), container);
-      transcript.hostUpdated();
-    }
-    const props = {
-      ...threadProps("pane-assistant-expand", "agent:work:main", [
-        {
-          role: "assistant",
-          content: "Preview\n...(truncated)...",
-          __openclaw: { id: "assistant-full-1", truncated: true },
-          timestamp: 1_000,
-        },
-      ]),
-      fullMessageAgentId: "work",
-      loadFullAssistantMessage,
-      onRequestUpdate: rerender,
-    };
-    rerender();
-    transcript.hostConnected();
-    transcript.hostUpdated();
-
-    await vi.waitFor(() => expect(container.textContent).toContain("Complete assistant content."));
-    expect(loadFullAssistantMessage).toHaveBeenCalledOnce();
-    expect(loadFullAssistantMessage).toHaveBeenCalledWith({
-      sessionKey: "agent:work:main",
-      agentId: "work",
-      messageId: "assistant-full-1",
-    });
-
-    expect(container.querySelector(".chat-message-disclosure__toggle")).toBeNull();
-    expect(container.textContent).toContain("Complete assistant content.");
-    expect(loadFullAssistantMessage).toHaveBeenCalledOnce();
-    transcript.hostDisconnected();
-  });
-
-  it("keeps transport-cut assistant text as received when full content is unavailable", async () => {
-    const transcript = createTestTranscript();
-    const container = document.body.appendChild(document.createElement("div"));
-    const loadFullAssistantMessage = vi.fn().mockRejectedValue(new Error("offline"));
-    function rerender() {
-      render(renderChatThread(props, transcript), container);
-      transcript.hostUpdated();
-    }
-    const props = {
-      ...threadProps("pane-assistant-retry", "agent:main:main", [
-        {
-          role: "assistant",
-          content: "Preview\n...(truncated)...",
-          __openclaw: { id: "assistant-retry-1", truncated: true },
-          timestamp: 1_000,
-        },
-      ]),
-      loadFullAssistantMessage,
-      onRequestUpdate: rerender,
-    };
-    rerender();
-    transcript.hostConnected();
-    transcript.hostUpdated();
-
-    await vi.waitFor(() => expect(loadFullAssistantMessage).toHaveBeenCalledOnce());
-    expect(container.textContent).toContain("Preview");
-    expect(container.textContent).toContain("...(truncated)...");
-    expect(container.querySelector(".chat-message-disclosure__toggle")).toBeNull();
-    transcript.hostDisconnected();
-  });
-
-  it.each(["Enter", " "])("opens focused transcript file links with %j", async (key) => {
-    const transcript = createTestTranscript();
+  it.each(
+    [
+      "skills/review/SKILL.md",
+      "qa-café/index.md",
+      "qa241-unicode/café note.md",
+      "qa241-unicode/emoji-🌱.md",
+      "qa241-unicode/100% ready.txt",
+      "qa241-unicode/日本語.txt",
+    ].flatMap((path) => ["click", "Enter", " "].map((key) => ({ path, key }))),
+  )("opens focused transcript file $path with $key", async ({ path, key }) => {
     const onOpenWorkspaceFile = vi.fn();
+    const onOpenSessionLink = vi.fn();
     const onHistoryIntent = vi.fn();
-    const container = document.body.appendChild(document.createElement("div"));
     const props = {
       ...threadProps("pane-file-link", "agent:main:main", [
-        { role: "assistant", content: "Inspect `src/chat.ts:17`", timestamp: 1_000 },
+        {
+          role: "assistant",
+          content: `Inspect [Read file](${encodeURI(path)}:17)`,
+          timestamp: 1_000,
+        },
       ]),
       onOpenWorkspaceFile,
+      onOpenSessionLink,
       onHistoryIntent,
     };
-    render(renderChatThread(props, transcript), container);
-    transcript.hostConnected();
-    transcript.hostUpdated();
-    await flushDeferredRowPrune();
+    const { container, transcript } = await mountThread(props);
 
     const link = container.querySelector<HTMLAnchorElement>("a.markdown-file-link");
     link?.focus();
     expect(document.activeElement).toBe(link);
-    const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
-    link?.dispatchEvent(event);
-
-    expect(event.defaultPrevented).toBe(true);
-    expect(onOpenWorkspaceFile).toHaveBeenCalledWith({ path: "src/chat.ts", line: 17 });
+    expect(link?.hasAttribute("href")).toBe(false);
+    if (key === "click") {
+      link?.click();
+    } else {
+      const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+      link?.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(true);
+    }
+    expect(onOpenWorkspaceFile).toHaveBeenCalledExactlyOnceWith({ path, line: 17 });
+    expect(onOpenSessionLink).not.toHaveBeenCalled();
     expect(onHistoryIntent).not.toHaveBeenCalled();
     transcript.hostDisconnected();
   });
@@ -415,11 +686,9 @@ describe("chat transcript rendering", () => {
   it.each(["click", "Ctrl+click", "Enter", " "])(
     "handles transcript session links with %j",
     async (action) => {
-      const transcript = createTestTranscript();
       const onOpenSessionLink = vi.fn();
       const onHistoryIntent = vi.fn();
       const sessionKey = "agent:roboclaw:dashboard:2139bddb-3211-4641-b993-10f619f124e6";
-      const container = document.body.appendChild(document.createElement("div"));
       const props = {
         ...threadProps("pane-session-link", "agent:main:main", [
           { role: "assistant", content: `Open \`${sessionKey}\``, timestamp: 1_000 },
@@ -427,10 +696,7 @@ describe("chat transcript rendering", () => {
         onOpenSessionLink,
         onHistoryIntent,
       };
-      render(renderChatThread(props, transcript), container);
-      transcript.hostConnected();
-      transcript.hostUpdated();
-      await flushDeferredRowPrune();
+      const { container, transcript } = await mountThread(props);
 
       const link = container.querySelector<HTMLAnchorElement>("a.markdown-session-link");
       if (action === "click" || action === "Ctrl+click") {
@@ -467,12 +733,10 @@ describe("chat transcript rendering", () => {
   );
 
   it.each(["click", "Enter"])("SPA-routes transcript session hrefs with %s", async (action) => {
-    const transcript = createTestTranscript();
     const onOpenSessionLink = vi.fn();
     const onHistoryIntent = vi.fn();
     const literalUuid = "12345678-90ab-cdef-1234-567890abcdef";
     const href = `/control/chat/main/~key/${literalUuid}?view=full#latest`;
-    const container = document.body.appendChild(document.createElement("div"));
     const props = {
       ...threadProps("pane-session-href", "agent:main:main", [
         { role: "assistant", content: `[Open session](${href})`, timestamp: 1_000 },
@@ -481,10 +745,7 @@ describe("chat transcript rendering", () => {
       onOpenSessionLink,
       onHistoryIntent,
     };
-    render(renderChatThread(props, transcript), container);
-    transcript.hostConnected();
-    transcript.hostUpdated();
-    await flushDeferredRowPrune();
+    const { container, transcript } = await mountThread(props);
 
     const link = container.querySelector<HTMLAnchorElement>(`a[href^="/control/chat/"]`);
     const event =
@@ -505,9 +766,7 @@ describe("chat transcript rendering", () => {
   });
 
   it("leaves external transcript hrefs to the browser", async () => {
-    const transcript = createTestTranscript();
     const onOpenSessionLink = vi.fn();
-    const container = document.body.appendChild(document.createElement("div"));
     const props = {
       ...threadProps("pane-external-href", "agent:main:main", [
         {
@@ -518,10 +777,7 @@ describe("chat transcript rendering", () => {
       ]),
       onOpenSessionLink,
     };
-    render(renderChatThread(props, transcript), container);
-    transcript.hostConnected();
-    transcript.hostUpdated();
-    await flushDeferredRowPrune();
+    const { container, transcript } = await mountThread(props);
 
     const link = container.querySelector<HTMLAnchorElement>('a[href^="https://example.com/"]');
     const event = new MouseEvent("click", { bubbles: true, button: 0, cancelable: true });

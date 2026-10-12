@@ -1,4 +1,3 @@
-// Sync Labels script supports OpenClaw repository automation.
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -6,12 +5,6 @@ import { parse } from "yaml";
 import { resolveGitHubRepoFromOrigin } from "./lib/github-repo.ts";
 
 const SYNC_LABELS_TIMEOUT_MS = 120_000;
-
-type RepoLabel = {
-  name: string;
-  color?: string;
-  description?: string;
-};
 
 const COLOR_BY_PREFIX = new Map<string, string>([
   ["channel", "0969DA"],
@@ -25,22 +18,6 @@ const COLOR_BY_PREFIX = new Map<string, string>([
   ["scripts", "57606A"],
   ["docker", "D6E3DA"],
   ["size", "8C959F"],
-]);
-
-const EXTRA_LABEL_METADATA = new Map<
-  string,
-  {
-    color: string;
-    description?: string;
-  }
->([
-  [
-    "beta-blocker",
-    {
-      color: "D93F0B",
-      description: "Plugin beta-release blocker pending stable cutoff triage",
-    },
-  ],
 ]);
 
 const configPath = resolve(".github/labeler.yml");
@@ -88,20 +65,22 @@ for (const label of missing) {
 }
 
 function resolveLabelMetadata(label: string): { color: string; description?: string } {
-  const extraMetadata = EXTRA_LABEL_METADATA.get(label);
-  if (extraMetadata) {
-    return extraMetadata;
+  if (label === "beta-blocker") {
+    return {
+      color: "D93F0B",
+      description: "Plugin beta-release blocker pending stable cutoff triage",
+    };
   }
   const prefix = label.includes(":") ? label.slice(0, label.indexOf(":")).trim() : label.trim();
   return { color: COLOR_BY_PREFIX.get(prefix) ?? "ededed" };
 }
 
-function fetchExistingLabels(repoLocal: string): Map<string, RepoLabel> {
+function fetchExistingLabels(repoLocal: string): Set<string> {
   const raw = execFileSync("gh", ["api", `repos/${repoLocal}/labels?per_page=100`, "--paginate"], {
     encoding: "utf8",
     timeout: SYNC_LABELS_TIMEOUT_MS,
     killSignal: "SIGKILL",
   });
-  const labels = JSON.parse(raw) as RepoLabel[];
-  return new Map(labels.map((label) => [label.name, label]));
+  const labels = JSON.parse(raw) as { name: string }[];
+  return new Set(labels.map((label) => label.name));
 }

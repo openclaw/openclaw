@@ -36,20 +36,8 @@ extension CuaDriverHostCoordinator {
                       expectedExecutableURL: expectedExecutableURL)
             else { continue }
 
-            if let hostPID = self.processEnvironmentValue(
-                processIdentifier,
-                key: "CUA_DRIVER_EMBEDDED_HOST_PID").flatMap(pid_t.init),
-                !self.processIsAlive(hostPID)
-            {
-                logger.error(
-                    """
-                    reaping orphaned embedded CUA daemon \(processIdentifier, privacy: .public) \
-                    whose host \(hostPID, privacy: .public) is gone
-                    """)
-            } else {
-                logger.error(
-                    "reaping owned embedded CUA daemon \(processIdentifier, privacy: .public) during lifecycle cleanup")
-            }
+            logger.error(
+                "reaping owned embedded CUA daemon \(processIdentifier, privacy: .public) during lifecycle cleanup")
             if await self.terminateProcess(
                 processIdentifier,
                 directory: directory,
@@ -193,96 +181,14 @@ extension CuaDriverHostCoordinator {
         return errno == EPERM
     }
 
-    private static func processExecutableURL(_ processIdentifier: pid_t) -> URL? {
-        var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
-        let length = proc_pidpath(processIdentifier, &buffer, UInt32(buffer.count))
-        guard length > 0 else { return nil }
-        let bytes = buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
-        guard let path = String(bytes: bytes, encoding: .utf8) else { return nil }
-        return URL(fileURLWithPath: path)
-    }
-
     private static func processExecutableMatches(
         _ processIdentifier: pid_t,
         expectedExecutableURL: URL) -> Bool
     {
-        guard let actualExecutableURL = self.processExecutableURL(processIdentifier) else { return false }
-        let actualPath = actualExecutableURL.resolvingSymlinksInPath().standardizedFileURL.path
+        guard let path = ProcessIdentity.executablePath(pid: processIdentifier) else { return false }
+        let actualPath = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
         let expectedPath = expectedExecutableURL.resolvingSymlinksInPath().standardizedFileURL.path
         return actualPath == expectedPath
-    }
-
-    private static func processEnvironmentValue(
-        _ processIdentifier: pid_t,
-        key: String) -> String?
-    {
-        var argumentMaximum: Int32 = 0
-        var argumentMaximumSize = MemoryLayout<Int32>.size
-        var argumentMaximumMIB: [Int32] = [CTL_KERN, KERN_ARGMAX]
-        guard sysctl(
-            &argumentMaximumMIB,
-            u_int(argumentMaximumMIB.count),
-            &argumentMaximum,
-            &argumentMaximumSize,
-            nil,
-            0) == 0,
-            argumentMaximum > 0,
-            argumentMaximum <= 4 * 1024 * 1024
-        else { return nil }
-
-        var buffer = [UInt8](repeating: 0, count: Int(argumentMaximum))
-        var bufferSize = buffer.count
-        var processMIB: [Int32] = [CTL_KERN, KERN_PROCARGS2, processIdentifier]
-        let readSucceeded = buffer.withUnsafeMutableBytes { bytes in
-            sysctl(
-                &processMIB,
-                u_int(processMIB.count),
-                bytes.baseAddress,
-                &bufferSize,
-                nil,
-                0) == 0
-        }
-        guard readSucceeded, bufferSize >= MemoryLayout<Int32>.size else { return nil }
-
-        var argumentCount: Int32 = 0
-        withUnsafeMutableBytes(of: &argumentCount) { destination in
-            destination.copyBytes(from: buffer.prefix(destination.count))
-        }
-        guard argumentCount > 0 else { return nil }
-
-        var offset = MemoryLayout<Int32>.size
-        func skipString() -> Bool {
-            guard offset < bufferSize else { return false }
-            while offset < bufferSize, buffer[offset] != 0 {
-                offset += 1
-            }
-            guard offset < bufferSize else { return false }
-            offset += 1
-            return true
-        }
-
-        guard skipString() else { return nil }
-        while offset < bufferSize, buffer[offset] == 0 {
-            offset += 1
-        }
-        for _ in 0..<argumentCount where offset < bufferSize {
-            guard skipString() else { return nil }
-        }
-
-        let prefix = Data("\(key)=".utf8)
-        while offset < bufferSize {
-            while offset < bufferSize, buffer[offset] == 0 {
-                offset += 1
-            }
-            guard offset < bufferSize else { break }
-            let start = offset
-            guard skipString() else { break }
-            let entry = Data(buffer[start..<(offset - 1)])
-            if entry.starts(with: prefix) {
-                return String(bytes: entry.dropFirst(prefix.count), encoding: .utf8)
-            }
-        }
-        return nil
     }
 
     private static func terminateProcess(

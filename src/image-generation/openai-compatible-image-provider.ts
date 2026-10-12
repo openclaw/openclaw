@@ -1,6 +1,4 @@
-/** Factory for image providers with OpenAI-compatible generation/edit endpoints. */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveGeneratedMediaMaxBytes } from "../media/configured-max-bytes.js";
 import { resolveApiKeyForProvider } from "../plugin-sdk/provider-auth-runtime.js";
@@ -15,6 +13,10 @@ import {
   sanitizeConfiguredModelProviderRequest,
 } from "../plugin-sdk/provider-http.js";
 import {
+  isProviderApiKeyConfigured,
+  isProviderApiKeyConfiguredAsync,
+} from "../plugins/provider-auth-availability.js";
+import {
   parseOpenAiCompatibleImageResponse,
   resolveInlineImageJsonResponseMaxBytes,
 } from "./image-assets.js";
@@ -26,8 +28,6 @@ import type {
   ImageGenerationSourceImage,
 } from "./types.js";
 
-// Factory for providers that expose OpenAI-style /images/generations and
-// /images/edits endpoints while still allowing provider-specific bodies.
 type ModelProviderConfig = NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string];
 
 /** OpenAI-compatible image endpoint mode. */
@@ -91,68 +91,14 @@ export type OpenAiCompatibleImageProviderOptions = {
   };
 };
 
-function readProviderConfig(
-  cfg: OpenClawConfig | undefined,
-  providerConfigKey: string,
-): ModelProviderConfig | undefined {
-  return cfg?.models?.providers?.[providerConfigKey];
-}
-
-function resolveDefaultModel(model: string | undefined, fallback: string): string {
-  return normalizeOptionalString(model) ?? fallback;
-}
-
-function trimTrailingSlash(value: string): string {
-  return value.replace(/\/+$/u, "");
-}
-
-function appendImagesPath(baseUrl: string, mode: OpenAiCompatibleImageRequestMode): string {
-  return `${trimTrailingSlash(baseUrl)}/images/${mode === "edit" ? "edits" : "generations"}`;
-}
-
-function resolveRequestTimeoutMs(params: {
-  options: OpenAiCompatibleImageProviderOptions;
-  req: ImageGenerationRequest;
-  mode: OpenAiCompatibleImageRequestMode;
-}): number | undefined {
-  if (params.options.defaultTimeoutMs === undefined) {
-    return params.req.timeoutMs;
-  }
-  const label =
-    params.mode === "edit"
-      ? (params.options.failureLabels?.edit ?? `${params.options.label} image edit`)
-      : (params.options.failureLabels?.generate ?? `${params.options.label} image generation`);
-  const deadline = createProviderOperationDeadline({
-    timeoutMs: params.req.timeoutMs,
-    label,
-  });
-  return resolveProviderOperationTimeoutMs({
-    deadline,
-    defaultTimeoutMs: params.options.defaultTimeoutMs,
-  });
-}
-
-function resolveResponseMaxImages(params: {
-  count: number;
-  mode: OpenAiCompatibleImageRequestMode;
-  options: OpenAiCompatibleImageProviderOptions;
-}): number {
-  return params.mode === "edit"
-    ? (params.options.capabilities.edit.maxCount ?? params.count)
-    : (params.options.capabilities.generate.maxCount ?? params.count);
-}
-
 /** Creates an image-generation provider backed by OpenAI-style image endpoints. */
 export function createOpenAiCompatibleImageGenerationProvider(
   options: OpenAiCompatibleImageProviderOptions,
 ): ImageGenerationProvider {
   const providerConfigKey = options.providerConfigKey ?? options.id;
-  const normalizeModel = options.normalizeModel ?? resolveDefaultModel;
-  const resolveCount =
-    options.resolveCount ??
-    (({ req }) => {
-      return req.count ?? 1;
-    });
+  const normalizeModel =
+    options.normalizeModel ?? ((model, fallback) => normalizeOptionalString(model) ?? fallback);
+  const resolveCount = options.resolveCount ?? (({ req }) => req.count ?? 1);
 
   return {
     id: options.id,
@@ -163,12 +109,14 @@ export function createOpenAiCompatibleImageGenerationProvider(
       : {}),
     models: [...options.models],
     isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: options.id, ...ctx }),
+    isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: options.id, ...ctx }),
     capabilities: options.capabilities,
     async generateImage(req): Promise<ImageGenerationResult> {
       const inputImages = req.inputImages ?? [];
       // Reference images switch the request to edit mode; providers can still
       // disable edits or cap reference count through capabilities.
       const mode: OpenAiCompatibleImageRequestMode = inputImages.length > 0 ? "edit" : "generate";
+      const operation = `${options.label} image ${mode === "edit" ? "edit" : "generation"}`;
       const maxInputImages = options.capabilities.edit.maxInputImages;
       if (mode === "edit" && !options.capabilities.edit.enabled) {
         throw new Error(`${options.label} image editing is not supported.`);
@@ -181,12 +129,6 @@ export function createOpenAiCompatibleImageGenerationProvider(
             }.`,
         );
       }
-      if (mode === "edit" && inputImages.length === 0) {
-        throw new Error(
-          options.missingInputImageError ?? `${options.label} image edit missing reference image.`,
-        );
-      }
-
       const auth = await resolveApiKeyForProvider({
         provider: options.id,
         cfg: req.cfg,
@@ -197,7 +139,7 @@ export function createOpenAiCompatibleImageGenerationProvider(
         throw new Error(options.missingApiKeyError ?? `${options.label} API key missing`);
       }
 
-      const providerConfig = readProviderConfig(req.cfg, providerConfigKey);
+      const providerConfig = req.cfg?.models?.providers?.[providerConfigKey];
       const resolvedBaseUrl =
         options.resolveBaseUrl?.({
           req,
@@ -238,68 +180,55 @@ export function createOpenAiCompatibleImageGenerationProvider(
         mode === "edit"
           ? options.buildEditRequest({ ...requestParams, mode })
           : options.buildGenerateRequest({ ...requestParams, mode });
-      const timeoutMs = resolveRequestTimeoutMs({ options, req, mode });
+      const timeoutMs =
+        options.defaultTimeoutMs === undefined
+          ? req.timeoutMs
+          : resolveProviderOperationTimeoutMs({
+              deadline: createProviderOperationDeadline({
+                timeoutMs: req.timeoutMs,
+                label: options.failureLabels?.[mode] ?? operation,
+              }),
+              defaultTimeoutMs: options.defaultTimeoutMs,
+            });
       // Multipart requests must let FormData set its own boundary header, while
       // JSON requests need an explicit content type after configured headers.
+      const requestOptions = {
+        url: `${baseUrl.replace(/\/+$/u, "")}/images/${mode === "edit" ? "edits" : "generations"}`,
+        headers: new Headers(headers),
+        timeoutMs,
+        fetchFn: fetch,
+        allowPrivateNetwork: resolvedAllowPrivateNetwork,
+        ssrfPolicy: req.ssrfPolicy,
+        dispatcherPolicy,
+      };
+      if (requestBody.kind === "multipart") {
+        requestOptions.headers.delete("Content-Type");
+      } else {
+        requestOptions.headers.set("Content-Type", "application/json");
+      }
       const request =
         requestBody.kind === "multipart"
-          ? postMultipartRequest({
-              url: appendImagesPath(baseUrl, mode),
-              headers: (() => {
-                const multipartHeaders = new Headers(headers);
-                multipartHeaders.delete("Content-Type");
-                return multipartHeaders;
-              })(),
-              body: requestBody.form,
-              timeoutMs,
-              fetchFn: fetch,
-              allowPrivateNetwork: resolvedAllowPrivateNetwork,
-              ssrfPolicy: req.ssrfPolicy,
-              dispatcherPolicy,
-            })
-          : postJsonRequest({
-              url: appendImagesPath(baseUrl, mode),
-              headers: (() => {
-                const jsonHeaders = new Headers(headers);
-                jsonHeaders.set("Content-Type", "application/json");
-                return jsonHeaders;
-              })(),
-              body: requestBody.body,
-              timeoutMs,
-              fetchFn: fetch,
-              allowPrivateNetwork: resolvedAllowPrivateNetwork,
-              ssrfPolicy: req.ssrfPolicy,
-              dispatcherPolicy,
-            });
+          ? postMultipartRequest({ ...requestOptions, body: requestBody.form })
+          : postJsonRequest({ ...requestOptions, body: requestBody.body });
 
       const { response, release } = await request;
       try {
         await assertOkOrThrowHttpError(
           response,
-          mode === "edit"
-            ? (options.failureLabels?.edit ?? `${options.label} image edit failed`)
-            : (options.failureLabels?.generate ?? `${options.label} image generation failed`),
+          options.failureLabels?.[mode] ?? `${operation} failed`,
         );
         const payload = await readProviderJsonResponse(response, `${options.id}.image-generation`, {
           maxBytes: resolveInlineImageJsonResponseMaxBytes(
-            resolveResponseMaxImages({ count, mode, options }),
+            options.capabilities[mode].maxCount ?? count,
             resolveGeneratedMediaMaxBytes(req.cfg, "image"),
           ),
         });
         const images = parseOpenAiCompatibleImageResponse(payload, {
           ...options.response,
-          malformedResponseError:
-            mode === "edit"
-              ? `${options.label} image edit response malformed`
-              : `${options.label} image generation response malformed`,
+          malformedResponseError: `${operation} response malformed`,
         });
         if (images.length === 0) {
-          throw new Error(
-            options.emptyResponseError ??
-              (mode === "edit"
-                ? `${options.label} image edit response missing image data`
-                : `${options.label} image generation response missing image data`),
-          );
+          throw new Error(options.emptyResponseError ?? `${operation} response missing image data`);
         }
         return { images, model };
       } finally {

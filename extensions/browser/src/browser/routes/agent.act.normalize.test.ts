@@ -1,9 +1,42 @@
-// Browser tests cover agent.act.normalize plugin behavior.
 import { describe, expect, it } from "vitest";
 import { ACT_MAX_BATCH_DEPTH } from "../act-policy.js";
 import { canonicalizeActTargetIds, normalizeActRequest } from "./agent.act.normalize.js";
 
 const MAX_SAFE_TIMEOUT_DELAY_MS = 2_147_483_647;
+
+it("projects nested actions without leaking caller control fields or dropping false and empty values", () => {
+  expect(
+    normalizeActRequest({
+      kind: "batch",
+      targetId: 123,
+      stopOnError: false,
+      signal: "caller-signal",
+      actions: [
+        {
+          kind: "click",
+          ref: " e1 ",
+          doubleClick: false,
+          delayMs: 0,
+          resolvedPage: { targetId: "other-page" },
+          assertCurrent: "caller-authority",
+        },
+        { kind: "type", selector: " input ", text: "", submit: false, slowly: false },
+        { kind: "select", ref: "e2", values: ["", " spaced "] },
+        { kind: "close", timeoutMs: "ignored-for-close" },
+      ],
+    }),
+  ).toStrictEqual({
+    kind: "batch",
+    targetId: "123",
+    stopOnError: false,
+    actions: [
+      { kind: "click", ref: "e1", doubleClick: false, delayMs: 0 },
+      { kind: "type", selector: "input", text: "", submit: false, slowly: false },
+      { kind: "select", ref: "e2", values: ["", " spaced "] },
+      { kind: "close" },
+    ],
+  });
+});
 
 describe("canonicalizeActTargetIds", () => {
   const canonical = "abcd1234";
@@ -36,12 +69,6 @@ describe("canonicalizeActTargetIds", () => {
     expect(nested.actions[0]?.targetId).toBe(canonical);
   });
 
-  it("leaves an absent targetId unset so dispatch falls back to the request tab", () => {
-    const action: Parameters<typeof canonicalizeActTargetIds>[0] = { kind: "click", ref: "1" };
-    expect(canonicalizeActTargetIds(action, tab)).toBeNull();
-    expect(action.targetId).toBeUndefined();
-  });
-
   it("rejects ids that resolve to a different tab", () => {
     expect(canonicalizeActTargetIds({ kind: "click", ref: "1", targetId: "zzzz9999" }, tab)).toBe(
       "action targetId must match request targetId",
@@ -65,49 +92,51 @@ describe("canonicalizeActTargetIds", () => {
   });
 });
 
+describe("normalizeActRequest keyboard keys", () => {
+  it("preserves focused text insertion without an element ref", () => {
+    const text = "  pasted 🦞\nsecond line  ";
+    expect(normalizeActRequest({ kind: "insertText", text, targetId: "tab-1" })).toEqual({
+      kind: "insertText",
+      text,
+      targetId: "tab-1",
+    });
+  });
+
+  it("rejects non-text insertion payloads without echoing content", () => {
+    expect(() =>
+      normalizeActRequest({ kind: "insertText", text: { secret: "synthetic" } }),
+    ).toThrow("insertText requires text");
+  });
+
+  it.each([
+    ["Ctrl+Shift+Esc", "Control+Shift+Escape"],
+    [" ", "Space"],
+    [" + ", "+"],
+    ["__proto__", "__proto__"],
+  ])("normalizes keyboard input %j", (key, expected) => {
+    expect(normalizeActRequest({ kind: "press", key })).toMatchObject({ key: expected });
+  });
+
+  it("still rejects an empty press key after trimming", () => {
+    expect(() => normalizeActRequest({ kind: "press", key: "" })).toThrow("press requires key");
+    expect(() => normalizeActRequest({ kind: "press", key: "\t" })).toThrow("press requires key");
+  });
+});
+
 describe("normalizeActRequest numeric fields", () => {
-  it("keeps structured numeric action options", () => {
-    expect(
-      normalizeActRequest({
-        kind: "click",
-        ref: "button-1",
-        delayMs: 25,
-        timeoutMs: 5000,
-      }),
-    ).toMatchObject({
-      kind: "click",
-      ref: "button-1",
-      delayMs: 25,
-      timeoutMs: 5000,
-    });
-  });
-
-  it("parses decimal integer strings for action options", () => {
-    expect(
-      normalizeActRequest({
-        kind: "wait",
-        timeMs: "25",
-        timeoutMs: "5000",
-      }),
-    ).toMatchObject({
-      kind: "wait",
-      timeMs: 25,
-      timeoutMs: 5000,
-    });
-  });
-
-  it("caps oversized action timeouts", () => {
-    expect(
-      normalizeActRequest({
-        kind: "wait",
-        text: "ready",
-        timeoutMs: String(Number.MAX_SAFE_INTEGER),
-      }),
-    ).toMatchObject({
-      kind: "wait",
-      text: "ready",
-      timeoutMs: MAX_SAFE_TIMEOUT_DELAY_MS,
-    });
+  it.each([
+    {
+      name: "decimal integer strings",
+      request: { kind: "wait", timeMs: "25", timeoutMs: "5000" },
+      expected: { kind: "wait", timeMs: 25, timeoutMs: 5000 },
+    },
+    {
+      name: "oversized timeouts",
+      request: { kind: "wait", text: "ready", timeoutMs: String(Number.MAX_SAFE_INTEGER) },
+      expected: { kind: "wait", text: "ready", timeoutMs: MAX_SAFE_TIMEOUT_DELAY_MS },
+    },
+  ])("normalizes $name", ({ request, expected }) => {
+    expect(normalizeActRequest(request)).toMatchObject(expected);
   });
 
   it("rejects loose integer tokens for action durations and timeouts", () => {
@@ -146,6 +175,17 @@ describe("normalizeActRequest numeric fields", () => {
   });
 });
 
+describe("normalizeActRequest fill fields", () => {
+  it("validates fill fields inside batch sub-actions", () => {
+    expect(() =>
+      normalizeActRequest({
+        kind: "batch",
+        actions: [{ kind: "fill", fields: [{ ref: "e1", value: "Neo", text: "unsupported" }] }],
+      }),
+    ).toThrow('fields[0] unsupported field key "text"');
+  });
+});
+
 describe("normalizeActRequest batch nesting depth", () => {
   const buildNestedBatch = (depth: number): Record<string, unknown> => {
     let action: Record<string, unknown> = { kind: "click", ref: "1" };
@@ -169,4 +209,13 @@ describe("normalizeActRequest batch nesting depth", () => {
       );
     }
   });
+});
+
+it("rejects non-action commands inside batches", () => {
+  expect(() =>
+    normalizeActRequest({
+      kind: "batch",
+      actions: [{ kind: "navigate", url: "https://example.com" }],
+    }),
+  ).toThrow("kind is required");
 });

@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { runCommandWithTimeout } from "../process/exec.js";
+import { npmCommandArgs } from "../test-utils/npm-command.js";
 import { toRepoRelativePath } from "../test-utils/repo-files.js";
 import {
   resolvePluginNpmGenerationProjectDir,
@@ -17,10 +18,7 @@ import {
 } from "./test-helpers/fs-fixtures.js";
 import { removePluginFromConfig } from "./uninstall-config.js";
 import { pruneManagedNpmPeerDependenciesAfterUninstall } from "./uninstall-managed-npm.js";
-import {
-  prepareConfigForPendingPluginDirectoryRemovalSet,
-  recordPluginPackageUninstallPlan,
-} from "./uninstall-package-plan.js";
+import { recordPluginPackageUninstallPlan } from "./uninstall-package-plan.js";
 import {
   applyPluginUninstallDirectoryRemoval,
   planPluginUninstall,
@@ -268,26 +266,6 @@ function createSingleNpmInstallConfig(installPath: string): OpenClawConfig {
   });
 }
 
-it("stages only runtime child entries while a package directory removal is pending", () => {
-  const staged = prepareConfigForPendingPluginDirectoryRemovalSet(
-    {
-      plugins: {
-        entries: {
-          "pack/one": { enabled: true },
-          "pack/two": { enabled: true },
-        },
-      },
-    },
-    ["pack/one", "pack/two"],
-  );
-
-  expect(staged.plugins?.entries).toEqual({
-    "pack/one": { enabled: false },
-    "pack/two": { enabled: false },
-  });
-  expect(staged.plugins?.entries).not.toHaveProperty("pack");
-});
-
 async function createPluginDirFixture(baseDir: string, pluginId = "my-plugin") {
   const pluginDir = path.join(baseDir, pluginId);
   await fs.mkdir(pluginDir, { recursive: true });
@@ -314,8 +292,7 @@ function expectNpmUninstallCommand(params: { packageName: string; npmRoot: strin
   if (!command) {
     throw new Error("Expected npm uninstall command");
   }
-  expect(command[0]).toEqual([
-    "npm",
+  expect(npmCommandArgs(command[0])).toEqual([
     "uninstall",
     "--loglevel=error",
     "--legacy-peer-deps",
@@ -337,14 +314,6 @@ function expectNpmUninstallCommand(params: { packageName: string; npmRoot: strin
 }
 
 describe("resolveUninstallChannelConfigKeys", () => {
-  it("falls back to pluginId when channelIds are unknown", () => {
-    expect(resolveUninstallChannelConfigKeys("timbot")).toEqual(["timbot"]);
-  });
-
-  it("keeps explicit empty channelIds as remove-nothing", () => {
-    expect(resolveUninstallChannelConfigKeys("telegram", { channelIds: [] })).toStrictEqual([]);
-  });
-
   it("filters shared keys and duplicate channel ids", () => {
     expect(
       resolveUninstallChannelConfigKeys("bad-plugin", {
@@ -388,7 +357,11 @@ describe("planPluginUninstall package ownership", () => {
     expect(result.directoryRemoval).toBeNull();
     expect(result.config.plugins).toEqual({
       allow: ["other"],
-      entries: { other: { enabled: true } },
+      entries: {
+        other: { enabled: true },
+        "pack/one": { enabled: false },
+        "pack/two": { enabled: false },
+      },
     });
     expect(result.actions).toMatchObject({
       entry: true,
@@ -623,14 +596,6 @@ describe("removePluginFromConfig", () => {
     expect(actions.contextEngineSlot).toBe(true);
   });
 
-  it("removes plugins object when uninstall leaves only empty slots", () => {
-    const config = createSinglePluginWithEmptySlotsConfig();
-
-    const { config: result } = removePluginFromConfig(config, "my-plugin");
-
-    expect(result.plugins?.slots).toBeUndefined();
-  });
-
   it("cleans up empty slots object", () => {
     const config = createSinglePluginWithEmptySlotsConfig();
 
@@ -669,16 +634,6 @@ describe("removePluginFromConfig", () => {
     expect(result.plugins?.installs).toEqual(expectedInstalls);
     expect(actions.entry).toBe(entryChanged);
     expect(actions.install).toBe(installChanged);
-  });
-
-  it("cleans up empty plugins object", () => {
-    const config = createPluginConfig({
-      entries: createSinglePluginEntries(),
-    });
-
-    const { config: result } = removePluginFromConfig(config, "my-plugin");
-
-    expect(result.plugins?.entries).toBeUndefined();
   });
 
   it("preserves other config values", () => {
@@ -946,40 +901,11 @@ describe("uninstallPlugin", () => {
     });
 
     const successfulResult = expectSuccessfulUninstall(result);
-    expect(successfulResult.config.plugins).toBeUndefined();
+    expect(successfulResult.config.plugins?.entries).toEqual({
+      constructor: { enabled: false },
+    });
     expect(successfulResult.actions.entry).toBe(true);
     expect(successfulResult.actions.install).toBe(true);
-  });
-
-  it("cleans stale policy references even when plugin code and install records are gone", async () => {
-    const result = await uninstallPlugin({
-      config: createPluginConfig({
-        allow: ["missing-plugin", "other-plugin"],
-        deny: ["missing-plugin"],
-        slots: {
-          memory: "missing-plugin",
-        },
-      }),
-      pluginId: "missing-plugin",
-      deleteFiles: true,
-    });
-
-    const successfulResult = expectSuccessfulUninstall(result);
-    expect(successfulResult.actions).toEqual({
-      entry: false,
-      install: false,
-      allowlist: true,
-      denylist: true,
-      loadPath: false,
-      memorySlot: true,
-      contextEngineSlot: false,
-      channelConfig: false,
-      directory: false,
-    });
-    expect(successfulResult.config.plugins?.allow).toEqual(["other-plugin"]);
-    expect(successfulResult.config.plugins?.deny).toBeUndefined();
-    expect(successfulResult.config.plugins?.slots?.memory).toBeUndefined();
-    expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -1028,6 +954,11 @@ describe("uninstallPlugin", () => {
         directory: false,
       },
       expectedConfig: {
+        plugins: {
+          entries: {
+            "missing-channel-plugin": { enabled: false },
+          },
+        },
         channels: {
           discord: { enabled: true },
         },
@@ -1058,6 +989,9 @@ describe("uninstallPlugin", () => {
       },
       expectedConfig: {
         plugins: {
+          entries: {
+            "missing-linked-plugin": { enabled: false },
+          },
           load: {
             paths: ["/keep/this/plugin"],
           },
@@ -1110,7 +1044,7 @@ describe("uninstallPlugin", () => {
     },
   );
 
-  it("removes config entries", async () => {
+  it("removes entry settings and keeps an explicit disabled tombstone", async () => {
     const config = createPluginConfig({
       entries: createSinglePluginEntries(),
       installs: {
@@ -1125,7 +1059,9 @@ describe("uninstallPlugin", () => {
     });
 
     const successfulResult = expectSuccessfulUninstall(result);
-    expect(successfulResult.config.plugins?.entries).toBeUndefined();
+    expect(successfulResult.config.plugins?.entries).toEqual({
+      "my-plugin": { enabled: false },
+    });
     expect(successfulResult.config.plugins?.installs).toBeUndefined();
     expect(successfulResult.actions.entry).toBe(true);
     expect(successfulResult.actions.install).toBe(true);
@@ -1550,7 +1486,7 @@ describe("uninstallPlugin", () => {
 
     expect(applied).toEqual({
       directoryRemoved: false,
-      warnings: [`Refused to remove npm path without canonical package ownership: ${pluginDir}`],
+      warnings: [`Refused to remove npm path without verified package ownership: ${pluginDir}`],
     });
     await expect(fs.readFile(sentinel, "utf8")).resolves.toBe("preserve me");
     await expect(fs.lstat(pluginDir).then((stat) => stat.isSymbolicLink())).resolves.toBe(true);
@@ -1612,7 +1548,7 @@ describe("uninstallPlugin", () => {
 
       expect(applied.directoryRemoved).toBe(false);
       expect(applied.warnings).toEqual([
-        `Refused to remove npm path without canonical package ownership: ${plan.directoryRemoval.target}`,
+        `Refused to remove npm path without verified package ownership: ${plan.directoryRemoval.target}`,
       ]);
       await expect(fs.readFile(sentinel, "utf8")).resolves.toBe("preserve me");
     },
@@ -1670,7 +1606,7 @@ describe("uninstallPlugin", () => {
 
       expect(applied.directoryRemoved).toBe(false);
       expect(applied.warnings).toEqual([
-        `Refused to remove npm path without canonical package ownership: ${expectedTarget}`,
+        `Refused to remove npm path without verified package ownership: ${expectedTarget}`,
       ]);
       expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
       await expect(fs.readFile(outsideManifest, "utf8")).resolves.toBe('{"preserve":true}\n');
@@ -1786,7 +1722,7 @@ describe("uninstallPlugin", () => {
       `${JSON.stringify({ name: "runtime-peer", version: "1.0.0" }, null, 2)}\n`,
     );
     runCommandWithTimeoutMock.mockImplementation(async (argv: string[], options?: unknown) => {
-      if (argv[1] === "uninstall") {
+      if (npmCommandArgs(argv)?.[0] === "uninstall") {
         expect(argv).toContain("--legacy-peer-deps");
         await fs.rm(removedPluginDir, { recursive: true, force: true });
         const rootManifest = JSON.parse(
@@ -1806,7 +1742,7 @@ describe("uninstallPlugin", () => {
           termination: "exit",
         };
       }
-      if (argv[1] === "install" && argv.includes("--package-lock-only")) {
+      if (npmCommandArgs(argv)?.[0] === "install" && argv.includes("--package-lock-only")) {
         const cwd = (options as { cwd?: string } | undefined)?.cwd;
         expect(cwd).toBeTruthy();
         await fs.writeFile(
@@ -1822,7 +1758,7 @@ describe("uninstallPlugin", () => {
           termination: "exit",
         };
       }
-      if (argv[1] === "install") {
+      if (npmCommandArgs(argv)?.[0] === "install") {
         expect(argv).toContain("--legacy-peer-deps");
         expect(argv).toContain("--omit=peer");
         await fs.rm(runtimePeerDir, { recursive: true, force: true });
@@ -1863,50 +1799,80 @@ describe("uninstallPlugin", () => {
     expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(3);
   });
 
-  it("retries managed peer cleanup without npm-incompatible override kinds", async () => {
-    const npmRoot = path.join(tempDir, "npm-override-cleanup");
-    await fs.mkdir(npmRoot, { recursive: true });
-    await fs.writeFile(
-      path.join(npmRoot, "package.json"),
-      `${JSON.stringify(
-        {
-          private: true,
-          dependencies: { "stale-peer": "1.0.0" },
-          overrides: {
-            axios: "1.18.1",
-            "node-domexception": "npm:@nolyfill/domexception@1.0.28",
-            "werift-ice@0.2.2>ip": "npm:neoip@3.1.0",
+  it.each([false, true])(
+    "removes stale managed peers after override normalization (alias retry: %s)",
+    async (rejectAliases) => {
+      const npmRoot = path.join(tempDir, "npm-override-cleanup");
+      await fs.mkdir(npmRoot, { recursive: true });
+      await fs.writeFile(
+        path.join(npmRoot, "package.json"),
+        `${JSON.stringify(
+          {
+            private: true,
+            dependencies: { "stale-peer": "1.0.0" },
+            overrides: {
+              axios: "1.18.1",
+              "node-domexception": "npm:@nolyfill/domexception@1.0.28",
+              "werift-ice@0.2.2>ip": "npm:neoip@3.1.0",
+            },
+            openclaw: {
+              managedOverrides: ["axios", "node-domexception", "werift-ice@0.2.2>ip"],
+              managedPeerDependencies: ["stale-peer"],
+            },
           },
-          openclaw: {
-            managedOverrides: ["axios", "node-domexception", "werift-ice@0.2.2>ip"],
-            managedPeerDependencies: ["stale-peer"],
-          },
-        },
-        null,
-        2,
-      )}\n`,
-    );
+          null,
+          2,
+        )}\n`,
+      );
 
-    let cleanupAttempts = 0;
-    const runCommand: typeof runCommandWithTimeout = vi.fn(async (argv, optionsOrTimeout) => {
-      const cwd = typeof optionsOrTimeout === "number" ? undefined : optionsOrTimeout.cwd;
-      if (argv.includes("--package-lock-only")) {
-        expect(cwd).toBeTruthy();
-        const manifest = JSON.parse(
-          await fs.readFile(path.join(cwd as string, "package.json"), "utf8"),
-        ) as { overrides?: Record<string, unknown> };
-        if (manifest.overrides?.["werift-ice@0.2.2>ip"]) {
+      let cleanupAttempts = 0;
+      const runCommand: typeof runCommandWithTimeout = vi.fn(async (argv, optionsOrTimeout) => {
+        const cwd = typeof optionsOrTimeout === "number" ? undefined : optionsOrTimeout.cwd;
+        if (argv.includes("--package-lock-only")) {
+          expect(cwd).toBeTruthy();
+          const manifest = JSON.parse(
+            await fs.readFile(path.join(cwd as string, "package.json"), "utf8"),
+          ) as { overrides?: Record<string, unknown> };
+          if (manifest.overrides?.["werift-ice@0.2.2>ip"]) {
+            return {
+              code: 1,
+              stdout: "",
+              stderr:
+                'npm error code EINVALIDTAGNAME\nnpm error Invalid tag name "0.2.2>ip" of package "werift-ice@0.2.2>ip"',
+              signal: null,
+              killed: false,
+              termination: "exit" as const,
+            };
+          }
+          if (rejectAliases && manifest.overrides?.["node-domexception"]) {
+            return {
+              code: 1,
+              stdout: "",
+              stderr: "npm ERR! Invalid comparator: npm:@nolyfill/domexception@1.0.28",
+              signal: null,
+              killed: false,
+              termination: "exit" as const,
+            };
+          }
+          await fs.writeFile(
+            path.join(cwd as string, "package-lock.json"),
+            `${JSON.stringify({ lockfileVersion: 3, packages: { "": {} } }, null, 2)}\n`,
+          );
           return {
-            code: 1,
+            code: 0,
             stdout: "",
-            stderr:
-              'npm error code EINVALIDTAGNAME\nnpm error Invalid tag name "0.2.2>ip" of package "werift-ice@0.2.2>ip"',
+            stderr: "",
             signal: null,
             killed: false,
             termination: "exit" as const,
           };
         }
-        if (manifest.overrides?.["node-domexception"]) {
+        cleanupAttempts += 1;
+        const manifest = JSON.parse(
+          await fs.readFile(path.join(npmRoot, "package.json"), "utf8"),
+        ) as { overrides?: Record<string, unknown> };
+        expect(manifest.overrides?.["werift-ice@0.2.2>ip"]).toBeUndefined();
+        if (rejectAliases && manifest.overrides?.["node-domexception"]) {
           return {
             code: 1,
             stdout: "",
@@ -1916,10 +1882,6 @@ describe("uninstallPlugin", () => {
             termination: "exit" as const,
           };
         }
-        await fs.writeFile(
-          path.join(cwd as string, "package-lock.json"),
-          `${JSON.stringify({ lockfileVersion: 3, packages: { "": {} } }, null, 2)}\n`,
-        );
         return {
           code: 0,
           stdout: "",
@@ -1928,75 +1890,46 @@ describe("uninstallPlugin", () => {
           killed: false,
           termination: "exit" as const,
         };
-      }
-      cleanupAttempts += 1;
+      });
+
+      await expect(
+        pruneManagedNpmPeerDependenciesAfterUninstall({
+          npmRoot,
+          packageName: "@openclaw/kitchen-sink",
+          managedOverrides: {
+            axios: "1.18.1",
+            hono: "4.12.32",
+            "node-domexception": "npm:@nolyfill/domexception@1.0.28",
+          },
+          runCommand,
+        }),
+      ).resolves.toBeUndefined();
+      expect(cleanupAttempts).toBe(rejectAliases ? 2 : 1);
       const manifest = JSON.parse(
         await fs.readFile(path.join(npmRoot, "package.json"), "utf8"),
-      ) as { overrides?: Record<string, unknown> };
-      if (cleanupAttempts === 1) {
-        expect(manifest.overrides?.["werift-ice@0.2.2>ip"]).toBe("npm:neoip@3.1.0");
-        return {
-          code: 1,
-          stdout: "",
-          stderr:
-            'npm error code EINVALIDTAGNAME\nnpm error Invalid tag name "0.2.2>ip" of package "werift-ice@0.2.2>ip"',
-          signal: null,
-          killed: false,
-          termination: "exit" as const,
+      ) as {
+        dependencies?: Record<string, string>;
+        overrides?: Record<string, unknown>;
+        openclaw?: {
+          managedOverrides?: string[];
+          managedPeerDependencies?: string[];
         };
-      }
-      if (cleanupAttempts === 2) {
-        expect(manifest.overrides?.["werift-ice@0.2.2>ip"]).toBeUndefined();
-        expect(manifest.overrides?.["node-domexception"]).toBe("npm:@nolyfill/domexception@1.0.28");
-        return {
-          code: 1,
-          stdout: "",
-          stderr: "npm ERR! Invalid comparator: npm:@nolyfill/domexception@1.0.28",
-          signal: null,
-          killed: false,
-          termination: "exit" as const,
-        };
-      }
-      expect(manifest.overrides).toEqual({ axios: "1.18.1", hono: "4.12.32" });
-      return {
-        code: 0,
-        stdout: "",
-        stderr: "",
-        signal: null,
-        killed: false,
-        termination: "exit" as const,
       };
-    });
-
-    await expect(
-      pruneManagedNpmPeerDependenciesAfterUninstall({
-        npmRoot,
-        packageName: "@openclaw/kitchen-sink",
-        managedOverrides: {
-          axios: "1.18.1",
-          hono: "4.12.32",
-          "node-domexception": "npm:@nolyfill/domexception@1.0.28",
-          "werift-ice@0.2.2>ip": "npm:neoip@3.1.0",
-        },
-        runCommand,
-      }),
-    ).resolves.toBeUndefined();
-    expect(cleanupAttempts).toBe(3);
-    const manifest = JSON.parse(await fs.readFile(path.join(npmRoot, "package.json"), "utf8")) as {
-      dependencies?: Record<string, string>;
-      overrides?: Record<string, unknown>;
-      openclaw?: {
-        managedOverrides?: string[];
-        managedPeerDependencies?: string[];
+      expect(manifest.dependencies).toEqual({});
+      const expectedOverrides = {
+        axios: "1.18.1",
+        hono: "4.12.32",
+        ...(!rejectAliases ? { "node-domexception": "npm:@nolyfill/domexception@1.0.28" } : {}),
       };
-    };
-    expect(manifest.dependencies).toEqual({});
-    expect(manifest.overrides).toEqual({ axios: "1.18.1", hono: "4.12.32" });
-    expect(manifest.openclaw?.managedOverrides).toEqual(["axios", "hono"]);
-    expect(manifest.openclaw?.managedPeerDependencies).toBeUndefined();
-  });
+      expect(manifest.overrides).toEqual(expectedOverrides);
+      expect(manifest.openclaw?.managedOverrides).toEqual(
+        Object.keys(expectedOverrides).toSorted(),
+      );
+      expect(manifest.openclaw?.managedPeerDependencies).toBeUndefined();
+    },
+  );
 
-  it("stops retrying when an incompatible unmanaged override remains", async () => {
+  it("does not remove incompatible unmanaged overrides", async () => {
     const npmRoot = path.join(tempDir, "npm-unmanaged-override-cleanup");
     await fs.mkdir(npmRoot, { recursive: true });
     await fs.writeFile(
@@ -2053,7 +1986,7 @@ describe("uninstallPlugin", () => {
     ).resolves.toContain(
       "Failed to prune managed peer dependencies after uninstalling @openclaw/kitchen-sink: npm error code EINVALIDTAGNAME",
     );
-    expect(cleanupAttempts).toBe(2);
+    expect(cleanupAttempts).toBe(1);
   });
 
   it("runs npm cleanup when the managed package directory is already absent", async () => {
@@ -2124,7 +2057,9 @@ describe("uninstallPlugin", () => {
     });
 
     const successfulResult = expectSuccessfulUninstall(result);
-    expect(successfulResult.config.plugins).toBeUndefined();
+    expect(successfulResult.config.plugins?.entries).toEqual({
+      "missing-plugin": { enabled: false },
+    });
     expect(successfulResult.actions.entry).toBe(true);
     expect(successfulResult.actions.install).toBe(true);
     expect(successfulResult.actions.directory).toBe(false);
@@ -2279,7 +2214,7 @@ describe("uninstallPlugin", () => {
   });
 
   it("returns a warning when directory deletion fails unexpectedly", async () => {
-    const rmSpy = vi.spyOn(fs, "rm").mockRejectedValueOnce(new Error("permission denied"));
+    const unlinkSpy = vi.spyOn(fs, "unlink").mockRejectedValueOnce(new Error("permission denied"));
     try {
       const { result } = await runDeleteInstalledNpmPluginFixture(tempDir);
 
@@ -2289,7 +2224,7 @@ describe("uninstallPlugin", () => {
       expect(successfulResult.warnings).toHaveLength(1);
       expect(successfulResult.warnings[0]).toContain("Failed to remove plugin directory");
     } finally {
-      rmSpy.mockRestore();
+      unlinkSpy.mockRestore();
     }
   });
 

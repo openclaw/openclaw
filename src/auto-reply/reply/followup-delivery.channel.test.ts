@@ -10,7 +10,7 @@ import {
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery-payloads.js";
-import { deliverFollowupDecision } from "./followup-delivery.js";
+import { deliverFollowupDecision, resolveFollowupDeliveryDecision } from "./followup-delivery.js";
 import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
 
 const channelState = vi.hoisted(() => ({
@@ -35,6 +35,23 @@ function createChannelPlugin(id: ChannelPlugin["id"]): ChannelPlugin {
     label: String(id),
     config: { listAccountIds: () => [], resolveAccount: () => ({}) },
   });
+}
+
+function registerCurrentReplyThreading() {
+  const slack = createChannelPlugin("slack");
+  slack.threading = {
+    resolveReplyTransport: (params: {
+      threadId?: string | number | null;
+      replyToId?: string | null;
+      replyToCurrent?: boolean;
+    }) => ({
+      threadId: null,
+      replyToId: params.replyToCurrent ? String(params.threadId) : params.replyToId,
+    }),
+  };
+  setActivePluginRegistry(
+    createTestRegistry([{ pluginId: "slack", plugin: slack, source: "test" }]),
+  );
 }
 
 function createTurn(params: {
@@ -140,38 +157,254 @@ afterEach(() => {
 
 describe("follow-up delivery channel boundary", () => {
   it.each([
-    { mode: "first", duplicate: "media" },
-    { mode: "batched", duplicate: "media" },
-    { mode: "first", duplicate: "text" },
-    { mode: "batched", duplicate: "text" },
+    {
+      name: "optional group generic silence",
+      expectation: "optional",
+      channel: "discord",
+      recipient: "channel:C1",
+      text: "NO_REPLY",
+      delivered: false,
+    },
+    {
+      name: "optional work without a recipient",
+      expectation: "optional",
+      channel: "discord",
+      recipient: undefined,
+      text: "Rate limit reached. Try again later.",
+      delivered: false,
+    },
+    {
+      name: "required WebChat without a channel recipient",
+      expectation: "required",
+      channel: "webchat",
+      recipient: undefined,
+      text: "The run failed. Please try again.",
+      delivered: true,
+    },
   ] as const)(
-    "preserves the $mode reply slot when earlier $duplicate was already sent",
-    ({ mode, duplicate }) => {
-      const duplicatePayload =
-        duplicate === "media"
-          ? { mediaUrl: "/tmp/already-sent.png", replyToId: "parent" }
-          : { text: "already sent", replyToId: "parent" };
+    "preserves the producer failure decision for $name",
+    async ({ expectation, channel, recipient, text, delivered }) => {
+      const turn = createTurn({ messageProvider: "discord", originatingChannel: "discord" });
+      turn.queued.run.terminalReplyExpectation = expectation;
+      turn.queued.originatingChannel = channel;
+      turn.queued.originatingTo = recipient;
+      turn.queued.originatingChatType = channel === "webchat" ? "direct" : "group";
 
-      expect(
-        resolveFollowupDeliveryPayloads({
-          cfg: {},
-          payloads: [duplicatePayload, { text: "actual answer", replyToId: "parent" }],
-          originatingChannel: "discord",
-          originatingReplyToMode: mode,
-          sentMediaUrls: ["/tmp/already-sent.png"],
-          sentTexts: ["already sent"],
-        }),
-      ).toEqual([{ text: "actual answer", replyToId: "parent" }]);
+      const decision = await resolveFollowupDeliveryDecision({
+        turn,
+        execution: {
+          runId: "run-1",
+          outcome: { kind: "rejected", payload: { text, isError: true } },
+        },
+        opts: { isHeartbeat: true },
+      });
+
+      expect(decision).toMatchObject(
+        delivered
+          ? { kind: "deliver", payloads: [{ isError: true }] }
+          : { kind: "suppress", reason: "silent" },
+      );
     },
   );
+  it("delivers optional group recovery guidance through a callback-only recipient", async () => {
+    const turn = createTurn({ messageProvider: "discord", originatingChannel: "discord" });
+    turn.queued.originatingTo = undefined;
+    turn.queued.originatingChatType = "group";
+    turn.queued.run.terminalReplyExpectation = "optional";
+    const onBlockReply = vi.fn(async (_payload: ReplyPayload) => {});
+    const defaults = createDefaults(onBlockReply);
+    const failure = { text: "Rate limit reached. Try again later.", isError: true };
+    const decision = await resolveFollowupDeliveryDecision({
+      turn,
+      execution: { runId: "run-1", outcome: { kind: "rejected", payload: failure } },
+      opts: defaults.opts,
+    });
+
+    await deliverFollowupDecision({
+      decision,
+      turn,
+      defaults,
+      runId: "run-1",
+      runFollowup: vi.fn(async () => {}),
+    });
+
+    expect(onBlockReply).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        isError: true,
+        text: expect.stringContaining("The AI service needs a short break"),
+      }),
+    );
+  });
+  it.each<{
+    name: string;
+    provenance?: AdmittedFollowupTurn["queued"]["run"]["inputProvenance"];
+    sourceChannel?: string;
+    expectedReply: string | null;
+  }>([
+    { name: "implicit current inbound", expectedReply: "new-inbound" },
+    {
+      name: "restart sentinel",
+      provenance: { kind: "internal_system", sourceTool: "restart-sentinel" },
+      expectedReply: null,
+    },
+    { name: "different source channel", sourceChannel: "discord", expectedReply: null },
+  ])("passes queued origin message facts to the channel resolver: $name", async (testCase) => {
+    const source = createChannelPlugin("slack");
+    source.threading = {
+      resolveReplyTransport: ({ currentMessageId, replyToId }) => ({
+        replyToId: replyToId ?? currentMessageId,
+      }),
+    };
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "slack", plugin: source, source: "test" },
+        { pluginId: "imessage", plugin: createChannelPlugin("imessage"), source: "test" },
+      ]),
+    );
+    const channel = "slack";
+    const turn = createTurn({
+      messageProvider: testCase.sourceChannel ?? channel,
+      originatingChannel: channel,
+    });
+    turn.queued.originatingTo = "dm:qa-peer";
+    turn.queued.messageId = "new-inbound";
+    turn.queued.originatingChatType = "direct";
+    turn.queued.run.inputProvenance = testCase.provenance;
+    const payload = { text: "queued answer" };
+    channelState.outcomes = ["delivered"];
+    await deliverFollowupDecision({
+      decision: { kind: "deliver", payloads: [payload] },
+      turn,
+      defaults: createDefaults(vi.fn(async () => {})),
+      runId: "run-1",
+      runFollowup: vi.fn(async () => {}),
+    });
+    expect(channelState.deliver).toHaveBeenCalledOnce();
+    expect(channelState.deliver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel,
+        to: "dm:qa-peer",
+        replyToId: testCase.expectedReply,
+      }),
+      undefined,
+    );
+  });
+
+  it("carries current-reply intent through queued status delivery", async () => {
+    registerCurrentReplyThreading();
+    const turn = createTurn({ messageProvider: "discord", originatingChannel: "slack" });
+    turn.queued.originatingThreadId = "111.000";
+    channelState.outcomes = ["delivered"];
+    await deliverFollowupDecision({
+      decision: {
+        kind: "deliver",
+        payloads: [
+          {
+            text: "Compacting context",
+            replyToId: "222.000",
+            replyToCurrent: true,
+            isCompactionNotice: true,
+          },
+        ],
+      },
+      turn,
+      defaults: createDefaults(vi.fn(async () => {})),
+      runId: "run-1",
+      runFollowup: vi.fn(async () => {}),
+      kind: "block",
+    });
+
+    expect(channelState.deliver).toHaveBeenCalledWith(
+      expect.objectContaining({ replyToId: "111.000" }),
+      undefined,
+    );
+  });
+
+  it("dedupes a current-reply status against its actual thread root", () => {
+    registerCurrentReplyThreading();
+    expect(
+      resolveFollowupDeliveryPayloads({
+        cfg: {},
+        payloads: [
+          {
+            text: "Compacting context",
+            replyToId: "222.000",
+            replyToCurrent: true,
+            isCompactionNotice: true,
+          },
+        ],
+        messageProvider: "slack",
+        originatingChannel: "slack",
+        originatingReplyToMode: "all",
+        originatingTo: "channel:C1",
+        originatingThreadId: "111.000",
+        sentTexts: ["Compacting context"],
+        sentTargets: [
+          {
+            tool: "slack",
+            provider: "slack",
+            to: "channel:C1",
+            threadId: "111.000",
+            text: "Compacting context",
+          },
+        ],
+      }),
+    ).toEqual([]);
+  });
+
+  it("renders post-compaction model failures after queued payload selection", async () => {
+    const decision = await resolveFollowupDeliveryDecision({
+      turn: createTurn({ messageProvider: "discord", originatingChannel: "discord" }),
+      execution: {
+        runId: "run-1",
+        outcome: {
+          kind: "rejected",
+          payload: { text: "⚠️ Provider billing failed.", isError: true },
+          postCompactionModelFailure: true,
+        },
+      },
+    });
+
+    expect(decision).toMatchObject({
+      kind: "deliver",
+      payloads: [
+        {
+          text: "⚠️ Context compaction succeeded, but the later model request still failed. Provider billing failed.",
+          isError: true,
+        },
+      ],
+    });
+  });
+
+  it("preserves the batched reply slot when earlier media was already sent", () => {
+    const duplicatePayload = { mediaUrl: "/tmp/already-sent.png", replyToId: "parent" };
+
+    expect(
+      resolveFollowupDeliveryPayloads({
+        cfg: {},
+        payloads: [duplicatePayload, { text: "actual answer", replyToId: "parent" }],
+        originatingChannel: "discord",
+        originatingReplyToMode: "batched",
+        sentMediaUrls: ["/tmp/already-sent.png"],
+        sentTexts: ["already sent"],
+      }),
+    ).toEqual([{ text: "actual answer", replyToId: "parent" }]);
+  });
 
   it("dedupes later Slack replies against their actual first-mode transport thread", () => {
     const slack = createChannelPlugin("slack");
     slack.threading = {
-      resolveReplyTransport: ({ threadId, replyToId, replyToIsExplicit }) => ({
-        threadId: null,
-        replyToId: replyToIsExplicit ? replyToId : threadId == null ? undefined : String(threadId),
-      }),
+      resolveReplyTransport: ({ threadId, replyToId, replyToIsExplicit }) => {
+        const inheritedThread = threadId == null ? undefined : String(threadId);
+        // First-mode can clear replyToId; Slack still falls back to the inherited thread.
+        return {
+          threadId: null,
+          replyToId:
+            replyToIsExplicit === false
+              ? (inheritedThread ?? replyToId)
+              : (replyToId ?? inheritedThread),
+        };
+      },
     };
     setActivePluginRegistry(
       createTestRegistry([{ pluginId: "slack", plugin: slack, source: "test" }]),

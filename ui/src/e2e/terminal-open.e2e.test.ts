@@ -1,9 +1,13 @@
 import { createHash } from "node:crypto";
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
+import { dockChatSidePanel, openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -36,14 +40,84 @@ async function settleTerminalPaint(page: Page): Promise<void> {
 
 async function cycleThemeMode(page: Page, currentMode: "Dark" | "Light" | "System") {
   const sidebar = page.locator("openclaw-app-sidebar");
-  const toggle = sidebar.getByRole("button", { name: `Color mode: ${currentMode}` });
-  if (!(await toggle.isVisible())) {
-    await sidebar.getByRole("button", { name: /^Identity and app menu for / }).click();
+  const identityMenu = sidebar.getByRole("button", { name: /^Identity and app menu for / });
+  if ((await identityMenu.getAttribute("aria-expanded")) !== "true") {
+    await identityMenu.click();
   }
-  await toggle.click();
+  await sidebar.getByRole("menuitem", { name: `Color mode: ${currentMode}`, exact: true }).click();
 }
 
 suite.define(() => {
+  it.each([
+    { dock: "bottom", keepFiles: false },
+    { dock: "bottom", keepFiles: true },
+    { dock: "right", keepFiles: false },
+    { dock: "right", keepFiles: true },
+  ] as const)(
+    "removes the last exited terminal in the $dock dock while preserving another panel=$keepFiles",
+    async ({ dock, keepFiles }) => {
+      await suite.withPage(
+        { serviceWorkers: "block", viewport: { width: 1280, height: 800 } },
+        async ({ page }) => {
+          const gateway = await installMockGateway(page, {
+            featureMethods: ["chat.startup", "terminal.open"],
+            terminalEnabled: true,
+            methodResponses: {
+              "terminal.open": {
+                sessionId: "logout-shell",
+                agentId: "main",
+                shell: "/bin/bash",
+                cwd: "/workspace/openclaw",
+                confined: false,
+                owner: "agent:main:main",
+              },
+            },
+          });
+          const panel = await openTerminalSidePanel(page);
+          await gateway.waitForRequest("terminal.open");
+          await panel.locator(".tp-host canvas").waitFor();
+          await dockChatSidePanel(page, dock);
+          if (keepFiles) {
+            await openChatSidePanelType(page, "Files");
+          }
+          const output = "$ logout\r\nlogout\r\n";
+          await gateway.emitGatewayEvent("terminal.data", {
+            sessionId: "logout-shell",
+            seq: output.length,
+            data: output,
+          });
+          await gateway.emitGatewayEvent("terminal.exit", {
+            sessionId: "logout-shell",
+            reason: "process_exit",
+            exitCode: 0,
+            signal: null,
+          });
+          if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR) {
+            const dir = createControlUiE2eArtifactDir(`terminal-logout-${dock}`);
+            const region = page.locator(".sidebar-region").first();
+            const frame = await takeControlUiScreenshotFrame(
+              page,
+              region,
+              [page.locator(".chat-side-panel-toggle")],
+              { animations: "disabled" },
+            );
+            await writeFile(
+              path.join(dir, keepFiles ? "other-panel.png" : "last-terminal.png"),
+              frame.png,
+            );
+          }
+          await expect.poll(() => panel.count()).toBe(0);
+          const side = page.locator(".sidebar-region__right-runtime .side-panel");
+          await expect.poll(() => side.isVisible()).toBe(keepFiles);
+          if (keepFiles) {
+            await page.locator('[data-panel-slot="workspace"]').waitFor();
+          }
+          expect(await gateway.getRequests("terminal.close")).toHaveLength(0);
+        },
+      );
+    },
+  );
+
   it("opens against the shared mock and renders echoed terminal output", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
@@ -53,7 +127,7 @@ suite.define(() => {
 
       const panel = await openTerminalSidePanel(page);
       await gateway.waitForRequest("terminal.open");
-      await panel.locator(".tabstrip-tab.is-live").waitFor();
+      await page.locator('[data-region-header="side"] .tabstrip-tab.is-live').waitFor();
       const canvas = panel.locator(".tp-host canvas");
       await canvas.waitFor({ state: "visible" });
       await settleTerminalPaint(page);
@@ -155,7 +229,7 @@ suite.define(() => {
 
       await retry.click();
       await expect.poll(async () => (await gateway.getRequests("terminal.open")).length).toBe(2);
-      await panel.locator(".tabstrip-tab.is-live").waitFor();
+      await page.locator('[data-region-header="side"] .tabstrip-tab.is-live').waitFor();
       const canvas = panel.locator(".tp-host canvas");
       await canvas.waitFor({ state: "visible" });
       await settleTerminalPaint(page);

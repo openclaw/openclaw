@@ -1,0 +1,349 @@
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
+import {
+  createAgentRunRestartAbortError,
+  isAgentRunRestartAbortReason,
+} from "../agents/run-termination.js";
+import { captureGatewayReplyRunRestartAbort } from "../auto-reply/reply/reply-run-registry.js";
+import { formatGatewayDrainCounts, waitForGatewayDrain } from "../infra/gateway-drain.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  abortChatRunById,
+  type ChatAbortControllerEntry,
+  isChatAbortControllerEntryAbortable,
+  removeChatAbortControllerEntry,
+  type RestartRecoveryCandidate,
+} from "./chat-abort.js";
+import { abortQueuedChatTurns, type QueuedChatTurnMap } from "./chat-queued-turns.js";
+import {
+  createChatAbortMarker,
+  type ChatRunEntry,
+  type ChatRunState,
+} from "./server-chat-state.js";
+import type { GatewayContextResolver } from "./server-methods/types.js";
+import { recordGatewayShutdownWarning } from "./server-shutdown.js";
+
+const shutdownLog = createSubsystemLogger("gateway/shutdown");
+const RESTART_REPLY_DRAIN_POLL_MS = 100;
+const RESTART_TERMINAL_PERSISTENCE_WAIT_TIMEOUT_MS = 1_000;
+const RESTART_MARKER_SLOW_WARNING_MS = 1_000;
+
+function inspectRestartReplyDrain(params: {
+  getPendingReplyCount: () => number;
+  chatAbortControllers: Map<string, ChatAbortControllerEntry>;
+  chatQueuedTurns: QueuedChatTurnMap;
+}) {
+  const pendingReplyCount = params.getPendingReplyCount();
+  const chatRuns = listRestartDrainRuns(params.chatAbortControllers).length;
+  const queuedTurns = Array.from(
+    params.chatQueuedTurns.values(),
+    (entry) => entry.controller.signal.aborted,
+  ).filter((aborted) => !aborted).length;
+  const counts = {
+    pendingReplies:
+      Number.isFinite(pendingReplyCount) && pendingReplyCount > 0
+        ? Math.floor(pendingReplyCount)
+        : 0,
+    chatRuns,
+    queuedTurns,
+  };
+  return { counts, idle: Object.values(counts).every((count) => count === 0) };
+}
+
+function listUnabortedRuns(
+  chatAbortControllers: Map<string, ChatAbortControllerEntry>,
+): Array<[string, ChatAbortControllerEntry]> {
+  return Array.from(chatAbortControllers.entries()).filter(
+    ([, entry]) => !entry.controller.signal.aborted,
+  );
+}
+
+function listRestartDrainRuns(
+  chatAbortControllers: Map<string, ChatAbortControllerEntry>,
+): Array<[string, ChatAbortControllerEntry]> {
+  return listUnabortedRuns(chatAbortControllers).filter(
+    ([, entry]) => entry.registrationCleanupRequested !== true,
+  );
+}
+
+function isRestartRecoveryRun(entry: ChatAbortControllerEntry): boolean {
+  // The close prelude can abort connection work before the shutdown marker runs.
+  return (
+    (!entry.controller.signal.aborted ||
+      entry.abortStopReason === "restart" ||
+      isAgentRunRestartAbortReason(entry.controller.signal.reason)) &&
+    entry.controlUiVisible !== false &&
+    (entry.registrationCleanupRequested !== true || entry.projectSessionTerminalPersisted !== true)
+  );
+}
+
+export type GatewayRunShutdownParams = {
+  resolveGatewayContext: GatewayContextResolver;
+  chatAbortControllers: Map<string, ChatAbortControllerEntry>;
+  chatQueuedTurns: QueuedChatTurnMap;
+  restartRecoveryCandidates?: Map<string, RestartRecoveryCandidate>;
+  chatRunState: ChatRunState;
+  removeChatRun: (
+    sessionId: string,
+    clientRunId: string,
+    sessionKey?: string,
+  ) => ChatRunEntry | undefined;
+  agentRunSeq: Map<string, number>;
+  broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
+  nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
+  markMainSessionsAbortedForRestart?: (params: {
+    resolveGatewayContext: GatewayContextResolver;
+    activeRuns: RestartRecoveryCandidate[];
+    reason: string;
+    isActiveRun: (run: RestartRecoveryCandidate) => boolean;
+  }) => Promise<void> | void;
+  resolveActiveSessionIdForKey?: (sessionKey: string) => string | undefined;
+};
+
+function collectActiveRestartSessionRefs(
+  params: Pick<
+    GatewayRunShutdownParams,
+    "chatAbortControllers" | "resolveActiveSessionIdForKey" | "restartRecoveryCandidates"
+  >,
+): RestartRecoveryCandidate[] {
+  const activeRuns = new Map<string, RestartRecoveryCandidate>();
+  const observedAt = Date.now();
+  const addRun = (run: RestartRecoveryCandidate) => {
+    activeRuns.set(`${run.runId}\u0000${run.lifecycleGeneration}`, {
+      ...run,
+      observedAt: run.observedAt ?? observedAt,
+    });
+  };
+  for (const [runId, entry] of params.chatAbortControllers) {
+    if (!isRestartRecoveryRun(entry)) {
+      continue;
+    }
+    const sessionKey = entry.sessionKey.trim();
+    // Registration metadata can predate a reset or compaction session-id rotation.
+    const resolvedSessionId =
+      entry.kind === "agent" || !sessionKey
+        ? undefined
+        : params.resolveActiveSessionIdForKey?.(sessionKey);
+    const sessionId = resolvedSessionId || entry.sessionId.trim();
+    if (runId && entry.lifecycleGeneration && sessionKey && sessionId) {
+      addRun({
+        runId,
+        lifecycleGeneration: entry.lifecycleGeneration,
+        sessionKey,
+        sessionId,
+        observedAt: entry.projectSessionTerminalObservedAt,
+      });
+    }
+  }
+  for (const candidate of params.restartRecoveryCandidates?.values() ?? []) {
+    const resolvedSessionId = params.resolveActiveSessionIdForKey?.(candidate.sessionKey);
+    addRun({
+      ...candidate,
+      sessionId: resolvedSessionId || candidate.sessionId,
+    });
+  }
+  return [...activeRuns.values()];
+}
+
+async function settleTerminalSessionPersistenceForRestart(
+  chatAbortControllers: Map<string, ChatAbortControllerEntry>,
+): Promise<void> {
+  const pending = listUnabortedRuns(chatAbortControllers).flatMap(([, entry]) => {
+    const persistence = entry.projectSessionTerminalPersistence;
+    if (entry.projectSessionActive !== false || !persistence) {
+      return [];
+    }
+    return [{ entry, persistence }];
+  });
+  if (pending.length === 0) {
+    return;
+  }
+  const results = await raceWithTimeout(
+    () => Promise.allSettled(pending.map(({ persistence }) => persistence)),
+    RESTART_TERMINAL_PERSISTENCE_WAIT_TIMEOUT_MS,
+    () => null,
+    { ref: false },
+  );
+  if (!results) {
+    shutdownLog.warn(
+      `terminal session persistence did not settle within ${RESTART_TERMINAL_PERSISTENCE_WAIT_TIMEOUT_MS}ms; preserving restart recovery`,
+    );
+    return;
+  }
+  for (const [index, result] of results.entries()) {
+    const tracked = pending[index];
+    if (!tracked || tracked.entry.projectSessionTerminalPersistence !== tracked.persistence) {
+      continue;
+    }
+    tracked.entry.projectSessionTerminalPending = false;
+    tracked.entry.projectSessionTerminalPersistence = undefined;
+    if (result.status === "fulfilled") {
+      tracked.entry.projectSessionTerminalPersisted = true;
+    }
+  }
+}
+
+async function markActiveRunsForRestartRecovery(
+  params: GatewayRunShutdownParams & {
+    reason: string;
+    warnings: string[];
+  },
+): Promise<number> {
+  if (!params.markMainSessionsAbortedForRestart) {
+    return 0;
+  }
+  await settleTerminalSessionPersistenceForRestart(params.chatAbortControllers);
+  const activeRuns = collectActiveRestartSessionRefs(params);
+  const activeEntries = new Map(params.chatAbortControllers);
+  const recoveryCandidates = new Map(params.restartRecoveryCandidates);
+  const abortReplyRuns = captureGatewayReplyRunRestartAbort(params.resolveGatewayContext);
+  try {
+    let markerOutcome: Promise<void>;
+    const timedOut = await raceWithTimeout(
+      () => {
+        markerOutcome = Promise.resolve(
+          params.markMainSessionsAbortedForRestart!({
+            resolveGatewayContext: params.resolveGatewayContext,
+            activeRuns,
+            reason: params.reason,
+            isActiveRun: (run) => {
+              const entry = params.chatAbortControllers.get(run.runId);
+              const candidate = params.restartRecoveryCandidates?.get(run.runId);
+              return (
+                (entry &&
+                  entry === activeEntries.get(run.runId) &&
+                  isRestartRecoveryRun(entry) &&
+                  entry.lifecycleGeneration === run.lifecycleGeneration) ||
+                (candidate !== undefined &&
+                  candidate === recoveryCandidates.get(run.runId) &&
+                  candidate.lifecycleGeneration === run.lifecycleGeneration)
+              );
+            },
+          }),
+        );
+        return markerOutcome.then(() => false);
+      },
+      RESTART_MARKER_SLOW_WARNING_MS,
+      () => true,
+      { ref: false },
+    );
+    if (timedOut) {
+      shutdownLog.warn(
+        `restart session marker did not settle within ${RESTART_MARKER_SLOW_WARNING_MS}ms; waiting before shutdown`,
+      );
+      recordGatewayShutdownWarning(params.warnings, "restart-main-session-marker");
+      await markerOutcome!;
+    }
+    for (const run of activeRuns) {
+      if (params.restartRecoveryCandidates?.get(run.runId) === recoveryCandidates.get(run.runId)) {
+        params.restartRecoveryCandidates?.delete(run.runId);
+      }
+    }
+  } catch (err) {
+    shutdownLog.warn(`failed to mark active main session(s) for restart recovery: ${String(err)}`);
+    recordGatewayShutdownWarning(params.warnings, "restart-main-session-marker");
+  }
+  // Disposing a tool cell can settle its result and start a finalizer. Cancel its
+  // parent after the marker settles, including failures, before resource teardown.
+  return abortReplyRuns((sessionId, error) => {
+    shutdownLog.warn(
+      `failed to cancel reply for restart: sessionId=${sessionId} error=${String(error)}`,
+    );
+    recordGatewayShutdownWarning(params.warnings, "restart-reply-abort");
+  });
+}
+
+/** Cancels only this Gateway's exact controller registrations. */
+function abortActiveRuns(params: GatewayRunShutdownParams, restart: boolean): number {
+  let aborted = 0;
+  for (const [runId, entry] of listUnabortedRuns(params.chatAbortControllers)) {
+    if (!isChatAbortControllerEntryAbortable(entry)) {
+      continue;
+    }
+    if (entry.projectSessionActive === false) {
+      entry.abortStopReason = restart ? "restart" : "rpc";
+      entry.controller.abort(restart ? createAgentRunRestartAbortError() : undefined);
+      removeChatAbortControllerEntry(params.chatAbortControllers, runId, entry);
+      params.chatRunState.getOrCreate(runId).abortMarker = createChatAbortMarker();
+      params.chatRunState.clearRun(runId);
+      const removed = params.removeChatRun(runId, runId, entry.sessionKey);
+      params.agentRunSeq.delete(runId);
+      if (removed?.clientRunId) {
+        params.agentRunSeq.delete(removed.clientRunId);
+      }
+      aborted += 1;
+      continue;
+    }
+    const result = abortChatRunById(params, {
+      runId,
+      sessionKey: entry.sessionKey,
+      stopReason: restart ? "restart" : "rpc",
+    });
+    if (result.aborted) {
+      aborted += 1;
+    }
+  }
+  return aborted;
+}
+
+/** Abort queued owners before active teardown can promote them into the closing runtime. */
+function abortQueuedTurns(params: GatewayRunShutdownParams, restart: boolean): number {
+  const matches = Array.from(params.chatQueuedTurns, ([runId, entry]) => ({ runId, entry }));
+  return abortQueuedChatTurns(params.chatQueuedTurns, matches, restart ? "restart" : undefined)
+    .length;
+}
+
+/** Completes grace and requests cancellation before execution joining begins. */
+export async function prepareGatewayRunShutdown(
+  params: {
+    restart: boolean;
+    getPendingReplyCount: () => number;
+    timeoutMs: number;
+    warnings: string[];
+  } & GatewayRunShutdownParams,
+): Promise<void> {
+  // Ordinary CLI stop already spent its grace period. Cancel only this Gateway's
+  // remaining owners before joining them, without scheduling restart recovery.
+  if (!params.restart) {
+    abortQueuedTurns(params, false);
+    abortActiveRuns(params, false);
+    return;
+  }
+  const initialSnapshot = inspectRestartReplyDrain(params);
+  let drainResult;
+  if (!initialSnapshot.idle) {
+    if (params.timeoutMs > 0) {
+      shutdownLog.info(
+        `waiting for ${formatGatewayDrainCounts(initialSnapshot)} before restart shutdown (timeout ${params.timeoutMs}ms)`,
+      );
+    }
+    drainResult = await waitForGatewayDrain(
+      () => inspectRestartReplyDrain(params),
+      params.timeoutMs,
+      {
+        pollMs: RESTART_REPLY_DRAIN_POLL_MS,
+        ref: false,
+      },
+    );
+    if (!drainResult.drained) {
+      shutdownLog.warn(
+        `restart reply drain timed out after ${drainResult.elapsedMs}ms with ${formatGatewayDrainCounts(drainResult.snapshot)} still active; continuing shutdown`,
+      );
+      recordGatewayShutdownWarning(params.warnings, "restart-reply-drain");
+    }
+  }
+
+  const abortedQueuedTurns = abortQueuedTurns(params, true);
+  if (drainResult?.drained === false && abortedQueuedTurns > 0) {
+    shutdownLog.warn(`aborted ${abortedQueuedTurns} queued turn(s) during restart shutdown`);
+  }
+  const abortedReplies = await markActiveRunsForRestartRecovery({
+    ...params,
+    reason: "gateway restart shutdown",
+  });
+  const abortedRuns = abortActiveRuns(params, true) + abortedReplies;
+  if (drainResult?.drained) {
+    shutdownLog.info(`restart reply drain completed after ${drainResult.elapsedMs}ms`);
+  } else if (drainResult && abortedRuns > 0) {
+    shutdownLog.warn(`aborted ${abortedRuns} active run(s) during restart shutdown`);
+  }
+}

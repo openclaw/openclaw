@@ -1,51 +1,28 @@
-import type { Message } from "grammy/types";
+import type { Message, User } from "grammy/types";
 import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
+import type { TelegramCallbackButton } from "./button-types.js";
 import type { TelegramQuestionCallback } from "./question-callback-data.js";
 import { buildInlineKeyboard } from "./send.js";
-
-export type TelegramCallbackButton = {
-  text: string;
-  callback_data: string;
-  style?: "danger" | "success" | "primary";
-};
 
 type TelegramCallbackReplyParams = Omit<
   NonNullable<Parameters<RegisterTelegramHandlerParams["bot"]["api"]["sendMessage"]>[2]>,
   "direct_messages_topic_id" | "message_thread_id"
 >;
+type TelegramCallbackEditParams = Parameters<
+  RegisterTelegramHandlerParams["bot"]["api"]["editMessageText"]
+>[3];
 
-export interface TelegramCallbackMessageActions {
-  editCallbackMessage: (
-    text: string,
-    editParams?: Parameters<RegisterTelegramHandlerParams["bot"]["api"]["editMessageText"]>[3],
-  ) => ReturnType<RegisterTelegramHandlerParams["bot"]["api"]["editMessageText"]>;
-  clearCallbackButtons: () => ReturnType<
-    RegisterTelegramHandlerParams["bot"]["api"]["editMessageReplyMarkup"]
-  >;
-  editCallbackButtons: (
-    buttons: TelegramCallbackButton[][],
-  ) => ReturnType<RegisterTelegramHandlerParams["bot"]["api"]["editMessageReplyMarkup"]>;
-  editCallbackMessageWithButtons: (
-    text: string,
-    buttons: TelegramCallbackButton[][],
-    extra?: { parse_mode?: "HTML" | "Markdown" | "MarkdownV2" },
-  ) => Promise<void>;
-  deleteCallbackMessage: () => ReturnType<
-    RegisterTelegramHandlerParams["bot"]["api"]["deleteMessage"]
-  >;
-  replyToCallbackChat: (
-    text: string,
-    replyParams?: TelegramCallbackReplyParams,
-  ) => ReturnType<RegisterTelegramHandlerParams["bot"]["api"]["sendMessage"]>;
-}
+export type TelegramCallbackMessageActions = ReturnType<
+  typeof createTelegramCallbackMessageActions
+>;
 
 export function createTelegramCallbackMessageActions(params: {
   bot: RegisterTelegramHandlerParams["bot"];
   callbackMessage: Message;
   threadSpec: TelegramThreadSpec;
-}): TelegramCallbackMessageActions {
+}) {
   const { bot, callbackMessage, threadSpec } = params;
   const callbackBusinessParams =
     callbackMessage.business_connection_id !== undefined
@@ -54,23 +31,12 @@ export function createTelegramCallbackMessageActions(params: {
   const withCallbackBusinessParams = <T extends object>(value: T) =>
     callbackBusinessParams ? { ...callbackBusinessParams, ...value } : value;
 
-  const editCallbackMessage = async (
-    text: string,
-    editParams?: Parameters<typeof bot.api.editMessageText>[3],
-  ) => {
+  const editCallbackMessage = async (text: string, editParams?: TelegramCallbackEditParams) => {
     return await bot.api.editMessageText(
       callbackMessage.chat.id,
       callbackMessage.message_id,
       text,
       editParams ? withCallbackBusinessParams(editParams) : callbackBusinessParams,
-    );
-  };
-
-  const clearCallbackButtons = async () => {
-    return await bot.api.editMessageReplyMarkup(
-      callbackMessage.chat.id,
-      callbackMessage.message_id,
-      withCallbackBusinessParams({ reply_markup: { inline_keyboard: [] } }),
     );
   };
 
@@ -115,8 +81,10 @@ export function createTelegramCallbackMessageActions(params: {
       if (errStr.includes("no text in the message")) {
         try {
           await deleteCallbackMessage();
-        } catch {}
-        await replyToCallbackChat(text, keyboard ? { reply_markup: keyboard, ...extra } : extra);
+        } catch {
+          await editCallbackButtons([]).catch(() => {});
+        }
+        await replyToCallbackChat(text, editParams);
       } else if (!errStr.includes("message is not modified")) {
         throw editErr;
       }
@@ -125,7 +93,7 @@ export function createTelegramCallbackMessageActions(params: {
 
   return {
     editCallbackMessage,
-    clearCallbackButtons,
+    clearCallbackButtons: () => editCallbackButtons([]),
     editCallbackButtons,
     editCallbackMessageWithButtons,
     deleteCallbackMessage,
@@ -133,34 +101,83 @@ export function createTelegramCallbackMessageActions(params: {
   };
 }
 type ResolveQuestionParams = Parameters<typeof questionGatewayRuntime.resolveOption>[0];
-type QuestionResolver = (
-  params: ResolveQuestionParams,
-) => ReturnType<typeof questionGatewayRuntime.resolveOption>;
+type QuestionFeedbackMode = "terminal" | "retry" | "custom-input";
+
+export async function sendTelegramQuestionFeedback(params: {
+  actions: TelegramCallbackMessageActions;
+  text: string;
+  mode: QuestionFeedbackMode;
+  isGroup: boolean;
+  user: User;
+}): Promise<void> {
+  if (params.mode === "terminal") {
+    await params.actions.clearCallbackButtons().catch(() => {});
+  }
+  const groupCustomInput = params.mode === "custom-input" && params.isGroup;
+  const text = groupCustomInput
+    ? `${params.user.first_name}, reply with your own answer.`
+    : params.text;
+  await params.actions.replyToCallbackChat(
+    text,
+    params.mode === "custom-input"
+      ? {
+          ...(groupCustomInput
+            ? {
+                // Selective Force Reply targets mentioned users or the sender of the
+                // replied-to message. The question is bot-authored, so mention the tapper.
+                entities: [
+                  {
+                    type: "text_mention" as const,
+                    offset: 0,
+                    length: params.user.first_name.length,
+                    user: params.user,
+                  },
+                ],
+              }
+            : {}),
+          reply_markup: { force_reply: true, selective: groupCustomInput },
+        }
+      : undefined,
+  );
+  if (params.mode === "custom-input") {
+    // Keep the existing answer route until Telegram accepts its replacement.
+    await params.actions.clearCallbackButtons().catch(() => {});
+  }
+}
 
 export async function handleTelegramQuestionCallback(params: {
   callback: TelegramQuestionCallback;
   cfg: ResolveQuestionParams["cfg"];
   senderId: string;
-  feedback: (text: string, terminal: boolean) => Promise<unknown>;
-  resolveQuestion?: QuestionResolver;
+  feedback: (text: string, mode: QuestionFeedbackMode) => Promise<unknown>;
+  resolveQuestion?: typeof questionGatewayRuntime.resolveOption;
 }): Promise<void> {
-  let result: Awaited<ReturnType<QuestionResolver>>;
   try {
-    result = await (params.resolveQuestion ?? questionGatewayRuntime.resolveOption)({
+    const result = await (params.resolveQuestion ?? questionGatewayRuntime.resolveOption)({
       cfg: params.cfg,
       questionId: params.callback.questionId,
-      optionIndex: params.callback.optionIndex,
+      ...(params.callback.intent === "custom-input"
+        ? { customInput: true }
+        : { optionIndex: params.callback.optionIndex }),
       senderId: params.senderId,
       clientDisplayName: "Telegram question",
     });
+    if (params.callback.intent === "custom-input") {
+      const terminal = result.status === "already-terminal";
+      await params.feedback(
+        terminal ? "This question was already answered." : "Reply with your own answer.",
+        terminal ? "terminal" : "custom-input",
+      );
+      return;
+    }
+    await params
+      .feedback(
+        result.status === "answered" ? "Answer submitted." : "This question was already answered.",
+        "terminal",
+      )
+      .catch(() => {});
   } catch (error) {
-    await params.feedback("Could not submit this answer.", false).catch(() => {});
+    await params.feedback("Could not submit this answer.", "retry").catch(() => {});
     throw error;
   }
-  await params
-    .feedback(
-      result.status === "answered" ? "Answer submitted." : "This question was already answered.",
-      true,
-    )
-    .catch(() => {});
 }

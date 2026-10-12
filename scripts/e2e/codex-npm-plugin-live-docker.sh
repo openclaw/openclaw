@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 # Installs OpenClaw from a prepared package tarball, installs @openclaw/codex
 # from a registry/git/tarball spec, and verifies a live Codex app-server turn.
 set -Eeuo pipefail
@@ -10,7 +14,6 @@ TRUSTED_HARNESS_DIR="$(cd "$TRUSTED_HARNESS_DIR" && pwd)"
 CANDIDATE_ROOT="$(cd "$CANDIDATE_ROOT" && pwd)"
 ROOT_DIR="$TRUSTED_HARNESS_DIR"
 source "$TRUSTED_HARNESS_DIR/scripts/lib/docker-e2e-image.sh"
-source "$TRUSTED_HARNESS_DIR/scripts/lib/docker-e2e-package.sh"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-codex-npm-plugin-live-e2e" OPENCLAW_CODEX_NPM_PLUGIN_E2E_IMAGE)"
 DOCKER_TARGET="${OPENCLAW_CODEX_NPM_PLUGIN_DOCKER_TARGET:-bare}"
@@ -18,6 +21,11 @@ HOST_BUILD="${OPENCLAW_CODEX_NPM_PLUGIN_HOST_BUILD:-1}"
 PACKAGE_TGZ="${OPENCLAW_CURRENT_PACKAGE_TGZ:-}"
 PROFILE_FILE="${OPENCLAW_CODEX_NPM_PLUGIN_PROFILE_FILE:-${OPENCLAW_TESTBOX_PROFILE_FILE:-$HOME/.openclaw-testbox-live.profile}}"
 CODEX_PLUGIN_SPEC="${OPENCLAW_CODEX_NPM_PLUGIN_SPEC:-}"
+AUDIT_IDENTITY="${OPENCLAW_CODEX_NPM_PLUGIN_AUDIT_IDENTITY:-0}"
+case "$AUDIT_IDENTITY" in
+  0|1) ;;
+  *) echo "OPENCLAW_CODEX_NPM_PLUGIN_AUDIT_IDENTITY must be 0 or 1" >&2; exit 1 ;;
+esac
 CODEX_PLUGIN_MOUNT=()
 CODEX_PLUGIN_PACK_DIR=""
 CODEX_PLUGIN_REGISTRY_PACKAGE=""
@@ -68,8 +76,12 @@ else
   FOLLOWTHROUGH_PROGRESS_FINAL_MODE="legacy"
 fi
 run_log=""
+# Signal traps inherit the harness function's log redirection. Reserve the original stdout
+# so EXIT cleanup cannot print the failure tail back into the log it is reading.
+exec 3>&1
 
 cleanup() {
+  local cleanup_status="$?"
   if [ -n "${CODEX_PLUGIN_PACK_DIR:-}" ]; then
     rm -rf "$CODEX_PLUGIN_PACK_DIR"
   fi
@@ -77,29 +89,29 @@ cleanup() {
     docker_e2e_cleanup_package_tgz "$PACKAGE_TGZ"
   fi
   if [ -n "${run_log:-}" ]; then
+    if [ "$cleanup_status" -ne 0 ]; then
+      docker_e2e_print_log "$run_log" >&3 || true
+    fi
     rm -f "$run_log"
   fi
+  return "$cleanup_status"
 }
 trap cleanup EXIT
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" codex-npm-plugin-live "$CANDIDATE_ROOT/scripts/e2e/Dockerfile" "$CANDIDATE_ROOT" "$DOCKER_TARGET"
 
-prepare_package_tgz() {
-  if [ -n "$PACKAGE_TGZ" ]; then
-    PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz codex-npm-plugin-live "$PACKAGE_TGZ")"
-    return 0
-  fi
+if [ -n "$PACKAGE_TGZ" ]; then
+  PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz codex-npm-plugin-live "$PACKAGE_TGZ")"
+else
   if [ "$HOST_BUILD" = "0" ] && [ -z "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}" ]; then
     echo "OPENCLAW_CODEX_NPM_PLUGIN_HOST_BUILD=0 requires OPENCLAW_CURRENT_PACKAGE_TGZ" >&2
     exit 1
   fi
-  local harness_root="$ROOT_DIR"
-  ROOT_DIR="$CANDIDATE_ROOT"
-  PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz codex-npm-plugin-live)"
-  ROOT_DIR="$harness_root"
-}
-
-prepare_package_tgz
+  PACKAGE_TGZ="$(
+    ROOT_DIR="$CANDIDATE_ROOT"
+    docker_e2e_prepare_package_tgz codex-npm-plugin-live
+  )"
+fi
 
 configure_codex_plugin_registry_candidate() {
   local source_path="$1"
@@ -196,11 +208,13 @@ echo "Running Codex npm plugin live Docker E2E..."
 echo "Profile file: $PROFILE_STATUS"
 echo "Codex plugin spec: $CODEX_PLUGIN_SPEC"
 if ! docker_e2e_run_with_harness \
+  -v "$CANDIDATE_ROOT/extensions/codex/package.json:/tmp/openclaw-candidate-codex-package.json:ro" \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e OPENCLAW_CODEX_NPM_PLUGIN_ALLOW_BETA_COMPAT_DIAGNOSTICS="${OPENCLAW_CODEX_NPM_PLUGIN_ALLOW_BETA_COMPAT_DIAGNOSTICS:-0}" \
   -e OPENCLAW_CODEX_NPM_PLUGIN_FORCE_UNSAFE_INSTALL="${OPENCLAW_CODEX_NPM_PLUGIN_FORCE_UNSAFE_INSTALL:-1}" \
   -e OPENCLAW_CODEX_NPM_PLUGIN_MODEL="${OPENCLAW_CODEX_NPM_PLUGIN_MODEL:-openai/gpt-5.4}" \
   -e OPENCLAW_CODEX_NPM_PLUGIN_SPEC="$CODEX_PLUGIN_SPEC" \
+  -e OPENCLAW_CODEX_NPM_PLUGIN_AUDIT_IDENTITY="$AUDIT_IDENTITY" \
   -e OPENCLAW_CODEX_NPM_PLUGIN_REGISTRY_PACKAGE="$CODEX_PLUGIN_REGISTRY_PACKAGE" \
   -e OPENCLAW_CODEX_NPM_PLUGIN_REGISTRY_TARBALL="$CODEX_PLUGIN_REGISTRY_TARBALL" \
   -e OPENCLAW_CODEX_NPM_PLUGIN_REGISTRY_VERSION="$CODEX_PLUGIN_REGISTRY_VERSION" \
@@ -218,8 +232,8 @@ if ! docker_e2e_run_with_harness \
   -e OPENAI_BASE_URL \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
-  "${CODEX_PLUGIN_MOUNT[@]}" \
-  "${PROFILE_MOUNT[@]}" \
+  ${CODEX_PLUGIN_MOUNT[@]+"${CODEX_PLUGIN_MOUNT[@]}"} \
+  ${PROFILE_MOUNT[@]+"${PROFILE_MOUNT[@]}"} \
   -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'; then
 set -Eeuo pipefail
 
@@ -282,6 +296,7 @@ dump_debug_logs() {
     /tmp/openclaw-codex-agent-turn1.err \
     /tmp/openclaw-codex-agent-turn2.json \
     /tmp/openclaw-codex-agent-turn2.err \
+    /tmp/openclaw-codex-audit-gateway.log \
     /tmp/openclaw-codex-followthrough.json \
     /tmp/openclaw-codex-followthrough.log \
     /tmp/openclaw-codex-followthrough.err \
@@ -292,12 +307,14 @@ dump_debug_logs() {
 }
 
 registry_pid=""
+audit_gateway_pid=""
 debug_logs_dumped=0
 cleanup_scenario() {
   local status=$?
   trap - EXIT
   set +e
   openclaw_e2e_stop_process "${registry_pid:-}"
+  openclaw_e2e_stop_process "${audit_gateway_pid:-}"
   if [ "$status" -ne 0 ] && [ "$debug_logs_dumped" -eq 0 ]; then
     dump_debug_logs "$status"
   fi
@@ -315,7 +332,7 @@ openclaw_e2e_enable_openclaw_cli_timeout
 if [ -n "$CODEX_PLUGIN_REGISTRY_TARBALL" ]; then
   registry_port_file=/tmp/openclaw-codex-plugin-registry.port
   rm -f "$registry_port_file"
-  OPENCLAW_NPM_REGISTRY_UPSTREAM="${OPENCLAW_CODEX_NPM_PLUGIN_REGISTRY_UPSTREAM:-https://registry.npmjs.org}" \
+  OPENCLAW_NPM_REGISTRY_UPSTREAM="${OPENCLAW_CODEX_NPM_PLUGIN_REGISTRY_UPSTREAM:-${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_URL:-https://registry.npmjs.org}}" \
     node scripts/e2e/lib/plugins/npm-registry-server.mjs \
       "$registry_port_file" \
       "$CODEX_PLUGIN_REGISTRY_PACKAGE" \
@@ -343,7 +360,7 @@ if [ -n "$CODEX_PLUGIN_REGISTRY_TARBALL" ]; then
 fi
 
 echo "Installing Codex plugin: $CODEX_PLUGIN_SPEC"
-openclaw plugins install "$CODEX_PLUGIN_SPEC" "${PLUGIN_INSTALL_FLAGS[@]}" >/tmp/openclaw-codex-plugin-install.log 2>&1
+openclaw_e2e_fixture_plugin_command openclaw -- plugins install "$CODEX_PLUGIN_SPEC" "${PLUGIN_INSTALL_FLAGS[@]}" >/tmp/openclaw-codex-plugin-install.log 2>&1
 
 node scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs configure "$MODEL_REF"
 
@@ -443,6 +460,17 @@ run_agent_turn \
 
 node scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs assert-agent-turn "$SUCCESS_MARKER" "$SESSION_ID" "$MODEL_REF"
 
+if [ "${OPENCLAW_CODEX_NPM_PLUGIN_AUDIT_IDENTITY:-0}" = "1" ]; then
+  echo "Inspecting persisted Codex execution identity through the installed package Gateway..."
+  audit_package_root="$(openclaw_e2e_package_root "$NPM_CONFIG_PREFIX")"
+  audit_package_entry="$(openclaw_e2e_package_entrypoint "$audit_package_root")"
+  audit_gateway_pid="$(openclaw_e2e_start_gateway "$audit_package_entry" 18789 /tmp/openclaw-codex-audit-gateway.log)"
+  openclaw_e2e_wait_gateway_ready "$audit_gateway_pid" /tmp/openclaw-codex-audit-gateway.log
+  node scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs assert-audit "$SUCCESS_MARKER"
+  openclaw_e2e_stop_process "$audit_gateway_pid"
+  audit_gateway_pid=""
+fi
+
 FOLLOWTHROUGH_SESSION_ID="${SESSION_ID}-followthrough"
 FOLLOWTHROUGH_PROGRESS_MARKER="${SUCCESS_MARKER}-FOLLOWTHROUGH-PROGRESS"
 FOLLOWTHROUGH_COMPLETE_MARKER="${SUCCESS_MARKER}-FOLLOWTHROUGH-COMPLETE"
@@ -471,6 +499,9 @@ esac
 FOLLOWTHROUGH_PROMPT="$(cat <<PROMPT
 Live release follow-through check.
 
+This is a Node.js test container: use node for any inline scripting needed for
+the workspace work below. Do not assume a python executable is installed.
+
 First call message(action=send) $FOLLOWTHROUGH_PROGRESS_INSTRUCTION and send exactly
 $FOLLOWTHROUGH_PROGRESS_MARKER to this conversation. Make this progress send
 your only tool call in this step,
@@ -490,7 +521,7 @@ PROMPT
 
 echo "Running Codex progress follow-through regression turn..."
 OPENCLAW_PACKAGE_ROOT="$(openclaw_e2e_package_root "$NPM_CONFIG_PREFIX")"
-if node scripts/e2e/lib/codex-npm-plugin-live/followthrough-turn.mjs \
+if openclaw_e2e_run_command node scripts/e2e/lib/codex-npm-plugin-live/followthrough-turn.mjs \
   "$OPENCLAW_PACKAGE_ROOT" \
   "$FOLLOWTHROUGH_SESSION_ID" \
   "$MODEL_REF" \
@@ -504,6 +535,7 @@ else
   followthrough_status=$?
 fi
 echo "followthrough_agent_status: $followthrough_status stdout_bytes=$(wc -c </tmp/openclaw-codex-followthrough.json 2>/dev/null || printf 0) stderr_bytes=$(wc -c </tmp/openclaw-codex-followthrough.err 2>/dev/null || printf 0)"
+openclaw_e2e_print_log /tmp/openclaw-codex-followthrough.log
 if [ "$followthrough_status" -ne 0 ]; then
   dump_debug_logs "$followthrough_status"
   exit "$followthrough_status"
@@ -542,7 +574,6 @@ node scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs assert-agent-error "$p
 
 echo "Codex npm plugin live Docker E2E passed"
 EOF
-  docker_e2e_print_log "$run_log"
   exit 1
 fi
 

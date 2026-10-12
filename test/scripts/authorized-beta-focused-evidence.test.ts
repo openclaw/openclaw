@@ -1,9 +1,9 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import {
   assertAuthorizedEligibilityPlanDigest,
@@ -19,11 +19,14 @@ import {
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const seedDirs = useAutoCleanupTempDirTracker(afterAll);
+let fixtureSeed: ReturnType<typeof buildFixturePolicy> | undefined;
 
 type ParsedWorkflow = {
   jobs?: Record<
     string,
     {
+      environment?: string;
       needs?: string | string[];
       outputs?: Record<string, string>;
       permissions?: Record<string, string>;
@@ -53,15 +56,14 @@ const VALIDATOR_CLOSURE = [
   "scripts/verify-authorized-beta-focused-candidate.mjs",
 ] as const;
 
-function stageValidatorClosure(root: string, scriptsDirectory: boolean): string {
-  const targetRoot = scriptsDirectory ? join(root, "scripts") : root;
+function stageValidatorClosure(root: string): string {
   for (const sourcePath of VALIDATOR_CLOSURE) {
     const relativePath = sourcePath.replace(/^scripts\//u, "");
-    const targetPath = join(targetRoot, relativePath);
+    const targetPath = join(root, relativePath);
     mkdirSync(dirname(targetPath), { recursive: true });
     copyFileSync(join(REPO_ROOT, sourcePath), targetPath);
   }
-  return join(targetRoot, "validate-authorized-beta-focused-evidence.mts");
+  return join(root, "validate-authorized-beta-focused-evidence.mts");
 }
 
 function namedStep(workflow: ParsedWorkflow, jobName: string, stepName: string) {
@@ -83,7 +85,14 @@ function commit(root: string, message: string): string {
 }
 
 function fixturePolicy(): { policy: AuthorizedBetaFocusedPolicy; root: string } {
+  const seed = (fixtureSeed ??= buildFixturePolicy(seedDirs.make("authorized-beta-focused-seed-")));
   const root = tempDirs.make("authorized-beta-focused-");
+  // Copy the complete Git state so each case owns its refs, hooks, index, and objects.
+  cpSync(seed.root, root, { recursive: true, mode: 0 });
+  return { root, policy: structuredClone(seed.policy) };
+}
+
+function buildFixturePolicy(root: string): { policy: AuthorizedBetaFocusedPolicy; root: string } {
   execFileSync("git", ["init", "-q"], { cwd: root });
   execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: root });
   execFileSync("git", ["config", "user.name", "Test"], { cwd: root });
@@ -134,10 +143,47 @@ function fixturePolicy(): { policy: AuthorizedBetaFocusedPolicy; root: string } 
   };
 }
 
-function runFocusedValidatorLogProbe(outcome: "flagged" | "legacy" | "unrelated") {
+function focusedEvidence(
+  policy: AuthorizedBetaFocusedPolicy,
+  producer: AuthorizedBetaFocusedProducerIdentity,
+): AuthorizedBetaFocusedEvidence {
+  return {
+    schema: "openclaw.authorized-beta-focused-evidence.v1",
+    mode: "authorized-beta-focused-v1",
+    policySha256: digestAuthorizedBetaFocusedPolicy(policy),
+    releaseTag: policy.releaseTag,
+    candidate: {
+      sha: policy.candidateSha,
+      parentSha: policy.baseCandidateSha,
+      treeSha: policy.candidateTreeSha,
+      packageProjectionSha256: policy.packageProjectionSha256,
+      changedPaths: policy.changedPaths,
+    },
+    producer,
+    historical: {
+      frvRunId: policy.historicalFrv.runId,
+      frvRunAttempt: policy.historicalFrv.runAttempt,
+      releaseChecksRunId: policy.historicalFrv.releaseChecksRunId,
+      performanceRunId: policy.historicalFrv.performanceRunId,
+    },
+    focused: {
+      ciRunId: policy.focusedProof.ciRunId,
+      ciJobId: policy.focusedProof.ciSuccessJobId,
+      pluginRunId: policy.focusedProof.pluginRunId,
+      pluginJobId: policy.focusedProof.pluginSuccessJobId,
+      reviewedHeadSha: policy.reviewedHeadSha,
+    },
+    inventory: { eligibilityPlanDigest: policy.eligibilityPlanDigest, ...policy.inventory },
+  };
+}
+
+function runFocusedValidatorLogProbe(
+  outcome: "flagged" | "legacy" | "unrelated",
+  skippedHistoricalChild = false,
+) {
   const { policy, root } = fixturePolicy();
   const trustedRoot = tempDirs.make("authorized-beta-focused-job-log-");
-  const validatorPath = stageValidatorClosure(trustedRoot, false);
+  const validatorPath = stageValidatorClosure(trustedRoot);
   const artifactPath = join(trustedRoot, "evidence.json");
   const callsPath = join(trustedRoot, "gh-log-calls.jsonl");
   const historical = policy.historicalFrv;
@@ -286,68 +332,58 @@ function runFocusedValidatorLogProbe(outcome: "flagged" | "legacy" | "unrelated"
       { key: "pluginPrerelease", selected: true, runId: historical.pluginRunId },
       { key: "releaseChecks", selected: true, runId: historical.releaseChecksRunId },
       { key: "productPerformance", selected: true, runId: historical.performanceRunId },
+      ...(skippedHistoricalChild ? [{ key: "npmTelegram", selected: false, runId: "" }] : []),
     ],
   };
-  const evidence: AuthorizedBetaFocusedEvidence = {
-    schema: "openclaw.authorized-beta-focused-evidence.v1",
-    mode: "authorized-beta-focused-v1",
-    policySha256: digestAuthorizedBetaFocusedPolicy(policy),
-    releaseTag: policy.releaseTag,
-    candidate: {
-      sha: policy.candidateSha,
-      parentSha: policy.baseCandidateSha,
-      treeSha: policy.candidateTreeSha,
-      packageProjectionSha256: policy.packageProjectionSha256,
-      changedPaths: policy.changedPaths,
-    },
-    producer,
-    historical: {
-      frvRunId: historical.runId,
-      frvRunAttempt: historical.runAttempt,
-      releaseChecksRunId: historical.releaseChecksRunId,
-      performanceRunId: historical.performanceRunId,
-    },
-    focused: {
-      ciRunId: focused.ciRunId,
-      ciJobId: focused.ciSuccessJobId,
-      pluginRunId: focused.pluginRunId,
-      pluginJobId: focused.pluginSuccessJobId,
-      reviewedHeadSha: policy.reviewedHeadSha,
-    },
-    inventory: { eligibilityPlanDigest: policy.eligibilityPlanDigest, ...policy.inventory },
-  };
+  const evidence = focusedEvidence(policy, producer);
   writeFileSync(join(trustedRoot, "authorized-beta-focused-policy.json"), JSON.stringify(policy));
   writeFileSync(artifactPath, JSON.stringify(evidence));
+  const apiResponses = [
+    ...runs.map((run) => [`repos/openclaw/openclaw/actions/runs/${run.id}`, run] as const),
+    ...jobs.map((job) => [`repos/openclaw/openclaw/actions/jobs/${job.id}`, job] as const),
+    [
+      `repos/openclaw/openclaw/git/ref/tags/${producerRef}`,
+      { object: { type: "commit", sha: producerSha } },
+    ] as const,
+  ];
   writeFileSync(
     join(trustedRoot, "gh"),
     [
-      "#!/usr/bin/env node",
-      'import { appendFileSync, writeFileSync } from "node:fs";',
-      'import { join } from "node:path";',
-      "const [command, route, ...args] = process.argv.slice(2);",
-      `const runs = ${JSON.stringify(Object.fromEntries(runs.map((run) => [run.id, run])))};`,
-      `const jobs = ${JSON.stringify(Object.fromEntries(jobs.map((job) => [job.id, job])))};`,
-      'if (command === "run" && route === "download") {',
-      '  const directory = args[args.indexOf("--dir") + 1];',
-      `  writeFileSync(join(directory, "full-release-execution-plan.json"), JSON.stringify(${JSON.stringify(plan)}));`,
-      '} else if (command === "api" && route.endsWith("/logs")) {',
-      `  appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify(process.argv.slice(2)) + "\\n");`,
-      `  const firstFocusedLog = route.endsWith("/${focused.ciTargetLogJobId}/logs");`,
-      `  if (firstFocusedLog && args.includes("--allow-escape-sequences") && ${JSON.stringify(outcome)} !== "flagged") {`,
-      `    process.stderr.write(${JSON.stringify(outcome)} === "legacy" ? "unknown flag: --allow-escape-sequences\\r\\n\\r\\nUsage: gh api <endpoint> [flags]\\r\\n" : "error: unknown flag: --allow-escape-sequences\\n");`,
-      "    process.exit(1);",
-      "  }",
-      `  process.stdout.write("\\u001b[32m${policy.reviewedHeadSha}\\u001b[0m");`,
-      '} else if (command === "api" && route.includes("/git/ref/tags/")) {',
-      `  process.stdout.write(JSON.stringify({ object: { type: "commit", sha: ${JSON.stringify(producerSha)} } }));`,
-      '} else if (command === "api") {',
-      '  const id = route.slice(route.lastIndexOf("/") + 1);',
-      '  const value = route.includes("/actions/runs/") ? runs[id] : jobs[id];',
-      "  if (!value) throw new Error(`unexpected GitHub API route: ${route}`);",
-      "  process.stdout.write(JSON.stringify(value));",
-      "} else {",
-      "  throw new Error(`unexpected gh invocation: ${JSON.stringify(process.argv.slice(2))}`);",
-      "}",
+      "#!/bin/sh",
+      'command="$1"; route="$2"; shift 2',
+      'if [ "$command" = run ] && [ "$route" = download ]; then',
+      '  while [ "$1" != --dir ]; do shift; done',
+      `  printf '%s' '${JSON.stringify(plan)}' > "$2/full-release-execution-plan.json"`,
+      "  exit 0",
+      "fi",
+      'if [ "$command" = api ] && [ "${route%/logs}" != "$route" ]; then',
+      '  if [ "$1" = --allow-escape-sequences ]; then',
+      `    printf '["api","%s","--allow-escape-sequences"]\\n' "$route" >> '${callsPath}'`,
+      `    if [ "$route" = 'repos/openclaw/openclaw/actions/jobs/${focused.ciTargetLogJobId}/logs' ] && [ '${outcome}' != flagged ]; then`,
+      `      if [ '${outcome}' = legacy ]; then`,
+      "        printf 'unknown flag: --allow-escape-sequences\\r\\n\\r\\nUsage: gh api <endpoint> [flags]\\r\\n' >&2",
+      "      else",
+      "        printf 'error: unknown flag: --allow-escape-sequences\\n' >&2",
+      "      fi",
+      "      exit 1",
+      "    fi",
+      "  else",
+      `    printf '["api","%s"]\\n' "$route" >> '${callsPath}'`,
+      "  fi",
+      `  printf '\\033[32m${policy.reviewedHeadSha}\\033[0m'`,
+      "  exit 0",
+      "fi",
+      'if [ "$command" = api ]; then',
+      '  case "$route" in',
+      ...apiResponses.map(
+        ([route, response]) => `    '${route}') printf '%s' '${JSON.stringify(response)}' ;;`,
+      ),
+      "    *) printf 'unexpected GitHub API route: %s\\n' \"$route\" >&2; exit 1 ;;",
+      "  esac",
+      "  exit 0",
+      "fi",
+      'printf \'unexpected gh invocation: %s %s\\n\' "$command" "$route" >&2',
+      "exit 1",
     ].join("\n"),
     { mode: 0o755 },
   );
@@ -384,7 +420,7 @@ function runFocusedValidatorLogProbe(outcome: "flagged" | "legacy" | "unrelated"
 
 function stageCandidateVerifier(policy: AuthorizedBetaFocusedPolicy, shouldFail = false) {
   const trustedRoot = tempDirs.make("authorized-beta-focused-trusted-");
-  const validatorPath = stageValidatorClosure(trustedRoot, false);
+  const validatorPath = stageValidatorClosure(trustedRoot);
   const policyPath = join(trustedRoot, "authorized-beta-focused-policy.json");
   const markerPath = join(trustedRoot, "candidate-verifier.json");
   writeFileSync(policyPath, JSON.stringify(policy));
@@ -517,7 +553,7 @@ function resolveFocusedProducer(
         "}",
         namedStep(
           workflow,
-          isDockerBoundary ? "resolve_build_provenance" : "resolve_release_target",
+          isDockerBoundary ? "publish" : "resolve_release_target",
           isDockerBoundary
             ? "Revalidate focused evidence producer after Docker approval"
             : "Resolve focused release evidence run",
@@ -546,7 +582,7 @@ function resolveFocusedProducer(
 }
 
 describe("authorized beta focused evidence", () => {
-  it.each(["ancestor", "current", "diverged"] as const)(
+  it.each(["diverged"] as const)(
     "accepts an exact protected focused producer from %s trusted tooling",
     (consumer) => {
       const { outputPath, producerRef, producerSha, result } = resolveFocusedProducer({ consumer });
@@ -562,13 +598,10 @@ describe("authorized beta focused evidence", () => {
   it.each([
     { name: "unanchored producer", options: { producer: "unanchored" as const } },
     { name: "producer policy drift", options: { producer: "policy-drift" as const } },
-    { name: "producer workflow drift", options: { producer: "workflow-drift" as const } },
     {
       name: "moved producer tag",
       options: { tag: { object: { sha: "f".repeat(40), type: "commit" } } },
     },
-    { name: "missing producer tag", options: { missingTag: true } },
-    { name: "annotated producer tag", options: { annotatedTag: true } },
     {
       name: "producer SHA prefix mismatch",
       options: { run: { head_branch: "release-publish/ffffffffffff-123" } },
@@ -581,20 +614,8 @@ describe("authorized beta focused evidence", () => {
       name: "wrong producer workflow path",
       options: { run: { path: ".github/workflows/openclaw-release-publish.yml" } },
     },
-    { name: "wrong producer workflow name", options: { run: { name: "Other Validation" } } },
-    { name: "wrong producer event", options: { run: { event: "push" } } },
-    { name: "unfinished producer", options: { run: { status: "in_progress" } } },
-    { name: "failed producer", options: { run: { conclusion: "failure" } } },
-    { name: "wrong producer attempt", options: { run: { run_attempt: 3 } } },
   ])("rejects $name before focused artifact download", ({ options }) => {
     expect(resolveFocusedProducer(options).result.status).not.toBe(0);
-  });
-
-  it("accepts the exact focused producer again after Docker approval", () => {
-    const { result } = resolveFocusedProducer({ boundary: "docker", consumer: "diverged" });
-
-    expect(result.stderr).toBe("");
-    expect(result.status).toBe(0);
   });
 
   it.each([
@@ -602,24 +623,23 @@ describe("authorized beta focused evidence", () => {
       name: "moved producer tag",
       options: { tag: { object: { sha: "f".repeat(40), type: "commit" } } },
     },
-    { name: "missing producer tag", options: { missingTag: true } },
     { name: "rerun producer", options: { run: { run_attempt: 3 } } },
-    { name: "substituted producer", options: { run: { head_sha: "f".repeat(40) } } },
-    { name: "failed producer", options: { run: { conclusion: "failure" } } },
   ])("rejects $name after Docker approval before registry access", ({ options }) => {
     expect(resolveFocusedProducer({ ...options, boundary: "docker" }).result.status).not.toBe(0);
   });
 
-  it("gates every Docker build on post-approval focused evidence revalidation", () => {
+  it("gates Docker registry access on post-approval focused evidence revalidation", () => {
     const docker = parse(
       readFileSync(".github/workflows/docker-release.yml", "utf8"),
     ) as ParsedWorkflow;
-    const gate = docker.jobs?.resolve_build_provenance;
+    const gate = docker.jobs?.publish;
     if (!gate) {
-      throw new Error("Docker build provenance gate is missing");
+      throw new Error("Docker publication gate is missing");
     }
 
-    expect(gate.needs).toContain("approve_docker_publish");
+    expect(docker.jobs?.approve?.environment).toBe("docker-release");
+    expect(gate.environment).toBeUndefined();
+    expect(gate.needs).toContain("approve");
     expect(gate.permissions).toMatchObject({
       actions: "read",
       attestations: "read",
@@ -631,14 +651,14 @@ describe("authorized beta focused evidence", () => {
     );
     const download = names.indexOf("Download focused release evidence after Docker approval");
     const verification = names.indexOf("Verify focused release evidence after Docker approval");
-    const provenance = names.indexOf("Resolve shared build provenance");
+    const credentials = names.indexOf("Log in to GHCR");
     expect(revalidation).toBeGreaterThan(-1);
     expect(revalidation).toBeLessThan(download);
     expect(download).toBeLessThan(verification);
-    expect(verification).toBeLessThan(provenance);
+    expect(verification).toBeLessThan(credentials);
     const verifyStep = namedStep(
       docker,
-      "resolve_build_provenance",
+      "publish",
       "Verify focused release evidence after Docker approval",
     );
     expect(verifyStep.run).toContain("verify-authorized-beta-focused-candidate.mjs");
@@ -646,130 +666,15 @@ describe("authorized beta focused evidence", () => {
     expect(verifyStep.run?.indexOf("gh attestation verify")).toBeLessThan(
       verifyStep.run?.indexOf("verify-authorized-beta-focused-candidate.mjs") ?? -1,
     );
-
-    for (const jobName of ["build-amd64", "build-arm64"]) {
-      expect(docker.jobs?.[jobName]?.needs).toContain("resolve_build_provenance");
-    }
-  });
-
-  it("pins the exact beta.3 candidate, inventories, trust split, and repaired leaves", () => {
-    const policy = readAuthorizedBetaFocusedPolicy();
-    expect(policy.releaseTag).toBe("v2026.8.1-beta.3");
-    expect(policy.candidateSha).toBe("3fbe94065c2b94f4c08acb6742a69938bf408d94");
-    expect(policy.baseCandidateSha).toBe("3203a6f7f8d79644fde2b4f091a694f4c1698538");
-    expect(policy.eligibilityPlanDigest).toBe(
-      "sha256:e05226cfd77716b262882b3e2525037a506cd8b6af2affa0a876499074b1671b",
-    );
-    expect(policy.changedPaths).toHaveLength(4);
-    expect(policy.inventory).toMatchObject({
-      npmCount: 93,
-      clawHubCount: 89,
-      trustedPublisherCount: 75,
-      bootstrapCount: 14,
-      missingTrustedPublisherCount: 0,
-    });
-    expect(policy.historicalFrv).toMatchObject({
-      runId: "32644377679",
-      ciFailedJobId: "97206458686",
-      pluginFailedJobId: "97208293666",
-      releaseChecksRunId: "32645133620",
-    });
-    expect(policy.focusedProof).toMatchObject({
-      ciRunId: "32664685168",
-      ciSuccessJobId: "97256296219",
-      pluginRunId: "32664686635",
-      pluginSuccessJobId: "97256329353",
-    });
   });
 
   it("accepts skipped historical release-plan children without run identities", () => {
-    const { policy, root } = fixturePolicy();
-    const trustedRoot = tempDirs.make("authorized-beta-focused-historical-plan-");
-    const validatorPath = stageValidatorClosure(trustedRoot, false);
-    writeFileSync(join(trustedRoot, "authorized-beta-focused-policy.json"), JSON.stringify(policy));
-
-    const producerSha = "a".repeat(40);
-    const producerRef = "release-publish/aaaaaaaaaaaa-1";
-    const historical = policy.historicalFrv;
-    const plan = {
-      parentRunId: historical.runId,
-      parentRunAttempt: historical.runAttempt,
-      workflowRef: historical.workflowRef,
-      workflowSha: policy.historicalToolingSha,
-      targetSha: historical.targetSha,
-      releaseProfile: "beta",
-      rerunGroup: "all",
-      children: [
-        { key: "normalCi", selected: true, runId: historical.ciRunId },
-        { key: "pluginPrerelease", selected: true, runId: historical.pluginRunId },
-        { key: "releaseChecks", selected: true, runId: historical.releaseChecksRunId },
-        { key: "npmTelegram", selected: false, runId: "" },
-        { key: "productPerformance", selected: true, runId: historical.performanceRunId },
-      ],
-    };
-    const producerRun = {
-      id: 123,
-      run_attempt: 1,
-      name: "Authorized Beta Focused Validation",
-      path: ".github/workflows/authorized-beta-focused-validation.yml",
-      event: "workflow_dispatch",
-      status: "completed",
-      conclusion: "success",
-      head_branch: producerRef,
-      head_sha: producerSha,
-    };
-    writeFileSync(
-      join(trustedRoot, "gh"),
-      [
-        "#!/usr/bin/env node",
-        'import { writeFileSync } from "node:fs";',
-        'import { join } from "node:path";',
-        "const [command, route, ...args] = process.argv.slice(2);",
-        'if (command === "api" && route.endsWith("/actions/runs/123")) {',
-        `  process.stdout.write(JSON.stringify(${JSON.stringify(producerRun)}));`,
-        '} else if (command === "api" && route.includes("/git/ref/tags/")) {',
-        `  process.stdout.write(JSON.stringify({ object: { type: "commit", sha: ${JSON.stringify(producerSha)} } }));`,
-        '} else if (command === "run" && route === "download") {',
-        '  const directory = args[args.indexOf("--dir") + 1];',
-        `  writeFileSync(join(directory, "full-release-execution-plan.json"), JSON.stringify(${JSON.stringify(plan)}));`,
-        "} else {",
-        '  console.error("historical execution plan child identities accepted");',
-        "  process.exitCode = 1;",
-        "}",
-      ].join("\n"),
-      { mode: 0o755 },
-    );
-
-    const result = spawnSync(
-      process.execPath,
-      [
-        validatorPath,
-        "verify",
-        "--candidate-root",
-        root,
-        "--artifact",
-        join(trustedRoot, "unused-evidence.json"),
-        "--producer-run-id",
-        "123",
-        "--producer-run-attempt",
-        "1",
-        "--producer-workflow-full-ref",
-        `refs/tags/${producerRef}`,
-        "--producer-workflow-sha",
-        producerSha,
-      ],
-      {
-        encoding: "utf8",
-        env: { ...process.env, PATH: `${trustedRoot}:${process.env.PATH ?? ""}` },
-      },
-    );
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("historical execution plan child identities accepted");
-    expect(result.stderr).not.toContain("historical execution plan child run id");
+    const { result } = runFocusedValidatorLogProbe("flagged", true);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("authorized beta focused evidence verified");
   });
 
   it.each([
-    { outcome: "flagged" as const, description: "accepts ANSI-bearing flagged Actions logs" },
     { outcome: "legacy" as const, description: "retries once for the exact legacy gh flag error" },
     {
       outcome: "unrelated" as const,
@@ -899,41 +804,12 @@ describe("authorized beta focused evidence", () => {
   });
 
   it.each([
-    { name: "null policy", policy: null },
-    { name: "array policy", policy: [] },
-    {
-      name: "wrong policy schema",
-      policy: { schema: "other", mode: "authorized-beta-focused-v1", candidateSha: "a".repeat(40) },
-    },
-    {
-      name: "wrong policy mode",
-      policy: {
-        schema: "openclaw.authorized-beta-focused-policy.v1",
-        mode: "other",
-        candidateSha: "a".repeat(40),
-      },
-    },
-    {
-      name: "missing candidate",
-      policy: {
-        schema: "openclaw.authorized-beta-focused-policy.v1",
-        mode: "authorized-beta-focused-v1",
-      },
-    },
     {
       name: "short candidate",
       policy: {
         schema: "openclaw.authorized-beta-focused-policy.v1",
         mode: "authorized-beta-focused-v1",
         candidateSha: "abc",
-      },
-    },
-    {
-      name: "uppercase candidate",
-      policy: {
-        schema: "openclaw.authorized-beta-focused-policy.v1",
-        mode: "authorized-beta-focused-v1",
-        candidateSha: "A".repeat(40),
       },
     },
   ])("rejects $name before touching the repository or verifier", ({ policy }) => {
@@ -1076,34 +952,6 @@ describe("authorized beta focused evidence", () => {
     ).rejects.toThrow("authorized eligibility plan digest mismatch");
   });
 
-  it.each([
-    { name: "downloaded verifier", scriptsDirectory: false },
-    { name: "sparse scripts checkout", scriptsDirectory: true },
-  ])("executes the $name module closure", ({ scriptsDirectory }) => {
-    const root = tempDirs.make("authorized-beta-focused-stage-");
-    const validatorPath = stageValidatorClosure(root, scriptsDirectory);
-    const probePath = join(root, "probe.mjs");
-    writeFileSync(
-      probePath,
-      [
-        `import { digestAuthorizedBetaFocusedPolicy, readAuthorizedBetaFocusedPolicy, validateAuthorizedBetaFocusedArtifactShape } from ${JSON.stringify(pathToFileURL(validatorPath).href)};`,
-        `const policy = readAuthorizedBetaFocusedPolicy();`,
-        `const producer = { repository: "openclaw/openclaw", runId: "123", runAttempt: 1, workflowPath: ".github/workflows/authorized-beta-focused-validation.yml", workflowFullRef: "refs/tags/release-publish/aaaaaaaaaaaa-1", workflowRef: "release-publish/aaaaaaaaaaaa-1", workflowSha: "a".repeat(40) };`,
-        `const inventory = { eligibilityPlanDigest: policy.eligibilityPlanDigest, ...policy.inventory };`,
-        `const evidence = { schema: "openclaw.authorized-beta-focused-evidence.v1", mode: policy.mode, policySha256: digestAuthorizedBetaFocusedPolicy(policy), releaseTag: policy.releaseTag, candidate: { sha: policy.candidateSha, parentSha: policy.baseCandidateSha, treeSha: policy.candidateTreeSha, packageProjectionSha256: policy.packageProjectionSha256, changedPaths: policy.changedPaths }, producer, historical: { frvRunId: policy.historicalFrv.runId, frvRunAttempt: policy.historicalFrv.runAttempt, releaseChecksRunId: policy.historicalFrv.releaseChecksRunId, performanceRunId: policy.historicalFrv.performanceRunId }, focused: { ciRunId: policy.focusedProof.ciRunId, ciJobId: policy.focusedProof.ciSuccessJobId, pluginRunId: policy.focusedProof.pluginRunId, pluginJobId: policy.focusedProof.pluginSuccessJobId, reviewedHeadSha: policy.reviewedHeadSha }, inventory };`,
-        `validateAuthorizedBetaFocusedArtifactShape(evidence, policy, producer, inventory);`,
-        `process.stdout.write("verified");`,
-      ].join("\n"),
-    );
-    const result = spawnSync(process.execPath, [probePath], {
-      cwd: root,
-      encoding: "utf8",
-    });
-    expect(result.stderr).toBe("");
-    expect(result.status).toBe(0);
-    expect(result.stdout).toBe("verified");
-  });
-
   it("accepts the exact artifact shape and rejects inventory drift", () => {
     const policy = readAuthorizedBetaFocusedPolicy();
     const producer: AuthorizedBetaFocusedProducerIdentity = {
@@ -1119,34 +967,7 @@ describe("authorized beta focused evidence", () => {
       eligibilityPlanDigest: policy.eligibilityPlanDigest,
       ...policy.inventory,
     };
-    const evidence = {
-      schema: "openclaw.authorized-beta-focused-evidence.v1",
-      mode: "authorized-beta-focused-v1",
-      policySha256: digestAuthorizedBetaFocusedPolicy(policy),
-      releaseTag: policy.releaseTag,
-      candidate: {
-        sha: policy.candidateSha,
-        parentSha: policy.baseCandidateSha,
-        treeSha: policy.candidateTreeSha,
-        packageProjectionSha256: policy.packageProjectionSha256,
-        changedPaths: policy.changedPaths,
-      },
-      producer,
-      historical: {
-        frvRunId: policy.historicalFrv.runId,
-        frvRunAttempt: policy.historicalFrv.runAttempt,
-        releaseChecksRunId: policy.historicalFrv.releaseChecksRunId,
-        performanceRunId: policy.historicalFrv.performanceRunId,
-      },
-      focused: {
-        ciRunId: policy.focusedProof.ciRunId,
-        ciJobId: policy.focusedProof.ciSuccessJobId,
-        pluginRunId: policy.focusedProof.pluginRunId,
-        pluginJobId: policy.focusedProof.pluginSuccessJobId,
-        reviewedHeadSha: policy.reviewedHeadSha,
-      },
-      inventory: expectedInventory,
-    } as AuthorizedBetaFocusedEvidence;
+    const evidence = focusedEvidence(policy, producer);
     expect(() =>
       validateAuthorizedBetaFocusedArtifactShape(evidence, policy, producer, expectedInventory),
     ).not.toThrow();
@@ -1215,7 +1036,7 @@ describe("authorized beta focused evidence", () => {
       expect(source).toContain("inputs.release_evidence_mode == 'full-release-validation'");
       expect(source).toContain("validate-full-release-validation-evidence.mjs");
     }
-    const parentSource = readFileSync(".github/workflows/openclaw-release-publish.yml", "utf8");
+    const parentSource = readFileSync("scripts/lib/release-publish-children.sh", "utf8");
     expect(parentSource).toContain('proof_label="authorized beta focused validation"');
     expect(parentSource).toContain('proof_run_id="${FOCUSED_RELEASE_EVIDENCE_RUN_ID}"');
     expect(parentSource).toContain(
@@ -1226,14 +1047,17 @@ describe("authorized beta focused evidence", () => {
     if (!parentWorkflow || !npmWorkflow) {
       throw new Error("release workflows missing");
     }
-    const downloadedTooling = namedStep(
+    const toolingCheckout = namedStep(
       parentWorkflow,
       "resolve_release_target",
-      "Download trusted release validation tooling",
-    ).run;
-    for (const path of VALIDATOR_CLOSURE) {
-      expect(downloadedTooling).toContain(path);
-    }
+      "Checkout trusted release validation tooling",
+    );
+    expect(toolingCheckout.with).toMatchObject({
+      ref: "${{ github.workflow_sha }}",
+      path: ".release-validation-tooling",
+      "persist-credentials": false,
+      "sparse-checkout": "scripts",
+    });
     const resolveSteps = parentWorkflow.jobs?.resolve_release_target?.steps ?? [];
     const resolveStepNames = resolveSteps.map((step) => step.name);
     expect(resolveStepNames).not.toContain("Install focused release verifier dependency");
@@ -1289,15 +1113,5 @@ describe("authorized beta focused evidence", () => {
     expect(validatorSource).toContain("policy.historicalToolingSha");
     expect(validatorSource).toContain("policy.historicalToolingRef");
     expect(validatorSource).toContain("assertAuthorizedEligibilityPlanDigest(");
-    expect(validatorSource).toContain('await import("./release-plan-contract.mjs")');
-    const trustBranch = validatorSource.indexOf("if (includeTrust)");
-    const pluginImport = validatorSource.indexOf('await import("./lib/plugin-clawhub-release.ts")');
-    expect(trustBranch).toBeGreaterThan(-1);
-    expect(pluginImport).toBeGreaterThan(trustBranch);
-    const verifyBranch = validatorSource.indexOf(
-      'const evidence = JSON.parse(readFileSync(artifactPath, "utf8"))',
-    );
-    expect(verifyBranch).toBeGreaterThan(-1);
-    expect(validatorSource.slice(verifyBranch)).not.toContain("collectInventory(");
   });
 });

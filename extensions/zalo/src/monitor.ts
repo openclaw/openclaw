@@ -1,41 +1,34 @@
-// Zalo plugin module implements monitor behavior.
-import type { IncomingMessage, ServerResponse } from "node:http";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import {
   createChannelPartialDeliveryError,
   formatInboundMediaUnavailableText,
-  resolveChannelInboundRouteEnvelope,
+  createChannelInboundEnvelopeBuilderAsync,
   type ChannelInboundMediaInput,
 } from "openclaw/plugin-sdk/channel-inbound";
-import {
-  resolveStableChannelMessageIngress,
-  type ChannelIngressContextBinding,
-  type ResolvedChannelMessageIngress,
+import type {
+  ChannelIngressContextBinding,
+  ResolvedChannelMessageIngress,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
-import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
-import {
-  createLazyRuntimeModule,
-  createLazyRuntimeNamedExport,
-} from "openclaw/plugin-sdk/lazy-runtime";
 import {
   deliverTextOrMediaReply,
   resolveSendableOutboundReplyParts,
   type OutboundReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { sleepWithAbort, waitForAbortSignal } from "openclaw/plugin-sdk/runtime-env";
 import {
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/runtime-group-policy";
-import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  canonicalizeWebhookRouteKey,
-  registerPluginHttpRoute,
-  resolveWebhookPath,
-} from "openclaw/plugin-sdk/webhook-ingress";
+  normalizeOptionalString,
+  normalizeStringEntries,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { registerPluginHttpRoute, resolveWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 import type { ResolvedZaloAccount } from "./accounts.js";
 import {
   ZaloApiError,
@@ -51,11 +44,7 @@ import {
   type ZaloUpdate,
 } from "./api.js";
 import { normalizeZaloAllowEntry, resolveZaloRuntimeGroupPolicy } from "./group-access.js";
-import {
-  prepareZaloDurableReplyPayload,
-  resolveZaloDurableReplyOptions,
-} from "./monitor-durable.js";
-import type { ZaloRuntimeEnv } from "./monitor.types.js";
+import type { ZaloRuntimeEnv, ZaloStatusSink } from "./monitor.types.js";
 import {
   prepareHostedZaloMediaUrl,
   resolveHostedZaloMediaRoutePrefix,
@@ -65,9 +54,7 @@ import { resolveZaloProxyFetch } from "./proxy.js";
 import { getZaloRuntime } from "./runtime.js";
 import type { ZaloWebhookIngressLifecycle } from "./webhook-spool.js";
 
-/** Default idle timeout for Zalo inbound photo downloads (30 seconds). */
 const ZALO_MEDIA_READ_IDLE_TIMEOUT_MS = 30_000;
-/** Maximum wait for Zalo inbound photo response headers (120 seconds). */
 const ZALO_MEDIA_RESPONSE_HEADER_TIMEOUT_MS = 120_000;
 
 type ZaloMonitorOptions = {
@@ -91,15 +78,6 @@ const ZALO_TYPING_TIMEOUT_MS = 5_000;
 const UNIX_MILLISECONDS_THRESHOLD = 1_000_000_000_000;
 
 type ZaloCoreRuntime = ReturnType<typeof getZaloRuntime>;
-type ZaloStatusSink = (patch: {
-  connected?: boolean;
-  lifecycle?: "ready" | "recovering";
-  terminalDisconnect?: boolean;
-  lastConnectedAt?: number;
-  lastError?: string | null;
-  lastInboundAt?: number;
-  lastOutboundAt?: number;
-}) => void;
 type ZaloProcessingContext = {
   token: string;
   account: ResolvedZaloAccount;
@@ -122,8 +100,6 @@ type ZaloPollingLoopParams = ZaloProcessingContext & {
 type ZaloUpdateProcessingParams = ZaloProcessingContext & {
   update: ZaloUpdate;
 };
-const hostedMediaRouteRefs = new Map<string, { count: number; unregisters: Array<() => void> }>();
-
 function resolveZaloTimestampMs(date: number | undefined): number | undefined {
   if (!date) {
     return undefined;
@@ -131,27 +107,11 @@ function resolveZaloTimestampMs(date: number | undefined): number | undefined {
   return date >= UNIX_MILLISECONDS_THRESHOLD ? date : date * 1000;
 }
 
-const loadZaloWebhookRuntime = createLazyRuntimeNamedExport(
-  () => import("./monitor.webhook.js"),
-  "zaloWebhookRuntime",
-);
-const loadZaloWebhookIngressRuntime = createLazyRuntimeNamedExport(
-  () => import("./webhook-spool.js"),
-  "zaloWebhookIngressRuntime",
-);
-const loadZaloWebhookModule = createLazyRuntimeModule(async () => ({
-  ...(await loadZaloWebhookRuntime()),
-  ...(await loadZaloWebhookIngressRuntime()),
-}));
-
 function registerSharedHostedMediaRoute(params: {
   path: string;
   log?: (message: string) => void;
 }): () => void {
-  const routeKey = canonicalizeWebhookRouteKey(params.path);
-  // Every account attempts the account-agnostic route so the first acquire after a registry swap
-  // repopulates it; exact same-owner conflicts reuse the existing route without replacement.
-  const unregister = registerPluginHttpRoute({
+  return registerPluginHttpRoute({
     auth: "plugin",
     match: "prefix",
     path: params.path,
@@ -169,35 +129,6 @@ function registerSharedHostedMediaRoute(params: {
       }
     },
   });
-  const acquired = hostedMediaRouteRefs.get(routeKey) ?? {
-    count: 0,
-    unregisters: [],
-  };
-  if (acquired.count === 0) {
-    hostedMediaRouteRefs.set(routeKey, acquired);
-  }
-  acquired.count += 1;
-  acquired.unregisters.push(unregister);
-
-  let released = false;
-  return () => {
-    if (released) {
-      return;
-    }
-    released = true;
-    const current = hostedMediaRouteRefs.get(routeKey);
-    if (current !== acquired) {
-      return;
-    }
-    acquired.count -= 1;
-    if (acquired.count > 0) {
-      return;
-    }
-    hostedMediaRouteRefs.delete(routeKey);
-    for (const unregisterHandle of acquired.unregisters) {
-      unregisterHandle();
-    }
-  };
 }
 
 type ZaloMessagePipelineParams = ZaloProcessingContext & {
@@ -209,16 +140,11 @@ type ZaloMessagePipelineParams = ZaloProcessingContext & {
   mediaType?: string;
   authorization?: ZaloMessageAuthorizationResult;
 };
-type ZaloImageMessageParams = ZaloProcessingContext & {
-  message: ZaloMessage;
-};
 type ZaloMessageAuthorizationResult = {
-  channelIngress: ResolvedChannelMessageIngress;
   resolveChannelIngress: (
     contextBinding: ChannelIngressContextBinding,
   ) => Promise<ResolvedChannelMessageIngress>;
   chatId: string;
-  commandAuthorized: boolean | undefined;
   isGroup: boolean;
   rawBody: string;
   senderId: string;
@@ -241,56 +167,16 @@ function describeWebhookTarget(rawUrl: string): string {
   }
 }
 
-function normalizeWebhookUrl(url: string | undefined): string | undefined {
-  const trimmed = url?.trim();
-  return trimmed ? trimmed : undefined;
-}
-
 function logVerbose(core: ZaloCoreRuntime, runtime: ZaloRuntimeEnv, message: string): void {
   if (core.logging.shouldLogVerbose()) {
     runtime.log?.(`[zalo] ${message}`);
   }
 }
 
-async function handleZaloWebhookRequest(
-  req: IncomingMessage,
-  res: ServerResponse,
-): Promise<boolean> {
-  const { handleZaloWebhookRequest: handleZaloWebhookRequestInternal } =
-    await loadZaloWebhookModule();
-  return await handleZaloWebhookRequestInternal(req, res);
-}
-
 function startPollingLoop(params: ZaloPollingLoopParams) {
-  const {
-    token,
-    account,
-    config,
-    runtime,
-    core,
-    mediaMaxMb,
-    canHostMedia,
-    webhookUrl,
-    webhookPath,
-    abortSignal,
-    isStopped,
-    statusSink,
-    fetcher,
-  } = params;
+  const { abortSignal, isStopped, ...processingContext } = params;
+  const { token, account, runtime, statusSink, fetcher } = processingContext;
   const pollTimeout = 30;
-  const processingContext = {
-    token,
-    account,
-    config,
-    runtime,
-    core,
-    mediaMaxMb,
-    canHostMedia,
-    webhookUrl,
-    webhookPath,
-    statusSink,
-    fetcher,
-  };
 
   runtime.log?.(`[${account.accountId}] Zalo polling loop started timeout=${String(pollTimeout)}s`);
 
@@ -337,38 +223,23 @@ function startPollingLoop(params: ZaloPollingLoopParams) {
 }
 
 async function processUpdate(params: ZaloUpdateProcessingParams): Promise<void> {
-  const { update, token, account, config, runtime, core, mediaMaxMb, statusSink, fetcher } = params;
+  const { update, ...sharedContext } = params;
+  const { account, core, runtime } = sharedContext;
   const { event_name, message } = update;
-  const sharedContext = {
-    token,
-    account,
-    config,
-    runtime,
-    core,
-    mediaMaxMb,
-    canHostMedia: params.canHostMedia,
-    webhookUrl: params.webhookUrl,
-    webhookPath: params.webhookPath,
-    statusSink,
-    fetcher,
-    turnAdoptionLifecycle: params.turnAdoptionLifecycle,
-  };
   if (!message) {
     return undefined;
   }
 
   switch (event_name) {
     case "message.text.received":
-      await handleTextMessage({
-        message,
-        ...sharedContext,
-      });
+      if (message.text?.trim()) {
+        await processMessageWithPipeline({ message, text: message.text, ...sharedContext });
+      }
       break;
     case "message.image.received":
       await handleImageMessage({
         message,
         ...sharedContext,
-        mediaMaxMb,
       });
       break;
     case "message.sticker.received":
@@ -384,33 +255,15 @@ async function processUpdate(params: ZaloUpdateProcessingParams): Promise<void> 
   }
 }
 
-async function handleTextMessage(
+async function handleImageMessage(
   params: ZaloProcessingContext & { message: ZaloMessage },
 ): Promise<void> {
-  const { message } = params;
-  const { text } = message;
-  if (!text?.trim()) {
-    return undefined;
-  }
-
-  await processMessageWithPipeline({
-    ...params,
-    text,
-    mediaKind: undefined,
-    mediaPath: undefined,
-    mediaType: undefined,
-  });
-}
-
-async function handleImageMessage(params: ZaloImageMessageParams): Promise<void> {
   const { message, mediaMaxMb, account, core, runtime } = params;
   const { photo_url, caption } = message;
   const authorization = await authorizeZaloMessage({
     ...params,
     text: caption,
     mediaKind: "image",
-    mediaPath: undefined,
-    mediaType: undefined,
   });
   if (!authorization) {
     return;
@@ -481,7 +334,7 @@ async function authorizeZaloMessage(
   });
   const shouldComputeAuth = core.channel.commands.shouldComputeCommandAuthorized(rawBody, config);
   const resolveChannelIngress = async (contextBinding?: ChannelIngressContextBinding) =>
-    await resolveStableChannelMessageIngress({
+    await core.channel.inbound.ingress.resolveStable({
       channelId: "zalo",
       accountId: account.accountId,
       identity: {
@@ -574,10 +427,8 @@ async function authorizeZaloMessage(
   }
 
   return {
-    channelIngress: access,
     resolveChannelIngress,
     chatId,
-    commandAuthorized: access.commandAccess.requested ? access.commandAccess.authorized : undefined,
     isGroup,
     rawBody,
     senderId,
@@ -602,25 +453,19 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
     authorization: authorizationOverride,
   } = params;
   const { message_id, date } = message;
-  const authorization =
-    authorizationOverride ??
-    (await authorizeZaloMessage({
-      ...params,
-      mediaPath,
-      mediaType,
-    }));
+  const authorization = authorizationOverride ?? (await authorizeZaloMessage(params));
   if (!authorization) {
     return;
   }
   const { isGroup, chatId, senderId, senderName, rawBody } = authorization;
   const agentBody = agentBodyOverride ?? rawBody;
 
-  const { route, buildEnvelope } = resolveChannelInboundRouteEnvelope({
+  const route = resolveAgentRoute({
     cfg: config,
     channel: "zalo",
     accountId: account.accountId,
     peer: {
-      kind: isGroup ? ("group" as const) : ("direct" as const),
+      kind: isGroup ? "group" : "direct",
       id: chatId,
     },
   });
@@ -649,6 +494,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
 
   const fromLabel = isGroup ? `group:${chatId}` : senderName || `user:${senderId}`;
   const timestamp = resolveZaloTimestampMs(date);
+  const buildEnvelope = await createChannelInboundEnvelopeBuilderAsync({ cfg: config, route });
   const body = buildEnvelope({
     channel: "Zalo",
     from: fromLabel,
@@ -741,35 +587,27 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
     route: { agentId: route.agentId, dmScope: route.dmScope, sessionKey: route.sessionKey },
     ctxPayload,
     delivery: {
-      preparePayload: (payload) =>
-        prepareZaloDurableReplyPayload({
-          payload,
-          tableMode,
-          convertMarkdownTables: core.channel.text.convertMarkdownTables,
-        }),
-      durable: (payload, info) =>
-        resolveZaloDurableReplyOptions({
-          payload,
-          infoKind: info.kind,
-          chatId,
-        }),
+      preparePayload: (payload) => {
+        if (!payload.text) {
+          return payload;
+        }
+        return {
+          ...payload,
+          text: core.channel.text.convertMarkdownTables(payload.text, tableMode),
+        };
+      },
+      durable: (payload, info) => {
+        if (info.kind !== "final") {
+          return false;
+        }
+        const reply = resolveSendableOutboundReplyParts(payload);
+        if (reply.hasMedia || !reply.hasText) {
+          return false;
+        }
+        return { to: chatId };
+      },
       deliver: async (payload) => {
-        await deliverZaloReply({
-          payload,
-          token,
-          chatId,
-          core,
-          config,
-          webhookUrl: params.webhookUrl,
-          webhookPath: params.webhookPath,
-          proxyUrl: account.config.proxy,
-          mediaMaxBytes: params.mediaMaxMb * 1024 * 1024,
-          canHostMedia: params.canHostMedia,
-          accountId: account.accountId,
-          statusSink,
-          fetcher,
-          tableMode: "off",
-        });
+        await deliverZaloReply(payload, chatId, params);
       },
       onDelivered: (_payload, _info, result) => {
         if (result?.visibleReplySent !== false) {
@@ -792,41 +630,26 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
   });
 }
 
-async function deliverZaloReply(params: {
-  payload: OutboundReplyPayload;
-  token: string;
-  chatId: string;
-  core: ZaloCoreRuntime;
-  config: OpenClawConfig;
-  webhookUrl?: string;
-  webhookPath?: string;
-  proxyUrl?: string;
-  mediaMaxBytes: number;
-  canHostMedia: boolean;
-  accountId?: string;
-  statusSink?: ZaloStatusSink;
-  fetcher?: ZaloFetch;
-  tableMode?: MarkdownTableMode;
-}): Promise<void> {
+async function deliverZaloReply(
+  payload: OutboundReplyPayload,
+  chatId: string,
+  context: ZaloProcessingContext,
+): Promise<void> {
   const {
-    payload,
     token,
-    chatId,
     core,
     config,
     webhookUrl,
     webhookPath,
-    proxyUrl,
-    mediaMaxBytes,
     canHostMedia,
-    accountId,
+    account,
     statusSink,
     fetcher,
-  } = params;
-  const tableMode = params.tableMode ?? "code";
-  const reply = resolveSendableOutboundReplyParts(payload, {
-    text: core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode),
-  });
+  } = context;
+  const proxyUrl = account.config.proxy;
+  const mediaMaxBytes = context.mediaMaxMb * 1024 * 1024;
+  const accountId = account.accountId;
+  const reply = resolveSendableOutboundReplyParts(payload);
   const chunkMode = core.channel.text.resolveChunkMode(config, "zalo", accountId);
   const acceptedMessageIds: string[] = [];
   let visibleReplySent = false;
@@ -906,7 +729,7 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
       : DEFAULT_MEDIA_MAX_MB;
   const fetcher = fetcherOverride ?? resolveZaloProxyFetch(account.config.proxy);
   const mode = useWebhook ? "webhook" : "polling";
-  const effectiveWebhookUrl = normalizeWebhookUrl(webhookUrl ?? account.config.webhookUrl);
+  const effectiveWebhookUrl = normalizeOptionalString(webhookUrl ?? account.config.webhookUrl);
   const effectiveWebhookPath =
     effectiveWebhookUrl || webhookPath?.trim() || account.config.webhookPath?.trim()
       ? (resolveWebhookPath({
@@ -926,7 +749,7 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
 
   let stopped = false;
   const stopHandlers: Array<() => void> = [];
-  const asyncStopHandlers: Array<() => Promise<void>> = [];
+  let stopIngress: (() => Promise<void>) | undefined;
   let cleanupWebhook: (() => Promise<void>) | undefined;
 
   const stop = () => {
@@ -959,6 +782,20 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
     `[${account.accountId}] Zalo provider init mode=${mode} mediaMaxMb=${String(effectiveMediaMaxMb)}`,
   );
 
+  const processingContext: ZaloProcessingContext = {
+    token,
+    account,
+    config,
+    runtime,
+    core,
+    mediaMaxMb: effectiveMediaMaxMb,
+    canHostMedia,
+    webhookUrl: effectiveWebhookUrl,
+    webhookPath: effectiveWebhookPath,
+    statusSink,
+    fetcher,
+  };
+
   try {
     if (hostedMediaRoutePath) {
       const unregisterHostedMediaRoute = registerSharedHostedMediaRoute({
@@ -969,7 +806,11 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
     }
 
     if (useWebhook) {
-      const { createZaloWebhookIngress, registerZaloWebhookTarget } = await loadZaloWebhookModule();
+      const { registerZaloWebhookTarget, handleZaloWebhookRequest } = (
+        await import("./monitor.webhook.js")
+      ).zaloWebhookRuntime;
+      const { createZaloWebhookIngress } = (await import("./webhook-spool.js"))
+        .zaloWebhookIngressRuntime;
       if (!effectiveWebhookUrl || !webhookSecret) {
         throw new Error("Zalo webhookUrl and webhookSecret are required for webhook mode");
       }
@@ -994,24 +835,14 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
         deliver: async (update, turnAdoptionLifecycle) => {
           statusSink?.({ lastInboundAt: Date.now() });
           await processUpdate({
+            ...processingContext,
             update,
-            token,
-            account,
-            config,
-            runtime,
-            core,
-            mediaMaxMb: effectiveMediaMaxMb,
-            canHostMedia,
-            webhookUrl: effectiveWebhookUrl,
-            webhookPath: path,
-            statusSink,
-            fetcher,
             turnAdoptionLifecycle,
           });
         },
       });
       ingress.start();
-      asyncStopHandlers.push(ingress.stop);
+      stopIngress = ingress.stop;
       const unregister = registerZaloWebhookTarget(
         {
           account,
@@ -1048,24 +879,18 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
         fetcher,
       );
       statusSink?.(channelReadyPatch());
-      let webhookCleanupPromise: Promise<void> | undefined;
       cleanupWebhook = async () => {
-        if (!webhookCleanupPromise) {
-          webhookCleanupPromise = (async () => {
-            runtime.log?.(`[${account.accountId}] Zalo stopping; deleting webhook`);
-            try {
-              await deleteWebhook(token, fetcher, WEBHOOK_CLEANUP_TIMEOUT_MS);
-              runtime.log?.(`[${account.accountId}] Zalo webhook deleted`);
-            } catch (err) {
-              const detail =
-                err instanceof Error && err.name === "AbortError"
-                  ? `timed out after ${String(WEBHOOK_CLEANUP_TIMEOUT_MS)}ms`
-                  : formatZaloError(err);
-              runtime.error?.(`[${account.accountId}] Zalo webhook delete failed: ${detail}`);
-            }
-          })();
+        runtime.log?.(`[${account.accountId}] Zalo stopping; deleting webhook`);
+        try {
+          await deleteWebhook(token, fetcher, WEBHOOK_CLEANUP_TIMEOUT_MS);
+          runtime.log?.(`[${account.accountId}] Zalo webhook deleted`);
+        } catch (err) {
+          const detail =
+            err instanceof Error && err.name === "AbortError"
+              ? `timed out after ${String(WEBHOOK_CLEANUP_TIMEOUT_MS)}ms`
+              : formatZaloError(err);
+          runtime.error?.(`[${account.accountId}] Zalo webhook delete failed: ${detail}`);
         }
-        await webhookCleanupPromise;
       };
       runtime.log?.(`[${account.accountId}] Zalo webhook registered path=${path}`);
       await waitForAbortSignal(abortSignal);
@@ -1074,49 +899,35 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
 
     runtime.log?.(`[${account.accountId}] Zalo polling mode: clearing webhook before startup`);
     try {
-      try {
-        const currentWebhookUrl = normalizeWebhookUrl(
-          (await getWebhookInfo(token, fetcher)).result?.url,
+      const currentWebhookUrl = normalizeOptionalString(
+        (await getWebhookInfo(token, fetcher)).result?.url,
+      );
+      if (!currentWebhookUrl) {
+        runtime.log?.(`[${account.accountId}] Zalo polling mode ready (no webhook configured)`);
+      } else {
+        runtime.log?.(
+          `[${account.accountId}] Zalo polling mode disabling existing webhook ${describeWebhookTarget(currentWebhookUrl)}`,
         );
-        if (!currentWebhookUrl) {
-          runtime.log?.(`[${account.accountId}] Zalo polling mode ready (no webhook configured)`);
-        } else {
-          runtime.log?.(
-            `[${account.accountId}] Zalo polling mode disabling existing webhook ${describeWebhookTarget(currentWebhookUrl)}`,
-          );
-          await deleteWebhook(token, fetcher);
-          runtime.log?.(`[${account.accountId}] Zalo polling mode ready (webhook disabled)`);
-        }
-      } catch (err) {
-        if (err instanceof ZaloApiError && err.errorCode === 404) {
-          // Some Zalo environments do not expose webhook inspection for polling bots.
-          runtime.log?.(
-            `[${account.accountId}] Zalo polling mode webhook inspection unavailable; continuing without webhook cleanup`,
-          );
-        } else {
-          throw err;
-        }
+        await deleteWebhook(token, fetcher);
+        runtime.log?.(`[${account.accountId}] Zalo polling mode ready (webhook disabled)`);
       }
     } catch (err) {
-      runtime.error?.(
-        `[${account.accountId}] Zalo polling startup could not clear webhook: ${formatZaloError(err)}`,
-      );
+      if (err instanceof ZaloApiError && err.errorCode === 404) {
+        // Some Zalo environments do not expose webhook inspection for polling bots.
+        runtime.log?.(
+          `[${account.accountId}] Zalo polling mode webhook inspection unavailable; continuing without webhook cleanup`,
+        );
+      } else {
+        runtime.error?.(
+          `[${account.accountId}] Zalo polling startup could not clear webhook: ${formatZaloError(err)}`,
+        );
+      }
     }
 
     startPollingLoop({
-      token,
-      account,
-      config,
-      runtime,
-      core,
-      canHostMedia,
-      webhookUrl: effectiveWebhookUrl,
-      webhookPath: effectiveWebhookPath,
+      ...processingContext,
       abortSignal,
       isStopped: () => stopped,
-      mediaMaxMb: effectiveMediaMaxMb,
-      statusSink,
-      fetcher,
     });
 
     await waitForAbortSignal(abortSignal);
@@ -1131,9 +942,7 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
     abortSignal.removeEventListener("abort", stopOnAbort);
     await cleanupWebhook?.();
     stop();
-    for (const stopAsync of asyncStopHandlers) {
-      await stopAsync();
-    }
+    await stopIngress?.();
     runtime.log?.(`[${account.accountId}] Zalo provider stopped mode=${mode}`);
   }
 }

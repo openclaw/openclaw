@@ -1,17 +1,34 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTranscriptsTool } from "../agents/tools/transcripts-tool.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
+import { clearTranscriptCapturesForTest } from "../transcripts/capture.test-support.js";
 import { TranscriptsStore } from "../transcripts/store.js";
 import { MeetingTranscriptDeliveryError } from "./session-transcript-store.js";
 import type { MeetingSessionRecord } from "./session-types.js";
+import { createMeetingTranscriptSourceProvider } from "./transcripts-bridge.js";
 import { createMeetingDurableTranscriptBridge } from "./transcripts-bridge.runtime.js";
 
-const tempDirs: string[] = [];
+let stateDir: string;
+
+beforeEach(async () => {
+  stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-bridge-"));
+});
 
 afterEach(async () => {
+  await clearTranscriptCapturesForTest();
   vi.useRealTimers();
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { force: true, recursive: true })));
+  vi.restoreAllMocks();
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
+  await fs.rm(stateDir, { force: true, recursive: true });
 });
 
 function session(): MeetingSessionRecord<"chrome", "agent"> {
@@ -30,10 +47,102 @@ function session(): MeetingSessionRecord<"chrome", "agent"> {
   };
 }
 
+function createBridge(providerId: string, providerName: string) {
+  return createMeetingDurableTranscriptBridge({
+    logger: { warn: vi.fn() },
+    options: { providerId, providerName, stateDir },
+  });
+}
+
+function createStore() {
+  return new TranscriptsStore(path.join(stateDir, "transcripts"), {
+    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+  });
+}
+
 describe("MeetingDurableTranscriptBridge", () => {
+  it.each([false, true])(
+    "retires simultaneous tool subscribers when meeting capture ends (metadata failure: %s)",
+    async (failMetadata) => {
+      const current = session();
+      const logger = { warn: vi.fn() };
+      const bridge = createMeetingDurableTranscriptBridge({
+        logger,
+        options: { providerId: "meeting", providerName: "Meeting", stateDir },
+      });
+      const stopSource = vi.fn(bridge.detach.bind(bridge));
+      const provider = createMeetingTranscriptSourceProvider({
+        id: "meeting",
+        name: "Meeting",
+        runtime: async () => ({
+          startTranscriptSource: async (request) => await bridge.attach(current, request),
+          stopTranscriptSource: stopSource,
+        }),
+      });
+      const registry = createEmptyPluginRegistry();
+      registry.transcriptSourceProviders.push({ pluginId: "meeting", source: "test", provider });
+      const tool = createTranscriptsTool({
+        stateDir,
+        agentId: "research",
+        logger,
+        caller: { kind: "operator", source: "local" },
+      });
+      const execute = (params: Record<string, unknown>) =>
+        withPluginRuntimeRegistryScope(registry, () => tool.execute("meeting", params));
+      const attach = (sessionId: string) =>
+        execute({ action: "start", providerId: "meeting", meetingUrl: current.url, sessionId });
+      const store = createStore();
+      await bridge.start(current, async () => {});
+      await bridge.ingest(current, [{ text: "existing note" }]);
+      await attach("first-subscriber");
+      await attach("second-subscriber");
+      await execute({ action: "stop", sessionId: "first-subscriber" });
+      await expect(execute({ action: "status" })).resolves.toMatchObject({
+        details: { active: [{ sessionId: "second-subscriber" }] },
+      });
+      await attach("third-subscriber");
+      const writeSession = store.writeSession.bind(store);
+      const fault = vi
+        .spyOn(TranscriptsStore.prototype, "writeSession")
+        .mockImplementation(async (descriptor) => {
+          if (failMetadata && descriptor.sessionId === current.id && descriptor.stoppedAt) {
+            throw new Error("meeting metadata unavailable");
+          }
+          return await writeSession(descriptor);
+        });
+      const stopping = bridge.stop(current, async () => {
+        await bridge.ingest(current, [{ text: "final note" }]);
+      });
+      if (failMetadata) {
+        await expect(stopping).rejects.toThrow("meeting metadata unavailable");
+      } else {
+        await expect(stopping).resolves.toBe(true);
+      }
+      fault.mockRestore();
+      await vi.waitFor(async () => {
+        for (const sessionId of ["second-subscriber", "third-subscriber"]) {
+          const stored = await store.readSession(sessionId);
+          expect(stored?.stoppedAt).toEqual(expect.any(String));
+          expect(stored?.metadata).toMatchObject({ agentId: "research" });
+          expect(stored?.source).toMatchObject({ providerId: "meeting", agentId: "research" });
+          expect(stored && (await store.readSummary(stored))).toMatchObject({
+            summary: { utteranceCount: 2 },
+          });
+        }
+        await expect(execute({ action: "status" })).resolves.toMatchObject({
+          details: { active: [], pendingFinalization: [] },
+        });
+      });
+      expect(stopSource).toHaveBeenCalledOnce();
+      await execute({ action: "stop", sessionId: "second-subscriber" });
+      expect(stopSource).toHaveBeenCalledOnce();
+      if (failMetadata) {
+        await bridge.stop(current, async () => {});
+      }
+    },
+  );
+
   it("replays stored lines to an attached provider and streams new lines in order", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-bridge-"));
-    tempDirs.push(stateDir);
     const current = session();
     const onUtterance = vi.fn();
     const transcriptSession = {
@@ -41,14 +150,7 @@ describe("MeetingDurableTranscriptBridge", () => {
       source: { providerId: "google-meet", agentId: "research", meetingUrl: current.url },
       startedAt: current.createdAt,
     };
-    const bridge = createMeetingDurableTranscriptBridge({
-      logger: { warn: vi.fn() },
-      options: {
-        providerId: "google-meet",
-        providerName: "Google Meet",
-        stateDir,
-      },
-    });
+    const bridge = createBridge("google-meet", "Google Meet");
 
     await bridge.start(current, async () => {});
     await bridge.ingest(current, [{ speaker: "Avery", text: "First line" }]);
@@ -84,9 +186,7 @@ describe("MeetingDurableTranscriptBridge", () => {
     expect(replayed.mock.calls.map(([utterance]) => utterance.id)).toEqual(
       onUtterance.mock.calls.map(([utterance]) => utterance.id),
     );
-    const store = new TranscriptsStore(path.join(stateDir, "transcripts"), {
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    });
+    const store = createStore();
     const stored = await store.readSession(current.id);
     expect(await store.readSummary(stored!)).toMatchObject({
       summary: { utteranceCount: 2 },
@@ -94,8 +194,6 @@ describe("MeetingDurableTranscriptBridge", () => {
   });
 
   it("honors the existing global transcripts opt-out", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-bridge-"));
-    tempDirs.push(stateDir);
     const bridge = createMeetingDurableTranscriptBridge({
       logger: { warn: vi.fn() },
       options: {
@@ -122,17 +220,8 @@ describe("MeetingDurableTranscriptBridge", () => {
   });
 
   it("rolls back an attachment when its start status callback fails", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-bridge-"));
-    tempDirs.push(stateDir);
     const current = session();
-    const bridge = createMeetingDurableTranscriptBridge({
-      logger: { warn: vi.fn() },
-      options: {
-        providerId: "teams",
-        providerName: "Microsoft Teams",
-        stateDir,
-      },
-    });
+    const bridge = createBridge("teams", "Microsoft Teams");
     const transcriptSession = {
       sessionId: "external-status",
       source: { providerId: "teams", agentId: "research", meetingUrl: current.url },
@@ -161,8 +250,6 @@ describe("MeetingDurableTranscriptBridge", () => {
 
   it("drains an in-flight periodic capture before the final capture", async () => {
     vi.useFakeTimers();
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-bridge-"));
-    tempDirs.push(stateDir);
     const current = session();
     let releasePeriodic!: () => void;
     const periodic = new Promise<void>((resolve) => {
@@ -176,10 +263,7 @@ describe("MeetingDurableTranscriptBridge", () => {
       }
     });
     const finalCapture = vi.fn(async () => {});
-    const bridge = createMeetingDurableTranscriptBridge({
-      logger: { warn: vi.fn() },
-      options: { providerId: "zoom", providerName: "Zoom", stateDir },
-    });
+    const bridge = createBridge("zoom", "Zoom");
     await bridge.start(current, capture);
     await vi.advanceTimersByTimeAsync(5_000);
 
@@ -192,18 +276,13 @@ describe("MeetingDurableTranscriptBridge", () => {
   });
 
   it("retries final durable delivery before completing the capture", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-bridge-"));
-    tempDirs.push(stateDir);
     const current = session();
     const finalCapture = vi
       .fn<() => Promise<void>>()
       .mockRejectedValueOnce(new MeetingTranscriptDeliveryError(new Error("write failed")))
       .mockRejectedValueOnce(new MeetingTranscriptDeliveryError(new Error("write failed")))
       .mockResolvedValueOnce();
-    const bridge = createMeetingDurableTranscriptBridge({
-      logger: { warn: vi.fn() },
-      options: { providerId: "teams", providerName: "Microsoft Teams", stateDir },
-    });
+    const bridge = createBridge("teams", "Microsoft Teams");
     await bridge.start(current, async () => {});
 
     await expect(bridge.stop(current, finalCapture)).resolves.toBe(true);
@@ -212,16 +291,11 @@ describe("MeetingDurableTranscriptBridge", () => {
   });
 
   it("detaches a failing subscriber without blocking durable rows", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-bridge-"));
-    tempDirs.push(stateDir);
     const current = session();
     const onUtterance = vi.fn(async () => {
       throw new Error("subscriber store unavailable");
     });
-    const bridge = createMeetingDurableTranscriptBridge({
-      logger: { warn: vi.fn() },
-      options: { providerId: "google-meet", providerName: "Google Meet", stateDir },
-    });
+    const bridge = createBridge("google-meet", "Google Meet");
     await bridge.start(current, async () => {});
     await bridge.attach(current, {
       session: {
@@ -235,9 +309,7 @@ describe("MeetingDurableTranscriptBridge", () => {
     await expect(bridge.ingest(current, [{ text: "first" }])).resolves.toBeUndefined();
     await expect(bridge.ingest(current, [{ text: "second" }])).resolves.toBeUndefined();
 
-    const store = new TranscriptsStore(path.join(stateDir, "transcripts"), {
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    });
+    const store = createStore();
     const stored = await store.readSession(current.id);
     expect(await store.readUtterancesForSession(stored!)).toHaveLength(2);
     expect(onUtterance).toHaveBeenCalledOnce();
@@ -245,17 +317,12 @@ describe("MeetingDurableTranscriptBridge", () => {
   });
 
   it("rejects attachments once finalization begins", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-bridge-"));
-    tempDirs.push(stateDir);
     const current = session();
     let releaseFinal!: () => void;
     const finalizing = new Promise<void>((resolve) => {
       releaseFinal = resolve;
     });
-    const bridge = createMeetingDurableTranscriptBridge({
-      logger: { warn: vi.fn() },
-      options: { providerId: "zoom", providerName: "Zoom", stateDir },
-    });
+    const bridge = createBridge("zoom", "Zoom");
     await bridge.start(current, async () => {});
 
     const stopping = bridge.stop(current, async () => await finalizing);
@@ -274,18 +341,13 @@ describe("MeetingDurableTranscriptBridge", () => {
   });
 
   it("drains subscriber delivery before detaching", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-bridge-"));
-    tempDirs.push(stateDir);
     const current = session();
     let releaseDelivery!: () => void;
     const delivery = new Promise<void>((resolve) => {
       releaseDelivery = resolve;
     });
     const onStatus = vi.fn(async () => {});
-    const bridge = createMeetingDurableTranscriptBridge({
-      logger: { warn: vi.fn() },
-      options: { providerId: "teams", providerName: "Microsoft Teams", stateDir },
-    });
+    const bridge = createBridge("teams", "Microsoft Teams");
     await bridge.start(current, async () => {});
     await bridge.attach(current, {
       session: {
@@ -313,8 +375,6 @@ describe("MeetingDurableTranscriptBridge", () => {
   });
 
   it("does not let terminal subscriber notification block finalization", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-bridge-"));
-    tempDirs.push(stateDir);
     const current = session();
     let statusCalls = 0;
     const onStatus = vi.fn(() => {
@@ -323,10 +383,7 @@ describe("MeetingDurableTranscriptBridge", () => {
         throw new Error("terminal status unavailable");
       }
     });
-    const bridge = createMeetingDurableTranscriptBridge({
-      logger: { warn: vi.fn() },
-      options: { providerId: "zoom", providerName: "Zoom", stateDir },
-    });
+    const bridge = createBridge("zoom", "Zoom");
     await bridge.start(current, async () => {});
     await bridge.attach(current, {
       session: {
@@ -344,18 +401,13 @@ describe("MeetingDurableTranscriptBridge", () => {
   });
 
   it("queues detach behind a pending attachment replay", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-bridge-"));
-    tempDirs.push(stateDir);
     const current = session();
     let releaseReplay!: () => void;
     const replay = new Promise<void>((resolve) => {
       releaseReplay = resolve;
     });
     const onUtterance = vi.fn(async () => await replay);
-    const bridge = createMeetingDurableTranscriptBridge({
-      logger: { warn: vi.fn() },
-      options: { providerId: "google-meet", providerName: "Google Meet", stateDir },
-    });
+    const bridge = createBridge("google-meet", "Google Meet");
     await bridge.start(current, async () => {});
     await bridge.ingest(current, [{ text: "existing row" }]);
     const transcriptSession = {
@@ -379,13 +431,8 @@ describe("MeetingDurableTranscriptBridge", () => {
   });
 
   it("records a non-blocking final browser snapshot failure", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-bridge-"));
-    tempDirs.push(stateDir);
     const current = session();
-    const bridge = createMeetingDurableTranscriptBridge({
-      logger: { warn: vi.fn() },
-      options: { providerId: "zoom", providerName: "Zoom", stateDir },
-    });
+    const bridge = createBridge("zoom", "Zoom");
     await bridge.start(current, async () => {});
 
     await expect(
@@ -394,12 +441,11 @@ describe("MeetingDurableTranscriptBridge", () => {
       }),
     ).resolves.toBe(true);
 
-    const store = new TranscriptsStore(path.join(stateDir, "transcripts"), {
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    });
+    const store = createStore();
     await expect(store.readSession(current.id)).resolves.toMatchObject({
       metadata: {
         finalCaptureError: "",
+        sessionIdOrigin: "supplied",
         finalCaptureFailedAt: expect.any(String),
       },
       stoppedAt: expect.any(String),

@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import type { Skill } from "../skills/loading/skill-contract.js";
+import { parseSkillsPromptCatalog } from "../skills/loading/skill-prompt-catalog.js";
 
 export type CodeModeSkill = {
   name: string;
@@ -14,47 +15,31 @@ export type CodeModeSkillReader = (params: {
   signal?: AbortSignal;
 }) => Promise<string>;
 
-function decodeXml(value: string): string {
-  return value
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&amp;/g, "&");
-}
-
-function readSkillField(block: string, field: "location" | "name"): string | undefined {
-  const match = new RegExp(`^[ ]{4}<${field}>(.*)</${field}>$`, "mu").exec(block)?.[1];
-  return match === undefined ? undefined : decodeXml(match);
-}
-
 /** Select Code Mode skills from the exact catalog rendered into this run's prompt. */
 export function resolveCodeModeSkills(params: {
   skillsPrompt: string;
   candidates: readonly Skill[];
   reader?: CodeModeSkillReader;
 }): CodeModeSkill[] {
-  const catalog = /<available_skills>\n([\s\S]*?)\n<\/available_skills>/u.exec(
-    params.skillsPrompt,
-  )?.[1];
-  if (!catalog) {
+  const catalog = parseSkillsPromptCatalog(params.skillsPrompt);
+  if (catalog.length === 0) {
     return [];
   }
   const candidatesByName = new Map(params.candidates.map((skill) => [skill.name, skill]));
   const result: CodeModeSkill[] = [];
-  for (const match of catalog.matchAll(/^[ ]{2}<skill>\n([\s\S]*?)\n[ ]{2}<\/skill>$/gmu)) {
-    const block = match[1] ?? "";
-    const name = readSkillField(block, "name");
-    const location = readSkillField(block, "location");
-    const source = name ? candidatesByName.get(name) : undefined;
-    if (!name || !location || !source) {
+  for (const { name, location } of catalog) {
+    const source = candidatesByName.get(name);
+    if (!source) {
       continue;
     }
     result.push({
       name,
-      description: source.description,
+      description: [source.description, source.locationNote].filter(Boolean).join("\n"),
       location,
-      source: { filePath: source.filePath, readContent: source.readContent },
+      source: {
+        filePath: source.filePath,
+        readContent: source.readContent,
+      },
       reader: params.reader,
     });
   }

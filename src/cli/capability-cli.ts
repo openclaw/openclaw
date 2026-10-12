@@ -1,12 +1,10 @@
-// Capability CLI command registration. Domain implementations live in ./capability-cli/.
 import type { Command } from "commander";
-import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
-import { theme } from "../../packages/terminal-core/src/theme.js";
-import { defaultRuntime } from "../runtime.js";
-import { resolveCliArgvInvocation } from "./argv-invocation.js";
-import { CAPABILITY_METADATA, findCapabilityMetadata } from "./capability-cli/metadata.js";
-import { emitJsonOrText, providerSummaryText } from "./capability-cli/shared.js";
-import { runCommandWithRuntime } from "./cli-utils.js";
+import { FLAG_TERMINATOR, getCommandArgsWithRootOptions } from "../infra/cli-root-options.js";
+import { getCommandPathWithRootOptions, normalizeRootLogLevelArgv } from "./argv.js";
+import { CAPABILITY_METADATA } from "./capability-cli/metadata.js";
+import { providerSummaryText } from "./capability-cli/output.js";
+import { runCapabilityCommand } from "./capability-cli/providers-command.js";
+import { formatDocsHelp } from "./help-format.js";
 import { removeCommandByName } from "./program/command-tree.js";
 
 const capabilityCommandGroups = [
@@ -37,53 +35,61 @@ const capabilityCommandGroups = [
 function registerCapabilityListAndInspect(capability: Command): void {
   capability
     .command("list")
-    .description("List canonical capability ids and supported transports")
+    .description("List capability IDs and supported transports")
     .option("--json", "Output JSON", false)
-    .action(async (opts) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const result = CAPABILITY_METADATA.map((entry) => ({
+    .action((opts) =>
+      runCapabilityCommand(opts.json, providerSummaryText, () =>
+        CAPABILITY_METADATA.map((entry) => ({
           id: entry.id,
           transports: entry.transports,
           description: entry.description,
-        }));
-        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, providerSummaryText);
-      });
-    });
+        })),
+      ),
+    );
 
   capability
     .command("inspect")
-    .description("Inspect one canonical capability id")
+    .description("Inspect one capability ID")
     .requiredOption("--name <capability>", "Capability id")
     .option("--json", "Output JSON", false)
-    .action(async (opts) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const entry = findCapabilityMetadata(String(opts.name));
+    .action((opts) =>
+      runCapabilityCommand(opts.json, undefined, () => {
+        const id = String(opts.name);
+        const entry = CAPABILITY_METADATA.find((candidate) => candidate.id === id);
         if (!entry) {
           throw new Error(`Unknown capability: ${String(opts.name)}`);
         }
-        emitJsonOrText(defaultRuntime, Boolean(opts.json), entry, (value) =>
-          JSON.stringify(value, null, 2),
-        );
-      });
-    });
+        return entry;
+      }),
+    );
 }
 
 async function registerCapabilityDomainCommands(
   capability: Command,
   argv: string[],
 ): Promise<void> {
-  const invocation = resolveCliArgvInvocation(argv);
-  if (!invocation.hasHelpOrVersion) {
-    const selectedName = invocation.commandPath[1];
-    if (selectedName === "list" || selectedName === "inspect") {
-      return;
-    }
-    const selected = capabilityCommandGroups.find(([name]) => name === selectedName);
-    if (selected) {
-      const register = await selected[1]();
-      register(capability);
-      return;
-    }
+  // Root log levels are normalized after registration. Reuse that view for selection,
+  // leaving help and unknown options ahead of a domain on the complete-tree path.
+  const selectionArgv = normalizeRootLogLevelArgv(argv);
+  const commandPath = getCommandPathWithRootOptions(selectionArgv, 2);
+  const primary = commandPath[0];
+  const commandArgs =
+    primary === "infer" || primary === "capability"
+      ? getCommandArgsWithRootOptions(selectionArgv, {
+          commandPath: [primary],
+          mode: "command-path",
+        })
+      : undefined;
+  // The raw tail marks both leading and post-parent `--`; only the former retains a domain.
+  const selectedName = commandArgs?.[0] === FLAG_TERMINATOR ? commandPath[1] : commandArgs?.[0];
+  if (selectedName === "list" || selectedName === "inspect") {
+    return;
+  }
+  const selected = capabilityCommandGroups.find(([name]) => name === selectedName);
+  if (selected) {
+    const register = await selected[1]();
+    register(capability);
+    return;
   }
 
   const registrars = await Promise.all(capabilityCommandGroups.map(([, load]) => load()));
@@ -103,11 +109,7 @@ export async function registerCapabilityCli(
     .command("infer")
     .alias("capability")
     .description("Run provider-backed inference commands through a stable CLI surface")
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/infer", "docs.openclaw.ai/cli/infer")}\n`,
-    );
+    .addHelpText("after", () => formatDocsHelp("/cli/infer"));
 
   registerCapabilityListAndInspect(capability);
   await registerCapabilityDomainCommands(capability, argv);

@@ -128,24 +128,32 @@ describe("buildDiscordInteractiveComponents", () => {
         questionId: "ask_0123456789abcdef0123456789abcdef",
         optionValue: "Production",
       },
-      expected: { internalCustomId: "ocq:id=ask_0123456789abcdef0123456789abcdef;i=1" },
+      expected: { internalCustomId: "ocq:id=ask_0123456789abcdef0123456789abcdef;i=0" },
     },
   ])("preserves typed $name authority through the legacy renderer", ({ action, expected }) => {
     expect(
-      buildDiscordInteractiveComponents({
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [
-              {
-                label: "Unavailable",
-                action: { type: "web-app", widgetId: "invalid" },
-              },
-              { label: "Continue", action },
-            ],
-          },
-        ],
-      }),
+      buildDiscordInteractiveComponents(
+        {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Unavailable",
+                  action: { type: "web-app", widgetId: "invalid" },
+                },
+                { label: "Continue", action },
+              ],
+            },
+          ],
+        },
+        {
+          questionOptionIndices:
+            action.type === "question"
+              ? new Map([[action.questionId, new Map([[action.optionValue.toLowerCase(), 0]])]])
+              : undefined,
+        },
+      ),
     ).toMatchObject({
       blocks: [{ type: "actions", buttons: [{ label: "Continue", ...expected }] }],
     });
@@ -276,27 +284,36 @@ describe("buildDiscordInteractiveComponents", () => {
     expect(buildDiscordPresentationComponents(presentation)).toBeUndefined();
   });
 
-  it("preserves authored block order around controls", () => {
-    expect(
-      buildDiscordPresentationComponents({
-        blocks: [
-          { type: "text", text: "First" },
-          {
-            type: "buttons",
-            buttons: [{ label: "Approve", value: "approve", style: "success" }],
-          },
-          { type: "text", text: "Last" },
-        ],
-      }),
-    ).toEqual({
+  it("renders system-agent approvals as actionable Discord controls", () => {
+    const rendered = buildDiscordPresentationComponents({
       blocks: [
-        { type: "text", text: "First" },
         {
-          type: "actions",
-          buttons: [{ label: "Approve", style: "success", callbackData: "approve" }],
+          type: "buttons",
+          buttons: [
+            {
+              label: "Allow Once",
+              action: {
+                type: "approval",
+                approvalId: "change-1",
+                approvalKind: "system-agent",
+                decision: "allow-once",
+              },
+              value: "/approve change-1 allow-once",
+              style: "success",
+            },
+          ],
         },
-        { type: "text", text: "Last" },
       ],
+    });
+
+    const firstBlock = rendered?.blocks?.[0];
+    const customId =
+      firstBlock?.type === "actions" ? firstBlock.buttons?.[0]?.internalCustomId : undefined;
+    expect(customId).toBe("execapproval:kind=system-agent;id=change-1;action=allow-once");
+    expect(parseExecApprovalData(parseCustomId(customId ?? "").data)).toEqual({
+      approvalId: "change-1",
+      approvalKind: "system-agent",
+      action: "allow-once",
     });
   });
 
@@ -360,17 +377,30 @@ describe("buildDiscordInteractiveComponents", () => {
   it("renders question choices with compact option indices", () => {
     const questionId = "ask_0123456789abcdef0123456789abcdef";
     expect(
-      buildDiscordPresentationComponents({
-        blocks: [
-          {
-            type: "buttons",
-            buttons: ["Staging", "Production"].map((label) => ({
-              label,
-              action: { type: "question" as const, questionId, optionValue: label },
-            })),
-          },
-        ],
-      }),
+      buildDiscordPresentationComponents(
+        {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: ["Staging", "Production"].map((label) => ({
+                label,
+                action: { type: "question" as const, questionId, optionValue: label },
+              })),
+            },
+          ],
+        },
+        {
+          questionOptionIndices: new Map([
+            [
+              questionId,
+              new Map([
+                ["staging", 0],
+                ["production", 1],
+              ]),
+            ],
+          ]),
+        },
+      ),
     ).toEqual({
       blocks: [
         {
@@ -382,6 +412,55 @@ describe("buildDiscordInteractiveComponents", () => {
               style: "secondary",
               internalCustomId: `ocq:id=${questionId};i=1`,
             },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("uses declared-choice indices when custom input is interleaved", () => {
+    const questionId = "ask_0123456789abcdef0123456789abcdef";
+    expect(
+      buildDiscordPresentationComponents(
+        {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Production",
+                  action: { type: "question", questionId, optionValue: "Production" },
+                },
+                {
+                  label: "Other…",
+                  action: { type: "question", questionId, intent: "custom-input" },
+                },
+                {
+                  label: "Staging",
+                  action: { type: "question", questionId, optionValue: "Staging" },
+                },
+              ],
+            },
+          ],
+        },
+        {
+          questionOptionIndices: new Map([
+            [
+              questionId,
+              new Map([
+                ["staging", 0],
+                ["production", 1],
+              ]),
+            ],
+          ]),
+        },
+      ),
+    ).toMatchObject({
+      blocks: [
+        {
+          buttons: [
+            { internalCustomId: `ocq:id=${questionId};i=1` },
+            { internalCustomId: `ocq:id=${questionId};i=0` },
           ],
         },
       ],

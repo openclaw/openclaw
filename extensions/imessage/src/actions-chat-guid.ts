@@ -4,8 +4,11 @@ import {
   parseStrictInteger,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
-import { normalizeOptionalString as stringFromUnknown } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { IMessageActionTransportOptions } from "./actions-rpc.js";
+import {
+  isRecord,
+  normalizeOptionalString as stringFromUnknown,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { IMessageActionTransportOptions } from "./actions-transport.js";
 import { normalizeDirectChatIdentifier } from "./chat-context.js";
 import { createIMessageRpcClient } from "./client.js";
 import type { IMessageTarget } from "./targets.js";
@@ -25,48 +28,8 @@ type ChatListCacheEntry = {
 const CHAT_LIST_CACHE_TTL_MS = 30 * 1000;
 const chatListCache = new Map<string, ChatListCacheEntry>();
 
-function asChatList(value: unknown): Array<Record<string, unknown>> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return [];
-  }
-  const chats = (value as IMessageChatListResponse).chats;
-  return Array.isArray(chats)
-    ? chats.filter(
-        (chat): chat is Record<string, unknown> =>
-          chat != null && typeof chat === "object" && !Array.isArray(chat),
-      )
-    : [];
-}
-
 function numberFromUnknown(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : parseStrictInteger(value);
-}
-
-function chatListCacheKey(options: IMessageActionTransportOptions): string {
-  return `${options.cliPath}\0${options.dbPath ?? ""}\0${options.remoteHost ?? ""}`;
-}
-
-function chatListCacheGet(
-  options: IMessageActionTransportOptions,
-): ReadonlyArray<Record<string, unknown>> | null {
-  const key = chatListCacheKey(options);
-  const entry = chatListCache.get(key);
-  const now = asDateTimestampMs(Date.now());
-  if (!entry || now === undefined || entry.expiresAt <= now) {
-    chatListCache.delete(key);
-    return null;
-  }
-  return entry.list;
-}
-
-function chatListCacheSet(
-  options: IMessageActionTransportOptions,
-  list: ReadonlyArray<Record<string, unknown>>,
-): void {
-  const expiresAt = resolveExpiresAtMsFromDurationMs(CHAT_LIST_CACHE_TTL_MS);
-  if (expiresAt !== undefined) {
-    chatListCache.set(chatListCacheKey(options), { list, expiresAt });
-  }
 }
 
 function findChatGuid(
@@ -105,10 +68,14 @@ export async function resolveIMessageActionChatGuid(params: {
   options: IMessageActionTransportOptions;
   conversationReadOrigin: IMessageConversationReadOrigin;
 }): Promise<string | null> {
-  const cached = chatListCacheGet(params.options);
-  if (cached) {
-    return findChatGuid(cached, params.target);
+  const { cliPath, dbPath, remoteHost } = params.options;
+  const key = `${cliPath}\0${dbPath ?? ""}\0${remoteHost ?? ""}`;
+  const cached = chatListCache.get(key);
+  const now = asDateTimestampMs(Date.now());
+  if (cached && now !== undefined && cached.expiresAt > now) {
+    return findChatGuid(cached.list, params.target);
   }
+  chatListCache.delete(key);
   const client = await createIMessageRpcClient(params.options);
   try {
     const result = await client.request<IMessageChatListResponse>(
@@ -116,8 +83,12 @@ export async function resolveIMessageActionChatGuid(params: {
       { limit: 1000 },
       { timeoutMs: params.options.timeoutMs },
     );
-    const list = asChatList(result);
-    chatListCacheSet(params.options, list);
+    const list =
+      isRecord(result) && Array.isArray(result.chats) ? result.chats.filter(isRecord) : [];
+    const expiresAt = resolveExpiresAtMsFromDurationMs(CHAT_LIST_CACHE_TTL_MS);
+    if (expiresAt !== undefined) {
+      chatListCache.set(key, { list, expiresAt });
+    }
     return findChatGuid(list, params.target);
   } finally {
     await client.stop();

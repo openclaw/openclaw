@@ -1,77 +1,44 @@
-// Diffs Language Pack plugin module implements plugin tests.
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import type { OpenClawPluginHttpRouteHandler } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { beforeAll, describe, expect, it } from "vitest";
-import type { OpenClawPluginApi, OpenClawPluginHttpRouteHandler } from "../api.js";
 import { registerDiffsLanguagePackPlugin } from "./plugin.js";
-
-const execFileAsync = promisify(execFile);
 
 const VIEWER_RUNTIME_PATH = "/plugins/diffs-language-pack/assets/viewer-runtime.js";
 const UNKNOWN_ASSET_PATH = "/plugins/diffs-language-pack/assets/does-not-exist.js";
 
-type ServedResponse = {
-  status: number;
-  contentLength: string | null;
-  bodyBytes: number;
-};
-
-async function ensureViewerRuntimeForTests(): Promise<void> {
-  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
-  const runtimePath = path.join(
-    repoRoot,
-    "extensions",
-    "diffs-language-pack",
-    "assets",
-    "viewer-runtime.js",
-  );
+beforeAll(async () => {
   try {
-    await fs.stat(runtimePath);
+    await fs.stat(new URL("../assets/viewer-runtime.js", import.meta.url));
     return;
   } catch (error) {
     if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
       throw error;
     }
   }
-  // viewer-runtime.js is ignored generated output; build the fixture before
-  // serving assets in a clean checkout.
-  await execFileAsync(
+  // Build the ignored runtime asset when testing a clean checkout.
+  await promisify(execFile)(
     process.execPath,
     ["--import", "tsx", "scripts/build-diffs-viewer-runtime.mts", "full"],
-    { cwd: repoRoot },
+    { cwd: new URL("../../../", import.meta.url) },
   );
-}
-
-beforeAll(async () => {
-  await ensureViewerRuntimeForTests();
 }, 120_000);
 
-function captureHandler(): OpenClawPluginHttpRouteHandler {
+async function withLanguagePackServer(run: (base: string) => Promise<void>): Promise<void> {
   let registeredHttpRouteHandler: OpenClawPluginHttpRouteHandler | undefined;
   const api = createTestPluginApi({
-    id: "diffs-language-pack",
-    name: "Diffs Language Pack",
-    description: "Diffs Language Pack",
-    source: "test",
-    config: {},
-    registerHttpRoute(params: Parameters<OpenClawPluginApi["registerHttpRoute"]>[0]) {
+    registerHttpRoute(params) {
       registeredHttpRouteHandler = params.handler;
     },
   });
-  registerDiffsLanguagePackPlugin(api as unknown as OpenClawPluginApi);
-  if (!registeredHttpRouteHandler) {
+  registerDiffsLanguagePackPlugin(api);
+  const handler = registeredHttpRouteHandler;
+  if (!handler) {
     throw new Error("expected the plugin to register an HTTP route");
   }
-  return registeredHttpRouteHandler;
-}
-
-async function withLanguagePackServer(run: (base: string) => Promise<void>): Promise<void> {
-  const handler = captureHandler();
   await withServer((req, res) => {
     void Promise.resolve(handler(req, res)).then((handled) => {
       if (!handled) {
@@ -82,11 +49,7 @@ async function withLanguagePackServer(run: (base: string) => Promise<void>): Pro
   }, run);
 }
 
-async function fetchServed(
-  base: string,
-  requestPath: string,
-  method = "GET",
-): Promise<ServedResponse> {
+async function fetchServed(base: string, requestPath: string, method = "GET") {
   const response = await fetch(`${base}${requestPath}`, { method });
   const body = await response.arrayBuffer();
   return {

@@ -168,7 +168,7 @@ describe("memory_get corpus outcomes", () => {
       expected: {
         path: lookup,
         text: "",
-        disabled: true,
+        status: "error",
         corpora: [
           { corpus: "memory", outcome: "unavailable", error: "memory unavailable" },
           { corpus: "wiki", outcome: "unavailable", error: "wiki unavailable" },
@@ -185,13 +185,12 @@ describe("memory_get corpus outcomes", () => {
       expected: {
         path: lookup,
         text: "",
-        disabled: true,
+        status: "error",
         corpora: [
           { corpus: "memory", outcome: "unavailable", error: "memory unavailable" },
           { corpus: "wiki", outcome: "not-registered" },
         ],
-        warning:
-          "Memory corpus unavailable: memory unavailable Wiki corpus is not registered; results do not cover that requested corpus.",
+        warning: "Memory corpus unavailable: memory unavailable",
         error: "memory unavailable",
       },
     },
@@ -280,7 +279,7 @@ describe("memory_get corpus outcomes", () => {
       const get = vi.fn(async () => wikiHit);
       registerMemoryCorpusSupplement("memory-wiki", { search: async () => [], get });
       const config = asOpenClawConfig({
-        agents: { list: [{ id: "marketing-agent", default: true }] },
+        agents: { entries: { "marketing-agent": {} } },
       });
       const tool = createMemoryGetTool({
         config,
@@ -317,7 +316,7 @@ describe("memory_get corpus outcomes", () => {
       path: lookup,
       corpus: "all",
     });
-    await vi.advanceTimersByTimeAsync(15_000);
+    await vi.advanceTimersByTimeAsync(30_000);
 
     await expect(pending).resolves.toMatchObject({
       details: {
@@ -327,7 +326,7 @@ describe("memory_get corpus outcomes", () => {
           {
             corpus: "wiki",
             outcome: "unavailable",
-            error: "memory_get timed out after 15s",
+            error: "memory_get timed out after 30s",
           },
         ],
       },

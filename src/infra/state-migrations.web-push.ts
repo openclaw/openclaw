@@ -1,5 +1,4 @@
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { root, type Root } from "@openclaw/fs-safe";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
@@ -7,17 +6,16 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { ensureWebPushSubscriptionBindingColumns } from "./push-web-store.kernel.js";
 import {
-  createWebPushVapidKeyPair,
   webPushSubscriptionFromRow,
   webPushSubscriptionToRow,
   webPushSubscriptionsEqual,
-  webPushVapidKeyPairToRow,
-  WEB_PUSH_VAPID_KEY_ID,
+  WEB_PUSH_VAPID_STATE_KEY,
   type VapidKeyPair,
   type WebPushDatabase,
   type WebPushSubscription,
-} from "./push-web-store.js";
+} from "./push-web-store.records.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import {
   claimLegacyMigrationSourceClaims,
@@ -149,40 +147,6 @@ function mergedSubscription(params: {
   return { ...winner, createdAtMs };
 }
 
-function findSubscriptionById(db: DatabaseSync, subscriptionId: string) {
-  return executeSqliteQueryTakeFirstSync(
-    db,
-    getNodeSqliteKysely<WebPushDatabase>(db)
-      .selectFrom("web_push_subscriptions")
-      .selectAll()
-      .where("subscription_id", "=", subscriptionId),
-  );
-}
-
-function writeSubscription(
-  db: DatabaseSync,
-  endpointHash: string,
-  subscription: WebPushSubscription,
-): void {
-  const row = webPushSubscriptionToRow({ endpointHash, subscription });
-  executeSqliteQuerySync(
-    db,
-    getNodeSqliteKysely<WebPushDatabase>(db)
-      .insertInto("web_push_subscriptions")
-      .values(row)
-      .onConflict((conflict) =>
-        conflict.column("endpoint_hash").doUpdateSet({
-          subscription_id: row.subscription_id,
-          endpoint: row.endpoint,
-          p256dh: row.p256dh,
-          auth: row.auth,
-          created_at_ms: row.created_at_ms,
-          updated_at_ms: row.updated_at_ms,
-        }),
-      ),
-  );
-}
-
 function migrateIntoDatabase(params: {
   stateDir: string;
   legacy: ParsedLegacyState;
@@ -192,16 +156,27 @@ function migrateIntoDatabase(params: {
   let importedVapidKeys = false;
   runOpenClawStateWriteTransaction(
     ({ db }) => {
+      ensureWebPushSubscriptionBindingColumns(db);
       const webPushDb = getNodeSqliteKysely<WebPushDatabase>(db);
-      const expectedSubscriptions = new Map<string, WebPushSubscription>();
-      for (const [endpointHash, legacySubscription] of params.legacy.subscriptions) {
-        const existingRow = executeSqliteQueryTakeFirstSync(
+      const readSubscription = (endpointHash: string) =>
+        executeSqliteQueryTakeFirstSync(
           db,
           webPushDb
             .selectFrom("web_push_subscriptions")
             .selectAll()
             .where("endpoint_hash", "=", endpointHash),
         );
+      const readVapidKeys = () =>
+        executeSqliteQueryTakeFirstSync(
+          db,
+          webPushDb
+            .selectFrom("config_machine_state")
+            .select("value_json")
+            .where("state_key", "=", WEB_PUSH_VAPID_STATE_KEY),
+        );
+      const expectedSubscriptions = new Map<string, WebPushSubscription>();
+      for (const [endpointHash, legacySubscription] of params.legacy.subscriptions) {
+        const existingRow = readSubscription(endpointHash);
         if (existingRow && existingRow.endpoint !== legacySubscription.endpoint) {
           throw new Error("Web Push endpoint hash collision during legacy import");
         }
@@ -209,12 +184,34 @@ function migrateIntoDatabase(params: {
         const expected = existing
           ? mergedSubscription({ existing, legacy: legacySubscription })
           : legacySubscription;
-        const conflictingIdRow = findSubscriptionById(db, expected.subscriptionId);
+        const conflictingIdRow = executeSqliteQueryTakeFirstSync(
+          db,
+          webPushDb
+            .selectFrom("web_push_subscriptions")
+            .selectAll()
+            .where("subscription_id", "=", expected.subscriptionId),
+        );
         if (conflictingIdRow && conflictingIdRow.endpoint_hash !== endpointHash) {
           throw new Error("Web Push subscription id conflicts with another endpoint");
         }
         if (!existing || !webPushSubscriptionsEqual(existing, expected)) {
-          writeSubscription(db, endpointHash, expected);
+          const row = webPushSubscriptionToRow({ endpointHash, subscription: expected });
+          executeSqliteQuerySync(
+            db,
+            webPushDb
+              .insertInto("web_push_subscriptions")
+              .values(row)
+              .onConflict((conflict) =>
+                conflict.column("endpoint_hash").doUpdateSet({
+                  subscription_id: row.subscription_id,
+                  endpoint: row.endpoint,
+                  p256dh: row.p256dh,
+                  auth: row.auth,
+                  created_at_ms: row.created_at_ms,
+                  updated_at_ms: row.updated_at_ms,
+                }),
+              ),
+          );
           importedSubscriptions += 1;
         }
         expectedSubscriptions.set(endpointHash, expected);
@@ -222,33 +219,25 @@ function migrateIntoDatabase(params: {
 
       let expectedVapidKeys: VapidKeyPair | null = null;
       if (params.legacy.vapidKeys) {
-        const existingVapidRow = executeSqliteQueryTakeFirstSync(
-          db,
-          webPushDb
-            .selectFrom("web_push_vapid_keys")
-            .selectAll()
-            .where("key_id", "=", WEB_PUSH_VAPID_KEY_ID),
-        );
+        const existingVapidRow = readVapidKeys();
         if (existingVapidRow) {
+          // SAFETY: The Web Push owner stores only VapidKeyPair objects under this key.
+          const existingVapidKeys = JSON.parse(existingVapidRow.value_json) as VapidKeyPair;
           if (
-            existingVapidRow.public_key !== params.legacy.vapidKeys.publicKey ||
-            existingVapidRow.private_key !== params.legacy.vapidKeys.privateKey
+            existingVapidKeys.publicKey !== params.legacy.vapidKeys.publicKey ||
+            existingVapidKeys.privateKey !== params.legacy.vapidKeys.privateKey
           ) {
             throw new Error("legacy Web Push VAPID identity conflicts with SQLite");
           }
-          expectedVapidKeys = createWebPushVapidKeyPair(
-            existingVapidRow.public_key,
-            existingVapidRow.private_key,
-            existingVapidRow.subject,
-          );
+          expectedVapidKeys = existingVapidKeys;
         } else {
           executeSqliteQuerySync(
             db,
-            webPushDb
-              .insertInto("web_push_vapid_keys")
-              .values(
-                webPushVapidKeyPairToRow({ keyPair: params.legacy.vapidKeys, nowMs: params.nowMs }),
-              ),
+            webPushDb.insertInto("config_machine_state").values({
+              state_key: WEB_PUSH_VAPID_STATE_KEY,
+              value_json: JSON.stringify(params.legacy.vapidKeys),
+              updated_at_ms: params.nowMs,
+            }),
           );
           expectedVapidKeys = params.legacy.vapidKeys;
           importedVapidKeys = true;
@@ -256,30 +245,20 @@ function migrateIntoDatabase(params: {
       }
 
       for (const [endpointHash, expected] of expectedSubscriptions) {
-        const row = executeSqliteQueryTakeFirstSync(
-          db,
-          webPushDb
-            .selectFrom("web_push_subscriptions")
-            .selectAll()
-            .where("endpoint_hash", "=", endpointHash),
-        );
+        const row = readSubscription(endpointHash);
         if (!row || !webPushSubscriptionsEqual(webPushSubscriptionFromRow(row), expected)) {
           throw new Error("SQLite verification failed for a Web Push subscription");
         }
       }
       if (expectedVapidKeys) {
-        const row = executeSqliteQueryTakeFirstSync(
-          db,
-          webPushDb
-            .selectFrom("web_push_vapid_keys")
-            .selectAll()
-            .where("key_id", "=", WEB_PUSH_VAPID_KEY_ID),
-        );
+        const row = readVapidKeys();
+        // SAFETY: This transaction writes or validates this key as a VapidKeyPair above.
+        const persisted = row ? (JSON.parse(row.value_json) as VapidKeyPair) : undefined;
         if (
-          !row ||
-          row.public_key !== expectedVapidKeys.publicKey ||
-          row.private_key !== expectedVapidKeys.privateKey ||
-          row.subject !== expectedVapidKeys.subject
+          !persisted ||
+          persisted.publicKey !== expectedVapidKeys.publicKey ||
+          persisted.privateKey !== expectedVapidKeys.privateKey ||
+          persisted.subject !== expectedVapidKeys.subject
         ) {
           throw new Error("SQLite verification failed for the Web Push VAPID identity");
         }
@@ -302,83 +281,6 @@ async function removeClaimedSources(params: {
   for (const claim of params.claimed) {
     await claim.remove({ removeSource: params.removeSource, skipSourceCheck: true });
   }
-}
-
-async function migrateLegacyWebPushWithExclusiveStateOwnership(params: {
-  stateRoot: Root;
-  detected: LegacyStateDetection["webPush"];
-  stateDir: string;
-  env: NodeJS.ProcessEnv;
-  beforeClaim?: () => void;
-  beforeVerify?: () => void;
-  removeSource?: (sourcePath: string) => Promise<void> | void;
-}): Promise<MigrationMessages> {
-  const changes: string[] = [];
-  const warnings: string[] = [];
-  const notices: string[] = [];
-  if (!params.detected.hasLegacy) {
-    return { changes, warnings };
-  }
-
-  let legacy: ParsedLegacyState;
-  try {
-    legacy = await readLegacyState(params.stateRoot, params.stateDir, params.detected, params.env);
-  } catch (error) {
-    warnings.push(`Failed reading legacy Web Push state: ${String(error)}`);
-    return { changes, warnings };
-  }
-
-  let claimed: LegacyMigrationSourceClaim[];
-  try {
-    params.beforeVerify?.();
-    await assertSourcesUnchanged(legacy.sources);
-    // Claim both sources before the database transaction. A legacy writer can no longer
-    // overwrite the retired paths after SQLite becomes canonical.
-    await claimLegacyMigrationSourceClaims(legacy.sources, {
-      beforeClaim: params.beforeClaim,
-      mismatchMessage: "legacy Web Push source changed before doctor could claim it",
-    });
-    claimed = legacy.sources.map(({ claim }) => claim);
-  } catch (error) {
-    warnings.push(`Failed migrating legacy Web Push state: ${String(error)}`);
-    return { changes, warnings };
-  }
-
-  let result: { importedSubscriptions: number; importedVapidKeys: boolean };
-  try {
-    result = migrateIntoDatabase({
-      stateDir: params.stateDir,
-      legacy,
-      nowMs: Date.now(),
-    });
-  } catch (error) {
-    const restoreErrors = await restoreLegacyMigrationSourceClaims(claimed);
-    warnings.push(
-      `Failed migrating legacy Web Push state: ${String(error)}${
-        restoreErrors.length > 0 ? `; restore failures: ${restoreErrors.join("; ")}` : ""
-      }`,
-    );
-    return { changes, warnings };
-  }
-
-  try {
-    await removeClaimedSources({
-      claimed,
-      removeSource: params.removeSource,
-    });
-  } catch (error) {
-    warnings.push(`Web Push state is in SQLite, but legacy cleanup failed: ${String(error)}`);
-    return { changes, warnings };
-  }
-
-  changes.push(
-    `Migrated ${result.importedSubscriptions} Web Push subscription${result.importedSubscriptions === 1 ? "" : "s"} to SQLite.`,
-  );
-  if (result.importedVapidKeys) {
-    changes.push("Migrated the Web Push VAPID identity to SQLite.");
-  }
-  notices.push("Removed retired Web Push JSON state after verified SQLite import.");
-  return { changes, warnings, notices };
 }
 
 export async function migrateLegacyWebPush(params: {
@@ -405,11 +307,63 @@ export async function migrateLegacyWebPush(params: {
         maxBytes: LEGACY_SUBSCRIPTIONS_MAX_BYTES,
         symlinks: "reject",
       });
-      return await migrateLegacyWebPushWithExclusiveStateOwnership({
-        ...params,
-        env,
-        stateRoot,
-      });
+      const changes: string[] = [];
+      const warnings: string[] = [];
+      const notices: string[] = [];
+
+      const legacy = await readLegacyState(stateRoot, params.stateDir, params.detected, env);
+
+      let claimed: LegacyMigrationSourceClaim[];
+      try {
+        params.beforeVerify?.();
+        await assertSourcesUnchanged(legacy.sources);
+        // Claim both sources before the database transaction. A legacy writer can no longer
+        // overwrite the retired paths after SQLite becomes canonical.
+        await claimLegacyMigrationSourceClaims(legacy.sources, {
+          beforeClaim: params.beforeClaim,
+          mismatchMessage: "legacy Web Push source changed before doctor could claim it",
+        });
+        claimed = legacy.sources.map(({ claim }) => claim);
+      } catch (error) {
+        warnings.push(`Failed migrating legacy Web Push state: ${String(error)}`);
+        return { changes, warnings };
+      }
+
+      let result: { importedSubscriptions: number; importedVapidKeys: boolean };
+      try {
+        result = migrateIntoDatabase({
+          stateDir: params.stateDir,
+          legacy,
+          nowMs: Date.now(),
+        });
+      } catch (error) {
+        const restoreErrors = await restoreLegacyMigrationSourceClaims(claimed);
+        warnings.push(
+          `Failed migrating legacy Web Push state: ${String(error)}${
+            restoreErrors.length > 0 ? `; restore failures: ${restoreErrors.join("; ")}` : ""
+          }`,
+        );
+        return { changes, warnings };
+      }
+
+      try {
+        await removeClaimedSources({
+          claimed,
+          removeSource: params.removeSource,
+        });
+      } catch (error) {
+        warnings.push(`Web Push state is in SQLite, but legacy cleanup failed: ${String(error)}`);
+        return { changes, warnings };
+      }
+
+      changes.push(
+        `Migrated ${result.importedSubscriptions} Web Push subscription${result.importedSubscriptions === 1 ? "" : "s"} to SQLite.`,
+      );
+      if (result.importedVapidKeys) {
+        changes.push("Migrated the Web Push VAPID identity to SQLite.");
+      }
+      notices.push("Removed retired Web Push JSON state after verified SQLite import.");
+      return { changes, warnings, notices };
     },
   });
 }

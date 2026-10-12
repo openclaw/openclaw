@@ -1,4 +1,3 @@
-// Slack plugin module implements message actions behavior.
 import { createActionGate } from "openclaw/plugin-sdk/channel-actions";
 import type { ChannelMessageActionName } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -28,42 +27,22 @@ export function listSlackMessageActions(
     return [];
   }
 
-  const isActionEnabled = (key: string, defaultValue = true) => {
-    for (const account of accounts) {
-      const gate = createActionGate(
-        (account.actions ?? cfg.channels?.slack?.actions) as Record<string, boolean | undefined>,
-      );
-      if (gate(key, defaultValue)) {
-        return true;
-      }
+  const gates = accounts.map((account) =>
+    createActionGate(account.actions ?? cfg.channels?.slack?.actions),
+  );
+  const actions: ChannelMessageActionName[] = ["send"];
+  for (const [gate, enabledActions] of [
+    ["reactions", ["react", "reactions"]],
+    ["messages", ["conversation-open", "read", "edit", "delete", "download-file", "upload-file"]],
+    ["pins", ["pin", "unpin", "list-pins"]],
+    ["memberInfo", ["member-info"]],
+    ["emojiList", ["emoji-list"]],
+  ] as const) {
+    if (gates.some((isEnabled) => isEnabled(gate))) {
+      actions.push(...enabledActions);
     }
-    return false;
-  };
-
-  const actions = new Set<ChannelMessageActionName>(["send"]);
-  if (isActionEnabled("reactions")) {
-    actions.add("react");
-    actions.add("reactions");
   }
-  if (isActionEnabled("messages")) {
-    actions.add("read");
-    actions.add("edit");
-    actions.add("delete");
-    actions.add("download-file");
-    actions.add("upload-file");
-  }
-  if (isActionEnabled("pins")) {
-    actions.add("pin");
-    actions.add("unpin");
-    actions.add("list-pins");
-  }
-  if (isActionEnabled("memberInfo")) {
-    actions.add("member-info");
-  }
-  if (isActionEnabled("emojiList")) {
-    actions.add("emoji-list");
-  }
-  return Array.from(actions);
+  return actions;
 }
 
 export function extractSlackToolSend(args: Record<string, unknown>): ChannelToolSend | null {

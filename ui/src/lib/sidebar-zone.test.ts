@@ -22,18 +22,17 @@ describe("reconcileSidebarZone", () => {
     ]);
   });
 
-  it("prunes known-unpinned sessions and appends server-pinned sessions", () => {
+  it("retains personal session refs without importing global pins", () => {
     const result = reconcileSidebarZone(
       ["session:agent:main:stale", "route:usage", "session:agent:main:alpha"],
       [{ key: "agent:main:alpha" }, { key: "agent:main:beta" }],
       SIDEBAR_NAV_ROUTES,
-      new Set(["agent:main:stale"]),
     );
 
     expect(result.sidebarEntries).toEqual([
+      "session:agent:main:stale",
       "route:usage",
       "session:agent:main:alpha",
-      "session:agent:main:beta",
     ]);
   });
 
@@ -44,7 +43,6 @@ describe("reconcileSidebarZone", () => {
       ["session:agent:b:remote", "route:usage", "session:agent:main:alpha"],
       [{ key: "agent:main:alpha" }],
       SIDEBAR_NAV_ROUTES,
-      new Set(["agent:main:other"]),
     );
 
     expect(result.entries).toEqual([
@@ -58,84 +56,42 @@ describe("reconcileSidebarZone", () => {
     ]);
   });
 
-  it("drops routes outside the supplied valid route set", () => {
+  it("preserves unavailable route references without granting access", () => {
     expect(
       reconcileSidebarZone(["route:usage", "route:plugins"], [], ["usage"]).sidebarEntries,
-    ).toEqual(["route:usage"]);
+    ).toEqual(["route:usage", "route:plugins"]);
   });
 
-  it("preserves a shipped Workboard parent slot and renders it only for its descriptor", () => {
-    const args = [
-      ["route:usage", "route:workboard", "route:plugins"],
+  it("migrates shipped Workboard placements to plugin destinations", () => {
+    const result = reconcileSidebarZone(
+      ["route:usage", "route:workboard", "workboard:ops"],
       [],
       SIDEBAR_NAV_ROUTES,
-      new Set<string>(),
-      [],
-      true,
-      true,
-    ] as const;
-    expect(reconcileSidebarZone(...args, false)).toEqual({
-      entries: [
-        { type: "route", route: "usage" },
-        { type: "route", route: "plugins" },
-      ],
-      sidebarEntries: ["route:usage", "route:workboard", "route:plugins"],
-    });
-    expect(reconcileSidebarZone(...args, true).entries).toEqual([
+      new Set(["workboard/workboard", "workboard/board-ops"]),
+    );
+    expect(result.sidebarEntries).toEqual([
+      "route:usage",
+      "plugin:workboard/workboard",
+      "plugin:workboard/board-ops",
+    ]);
+    expect(result.entries).toEqual([
       { type: "route", route: "usage" },
-      { type: "route", route: "workboard" },
-      { type: "route", route: "plugins" },
+      { type: "plugin", key: "workboard/workboard" },
+      { type: "plugin", key: "workboard/board-ops" },
     ]);
   });
 
-  it("keeps active Workboard boards, drops stale ids, and preserves plugin-off pins", () => {
-    const boards = [
-      { id: "default", total: 0, active: 0, archived: 0, byStatus: {} },
-      { id: "ops", total: 0, active: 0, archived: 0, byStatus: {} },
-    ];
-    expect(
-      reconcileSidebarZone(
-        ["workboard:ops", "workboard:deleted", "route:usage"],
-        [],
-        SIDEBAR_NAV_ROUTES,
-        new Set(),
-        boards,
-        true,
-        true,
-      ).sidebarEntries,
-    ).toEqual(["workboard:ops", "route:usage"]);
-    // Disabled is indistinguishable from an unloaded config snapshot at
-    // startup; a zone write then must not erase persisted pins.
-    expect(
-      reconcileSidebarZone(
-        ["workboard:ops", "route:usage"],
-        [],
-        SIDEBAR_NAV_ROUTES,
-        new Set(),
-        boards,
-        false,
-        true,
-      ),
-    ).toEqual({
+  it("preserves unavailable plugin positions through reloads and permission loss", () => {
+    const entries = ["plugin:example/review", "route:usage"];
+    expect(reconcileSidebarZone(entries, [], SIDEBAR_NAV_ROUTES)).toEqual({
       entries: [{ type: "route", route: "usage" }],
-      sidebarEntries: ["workboard:ops", "route:usage"],
+      sidebarEntries: entries,
     });
-  });
-
-  it("preserves Workboard pins until the active plugin's board catalog is authoritative", () => {
     expect(
-      reconcileSidebarZone(
-        ["workboard:ops", "route:usage"],
-        [],
-        SIDEBAR_NAV_ROUTES,
-        new Set(),
-        [],
-        true,
-        false,
-      ),
-    ).toEqual({
-      entries: [{ type: "route", route: "usage" }],
-      sidebarEntries: ["workboard:ops", "route:usage"],
-    });
+      reconcileSidebarZone(entries, [], SIDEBAR_NAV_ROUTES, new Set(["example/review"])).entries,
+    ).toEqual([
+      { type: "plugin", key: "example/review" },
+      { type: "route", route: "usage" },
+    ]);
   });
 });

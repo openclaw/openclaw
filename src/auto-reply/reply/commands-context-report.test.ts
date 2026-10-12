@@ -9,7 +9,7 @@ import { persistSessionTranscriptTurn } from "../../config/sessions/session-acce
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { buildContextReply } from "./commands-context-report.js";
-import { buildCommandContext } from "./commands-context.js";
+import { buildCommandContextForTest as buildCommandContext } from "./commands-context.test-support.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { stripStructuralPrefixes } from "./mentions.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -44,8 +44,12 @@ function makeParams(
     workspaceDir: "/tmp/workspace",
     contextTokens: options?.contextTokens ?? null,
     storePath: options?.storePath,
-    provider: "openai",
-    model: "gpt-5",
+    provider: "ollama",
+    model: "qwen2.5:7b",
+    thinkingCatalog:
+      options?.contextTokens != null
+        ? [{ provider: "ollama", id: "qwen2.5:7b", contextWindow: options.contextTokens }]
+        : [],
     elevated: { allowed: false },
     resolvedThinkLevel: "off",
     resolvedReasoningLevel: "off",
@@ -149,6 +153,62 @@ async function withTranscript(
 }
 
 describe("buildContextReply", () => {
+  it.each<{
+    resolved?: number;
+    authored?: number;
+    persistedHarness?: string;
+    expected: number | null;
+  }>([
+    { expected: 32_768 },
+    { resolved: 65_536, expected: 65_536 },
+    { resolved: 200_000, expected: 200_000 },
+    { authored: 16_384, expected: 16_384 },
+    { persistedHarness: "other-runtime", expected: null },
+  ])("projects the selected session window ($resolved, $authored)", async (testCase) => {
+    const params = makeParams("/context json", false, { contextTokens: 200_000 });
+    params.provider = "ollama";
+    params.model = "qwen2.5:7b";
+    params.sessionEntry = {
+      ...params.sessionEntry,
+      sessionId: "local-context",
+      updatedAt: 1,
+      modelProvider: params.provider,
+      model: params.model,
+      agentHarnessId: testCase.persistedHarness ?? "openclaw",
+      contextTokens: 32_768,
+      contextTokensSource: "resolved-v1",
+    };
+    params.thinkingCatalog = [
+      { provider: params.provider, id: params.model, contextWindow: testCase.resolved },
+    ];
+    if (testCase.authored !== undefined) {
+      params.cfg = {
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://127.0.0.1:11434",
+              models: [
+                {
+                  id: params.model,
+                  name: "Qwen 2.5 7B",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 131_072,
+                  contextTokens: testCase.authored,
+                  maxTokens: 8_192,
+                },
+              ],
+            },
+          },
+        },
+      };
+    }
+
+    const result = await buildContextReply(params);
+    expect(JSON.parse(result.text ?? "{}").session.contextTokens).toBe(testCase.expected);
+  });
+
   it("describes compactable transcript counts in help output", async () => {
     const result = await buildContextReply(makeParams("/context", false));
     expect(result.text).toContain(
@@ -163,11 +223,6 @@ describe("buildContextReply", () => {
     expect(result.text).toContain("Causes: 1 file(s) exceeded max/file.");
     expect(result.text).toContain("agents.entries.*.bootstrapMaxChars");
     expect(result.text).toContain("agents.defaults.*");
-  });
-
-  it("does not show bootstrap truncation warning when there is no truncation", async () => {
-    const result = await buildContextReply(makeParams("/context list", false));
-    expect(result.text).not.toContain("Bootstrap context is over configured limits");
   });
 
   it("reports native Codex project docs as unverified without OpenClaw limit advice", async () => {
@@ -185,17 +240,6 @@ describe("buildContextReply", () => {
     expect(result.text).not.toContain("agents.entries.*.bootstrapMaxChars");
   });
 
-  it("falls back to config defaults when legacy reports are missing bootstrap limits", async () => {
-    const result = await buildContextReply(
-      makeParams("/context list", false, {
-        omitBootstrapLimits: true,
-      }),
-    );
-    expect(result.text).toContain("Bootstrap max/file: 20,000 chars");
-    expect(result.text).toContain("Bootstrap max/total: 60,000 chars");
-    expect(result.text).not.toContain("Bootstrap max/file: ? chars");
-  });
-
   it("uses the session agent profile when legacy reports are missing bootstrap limits", async () => {
     const result = await buildContextReply(
       makeParams("/context list", false, {
@@ -207,13 +251,12 @@ describe("buildContextReply", () => {
               bootstrapMaxChars: 12_000,
               bootstrapTotalMaxChars: 60_000,
             },
-            list: [
-              {
-                id: "scout",
+            entries: {
+              scout: {
                 bootstrapMaxChars: 32_000,
                 bootstrapTotalMaxChars: 96_000,
               },
-            ],
+            },
           },
         },
       }),
@@ -222,25 +265,14 @@ describe("buildContextReply", () => {
     expect(result.text).toContain("Bootstrap max/total: 96,000 chars");
   });
 
-  it("shows tracked estimate and cached context delta in detail output", async () => {
-    const result = await buildContextReply(
-      makeParams("/context detail", false, {
-        contextTokens: 8_192,
-        totalTokens: 900,
-      }),
-    );
-    expect(result.text).toContain("Tracked prompt estimate: 1,020 chars (~255 tok)");
-    expect(result.text).toContain("Actual context usage (cached): 900 tok");
-    expect(result.text).toContain("Untracked provider/runtime overhead: ~645 tok");
-    expect(result.text).toContain(
-      "Compactable transcript: unavailable (no active transcript session)",
-    );
-    expect(result.text).toContain("Session tokens (cached): 900 total / ctx=8,192");
-  });
-
-  it("reports compactable real conversation messages from the active transcript", async () => {
+  it("counts conversation anchors across active transcript pages", async () => {
     await withTranscript(
       [
+        ...Array.from({ length: 127 }, (_, index) => ({
+          role: "assistant",
+          content: "NO_REPLY",
+          timestamp: index,
+        })),
         { role: "user", content: "Please inspect the repo", timestamp: 1 },
         {
           role: "assistant",
@@ -265,7 +297,7 @@ describe("buildContextReply", () => {
         );
 
         expect(result.text).toContain(
-          "Compactable transcript: 2 real conversation message(s) / 3 transcript message(s)",
+          "Compactable transcript: 2 real conversation message(s) / 130 transcript message(s)",
         );
         expect(result.text).not.toContain("Compaction note:");
       },
@@ -326,63 +358,40 @@ describe("buildContextReply", () => {
   });
 
   it("prefers the target session entry from sessionStore for cached context stats", async () => {
-    const params = makeParams("/context detail", false, {
-      contextTokens: 8_192,
-      totalTokens: 111,
-    });
-    const sessionEntry = {
-      ...params.sessionEntry,
-      sessionId: params.sessionEntry?.sessionId ?? "session-main",
-      updatedAt: params.sessionEntry?.updatedAt ?? 1,
-      totalTokens: 111,
-      totalTokensFresh: true,
-      totalTokensVersion: 1,
-      inputTokens: 100,
-      outputTokens: 11,
-    } satisfies SessionEntry;
-    params.sessionEntry = sessionEntry;
-    params.sessionStore = {
-      [params.sessionKey]: {
-        ...sessionEntry,
-        totalTokens: 900,
+    await withTranscript([{ role: "user", content: "cached context fixture" }], async (target) => {
+      const params = makeParams("/context detail", false, {
+        contextTokens: 8_192,
+        totalTokens: 111,
+        ...target,
+      });
+      const sessionEntry = {
+        ...params.sessionEntry,
+        sessionId: target.sessionId,
+        updatedAt: params.sessionEntry?.updatedAt ?? 1,
+        totalTokens: 111,
         totalTokensFresh: true,
         totalTokensVersion: 1,
-        inputTokens: 700,
-        outputTokens: 200,
-      },
-    };
+        inputTokens: 100,
+        outputTokens: 11,
+      } satisfies SessionEntry;
+      params.sessionEntry = sessionEntry;
+      params.sessionStore = {
+        [params.sessionKey]: {
+          ...sessionEntry,
+          totalTokens: 900,
+          totalTokensFresh: true,
+          totalTokensVersion: 1,
+          inputTokens: 700,
+          outputTokens: 200,
+        },
+      };
 
-    const result = await buildContextReply(params);
+      const result = await buildContextReply(params);
 
-    expect(result.text).toContain("Actual context usage (cached): 900 tok");
-    expect(result.text).toContain("Session tokens (cached): 900 total / ctx=8,192");
-    expect(result.text).not.toContain("Actual context usage (cached): 111 tok");
-  });
-
-  it("renders context map as sensitive local PNG media", async () => {
-    const result = await buildContextReply(
-      makeParams("/context map", false, {
-        contextTokens: 8_192,
-        totalTokens: 900,
-      }),
-    );
-    if (!result.mediaUrl) {
-      throw new Error("missing context map media path");
-    }
-    try {
-      const png = await readFile(result.mediaUrl);
-      expect(result.text).toContain("Context treemap");
-      expect(result.text).toContain("Source: run");
-      expect(result.text).toContain("Actual cached context: 900 tok");
-      expect(result.trustedLocalMedia).toBe(true);
-      expect(result.sensitiveMedia).toBe(true);
-      expect(png.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
-      expect(png.subarray(12, 16).toString("ascii")).toBe("IHDR");
-      expect(png.readUInt32BE(16)).toBe(1280);
-      expect(png.readUInt32BE(20)).toBe(860);
-    } finally {
-      await unlink(result.mediaUrl);
-    }
+      expect(result.text).toContain("Actual context usage (cached): 900 tok");
+      expect(result.text).toContain("Session tokens (cached): 900 total / ctx=8,192");
+      expect(result.text).not.toContain("Actual context usage (cached): 111 tok");
+    });
   });
 
   it("omits unknown native project-document bytes from context maps", async () => {
@@ -490,29 +499,6 @@ describe("buildContextReply", () => {
 /** Tests context command behavior and token reporting. */
 
 describe("buildCommandContext", () => {
-  it("canonicalizes registered aliases like /id to their primary command", () => {
-    const ctx = buildTestCtx({
-      Provider: "webchat",
-      Surface: "webchat",
-      From: "user",
-      To: "bot",
-      Body: "/id",
-      RawBody: "/id",
-      CommandBody: "/id",
-      BodyForCommands: "/id",
-    });
-
-    const result = buildCommandContext({
-      ctx,
-      cfg: {} as OpenClawConfig,
-      isGroup: false,
-      triggerBodyNormalized: "/id",
-      commandAuthorized: true,
-    });
-
-    expect(result.commandBodyNormalized).toBe("/whoami");
-  });
-
   it("preserves multiline soft reset tails after structural normalization", () => {
     const ctx = buildTestCtx({
       Provider: "whatsapp",

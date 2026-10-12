@@ -5,6 +5,9 @@ on:
     paths:
       - scripts/install.sh
       - scripts/install-cli.sh
+      - scripts/install-policy.sh
+      - scripts/build-installers.mjs
+      - scripts/lib/standalone-installers.mjs
       - scripts/install.ps1
       - .github/workflows/website-installer-sync.yml
   push:
@@ -12,6 +15,9 @@ on:
     paths:
       - scripts/install.sh
       - scripts/install-cli.sh
+      - scripts/install-policy.sh
+      - scripts/build-installers.mjs
+      - scripts/lib/standalone-installers.mjs
       - scripts/install.ps1
       - .github/workflows/website-installer-sync.yml
   workflow_dispatch:
@@ -38,17 +44,23 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Assemble standalone installers
+        run: node scripts/build-installers.mjs
+
       - name: Shell syntax
-        run: bash -n scripts/install.sh scripts/install-cli.sh
+        run: |
+          for installer in dist/installers/install.sh dist/installers/install-cli.sh; do
+            bash -n "$installer"
+          done
 
       - name: ShellCheck
-        run: shellcheck -e SC1091 scripts/install.sh scripts/install-cli.sh
+        run: shellcheck -e SC1091 dist/installers/install.sh dist/installers/install-cli.sh
 
       - name: Installer help and dry-runs
         run: |
-          bash scripts/install.sh --help >/tmp/install-help.txt
-          bash scripts/install.sh --dry-run --no-onboard --no-prompt
-          bash scripts/install-cli.sh --help >/tmp/install-cli-help.txt
+          bash dist/installers/install.sh --help >/tmp/install-help.txt
+          bash dist/installers/install.sh --dry-run --no-onboard --no-prompt
+          bash dist/installers/install-cli.sh --help >/tmp/install-cli-help.txt
 
       - name: PowerShell syntax
         shell: pwsh
@@ -68,10 +80,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Assemble standalone installers
+        run: node scripts/build-installers.mjs
+
       - name: install.sh in Docker
         run: |
           timeout --kill-after=30s 20m docker run --rm \
-            -v "$PWD/scripts/install.sh:/tmp/install.sh:ro" \
+            -v "$PWD/dist/installers/install.sh:/tmp/install.sh:ro" \
             node:24-bookworm-slim \
             bash -lc 'bash /tmp/install.sh --version latest && openclaw --version'
 
@@ -80,19 +95,50 @@ jobs:
           timeout --kill-after=30s 20m docker run --rm \
             -e OPENCLAW_NO_ONBOARD=1 \
             -e OPENCLAW_NO_PROMPT=1 \
-            -v "$PWD/scripts/install-cli.sh:/tmp/install-cli.sh:ro" \
+            -v "$PWD/dist/installers/install-cli.sh:/tmp/install-cli.sh:ro" \
             node:24-bookworm-slim \
             bash -lc 'apt-get update -y && apt-get install -y curl && bash /tmp/install-cli.sh --prefix /tmp/openclaw --no-onboard --version latest && /tmp/openclaw/bin/openclaw --version'
+
+  debian-installer:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Assemble standalone installers
+        run: node scripts/build-installers.mjs
+
+      - name: install.sh on Debian without Node
+        run: |
+          timeout --kill-after=30s 20m docker run --rm -i \
+            -v "$PWD/dist/installers/install.sh:/tmp/install.sh:ro" \
+            debian:bookworm-slim \
+            bash -s <<'CONTAINER'
+          set -euo pipefail
+          apt-get update -qq
+          apt-get install -y -qq ca-certificates curl
+          bash /tmp/install.sh --install-method npm --no-onboard --no-prompt --version latest
+          node --version | grep -E '^v24\.[0-9]+\.[0-9]+$'
+          node -e '
+            const { DatabaseSync } = require("node:sqlite");
+            const db = new DatabaseSync(":memory:");
+            console.log(`SQLite ${db.prepare("SELECT sqlite_version() AS version").get().version}`);
+            db.close();
+          '
+          openclaw --version
+          CONTAINER
 
   linux-build-tools-failure:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Assemble standalone installers
+        run: node scripts/build-installers.mjs
+
       - name: install.sh reports build-tool failures honestly
         run: |
           timeout --kill-after=10s 5m docker run --rm -i \
-            -v "$PWD/scripts/install.sh:/tmp/install.sh:ro" \
+            -v "$PWD/dist/installers/install.sh:/tmp/install.sh:ro" \
             debian:bookworm \
             bash -s <<'CONTAINER'
           set -euo pipefail
@@ -151,10 +197,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Assemble standalone installers
+        run: node scripts/build-installers.mjs
+
       - name: install.sh as a non-root user
         run: |
           timeout --kill-after=30s 20m docker run --rm -i \
-            -v "$PWD/scripts/install.sh:/tmp/install.sh:ro" \
+            -v "$PWD/dist/installers/install.sh:/tmp/install.sh:ro" \
             node:24-bookworm-slim \
             bash -s <<'CONTAINER'
           set -euo pipefail
@@ -191,13 +240,16 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Assemble standalone installers
+        run: node scripts/build-installers.mjs
+
       - name: install.sh on Fedora
         env:
           INSTALL_USER: ${{ matrix.user }}
         run: |
           if [[ "$INSTALL_USER" == "root" ]]; then
             timeout --kill-after=30s 20m docker run --rm -i \
-              -v "$PWD/scripts/install.sh:/tmp/install.sh:ro" \
+              -v "$PWD/dist/installers/install.sh:/tmp/install.sh:ro" \
               fedora:44 \
               bash -s <<'CONTAINER'
           set -euo pipefail
@@ -206,7 +258,7 @@ jobs:
           CONTAINER
           else
             timeout --kill-after=30s 20m docker run --rm -i \
-              -v "$PWD/scripts/install.sh:/tmp/install.sh:ro" \
+              -v "$PWD/dist/installers/install.sh:/tmp/install.sh:ro" \
               fedora:44 \
               bash -s <<'CONTAINER'
           set -euo pipefail
@@ -238,15 +290,18 @@ jobs:
         with:
           node-version: 24
 
+      - name: Assemble standalone installers
+        run: node scripts/build-installers.mjs
+
       - name: install.sh dry run
-        run: bash scripts/install.sh --dry-run --no-onboard --no-prompt
+        run: bash dist/installers/install.sh --dry-run --no-onboard --no-prompt
 
       - name: install.sh on macOS
         env:
           OPENCLAW_NO_ONBOARD: "1"
           OPENCLAW_NO_PROMPT: "1"
         run: |
-          bash scripts/install.sh --no-onboard --no-prompt --version latest
+          bash dist/installers/install.sh --no-onboard --no-prompt --version latest
           openclaw --version
 
   windows-installer:
@@ -321,6 +376,7 @@ jobs:
     needs:
       - static
       - linux-docker
+      - debian-installer
       - linux-build-tools-failure
       - linux-non-root
       - fedora-installer
@@ -355,8 +411,9 @@ jobs:
       - name: Sync installer scripts
         if: env.OPENCLAW_GH_TOKEN != ''
         run: |
-          cp openclaw/scripts/install.sh openclaw.ai/public/install.sh
-          cp openclaw/scripts/install-cli.sh openclaw.ai/public/install-cli.sh
+          node openclaw/scripts/build-installers.mjs openclaw/dist/installers openclaw
+          cp openclaw/dist/installers/install.sh openclaw.ai/public/install.sh
+          cp openclaw/dist/installers/install-cli.sh openclaw.ai/public/install-cli.sh
           cp openclaw/scripts/install.ps1 openclaw.ai/public/install.ps1
           rm -f openclaw.ai/public/install.cmd
           chmod +x openclaw.ai/public/install.sh openclaw.ai/public/install-cli.sh
@@ -388,7 +445,9 @@ jobs:
         if: steps.changes.outputs.changed == 'true'
         working-directory: openclaw.ai
         run: |
-          bash -n public/install.sh public/install-cli.sh
+          for installer in public/install.sh public/install-cli.sh; do
+            bash -n "$installer"
+          done
           shellcheck -e SC1091 public/install.sh public/install-cli.sh
           bun install --frozen-lockfile
           bun run build

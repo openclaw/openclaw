@@ -21,6 +21,8 @@ function buildOwners(): PluginMetadataSnapshotOwnerMaps {
     setupProviders: empty,
     commandAliases: empty,
     contracts: empty,
+    providerAuthContributions: [],
+    modelIdNormalizationPolicies: new Map(),
     providerEndpoints: [
       { endpointClass: "openai-public", hosts: ["prepared.example"] },
       { endpointClass: "anthropic-public", hosts: ["projected.example"] },

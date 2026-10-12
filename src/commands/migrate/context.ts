@@ -35,7 +35,7 @@ export function buildMigrationReportDir(
 }
 
 /** Resolves an explicit migration owner without allowing typo-created agent stores. */
-export function resolveMigrationTargetAgentId(
+function resolveMigrationTargetAgentId(
   config: OpenClawConfig,
   rawAgentId: string | undefined,
 ): string | undefined {
@@ -53,7 +53,6 @@ export function resolveMigrationTargetAgentId(
   return resolveConfiguredAgentId(config, agentId);
 }
 
-/** Builds the provider-facing migration context from CLI options and runtime state. */
 export function buildMigrationContext(params: {
   source?: string;
   targetAgentId?: string;

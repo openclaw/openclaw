@@ -10,16 +10,12 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, relative, resolve, win32 as pathWin32 } from "node:path";
+import { dirname, join, resolve, win32 as pathWin32 } from "node:path";
 import { pathToFileURL } from "node:url";
 import { validatePackageSourceDir } from "../../package-source-preflight.mjs";
-import { isLocalBuildMetadataDistPath } from "../local-build-metadata-paths.mts";
 import type { CandidateBuild, LaneCommandParams, LaneState, PackageJson } from "./config.ts";
 import {
   CROSS_OS_NPM_DEBUG_LOG_TAIL_BYTES,
-  INSTALL_STAGE_DEBRIS_DIR_PATTERN,
-  OMITTED_QA_EXTENSION_PREFIXES,
-  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   PUBLISHED_INSTALLER_BASE_URL,
   installTimeoutMs,
   resolvePackDestinationTarball,
@@ -27,7 +23,7 @@ import {
 import { readLogTextWindow } from "./logs.ts";
 import { runCommand } from "./process.ts";
 import { logPhase } from "./reporting.ts";
-import { formatError, resolveCommandPath, shellEscapeForSh } from "./shared.ts";
+import { resolveCommandPath, shellEscapeForSh, sleep } from "./shared.ts";
 
 export async function prepareCandidate(params: {
   outputDir: string;
@@ -81,238 +77,40 @@ export async function prepareCandidate(params: {
   const packDir = join(params.outputDir, "package");
   mkdirSync(packDir, { recursive: true });
   const packJsonPath = join(packDir, "pack.json");
-  logPhase("prepare", "package-dist-inventory");
-  await writePackageDistInventoryForCandidate({
-    sourceDir: params.sourceDir,
-    logPath: join(params.logsDir, "pnpm-pack-dry-run.log"),
-  });
-  const packCommand = resolvePackageCandidatePackCommand(params.sourceDir, packDir);
-  logPhase("prepare", packCommand.phase);
-  const packResult = await runCommand(packCommand.command, packCommand.args, {
-    cwd: params.sourceDir,
-    logPath: join(params.logsDir, packCommand.logFileName),
-    timeoutMs: 15 * 60 * 1000,
-  });
-  const packedCandidate = resolvePackedCandidateFromOutput({
-    output: packResult.stdout,
+  // Supported source checkouts own inventory and bundled dependency preparation.
+  logPhase("prepare", "package-candidate");
+  const packResult = await runCommand(
+    process.execPath,
+    [
+      join(params.sourceDir, "scripts", "package-openclaw-for-docker.mjs"),
+      "--skip-build",
+      "--output-dir",
+      packDir,
+    ],
+    {
+      cwd: params.sourceDir,
+      logPath: join(params.logsDir, "package-candidate.log"),
+      timeoutMs: 15 * 60 * 1000,
+    },
+  );
+  const packedCandidate = resolvePackDestinationTarball(
+    packResult.stdout.trim().split(/\r?\n/u).findLast(Boolean),
     packDir,
-    packageJson,
-    packCommand,
-  });
-  writeFileSync(packJsonPath, packedCandidate.packJson, "utf8");
+    "package-openclaw-for-docker",
+  );
+  writeFileSync(
+    packJsonPath,
+    `${JSON.stringify({ filename: packedCandidate.fileName, path: packedCandidate.path, version: packageJson.version }, null, 2)}\n`,
+    "utf8",
+  );
 
   return {
     sourceDir: params.sourceDir,
     sourceSha,
-    candidateVersion: packedCandidate.version,
+    candidateVersion: (packageJson.version ?? "").trim(),
     candidateTgz: packedCandidate.path,
     candidateFileName: packedCandidate.fileName,
   };
-}
-
-export function resolvePackageCandidatePackCommand(sourceDir: string, packDir: string) {
-  const packageHelper = join(sourceDir, "scripts", "package-openclaw-for-docker.mjs");
-  if (existsSync(packageHelper)) {
-    return {
-      args: [packageHelper, "--skip-build", "--output-dir", packDir],
-      command: process.execPath,
-      kind: "docker-helper",
-      logFileName: "package-candidate.log",
-      phase: "package-candidate",
-    };
-  }
-
-  return {
-    args: ["pack", "--config.ignore-scripts=true", "--json", "--pack-destination", packDir],
-    command: pnpmCommand(),
-    kind: "pnpm-pack",
-    logFileName: "pnpm-pack.log",
-    phase: "pnpm-pack",
-  };
-}
-
-function resolvePackedCandidateFromOutput(params: {
-  output: string;
-  packDir: string;
-  packageJson: PackageJson;
-  packCommand: ReturnType<typeof resolvePackageCandidatePackCommand>;
-}) {
-  if (params.packCommand.kind === "docker-helper") {
-    const packOutputLines = params.output.trim().split(/\r?\n/u).filter(Boolean);
-    const packedTarball = resolvePackDestinationTarball(
-      packOutputLines.at(-1),
-      params.packDir,
-      "package-openclaw-for-docker",
-    );
-    return {
-      fileName: packedTarball.fileName,
-      packJson: `${JSON.stringify(
-        {
-          filename: packedTarball.fileName,
-          path: packedTarball.path,
-          version: params.packageJson.version,
-        },
-        null,
-        2,
-      )}\n`,
-      path: packedTarball.path,
-      version: (params.packageJson.version ?? "").trim(),
-    };
-  }
-
-  const parsedPack = JSON.parse(params.output) as
-    | { filename?: string; version?: string }
-    | Array<{ filename?: string; version?: string }>;
-  const lastPack = Array.isArray(parsedPack) ? parsedPack.at(-1) : parsedPack;
-  const packedTarball = resolvePackDestinationTarball(
-    lastPack?.filename,
-    params.packDir,
-    "pnpm pack",
-  );
-  return {
-    fileName: packedTarball.fileName,
-    packJson: params.output,
-    path: packedTarball.path,
-    version: (lastPack?.version ?? params.packageJson.version ?? "").trim(),
-  };
-}
-
-function normalizeRelativePath(value: string) {
-  return value.replace(/\\/gu, "/");
-}
-
-function isNotFoundError(error: unknown) {
-  return error !== null && typeof error === "object" && "code" in error && error.code === "ENOENT";
-}
-
-function isInstallStageDirName(value: string) {
-  return INSTALL_STAGE_DEBRIS_DIR_PATTERN.test(value);
-}
-
-function collectLegacyPluginDependencyStagingDebrisPaths(packageRoot: string) {
-  const rootEntries = readdirSync(packageRoot, { withFileTypes: true });
-  const debris: string[] = [];
-  for (const rootEntry of rootEntries) {
-    if (!rootEntry.isDirectory() || rootEntry.name.toLowerCase() !== "dist") {
-      continue;
-    }
-    const distDir = join(packageRoot, rootEntry.name);
-    let distEntries;
-    try {
-      distEntries = readdirSync(distDir, { withFileTypes: true });
-    } catch (error) {
-      if (isNotFoundError(error)) {
-        continue;
-      }
-      throw error;
-    }
-    for (const distEntry of distEntries) {
-      if (!distEntry.isDirectory() || distEntry.name.toLowerCase() !== "extensions") {
-        continue;
-      }
-      const extensionsDir = join(distDir, distEntry.name);
-      let extensionEntries;
-      try {
-        extensionEntries = readdirSync(extensionsDir, { withFileTypes: true });
-      } catch (error) {
-        if (isNotFoundError(error)) {
-          continue;
-        }
-        throw error;
-      }
-
-      for (const extensionEntry of extensionEntries) {
-        if (!extensionEntry.isDirectory()) {
-          continue;
-        }
-        const extensionPath = join(extensionsDir, extensionEntry.name);
-        let stagingEntries;
-        try {
-          stagingEntries = readdirSync(extensionPath, { withFileTypes: true });
-        } catch (error) {
-          if (isNotFoundError(error)) {
-            continue;
-          }
-          throw error;
-        }
-        for (const stagingEntry of stagingEntries) {
-          if (isInstallStageDirName(stagingEntry.name)) {
-            debris.push(
-              normalizeRelativePath(relative(packageRoot, join(extensionPath, stagingEntry.name))),
-            );
-          }
-        }
-      }
-    }
-  }
-  return debris.toSorted((left, right) => left.localeCompare(right));
-}
-
-function assertNoLegacyPluginDependencyStagingDebris(packageRoot: string) {
-  const debris = collectLegacyPluginDependencyStagingDebrisPaths(packageRoot);
-  if (debris.length === 0) {
-    return;
-  }
-  throw new Error(
-    `unexpected legacy plugin dependency staging debris in package dist: ${debris.join(", ")}`,
-  );
-}
-
-function isPackagedDistPath(relativePath: string) {
-  if (!relativePath.startsWith("dist/")) {
-    return false;
-  }
-  if (relativePath === PACKAGE_DIST_INVENTORY_RELATIVE_PATH) {
-    return false;
-  }
-  if (isLocalBuildMetadataDistPath(relativePath)) {
-    return false;
-  }
-  if (relativePath.endsWith(".map")) {
-    return false;
-  }
-  if (relativePath === "dist/plugin-sdk/.tsbuildinfo") {
-    return false;
-  }
-  if (OMITTED_QA_EXTENSION_PREFIXES.some((prefix) => relativePath.startsWith(prefix))) {
-    return false;
-  }
-  return true;
-}
-
-export async function writePackageDistInventoryForCandidate(params: {
-  sourceDir: string;
-  logPath: string;
-}) {
-  assertNoLegacyPluginDependencyStagingDebris(params.sourceDir);
-  const dryRun = await runCommand(
-    pnpmCommand(),
-    ["pack", "--dry-run", "--config.ignore-scripts=true", "--json"],
-    {
-      cwd: params.sourceDir,
-      logPath: params.logPath,
-      timeoutMs: 5 * 60 * 1000,
-    },
-  );
-  const parsedPack = JSON.parse(dryRun.stdout) as
-    | { files?: Array<{ path?: string }> }
-    | Array<{ files?: Array<{ path?: string }> }>;
-  const lastPack = Array.isArray(parsedPack) ? parsedPack.at(-1) : parsedPack;
-  const files = Array.isArray(lastPack?.files) ? lastPack.files : [];
-  if (files.length === 0) {
-    throw new Error(
-      "pnpm pack --dry-run did not report package files for dist inventory generation.",
-    );
-  }
-  const inventory = files
-    .flatMap((entry) => {
-      const relativePath = normalizeRelativePath((entry.path ?? "").trim());
-      return isPackagedDistPath(relativePath) ? [relativePath] : [];
-    })
-    .toSorted((left, right) => left.localeCompare(right));
-  const inventoryPath = join(params.sourceDir, PACKAGE_DIST_INVENTORY_RELATIVE_PATH);
-  mkdirSync(dirname(inventoryPath), { recursive: true });
-  writeFileSync(inventoryPath, `${JSON.stringify(inventory, null, 2)}\n`, "utf8");
 }
 
 export function readProvidedCandidate(params: {
@@ -359,11 +157,7 @@ export function packageHasScript(packageRoot: string, scriptName: string) {
   }
 }
 
-export function normalizeWindowsInstalledCliPath(cliPath: string) {
-  return normalizeWindowsCommandShimPath(cliPath);
-}
-
-export function normalizeWindowsCommandShimPath(commandPath: string) {
+export function normalizeWindowsInstalledCliPath(commandPath: string) {
   if (typeof commandPath !== "string") {
     return commandPath;
   }
@@ -415,6 +209,7 @@ export async function installPackageSpec(params: {
   logPath: string;
   timeoutMs?: number;
   ignoreScripts?: boolean;
+  retryWindowsRemoval?: boolean;
 }) {
   const installEnv = {
     ...params.env,
@@ -422,8 +217,41 @@ export async function installPackageSpec(params: {
     npm_config_location: "global",
     npm_config_prefix: params.lane.prefixDir,
   };
-  rmSync(installedPackageRoot(params.lane.prefixDir), { force: true, recursive: true });
-  try {
+  const retryRemoval = params.retryWindowsRemoval && process.platform === "win32";
+  // Antivirus and delayed DLL handle release can outlast taskkill. Retry only
+  // removal, never npm, for at most 15.5 seconds of backoff after tree exit.
+  const removalRetryDelaysMs = retryRemoval ? [500, 1_000, 2_000, 4_000, 8_000] : [];
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      rmSync(installedPackageRoot(params.lane.prefixDir), { force: true, recursive: true });
+    } catch (error) {
+      const code =
+        error && typeof error === "object" && "code" in error && typeof error.code === "string"
+          ? error.code
+          : "unknown";
+      const retryDelayMs =
+        code === "EPERM" || code === "EBUSY" ? removalRetryDelaysMs[attempt] : undefined;
+      if (retryRemoval) {
+        appendFileSync(
+          params.logPath,
+          `[release-checks] package-removal attempt=${attempt + 1} code=${code} ${retryDelayMs === undefined ? "failed" : `retryDelayMs=${retryDelayMs}`}\n`,
+        );
+      }
+      if (retryDelayMs === undefined) {
+        throw error;
+      }
+      await sleep(retryDelayMs);
+      continue;
+    }
+    if (retryRemoval) {
+      appendFileSync(
+        params.logPath,
+        `[release-checks] package-removal attempt=${attempt + 1} success\n`,
+      );
+    }
+    break;
+  }
+  await withNpmDiagnostics(params.lane.homeDir, params.logPath, installEnv, async () => {
     await runCommand(
       npmCommand(),
       buildNpmGlobalInstallArgs(params.packageSpec, { ignoreScripts: params.ignoreScripts }),
@@ -434,44 +262,119 @@ export async function installPackageSpec(params: {
         timeoutMs: params.timeoutMs ?? installTimeoutMs(),
       },
     );
-  } catch (error) {
-    const debugTail = appendLatestNpmDebugLogTail(params.lane.homeDir, params.logPath, installEnv);
-    if (!debugTail) {
-      throw error;
+  });
+}
+
+const NPM_DIAGNOSTIC_LOG_LIMIT = 8;
+const NPM_DIAGNOSTIC_ERROR_CODES = new Set([
+  "EACCES",
+  "EBADENGINE",
+  "EBUSY",
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "EEXIST",
+  "EINTEGRITY",
+  "EISDIR",
+  "ENOENT",
+  "ENOSPC",
+  "ENOTEMPTY",
+  "ENOTFOUND",
+  "EPERM",
+  "ERESOLVE",
+  "ETIMEDOUT",
+  "EAI_AGAIN",
+  "E401",
+  "E403",
+  "E404",
+]);
+
+export async function withNpmDiagnostics<T>(
+  homeDir: string,
+  logPath: string,
+  env: NodeJS.ProcessEnv,
+  run: () => Promise<T>,
+) {
+  const findLogs = () => resolveNpmDebugLogDirs(homeDir, env).flatMap(findNpmDebugLogs);
+  const before = new Map(findLogs().map((file) => [file.path, file]));
+  try {
+    return await run();
+  } finally {
+    try {
+      const changed = [...new Map(findLogs().map((file) => [file.path, file])).values()]
+        .filter((file) => {
+          const previous = before.get(file.path);
+          return !previous || file.size !== previous.size || file.mtimeMs !== previous.mtimeMs;
+        })
+        .toSorted(
+          (left, right) => left.mtimeMs - right.mtimeMs || left.path.localeCompare(right.path),
+        );
+      // Capture before the next npm invocation rotates logs. Never export npm's
+      // free text: its redactor does not cover provider keys or URL query secrets.
+      const logs = changed.slice(-NPM_DIAGNOSTIC_LOG_LIMIT).map((file) => {
+        const previousSize = before.get(file.path)?.size ?? 0;
+        const offsetBytes = previousSize <= file.size ? previousSize : 0;
+        const maxBytes = CROSS_OS_NPM_DEBUG_LOG_TAIL_BYTES / NPM_DIAGNOSTIC_LOG_LIMIT;
+        const truncated = file.size - offsetBytes > maxBytes;
+        const window = readLogTextWindow(file.path, { maxBytes, offsetBytes });
+        const text = truncated ? window.replace(/^[^\n]*(?:\n|$)/u, "") : window;
+        return Object.assign(projectNpmDebugLog(text), { truncated });
+      });
+      appendFileSync(
+        logPath,
+        `\n[release-checks] npm-diagnostics ${JSON.stringify({
+          logs,
+          truncated: changed.length > NPM_DIAGNOSTIC_LOG_LIMIT,
+        })}\n`,
+        "utf8",
+      );
+    } catch {
+      // Diagnostics must not replace the install result or original failure.
     }
-    throw new Error(`${formatError(error)}\n\nnpm debug log tail:\n${debugTail}`, { cause: error });
   }
 }
 
-export function appendLatestNpmDebugLogTail(
-  homeDir: string,
-  logPath: string,
-  env = process.env,
-  platform = process.platform,
-) {
-  try {
-    const candidates = resolveNpmDebugLogDirs(homeDir, env, platform)
-      .flatMap(findNpmDebugLogs)
-      .toSorted((left, right) => left.mtimeMs - right.mtimeMs);
-    const latest = candidates.at(-1);
-    if (!latest) {
-      return "";
+function projectNpmDebugLog(text: string) {
+  const fetch = { count: 0, cacheHits: 0, cacheMisses: 0, durationMs: 0, maxDurationMs: 0 };
+  const errorCodes = new Set<string>();
+  let command: string | null = null;
+  let exitCode: number | null = null;
+  let lastActivity: string | null = null;
+  for (const line of text.split(/\r?\n/u)) {
+    command =
+      line.match(
+        /^\d+ verbose title npm (install|i|root|view|pack|exec|rebuild|run-script|--version)(?:\s|$)/u,
+      )?.[1] ?? command;
+    lastActivity =
+      line.match(
+        /^\d+ (?:silly|verbose|http|info|warn|error) (fetch manifest|idealTree|reify|tar|run|fetch|cache)\b/u,
+      )?.[1] ?? lastActivity;
+    const exit = line.match(/^\d+ verbose exit (-?\d{1,3})$/u);
+    if (exit) {
+      exitCode = Number(exit[1]);
     }
-
-    const tail = readLogTextWindow(latest.path, { maxBytes: CROSS_OS_NPM_DEBUG_LOG_TAIL_BYTES });
-    if (!tail.trim()) {
-      return "";
+    const code = line.match(/^\d+ (?:error|verbose) code (\S+)$/u)?.[1];
+    if (code && NPM_DIAGNOSTIC_ERROR_CODES.has(code)) {
+      errorCodes.add(code);
     }
-
-    appendFileSync(
-      logPath,
-      `\n${new Date().toISOString()} npm-debug-log path=${latest.path}\n${tail}\n`,
-      "utf8",
+    // npm-registry-fetch emits both network and cache reads; summed durations
+    // describe this bounded tail and may overlap, so they are not wall time.
+    const request = line.match(
+      /^\d+ http (?:fetch|cache) .+ (\d+)ms(?: attempt #\d+)?(?: \(cache (hit|miss|updated|revalidated|stale)\))?$/u,
     );
-    return tail;
-  } catch {
-    return "";
+    if (request && isNpmTiming(Number(request[1]))) {
+      const durationMs = Number(request[1]);
+      fetch.count++;
+      fetch.cacheHits += Number(request[2] === "hit");
+      fetch.cacheMisses += Number(request[2] === "miss");
+      fetch.durationMs += durationMs;
+      fetch.maxDurationMs = Math.max(fetch.maxDurationMs, durationMs);
+    }
   }
+  return { command, exitCode, lastActivity, errorCodes: [...errorCodes], fetch };
+}
+
+function isNpmTiming(value: number) {
+  return Number.isSafeInteger(value) && value >= 0 && value <= 60 * 60 * 1000;
 }
 
 export function resolveNpmDebugLogDirs(
@@ -516,24 +419,22 @@ function normalizeNpmCacheLogDir(logDir: string) {
 }
 
 function findNpmDebugLogs(logsDir: string) {
-  if (!existsSync(logsDir)) {
-    return [];
-  }
-
-  return readdirSync(logsDir)
-    .flatMap((fileName) => {
-      if (!fileName.endsWith("-debug-0.log")) {
+  try {
+    return readdirSync(logsDir).flatMap((fileName) => {
+      if (!/-debug-\d+\.log$/u.test(fileName)) {
         return [];
       }
       const path = join(logsDir, fileName);
       try {
         const stat = statSync(path);
-        return stat.isFile() ? [{ path, mtimeMs: stat.mtimeMs }] : [];
+        return stat.isFile() ? [{ path, mtimeMs: stat.mtimeMs, size: stat.size }] : [];
       } catch {
         return [];
       }
-    })
-    .toSorted((left, right) => left.mtimeMs - right.mtimeMs);
+    });
+  } catch {
+    return [];
+  }
 }
 
 export function buildNpmGlobalInstallArgs(
@@ -708,11 +609,6 @@ export function ensureLocalNpmShim(lane: LaneState) {
   chmodSync(shimPath, 0o755);
 }
 
-function readInstalledPackageManifest(prefixDir: string) {
-  const packageRoot = installedPackageRoot(prefixDir);
-  return readInstalledPackageManifestFromPackageRoot(packageRoot);
-}
-
 function readInstalledPackageManifestFromPackageRoot(packageRoot: string) {
   const packageJsonPath = join(packageRoot, "package.json");
   if (!existsSync(packageJsonPath)) {
@@ -723,7 +619,9 @@ function readInstalledPackageManifestFromPackageRoot(packageRoot: string) {
 }
 
 export function readInstalledVersion(prefixDir: string) {
-  const { packageJson } = readInstalledPackageManifest(prefixDir);
+  const { packageJson } = readInstalledPackageManifestFromPackageRoot(
+    installedPackageRoot(prefixDir),
+  );
   return typeof packageJson.version === "string" ? packageJson.version.trim() : "";
 }
 
@@ -734,16 +632,11 @@ export function readInstalledMetadataFromCliPath(cliPath: string, platform = pro
 }
 
 export function readInstalledMetadata(prefixDir: string) {
-  const { packageJson, packageRoot } = readInstalledPackageManifest(prefixDir);
-  return readInstalledMetadataFromManifest(packageJson, packageRoot);
+  return readInstalledMetadataFromPackageRoot(installedPackageRoot(prefixDir));
 }
 
 function readInstalledMetadataFromPackageRoot(packageRoot: string) {
   const { packageJson } = readInstalledPackageManifestFromPackageRoot(packageRoot);
-  return readInstalledMetadataFromManifest(packageJson, packageRoot);
-}
-
-function readInstalledMetadataFromManifest(packageJson: PackageJson, packageRoot: string) {
   const buildInfoPath = join(packageRoot, "dist", "build-info.json");
   if (!existsSync(buildInfoPath)) {
     throw new Error(`Installed build info missing: ${buildInfoPath}`);

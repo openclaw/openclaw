@@ -1,10 +1,15 @@
-import fs from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import type { GatewaySessionRow } from "../api/types.ts";
+import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
 import {
   CHAT_SNAPSHOT_DB_NAME,
   CHAT_SNAPSHOT_STORE_NAME,
 } from "../pages/chat/session-snapshot-database.ts";
+import { resolveChatSnapshotKey } from "../pages/chat/session-snapshot-key.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   createChatFlowE2eSuite,
   installMockGateway,
@@ -15,6 +20,11 @@ import {
 
 const suite = createChatFlowE2eSuite();
 const sessionId = "durable-geometry-session";
+const sessionInfo = {
+  key: "agent:main:main",
+  kind: "direct",
+  sessionId,
+} satisfies GatewaySessionRow;
 
 function historyMessage(seq: number, text: string) {
   return {
@@ -27,10 +37,10 @@ function historyMessage(seq: number, text: string) {
 
 suite.define(() => {
   it("discards stale transcript geometry before restored history bootstrap", async () => {
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-    if (artifactDir) {
-      await fs.mkdir(artifactDir, { recursive: true });
-    }
+    const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactRoot
+      ? createControlUiE2eArtifactDir("chat-history-stale-geometry", artifactRoot)
+      : undefined;
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -57,11 +67,13 @@ suite.define(() => {
         "chat.startup": {
           hasMore: false,
           messages: recentMessages,
+          sessionInfo,
           sessionId,
           totalMessages: recentMessages.length,
         },
       },
       sessionKey: "agent:main:main",
+      sessions: [sessionInfo],
     });
 
     try {
@@ -75,16 +87,40 @@ suite.define(() => {
       );
       expect(rowKeys.length).toBeGreaterThan(0);
       if (artifactDir) {
-        await page.screenshot({
-          path: path.join(artifactDir, "00-prior-narrow-transcript.png"),
-          fullPage: true,
-        });
+        await writeFile(
+          path.join(artifactDir, "00-prior-narrow-transcript.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            page.getByText("Restored message 18:", { exact: false }),
+          ]),
+        );
       }
+      const snapshotHost = await page
+        .locator(".chat-pane-cache__pane--active")
+        .evaluate((element) => {
+          const { state } = element as HTMLElement & { state: ChatPageHost };
+          if (!state.client?.recoveryScopeReady || !state.client.recoveryScope) {
+            throw new Error("Expected the authenticated snapshot owner");
+          }
+          return {
+            settings: { gatewayUrl: state.settings.gatewayUrl },
+            client: { recoveryScopeReady: true, recoveryScope: state.client.recoveryScope },
+            agentsList: state.agentsList,
+            hello: state.hello,
+            assistantAgentId: state.assistantAgentId,
+          };
+        });
+      const snapshotKey = resolveChatSnapshotKey(snapshotHost, { sessionKey: "agent:main:main" });
       await expect
         .poll(
           () =>
             page.evaluate(
-              async ({ databaseName, keys, storeName }) => {
+              async ({
+                databaseName,
+                keys,
+                storeName,
+                snapshotKey: storedKey,
+                sessionId: expectedSessionId,
+              }) => {
                 const database = await new Promise<IDBDatabase>((resolve, reject) => {
                   const request = indexedDB.open(databaseName);
                   request.addEventListener("success", () => resolve(request.result));
@@ -95,7 +131,7 @@ suite.define(() => {
                 const transaction = database.transaction(storeName, "readwrite");
                 const store = transaction.objectStore(storeName);
                 const record = await new Promise<unknown>((resolve, reject) => {
-                  const request = store.get("agent:main:main");
+                  const request = store.get(storedKey);
                   request.addEventListener("success", () => resolve(request.result));
                   request.addEventListener("error", () =>
                     reject(new Error(request.error?.message ?? "snapshot record read failed")),
@@ -104,6 +140,15 @@ suite.define(() => {
                 if (!record || typeof record !== "object") {
                   database.close();
                   return false;
+                }
+                if (
+                  !("sessionKey" in record) ||
+                  record.sessionKey !== storedKey ||
+                  !("sessionId" in record) ||
+                  record.sessionId !== expectedSessionId
+                ) {
+                  database.close();
+                  throw new Error("Snapshot record does not belong to the expected conversation");
                 }
                 (record as Record<string, unknown>).rowHeights = new Map(
                   keys.map((key) => [key, 1_000]),
@@ -125,6 +170,8 @@ suite.define(() => {
                 databaseName: CHAT_SNAPSHOT_DB_NAME,
                 keys: rowKeys,
                 storeName: CHAT_SNAPSHOT_STORE_NAME,
+                snapshotKey,
+                sessionId,
               },
             ),
           { timeout: 10_000 },
@@ -135,6 +182,7 @@ suite.define(() => {
         hasMore: true,
         messages: compactRecentMessages,
         nextOffset: compactRecentMessages.length,
+        sessionInfo,
         sessionId,
         totalMessages,
       });
@@ -179,10 +227,12 @@ suite.define(() => {
         )
         .toBeLessThanOrEqual(1);
       if (artifactDir) {
-        await page.screenshot({
-          path: path.join(artifactDir, "01-restored-without-phantom-gap.png"),
-          fullPage: true,
-        });
+        await writeFile(
+          path.join(artifactDir, "01-restored-without-phantom-gap.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            page.getByText("Older 1", { exact: true }),
+          ]),
+        );
       }
     } finally {
       await suite.closeBrowserContext(context);

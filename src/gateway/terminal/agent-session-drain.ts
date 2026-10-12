@@ -1,3 +1,4 @@
+import { createDeferredCore } from "../../shared/deferred.js";
 import type {
   AgentTerminalOwner,
   AgentTerminalSessionDrain,
@@ -9,21 +10,12 @@ export function agentTerminalOwnerMatches(
   owner: TerminalOwner | null,
   expected: AgentTerminalOwner,
 ): boolean {
-  if (owner?.kind !== "agent") {
-    return false;
-  }
   return (
+    owner?.kind === "agent" &&
     owner.agentSessionKey === expected.agentSessionKey &&
     owner.agentSessionId === expected.agentSessionId &&
     owner.agentId === expected.agentId
   );
-}
-
-type TaskBoundAgentOwner = Extract<TerminalOwner, { kind: "agent" }> & { taskId?: string };
-
-export function terminalTaskOwnerMatches(owner: TerminalOwner | null, taskId: string): boolean {
-  // SAFETY: taskId is manager-private metadata added only to host-minted agent owners.
-  return owner?.kind === "agent" && (owner as TaskBoundAgentOwner).taskId === taskId;
 }
 
 function drainKey(owner: AgentTerminalOwner): string {
@@ -31,35 +23,22 @@ function drainKey(owner: AgentTerminalOwner): string {
 }
 
 export class AgentTerminalSessionDrainTracker {
-  private readonly active = new Set<string>();
-  private readonly waiters = new Map<string, Set<() => void>>();
+  private readonly active = new Map<string, Set<() => void>>();
   private readonly exiting = new Set<TerminalSession>();
 
   begin(owner: AgentTerminalOwner, hasWork: () => boolean): AgentTerminalSessionDrain {
     const key = drainKey(owner);
-    this.active.add(key);
-    let resolveDrain!: () => void;
-    const drained = new Promise<void>((resolve) => {
-      resolveDrain = resolve;
-      const waiters = this.waiters.get(key) ?? new Set();
-      waiters.add(resolve);
-      this.waiters.set(key, waiters);
-    });
+    const drained = createDeferredCore();
+    const receipts = this.active.get(key) ?? new Set<() => void>();
+    receipts.add(drained.resolve);
+    this.active.set(key, receipts);
     this.resolveIfIdle(owner, hasWork);
-    let released = false;
     return {
-      drained,
+      drained: drained.promise,
       hasWork,
       release: () => {
-        if (released) {
-          return;
-        }
-        released = true;
-        this.active.delete(key);
-        const waiters = this.waiters.get(key);
-        waiters?.delete(resolveDrain);
-        if (waiters?.size === 0) {
-          this.waiters.delete(key);
+        if (receipts.delete(drained.resolve) && receipts.size === 0) {
+          this.active.delete(key);
         }
       },
     };
@@ -85,13 +64,8 @@ export class AgentTerminalSessionDrainTracker {
     if (hasWork()) {
       return;
     }
-    const key = drainKey(owner);
-    const waiters = this.waiters.get(key);
-    if (!waiters) {
-      return;
-    }
-    this.waiters.delete(key);
-    for (const resolve of waiters) {
+    // Settled receipts retain admission until their own lifecycle mutation releases.
+    for (const resolve of this.active.get(drainKey(owner)) ?? []) {
       resolve();
     }
   }

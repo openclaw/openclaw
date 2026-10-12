@@ -7,10 +7,7 @@ export {
   collectUnregisteredConfiguredMemoryEmbeddingProviders,
 } from "./gateway-startup-plugin-providers.js";
 export {
-  createConfigValidationMetadataPluginIdScope,
   createGatewayStartupMetadataPluginIdScope,
-  isMetadataSnapshotScopedForGatewayStartup,
-  resolveConfigValidationMetadataPluginIds,
   resolveGatewayStartupMetadataPluginIds,
 } from "./gateway-startup-plugin-metadata.js";
 export {
@@ -21,5 +18,4 @@ export {
   loadGatewayStartupPluginPlan,
   loadGatewayStartupPluginPlanWithMetadata,
   resolveChannelPluginIds,
-  resolveGatewayStartupPluginIdsFromRegistry,
 } from "./gateway-startup-plugin-loader.js";

@@ -4,8 +4,11 @@ import fs from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import type { SourceFile } from "typescript/unstable/ast";
+import { afterAll, describe, expect, it } from "vitest";
 import { classifyBundledExtensionSourcePath } from "../../../../scripts/lib/extension-source-classifier.mts";
+import { collectModuleReferencesFromSource } from "../../../../scripts/lib/guard-inventory-utils.mjs";
+import { createNativeTypeScriptParser } from "../../../../scripts/lib/native-typescript.mts";
 import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../../../plugin-sdk/test-helpers/public-artifacts.js";
 import { loadPluginManifestRegistryCore } from "../../../plugins/manifest-registry.js";
 import { expectNoReaddirSyncDuring } from "../../../test-utils/fs-scan-assertions.js";
@@ -17,6 +20,8 @@ import {
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const REPO_ROOT = resolve(ROOT_DIR, "..");
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
 const ALLOWED_EXTENSION_PUBLIC_SURFACES = new Set(GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES);
 ALLOWED_EXTENSION_PUBLIC_SURFACES.add("test-api.js");
 const BUNDLED_PLUGIN_ROOT_DIR = "extensions";
@@ -83,7 +88,11 @@ function createGuardedSource(
 const SAME_CHANNEL_SDK_GUARDS: GuardedSource[] = [
   ...["discord", "slack", "telegram", "imessage", "whatsapp", "signal"].flatMap((pluginId) => {
     const relativePaths =
-      pluginId === "signal" ? ["src/shared.ts", "src/runtime-api.ts"] : ["src/shared.ts"];
+      pluginId === "signal"
+        ? ["src/shared.ts", "runtime-api.ts"]
+        : pluginId === "telegram"
+          ? ["src/channel.ts", "src/setup-plugin.ts"]
+          : ["src/shared.ts"];
     return relativePaths.map((relativePath) =>
       createGuardedSource(pluginId, relativePath, [
         new RegExp(`["']openclaw/plugin-sdk/${pluginId}["']`),
@@ -224,6 +233,7 @@ function readSource(path: string): string {
   if (cached !== undefined) {
     return cached;
   }
+  expect(fs.existsSync(fullPath), `Missing guardrail source: ${path}`).toBe(true);
   const text = fs.readFileSync(fullPath, "utf8");
   sourceTextCache.set(fullPath, text);
   return text;
@@ -495,6 +505,13 @@ function getSourceAnalysis(path: string): SourceAnalysis {
   return analysis;
 }
 
+function expectNoCorePluginPrivateSrcImports(sourceFile: SourceFile): void {
+  const imports = collectModuleReferencesFromSource(sourceFile, {
+    acceptSpecifier: (specifier) => /(?:^|\/)extensions\/[^/]+\/src\//u.test(specifier),
+  });
+  expect(imports, `${sourceFile.fileName} should not import plugin-private src paths`).toEqual([]);
+}
+
 function expectOnlyApprovedExtensionSeams(file: string, imports: string[]): void {
   for (const specifier of imports) {
     const normalized = specifier.replaceAll("\\", "/");
@@ -511,26 +528,6 @@ function expectOnlyApprovedExtensionSeams(file: string, imports: string[]): void
       ALLOWED_EXTENSION_PUBLIC_SURFACES.has(basenameLocal),
       `${file} should only import approved extension surfaces, got ${specifier}`,
     ).toBe(true);
-  }
-}
-
-function expectNoSiblingExtensionPrivateSrcImports(file: string, imports: string[]): void {
-  const normalizedFile = file.replaceAll("\\", "/");
-  const currentExtensionId =
-    normalizedFile.match(new RegExp(`/${BUNDLED_PLUGIN_ROOT_DIR}/([^/]+)/`))?.[1] ?? null;
-  if (!currentExtensionId) {
-    return;
-  }
-  for (const specifier of imports) {
-    if (!specifier.startsWith(".")) {
-      continue;
-    }
-    const resolvedImport = resolve(dirname(file), specifier).replaceAll("\\", "/");
-    const targetExtensionId = resolvedImport.match(/\/extensions\/([^/]+)\/src\//)?.[1] ?? null;
-    if (!targetExtensionId || targetExtensionId === currentExtensionId) {
-      continue;
-    }
-    expect.fail(`${file} should not import another extension's private src, got ${specifier}`);
   }
 }
 
@@ -635,27 +632,43 @@ describe("channel import guardrails", () => {
     expect(collectExtensionForbiddenImportMatches(["src/infra/outbound/send-deps"])).toEqual([]);
   });
 
-  it("keeps core production files off plugin-private src imports", () => {
-    for (const file of collectCoreSourceFiles()) {
-      const text = readSource(file);
-      expect(text, `${file} should not import plugin-private src paths`).not.toMatch(
-        /["'][^"']*extensions\/[^/"']+\/src\//,
-      );
-    }
+  it.each([
+    'import { client } from "../../extensions/feishu/src/client.js";',
+    'import "../../extensions/feishu/src/client.js";',
+    'await import("../../extensions/feishu/src/client.js");',
+    'export * from "../../extensions/feishu/src/client.js";',
+    'export { client } from "../../extensions/feishu/src/client.js";',
+    'require("../../extensions/feishu/src/client.js");',
+    'import client = require("../../extensions/feishu/src/client");',
+  ])("rejects core plugin-private module references: %s", (source) => {
+    expect(() =>
+      expectNoCorePluginPrivateSrcImports(parser.parseSourceFile("source.ts", source)),
+    ).toThrow("should not import plugin-private src paths");
   });
 
-  describe("extension private src import guardrails", () => {
-    for (const extensionId of BUNDLED_EXTENSION_IDS.toSorted((left, right) =>
-      left.localeCompare(right),
-    )) {
-      it(`${extensionId} stays off other extensions' private src imports`, () => {
-        for (const file of collectExtensionFiles(extensionId)) {
-          if (basename(file) === "api.ts") {
-            continue;
-          }
-          expectNoSiblingExtensionPrivateSrcImports(file, getSourceAnalysis(file).importSpecifiers);
-        }
-      });
+  it("allows diagnostic paths and import examples without loading plugin-private modules", () => {
+    expectNoCorePluginPrivateSrcImports(
+      parser.parseSourceFile(
+        "source.ts",
+        [
+          'const modulePath = "extensions/feishu/src/client.ts";',
+          '// import "../../extensions/feishu/src/client.js";',
+          'const example = `require("../../extensions/feishu/src/client.js")`;',
+        ].join("\n"),
+      ),
+    );
+  });
+
+  it("keeps core production files off plugin-private src imports", () => {
+    const files = collectCoreSourceFiles();
+    for (let offset = 0; offset < files.length; offset += 32) {
+      const sources = files.slice(offset, offset + 32).map((fileName) => ({
+        fileName,
+        text: readSource(fileName),
+      }));
+      for (const sourceFile of parser.parseSourceFiles(sources)) {
+        expectNoCorePluginPrivateSrcImports(sourceFile);
+      }
     }
   });
 

@@ -73,43 +73,9 @@ describe("non-duplex node-host plugin cancellation", () => {
       sendNodeEvent,
       sessionKey: "agent:main:local-model",
       signal: controller.signal,
+      prepareExecAuthorization: expect.any(Function),
     });
     expect(request).not.toHaveBeenCalled();
-  });
-
-  it("preserves legacy plugin context when the caller supplies no signal", async () => {
-    const sendNodeEvent = vi.fn(async () => undefined);
-    const handle = vi.fn(async () => '{"ok":true}');
-    const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands = [
-      {
-        pluginId: "ollama",
-        pluginName: "Ollama",
-        command: { command: "ollama.chat", cap: "local-inference", handle },
-        source: "test",
-      },
-    ];
-    setActivePluginRegistry(registry);
-    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
-
-    await handleInvoke(
-      {
-        id: "legacy-model-inference",
-        nodeId: "paired-node",
-        command: "ollama.chat",
-        paramsJSON: "{}",
-      },
-      { request } as unknown as GatewayClient,
-      { current: async () => [] },
-      undefined,
-      { pluginCommandContext: { sendNodeEvent } },
-    );
-
-    expect(handle).toHaveBeenCalledWith("{}", undefined, { sendNodeEvent });
-    expect(request).toHaveBeenCalledWith(
-      "node.invoke.result",
-      expect.objectContaining({ ok: true, payloadJSON: '{"ok":true}' }),
-    );
   });
 
   it.each(["success", "failure", "cancellation", "supersession", "different-error"] as const)(

@@ -9,7 +9,15 @@ const removalDatePendingCompatCodes = new Set<PluginCompatCode>([
   "agent-harness-sdk-alias",
   "plugin-sdk-shipped-channel-setup-exports",
 ]);
-const retiredPluginSdkSubpathCodes = [
+const retiredPluginSdkSurfaceCodes = [
+  "plugin-sdk-channel-lifecycle-subpath",
+  "plugin-sdk-channel-message-subpath",
+  "plugin-sdk-channel-reply-pipeline-subpath",
+  "plugin-sdk-config-runtime-subpath",
+  "plugin-sdk-infra-runtime-subpath",
+  "plugin-sdk-command-auth-subpath",
+  "plugin-sdk-discord-subpath",
+  "plugin-sdk-telegram-account-subpath",
   "plugin-sdk-channel-streaming-subpath",
   "plugin-sdk-text-runtime-subpath",
   "plugin-sdk-channel-secret-runtime-subpath",
@@ -18,6 +26,15 @@ const retiredPluginSdkSubpathCodes = [
   "plugin-sdk-channel-logging-subpath",
   "plugin-sdk-group-access-subpath",
   "plugin-sdk-zod-subpath",
+  "deprecated-session-store-beta5-api",
+  "plugin-sdk-allowlist-resolution-entry-mapper",
+  "plugin-sdk-computer-use-validator-compiler",
+  "plugin-sdk-stoppable-passive-monitor",
+  "plugin-sdk-advertised-lan-host",
+  "plugin-sdk-json-file-fallback-reader",
+  "plugin-sdk-secret-input-mode-normalizer",
+  "plugin-sdk-persistent-dedupe-legacy-json-migration",
+  "plugin-sdk-provider-auth-copilot-helpers",
 ] as const satisfies readonly PluginCompatCode[];
 const deprecationMarkingCodes = [
   "plugin-sdk-channel-setup-input-fields",
@@ -31,18 +48,6 @@ const deprecationMarkingCodes = [
   "plugin-runtime-api-compat-aliases",
   "plugin-provider-manifest-compat-aliases",
 ] as const;
-const deprecationMarkingSurfaceCounts: Record<(typeof deprecationMarkingCodes)[number], number> = {
-  "plugin-sdk-channel-setup-input-fields": 22,
-  "plugin-sdk-broad-runtime-barrels": 12,
-  "plugin-sdk-provider-owned-helper-shims": 31,
-  "message-presentation-legacy-bridges": 21,
-  "plugin-sdk-focused-compat-aliases": 23,
-  "agent-harness-terminal-result-aliases": 10,
-  "official-plugin-export-aliases": 7,
-  "memory-host-compatibility-aliases": 4,
-  "plugin-runtime-api-compat-aliases": 27,
-  "plugin-provider-manifest-compat-aliases": 9,
-};
 function expectNonEmptyStringList(values: readonly string[], label: string) {
   expect(values, label).toEqual([expect.stringMatching(/\S/u), ...values.slice(1)]);
   for (const value of values) {
@@ -83,7 +88,7 @@ describe("plugin compatibility registry", () => {
       (record) =>
         record.status === "removal-pending" &&
         record.removeAfter !== undefined &&
-        record.removeAfter <= "2026-07-30",
+        record.removeAfter <= "2026-09-02",
     );
 
     expect(staleRemovalWindows).toEqual([]);
@@ -107,27 +112,46 @@ describe("plugin compatibility registry", () => {
     expect(records.get("plugin-sdk-inbound-reply-dispatch-subpath")).toMatchObject({
       status: "deprecated",
       removalGate: "next-plugin-sdk-major",
-      removeAfter: undefined,
     });
+    expect(records.get("plugin-sdk-inbound-reply-dispatch-subpath")?.removeAfter).toBeUndefined();
+    expect(records.get("plugin-state-sync-keyed-store")).toMatchObject({
+      status: "deprecated",
+      owner: "sdk",
+      deprecated: "2026-09-11",
+      warningStarts: "2026-09-11",
+      removalGate: "next-plugin-sdk-major",
+      docsPath: "/plugins/sdk-runtime/state-and-system#synchronous-keyed-store-migration",
+      surfaces: [
+        "api.runtime.state.openSyncKeyedStore",
+        "PluginStateSyncKeyedStore",
+        "createPluginStateSyncKeyedStore",
+        "PluginStateKeyedStore.update",
+        "PluginStateKeyedStore.deleteIf",
+      ],
+    });
+    expect(records.get("plugin-state-sync-keyed-store")?.removeAfter).toBeUndefined();
     expect(records.get("agent-harness-sdk-alias")?.surfaces).toEqual([
       "openclaw/plugin-sdk/agent-harness",
       "openclaw/plugin-sdk/agent-harness-runtime",
     ]);
   });
 
-  it("keeps retired Plugin SDK subpaths as migration tombstones", () => {
+  it("keeps retired Plugin SDK surfaces as migration tombstones", () => {
     const records = new Map(listPluginCompatRecords().map((record) => [record.code, record]));
 
-    for (const code of retiredPluginSdkSubpathCodes) {
+    for (const code of retiredPluginSdkSurfaceCodes) {
       expect(records.get(code)).toMatchObject({
         status: "removed",
         releaseNote: expect.stringMatching(/\S/u),
       });
-      expect(records.get(code)?.removeAfter, code).toBeUndefined();
+      const removeAfter = records.get(code)?.removeAfter;
+      if (removeAfter !== undefined) {
+        expect(removeAfter, code).toMatch(datePattern);
+      }
     }
   });
 
-  it("tracks the deprecation-marking families through the approved window", () => {
+  it("keeps elapsed annotation windows pending their reader migrations", () => {
     const records = new Map(listPluginCompatRecords().map((record) => [record.code, record]));
 
     expect(deprecationMarkingCodes.map((code) => records.get(code)?.code)).toEqual(
@@ -135,13 +159,18 @@ describe("plugin compatibility registry", () => {
     );
     for (const code of deprecationMarkingCodes) {
       expect(records.get(code)).toMatchObject({
-        status: "deprecated",
+        status: "removal-pending",
         deprecated: "2026-07-25",
         warningStarts: "2026-07-25",
         removeAfter: "2026-10-01",
       });
-      expect(records.get(code)?.surfaces, code).toHaveLength(deprecationMarkingSurfaceCounts[code]);
+      expect(records.get(code)?.replacement, code).toMatch(/retain (?:each field )?until/u);
     }
+    expect(records.get("media-legacy-projection")).toMatchObject({
+      status: "removal-pending",
+      removeAfter: "2026-10-01",
+      replacement: expect.stringContaining("clean published-plugin artifact sweep"),
+    });
     expect(records.get("plugin-sdk-broad-runtime-barrels")?.surfaces).toEqual(
       expect.arrayContaining([
         "openclaw/plugin-sdk/agent-runtime",
@@ -158,61 +187,26 @@ describe("plugin compatibility registry", () => {
         "openclaw/plugin-sdk/security-runtime",
       ]),
     );
-    expect(records.get("deprecated-session-store-beta5-api")?.surfaces).toEqual(
-      expect.arrayContaining([
-        "openclaw package root loadSessionStore",
-        "openclaw package root saveSessionStore",
-      ]),
-    );
   });
 
-  it("keeps the removed context-engine host-param default as a migration tombstone", () => {
-    const record = listPluginCompatRecords().find(
-      (candidate) => candidate.code === "context-engine-legacy-host-param-default",
-    );
-
-    expect(record).toMatchObject({
-      status: "removed",
-      replacement:
-        "`ContextEngineInfo.acceptedHostParams` for restricted projection; omitted declarations receive full host params",
-    });
-    expect(record?.removeAfter).toBeUndefined();
-  });
-
-  it("keeps the removed deactivate hook alias as a migration tombstone", () => {
-    const record = listPluginCompatRecords().find(
-      (candidate) => candidate.code === "legacy-deactivate-hook-alias",
-    );
-
-    expect(record).toMatchObject({
-      status: "removed",
-      replacement: "`gateway_stop` hook",
-    });
-    expect(record?.removeAfter).toBeUndefined();
-  });
-
-  it("keeps the removed subagent spawning hook as a migration tombstone", () => {
-    const record = listPluginCompatRecords().find(
-      (candidate) => candidate.code === "legacy-subagent-spawning-hook",
-    );
-
-    expect(record).toMatchObject({
-      status: "removed",
-      replacement:
-        "`subagent_spawned` for post-launch observation; core session-binding adapters for thread routing",
-    });
-    expect(record?.removeAfter).toBeUndefined();
-  });
-
-  it("keeps the removed embedded Pi aliases as a migration tombstone", () => {
-    const record = listPluginCompatRecords().find(
-      (candidate) => candidate.code === "embedded-pi-agent-sdk-aliases",
-    );
-
-    expect(record).toMatchObject({
-      status: "removed",
-      replacement: "`runEmbeddedAgent` and `EmbeddedAgent*` SDK/runtime names",
-    });
+  it.each([
+    [
+      "context-engine-legacy-host-param-default",
+      "`ContextEngineInfo.acceptedHostParams` for restricted projection; omitted declarations receive full host params",
+    ],
+    ["legacy-deactivate-hook-alias", "`gateway_stop` hook"],
+    [
+      "legacy-subagent-spawning-hook",
+      "`subagent_spawned` for post-launch observation; core session-binding adapters for thread routing",
+    ],
+    ["embedded-pi-agent-sdk-aliases", "`runEmbeddedAgent` and `EmbeddedAgent*` SDK/runtime names"],
+    [
+      "deprecated-memory-embedding-provider-api",
+      "`api.registerEmbeddingProvider(...)` and `contracts.embeddingProviders`",
+    ],
+  ])("keeps %s as a migration tombstone", (code, replacement) => {
+    const record = listPluginCompatRecords().find((candidate) => candidate.code === code);
+    expect(record).toMatchObject({ status: "removed", replacement });
     expect(record?.removeAfter).toBeUndefined();
   });
 
@@ -225,18 +219,6 @@ describe("plugin compatibility registry", () => {
       status: "deprecated",
       replacement:
         "retain until supported published packages migrate to plugin-owned config schemas plus generic `openclaw/plugin-sdk/channel-config-schema` and `openclaw/plugin-sdk/setup-runtime` primitives",
-    });
-    expect(record?.removeAfter).toBeUndefined();
-  });
-
-  it("keeps the removed memory embedding registrar as a migration tombstone", () => {
-    const record = listPluginCompatRecords().find(
-      (candidate) => candidate.code === "deprecated-memory-embedding-provider-api",
-    );
-
-    expect(record).toMatchObject({
-      status: "removed",
-      replacement: "`api.registerEmbeddingProvider(...)` and `contracts.embeddingProviders`",
     });
     expect(record?.removeAfter).toBeUndefined();
   });

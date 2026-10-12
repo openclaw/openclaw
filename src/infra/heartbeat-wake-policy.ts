@@ -61,8 +61,7 @@ type TargetedUnscheduledWakeParams = {
 
 export function isTargetedUnscheduledWake(params: TargetedUnscheduledWakeParams): boolean {
   const hasSessionTarget = normalizeOptionalString(params.sessionKey) !== undefined;
-  const hasTarget = hasSessionTarget || normalizeOptionalString(params.agentId) !== undefined;
-  if (!hasTarget) {
+  if (!hasSessionTarget && normalizeOptionalString(params.agentId) === undefined) {
     return false;
   }
 
@@ -72,7 +71,16 @@ export function isTargetedUnscheduledWake(params: TargetedUnscheduledWakeParams)
   // they cannot broaden the immediate-wake exception.
   const reason = params.reason?.trim();
   switch (params.source) {
+    case "cron":
+      return params.intent === "immediate" && (reason?.startsWith("cron:") ?? false);
     case "notifications-event":
+      return (
+        hasSessionTarget &&
+        ((params.intent === "immediate" && reason === "wake") ||
+          (params.intent === "event" && reason === "notifications-event"))
+      );
+    case "manual":
+    case "restart-sentinel":
       return params.intent === "immediate" && hasSessionTarget && reason === "wake";
     case "hook":
       return params.intent === "immediate" && (reason?.startsWith("hook:") ?? false);

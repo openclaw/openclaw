@@ -114,6 +114,9 @@ export const overflowCases = [
       "patterns-context-cohere",
       { message: "total tokens exceeds the model's maximum limit of 4096" },
     ],
+    ["patterns-context-llamacpp-exceeded", { message: "Context size has been exceeded." }],
+    ["patterns-context-llamacpp-exceeded-400", { message: "400 Context size has been exceeded." }],
+    ["patterns-context-llamacpp-exceeded-500", { message: "500 Context size has been exceeded." }],
     [
       "patterns-context-llamacpp-available",
       {
@@ -191,6 +194,17 @@ export const overflowCases = [
     {
       id: "patterns-context-prompt-token-limit",
       message: "prompt is too long: 150000 tokens > 128000 maximum",
+    },
+    {
+      id: "patterns-context-lmstudio-loaded-length",
+      message:
+        "Trying to keep the first 15857 tokens when context the overflows. However, the model is loaded with context length of only 4096 tokens, which is not enough. Try to load the model with a larger context length, or provide a shorter input.",
+    },
+    {
+      id: "patterns-context-lmstudio-loaded-length-400",
+      status: 400,
+      message:
+        '400 " Trying to keep the first 15857 tokens when context the overflows. However, the model is loaded with context length of only 4096 tokens, which is not enough. Try to load the model with a larger context length, or provide a shorter input. Error Data: n/a, Additional Data: n/a"',
     },
   ]),
 ] satisfies readonly FailoverClassificationCorpusRow[];

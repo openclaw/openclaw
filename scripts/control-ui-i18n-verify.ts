@@ -3,17 +3,26 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import * as ts from "typescript";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import * as ts from "typescript/unstable/ast";
 import {
   loadControlUiTranslationMemory,
-  loadControlUiLocaleCatalog,
+  materializePreparedControlUiLocaleCatalog,
+  prepareControlUiCatalogSource,
+  type PreparedControlUiCatalogSource,
+} from "./lib/control-ui-i18n-catalog-values.ts";
+import {
   loadControlUiSourceCatalog,
-  materializeControlUiLocaleCatalog,
   readControlUiSourceCatalog,
 } from "./lib/control-ui-i18n-catalog.ts";
 import { CONTROL_UI_LOCALE_ENTRIES } from "./lib/control-ui-i18n-config.ts";
 import { syncControlUiRawCopyBaseline } from "./lib/control-ui-i18n-raw-copy.ts";
-import type { TranslationMap } from "./lib/control-ui-i18n-sync-plan.ts";
+import {
+  compareStringArrays,
+  extractTranslationPlaceholders,
+} from "./lib/control-ui-i18n-sync-plan.ts";
+import { loadControlUiPluginCatalogs } from "./lib/control-ui-plugin-i18n-catalog.ts";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { collectSourceFileContents } from "./lib/source-file-scan-cache.mts";
 
 export type CatalogFallbackBaseline = {
@@ -23,18 +32,14 @@ export type CatalogFallbackBaseline = {
 };
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const LOCALES_DIR = path.join(ROOT, "ui", "src", "i18n", "locales");
 const I18N_ASSETS_DIR = path.join(ROOT, "ui", "src", "i18n", ".i18n");
-const SOURCE_LOCALE_PATH = path.join(LOCALES_DIR, "en.ts");
-const ACTIVITY_SOURCE_LOCALE_PATH = path.join(LOCALES_DIR, "en-activity.ts");
-const SESSION_PLACEMENT_SOURCE_LOCALE_PATH = path.join(LOCALES_DIR, "en-session-placement.ts");
 const FALLBACK_BASELINE_PATH = path.join(I18N_ASSETS_DIR, "catalog-fallbacks.json");
 const FALLBACK_BASELINE_VERSION = 1;
 const CONTROL_UI_TEST_FILE_PATTERN = /\.(?:test|browser\.test|node\.test)\.tsx?$/u;
-
-function compareStringArrays(left: readonly string[], right: readonly string[]): boolean {
-  return left.length === right.length && left.every((value, index) => value === right[index]);
-}
+const AUTOMATIONS_FEATURE_KEYS =
+  `sessionsView.showCronSessions sessionsView.subagentPrefix sessionsView.automationPrefix agents.cronPanel.schedulerSubtitle agents.cronPanel.agentJobsTitle configForm.sections.cron.label configView.sections.cron subtitles.automation memoryPage.dreaming.intro attention.cronFailed attention.cronOverdue palette.items.scheduled`.split(
+    " ",
+  );
 
 function toRepoPath(filePath: string): string {
   return path.relative(ROOT, filePath).split(path.sep).join("/");
@@ -45,28 +50,6 @@ export function formatControlUiCatalogFallbackDriftError(): string {
     "control-ui catalog fallback baseline drift detected.",
     "Run `pnpm ui:i18n:sync` (included in `pnpm release:prep`) and commit the generated locale artifacts.",
   ].join("\n");
-}
-
-async function loadSourceLocaleMap(): Promise<TranslationMap> {
-  return await loadControlUiSourceCatalog(
-    SOURCE_LOCALE_PATH,
-    ACTIVITY_SOURCE_LOCALE_PATH,
-    SESSION_PLACEMENT_SOURCE_LOCALE_PATH,
-  );
-}
-
-async function readSourceLocaleRaw(): Promise<string> {
-  return await readControlUiSourceCatalog(
-    SOURCE_LOCALE_PATH,
-    ACTIVITY_SOURCE_LOCALE_PATH,
-    SESSION_PLACEMENT_SOURCE_LOCALE_PATH,
-  );
-}
-
-function extractPlaceholders(text: string): string[] {
-  return [...new Set([...text.matchAll(/\{(\w+)\}/g)].map((match) => match[1] ?? ""))]
-    .filter(Boolean)
-    .toSorted((left, right) => left.localeCompare(right));
 }
 
 export function flattenControlUiCatalog(
@@ -123,8 +106,8 @@ export function analyzeControlUiCatalogs(
         fallbackLocalesByKey.set(key, locales);
         continue;
       }
-      const sourcePlaceholders = extractPlaceholders(sourceFlat.get(key) ?? "");
-      const translatedPlaceholders = extractPlaceholders(translated);
+      const sourcePlaceholders = extractTranslationPlaceholders(sourceFlat.get(key) ?? "");
+      const translatedPlaceholders = extractTranslationPlaceholders(translated);
       if (!compareStringArrays(sourcePlaceholders, translatedPlaceholders)) {
         errors.push(
           `${locale}:${key} expected {${sourcePlaceholders.join("},{")}} got {${translatedPlaceholders.join("},{")}}`,
@@ -151,46 +134,55 @@ export function verifyControlUiReferencedKeys(
   let literalReferences = 0;
   let templatePrefixReferences = 0;
 
-  for (const { content, relativeFile } of sourceFiles) {
-    const sourceFile = ts.createSourceFile(relativeFile, content, ts.ScriptTarget.Latest, true);
-    const reportMissing = (node: ts.Node, description: string) => {
-      const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
-      errors.push(`${relativeFile}:${line}: ${description}`);
-    };
-    const verifyArgument = (rawArgument: ts.Expression): void => {
-      const argument = ts.isParenthesizedExpression(rawArgument)
-        ? rawArgument.expression
-        : ts.isAsExpression(rawArgument) || ts.isTypeAssertionExpression(rawArgument)
+  const parser = createNativeTypeScriptParser({ cwd: ROOT });
+  try {
+    const sources = sourceFiles.map(({ content, relativeFile }) => ({
+      fileName: relativeFile,
+      text: content,
+    }));
+    for (const sourceFile of parser.parseSourceFiles(sources)) {
+      const relativeFile = toRepoPath(sourceFile.fileName);
+      const reportMissing = (node: ts.Node, description: string) => {
+        const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
+        errors.push(`${relativeFile}:${line}: ${description}`);
+      };
+      const verifyArgument = (rawArgument: ts.Expression): void => {
+        const argument = ts.isParenthesizedExpression(rawArgument)
           ? rawArgument.expression
-          : rawArgument;
-      if (ts.isStringLiteral(argument) || ts.isNoSubstitutionTemplateLiteral(argument)) {
-        literalReferences += 1;
-        if (!sourceFlat.has(argument.text)) {
-          reportMissing(argument, `missing English catalog key ${JSON.stringify(argument.text)}`);
+          : ts.isAsExpression(rawArgument) || ts.isTypeAssertion(rawArgument)
+            ? rawArgument.expression
+            : rawArgument;
+        if (ts.isStringLiteral(argument) || ts.isNoSubstitutionTemplateLiteral(argument)) {
+          literalReferences += 1;
+          if (!sourceFlat.has(argument.text)) {
+            reportMissing(argument, `missing English catalog key ${JSON.stringify(argument.text)}`);
+          }
+        } else if (ts.isTemplateExpression(argument)) {
+          templatePrefixReferences += 1;
+          const prefix = argument.head.text;
+          if (prefix && !sourceKeys.some((key) => key.startsWith(prefix))) {
+            reportMissing(argument, `missing English catalog subtree ${JSON.stringify(prefix)}`);
+          }
+        } else if (ts.isConditionalExpression(argument)) {
+          verifyArgument(argument.whenTrue);
+          verifyArgument(argument.whenFalse);
         }
-      } else if (ts.isTemplateExpression(argument)) {
-        templatePrefixReferences += 1;
-        const prefix = argument.head.text;
-        if (prefix && !sourceKeys.some((key) => key.startsWith(prefix))) {
-          reportMissing(argument, `missing English catalog subtree ${JSON.stringify(prefix)}`);
+      };
+      const visit = (node: ts.Node) => {
+        if (
+          ts.isCallExpression(node) &&
+          ts.isIdentifier(node.expression) &&
+          node.expression.text === "t" &&
+          node.arguments[0]
+        ) {
+          verifyArgument(node.arguments[0]);
         }
-      } else if (ts.isConditionalExpression(argument)) {
-        verifyArgument(argument.whenTrue);
-        verifyArgument(argument.whenFalse);
-      }
-    };
-    const visit = (node: ts.Node) => {
-      if (
-        ts.isCallExpression(node) &&
-        ts.isIdentifier(node.expression) &&
-        node.expression.text === "t" &&
-        node.arguments[0]
-      ) {
-        verifyArgument(node.arguments[0]);
-      }
-      ts.forEachChild(node, visit);
-    };
-    visit(sourceFile);
+        node.forEachChild(visit);
+      };
+      visit(sourceFile);
+    }
+  } finally {
+    parser.close();
   }
 
   if (errors.length > 0) {
@@ -212,20 +204,34 @@ async function buildCatalogFallbackBaseline(
     allowCatalogDrift?: boolean;
   } = {},
 ): Promise<CatalogFallbackBaseline> {
-  const sourceRaw = await readSourceLocaleRaw();
-  const sourceMap = await loadSourceLocaleMap();
+  const sourceRaw = await readControlUiSourceCatalog();
+  const sourceMap = loadControlUiSourceCatalog();
   const sourceFlat = flattenControlUiCatalog(sourceMap, "en");
   const localeFlats = new Map<string, Map<string, string>>();
-  for (const entry of CONTROL_UI_LOCALE_ENTRIES) {
-    const memoryPath = path.join(I18N_ASSETS_DIR, `${entry.locale}.tm.jsonl`);
-    if (!existsSync(memoryPath)) {
-      throw new Error(`${toRepoPath(memoryPath)} does not contain ${entry.locale} translations`);
+  {
+    let prepared: PreparedControlUiCatalogSource | undefined;
+    for (const [index, entry] of CONTROL_UI_LOCALE_ENTRIES.entries()) {
+      const memoryPath = path.join(I18N_ASSETS_DIR, `${entry.locale}.tm.jsonl`);
+      if (!existsSync(memoryPath)) {
+        throw new Error(`${toRepoPath(memoryPath)} does not contain ${entry.locale} translations`);
+      }
+      const memory = loadControlUiTranslationMemory(memoryPath);
+      prepared ??= prepareControlUiCatalogSource(sourceFlat);
+      // Match the source + translation-memory materialization served by the runtime Vite module.
+      const localeMap = materializePreparedControlUiLocaleCatalog(prepared, memory);
+      if (index === CONTROL_UI_LOCALE_ENTRIES.length - 1) {
+        // Analysis retains locale flats, but no longer needs the prepared hashes.
+        prepared = undefined;
+      }
+      const localeFlat = flattenControlUiCatalog(localeMap, entry.locale);
+      const invalid = AUTOMATIONS_FEATURE_KEYS.slice(1, 3).filter((key) =>
+        /\bcron\b/i.test(localeFlat.get(key) ?? ""),
+      );
+      if (invalid.length > 0) {
+        throw new Error(`${entry.locale}: ${invalid.join(", ")}`);
+      }
+      localeFlats.set(entry.locale, localeFlat);
     }
-    const localeMap = materializeControlUiLocaleCatalog(
-      sourceFlat,
-      loadControlUiTranslationMemory(memoryPath),
-    );
-    localeFlats.set(entry.locale, flattenControlUiCatalog(localeMap, entry.locale));
   }
 
   const analysis = analyzeControlUiCatalogs(sourceFlat, localeFlats);
@@ -264,8 +270,13 @@ function printCatalogFallbackSummary(baseline: CatalogFallbackBaseline) {
 }
 
 async function verifyControlUiSourceCatalogShape() {
-  const sourceMap = await loadSourceLocaleMap();
-  const sourceFlat = flattenControlUiCatalog(sourceMap, "en");
+  const sourceFlat = flattenControlUiCatalog(loadControlUiSourceCatalog(), "en");
+  const invalidRenamedValues = AUTOMATIONS_FEATURE_KEYS.filter((key) =>
+    /\bcron\b/i.test(sourceFlat.get(key) ?? "cron"),
+  );
+  if (invalidRenamedValues.length > 0) {
+    throw new Error(`automations terminology drift: ${invalidRenamedValues.join(", ")}`);
+  }
   const sourceFiles = (
     await collectSourceFileContents({
       ignoredDirNames: new Set(["test-helpers"]),
@@ -278,6 +289,63 @@ async function verifyControlUiSourceCatalogShape() {
   process.stdout.write(
     `control-ui-i18n: source: keys=${sourceFlat.size} literal_references=${referenced.literalReferences} template_prefix_references=${referenced.templatePrefixReferences}\n`,
   );
+}
+
+export async function verifyControlUiPluginCatalogs(repoRoot = ROOT) {
+  const summaries = [];
+  const supportedLocales = new Set<string>(CONTROL_UI_LOCALE_ENTRIES.map(({ locale }) => locale));
+  for (const plugin of await loadControlUiPluginCatalogs(repoRoot)) {
+    const sourceFlat = flattenControlUiCatalog(plugin.source, `${plugin.id}:en`);
+    const localeFlats = new Map<string, Map<string, string>>();
+    let unusedTranslations = 0;
+    for (const [locale, translations] of Object.entries(plugin.translations)) {
+      if (!supportedLocales.has(locale)) {
+        throw new Error(`${plugin.id}: unsupported locale ${locale}`);
+      }
+      const flat = flattenControlUiCatalog(translations, `${plugin.id}:${locale}`);
+      // An object at an English leaf suppresses the runtime's English fallback.
+      // Historical child keys may remain only when they cannot mask current copy.
+      for (const key of sourceFlat.keys()) {
+        let value: unknown = translations;
+        for (const part of key.split(".")) {
+          value = isRecord(value) ? value[part] : undefined;
+        }
+        if (isRecord(value)) {
+          throw new Error(`${plugin.id}:${locale}:${key} must be a string at an English leaf`);
+        }
+      }
+      unusedTranslations += [...flat.keys()].filter((key) => !sourceFlat.has(key)).length;
+      // Plugin catalogs are authored inputs, not generated core catalogs. Validate
+      // current keys in source order without deleting retained historical translations.
+      localeFlats.set(
+        locale,
+        new Map(
+          [...sourceFlat.keys()].filter((key) => flat.has(key)).map((key) => [key, flat.get(key)!]),
+        ),
+      );
+    }
+    const analysis = analyzeControlUiCatalogs(sourceFlat, localeFlats);
+    if (analysis.errors.length > 0) {
+      throw new Error(`${plugin.id}: ${analysis.errors.join("\n")}`);
+    }
+    const sourceFiles = (
+      await collectSourceFileContents({
+        ignoredDirNames: new Set(["test-helpers"]),
+        repoRoot,
+        scanExtensions: new Set([".ts", ".tsx"]),
+        scanRoots: [plugin.browserRoot],
+      })
+    ).filter(({ relativeFile }) => !CONTROL_UI_TEST_FILE_PATTERN.test(relativeFile));
+    const referenced = verifyControlUiReferencedKeys(sourceFlat, sourceFiles);
+    summaries.push({
+      id: plugin.id,
+      keys: sourceFlat.size,
+      locales: localeFlats.size,
+      unusedTranslations,
+      ...referenced,
+    });
+  }
+  return summaries;
 }
 
 export async function syncControlUiCatalogFallbackBaseline(options: {
@@ -303,19 +371,18 @@ export async function syncControlUiCatalogFallbackBaseline(options: {
 }
 
 export async function verifyRuntimeLocaleConfig() {
-  const registryRaw = await readFile(
-    path.join(ROOT, "ui", "src", "i18n", "lib", "registry.ts"),
-    "utf8",
-  );
-  const typesRaw = await readFile(path.join(ROOT, "ui", "src", "i18n", "lib", "types.ts"), "utf8");
-  for (const entry of CONTROL_UI_LOCALE_ENTRIES) {
-    if (!registryRaw.includes(`"${entry.locale}"`) || !typesRaw.includes(`| "${entry.locale}"`)) {
-      throw new Error(`runtime locale config is missing ${entry.locale}`);
-    }
+  const registryPath = path.join(ROOT, "ui", "src", "i18n", "lib", "registry.ts");
+  const registry = (await import(pathToFileURL(registryPath).href)) as {
+    SUPPORTED_LOCALES: readonly string[];
+  };
+  const expectedLocales = ["en", ...CONTROL_UI_LOCALE_ENTRIES.map((entry) => entry.locale)];
+  if (!compareStringArrays(registry.SUPPORTED_LOCALES, expectedLocales)) {
+    throw new Error(
+      `runtime locale config is out of sync: expected ${expectedLocales.join(", ")}, got ${registry.SUPPORTED_LOCALES.join(", ")}`,
+    );
   }
 
-  const enMap = (await loadControlUiLocaleCatalog(SOURCE_LOCALE_PATH, "en")) ?? {};
-  const languageMap = enMap.languages;
+  const languageMap = loadControlUiSourceCatalog().languages;
   const languageKeys =
     languageMap && typeof languageMap === "object"
       ? Object.keys(languageMap).toSorted((left, right) => left.localeCompare(right))
@@ -331,21 +398,11 @@ export async function verifyRuntimeLocaleConfig() {
   }
 }
 
-export async function verifyControlUiGeneratedCatalogs(options: {
-  checkOnly: boolean;
-  write: boolean;
-}) {
+export async function verifyControlUiGeneratedCatalogs() {
   await verifyRuntimeLocaleConfig();
-  await syncControlUiRawCopyBaseline(options);
-  await syncControlUiCatalogFallbackBaseline(options);
-}
-
-async function verifyControlUiContributorCatalogs(options: { checkOnly: boolean; write: boolean }) {
-  await verifyRuntimeLocaleConfig();
-  await syncControlUiRawCopyBaseline(options);
-  // Foreign catalogs may be stale after an English rename, deletion, or
-  // placeholder change. The post-merge locale workflow owns that repair.
-  await verifyControlUiSourceCatalogShape();
+  await verifyControlUiPluginCatalogs();
+  await syncControlUiRawCopyBaseline({ checkOnly: true, write: false });
+  await syncControlUiCatalogFallbackBaseline({ checkOnly: true, write: false });
 }
 
 function usage(): never {
@@ -358,18 +415,21 @@ async function main() {
   if ((command !== "verify" && command !== "baseline") || rest.length > 0) {
     usage();
   }
-  await verifyControlUiContributorCatalogs({
+  await verifyRuntimeLocaleConfig();
+  await syncControlUiRawCopyBaseline({
     checkOnly: command === "verify",
     write: command === "baseline",
   });
+  // Foreign catalogs are repaired by the post-merge locale workflow.
+  await verifyControlUiSourceCatalogShape();
+  for (const summary of await verifyControlUiPluginCatalogs()) {
+    process.stdout.write(
+      `control-ui-i18n: plugin=${summary.id} keys=${summary.keys} locales=${summary.locales} unused_translations=${summary.unusedTranslations}\n`,
+    );
+  }
 }
 
-function isCliEntrypoint() {
-  const entrypoint = process.argv[1];
-  return Boolean(entrypoint && import.meta.url === pathToFileURL(path.resolve(entrypoint)).href);
-}
-
-if (isCliEntrypoint()) {
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   await main().catch((error: unknown) => {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);

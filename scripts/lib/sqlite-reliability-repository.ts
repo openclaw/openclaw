@@ -1,4 +1,3 @@
-import { fork, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,192 +7,53 @@ import {
   type SnapshotDatabaseIdentity,
   type SnapshotSummary,
 } from "../../src/snapshot/snapshot-provider.js";
-import type { ReliabilityReport, ReliabilityStateProof } from "./sqlite-reliability-contract.js";
+import {
+  assertSameCompactionPayload,
+  assertSameReliabilityState,
+  type CompactionPayloadProof,
+  type ReliabilityStateProof,
+} from "./sqlite-reliability-contract.js";
+import { startReliabilityCrashWorker } from "./sqlite-reliability-process.js";
 
 type RepositoryCrashPoint = "after-commit" | "before-pending" | "pending";
-type RepositoryExit =
-  ReliabilityReport["maintenanceProof"]["repositoryInterruption"]["beforePending"]["exit"];
-type RepositoryPayload =
-  ReliabilityReport["maintenanceProof"]["repositoryInterruption"]["beforePending"]["payload"];
-type CrashPointResult = {
-  crashSnapshotVerifiedAfterCrash: boolean;
-  crashSnapshotVisibleAfterCrash: boolean;
-  exit: RepositoryExit;
-  incompleteEntries: number;
-  payload: RepositoryPayload;
-  stagingEntries: number;
-  state: ReliabilityStateProof;
-  visibleSnapshotsAfterCrash: number;
-};
-
 const REPOSITORY_WORKER_PATH = fileURLToPath(
   new URL("./sqlite-reliability-repository-worker.ts", import.meta.url),
 );
-const REPOSITORY_TIMEOUT_MS = 120_000;
-
-function assertSameState(
-  actual: ReliabilityStateProof,
-  expected: ReliabilityStateProof,
-  label: string,
-): void {
-  if (
-    actual.batches !== expected.batches ||
-    actual.rows !== expected.rows ||
-    actual.sha256 !== expected.sha256
-  ) {
-    throw new Error(
-      `${label} changed reliability state: expected batches=${expected.batches} rows=${expected.rows} sha256=${expected.sha256}, got batches=${actual.batches} rows=${actual.rows} sha256=${actual.sha256}`,
-    );
-  }
-}
-
-function assertSamePayload(
-  actual: RepositoryPayload,
-  expected: RepositoryPayload,
-  label: string,
-): void {
-  if (
-    actual.bytes !== expected.bytes ||
-    actual.idSum !== expected.idSum ||
-    actual.rows !== expected.rows
-  ) {
-    throw new Error(
-      `${label} changed compaction payload: expected rows=${expected.rows} bytes=${expected.bytes} idSum=${expected.idSum}, got rows=${actual.rows} bytes=${actual.bytes} idSum=${actual.idSum}`,
-    );
-  }
-}
-
-function formatWorkerStderr(stderr: string): string {
-  const text = stderr.trim();
-  return text ? ` stderr=${JSON.stringify(text)}` : "";
-}
-
-async function waitForCrashPoint(params: {
-  child: ChildProcess;
-  crashPoint: RepositoryCrashPoint;
-  readStderr: () => string;
-}): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      cleanup();
-      reject(
-        new Error(
-          `SQLite repository worker did not reach ${params.crashPoint}.${formatWorkerStderr(params.readStderr())}`,
-        ),
-      );
-    }, REPOSITORY_TIMEOUT_MS);
-    const onMessage = (message: unknown) => {
-      const event = message as { crashPoint?: unknown; kind?: unknown } | undefined;
-      if (event?.kind === "crash-point" && event.crashPoint === params.crashPoint) {
-        cleanup();
-        resolve();
-      }
-    };
-    const onError = (error: Error) => {
-      cleanup();
-      reject(error);
-    };
-    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
-      cleanup();
-      reject(
-        new Error(
-          `SQLite repository worker exited before ${params.crashPoint}: code=${String(code)} signal=${String(signal)}.${formatWorkerStderr(params.readStderr())}`,
-        ),
-      );
-    };
-    const cleanup = () => {
-      clearTimeout(timeout);
-      params.child.off("message", onMessage);
-      params.child.off("error", onError);
-      params.child.off("exit", onExit);
-    };
-    params.child.on("message", onMessage);
-    params.child.on("error", onError);
-    params.child.on("exit", onExit);
-  });
-}
-
-async function waitForChildExit(child: ChildProcess): Promise<RepositoryExit> {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return { code: child.exitCode, signal: child.signalCode };
-  }
-  return await new Promise<RepositoryExit>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      cleanup();
-      reject(new Error("SQLite repository worker did not exit after forced termination."));
-    }, 30_000);
-    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
-      cleanup();
-      resolve({ code, signal });
-    };
-    const onError = (error: Error) => {
-      cleanup();
-      reject(error);
-    };
-    const cleanup = () => {
-      clearTimeout(timeout);
-      child.off("exit", onExit);
-      child.off("error", onError);
-    };
-    child.on("exit", onExit);
-    child.on("error", onError);
-  });
-}
-
-function assertForcedExit(exit: RepositoryExit): void {
-  if (exit.code === 0) {
-    throw new Error("SQLite repository worker exited cleanly before forced termination.");
-  }
-  if (process.platform === "win32") {
-    if (exit.code === null && exit.signal === null) {
-      throw new Error("SQLite repository worker reported no forced Windows exit.");
-    }
-    return;
-  }
-  if (exit.signal !== "SIGKILL") {
-    throw new Error(
-      `SQLite repository worker exited without SIGKILL: code=${String(exit.code)} signal=${String(exit.signal)}`,
-    );
-  }
-}
 
 async function verifySnapshot(params: {
-  expectedPayload: RepositoryPayload;
+  expectedPayload: CompactionPayloadProof;
   expectedState: ReliabilityStateProof;
   provider: ReturnType<typeof createLocalSqliteSnapshotProvider>;
   snapshot: SnapshotSummary;
-  verifyPayload: (databasePath: string) => RepositoryPayload;
+  verifyPayload: (databasePath: string) => CompactionPayloadProof;
   verifyState: (databasePath: string) => ReliabilityStateProof;
 }): Promise<void> {
   await params.provider.verify(params.snapshot.ref);
   const artifactPath = path.join(params.snapshot.ref.path, SNAPSHOT_SQLITE_FILENAME);
-  assertSameState(params.verifyState(artifactPath), params.expectedState, artifactPath);
-  assertSamePayload(params.verifyPayload(artifactPath), params.expectedPayload, artifactPath);
+  assertSameReliabilityState(params.verifyState(artifactPath), params.expectedState, artifactPath);
+  assertSameCompactionPayload(
+    params.verifyPayload(artifactPath),
+    params.expectedPayload,
+    artifactPath,
+  );
 }
 
 function listRepositoryEntries(repositoryPath: string): string[] {
   return fs.existsSync(repositoryPath) ? fs.readdirSync(repositoryPath) : [];
 }
 
-async function runCrashPoint(params: {
-  crashPoint: RepositoryCrashPoint;
-  expectedPayload: RepositoryPayload;
-  expectedState: ReliabilityStateProof;
-  identity: SnapshotDatabaseIdentity;
-  provider: ReturnType<typeof createLocalSqliteSnapshotProvider>;
-  repositoryPath: string;
-  sourcePath: string;
-  validationRootPath: string;
-  verifyPayload: (databasePath: string) => RepositoryPayload;
-  verifyState: (databasePath: string) => ReliabilityStateProof;
-}): Promise<CrashPointResult> {
+async function runCrashPoint(
+  params: Parameters<typeof runRepositoryInterruptionProof>[0] & {
+    crashPoint: RepositoryCrashPoint;
+    provider: ReturnType<typeof createLocalSqliteSnapshotProvider>;
+  },
+) {
   const visibleBefore = await params.provider.list();
   const visiblePathsBefore = new Set(
     visibleBefore.map((snapshot) => path.resolve(snapshot.ref.path)),
   );
   const entriesBefore = new Set(listRepositoryEntries(params.repositoryPath));
-  let stderr = "";
-  const child = fork(
+  const worker = startReliabilityCrashWorker(
     REPOSITORY_WORKER_PATH,
     [
       params.crashPoint,
@@ -203,30 +63,14 @@ async function runCrashPoint(params: {
       JSON.stringify(params.identity),
     ],
     {
+      label: "SQLite repository worker",
       cwd: process.cwd(),
-      execArgv: ["--import", "tsx"],
-      serialization: "json",
-      stdio: ["ignore", "ignore", "pipe", "ipc"],
     },
   );
-  child.stderr?.setEncoding("utf8");
-  child.stderr?.on("data", (chunk: string) => {
-    stderr += chunk;
-  });
 
   try {
-    await waitForCrashPoint({
-      child,
-      crashPoint: params.crashPoint,
-      readStderr: () => stderr,
-    });
-    if (!child.kill("SIGKILL")) {
-      throw new Error(
-        `SQLite repository worker exited before the ${params.crashPoint} crash signal was delivered.`,
-      );
-    }
-    const exit = await waitForChildExit(child);
-    assertForcedExit(exit);
+    await worker.waitForCrashPoint(params.crashPoint);
+    const exit = await worker.crash(params.crashPoint);
 
     const createdEntries = listRepositoryEntries(params.repositoryPath).filter(
       (entry) => !entriesBefore.has(entry),
@@ -246,9 +90,13 @@ async function runCrashPoint(params: {
     }
 
     const sourceState = params.verifyState(params.sourcePath);
-    assertSameState(sourceState, params.expectedState, `${params.crashPoint} source`);
+    assertSameReliabilityState(sourceState, params.expectedState, `${params.crashPoint} source`);
     const sourcePayload = params.verifyPayload(params.sourcePath);
-    assertSamePayload(sourcePayload, params.expectedPayload, `${params.crashPoint} source`);
+    assertSameCompactionPayload(
+      sourcePayload,
+      params.expectedPayload,
+      `${params.crashPoint} source`,
+    );
 
     const crashSnapshotNames = new Set(
       crashSnapshots.map((snapshot) => path.basename(snapshot.ref.path)),
@@ -292,25 +140,26 @@ async function runCrashPoint(params: {
       stagingEntries,
       state: sourceState,
       visibleSnapshotsAfterCrash: visibleAfter.length,
+      repositoryVerified: true,
+      retryCreated: true,
+      sourcePayloadPreserved: true,
+      sourceStatePreserved: true,
     };
   } finally {
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill("SIGKILL");
-      await waitForChildExit(child).catch(() => undefined);
-    }
+    await worker.stop();
   }
 }
 
 export async function runRepositoryInterruptionProof(params: {
-  expectedPayload: RepositoryPayload;
+  expectedPayload: CompactionPayloadProof;
   expectedState: ReliabilityStateProof;
   identity: SnapshotDatabaseIdentity;
   repositoryPath: string;
   sourcePath: string;
   validationRootPath: string;
-  verifyPayload: (databasePath: string) => RepositoryPayload;
+  verifyPayload: (databasePath: string) => CompactionPayloadProof;
   verifyState: (databasePath: string) => ReliabilityStateProof;
-}): Promise<ReliabilityReport["maintenanceProof"]["repositoryInterruption"]> {
+}) {
   const provider = createLocalSqliteSnapshotProvider({
     repositoryPath: params.repositoryPath,
     validationRootPath: params.validationRootPath,
@@ -343,36 +192,5 @@ export async function runRepositoryInterruptionProof(params: {
     provider,
   });
 
-  return {
-    afterCommit: {
-      ...afterCommit,
-      crashSnapshotVerifiedAfterCrash: true,
-      crashSnapshotVisibleAfterCrash: true,
-      incompleteEntries: 0,
-      repositoryVerified: true,
-      retryCreated: true,
-      sourcePayloadPreserved: true,
-      sourceStatePreserved: true,
-    },
-    beforePending: {
-      ...beforePending,
-      crashSnapshotVerifiedAfterCrash: false,
-      crashSnapshotVisibleAfterCrash: false,
-      incompleteEntries: 1,
-      repositoryVerified: true,
-      retryCreated: true,
-      sourcePayloadPreserved: true,
-      sourceStatePreserved: true,
-    },
-    pending: {
-      ...pending,
-      crashSnapshotVerifiedAfterCrash: true,
-      crashSnapshotVisibleAfterCrash: true,
-      incompleteEntries: 0,
-      repositoryVerified: true,
-      retryCreated: true,
-      sourcePayloadPreserved: true,
-      sourceStatePreserved: true,
-    },
-  };
+  return { afterCommit, beforePending, pending };
 }

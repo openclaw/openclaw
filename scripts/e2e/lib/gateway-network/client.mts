@@ -1,4 +1,3 @@
-// WebSocket client helpers for gateway network E2E scenarios.
 import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
@@ -32,6 +31,7 @@ type GatewayPayload = Record<string, unknown> & {
   defaultAgentId?: string;
   durationMs?: number;
   expiresAtMs?: number;
+  features?: Record<string, unknown>;
   ok?: boolean;
   ready?: boolean;
   resumed?: boolean;
@@ -57,7 +57,13 @@ type GatewayRequestContext = {
   token: string;
   url: string;
 };
-type GatewayClientOptions = { statePath?: string; timeoutMs?: number; token: string; url: string };
+type GatewayClientOptions = {
+  capabilitiesPath?: string;
+  statePath?: string;
+  timeoutMs?: number;
+  token: string;
+  url: string;
+};
 type GatewayFetchDeps = { fetchImpl?: typeof fetch };
 type GatewayNetworkDeps = {
   delay?: (ms: number) => Promise<void>;
@@ -107,6 +113,28 @@ function hasGatewayHealthSummaryPayload(
   );
 }
 
+const SUSPENSION_METHODS = [
+  "gateway.suspend.prepare",
+  "gateway.suspend.status",
+  "gateway.suspend.resume",
+] as const;
+
+function classifySuspensionCapability(connectResponse: GatewayFrame) {
+  const features = connectResponse.payload?.features;
+  const methods = isRecord(features) ? features.methods : undefined;
+  if (!Array.isArray(methods) || methods.some((method) => typeof method !== "string")) {
+    throw new Error("connect hello suspension methods are malformed");
+  }
+  const availableCount = SUSPENSION_METHODS.filter((method) => methods.includes(method)).length;
+  if (availableCount === 0) {
+    return "unsupported" as const;
+  }
+  if (availableCount === SUSPENSION_METHODS.length) {
+    return "supported" as const;
+  }
+  throw new Error("connect hello contains partial suspension methods");
+}
+
 function httpUrl(url: string, pathname = "/") {
   const target = new URL(url);
   target.protocol = target.protocol === "wss:" ? "https:" : "http:";
@@ -146,7 +174,7 @@ async function adminRpc(
     body: JSON.stringify({ id: `e2e-${method}`, method, params }),
     signal,
   });
-  return await readJson<GatewayFrame>(response, `Admin RPC ${method}`, signal);
+  return readJson<GatewayFrame>(response, `Admin RPC ${method}`, signal);
 }
 
 async function readProbe(
@@ -155,7 +183,7 @@ async function readProbe(
 ): Promise<GatewayProbeResponse> {
   const signal = deadlineSignal(deadline);
   const response = await fetchImpl(httpUrl(url, pathname), { signal });
-  return await readJson<GatewayProbeResponse["body"]>(response, pathname, signal);
+  return readJson<GatewayProbeResponse["body"]>(response, pathname, signal);
 }
 
 function emitPhase(phase: string, startedAt: number) {
@@ -216,13 +244,14 @@ export async function prepareReadySuspension(
       throw new DOMException("gateway suspension preparation timeout", "TimeoutError");
     }
     const response = await rpc("gateway.suspend.prepare", { requestId });
-    if (response?.status !== 200 || response.body?.ok !== true) {
+    if (
+      response?.status !== 200 ||
+      response.body?.ok !== true ||
+      response.body.payload?.status !== "busy"
+    ) {
       return assertReadySuspensionResponse(response, now());
     }
     const payload = response.body.payload;
-    if (payload?.status !== "busy") {
-      return assertReadySuspensionResponse(response, now());
-    }
     const retryAfterMs =
       typeof payload.retryAfterMs === "number" && Number.isFinite(payload.retryAfterMs)
         ? Math.max(1, Math.floor(payload.retryAfterMs))
@@ -503,7 +532,12 @@ async function readProtocolVersion() {
 }
 
 export async function runGatewayNetworkClient(
-  { token, url, timeoutMs = readGatewayNetworkClientConnectTimeoutMs() }: GatewayClientOptions,
+  {
+    capabilitiesPath,
+    token,
+    url,
+    timeoutMs = readGatewayNetworkClientConnectTimeoutMs(),
+  }: GatewayClientOptions,
   deps: GatewayNetworkDeps = {},
 ) {
   const deadline = Date.now() + timeoutMs;
@@ -545,27 +579,37 @@ export async function runGatewayNetworkClient(
         remainingDeadlineMs(deadline),
       );
       if (!connectRes.ok) {
-        lastError = responseError("connect", connectRes);
-        if (!isRetryableStartupError(lastError.message)) {
-          throw lastError;
-        }
-      } else {
-        ws.send(JSON.stringify({ type: "req", id: "h1", method: "health" }));
-        const healthRes = await onceFrameImpl(
-          ws,
-          (frame) => frame?.type === "res" && frame?.id === "h1",
-          remainingDeadlineMs(deadline),
-        );
-        if (healthRes.ok) {
-          if (!hasGatewayHealthSummaryPayload(healthRes)) {
-            throw new Error("health failed: missing health summary payload");
-          }
-          stdout("ok");
-          return;
-        }
-
+        throw responseError("connect", connectRes);
+      }
+      let suspension: "supported" | "unsupported" | undefined;
+      let capabilityError: Error | undefined;
+      try {
+        suspension = classifySuspensionCapability(connectRes);
+      } catch (error) {
+        capabilityError = error instanceof Error ? error : new Error(String(error));
+      }
+      ws.send(JSON.stringify({ type: "req", id: "h1", method: "health" }));
+      const healthRes = await onceFrameImpl(
+        ws,
+        (frame) => frame?.type === "res" && frame?.id === "h1",
+        remainingDeadlineMs(deadline),
+      );
+      if (!healthRes.ok) {
         throw responseError("health", healthRes);
       }
+      if (!hasGatewayHealthSummaryPayload(healthRes)) {
+        throw new Error("health failed: missing health summary payload");
+      }
+      if (capabilityError) {
+        throw capabilityError;
+      }
+      assert(suspension, "connect hello suspension capability must be classified");
+      const capabilities = { suspension };
+      if (capabilitiesPath) {
+        await writeFile(capabilitiesPath, JSON.stringify(capabilities));
+      }
+      stdout("ok");
+      return capabilities;
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
       if (!isRetryableStartupError(lastError.message)) {
@@ -592,7 +636,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   }
   const mode = process.env.GW_MODE ?? "network";
   if (mode === "network") {
-    await runGatewayNetworkClient({ token, url });
+    await runGatewayNetworkClient({
+      capabilitiesPath: process.env.GW_CAPABILITIES_PATH,
+      token,
+      url,
+    });
   } else {
     const statePath = process.env.GW_STATE_PATH;
     if (!statePath) {

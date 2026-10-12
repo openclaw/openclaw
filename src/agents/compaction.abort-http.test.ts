@@ -1,7 +1,8 @@
 import { createServer } from "node:http";
 import { performance } from "node:perf_hooks";
 import { describe, expect, it } from "vitest";
-import { summarizeInStages } from "./compaction.js";
+import { makeUserMessage } from "../../test/helpers/user-message.js";
+import { summarizeCompactionHistory } from "./compaction.js";
 import type { AgentMessage } from "./runtime/index.js";
 import type { ExtensionContext } from "./sessions/index.js";
 
@@ -67,23 +68,16 @@ describe("compaction retry backoff over real HTTP", () => {
       } satisfies NonNullable<ExtensionContext["model"]>;
 
       const messages: AgentMessage[] = [
-        {
-          role: "user",
-          content: "Keep this original conversation and opaque ID 5cf86ba9 unchanged.",
-          timestamp: 1,
-        },
+        makeUserMessage("Keep this original conversation and opaque ID 5cf86ba9 unchanged.", 1),
       ];
       const originalHistory = Buffer.from(JSON.stringify(messages));
 
-      const summary = summarizeInStages({
+      const summary = summarizeCompactionHistory({
         messages,
         model,
         apiKey: "loopback-test-key", // pragma: allowlist secret
         signal: controller.signal,
         reserveTokens: 1_000,
-        maxChunkTokens: 50_000,
-        contextWindow: model.contextWindow,
-        parts: 1,
       });
 
       await expect(summary).rejects.toThrow(/abort/i);

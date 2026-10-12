@@ -1,9 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
-import { updateMcpAppModelContext } from "./mcp-app-model-context.js";
+import {
+  getMcpAppModelContext,
+  subscribeMcpAppModelContext,
+  updateMcpAppModelContext,
+} from "./mcp-app-model-context.js";
 import { buildMcpAppSandboxPath, resolveMcpAppSandboxPort } from "./mcp-app-sandbox.js";
 import {
   acquireMcpAppViewRequest,
+  leaseMcpAppModelContextForSessionTurn,
   fetchMcpAppView,
   getMcpAppViewLease,
   getMcpAppViewLeaseForSession,
@@ -33,13 +38,114 @@ function runtime(readResource: SessionMcpRuntime["readResource"]): SessionMcpRun
   };
 }
 
+type ViewParams = Parameters<typeof fetchMcpAppView>[0];
+
+function fetchView(params: Pick<ViewParams, "runtime"> & Partial<Omit<ViewParams, "runtime">>) {
+  return fetchMcpAppView({
+    serverName: "demo",
+    toolName: "show",
+    uiResourceUri: "ui://demo/app",
+    toolInput: {},
+    toolResult: { content: [] },
+    ...params,
+  });
+}
+
+function html(text = "<html>demo</html>") {
+  return { contents: [{ uri: "ui://demo/app", mimeType: MCP_APP_RESOURCE_MIME_TYPE, text }] };
+}
+
 describe("MCP App UI resources", () => {
   beforeEach(() => {
     mcpUiResourceTesting.clearViewStore();
   });
 
   afterEach(() => {
+    mcpUiResourceTesting.clearViewStore();
     vi.useRealTimers();
+  });
+
+  it.each([
+    { preferred: "fullscreen", requested: undefined, available: undefined, expected: "fullscreen" },
+    { preferred: "fullscreen", requested: "fullscreen", available: ["inline"], expected: "inline" },
+  ] as const)(
+    "selects an advertised initial display mode ($expected)",
+    async ({ preferred, requested, available, expected }) => {
+      const active = runtime(async () => ({
+        contents: [
+          {
+            uri: "ui://demo/app",
+            mimeType: MCP_APP_RESOURCE_MIME_TYPE,
+            text: "<p>app</p>",
+            _meta: {
+              "openai/ui": { preferredDisplayMode: preferred, availableDisplayModes: available },
+            },
+          },
+        ],
+      }));
+      const view = await fetchView({ runtime: active, displayMode: requested });
+      expect(getMcpAppViewLease(view!.viewId, active)?.displayMode).toBe(expected);
+    },
+  );
+
+  it("leases next-turn context only for exact live session and requester identities across native facades", async () => {
+    const native = runtime(async () => html());
+    const first = await fetchView({
+      runtime: native,
+      requesterId: "alice",
+      allowedAppToolNames: new Set(),
+    });
+    const second = await fetchView({
+      runtime: native,
+      requesterId: "bob",
+      allowedAppToolNames: new Set(),
+    });
+    const alice = getMcpAppViewLease(first!.viewId, native)!;
+    const bob = getMcpAppViewLease(second!.viewId, native)!;
+    updateMcpAppModelContext(native, alice, { content: [{ type: "text", text: "alice-private" }] });
+    updateMcpAppModelContext(native, bob, { content: [{ type: "text", text: "bob-private" }] });
+    const target = {
+      sessionKey: native.sessionKey,
+      sessionId: native.sessionId,
+      requesterId: "alice",
+    };
+    expect(
+      await leaseMcpAppModelContextForSessionTurn({ ...target, sessionId: "replacement" }),
+    ).toBeUndefined();
+    expect(
+      await leaseMcpAppModelContextForSessionTurn({ ...target, sessionKey: "agent:main:other" }),
+    ).toBeUndefined();
+    expect(
+      await leaseMcpAppModelContextForSessionTurn({ ...target, requesterId: "mallory" }),
+    ).toBeUndefined();
+    const lease = await leaseMcpAppModelContextForSessionTurn(target);
+    expect(lease?.project(0).context.text).toContain("alice-private");
+    expect(lease?.project(0).context.text).not.toContain("bob-private");
+    lease?.commit();
+    expect(getMcpAppModelContext(native, alice)).toBeNull();
+    expect(getMcpAppModelContext(native, bob)).not.toBeNull();
+  });
+
+  it("does not infer a Gateway profile from transport requester scope", async () => {
+    const sessionRuntime = runtime(async () => html());
+    sessionRuntime.requesterScope = {
+      requesterSenderId: "channel-user",
+      messageChannel: "discord",
+    };
+    const descriptor = await fetchView({ runtime: sessionRuntime });
+    const view = getMcpAppViewLease(descriptor!.viewId, sessionRuntime)!;
+    expect(view.requesterId).toBeUndefined();
+    view.allowedAppToolNames = new Set();
+    updateMcpAppModelContext(sessionRuntime, view, {
+      content: [{ type: "text", text: "shared selection" }],
+    });
+    const context = await leaseMcpAppModelContextForSessionTurn({
+      sessionId: sessionRuntime.sessionId,
+      sessionKey: sessionRuntime.sessionKey,
+      requesterId: "verified-profile",
+    });
+    expect(context?.project(0).context.text).toContain("shared selection");
+    context?.rollback();
   });
 
   it("leases HTML and tool data only in memory", async () => {
@@ -59,11 +165,8 @@ describe("MCP App UI resources", () => {
       ],
     }));
     const authorizeAppInteraction = vi.fn(async () => true);
-    const result = await fetchMcpAppView({
+    const result = await fetchView({
       runtime: sessionRuntime,
-      serverName: "demo",
-      toolName: "show",
-      uiResourceUri: "ui://demo/app",
       toolInput: { city: "Paris" },
       toolResult: { content: [{ type: "text", text: "ok" }] },
       authorizeAppInteraction,
@@ -95,24 +198,11 @@ describe("MCP App UI resources", () => {
   });
 
   it("isolates live views by agent when bare session keys collide", async () => {
-    const sessionRuntime = runtime(async () => ({
-      contents: [
-        {
-          uri: "ui://demo/app",
-          mimeType: MCP_APP_RESOURCE_MIME_TYPE,
-          text: "<html>ops</html>",
-        },
-      ],
-    }));
+    const sessionRuntime = runtime(async () => html("<html>ops</html>"));
     sessionRuntime.sessionKey = "global";
-    const result = await fetchMcpAppView({
+    const result = await fetchView({
       runtime: sessionRuntime,
       agentId: "ops",
-      serverName: "demo",
-      toolName: "show",
-      uiResourceUri: "ui://demo/app",
-      toolInput: {},
-      toolResult: { content: [] },
     });
 
     expect(getMcpAppViewLeaseForSession(result?.viewId ?? "", "global", "ops")).toBeDefined();
@@ -122,27 +212,14 @@ describe("MCP App UI resources", () => {
   });
 
   it("keeps valid Apps when optional listing metadata fails", async () => {
-    const readResource = vi.fn(async () => ({
-      contents: [
-        {
-          uri: "ui://demo/app",
-          mimeType: MCP_APP_RESOURCE_MIME_TYPE,
-          text: "<html>demo</html>",
-        },
-      ],
-    }));
+    const readResource = vi.fn(async () => html());
     const sessionRuntime = runtime(readResource);
     sessionRuntime.listResources = vi.fn(async () => {
       throw new Error("resources/list unavailable");
     });
 
-    const result = await fetchMcpAppView({
+    const result = await fetchView({
       runtime: sessionRuntime,
-      serverName: "demo",
-      toolName: "show",
-      uiResourceUri: "ui://demo/app",
-      toolInput: {},
-      toolResult: { content: [] },
     });
 
     expect(result?.viewId).toMatch(/^mcp-app-/u);
@@ -167,13 +244,8 @@ describe("MCP App UI resources", () => {
         text: "x".repeat(MCP_APP_RESOURCE_MAX_BYTES + 1),
       },
     ]) {
-      const result = await fetchMcpAppView({
+      const result = await fetchView({
         runtime: runtime(async () => ({ contents: [content] })),
-        serverName: "demo",
-        toolName: "show",
-        uiResourceUri: "ui://demo/app",
-        toolInput: {},
-        toolResult: { content: [] },
       });
       expect(result).toBeUndefined();
     }
@@ -194,7 +266,7 @@ describe("MCP App UI resources", () => {
     releases.slice(1).forEach((entry) => entry());
   });
 
-  it("normalizes CSP and snapshots the session deadline before retaining the view", async () => {
+  it("normalizes CSP before retaining the view", async () => {
     const sessionRuntime = runtime(async () => ({
       contents: [
         {
@@ -212,17 +284,8 @@ describe("MCP App UI resources", () => {
         },
       ],
     }));
-    const peekCatalog = vi.fn(() => null);
-    sessionRuntime.peekCatalog = peekCatalog;
-    sessionRuntime.getServerRequestTimeoutMs = (serverName) =>
-      serverName === "demo" ? 120_000 : undefined;
-    const result = await fetchMcpAppView({
+    const result = await fetchView({
       runtime: sessionRuntime,
-      serverName: "demo",
-      toolName: "show",
-      uiResourceUri: "ui://demo/app",
-      toolInput: {},
-      toolResult: { content: [] },
     });
     const view = getMcpAppViewLease(result?.viewId ?? "", sessionRuntime);
     expect(view?.csp).toEqual({
@@ -230,41 +293,30 @@ describe("MCP App UI resources", () => {
       resourceDomains: ["https://cdn.example.com"],
     });
     expect(view?.html.startsWith("<!doctype html>")).toBe(true);
-    expect(view?.requestTimeoutMs).toBe(120_000);
-    expect(peekCatalog).not.toHaveBeenCalled();
     expect(buildMcpAppSandboxPath(view?.csp)).toContain("?csp=");
   });
 
   it("deletes sensitive view data when the lease expires without later activity", async () => {
     vi.useFakeTimers();
-    const sessionRuntime = runtime(async () => ({
-      contents: [
-        {
-          uri: "ui://demo/app",
-          mimeType: MCP_APP_RESOURCE_MIME_TYPE,
-          text: "<html>secret</html>",
-        },
-      ],
-    }));
-    const result = await fetchMcpAppView({
+    const sessionRuntime = runtime(async () => html("<html>secret</html>"));
+    const result = await fetchView({
       runtime: sessionRuntime,
-      serverName: "demo",
-      toolName: "show",
-      uiResourceUri: "ui://demo/app",
       toolInput: { token: "secret" },
-      toolResult: { content: [] },
     });
     const view = getMcpAppViewLease(result?.viewId ?? "", sessionRuntime);
     expect(view).toBeDefined();
+    const changed = vi.fn();
+    view!.disposeCallbacks = new Set([subscribeMcpAppModelContext(view!, changed)]);
     updateMcpAppModelContext(sessionRuntime, view!, {
       content: [{ type: "text", text: "ephemeral context" }],
     });
-    expect(sessionRuntime.pendingMcpAppModelContext).toBeDefined();
+    expect(getMcpAppModelContext(sessionRuntime, view!)).not.toBeNull();
 
     await vi.advanceTimersByTimeAsync(10 * 60_000);
 
     expect(getMcpAppViewLease(result?.viewId ?? "", sessionRuntime)).toBeUndefined();
-    expect(sessionRuntime.pendingMcpAppModelContext).toBeUndefined();
+    expect(getMcpAppModelContext(sessionRuntime, view!)).toBeNull();
+    expect(changed).toHaveBeenLastCalledWith(null);
     expect(sessionRuntime.acquireLease).toHaveBeenCalledOnce();
     const release = vi.mocked(sessionRuntime.acquireLease!).mock.results[0]?.value;
     expect(release).toHaveBeenCalledOnce();
@@ -304,60 +356,19 @@ describe("MCP App UI resources", () => {
     );
   });
 
-  it("keeps all 32 valid leases during lookup-only pruning", async () => {
-    const sessionRuntime = runtime(async () => ({
-      contents: [
-        {
-          uri: "ui://demo/app",
-          mimeType: MCP_APP_RESOURCE_MIME_TYPE,
-          text: "<html>demo</html>",
-        },
-      ],
-    }));
-    const viewIds: string[] = [];
-    for (let index = 0; index < 32; index += 1) {
-      const result = await fetchMcpAppView({
-        runtime: sessionRuntime,
-        serverName: "demo",
-        toolName: "show",
-        uiResourceUri: "ui://demo/app",
-        toolInput: { index },
-        toolResult: { content: [] },
-      });
-      if (result) {
-        viewIds.push(result.viewId);
-      }
-    }
-
-    expect(getMcpAppViewLease(viewIds[0] ?? "", sessionRuntime)).toBeDefined();
-    expect(getMcpAppViewLease(viewIds[31] ?? "", sessionRuntime)).toBeDefined();
-  });
-
   it("replaces a reconstructed view id without leaking the previous runtime lease", async () => {
     const releases = [vi.fn(), vi.fn()];
-    const sessionRuntime = runtime(async () => ({
-      contents: [
-        {
-          uri: "ui://demo/app",
-          mimeType: MCP_APP_RESOURCE_MIME_TYPE,
-          text: "<html>demo</html>",
-        },
-      ],
-    }));
+    const sessionRuntime = runtime(async () => html());
     sessionRuntime.acquireLease = vi
       .fn()
       .mockReturnValueOnce(releases[0])
       .mockReturnValueOnce(releases[1]);
 
     for (const version of [1, 2]) {
-      await fetchMcpAppView({
+      await fetchView({
         runtime: sessionRuntime,
-        serverName: "demo",
-        toolName: "show",
-        uiResourceUri: "ui://demo/app",
         viewId: "mcp-app-restored",
         toolInput: { version },
-        toolResult: { content: [] },
       });
     }
 

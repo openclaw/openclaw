@@ -1,5 +1,4 @@
 /** Handles /mcp commands for showing and mutating configured MCP servers. */
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
   setConfiguredMcpServer,
   unsetConfiguredMcpServer,
@@ -8,19 +7,16 @@ import { listConfiguredMcpServers } from "../../config/mcp-config.js";
 import { redactSensitiveArgv } from "../../config/redact-argv.js";
 import { REDACTED_SENTINEL, redactConfigObject } from "../../config/redact-snapshot.js";
 import { buildConfigSchemaCore } from "../../config/schema.js";
-import type { ExecApprovalRequest } from "../../infra/exec-approvals.js";
 import type { ReplyPayload } from "../types.js";
 import {
   commandReply,
   defineAuthorizedTextCommand,
+  renderCommandJsonBlock,
   requireCommandFlagEnabled,
   requireGatewayClientScope,
 } from "./command-gates.js";
 import {
   deliverPrivateCommandReply,
-  readCommandDeliveryTarget,
-  readCommandMessageThreadId,
-  resolvePrivateCommandApprovalRouteExpiresAtMs,
   resolvePrivateCommandRouteTargets,
 } from "./commands-private-route.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
@@ -28,12 +24,14 @@ import { parseMcpCommand } from "./mcp-commands.js";
 
 const MCP_SHOW_PRIVATE_ROUTE_UNAVAILABLE =
   "I couldn't find a private owner route for MCP configuration. Run /mcp show from an owner DM so sensitive server details are not posted in this chat.";
-const MCP_SHOW_PRIVATE_ROUTE_ACK =
-  "MCP server configuration is sensitive. I sent the details to the owner privately.";
-
-function renderJsonBlock(label: string, value: unknown): string {
-  return `${label}\n\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\``;
-}
+const MCP_SHOW_PRIVATE_ROUTE_REPLIES = {
+  delivered: "MCP server configuration is sensitive. I sent the details to the owner privately.",
+  pending:
+    "MCP server configuration is sensitive. Private delivery is pending; I can't confirm receipt yet.",
+  suppressed:
+    "MCP server configuration is sensitive. Private delivery was suppressed; no details were sent.",
+  failed: MCP_SHOW_PRIVATE_ROUTE_UNAVAILABLE,
+};
 
 function redactMcpServerArgsForDisplay(server: unknown): unknown {
   if (!server || typeof server !== "object" || Array.isArray(server)) {
@@ -77,66 +75,36 @@ async function buildMcpShowReply(name?: string): Promise<ReplyPayload> {
       [name]: server,
     })[name];
     return {
-      text: renderJsonBlock(`🔌 MCP server "${name}" (${loaded.path})`, redactedServer),
+      text: renderCommandJsonBlock(`🔌 MCP server "${name}" (${loaded.path})`, redactedServer),
     };
   }
   if (Object.keys(loaded.mcpServers).length === 0) {
     return { text: `🔌 No MCP servers configured in ${loaded.path}.` };
   }
   return {
-    text: renderJsonBlock(
+    text: renderCommandJsonBlock(
       `🔌 MCP servers (${loaded.path})`,
       redactMcpServersForDisplay(loaded.mcpServers),
     ),
   };
 }
 
-function buildMcpShowPrivateRouteRequest(params: HandleCommandsParams): ExecApprovalRequest {
-  const now = Date.now();
-  const agentId =
-    params.agentId ??
-    resolveSessionAgentId({
-      sessionKey: params.sessionKey,
-      config: params.cfg,
-    });
-  return {
-    approvalKind: "exec",
-    id: "mcp-show-private-route",
-    request: {
-      command: params.command.commandBodyNormalized,
-      agentId,
-      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-      turnSourceChannel: params.command.channel,
-      turnSourceTo: readCommandDeliveryTarget(params) ?? null,
-      turnSourceAccountId: params.ctx.AccountId ?? null,
-      turnSourceThreadId: readCommandMessageThreadId(params) ?? null,
-    },
-    createdAtMs: now,
-    expiresAtMs: resolvePrivateCommandApprovalRouteExpiresAtMs(now),
-  };
-}
-
 async function deliverGroupMcpShowReplyPrivately(params: HandleCommandsParams, name?: string) {
   const targets = await resolvePrivateCommandRouteTargets({
     commandParams: params,
-    request: buildMcpShowPrivateRouteRequest(params),
+    id: "mcp-show-private-route",
+    command: params.command.commandBodyNormalized,
   });
   if (targets.length === 0) {
     return commandReply(MCP_SHOW_PRIVATE_ROUTE_UNAVAILABLE);
   }
   const privateReply = await buildMcpShowReply(name);
-  for (const target of targets) {
-    if (
-      await deliverPrivateCommandReply({
-        commandParams: params,
-        targets: [target],
-        reply: privateReply,
-      })
-    ) {
-      return commandReply(MCP_SHOW_PRIVATE_ROUTE_ACK);
-    }
-  }
-  return commandReply(MCP_SHOW_PRIVATE_ROUTE_UNAVAILABLE);
+  const outcome = await deliverPrivateCommandReply({
+    commandParams: params,
+    targets,
+    reply: privateReply,
+  });
+  return commandReply(MCP_SHOW_PRIVATE_ROUTE_REPLIES[outcome]);
 }
 
 /** Command handler for /mcp show/set/unset operations. */
@@ -158,10 +126,7 @@ export const handleMcpCommand: CommandHandler = defineAuthorizedTextCommand(
       if (params.isGroup) {
         return await deliverGroupMcpShowReplyPrivately(params, mcpCommand.name);
       }
-      return {
-        shouldContinue: false,
-        reply: await buildMcpShowReply(mcpCommand.name),
-      };
+      return commandReply(await buildMcpShowReply(mcpCommand.name));
     }
 
     const missingAdminScope = requireGatewayClientScope(params, {
@@ -173,20 +138,19 @@ export const handleMcpCommand: CommandHandler = defineAuthorizedTextCommand(
       return missingAdminScope;
     }
 
-    if (mcpCommand.action === "set") {
-      const result = await setConfiguredMcpServer({
-        name: mcpCommand.name,
-        server: mcpCommand.value,
-      });
-      if (!result.ok) {
-        return commandReply(`⚠️ ${result.error}`);
-      }
-      return commandReply(`🔌 MCP server "${mcpCommand.name}" saved to ${result.path}.`);
-    }
-
-    const result = await unsetConfiguredMcpServer({ name: mcpCommand.name });
+    const mutation = {
+      name: mcpCommand.name,
+      assertCurrent: params.command.assertOwnerCurrent,
+    };
+    const result =
+      mcpCommand.action === "set"
+        ? await setConfiguredMcpServer({ ...mutation, server: mcpCommand.value })
+        : await unsetConfiguredMcpServer(mutation);
     if (!result.ok) {
       return commandReply(`⚠️ ${result.error}`);
+    }
+    if (mcpCommand.action === "set") {
+      return commandReply(`🔌 MCP server "${mcpCommand.name}" saved to ${result.path}.`);
     }
     if (!result.removed) {
       return commandReply(`🔌 No MCP server named "${mcpCommand.name}" in ${result.path}.`);

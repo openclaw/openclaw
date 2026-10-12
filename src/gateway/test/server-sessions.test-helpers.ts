@@ -1,25 +1,30 @@
 /**
  * HTTP server session fixtures shared by gateway session tests.
  */
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import type { AssistantMessage, UserMessage } from "openclaw/plugin-sdk/llm";
-import { afterAll, beforeAll, beforeEach, expect, vi } from "vitest";
+import { afterEach, beforeEach, expect, vi } from "vitest";
+import { registerAcpSessionResetControls } from "../../acp/control-plane/manager.reset-controls.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import type { InternalHookEvent } from "../../hooks/internal-hooks.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
+import type { HookRunner } from "../../plugins/hooks.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { flushPendingSessionsChangedEvents } from "../server-methods/session-change-event.js";
+import {
+  disposeSessionReadContexts,
+  initializeSessionReadContext,
+} from "../server-methods/sessions-read-cache.test-support.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
-import type { GatewayServerHarness } from "../server.e2e-ws-harness.js";
-import { embeddedRunMock, agentDiscoveryMock, testState } from "../test-helpers.runtime-state.js";
+import { embeddedRunMock, testState } from "../test-helpers.runtime-state.js";
 import * as gatewayTestHelpers from "../test-helpers.server.js";
+import {
+  installGatewaySessionsTestResources,
+  type GatewaySessionsSuiteSetup,
+} from "./server-sessions-resources.test-helpers.js";
 
-export const getSessionManagerModule = createLazyRuntimeModule(
-  () => import("../../agents/sessions/index.js"),
-);
+export { createCompactedSessionFixture } from "./server-sessions-compaction.test-helpers.js";
 
 export const getGatewayConfigModule = createLazyRuntimeModule(
   () => import("../../config/config.js"),
@@ -27,10 +32,6 @@ export const getGatewayConfigModule = createLazyRuntimeModule(
 
 const getSessionAccessorModule = createLazyRuntimeModule(
   () => import("../../config/sessions/session-accessor.js"),
-);
-
-const getGatewayServerHarnessModule = createLazyRuntimeModule(
-  () => import("../server.e2e-ws-harness.js"),
 );
 
 const getGatewayServerMethodsModule = createLazyRuntimeModule(() => import("../server-methods.js"));
@@ -111,17 +112,11 @@ export async function loadSeededTranscriptEvents(params: {
 }
 
 const sessionCleanupMocks = vi.hoisted(() => ({
-  clearSessionQueues: vi.fn((keys: Array<string | undefined>) => {
-    const clearedKeys = Array.from(
-      new Set(
-        keys
-          .map((key) => (typeof key === "string" ? key.trim() : ""))
-          .filter((key) => key.length > 0),
-      ),
-    );
-    return { followupCleared: 0, laneCleared: 0, keys: clearedKeys };
-  }),
-  stopSubagentsForRequester: vi.fn(async () => ({ stopped: 0 })),
+  clearSessionLifecycleQueues:
+    vi.fn<
+      (typeof import("../../auto-reply/reply/queue/cleanup.js"))["clearSessionLifecycleQueues"]
+    >(),
+  stopSessionResetSubagents: vi.fn(async () => {}),
 }));
 
 const bootstrapCacheMocks = vi.hoisted(() => ({
@@ -138,8 +133,8 @@ const beforeResetHookMocks = vi.hoisted(() => ({
 }));
 
 const sessionLifecycleHookMocks = vi.hoisted(() => ({
-  runSessionEnd: vi.fn(async () => {}),
-  runSessionStart: vi.fn(async () => {}),
+  runSessionEnd: vi.fn<HookRunner["runSessionEnd"]>(async () => {}),
+  runSessionStart: vi.fn<HookRunner["runSessionStart"]>(async () => {}),
 }));
 
 const subagentLifecycleHookMocks = vi.hoisted(() => ({
@@ -153,6 +148,7 @@ const beforeResetHookState = vi.hoisted(() => ({
 const sessionLifecycleHookState = vi.hoisted(() => ({
   hasSessionEndHook: true,
   hasSessionStartHook: true,
+  runner: undefined as HookRunner | undefined,
 }));
 
 const subagentLifecycleHookState = vi.hoisted(() => ({
@@ -169,9 +165,12 @@ const acpRuntimeMocks = vi.hoisted(() => ({
   requireAcpRuntimeBackend: vi.fn(),
 }));
 const acpManagerMocks = vi.hoisted(() => ({
+  captureSessionRuntimeOwnership: vi.fn(() => ({ isCurrent: () => true, release: vi.fn() })),
   cancelSession: vi.fn(async () => {}),
   closeSession: vi.fn(async () => {}),
+  forceDiscardSessionRuntime: vi.fn(async () => {}),
 }));
+registerAcpSessionResetControls(acpManagerMocks, acpManagerMocks);
 const browserSessionTabMocks = vi.hoisted(() => ({
   closeTrackedBrowserTabsForSessions: vi.fn(async () => 0),
 }));
@@ -181,33 +180,25 @@ const bundleMcpRuntimeMocks = vi.hoisted(() => ({
   retireSessionMcpRuntime: vi.fn(async (_params: RetireSessionMcpRuntimeParams) => true),
 }));
 
-vi.mock("../../auto-reply/reply/queue.js", async () => {
-  const actual = await vi.importActual<typeof import("../../auto-reply/reply/queue.js")>(
-    "../../auto-reply/reply/queue.js",
-  );
-  return {
-    ...actual,
-    clearSessionQueues: sessionCleanupMocks.clearSessionQueues,
-  };
-});
-
 vi.mock("../../auto-reply/reply/queue/cleanup.js", async () => {
   const actual = await vi.importActual<typeof import("../../auto-reply/reply/queue/cleanup.js")>(
     "../../auto-reply/reply/queue/cleanup.js",
   );
   return {
     ...actual,
-    clearSessionQueues: sessionCleanupMocks.clearSessionQueues,
+    clearSessionLifecycleQueues: sessionCleanupMocks.clearSessionLifecycleQueues.mockImplementation(
+      actual.clearSessionLifecycleQueues,
+    ),
   };
 });
 
-vi.mock("../../auto-reply/reply/abort.js", async () => {
-  const actual = await vi.importActual<typeof import("../../auto-reply/reply/abort.js")>(
-    "../../auto-reply/reply/abort.js",
-  );
+vi.mock("../../auto-reply/reply/session-reset-cleanup.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../auto-reply/reply/session-reset-cleanup.js")
+  >("../../auto-reply/reply/session-reset-cleanup.js");
   return {
     ...actual,
-    stopSubagentsForRequester: sessionCleanupMocks.stopSubagentsForRequester,
+    stopSessionResetSubagents: sessionCleanupMocks.stopSessionResetSubagents,
   };
 });
 
@@ -238,17 +229,20 @@ vi.mock("../../plugins/hook-runner-global.js", async () => {
   );
   return {
     ...actual,
-    getGlobalHookRunner: vi.fn(() => ({
-      hasHooks: (hookName: string) =>
-        (hookName === "subagent_ended" && subagentLifecycleHookState.hasSubagentEndedHook) ||
-        (hookName === "before_reset" && beforeResetHookState.hasBeforeResetHook) ||
-        (hookName === "session_end" && sessionLifecycleHookState.hasSessionEndHook) ||
-        (hookName === "session_start" && sessionLifecycleHookState.hasSessionStartHook),
-      runBeforeReset: beforeResetHookMocks.runBeforeReset,
-      runSessionEnd: sessionLifecycleHookMocks.runSessionEnd,
-      runSessionStart: sessionLifecycleHookMocks.runSessionStart,
-      runSubagentEnded: subagentLifecycleHookMocks.runSubagentEnded,
-    })),
+    getGlobalHookRunner: vi.fn(
+      () =>
+        sessionLifecycleHookState.runner ?? {
+          hasHooks: (hookName: string) =>
+            (hookName === "subagent_ended" && subagentLifecycleHookState.hasSubagentEndedHook) ||
+            (hookName === "before_reset" && beforeResetHookState.hasBeforeResetHook) ||
+            (hookName === "session_end" && sessionLifecycleHookState.hasSessionEndHook) ||
+            (hookName === "session_start" && sessionLifecycleHookState.hasSessionStartHook),
+          runBeforeReset: beforeResetHookMocks.runBeforeReset,
+          runSessionEnd: sessionLifecycleHookMocks.runSessionEnd,
+          runSessionStart: sessionLifecycleHookMocks.runSessionStart,
+          runSubagentEnded: subagentLifecycleHookMocks.runSubagentEnded,
+        },
+    ),
   };
 });
 
@@ -284,10 +278,7 @@ vi.mock("../../acp/runtime/registry.js", async () => {
 });
 
 vi.mock("../../acp/control-plane/manager.js", () => ({
-  getAcpSessionManager: () => ({
-    cancelSession: acpManagerMocks.cancelSession,
-    closeSession: acpManagerMocks.closeSession,
-  }),
+  getAcpSessionManager: () => acpManagerMocks,
 }));
 
 vi.mock("../../plugin-sdk/browser-maintenance.js", () => ({
@@ -302,46 +293,31 @@ vi.mock("../../agents/agent-bundle-mcp-tools.js", async (importOriginal) => ({
   retireSessionMcpRuntime: bundleMcpRuntimeMocks.retireSessionMcpRuntime,
 }));
 
-export function setupGatewaySessionsHandlerTestHarness() {
-  const { getHarness, openClient, ...handlerFixture } = createGatewaySessionsTestHarness(false);
+export function setupGatewaySessionsHandlerTestHarness(setup?: GatewaySessionsSuiteSetup) {
+  const { getHarness, openClient, ...handlerFixture } = createGatewaySessionsTestHarness(
+    false,
+    setup,
+  );
   void [getHarness, openClient];
   return handlerFixture;
 }
 
-export function setupGatewaySessionsTestHarness() {
-  return createGatewaySessionsTestHarness(true);
+export function setupGatewaySessionsTestHarness(setup?: GatewaySessionsSuiteSetup) {
+  return createGatewaySessionsTestHarness(true, setup);
 }
 
-function createGatewaySessionsTestHarness(startServer: boolean) {
-  gatewayTestHelpers.installGatewayTestHooks({ scope: "suite" });
-
-  const defaultAgentWorkspace = path.join(os.tmpdir(), "openclaw-gateway-test");
-  let harness: GatewayServerHarness | undefined;
-  let sharedSessionStoreDir: string | undefined;
+function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewaySessionsSuiteSetup) {
+  const { requireHarness, requireSharedSessionStoreDir, withSessionTestState } =
+    installGatewaySessionsTestResources(startServer, setup);
+  afterEach(disposeSessionReadContexts);
   let sessionStoreCaseSeq = 0;
-
-  beforeAll(async () => {
-    await fs.mkdir(defaultAgentWorkspace, { recursive: true });
-    if (startServer) {
-      const { startGatewayServerHarness } = await getGatewayServerHarnessModule();
-      harness = await startGatewayServerHarness();
-    }
-    sharedSessionStoreDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
-  });
-
-  afterAll(async () => {
-    await harness?.close();
-    if (sharedSessionStoreDir) {
-      await fs.rm(sharedSessionStoreDir, { recursive: true, force: true });
-    }
-  });
 
   beforeEach(async () => {
     const { clearConfigCache, clearRuntimeConfigSnapshot } = await getGatewayConfigModule();
     clearRuntimeConfigSnapshot();
     clearConfigCache();
-    sessionCleanupMocks.clearSessionQueues.mockClear();
-    sessionCleanupMocks.stopSubagentsForRequester.mockClear();
+    sessionCleanupMocks.clearSessionLifecycleQueues.mockClear();
+    sessionCleanupMocks.stopSessionResetSubagents.mockClear();
     bootstrapCacheMocks.clearBootstrapSnapshot.mockReset();
     sessionHookMocks.hasInternalHookListeners.mockReset();
     sessionHookMocks.hasInternalHookListeners.mockReturnValue(true);
@@ -352,6 +328,7 @@ function createGatewaySessionsTestHarness(startServer: boolean) {
     sessionLifecycleHookMocks.runSessionStart.mockClear();
     sessionLifecycleHookState.hasSessionEndHook = true;
     sessionLifecycleHookState.hasSessionStartHook = true;
+    sessionLifecycleHookState.runner = undefined;
     subagentLifecycleHookMocks.runSubagentEnded.mockClear();
     subagentLifecycleHookState.hasSubagentEndedHook = true;
     threadBindingMocks.unbindThreadBindingsBySessionKey.mockClear();
@@ -364,8 +341,7 @@ function createGatewaySessionsTestHarness(startServer: boolean) {
     acpRuntimeMocks.requireAcpRuntimeBackend.mockImplementation((backendId?: string) =>
       acpRuntimeMocks.getAcpRuntimeBackend(backendId),
     );
-    acpManagerMocks.cancelSession.mockClear();
-    acpManagerMocks.closeSession.mockClear();
+    Object.values(acpManagerMocks).forEach((mock) => mock.mockClear());
     browserSessionTabMocks.closeTrackedBrowserTabsForSessions.mockClear();
     browserSessionTabMocks.closeTrackedBrowserTabsForSessions.mockResolvedValue(0);
     bundleMcpRuntimeMocks.disposeSessionMcpRuntime.mockClear();
@@ -380,24 +356,10 @@ function createGatewaySessionsTestHarness(startServer: boolean) {
     });
   });
 
-  const requireHarness = () => {
-    if (!harness) {
-      throw new Error("Gateway sessions test harness was not started");
-    }
-    return harness;
+  const openClient = async (opts?: Parameters<typeof gatewayTestHelpers.connectOk>[1]) => {
+    await gatewayTestHelpers.prepareGatewayReplyRuntimeForTest({ force: true });
+    return await requireHarness().openClient(opts);
   };
-
-  const requireSharedSessionStoreDir = () => {
-    if (!sharedSessionStoreDir) {
-      throw new Error("Gateway sessions shared session store dir was not created");
-    }
-    return sharedSessionStoreDir;
-  };
-
-  const openClient = async (opts?: Parameters<typeof gatewayTestHelpers.connectOk>[1]) =>
-    await gatewayTestHelpers
-      .prepareGatewayReplyRuntimeForTest({ force: true })
-      .then(() => requireHarness().openClient(opts));
 
   async function createSessionStoreDir() {
     const dir = path.join(requireSharedSessionStoreDir(), `case-${sessionStoreCaseSeq++}`);
@@ -412,7 +374,12 @@ function createGatewaySessionsTestHarness(startServer: boolean) {
     const storeTemplate = path.join(dir, "agents", "{agentId}", "sessions", "sessions.json");
     testState.sessionStorePath = storeTemplate;
     testState.sessionConfig = { scope: "global" };
-    testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
+    testState.agentsConfig = { ownership: "explicit", entries: { main: {}, work: {} } };
+    testState.agentConfig = {
+      ...testState.agentConfig,
+      systemAgent: { agentId: "main" },
+      sessionStore: { agentId: "main" },
+    };
     return {
       dir,
       storeTemplate,
@@ -475,7 +442,6 @@ function createGatewaySessionsTestHarness(startServer: boolean) {
         storePath: workStorePath,
       });
     }
-
     const configPath = process.env.OPENCLAW_CONFIG_PATH;
     if (!configPath) {
       throw new Error("OPENCLAW_CONFIG_PATH is required");
@@ -484,7 +450,11 @@ function createGatewaySessionsTestHarness(startServer: boolean) {
       configPath,
       `${JSON.stringify(
         {
-          agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+          agents: {
+            ownership: "explicit",
+            entries: { main: {}, work: {} },
+            defaults: { systemAgent: { agentId: "main" }, sessionStore: { agentId: "main" } },
+          },
           session: { scope: "global", store: storeTemplate },
         },
         null,
@@ -538,11 +508,11 @@ function createGatewaySessionsTestHarness(startServer: boolean) {
     createConfiguredGlobalAgentSessionStore,
     createSessionStoreDir,
     createSelectedGlobalSessionStore,
-    defaultAgentWorkspace,
     getHarness: requireHarness,
     openClient,
     resetConfiguredGlobalAgentSessionStore,
     seedActiveMainSession,
+    withSessionTestState,
   };
 }
 
@@ -562,116 +532,43 @@ export function sessionStoreEntry(sessionId: string, overrides: Partial<SessionE
   };
 }
 
-function writeSessionFixture(
-  sessionFile: string,
-  session: { getPersistedEntries(): unknown[] },
-): void {
-  const contents = session
-    .getPersistedEntries()
-    .map((entry) => JSON.stringify(entry))
-    .join("\n");
-  fsSync.writeFileSync(sessionFile, `${contents}\n`, "utf8");
-}
-
-export async function createCheckpointFixture(
-  dir: string,
-  options: { legacyPreCompactionSnapshot?: boolean } = { legacyPreCompactionSnapshot: true },
-) {
-  const { SessionManager } = await getSessionManagerModule();
-  const session = SessionManager.inMemory(dir);
-  const userMessage: UserMessage = {
-    role: "user",
-    content: "before compaction",
-    timestamp: Date.now(),
-  };
-  const assistantMessage: AssistantMessage = {
-    role: "assistant",
-    content: [{ type: "text", text: "working on it" }],
-    api: "responses",
-    provider: "openai",
-    model: "gpt-test",
-    usage: {
-      input: 1,
-      output: 1,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 2,
-      cost: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        total: 0,
-      },
-    },
-    stopReason: "stop",
-    timestamp: Date.now(),
-  };
-  session.appendMessage(userMessage);
-  session.appendMessage(assistantMessage);
-  const preCompactionLeafId = session.getLeafId();
-  if (!preCompactionLeafId) {
-    throw new Error("expected persisted session leaf before compaction");
-  }
-  const sessionFile = path.join(dir, `${session.getSessionId()}.jsonl`);
-  writeSessionFixture(sessionFile, session);
-  const legacyPreCompactionSnapshot = options.legacyPreCompactionSnapshot ?? true;
-  const preCompactionSessionFile = legacyPreCompactionSnapshot
-    ? path.join(dir, `${path.parse(sessionFile).name}.checkpoint-test.jsonl`)
-    : undefined;
-  if (preCompactionSessionFile) {
-    fsSync.copyFileSync(sessionFile, preCompactionSessionFile);
-  }
-  const preCompactionSession = preCompactionSessionFile
-    ? SessionManager.fromEntries(session.getPersistedEntries(), dir)
-    : undefined;
-  session.appendCompaction("checkpoint summary", preCompactionLeafId, 123, { ok: true });
-  const postCompactionLeafId = session.getLeafId();
-  if (!postCompactionLeafId) {
-    throw new Error("expected post-compaction leaf");
-  }
-  writeSessionFixture(sessionFile, session);
-  return {
-    session,
-    sessionId: session.getSessionId(),
-    sessionFile,
-    preCompactionSession,
-    preCompactionSessionFile,
-    preCompactionLeafId,
-    postCompactionLeafId,
-  };
-}
-
 export function expectActiveRunCleanup(
   requesterSessionKey: string,
   expectedQueueKeys: string[],
   sessionId: string,
+  requesterAgentId: string,
 ) {
-  expect(sessionCleanupMocks.stopSubagentsForRequester).toHaveBeenCalledWith({
-    cfg: expect.any(Object),
-    requesterSessionKey,
-  });
-  expectSessionQueueCleanup(expectedQueueKeys);
+  expect(sessionCleanupMocks.stopSessionResetSubagents).toHaveBeenCalledWith(
+    expect.objectContaining({
+      cfg: expect.any(Object),
+      sessionKey: requesterSessionKey,
+      agentId: requesterAgentId,
+    }),
+  );
+  expect(sessionCleanupMocks.clearSessionLifecycleQueues).toHaveBeenCalledTimes(1);
+  expect(sessionCleanupMocks.clearSessionLifecycleQueues).toHaveBeenCalledWith(
+    expect.objectContaining({
+      keys: expect.arrayContaining(expectedQueueKeys),
+      agentId: requesterAgentId,
+      sessionKey: requesterSessionKey,
+      sessionId,
+      assertCurrent: expect.any(Function),
+    }),
+  );
   expect(embeddedRunMock.abortCalls).toEqual([sessionId]);
   expect(embeddedRunMock.waitCalls).toEqual([sessionId]);
 }
 
-function expectSessionQueueCleanup(expectedQueueKeys: string[]) {
-  expect(sessionCleanupMocks.clearSessionQueues).toHaveBeenCalledTimes(1);
-  const clearedKeys = (
-    sessionCleanupMocks.clearSessionQueues.mock.calls as unknown as Array<[string[]]>
-  )[0]?.[0];
-  for (const key of expectedQueueKeys) {
-    expect(clearedKeys).toContain(key);
-  }
-}
-
 export function expectNoSessionQueueCleanup() {
-  expect(sessionCleanupMocks.clearSessionQueues).not.toHaveBeenCalled();
+  expect(sessionCleanupMocks.clearSessionLifecycleQueues).not.toHaveBeenCalled();
 }
 
 type SessionsHandlers = Awaited<ReturnType<typeof getSessionsHandlers>>;
 type SessionsHandlerOptions = Parameters<SessionsHandlers[keyof SessionsHandlers]>[0];
+
+const defaultDirectContext = {};
+const directContexts = new Map<object, GatewayRequestContext>();
+beforeEach(() => directContexts.clear());
 
 export async function directSessionReq<TPayload = unknown>(
   method: keyof SessionsHandlers,
@@ -683,18 +580,60 @@ export async function directSessionReq<TPayload = unknown>(
     sessionMutationAuthorization?: SessionsHandlerOptions["sessionMutationAuthorization"];
     coercePayload?: (payload: unknown) => TPayload;
   },
-): Promise<{ ok: boolean; payload?: TPayload; error?: { code?: string; message?: string } }> {
+): Promise<{
+  ok: boolean;
+  payload?: TPayload;
+  error?: { code?: string; message?: string; details?: unknown };
+}> {
   const sessionsHandlers = await getSessionsHandlers();
   const { getRuntimeConfig } = await getGatewayConfigModule();
-  const loadGatewayModelCatalog =
-    (opts?.context?.loadGatewayModelCatalog as GatewayRequestContext["loadGatewayModelCatalog"]) ??
-    (async () => agentDiscoveryMock.models);
   let result:
-    | { ok: boolean; payload?: TPayload; error?: { code?: string; message?: string } }
+    | {
+        ok: boolean;
+        payload?: TPayload;
+        error?: { code?: string; message?: string; details?: unknown };
+      }
     | undefined;
   const handler = sessionsHandlers[method];
   if (!handler) {
     throw new Error(`missing sessions handler for ${method}`);
+  }
+  const contextKey = opts?.context ?? defaultDirectContext;
+  const existingContext = directContexts.get(contextKey);
+  const contextFields: GatewayRequestContext = createDirectChatContext({
+    broadcastToConnIds: vi.fn(),
+    chatAbortControllers: existingContext?.chatAbortControllers ?? new Map(),
+    chatQueuedTurns: existingContext?.chatQueuedTurns ?? new Map(),
+    dedupe: existingContext?.dedupe ?? new Map(),
+    getSessionEventSubscriberConnIds: () => new Set<string>(),
+    readPreparedGatewayModelCatalog: async () => {
+      const catalog = await contextFields.loadGatewayModelCatalogSnapshot();
+      return { entries: catalog.entries, routeVariants: catalog.routeVariants };
+    },
+    getRuntimeConfig,
+    ...opts?.context,
+  });
+  const context = existingContext ?? createDirectChatContext();
+  Object.assign(context, contextFields);
+  directContexts.set(contextKey, context);
+  if (
+    [
+      "chat.startup",
+      "chat.history",
+      "sessions.list",
+      "sessions.processes.list",
+      "sessions.processes.stop",
+      "sessions.describe",
+      "sessions.get",
+      "sessions.preview",
+      "sessions.resolve",
+      "sessions.create",
+      "sessions.patch",
+      "sessions.patchMany",
+      "sessions.compact",
+    ].includes(method)
+  ) {
+    await initializeSessionReadContext(context);
   }
   await handler({
     req: {} as never,
@@ -711,22 +650,12 @@ export async function directSessionReq<TPayload = unknown>(
         error,
       };
     },
-    context: {
-      ...createDirectChatContext(),
-      broadcastToConnIds: vi.fn(),
-      chatAbortControllers: new Map(),
-      chatQueuedTurns: new Map(),
-      dedupe: new Map(),
-      getSessionEventSubscriberConnIds: () => new Set<string>(),
-      loadGatewayModelCatalog,
-      readPreparedGatewayModelCatalog: loadGatewayModelCatalog,
-      getRuntimeConfig,
-      ...opts?.context,
-    } as never,
+    context,
     client: opts?.client ?? null,
     isWebchatConnect: opts?.isWebchatConnect ?? (() => false),
     sessionMutationAuthorization: opts?.sessionMutationAuthorization,
   });
+  await flushPendingSessionsChangedEvents(context);
   if (!result) {
     throw new Error(`${method} did not respond`);
   }
@@ -746,6 +675,10 @@ export function isInternalHookEvent(value: unknown): value is InternalHookEvent 
     typeof candidate.context === "object" &&
     candidate.context !== null
   );
+}
+
+export function setSessionLifecycleHookRunnerForTest(runner: HookRunner | undefined): void {
+  sessionLifecycleHookState.runner = runner;
 }
 
 export {

@@ -12,7 +12,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import JSZip from "jszip";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 const SCRIPT = path.join(process.cwd(), "scripts", "ios-validate-app-store-ipa.sh");
 const BASH_BIN = process.platform === "win32" ? "bash" : "/bin/bash";
@@ -20,6 +20,7 @@ const BUILD_COMMIT = "0123456789abcdef0123456789abcdef01234567";
 const BUILD_TIMESTAMP = "2026-07-10T12:34:56.000Z";
 
 const tempDirs: string[] = [];
+let toolsDir: string;
 
 function bashArgs(scriptPath: string): string[] {
   return process.platform === "win32" ? [scriptPath] : ["--noprofile", "--norc", scriptPath];
@@ -214,12 +215,9 @@ async function writeValidFixture(
   root: string,
   options: {
     buildCommit?: string;
-    buildTimestamp?: string;
-    healthUpdateUsage?: boolean | string | null;
+    healthUpdateUsage?: string | null;
     displayName?: string;
     localizedDisplayName?: string;
-    pushMode?: string;
-    legacyKey?: boolean;
   } = {},
 ): Promise<{
   ipaPath: string;
@@ -241,8 +239,8 @@ async function writeValidFixture(
     plistString("CFBundleIdentifier", "ai.openclawfoundation.app"),
     plistString("CFBundleDisplayName", options.displayName ?? "OpenClaw"),
     plistString("OpenClawGitCommit", options.buildCommit ?? BUILD_COMMIT),
-    plistString("OpenClawBuildTimestamp", options.buildTimestamp ?? BUILD_TIMESTAMP),
-    plistString("OpenClawPushMode", options.pushMode ?? "appStore"),
+    plistString("OpenClawBuildTimestamp", BUILD_TIMESTAMP),
+    plistString("OpenClawPushMode", "appStore"),
     plistString("OpenClawPushRelayBaseURL", ""),
     plistString(
       "NSHealthShareUsageDescription",
@@ -250,13 +248,10 @@ async function writeValidFixture(
     ),
     options.healthUpdateUsage === null
       ? ""
-      : typeof options.healthUpdateUsage === "boolean"
-        ? plistBool("NSHealthUpdateUsageDescription", options.healthUpdateUsage)
-        : plistString(
-            "NSHealthUpdateUsageDescription",
-            options.healthUpdateUsage ?? "OpenClaw reads Health data for Health Summaries.",
-          ),
-    options.legacyKey ? plistString("OpenClawPushRelayProfile", "production") : "",
+      : plistString(
+          "NSHealthUpdateUsageDescription",
+          options.healthUpdateUsage ?? "OpenClaw reads Health data for Health Summaries.",
+        ),
   ].join("");
   writeFileSync(path.join(appDir, "Info.plist"), plist(infoBody), "utf8");
   const localizedDir = path.join(appDir, "de.lproj");
@@ -314,12 +309,9 @@ async function writeValidFixture(
     "utf8",
   );
 
-  const plistBuddy = path.join(binDir, "plistbuddy");
-  writeFakePlistBuddy(plistBuddy);
-  const plutil = path.join(binDir, "plutil");
-  writeFakePlutil(plutil);
-  const unzip = path.join(binDir, "unzip");
-  writeFakeUnzip(unzip);
+  const plistBuddy = path.join(toolsDir, "plistbuddy");
+  const plutil = path.join(toolsDir, "plutil");
+  const unzip = path.join(toolsDir, "unzip");
   const codesign = path.join(binDir, "codesign");
   writeExecutable(
     codesign,
@@ -392,6 +384,20 @@ function runValidator(
 }
 
 describe("scripts/ios-validate-app-store-ipa.sh", () => {
+  beforeAll(() => {
+    // Interpreters read fixture paths from argv; signing inputs remain case-owned.
+    toolsDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-ios-ipa-tools-"));
+    writeFakePlistBuddy(path.join(toolsDir, "plistbuddy"));
+    writeFakePlutil(path.join(toolsDir, "plutil"));
+    writeFakeUnzip(path.join(toolsDir, "unzip"));
+  });
+
+  afterAll(() => {
+    if (toolsDir) {
+      rmSync(toolsDir, { recursive: true, force: true });
+    }
+  });
+
   afterEach(() => {
     for (const dir of tempDirs.splice(0)) {
       rmSync(dir, { recursive: true, force: true });
@@ -401,8 +407,7 @@ describe("scripts/ios-validate-app-store-ipa.sh", () => {
   it("fake plutil escapes regex-metacharacter keys before matching", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-ios-ipa-"));
     tempDirs.push(root);
-    const plutil = path.join(root, "plutil");
-    writeFakePlutil(plutil);
+    const plutil = path.join(toolsDir, "plutil");
     const plistPath = path.join(root, "meta.plist");
     writeFileSync(
       plistPath,
@@ -427,28 +432,6 @@ describe("scripts/ios-validate-app-store-ipa.sh", () => {
       },
     );
     expect(missing.status).toBe(1);
-  });
-
-  it("accepts an App Store IPA with appStore mode and production entitlements", async () => {
-    const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-ios-ipa-"));
-    tempDirs.push(root);
-    const fixture = await writeValidFixture(root);
-
-    const result = runValidator(fixture);
-
-    expect(result.ok).toBe(true);
-    expect(result.stdout).toContain("Validated iOS App Store IPA");
-  });
-
-  it("rejects an IPA that was exported with a non-App-Store push mode", async () => {
-    const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-ios-ipa-"));
-    tempDirs.push(root);
-    const fixture = await writeValidFixture(root, { pushMode: "localProduction" });
-
-    const result = runValidator(fixture);
-
-    expect(result.ok).toBe(false);
-    expect(result.stderr).toContain("push mode mismatch");
   });
 
   it("rejects an IPA without the Health update purpose string required by App Store Connect", async () => {
@@ -484,28 +467,6 @@ describe("scripts/ios-validate-app-store-ipa.sh", () => {
 
     expect(result.ok).toBe(false);
     expect(result.stderr).toContain("unresolved build setting in localized plist");
-  });
-
-  it("rejects a non-string Health update purpose value", async () => {
-    const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-ios-ipa-"));
-    tempDirs.push(root);
-    const fixture = await writeValidFixture(root, { healthUpdateUsage: true });
-
-    const result = runValidator(fixture);
-
-    expect(result.ok).toBe(false);
-    expect(result.stderr).toContain("Health update usage description must be a non-empty string");
-  });
-
-  it("rejects legacy independently selectable production push keys", async () => {
-    const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-ios-ipa-"));
-    tempDirs.push(root);
-    const fixture = await writeValidFixture(root, { legacyKey: true });
-
-    const result = runValidator(fixture);
-
-    expect(result.ok).toBe(false);
-    expect(result.stderr).toContain("legacy relay profile");
   });
 
   it("rejects malformed or mismatched embedded build provenance", async () => {

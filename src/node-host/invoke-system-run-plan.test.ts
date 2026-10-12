@@ -4,11 +4,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import {
-  revalidateApprovedMutableFileOperand,
-  resolveMutableFileOperandSnapshotSync,
-} from "../infra/system-run-approval-binding.js";
+import { resolveMutableFileOperandSnapshotSync } from "../infra/system-run-approval-binding.js";
 import { formatExecCommand } from "../infra/system-run-command.js";
+import { revalidateApprovedMutableFileOperand } from "../infra/system-run-file-snapshot.js";
 import { withEnv } from "../test-utils/env.js";
 import {
   buildSystemRunApprovalPlan,
@@ -26,7 +24,6 @@ type HardeningCase = {
   shellCommand?: string | null;
   withPathToken?: boolean;
   expectedArgv: (ctx: { pathToken: PathTokenSetup | null }) => string[];
-  expectedArgvChanged?: boolean;
   expectedCmdText?: string;
   checkRawCommandMatchesArgv?: boolean;
   expectedCommandPreview?: string | null;
@@ -254,10 +251,10 @@ function withScriptOperandPlanFixture<T>(
   return run(fixture, tmp);
 }
 
-const DENIED_RUNTIME_APPROVAL = {
+const DENIED_RUNTIME_APPROVAL = expect.objectContaining({
   ok: false,
-  message: "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
-} as const;
+  reason: "unsupported-command-shape",
+});
 
 function runNamedCase(name: string, run: () => void) {
   try {
@@ -413,7 +410,6 @@ describe("hardenApprovedExecutionPaths", () => {
       argv: ["env", "tr", "a", "b"],
       shellCommand: null,
       expectedArgv: () => ["env", "tr", "a", "b"],
-      expectedArgvChanged: false,
     },
     {
       name: "pins direct PATH-token executable during approval hardening",
@@ -422,7 +418,6 @@ describe("hardenApprovedExecutionPaths", () => {
       shellCommand: null,
       withPathToken: true,
       expectedArgv: ({ pathToken }) => [requirePathToken(pathToken).expected, "SAFE"],
-      expectedArgvChanged: true,
     },
     {
       name: "preserves env-wrapper PATH-token argv during approval hardening",
@@ -431,7 +426,6 @@ describe("hardenApprovedExecutionPaths", () => {
       shellCommand: null,
       withPathToken: true,
       expectedArgv: () => ["env", "poccmd", "SAFE"],
-      expectedArgvChanged: false,
     },
     {
       name: "rawCommand matches hardened argv after executable path pinning",
@@ -493,9 +487,6 @@ describe("hardenApprovedExecutionPaths", () => {
             throw new Error("unreachable");
           }
           expect(hardened.argv).toEqual(testCase.expectedArgv({ pathToken }));
-          if (typeof testCase.expectedArgvChanged === "boolean") {
-            expect(hardened.argvChanged).toBe(testCase.expectedArgvChanged);
-          }
         };
 
         if (testCase.withPathToken) {
@@ -693,6 +684,20 @@ describe("hardenApprovedExecutionPaths", () => {
         expectMutableFileOperandApprovalPlan(fixture, tmp);
       },
     );
+  });
+
+  it("captures the execution host cwd when an approval request omits cwd", () => {
+    const hardened = hardenApprovedExecutionPaths({
+      approvedByAsk: true,
+      argv: [],
+      shellCommand: null,
+      cwd: undefined,
+    });
+    expect(hardened.ok).toBe(true);
+    if (!hardened.ok) {
+      throw new Error("unreachable");
+    }
+    expect(hardened.cwd).toBe(fs.realpathSync(process.cwd()));
   });
 
   it("handles shell payloads that invoke absolute-path native binaries", () => {

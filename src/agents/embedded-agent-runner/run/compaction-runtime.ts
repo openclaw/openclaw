@@ -1,31 +1,53 @@
-import type { resolveContextEngine } from "../../../context-engine/registry.js";
+import { acknowledgeReplySessionTransition } from "../../../auto-reply/reply/reply-run-registry.state.js";
+import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
+import { captureSessionEntrySourceAssertion } from "../../../config/sessions/session-entry-source-authority.js";
+import { captureIncognitoSessionSource } from "../../../config/sessions/session-incognito-binding.js";
+import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
+import {
+  withOwnedSessionTranscriptWrites,
+  SessionTranscriptWriterClaimReboundError,
+} from "../../../config/sessions/transcript-write-context.js";
 import type { buildContextEngineRuntimeSettings } from "../../../context-engine/runtime-settings.js";
 import {
   resolveCompactionSuccessorTranscript,
+  type ContextEngine,
   type ContextEngineSessionTarget,
 } from "../../../context-engine/types.js";
+import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
+import { retireSessionMcpRuntime } from "../../agent-bundle-mcp-manager-api.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import { resolveProcessToolScopeKey } from "../../bash-process-scope.js";
+import { resolveModelCallUrgency } from "../../run-trigger.js";
+import { SessionManager } from "../../sessions/session-manager.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
 import {
   compactContextEngineWithSafetyTimeout,
   resolveCompactionTimeoutMs,
 } from "../compaction-safety-timeout.js";
+import {
+  acceptCompactionSuccessor,
+  resolveContextEngineCompactionSuccessor,
+  type AcceptedCompactionSuccessor,
+} from "../compaction-successor.js";
 import { resolveContextEngineCapabilities } from "../context-engine-capabilities.js";
 import { log } from "../logger.js";
-import { resolveModelCallUrgency } from "../vllm-priority.js";
+import { declarePromptHistoryRewrite } from "../prompt-cache-observability.js";
+import { mergeUsageIntoAccumulator, type UsageAccumulator } from "../usage-accumulator.js";
+import { attachCompactionAccountingRecorder } from "./compaction-accounting-bridge.js";
+import type { resolveCompactionLiveModelSelection } from "./compaction-live-model-selection.js";
 import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import { buildContextEngineCompactionSessionTarget } from "./session-bootstrap.js";
+import { resolveEmbeddedSessionContextLimits } from "./session-context-limits.js";
 import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
-type ContextEngine = Awaited<ReturnType<typeof resolveContextEngine>>;
-type SessionPromptState = ReturnType<typeof createEmbeddedRunSessionPromptState>;
+type SessionPromptState = Awaited<ReturnType<typeof createEmbeddedRunSessionPromptState>>;
 type CompactionResult = Awaited<ReturnType<ContextEngine["compact"]>>;
 
 export type EmbeddedRunCompactionRecoveryInput = {
+  runInput?: PreparedEmbeddedRunInput;
   runParams: RunEmbeddedAgentParams;
   state: EmbeddedRunContextRecoveryState;
   contextEngine: ContextEngine;
@@ -38,43 +60,30 @@ export type EmbeddedRunCompactionRecoveryInput = {
   contextEngineAgentId?: string;
   agentDir: string;
   workspaceDir: string;
-  provider: string;
-  modelId: string;
+  modelSelection: ReturnType<typeof resolveCompactionLiveModelSelection>;
   harnessRuntime: string;
   thinkLevel: Parameters<typeof buildEmbeddedCompactionRuntimeContext>[0]["thinkLevel"];
-  authProfileId?: string;
-  authProfileIdSource: "auto" | "user";
   resolveContextEnginePluginId: () => string | undefined;
   buildRuntimeSettings: (settings: {
     tokenBudget?: number | null;
     degradedReason?: string | null;
   }) => ReturnType<typeof buildContextEngineRuntimeSettings>;
-  onCompactionHookMessages: (payload: {
-    phase: "before" | "after";
-    messages: string[];
-  }) => Promise<void>;
-  runOwnsCompactionBeforeHook: (reason: string) => Promise<void>;
-  runOwnsCompactionAfterHook: (
-    reason: string,
-    result: CompactionResult,
-    previousSessionId?: string,
-  ) => Promise<void>;
-  adoptCompactionTranscript: (result: CompactionResult) => Promise<string | undefined>;
   getActiveSession: () => {
     id: string;
     file: string;
     target?: ContextEngineSessionTarget;
   };
-  prepareCompactedTranscriptRetry: () => Promise<void>;
+  prepareCompactedTranscriptRetry: (assertActive: () => void) => Promise<void>;
   armPostCompactionGuard: () => void;
-};
+  usageAccumulator: UsageAccumulator;
+} & ReturnType<typeof createEmbeddedRunCompactionRuntime>;
 
-/** Preserve one prepared owner snapshot for both timeout and overflow recovery. */
+/** Preserve one prepared owner snapshot throughout context and timeout recovery. */
 export async function compactEmbeddedRunForRecovery(
   input: EmbeddedRunCompactionRecoveryInput,
   recovery: {
     tokenBudget: number;
-    trigger: "overflow" | "timeout_recovery";
+    trigger: "budget" | "overflow" | "timeout_recovery";
     diagId: string;
     attempt: number;
     maxAttempts: number;
@@ -82,60 +91,50 @@ export async function compactEmbeddedRunForRecovery(
   },
 ) {
   const { runParams } = input;
-  const activeSession = input.getActiveSession();
+  const owner = input.prepareRecoveryOwner();
+  const activeSession = owner.session;
+  const promptCacheIdentity = {
+    ...runParams,
+    sessionId: activeSession.id,
+    sessionKey: input.resolvedSessionKey,
+  };
+  const recoveryKind = recovery.trigger === "timeout_recovery" ? "timeout" : recovery.trigger;
+  const reason = `${recoveryKind === "budget" ? "context budget" : recoveryKind} recovery`;
+  await input.runOwnsCompactionBeforeHook(reason);
+  owner.assertActive();
   const runtimeContext = {
-    ...buildEmbeddedCompactionRuntimeContext({
-      sessionKey: runParams.sessionKey,
-      messageChannel: runParams.messageChannel,
-      messageProvider: runParams.messageProvider,
-      clientCaps: runParams.clientCaps,
-      chatType: runParams.chatType,
-      agentAccountId: runParams.agentAccountId,
-      currentChannelId: runParams.currentChannelId,
-      currentThreadTs: runParams.currentThreadTs,
-      currentMessageId: runParams.currentMessageId,
-      authProfileId: input.authProfileId,
-      authProfileIdSource: input.authProfileIdSource,
-      runtimeAuthPlan: input.runtimeAuthPlan,
-      workspaceDir: input.workspaceDir,
-      bootstrapWorkspaceDir: runParams.bootstrapWorkspaceDir,
-      permissionMode: runParams.permissionMode,
-      sessionRoot: runParams.sessionRoot,
-      agentDir: input.agentDir,
-      config: runParams.config,
-      toolOverrides: runParams.toolOverrides,
-      skillsSnapshot: runParams.skillsSnapshot,
-      senderId: runParams.senderId,
-      modelCallUrgency: resolveModelCallUrgency(runParams),
-      provider: input.provider,
-      modelId: input.modelId,
-      harnessRuntime: input.harnessRuntime,
-      modelSelectionLocked: runParams.modelSelectionLocked,
-      modelFallbacksOverride: runParams.modelFallbacksOverride,
-      thinkLevel: input.thinkLevel,
-      reasoningLevel: runParams.reasoningLevel,
-      execOverrides: runParams.execOverrides,
-      bashElevated: runParams.bashElevated,
-      extraSystemPrompt: runParams.extraSystemPrompt,
-      sourceReplyDeliveryMode: runParams.sourceReplyDeliveryMode,
-      ownerNumbers: runParams.ownerNumbers,
-      activeProcessSessions: listActiveProcessSessionReferences({
-        scopeKey: resolveProcessToolScopeKey({
-          sessionKey: runParams.sandboxSessionKey?.trim() || runParams.sessionKey,
-          sessionId: activeSession.id,
-          agentId: input.sessionAgentId,
+    ...buildEmbeddedCompactionRuntimeContext(
+      {
+        ...runParams,
+        modelCallUrgency: resolveModelCallUrgency(runParams),
+        authProfileId: input.modelSelection.authProfileId,
+        authProfileIdSource: input.modelSelection.authProfileIdSource,
+        runtimeAuthPlan: input.runtimeAuthPlan,
+        workspaceDir: input.workspaceDir,
+        agentDir: input.agentDir,
+        provider: input.modelSelection.provider,
+        modelId: input.modelSelection.model,
+        harnessRuntime: input.harnessRuntime,
+        thinkLevel: input.thinkLevel,
+        activeProcessSessions: listActiveProcessSessionReferences({
+          scopeKey: resolveProcessToolScopeKey({
+            sessionKey: runParams.sessionKey,
+            sessionId: activeSession.id,
+            agentId: input.sessionAgentId,
+          }),
         }),
-      }),
-    }),
+      },
+      "recovery",
+    ),
     ...resolveContextEngineCapabilities({
       config: runParams.config,
       sessionKey: runParams.sessionKey,
       explicitAgentId: input.contextEngineAgentId,
       contextEnginePluginId: input.resolveContextEnginePluginId(),
       purpose:
-        recovery.trigger === "overflow"
-          ? "context-engine.overflow-compaction"
-          : "context-engine.timeout-compaction",
+        recoveryKind === "budget"
+          ? "context-engine.compaction"
+          : `context-engine.${recoveryKind}-compaction`,
     }),
     onCompactionHookMessages: input.onCompactionHookMessages,
     ...(input.attempt.promptCache ? { promptCache: input.attempt.promptCache } : {}),
@@ -148,37 +147,125 @@ export async function compactEmbeddedRunForRecovery(
     attempt: recovery.attempt,
     maxAttempts: recovery.maxAttempts,
   };
+  let observedCompactions = 0;
   const runtimeSettings = input.buildRuntimeSettings({
     tokenBudget: recovery.tokenBudget,
     ...(recovery.trigger === "overflow" ? { degradedReason: "context_overflow" } : {}),
   });
-  const result = await compactContextEngineWithSafetyTimeout(
-    input.contextEngine,
-    {
+  const compactParams: Parameters<ContextEngine["compact"]>[0] = {
+    sessionId: activeSession.id,
+    sessionKey: input.resolvedSessionKey,
+    agentId: input.sessionAgentId,
+    sessionTarget: buildContextEngineCompactionSessionTarget({
+      agentId: input.sessionAgentId,
+      config: runParams.config,
+      sessionFile: activeSession.file,
       sessionId: activeSession.id,
       sessionKey: input.resolvedSessionKey,
-      agentId: input.sessionAgentId,
-      sessionTarget: buildContextEngineCompactionSessionTarget({
-        agentId: input.sessionAgentId,
-        config: runParams.config,
-        sessionFile: activeSession.file,
-        sessionId: activeSession.id,
-        sessionKey: input.resolvedSessionKey,
-        sessionTarget: activeSession.target,
-      }),
-      tokenBudget: recovery.tokenBudget,
-      ...(recovery.currentTokenCount !== undefined
-        ? { currentTokenCount: recovery.currentTokenCount }
-        : {}),
-      force: true,
-      compactionTarget: "budget",
-      runtimeContext,
-      runtimeSettings,
-    },
-    resolveCompactionTimeoutMs(runParams.config),
-    runParams.abortSignal,
-  );
-  return { result, runtimeContext, runtimeSettings };
+      sessionTarget: activeSession.target,
+    }),
+    tokenBudget: recovery.tokenBudget,
+    ...(recovery.currentTokenCount !== undefined
+      ? { currentTokenCount: recovery.currentTokenCount }
+      : {}),
+    force: true,
+    compactionTarget: "budget",
+    runtimeContext,
+    runtimeSettings,
+  };
+  let result: CompactionResult;
+  try {
+    result = await compactContextEngineWithSafetyTimeout(
+      {
+        info: input.contextEngine.info,
+        compact: (backendParams) =>
+          owner.withTranscriptWrites(backendParams.abortSignal, () => {
+            if (backendParams.runtimeContext) {
+              attachCompactionAccountingRecorder(backendParams.runtimeContext, {
+                requestBudget: input.state.compactionRequestBudget,
+                pendingRequestState:
+                  recovery.trigger === "timeout_recovery" ? undefined : "unresolved",
+                memoryTranscript: owner.sessionManager
+                  ? {
+                      sessionManager: owner.sessionManager,
+                      sessionTarget: activeSession.target,
+                      assertActive: () => {
+                        backendParams.abortSignal?.throwIfAborted();
+                        owner.assertActive();
+                      },
+                    }
+                  : undefined,
+                recordUsage: (usage) => mergeUsageIntoAccumulator(input.usageAccumulator, usage),
+                recordCompaction: ({ tokensAfter }) => {
+                  declarePromptHistoryRewrite({ ...promptCacheIdentity, reason: "compaction" });
+                  observedCompactions += 1;
+                  input.state.observeContextAccounting({ kind: "compaction", tokensAfter });
+                },
+              });
+            }
+            return input.contextEngine.compact(backendParams);
+          }),
+      },
+      compactParams,
+      resolveCompactionTimeoutMs(runParams.config),
+      runParams.abortSignal,
+    );
+  } catch (error) {
+    // Only a live owner's backend failure is recoverable. Caller cancellation,
+    // replacement, and claim loss must never become a truncation/retry request.
+    owner.assertActive();
+    log.warn(
+      `contextEngine.compact() threw during ${reason} for ${input.modelSelection.provider}/${input.modelSelection.model}: ${String(error)}`,
+    );
+    result = { ok: false, compacted: false, reason: String(error) };
+  }
+  if (observedCompactions > 0 && !result.compacted) {
+    // Post-commit failure is not an unperformed compaction. Retry the observed
+    // current context, but never adopt a failed backend's successor proposal.
+    result = { ok: result.ok, compacted: true, reason: result.reason };
+  }
+  const successor = resolveCompactionSuccessorTranscript(result);
+  const target = result.result?.sessionTarget;
+  const sameTarget =
+    (!successor.sessionId || successor.sessionId === activeSession.id) &&
+    (!successor.sessionFile || successor.sessionFile === activeSession.file) &&
+    (!target?.agentId || target.agentId === activeSession.target?.agentId) &&
+    (!target?.sessionKey || target.sessionKey === activeSession.target?.sessionKey) &&
+    (!target?.storePath || target.storePath === activeSession.target?.storePath);
+  const reportedTokens = result.result?.tokensAfter;
+  const tokensAfter =
+    typeof reportedTokens === "number" && Number.isFinite(reportedTokens) && reportedTokens >= 0
+      ? Math.floor(reportedTokens)
+      : undefined;
+  const recordTokensAfter = () => {
+    input.state.lastCompactionTokensAfter = tokensAfter;
+    input.state.currentContextSnapshot = { tokens: tokensAfter };
+  };
+  if (result.compacted && observedCompactions === 0) {
+    // Opaque engines report completion on return. Stock commits are already
+    // recorded before hooks; their late result must not replace a newer context.
+    // A proposed successor's token snapshot transfers only on host acceptance.
+    input.state.observeContextAccounting({
+      kind: "compaction",
+      tokensAfter: sameTarget ? tokensAfter : undefined,
+    });
+  }
+  owner.assertActive();
+  // Stock compaction already updated this exact buffer; resolving its unchanged
+  // portable identity would unnecessarily consult a borrowed durable session.
+  const retainMemoryTranscript =
+    owner.sessionManager &&
+    sameTarget &&
+    (target?.threadId === undefined || target.threadId === activeSession.target.threadId);
+  const previousSessionId =
+    result.compacted && !retainMemoryTranscript
+      ? await input.adoptCompactionTranscript(result, sameTarget ? undefined : recordTokensAfter)
+      : undefined;
+  input.assertRecoveryActive();
+  if (result.compacted && observedCompactions === 0) {
+    declarePromptHistoryRewrite({ ...promptCacheIdentity, reason: "compaction" });
+  }
+  return { result, runtimeContext, runtimeSettings, previousSessionId };
 }
 
 export function createEmbeddedRunCompactionRuntime(input: {
@@ -189,35 +276,262 @@ export function createEmbeddedRunCompactionRuntime(input: {
   sessionPromptState: SessionPromptState;
 }) {
   const { runParams: params, contextEngine, hookRunner, hookContext, sessionPromptState } = input;
+  const abortSignal = params.abortSignal;
+  const admittedAssertion = params.admittedRunContext
+    ? resolveAdmittedRunActiveAssertion(params.admittedRunContext)
+    : undefined;
+  const runId = params.runId;
+  const memoryManager =
+    params.sessionManager && !params.sessionManager.getSessionTarget()
+      ? params.sessionManager
+      : undefined;
+  const detached = params.sessionPersistence === "detached";
+  const initialTarget = sessionPromptState.sessionTarget;
+  const incognito =
+    !memoryManager && !detached && initialTarget
+      ? captureIncognitoSessionSource(initialTarget)
+      : undefined;
+  const assertAdmittedActive = composeSessionSourceAssertion(
+    [admittedAssertion],
+    (assertSource) => {
+      // Preserve the caller's reason before a closed admission can replace it.
+      abortSignal?.throwIfAborted();
+      if (!admittedAssertion) {
+        throw new Error("compaction recovery requires an active admitted run");
+      }
+      assertSource();
+    },
+  );
+  const assertRecoveryTarget = (
+    target: ContextEngineSessionTarget | undefined,
+    sessionId = sessionPromptState.sessionId,
+    writerFence = sessionPromptState.sessionWriterFence,
+  ) => {
+    assertAdmittedActive();
+    if (memoryManager || detached) {
+      return;
+    }
+    incognito?.admissionSignal?.throwIfAborted();
+    if (incognito && "kind" in incognito) {
+      incognito.assertCurrent();
+    }
+    if (
+      incognito &&
+      (target?.agentId !== initialTarget?.agentId || target?.storePath !== initialTarget?.storePath)
+    ) {
+      throw new SessionTranscriptWriterClaimReboundError();
+    }
+    const entry =
+      target?.sessionKey && target.storePath
+        ? incognito
+          ? "kind" in incognito
+            ? undefined
+            : incognito.actor.sessions.readSharing(target.sessionKey)?.entry
+          : loadSessionEntry({
+              agentId: target.agentId,
+              sessionKey: target.sessionKey,
+              storePath: target.storePath,
+              readConsistency: "latest",
+            })
+        : undefined;
+    if (
+      !writerFence ||
+      writerFence.expectedWriterRunId !== runId ||
+      entry?.sessionId !== sessionId ||
+      entry.lifecycleRevision !== writerFence.expectedLifecycleRevision ||
+      entry.activeWriterRunId !== writerFence.expectedWriterRunId
+    ) {
+      throw new SessionTranscriptWriterClaimReboundError();
+    }
+  };
+  const assertRecoveryActive = () => assertRecoveryTarget(sessionPromptState.sessionTarget);
+  const getPreparedTarget = () => {
+    const target = sessionPromptState.sessionTarget;
+    if (!target?.agentId || !target.sessionKey || !target.storePath) {
+      throw new Error("compaction recovery requires a complete transcript target");
+    }
+    return {
+      ...target,
+      agentId: target.agentId,
+      sessionId: sessionPromptState.sessionId,
+      sessionKey: target.sessionKey,
+      storePath: target.storePath,
+    };
+  };
+  const prepareRecoveryOwner = () => {
+    assertRecoveryActive();
+    const sessionId = sessionPromptState.sessionId;
+    const sessionFile = sessionPromptState.sessionFile;
+    const writerFence = sessionPromptState.sessionWriterFence;
+    const target = { ...getPreparedTarget(), ...writerFence };
+    const source =
+      !memoryManager && !detached
+        ? captureSessionEntrySourceAssertion({
+            scope: target,
+            expected: {
+              sessionId,
+              lifecycleRevision: writerFence?.expectedLifecycleRevision,
+              activeWriterRunId: writerFence?.expectedWriterRunId,
+            },
+            fields: ["sessionId", "lifecycleRevision", "activeWriterRunId"],
+            assertCurrent: () => assertRecoveryTarget(target, sessionId, writerFence),
+            assertHostCurrent: () => {
+              if (!writerFence || writerFence.expectedWriterRunId !== runId) {
+                throw new SessionTranscriptWriterClaimReboundError();
+              }
+            },
+            refuse: () => {
+              throw new SessionTranscriptWriterClaimReboundError();
+            },
+          })
+        : undefined;
+    const assertActive = composeSessionSourceAssertion(
+      [assertAdmittedActive, source],
+      (assertSources) => {
+        assertSources();
+        const current = sessionPromptState.sessionTarget;
+        if (
+          sessionPromptState.sessionId !== sessionId ||
+          sessionPromptState.sessionFile !== sessionFile ||
+          current?.agentId !== target.agentId ||
+          current?.sessionKey !== target.sessionKey ||
+          current?.storePath !== target.storePath
+        ) {
+          throw new Error("active session changed after recovery transcript preparation");
+        }
+      },
+    );
+    return {
+      session: { id: sessionId, file: sessionFile, target },
+      ...(memoryManager ? { sessionManager: memoryManager } : {}),
+      assertActive,
+      withTranscriptWrites: <T>(signal: AbortSignal | undefined, run: () => Promise<T>) => {
+        const assertInvocationActive = composeSessionSourceAssertion(
+          [assertActive],
+          (assertSource) => {
+            signal?.throwIfAborted();
+            assertSource();
+          },
+        );
+        const assertCommitAllowed = composeSessionSourceAssertion(
+          [assertInvocationActive],
+          (assertSource) => {
+            assertSource();
+            if (detached || memoryManager) {
+              throw new Error("detached recovery cannot persist a session transcript");
+            }
+          },
+        );
+        // Bind the original owner and the safety wrapper's child signal to every
+        // nested write, including callbacks retained beyond the backend result.
+        return withOwnedSessionTranscriptWrites(
+          {
+            sessionTarget: target,
+            assertCommitAllowed,
+            withTranscriptWrite: async (write) => await write(),
+          },
+          async () => {
+            assertInvocationActive();
+            return await run();
+          },
+        );
+      },
+    };
+  };
+  const prepareRecoverySession = async (contextTokenBudget: number) => {
+    const owner = prepareRecoveryOwner();
+    const sessionManager =
+      memoryManager ??
+      (detached
+        ? undefined
+        : await SessionManager.openAsync(
+            owner.session.target,
+            params.workspaceDir,
+            resolveEmbeddedSessionContextLimits(contextTokenBudget),
+          ));
+    owner.assertActive();
+    return {
+      sessionManager,
+      assertActive: owner.assertActive,
+      withSessionManagerRewriteLock: <T>(operation: () => Promise<T> | T): Promise<T> =>
+        owner.withTranscriptWrites(undefined, async () => {
+          if (!sessionManager) {
+            throw new Error("detached recovery has no caller-owned transcript to rewrite");
+          }
+          await sessionManager.reloadPersistedTranscriptAsync();
+          owner.assertActive();
+          return await operation();
+        }),
+    };
+  };
   const resolveActiveHookContext = () => ({
     ...hookContext,
     sessionId: sessionPromptState.sessionId,
   });
   const adoptCompactionTranscript = async (
-    compactResult: Awaited<ReturnType<ContextEngine["compact"]>>,
+    compactResult: CompactionResult,
+    onAccepted?: () => void,
   ): Promise<string | undefined> => {
-    const previousSessionId = sessionPromptState.sessionId;
-    const nextSessionTarget = compactResult.result?.sessionTarget;
-    const successor = resolveCompactionSuccessorTranscript(compactResult);
-    await sessionPromptState.adoptSessionTarget(
-      nextSessionTarget && successor.sessionId
-        ? {
-            ...nextSessionTarget,
-            sessionId: nextSessionTarget.sessionId ?? successor.sessionId,
-          }
-        : nextSessionTarget,
-    );
-    if (
-      !nextSessionTarget &&
-      successor.sessionFile &&
-      successor.sessionFile !== sessionPromptState.sessionFile
-    ) {
-      sessionPromptState.sessionFile = successor.sessionFile;
+    assertRecoveryActive();
+    const currentTarget = getPreparedTarget();
+    if (memoryManager || detached) {
+      const successor = await resolveContextEngineCompactionSuccessor({
+        config: params.config,
+        currentSessionFile: sessionPromptState.sessionFile,
+        currentTarget,
+        result: compactResult,
+      });
+      assertAdmittedActive();
+      sessionPromptState.capturePreparedCompactionTarget(successor);
+      try {
+        onAccepted?.();
+        sessionPromptState.notifyCompactionSessionAdopted(currentTarget.sessionId);
+        assertAdmittedActive();
+        return successor.sessionId !== currentTarget.sessionId
+          ? currentTarget.sessionId
+          : undefined;
+      } finally {
+        if (successor.sessionId !== currentTarget.sessionId) {
+          await retireSessionMcpRuntime({
+            sessionId: currentTarget.sessionId,
+            reason: "compaction-session-end",
+            retainAcrossReuse: true,
+            preserveActiveLeases: true,
+          });
+        }
+      }
     }
-    sessionPromptState.adoptSessionId(successor.sessionId);
-    return successor.sessionId && successor.sessionId !== previousSessionId
-      ? previousSessionId
-      : undefined;
+    const writerFence = sessionPromptState.sessionWriterFence;
+    const recordAccepted = (accepted: AcceptedCompactionSuccessor) => {
+      sessionPromptState.recordCommittedCompactionSuccessor(accepted);
+      onAccepted?.();
+    };
+    const accepted = await acceptCompactionSuccessor({
+      config: params.config,
+      currentSessionFile: sessionPromptState.sessionFile,
+      currentTarget,
+      result: compactResult,
+      expectedEntry: {
+        sessionId: currentTarget.sessionId,
+        lifecycleRevision: writerFence?.expectedLifecycleRevision,
+        activeWriterRunId: writerFence?.expectedWriterRunId,
+      },
+      assertActive: assertAdmittedActive,
+      onCommitted: recordAccepted,
+    });
+    // Unchanged identity has no storage publication, but its validated current
+    // row still identifies the already-recorded compaction for accounting.
+    if (!accepted.previousSessionId) {
+      recordAccepted(accepted);
+    }
+    if (params.replyOperation && accepted.admissionTransition) {
+      assertAdmittedActive();
+      await acknowledgeReplySessionTransition(params.replyOperation, accepted.admissionTransition);
+    }
+    assertRecoveryActive();
+    sessionPromptState.notifyCompactionSessionAdopted(accepted.previousSessionId);
+    assertRecoveryActive();
+    return accepted.previousSessionId;
   };
   const onCompactionHookMessages = async (payload: {
     phase: "before" | "after";
@@ -227,6 +541,7 @@ export function createEmbeddedRunCompactionRuntime(input: {
     if (messages.length === 0) {
       return;
     }
+    assertRecoveryActive();
     await params.onAgentEvent?.({
       stream: "compaction",
       data: {
@@ -236,55 +551,60 @@ export function createEmbeddedRunCompactionRuntime(input: {
       },
       ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     });
+    assertRecoveryActive();
   };
-  const runOwnsCompactionBeforeHook = async (reason: string) => {
-    if (contextEngine.info.ownsCompaction !== true || !hookRunner?.hasHooks("before_compaction")) {
-      return;
-    }
-    try {
-      await hookRunner.runBeforeCompaction(
-        { messageCount: -1, sessionFile: sessionPromptState.sessionFile },
-        resolveActiveHookContext(),
-      );
-    } catch (error) {
-      log.warn(`before_compaction hook failed during ${reason}: ${String(error)}`);
-    }
-  };
-  const runOwnsCompactionAfterHook = async (
+  const runOwnsCompactionHook = async (
     reason: string,
-    compactResult: Awaited<ReturnType<ContextEngine["compact"]>>,
+    compactResult?: CompactionResult,
     previousSessionId?: string,
   ) => {
+    assertRecoveryActive();
+    const hook = compactResult ? "after_compaction" : "before_compaction";
     if (
       contextEngine.info.ownsCompaction !== true ||
-      !compactResult.ok ||
-      !compactResult.compacted ||
-      !hookRunner?.hasHooks("after_compaction")
+      (compactResult && !compactResult.ok) ||
+      !hookRunner?.hasHooks(hook)
     ) {
       return;
     }
     try {
-      await hookRunner.runAfterCompaction(
-        {
-          messageCount: -1,
-          compactedCount: -1,
-          tokenCount: compactResult.result?.tokensAfter,
-          sessionFile:
-            resolveCompactionSuccessorTranscript(compactResult).sessionFile ??
-            sessionPromptState.sessionFile,
-          ...(previousSessionId ? { previousSessionId } : {}),
-        },
-        resolveActiveHookContext(),
-      );
+      if (compactResult) {
+        await hookRunner.runAfterCompaction(
+          {
+            messageCount: -1,
+            compactedCount: compactResult.compacted ? -1 : 0,
+            tokenCount: compactResult.result?.tokensAfter,
+            sessionFile:
+              resolveCompactionSuccessorTranscript(compactResult).sessionFile ??
+              sessionPromptState.sessionFile,
+            ...(previousSessionId ? { previousSessionId } : {}),
+          },
+          resolveActiveHookContext(),
+        );
+      } else {
+        await hookRunner.runBeforeCompaction(
+          { messageCount: -1, sessionFile: sessionPromptState.sessionFile },
+          resolveActiveHookContext(),
+        );
+      }
     } catch (error) {
-      log.warn(`after_compaction hook failed during ${reason}: ${String(error)}`);
+      assertRecoveryActive();
+      log.warn(`${hook} hook failed during ${reason}: ${String(error)}`);
     }
+    assertRecoveryActive();
   };
 
   return {
+    assertRecoveryActive,
+    prepareRecoveryOwner,
+    prepareRecoverySession,
     adoptCompactionTranscript,
     onCompactionHookMessages,
-    runOwnsCompactionBeforeHook,
-    runOwnsCompactionAfterHook,
+    runOwnsCompactionBeforeHook: (reason: string) => runOwnsCompactionHook(reason),
+    runOwnsCompactionAfterHook: (
+      reason: string,
+      compactResult: CompactionResult,
+      previousSessionId?: string,
+    ) => runOwnsCompactionHook(reason, compactResult, previousSessionId),
   };
 }

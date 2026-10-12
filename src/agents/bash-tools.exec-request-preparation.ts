@@ -1,7 +1,8 @@
-/** Prepares exec workdir and environment facts before policy and host dispatch. */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { SystemRunExecutionContext } from "../../packages/gateway-protocol/src/system-run-execution-context.js";
 import { normalizeChatChannelId } from "../channels/ids.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import type { ExecHost } from "../infra/exec-approvals.js";
 import {
   isDangerousHostEnvOverrideVarName,
@@ -9,14 +10,22 @@ import {
   normalizeHostOverrideEnvVarKey,
   sanitizeHostExecEnvWithDiagnostics,
 } from "../infra/host-env-security.js";
-import { OPENCLAW_CLI_ENV_VAR } from "../infra/openclaw-exec-env.js";
+import {
+  getInstallationTarget,
+  installationTargetEnv,
+  LOCAL_INSTALLATION_TARGET_UNSUPPORTED,
+} from "../infra/installation-target-context.js";
+import { omitGatewayAgentCliPath } from "../infra/openclaw-cli-shim.js";
+import { OPENCLAW_CLI_ENV_VAR, buildExecRoutingEnv } from "../infra/openclaw-exec-env.js";
+import { mergeProcessEnv, resolveEnvironmentValue } from "../infra/process-env.js";
 import {
   getShellPathFromLoginShell,
   resolveShellEnvFallbackTimeoutMs,
 } from "../infra/shell-env.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
-import { safeJsonStringify } from "../utils/safe-json.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
+import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import { stripMalformedXmlArgValueSuffixFromKeys } from "./agent-tools.params.js";
 import { DEFAULT_PATH, applyPathPrepend, applyShellPath } from "./bash-tools.exec-runtime.js";
@@ -26,6 +35,7 @@ import { buildSandboxEnv, coerceEnv } from "./bash-tools.shared.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { prepareGitHubToolEnvironment } from "./github-tool-identity.js";
 import { sanitizeEnvVars } from "./sandbox/sanitize-env-vars.js";
+import { isSubagentEnvelopeSession } from "./subagents/spawn/subagent-capabilities.js";
 import { ToolInputError } from "./tools/common.js";
 
 export type ExecToolArgs = Record<string, unknown> & {
@@ -34,11 +44,11 @@ export type ExecToolArgs = Record<string, unknown> & {
   env?: Record<string, string>;
   yieldMs?: number;
   background?: boolean;
+  awaitResults?: boolean;
   timeoutSeconds?: number;
   pty?: boolean;
   elevated?: boolean;
   host?: string;
-  security?: string;
   ask?: string;
   node?: string;
 };
@@ -47,63 +57,41 @@ type ResolvedExecEnvPreparedState = {
   host?: ExecHost;
   pluginEnv?: Record<string, string>;
 };
-type DeferredResolveExecEnvPreparedState = {
-  hookContext?: HookContext;
-};
 type ResolvedExecWorkdirPreparedState = {
   host: ExecHost;
   inputWorkdir?: string;
   resolution: ExecWorkdirResolution;
 };
 
-const CHANNEL_CONTEXT_ENV_KEY = "OPENCLAW_CHANNEL_CONTEXT";
 const resolvedExecEnvPreparedStates = new WeakMap<ExecToolArgs, ResolvedExecEnvPreparedState>();
-const deferredResolveExecEnvPreparedStates = new WeakMap<
-  ExecToolArgs,
-  DeferredResolveExecEnvPreparedState
->();
+const execHookContexts = new WeakMap<ExecToolArgs, HookContext | undefined>();
 const resolvedExecWorkdirPreparedStates = new WeakMap<
   ExecToolArgs,
   ResolvedExecWorkdirPreparedState
 >();
-const XML_ARG_VALUE_EXEC_PARAM_KEYS = [
-  "command",
-  "workdir",
-  "host",
-  "security",
-  "ask",
-  "node",
-] as const;
+const XML_ARG_VALUE_EXEC_PARAM_KEYS = ["command", "workdir", "host", "ask", "node"] as const;
 
 export function assertSupportedExecParams(args: unknown): void {
-  if (isRecord(args) && Object.hasOwn(args, "timeout")) {
+  if (!isRecord(args)) {
+    return;
+  }
+  if (args.awaitResults !== undefined && typeof args.awaitResults !== "boolean") {
+    throw new ToolInputError("exec awaitResults must be a boolean");
+  }
+  if (args.awaitResults === true && args.background === true) {
+    throw new ToolInputError("exec with awaitResults=true cannot be detached with background=true");
+  }
+  if (Object.hasOwn(args, "timeout")) {
     throw new ToolInputError(
       'exec parameter "timeout" is unsupported; use "timeoutSeconds" instead',
     );
   }
-}
-
-function buildSubprocessChannelContext(
-  channelContext: PluginHookChannelContext | undefined,
-): PluginHookChannelContext | undefined {
-  const senderId = normalizeOptionalString(channelContext?.sender?.id);
-  const chatId = normalizeOptionalString(channelContext?.chat?.id);
-  const subprocessContext: PluginHookChannelContext = {
-    ...(senderId ? { sender: { id: senderId } } : {}),
-    ...(chatId ? { chat: { id: chatId } } : {}),
-  };
-  return subprocessContext.sender || subprocessContext.chat ? subprocessContext : undefined;
-}
-
-function buildChannelContextEnv(
-  channelContext: PluginHookChannelContext | undefined,
-): Record<string, string> | undefined {
-  const subprocessContext = buildSubprocessChannelContext(channelContext);
-  if (!subprocessContext) {
-    return undefined;
+  // `cwd` is a tool-level default, never a model-facing parameter: a dropped cwd runs the
+  // command somewhere the caller did not choose, and the failure surfaces as a path the
+  // caller never named.
+  if (Object.hasOwn(args, "cwd")) {
+    throw new ToolInputError('exec parameter "cwd" is unsupported; use "workdir" instead');
   }
-  const serialized = safeJsonStringify(subprocessContext);
-  return serialized ? { [CHANNEL_CONTEXT_ENV_KEY]: serialized } : undefined;
 }
 
 function isExecToolArgsObject(value: unknown): value is ExecToolArgs {
@@ -131,67 +119,78 @@ function filterPluginExecEnv(rawEnv: Record<string, string>): Record<string, str
   return Object.keys(env).length > 0 ? env : undefined;
 }
 
-function markResolveExecEnvPrepared<T extends ExecToolArgs>(
-  params: T,
-  state: ResolvedExecEnvPreparedState = {},
-): T {
-  resolvedExecEnvPreparedStates.set(params, state);
-  return params;
-}
-
-function getResolvedExecEnvPreparedState(
-  params: ExecToolArgs,
-): ResolvedExecEnvPreparedState | undefined {
-  return resolvedExecEnvPreparedStates.get(params);
-}
-
-function isResolveExecEnvPrepared(params: ExecToolArgs): boolean {
-  return Boolean(getResolvedExecEnvPreparedState(params));
-}
-
-function markDeferredResolveExecEnvPrepared<T extends ExecToolArgs>(
-  params: T,
-  state: DeferredResolveExecEnvPreparedState,
-): T {
-  deferredResolveExecEnvPreparedStates.set(params, state);
-  return params;
-}
-
-function getDeferredResolveExecEnvPreparedState(
-  params: ExecToolArgs,
-): DeferredResolveExecEnvPreparedState | undefined {
-  return deferredResolveExecEnvPreparedStates.get(params);
-}
-
-function markResolvedExecWorkdirPrepared<T extends ExecToolArgs>(
-  params: T,
-  state: ResolvedExecWorkdirPreparedState,
-): T {
-  resolvedExecWorkdirPreparedStates.set(params, state);
-  return params;
-}
-
-function getResolvedExecWorkdirPreparedState(
-  params: ExecToolArgs,
-): ResolvedExecWorkdirPreparedState | undefined {
-  return resolvedExecWorkdirPreparedStates.get(params);
-}
-
-export function resolveNotifyOnExitEmptySuccess(defaults?: ExecToolDefaults): boolean {
+function resolveNotifyOnExitEmptySuccess(defaults?: ExecToolDefaults): boolean {
   if (typeof defaults?.notifyOnExitEmptySuccess === "boolean") {
     return defaults.notifyOnExitEmptySuccess;
   }
   return normalizeChatChannelId(defaults?.messageProvider) !== null;
 }
 
-export function resolveExecPreparedRunEnvironment(defaults?: ExecToolDefaults) {
-  return (
-    defaults?.preparedRunEnvironment ??
-    prepareGitHubToolEnvironment({
-      config: defaults?.config ?? {},
-      agentId: defaults?.agentId ?? "main",
-    })
+/** Capture notification routing and child identity before process lifetime detaches. */
+export function resolveExecNotificationDefaults(defaults?: ExecToolDefaults) {
+  const notifyOnExit = defaults?.notifyOnExit !== false;
+  const notifyOnExitEmptySuccess = resolveNotifyOnExitEmptySuccess(defaults);
+  const notifySessionKey = normalizeOptionalString(
+    defaults?.notifySessionKey ?? defaults?.runSessionKey ?? defaults?.sessionKey,
   );
+  const notifyAgentSession = parseAgentSessionKey(notifySessionKey);
+  // Resolve before dispatch and retain the fact after the child registry retires.
+  // One tool instance belongs to one run; worker reads avoid blocking the Gateway.
+  let subagentSession: Promise<boolean> | undefined;
+  const resolveSubagentSession = () =>
+    (subagentSession ??= (async () => {
+      if (
+        !notifySessionKey ||
+        !defaults?.config ||
+        !notifyAgentSession?.rest.startsWith("dashboard:")
+      ) {
+        return isSubagentEnvelopeSession(notifySessionKey);
+      }
+      const { readSessionEntriesFromStoreInWorker } =
+        await import("../config/sessions/session-entry-read-runtime.js");
+      const read = await readSessionEntriesFromStoreInWorker({
+        agentId: notifyAgentSession.agentId,
+        sessionKeys: [notifySessionKey],
+        snapshotFields: [],
+        storePath: resolveSessionStorePathCore(defaults.config.session?.store, {
+          agentId: notifyAgentSession.agentId,
+        }),
+      });
+      return isSubagentEnvelopeSession(notifySessionKey, {
+        entry: read.entries.find(({ sessionKey }) => sessionKey === notifySessionKey)?.entry,
+      });
+    })().catch(() => {
+      // Identity enrichment must not prevent exec; retry the worker on the next call.
+      subagentSession = undefined;
+      return isSubagentEnvelopeSession(notifySessionKey);
+    }));
+  const notifyDeliveryContext = normalizeDeliveryContext({
+    channel: defaults?.messageProvider,
+    to: defaults?.currentChannelId,
+    accountId: defaults?.accountId,
+    threadId: defaults?.currentThreadTs,
+  });
+  return {
+    notifyOnExit,
+    notifyOnExitEmptySuccess,
+    notifySessionKey,
+    resolveSubagentSession,
+    notifyDeliveryContext,
+    // Preserve conversation provenance for passive subagent completion notices.
+    notifyFromConversationTurn:
+      defaults?.trigger === "user" || defaults?.continuesConversation === true,
+  };
+}
+
+export function resolveExecPreparedRunEnvironment(defaults?: ExecToolDefaults) {
+  return {
+    ...(defaults?.preparedRunEnvironment ??
+      prepareGitHubToolEnvironment({
+        config: defaults?.config ?? {},
+        agentId: defaults?.agentId ?? "main",
+      })),
+    localProcessEnv: installationTargetEnv(getInstallationTarget()),
+  };
 }
 
 export function createExecRequestPreparation(params: {
@@ -226,11 +225,12 @@ export function createExecRequestPreparation(params: {
       nodeCwd: params.defaults?.nodeCwd,
       sandbox: params.defaults?.sandbox,
     });
-    return markResolvedExecWorkdirPrepared(execParams, {
+    resolvedExecWorkdirPreparedStates.set(execParams, {
       host,
       inputWorkdir: execParams.workdir,
       resolution,
     });
+    return execParams;
   };
 
   const shouldDeferResolveExecEnvUntilWorkdirValidated = (execParams: ExecToolArgs): boolean => {
@@ -252,15 +252,16 @@ export function createExecRequestPreparation(params: {
     if (!execParams.command) {
       return execParams;
     }
-    if (isResolveExecEnvPrepared(execParams)) {
-      return markResolveExecEnvPrepared(execParams);
+    if (resolvedExecEnvPreparedStates.has(execParams)) {
+      return execParams;
     }
     const hookRunner = getGlobalHookRunner();
     if (
       !hookRunner?.hasHooks("resolve_exec_env") ||
       typeof hookRunner.runResolveExecEnv !== "function"
     ) {
-      return markResolveExecEnvPrepared(execParams);
+      resolvedExecEnvPreparedStates.set(execParams, {});
+      return execParams;
     }
     let host: ExecHost;
     try {
@@ -268,15 +269,17 @@ export function createExecRequestPreparation(params: {
     } catch {
       return execParams;
     }
+    const sessionId = context?.hookContext?.sessionId ?? params.defaults?.sessionId;
     const rawPluginEnv = await hookRunner.runResolveExecEnv(
       {
-        sessionKey: params.defaults?.sessionKey ?? context?.hookContext?.sessionKey,
+        sessionKey: context?.hookContext?.sessionKey ?? params.defaults?.sessionKey,
         toolName: "exec",
         host,
       },
       {
-        agentId: params.agentId ?? context?.hookContext?.agentId,
-        sessionKey: params.defaults?.sessionKey ?? context?.hookContext?.sessionKey,
+        agentId: context?.hookContext?.agentId ?? params.agentId,
+        sessionKey: context?.hookContext?.sessionKey ?? params.defaults?.sessionKey,
+        ...(sessionId ? { sessionId } : {}),
         messageProvider: params.defaults?.messageProvider,
         channelId: params.defaults?.currentChannelId ?? context?.hookContext?.channelId,
         ...(params.defaults?.channelContext
@@ -285,10 +288,11 @@ export function createExecRequestPreparation(params: {
       },
     );
     const pluginEnv = filterPluginExecEnv(rawPluginEnv);
-    return markResolveExecEnvPrepared(execParams, {
+    resolvedExecEnvPreparedStates.set(execParams, {
       host,
       ...(pluginEnv ? { pluginEnv } : {}),
     });
+    return execParams;
   };
 
   const prepareBeforeToolCallParams = async (
@@ -297,34 +301,38 @@ export function createExecRequestPreparation(params: {
   ): Promise<ExecToolArgs> => {
     assertSupportedExecParams(args);
     const execParams = await prepareParamsWithResolvedExecWorkdir(args);
-    const workdirState = getResolvedExecWorkdirPreparedState(execParams);
-    if (workdirState?.resolution.kind === "unavailable") {
-      return execParams;
-    }
     if (!isExecToolArgsObject(execParams)) {
       return execParams;
     }
-    if (shouldDeferResolveExecEnvUntilWorkdirValidated(execParams)) {
-      return markDeferredResolveExecEnvPrepared(execParams, {
-        hookContext: context.hookContext as HookContext | undefined,
-      });
+    const hookContext = context.hookContext as HookContext | undefined;
+    execHookContexts.set(execParams, hookContext);
+    const workdirState = resolvedExecWorkdirPreparedStates.get(execParams);
+    if (
+      workdirState?.resolution.kind === "unavailable" ||
+      shouldDeferResolveExecEnvUntilWorkdirValidated(execParams)
+    ) {
+      return execParams;
     }
-    return prepareParamsWithResolvedExecEnv(execParams, {
-      hookContext: context.hookContext as HookContext | undefined,
-    });
+    return prepareParamsWithResolvedExecEnv(execParams, { hookContext });
   };
 
   const finalizeBeforeToolCallParams = (rawParams: unknown, preparedParams: unknown) => {
-    const envState = getResolvedExecEnvPreparedState(preparedParams as ExecToolArgs);
-    const deferredEnvState = getDeferredResolveExecEnvPreparedState(preparedParams as ExecToolArgs);
-    const workdirState = getResolvedExecWorkdirPreparedState(preparedParams as ExecToolArgs);
-    if (!envState && !deferredEnvState && !workdirState) {
+    const envState = resolvedExecEnvPreparedStates.get(preparedParams as ExecToolArgs);
+    const hookContext = execHookContexts.get(preparedParams as ExecToolArgs);
+    const workdirState = resolvedExecWorkdirPreparedStates.get(preparedParams as ExecToolArgs);
+    if (!envState && !hookContext && !workdirState) {
       return rawParams;
     }
     if (!isExecToolArgsObject(rawParams)) {
       return rawParams;
     }
     const execParams = rawParams;
+    // Host/workdir rewrites invalidate cached facts, not the bound execution identity.
+    const invalidatePreparedParams = () => {
+      const invalidated = { ...execParams };
+      execHookContexts.set(invalidated, hookContext);
+      return invalidated;
+    };
     let host: ExecHost | undefined;
     const resolveFinalHost = () => {
       host ??= params.resolveHostForParams(execParams);
@@ -332,26 +340,26 @@ export function createExecRequestPreparation(params: {
     };
     try {
       if (envState?.host && execParams.command && resolveFinalHost() !== envState.host) {
-        return { ...execParams };
+        return invalidatePreparedParams();
       }
       if (
         workdirState &&
         (resolveFinalHost() !== workdirState.host ||
           execParams.workdir !== workdirState.inputWorkdir)
       ) {
-        return { ...execParams };
+        return invalidatePreparedParams();
       }
     } catch {
-      return { ...execParams };
+      return invalidatePreparedParams();
     }
     if (envState) {
-      markResolveExecEnvPrepared(execParams, envState);
+      resolvedExecEnvPreparedStates.set(execParams, envState);
     }
-    if (deferredEnvState) {
-      markDeferredResolveExecEnvPrepared(execParams, deferredEnvState);
+    if (hookContext) {
+      execHookContexts.set(execParams, hookContext);
     }
     if (workdirState) {
-      markResolvedExecWorkdirPrepared(execParams, workdirState);
+      resolvedExecWorkdirPreparedStates.set(execParams, workdirState);
     }
     return execParams;
   };
@@ -361,10 +369,12 @@ export function createExecRequestPreparation(params: {
     prepareBeforeToolCallParams,
     finalizeBeforeToolCallParams,
     prepareParamsWithResolvedExecEnv,
-    isResolveExecEnvPrepared,
-    getDeferredResolveExecEnvPreparedState,
-    getResolvedExecWorkdirPreparedState,
-    getResolvedExecEnvPreparedState,
+    isResolveExecEnvPrepared: (args: ExecToolArgs) => resolvedExecEnvPreparedStates.has(args),
+    getExecHookContext: (args: ExecToolArgs) => execHookContexts.get(args),
+    getResolvedExecWorkdirPreparedState: (args: ExecToolArgs) =>
+      resolvedExecWorkdirPreparedStates.get(args),
+    getResolvedExecEnvPreparedState: (args: ExecToolArgs) =>
+      resolvedExecEnvPreparedStates.get(args),
   };
 }
 
@@ -374,26 +384,35 @@ export function resolvePreparedExecEnvironment(params: {
   sandbox?: BashSandboxConfig;
   containerWorkdir?: string | null;
   channelContext?: PluginHookChannelContext;
+  subagentExecution?: boolean;
   defaultPathPrepend: string[];
   pluginEnv?: Record<string, string>;
   storeEnv?: Record<string, string>;
   storeSecretEnv?: Record<string, string>;
-  secretEgressEnv?: Record<string, string>;
   credentialScrubEnv?: Readonly<Record<string, string>>;
   localIdentityEnv?: Readonly<Record<string, string>>;
+  localGitConfigParameters?: string;
   managedLocalIdentity?: boolean;
+  localProcessEnv?: Readonly<Record<string, string>>;
   warnings: string[];
-}): { env: Record<string, string>; requestedEnv?: Record<string, string> } {
-  const inheritedBaseEnv = coerceEnv(process.env);
-  if (params.secretEgressEnv) {
-    Object.assign(inheritedBaseEnv, params.secretEgressEnv);
+}): {
+  env: Record<string, string>;
+  requestedEnv?: Record<string, string>;
+  executionContext?: SystemRunExecutionContext;
+} {
+  if (params.localProcessEnv && params.host !== "gateway") {
+    throw new Error(LOCAL_INSTALLATION_TARGET_UNSUPPORTED);
   }
-  const channelContextEnv = buildChannelContextEnv(params.channelContext);
+  const inheritedBaseEnv = coerceEnv(process.env);
+  const executionContext: SystemRunExecutionContext = {
+    senderId: normalizeOptionalString(params.channelContext?.sender?.id),
+    chatId: normalizeOptionalString(params.channelContext?.chat?.id),
+    ...(params.subagentExecution ? { subagent: true } : {}),
+  };
+  const routingEnv = buildExecRoutingEnv(executionContext);
   const explicitEnv: Record<string, string> | undefined =
-    params.execParams.env !== undefined ||
-    params.pluginEnv !== undefined ||
-    channelContextEnv !== undefined
-      ? { ...params.execParams.env, ...params.pluginEnv, ...channelContextEnv }
+    params.execParams.env !== undefined || params.pluginEnv !== undefined
+      ? { ...params.execParams.env, ...params.pluginEnv }
       : undefined;
   const storeEnvResult = params.storeEnv
     ? sanitizeHostExecEnvWithDiagnostics({
@@ -498,10 +517,13 @@ export function resolvePreparedExecEnvironment(params: {
 
   // `tools.exec.pathPrepend` is only meaningful when exec runs locally (gateway) or in the sandbox.
   // Node hosts intentionally ignore request-scoped PATH overrides, so don't pretend this applies.
-  if (params.host === "node" && params.defaultPathPrepend.length > 0) {
-    params.warnings.push(
-      "Warning: tools.exec.pathPrepend is ignored for host=node. Configure PATH on the node host/service instead.",
-    );
+  // The Gateway CLI shim is merged in automatically and only exists on the Gateway host.
+  if (params.host === "node") {
+    if (omitGatewayAgentCliPath(params.defaultPathPrepend).length > 0) {
+      params.warnings.push(
+        "Warning: tools.exec.pathPrepend is ignored for host=node. Configure PATH on the node host/service instead.",
+      );
+    }
   } else {
     applyPathPrepend(env, params.defaultPathPrepend);
   }
@@ -525,20 +547,34 @@ export function resolvePreparedExecEnvironment(params: {
       }
     }
   }
-  if (params.secretEgressEnv) {
-    Object.assign(env, params.secretEgressEnv);
-  }
-  const preparedEnv = {
+  const preparedEnv: Record<string, string> = {
+    ...params.localProcessEnv,
     ...params.credentialScrubEnv,
     ...(params.host === "gateway" ? params.localIdentityEnv : undefined),
   };
-  // Prepared host values are authoritative over ambient, model, plugin, and store projections.
-  Object.assign(env, preparedEnv);
+  // Inherited Git parameters can contain credentials; keep them out of request overrides.
+  const gitPolicyEnv =
+    params.host === "gateway" && params.localGitConfigParameters
+      ? {
+          GIT_CONFIG_PARAMETERS: [
+            resolveEnvironmentValue(preparedEnv, "GIT_CONFIG_PARAMETERS") ??
+              resolveEnvironmentValue(env, "GIT_CONFIG_PARAMETERS"),
+            params.localGitConfigParameters,
+          ]
+            .filter(Boolean)
+            .join(" "),
+        }
+      : undefined;
+  // Prepared values win locally; nodes sanitize their own base env and reject scrub override keys.
+  const executionEnv = mergeProcessEnv([env, preparedEnv, routingEnv, gitPolicyEnv]);
+  const forwardedEnv =
+    params.host === "node" || !routingEnv ? requestedEnv : { ...requestedEnv, ...routingEnv };
 
   return {
-    env,
-    ...(Object.keys(preparedEnv).length > 0
-      ? { requestedEnv: { ...requestedEnv, ...preparedEnv } }
-      : { requestedEnv }),
+    env: executionEnv,
+    ...(params.host === "node" && routingEnv ? { executionContext } : {}),
+    ...(params.host !== "node" && Object.keys(preparedEnv).length > 0
+      ? { requestedEnv: { ...forwardedEnv, ...preparedEnv } }
+      : { requestedEnv: forwardedEnv }),
   };
 }

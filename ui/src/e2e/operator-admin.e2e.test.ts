@@ -1,8 +1,10 @@
 // Control UI E2E coverage for operator-facing Skills, Nodes, and exec approvals administration.
-import { mkdir } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { BrowserContext, Page } from "playwright";
-import { expect, it } from "vitest";
+import type { BrowserContext, Locator, Page } from "playwright";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   installMockGateway,
   type MockGatewayControls,
@@ -17,7 +19,12 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "operator-admin");
+let proofDir: string;
+beforeEach(() => {
+  if (captureUiProof) {
+    proofDir = createControlUiE2eArtifactDir("operator-admin");
+  }
+});
 const viewport = { height: 960, width: 1440 };
 
 const agentRoster = [
@@ -27,8 +34,10 @@ const agentRoster = [
 
 const operatorConfig = {
   agents: {
+    ownership: "explicit",
+    defaults: { systemAgent: { agentId: "main" } },
     entries: {
-      main: { default: true, name: "Main" },
+      main: { name: "Main" },
       reviewer: { name: "Reviewer" },
     },
   },
@@ -116,9 +125,6 @@ async function waitForRequest(
 }
 
 async function createContext(): Promise<BrowserContext> {
-  if (captureUiProof) {
-    await mkdir(proofDir, { recursive: true });
-  }
   return suite.browser.newContext({
     locale: "en-US",
     serviceWorkers: "block",
@@ -128,7 +134,7 @@ async function createContext(): Promise<BrowserContext> {
 }
 
 async function selectAgentOnAgentsPage(page: Page, name: string) {
-  const select = page.locator(".agents-control-select openclaw-agent-select");
+  const select = page.locator(".settings-sidebar__agent openclaw-agent-select");
   await select.locator(".agent-select__trigger").click();
   await select.locator("wa-dropdown-item[data-agent-option]").filter({ hasText: name }).click();
   await expect
@@ -136,15 +142,19 @@ async function selectAgentOnAgentsPage(page: Page, name: string) {
     .toBe(name);
 }
 
-async function screenshot(page: Page, name: string) {
+async function screenshot(
+  page: Page,
+  name: string,
+  content: Locator,
+  surface = page.locator(".shell"),
+) {
   if (!captureUiProof) {
     return;
   }
-  await page.screenshot({
-    animations: "disabled",
-    fullPage: true,
-    path: path.join(proofDir, name),
-  });
+  await writeFile(
+    path.join(proofDir, name),
+    await takeControlUiViewportScreenshot(page, surface, [content]),
+  );
 }
 
 suite.define(() => {
@@ -163,6 +173,11 @@ suite.define(() => {
         "skills.install",
         "skills.status",
         "skills.update",
+        "skills.workshop.archive",
+        "skills.workshop.changes",
+        "skills.workshop.list",
+        "skills.workshop.read",
+        "skills.workshop.restore",
       ],
       methodResponses: {
         "agents.list": {
@@ -216,13 +231,25 @@ suite.define(() => {
       expect(response?.status()).toBe(200);
       await gateway.waitForRequest("skills.status");
 
-      const agentSelect = page.locator('openclaw-agent-select[name="skills-agent"]');
-      await agentSelect.locator(".agent-select__trigger").click();
-      await agentSelect
-        .locator("wa-dropdown-item[data-agent-option]")
-        .filter({ hasText: "Reviewer" })
+      const skillCard = page.locator(".skill-discovery .plugin-catalog-card", {
+        hasText: "Deploy Helper",
+      });
+      await expect.poll(() => skillCard.getByRole("img", { name: "Ready" }).isVisible()).toBe(true);
+      const sidebar = page.locator("openclaw-app-sidebar");
+      await sidebar.getByRole("button", { name: /Switch agent/ }).click();
+      await sidebar
+        .locator("wa-dropdown.sidebar-agent-menu")
+        .getByRole("menuitem", { name: "Reviewer" })
         .click();
       await waitForRequest(gateway, "skills.status", (params) => params.agentId === "reviewer");
+      expect(new URL(page.url()).pathname).toBe("/skills");
+      await expect
+        .poll(() => skillCard.getByRole("img", { name: /Needs Setup.*deploy-helper/ }).isVisible())
+        .toBe(true);
+
+      await page.getByRole("button", { name: "Skill settings", exact: true }).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/skills");
+      const agentSelect = page.locator(".settings-sidebar__agent openclaw-agent-select");
       await expect
         .poll(async () => (await agentSelect.locator(".agent-select__label").textContent())?.trim())
         .toBe("Reviewer");
@@ -242,7 +269,12 @@ suite.define(() => {
         dangerouslyForceUnsafeInstall: false,
       });
       await expect.poll(() => dialog.getByText("Installed Deploy Helper").isVisible()).toBe(true);
-      await screenshot(page, "01-reviewer-skill-installed.png");
+      await screenshot(
+        page,
+        "01-reviewer-skill-installed.png",
+        dialog.getByText("Installed Deploy Helper"),
+        dialog.locator("dialog"),
+      );
 
       await page.goto(`${suite.server.baseUrl}nodes`);
       await Promise.all([
@@ -251,21 +283,26 @@ suite.define(() => {
         gateway.waitForRequest("exec.approvals.get"),
       ]);
       await expect.poll(() => page.getByText("Build Node", { exact: true }).isVisible()).toBe(true);
-      await expect.poll(() => page.getByText("connected", { exact: true }).count()).toBe(0);
+      // The connected node row carries a status pill and capability chips; an
+      // unknown capability keeps its raw name as a generic chip.
+      await expect.poll(() => page.getByText("connected", { exact: true }).count()).toBe(1);
+      const chips = page.locator(".device-capability");
+      await expect.poll(() => chips.filter({ hasText: "Browser" }).count()).toBe(1);
+      await expect.poll(() => chips.filter({ hasText: "filesystem" }).count()).toBe(1);
       await page.getByText("Details", { exact: true }).click();
-      await expect
-        .poll(() => page.getByText(/Capabilities: browser, filesystem/).isVisible())
-        .toBe(true);
       await expect
         .poll(() =>
           page
-            .getByText(
-              /Commands: system\.run, system\.execApprovals\.get, system\.execApprovals\.set/,
-            )
+            .locator(".device-entry__facts dd")
+            .filter({ hasText: "system.run, system.execApprovals.get, system.execApprovals.set" })
             .isVisible(),
         )
         .toBe(true);
-      await screenshot(page, "02-connected-node-inventory.png");
+      await screenshot(
+        page,
+        "02-connected-node-inventory.png",
+        page.locator(".device-entry__facts"),
+      );
     } finally {
       await context.close();
     }
@@ -274,18 +311,7 @@ suite.define(() => {
   it("keeps read-only administration pages visible without dispatching mutations", async () => {
     const context = await createContext();
     const page = await context.newPage();
-    const proposal = {
-      id: "proposal-read-only",
-      kind: "create",
-      status: "pending",
-      title: "Read Only Proposal",
-      description: "Review without mutation access.",
-      skillName: "Read Only Proposal",
-      skillKey: "read-only-proposal",
-      createdAt: "2026-08-04T08:00:00.000Z",
-      updatedAt: "2026-08-04T08:00:00.000Z",
-      scanState: "clean",
-    };
+    const learnedAtMs = Date.parse("2026-08-04T08:00:00.000Z");
     const readOnlyConfig = {
       ...operatorConfig,
       skills: { workshop: { autonomous: { mode: "auto" } } },
@@ -303,16 +329,14 @@ suite.define(() => {
         "config.patch",
         "config.set",
         "skills.install",
-        "skills.proposals.apply",
-        "skills.proposals.evaluate",
-        "skills.proposals.historyScan",
-        "skills.proposals.historyStatus",
-        "skills.proposals.inspect",
-        "skills.proposals.list",
-        "skills.proposals.reject",
-        "skills.proposals.requestRevision",
+        "sessions.create",
         "skills.status",
         "skills.update",
+        "skills.workshop.archive",
+        "skills.workshop.changes",
+        "skills.workshop.list",
+        "skills.workshop.read",
+        "skills.workshop.restore",
       ],
       operatorScopes: ["operator.read"],
       methodResponses: {
@@ -344,80 +368,92 @@ suite.define(() => {
           workspace: "/tmp/openclaw-e2e/workspace",
         },
         "config.get": configResponse(readOnlyConfig),
-        "skills.proposals.inspect": {
-          content: "Review the proposed skill.",
-          record: {
-            ...proposal,
-            proposedVersion: "v1",
-            target: { skillKey: proposal.skillKey, skillName: proposal.skillName },
-          },
-          supportFiles: [],
+        "skills.workshop.list": {
+          agentId: "main",
+          mode: "auto",
+          root: "/tmp/openclaw-e2e/agents/main/workshop-skills",
+          skills: [
+            {
+              name: "read-only-skill",
+              description: "Review without mutation access.",
+              updatedAtMs: learnedAtMs,
+              sizeBytes: 120,
+              files: ["SKILL.md"],
+            },
+          ],
+          archived: [
+            {
+              name: "read-only-skill",
+              live: true,
+              versions: [
+                { id: "20260804T080000000Z-patch", action: "patch", createdAtMs: learnedAtMs },
+              ],
+            },
+          ],
         },
-        "skills.proposals.list": {
-          proposals: [proposal],
-          schema: "openclaw.skill-workshop.proposals-manifest.v1",
-          updatedAt: proposal.updatedAt,
-        },
-        "skills.proposals.historyStatus": {
-          hasScanned: false,
-          hasMore: true,
-          ideasFound: 0,
-          reviewedSessions: 0,
-          lastScanReviewed: 0,
+        "skills.workshop.changes": {
+          changes: [
+            {
+              id: "change-read-only",
+              agentId: "main",
+              skillName: "read-only-skill",
+              action: "patch",
+              actor: "review",
+              summary: "tightened the review step",
+              versionId: "20260804T080000000Z-patch",
+              createdAtMs: learnedAtMs,
+            },
+          ],
         },
         "skills.status": skillStatus(false),
       },
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}agents`);
+      await page.goto(`${suite.server.baseUrl}settings/agents`);
       await gateway.waitForRequest("agents.list");
       await selectAgentOnAgentsPage(page, "Reviewer");
       await page.locator("#agents-tab-overview").click();
       const setDefault = page.locator(".agents-toolbar-actions button").nth(1);
       await expect.poll(() => setDefault.isDisabled()).toBe(true);
-      const identitySave = page.locator(".agent-identity-editor__actions button");
+      const identitySave = page
+        .locator(".agent-identity-editor__actions")
+        .getByRole("button", { name: "Save", exact: true });
       await expect.poll(async () => (await identitySave.textContent())?.trim()).toBe("Save");
       await expect.poll(() => identitySave.isDisabled()).toBe(true);
       await setDefault.click({ force: true });
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
-      await screenshot(page, "05-read-only-agents.png");
+      await screenshot(page, "05-read-only-agents.png", setDefault);
 
       await page.goto(`${suite.server.baseUrl}settings/agents/main/files`);
-      await gateway.waitForRequest("agents.files.list");
-      await page.locator("openclaw-agents-page").evaluate((element) => {
-        const agentsPage = element as HTMLElement & {
-          agentFileActive: string | null;
-          agentFileContents: Record<string, string>;
-          agentFileDrafts: Record<string, string>;
-          agentFilesList: {
-            agentId: string;
-            files: Array<{ name: string; path: string; missing: boolean }>;
-            workspace: string;
-          };
-          requestUpdate: () => void;
-        };
-        agentsPage.agentFilesList = {
-          agentId: "main",
-          files: [
-            {
-              name: "AGENTS.md",
-              path: "/tmp/openclaw-e2e/workspace/AGENTS.md",
-              missing: false,
-            },
-          ],
-          workspace: "/tmp/openclaw-e2e/workspace",
-        };
-        agentsPage.agentFileActive = "AGENTS.md";
-        agentsPage.agentFileContents = { "AGENTS.md": "# Main agent\n" };
-        agentsPage.agentFileDrafts = { "AGENTS.md": "# Mutated\n" };
-        agentsPage.requestUpdate();
-      });
+      await waitForRequest(
+        gateway,
+        "agents.files.get",
+        (params) => params.agentId === "main" && params.name === "AGENTS.md",
+      );
       const fileEditor = page.locator(".agent-file-textarea");
+      await expect.poll(() => fileEditor.inputValue()).toBe("# Main agent\n");
       await expect.poll(() => fileEditor.isDisabled()).toBe(true);
+      // Bypass only the DOM disabled state to exercise the owner's permission guard.
+      await fileEditor.evaluate((element: HTMLTextAreaElement) => {
+        element.disabled = false;
+        element.value = "# Mutated\n";
+        element.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await page
+        .locator(".agent-file-actions")
+        .getByRole("button", { name: "Preview", exact: true })
+        .click();
+      await expect
+        .poll(() => page.locator(".md-preview-dialog__reader").textContent())
+        .toContain("Mutated");
+      await page.getByRole("button", { name: "Close preview", exact: true }).click();
       const fileSave = page.locator(".agent-file-actions button").filter({ hasText: "Save" });
       await expect.poll(() => fileSave.isDisabled()).toBe(true);
-      await fileSave.click({ force: true });
+      await fileSave.evaluate((element: HTMLButtonElement) => {
+        element.disabled = false;
+      });
+      await fileSave.click();
       expect(await gateway.getRequests("agents.files.set")).toHaveLength(0);
 
       await page.goto(`${suite.server.baseUrl}settings/agents/main/skills`);
@@ -430,49 +466,46 @@ suite.define(() => {
 
       await page.goto(`${suite.server.baseUrl}skills`);
       await gateway.waitForRequest("skills.status");
-      const globalSkillToggle = page.locator("wa-switch.settings-toggle").first();
-      await expect.poll(() => globalSkillToggle.getAttribute("disabled")).not.toBeNull();
-      await globalSkillToggle.click({ force: true });
-      expect(await gateway.getRequests("skills.update")).toHaveLength(0);
+      const skillCard = page.locator(".skill-discovery .plugin-catalog-card", {
+        hasText: "Deploy Helper",
+      });
+      await expect
+        .poll(() => skillCard.getByRole("img", { name: /Needs Setup.*deploy-helper/ }).isVisible())
+        .toBe(true);
+      expect(await page.locator(".skill-discovery").getByRole("switch").count()).toBe(0);
+      await page.getByRole("button", { name: "Skill settings", exact: true }).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/skills");
       await page.getByRole("button", { name: "Open Deploy Helper details" }).click();
       const skillDialog = page.locator("openclaw-modal-dialog", { hasText: "Deploy Helper" });
+      const globalSkillToggle = skillDialog.getByRole("switch");
+      await expect.poll(() => globalSkillToggle.isDisabled()).toBe(true);
+      await globalSkillToggle.click({ force: true });
+      expect(await gateway.getRequests("skills.update")).toHaveLength(0);
       const install = skillDialog.getByRole("button", { name: "Install Deploy Helper" });
       await expect.poll(() => install.isDisabled()).toBe(true);
       await install.click({ force: true });
       expect(await gateway.getRequests("skills.install")).toHaveLength(0);
-      await screenshot(page, "06-read-only-skills.png");
+      await screenshot(page, "06-read-only-skills.png", install, skillDialog.locator("dialog"));
 
       await page.goto(`${suite.server.baseUrl}skills/workshop`);
-      await gateway.waitForRequest("skills.proposals.list");
-      await page.locator("#skill-workshop-mode-tab-board").click();
-      const actionButtons = page.locator(".sw-action-bar button");
-      const evaluate = actionButtons.nth(0);
-      const apply = actionButtons.nth(1);
-      const revise = actionButtons.nth(2);
-      const reject = actionButtons.nth(3);
-      await expect.poll(() => apply.isDisabled()).toBe(true);
-      await expect.poll(() => evaluate.isDisabled()).toBe(true);
-      await expect.poll(() => revise.isDisabled()).toBe(true);
-      await expect.poll(() => reject.isDisabled()).toBe(true);
-      await apply.click({ force: true });
-      await evaluate.click({ force: true });
-      await revise.click({ force: true });
-      await reject.click({ force: true });
-      expect(await gateway.getRequests("skills.proposals.apply")).toHaveLength(0);
-      expect(await gateway.getRequests("skills.proposals.evaluate")).toHaveLength(0);
-      expect(await gateway.getRequests("skills.proposals.requestRevision")).toHaveLength(0);
-      expect(await gateway.getRequests("skills.proposals.reject")).toHaveLength(0);
-      const selfLearning = page.getByRole("checkbox", {
-        name: "Toggle autonomous self-learning",
-      });
-      await expect.poll(() => selfLearning.isDisabled()).toBe(true);
-      await selfLearning.click({ force: true });
+      await gateway.waitForRequest("skills.workshop.list");
+      await page.getByText("tightened the review step").waitFor();
+      expect(await page.getByRole("button", { name: "Undo", exact: true }).count()).toBe(0);
+      await page.getByRole("button", { name: "read-only-skill" }).first().click();
+      await gateway.waitForRequest("skills.workshop.read");
+      expect(await page.getByRole("button", { name: "Archive", exact: true }).count()).toBe(0);
+      const learningOff = page.getByRole("button", { name: "Off", exact: true });
+      await expect.poll(() => learningOff.isDisabled()).toBe(true);
+      await learningOff.click({ force: true });
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
-      const scanHistory = page.getByRole("button", { name: "Find skill ideas" });
-      await expect.poll(() => scanHistory.isDisabled()).toBe(true);
-      await scanHistory.click({ force: true });
-      expect(await gateway.getRequests("skills.proposals.historyScan")).toHaveLength(0);
-      await screenshot(page, "07-read-only-workshop.png");
+      expect(await gateway.getRequests("skills.workshop.restore")).toHaveLength(0);
+      expect(await gateway.getRequests("skills.workshop.archive")).toHaveLength(0);
+      const learn = page.getByRole("button", { name: "Learn from history" });
+      await expect.poll(() => learn.isDisabled()).toBe(true);
+      const creates = (await gateway.getRequests("sessions.create")).length;
+      await learn.click({ force: true });
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(creates);
+      await screenshot(page, "07-read-only-workshop.png", learn);
     } finally {
       await context.close();
     }
@@ -497,7 +530,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}agents`);
+      await page.goto(`${suite.server.baseUrl}settings/agents`);
       await gateway.waitForRequest("agents.list");
       await selectAgentOnAgentsPage(page, "Reviewer");
       const setDefault = page.locator(".agents-toolbar-actions button").nth(1);
@@ -601,10 +634,14 @@ suite.define(() => {
       await page.getByRole("combobox", { name: "Fallback" }).selectOption("allowlist");
       const autoAllowSwitch = page
         .locator(".settings-row", { hasText: "Auto-allow skill CLIs" })
-        .locator("wa-switch");
+        .getByRole("switch");
       await autoAllowSwitch.click();
       await page.getByRole("textbox", { name: "Pattern" }).fill("/usr/bin/gh");
-      await screenshot(page, "03-reviewer-approval-edits.png");
+      await screenshot(
+        page,
+        "03-reviewer-approval-edits.png",
+        page.getByRole("textbox", { name: "Pattern" }),
+      );
 
       await gateway.setMethodResponse("exec.approvals.get", appliedApprovals);
       const getRequestsBeforeSave = (await gateway.getRequests("exec.approvals.get")).length;
@@ -625,19 +662,13 @@ suite.define(() => {
       await expect
         .poll(() => page.getByRole("combobox", { name: "Fallback" }).inputValue())
         .toBe("allowlist");
-      await expect
-        .poll(() =>
-          autoAllowSwitch.evaluate(
-            (element) => (element as HTMLElement & { checked: boolean }).checked,
-          ),
-        )
-        .toBe(true);
+      await expect.poll(() => autoAllowSwitch.isChecked()).toBe(true);
       await expect
         .poll(() => page.getByRole("textbox", { name: "Pattern" }).inputValue())
         .toBe("/usr/bin/gh");
       await expect.poll(() => saveButton.isDisabled()).toBe(true);
       expect(await page.getByRole("alert").count()).toBe(0);
-      await screenshot(page, "04-reviewer-approval-applied.png");
+      await screenshot(page, "04-reviewer-approval-applied.png", saveButton);
     } finally {
       await context.close();
     }

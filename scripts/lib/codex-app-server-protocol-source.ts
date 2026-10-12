@@ -1,4 +1,3 @@
-// Codex App Server Protocol Source script supports OpenClaw repository automation.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -33,14 +32,6 @@ type GeneratedCodexAppServerProtocolSource = {
   cleanup: () => Promise<void>;
 };
 
-type PnpmCommand = {
-  args: string[];
-  command: string;
-  env?: NodeJS.ProcessEnv;
-  shell: boolean;
-  windowsVerbatimArguments?: boolean;
-};
-
 type CargoProtocolFixtureCommand = {
   args: string[];
   env: NodeJS.ProcessEnv;
@@ -57,22 +48,16 @@ type ResolvePnpmCommandOptions = {
 export function resolveCodexProtocolPnpmCommand(
   args: string[],
   options: ResolvePnpmCommandOptions = {},
-): PnpmCommand {
+): ReturnType<typeof resolvePnpmRunner> {
   const env = options.env ?? process.env;
-  const command = resolvePnpmRunner({
+  return resolvePnpmRunner({
     comSpec: options.comSpec,
     env,
     npmExecPath: options.npmExecPath ?? env.npm_execpath,
     nodeExecPath: options.execPath ?? process.execPath,
     platform: options.platform,
     pnpmArgs: args,
-  }) as PnpmCommand;
-  if (command.env === undefined) {
-    const invocation: PnpmCommand = { ...command };
-    delete invocation.env;
-    return invocation;
-  }
-  return command;
+  });
 }
 
 export function buildCodexProtocolFixtureCommand(
@@ -426,7 +411,7 @@ function formatGeneratedTypeScript(repoRoot: string, root: string): void {
   ]);
   const result = spawnSync(command.command, command.args, {
     cwd: repoRoot,
-    env: command.env ?? process.env,
+    env: process.env,
     shell: command.shell,
     stdio: "inherit",
     windowsVerbatimArguments: command.windowsVerbatimArguments,
@@ -487,7 +472,33 @@ export function normalizeCodexAppServerProtocolJsonText(text: string): string {
 }
 
 export function formatCodexAppServerProtocolJsonText(text: string): string {
-  return `${JSON.stringify(canonicalizeCodexAppServerProtocolJson(JSON.parse(text)), null, 2)}\n`;
+  const canonical = canonicalizeCodexAppServerProtocolJson(JSON.parse(text));
+  if (!isPlainObject(canonical)) {
+    return `${JSON.stringify(canonical)}\n`;
+  }
+
+  const entries = Object.entries(canonical);
+  const lines = ["{"];
+  for (const [index, [key, value]] of entries.entries()) {
+    const suffix = index === entries.length - 1 ? "" : ",";
+    const label = JSON.stringify(key);
+    if (key !== "definitions" || !isPlainObject(value)) {
+      lines.push(`  ${label}: ${JSON.stringify(value)}${suffix}`);
+      continue;
+    }
+
+    // Keep definition changes line-local while avoiding pretty-printing the
+    // same nested schema scaffolding across thousands of generated lines.
+    lines.push(`  ${label}: {`);
+    const definitions = Object.entries(value);
+    for (const [definitionIndex, [name, definition]] of definitions.entries()) {
+      const definitionSuffix = definitionIndex === definitions.length - 1 ? "" : ",";
+      lines.push(`    ${JSON.stringify(name)}: ${JSON.stringify(definition)}${definitionSuffix}`);
+    }
+    lines.push(`  }${suffix}`);
+  }
+  lines.push("}", "");
+  return lines.join("\n");
 }
 
 /**

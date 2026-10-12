@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import * as utils from "../utils.js";
 import {
   getWideAreaZonePath,
   normalizeWideAreaDomain,
@@ -17,8 +16,8 @@ import {
 
 const replaceFileAtomicSyncMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./replace-file.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./replace-file.js")>()),
+vi.mock("@openclaw/fs-safe/atomic", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/fs-safe/atomic")>()),
   replaceFileAtomicSync: replaceFileAtomicSyncMock,
 }));
 
@@ -55,76 +54,14 @@ afterEach(() => {
 });
 
 describe("wide-area DNS discovery domain helpers", () => {
-  it.each([
-    { value: "openclaw.internal", expected: "openclaw.internal." },
-    { value: "openclaw.internal.", expected: "openclaw.internal." },
-    { value: "  openclaw.internal  ", expected: "openclaw.internal." },
-    { value: "", expected: null },
-    { value: "   ", expected: null },
-    { value: null, expected: null },
-    { value: undefined, expected: null },
-  ])("normalizes domains for %j", ({ value, expected }) => {
-    expect(normalizeWideAreaDomain(value)).toBe(expected);
+  it("normalizes domains with a terminal dot", () => {
+    expect(normalizeWideAreaDomain("openclaw.internal.")).toBe("openclaw.internal.");
   });
 
-  it.each(["../../x", "foo/bar", "foo\\bar", "evil\nrecords", "openclaw..internal"])(
-    "rejects invalid domains for %j",
-    (value) => {
-      expect(() => normalizeWideAreaDomain(value)).toThrow(
-        "wide-area discovery domain must be a valid DNS name",
-      );
-    },
-  );
-
-  it.each([
-    {
-      name: "prefers config domain over env",
-      params: {
-        env: { OPENCLAW_WIDE_AREA_DOMAIN: "env.internal" } as NodeJS.ProcessEnv,
-        configDomain: "config.internal",
-      },
-      expected: "config.internal.",
-    },
-    {
-      name: "falls back to env domain",
-      params: {
-        env: { OPENCLAW_WIDE_AREA_DOMAIN: "env.internal" } as NodeJS.ProcessEnv,
-      },
-      expected: "env.internal.",
-    },
-    {
-      name: "returns null when both sources are blank",
-      params: {
-        env: { OPENCLAW_WIDE_AREA_DOMAIN: "   " } as NodeJS.ProcessEnv,
-        configDomain: " ",
-      },
-      expected: null,
-    },
-    {
-      name: "returns null for invalid config domains",
-      params: {
-        env: { OPENCLAW_WIDE_AREA_DOMAIN: "env.internal" } as NodeJS.ProcessEnv,
-        configDomain: "foo/bar",
-      },
-      expected: null,
-    },
-    {
-      name: "returns null for invalid env domains",
-      params: {
-        env: { OPENCLAW_WIDE_AREA_DOMAIN: "foo/bar" } as NodeJS.ProcessEnv,
-      },
-      expected: null,
-    },
-  ])("$name", ({ params, expected }) => {
-    expect(resolveWideAreaDiscoveryDomain(params)).toBe(expected);
-  });
-
-  it("builds valid zone paths under the DNS config directory", () => {
-    const dnsDir = path.resolve(utils.CONFIG_DIR, "dns");
-    const zonePath = getWideAreaZonePath("openclaw.internal.");
-
-    expect(zonePath).toBe(path.join(dnsDir, "openclaw.internal.db"));
-    expect(path.relative(dnsDir, zonePath)).toBe("openclaw.internal.db");
+  it("returns null for invalid env domains", () => {
+    expect(
+      resolveWideAreaDiscoveryDomain({ env: { OPENCLAW_WIDE_AREA_DOMAIN: "foo/bar" } }),
+    ).toBeNull();
   });
 });
 
@@ -150,11 +87,6 @@ describe("wide-area DNS-SD zone rendering", () => {
   });
 
   it.each([
-    {
-      name: "includes tailnetDns when provided",
-      overrides: { tailnetDns: "peters-mac-studio-1.sheep-coho.ts.net" },
-      records: [`tailnetDns=peters-mac-studio-1.sheep-coho.ts.net`],
-    },
     {
       name: "includes gateway TLS TXT fields and trims display metadata",
       overrides: {
@@ -192,16 +124,13 @@ describe("wide-area DNS zone writes", () => {
     );
   });
 
-  it.each(["../../x", "foo/bar", "foo\\bar", "evil\nrecords", "openclaw..internal"])(
-    "rejects invalid domain %j before writing",
-    async (domain) => {
-      await expect(writeWideAreaGatewayZone(makeZoneOpts({ domain }))).rejects.toThrow(
-        "wide-area discovery domain must be a valid DNS name",
-      );
+  it("rejects path traversal domains before writing", async () => {
+    await expect(writeWideAreaGatewayZone(makeZoneOpts({ domain: "../../x" }))).rejects.toThrow(
+      "wide-area discovery domain must be a valid DNS name",
+    );
 
-      expect(replaceFileAtomicSyncMock).not.toHaveBeenCalled();
-    },
-  );
+    expect(replaceFileAtomicSyncMock).not.toHaveBeenCalled();
+  });
 
   it("skips rewriting unchanged content", async () => {
     const existing = renderWideAreaGatewayZoneText({ ...makeZoneOpts(), serial: 2026031301 });

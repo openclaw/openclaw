@@ -1,22 +1,30 @@
 // Runtime registry loader assembles process-root plugin runtimes from config metadata.
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { listAgentEntries } from "../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withActivatedPluginIds } from "../activation-context.js";
 import {
   resolveChannelPluginIds,
-  resolveConfiguredChannelPluginIds,
+  resolveConfiguredChannelPluginIdsAsync,
 } from "../channel-plugin-ids.js";
 import { normalizePluginsConfig } from "../config-state.js";
-import { resolveEffectivePluginIds } from "../effective-plugin-ids.js";
+import { resolveEffectivePluginIdsAsync } from "../effective-plugin-ids.js";
 import { collectConfiguredMemoryEmbeddingProviderIds } from "../gateway-startup-plugin-ids.js";
 import { createInstalledPluginIndexScopeLookup } from "../installed-plugin-index-scope-lookup.js";
-import { loadOpenClawPlugins } from "../loader.js";
+import { loadAndActivateRootPluginRegistry } from "../loader.js";
 import { hasNonEmptyPluginIdScope } from "../plugin-scope.js";
-import {
-  buildPluginRuntimeLoadOptionsFromValues,
-  resolvePluginRuntimeLoadContext,
-} from "./load-context.js";
+import { buildPluginRuntimeLoadOptions } from "./load-context.js";
+import { resolvePluginRuntimeLoadContext } from "./load-context.resolve.js";
 
-export type PluginRegistryScope = "configured-channels" | "channels" | "memory" | "all";
+export type PluginRegistryScope =
+  | "configured-channels"
+  | "channels"
+  | "memory"
+  | "sandbox-backends"
+  | "all";
+
+// Core-owned backends must keep their registry ownership if a plugin reuses an id.
+const CORE_SANDBOX_BACKEND_IDS = new Set(["docker", "podman", "ssh"]);
 
 function resolveMemoryPluginIds(
   context: ReturnType<typeof resolvePluginRuntimeLoadContext>,
@@ -41,47 +49,78 @@ function resolveMemoryPluginIds(
   return [...pluginIds].toSorted();
 }
 
-function resolveScopePluginIds(params: {
-  scope: PluginRegistryScope;
-  context: ReturnType<typeof resolvePluginRuntimeLoadContext>;
-}): string[] {
-  if (params.scope === "configured-channels") {
-    return resolveConfiguredChannelPluginIds({
-      config: params.context.config,
-      activationSourceConfig: params.context.activationSourceConfig,
-      workspaceDir: params.context.workspaceDir,
-      env: params.context.env,
-    });
+function resolveSandboxBackendPluginIds(
+  context: ReturnType<typeof resolvePluginRuntimeLoadContext>,
+  persistedBackendIds: readonly string[] = [],
+): string[] {
+  if (!context.metadataSnapshot) {
+    return [];
   }
-  if (params.scope === "channels") {
-    return resolveChannelPluginIds({
-      config: params.context.config,
-      workspaceDir: params.context.workspaceDir,
-      env: params.context.env,
-    });
+  const agents = context.activationSourceConfig.agents;
+  const configuredBackendIds = [
+    agents?.defaults?.sandbox?.backend,
+    ...listAgentEntries(context.activationSourceConfig).map((agent) => agent.sandbox?.backend),
+    ...persistedBackendIds,
+  ];
+  const lookup = createInstalledPluginIndexScopeLookup(context.metadataSnapshot.index);
+  const pluginIds = new Set<string>();
+  for (const backendId of configuredBackendIds) {
+    const normalizedBackendId = normalizeOptionalLowercaseString(backendId);
+    if (
+      !normalizedBackendId ||
+      CORE_SANDBOX_BACKEND_IDS.has(normalizedBackendId) ||
+      !lookup.hasInstalledPluginIds([normalizedBackendId])
+    ) {
+      continue;
+    }
+    // Backend ids have no manifest ownership contract; only an exact installed plugin id is safe.
+    pluginIds.add(lookup.normalizePluginId(normalizedBackendId));
   }
-  if (params.scope === "memory") {
-    // Memory CLI commands must use the same backend and embedding adapters as
-    // Gateway, without activating unrelated explicitly enabled plugins.
-    return resolveMemoryPluginIds(params.context);
-  }
-  return resolveEffectivePluginIds({
-    config: params.context.rawConfig,
-    workspaceDir: params.context.workspaceDir,
-    env: params.context.env,
-  });
+  return [...pluginIds].toSorted();
 }
 
-export function ensurePluginRegistryLoaded(options?: {
+export async function ensurePluginRegistryLoaded(options?: {
   scope?: PluginRegistryScope;
   config?: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   workspaceDir?: string;
-}): void {
+  persistedSandboxBackendIds?: readonly string[];
+}): Promise<void> {
   const scope = options?.scope ?? "all";
   const context = resolvePluginRuntimeLoadContext(options);
-  const pluginIds = resolveScopePluginIds({ scope, context });
+  let pluginIds: string[];
+  switch (scope) {
+    case "configured-channels":
+      pluginIds = await resolveConfiguredChannelPluginIdsAsync({
+        config: context.config,
+        activationSourceConfig: context.activationSourceConfig,
+        workspaceDir: context.workspaceDir,
+        env: context.env,
+      });
+      break;
+    case "channels":
+      pluginIds = resolveChannelPluginIds({
+        config: context.config,
+        workspaceDir: context.workspaceDir,
+        env: context.env,
+      });
+      break;
+    case "memory":
+      // Memory CLI commands must use the same backend and embedding adapters as
+      // Gateway, without activating unrelated explicitly enabled plugins.
+      pluginIds = resolveMemoryPluginIds(context);
+      break;
+    case "sandbox-backends":
+      pluginIds = resolveSandboxBackendPluginIds(context, options?.persistedSandboxBackendIds);
+      break;
+    default:
+      pluginIds = await resolveEffectivePluginIdsAsync({
+        config: context.rawConfig,
+        workspaceDir: context.workspaceDir,
+        env: context.env,
+      });
+  }
   const activateConfigured = scope === "configured-channels" && pluginIds.length > 0;
   const config = activateConfigured
     ? (withActivatedPluginIds({ config: context.config, pluginIds }) ?? context.config)
@@ -92,13 +131,14 @@ export function ensurePluginRegistryLoaded(options?: {
         pluginIds,
       }) ?? context.activationSourceConfig)
     : context.activationSourceConfig;
-  loadOpenClawPlugins(
-    buildPluginRuntimeLoadOptionsFromValues(
+  await loadAndActivateRootPluginRegistry(
+    buildPluginRuntimeLoadOptions(
       { ...context, config, activationSourceConfig },
       {
         throwOnLoadError: true,
         ...(scope === "configured-channels" ||
         scope === "memory" ||
+        scope === "sandbox-backends" ||
         scope === "all" ||
         hasNonEmptyPluginIdScope(pluginIds)
           ? { onlyPluginIds: pluginIds }

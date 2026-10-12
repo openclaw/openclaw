@@ -1,5 +1,6 @@
 // Non-interactive API key tests cover flag, environment, auth-profile, and secret-ref mode precedence.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createApiKeyCredential } from "../../agents/auth-profiles/credential-fixtures.test-support.js";
 import { resolveNonInteractiveApiKey } from "./api-keys.js";
 
 const resolveEnvApiKey = vi.hoisted(() => vi.fn());
@@ -279,11 +280,10 @@ describe("resolveNonInteractiveApiKey", () => {
 
   it("falls back to a matching API-key profile after flag and env are absent", async () => {
     const runtime = createRuntime();
-    authStore.profiles["custom-models-custom-local:default"] = {
-      type: "api_key",
-      provider: "custom-models-custom-local",
-      key: "custom-profile-key",
-    };
+    authStore.profiles["custom-models-custom-local:default"] = createApiKeyCredential(
+      "custom-models-custom-local",
+      "custom-profile-key",
+    );
     resolveEnvApiKey.mockReturnValue(null);
 
     const result = await resolveNonInteractiveApiKey({
@@ -302,11 +302,10 @@ describe("resolveNonInteractiveApiKey", () => {
 
   it("retains existing profile reuse in secret-ref mode without inventing an env reference", async () => {
     const runtime = createRuntime();
-    authStore.profiles["custom-models-custom-local:default"] = {
-      type: "api_key",
-      provider: "custom-models-custom-local",
-      key: "fixture-profile-key",
-    };
+    authStore.profiles["custom-models-custom-local:default"] = createApiKeyCredential(
+      "custom-models-custom-local",
+      "fixture-profile-key",
+    );
     resolveEnvApiKey.mockReturnValue(null);
 
     const result = await resolveNonInteractiveApiKey({
@@ -386,6 +385,7 @@ describe("resolveNonInteractiveApiKey", () => {
     const payload = JSON.parse(String(runtime.log.mock.calls[0]?.[0]));
     expect(payload).toEqual({
       ok: false,
+      error: { type: "cli_error", message: expect.stringContaining(testCase.expectedMessage) },
       phase: "options",
       message: expect.stringContaining(testCase.expectedMessage),
     });

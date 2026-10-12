@@ -3,11 +3,20 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as usageCacheSqlite from "../infra/session-cost-usage-cache.sqlite.js";
 import {
-  closeOpenClawAgentDatabasesForTest,
+  decodeUsageCostRollup,
+  encodeUsageCostRollup,
+  USAGE_COST_ROLLUP_SCOPE,
+  USAGE_COST_ROLLUP_VERSION,
+} from "../infra/session-cost-usage-rollup-codec.js";
+import { createSessionUsageRollupData } from "../infra/session-cost-usage-rollup.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { maybeRepairLegacyRuntimeFiles } from "./doctor-usage-cost-cache.js";
 
 const note = vi.hoisted(() => vi.fn());
@@ -15,12 +24,13 @@ const note = vi.hoisted(() => vi.fn());
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
 let root: string | undefined;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(async () => {
   vi.restoreAllMocks();
   note.mockReset();
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   if (root) {
     await fs.rm(root, { recursive: true, force: true });
     root = undefined;
@@ -28,6 +38,44 @@ afterEach(async () => {
 });
 
 describe("legacy usage-cost cache cleanup", () => {
+  it("reports the obsolete Control UI cache and removes only that cache on repair, recording failures", async () => {
+    const stateDir = tempDirs.make("openclaw-control-ui-cache-doctor-");
+    const cacheRoot = path.join(stateDir, "cache", "control-ui-assets");
+    const cachedAsset = path.join(cacheRoot, "old-build", "assets", "index-old.js");
+    const unrelatedCache = path.join(stateDir, "cache", "keep.txt");
+    await fs.mkdir(path.dirname(cachedAsset), { recursive: true });
+    await fs.writeFile(cachedAsset, "old build");
+    await fs.writeFile(unrelatedCache, "keep");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+
+    await maybeRepairLegacyRuntimeFiles(false, env);
+    await expect(fs.readFile(cachedAsset, "utf8")).resolves.toBe("old build");
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(`Obsolete Control UI asset cache remains at ${cacheRoot}`),
+      "Control UI assets",
+    );
+
+    const rm = vi.spyOn(fs, "rm").mockRejectedValueOnce(fsError("EACCES"));
+    await expect(maybeRepairLegacyRuntimeFiles(true, env)).resolves.toEqual([
+      expect.stringMatching(/Could not remove obsolete Control UI asset cache.*EACCES/u),
+    ]);
+    expect(note).toHaveBeenCalledWith(
+      expect.stringMatching(/Could not remove obsolete Control UI asset cache.*EACCES/u),
+      "Doctor warnings",
+    );
+    await expect(fs.readFile(cachedAsset, "utf8")).resolves.toBe("old build");
+    rm.mockRestore();
+
+    await expect(maybeRepairLegacyRuntimeFiles(true, env)).resolves.toEqual([]);
+    await expect(fs.lstat(cacheRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.readFile(unrelatedCache, "utf8")).resolves.toBe("keep");
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(`Removed obsolete Control UI asset cache at ${cacheRoot}`),
+      "Control UI assets",
+    );
+    await expect(maybeRepairLegacyRuntimeFiles(true, env)).resolves.toEqual([]);
+  });
+
   it("removes only rebuildable usage-cost cache sidecars", async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-usage-cost-doctor-"));
     const sessionsDir = path.join(root, "agents", "main", "sessions");
@@ -102,35 +150,89 @@ describe("legacy usage-cost cache cleanup", () => {
     await expect(fs.readFile(path.join(external, "keep.txt"), "utf8")).resolves.toBe("keep");
   });
 
-  it("removes retired usage rows from every registered agent database", async () => {
-    root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-usage-cost-sqlite-doctor-"));
-    const env = { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv;
-    const databases = ["main", "worker"].map((agentId) =>
-      openOpenClawAgentDatabase({ agentId, env }),
-    );
-    for (const database of databases) {
-      const insert = database.db.prepare(
-        "INSERT INTO cache_entries (scope, key, value_json, blob, expires_at, updated_at) VALUES (?, ?, ?, NULL, NULL, 1)",
-      );
-      insert.run("session-cost-usage-rollup-v1", "retired", '{"pricingFingerprint":"large"}');
-      insert.run("session-cost-usage-rollup-v2", "current", "{}");
-      insert.run("session-cost-usage", "cache", "{}");
-      insert.run("session-cost-usage", "refresh-lock", "{}");
-      insert.run("other", "keep", "{}");
-    }
+  it.each([false, true])(
+    "continues retired-row cleanup after a rejected write (rejectFirst=%s)",
+    async (rejectFirst) => {
+      root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-usage-cost-sqlite-doctor-"));
+      const env = { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv;
+      const firstDatabase = openOpenClawAgentDatabase({ agentId: "main", env });
+      const databases = [firstDatabase, openOpenClawAgentDatabase({ agentId: "worker", env })];
+      const rollup = createSessionUsageRollupData();
+      rollup.untimestamped.totals.totalTokens = 17;
+      const current = encodeUsageCostRollup({
+        version: USAGE_COST_ROLLUP_VERSION,
+        pricingFingerprint: "synthetic",
+        checkpoint: {
+          kind: "jsonl",
+          parsedOffset: 7,
+          observedSize: 7,
+          observedMtimeMs: 1,
+          device: 1,
+          inode: 2,
+          anchorHash: "anchor",
+        },
+        scannedAt: 1,
+        parsedRecords: 1,
+        countedRecords: 0,
+        rollup,
+      });
+      for (const database of databases) {
+        const insert = database.db.prepare(
+          "INSERT INTO cache_entries (scope, key, value_json, blob, expires_at, updated_at) VALUES (?, ?, ?, NULL, NULL, 1)",
+        );
+        insert.run("session-cost-usage-rollup-v1", "retired", '{"pricingFingerprint":"large"}');
+        insert.run("session-cost-usage-rollup-v2", "retired-v2", "{}");
+        database.db
+          .prepare(
+            "INSERT INTO cache_entries (scope, key, value_json, blob, expires_at, updated_at) VALUES (?, 'current', ?, ?, NULL, 1)",
+          )
+          .run(USAGE_COST_ROLLUP_SCOPE, current.valueJson, current.blob);
+        insert.run("session-cost-usage", "cache", "{}");
+        insert.run("session-cost-usage", "refresh-lock", "{}");
+        insert.run("other", "keep", "{}");
+      }
+      const before = firstDatabase.db
+        .prepare("SELECT * FROM cache_entries ORDER BY scope, key")
+        .all();
 
-    await maybeRepairLegacyRuntimeFiles(true, env);
+      if (rejectFirst) {
+        vi.spyOn(usageCacheSqlite, "deleteSessionCostUsageRollupsExcept").mockRejectedValueOnce(
+          new Error("pruning rejected"),
+        );
+      }
+      await maybeRepairLegacyRuntimeFiles(true, env);
 
-    for (const database of databases) {
-      expect(
-        database.db.prepare("SELECT scope, key FROM cache_entries ORDER BY scope, key").all(),
-      ).toEqual([
-        { key: "keep", scope: "other" },
-        { key: "refresh-lock", scope: "session-cost-usage" },
-        { key: "current", scope: "session-cost-usage-rollup-v2" },
-      ]);
-    }
-  });
+      if (rejectFirst) {
+        expect(note).toHaveBeenCalledWith(
+          expect.stringContaining("pruning rejected"),
+          "Doctor warnings",
+        );
+        expect(
+          firstDatabase.db.prepare("SELECT * FROM cache_entries ORDER BY scope, key").all(),
+        ).toEqual(before);
+      }
+      for (const database of rejectFirst ? databases.slice(1) : databases) {
+        expect(
+          database.db.prepare("SELECT scope, key FROM cache_entries ORDER BY scope, key").all(),
+        ).toEqual([
+          { key: "keep", scope: "other" },
+          { key: "refresh-lock", scope: "session-cost-usage" },
+          { key: "current", scope: USAGE_COST_ROLLUP_SCOPE },
+        ]);
+        const retained = database.db
+          .prepare("SELECT value_json, blob FROM cache_entries WHERE scope = ? AND key = 'current'")
+          .get(USAGE_COST_ROLLUP_SCOPE);
+        expect(retained).toEqual({ value_json: current.valueJson, blob: current.blob });
+        if (typeof retained?.value_json !== "string" || !(retained.blob instanceof Uint8Array)) {
+          throw new Error("Expected a retained current usage report");
+        }
+        expect(
+          decodeUsageCostRollup(retained.value_json, "synthetic", retained.blob)?.rollup
+            .untimestamped.totals.totalTokens,
+        ).toBe(17);
+      }
+    },
+  );
 
   it.each([
     [

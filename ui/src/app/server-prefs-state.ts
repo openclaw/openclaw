@@ -1,101 +1,118 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeSidebarEntries } from "../app-navigation.ts";
+import {
+  normalizeBackgroundPreference,
+  type BackgroundPreference,
+} from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
+import { normalizeTabIconPreference } from "../../../packages/gateway-protocol/src/schema/tab-icon.ts";
+import { UI_APPEARANCE_PREFERENCE_KEYS } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
+import { isThemeId, normalizeThemeMode } from "../../../packages/gateway-protocol/src/theme-ids.ts";
+import { DEFAULT_SIDEBAR_ENTRIES, normalizeSidebarEntries } from "../app-navigation.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
 import {
   normalizeAccentColor,
   normalizeChatFollowUpModeOverride,
   normalizeChatSendShortcut,
   UI_APPEARANCE_DEFAULTS,
-  type ChatFollowUpMode,
   type ChatSendShortcut,
   type UiSettings,
-} from "./settings.ts";
+} from "./settings-contract.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
+import { normalizeTypefaceOverride } from "./typography.ts";
 
-const THEMES: ReadonlySet<ThemeName> = new Set(["claw", "knot", "dash", "custom"]);
-const THEME_MODES: ReadonlySet<ThemeMode> = new Set(["light", "dark", "system"]);
+export function isAppearancePref(key: string): key is keyof typeof UI_APPEARANCE_PREFERENCE_KEYS {
+  return Object.hasOwn(UI_APPEARANCE_PREFERENCE_KEYS, key);
+}
+
+export const UI_NAVIGATION_PREFERENCE_KEYS = {
+  sidebarEntries: "ui.sidebarEntries",
+} as const;
+
+export function isNavigationPref(key: string): key is keyof typeof UI_NAVIGATION_PREFERENCE_KEYS {
+  return Object.hasOwn(UI_NAVIGATION_PREFERENCE_KEYS, key);
+}
+
+export function isProfilePref(key: string): boolean {
+  return isAppearancePref(key) || isNavigationPref(key);
+}
 
 type SyncedPrefSpec<T> = {
+  configSync?: boolean;
   extract: (value: unknown) => T | undefined;
   local: (settings: UiSettings) => T | undefined;
   write?: (value: T | undefined) => Partial<UiSettings>;
   canApply?: (value: T, settings: UiSettings) => boolean;
-  clearable?: boolean;
-  reset?: (settings: UiSettings) => Partial<UiSettings>;
 };
 
 const prefSpec = <T>(specification: SyncedPrefSpec<T>) => specification;
 
+const optionalPrefSpec = <
+  K extends "accent" | "fontUi" | "fontChat" | "tabIcon" | "chatFollowUpMode",
+>(
+  key: K,
+  normalize: (value: unknown) => UiSettings[K],
+  configSync = true,
+) =>
+  prefSpec<UiSettings[K]>({
+    configSync,
+    extract: normalize,
+    local: (settings) => normalize(settings[key]),
+    write: (value) => ({ [key]: value }),
+  });
+
+const booleanPrefSpec = (local: SyncedPrefSpec<boolean>["local"]) =>
+  prefSpec<boolean>({
+    extract: (value) => (typeof value === "boolean" ? value : undefined),
+    local,
+  });
+
 /**
- * One descriptor per synced pref: the source of truth for config ui.prefs.
+ * One descriptor per synced pref, including its profile-only storage boundary.
  * Each key owns server validation, local normalization, and applicability.
  */
 export const SYNCED_PREFS = {
   theme: prefSpec<ThemeName>({
-    extract: (value) => (THEMES.has(value as ThemeName) ? (value as ThemeName) : undefined),
+    extract: (value) => (value === "custom" || isThemeId(value) ? value : undefined),
     local: (settings) => settings.theme,
     write: (value) => ({ theme: value ?? UI_APPEARANCE_DEFAULTS.theme }),
-    clearable: true,
-    reset: () => ({ theme: UI_APPEARANCE_DEFAULTS.theme }),
     // A server "custom" theme is only honorable once this browser imported one;
     // the imported palette itself is too large to live in config.
     canApply: (value, settings) => value !== "custom" || Boolean(settings.customTheme),
   }),
   themeMode: prefSpec<ThemeMode>({
-    extract: (value) => (THEME_MODES.has(value as ThemeMode) ? (value as ThemeMode) : undefined),
+    extract: normalizeThemeMode,
     local: (settings) => settings.themeMode,
     write: (value) => ({ themeMode: value ?? UI_APPEARANCE_DEFAULTS.themeMode }),
-    clearable: true,
-    reset: () => ({ themeMode: UI_APPEARANCE_DEFAULTS.themeMode }),
   }),
-  accent: prefSpec<string>({
-    extract: normalizeAccentColor,
-    local: (settings) => normalizeAccentColor(settings.accent),
-    write: (value) => ({ accent: value }),
-    clearable: true,
-    reset: () => ({ accent: undefined }),
+  accent: optionalPrefSpec("accent", normalizeAccentColor),
+  fontUi: optionalPrefSpec("fontUi", normalizeTypefaceOverride, false),
+  fontChat: optionalPrefSpec("fontChat", normalizeTypefaceOverride, false),
+  tabIcon: optionalPrefSpec("tabIcon", normalizeTabIconPreference, false),
+  background: prefSpec<BackgroundPreference>({
+    configSync: false,
+    extract: normalizeBackgroundPreference,
+    local: (settings) => normalizeBackgroundPreference(settings.background),
+    write: (value) => ({ background: value }),
   }),
   locale: prefSpec<string>({
     extract: (value) => (typeof value === "string" && isSupportedLocale(value) ? value : undefined),
     local: (settings) => settings.locale,
     write: (value) => ({ locale: value }),
-    clearable: true,
-    reset: () => ({ locale: undefined }),
   }),
-  chatShowThinking: prefSpec<boolean>({
-    extract: (value) => (typeof value === "boolean" ? value : undefined),
-    local: (settings) => settings.chatShowThinking,
-  }),
-  chatShowToolCalls: prefSpec<boolean>({
-    extract: (value) => (typeof value === "boolean" ? value : undefined),
-    local: (settings) => settings.chatShowToolCalls,
-  }),
-  chatPersistCommentary: prefSpec<boolean>({
-    extract: (value) => (typeof value === "boolean" ? value : undefined),
-    local: (settings) => settings.chatPersistCommentary !== false,
-  }),
+  chatShowThinking: booleanPrefSpec((settings) => settings.chatShowThinking),
+  chatShowToolCalls: booleanPrefSpec((settings) => settings.chatShowToolCalls),
+  chatPersistCommentary: booleanPrefSpec((settings) => settings.chatPersistCommentary !== false),
   chatSendShortcut: prefSpec<ChatSendShortcut>({
-    extract: (value) =>
-      value === "enter" || value === "modifier-enter"
-        ? normalizeChatSendShortcut(value)
-        : undefined,
+    extract: (value) => (value === "enter" || value === "modifier-enter" ? value : undefined),
     local: (settings) => normalizeChatSendShortcut(settings.chatSendShortcut),
     write: (value) => ({ chatSendShortcut: value }),
-    clearable: true,
-    reset: () => ({ chatSendShortcut: undefined }),
   }),
-  chatFollowUpMode: prefSpec<ChatFollowUpMode>({
-    extract: (value) => normalizeChatFollowUpModeOverride(value),
-    local: (settings) => normalizeChatFollowUpModeOverride(settings.chatFollowUpMode),
-    write: (value) => ({ chatFollowUpMode: value }),
-    // Unset means "use the server-configured queue mode"; clearing must propagate,
-    // so the push serializes an explicit null removal.
-    clearable: true,
-    reset: () => ({ chatFollowUpMode: undefined }),
-  }),
+  // Unset uses the server-configured queue mode; clearing sends an explicit null removal.
+  chatFollowUpMode: optionalPrefSpec("chatFollowUpMode", normalizeChatFollowUpModeOverride),
   sidebarEntries: prefSpec<string[]>({
+    configSync: false,
     extract: (value) => normalizeSidebarEntries(value) ?? undefined,
     local: (settings) => settings.sidebarEntries,
+    write: (value) => ({ sidebarEntries: value ?? [...DEFAULT_SIDEBAR_ENTRIES] }),
   }),
 } as const;
 
@@ -104,13 +121,31 @@ export type ResettableServerUiPrefKey =
   | "theme"
   | "themeMode"
   | "accent"
+  | "fontUi"
+  | "fontChat"
+  | "tabIcon"
+  | "background"
   | "locale"
   | "chatSendShortcut"
   | "chatFollowUpMode";
 export type SyncedPrefValue<K extends SyncedPrefKey> =
   ReturnType<(typeof SYNCED_PREFS)[K]["extract"]> extends (infer T) | undefined ? T : never;
-export type ServerUiPrefs = { [K in SyncedPrefKey]?: SyncedPrefValue<K> | null };
-export type ServerUiPrefProvenance = "default" | "pending" | "synced" | "device-local";
+export type SyncedServerUiPrefs = { [K in SyncedPrefKey]?: SyncedPrefValue<K> | null };
+// Browser storage can retain unknown keys until authoritative rejection; known fields stay typed.
+export type ServerUiPrefs = SyncedServerUiPrefs &
+  Record<string, unknown> & {
+    /** Browser-only identities of the last confirmed navigation publications, never RPC entries. */
+    navigationConfirmation?: Partial<Record<"sidebarEntries", string>>;
+    /** Browser-only edit base: the observed snapshot with subsequent authored membership operations folded in. */
+    sidebarEntriesBase?: readonly string[];
+    /** Browser-only: an unacknowledged authored reorder, including a reversal back to the edit base. */
+    sidebarEntriesOrder?: true;
+  };
+export function clearSidebarEntriesMetadata(prefs: ServerUiPrefs): void {
+  delete prefs.sidebarEntriesBase;
+  delete prefs.sidebarEntriesOrder;
+}
+export type ServerUiPrefProvenance = "default" | "pending" | "synced" | "profile" | "device-local";
 export type ServerUiPrefState<T> = {
   overridden: boolean;
   provenance: ServerUiPrefProvenance;
@@ -124,155 +159,22 @@ export function prefValuesEqual(left: unknown, right: unknown): boolean {
   if (Array.isArray(left) && Array.isArray(right)) {
     return left.length === right.length && left.every((value, index) => value === right[index]);
   }
+  const leftRecord = asRecord(left);
+  const rightRecord = asRecord(right);
+  if (leftRecord && rightRecord) {
+    const keys = Object.keys(leftRecord);
+    return (
+      keys.length === Object.keys(rightRecord).length &&
+      keys.every(
+        (key) =>
+          Object.hasOwn(rightRecord, key) && prefValuesEqual(leftRecord[key], rightRecord[key]),
+      )
+    );
+  }
   return left === right;
 }
 
-function applyChangedSettingsPatch(
-  target: Partial<UiSettings>,
-  settings: UiSettings,
-  source: Partial<UiSettings>,
-): void {
-  const applyKey = <K extends keyof UiSettings>(key: K, value: UiSettings[K] | undefined) => {
-    if (!prefValuesEqual(settings[key], value)) {
-      target[key] = value;
-    }
-  };
-  for (const key of Object.keys(source) as Array<keyof UiSettings>) {
-    applyKey(key, source[key]);
-  }
-}
-
-export function extractServerUiPrefs(configObject: unknown): ServerUiPrefs {
-  const prefs = asRecord(asRecord(asRecord(configObject)?.ui)?.prefs);
-  if (!prefs) {
-    return {};
-  }
-  const result: ServerUiPrefs = {};
-  for (const key of SYNCED_PREF_KEYS) {
-    const value = SYNCED_PREFS[key].extract(prefs[key]);
-    if (value !== undefined) {
-      (result as Record<string, unknown>)[key] = value;
-    }
-  }
-  return result;
-}
-
-export function resolveServerUiPrefStateFromSnapshot<K extends SyncedPrefKey>(
-  configObject: unknown,
-  key: K,
-  shadowPrefs: ServerUiPrefs | null,
-  settings: UiSettings,
-  canSync?: boolean | null,
-): ServerUiPrefState<SyncedPrefValue<K>> {
-  const specification = SYNCED_PREFS[key];
-  const localValue = specification.local(settings) as SyncedPrefValue<K> | undefined;
-  const resetPatch = specification.reset?.(settings);
-  const productDefault = (
-    resetPatch ? specification.local({ ...settings, ...resetPatch }) : undefined
-  ) as SyncedPrefValue<K> | undefined;
-  const localState = (
-    resetValue: SyncedPrefValue<K> | undefined,
-  ): ServerUiPrefState<SyncedPrefValue<K>> => {
-    const overridden = !prefValuesEqual(localValue, resetValue);
-    return {
-      overridden,
-      provenance: overridden ? "device-local" : "default",
-      resetValue,
-      value: localValue,
-    };
-  };
-  const prefs = asRecord(asRecord(asRecord(configObject)?.ui)?.prefs);
-  const serverValue =
-    prefs && Object.hasOwn(prefs, key)
-      ? (specification.extract(prefs[key]) as SyncedPrefValue<K> | undefined)
-      : undefined;
-  const canApplyServerValue =
-    serverValue !== undefined &&
-    (!specification.canApply ||
-      (specification.canApply as (value: unknown, settings: UiSettings) => boolean)(
-        serverValue,
-        settings,
-      ));
-  const applicableServerValue = canApplyServerValue ? serverValue : productDefault;
-  if (shadowPrefs && key in shadowPrefs) {
-    if (canSync === false) {
-      return {
-        ...localState(applicableServerValue),
-        // Keep queued intent for a later authorized reconnect without claiming
-        // that this connected read-only browser is pending a server sync.
-        provenance: "device-local",
-      };
-    }
-    const shadowValue = shadowPrefs[key];
-    if (shadowValue === null) {
-      return { ...localState(productDefault), provenance: "pending" };
-    }
-    return {
-      overridden: true,
-      provenance: "pending",
-      resetValue: productDefault,
-      value: shadowValue as SyncedPrefValue<K>,
-    };
-  }
-  if (!prefs || !Object.hasOwn(prefs, key) || serverValue === undefined) {
-    return localState(productDefault);
-  }
-  if (!canApplyServerValue) {
-    if (canSync === false) {
-      return localState(productDefault);
-    }
-    // Preserve authored server provenance even when this browser cannot render
-    // the value, so Restore default still removes the server override.
-    return {
-      overridden: true,
-      provenance: "synced",
-      resetValue: productDefault,
-      value: localValue,
-    };
-  }
-  if (prefValuesEqual(localValue, serverValue)) {
-    return {
-      overridden: true,
-      provenance: "synced",
-      resetValue: productDefault,
-      value: serverValue,
-    };
-  }
-  return localState(serverValue);
-}
-
-/** Local-settings patch that brings the browser mirror in line with the server. */
-export function serverPrefsLocalPatch(
-  prefs: ServerUiPrefs,
-  settings: UiSettings,
-): Partial<UiSettings> | null {
-  const patch: Partial<UiSettings> = {};
-  for (const key of SYNCED_PREF_KEYS) {
-    const specification = SYNCED_PREFS[key];
-    const serverValue = prefs[key];
-    if (serverValue === undefined) {
-      continue;
-    }
-    if (serverValue === null) {
-      const resetPatch = specification.clearable ? specification.reset?.(settings) : undefined;
-      if (resetPatch) {
-        applyChangedSettingsPatch(patch, settings, resetPatch);
-      }
-      continue;
-    }
-    if (prefValuesEqual(serverValue, specification.local(settings))) {
-      continue;
-    }
-    if (
-      specification.canApply &&
-      !(specification.canApply as (value: unknown, settings: UiSettings) => boolean)(
-        serverValue,
-        settings,
-      )
-    ) {
-      continue;
-    }
-    (patch as Record<string, unknown>)[key] = serverValue;
-  }
-  return Object.keys(patch).length > 0 ? patch : null;
-}
+export type ServerUiPrefReadiness = {
+  appearanceReady: boolean;
+  navigationReady?: boolean;
+};

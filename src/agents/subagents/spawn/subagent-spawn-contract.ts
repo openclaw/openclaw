@@ -1,4 +1,6 @@
+import type { SessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
 import type { FastMode } from "../../../shared/fast-mode.js";
+import type { SpawnedToolContext } from "../../spawned-context.js";
 import type {
   SpawnSubagentContextMode,
   SpawnSubagentMode,
@@ -21,6 +23,10 @@ export type SpawnSubagentParams = {
   /** Canonical request hash checked before reusing a host-reserved collector. */
   swarmLaunchRequestFingerprint?: string;
   cwd?: string;
+  projectId?: string;
+  worktree?: boolean;
+  worktreeName?: string;
+  worktreeBaseRef?: string;
   runTimeoutSeconds?: number;
   thread?: boolean;
   mode?: SpawnSubagentMode;
@@ -29,6 +35,7 @@ export type SpawnSubagentParams = {
   context?: SpawnSubagentContextMode;
   lightContext?: boolean;
   expectsCompletionMessage?: boolean;
+  completionTarget?: "parent";
   attachments?: Array<{
     name: string;
     content: string;
@@ -38,11 +45,18 @@ export type SpawnSubagentParams = {
   attachMountPath?: string;
 };
 
-export type SpawnSubagentContext = {
+export type SpawnSubagentContext = SpawnedToolContext & {
+  onSpawnEffectsStart?: () => void;
   agentSessionKey?: string;
+  /** Trusted parent tool construction facts; never read from model arguments. */
+  senderIsOwner?: boolean;
+  expectedParentSessionId?: string;
   requesterTurnRunId?: string;
   /** Separate key used only for completion routing, not sandbox policy. */
   completionOwnerKey?: string;
+  /** Active requester sandbox classification, preserved separately from the durable lineage key.
+   * Hidden native spawn derives sandbox admission from this when set, mirroring visible/ACP paths. */
+  sandboxed?: boolean;
   agentChannel?: string;
   agentAccountId?: string;
   agentTo?: string;
@@ -50,25 +64,20 @@ export type SpawnSubagentContext = {
   currentMessagingTarget?: string;
   currentChannelId?: string;
   currentMessageId?: string | number;
-  agentGroupId?: string | null;
-  agentGroupChannel?: string | null;
-  agentGroupSpace?: string | null;
-  agentMemberRoleIds?: string[];
   requesterAgentIdOverride?: string;
-  /** Explicit workspace directory for subagent to inherit (optional). */
-  workspaceDir?: string;
-  inheritedToolAllowlist?: string[];
-  inheritedToolDenylist?: string[];
   requesterRunId?: string;
+  /** Private invocation fence, consumed only before registration transfers ownership. */
+  assertActive?: SessionSourceAssertion;
 };
 
 export type SpawnSubagentResult = {
-  status: "accepted" | "forbidden" | "error";
   childSessionKey?: string;
   sessionKey?: string;
   runId?: string;
   mode?: SpawnSubagentMode;
   taskName?: string;
+  expectsCompletionMessage?: boolean;
+  completionTarget?: "parent";
   note?: string;
   /** Fully resolved model ref applied to the spawned child session. */
   resolvedModel?: string;
@@ -82,4 +91,11 @@ export type SpawnSubagentResult = {
     files: Array<{ name: string; bytes: number; sha256: string }>;
     relDir: string;
   };
-};
+} & (
+  | { status: "accepted"; context: SpawnSubagentContextMode }
+  | { status: "forbidden" | "error"; context?: never }
+);
+
+export function rejectSubagentSpawnRequest(status: "error" | "forbidden", error: string) {
+  return { ok: false as const, result: { status, error } satisfies SpawnSubagentResult };
+}

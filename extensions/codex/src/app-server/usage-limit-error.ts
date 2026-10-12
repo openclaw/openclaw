@@ -1,7 +1,3 @@
-/**
- * Enriches Codex usage-limit failures with current rate-limit information and
- * marks blocked auth profiles when Codex exposes a reset time.
- */
 import {
   embeddedAgentLog,
   formatErrorMessage,
@@ -37,15 +33,51 @@ type CodexUsageLimitErrorResult = {
   rateLimitsForProfile?: JsonValue;
 };
 
-export function createCodexUsageLimitPromptError(message: string): Error & { status: 429 } {
-  return Object.assign(new Error(message), { status: 429 as const });
+// HTTP 429 alone is not subscription exhaustion and must not inherit its reset cooldown.
+export class CodexUsageLimitPromptError extends Error {
+  readonly status = 429;
 }
 
-export function isCodexUsageLimitPromptError(error: unknown): error is Error & { status: 429 } {
-  return error instanceof Error && "status" in error && error.status === 429;
+export function resolveCodexPromptError(
+  source: Pick<CodexUsageLimitErrorSource, "message" | "codexErrorInfo" | "rateLimits">,
+): string | Error | undefined {
+  const usageLimitMessage = formatCodexUsageLimitErrorMessage(source);
+  if (usageLimitMessage) {
+    return new CodexUsageLimitPromptError(usageLimitMessage);
+  }
+  // Native retry exhaustion is not a permanent model/configuration failure.
+  // Preserve the provider facts before terminal projection drops the native envelope.
+  const info = source.codexErrorInfo;
+  let status =
+    info === "rateLimitExceeded"
+      ? 429
+      : info === "serverOverloaded"
+        ? 503
+        : info === "internalServerError"
+          ? 500
+          : undefined;
+  if (isJsonObject(info)) {
+    for (const variant of [
+      "httpConnectionFailed",
+      "responseStreamConnectionFailed",
+      "responseStreamDisconnected",
+      "responseTooManyFailedAttempts",
+    ]) {
+      const detail = info[variant];
+      if (isJsonObject(detail) && typeof detail.httpStatusCode === "number") {
+        status = detail.httpStatusCode;
+        break;
+      }
+    }
+  }
+  return status === undefined
+    ? (source.message ?? undefined)
+    : Object.assign(new Error(source.message ?? "codex app-server error"), {
+        status,
+        ...(info === "serverOverloaded" ? { code: "OVERLOADED" } : {}),
+      });
 }
 
-/** Marks a Codex auth profile blocked until the reset time advertised by rate limits. */
 export async function markCodexAuthProfileBlockedFromRateLimits(params: {
   params: EmbeddedRunAttemptParams;
   authProfileId?: string;
@@ -77,7 +109,6 @@ export async function markCodexAuthProfileBlockedFromRateLimits(params: {
   }
 }
 
-/** Formats a turn-start usage-limit error, refreshing rate limits when needed. */
 export async function formatCodexTurnStartUsageLimitError(params: {
   client: CodexAppServerClient;
   error: unknown;
@@ -87,19 +118,16 @@ export async function formatCodexTurnStartUsageLimitError(params: {
   signal?: AbortSignal;
 }): Promise<CodexUsageLimitErrorResult | undefined> {
   return refreshCodexUsageLimitError({
-    client: params.client,
+    ...params,
     source: readCodexTurnStartUsageLimitErrorSource(
       params.client,
       params.error,
       params.errorNotification,
       params.rateLimitsRevisionBeforeTurnStart,
     ),
-    timeoutMs: params.timeoutMs,
-    signal: params.signal,
   });
 }
 
-/** Refreshes a generic prompt usage-limit message into a reset-aware message. */
 export async function refreshCodexUsageLimitPromptError(params: {
   client: CodexAppServerClient;
   message: string | undefined;
@@ -110,14 +138,12 @@ export async function refreshCodexUsageLimitPromptError(params: {
     return undefined;
   }
   return refreshCodexUsageLimitError({
-    client: params.client,
+    ...params,
     source: {
       message: params.message,
       codexErrorInfo: "usageLimitExceeded",
       rateLimits: readRecentCodexRateLimits(params.client),
     },
-    timeoutMs: params.timeoutMs,
-    signal: params.signal,
   });
 }
 
@@ -128,39 +154,24 @@ async function refreshCodexUsageLimitError(params: {
   signal?: AbortSignal;
 }): Promise<CodexUsageLimitErrorResult | undefined> {
   const initialMessage = formatCodexUsageLimitErrorMessage(params.source);
-  if (!shouldRefreshCodexRateLimitsForUsageLimitMessage(initialMessage)) {
-    return initialMessage
-      ? {
-          message: initialMessage,
-          ...(params.source.rateLimitsTrustedForProfile
-            ? { rateLimitsForProfile: params.source.rateLimits }
-            : {}),
-        }
-      : undefined;
-  }
-  const rateLimits = await readCodexRateLimitsFromAppServerForUsageLimitError({
-    client: params.client,
-    timeoutMs: params.timeoutMs,
-    signal: params.signal,
-  });
-  if (!rateLimits) {
-    return initialMessage
-      ? {
-          message: initialMessage,
-          ...(params.source.rateLimitsTrustedForProfile
-            ? { rateLimitsForProfile: params.source.rateLimits }
-            : {}),
-        }
-      : undefined;
-  }
-  const refreshedMessage = formatCodexUsageLimitErrorMessage({
-    message: params.source.message,
-    codexErrorInfo: params.source.codexErrorInfo,
-    rateLimits,
-    rateLimitsAuthoritative: true,
-  });
-  const message = refreshedMessage ?? initialMessage;
-  return message ? { message, rateLimitsForProfile: rateLimits } : undefined;
+  const rateLimits = shouldRefreshCodexRateLimitsForUsageLimitMessage(initialMessage)
+    ? await readCodexRateLimitsFromAppServerForUsageLimitError(params)
+    : undefined;
+  const message = rateLimits
+    ? (formatCodexUsageLimitErrorMessage({
+        ...params.source,
+        rateLimits,
+        rateLimitsAuthoritative: true,
+      }) ?? initialMessage)
+    : initialMessage;
+  return message
+    ? {
+        message,
+        ...(rateLimits || params.source.rateLimitsTrustedForProfile
+          ? { rateLimitsForProfile: rateLimits || params.source.rateLimits }
+          : {}),
+      }
+    : undefined;
 }
 
 async function readCodexRateLimitsFromAppServerForUsageLimitError(params: {
@@ -241,7 +252,7 @@ function readCodexErrorPayload(error: unknown): {
   if (!error || typeof error !== "object" || !("data" in error)) {
     return { message };
   }
-  const data = (error as { data?: unknown }).data as JsonValue | undefined;
+  const data = error.data;
   if (!isJsonObject(data)) {
     return { message };
   }

@@ -19,9 +19,29 @@ execution, streaming, persistence.
 
 1. `agent` RPC validates params, resolves the session (`sessionKey`/`sessionId`), persists session metadata, and returns `{ runId, acceptedAt }` immediately.
 2. `agentCommand` runs the turn: resolves model + thinking/verbose/trace defaults, loads the skills snapshot, calls `runEmbeddedAgent`, and emits a fallback **lifecycle end/error** if the embedded loop did not already emit one.
-3. `runEmbeddedAgent`: serializes runs via per-session and global queues, resolves model + auth profile, builds the OpenClaw session, subscribes to runtime events, streams assistant/tool deltas, enforces the run timeout (aborting on expiry), and returns payloads plus usage metadata. For Codex app-server turns it also aborts an accepted turn that stops producing app-server progress before a terminal event.
-4. `subscribeEmbeddedAgentSession` bridges runtime events to the `agent` stream: tool events to `stream: "tool"`, assistant deltas to `stream: "assistant"`, lifecycle events to `stream: "lifecycle"` (`phase: "start" | "end" | "error"`).
-5. `agent.wait` (`waitForAgentRun`) waits for **lifecycle end/error** on a `runId` and returns `{ status: ok|error|timeout, startedAt, endedAt, error? }`.
+3. `runEmbeddedAgent`: serializes runs via per-session and global queues, resolves model + auth profile, builds the OpenClaw session, subscribes to runtime events, streams assistant/tool deltas, enforces the current model attempt's timeout (aborting that attempt on expiry), and returns payloads plus usage metadata. For Codex app-server turns, native Codex owns provider liveness and the exact `turn/completed` outcome; quiet periods and assistant output do not end the turn.
+4. `subscribeEmbeddedAgentSession` bridges runtime events to the `agent` stream: tool events to `stream: "tool"`, assistant deltas to `stream: "assistant"`, lifecycle events to `stream: "lifecycle"` (`phase: "start" | "finishing" | "end" | "error"`).
+5. `agent.wait` waits for the terminal outcome on a `runId` and returns `{ status: ok|error|timeout, startedAt, endedAt, error? }`. Gateway RPC runs also wait for their terminal replay payload to be published, so a duplicate request after a terminal wait result can replay that outcome.
+
+For embedded OpenAI Responses turns, `response.completed` finishes one model
+response. If the provider sends `end_turn: false`, the loop requests another
+response even when the completed response contains only text. Existing
+cancellation, host stop decisions, and intentional tool termination still apply.
+
+Each completed or incomplete Responses response also carries an
+`openai_responses_terminal` entry in the saved assistant message's `diagnostics`.
+It records `eventType` and the provider's `endTurn` signal as
+`true`, `false`, `"absent"`, or `"invalid"`, without retaining malformed values.
+Read it alongside the message's `stopReason` and text phase. These per-response
+facts survive later responses in the same run and require no
+raw-stream logging. They record the provider signal, not whether a host stop or
+cancellation prevented continuation. Older messages without this diagnostic
+cannot establish whether the provider omitted the signal.
+
+The wait result also carries the run's `terminalReply` and, when available,
+`terminalReceipt`. A receipt with `sourceReplyDelivered: true` confirms a final
+reply reached the external source conversation. A2A announcements consume that
+fact instead of using display-history mirrors as delivery evidence.
 
 ## Queueing and concurrency
 
@@ -42,15 +62,17 @@ System prompt is built from OpenClaw's base prompt, skills prompt, bootstrap con
 
 ## Hooks
 
-OpenClaw has two hook systems:
+OpenClaw has two in-process hook systems:
 
-- **Internal hooks** (Gateway hooks): event-driven scripts for commands and lifecycle events.
-- **Plugin hooks**: extension points inside the agent/tool lifecycle and gateway pipeline.
+- **Internal hooks**: `HOOK.md` scripts for command and lifecycle events such as `command:new`.
+- **Plugin hooks**: typed `api.on(...)` handlers inside the agent/tool lifecycle and Gateway pipeline, such as `before_tool_call`.
+
+[HTTP webhooks](/automation/cron-jobs#webhooks) are separate: they accept external requests that trigger work, rather than subscribing to agent-loop events.
 
 ### Internal hooks (Gateway hooks)
 
 - **`agent:bootstrap`**: runs while building bootstrap files before the system prompt is finalized. Use it to add or remove bootstrap context files.
-- **Command hooks**: `/new`, `/reset`, `/stop`, and other command events (see the Hooks doc).
+- **Command hooks**: core emits `command:new`, `command:reset`, and `command:stop`. Other command names do not automatically become hook events.
 
 See [Hooks](/automation/hooks) for setup and examples.
 
@@ -64,7 +86,7 @@ These run inside the agent loop or gateway pipeline:
 | `before_prompt_build`                                   | After session load (with `messages`), to inject `prependContext`, `systemPrompt`, `prependSystemContext`, or `appendSystemContext`, or, on supported runtimes with a turn-scoped submitted tool surface, narrow it with `toolsAllow`. An empty `toolsAllow` submits no optional tools; omitted leaves the host-resolved surface unchanged. Unsupported runtimes reject restrictive values instead of ignoring them. |
 | `before_agent_reply`                                    | After inline actions, before the LLM call. Lets a plugin claim the turn and return a synthetic reply or silence it entirely.                                                                                                                                                                                                                                                                                        |
 | `agent_end`                                             | After completion, with the final message list and run metadata.                                                                                                                                                                                                                                                                                                                                                     |
-| `before_compaction` / `after_compaction`                | Observe or annotate compaction cycles.                                                                                                                                                                                                                                                                                                                                                                              |
+| `before_compaction` / `after_compaction`                | Observe compaction cycles; these hooks do not rewrite or veto compaction.                                                                                                                                                                                                                                                                                                                                           |
 | `before_tool_call` / `after_tool_call`                  | Intercept tool params/results.                                                                                                                                                                                                                                                                                                                                                                                      |
 | `before_install`                                        | After operator install policy runs, on staged skill/plugin install material, when plugin hooks are loaded in the current process.                                                                                                                                                                                                                                                                                   |
 | `tool_result_persist`                                   | Synchronously transforms tool results before they are written to an OpenClaw-owned session transcript.                                                                                                                                                                                                                                                                                                              |
@@ -85,11 +107,22 @@ Harnesses can adapt these hooks. The Codex app-server harness keeps OpenClaw plu
 ## Streaming
 
 - Assistant deltas stream from the agent runtime as `assistant` events.
+- Adjacent text appends already waiting in the provider event queue can merge before
+  agent delivery. This adds no buffering delay; snapshots, content-block changes,
+  reasoning, tools, and terminal events remain separate boundaries.
 - Block streaming can emit partial replies on `text_end` or `message_end`.
 - Reasoning streaming can be a separate stream or block replies.
+- Serialized XML tool calls, including GLM `arg_key` payloads and `invoke`/`parameter` blocks, are hidden from streamed and final replies. Ambiguous tag prefixes wait for more text; completed literal explanations and Markdown code examples remain visible. Hiding a shadow copy does not execute it again.
 - See [Streaming](/concepts/streaming) for chunking and block reply behavior.
 
 ## Tool execution
+
+Tool arguments are validated against the tool's schema before execution. During
+argument recovery, `anyOf` and `oneOf` values already accepted by a branch keep
+their original value and type. For example, a string ID `"00123"` stays a string
+even when a sibling integer field needs conversion from `"2"` to `2`. Recovery
+tries branch conversions only when no branch accepts the original value; the
+complete schema still enforces constraints such as `oneOf` exclusivity.
 
 - Tool start/update/end events emit on the `tool` stream.
 - Tool results are sanitized for size and image payloads before logging/emitting.
@@ -101,9 +134,34 @@ Final payloads are assembled from assistant text (plus optional reasoning), inli
 
 - The exact silent token `NO_REPLY` is filtered from outgoing payloads.
 - Messaging tool duplicates are removed from the final payload list.
-- If no renderable payloads remain and a tool errored, a fallback tool error reply is emitted unless a messaging tool already sent a user-visible reply.
+- A fallback tool error warning appears only when a run ends with a tool failure and would otherwise leave the user with no reply. This guard is not configurable; a user-facing reply, including one already delivered by a messaging tool, prevents the warning.
+
+The host decides whether an input requires a visible reply. Direct requests and accepted group/channel requests require an answer by default. Unaddressed group requests remain optional only when the operator explicitly allows the [silence policy](/concepts/messages#silent-replies); mentions and authorized commands still require a response. Ambient room events and internal helper turns remain optional. Model-authored `NO_REPLY` is empty output, not permission to waive a required response; required turns with no delivered reply still need an answer.
+
+When a required turn exhausts its retries with only reasoning or empty output, OpenClaw reports an error and saves the try-again notice in chat history. This also applies when compaction occurs between retries. Whitespace and zero-width characters alone do not count as a visible answer.
+
+If a required-reply turn ends after a fully settled tool batch without a composed answer, OpenClaw can make a tool-free finalization pass. Earlier tool errors, pre-tool progress, and superseded, undelivered confirmations do not count as a final answer. A progress message fully delivered to the current conversation counts as the answer only when it is the last tool batch of the settled turn and the turn then produces no output: the model wrote it after every other tool result, so a finalization pass could only repeat it. Any later tool work, including work after an asynchronous progress send, still gets a finalization pass. This pass uses the settled results and does not repeat completed tools. Fatal automation failures, including denied execution, remain failures even when finalization produces an answer.
+
+An optional turn that explicitly finishes with `NO_REPLY` does not need a finalization pass, even after a settled tool failure. The failure remains recorded; a rejected Skill Workshop review still fails without making extra model requests to compose a reply.
+
+A confirmed delivery prevents duplicate generation. Pending delivery or continuation work retains completion ownership without being marked delivered; rejected sends, unflushed deferred text, and missing delivery callbacks are not delivery proof. `NO_REPLY` does not retract text already delivered. Pending tools, accepted child runs, and yielded work keep their existing owners, and assistant errors and aborts are not intentional silence.
+
+Prompt-segment diagnostics attribute attachment/context blocks and generated inbound metadata separately from user text. A prompt containing only those blocks does not need trailing user text for reply processing to complete.
 
 ## Compaction and retries
+
+When an OpenAI Responses request hits its output limit while generating a tool
+call, the built-in harness finishes already admitted tools and retries from their
+recorded results. The unfinished call never executes. Recovery uses the existing
+bounded session retry budget and remains cancellable; refusals and inconsistent
+terminal responses do not qualify for this continuation.
+
+An empty `length` response also qualifies when it leaves no completed or pending
+reply. The built-in harness continues the existing transcript with its normally
+allowed tools, so it can finish work such as controlling a background `exec`
+process. This continuation preserves completed actions and uses the same retry
+budget. Partial answers and intentional silent cron results keep their existing
+handling; a confirmed context overflow still uses compaction.
 
 Auto-compaction emits `compaction` stream events and can trigger a retry. On retry, in-memory buffers and tool summaries reset to avoid duplicate output. See [Compaction](/concepts/compaction).
 
@@ -113,6 +171,24 @@ Auto-compaction emits `compaction` stream events and can trigger a retry. On ret
 - `assistant`: streamed deltas from the agent runtime.
 - `tool`: streamed tool events from the agent runtime.
 
+After a definitive lifecycle `end` or `error` is published, the event owner
+suppresses later client lifecycle events for that execution, including model updates
+and duplicate terminals during abort cleanup. Retryable attempt errors leave
+the lifecycle open. Chat abort keeps its immediate terminal with `aborted: true`
+and the caller's stop reason (for example `rpc`, `restart`, or `timeout`).
+The abort owner reserves that terminal before invoking cancellation listeners.
+The same publication decision covers agent frames, chat finals, progress snapshots,
+and session lifecycle notifications. Execution settlement and cleanup continue
+independently of event publication.
+
+For completed `chat.send` turns, clients may request compaction, fork, or rewind
+as soon as they receive chat `final`. These requests join the published turn's
+remaining transcript and admission cleanup before mutating the session. A
+competing live turn still returns an active-run error.
+Lifecycle delivery captures registrations before listeners run, and later chat
+terminal publication keeps the producer's original registration. Reusing a run ID
+during a listener callback cannot make its replacement terminal.
+
 The Gateway projects lifecycle and tool start/terminal events into the bounded,
 metadata-only [audit ledger](/cli/audit). This projection records provenance and
 result codes without copying prompts, messages, tool arguments, tool results,
@@ -120,18 +196,94 @@ or raw errors out of the transcript/runtime path.
 
 ## Chat channel handling
 
-Assistant deltas buffer into chat `delta` messages. A chat `final` is emitted on **lifecycle end/error**.
+Assistant deltas buffer into chat `delta` messages. Terminal lifecycle events
+produce chat `final`, `error`, or `aborted` messages. Definitive cancellation and
+timeout events finalize immediately, including when the runtime reports them as
+`phase: "error"`. Retryable errors keep a 15-second grace window for a fallback
+or restart of the same run. Once the outer execution owner has finished its
+attempts, it publishes `executionSettled: true`. The Gateway consumes that fact
+without retry grace, including preparation failures that never reached a model
+or emitted a fallback step. For Gateway RPC runs, `agent.wait` also joins terminal
+replay publication after required settlement. Unmarked timeout and bare-abort observations
+retain their existing wait-layer retry handling.
+
+Cron attempt completions remain `finishing` across model fallbacks and
+interim-acknowledgment retries; worker `finishing` events do not claim execution
+settlement. Completed execution facts are captured before cron bookkeeping, but
+finality is published only after execution settles. A new attempt clears the
+prior outcome before preparation. Later workflow errors or aborts cannot
+reclassify completed execution; cron persistence, delivery, and yielded-parent
+continuation retain their separate outcomes.
+
+A yielded end while the parent task is waiting does not commit a terminal outcome.
+If dispatch then fails, the Gateway still publishes and retains that failure for
+chat replay and conversation history.
+
+Chat errors wait for terminal session persistence, including any failure notice,
+so an immediate history reload includes the recorded failure. Successful and
+aborted chat terminals do not wait for this write. If persistence fails, the
+Gateway logs the write failure and still delivers the live chat error.
+
+History keeps a run active while its terminal session write is pending. Once
+that write succeeds, history and session activity show the recorded end time
+and duration without waiting for retry grace.
+
+Live snapshots are scoped to their assistant message. A correction can shorten or clear the current preview without erasing earlier messages. Pending text is flushed before the terminal event; pacing live updates does not delay tool execution or transcript writes.
+
+Run-duration metadata belongs to the current run, including when preparation fails before the model starts. In Control UI completed-work rollups, independent sends have separate elapsed-time boundaries: a failed turn and the idle time before the next send are not part of that next turn's work. Steering remains associated with its target run rather than being treated as an independent retry.
 
 ## Timeouts
 
-| Timeout                                          | Default                                | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| ------------------------------------------------ | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `agent.wait`                                     | 30s                                    | Wait-only; `timeoutMs` param overrides. Does not stop the underlying run.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| Agent runtime (`agents.defaults.timeoutSeconds`) | 172800s (48h)                          | Enforced by `runEmbeddedAgent`'s abort timer. Set `0` for an unlimited run budget; model stream liveness watchdogs still apply.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| CLI backend no-output watchdog                   | computed per fresh/resumed CLI run     | Separate from the agent runtime and owned by the registered backend plugin. A CLI-internal background task shares the parent subprocess and does not outlive an overall agent timeout.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| Cron isolated agent turn                         | owned by cron                          | The scheduler starts its own timer when execution begins, aborts the run at the configured deadline, then runs bounded cleanup before recording the timeout so a stale child session cannot keep the lane stuck.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| Model idle timeout                               | Cloud 120s; self-hosted 300s           | OpenClaw aborts a model request when no response chunks arrive before the idle window. `models.providers.<id>.timeoutSeconds` extends this idle watchdog for slow local/self-hosted providers, but stays bounded by any lower finite `agents.defaults.timeoutSeconds` or run-specific timeout, since those govern the whole agent run. Unlimited run budgets still keep the provider-class idle watchdog. Cron-triggered cloud model runs with no explicit model/agent timeout use the same default; with an explicit cron run timeout, cloud model stream stalls cap at 60s so configured model fallbacks can still run before the outer cron deadline. Cron-triggered runs on genuinely local endpoints (loopback/private baseUrl) keep the local idle opt-out; self-hosted providers on network baseUrls get the 300s implicit watchdog. With an explicit cron run timeout, local/self-hosted stalls cap at that timeout. Set `models.providers.<id>.timeoutSeconds` for slow local providers. |
-| Provider HTTP request timeout                    | `models.providers.<id>.timeoutSeconds` | Covers connect, headers, body, SDK request timeout, guarded-fetch abort handling, and the model stream idle watchdog for that provider. Use for slow local/self-hosted providers (for example Ollama) before raising the whole agent runtime timeout; keep the agent/runtime timeout at least as high when the model request needs to run longer.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+When no result is available before an `agent.wait` deadline, the response contains
+only `runId` and `status: "timeout"`.
+It does not cancel the run or identify its execution phase; wait on the same
+`runId` again to observe completion. A wait interrupted by Gateway lifecycle
+shutdown includes `timeoutPhase: "gateway_draining"` without terminal metadata.
+Known queued chat turns report `status: "pending"`, `timeoutPhase: "queue"`, and
+`providerStarted: false`.
+
+| Timeout                                          | Default                                | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ------------------------------------------------ | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agent.wait`                                     | 30s                                    | Wait-only; `timeoutMs` param overrides. Does not stop the underlying run.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Agent runtime (`agents.defaults.timeoutSeconds`) | 172800s (48h)                          | Elapsed execution budget for each model attempt. Each configured fallback receives a fresh budget, so the total run can exceed this setting. Progress does not reset an attempt's budget. Set `0` for unlimited execution; runtime-owned provider liveness still applies. Codex enforces this budget per attempt, independently of its native stream recovery.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| CLI backend no-output watchdog                   | computed per fresh/resumed CLI run     | Separate from the agent runtime and owned by the registered backend plugin. A CLI-internal background task shares the parent subprocess and does not outlive its model attempt's timeout.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Cron isolated agent turn                         | owned by cron                          | The scheduler starts its own timer when execution begins, independently of per-attempt model budgets. Fallback does not reset it. It aborts the run at the configured deadline, then runs bounded cleanup before recording the timeout so a stale child session cannot keep the lane stuck.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| Model idle timeout                               | Cloud 120s; self-hosted 300s           | OpenClaw aborts a model request when no response chunks or recognized SSE comment keepalives arrive before the idle window. A separate model-progress deadline is 2x the idle window: OpenAI-compatible Completions and Responses comment keepalives, like content-free Completions chunks, keep the connection alive but do not count as progress. `models.providers.<id>.timeoutSeconds` extends this idle watchdog for slow local/self-hosted providers, but stays bounded by any lower finite `agents.defaults.timeoutSeconds` or run-specific timeout, since those bound each model attempt. Unlimited attempt budgets still keep the provider-class idle watchdog. Cron-triggered cloud model runs with no explicit model/agent timeout use the same default; with an explicit cron run timeout, cloud model stream stalls cap at 60s so configured model fallbacks can still run before the outer cron deadline. Cron-triggered runs on genuinely local endpoints (loopback/private baseUrl) keep the local idle opt-out; self-hosted providers on network baseUrls get the 300s implicit watchdog. With an explicit cron run timeout, local/self-hosted stalls cap at that timeout. Set `models.providers.<id>.timeoutSeconds` for slow local providers. |
+| Provider HTTP request timeout                    | `models.providers.<id>.timeoutSeconds` | Covers connect, headers, body, SDK request timeout, guarded-fetch abort handling, and the model stream idle watchdog for that provider. Use for slow local/self-hosted providers (for example Ollama) before raising the agent runtime's per-attempt timeout; keep the agent/runtime timeout at least as high when the model request needs to run longer.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+
+For Chat Completions streams, repeated or decreasing usage snapshots keep the
+connection active but do not reset the model-progress deadline. Only advancing
+prompt, completion, total, or reasoning token counts count as usage progress;
+changing billing metadata does not keep a stalled request alive.
+
+The built-in OpenClaw harness publishes the current model attempt's execution
+deadline to the queue. When an attempt times out, configured fallback can start
+with a fresh budget after the interrupted attempt settles. User cancellation
+stops the entire run, including fallback. Approval waits pause the unused attempt
+budget; resolving all pending approvals resumes that same budget. Compaction can
+receive one bounded grace period. A question from `ask_user` does not pause the
+attempt's execution budget. With `0`, no execution timer is armed, but provider
+liveness, Stop, and bounded abort cleanup
+still apply. Isolated post-tool finalization gets its own deadline and cancellation
+controls rather than inheriting callbacks from the completed attempt.
+
+A terminal timeout is a failed turn, not a successful completion. Chat and
+command results retain its timeout explanation; earlier tool errors do not
+replace that explanation or restart an already-final timed-out turn.
+
+The model idle and provider HTTP rows describe the built-in OpenClaw model
+path. Codex owns its native stream deadlines and network retries. After exact
+native terminal receipt, OpenClaw allows two minutes for local settlement.
+After separately bounded abort cleanup, queued projection gets a five-second
+drain grace. Neither window resets on progress. These cleanup limits still
+apply when the execution budget is unlimited. See
+[Codex timeouts](/plugins/codex-harness-reference#timeouts).
+
+When a runtime reports a definitive timeout, the Gateway records its terminal
+status and error for the session sidebar immediately, without waiting for
+provider retry grace. Opening the failed session dismisses its sidebar attention
+as usual. A later successful turn clears the previous error and is not replaced
+by an older delayed failure.
 
 ### Stuck session diagnostics
 
@@ -142,6 +294,24 @@ With diagnostics enabled, a built-in two-minute threshold classifies long `proce
 - `session.stuck` is reserved for recoverable stale session bookkeeping, including idle queued sessions with stale ownerless model/tool activity.
 
 The abort threshold is at least 5 minutes and 3x the warning threshold. Stale session bookkeeping releases the affected session lane immediately after recovery gates pass; stalled embedded runs are abort-drained only after the abort threshold, so queued work resumes without cutting off merely slow runs. Recovery emits structured requested/completed outcomes; diagnostic state is marked idle only if the same processing generation is still current, and repeated `session.stuck` diagnostics back off while the session stays unchanged.
+
+Attention and recovery log lines read optional session context only when their
+log level is enabled. Transcript enrichment runs in the background read worker
+and returns at most 140 characters; it never delays classification or recovery.
+Session replacement discards pending enrichment, and stopping diagnostics retires
+pending log publications. Incognito replies remain excluded.
+
+Pending human-input questions protect their exact active owner from stale-work
+recovery. If checking a question expires it, or diagnostic reporting resumes or
+replaces the run, that observation cannot authorize an abort of the resumed work.
+Recovery revalidates the session generation captured with the observation.
+
+A current Codex attempt waiting on native work is the exception to these idle
+thresholds: it remains `session.long_running` with reason `runtime_owned_wait`
+and is not aborted or taken over merely because it is quiet. Recovery and
+steering revalidate that exact active owner and its execution budget. This does
+not protect expired OpenClaw-owned requests or tools, cancellation, terminal
+settlement, or ownerless state.
 
 ## Where things can end early
 
@@ -157,3 +327,4 @@ The abort threshold is at least 5 minutes and 3x the warning threshold. Stale se
 - [Compaction](/concepts/compaction) - how long conversations are summarized
 - [Exec Approvals](/tools/exec-approvals) - approval gates for shell commands
 - [Thinking](/tools/thinking) - thinking/reasoning level configuration
+- [Agent runtimes](/concepts/agent-runtimes) - alternate harness runtimes that drive this loop

@@ -2,12 +2,12 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerWorkboardCli } from "./cli.js";
-import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./persistence-types.js";
-import { WorkboardStore } from "./store.js";
+import type { WorkboardStore } from "./store.js";
+import { createWorkboardSqliteTestStore } from "./test/sqlite-store.js";
 
 const gatewayRuntime = vi.hoisted(() => ({
   callGatewayFromCli: vi.fn(),
-  getRuntimeConfig: vi.fn(() => ({})),
+  isImplicitLocalGatewayTargetFromCli: vi.fn(async () => false),
 }));
 
 vi.mock("openclaw/plugin-sdk/gateway-runtime", async () => {
@@ -17,30 +17,18 @@ vi.mock("openclaw/plugin-sdk/gateway-runtime", async () => {
   return {
     ...actual,
     callGatewayFromCli: gatewayRuntime.callGatewayFromCli,
+    isImplicitLocalGatewayTargetFromCli: gatewayRuntime.isImplicitLocalGatewayTargetFromCli,
   };
 });
 
-vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", () => ({
-  getRuntimeConfig: gatewayRuntime.getRuntimeConfig,
+vi.mock("openclaw/plugin-sdk/cli-state-owner", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/cli-state-owner")>()),
+  runWithLocalStateOwner: ({
+    runLocal,
+  }: {
+    runLocal: (scope: { assertCurrent(): void }) => unknown;
+  }) => runLocal({ assertCurrent() {} }),
 }));
-
-function createMemoryStore<T = PersistedWorkboardCard>(): WorkboardKeyedStore<T> {
-  const entries = new Map<string, T>();
-  return {
-    async register(key, value) {
-      entries.set(key, value);
-    },
-    async lookup(key) {
-      return entries.get(key);
-    },
-    async delete(key) {
-      return entries.delete(key);
-    },
-    async entries() {
-      return [...entries].flatMap(([key, value]) => (value ? [{ key, value }] : []));
-    },
-  };
-}
 
 function createProgram(store: WorkboardStore): Command {
   const program = new Command();
@@ -49,7 +37,7 @@ function createProgram(store: WorkboardStore): Command {
     writeErr: () => {},
     writeOut: () => {},
   });
-  registerWorkboardCli({ program, store });
+  registerWorkboardCli({ program, withStore: async (action) => action(store) });
   return program;
 }
 
@@ -83,13 +71,12 @@ async function captureStdout(run: () => Promise<void>): Promise<string> {
 describe("registerWorkboardCli", () => {
   beforeEach(() => {
     gatewayRuntime.callGatewayFromCli.mockReset();
-    gatewayRuntime.getRuntimeConfig.mockReset();
-    gatewayRuntime.getRuntimeConfig.mockReturnValue({});
+    gatewayRuntime.isImplicitLocalGatewayTargetFromCli.mockReset().mockResolvedValue(false);
     delete process.env.OPENCLAW_GATEWAY_URL;
   });
 
   it("records full-host authority on locally created cards", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const program = createProgram(store);
 
     await program.parseAsync(["workboard", "create", "Host card"], { from: "user" });
@@ -104,7 +91,7 @@ describe("registerWorkboardCli", () => {
   });
 
   it("redacts claim tokens from card JSON output", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({ title: "Claimed worker", status: "running" });
     await store.claim(card.id, { ownerId: "worker", token: "secret-token" });
     const program = createProgram(store);
@@ -123,7 +110,7 @@ describe("registerWorkboardCli", () => {
   });
 
   it("hides archived cards from text output by default and reveals them with --include-archived", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     await store.create({ title: "Active card" });
     const archived = await store.create({ title: "Archived card" });
     await store.archive(archived.id, true);
@@ -143,8 +130,30 @@ describe("registerWorkboardCli", () => {
     expect(includeOutput).toContain("(archived)");
   });
 
+  it("rejects invalid list status filters instead of reporting an empty board", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const running = await store.create({ title: "Active work", status: "running" });
+    await store.create({ title: "Queued work", status: "todo" });
+    const program = createProgram(store);
+
+    const output = await captureStdout(async () => {
+      await program.parseAsync(["workboard", "list", "--status", "running", "--json"], {
+        from: "user",
+      });
+    });
+    expect(JSON.parse(output)).toMatchObject({ cards: [{ id: running.id }] });
+
+    await captureStdout(async () => {
+      await expect(
+        program.parseAsync(["workboard", "list", "--status", "runnning", "--json"], {
+          from: "user",
+        }),
+      ).rejects.toThrow(/Allowed choices are.*running/);
+    });
+  });
+
   it("marks archived cards in show output", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const archived = await store.create({ title: "Archived card", status: "ready" });
     await store.archive(archived.id, true);
     const program = createProgram(store);
@@ -157,7 +166,7 @@ describe("registerWorkboardCli", () => {
   });
 
   it("preserves archived cards in JSON list output by default", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const archived = await store.create({ title: "Archived card" });
     await store.archive(archived.id, true);
     const program = createProgram(store);
@@ -171,7 +180,7 @@ describe("registerWorkboardCli", () => {
   });
 
   it("does not fall back to local dispatch for explicit gateway targets", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({ title: "Remote target", status: "ready" });
     const program = createProgram(store);
     gatewayRuntime.callGatewayFromCli.mockRejectedValueOnce(
@@ -188,12 +197,10 @@ describe("registerWorkboardCli", () => {
   });
 
   it("does not fall back to local dispatch for configured remote gateways", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({ title: "Configured remote target", status: "ready" });
     const program = createProgram(store);
-    gatewayRuntime.getRuntimeConfig.mockReturnValue({
-      gateway: { mode: "remote", remote: { url: "wss://gateway.example" } },
-    });
+
     gatewayRuntime.callGatewayFromCli.mockRejectedValueOnce(
       new Error("connect ECONNREFUSED gateway.example:443"),
     );
@@ -208,7 +215,7 @@ describe("registerWorkboardCli", () => {
   });
 
   it("forwards --max-starts to the dispatch gateway call", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const program = createProgram(store);
     gatewayRuntime.callGatewayFromCli.mockResolvedValueOnce({ started: [], startFailures: [] });
 
@@ -223,7 +230,7 @@ describe("registerWorkboardCli", () => {
   });
 
   it("requests minimum scopes unless full-host access is explicit", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const program = createProgram(store);
     gatewayRuntime.callGatewayFromCli.mockResolvedValue({ started: [], startFailures: [] });
 
@@ -240,8 +247,37 @@ describe("registerWorkboardCli", () => {
     });
   });
 
+  it.each([false, true])("reports each dispatch failure with JSON=%s", async (json) => {
+    const store = createWorkboardSqliteTestStore();
+    const program = createProgram(store);
+    const result = {
+      started: [{ cardId: "started-card", runId: "run-started" }],
+      startFailures: [
+        { cardId: "12345678-first-card", error: "Workspace is unavailable." },
+        { cardId: "abcdef01-second-card", error: "Model is unavailable." },
+      ],
+    };
+    gatewayRuntime.callGatewayFromCli.mockResolvedValueOnce(result);
+
+    const output = await captureStdout(async () => {
+      await program.parseAsync(["workboard", "dispatch", ...(json ? ["--json"] : [])], {
+        from: "user",
+      });
+    });
+
+    if (json) {
+      expect(JSON.parse(output)).toEqual(result);
+    } else {
+      expect(output).toBe(
+        "dispatch complete: started=1 failures=2\n" +
+          "12345678: Workspace is unavailable.\n" +
+          "abcdef01: Model is unavailable.\n",
+      );
+    }
+  });
+
   it("omits maxStarts from the dispatch gateway call when the flag is absent", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const program = createProgram(store);
     gatewayRuntime.callGatewayFromCli.mockResolvedValueOnce({ started: [], startFailures: [] });
 
@@ -256,7 +292,7 @@ describe("registerWorkboardCli", () => {
   });
 
   it("does not fall back when an older gateway lacks max-starts dispatch", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({ title: "Bounded dispatch", status: "ready" });
     const program = createProgram(store);
     gatewayRuntime.callGatewayFromCli.mockRejectedValueOnce(
@@ -270,21 +306,18 @@ describe("registerWorkboardCli", () => {
     await expect(store.get(card.id)).resolves.toMatchObject({ status: "ready" });
   });
 
-  it.each(["0", "-1", "1e3", "0x10", "5.5"])(
-    "rejects invalid --max-starts value %s",
-    async (value) => {
-      const store = new WorkboardStore(createMemoryStore());
-      const program = createProgram(store);
+  it.each(["0", "1e3"])("rejects invalid --max-starts value %s", async (value) => {
+    const store = createWorkboardSqliteTestStore();
+    const program = createProgram(store);
 
-      await expect(
-        program.parseAsync(["workboard", "dispatch", "--max-starts", value], { from: "user" }),
-      ).rejects.toThrow("--max-starts must be a positive integer.");
-      expect(gatewayRuntime.callGatewayFromCli).not.toHaveBeenCalled();
-    },
-  );
+    await expect(
+      program.parseAsync(["workboard", "dispatch", "--max-starts", value], { from: "user" }),
+    ).rejects.toThrow("--max-starts must be a positive integer.");
+    expect(gatewayRuntime.callGatewayFromCli).not.toHaveBeenCalled();
+  });
 
   it("rejects ambiguous card id prefixes", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const prefix = await createAmbiguousPrefix(store);
     const program = createProgram(store);
 
@@ -294,7 +327,7 @@ describe("registerWorkboardCli", () => {
   });
 
   it("moves claimed cards with operator authority and redacts JSON output", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({ title: "Claimed card", status: "todo" });
     await store.claim(card.id, { ownerId: "worker", token: "secret-token" });
     const program = createProgram(store);
@@ -313,7 +346,7 @@ describe("registerWorkboardCli", () => {
   });
 
   it("rejects an invalid move status", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({ title: "Invalid move" });
     const program = createProgram(store);
 

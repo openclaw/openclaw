@@ -1,17 +1,23 @@
+import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
+
+installDiscordIngressTestRuntime();
 // Discord tests cover durable gateway-message admission and replay recovery.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { APIMessage } from "discord-api-types/v10";
-import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDiscordIngressMonitor, type DiscordIngressLifecycle } from "./ingress.js";
+import { createDiscordMessageHandler } from "./message-handler.js";
+import { createBaseDiscordMessageContext } from "./message-handler.test-harness.js";
+import { createDiscordHandlerParams } from "./message-handler.test-helpers.js";
 
 type DiscordIngressPayload = {
   version: 1;
@@ -53,7 +59,7 @@ function payloadFor(rawMessage: APIMessage): DiscordIngressPayload {
 }
 
 async function withQueue<T>(
-  fn: (queue: ChannelIngressQueue<DiscordIngressPayload>) => Promise<T>,
+  fn: (queue: ChannelIngressQueue<DiscordIngressPayload>, stateDir: string) => Promise<T>,
 ): Promise<T> {
   const created = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discord-ingress-"));
   const stateDir = await fs.realpath(created);
@@ -63,7 +69,7 @@ async function withQueue<T>(
     stateDir,
   });
   try {
-    return await fn(queue);
+    return await fn(queue, stateDir);
   } finally {
     closeOpenClawStateDatabaseForTest();
     await fs.rm(stateDir, { recursive: true, force: true });
@@ -81,10 +87,100 @@ describe("Discord durable ingress", () => {
     closeOpenClawStateDatabaseForTest();
   });
 
+  it("admits a same-channel correction while an earlier claim is deferred and a run is active", async () => {
+    await withQueue(async (queue, stateDir) => {
+      const activeStarted = createDeferred<void>();
+      const finishActive = createDeferred<void>();
+      const deferredStarted = createDeferred<DiscordIngressLifecycle>();
+      const markerAdopted = createDeferred<void>();
+      const processed: string[] = [];
+      const complete = vi.spyOn(queue, "complete");
+      const params = createDiscordHandlerParams();
+      const baseContext = await createBaseDiscordMessageContext(
+        { threadBindings: params.threadBindings },
+        { storePath: path.join(stateDir, "sessions.json") },
+      );
+      const handler = createDiscordMessageHandler({
+        ...params,
+        client: {} as never,
+        testing: {
+          preflightDiscordMessage: async (input) => ({
+            ...baseContext,
+            data: input.data,
+            message: input.data.message,
+            turnAdoptionLifecycle: input.turnAdoptionLifecycle,
+            abortSignal: input.abortSignal,
+          }),
+          processDiscordMessage: async (ctx) => {
+            const lifecycle = ctx.turnAdoptionLifecycle;
+            if (!lifecycle) {
+              throw new Error("Expected a durable Discord lifecycle");
+            }
+            processed.push(ctx.message.id);
+            if (ctx.message.id === "1007") {
+              lifecycle.onDeferred();
+              deferredStarted.resolve(lifecycle);
+              return;
+            }
+            await lifecycle.onAdopted();
+            if (ctx.message.id === "1006") {
+              activeStarted.resolve();
+              await finishActive.promise;
+            } else if (ctx.message.id === "1009") {
+              markerAdopted.resolve();
+            }
+          },
+          createIngressMonitor: (monitorParams) =>
+            createDiscordIngressMonitor({ ...monitorParams, queue }),
+        },
+      });
+      try {
+        await handler(createRawMessage("1006"), {} as never);
+        await activeStarted.promise;
+        await handler(createRawMessage("1007"), {} as never);
+        const deferredLifecycle = await deferredStarted.promise;
+        const [deferredClaim] = await queue.listClaims();
+        expect(deferredClaim?.id).toBe("1007");
+
+        await handler(createRawMessage("1008"), {} as never);
+        // A later message in another lane reaches adoption even when the
+        // correction is blocked, so the regression fails without a timeout.
+        await handler(createRawMessage("1009", "channel-2"), {} as never);
+        await markerAdopted.promise;
+        expect(processed).toEqual(["1006", "1007", "1008", "1009"]);
+        expect(await queue.listClaims()).toMatchObject([
+          {
+            id: "1007",
+            claim: {
+              token: deferredClaim?.claim.token,
+              ownerId: deferredClaim?.claim.ownerId,
+            },
+          },
+        ]);
+
+        await deferredLifecycle.onAdopted();
+        expect(await queue.listClaims()).toEqual([]);
+        await expect(
+          queue.enqueue("1007", payloadFor(createRawMessage("1007"))),
+        ).resolves.toMatchObject({ kind: "completed" });
+        expect(
+          complete.mock.calls.filter(
+            ([claim]) => (typeof claim === "string" ? claim : claim.id) === "1007",
+          ),
+        ).toHaveLength(1);
+      } finally {
+        finishActive.resolve();
+        await handler.deactivate();
+      }
+    });
+  });
+
   it("does not normalize or dispatch before the durable append completes", async () => {
     await withQueue(async (queue) => {
       const appendGate = createDeferred<void>();
+      const appendStarted = createDeferred<void>();
       const enqueue = vi.fn(async (...args: Parameters<typeof queue.enqueue>) => {
+        appendStarted.resolve();
         await appendGate.promise;
         return await queue.enqueue(...args);
       });
@@ -100,9 +196,10 @@ describe("Discord durable ingress", () => {
         dispatch,
       });
       monitor.start();
+      const accepted = monitor.accept(createRawMessage("1001"));
       try {
-        const accepted = monitor.accept(createRawMessage("1001"));
-        await vi.waitFor(() => expect(enqueue).toHaveBeenCalledTimes(1));
+        await Promise.race([appendStarted.promise, accepted]);
+        expect(enqueue).toHaveBeenCalledTimes(1);
 
         expect(dispatch).not.toHaveBeenCalled();
 
@@ -110,7 +207,12 @@ describe("Discord durable ingress", () => {
         await accepted;
         await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
       } finally {
-        await monitor.stop();
+        appendGate.resolve();
+        try {
+          await accepted;
+        } finally {
+          await monitor.stop();
+        }
       }
     });
   });

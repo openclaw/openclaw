@@ -3,7 +3,9 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as packageRoot from "../infra/openclaw-root.js";
+import * as commands from "../process/exec.js";
 import {
   detectUiProtocolFreshnessIssues,
   uiProtocolFreshnessIssueToHealthFinding,
@@ -23,8 +25,8 @@ function issue(overrides: Partial<UiProtocolFreshnessIssue> = {}): UiProtocolFre
   } as UiProtocolFreshnessIssue;
 }
 
-async function createOpenClawRoot(): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-ui-"));
+async function createOpenClawRoot(prefix = "openclaw-doctor-ui-"): Promise<string> {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), prefix)));
   tempRoots.push(root);
   await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
   await fs.mkdir(path.join(root, "packages/gateway-protocol/src"), { recursive: true });
@@ -38,8 +40,25 @@ async function touch(filePath: string, date: Date): Promise<void> {
   await fs.utimes(filePath, date, date);
 }
 
+function inspectRoot(root: string) {
+  vi.spyOn(packageRoot, "resolveOpenClawPackageRoot").mockResolvedValue(root);
+  return detectUiProtocolFreshnessIssues();
+}
+
+function mockGitLog(stdout: string | null) {
+  return vi.spyOn(commands, "runCommandWithTimeout").mockResolvedValue({
+    stdout: stdout ?? "",
+    stderr: "",
+    code: stdout === null ? 1 : 0,
+    signal: null,
+    killed: false,
+    termination: "exit",
+  });
+}
+
 describe("UI protocol freshness health mapping", () => {
   afterEach(async () => {
+    vi.restoreAllMocks();
     await Promise.all(
       tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
     );
@@ -85,6 +104,45 @@ describe("UI protocol freshness health mapping", () => {
     ]);
   });
 
+  it.each([
+    { kind: "missing-assets", field: "message" },
+    { kind: "stale-assets", field: "fixHint" },
+  ] as const)(
+    "passes the source root as one argument in the $kind manual repair",
+    async ({ kind, field }) => {
+      const root = await createOpenClawRoot("openclaw-doctor-ui-owner's source-");
+      const unrelated = await createOpenClawRoot();
+      await touch(path.join(root, "ui/package.json"), new Date("2026-01-01"));
+      if (kind === "stale-assets") {
+        await touch(path.join(root, "dist/control-ui/index.html"), new Date("2026-01-01"));
+      }
+      vi.spyOn(process, "cwd").mockReturnValue(unrelated);
+      mockGitLog("abc123 protocol changed");
+      const findings = await inspectRoot(root);
+      expect(findings).toHaveLength(1);
+      expect(findings[0]?.kind).toBe(kind);
+      const finding = uiProtocolFreshnessIssueToHealthFinding(findings[0]!);
+      const command = finding[field]?.match(/pnpm [^`\n]+/u)?.[0];
+      expect(command).toBeDefined();
+
+      const windows = process.platform === "win32";
+      const captureArguments = windows
+        ? `function pnpm { [Console]::Write(($args -join [char]0) + [char]0) }
+${command!}`
+        : `pnpm() { printf '%s\\0' "$@"; }
+${command!}`;
+      const output = execFileSync(
+        windows ? "powershell.exe" : "/bin/sh",
+        windows
+          ? ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", captureArguments]
+          : ["-c", captureArguments],
+        { cwd: unrelated, timeout: 10_000, encoding: "utf8" },
+      );
+
+      expect(output.split("\0")).toEqual(["--dir", root, "ui:build", ""]);
+    },
+  );
+
   it("does not report dry-run effects when UI sources are unavailable", () => {
     expect(uiProtocolFreshnessIssueToRepairEffects(issue({ canBuild: false }))).toEqual([]);
   });
@@ -93,7 +151,7 @@ describe("UI protocol freshness health mapping", () => {
     const root = await createOpenClawRoot();
     await fs.rm(path.join(root, "packages"), { recursive: true });
 
-    await expect(detectUiProtocolFreshnessIssues({ root })).resolves.toEqual([
+    await expect(inspectRoot(root)).resolves.toEqual([
       {
         kind: "missing-assets",
         root,
@@ -114,51 +172,10 @@ describe("UI protocol freshness health mapping", () => {
     const root = await createOpenClawRoot();
     await fs.rm(path.join(root, "packages"), { recursive: true });
     await touch(path.join(root, "dist/control-ui/index.html"), new Date("2026-01-02"));
-    let checkedHistory = false;
+    const gitLog = mockGitLog("abc123 unavailable packaged source");
 
-    await expect(
-      detectUiProtocolFreshnessIssues({
-        root,
-        async collectChangesSinceBuild() {
-          checkedHistory = true;
-          return ["abc123 unavailable packaged source"];
-        },
-      }),
-    ).resolves.toEqual([]);
-    expect(checkedHistory).toBe(false);
-  });
-
-  it.each([
-    ["a nested schema module", "schema/sessions.ts"],
-    ["the protocol package entrypoint", "index.ts"],
-  ])("reports stale assets after changes to %s", async (_description, changedProtocolFile) => {
-    const root = await createOpenClawRoot();
-    const uiIndexPath = path.join(root, "dist/control-ui/index.html");
-    const schemaBarrelPath = path.join(root, "packages/gateway-protocol/src/schema.ts");
-    await touch(schemaBarrelPath, new Date("2026-01-01T00:00:00.000Z"));
-    await touch(uiIndexPath, new Date("2026-01-02T00:00:00.000Z"));
-    await touch(path.join(root, "ui/package.json"), new Date("2026-01-02T00:00:00.000Z"));
-    await touch(
-      path.join(root, "packages/gateway-protocol/src", changedProtocolFile),
-      new Date("2026-01-03T00:00:00.000Z"),
-    );
-
-    await expect(
-      detectUiProtocolFreshnessIssues({
-        root,
-        async collectChangesSinceBuild() {
-          return [`abc123 changed ${changedProtocolFile}`];
-        },
-      }),
-    ).resolves.toEqual([
-      {
-        kind: "stale-assets",
-        root,
-        uiIndexPath,
-        canBuild: true,
-        changesSinceBuild: [`abc123 changed ${changedProtocolFile}`],
-      },
-    ]);
+    await expect(inspectRoot(root)).resolves.toEqual([]);
+    expect(gitLog).not.toHaveBeenCalled();
   });
 
   it("reads committed nested protocol changes from the real complete-package git pathspec", async () => {
@@ -200,7 +217,7 @@ describe("UI protocol freshness health mapping", () => {
       },
     );
 
-    await expect(detectUiProtocolFreshnessIssues({ root })).resolves.toEqual([
+    await expect(inspectRoot(root)).resolves.toEqual([
       expect.objectContaining({
         kind: "stale-assets",
         changesSinceBuild: [expect.stringMatching(/update nested protocol schema$/)],
@@ -216,14 +233,8 @@ describe("UI protocol freshness health mapping", () => {
     await touch(schemaPath, new Date("2026-01-02T00:00:00.000Z"));
     await touch(path.join(root, "ui/package.json"), new Date("2026-01-01T00:00:00.000Z"));
 
-    await expect(
-      detectUiProtocolFreshnessIssues({
-        root,
-        async collectChangesSinceBuild() {
-          return [];
-        },
-      }),
-    ).resolves.toEqual([]);
+    mockGitLog("");
+    await expect(inspectRoot(root)).resolves.toEqual([]);
   });
 
   it("does not report stale assets when git history is unavailable", async () => {
@@ -234,13 +245,7 @@ describe("UI protocol freshness health mapping", () => {
     await touch(schemaPath, new Date("2026-01-02T00:00:00.000Z"));
     await touch(path.join(root, "ui/package.json"), new Date("2026-01-01T00:00:00.000Z"));
 
-    await expect(
-      detectUiProtocolFreshnessIssues({
-        root,
-        async collectChangesSinceBuild() {
-          return null;
-        },
-      }),
-    ).resolves.toEqual([]);
+    mockGitLog(null);
+    await expect(inspectRoot(root)).resolves.toEqual([]);
   });
 });

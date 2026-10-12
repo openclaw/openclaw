@@ -4,10 +4,10 @@ import { loadPatternListFromEnv, narrowIncludePatternsForCli } from "./vitest.pa
 import { resolveRepoRootPath, sharedVitestConfig } from "./vitest.shared.config.ts";
 import { tuiPtyTestFiles } from "./vitest.test-shards.mjs";
 
-const targetableIncludes = [
-  "src/tui/tui-pty-harness-assertion-test-support.test.ts",
-  ...tuiPtyTestFiles,
-].flatMap((target) => [target, target.replace(/^src\//u, "")]);
+const targetableIncludes = tuiPtyTestFiles.flatMap((target) => [
+  target,
+  target.replace(/^src\//u, ""),
+]);
 
 function toTuiPtyIncludePatterns(patterns: string[] | null) {
   return patterns?.map((pattern) => pattern.replace(/^src\//u, "")) ?? null;
@@ -33,6 +33,7 @@ export function createTuiPtyVitestConfig(env?: Record<string, string | undefined
       ...baseTest,
       env,
       name: "tui-pty",
+      pool: "forks",
       dir: resolveRepoRootPath("src"),
       include: includeFromEnv ?? includeFromArgv ?? include,
       exclude,

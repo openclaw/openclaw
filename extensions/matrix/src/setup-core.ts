@@ -1,9 +1,9 @@
 import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
-// Matrix plugin module implements setup core behavior.
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   prepareScopedSetupConfig,
+  setSetupChannelEnabled,
   type ChannelSetupAdapter,
   type ChannelSetupWizardAdapter,
 } from "openclaw/plugin-sdk/setup";
@@ -52,15 +52,21 @@ export function createMatrixSetupWizardProxy(
       const promptAllowFrom = (await loadWizard()).dmPolicy?.promptAllowFrom;
       return promptAllowFrom ? await promptAllowFrom(params) : params.cfg;
     }),
-    disable: (cfg) => ({
-      ...(cfg as CoreConfig),
-      channels: {
-        ...(cfg as CoreConfig).channels,
-        matrix: { ...(cfg as CoreConfig).channels?.matrix, enabled: false },
-      },
-    }),
+    disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
   };
 }
+
+export const finishMatrixSetupAfterConfigWrite: NonNullable<
+  ChannelSetupWizardAdapter["afterConfigWritten"]
+> = async ({ previousCfg, cfg, accountId, runtime }) => {
+  const { runMatrixSetupBootstrapAfterConfigWrite } = await import("./setup-bootstrap.js");
+  await runMatrixSetupBootstrapAfterConfigWrite({
+    previousCfg: previousCfg as CoreConfig,
+    cfg: cfg as CoreConfig,
+    accountId,
+    runtime,
+  });
+};
 
 export const matrixSetupAdapter: ChannelSetupAdapter = {
   singleAccountKeysToMove,
@@ -90,15 +96,7 @@ export const matrixSetupAdapter: ChannelSetupAdapter = {
       accountId,
       input,
     }),
-  afterAccountConfigWritten: async ({ previousCfg, cfg, accountId, runtime }) => {
-    const { runMatrixSetupBootstrapAfterConfigWrite } = await import("./setup-bootstrap.js");
-    await runMatrixSetupBootstrapAfterConfigWrite({
-      previousCfg: previousCfg as CoreConfig,
-      cfg: cfg as CoreConfig,
-      accountId,
-      runtime,
-    });
-  },
+  afterAccountConfigWritten: finishMatrixSetupAfterConfigWrite,
 };
 
 export const matrixSetupContract = defineChannelSetupContract({

@@ -1,188 +1,59 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions.js";
-import { listSessionEntriesCore } from "../config/sessions/session-accessor.js";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import type { ErrorShape } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
-import { verifyBoardViewTicket } from "./board-view-ticket.js";
+import { resolveAuthorizedBoardViewTicketClaims } from "./board-view-ticket.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
+import { readSessionGroupCatalog } from "./session-group-catalog.js";
+import {
+  isApprovalSessionTargetMethod,
+  sessionMutationTargetFields,
+} from "./session-method-policy.js";
+import type { SessionMutationTarget } from "./session-mutation-authorization-error.js";
+import {
+  resolveChatSendSessionKey,
+  resolveRequestedSessionAgentId,
+} from "./session-request-agent.js";
+import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { canonicalizeSessionKeyForAgent } from "./session-store-key.js";
+import { resolveUnifiedTalkSessionTarget } from "./talk/session-registry.js";
 
-export function resolveSessionGroupMutationTargetsByName(
+export type { SessionMutationTarget } from "./session-mutation-authorization-error.js";
+
+export function resolveChatSendAuthorizationTarget(
   cfg: OpenClawConfig,
-): Map<string, SessionMutationTarget[]> {
-  const targetsByName = new Map<string, SessionMutationTarget[]>();
-  for (const storeTarget of resolveAllAgentSessionStoreTargetsSync(cfg)) {
-    for (const { sessionKey, entry } of listSessionEntriesCore({
-      agentId: storeTarget.agentId,
-      storePath: storeTarget.storePath,
-    })) {
-      const groupName = normalizeOptionalString(entry.category);
-      if (!groupName) {
-        continue;
-      }
-      const targets = targetsByName.get(groupName) ?? [];
-      targets.push({ sessionKey, agentId: storeTarget.agentId });
-      targetsByName.set(groupName, targets);
-    }
+  target: SessionMutationTarget,
+): Result<SessionMutationTarget, ErrorShape> {
+  const agent = resolveRequestedSessionAgentId(cfg, target.sessionKey, target.agentId);
+  return agent.ok
+    ? ok({
+        ...target,
+        agentId: agent.agentId,
+        sessionKey: resolveChatSendSessionKey(cfg, target.sessionKey, agent.agentId),
+      })
+    : err(agent.error);
+}
+
+/** Authorization selects the same chat target without rewriting the raw request's replay aliases. */
+export function resolveChatSendAuthorizationParams(
+  cfg: OpenClawConfig,
+  params: unknown,
+): Result<unknown, ErrorShape> {
+  const record = asOptionalRecord(params);
+  if (typeof record?.sessionKey !== "string") {
+    return ok(params);
   }
-  return targetsByName;
-}
-
-export type SessionMutationTarget = {
-  sessionKey: string;
-  agentId?: string;
-};
-
-type SessionMutationTargetField = "key" | "parentSessionKey" | "sessionKey";
-
-const SESSION_TARGET_FIELDS_BY_METHOD = new Map<string, readonly SessionMutationTargetField[]>([
-  ["agent", ["sessionKey"]],
-  ["board.event", ["sessionKey"]],
-  ["board.update", ["sessionKey"]],
-  ["board.widget.grant", ["sessionKey"]],
-  ["board.widget.put", ["sessionKey"]],
-  ["chat.abort", ["sessionKey"]],
-  ["chat.inject", ["sessionKey"]],
-  ["chat.send", ["sessionKey"]],
-  ["mcp.app.callTool", ["sessionKey"]],
-  ["mcp.app.updateModelContext", ["sessionKey"]],
-  ["message.action", ["sessionKey"]],
-  ["plugins.sessionAction", ["sessionKey"]],
-  ["progressCard.get", ["sessionKey"]],
-  ["progressCard.put", ["sessionKey"]],
-  ["send", ["sessionKey"]],
-  ["session.discussion.open", ["sessionKey"]],
-  ["sessions.abort", ["key"]],
-  ["sessions.assignOwner", ["key"]],
-  ["sessions.companion.ask", ["sessionKey"]],
-  ["sessions.companion.reset", ["sessionKey"]],
-  ["sessions.companion.state", ["sessionKey"]],
-  ["sessions.compaction.branch", ["key"]],
-  ["sessions.compaction.restore", ["key"]],
-  ["sessions.compact", ["key"]],
-  ["sessions.create", ["key", "parentSessionKey"]],
-  ["sessions.delete", ["key"]],
-  ["sessions.dispatch", ["key"]],
-  ["sessions.files.set", ["sessionKey"]],
-  ["sessions.github.publish", ["sessionKey"]],
-  ["sessions.fork", ["sessionKey"]],
-  ["sessions.patch", ["key"]],
-  ["sessions.pluginPatch", ["key"]],
-  ...(["sessions.move", "sessions.reclaim"] as const).map((method) => [method, ["key"]] as const),
-  ["sessions.recover", ["key"]],
-  ["sessions.reset", ["key"]],
-  ["sessions.rewind", ["sessionKey"]],
-  ["sessions.send", ["key"]],
-  ["sessions.steer", ["key"]],
-  ["sessions.branches.switch", ["sessionKey"]],
-  ...(
-    [
-      "taskSuggestions.create",
-      "talk.client.close",
-      "talk.client.create",
-      "talk.client.steer",
-      "talk.client.toolCall",
-      "talk.client.transcript",
-      "talk.session.create",
-      "talk.session.steer",
-      "wake",
-    ] as const
-  ).map((method) => [method, ["sessionKey"]] as const),
-  ["tools.invoke", ["sessionKey"]],
-]);
-
-const REQUIRED_SESSION_TARGET_METHODS = new Set([
-  "board.action",
-  "board.event",
-  "board.update",
-  "board.widget.grant",
-  "board.widget.put",
-  "chat.abort",
-  "chat.inject",
-  "chat.send",
-  "mcp.app.callTool",
-  "mcp.app.updateModelContext",
-  "progressCard.get",
-  "progressCard.put",
-  "session.discussion.open",
-  "sessions.abort",
-  "sessions.assignOwner",
-  "sessions.branches.switch",
-  "sessions.compact",
-  "sessions.companion.reset",
-  "sessions.compaction.branch",
-  "sessions.compaction.restore",
-  "sessions.delete",
-  "sessions.dispatch",
-  "sessions.files.set",
-  "sessions.fork",
-  "sessions.groups.delete",
-  "sessions.groups.rename",
-  "sessions.groups.update",
-  "sessions.github.publish",
-  "sessions.patch",
-  "sessions.pluginPatch",
-  "sessions.reclaim",
-  "sessions.recover",
-  "sessions.move",
-  "sessions.reset",
-  "sessions.rewind",
-  "sessions.send",
-  "sessions.steer",
-  "talk.client.close",
-  "talk.client.steer",
-  "talk.client.toolCall",
-  "talk.client.transcript",
-  "taskSuggestions.create",
-]);
-
-const APPROVAL_SESSION_TARGET_METHODS = new Set([
-  "approval.resolve",
-  "exec.approval.resolve",
-  "plugin.approval.resolve",
-]);
-
-const READ_ONLY_SESSION_TARGET_METHODS = new Set([
-  "sessions.companion.ask",
-  "sessions.companion.state",
-]);
-
-const LEGACY_PROFILE_INDEPENDENT_MUTATION_METHODS = new Set([
-  "talk.client.close",
-  "talk.client.create",
-  "talk.client.steer",
-  "talk.client.toolCall",
-  "talk.client.transcript",
-  "talk.session.create",
-  "talk.session.steer",
-  "wake",
-]);
-
-export function sessionMutationTargetFields(method: string): readonly SessionMutationTargetField[] {
-  return READ_ONLY_SESSION_TARGET_METHODS.has(method)
-    ? []
-    : (SESSION_TARGET_FIELDS_BY_METHOD.get(method) ?? []);
-}
-
-export function isRequiredSessionTargetMethod(method: string): boolean {
-  return REQUIRED_SESSION_TARGET_METHODS.has(method);
-}
-
-function isApprovalSessionTargetMethod(method: string): boolean {
-  return APPROVAL_SESSION_TARGET_METHODS.has(method);
-}
-
-export function isSessionProfileDependentMethod(method: string): boolean {
-  if (LEGACY_PROFILE_INDEPENDENT_MUTATION_METHODS.has(method)) {
-    return false;
-  }
-  return (
-    SESSION_TARGET_FIELDS_BY_METHOD.has(method) ||
-    REQUIRED_SESSION_TARGET_METHODS.has(method) ||
-    APPROVAL_SESSION_TARGET_METHODS.has(method) ||
-    method === "sessions.patchMany"
-  );
+  const target = resolveChatSendAuthorizationTarget(cfg, {
+    sessionKey: record.sessionKey,
+    agentId: normalizeOptionalString(record.agentId),
+  });
+  return target.ok
+    ? ok({ ...record, sessionKey: target.value.sessionKey, agentId: target.value.agentId })
+    : err(target.error);
 }
 
 export function resolveDirectSessionTargets(
@@ -192,12 +63,12 @@ export function resolveDirectSessionTargets(
   if (method === "sessions.create" || method === "sessions.list") {
     return [];
   }
-  if (!params || typeof params !== "object" || Array.isArray(params)) {
+  const record = asOptionalRecord(params);
+  if (!record) {
     return [];
   }
-  const record = params as Record<string, unknown>;
   const candidates = [record.key, record.sessionKey];
-  if (Array.isArray(record.keys)) {
+  if (method.startsWith("sessions.") && Array.isArray(record.keys)) {
     candidates.push(...record.keys);
   }
   if (Array.isArray(record.sessionKeys)) {
@@ -222,21 +93,38 @@ export function resolveDirectIncognitoTargets(
   );
 }
 
-function readSessionSharingStringParam(params: unknown, key: string): string | undefined {
-  if (!params || typeof params !== "object" || Array.isArray(params)) {
-    return undefined;
-  }
-  return normalizeOptionalString((params as Record<string, unknown>)[key]);
+export function readSessionSharingStringParam(params: unknown, key: string): string | undefined {
+  return normalizeOptionalString(asOptionalRecord(params)?.[key]);
 }
 
-function resolveSessionGroupMutationTargets(params: {
-  getCfg: () => OpenClawConfig;
-  requestParams: unknown;
-}): SessionMutationTarget[] | undefined {
-  const groupName = readSessionSharingStringParam(params.requestParams, "name");
-  return groupName
-    ? (resolveSessionGroupMutationTargetsByName(params.getCfg()).get(groupName) ?? [])
-    : undefined;
+function preparedGroupTargets(context: GatewayRequestContext) {
+  const projection = getSessionRowProjection(context);
+  if (!projection) {
+    throw new Error("Session group membership is unavailable during Gateway startup");
+  }
+  return projection.sessionGroupTargets();
+}
+
+function resolveSessionGroupsPutMutationTargets(
+  context: GatewayRequestContext,
+  requestParams: unknown,
+): SessionMutationTarget[] | undefined {
+  const names =
+    requestParams && typeof requestParams === "object" && "names" in requestParams
+      ? requestParams.names
+      : undefined;
+  if (!Array.isArray(names)) {
+    return undefined;
+  }
+  const requested = new Set(normalizeUniqueTrimmedStringList(names));
+  const dropped = readSessionGroupCatalog()
+    .groups.map((group) => group.name)
+    .filter((name) => !requested.has(name));
+  if (dropped.length === 0) {
+    return [];
+  }
+  const byName = preparedGroupTargets(context);
+  return dropped.flatMap((name) => byName.get(name) ?? []);
 }
 
 function resolveApprovalSessionTarget(
@@ -255,10 +143,10 @@ function resolveApprovalSessionTarget(
       : method === "approval.resolve" && kind === "system-agent"
         ? context.systemAgentApprovalManager
         : context.execApprovalManager;
-  const resolvedId = manager?.lookupApprovalId(id, { includeResolved: true });
+  const resolvedId = manager?.lookupLocalApprovalId(id, { includeResolved: true });
   const recordId =
     resolvedId?.kind === "exact" || resolvedId?.kind === "prefix" ? resolvedId.id : id;
-  const request = manager?.getSnapshot(recordId)?.request;
+  const request = manager?.getLocalSnapshot(recordId)?.request;
   const sessionKey = readSessionSharingStringParam(request, "sessionKey");
   const agentId = readSessionSharingStringParam(request, "agentId");
   return sessionKey
@@ -269,11 +157,51 @@ function resolveApprovalSessionTarget(
     : undefined;
 }
 
+/** Realtime creates authorize their effective default; transcription stays sessionless. */
+export function resolveTalkSessionTargetInput(
+  method: string,
+  params: unknown,
+  connId?: string,
+):
+  | { kind: "request"; sessionKey?: string }
+  | ({ kind: "relay" } & NonNullable<ReturnType<typeof resolveUnifiedTalkSessionTarget>>)
+  | undefined {
+  if (method === "talk.session.steer") {
+    const sessionId = readSessionSharingStringParam(params, "sessionId");
+    const retained = sessionId ? resolveUnifiedTalkSessionTarget(sessionId, connId) : undefined;
+    return retained ? { kind: "relay", ...retained } : undefined;
+  }
+  if (
+    method !== "talk.client.create" &&
+    method !== "talk.client.toolCall" &&
+    method !== "talk.session.create" &&
+    method !== "talk.client.transcript" &&
+    method !== "talk.client.close" &&
+    method !== "talk.client.steer"
+  ) {
+    return undefined;
+  }
+  const sessionKey = readSessionSharingStringParam(params, "sessionKey");
+  if (sessionKey) {
+    return { kind: "request", sessionKey };
+  }
+  if (method === "talk.client.create") {
+    return { kind: "request" };
+  }
+  if (
+    method === "talk.session.create" &&
+    (readSessionSharingStringParam(params, "mode") ?? "realtime") === "realtime" &&
+    readSessionSharingStringParam(params, "transport") !== "managed-room"
+  ) {
+    return { kind: "request" };
+  }
+  return undefined;
+}
+
 export function resolveSessionMutationTargets(params: {
   method: string;
   requestParams: unknown;
   context: GatewayRequestContext;
-  getCfg: () => OpenClawConfig;
 }): SessionMutationTarget[] | undefined {
   if (params.method === "sessions.patchMany") {
     const targets =
@@ -295,10 +223,11 @@ export function resolveSessionMutationTargets(params: {
     params.method === "sessions.groups.delete" ||
     params.method === "sessions.groups.update"
   ) {
-    return resolveSessionGroupMutationTargets({
-      getCfg: params.getCfg,
-      requestParams: params.requestParams,
-    });
+    const groupName = readSessionSharingStringParam(params.requestParams, "name");
+    return groupName ? [...(preparedGroupTargets(params.context).get(groupName) ?? [])] : undefined;
+  }
+  if (params.method === "sessions.groups.put") {
+    return resolveSessionGroupsPutMutationTargets(params.context, params.requestParams);
   }
   if (isApprovalSessionTargetMethod(params.method)) {
     const target = resolveApprovalSessionTarget(
@@ -329,7 +258,9 @@ export function resolveSessionMutationTargets(params: {
   }
   if (params.method === "board.event" || params.method === "board.action") {
     const ticket = readSessionSharingStringParam(params.requestParams, "ticket");
-    const claims = ticket ? verifyBoardViewTicket(ticket) : undefined;
+    const claims = ticket
+      ? resolveAuthorizedBoardViewTicketClaims(ticket, { gatewayContext: params.context })
+      : undefined;
     if (!claims || (requestedAgentId && requestedAgentId !== claims.agentId)) {
       return undefined;
     }

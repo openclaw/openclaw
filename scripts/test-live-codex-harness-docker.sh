@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 set -euo pipefail
 
 SCRIPT_ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -11,6 +15,7 @@ if [[ -z "$TRUSTED_HARNESS_DIR" || ! -d "$TRUSTED_HARNESS_DIR" ]]; then
 fi
 TRUSTED_HARNESS_DIR="$(cd "$TRUSTED_HARNESS_DIR" && pwd)"
 source "$TRUSTED_HARNESS_DIR/scripts/lib/live-docker-auth.sh"
+source "$TRUSTED_HARNESS_DIR/scripts/lib/codex-live-docker-security.sh"
 IMAGE_NAME="${OPENCLAW_IMAGE:-openclaw:local}"
 LIVE_IMAGE_NAME="${OPENCLAW_LIVE_IMAGE:-${IMAGE_NAME}-live}"
 CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-$HOME/.openclaw}"
@@ -34,18 +39,6 @@ DOCKER_CLI_TOOLS_CONTAINER_DIR="/tmp/openclaw-npm-global"
 DOCKER_EXTRA_ENV_FILES=()
 DOCKER_AUTH_PRESTAGED=0
 
-openclaw_live_codex_harness_append_build_extension() {
-  local extension="${1:?extension required}"
-  local current="${OPENCLAW_DOCKER_BUILD_EXTENSIONS:-${OPENCLAW_EXTENSIONS:-}}"
-  case " $current " in
-    *" $extension "*)
-      ;;
-    *)
-      export OPENCLAW_DOCKER_BUILD_EXTENSIONS="${current:+$current }$extension"
-      ;;
-  esac
-}
-
 case "$CODEX_HARNESS_AUTH_MODE" in
   codex-auth | api-key)
     ;;
@@ -60,6 +53,11 @@ if [[ -f "$PROFILE_FILE" && -r "$PROFILE_FILE" ]]; then
   # shellcheck disable=SC1090
   source "$PROFILE_FILE"
   set +a
+fi
+
+CODEX_APP_SERVER_ARGS="${OPENCLAW_CODEX_APP_SERVER_ARGS:-}"
+if [[ -z "$CODEX_APP_SERVER_ARGS" ]] && openclaw_live_truthy "${OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE:-1}"; then
+  CODEX_APP_SERVER_ARGS="app-server --listen stdio:// -c features.multi_agent_v2=true"
 fi
 
 if [[ "$CODEX_HARNESS_AUTH_MODE" == "api-key" && -z "${OPENAI_API_KEY:-}" ]]; then
@@ -212,6 +210,11 @@ cd "$tmp_dir"
 if [ "${OPENCLAW_LIVE_CODEX_HARNESS_USE_CI_SAFE_CODEX_CONFIG:-1}" = "1" ]; then
   node --import tsx "$trusted_scripts_dir/prepare-codex-ci-config.ts" "$HOME/.codex/config.toml" "$tmp_dir"
 fi
+# Detect runner namespace restrictions before making live provider requests.
+"$NPM_CONFIG_PREFIX/bin/codex" sandbox \
+  -c 'sandbox_mode="workspace-write"' \
+  -c sandbox_workspace_write.network_access=false \
+  -- true
 codex_preflight_log="$tmp_dir/codex-preflight.log"
 codex_preflight_token="CODEX-PREFLIGHT-OK"
 if ! "$NPM_CONFIG_PREFIX/bin/codex" exec \
@@ -232,7 +235,7 @@ run_codex_harness_target() {
   export OPENCLAW_LIVE_CODEX_HARNESS_MODEL="$model"
   export OPENCLAW_LIVE_CODEX_HARNESS_THINKING="$thinking"
   echo "==> Codex harness target: model=$model thinking=$thinking"
-  node --import tsx scripts/test-live.mts -- ${OPENCLAW_LIVE_CODEX_TEST_FILES:-src/gateway/gateway-codex-harness.live.test.ts}
+  openclaw_live_run_staged_script scripts/test-live -- ${OPENCLAW_LIVE_CODEX_TEST_FILES:-src/gateway/gateway-codex-harness.live.test.ts}
 }
 if [ -n "${OPENCLAW_LIVE_CODEX_HARNESS_TARGETS:-}" ]; then
   IFS=',' read -r -a harness_targets <<<"$OPENCLAW_LIVE_CODEX_HARNESS_TARGETS"
@@ -252,7 +255,7 @@ else
 fi
 EOF
 
-openclaw_live_codex_harness_append_build_extension codex
+openclaw_live_require_build_extension codex
 # The release package image intentionally excludes externalized plugins such as
 # Codex. This lane must rebuild the live image so the plugin-owned harness is
 # present under the bundled plugin runtime directory.
@@ -302,6 +305,26 @@ echo "==> Harness fallback: none"
 echo "==> Auth files: ${AUTH_FILES_CSV:-none}"
 DOCKER_RUN_ARGS=()
 openclaw_live_init_docker_run_args DOCKER_RUN_ARGS "$CODEX_HARNESS_DOCKER_RUN_TIMEOUT"
+cleanup_codex_live_docker() {
+  local run_result=$?
+  local cleanup_failed=0
+  trap - EXIT
+  if ! openclaw_codex_live_cleanup_security; then
+    echo "ERROR: Codex Docker cleanup failed; retained recovery files at ${CODEX_LIVE_SECURITY_DIR:-<unavailable>}." >&2
+    cleanup_failed=1
+  fi
+  cleanup_temp_dirs || cleanup_failed=1
+  if [[ "$cleanup_failed" == 1 ]]; then
+    exit 1
+  fi
+  exit "$run_result"
+}
+trap cleanup_codex_live_docker EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+openclaw_codex_live_prepare_security "$TRUSTED_HARNESS_DIR/scripts/lib/codex-live-docker-security"
+openclaw_live_append_array DOCKER_RUN_ARGS CODEX_LIVE_SECURITY_ARGS
 DOCKER_RUN_ARGS+=(--rm -t \
   -u "$DOCKER_USER" \
   --entrypoint bash \
@@ -317,30 +340,18 @@ DOCKER_RUN_ARGS+=(--rm -t \
   -e OPENCLAW_AGENT_HARNESS_FALLBACK=none \
   -e OPENCLAW_DOCKER_AUTH_PRESTAGED="$DOCKER_AUTH_PRESTAGED" \
   -e OPENCLAW_CODEX_APP_SERVER_BIN="${OPENCLAW_CODEX_APP_SERVER_BIN:-codex}" \
+  -e OPENCLAW_CODEX_APP_SERVER_ARGS="$CODEX_APP_SERVER_ARGS" \
   -e OPENCLAW_DOCKER_AUTH_FILES_RESOLVED="$AUTH_FILES_CSV" \
   -e OPENCLAW_LIVE_DOCKER_SOURCE_STAGE_MODE="${OPENCLAW_LIVE_DOCKER_SOURCE_STAGE_MODE:-copy}" \
   -e OPENCLAW_LIVE_CODEX_HARNESS_AUTH="$CODEX_HARNESS_AUTH_MODE" \
-  -e OPENCLAW_LIVE_CODEX_HARNESS=1 \
-  -e OPENCLAW_LIVE_CODEX_HARNESS_CHAT_IMAGE_PROBE="${OPENCLAW_LIVE_CODEX_HARNESS_CHAT_IMAGE_PROBE:-0}" \
-  -e OPENCLAW_LIVE_CODEX_HARNESS_CODE_MODE_ONLY="${OPENCLAW_LIVE_CODEX_HARNESS_CODE_MODE_ONLY:-0}" \
-  -e OPENCLAW_LIVE_CODEX_HARNESS_COMPACTION_STRESS="${OPENCLAW_LIVE_CODEX_HARNESS_COMPACTION_STRESS:-0}" \
-  -e OPENCLAW_LIVE_CODEX_HARNESS_COMPACTION_STRESS_TURNS="${OPENCLAW_LIVE_CODEX_HARNESS_COMPACTION_STRESS_TURNS:-4}" \
-  -e OPENCLAW_LIVE_CODEX_HARNESS_DEBUG="${OPENCLAW_LIVE_CODEX_HARNESS_DEBUG:-}" \
-  -e OPENCLAW_LIVE_CODEX_HARNESS_DISABLE_LOOP_RELAY="${OPENCLAW_LIVE_CODEX_HARNESS_DISABLE_LOOP_RELAY:-0}" \
-  -e OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE="${OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE:-1}" \
-  -e OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE="${OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE:-1}" \
-  -e OPENCLAW_LIVE_CODEX_HARNESS_LARGE_OUTPUT_BYTES="${OPENCLAW_LIVE_CODEX_HARNESS_LARGE_OUTPUT_BYTES:-300000}" \
-  -e OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE="${OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE:-1}" \
-  -e OPENCLAW_LIVE_CODEX_HARNESS_MULTI_SESSION_PROBE="${OPENCLAW_LIVE_CODEX_HARNESS_MULTI_SESSION_PROBE:-0}" \
-  -e OPENCLAW_LIVE_CODEX_HARNESS_MODEL="${OPENCLAW_LIVE_CODEX_HARNESS_MODEL:-openai/gpt-5.6-luna}" \
-  -e OPENCLAW_LIVE_CODEX_HARNESS_TARGETS="${OPENCLAW_LIVE_CODEX_HARNESS_TARGETS:-}" \
-  -e OPENCLAW_LIVE_CODEX_HARNESS_THINKING="${OPENCLAW_LIVE_CODEX_HARNESS_THINKING:-low}" \
-  -e OPENCLAW_LIVE_CODEX_HARNESS_EXPECTED_EFFORT="${OPENCLAW_LIVE_CODEX_HARNESS_EXPECTED_EFFORT:-}" \
-  -e OPENCLAW_LIVE_CODEX_HARNESS_REQUIRE_GUARDIAN_EVENTS="${OPENCLAW_LIVE_CODEX_HARNESS_REQUIRE_GUARDIAN_EVENTS:-1}" \
-  -e OPENCLAW_LIVE_CODEX_HARNESS_REQUEST_TIMEOUT_MS="${OPENCLAW_LIVE_CODEX_HARNESS_REQUEST_TIMEOUT_MS:-}" \
-  -e OPENCLAW_LIVE_CODEX_HARNESS_RESUME_STRESS="${OPENCLAW_LIVE_CODEX_HARNESS_RESUME_STRESS:-0}" \
-  -e OPENCLAW_LIVE_CODEX_HARNESS_RESUME_STRESS_HISTORY_TURNS="${OPENCLAW_LIVE_CODEX_HARNESS_RESUME_STRESS_HISTORY_TURNS:-4}" \
-  -e OPENCLAW_LIVE_CODEX_HARNESS_RESUME_STRESS_RESTARTS="${OPENCLAW_LIVE_CODEX_HARNESS_RESUME_STRESS_RESTARTS:-3}" \
+  -e OPENCLAW_LIVE_CODEX_HARNESS=1)
+openclaw_live_append_default_env OPENCLAW_LIVE_CODEX_HARNESS_ \
+  CHAT_IMAGE_PROBE=0 CODE_MODE_ONLY=0 COMPACTION_STRESS=0 COMPACTION_STRESS_TURNS=4 \
+  DEBUG= DISABLE_LOOP_RELAY=0 GUARDIAN_PROBE=1 IMAGE_PROBE=1 LARGE_OUTPUT_BYTES=300000 \
+  MCP_PROBE=1 MULTI_SESSION_PROBE=0 MODEL=openai/gpt-5.6-luna TARGETS= THINKING=low \
+  EXPECTED_EFFORT= REQUIRE_GUARDIAN_EVENTS=1 REQUEST_TIMEOUT_MS= RESUME_STRESS=0 \
+  RESUME_STRESS_HISTORY_TURNS=4 RESUME_STRESS_RESTARTS=3
+DOCKER_RUN_ARGS+=(\
   -e OPENCLAW_LIVE_CODEX_HARNESS_SETUP_TIMEOUT_SECONDS="$CODEX_HARNESS_SETUP_TIMEOUT_SECONDS" \
   -e OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_ONLY="${OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_ONLY:-}" \
   -e OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_COUNT="${OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_COUNT:-1}" \

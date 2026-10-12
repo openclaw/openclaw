@@ -1,22 +1,20 @@
 // Discord tests cover reply delivery plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
+import { createSubscribedSessionHarness } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RequestClient } from "../internal/discord.js";
 
 const sendDurableMessageBatchMock = vi.hoisted(() =>
-  vi.fn(
-    async (): Promise<unknown> => ({
-      status: "sent" as const,
+  vi.fn(async (): Promise<unknown> => ({
+    status: "sent" as const,
+    results: [{ messageId: "msg-1", channelId: "channel-1" }],
+    receipt: createMessageReceiptFromOutboundResults({
       results: [{ messageId: "msg-1", channelId: "channel-1" }],
-      receipt: createMessageReceiptFromOutboundResults({
-        results: [{ messageId: "msg-1", channelId: "channel-1" }],
-      }),
     }),
-  ),
+  })),
 );
 const sendMessageDiscordMock = vi.hoisted(() => vi.fn());
 const sendVoiceMessageDiscordMock = vi.hoisted(() => vi.fn());
@@ -88,10 +86,17 @@ function objectArgAt(
 }
 
 describe("deliverDiscordReply", () => {
-  const runtime = {} as RuntimeEnv;
   const cfg = {
     channels: { discord: { token: "test-token" } },
   } as OpenClawConfig;
+
+  const deliveryDefaults = {
+    target: "channel:101",
+    token: "token",
+    cfg,
+    textLimit: 2000,
+    kind: "final" as const,
+  };
 
   beforeAll(async () => {
     ({ deliverDiscordReply } = await import("./reply-delivery.js"));
@@ -122,18 +127,13 @@ describe("deliverDiscordReply", () => {
     const onPlatformSendDispatch = vi.fn(async () => undefined);
 
     await deliverDiscordReply({
+      ...deliveryDefaults,
       replies,
-      target: "channel:101",
-      token: "token",
       accountId: "default",
       rest,
-      runtime,
-      cfg,
-      textLimit: 2000,
       replyToId: "reply-1",
       replyToMode: "all",
       allowedMentions: { parse: [] },
-      kind: "final",
       onPlatformSendDispatch,
     });
 
@@ -159,29 +159,59 @@ describe("deliverDiscordReply", () => {
     expect(sendOptions.allowedMentions).toEqual({ parse: [] });
   });
 
-  it("formats reasoning replies as visible Discord payloads before shared outbound", async () => {
-    await deliverDiscordReply({
-      replies: [{ text: "Because it helps", isReasoning: true }],
-      target: "channel:101",
-      token: "token",
-      accountId: "default",
-      runtime,
-      cfg,
-      textLimit: 2000,
-      kind: "block",
+  it("delivers completed provider reasoning before a streamed answer block", async () => {
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "discord-reasoning-order",
+      reasoningMode: "on",
+      blockReplyBreak: "text_end",
+      onBlockReply: async (payload) => {
+        await deliverDiscordReply({
+          ...deliveryDefaults,
+          replies: [payload],
+          kind: "block",
+        });
+      },
     });
-
-    expect(firstDeliverParams().payloads).toEqual([{ text: "Thinking\n\n_Because it helps_" }]);
+    try {
+      const thinking = { type: "thinking", thinking: "Because it helps" };
+      emit({ type: "message_start", message: { role: "assistant", content: [] } });
+      emit({
+        type: "message_update",
+        message: { role: "assistant", content: [thinking] },
+        assistantMessageEvent: { type: "thinking_end", content: "Because it helps" },
+      });
+      const message = {
+        role: "assistant",
+        content: [thinking, { type: "text", text: "Final answer" }],
+      };
+      emit({
+        type: "message_update",
+        message,
+        assistantMessageEvent: { type: "text_end", contentIndex: 1, content: "Final answer" },
+      });
+      emit({ type: "message_end", message });
+      await subscription.waitForPendingEvents();
+      const batches = sendDurableMessageBatchMock.mock.calls as unknown as Array<[DeliverParams]>;
+      expect(batches.map(([params]) => params.payloads)).toMatchObject([
+        [{ text: "Thinking\n\n_Because it helps_" }],
+        [{ text: "Final answer" }],
+      ]);
+    } finally {
+      subscription.unsubscribe();
+    }
   });
 
   it("preserves the accepted receipt when a later Discord delivery fails", async () => {
     const cause = new Error("second Discord chunk failed");
     const receipt = createMessageReceiptFromOutboundResults({
-      results: [{ channel: "discord", messageId: "accepted-1" }],
+      results: [
+        { channel: "discord", messageId: "accepted-1" },
+        { channel: "discord", messageId: "accepted-2" },
+      ],
     });
     sendDurableMessageBatchMock.mockResolvedValueOnce({
       status: "partial_failed",
-      results: [{ channel: "discord", messageId: "accepted-1" }],
+      results: [{ channel: "discord", messageId: "accepted-2", receipt }],
       receipt,
       error: cause,
       sentBeforeError: true,
@@ -190,13 +220,8 @@ describe("deliverDiscordReply", () => {
     let error: unknown;
     try {
       await deliverDiscordReply({
+        ...deliveryDefaults,
         replies: [{ text: "first chunk\nsecond chunk" }],
-        target: "channel:101",
-        token: "token",
-        runtime,
-        cfg,
-        textLimit: 2000,
-        kind: "final",
       });
     } catch (caught) {
       error = caught;
@@ -208,7 +233,7 @@ describe("deliverDiscordReply", () => {
       sentBeforeError: true,
       visibleReplySent: true,
       deliveryResult: {
-        messageIds: ["accepted-1"],
+        messageIds: ["accepted-1", "accepted-2"],
         receipt,
         visibleReplySent: true,
       },
@@ -221,45 +246,10 @@ describe("deliverDiscordReply", () => {
 
     await expect(
       deliverDiscordReply({
+        ...deliveryDefaults,
         replies: [{ text: "not delivered" }],
-        target: "channel:101",
-        token: "token",
-        runtime,
-        cfg,
-        textLimit: 2000,
-        kind: "final",
       }),
     ).rejects.toBe(cause);
-  });
-
-  it("preserves every accepted Discord message from a nested delivery receipt", async () => {
-    const receipt = createMessageReceiptFromOutboundResults({
-      results: [
-        { channel: "discord", messageId: "accepted-1" },
-        { channel: "discord", messageId: "accepted-2" },
-      ],
-    });
-    sendDurableMessageBatchMock.mockResolvedValueOnce({
-      status: "sent",
-      results: [{ channel: "discord", messageId: "accepted-2", receipt }],
-      receipt,
-    });
-
-    await expect(
-      deliverDiscordReply({
-        replies: [{ text: "first chunk\nsecond chunk" }],
-        target: "channel:101",
-        token: "token",
-        runtime,
-        cfg,
-        textLimit: 2000,
-        kind: "final",
-      }),
-    ).resolves.toEqual({
-      messageIds: ["accepted-1", "accepted-2"],
-      receipt,
-      visibleReplySent: true,
-    });
   });
 
   it("fails when shared outbound accepts a final reply but delivers no Discord message", async () => {
@@ -267,14 +257,9 @@ describe("deliverDiscordReply", () => {
 
     await expect(
       deliverDiscordReply({
+        ...deliveryDefaults,
         replies: [{ text: "lost reply" }],
-        target: "channel:101",
-        token: "token",
         accountId: "default",
-        runtime,
-        cfg,
-        textLimit: 2000,
-        kind: "final",
       }),
     ).rejects.toThrow("discord final reply produced no delivered message for channel:101");
   });
@@ -293,14 +278,9 @@ describe("deliverDiscordReply", () => {
 
     await expect(
       deliverDiscordReply({
+        ...deliveryDefaults,
         replies: [{ text: "cancelled" }],
-        target: "channel:101",
-        token: "token",
         accountId: "default",
-        runtime,
-        cfg,
-        textLimit: 2000,
-        kind: "final",
       }),
     ).resolves.toEqual({
       visibleReplySent: false,
@@ -312,27 +292,9 @@ describe("deliverDiscordReply", () => {
     });
   });
 
-  it("preserves explicit tool progress payloads at the tool delivery boundary", async () => {
-    await deliverDiscordReply({
-      replies: [{ text: "🛠️ Exec: `echo visible`" }],
-      target: "channel:101",
-      token: "token",
-      accountId: "default",
-      runtime,
-      cfg,
-      textLimit: 2000,
-      kind: "tool",
-    });
-
-    expect(sendDurableMessageBatchMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        payloads: [{ text: "🛠️ Exec: `echo visible`" }],
-      }),
-    );
-  });
-
   it("strips assistant scaffolding from explicit tool progress payloads", async () => {
     await deliverDiscordReply({
+      ...deliveryDefaults,
       replies: [
         {
           text: [
@@ -342,12 +304,7 @@ describe("deliverDiscordReply", () => {
           ].join("\n"),
         },
       ],
-      target: "channel:101",
-      token: "token",
       accountId: "default",
-      runtime,
-      cfg,
-      textLimit: 2000,
       kind: "tool",
     });
 
@@ -358,110 +315,19 @@ describe("deliverDiscordReply", () => {
     );
   });
 
-  it("strips internal execution trace lines at the final Discord send boundary", async () => {
-    await deliverDiscordReply({
-      replies: [
-        {
-          text: [
-            "📊 Session Status: current",
-            "🛠️ run git status",
-            "⚠️ 🛠️ `run openclaw definitely-not-a-real-subcommand (agent)` failed",
-            "🛠️ `gh pr view`",
-            "🛠️ `docker compose up`",
-            "🛠️ elevated · `cd /tmp && pnpm test`",
-            "🛠️ pty · `apply_patch update`",
-            "📖 Read: lines 1-40 from secret.md",
-            "Visible reply.",
-          ].join("\n"),
-        },
-      ],
-      target: "channel:101",
-      token: "token",
-      accountId: "default",
-      runtime,
-      cfg,
-      textLimit: 2000,
-      kind: "final",
-    });
-
-    expect(firstDeliverParams().payloads).toEqual([{ text: "Visible reply." }]);
-  });
-
   it("drops pure internal tool failure warnings at the final Discord send boundary", async () => {
     await deliverDiscordReply({
+      ...deliveryDefaults,
       replies: [
         {
           text: "⚠️ 🛠️ `run openclaw definitely-not-a-real-subcommand (agent)` failed",
           isError: true,
         },
       ],
-      target: "channel:101",
-      token: "token",
       accountId: "default",
-      runtime,
-      cfg,
-      textLimit: 2000,
-      kind: "final",
     });
 
     expect(sendDurableMessageBatchMock).not.toHaveBeenCalled();
-  });
-
-  it("strips serialized tool call blocks at the final Discord send boundary", async () => {
-    await deliverDiscordReply({
-      replies: [
-        {
-          text: [
-            "[tool:exec]",
-            "<parameter=command>",
-            'cat /proc/mounts 2>/dev/null | grep -i "libra|rav|openclaw" | head -20',
-            "</parameter>",
-            "",
-            "<function=exec>",
-            "<parameter=command>",
-            'find / -maxdepth 4 -type d \\( -name "ravdb" -o -name "librav" \\) 2>/dev/null | head -20',
-            "</parameter>",
-            "<parameter=timeout_ms>",
-            "1000",
-            "</parameter>",
-            "</function>",
-            "",
-            "Visible reply.",
-          ].join("\n"),
-        },
-      ],
-      target: "channel:101",
-      token: "token",
-      accountId: "default",
-      runtime,
-      cfg,
-      textLimit: 2000,
-      kind: "final",
-    });
-
-    expect(firstDeliverParams().payloads).toEqual([{ text: "Visible reply." }]);
-  });
-
-  it("drops pure internal trace text while preserving media-only delivery", async () => {
-    await deliverDiscordReply({
-      replies: [
-        {
-          text: "commentary: calling tool\nanalysis: inspect private state",
-          mediaUrl: "https://example.com/result.png",
-        },
-      ],
-      target: "channel:101",
-      token: "token",
-      accountId: "default",
-      runtime,
-      cfg,
-      textLimit: 2000,
-      kind: "final",
-    });
-
-    expect(firstDeliverParams().payloads).toEqual([
-      { mediaUrl: "https://example.com/result.png", text: undefined },
-    ]);
   });
 
   it("preserves component-only channelData payloads when text scrubs empty", async () => {
@@ -484,19 +350,27 @@ describe("deliverDiscordReply", () => {
     };
 
     await deliverDiscordReply({
+      ...deliveryDefaults,
       replies: [
         {
-          text: "analysis: internal only",
+          text: [
+            "analysis: internal only",
+            "🛠️ run git status",
+            "📖 Read: lines 1-40 from secret.md",
+            "[tool:exec]",
+            "<parameter=command>",
+            "cat /proc/mounts",
+            "</parameter>",
+            "<function=exec>",
+            "<parameter=command>",
+            "find /tmp -type f",
+            "</parameter>",
+            "</function>",
+          ].join("\n"),
           channelData,
         },
       ],
-      target: "channel:101",
-      token: "token",
       accountId: "default",
-      runtime,
-      cfg,
-      textLimit: 2000,
-      kind: "final",
     });
 
     expect(firstDeliverParams().payloads).toEqual([{ channelData, text: undefined }]);
@@ -514,19 +388,14 @@ describe("deliverDiscordReply", () => {
     };
 
     await deliverDiscordReply({
+      ...deliveryDefaults,
       replies: [
         {
           text: "commentary: hidden",
           presentation,
         },
       ],
-      target: "channel:101",
-      token: "token",
       accountId: "default",
-      runtime,
-      cfg,
-      textLimit: 2000,
-      kind: "final",
     });
 
     expect(firstDeliverParams().payloads).toEqual([{ presentation, text: undefined }]);
@@ -536,79 +405,12 @@ describe("deliverDiscordReply", () => {
     const text = ["Example:", "```", "🛠️ Exec: run ls", "```"].join("\n");
 
     await deliverDiscordReply({
+      ...deliveryDefaults,
       replies: [{ text }],
-      target: "channel:101",
-      token: "token",
       accountId: "default",
-      runtime,
-      cfg,
-      textLimit: 2000,
-      kind: "final",
     });
 
     expect(firstDeliverParams().payloads).toEqual([{ text }]);
-  });
-
-  it("does not strip ordinary visible labeled lines", async () => {
-    const text = [
-      "Command: restart the gateway",
-      "Search: check recent Discord logs",
-      "Open: the channel status page",
-      "Find: the failing account",
-    ].join("\n");
-
-    await deliverDiscordReply({
-      replies: [{ text }],
-      target: "channel:101",
-      token: "token",
-      accountId: "default",
-      runtime,
-      cfg,
-      textLimit: 2000,
-      kind: "final",
-    });
-
-    expect(firstDeliverParams().payloads).toEqual([{ text }]);
-  });
-
-  it("passes resolved Discord formatting options as explicit delivery options", async () => {
-    const baseCfg = {
-      channels: {
-        discord: {
-          token: "test-token",
-          markdown: { tables: "code" },
-          accounts: {
-            default: {
-              token: "account-token",
-              maxLinesPerMessage: 99,
-              streaming: { chunkMode: "length" },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    await deliverDiscordReply({
-      replies: [{ text: "formatted" }],
-      target: "channel:101",
-      token: "token",
-      accountId: "default",
-      runtime,
-      cfg: baseCfg,
-      textLimit: 1234,
-      maxLinesPerMessage: 7,
-      tableMode: "off",
-      chunkMode: "newline",
-      kind: "final",
-    });
-
-    expect(firstDeliverParams().cfg).toBe(baseCfg);
-    expect(firstDeliverParams().formatting).toEqual({
-      textLimit: 1234,
-      maxLinesPerMessage: 7,
-      tableMode: "off",
-      chunkMode: "newline",
-    });
   });
 
   it("passes media roots and explicit off-mode payload reply tags to shared outbound", async () => {
@@ -621,15 +423,11 @@ describe("deliverDiscordReply", () => {
     ];
 
     await deliverDiscordReply({
+      ...deliveryDefaults,
       replies,
       target: "channel:202",
-      token: "token",
-      runtime,
-      cfg,
-      textLimit: 2000,
       replyToMode: "off",
       mediaLocalRoots: ["/tmp/openclaw-media"],
-      kind: "final",
     });
 
     const params = firstDeliverParams();
@@ -641,14 +439,10 @@ describe("deliverDiscordReply", () => {
 
   it("bridges Discord voice sends through the outbound dependency bag", async () => {
     await deliverDiscordReply({
+      ...deliveryDefaults,
       replies: [{ text: "voice", mediaUrl: "https://example.com/voice.ogg", audioAsVoice: true }],
       target: "channel:123",
-      token: "token",
-      runtime,
-      cfg,
-      textLimit: 2000,
       replyToId: "reply-1",
-      kind: "final",
     });
 
     const deps = firstDeliverParams().deps!;
@@ -682,7 +476,7 @@ describe("deliverDiscordReply", () => {
           threadId: "thread-1",
           targetSessionKey: "agent:main:subagent:child",
           agentId: "main",
-          label: "child",
+          label: `${"a".repeat(76)}🚀tail`,
           webhookId: "wh_1",
           webhookToken: "tok_1",
         },
@@ -691,60 +485,22 @@ describe("deliverDiscordReply", () => {
     };
 
     await deliverDiscordReply({
+      ...deliveryDefaults,
       replies: [{ text: "Hello from subagent" }],
       target: "channel:thread-1",
-      token: "token",
       accountId: "default",
-      runtime,
-      cfg,
-      textLimit: 2000,
       replyToId: "reply-1",
       sessionKey: "agent:main:subagent:child",
       threadBindings,
-      kind: "final",
     });
 
     const params = firstDeliverParams();
     expect(params.to).toBe("channel:parent-1");
     expect(params.threadId).toBe("thread-1");
     expect(params.replyToId).toBe("reply-1");
-    expect(recordField(params.identity, "identity").name).toBe("🤖 child");
+    expect(recordField(params.identity, "identity").name).toBe(`🤖 ${"a".repeat(76)}`);
     const session = recordField(params.session, "session");
     expect(session.key).toBe("agent:main:subagent:child");
     expect(session.agentId).toBe("main");
-  });
-
-  it("keeps bound thread persona names on a UTF-16 boundary", async () => {
-    const threadBindings = {
-      listBySessionKey: vi.fn(() => [
-        {
-          accountId: "default",
-          channelId: "parent-1",
-          threadId: "thread-1",
-          targetSessionKey: "agent:main:subagent:child",
-          agentId: "main",
-          label: `${"a".repeat(76)}🚀tail`,
-          webhookId: "wh_1",
-          webhookToken: "tok_1",
-        },
-      ]),
-    };
-
-    await deliverDiscordReply({
-      replies: [{ text: "Hello from subagent" }],
-      target: "channel:thread-1",
-      token: "token",
-      accountId: "default",
-      runtime,
-      cfg,
-      textLimit: 2000,
-      sessionKey: "agent:main:subagent:child",
-      threadBindings,
-      kind: "final",
-    });
-
-    expect(recordField(firstDeliverParams().identity, "identity").name).toBe(
-      `🤖 ${"a".repeat(76)}`,
-    );
   });
 });

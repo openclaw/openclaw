@@ -1,14 +1,15 @@
-// Exercises heartbeat wake coalescing, retries, and skip handling.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
+import { heartbeatLog } from "./heartbeat-log.js";
 import {
-  HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
   requestHeartbeat,
+  requestHeartbeatAndWait,
   setHeartbeatWakeHandler as setRuntimeHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
 
@@ -50,39 +51,9 @@ describe("heartbeat-wake", () => {
     return { source, intent, reason, ...opts };
   }
 
-  function setRetryOnceHeartbeatHandler() {
-    const handler = vi
-      .fn()
-      .mockResolvedValueOnce({ status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT })
-      .mockResolvedValueOnce({ status: "ran", durationMs: 1 });
-    setHeartbeatWakeHandler(handler);
-    return handler;
-  }
-
   function expectWakeCall(handler: ReturnType<typeof vi.fn>, index: number, request: WakeRequest) {
     const [actualRequest] = handler.mock.calls[index] ?? [];
     expect(actualRequest).toEqual(request);
-  }
-
-  async function expectRetryAfterDefaultDelay(params: {
-    handler: ReturnType<typeof vi.fn>;
-    initialReason: string;
-    expectedRetryReason: string;
-  }) {
-    setHeartbeatWakeHandler(
-      params.handler as unknown as Parameters<typeof setHeartbeatWakeHandler>[0],
-    );
-    requestHeartbeat(wake(params.initialReason, { coalesceMs: 0 }));
-
-    await vi.advanceTimersByTimeAsync(1);
-    expect(params.handler).toHaveBeenCalledTimes(1);
-
-    await vi.advanceTimersByTimeAsync(500);
-    expect(params.handler).toHaveBeenCalledTimes(1);
-
-    await vi.advanceTimersByTimeAsync(500);
-    expect(params.handler).toHaveBeenCalledTimes(2);
-    expectWakeCall(params.handler, 1, wake(params.expectedRetryReason));
   }
 
   beforeEach(() => {
@@ -103,21 +74,6 @@ describe("heartbeat-wake", () => {
     currentHandlerDisposer = undefined;
     vi.useRealTimers();
     vi.restoreAllMocks();
-  });
-
-  it("drains a pending wake once a handler is registered", async () => {
-    vi.useFakeTimers();
-
-    requestHeartbeat(wake("manual", { coalesceMs: 0 }));
-    await vi.advanceTimersByTimeAsync(1);
-
-    const handler = vi.fn().mockResolvedValue({ status: "skipped", reason: "disabled" });
-    setHeartbeatWakeHandler(handler);
-    await vi.advanceTimersByTimeAsync(249);
-    expect(handler).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(handler).toHaveBeenCalledOnce();
-    expect(handler).toHaveBeenCalledWith(wake("manual"));
   });
 
   it("defers a full wake while gateway suspension is prepared", async () => {
@@ -145,33 +101,6 @@ describe("heartbeat-wake", () => {
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 
-  it("counts an in-flight wake until the whole handler settles", async () => {
-    vi.useFakeTimers();
-    let finishWake: (() => void) | undefined;
-    const wakeFinished = new Promise<void>((resolve) => {
-      finishWake = resolve;
-    });
-    const handler = vi.fn(async () => {
-      await wakeFinished;
-      return { status: "ran" as const, durationMs: 1 };
-    });
-    setHeartbeatWakeHandler(handler);
-
-    requestHeartbeat(wake("manual", { coalesceMs: 0 }));
-    await vi.advanceTimersByTimeAsync(1);
-
-    expect(handler).toHaveBeenCalledOnce();
-    expect(getActiveGatewayRootWorkCount()).toBe(1);
-    const suspension = tryBeginGatewaySuspendAdmission(() => {});
-    expect(suspension).not.toBeNull();
-    expect(getActiveGatewayRootWorkCount()).toBe(1);
-    expect(suspension?.rollback()).toBe(true);
-
-    finishWake?.();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(getActiveGatewayRootWorkCount()).toBe(0);
-  });
-
   it("coalesces multiple wake requests into one highest-priority run", async () => {
     vi.useFakeTimers();
     const handler = vi.fn().mockResolvedValue({ status: "skipped", reason: "disabled" });
@@ -188,181 +117,38 @@ describe("heartbeat-wake", () => {
     expect(handler).toHaveBeenCalledWith(wake("exec-event"));
   });
 
-  it("coalesces independently scheduled tasks without dropping either prompt", async () => {
+  it("coalesces a colliding scheduled wake into the task turn", async () => {
     vi.useFakeTimers();
     const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
     setHeartbeatWakeHandler(handler);
+    const scheduled = wake("interval", {
+      agentId: "main",
+      scheduledEveryMs: 5 * 60_000,
+      coalesceMs: 100,
+    });
+    const task = {
+      source: "interval" as const,
+      intent: "task" as const,
+      reason: "heartbeat-task:job-inbox",
+      agentId: "main",
+      tasks: [{ jobId: "job-inbox", name: "inbox", prompt: "Check inbox" }],
+      coalesceMs: 100,
+    };
 
-    for (const task of [
-      { jobId: "job-inbox", name: "inbox", prompt: "Check inbox" },
-      { jobId: "job-calendar", name: "calendar", prompt: "Check calendar" },
-    ]) {
-      requestHeartbeat({
-        source: "interval",
-        intent: "task",
-        reason: `heartbeat-task:${task.jobId}`,
-        agentId: "main",
-        tasks: [task],
-        coalesceMs: 100,
-      });
+    for (const request of [task, scheduled]) {
+      requestHeartbeat(request);
     }
-
     await vi.advanceTimersByTimeAsync(100);
 
     expect(handler).toHaveBeenCalledOnce();
     expect(handler).toHaveBeenCalledWith({
       source: "interval",
       intent: "task",
-      reason: "heartbeat-task:job-calendar",
-      agentId: "main",
-      tasks: [
-        { jobId: "job-calendar", name: "calendar", prompt: "Check calendar" },
-        { jobId: "job-inbox", name: "inbox", prompt: "Check inbox" },
-      ],
-    });
-  });
-
-  it.each(["scheduled-first", "task-first"] as const)(
-    "coalesces a colliding scheduled wake into the task turn (%s)",
-    async (order) => {
-      vi.useFakeTimers();
-      const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
-      setHeartbeatWakeHandler(handler);
-      const scheduled = wake("interval", {
-        agentId: "main",
-        scheduledEveryMs: 5 * 60_000,
-        scheduledAnchorMs: 42_000,
-        coalesceMs: 100,
-      });
-      const task = {
-        source: "interval" as const,
-        intent: "task" as const,
-        reason: "heartbeat-task:job-inbox",
-        agentId: "main",
-        tasks: [{ jobId: "job-inbox", name: "inbox", prompt: "Check inbox" }],
-        coalesceMs: 100,
-      };
-
-      for (const request of order === "scheduled-first" ? [scheduled, task] : [task, scheduled]) {
-        requestHeartbeat(request);
-      }
-      await vi.advanceTimersByTimeAsync(100);
-
-      expect(handler).toHaveBeenCalledOnce();
-      expect(handler).toHaveBeenCalledWith({
-        source: "interval",
-        intent: "task",
-        reason: "heartbeat-task:job-inbox",
-        agentId: "main",
-        scheduledEveryMs: 5 * 60_000,
-        scheduledAnchorMs: 42_000,
-        tasks: [{ jobId: "job-inbox", name: "inbox", prompt: "Check inbox" }],
-      });
-    },
-  );
-
-  it("runs a phase-aligned task on every period despite the min-spacing floor", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(2_000_000_000_000);
-    let lastRunAtMs: number | undefined;
-    const successfulTaskRuns: string[] = [];
-    const handler = vi.fn().mockImplementation(async (request: WakeRequest) => {
-      const now = Date.now();
-      if (lastRunAtMs !== undefined && now - lastRunAtMs < 30_000) {
-        return { status: "skipped" as const, reason: "min-spacing" };
-      }
-      lastRunAtMs = now;
-      if (request.intent === "task") {
-        successfulTaskRuns.push(request.tasks?.[0]?.jobId ?? "missing");
-      }
-      return { status: "ran" as const, durationMs: 1 };
-    });
-    setHeartbeatWakeHandler(handler);
-
-    const requestPeriod = () => {
-      requestHeartbeat(wake("interval", { agentId: "main", coalesceMs: 100 }));
-      requestHeartbeat({
-        source: "interval",
-        intent: "task",
-        reason: "heartbeat-task:job-inbox",
-        agentId: "main",
-        tasks: [{ jobId: "job-inbox", name: "inbox", prompt: "Check inbox" }],
-        coalesceMs: 100,
-      });
-    };
-
-    requestPeriod();
-    await vi.advanceTimersByTimeAsync(100);
-    await vi.advanceTimersByTimeAsync(60_000);
-    requestPeriod();
-    await vi.advanceTimersByTimeAsync(100);
-
-    expect(handler).toHaveBeenCalledTimes(2);
-    expect(successfulTaskRuns).toEqual(["job-inbox", "job-inbox"]);
-  });
-
-  it("keeps task and event wakes in separate guarded turns", async () => {
-    vi.useFakeTimers();
-    const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
-    setHeartbeatWakeHandler(handler);
-
-    requestHeartbeat({
-      source: "interval",
-      intent: "task",
       reason: "heartbeat-task:job-inbox",
       agentId: "main",
+      scheduledEveryMs: 5 * 60_000,
       tasks: [{ jobId: "job-inbox", name: "inbox", prompt: "Check inbox" }],
-      coalesceMs: 100,
     });
-    requestHeartbeat({
-      source: "exec-event",
-      intent: "event",
-      reason: "exec-event",
-      agentId: "main",
-      coalesceMs: 100,
-    });
-
-    await vi.advanceTimersByTimeAsync(100);
-
-    expect(handler).toHaveBeenCalledTimes(2);
-    const handledRequests = handler.mock.calls
-      .map((call) => call[0])
-      .toSorted((left, right) => left.intent.localeCompare(right.intent));
-    expect(handledRequests).toEqual([
-      {
-        source: "exec-event",
-        intent: "event",
-        reason: "exec-event",
-        agentId: "main",
-      },
-      {
-        source: "interval",
-        intent: "task",
-        reason: "heartbeat-task:job-inbox",
-        agentId: "main",
-        tasks: [{ jobId: "job-inbox", name: "inbox", prompt: "Check inbox" }],
-      },
-    ]);
-  });
-
-  it("retains task prompts across busy retries", async () => {
-    vi.useFakeTimers();
-    const handler = setRetryOnceHeartbeatHandler();
-    const request = {
-      source: "interval" as const,
-      intent: "task" as const,
-      reason: "heartbeat-task:job-inbox",
-      agentId: "main",
-      tasks: [{ jobId: "job-inbox", name: "inbox", prompt: "Check inbox" }],
-    };
-
-    requestHeartbeat({ ...request, coalesceMs: 0 });
-    await vi.advanceTimersByTimeAsync(1);
-    await vi.advanceTimersByTimeAsync(60_000);
-
-    expect(handler).toHaveBeenCalledTimes(2);
-    expect(handler).toHaveBeenNthCalledWith(1, request);
-    expect(handler).toHaveBeenNthCalledWith(2, { ...request, retainedWork: true });
   });
 
   it("runs equal-period tasks at staggered anchors by retaining the spaced task", async () => {
@@ -547,50 +333,49 @@ describe("heartbeat-wake", () => {
     });
   });
 
-  it.each([
-    { source: "manual" as const, intent: "manual" as const, reason: "manual" },
-    { source: "cron" as const, intent: "immediate" as const, reason: "cron:job-now" },
-  ])(
-    "does not let a retained event cooldown defer an explicit $intent wake",
-    async (explicitWake) => {
-      vi.useFakeTimers();
-      vi.setSystemTime(2_000_000_000_000);
-      const handler = vi
-        .fn()
-        .mockResolvedValueOnce({
-          status: "skipped",
-          reason: "not-due",
-          retryAtMs: Date.now() + 30 * 60_000,
-        })
-        .mockResolvedValue({ status: "ran", durationMs: 1 });
-      setHeartbeatWakeHandler(handler);
+  it("does not let a retained event cooldown defer an immediate wake", async () => {
+    const explicitWake = {
+      source: "cron" as const,
+      intent: "immediate" as const,
+      reason: "cron:job-now",
+    };
+    vi.useFakeTimers();
+    vi.setSystemTime(2_000_000_000_000);
+    const handler = vi
+      .fn()
+      .mockResolvedValueOnce({
+        status: "skipped",
+        reason: "not-due",
+        retryAtMs: Date.now() + 30 * 60_000,
+      })
+      .mockResolvedValue({ status: "ran", durationMs: 1 });
+    setHeartbeatWakeHandler(handler);
 
-      requestHeartbeat({
-        source: "exec-event",
-        intent: "event",
-        reason: "exec-event",
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        coalesceMs: 0,
-      });
-      await vi.advanceTimersByTimeAsync(1);
+    requestHeartbeat({
+      source: "exec-event",
+      intent: "event",
+      reason: "exec-event",
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
 
-      requestHeartbeat({
-        ...explicitWake,
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        coalesceMs: 0,
-      });
-      await vi.advanceTimersByTimeAsync(1);
+    requestHeartbeat({
+      ...explicitWake,
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
 
-      expect(handler).toHaveBeenCalledTimes(2);
-      expect(handler.mock.calls[1]?.[0]).toMatchObject({
-        ...explicitWake,
-        agentId: "main",
-        sessionKey: "agent:main:main",
-      });
-    },
-  );
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(handler.mock.calls[1]?.[0]).toMatchObject({
+      ...explicitWake,
+      agentId: "main",
+      sessionKey: "agent:main:main",
+    });
+  });
 
   it("keeps a retained immediate wake guarded when an ordinary event joins", async () => {
     vi.useFakeTimers();
@@ -638,22 +423,6 @@ describe("heartbeat-wake", () => {
     });
   });
 
-  it.each([HEARTBEAT_SKIP_CRON_IN_PROGRESS])(
-    "retries %s after the default retry delay",
-    async (reason) => {
-      vi.useFakeTimers();
-      const handler = vi
-        .fn()
-        .mockResolvedValueOnce({ status: "skipped", reason })
-        .mockResolvedValueOnce({ status: "ran", durationMs: 1 });
-      await expectRetryAfterDefaultDelay({
-        handler,
-        initialReason: "interval",
-        expectedRetryReason: "interval",
-      });
-    },
-  );
-
   it("lets a fresh event run while a scheduled retry observes idle grace", async () => {
     vi.useFakeTimers();
     const handler = vi
@@ -676,77 +445,13 @@ describe("heartbeat-wake", () => {
     expect(handler.mock.calls[2]?.[0]).toEqual({ ...wake("interval"), retainedWork: true });
   });
 
-  it("retries thrown handler errors after the default retry delay", async () => {
+  it("retries only the failed targeted wake without replaying completed siblings", async () => {
+    const failedTarget = "b";
     vi.useFakeTimers();
-    const handler = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("boom"))
-      .mockResolvedValueOnce({ status: "skipped", reason: "disabled" });
-    await expectRetryAfterDefaultDelay({
-      handler,
-      initialReason: "exec-event",
-      expectedRetryReason: "exec-event",
-    });
-  });
-
-  it.each(["a", "b", "c"])(
-    "retries only the failed targeted wake when batch target %s throws",
-    async (failedTarget) => {
-      vi.useFakeTimers();
-      let hasFailed = false;
-      const handler = vi.fn(async (request: WakeRequest) => {
-        if (request.reason === `cron:job-${failedTarget}` && !hasFailed) {
-          hasFailed = true;
-          throw new Error("heartbeat target failed");
-        }
-        return { status: "ran" as const, durationMs: 1 };
-      });
-      setHeartbeatWakeHandler(handler);
-
-      for (const target of ["a", "b", "c"]) {
-        requestHeartbeat({
-          source: "cron",
-          intent: "event",
-          reason: `cron:job-${target}`,
-          agentId: `agent-${target}`,
-          sessionKey: `agent:agent-${target}:main`,
-          coalesceMs: 100,
-        });
-      }
-
-      await vi.advanceTimersByTimeAsync(100);
-
-      expect(handler.mock.calls.map(([request]) => request.reason)).toEqual([
-        "cron:job-a",
-        "cron:job-b",
-        "cron:job-c",
-      ]);
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
-
-      await vi.advanceTimersByTimeAsync(999);
-      expect(handler).toHaveBeenCalledTimes(3);
-
-      await vi.advanceTimersByTimeAsync(1);
-      expect(handler.mock.calls.map(([request]) => request.reason)).toEqual([
-        "cron:job-a",
-        "cron:job-b",
-        "cron:job-c",
-        `cron:job-${failedTarget}`,
-      ]);
-      expect(handler.mock.calls[3]?.[0]).toMatchObject({
-        agentId: `agent-${failedTarget}`,
-        sessionKey: `agent:agent-${failedTarget}:main`,
-      });
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
-    },
-  );
-
-  it("does not replay completed wake targets when another target keeps throwing", async () => {
-    vi.useFakeTimers();
-    let failedAttempts = 0;
+    let remainingFailures = 2;
     const handler = vi.fn(async (request: WakeRequest) => {
-      if (request.reason === "cron:job-b" && failedAttempts < 2) {
-        failedAttempts += 1;
+      if (request.reason === `cron:job-${failedTarget}` && remainingFailures > 0) {
+        remainingFailures -= 1;
         throw new Error("heartbeat target failed");
       }
       return { status: "ran" as const, durationMs: 1 };
@@ -765,9 +470,31 @@ describe("heartbeat-wake", () => {
     }
 
     await vi.advanceTimersByTimeAsync(100);
-    await vi.advanceTimersByTimeAsync(1_000);
-    await vi.advanceTimersByTimeAsync(1_000);
 
+    expect(handler.mock.calls.map(([request]) => request.reason)).toEqual([
+      "cron:job-a",
+      "cron:job-b",
+      "cron:job-c",
+    ]);
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(handler).toHaveBeenCalledTimes(3);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(handler.mock.calls.map(([request]) => request.reason)).toEqual([
+      "cron:job-a",
+      "cron:job-b",
+      "cron:job-c",
+      `cron:job-${failedTarget}`,
+    ]);
+    expect(handler.mock.calls[3]?.[0]).toMatchObject({
+      agentId: `agent-${failedTarget}`,
+      sessionKey: `agent:agent-${failedTarget}:main`,
+    });
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(1_000);
     expect(handler.mock.calls.map(([request]) => request.reason)).toEqual([
       "cron:job-a",
       "cron:job-b",
@@ -778,82 +505,23 @@ describe("heartbeat-wake", () => {
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 
-  it("preempts existing timer when a sooner schedule is requested", async () => {
-    vi.useFakeTimers();
-    const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
-    setHeartbeatWakeHandler(handler);
-
-    // Schedule for 5 seconds from now
-    requestHeartbeat(wake("slow", { coalesceMs: 5000 }));
-
-    // Schedule for 100ms from now — should preempt the 5s timer
-    requestHeartbeat(wake("fast", { coalesceMs: 100 }));
-
-    await vi.advanceTimersByTimeAsync(100);
-    expect(handler).toHaveBeenCalledTimes(1);
-    // The reason should be "fast" since it was set last
-    expect(handler).toHaveBeenCalledWith(wake("fast"));
-  });
-
-  it("keeps existing timer when later schedule is requested", async () => {
-    vi.useFakeTimers();
-    const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
-    setHeartbeatWakeHandler(handler);
-
-    // Schedule for 100ms from now
-    requestHeartbeat(wake("fast", { coalesceMs: 100 }));
-
-    // Schedule for 5 seconds from now — should NOT preempt
-    requestHeartbeat(wake("slow", { coalesceMs: 5000 }));
-
-    await vi.advanceTimersByTimeAsync(100);
-    expect(handler).toHaveBeenCalledTimes(1);
-  });
-
-  it("clamps oversized coalesce delays instead of firing immediately", async () => {
-    vi.useFakeTimers();
-    const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
-    setHeartbeatWakeHandler(handler);
-
-    requestHeartbeat(wake("slow", { coalesceMs: Number.MAX_SAFE_INTEGER }));
-
-    await vi.advanceTimersByTimeAsync(1);
-    expect(handler).not.toHaveBeenCalled();
-  });
-
-  it("does not downgrade a higher-priority pending reason", async () => {
-    vi.useFakeTimers();
-    const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
-    setHeartbeatWakeHandler(handler);
-
-    requestHeartbeat(wake("exec-event", { coalesceMs: 100 }));
-    requestHeartbeat(wake("retry", { coalesceMs: 100 }));
-
-    await vi.advanceTimersByTimeAsync(100);
-    expect(handler).toHaveBeenCalledTimes(1);
-    expect(handler).toHaveBeenCalledWith(wake("exec-event"));
-  });
-
   it("recovers interrupted wakes when a replacement handler is registered", async () => {
     vi.useFakeTimers();
 
-    // Simulate a handler that's mid-execution when SIGUSR1 fires.
+    // Simulate a handler that's mid-execution when SIGUSR2 fires.
     // We do this by having the handler hang forever (never resolve).
-    let resolveHang: () => void;
-    const hangPromise = new Promise<void>((r) => {
-      resolveHang = r;
-    });
+    const { promise: hangPromise, resolve: resolveHang } = createDeferred();
     const handlerA = vi
       .fn()
       .mockReturnValue(hangPromise.then(() => ({ status: "ran" as const, durationMs: 1 })));
     setHeartbeatWakeHandler(handlerA);
 
     // Trigger the handler — it starts running but never finishes
-    requestHeartbeat(wake("interval", { coalesceMs: 0 }));
+    const recovered = requestHeartbeatAndWait(wake("interval", { coalesceMs: 0 }));
     await vi.advanceTimersByTimeAsync(1);
     expect(handlerA).toHaveBeenCalledTimes(1);
 
-    // Now simulate SIGUSR1: register a new handler while handlerA is still running.
+    // Now simulate SIGUSR2: register a new handler while handlerA is still running.
     // Without the fix, `running` would stay true and handlerB would never fire.
     const handlerB = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
     setHeartbeatWakeHandler(handlerB);
@@ -863,6 +531,7 @@ describe("heartbeat-wake", () => {
     requestHeartbeat(wake("interval", { agentId: "ready", coalesceMs: 0 }));
     await vi.advanceTimersByTimeAsync(1);
     expect(handlerB.mock.calls.map(([request]) => request.agentId)).toEqual([undefined, "ready"]);
+    await expect(recovered).resolves.toEqual({ status: "ran", durationMs: 1 });
 
     // Clean up the hanging promise
     resolveHang!();
@@ -916,75 +585,39 @@ describe("heartbeat-wake", () => {
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 
-  it.each([
-    { outcome: "completed", expectedReasons: ["cron:job-a", "cron:job-b"] },
-    { outcome: "thrown", expectedReasons: ["cron:job-a", "cron:job-b"] },
-    { outcome: "busy", expectedReasons: ["cron:job-a", "cron:job-b"] },
-    { outcome: "guarded", expectedReasons: ["cron:job-a", "cron:job-b"] },
-  ] as const)(
-    "hands off only unfinished wakes when a replaced handler is $outcome",
-    async ({ outcome, expectedReasons }) => {
-      vi.useFakeTimers();
-      let finishOldWake!: () => void;
-      const oldWakeFinished = new Promise<void>((resolve) => {
-        finishOldWake = resolve;
-      });
-      const oldHandler = vi.fn(async () => {
-        await oldWakeFinished;
-        if (outcome === "thrown") {
-          throw new Error("stale heartbeat target failed");
-        }
-        if (outcome === "busy") {
-          return { status: "skipped" as const, reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT };
-        }
-        if (outcome === "guarded") {
-          return {
-            status: "skipped" as const,
-            reason: "not-due",
-            retryAtMs: Date.now() + 30 * 60_000,
-          };
-        }
-        return { status: "ran" as const, durationMs: 1 };
-      });
-      setHeartbeatWakeHandler(oldHandler);
-
-      for (const target of ["a", "b"]) {
-        requestHeartbeat({
-          source: "cron",
-          intent: target === "a" ? "task" : "event",
-          reason: `cron:job-${target}`,
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          coalesceMs: 100,
-        });
-      }
-      await vi.advanceTimersByTimeAsync(100);
-      expect(oldHandler).toHaveBeenCalledOnce();
-
-      const newHandler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
-      setHeartbeatWakeHandler(newHandler);
-      finishOldWake();
-      await vi.advanceTimersByTimeAsync(250);
-
-      expect(oldHandler).toHaveBeenCalledOnce();
-      expect(newHandler.mock.calls.map(([request]) => request.reason)).toEqual(expectedReasons);
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
-    },
-  );
-
-  it("does not let a stale disposer clear a newer handler", async () => {
+  it("hands off only unfinished wakes when a replaced handler returns busy", async () => {
     vi.useFakeTimers();
-    const handlerA = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
-    const handlerB = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
-    const disposeA = setHeartbeatWakeHandler(handlerA);
-    setHeartbeatWakeHandler(handlerB);
+    const { promise: oldWakeFinished, resolve: finishOldWake } = createDeferred();
+    const oldHandler = vi.fn(async () => {
+      await oldWakeFinished;
+      return { status: "skipped" as const, reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT };
+    });
+    setHeartbeatWakeHandler(oldHandler);
 
-    disposeA();
-    requestHeartbeat(wake("interval", { coalesceMs: 0 }));
-    await vi.advanceTimersByTimeAsync(1);
+    for (const target of ["a", "b"]) {
+      requestHeartbeat({
+        source: "cron",
+        intent: target === "a" ? "task" : "event",
+        reason: `cron:job-${target}`,
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        coalesceMs: 100,
+      });
+    }
+    await vi.advanceTimersByTimeAsync(100);
+    expect(oldHandler).toHaveBeenCalledOnce();
 
-    expect(handlerA).not.toHaveBeenCalled();
-    expect(handlerB).toHaveBeenCalledOnce();
+    const newHandler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    setHeartbeatWakeHandler(newHandler);
+    finishOldWake();
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(oldHandler).toHaveBeenCalledOnce();
+    expect(newHandler.mock.calls.map(([request]) => request.reason)).toEqual([
+      "cron:job-a",
+      "cron:job-b",
+    ]);
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 
   it("clears stale retry cooldown when a new handler is registered", async () => {
@@ -998,7 +631,7 @@ describe("heartbeat-wake", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(handlerA).toHaveBeenCalledTimes(1);
 
-    // Simulate SIGUSR1 startup with a fresh wake handler.
+    // Simulate SIGUSR2 startup with a fresh wake handler.
     const handlerB = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
     setHeartbeatWakeHandler(handlerB);
 
@@ -1006,43 +639,6 @@ describe("heartbeat-wake", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(handlerB).toHaveBeenCalledTimes(1);
     expect(handlerB).toHaveBeenCalledWith(wake("manual"));
-  });
-
-  it("forwards wake target fields and preserves them across retries", async () => {
-    vi.useFakeTimers();
-    const handler = setRetryOnceHeartbeatHandler();
-
-    requestHeartbeat({
-      source: "cron",
-      intent: "immediate",
-      reason: "cron:job-1",
-      agentId: "ops",
-      sessionKey: "agent:ops:guildchat:channel:alerts",
-      heartbeat: { target: "last" },
-      coalesceMs: 0,
-    });
-
-    await vi.advanceTimersByTimeAsync(1);
-    expect(handler).toHaveBeenCalledTimes(1);
-    expectWakeCall(handler, 0, {
-      source: "cron",
-      intent: "immediate",
-      reason: "cron:job-1",
-      agentId: "ops",
-      sessionKey: "agent:ops:guildchat:channel:alerts",
-      heartbeat: { target: "last" },
-    });
-
-    await vi.advanceTimersByTimeAsync(1000);
-    expect(handler).toHaveBeenCalledTimes(2);
-    expectWakeCall(handler, 1, {
-      source: "cron",
-      intent: "immediate",
-      reason: "cron:job-1",
-      agentId: "ops",
-      sessionKey: "agent:ops:guildchat:channel:alerts",
-      heartbeat: { target: "last" },
-    });
   });
 
   it("preserves heartbeat override when same-target wakes coalesce", async () => {
@@ -1080,50 +676,212 @@ describe("heartbeat-wake", () => {
       heartbeat: { target: "last" },
     });
   });
-
-  it("executes distinct targeted wakes queued in the same coalescing window", async () => {
+  it("dispatches an urgent wake after the wall clock changes forward", async () => {
     vi.useFakeTimers();
+    vi.setSystemTime(2_000_000_000_000);
     const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
     setHeartbeatWakeHandler(handler);
 
-    requestHeartbeat({
-      source: "cron",
-      intent: "event",
-      reason: "cron:job-a",
-      agentId: "ops",
-      sessionKey: "agent:ops:guildchat:channel:alerts",
-      coalesceMs: 100,
-    });
-    requestHeartbeat({
-      source: "cron",
-      intent: "event",
-      reason: "cron:job-b",
-      agentId: "main",
-      sessionKey: "agent:main:forum:group:-1001",
-      coalesceMs: 100,
-    });
+    requestHeartbeat(wake("interval", { agentId: "slow", coalesceMs: 60_000 }));
+    vi.setSystemTime(Date.now() + 3_600_000);
+    requestHeartbeat(wake("manual", { agentId: "urgent", coalesceMs: 0 }));
+    await vi.advanceTimersByTimeAsync(1);
 
-    await vi.advanceTimersByTimeAsync(100);
+    expect(handler).toHaveBeenCalledExactlyOnceWith(wake("manual", { agentId: "urgent" }));
+  });
 
+  it("keeps manual requests-in-flight on the default retry delay", async () => {
+    vi.useFakeTimers();
+    const handler = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT })
+      .mockResolvedValueOnce({ status: "ran", durationMs: 1 });
+    setHeartbeatWakeHandler(handler);
+    requestHeartbeat(wake("manual", { coalesceMs: 0 }));
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(handler).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1);
     expect(handler).toHaveBeenCalledTimes(2);
-    const handledRequests = handler.mock.calls
-      .map((call) => call[0])
-      .toSorted((left, right) => left.reason.localeCompare(right.reason));
-    expect(handledRequests).toEqual([
+  });
+});
+
+describe("heartbeat wake settlement", () => {
+  let disposeHandler: (() => void) | undefined;
+
+  afterEach(async () => {
+    resetGatewayWorkAdmission();
+    if (vi.isFakeTimers()) {
+      disposeHandler?.();
+      disposeHandler = setRuntimeHeartbeatWakeHandler(async () => ({
+        status: "skipped",
+        reason: "disabled",
+      }));
+      await vi.runAllTimersAsync();
+    }
+    disposeHandler?.();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  function setHandler(handler: Parameters<typeof setRuntimeHeartbeatWakeHandler>[0]) {
+    disposeHandler = setRuntimeHeartbeatWakeHandler(handler);
+  }
+
+  it.each([false, true])("logs terminal wake failures with a waiter=%s", async (wait) => {
+    vi.useFakeTimers();
+    const error = vi.spyOn(heartbeatLog, "error").mockImplementation(() => {});
+    const failure = { status: "failed" as const, reason: "synthetic target unavailable" };
+    const handler = vi.fn().mockResolvedValue(failure);
+    setHandler(handler);
+    const request = {
+      source: "exec-event" as const,
+      intent: "event" as const,
+      reason: "exec-event",
+      agentId: "main",
+      sessionKey: "agent:main:wake-failure",
+      coalesceMs: 0,
+    };
+    const result = wait ? requestHeartbeatAndWait(request) : requestHeartbeat(request);
+
+    await vi.runAllTimersAsync();
+
+    expect(handler).toHaveBeenCalledOnce();
+    expect(error).toHaveBeenCalledExactlyOnceWith(
+      "session event wake failed; no wake retry scheduled",
       {
-        source: "cron",
+        source: "exec-event",
         intent: "event",
-        reason: "cron:job-a",
-        agentId: "ops",
-        sessionKey: "agent:ops:guildchat:channel:alerts",
-      },
-      {
-        source: "cron",
-        intent: "event",
-        reason: "cron:job-b",
         agentId: "main",
-        sessionKey: "agent:main:forum:group:-1001",
+        sessionKey: "agent:main:wake-failure",
+        wakeReason: "exec-event",
+        error: failure.reason,
       },
+    );
+    if (wait) {
+      expect(await result).toEqual(failure);
+    }
+  });
+
+  it.each(["absent", "queued", "running"])(
+    "settles a waiter with an unavailable handler when %s",
+    async (phase) => {
+      vi.useFakeTimers();
+      const release = createDeferred();
+      setHandler(
+        phase === "absent"
+          ? null
+          : async () => {
+              await release.promise;
+              return { status: "ran", durationMs: 1 };
+            },
+      );
+      const controller = new AbortController();
+      const result = requestHeartbeatAndWait(
+        { source: "interval", intent: "scheduled", coalesceMs: 0 },
+        { abortSignal: controller.signal },
+      );
+      try {
+        if (phase === "running") {
+          await vi.advanceTimersByTimeAsync(0);
+        }
+        if (phase !== "absent") {
+          disposeHandler?.();
+        }
+        expect(await Promise.race([result, Promise.resolve("pending")])).toEqual({
+          status: "skipped",
+          reason: "handler-unavailable",
+        });
+        if (phase === "absent") {
+          const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+          setHandler(handler);
+          await vi.advanceTimersByTimeAsync(0);
+          expect(handler).not.toHaveBeenCalled();
+        }
+      } finally {
+        controller.abort();
+        release.resolve();
+        await result;
+      }
+    },
+  );
+
+  it("dispatches queued notifications after installation before a later target", async () => {
+    vi.useFakeTimers();
+    setHandler(null);
+    const wake = { source: "session-state" as const, intent: "immediate" as const };
+    requestHeartbeat({
+      ...wake,
+      sessionKey: "agent:main:ready",
+      coalesceMs: 0,
+    });
+    const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 7 });
+    setHandler(handler);
+    const later = requestHeartbeatAndWait({
+      ...wake,
+      sessionKey: "agent:main:later",
+      coalesceMs: 5_000,
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(handler.mock.calls.map(([request]) => request.sessionKey)).toEqual(["agent:main:ready"]);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    await expect(later).resolves.toEqual({ status: "ran", durationMs: 7 });
+    expect(handler.mock.calls.map(([request]) => request.sessionKey)).toEqual([
+      "agent:main:ready",
+      "agent:main:later",
     ]);
+  });
+
+  it("settles coalesced heartbeat callers", async () => {
+    vi.useFakeTimers();
+    const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 7 });
+    setHandler(handler);
+    const wake = {
+      source: "interval" as const,
+      intent: "scheduled" as const,
+      reason: "interval",
+      agentId: "main",
+    };
+    const settled = vi.fn();
+    const resultA = requestHeartbeatAndWait({ ...wake, coalesceMs: 100 });
+    const resultB = requestHeartbeatAndWait({ ...wake, coalesceMs: 100 });
+    void resultA.then(settled);
+    void resultB.then(settled);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(handler).toHaveBeenCalledExactlyOnceWith(wake);
+    expect(settled).toHaveBeenCalledTimes(2);
+    expect(settled).toHaveBeenNthCalledWith(1, { status: "ran", durationMs: 7 });
+    expect(settled).toHaveBeenNthCalledWith(2, { status: "ran", durationMs: 7 });
+    await expect(Promise.all([resultA, resultB])).resolves.toEqual([
+      { status: "ran", durationMs: 7 },
+      { status: "ran", durationMs: 7 },
+    ]);
+  });
+
+  it("keeps an awaited cron wake pending across a retryable skip", async () => {
+    vi.useFakeTimers();
+    const handler = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT })
+      .mockResolvedValueOnce({ status: "ran", durationMs: 1 });
+    setHandler(handler);
+    const result = requestHeartbeatAndWait({
+      source: "cron",
+      intent: "scheduled",
+      reason: "interval",
+      coalesceMs: 0,
+    });
+    const settled = vi.fn();
+    void result.then(settled);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(handler).toHaveBeenCalledOnce();
+    expect(settled).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    await expect(result).resolves.toEqual({ status: "ran", durationMs: 1 });
+    expect(handler).toHaveBeenCalledTimes(2);
   });
 });

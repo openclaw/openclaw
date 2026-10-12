@@ -83,7 +83,6 @@ describe("zalouser group policy helpers", () => {
         buildZalouserGroupCandidates({
           groupId: "123",
           groupName: "Team Alpha",
-          includeWildcard: false,
           allowNameMatching,
         }),
       );

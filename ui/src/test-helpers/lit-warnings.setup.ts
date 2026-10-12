@@ -1,8 +1,10 @@
-import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
-import { setSessionPathBuilder } from "../app-session-path-builder.ts";
+import { vi } from "vitest";
 import { installSafeLocalStorageForTesting } from "./storage.ts";
 
-setSessionPathBuilder(buildControlUiSessionPath);
+if (typeof document !== "undefined" && !("__vitest_browser__" in globalThis)) {
+  // mock-isolation: JSDOM rendering tests assume admission; the real browser gate has E2E coverage.
+  vi.doMock("../app/boot-capabilities.ts", () => ({ unsupportedControlUiBrowser: false }));
+}
 
 // Lit emits a one-time dev-mode warning in test builds. Pre-mark it as issued
 // so broad UI suites stay signal-heavy instead of repeating the same console.warn.
@@ -43,17 +45,10 @@ if (typeof Element !== "undefined" && !("getAnimations" in Element.prototype)) {
   });
 }
 
-// jsdom does not yet expose the browser's state-preserving DOM move primitive.
-if (typeof Element !== "undefined" && !("moveBefore" in Element.prototype)) {
-  Object.defineProperty(Element.prototype, "moveBefore", {
-    configurable: true,
-    value: () => {},
-  });
-}
-
 // JSDOM exposes partial ElementInternals. Web Awesome form controls require
 // the form-associated methods even when tests do not mount them in a form.
-if (typeof HTMLElement !== "undefined") {
+// Browser tests need native CustomStateSet so CSS :state() observes real state.
+if (typeof HTMLElement !== "undefined" && !("__vitest_browser__" in globalThis)) {
   Object.defineProperty(HTMLElement.prototype, "attachInternals", {
     configurable: true,
     value() {

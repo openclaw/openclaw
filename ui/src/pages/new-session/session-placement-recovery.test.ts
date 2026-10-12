@@ -1,13 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  sessionPlacementRecoveryExactStorageKey,
-  sessionPlacementRecoveryScopeStoragePrefix,
-} from "../../lib/sessions/session-placement-recovery-storage-key.ts";
+import { sessionPlacementRecoveryExactStorageKey } from "../../lib/sessions/session-placement-recovery-storage-key.ts";
 import {
   clearSessionPlacementRecovery,
   listSessionPlacementRecoveries,
   migrateSessionPlacementRecoveryScope,
   parseSessionPlacementCreateParams,
+  pauseSessionPlacementRecovery,
+  promoteSessionPlacementRecovery,
   readSessionPlacementRecovery,
   writeSessionPlacementRecovery,
   writeSessionPlacementRecoveryIfAvailable,
@@ -27,6 +26,10 @@ const recovery = {
 const exactKey = (sessionKey: string) =>
   sessionPlacementRecoveryExactStorageKey(recovery.gatewayUrl, recovery.recoveryScope, sessionKey);
 
+const readRecovery = (
+  record: Pick<typeof recovery, "gatewayUrl" | "recoveryScope" | "sessionKey"> = recovery,
+) => readSessionPlacementRecovery(record.gatewayUrl, record.recoveryScope, record.sessionKey);
+
 describe("session placement recovery", () => {
   beforeEach(() => sessionStorage.clear());
   afterEach(() => {
@@ -38,16 +41,13 @@ describe("session placement recovery", () => {
     const gatewayUrl = "ws://gateway.example";
     const recoveryScope = "principal-a";
     const sessionKey = "admin";
-    const scopePrefix = sessionPlacementRecoveryScopeStoragePrefix(gatewayUrl, recoveryScope);
-    expect(scopePrefix).toBe(
-      `openclaw.new-session.session-placement-recovery.v1:${gatewayUrl.length}:${gatewayUrl}:${recoveryScope.length}:${recoveryScope}:`,
-    );
+    const scopePrefix = `openclaw.new-session.session-placement-recovery.v1:${gatewayUrl.length}:${gatewayUrl}:${recoveryScope.length}:${recoveryScope}:`;
     expect(sessionPlacementRecoveryExactStorageKey(gatewayUrl, recoveryScope, sessionKey)).toBe(
       `${scopePrefix}${sessionKey.length}:${sessionKey}`,
     );
     const colonGateway = `${gatewayUrl}:principal-a`;
-    expect(sessionPlacementRecoveryScopeStoragePrefix(colonGateway, "admin")).not.toBe(
-      sessionPlacementRecoveryScopeStoragePrefix(gatewayUrl, "principal-a:admin"),
+    expect(sessionPlacementRecoveryExactStorageKey(colonGateway, "admin", sessionKey)).not.toBe(
+      sessionPlacementRecoveryExactStorageKey(gatewayUrl, "principal-a:admin", sessionKey),
     );
 
     expect(sessionPlacementRecoveryExactStorageKey(gatewayUrl, recoveryScope, "\ud800")).not.toBe(
@@ -69,28 +69,91 @@ describe("session placement recovery", () => {
       recovery,
       second,
     ]);
-    expect(
-      readSessionPlacementRecovery(
-        recovery.gatewayUrl,
-        recovery.recoveryScope,
-        recovery.sessionKey,
-      ),
-    ).toEqual(recovery);
+    expect(readRecovery()).toEqual(recovery);
 
     clearSessionPlacementRecovery(recovery.gatewayUrl, recovery.recoveryScope, recovery.sessionKey);
-    expect(
-      readSessionPlacementRecovery(
-        recovery.gatewayUrl,
-        recovery.recoveryScope,
-        recovery.sessionKey,
-      ),
-    ).toBeNull();
-    expect(
-      readSessionPlacementRecovery(second.gatewayUrl, second.recoveryScope, second.sessionKey),
-    ).toEqual(second);
+    expect(readRecovery()).toBeNull();
+    expect(readRecovery(second)).toEqual(second);
 
     clearSessionPlacementRecovery(recovery.gatewayUrl, recovery.recoveryScope);
     expect(listSessionPlacementRecoveries(recovery.gatewayUrl, recovery.recoveryScope)).toEqual([]);
+  });
+
+  it("keeps required input outside the released scope through promotion, migration, and retirement", () => {
+    const required = {
+      ...recovery,
+      target: { kind: "profile" as const, profileId: "aws", required: true as const },
+      attachments: [{ type: "file", mimeType: "text/plain", content: "aGVsbG8=" }],
+    };
+    const optional = {
+      ...recovery,
+      sessionKey: "agent:cloud:optional",
+      messageId: "optional-turn",
+    };
+    expect(writeSessionPlacementRecovery(required)).toBe(true);
+    expect(writeSessionPlacementRecovery(optional)).toBe(true);
+    const releasedPrefix = `openclaw.new-session.session-placement-recovery.v1:${recovery.gatewayUrl.length}:${recovery.gatewayUrl}:${recovery.recoveryScope.length}:${recovery.recoveryScope}:`;
+    const storedKeys = Array.from({ length: sessionStorage.length }, (_, index) =>
+      sessionStorage.key(index)!,
+    );
+    expect(storedKeys.filter((key) => key.startsWith(releasedPrefix))).toEqual([
+      exactKey(optional.sessionKey),
+    ]);
+    expect(listSessionPlacementRecoveries(recovery.gatewayUrl, recovery.recoveryScope)).toEqual([
+      required,
+      optional,
+    ]);
+
+    const promoted = { ...required, sessionKey: "agent:cloud:canonical" };
+    expect(promoteSessionPlacementRecovery(required.sessionKey, promoted)).toBe(true);
+    expect(readRecovery()).toBeNull();
+    expect(readRecovery(promoted)).toEqual(promoted);
+    const paused = pauseSessionPlacementRecovery(promoted, "placement unavailable", true).recovery;
+    const destinationScope = "principal-migrated";
+    migrateSessionPlacementRecoveryScope(
+      recovery.gatewayUrl,
+      recovery.recoveryScope,
+      destinationScope,
+    );
+    expect(listSessionPlacementRecoveries(recovery.gatewayUrl, recovery.recoveryScope)).toEqual([]);
+    expect(listSessionPlacementRecoveries(recovery.gatewayUrl, destinationScope)).toEqual([
+      { ...paused, recoveryScope: destinationScope },
+      { ...optional, recoveryScope: destinationScope },
+    ]);
+    clearSessionPlacementRecovery(
+      recovery.gatewayUrl,
+      destinationScope,
+      promoted.sessionKey,
+      "older-turn",
+    );
+    expect(readRecovery({ ...promoted, recoveryScope: destinationScope })).toEqual({
+      ...paused,
+      recoveryScope: destinationScope,
+    });
+    clearSessionPlacementRecovery(recovery.gatewayUrl, destinationScope);
+    expect(sessionStorage.length).toBe(0);
+  });
+
+  it("relocates a required draft written before namespace isolation without replacing newer input", () => {
+    const required = {
+      ...recovery,
+      target: { kind: "profile" as const, profileId: "aws", required: true as const },
+    };
+    sessionStorage.setItem(exactKey(required.sessionKey), JSON.stringify(required));
+    expect(readRecovery()).toEqual(required);
+    expect(sessionStorage.getItem(exactKey(required.sessionKey))).toBeNull();
+    const older = { ...required, messageId: "older-turn", message: "older input" };
+    const olderRaw = JSON.stringify(older);
+    sessionStorage.setItem(exactKey(required.sessionKey), olderRaw);
+    expect(listSessionPlacementRecoveries(recovery.gatewayUrl, recovery.recoveryScope)).toEqual([
+      required,
+    ]);
+    expect(sessionStorage.getItem(exactKey(required.sessionKey))).toBe(olderRaw);
+    expect(writeSessionPlacementRecoveryIfAvailable({ ...older, message: "do not replace" })).toBe(
+      false,
+    );
+    clearSessionPlacementRecovery(recovery.gatewayUrl, recovery.recoveryScope);
+    expect(sessionStorage.length).toBe(0);
   });
 
   it("preserves automatic device selection across placement recovery", () => {
@@ -99,13 +162,108 @@ describe("session placement recovery", () => {
       target: { kind: "auto-device" as const },
     };
     expect(writeSessionPlacementRecovery(automatic)).toBe(true);
-    expect(
-      readSessionPlacementRecovery(
-        automatic.gatewayUrl,
-        automatic.recoveryScope,
-        automatic.sessionKey,
-      ),
-    ).toEqual(automatic);
+    expect(readRecovery(automatic)).toEqual(automatic);
+  });
+
+  it("does not retire a replacement submission at the same session key", () => {
+    const replacement = { ...recovery, messageId: "message-newer", message: "newer input" };
+    expect(writeSessionPlacementRecovery(replacement)).toBe(true);
+    clearSessionPlacementRecovery(
+      recovery.gatewayUrl,
+      recovery.recoveryScope,
+      recovery.sessionKey,
+      recovery.messageId,
+    );
+    expect(readRecovery()).toEqual(replacement);
+    clearSessionPlacementRecovery(
+      recovery.gatewayUrl,
+      recovery.recoveryScope,
+      recovery.sessionKey,
+      replacement.messageId,
+    );
+    expect(readRecovery()).toBeNull();
+  });
+
+  it.each(["not-sent", "rejected", "unconfirmed"] as const)(
+    "retains a paused %s failure without changing pending recovery or storage lifetime",
+    (reason) => {
+      const paused = {
+        ...recovery,
+        phase: "paused" as const,
+        reason,
+        error: "Target unavailable",
+      };
+      expect(writeSessionPlacementRecovery(paused)).toBe(true);
+      expect(readRecovery()).toEqual(paused);
+      expect(writeSessionPlacementRecovery({ ...paused, error: "x".repeat(4097) })).toBe(false);
+      expect(readRecovery()).toEqual(paused);
+    },
+  );
+
+  it.each([false, true])(
+    "keeps input in memory on a failed pause write (already paused=%s)",
+    (alreadyPaused) => {
+      const retained = alreadyPaused
+        ? {
+            ...recovery,
+            phase: "paused" as const,
+            reason: "not-sent" as const,
+            error: "first failure",
+          }
+        : recovery;
+      expect(writeSessionPlacementRecovery(retained)).toBe(true);
+      const storage = sessionStorage;
+      vi.stubGlobal("sessionStorage", {
+        getItem: storage.getItem.bind(storage),
+        removeItem: storage.removeItem.bind(storage),
+        setItem: () => {
+          throw new DOMException("quota exceeded", "QuotaExceededError");
+        },
+      });
+      expect(pauseSessionPlacementRecovery(retained, "later failure", true)).toMatchObject({
+        persisted: false,
+        recovery: {
+          message: retained.message,
+          messageId: retained.messageId,
+          phase: "paused",
+          reason: "not-sent",
+          error: expect.stringContaining("Keep this page open"),
+        },
+      });
+      expect(readRecovery()).toEqual(alreadyPaused ? retained : null);
+    },
+  );
+
+  it.each([false, true])(
+    "keeps bounded pause errors on UTF-16 boundaries (persistent=%s)",
+    (persistent) => {
+      const error = `${"x".repeat(4095)}🤖`;
+      const paused = pauseSessionPlacementRecovery(recovery, error, persistent);
+
+      expect(paused.recovery.error).toBe("x".repeat(4095));
+      expect(paused.persisted).toBe(persistent);
+      expect(readRecovery()).toEqual(persistent ? paused.recovery : null);
+    },
+  );
+
+  it("keeps storage-failure guidance on UTF-16 boundaries", () => {
+    const prefix = "Recovery could not be saved in this tab. Keep this page open.\n";
+    const error = `${"x".repeat(4095 - prefix.length)}🤖`;
+    expect(writeSessionPlacementRecovery(recovery)).toBe(true);
+    const storage = sessionStorage;
+    vi.stubGlobal("sessionStorage", {
+      getItem: storage.getItem.bind(storage),
+      removeItem: storage.removeItem.bind(storage),
+      setItem: () => {
+        throw new DOMException("quota exceeded", "QuotaExceededError");
+      },
+    });
+
+    const paused = pauseSessionPlacementRecovery(recovery, error, true);
+
+    expect(paused.recovery.error).toBe(`${prefix}${"x".repeat(4095 - prefix.length)}`);
+    expect(paused.persisted).toBe(false);
+    expect(readRecovery()).toBeNull();
   });
 
   it("migrates only exact framed rows under a new scope", () => {
@@ -259,16 +417,14 @@ describe("session placement recovery", () => {
       attachments: [{ type: "file", mimeType: "text/plain", content: "aGVsbG8=" }],
     };
     expect(writeSessionPlacementRecovery(attachmentRecovery)).toBe(true);
-    expect(
-      readSessionPlacementRecovery(
-        recovery.gatewayUrl,
-        recovery.recoveryScope,
-        recovery.sessionKey,
-      ),
-    ).toEqual(attachmentRecovery);
+    expect(readRecovery()).toEqual(attachmentRecovery);
   });
 
-  it("requires matching create parameters for a creating recovery", () => {
+  it.each([
+    { projectId: "openclaw", worktree: true as const },
+    { worktree: true as const, worktreeSource: "empty" as const },
+    { repository: { url: "https://github.com/openclaw/openclaw.git", ref: "release/next" } },
+  ])("requires matching create parameters for a creating recovery: %j", (workspace) => {
     const creating = {
       ...recovery,
       phase: "creating" as const,
@@ -277,7 +433,8 @@ describe("session placement recovery", () => {
         agentId: "cloud",
         message: "" as const,
         category: "Client work",
-        projectId: "openclaw",
+        model: "openai/gpt-5.6-sol",
+        agentRuntime: "codex",
         thinkingLevel: "high",
         toolOverrides: {
           mcpServers: { github: false },
@@ -285,40 +442,60 @@ describe("session placement recovery", () => {
           webSearch: false,
         },
         visibility: "draft" as const,
-        worktree: true as const,
+        ...workspace,
       },
     };
     expect(writeSessionPlacementRecovery(creating)).toBe(true);
-    expect(
-      readSessionPlacementRecovery(
-        recovery.gatewayUrl,
-        recovery.recoveryScope,
-        recovery.sessionKey,
-      ),
-    ).toEqual(creating);
+    expect(readRecovery()).toEqual(creating);
 
     sessionStorage.setItem(
       exactKey(recovery.sessionKey),
       JSON.stringify({ ...creating, createParams: { key: "agent:cloud:other" } }),
     );
-    expect(
-      readSessionPlacementRecovery(
-        recovery.gatewayUrl,
-        recovery.recoveryScope,
-        recovery.sessionKey,
-      ),
-    ).toBeNull();
+    expect(readRecovery()).toBeNull();
   });
 
   it.each([
+    { name: "an unsupported workspace source", value: { worktreeSource: "folder" } },
+    {
+      name: "an empty workspace with a previous checkout",
+      value: { worktreeSource: "empty", cwd: "/previous/checkout" },
+    },
+    {
+      name: "an empty workspace with a repository",
+      value: {
+        worktreeSource: "empty",
+        worktree: undefined,
+        repository: { url: "https://github.com/openclaw/openclaw.git" },
+      },
+    },
     { name: "an empty project id", value: { projectId: "" } },
     { name: "a non-string project id", value: { projectId: 42 } },
     { name: "a project id with a cwd", value: { projectId: "openclaw", cwd: "/tmp/repo" } },
+    {
+      name: "a repository with a Gateway worktree",
+      value: { repository: { url: "https://github.com/openclaw/openclaw.git" } },
+    },
+    { name: "an invalid repository", value: { worktree: undefined, repository: { url: "" } } },
+    {
+      name: "a repository with a local path",
+      value: {
+        worktree: undefined,
+        repository: { url: "https://github.com/openclaw/openclaw.git" },
+        cwd: "/gateway/repo",
+      },
+    },
     {
       name: "a project id with an exec node",
       value: { projectId: "openclaw", execNode: "macbook" },
     },
     { name: "an unsupported visibility", value: { visibility: "shared" } },
+    { name: "an unsupported Fast Mode", value: { fastMode: "fast" } },
+    { name: "a null Fast Mode", value: { fastMode: null } },
+    { name: "an empty runtime", value: { agentRuntime: "" } },
+    { name: "a whitespace runtime", value: { agentRuntime: "  " } },
+    { name: "a non-string runtime", value: { agentRuntime: 42 } },
+    { name: "a null runtime", value: { agentRuntime: null } },
     { name: "malformed tool overrides", value: { toolOverrides: { webSearch: "yes" } } },
     { name: "an unknown field", value: { unknown: true } },
   ])("rejects $name in creating parameters", ({ value }) => {
@@ -335,18 +512,6 @@ describe("session placement recovery", () => {
         "cloud",
       ),
     ).toBeNull();
-  });
-
-  it("does not let stale cleanup erase another session", () => {
-    expect(writeSessionPlacementRecovery(recovery)).toBe(true);
-    clearSessionPlacementRecovery(recovery.gatewayUrl, recovery.recoveryScope, "agent:cloud:older");
-    expect(
-      readSessionPlacementRecovery(
-        recovery.gatewayUrl,
-        recovery.recoveryScope,
-        recovery.sessionKey,
-      ),
-    ).toEqual(recovery);
   });
 
   it("arbitrates matching sessions without blocking another session", () => {

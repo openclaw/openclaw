@@ -6,18 +6,15 @@ import {
   normalizeOptionalLowercaseString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
-import type { AgentPlanStep } from "../channels/streaming.js";
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { consumeRootOptionToken } from "../infra/cli-root-options.js";
+import type {
+  ExecApprovalPendingReplyParams,
+  ExecApprovalUnavailableReplyParams,
+} from "../infra/exec-approval-reply.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
-import {
-  parseInteractiveParam,
-  parseJsonMessageParam,
-} from "../infra/outbound/message-action-params.js";
+import { parseJsonMessageParam } from "../infra/outbound/message-action-params.js";
 import { hasReplyPayloadContent } from "../interactive/payload.js";
-import {
-  normalizeProgressCardInput,
-  ProgressCardInputError,
-} from "../session-cards/progress-card-input.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { hasTopLevelShellControlOperator, splitShellArgs } from "../utils/shell-argv.js";
 import type { ApplyPatchSummary } from "./apply-patch.js";
@@ -28,9 +25,13 @@ import {
   filterToolResultMediaUrls,
 } from "./embedded-agent-tool-media.js";
 import { extractToolResultText, truncateLiveExecOutput } from "./embedded-agent-tool-results.js";
-import type { ProcessTerminalDiagnostic } from "./tool-error-summary.js";
+import {
+  hasTerminalControlCharacter,
+  type ProcessTerminalDiagnostic,
+} from "./tool-error-summary.js";
 import { readToolResultDetails } from "./tool-result-error.js";
 import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
+import { getCoreTtsToolResultMediaUrls } from "./tools/tts-tool-result-provenance.js";
 
 type ExecApprovalReplyModule = typeof import("../infra/exec-approval-reply.js");
 
@@ -59,45 +60,8 @@ export function resolveFallbackToolTerminalObserver(ctx: ToolHandlerContext) {
   return created;
 }
 
-export function readProgressCardPlanInput(args: unknown): { steps: AgentPlanStep[] } | undefined {
-  const params = readRecordField(args);
-  if (!params) {
-    return undefined;
-  }
-  try {
-    return {
-      steps:
-        normalizeProgressCardInput({ markdown: params.markdown, plan: params.plan }).steps ?? [],
-    };
-  } catch (error) {
-    if (error instanceof ProgressCardInputError) {
-      return undefined;
-    }
-    throw error;
-  }
-}
-
 export function isMiddlewareToolResultError(result: unknown): boolean {
-  if (!result || typeof result !== "object") {
-    return false;
-  }
-  const details = (result as { details?: unknown }).details;
-  return Boolean(
-    details &&
-    typeof details === "object" &&
-    !Array.isArray(details) &&
-    (details as { middlewareError?: unknown }).middlewareError === true,
-  );
-}
-
-export function hasTerminalControlCharacter(value: string): boolean {
-  for (const char of value) {
-    const code = char.charCodeAt(0);
-    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) {
-      return true;
-    }
-  }
-  return false;
+  return readRecordField(asOptionalObjectRecord(result)?.details)?.middlewareError === true;
 }
 
 const PROCESS_TERMINATION_REASONS = new Set([
@@ -174,20 +138,12 @@ export function buildProcessTerminalDiagnostic(
   };
 }
 
-function loadExecApprovalReply(): Promise<ExecApprovalReplyModule> {
-  return execApprovalReplyModuleLoader.load();
-}
-
 export function loadHookRunnerGlobal(): Promise<HookRunnerGlobalModule> {
   return hookRunnerGlobalModuleLoader.load();
 }
 
 export function isCronAddAction(args: unknown): boolean {
-  if (!args || typeof args !== "object") {
-    return false;
-  }
-  const action = (args as Record<string, unknown>).action;
-  return normalizeOptionalLowercaseString(action) === "add";
+  return normalizeOptionalLowercaseString(asOptionalObjectRecord(args)?.action) === "add";
 }
 
 export function applyCurrentMessageProvider(
@@ -220,28 +176,6 @@ export function applyToolSendReceiptForExtraction(
       ...readToolResultDetails(result),
       toolSend,
     },
-  };
-}
-
-export function isAsyncStartedToolResult(result: unknown): boolean {
-  const details = readToolResultDetails(result);
-  return details?.async === true && details.status === "started";
-}
-
-export function readAsyncStartedTaskIds(result: unknown): {
-  asyncTaskRunId?: string;
-  asyncTaskId?: string;
-} {
-  const details = readToolResultDetails(result);
-  if (!details) {
-    return {};
-  }
-  const nestedTask = readRecordField(details.task);
-  const asyncTaskRunId = readStringValue(details.runId) ?? readStringValue(nestedTask?.runId);
-  const asyncTaskId = readStringValue(details.taskId) ?? readStringValue(nestedTask?.taskId);
-  return {
-    ...(asyncTaskRunId ? { asyncTaskRunId } : {}),
-    ...(asyncTaskId ? { asyncTaskId } : {}),
   };
 }
 
@@ -308,17 +242,15 @@ function skipOpenClawPackageRunner(
         option === "-y" ||
         option === "--yes" ||
         option === "--no-install" ||
-        option === "--bun"
+        option === "--bun" ||
+        option?.startsWith("--package=") ||
+        option?.startsWith("--yes=")
       ) {
         commandIndex += 1;
         continue;
       }
       if (option === "-p" || option === "--package") {
         commandIndex += 2;
-        continue;
-      }
-      if (option?.startsWith("--package=") || option?.startsWith("--yes=")) {
-        commandIndex += 1;
         continue;
       }
       break;
@@ -382,52 +314,21 @@ export function didShellCronAddSucceed(args: unknown, result: unknown): boolean 
 
 export function readApplyPatchSummary(result: unknown): ApplyPatchSummary | null {
   const details = readToolResultDetails(result);
-  const summary =
-    details?.summary && typeof details.summary === "object" && !Array.isArray(details.summary)
-      ? (details.summary as Record<string, unknown>)
-      : null;
+  const summary = readRecordField(details?.summary);
   if (!summary) {
     return null;
   }
-  const added = Array.isArray(summary.added)
-    ? summary.added.filter((entry): entry is string => typeof entry === "string")
-    : [];
-  const modified = Array.isArray(summary.modified)
-    ? summary.modified.filter((entry): entry is string => typeof entry === "string")
-    : [];
-  const deleted = Array.isArray(summary.deleted)
-    ? summary.deleted.filter((entry): entry is string => typeof entry === "string")
-    : [];
-  return { added, modified, deleted };
-}
-
-function shouldSuppressStructuredMediaToolOutput(params: {
-  toolName: string;
-  rawToolName: string;
-  isToolError: boolean;
-  hasDeliverableStructuredMedia: boolean;
-  builtinToolNames?: ReadonlySet<string>;
-}): boolean {
-  return (
-    params.toolName === "tts" &&
-    params.rawToolName.trim() === "tts" &&
-    params.builtinToolNames?.has("tts") === true &&
-    !params.isToolError &&
-    params.hasDeliverableStructuredMedia
-  );
+  return {
+    added: filterStringEntries(summary.added),
+    modified: filterStringEntries(summary.modified),
+    deleted: filterStringEntries(summary.deleted),
+  };
 }
 
 export function buildPatchSummaryText(summary: ApplyPatchSummary): string {
-  const parts: string[] = [];
-  if (summary.added.length > 0) {
-    parts.push(`${summary.added.length} added`);
-  }
-  if (summary.modified.length > 0) {
-    parts.push(`${summary.modified.length} modified`);
-  }
-  if (summary.deleted.length > 0) {
-    parts.push(`${summary.deleted.length} deleted`);
-  }
+  const parts = (["added", "modified", "deleted"] as const).flatMap((kind) =>
+    summary[kind].length > 0 ? [`${summary[kind].length} ${kind}`] : [],
+  );
   return parts.length > 0 ? parts.join(", ") : "no file changes recorded";
 }
 
@@ -449,7 +350,7 @@ export function hasMessagingRichContent(record: Record<string, unknown>): boolea
   };
   try {
     parseJsonMessageParam(payload, "presentation");
-    parseInteractiveParam(payload);
+    parseJsonMessageParam(payload, "interactive");
   } catch {
     return false;
   }
@@ -460,6 +361,7 @@ function queuePendingToolMedia(
   ctx: ToolHandlerContext,
   mediaReply: NonNullable<ReturnType<typeof extractToolResultMediaArtifact>>,
   allowedMediaUrls: string[],
+  autoDeliveryMediaUrls: ReadonlySet<string>,
 ) {
   const indexByUrl = new Map(
     ctx.state.pendingToolMediaUrls.map((url, index) => [url.trim(), index]),
@@ -480,6 +382,12 @@ function queuePendingToolMedia(
     } else if (!ctx.state.pendingToolMediaTrustByUrl.has(normalized)) {
       ctx.state.pendingToolMediaTrustByUrl.set(normalized, false);
     }
+    if (autoDeliveryMediaUrls.has(normalized)) {
+      ctx.state.toolAutoDeliveryMediaUrls.add(normalized);
+    } else {
+      // One shared URL with mixed provenance must never inherit auto-delivery.
+      ctx.state.toolAutoDeliveryMediaUrls.delete(normalized);
+    }
     const attachment = attachmentsByUrl.get(normalized);
     const existingIndex = indexByUrl.get(normalized);
     if (existingIndex !== undefined) {
@@ -497,26 +405,10 @@ function queuePendingToolMedia(
   }
 }
 
-function readExecApprovalPendingDetails(result: unknown): {
-  approvalId: string;
-  approvalSlug: string;
-  expiresAtMs?: number;
-  allowedDecisions?: readonly ExecApprovalDecision[];
-  host: "gateway" | "node";
-  command: string;
-  cwd?: string;
-  nodeId?: string;
-  warningText?: string;
-} | null {
-  if (!result || typeof result !== "object") {
-    return null;
-  }
-  const outer = result as Record<string, unknown>;
-  const details =
-    outer.details && typeof outer.details === "object" && !Array.isArray(outer.details)
-      ? (outer.details as Record<string, unknown>)
-      : outer;
-  if (details.status !== "approval-pending") {
+function readExecApprovalPendingDetails(result: unknown): ExecApprovalPendingReplyParams | null {
+  const outer = asOptionalObjectRecord(result);
+  const details = readRecordField(outer?.details) ?? outer;
+  if (details?.status !== "approval-pending") {
     return null;
   }
   const approvalId = readStringValue(details.approvalId) ?? "";
@@ -544,25 +436,12 @@ function readExecApprovalPendingDetails(result: unknown): {
   };
 }
 
-function readExecApprovalUnavailableDetails(result: unknown): {
-  reason: "initiating-platform-disabled" | "initiating-platform-unsupported" | "no-approval-route";
-  warningText?: string;
-  channel?: string;
-  channelLabel?: string;
-  accountId?: string;
-  sentApproverDms?: boolean;
-  host?: "gateway" | "node";
-  nodeId?: string;
-} | null {
-  if (!result || typeof result !== "object") {
-    return null;
-  }
-  const outer = result as Record<string, unknown>;
-  const details =
-    outer.details && typeof outer.details === "object" && !Array.isArray(outer.details)
-      ? (outer.details as Record<string, unknown>)
-      : outer;
-  if (details.status !== "approval-unavailable") {
+function readExecApprovalUnavailableDetails(
+  result: unknown,
+): ExecApprovalUnavailableReplyParams | null {
+  const outer = asOptionalObjectRecord(result);
+  const details = readRecordField(outer?.details) ?? outer;
+  if (details?.status !== "approval-unavailable") {
     return null;
   }
   const reason =
@@ -596,90 +475,54 @@ export async function emitToolResultOutput(params: {
   sanitizedResult: unknown;
 }) {
   const { ctx, toolName, rawToolName, meta, isToolError, result, sanitizedResult } = params;
-  const recordApprovalPromptDeliveryFailure = (error: unknown) => {
-    const message = error instanceof Error ? error.message : String(error);
-    ctx.log.warn(`failed to deliver exec approval prompt: ${message}`);
-    const approvalMeta = meta ? `${meta} · approval prompt delivery` : "approval prompt delivery";
-    const terminal = (ctx.params.observeToolTerminal ?? resolveFallbackToolTerminalObserver(ctx))({
-      toolName,
-      meta: approvalMeta,
-      executionStarted: false,
-      outcome: "failure",
-      failure: { error: `Approval prompt delivery failed: ${message}` },
-    });
-    ctx.state.lastToolError = terminal.lastToolError;
-    ctx.state.deterministicApprovalPromptSent = false;
-  };
-  const hasStructuredMedia = Boolean(
-    result &&
-    typeof result === "object" &&
-    (result as { details?: unknown }).details &&
-    typeof (result as { details?: unknown }).details === "object" &&
-    !Array.isArray((result as { details?: unknown }).details) &&
-    typeof ((result as { details?: { media?: unknown } }).details?.media ?? undefined) ===
-      "object" &&
-    !Array.isArray((result as { details?: { media?: unknown } }).details?.media),
-  );
+  const details = readRecordField(asOptionalObjectRecord(result)?.details);
+  const hasStructuredMedia = readRecordField(details?.media) !== undefined;
   const approvalPending = readExecApprovalPendingDetails(result);
-  if (!isToolError && approvalPending) {
+  const approvalUnavailable =
+    !isToolError && approvalPending ? null : readExecApprovalUnavailableDetails(result);
+  if (!isToolError && (approvalPending || approvalUnavailable)) {
     if (!ctx.params.onToolResult) {
       return;
     }
-    ctx.state.deterministicApprovalPromptPending = true;
+    // Setup notices are progress; only pending approvals suppress the final answer.
+    if (approvalPending) {
+      ctx.state.deterministicApprovalPromptPending = true;
+    }
     try {
-      const { buildTypedExecApprovalPendingReplyPayload } = await loadExecApprovalReply();
-      await ctx.params.onToolResult(
-        buildTypedExecApprovalPendingReplyPayload({
-          approvalId: approvalPending.approvalId,
-          approvalSlug: approvalPending.approvalSlug,
-          allowedDecisions: approvalPending.allowedDecisions,
-          command: approvalPending.command,
-          cwd: approvalPending.cwd,
-          host: approvalPending.host,
-          nodeId: approvalPending.nodeId,
-          expiresAtMs: approvalPending.expiresAtMs,
-          warningText: approvalPending.warningText,
-        }),
-      );
-      ctx.state.deterministicApprovalPromptSent = true;
+      const replies = await execApprovalReplyModuleLoader.load();
+      if (approvalPending) {
+        await ctx.params.onToolResult(
+          replies.buildTypedExecApprovalPendingReplyPayload(approvalPending),
+        );
+        ctx.state.deterministicApprovalPromptSent = true;
+      } else if (approvalUnavailable) {
+        await ctx.params.onToolResult?.(
+          replies.buildExecApprovalUnavailableReplyPayload(approvalUnavailable),
+        );
+      }
     } catch (error) {
-      recordApprovalPromptDeliveryFailure(error);
+      const message = error instanceof Error ? error.message : String(error);
+      ctx.log.warn(`failed to deliver exec approval prompt: ${message}`);
+      const approvalMeta = meta ? `${meta} · approval prompt delivery` : "approval prompt delivery";
+      const terminal = (ctx.params.observeToolTerminal ?? resolveFallbackToolTerminalObserver(ctx))(
+        {
+          toolName,
+          meta: approvalMeta,
+          executionStarted: false,
+          outcome: "failure",
+          failure: { error: `Approval prompt delivery failed: ${message}` },
+        },
+      );
+      ctx.state.lastToolError = terminal.lastToolError;
+      // A later delivery failure does not undo an already delivered pending prompt.
     } finally {
-      ctx.state.deterministicApprovalPromptPending = false;
+      if (approvalPending) {
+        ctx.state.deterministicApprovalPromptPending = false;
+      }
     }
     return;
   }
 
-  const approvalUnavailable = readExecApprovalUnavailableDetails(result);
-  if (!isToolError && approvalUnavailable) {
-    if (!ctx.params.onToolResult) {
-      return;
-    }
-    ctx.state.deterministicApprovalPromptPending = true;
-    try {
-      const { buildExecApprovalUnavailableReplyPayload } = await loadExecApprovalReply();
-      await ctx.params.onToolResult?.(
-        buildExecApprovalUnavailableReplyPayload({
-          reason: approvalUnavailable.reason,
-          warningText: approvalUnavailable.warningText,
-          channel: approvalUnavailable.channel,
-          channelLabel: approvalUnavailable.channelLabel,
-          accountId: approvalUnavailable.accountId,
-          sentApproverDms: approvalUnavailable.sentApproverDms,
-          host: approvalUnavailable.host,
-          nodeId: approvalUnavailable.nodeId,
-        }),
-      );
-      ctx.state.deterministicApprovalPromptSent = true;
-    } catch (error) {
-      recordApprovalPromptDeliveryFailure(error);
-    } finally {
-      ctx.state.deterministicApprovalPromptPending = false;
-    }
-    return;
-  }
-
-  const outputText = extractToolResultText(sanitizedResult);
   const mediaReply = isToolError ? undefined : extractToolResultMediaArtifact(result);
   const mediaUrls = mediaReply
     ? filterToolResultMediaUrls(
@@ -689,15 +532,16 @@ export async function emitToolResultOutput(params: {
         ctx.trustedLocalMediaToolNames,
       )
     : [];
-  const shouldEmitOutput =
-    !shouldSuppressStructuredMediaToolOutput({
-      toolName,
-      rawToolName,
-      isToolError,
-      hasDeliverableStructuredMedia: hasStructuredMedia && mediaUrls.length > 0,
-      builtinToolNames: ctx.builtinToolNames,
-    }) && ctx.shouldEmitToolOutput();
+  const suppressStructuredTtsOutput =
+    toolName === "tts" &&
+    rawToolName.trim() === "tts" &&
+    ctx.builtinToolNames?.has("tts") === true &&
+    !isToolError &&
+    hasStructuredMedia &&
+    mediaUrls.length > 0;
+  const shouldEmitOutput = !suppressStructuredTtsOutput && ctx.shouldEmitToolOutput();
   if (shouldEmitOutput) {
+    const outputText = extractToolResultText(sanitizedResult);
     if (outputText) {
       ctx.emitToolOutput(rawToolName, meta, outputText, hasStructuredMedia ? undefined : result);
     }
@@ -706,15 +550,11 @@ export async function emitToolResultOutput(params: {
     }
   }
 
-  if (isToolError) {
+  if (isToolError || !mediaReply || mediaUrls.length === 0) {
     return;
   }
-
-  if (!mediaReply) {
-    return;
-  }
-  if (mediaUrls.length === 0) {
-    return;
-  }
-  queuePendingToolMedia(ctx, mediaReply, mediaUrls);
+  const autoDeliveryMediaUrls = new Set(
+    mediaReply.trustedLocalMedia === true ? getCoreTtsToolResultMediaUrls(result) : [],
+  );
+  queuePendingToolMedia(ctx, mediaReply, mediaUrls, autoDeliveryMediaUrls);
 }

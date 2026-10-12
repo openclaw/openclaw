@@ -1,132 +1,87 @@
-// Status command report tests cover terminal report line rendering from report sections.
-import { describe, expect, it } from "vitest";
-import { buildStatusCommandReportLines } from "./status.command-report.ts";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import * as terminalTable from "../../packages/terminal-core/src/table.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
+import { buildStatusCommandReportLines } from "./status.command-report.js";
 
-function createRenderTable() {
-  return ({ columns, rows }: { columns: Array<Record<string, unknown>>; rows: unknown[] }) =>
-    `table:${String(columns[0]?.header)}:${rows.length}`;
-}
+const renderTable: typeof terminalTable.renderTable = ({ columns, rows }) =>
+  `table:${columns.map((column) => column.header).join("+")}:${rows.length} \n\t`;
 
-describe("buildStatusCommandReportLines", () => {
-  it("builds the full command report with optional sections", async () => {
-    const lines = await buildStatusCommandReportLines({
-      heading: (text) => `# ${text}`,
-      muted: (text) => `muted(${text})`,
-      renderTable: createRenderTable(),
-      width: 120,
-      overviewRows: [{ Item: "OS", Value: "macOS" }],
-      showTaskMaintenanceHint: true,
-      taskMaintenanceHint: "maintenance hint",
-      retainedLostTaskLine: "retained lost line",
-      pluginCompatibilityLines: ["warn 1"],
-      pairingRecoveryLines: ["pairing needed"],
-      modelSelectionLines: ["model warning"],
-      securityAuditLines: ["audit line"],
-      channelsColumns: [{ key: "Channel", header: "Channel" }],
-      channelsRows: [{ Channel: "quietchat" }],
-      sessionsColumns: [{ key: "Key", header: "Key" }],
-      sessionsRows: [{ Key: "main" }],
-      systemEventsRows: [{ Event: "queued" }],
-      systemEventsTrailer: "muted(… +1 more)",
-      healthColumns: [{ key: "Item", header: "Item" }],
-      healthRows: [{ Item: "Gateway" }],
-      usageLines: ["usage line"],
-      footerLines: ["FAQ", "Next steps:"],
-    });
+beforeEach(() => {
+  vi.spyOn(theme, "heading").mockImplementation((text) => `# ${String(text)}`);
+  vi.spyOn(theme, "muted").mockImplementation(String);
+  vi.spyOn(terminalTable, "renderTable").mockImplementation(renderTable);
+});
+afterEach(() => vi.restoreAllMocks());
 
-    expect(lines).toEqual([
+const params: Parameters<typeof buildStatusCommandReportLines>[0] = {
+  width: 120,
+  overviewRows: [{ Item: "OS", Value: "macOS" }],
+  pluginCompatibilityLines: ["plugin warning"],
+  pairingRecoveryLines: ["pairing needed"],
+  modelSelectionLines: ["model warning"],
+  securityAuditLines: ["audit line"],
+  channelsColumns: [{ key: "Channel", header: "Channel" }],
+  channelsRows: [{ Channel: "quietchat" }],
+  sessionsColumns: [{ key: "Key", header: "Key" }],
+  sessionsRows: [{ Key: "main" }],
+  systemEventsRows: [{ Event: "queued" }],
+  systemEventsTrailer: "… +1 more",
+  healthColumns: [{ key: "Item", header: "Item" }],
+  healthRows: [{ Item: "Gateway" }],
+  usageLines: ["usage line"],
+  footerLines: ["FAQ", "Next steps:"],
+};
+
+it("renders the full report in section order and trims table output", async () => {
+  expect((await buildStatusCommandReportLines(params)).join("\n")).toBe(
+    [
       "# OpenClaw status",
-      "",
-      "# Overview",
-      "table:Item:1",
-      "",
-      "muted(maintenance hint)",
-      "retained lost line",
-      "",
-      "# Plugin compatibility",
-      "warn 1",
-      "",
+      "# Overview\ntable:Item+Value:1",
+      "# Plugin compatibility\nplugin warning",
       "pairing needed",
-      "",
-      "# Model selection",
-      "model warning",
-      "",
-      "# Security audit",
-      "audit line",
-      "",
-      "# Channels",
-      "table:Channel:1",
-      "",
-      "# Sessions",
-      "table:Key:1",
-      "",
-      "# System events",
-      "table:Event:1",
-      "muted(… +1 more)",
-      "",
-      "# Health",
-      "table:Item:1",
-      "",
-      "# Usage",
-      "usage line",
-      "",
-      "FAQ",
-      "Next steps:",
-    ]);
+      "# Model selection\nmodel warning",
+      "# Security audit\naudit line",
+      "# Channels\ntable:Channel:1",
+      "# Sessions\ntable:Key:1",
+      "# System events\ntable:Event:1\n… +1 more",
+      "# Health\ntable:Item:1",
+      "# Usage\nusage line",
+      "FAQ\nNext steps:",
+    ].join("\n\n"),
+  );
+});
+
+it("prepares empty-state messages before rendering and omits absent sections", async () => {
+  const events: string[] = [];
+  vi.spyOn(theme, "muted").mockImplementation((text) => {
+    events.push(String(text));
+    return String(text);
   });
-
-  it("omits optional sections when inputs are absent", async () => {
-    const lines = await buildStatusCommandReportLines({
-      heading: (text) => `# ${text}`,
-      muted: (text) => text,
-      renderTable: createRenderTable(),
-      width: 120,
-      overviewRows: [{ Item: "OS", Value: "macOS" }],
-      showTaskMaintenanceHint: false,
-      taskMaintenanceHint: "ignored",
-      pluginCompatibilityLines: [],
-      pairingRecoveryLines: [],
-      modelSelectionLines: [],
-      securityAuditLines: ["audit line"],
-      channelsColumns: [{ key: "Channel", header: "Channel" }],
-      channelsRows: [{ Channel: "quietchat" }],
-      sessionsColumns: [{ key: "Key", header: "Key" }],
-      sessionsRows: [{ Key: "main" }],
-      footerLines: ["FAQ"],
-    });
-
-    expect(lines).not.toContain("# Plugin compatibility");
-    expect(lines).not.toContain("# System events");
-    expect(lines).not.toContain("# Health");
-    expect(lines).not.toContain("# Usage");
-    expect(lines.at(-1)).toBe("FAQ");
+  vi.spyOn(terminalTable, "renderTable").mockImplementation((input) => {
+    events.push("table");
+    return renderTable(input);
   });
-
-  it("renders empty channels and sessions as plain messages", async () => {
-    const lines = await buildStatusCommandReportLines({
-      heading: (text) => `# ${text}`,
-      muted: (text) => `muted(${text})`,
-      renderTable: createRenderTable(),
-      width: 120,
-      overviewRows: [{ Item: "OS", Value: "macOS" }],
-      showTaskMaintenanceHint: false,
-      taskMaintenanceHint: "ignored",
-      pluginCompatibilityLines: [],
-      pairingRecoveryLines: [],
-      modelSelectionLines: [],
-      securityAuditLines: ["audit line"],
-      channelsColumns: [{ key: "Channel", header: "Channel" }],
-      channelsRows: [],
-      sessionsColumns: [{ key: "Key", header: "Key" }],
-      sessionsRows: [],
-      footerLines: ["FAQ"],
-    });
-
-    expect(lines).toContain("# Channels");
-    expect(lines).toContain("muted(No channels configured)");
-    expect(lines).toContain("# Sessions");
-    expect(lines).toContain("muted(No sessions)");
-    expect(lines).not.toContain("table:Channel:0");
-    expect(lines).not.toContain("table:Key:0");
+  const lines = await buildStatusCommandReportLines({
+    ...params,
+    pluginCompatibilityLines: [],
+    pairingRecoveryLines: [],
+    modelSelectionLines: [],
+    channelsRows: [],
+    sessionsRows: [],
+    systemEventsRows: undefined,
+    healthColumns: undefined,
+    healthRows: undefined,
+    usageLines: undefined,
   });
+  expect(events).toEqual(["No channels configured", "No sessions", "table"]);
+  expect(lines.join("\n")).toBe(
+    [
+      "# OpenClaw status",
+      "# Overview\ntable:Item+Value:1",
+      "# Security audit\naudit line",
+      "# Channels\nNo channels configured",
+      "# Sessions\nNo sessions",
+      "FAQ\nNext steps:",
+    ].join("\n\n"),
+  );
 });

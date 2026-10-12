@@ -1,140 +1,126 @@
-// Browser tests cover cdp plugin behavior.
-import { createServer } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
+import { SsrFBlockedError } from "openclaw/plugin-sdk/security-runtime";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
+import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { type WebSocket, WebSocketServer } from "ws";
-import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import "../test-support/browser-security.mock.js";
-import { closeTrackedCdpTarget, resolveCdpTabOwnership } from "./cdp.helpers.js";
 import {
-  createTargetViaCdp,
+  closeTrackedCdpTarget,
+  normalizeCdpHttpBaseForJsonEndpoints,
   normalizeCdpWsUrl,
-  snapshotAria,
-  snapshotRoleViaCdp,
-  waitForCdpCommittedNavigationUrl,
-} from "./cdp.js";
-import { BrowserCdpEndpointBlockedError } from "./errors.js";
+  redactCdpErrorText,
+  resolveCdpTabOwnership,
+} from "./cdp.helpers.js";
+import { createTargetViaCdp, waitForCdpCommittedNavigationUrl } from "./cdp.js";
+import { BrowserCdpEndpointBlockedError, toBrowserErrorResponse } from "./errors.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
 
-const CDP_TEST_WS_MAX_PAYLOAD_BYTES = 1024 * 1024;
+type Message = { id?: number; method?: string; params?: Record<string, unknown> };
+type Reply = { result: Record<string, unknown> } | { error: { message: string } };
+const servers: Array<{ close: (callback: () => void) => void }> = [];
+const enabledMethods = new Set([
+  "Target.detachFromTarget",
+  "Page.enable",
+  "Runtime.enable",
+  "Network.enable",
+  "DOM.enable",
+  "Accessibility.enable",
+  "Runtime.runIfWaitingForDebugger",
+]);
+const strictPolicy = { dangerouslyAllowPrivateNetwork: false, allowedHostnames: ["127.0.0.1"] };
 
-describe("cdp", () => {
-  let httpServer: ReturnType<typeof createServer> | null = null;
-  let wsServer: WebSocketServer | null = null;
-
-  const startWsServer = async () => {
-    wsServer = new WebSocketServer({ port: 0, host: "127.0.0.1" });
-    await new Promise<void>((resolve) => {
-      wsServer?.once("listening", resolve);
-    });
-    return (wsServer.address() as { port: number }).port;
-  };
-
-  const startWsServerWithMessages = async (
-    onMessage: (
-      msg: { id?: number; method?: string; params?: Record<string, unknown> },
-      socket: WebSocket,
-    ) => void,
-  ) => {
-    const wsPort = await startWsServer();
-    if (!wsServer) {
-      throw new Error("ws server not initialized");
+async function startBrowser(
+  handle: (message: Message, path: string) => Reply | undefined,
+  options: {
+    advertisedUrl?: string;
+    versionBody?: Record<string, unknown>;
+    discover?: (request: IncomingMessage, response: ServerResponse) => void;
+  } = {},
+) {
+  let wsUrl = "";
+  const http = createServer((request, response) => {
+    if (request.url !== "/json/version") {
+      response.writeHead(404).end();
+      return;
     }
-    wsServer.on("connection", (socket) => {
-      socket.on("message", (data) => {
-        const msg = JSON.parse(rawDataToString(data)) as {
-          id?: number;
-          method?: string;
-          params?: Record<string, unknown>;
-        };
-        onMessage(msg, socket);
-        if (msg.method === "Target.attachToTarget") {
-          socket.send(JSON.stringify({ id: msg.id, result: { sessionId: "S1" } }));
-        } else if (
-          msg.method === "Target.detachFromTarget" ||
-          msg.method === "Page.enable" ||
-          msg.method === "Runtime.enable" ||
-          msg.method === "Network.enable" ||
-          msg.method === "DOM.enable" ||
-          msg.method === "Accessibility.enable" ||
-          msg.method === "Runtime.runIfWaitingForDebugger"
-        ) {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-        }
-      });
-    });
-    return wsPort;
-  };
-
-  const startVersionHttpServer = async (versionBody: Record<string, unknown>) => {
-    httpServer = createServer((req, res) => {
-      if (req.url === "/json/version") {
-        res.setHeader("content-type", "application/json");
-        res.end(JSON.stringify(versionBody));
-        return;
+    if (options.discover) {
+      return options.discover(request, response);
+    }
+    response.setHeader("content-type", "application/json");
+    response.end(
+      JSON.stringify(
+        options.versionBody ?? { webSocketDebuggerUrl: options.advertisedUrl ?? wsUrl },
+      ),
+    );
+  });
+  const ws = new WebSocketServer({ server: http });
+  servers.push(ws, http);
+  const messages: Message[] = [];
+  ws.on("connection", (socket, request) => {
+    socket.on("message", (raw) => {
+      const message = JSON.parse(rawDataToString(raw)) as Message;
+      messages.push(message);
+      const reply =
+        handle(message, request.url ?? "") ??
+        (message.method === "Target.attachToTarget"
+          ? { result: { sessionId: "S1" } }
+          : enabledMethods.has(message.method ?? "")
+            ? { result: {} }
+            : undefined);
+      if (reply) {
+        socket.send(JSON.stringify({ id: message.id, ...reply }));
       }
-      res.statusCode = 404;
-      res.end("not found");
-    });
-    await new Promise<void>((resolve) => {
-      httpServer?.listen(0, "127.0.0.1", resolve);
-    });
-    return (httpServer.address() as { port: number }).port;
-  };
-
-  afterEach(async () => {
-    vi.unstubAllEnvs();
-    await new Promise<void>((resolve) => {
-      if (!httpServer) {
-        resolve();
-        return;
-      }
-      httpServer.close(() => resolve());
-      httpServer = null;
-    });
-    await new Promise<void>((resolve) => {
-      if (!wsServer) {
-        resolve();
-        return;
-      }
-      wsServer.close(() => resolve());
-      wsServer = null;
     });
   });
+  await new Promise<void>((resolve) => {
+    http.listen(0, "127.0.0.1", resolve);
+  });
+  const cdpUrl = `http://127.0.0.1:${(http.address() as AddressInfo).port}`;
+  wsUrl = `${cdpUrl.replace("http:", "ws:")}/devtools/browser/TEST`;
+  return { cdpUrl, wsUrl, messages };
+}
 
-  it("creates a target via the browser websocket", async () => {
-    const methods: string[] = [];
-    let createTargetParams: Record<string, unknown> | undefined;
-    const wsPort = await startWsServerWithMessages((msg, socket) => {
-      if (msg.method) {
-        methods.push(msg.method);
-      }
-      if (msg.method !== "Target.createTarget") {
-        return;
-      }
-      createTargetParams = msg.params;
-      socket.send(
-        JSON.stringify({
-          id: msg.id,
-          result: { targetId: "TARGET_123" },
+beforeEach(() => {
+  for (const key of [
+    "ALL_PROXY",
+    "all_proxy",
+    "HTTP_PROXY",
+    "http_proxy",
+    "HTTPS_PROXY",
+    "https_proxy",
+  ]) {
+    vi.stubEnv(key, "");
+  }
+});
+afterEach(async () => {
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+  await Promise.all(
+    servers.splice(0).map(
+      (server) =>
+        new Promise<void>((resolve) => {
+          server.close(resolve);
         }),
-      );
-    });
+    ),
+  );
+});
 
-    const httpPort = await startVersionHttpServer({
-      webSocketDebuggerUrl: `ws://127.0.0.1:${wsPort}/devtools/browser/TEST`,
-    });
-
-    const created = await createTargetViaCdp({
-      cdpUrl: `http://127.0.0.1:${httpPort}`,
-      url: "https://example.com",
-    });
-
-    expect(created.targetId).toBe("TARGET_123");
-    expect(createTargetParams).toEqual({ url: "https://example.com", background: true });
-    expect(methods).toEqual([
+describe("CDP target creation", () => {
+  it("opens an explicitly allowed private target in the background and prepares its page", async () => {
+    const browser = await startBrowser((message) =>
+      message.method === "Target.createTarget" ? { result: { targetId: "TARGET" } } : undefined,
+    );
+    await expect(
+      createTargetViaCdp({
+        cdpUrl: browser.cdpUrl,
+        url: "http://127.0.0.1:8080",
+        ssrfPolicy: { allowPrivateNetwork: true },
+      }),
+    ).resolves.toEqual({ targetId: "TARGET" });
+    expect(browser.messages[0]?.params).toEqual({ url: "http://127.0.0.1:8080", background: true });
+    expect(browser.messages.map((message) => message.method)).toEqual([
       "Target.createTarget",
       "Target.attachToTarget",
       "Page.enable",
@@ -147,380 +133,160 @@ describe("cdp", () => {
     ]);
   });
 
-  it("verifies ownership and closes a tracked target on one browser connection", async () => {
-    const methods: string[] = [];
-    const wsPort = await startWsServerWithMessages((msg, socket) => {
-      if (msg.method) {
-        methods.push(msg.method);
-      }
-      if (msg.method === "Target.getTargets") {
-        socket.send(
-          JSON.stringify({
-            id: msg.id,
-            result: {
-              targetInfos: [
-                { targetId: "OWNED", type: "page" },
-                { targetId: "USER", type: "page" },
-              ],
-            },
-          }),
-        );
-      } else if (msg.method === "Target.closeTarget") {
-        socket.send(JSON.stringify({ id: msg.id, result: { success: true } }));
-      }
-    });
-    const browserWebSocketUrl = `ws://127.0.0.1:${wsPort}/devtools/browser/TEST`;
-    const httpPort = await startVersionHttpServer({ webSocketDebuggerUrl: browserWebSocketUrl });
-    const cdpUrl = `http://127.0.0.1:${httpPort}`;
-    const resolvedOwnership = await resolveCdpTabOwnership({
-      profileName: "remote",
-      cdpUrl,
-      nativeTargetId: "OWNED",
-    });
-    expect(resolvedOwnership.status).toBe("durable");
-    if (resolvedOwnership.status !== "durable") {
-      throw new Error("expected durable ownership");
-    }
-
-    await expect(
-      closeTrackedCdpTarget({
-        profileName: "remote",
-        cdpUrl,
-        nativeTargetId: "OWNED",
-        expectedProfileFingerprint: resolvedOwnership.profileFingerprint,
-        expectedBrowserInstanceFingerprint: resolvedOwnership.browserInstanceFingerprint,
-      }),
-    ).resolves.toEqual({ status: "closed" });
-    expect(methods).toEqual(["Target.getTargets", "Target.closeTarget"]);
-    methods.length = 0;
-    await expect(
-      closeTrackedCdpTarget({
-        profileName: "remote",
-        cdpUrl,
-        nativeTargetId: "OWNED",
-        expectedProfileFingerprint: resolvedOwnership.profileFingerprint,
-        expectedBrowserInstanceFingerprint: resolvedOwnership.browserInstanceFingerprint,
-        shouldClose: () => false,
-      }),
-    ).resolves.toEqual({ status: "cancelled" });
-    expect(methods).toEqual(["Target.getTargets"]);
-  });
-
-  it("retires an absent target without issuing a close command", async () => {
-    const methods: string[] = [];
-    const wsPort = await startWsServerWithMessages((msg, socket) => {
-      if (msg.method) {
-        methods.push(msg.method);
-      }
-      if (msg.method === "Target.getTargets") {
-        socket.send(
-          JSON.stringify({
-            id: msg.id,
-            result: { targetInfos: [{ targetId: "USER", type: "page" }] },
-          }),
-        );
-      }
-    });
-    const browserWebSocketUrl = `ws://127.0.0.1:${wsPort}/devtools/browser/TEST`;
-    const httpPort = await startVersionHttpServer({ webSocketDebuggerUrl: browserWebSocketUrl });
-    const cdpUrl = `http://127.0.0.1:${httpPort}`;
-    const resolvedOwnership = await resolveCdpTabOwnership({
-      profileName: "remote",
-      cdpUrl,
-      nativeTargetId: "MISSING",
-    });
-    expect(resolvedOwnership.status).toBe("durable");
-    if (resolvedOwnership.status !== "durable") {
-      throw new Error("expected durable ownership");
-    }
-
-    await expect(
-      closeTrackedCdpTarget({
-        profileName: "remote",
-        cdpUrl,
-        nativeTargetId: "MISSING",
-        expectedProfileFingerprint: resolvedOwnership.profileFingerprint,
-        expectedBrowserInstanceFingerprint: resolvedOwnership.browserInstanceFingerprint,
-      }),
-    ).resolves.toEqual({ status: "missing" });
-    expect(methods).toEqual(["Target.getTargets"]);
-  });
-
-  it("does not inspect or close targets after browser ownership changes", async () => {
-    const methods: string[] = [];
-    const wsPort = await startWsServerWithMessages((msg) => {
-      if (msg.method) {
-        methods.push(msg.method);
-      }
-    });
-    const browserWebSocketUrl = `ws://127.0.0.1:${wsPort}/devtools/browser/NEW`;
-    const httpPort = await startVersionHttpServer({ webSocketDebuggerUrl: browserWebSocketUrl });
-
-    await expect(
-      closeTrackedCdpTarget({
-        profileName: "remote",
-        cdpUrl: `http://127.0.0.1:${httpPort}`,
-        nativeTargetId: "REUSED",
-        expectedProfileFingerprint: "sha256:old-profile",
-        expectedBrowserInstanceFingerprint: "sha256:old-browser",
-      }),
-    ).resolves.toEqual({ status: "ownership-mismatch" });
-    expect(methods).toEqual([]);
-  });
-
   it("returns the stable browser-owned frame URL when requested", async () => {
-    let frameReadCount = 0;
-    const methods: string[] = [];
-    const wsPort = await startWsServerWithMessages((msg, socket) => {
-      if (msg.method) {
-        methods.push(msg.method);
+    let frameReads = 0;
+    const browser = await startBrowser((message) => {
+      if (message.method === "Target.createTarget") {
+        return { result: { targetId: "TARGET" } };
       }
-      if (msg.method === "Target.createTarget") {
-        socket.send(JSON.stringify({ id: msg.id, result: { targetId: "TARGET_REDIRECT" } }));
-        return;
-      }
-      if (msg.method === "Page.getFrameTree") {
-        frameReadCount += 1;
-        socket.send(
-          JSON.stringify({
-            id: msg.id,
-            result: {
-              frameTree: {
-                frame:
-                  frameReadCount === 1
-                    ? { loaderId: "LOADER_BLANK", url: "about:blank" }
-                    : {
-                        loaderId: "LOADER_BLOCKED",
-                        url: "http://127.0.0.1:61501/blocked",
-                        urlFragment: "#fragment",
-                      },
-              },
-            },
-          }),
-        );
-      }
-    });
-    const httpPort = await startVersionHttpServer({
-      webSocketDebuggerUrl: `ws://127.0.0.1:${wsPort}/devtools/browser/TEST`,
-    });
-
-    const created = await createTargetViaCdp({
-      cdpUrl: `http://127.0.0.1:${httpPort}`,
-      url: "https://redirect.example/start",
-      waitForNavigationResult: true,
-    });
-
-    expect(created).toEqual({
-      targetId: "TARGET_REDIRECT",
-      finalUrl: "http://127.0.0.1:61501/blocked#fragment",
-    });
-    expect(frameReadCount).toBeGreaterThan(2);
-    expect(methods).not.toContain("Runtime.evaluate");
-  });
-
-  it("preserves caller cancellation after target creation while navigation is settling", async () => {
-    const controller = new AbortController();
-    const reason = new Error("cancel after target creation");
-    const wsPort = await startWsServerWithMessages((msg, socket) => {
-      if (msg.method === "Target.createTarget") {
-        socket.send(JSON.stringify({ id: msg.id, result: { targetId: "TARGET_CANCEL" } }));
-        return;
-      }
-      if (msg.method === "Page.getFrameTree") {
-        controller.abort(reason);
-        socket.send(
-          JSON.stringify({
-            id: msg.id,
-            result: {
-              frameTree: {
-                frame: { loaderId: "LOADER_CANCEL", url: "https://example.com" },
-              },
-            },
-          }),
-        );
-      }
-    });
-    const httpPort = await startVersionHttpServer({
-      webSocketDebuggerUrl: `ws://127.0.0.1:${wsPort}/devtools/browser/TEST`,
-    });
-
-    await expect(
-      createTargetViaCdp({
-        cdpUrl: `http://127.0.0.1:${httpPort}`,
-        url: "https://example.com",
-        signal: controller.signal,
-        waitForNavigationResult: true,
-      }),
-    ).rejects.toBe(reason);
-  });
-
-  it("does not create a target when cancellation arrives during endpoint discovery", async () => {
-    const controller = new AbortController();
-    const reason = new Error("cancel during endpoint discovery");
-    const methods: string[] = [];
-    const wsPort = await startWsServerWithMessages((msg) => {
-      if (msg.method) {
-        methods.push(msg.method);
-      }
-    });
-    httpServer = createServer((req, res) => {
-      if (req.url !== "/json/version") {
-        res.statusCode = 404;
-        res.end("not found");
-        return;
-      }
-      controller.abort(reason);
-      res.setHeader("content-type", "application/json");
-      res.end(
-        JSON.stringify({
-          webSocketDebuggerUrl: `ws://127.0.0.1:${wsPort}/devtools/browser/TEST`,
-        }),
-      );
-    });
-    await new Promise<void>((resolve) => {
-      httpServer?.listen(0, "127.0.0.1", resolve);
-    });
-    const httpPort = (httpServer.address() as AddressInfo).port;
-
-    await expect(
-      createTargetViaCdp({
-        cdpUrl: `http://127.0.0.1:${httpPort}`,
-        url: "https://example.com",
-        signal: controller.signal,
-      }),
-    ).rejects.toBe(reason);
-    expect(methods).toEqual([]);
-  });
-
-  it("reads the browser frame URL with its fragment", async () => {
-    const wsPort = await startWsServerWithMessages((msg, socket) => {
-      if (msg.method !== "Page.getFrameTree") {
-        return;
-      }
-      socket.send(
-        JSON.stringify({
-          id: msg.id,
+      if (message.method === "Page.getFrameTree") {
+        frameReads++;
+        return {
           result: {
             frameTree: {
-              frame: {
-                loaderId: "LOADER_FINAL",
-                url: "https://example.com/final",
-                urlFragment: "#section",
-              },
+              frame:
+                frameReads === 1
+                  ? { loaderId: "BLANK", url: "about:blank" }
+                  : {
+                      loaderId: "FINAL",
+                      url: "http://127.0.0.1:61501/blocked",
+                      urlFragment: "#fragment",
+                    },
             },
           },
-        }),
-      );
-    });
-
-    await expect(
-      waitForCdpCommittedNavigationUrl({
-        wsUrl: `ws://127.0.0.1:${wsPort}/devtools/page/TARGET`,
-        configuredCdpUrl: `http://127.0.0.1:${wsPort}`,
-        requestedUrl: "https://example.com/start",
-      }),
-    ).resolves.toBe("https://example.com/final#section");
-  });
-
-  it("propagates a policy-blocked discovered page websocket", async () => {
-    await expect(
-      waitForCdpCommittedNavigationUrl({
-        wsUrl: "ws://169.254.169.254:9222/devtools/page/PIVOT",
-        configuredCdpUrl: "http://127.0.0.1:9222",
-        cdpPolicy: {
-          dangerouslyAllowPrivateNetwork: false,
-          allowedHostnames: ["127.0.0.1"],
-        },
-        requestedUrl: "about:blank",
-      }),
-    ).rejects.toBeInstanceOf(BrowserCdpEndpointBlockedError);
-  });
-
-  it("creates a target via direct WebSocket URL (skips /json/version)", async () => {
-    const wsPort = await startWsServerWithMessages((msg, socket) => {
-      if (msg.method !== "Target.createTarget") {
-        return;
+        };
       }
-      socket.send(
-        JSON.stringify({
-          id: msg.id,
-          result: { targetId: "TARGET_WS_DIRECT" },
-        }),
-      );
+      return undefined;
     });
+    await expect(
+      createTargetViaCdp({
+        cdpUrl: browser.cdpUrl,
+        url: "https://redirect.example/start",
+        waitForNavigationResult: true,
+      }),
+    ).resolves.toEqual({ targetId: "TARGET", finalUrl: "http://127.0.0.1:61501/blocked#fragment" });
+    expect(frameReads).toBeGreaterThan(2);
+    expect(browser.messages.map((message) => message.method)).not.toContain("Runtime.evaluate");
+  });
 
-    const fetchSpy = vi.spyOn(globalThis, "fetch");
-    try {
-      const created = await createTargetViaCdp({
-        cdpUrl: `ws://127.0.0.1:${wsPort}/devtools/browser/TEST`,
-        url: "https://example.com",
+  it.each([
+    { abortAt: "creation", closeFails: false },
+    { abortAt: "navigation", closeFails: true },
+  ])(
+    "closes an unreturned target after $abortAt abort (close fails: $closeFails)",
+    async ({ abortAt, closeFails }) => {
+      const controller = new AbortController();
+      const reason = new Error("cancel after target creation");
+      const browser = await startBrowser((message) => {
+        if (message.method === "Target.createTarget") {
+          if (abortAt === "creation") {
+            controller.abort(reason);
+          }
+          return { result: { targetId: "TARGET" } };
+        }
+        if (message.method === "Target.closeTarget") {
+          return closeFails
+            ? { error: { message: "close failed" } }
+            : { result: { success: true } };
+        }
+        if (message.method === "Page.getFrameTree") {
+          controller.abort(reason);
+          return {
+            result: { frameTree: { frame: { loaderId: "CANCEL", url: "https://example.com" } } },
+          };
+        }
+        return undefined;
       });
+      await expect(
+        createTargetViaCdp({
+          cdpUrl: browser.cdpUrl,
+          url: "https://example.com",
+          signal: controller.signal,
+          waitForNavigationResult: true,
+        }),
+      ).rejects.toBe(reason);
+      expect(
+        browser.messages
+          .filter((message) => message.method === "Target.closeTarget")
+          .map((message) => message.params?.targetId),
+      ).toEqual(["TARGET"]);
+    },
+  );
 
-      expect(created.targetId).toBe("TARGET_WS_DIRECT");
-      // /json/version should NOT have been called — direct WS skips HTTP discovery
-      expect(fetchSpy).not.toHaveBeenCalled();
+  it("cancels hanging endpoint discovery without creating a target", async () => {
+    const controller = new AbortController();
+    const reason = new Error("cancel during endpoint discovery");
+    const discovery = Promise.withResolvers<void>();
+    let heldResponse: ServerResponse | undefined;
+    const browser = await startBrowser(() => undefined, {
+      discover: (_request, response) => {
+        heldResponse = response;
+        discovery.resolve();
+      },
+    });
+    const pending = createTargetViaCdp({
+      cdpUrl: browser.cdpUrl,
+      url: "https://example.com",
+      signal: controller.signal,
+    });
+    await discovery.promise;
+    controller.abort(reason);
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await expect(
+        Promise.race([
+          pending,
+          new Promise<never>((_resolve, reject) => {
+            deadline = setTimeout(
+              () => reject(new Error("cancelled discovery remained pending")),
+              300,
+            );
+          }),
+        ]),
+      ).rejects.toBe(reason);
+      expect(browser.messages).toEqual([]);
     } finally {
-      fetchSpy.mockRestore();
+      clearTimeout(deadline);
+      heldResponse?.end(JSON.stringify({ webSocketDebuggerUrl: browser.wsUrl }));
+      await pending.catch(() => {});
     }
   });
 
-  it("honors configured HTTP discovery timeouts when creating a target", async () => {
-    const wsPort = await startWsServerWithMessages((msg, socket) => {
-      if (msg.method !== "Target.createTarget") {
-        return;
-      }
-      socket.send(JSON.stringify({ id: msg.id, result: { targetId: "TARGET_SLOW" } }));
-    });
-
-    httpServer = createServer((req, res) => {
-      if (req.url === "/json/version") {
-        setTimeout(() => {
-          res.setHeader("content-type", "application/json");
-          res.end(
-            JSON.stringify({
-              webSocketDebuggerUrl: `ws://127.0.0.1:${wsPort}/devtools/browser/SLOW`,
-            }),
-          );
-        }, 120);
-        return;
-      }
-      res.statusCode = 404;
-      res.end("not found");
-    });
-    await new Promise<void>((resolve) => {
-      httpServer?.listen(0, "127.0.0.1", resolve);
-    });
-    const httpPort = (httpServer.address() as AddressInfo).port;
-
+  it("honors configured HTTP discovery timeouts", async () => {
+    const browser = await startBrowser(
+      (message) =>
+        message.method === "Target.createTarget" ? { result: { targetId: "SLOW" } } : undefined,
+      {
+        discover: (_request, response) => {
+          setTimeout(() => {
+            response.end(JSON.stringify({ webSocketDebuggerUrl: browser.wsUrl }));
+          }, 120);
+        },
+      },
+    );
     await expect(
       createTargetViaCdp({
-        cdpUrl: `http://127.0.0.1:${httpPort}`,
+        cdpUrl: browser.cdpUrl,
         url: "https://example.com",
         timeouts: { httpTimeoutMs: 20 },
       }),
     ).rejects.toThrow(/abort|timeout|timed out/i);
   });
 
-  it("honors configured WebSocket handshake timeouts when creating a target", async () => {
-    wsServer = new WebSocketServer({
-      noServer: true,
-      maxPayload: CDP_TEST_WS_MAX_PAYLOAD_BYTES,
-    });
-    httpServer = createServer();
+  it("honors configured WebSocket handshake timeouts", async () => {
+    const server = createServer();
+    servers.push(server);
     const heldSockets: Duplex[] = [];
-    httpServer.on("upgrade", (_req, socket) => {
+    server.on("upgrade", (_request, socket) => {
       heldSockets.push(socket);
-      // Hold the TCP connection open without completing the WebSocket handshake.
     });
     await new Promise<void>((resolve) => {
-      httpServer?.listen(0, "127.0.0.1", resolve);
+      server.listen(0, "127.0.0.1", resolve);
     });
-    const port = (httpServer.address() as AddressInfo).port;
-
     try {
       await expect(
         createTargetViaCdp({
-          cdpUrl: `ws://127.0.0.1:${port}/devtools/browser/SLOW`,
+          cdpUrl: `ws://127.0.0.1:${(server.address() as AddressInfo).port}/devtools/browser/SLOW`,
           url: "https://example.com",
           timeouts: { handshakeTimeoutMs: 20 },
         }),
@@ -532,434 +298,251 @@ describe("cdp", () => {
     }
   });
 
-  it("preserves query params when connecting via direct WebSocket URL", async () => {
-    let receivedHeaders: Record<string, string> = {};
-    const wsPort = await startWsServer();
-    if (!wsServer) {
-      throw new Error("ws server not initialized");
-    }
-    wsServer.on("headers", (headers, req) => {
-      receivedHeaders = Object.fromEntries(
-        Object.entries(req.headers).map(([k, v]) => [k, String(v)]),
-      );
-    });
-    wsServer.on("connection", (socket) => {
-      socket.on("message", (data) => {
-        const msg = JSON.parse(rawDataToString(data)) as { id?: number; method?: string };
-        if (msg.method === "Target.createTarget") {
-          socket.send(JSON.stringify({ id: msg.id, result: { targetId: "T_QP" } }));
-        } else if (msg.method === "Target.attachToTarget") {
-          socket.send(JSON.stringify({ id: msg.id, result: { sessionId: "S1" } }));
-        } else if (
-          msg.method === "Target.detachFromTarget" ||
-          msg.method === "Page.enable" ||
-          msg.method === "Runtime.enable" ||
-          msg.method === "Network.enable" ||
-          msg.method === "DOM.enable" ||
-          msg.method === "Accessibility.enable" ||
-          msg.method === "Runtime.runIfWaitingForDebugger"
-        ) {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-        }
-      });
-    });
-
-    const created = await createTargetViaCdp({
-      cdpUrl: `ws://127.0.0.1:${wsPort}/devtools/browser/TEST?apiKey=secret123`,
+  it.each([
+    { url: "http://127.0.0.1:8080", ssrfPolicy: undefined, error: SsrFBlockedError },
+    {
       url: "https://example.com",
-    });
-    expect(created.targetId).toBe("T_QP");
-    // The WebSocket upgrade request should have been made to the URL with the query param
-    expect(receivedHeaders.host).toBe(`127.0.0.1:${wsPort}`);
-  });
-
-  it("enforces SSRF policy on the navigation target URL before any CDP connection attempt", async () => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch");
-    try {
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+      error: InvalidBrowserNavigationUrlError,
+    },
+    { url: "file:///etc/passwd", ssrfPolicy: undefined, error: InvalidBrowserNavigationUrlError },
+  ])(
+    "blocks disallowed navigation to $url before connecting",
+    async ({ url, ssrfPolicy, error }) => {
+      const fetch = vi.spyOn(globalThis, "fetch");
       await expect(
-        createTargetViaCdp({
-          cdpUrl: "ws://127.0.0.1:9222",
-          url: "http://127.0.0.1:8080",
-        }),
-      ).rejects.toBeInstanceOf(SsrFBlockedError);
-      // SSRF check happens before any connection attempt
-      expect(fetchSpy).not.toHaveBeenCalled();
-    } finally {
-      fetchSpy.mockRestore();
-    }
-  });
+        createTargetViaCdp({ cdpUrl: "http://127.0.0.1:9222", url, ssrfPolicy }),
+      ).rejects.toBeInstanceOf(error);
+      expect(fetch).not.toHaveBeenCalled();
+    },
+  );
 
-  it("blocks private navigation targets by default", async () => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch");
-    try {
-      await expect(
-        createTargetViaCdp({
-          cdpUrl: "http://127.0.0.1:9222",
-          url: "http://127.0.0.1:8080",
-        }),
-      ).rejects.toBeInstanceOf(SsrFBlockedError);
-      expect(fetchSpy).not.toHaveBeenCalled();
-    } finally {
-      fetchSpy.mockRestore();
-    }
-  });
-
-  it("blocks hostname navigation targets when strict SSRF policy is configured", async () => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch");
-    try {
-      await expect(
-        createTargetViaCdp({
-          cdpUrl: "http://127.0.0.1:9222",
-          url: "https://example.com",
-          ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
-        }),
-      ).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
-      expect(fetchSpy).not.toHaveBeenCalled();
-    } finally {
-      fetchSpy.mockRestore();
-    }
-  });
-
-  it("blocks unsupported non-network navigation URLs", async () => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch");
-    try {
-      await expect(
-        createTargetViaCdp({
-          cdpUrl: "http://127.0.0.1:9222",
-          url: "file:///etc/passwd",
-        }),
-      ).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
-      expect(fetchSpy).not.toHaveBeenCalled();
-    } finally {
-      fetchSpy.mockRestore();
-    }
-  });
-
-  it("allows private navigation targets when explicitly configured", async () => {
-    const wsPort = await startWsServerWithMessages((msg, socket) => {
-      if (msg.method !== "Target.createTarget") {
-        return;
-      }
-      expect(msg.params?.url).toBe("http://127.0.0.1:8080");
-      socket.send(
-        JSON.stringify({
-          id: msg.id,
-          result: { targetId: "TARGET_LOCAL" },
-        }),
-      );
+  it("blocks a cross-host websocket pivot returned by discovery", async () => {
+    const browser = await startBrowser(() => undefined, {
+      advertisedUrl: "ws://169.254.169.254:9222/devtools/browser/PIVOT",
     });
-
-    const httpPort = await startVersionHttpServer({
-      webSocketDebuggerUrl: `ws://127.0.0.1:${wsPort}/devtools/browser/TEST`,
-    });
-
-    const created = await createTargetViaCdp({
-      cdpUrl: `http://127.0.0.1:${httpPort}`,
-      url: "http://127.0.0.1:8080",
-      ssrfPolicy: { allowPrivateNetwork: true },
-    });
-
-    expect(created.targetId).toBe("TARGET_LOCAL");
-  });
-
-  it("blocks cross-host websocket pivots returned by /json/version in strict SSRF mode", async () => {
-    const httpPort = await startVersionHttpServer({
-      webSocketDebuggerUrl: "ws://169.254.169.254:9222/devtools/browser/PIVOT",
-    });
-
     await expect(
       createTargetViaCdp({
-        cdpUrl: `http://127.0.0.1:${httpPort}`,
+        cdpUrl: browser.cdpUrl,
         url: "https://93.184.216.34",
-        ssrfPolicy: {
-          dangerouslyAllowPrivateNetwork: false,
-          allowedHostnames: ["127.0.0.1"],
-        },
+        ssrfPolicy: strictPolicy,
       }),
     ).rejects.toBeInstanceOf(BrowserCdpEndpointBlockedError);
+    expect(browser.messages).toEqual([]);
   });
 
-  it("blocks the initial /json/version fetch when the cdpUrl host is outside strict SSRF policy", async () => {
+  it("blocks a configured CDP host outside strict policy before discovery", async () => {
     await expect(
       createTargetViaCdp({
         cdpUrl: "http://169.254.169.254:9222",
         url: "https://93.184.216.34",
-        ssrfPolicy: {
-          dangerouslyAllowPrivateNetwork: false,
-          allowedHostnames: ["127.0.0.1"],
-        },
+        ssrfPolicy: strictPolicy,
       }),
     ).rejects.toBeInstanceOf(BrowserCdpEndpointBlockedError);
   });
 
-  it("blocks direct websocket cdp urls outside strict SSRF policy", async () => {
+  it("rejects HTTP discovery without a browser websocket URL", async () => {
+    const browser = await startBrowser(() => undefined, { versionBody: {} });
     await expect(
-      createTargetViaCdp({
-        cdpUrl: "ws://169.254.169.254:9222/devtools/browser/PIVOT",
-        url: "https://93.184.216.34",
-        ssrfPolicy: {
-          dangerouslyAllowPrivateNetwork: false,
-          allowedHostnames: ["127.0.0.1"],
-        },
-      }),
-    ).rejects.toBeInstanceOf(BrowserCdpEndpointBlockedError);
-  });
-
-  it("fails when /json/version omits webSocketDebuggerUrl for an HTTP cdpUrl", async () => {
-    const httpPort = await startVersionHttpServer({});
-    await expect(
-      createTargetViaCdp({
-        cdpUrl: `http://127.0.0.1:${httpPort}`,
-        url: "https://example.com",
-      }),
+      createTargetViaCdp({ cdpUrl: browser.cdpUrl, url: "https://example.com" }),
     ).rejects.toThrow("CDP /json/version missing webSocketDebuggerUrl");
   });
 
-  it("falls back to direct WS connection when /json/version is unavailable for a bare ws:// cdpUrl", async () => {
-    // Simulates a Browserless/Browserbase-style provider: the cdpUrl IS a
-    // WebSocket root (no /devtools/ path) but there is no HTTP /json/version
-    // endpoint. The WS server accepts Target.createTarget directly.
-    const wsPort = await startWsServerWithMessages((msg, socket) => {
-      if (msg.method === "Target.createTarget") {
-        socket.send(JSON.stringify({ id: msg.id, result: { targetId: "WS_FALLBACK" } }));
-      }
-    });
-    // No HTTP server on this port — discovery will fail, triggering the fallback.
-    const created = await createTargetViaCdp({
-      cdpUrl: `ws://127.0.0.1:${wsPort}`,
-      url: "https://example.com",
-    });
-    expect(created.targetId).toBe("WS_FALLBACK");
-  });
+  it.each(["unavailable", "rejected"] as const)(
+    "falls back to the WebSocket root when discovery is %s",
+    async (failure) => {
+      const browser = await startBrowser(
+        (message, path) => {
+          if (path.startsWith("/e/bad")) {
+            return { error: { message: "Browserless endpoint rejected command" } };
+          }
+          if (message.method === "Target.createTarget") {
+            return { result: { targetId: "FALLBACK" } };
+          }
+          return undefined;
+        },
+        {
+          discover: (request, response) => {
+            if (failure === "unavailable") {
+              response.writeHead(404).end();
+            } else {
+              response.end(
+                JSON.stringify({ webSocketDebuggerUrl: `ws://${request.headers.host}/e/bad` }),
+              );
+            }
+          },
+        },
+      );
+      await expect(
+        createTargetViaCdp({
+          cdpUrl: browser.cdpUrl.replace("http:", "ws:"),
+          url: "https://example.com",
+        }),
+      ).resolves.toEqual({ targetId: "FALLBACK" });
+    },
+  );
+});
 
-  it("falls back to direct WS connection when discovered Browserless endpoint rejects commands", async () => {
-    const server = createServer((req, res) => {
-      if (req.url?.startsWith("/json/version")) {
-        const addr = server.address() as AddressInfo;
-        res.setHeader("content-type", "application/json");
-        res.end(
-          JSON.stringify({
-            webSocketDebuggerUrl: `ws://127.0.0.1:${addr.port}/e/bad`,
-          }),
-        );
-        return;
-      }
-      res.statusCode = 404;
-      res.end("not found");
-    });
-    const wss = new WebSocketServer({
-      noServer: true,
-      maxPayload: CDP_TEST_WS_MAX_PAYLOAD_BYTES,
-    });
-    server.on("upgrade", (req, socket, head) => {
-      wss.handleUpgrade(req, socket, head, (ws) => {
-        wss.emit("connection", ws, req);
-      });
-    });
-    wss.on("connection", (socket, req) => {
-      socket.on("message", (data) => {
-        const msg = JSON.parse(rawDataToString(data)) as {
-          id?: number;
-          method?: string;
-        };
-        if (req.url?.startsWith("/e/bad")) {
-          socket.send(
-            JSON.stringify({
-              id: msg.id,
-              error: { message: "Browserless endpoint rejected command" },
-            }),
-          );
-          return;
-        }
-        if (msg.method === "Target.createTarget") {
-          socket.send(JSON.stringify({ id: msg.id, result: { targetId: "ROOT_FALLBACK" } }));
-        } else if (msg.method === "Target.attachToTarget") {
-          socket.send(JSON.stringify({ id: msg.id, result: { sessionId: "S1" } }));
-        } else if (
-          msg.method === "Target.detachFromTarget" ||
-          msg.method === "Page.enable" ||
-          msg.method === "Runtime.enable" ||
-          msg.method === "Network.enable" ||
-          msg.method === "DOM.enable" ||
-          msg.method === "Accessibility.enable" ||
-          msg.method === "Runtime.runIfWaitingForDebugger"
-        ) {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-        }
-      });
-    });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    try {
-      const addr = server.address() as AddressInfo;
-      const created = await createTargetViaCdp({
-        cdpUrl: `ws://127.0.0.1:${addr.port}?token=abc`,
-        url: "https://example.com",
-      });
-      expect(created.targetId).toBe("ROOT_FALLBACK");
-    } finally {
-      await new Promise<void>((resolve) => {
-        wss.close(() => resolve());
-      });
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
-    }
-  });
-
-  it("captures an aria snapshot via CDP", async () => {
-    const wsPort = await startWsServerWithMessages((msg, socket) => {
-      if (msg.method === "Accessibility.enable") {
-        socket.send(JSON.stringify({ id: msg.id, result: {} }));
-        return;
-      }
-      if (msg.method === "Accessibility.getFullAXTree") {
-        socket.send(
-          JSON.stringify({
-            id: msg.id,
+describe("CDP committed navigation", () => {
+  it("reads the browser frame URL with its fragment", async () => {
+    const browser = await startBrowser((message) =>
+      message.method === "Page.getFrameTree"
+        ? {
             result: {
-              nodes: [
-                {
-                  nodeId: "1",
-                  role: { value: "RootWebArea" },
-                  name: { value: "" },
-                  childIds: ["2"],
+              frameTree: {
+                frame: {
+                  loaderId: "FINAL",
+                  url: "https://example.com/final",
+                  urlFragment: "#section",
                 },
-                {
-                  nodeId: "2",
-                  role: { value: "button" },
-                  name: { value: "OK" },
-                  backendDOMNodeId: 42,
-                  childIds: [],
-                },
-              ],
+              },
             },
-          }),
-        );
-      }
-    });
-
-    const snap = await snapshotAria({ wsUrl: `ws://127.0.0.1:${wsPort}` });
-    expect(snap.nodes.length).toBe(2);
-    expect(snap.nodes[0]?.role).toBe("RootWebArea");
-    expect(snap.nodes[1]?.role).toBe("button");
-    expect(snap.nodes[1]?.name).toBe("OK");
-    expect(snap.nodes[1]?.backendDOMNodeId).toBe(42);
-    expect(snap.nodes[1]?.depth).toBe(1);
+          }
+        : undefined,
+    );
+    await expect(
+      waitForCdpCommittedNavigationUrl({
+        wsUrl: browser.wsUrl,
+        configuredCdpUrl: browser.cdpUrl,
+        requestedUrl: "https://example.com/start",
+      }),
+    ).resolves.toBe("https://example.com/final#section");
   });
 
-  it("hard-bounds CDP role rendering above a requested depth", async () => {
-    const nodes = Array.from({ length: 1_000 }, (_value, index) => ({
-      nodeId: String(index),
-      role: { value: index === 0 ? "RootWebArea" : "generic" },
-      name: { value: `n${index}` },
-      childIds: index + 1 < 1_000 ? [String(index + 1)] : [],
-    }));
-    const wsPort = await startWsServerWithMessages((msg, socket) => {
-      if (msg.method === "Accessibility.getFullAXTree") {
-        socket.send(JSON.stringify({ id: msg.id, result: { nodes } }));
-      }
-    });
-
-    const snap = await snapshotRoleViaCdp({
-      wsUrl: `ws://127.0.0.1:${wsPort}`,
-      options: { maxDepth: 50_000 },
-    });
-    expect(snap.snapshot).toContain("[...TRUNCATED - accessibility tree too deep]");
-    const roleLines = snap.snapshot.split("\n").filter((line) => line.trimStart().startsWith("-"));
-    expect(roleLines).toHaveLength(101);
-    expect(snap.truncated).toBe(true);
-  });
-
-  it("normalizes loopback websocket URLs for remote CDP hosts", () => {
-    const normalized = normalizeCdpWsUrl(
-      "ws://127.0.0.1:9222/devtools/browser/ABC",
-      "http://example.com:9222",
-    );
-    expect(normalized).toBe("ws://example.com:9222/devtools/browser/ABC");
-  });
-
-  it("propagates auth and query params onto normalized websocket URLs", () => {
-    const normalized = normalizeCdpWsUrl(
-      "ws://127.0.0.1:9222/devtools/browser/ABC",
-      "https://user:pass@example.com?token=abc",
-    );
-    expect(normalized).toBe("wss://user:pass@example.com/devtools/browser/ABC?token=abc");
-  });
-
-  it("rewrites localhost absolute-form websocket URLs for remote CDP hosts", () => {
-    const normalized = normalizeCdpWsUrl(
-      "ws://localhost.:9222/devtools/browser/ABC",
-      "https://user:pass@example.com?token=abc",
-    );
-    expect(normalized).toBe("wss://user:pass@example.com/devtools/browser/ABC?token=abc");
-  });
-
-  it("normalizes loopback websocket aliases to the configured CDP loopback host", () => {
-    const normalized = normalizeCdpWsUrl(
-      "ws://localhost.:18800/devtools/browser/ABC",
-      "http://127.0.0.1:18800",
-    );
-    expect(normalized).toBe("ws://127.0.0.1:18800/devtools/browser/ABC");
-  });
-
-  it("rewrites 0.0.0.0 wildcard bind address to remote CDP host", () => {
-    const normalized = normalizeCdpWsUrl(
-      "ws://0.0.0.0:3000/devtools/browser/ABC",
-      "http://192.168.1.202:18850?token=secret",
-    );
-    expect(normalized).toBe("ws://192.168.1.202:18850/devtools/browser/ABC?token=secret");
-  });
-
-  it("rewrites :: wildcard bind address to remote CDP host", () => {
-    const normalized = normalizeCdpWsUrl(
-      "ws://[::]:3000/devtools/browser/ABC",
-      "http://192.168.1.202:18850",
-    );
-    expect(normalized).toBe("ws://192.168.1.202:18850/devtools/browser/ABC");
-  });
-
-  it("keeps existing websocket query params when appending remote CDP query params", () => {
-    const normalized = normalizeCdpWsUrl(
-      "ws://127.0.0.1:9222/devtools/browser/ABC?session=1&token=ws-token",
-      "http://127.0.0.1:9222?token=cdp-token&apiKey=abc",
-    );
-    expect(normalized).toBe(
-      "ws://127.0.0.1:9222/devtools/browser/ABC?session=1&token=ws-token&apiKey=abc",
-    );
-  });
-
-  it("rewrites wildcard bind addresses to secure remote CDP hosts without clobbering websocket params", () => {
-    const normalized = normalizeCdpWsUrl(
-      "ws://0.0.0.0:3000/devtools/browser/ABC?session=1&token=ws-token",
-      "https://user:pass@example.com:9443?token=cdp-token&apiKey=abc",
-    );
-    expect(normalized).toBe(
-      "wss://user:pass@example.com:9443/devtools/browser/ABC?session=1&token=ws-token&apiKey=abc",
-    );
-  });
-
-  it("upgrades ws to wss when CDP uses https", () => {
-    const normalized = normalizeCdpWsUrl(
-      "ws://production-sfo.browserless.io",
-      "https://production-sfo.browserless.io?token=abc",
-    );
-    expect(normalized).toBe("wss://production-sfo.browserless.io/?token=abc");
+  it("propagates a policy-blocked discovered page websocket", async () => {
+    await expect(
+      waitForCdpCommittedNavigationUrl({
+        wsUrl: "ws://169.254.169.254:9222/devtools/page/PIVOT",
+        configuredCdpUrl: "http://127.0.0.1:9222",
+        cdpPolicy: strictPolicy,
+        requestedUrl: "about:blank",
+      }),
+    ).rejects.toBeInstanceOf(BrowserCdpEndpointBlockedError);
   });
 });
 
-const proxyEnvKeys = [
-  "ALL_PROXY",
-  "all_proxy",
-  "HTTP_PROXY",
-  "http_proxy",
-  "HTTPS_PROXY",
-  "https_proxy",
-] as const;
+describe("tracked CDP target closure", () => {
+  it.each(["closed", "declined", "missing", "cancelled"] as const)(
+    "keeps closure %s under current ownership",
+    async (outcome) => {
+      const browser = await startBrowser(
+        (message) => {
+          if (message.method === "Target.getTargets") {
+            return {
+              result: {
+                targetInfos: [{ targetId: outcome === "missing" ? "USER" : "OWNED", type: "page" }],
+              },
+            };
+          }
+          if (message.method === "Target.closeTarget") {
+            return { result: { success: outcome !== "declined" } };
+          }
+          return undefined;
+        },
+        { advertisedUrl: "ws://localhost/devtools/browser/SIDECAR" },
+      );
+      const params = { profileName: "remote", cdpUrl: browser.cdpUrl, nativeTargetId: "OWNED" };
+      const ownership = await resolveCdpTabOwnership(params);
+      if (ownership.status !== "durable") {
+        throw new Error("expected durable ownership");
+      }
+      await expect(
+        closeTrackedCdpTarget({
+          ...params,
+          expectedProfileFingerprint: ownership.profileFingerprint,
+          // Fixed pre-upgrade identity: connections normalize localhost, fingerprints do not.
+          expectedBrowserInstanceFingerprint:
+            "sha256:e40b808cae2f166a9e1e0f0fc45e3600f01f6dfd5265d9ff59d13de95356dae2",
+          ...(outcome === "cancelled"
+            ? { closeIfCurrent: async () => ({ status: "cancelled" as const }) }
+            : {}),
+        }),
+      ).resolves.toEqual(
+        outcome === "declined"
+          ? { status: "unavailable", reason: "target-close-failed" }
+          : { status: outcome },
+      );
+      expect(browser.messages.map((message) => message.method)).toEqual(
+        outcome === "closed" || outcome === "declined"
+          ? ["Target.getTargets", "Target.closeTarget"]
+          : ["Target.getTargets"],
+      );
+    },
+  );
 
-beforeEach(() => {
-  for (const key of proxyEnvKeys) {
-    vi.stubEnv(key, "");
-  }
+  it("does not inspect or close targets after browser ownership changes", async () => {
+    const browser = await startBrowser(() => undefined);
+    await expect(
+      closeTrackedCdpTarget({
+        profileName: "remote",
+        cdpUrl: browser.cdpUrl,
+        nativeTargetId: "REUSED",
+        expectedProfileFingerprint: "sha256:old-profile",
+        expectedBrowserInstanceFingerprint: "sha256:old-browser",
+      }),
+    ).resolves.toEqual({ status: "ownership-mismatch" });
+    expect(browser.messages).toEqual([]);
+  });
+});
+
+describe("browser error mapping", () => {
+  it("maps blocked browser targets to conflict responses", () => {
+    const err = new Error("Target blocked after navigation");
+    err.name = "BlockedBrowserTargetError";
+    expect(toBrowserErrorResponse(err)).toEqual({
+      status: 409,
+      message: err.message,
+      reason: "navigation_blocked",
+    });
+  });
+  it("sanitizes navigation-target SSRF policy details", () => {
+    expect(toBrowserErrorResponse(new SsrFBlockedError("raw private-network policy"))).toEqual({
+      status: 400,
+      message: "browser navigation blocked by policy",
+      reason: "navigation_blocked",
+    });
+  });
+  it("distinguishes endpoint policy blocks from navigation errors", () => {
+    expect(toBrowserErrorResponse(new BrowserCdpEndpointBlockedError())).toEqual({
+      status: 400,
+      message: "browser endpoint blocked by policy",
+    });
+  });
+});
+
+it.each([
+  [
+    "ws://0.0.0.0:3000/devtools/browser/ABC?session=1&token=ws-token",
+    "https://user:pass@example.com:9443?token=cdp-token&apiKey=abc",
+    "wss://user:pass@example.com:9443/devtools/browser/ABC?session=1&token=ws-token&apiKey=abc",
+  ],
+  [
+    "ws://[::]:3000/devtools/browser/ABC",
+    "http://example.com",
+    "ws://example.com/devtools/browser/ABC",
+  ],
+  ["ws://remote.example", "https://remote.example?token=abc", "wss://remote.example/?token=abc"],
+])("normalizes %s against the configured authority", (reported, configured, expected) => {
+  expect(normalizeCdpWsUrl(reported, configured)).toBe(expected);
+});
+
+describe("CDP URL edge cases", () => {
+  it("normalizes WebSocket endpoints and malformed URL fallbacks", () => {
+    expect(normalizeCdpHttpBaseForJsonEndpoints("ws://host:9222/cdp")).toBe("http://host:9222");
+    expect(normalizeCdpHttpBaseForJsonEndpoints("wss://host/devtools/browser/abc?t=1")).toBe(
+      "https://host/?t=1",
+    );
+    expect(normalizeCdpHttpBaseForJsonEndpoints("ws://").startsWith("http:")).toBe(true);
+  });
+
+  it("redacts embedded CDP URL credentials from dependency error prose", () => {
+    const message = redactCdpErrorText(
+      "connect failed for wss://alice:browser-password@browserless.example/devtools/browser/id?token=browser-token",
+    );
+
+    expect(message).toContain("browserless.example/devtools/browser/id");
+    expect(message).not.toContain("alice");
+    expect(message).not.toContain("browser-password");
+    expect(message).not.toContain("browser-token");
+  });
 });

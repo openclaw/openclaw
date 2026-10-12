@@ -10,6 +10,8 @@ title: "QR"
 
 Generate a mobile pairing QR and setup code from your current Gateway configuration.
 
+The legacy [`openclaw clawbot qr`](/cli/clawbot) alias accepts every flag below.
+
 ```bash
 openclaw qr
 openclaw qr --setup-code-only
@@ -31,14 +33,14 @@ openclaw devices approve <requestId>
 
 ## Options
 
-- `--remote`: prefer `gateway.remote.url`; falls back to `gateway.tailscale.mode=serve|funnel` if that URL is unset. Ignores `device-pair` plugin `publicUrl`.
+- `--remote`: prefer `gateway.remote.url` and remote credentials; fall back to Tailscale Serve/Funnel when the remote URL is unset. Ignores `device-pair` plugin `publicUrl`; explicit `--url` or `--public-url` still takes precedence.
 - `--url <url>`: override the gateway URL used in the payload
 - `--public-url <url>`: override the public URL used in the payload
 - `--token <token>`: override the gateway token the bootstrap flow authenticates against
 - `--password <password>`: override the gateway password the bootstrap flow authenticates against
 - `--limited`: omit administrative Gateway access from the handed-off operator token
 - `--voice-node`: issue node credentials plus only `operator.read` and `operator.talk`
-- `--setup-code-only`: print only the setup code
+- `--setup-code-only`: print only the setup code; `--json` takes precedence and emits the JSON document instead
 - `--no-ascii`: skip ASCII QR rendering
 - `--json`: emit JSON (`setupCode`, `gatewayUrl`, optional `gatewayUrls`, `auth`, `access`, optional `accessDowngraded`, `urlSource`)
 
@@ -62,19 +64,40 @@ to get full access.
 
 ## Gateway URL resolution
 
-Mobile pairing fails closed for Tailscale/public `ws://` gateway URLs: use Tailscale Serve/Funnel or a `wss://` gateway URL for those. Private LAN addresses and `.local` Bonjour hosts remain supported over plain `ws://`, with limited operator access as described above.
+Mobile pairing rejects Tailscale/public `ws://` gateway URLs: use Tailscale Serve/Funnel or a `wss://` gateway URL for those. Private LAN addresses and `.local` Bonjour hosts remain supported over plain `ws://`, with limited operator access as described above.
 
 The QR command advertises Tailscale URLs only when OpenClaw owns the route through `gateway.tailscale.mode=serve|funnel`. Legacy external Serve routes that target the ordinary Gateway listener are not advertised because that listener rejects Tailscale-shaped proxy ingress.
 
 If an older setup used `gateway.bind=lan` with a persistent default HTTPS Serve
-route, run `openclaw doctor` to preview migration to managed ingress. Apply it
-with `openclaw doctor --fix`, then restart the Gateway. Doctor leaves custom
-Serve ports unchanged. Retired named-Service config is removed with managed
-ingress disabled, and Doctor prints manual route-cleanup guidance.
+route, run `openclaw doctor` to inspect it. Doctor does not migrate or clear the
+route because its status cannot prove who owns it, even with `--fix`; if you
+confirm it is stale, clear only its root handler, configure
+`gateway.bind=loopback` plus `gateway.tailscale.mode=serve` manually, and restart
+the Gateway. Custom Serve ports and retired named-Service routes require the
+same manual cleanup; Doctor prints the relevant guidance.
 
-With `--remote`, one of `gateway.remote.url` or `gateway.tailscale.mode=serve|funnel` is required.
+Unless `--url` or `--public-url` is supplied, `--remote` requires either
+`gateway.remote.url` or `gateway.tailscale.mode=serve|funnel` before URL resolution
+runs. `gateway.publicOrigin` alone does not satisfy that prerequisite.
+
+URL selection preserves existing routes: an explicit pairing override, a
+preferred remote URL, Tailscale Serve/Funnel, a non-preferred remote URL, then
+bind-derived addresses. For local QR setup, `gateway.publicOrigin` is the final
+fallback before the loopback-only error. Without `--remote`, the configured
+`plugins.entries.device-pair.config.publicUrl` supplies the override.
+Unlike QR setup, [cloud enrollment](/gateway/cloud-workers) explicitly asks the
+same resolver to prefer public ingress over discovery for fresh cloud workers.
+
+QR setup, join codes, and cloud enrollment preserve context paths in fully
+qualified URLs. The device-pair plugin's `/pair` command retains its historical
+origin-only URLs, including when the configured `publicUrl` contains a path.
 
 ## Auth resolution (no `--remote`)
+
+Gateways with `gateway.auth.mode="trusted-proxy"` can generate setup codes without a shared token or password.
+The proxy still authenticates the mobile connection before it reaches the Gateway.
+The setup code does not bypass Cloudflare Access or another proxy login.
+Bootstrap expiry, device binding, and access profiles stay the same.
 
 When no CLI auth override is passed, local gateway auth SecretRefs resolve as follows:
 

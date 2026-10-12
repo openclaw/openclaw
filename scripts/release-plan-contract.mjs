@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { canonicalAsciiJson, canonicalizeJsonValue, compareAscii } from "./lib/canonical-json.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 import { parseReleaseVersion } from "./lib/release-version.mjs";
 import {
@@ -17,8 +18,6 @@ const ASCII_PATTERN = /^[\x20-\x7e]+$/u;
 const REPOSITORY = "openclaw/openclaw";
 const WORKFLOW_PATH = ".github/workflows/full-release-validation.yml";
 const PACKAGE_TARGETS = new Set(["clawhub", "npm"]);
-const compareAscii = (left, right) => (left < right ? -1 : left > right ? 1 : 0);
-
 function fail(message) {
   throw new Error(message);
 }
@@ -58,10 +57,7 @@ function sortedUniqueStrings(value, label) {
     fail(`${label} must be a non-empty array`);
   }
   const result = value.map((entry, index) => asciiString(entry, `${label}[${index}]`));
-  if (
-    new Set(result).size !== result.length ||
-    result.some((entry, index) => index > 0 && compareAscii(result[index - 1], entry) >= 0)
-  ) {
+  if (result.some((entry, index) => index > 0 && compareAscii(result[index - 1], entry) >= 0)) {
     fail(`${label} must contain unique strings in ascending ASCII order`);
   }
   return result;
@@ -74,77 +70,6 @@ function sortedUniqueEnumStrings(value, allowed, label) {
     fail(`${label} contains unsupported value: ${unsupported}`);
   }
   return result;
-}
-
-function canonicalPath(parent, key) {
-  return `${parent}[${JSON.stringify(key)}]`;
-}
-
-function canonicalize(value, path = "$", ancestors = new Set()) {
-  if (value === null || typeof value === "string" || typeof value === "boolean") {
-    return value;
-  }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
-      fail(`canonical JSON number at ${path} must be finite`);
-    }
-    if (Object.is(value, -0)) {
-      fail(`canonical JSON number at ${path} must not be negative zero`);
-    }
-    return value;
-  }
-  if (typeof value !== "object") {
-    fail(`canonical JSON contains unsupported ${typeof value} at ${path}`);
-  }
-  if (ancestors.has(value)) {
-    fail(`canonical JSON must not contain cycles at ${path}`);
-  }
-  ancestors.add(value);
-  try {
-    if (Array.isArray(value)) {
-      const keys = Reflect.ownKeys(value).filter((key) => key !== "length");
-      if (
-        keys.length !== value.length ||
-        keys.some((key, index) => typeof key !== "string" || key !== String(index))
-      ) {
-        fail(`canonical JSON array at ${path} must be dense and contain no extra properties`);
-      }
-      return keys.map((key) => {
-        const descriptor = Object.getOwnPropertyDescriptor(value, key);
-        if (!descriptor?.enumerable || !("value" in descriptor)) {
-          fail(`canonical JSON array at ${path} must contain enumerable data properties only`);
-        }
-        return canonicalize(descriptor.value, canonicalPath(path, key), ancestors);
-      });
-    }
-    const prototype = Object.getPrototypeOf(value);
-    if (prototype !== Object.prototype && prototype !== null) {
-      fail(`canonical JSON object at ${path} must be plain`);
-    }
-    const keys = Reflect.ownKeys(value);
-    if (keys.some((key) => typeof key !== "string")) {
-      fail(`canonical JSON object at ${path} must use string keys only`);
-    }
-    return Object.fromEntries(
-      keys.toSorted(compareAscii).map((key) => {
-        const descriptor = Object.getOwnPropertyDescriptor(value, key);
-        if (!descriptor?.enumerable || !("value" in descriptor)) {
-          fail(`canonical JSON object at ${path} must contain enumerable data properties only`);
-        }
-        return [key, canonicalize(descriptor.value, canonicalPath(path, key), ancestors)];
-      }),
-    );
-  } finally {
-    ancestors.delete(value);
-  }
-}
-
-function canonicalAsciiJson(value) {
-  const json = `${JSON.stringify(canonicalize(value))}\n`;
-  if (!/^[\x20-\x7e]+\n$/u.test(json)) {
-    fail("canonical JSON must be printable ASCII with exactly one trailing newline");
-  }
-  return json;
 }
 
 function assertNoDuplicateJsonKeys(text) {
@@ -206,10 +131,7 @@ function validatePackages(value) {
     };
   });
   const names = packages.map((entry) => entry.name);
-  if (
-    new Set(names).size !== names.length ||
-    names.some((entry, index) => index > 0 && compareAscii(names[index - 1], entry) >= 0)
-  ) {
+  if (names.some((entry, index) => index > 0 && compareAscii(names[index - 1], entry) >= 0)) {
     fail("release plan packages must have unique names in ascending ASCII order");
   }
   return packages;
@@ -230,10 +152,7 @@ function validatePlatforms(value) {
     };
   });
   const ids = platforms.map((entry) => entry.id);
-  if (
-    new Set(ids).size !== ids.length ||
-    ids.some((entry, index) => index > 0 && compareAscii(ids[index - 1], entry) >= 0)
-  ) {
+  if (ids.some((entry, index) => index > 0 && compareAscii(ids[index - 1], entry) >= 0)) {
     fail("release plan platforms must have unique ids in ascending ASCII order");
   }
   return platforms;
@@ -244,8 +163,11 @@ function validatePurposeMatrix({ candidateSha, purpose, tag, targetContextRef, v
   if (parsedVersion === null || parsedVersion.version !== version) {
     fail("release plan version must use a supported release version");
   }
-  if (purpose === "beta-publish" && parsedVersion.channel === "stable") {
-    fail("beta-publish release plan version must be alpha or beta");
+  if (parsedVersion.channel === "alpha" && purpose !== "diagnostic") {
+    fail("Alpha releases are retired; use a beta prerelease instead.");
+  }
+  if (purpose === "beta-publish" && parsedVersion.channel !== "beta") {
+    fail("beta-publish release plan version must be beta");
   }
   if (purpose === "stable-publish" && parsedVersion.channel !== "stable") {
     fail("stable-publish release plan version must be stable");
@@ -277,7 +199,7 @@ function validateToolingRoute(purpose, ref, toolingSha) {
 }
 
 export function validateReleasePlan(value) {
-  canonicalize(value);
+  canonicalizeJsonValue(value);
   if (!isRecord(value)) {
     fail("release plan must be an object");
   }
@@ -386,8 +308,8 @@ export function canonicalReleasePlanJson(value) {
   return canonicalAsciiJson(validateReleasePlan(value));
 }
 
-function releasePlanDigest(value) {
-  return `sha256:${createHash("sha256").update(canonicalReleasePlanJson(value), "ascii").digest("hex")}`;
+function releasePlanDigest(plan) {
+  return `sha256:${createHash("sha256").update(canonicalAsciiJson(plan), "ascii").digest("hex")}`;
 }
 
 export function createReleasePlanLock(value) {
@@ -400,7 +322,7 @@ export function createReleasePlanLock(value) {
 }
 
 function validateReleasePlanLock(value) {
-  canonicalize(value);
+  canonicalizeJsonValue(value);
   if (!isRecord(value)) {
     fail("release plan lock must be an object");
   }
@@ -435,7 +357,7 @@ export function parseReleasePlanLockJson(text) {
     throw new Error("release plan lock JSON is invalid JSON", { cause: error });
   }
   const lock = validateReleasePlanLock(value);
-  if (text !== canonicalReleasePlanLockJson(lock)) {
+  if (text !== canonicalAsciiJson(lock)) {
     fail("release plan lock JSON does not use canonical bytes");
   }
   return lock;

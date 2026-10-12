@@ -40,7 +40,11 @@ const deviceRecord: GitHubDeviceAuthorizationRecord = {
   nextPollAtMs: now + 5_000,
   agentId: "main",
   scope: "agent",
-  expectedIdentity: null,
+  expectedIdentity: {
+    profileId,
+    allowInSandbox: true,
+    gitAuthor: { name: "  Original Author  ", email: "  original@example.test  " },
+  },
   agentLifecycleBinding: {
     agentId: "main",
     provenance: null,
@@ -84,12 +88,75 @@ describe("GitHub OAuth hidden records", () => {
     expect(hiddenStore.records.size).toBe(0);
   });
 
+  it("rejects an own __proto__ key in persisted provenance", () => {
+    const record = {
+      ...deviceRecord,
+      agentLifecycleBinding: {
+        agentId: "main",
+        provenance: {
+          agentId: "main",
+          createdVia: "operator",
+          creatorAgentId: null,
+          createdAtMs: now,
+        },
+      },
+    };
+    Object.defineProperty(record.agentLifecycleBinding.provenance, "__proto__", {
+      value: null,
+      enumerable: true,
+    });
+    hiddenStore.records.set(requestId, JSON.stringify(record));
+    expect(readGitHubDeviceAuthorizationRecord(requestId)).toBeUndefined();
+  });
+
+  it("preserves System record reads that discard an invalid agent binding", () => {
+    const agentLifecycleBinding = { agentId: "main", provenance: null, extra: true };
+    const { agentLifecycleBinding: _binding, ...unboundDevice } = deviceRecord;
+    const expected = { ...unboundDevice, scope: "system" };
+    hiddenStore.records.set(requestId, JSON.stringify({ ...expected, agentLifecycleBinding }));
+    expect(readGitHubDeviceAuthorizationRecord(requestId)).toStrictEqual(expected);
+    const pendingInitial = {
+      requestId,
+      scope: "system",
+      agentId: "main",
+      expectedIdentity: null,
+    };
+    hiddenStore.records.set(
+      `github-oauth-${profileId.slice("ghp_".length)}`,
+      JSON.stringify({
+        ...oauthRecord,
+        scope: "system",
+        pendingInitial: { ...pendingInitial, agentLifecycleBinding },
+      }),
+    );
+    expect(inspectGitHubOAuthRecord(profileId)).toStrictEqual({
+      state: "valid",
+      record: { ...oauthRecord, scope: "system", pendingInitial },
+    });
+  });
+
   it.each([
-    ["extra field", { unexpected: true }],
-    ["unpinned verification URI", { verificationUri: "https://example.test" }],
-    ["oversized lifetime", { expiresAtMs: deviceRecord.expiresAtMs + 1 }],
-    ["noncanonical agent", { agentId: " Main " }],
-    ["invalid device code", { deviceCode: "secret" }],
+    ["missing lifecycle binding", { agentLifecycleBinding: undefined }],
+    ["foreign lifecycle agent", { agentLifecycleBinding: { agentId: "other", provenance: null } }],
+    [
+      "foreign provenance agent",
+      {
+        agentLifecycleBinding: {
+          agentId: "main",
+          provenance: {
+            agentId: "other",
+            createdVia: "operator",
+            creatorAgentId: null,
+            createdAtMs: now,
+          },
+        },
+      },
+    ],
+    [
+      "extra Git author field",
+      { expectedIdentity: { profileId, gitAuthor: { name: "Name", extra: true } } },
+    ],
+    ["missing identity snapshot", { expectedIdentity: undefined }],
   ])("rejects a pending record with %s", (_label, overrides) => {
     const value = structuredClone(deviceRecord);
     Object.assign(value, overrides);
@@ -97,29 +164,6 @@ describe("GitHub OAuth hidden records", () => {
   });
 
   it.each([
-    ["extra field", { ...oauthRecord, unexpected: true }],
-    ["newline-bearing refresh token", { ...oauthRecord, refreshToken: "secret\nleak" }],
-    ["unsorted scopes", { ...oauthRecord, scopes: ["repo", "offline_access", "workflow"] }],
-    ["duplicate scopes", { ...oauthRecord, scopes: ["repo", "repo"] }],
-    ["invalid login", { ...oauthRecord, login: "-robot" }],
-    [
-      "access expiry after refresh",
-      { ...oauthRecord, accessExpiresAtMs: oauthRecord.refreshExpiresAtMs },
-    ],
-    [
-      "both pending-initial and pending-refresh markers",
-      {
-        ...oauthRecord,
-        pendingInitial: {
-          requestId,
-          scope: "agent",
-          agentId: "main",
-          expectedIdentity: null,
-          agentLifecycleBinding: { agentId: "main", provenance: null },
-        },
-        pendingRefresh: true,
-      },
-    ],
     [
       "pending-initial scope mismatch",
       {

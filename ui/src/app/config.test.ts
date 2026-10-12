@@ -1,16 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ControlUiBootstrapConfig } from "../../../src/gateway/control-ui-contract.js";
+import {
+  CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE,
+  type ControlUiBootstrapConfig,
+} from "../../../src/gateway/control-ui-contract.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createApplicationConfigCapability } from "./config.ts";
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
-
-function bootstrapResponse(serverVersion: string, automaticallyFetchFavicons = false): Response {
+function bootstrapResponse(
+  serverVersion: string,
+  automaticallyFetchFavicons = false,
+  pluginAssetsRequireAuth?: boolean,
+  communityInvite = true,
+): Response {
   const payload: ControlUiBootstrapConfig = {
     basePath: "",
     assistantName: "Assistant",
@@ -20,6 +21,8 @@ function bootstrapResponse(serverVersion: string, automaticallyFetchFavicons = f
     terminalEnabled: false,
     cliAgentsEnabled: true,
     automaticallyFetchFavicons,
+    communityInvite,
+    ...(pluginAssetsRequireAuth === undefined ? {} : { pluginAssetsRequireAuth }),
     pluginFrameGrants: [],
   };
   return new Response(JSON.stringify(payload), {
@@ -30,9 +33,99 @@ function bootstrapResponse(serverVersion: string, automaticallyFetchFavicons = f
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  document.documentElement.removeAttribute(CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE);
 });
 
 describe("createApplicationConfigCapability", () => {
+  it("keeps the bubble lab off until bootstrap enables it and publishes disablement", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(Response.json({ chatBubblesEnabled: true }))
+        .mockResolvedValueOnce(Response.json({ chatBubblesEnabled: false })),
+    );
+    const config = createApplicationConfigCapability({ resourceBasePath: "" });
+    const listener = vi.fn();
+    config.subscribe(listener);
+    expect(config.current.chatBubblesEnabled).toBe(false);
+    await config.refresh();
+    expect(config.current.chatBubblesEnabled).toBe(true);
+    await config.refresh();
+    expect(config.current.chatBubblesEnabled).toBe(false);
+    expect(listener.mock.calls.map(([value]) => value.chatBubblesEnabled)).toEqual([true, false]);
+  });
+  it("publishes upload policy changes and keeps the default enabled", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ uploadsEnabled: false }))
+      .mockResolvedValueOnce(Response.json({ uploadsEnabled: true }));
+    vi.stubGlobal("fetch", fetchMock);
+    const config = createApplicationConfigCapability({ resourceBasePath: "" });
+    const listener = vi.fn();
+    config.subscribe(listener);
+    expect(config.current.uploadsEnabled).toBe(true);
+    await config.refresh();
+    expect(config.current.uploadsEnabled).toBe(false);
+    await config.refresh();
+    expect(config.current.uploadsEnabled).toBe(true);
+    expect(listener.mock.calls.map(([value]) => value.uploadsEnabled)).toEqual([false, true]);
+  });
+
+  it("keeps capabilities available when development plugin grants contain invalid URLs", async () => {
+    vi.stubGlobal("OPENCLAW_UI_DEV_GATEWAY", {
+      gatewayUrl: "ws://gateway.example/mount",
+      proxyPath: "/dev-gateway",
+    });
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      Response.json({
+        terminalEnabled: true,
+        cliAgentsEnabled: true,
+        pluginFrameGrants: [
+          {
+            pluginId: "fixture",
+            path: "/mount/plugins/fixture/",
+            match: "prefix",
+            unrecognized: "discard",
+          },
+          { pluginId: "malformed", path: "http://[", match: "prefix" },
+          { pluginId: "foreign", path: "https://other.example/panel", match: "exact" },
+          { path: "/missing-owner", match: "prefix" },
+        ],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const config = createApplicationConfigCapability({ resourceBasePath: "/dev-gateway/mount" });
+    await expect(config.refresh()).resolves.toMatchObject({
+      terminalEnabled: true,
+      cliAgentsEnabled: true,
+      pluginFrameGrants: [
+        { pluginId: "fixture", path: "/dev-gateway/mount/plugins/fixture/", match: "prefix" },
+        { pluginId: "malformed", path: "http://[", match: "prefix" },
+        { pluginId: "foreign", path: "https://other.example/panel", match: "exact" },
+      ],
+    });
+    expect(config.current.pluginFrameGrants[0]).not.toHaveProperty("unrecognized");
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it.each([undefined, false])(
+    "requires native asset grants unless bootstrap explicitly disables auth: %s",
+    async (pluginAssetsRequireAuth) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn<typeof fetch>(async () => bootstrapResponse("test", false, pluginAssetsRequireAuth)),
+      );
+      const config = createApplicationConfigCapability({ resourceBasePath: "" });
+      expect(config.current.pluginAssetsRequireAuth).toBe(true);
+      await expect(config.refresh()).resolves.toMatchObject({
+        pluginAssetsRequireAuth: pluginAssetsRequireAuth !== false,
+        pluginFrameGrants: [],
+      });
+    },
+  );
+
   it("stays fail closed before bootstrap and accepts the Gateway favicon setting", async () => {
     const fetchMock = vi.fn<typeof fetch>(async () => bootstrapResponse("test", true));
     vi.stubGlobal("fetch", fetchMock);
@@ -44,17 +137,201 @@ describe("createApplicationConfigCapability", () => {
     expect(config.current.automaticallyFetchFavicons).toBe(true);
   });
 
-  it("returns null for a superseded bootstrap response", async () => {
-    const firstResponse = deferred<Response>();
-    const secondResponse = deferred<Response>();
+  it.each([{ pluginFrameGrants: {} }])(
+    "returns an unavailable result for invalid bootstrap data: %j",
+    async (payload) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn<typeof fetch>(async () => new Response(JSON.stringify(payload))),
+      );
+      const config = createApplicationConfigCapability({ resourceBasePath: "" });
+
+      await expect(config.refresh()).resolves.toBeNull();
+      expect(config.current.serverVersion).toBeNull();
+    },
+  );
+
+  it("publishes document config before requests and reuses it until invalidated", async () => {
+    const payload: ControlUiBootstrapConfig = {
+      basePath: "",
+      assistantName: "Observatory",
+      assistantAvatar: "🔭",
+      assistantAgentId: "main",
+      terminalEnabled: false,
+      pluginFrameGrants: [{ pluginId: "fixture", path: "/panel", match: "exact" }],
+    };
+    document.documentElement.setAttribute(
+      CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE,
+      JSON.stringify(payload),
+    );
+    const fetchMock = vi.fn<typeof fetch>(async () => bootstrapResponse("updated"));
+    vi.stubGlobal("fetch", fetchMock);
+    const config = createApplicationConfigCapability({ resourceBasePath: "" });
+    expect(config.current.assistantIdentity).toMatchObject({ name: "Observatory", avatar: "🔭" });
+    expect(config.current.pluginFrameGrants).toEqual(payload.pluginFrameGrants);
+    await config.refresh({ ifNeeded: true });
+    expect(fetchMock).not.toHaveBeenCalled();
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 24 * 60 * 60 * 1_000);
+    await config.refresh({ ifNeeded: true });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    await config.refresh();
+    expect(config.current.serverVersion).toBe("updated");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("revalidates document grants before reusing them with a startup bearer", async () => {
+    document.documentElement.setAttribute(
+      CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE,
+      JSON.stringify({
+        basePath: "",
+        assistantName: "Browser identity",
+        assistantAvatar: "B",
+        pluginFrameGrants: [{ pluginId: "browser-only", path: "/browser", match: "prefix" }],
+      }),
+    );
+    const fetchMock = vi.fn<typeof fetch>(async () => bootstrapResponse("bearer"));
+    vi.stubGlobal("fetch", fetchMock);
+    const config = createApplicationConfigCapability({
+      resourceBasePath: "",
+      getAuth: () => ({ settings: { token: "test-other-identity" } }),
+    });
+    expect(config.current.assistantIdentity.name).toBe("Browser identity");
+    const result = await config.refresh({ ifNeeded: true });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ serverVersion: "bearer", pluginFrameGrants: [] });
+  });
+
+  it.each(["/other", "https://other.example"])(
+    "does not adopt another resource owner's document config: %s",
+    (resourceBasePath) => {
+      document.documentElement.setAttribute(
+        CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE,
+        JSON.stringify({
+          basePath: "",
+          assistantName: "Observatory",
+          assistantAvatar: "O",
+        }),
+      );
+      const config = createApplicationConfigCapability({ resourceBasePath });
+      expect(config.current.assistantIdentity.name).toBe("Assistant");
+    },
+  );
+
+  it("shares concurrent bootstrap loads with equivalent credentials", async () => {
+    const response = createDeferred<Response>();
+    const fetchMock = vi.fn<typeof fetch>(() => response.promise);
+    vi.stubGlobal("fetch", fetchMock);
+    let token = "fixture-token";
+    const config = createApplicationConfigCapability({
+      resourceBasePath: "",
+      getAuth: () => ({ settings: { token } }),
+    });
+
+    const first = config.refresh();
+    token = " fixture-token ";
+    const second = config.refresh({ ifNeeded: true });
+    response.resolve(bootstrapResponse("ready"));
+
+    await expect(first).resolves.toMatchObject({ serverVersion: "ready" });
+    await expect(second).resolves.toMatchObject({ serverVersion: "ready" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes without a bearer candidate at boot and after credentials change", async () => {
+    const oldResponse = createDeferred<Response>();
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockImplementationOnce(() => oldResponse.promise)
+      .mockResolvedValueOnce(bootstrapResponse("cookie"));
+    vi.stubGlobal("fetch", fetchMock);
+    let token = "fixture-token";
+    const config = createApplicationConfigCapability({
+      resourceBasePath: "",
+      getAuth: () => ({ settings: { token } }),
+    });
+    const loading = config.refresh({ ifNeeded: true });
+    token = "";
+    await expect(config.refresh({ ifNeeded: true })).resolves.toMatchObject({
+      serverVersion: "cookie",
+    });
+    oldResponse.resolve(bootstrapResponse("retired"));
+    await expect(loading).resolves.toBeNull();
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    });
+    expect(fetchMock.mock.calls[1]?.[1]?.headers).not.toHaveProperty("Authorization");
+    expect(config.current.serverVersion).toBe("cookie");
+  });
+
+  it.each(["replacement-fixture-token"])(
+    "rejects an authenticated response when live credentials change without another refresh: %s",
+    async (nextToken) => {
+      const response = createDeferred<Response>();
+      const fetchMock = vi.fn<typeof fetch>(() => response.promise);
+      vi.stubGlobal("fetch", fetchMock);
+      let token = "fixture-token";
+      const config = createApplicationConfigCapability({
+        resourceBasePath: "",
+        getAuth: () => ({ settings: { token } }),
+      });
+
+      const loading = config.refresh();
+      token = nextToken;
+      response.resolve(bootstrapResponse("retired"));
+
+      await expect(loading).resolves.toBeNull();
+      expect(config.current.serverVersion).toBeNull();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([false, true])(
+    "keeps independent callers valid and publishes the newest successful response (aborted: %s)",
+    async (aborted) => {
+      const firstResponse = createDeferred<Response>();
+      const secondResponse = createDeferred<Response>();
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn<typeof fetch>()
+          .mockImplementationOnce(() => firstResponse.promise)
+          .mockImplementationOnce(() => secondResponse.promise),
+      );
+      const config = createApplicationConfigCapability({ resourceBasePath: "" });
+      const abort = new AbortController();
+      const first = config.refresh();
+      const second = config.refresh({ signal: abort.signal });
+      if (aborted) {
+        abort.abort();
+      }
+      secondResponse.resolve(bootstrapResponse("new"));
+      expect(await second).toEqual(
+        aborted ? null : expect.objectContaining({ serverVersion: "new" }),
+      );
+      firstResponse.resolve(bootstrapResponse("old"));
+
+      await expect(first).resolves.toMatchObject({ serverVersion: "old" });
+      expect(config.current.serverVersion).toBe(aborted ? "old" : "new");
+    },
+  );
+
+  it("returns null for a bootstrap response superseded by different credentials", async () => {
+    const firstResponse = createDeferred<Response>();
+    const secondResponse = createDeferred<Response>();
     const fetchMock = vi
       .fn<typeof fetch>()
       .mockImplementationOnce(() => firstResponse.promise)
       .mockImplementationOnce(() => secondResponse.promise);
     vi.stubGlobal("fetch", fetchMock);
-    const config = createApplicationConfigCapability({ resourceBasePath: "" });
+    let token = "old-fixture-token";
+    const config = createApplicationConfigCapability({
+      resourceBasePath: "",
+      getAuth: () => ({ settings: { token } }),
+    });
 
     const firstRefresh = config.refresh();
+    token = "new-fixture-token";
     const secondRefresh = config.refresh();
     secondResponse.resolve(bootstrapResponse("new"));
     await expect(secondRefresh).resolves.toMatchObject({ serverVersion: "new" });

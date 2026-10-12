@@ -1,8 +1,7 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-// Discord plugin module implements message handler.routing preflight behavior.
 import { resolveDiscordRuntimeBindingConversationId } from "../conversation-identity.js";
 import type { User } from "../internal/discord.js";
-import { resolveDiscordConversationBindingRoute } from "./conversation-binding-route.js";
+import { resolveDiscordConversationBindingRouteAsync } from "./conversation-binding-route.js";
 import type { DiscordMessagePreflightParams } from "./message-handler.preflight.types.js";
 import {
   buildDiscordRoutePeer,
@@ -24,45 +23,46 @@ export async function resolveDiscordPreflightRoute(params: {
   earlyThreadParentId?: string;
 }) {
   const conversationRuntime = await loadConversationRuntime();
-  const route = resolveDiscordConversationRoute({
-    cfg: params.preflight.cfg,
-    accountId: params.preflight.accountId,
-    guildId: params.preflight.data.guild_id ?? undefined,
-    memberRoleIds: params.memberRoleIds,
-    peer: buildDiscordRoutePeer({
-      isDirectMessage: params.isDirectMessage,
-      isGroupDm: params.isGroupDm,
-      directUserId: params.author.id,
-      conversationId: params.messageChannelId,
-    }),
-    parentConversationId: params.earlyThreadParentId,
-  });
+  const route = ({ boundAgentId }: { boundAgentId?: string }) =>
+    resolveDiscordConversationRoute({
+      cfg: params.preflight.cfg,
+      defaultAgentId: boundAgentId,
+      accountId: params.preflight.accountId,
+      guildId: params.preflight.data.guild_id ?? undefined,
+      memberRoleIds: params.memberRoleIds,
+      peer: buildDiscordRoutePeer({
+        isDirectMessage: params.isDirectMessage,
+        isGroupDm: params.isGroupDm,
+        directUserId: params.author.id,
+        conversationId: params.messageChannelId,
+      }),
+      parentConversationId: params.earlyThreadParentId,
+    });
   const bindingConversationId = resolveDiscordRuntimeBindingConversationId({
     isDirectMessage: params.isDirectMessage,
     isGroupDm: params.isGroupDm,
     userId: params.author.id,
     channelId: params.messageChannelId,
   });
-  const { runtimeRoute, configuredRoute } = resolveDiscordConversationBindingRoute({
+  const { runtimeRoute, configuredRoute } = await resolveDiscordConversationBindingRouteAsync({
     cfg: params.preflight.cfg,
-    route,
+    resolveRoute: route,
     accountId: params.preflight.accountId,
     runtimeConversationId: bindingConversationId,
     configuredConversationId: params.messageChannelId,
     parentConversationId: params.earlyThreadParentId,
+    // Processing owns the awaited activity write after preflight completes.
+    touchBinding: false,
   });
-  let threadBinding = runtimeRoute.bindingRecord ?? undefined;
   const configuredBinding = configuredRoute?.bindingResolution ?? null;
-  if (!threadBinding && configuredBinding) {
-    threadBinding = configuredBinding.record;
-  }
+  const threadBinding = runtimeRoute.bindingRecord ?? configuredBinding?.record;
   const boundSessionKey = conversationRuntime.isPluginOwnedSessionBindingRecord(threadBinding)
     ? ""
     : (runtimeRoute.boundSessionKey ?? threadBinding?.targetSessionKey?.trim());
   const effectiveRoute = runtimeRoute.boundSessionKey
     ? runtimeRoute.route
     : resolveDiscordEffectiveRoute({
-        route,
+        route: configuredRoute?.route ?? runtimeRoute.route,
         boundSessionKey,
         configuredRoute,
         matchedBy: "binding.channel",

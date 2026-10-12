@@ -9,11 +9,13 @@ import {
 } from "../../../agents/auth-profiles/persisted.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../../../agents/auth-profiles/runtime-snapshots.js";
 import { writePersistedAuthProfileStoreRaw } from "../../../agents/auth-profiles/sqlite.js";
-import { saveAuthProfileStore } from "../../../agents/auth-profiles/store.js";
+import { saveAuthProfileStore } from "../../../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileStore, OAuthCredential } from "../../../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { captureEnv } from "../../../test-utils/env.js";
+import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import { resolveLegacyAuthProfilesPath as resolveAuthStorePath } from "../../doctor-auth-legacy-paths.js";
+import { beginDoctorMaintenance } from "../../doctor-maintenance.js";
 import {
   collectStaleOAuthProfileShadowWarnings,
   repairStaleOAuthProfileShadows,
@@ -32,10 +34,10 @@ function oauthCredential(overrides: Partial<OAuthCredential>): OAuthCredential {
   };
 }
 
-function storeWith(profileId: string, credential: OAuthCredential): AuthProfileStore {
+function storeWith(profileId: string, overrides: Partial<OAuthCredential>): AuthProfileStore {
   return {
     version: 1,
-    profiles: { [profileId]: credential },
+    profiles: { [profileId]: oauthCredential(overrides) },
   };
 }
 
@@ -76,7 +78,11 @@ describe("stale OAuth profile shadow doctor repair", () => {
 
   afterEach(async () => {
     clearRuntimeAuthProfileStoreSnapshots();
-    envSnapshot.restore();
+    try {
+      await cleanupSessionStateForTest({ stateDir, rootPath: tempRoot });
+    } finally {
+      envSnapshot.restore();
+    }
     await fs.rm(tempRoot, { recursive: true, force: true });
   });
 
@@ -86,26 +92,20 @@ describe("stale OAuth profile shadow doctor repair", () => {
     const childAgentDir = path.join(stateDir, "agents", "telegram", "agent");
     await writeRawAuthStore(
       childAgentDir,
-      storeWith(
-        profileId,
-        oauthCredential({
-          access: "child-access",
-          refresh: "child-refresh",
-          expires: now - 60_000,
-          accountId: "acct-shared",
-        }),
-      ),
+      storeWith(profileId, {
+        access: "child-access",
+        refresh: "child-refresh",
+        expires: now - 60_000,
+        accountId: "acct-shared",
+      }),
     );
     saveAuthProfileStore(
-      storeWith(
-        profileId,
-        oauthCredential({
-          access: "main-access",
-          refresh: "main-refresh",
-          expires: now + 60 * 60 * 1000,
-          accountId: "acct-shared",
-        }),
-      ),
+      storeWith(profileId, {
+        access: "main-access",
+        refresh: "main-refresh",
+        expires: now + 60 * 60 * 1000,
+        accountId: "acct-shared",
+      }),
     );
 
     const hits = await scanStaleOAuthProfileShadows({
@@ -117,36 +117,41 @@ describe("stale OAuth profile shadow doctor repair", () => {
       doctorFixCommand: "openclaw doctor --fix",
     });
 
-    expect(hits).toHaveLength(1);
+    expect(hits).toEqual([
+      expect.objectContaining({ authPath: resolveAuthStorePath(childAgentDir), profileId }),
+    ]);
     expect(warnings[0]).toContain("stale OAuth auth profile anthropic:default");
     expect(warnings[0]).toContain("openclaw doctor --fix");
     expect(loadPersistedAuthProfileStore(childAgentDir)?.profiles[profileId]).toBeDefined();
   });
 
-  it("scans sqlite-only child auth stores after JSON migration", async () => {
-    const profileId = "anthropic:default";
+  it("does not classify a cross-tenant GitHub Copilot profile as a removable shadow", async () => {
+    const profileId = "github-copilot:default";
     const now = Date.now();
     const childAgentDir = path.join(stateDir, "agents", "telegram", "agent");
-    saveAuthProfileStore(
+    await writeRawAuthStore(
+      childAgentDir,
       storeWith(
         profileId,
         oauthCredential({
+          provider: "github-copilot",
+          enterpriseUrl: "acme.ghe.com",
           access: "child-access",
           refresh: "child-refresh",
           expires: now - 60_000,
-          accountId: "acct-shared",
         }),
       ),
-      childAgentDir,
     );
     saveAuthProfileStore(
       storeWith(
         profileId,
         oauthCredential({
+          provider: "github-copilot",
+          enterpriseUrl: "other.ghe.com",
           access: "main-access",
           refresh: "main-refresh",
           expires: now + 60 * 60 * 1000,
-          accountId: "acct-shared",
+          accountId: "acct-main",
         }),
       ),
     );
@@ -156,15 +161,11 @@ describe("stale OAuth profile shadow doctor repair", () => {
       now,
     });
 
-    expect(hits).toEqual([
-      expect.objectContaining({
-        authPath: resolveAuthStorePath(childAgentDir),
-        profileId,
-      }),
-    ]);
-    await expect(fs.access(resolveAuthStorePath(childAgentDir))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    expect(hits).toHaveLength(0);
+    await expect(
+      repairStaleOAuthProfileShadows({ cfg: {} satisfies OpenClawConfig, now }),
+    ).resolves.toEqual({ changes: [], warnings: [] });
+    expect(loadPersistedAuthProfileStore(childAgentDir)?.profiles[profileId]).toBeDefined();
   });
 
   it("uses the injected env for the main auth store", async () => {
@@ -177,39 +178,30 @@ describe("stale OAuth profile shadow doctor repair", () => {
       OPENCLAW_HOME: injectedStateDir,
     };
     saveAuthProfileStore(
-      storeWith(
-        profileId,
-        oauthCredential({
-          expires: now + 60 * 60 * 1000,
-          accountId: "acct-process-env",
-        }),
-      ),
+      storeWith(profileId, {
+        expires: now + 60 * 60 * 1000,
+        accountId: "acct-process-env",
+      }),
       undefined,
     );
     await writeRawAuthStore(
       path.join(injectedStateDir, "agents", "main", "agent"),
-      storeWith(
-        profileId,
-        oauthCredential({
-          access: "main-access",
-          refresh: "main-refresh",
-          expires: now + 60 * 60 * 1000,
-          accountId: "acct-injected-env",
-        }),
-      ),
+      storeWith(profileId, {
+        access: "main-access",
+        refresh: "main-refresh",
+        expires: now + 60 * 60 * 1000,
+        accountId: "acct-injected-env",
+      }),
     );
     const childAgentDir = path.join(injectedStateDir, "agents", "telegram", "agent");
     await writeRawAuthStore(
       childAgentDir,
-      storeWith(
-        profileId,
-        oauthCredential({
-          access: "child-access",
-          refresh: "child-refresh",
-          expires: now - 60_000,
-          accountId: "acct-injected-env",
-        }),
-      ),
+      storeWith(profileId, {
+        access: "child-access",
+        refresh: "child-refresh",
+        expires: now - 60_000,
+        accountId: "acct-injected-env",
+      }),
     );
 
     const hits = await scanStaleOAuthProfileShadows({
@@ -238,31 +230,25 @@ describe("stale OAuth profile shadow doctor repair", () => {
     };
     await writeRawAuthStore(
       relocatedMainAgentDir,
-      storeWith(
-        profileId,
-        oauthCredential({
-          access: "main-access",
-          refresh: "main-refresh",
-          expires: now + 60 * 60 * 1000,
-          accountId: "acct-shared",
-        }),
-      ),
+      storeWith(profileId, {
+        access: "main-access",
+        refresh: "main-refresh",
+        expires: now + 60 * 60 * 1000,
+        accountId: "acct-shared",
+      }),
     );
     await writeRawAuthStore(
       childAgentDir,
-      storeWith(
-        profileId,
-        oauthCredential({
-          access: "child-access",
-          refresh: "child-refresh",
-          expires: now - 60_000,
-          accountId: "acct-shared",
-        }),
-      ),
+      storeWith(profileId, {
+        access: "child-access",
+        refresh: "child-refresh",
+        expires: now - 60_000,
+        accountId: "acct-shared",
+      }),
     );
 
     const result = await repairStaleOAuthProfileShadows({
-      cfg: { agents: { entries: { telegram: { default: true } } } } satisfies OpenClawConfig,
+      cfg: { agents: { entries: { telegram: {} } } } satisfies OpenClawConfig,
       env,
       now,
     });
@@ -293,16 +279,13 @@ describe("stale OAuth profile shadow doctor repair", () => {
       },
     });
     saveAuthProfileStore(
-      storeWith(
-        profileId,
-        oauthCredential({
-          provider: "openai-codex",
-          access: "main-access",
-          refresh: "main-refresh",
-          expires: now + 60 * 60 * 1000,
-          accountId: "acct-shared",
-        }),
-      ),
+      storeWith(profileId, {
+        provider: "openai-codex",
+        access: "main-access",
+        refresh: "main-refresh",
+        expires: now + 60 * 60 * 1000,
+        accountId: "acct-shared",
+      }),
     );
 
     const hits = await scanStaleOAuthProfileShadows({
@@ -322,36 +305,40 @@ describe("stale OAuth profile shadow doctor repair", () => {
     expect(raw.profiles[profileId]?.oauthRef).toBeDefined();
   });
 
-  it("removes stale child OAuth shadows and local cooldown state", async () => {
+  it("retires a local OAuth copy under Doctor maintenance without changing the authored order", async () => {
     const profileId = "anthropic:default";
     const now = Date.now();
     const childAgentDir = path.join(stateDir, "agents", "telegram", "agent");
+    const localId = "anthropic:local";
+    const localCredential = oauthCredential({ accountId: "acct-local" });
+    const localHealth = { errorCount: 1, lastUsed: now - 1_000 };
+    const order = [localId, profileId, "anthropic:missing"];
     saveAuthProfileStore(
-      storeWith(
-        profileId,
-        oauthCredential({
-          access: "main-access",
-          refresh: "main-refresh",
-          expires: now + 60 * 60 * 1000,
-          accountId: "acct-shared",
-        }),
-      ),
+      storeWith(profileId, {
+        access: "main-access",
+        refresh: "main-refresh",
+        expires: now + 60 * 60 * 1000,
+        accountId: "acct-shared",
+      }),
       undefined,
     );
+    const sharedBefore = loadPersistedAuthProfileStore();
     writePersistedAuthProfileStoreRaw(
       {
-        ...storeWith(
-          profileId,
-          oauthCredential({
+        version: 1,
+        profiles: {
+          [profileId]: oauthCredential({
             access: "child-access",
             refresh: "child-refresh",
             expires: now - 60_000,
             accountId: "acct-shared",
           }),
-        ),
-        order: { anthropic: [profileId] },
+          [localId]: localCredential,
+        },
+        order: { anthropic: order },
         lastGood: { anthropic: profileId },
         usageStats: {
+          [localId]: localHealth,
           [profileId]: {
             cooldownReason: "auth",
             failureCounts: { auth: 2 },
@@ -361,113 +348,56 @@ describe("stale OAuth profile shadow doctor repair", () => {
       childAgentDir,
     );
 
-    const result = await repairStaleOAuthProfileShadows({
-      cfg: { agents: { list: [{ id: "telegram" }] } } satisfies OpenClawConfig,
-      now,
+    await cleanupSessionStateForTest({ stateDir });
+    const maintenance = await beginDoctorMaintenance({
+      root: null,
+      options: { repair: true },
+      runtime: { log() {}, error() {}, exit() {} },
     });
+    if (!maintenance) {
+      throw new Error("Doctor did not acquire maintenance");
+    }
+    let result;
+    try {
+      result = await maintenance.run(() =>
+        repairStaleOAuthProfileShadows({
+          cfg: {} satisfies OpenClawConfig,
+          now,
+        }),
+      );
+    } finally {
+      await maintenance.release();
+    }
 
     expect(result.warnings).toEqual([]);
     expect(result.changes).toHaveLength(1);
-    expect(result.changes[0]).toContain(
-      "Removed stale OAuth auth profile shadow anthropic:default",
-    );
     const childStore = loadPersistedAuthProfileStore(childAgentDir);
-    expect(childStore?.profiles[profileId]).toBeUndefined();
-    expect(childStore?.usageStats?.[profileId]).toBeUndefined();
-    expect(childStore?.order?.anthropic).toBeUndefined();
+    expect(childStore?.profiles).toEqual({ [localId]: localCredential });
+    expect(childStore?.usageStats).toEqual({ [localId]: localHealth });
+    expect(childStore?.order?.anthropic).toEqual(order);
     expect(childStore?.lastGood?.anthropic).toBeUndefined();
-  });
-
-  it("does not remove a child OAuth profile for a different account", async () => {
-    const profileId = "anthropic:default";
-    const now = Date.now();
-    const childAgentDir = path.join(stateDir, "agents", "telegram", "agent");
-    await writeRawAuthStore(
-      childAgentDir,
-      storeWith(
-        profileId,
-        oauthCredential({
-          expires: now - 60_000,
-          accountId: "acct-child",
-        }),
-      ),
-    );
-    saveAuthProfileStore(
-      storeWith(
-        profileId,
-        oauthCredential({
-          expires: now + 60 * 60 * 1000,
-          accountId: "acct-main",
-        }),
-      ),
-    );
-
-    const result = await repairStaleOAuthProfileShadows({
-      cfg: {} satisfies OpenClawConfig,
-      now,
-    });
-
-    expect(result.changes).toEqual([]);
-    expect(loadPersistedAuthProfileStore(childAgentDir)?.profiles[profileId]).toBeDefined();
-  });
-
-  it("keeps a newer child OAuth profile", async () => {
-    const profileId = "anthropic:default";
-    const now = Date.now();
-    const childAgentDir = path.join(stateDir, "agents", "telegram", "agent");
-    await writeRawAuthStore(
-      childAgentDir,
-      storeWith(
-        profileId,
-        oauthCredential({
-          expires: now + 60 * 60 * 1000,
-          accountId: "acct-shared",
-        }),
-      ),
-    );
-    saveAuthProfileStore(
-      storeWith(
-        profileId,
-        oauthCredential({
-          expires: now + 30 * 60 * 1000,
-          accountId: "acct-shared",
-        }),
-      ),
-    );
-
-    const result = await repairStaleOAuthProfileShadows({
-      cfg: {} satisfies OpenClawConfig,
-      now,
-    });
-
-    expect(result.changes).toEqual([]);
-    expect(loadPersistedAuthProfileStore(childAgentDir)?.profiles[profileId]).toBeDefined();
+    expect(loadPersistedAuthProfileStore()).toEqual(sharedBefore);
   });
 
   it("rechecks stale OAuth shadows against the locked store before removal", () => {
     const profileId = "anthropic:default";
     const now = Date.now();
-    const result = testing.removeStaleProfilesFromStore({
-      store: storeWith(
-        profileId,
-        oauthCredential({
-          expires: now + 60 * 60 * 1000,
-          accountId: "acct-shared",
-        }),
-      ),
-      mainStore: storeWith(
-        profileId,
-        oauthCredential({
-          expires: now + 30 * 60 * 1000,
-          accountId: "acct-shared",
-        }),
-      ),
+    const store = storeWith(profileId, {
+      expires: now + 60 * 60 * 1000,
+      accountId: "acct-shared",
+    });
+    const removedProfileIds = testing.removeStaleProfilesFromStore({
+      store,
+      mainStore: storeWith(profileId, {
+        expires: now + 30 * 60 * 1000,
+        accountId: "acct-shared",
+      }),
       profileIds: new Set([profileId]),
       now,
     });
 
-    expect(result.removedProfileIds).toEqual([]);
-    expect(result.store.profiles[profileId]).toBeDefined();
+    expect(removedProfileIds).toEqual([]);
+    expect(store.profiles[profileId]).toBeDefined();
   });
 
   it("does not recreate a child auth store that disappeared before repair", async () => {
@@ -476,18 +406,15 @@ describe("stale OAuth profile shadow doctor repair", () => {
     const childAgentDir = path.join(stateDir, "agents", "telegram", "agent");
     const repair = await testing.repairStaleOAuthProfilesForAgent({
       agentDir: childAgentDir,
-      mainStore: storeWith(
-        profileId,
-        oauthCredential({
-          expires: now + 60 * 60 * 1000,
-          accountId: "acct-shared",
-        }),
-      ),
+      mainStore: storeWith(profileId, {
+        expires: now + 60 * 60 * 1000,
+        accountId: "acct-shared",
+      }),
       profileIds: new Set([profileId]),
       now,
     });
 
-    expect(repair.status).toBe("missing");
+    expect(repair).toEqual([]);
     await expect(fs.stat(resolveAuthStorePath(childAgentDir))).rejects.toMatchObject({
       code: "ENOENT",
     });

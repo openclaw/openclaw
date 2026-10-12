@@ -1,6 +1,8 @@
 /* @vitest-environment jsdom */
 
+import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { renderConnectingSplash } from "../components/loading-skeleton.ts";
 import { beginNativeWindowDrag, beginNativeWindowDragFromTopInset } from "./native-window-drag.ts";
 
 afterEach(() => {
@@ -40,14 +42,21 @@ function mouseDown(target: Element, init: MouseEventInit = {}) {
 }
 
 describe("native window drag", () => {
-  it("posts a window-drag message for presses on passive header chrome", () => {
+  it("drags the connecting skeleton while leaving startup status text selectable", () => {
     const postMessage = installBridge();
-    const { header } = buildHeader();
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(renderConnectingSplash("Connecting to Gateway"), container);
 
-    const event = mouseDown(header);
-
-    expect(postMessage).toHaveBeenCalledWith({ type: "window-drag" });
-    expect(event.defaultPrevented).toBe(true);
+    for (const selector of [".connect-splash__layout", ".loading-skeleton__message"]) {
+      expect(mouseDown(container.querySelector(selector)!).defaultPrevented).toBe(true);
+    }
+    expect(postMessage).toHaveBeenCalledTimes(2);
+    expect(postMessage).toHaveBeenLastCalledWith({ type: "window-drag" });
+    expect(mouseDown(container.querySelector(".connect-splash__status")!).defaultPrevented).toBe(
+      false,
+    );
+    expect(postMessage).toHaveBeenCalledTimes(2);
   });
 
   it("treats the static title text as draggable chrome", () => {

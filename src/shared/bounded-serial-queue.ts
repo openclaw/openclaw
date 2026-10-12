@@ -1,8 +1,18 @@
+import { createDeferredCore } from "./deferred.js";
+import { runInDetachedAsyncContext } from "./detached-async-context.js";
+
+// The voice transcript queue also runs in the browser, which has no Node async context.
+const asyncLocalStorage =
+  typeof process === "undefined"
+    ? undefined
+    : process.getBuiltinModule("node:async_hooks").AsyncLocalStorage;
+
 type BoundedSerialQueueAdmission<T> =
   | { accepted: true; completion: Promise<T> }
   | { accepted: false; reason: "capacity" | "overflow" | "sealed" };
 
 type BoundedSerialQueueTask = {
+  sequence: number;
   weight: number;
   run: () => unknown;
   resolve: (value: unknown) => void;
@@ -21,8 +31,8 @@ export class BoundedSerialQueue {
   private active = false;
   private sealed = false;
   private overflowed = false;
-  private failed = false;
-  private firstFailure: unknown;
+  private acceptedSequence = 0;
+  private firstFailure?: { sequence: number; error: unknown };
   private settledPrefix: Promise<void> = Promise.resolve();
 
   constructor(
@@ -71,15 +81,13 @@ export class BoundedSerialQueue {
       return { accepted: false, reason: "overflow" };
     }
 
-    let resolve!: (value: T | PromiseLike<T>) => void;
-    let reject!: (reason: unknown) => void;
-    const completion = new Promise<T>((accept, fail) => {
-      resolve = accept;
-      reject = fail;
-    });
+    const { promise: completion, resolve, reject } = createDeferredCore<T>();
     const task: BoundedSerialQueueTask = {
+      sequence: ++this.acceptedSequence,
       weight,
-      run,
+      // Waiting work retains its caller's context, including an absent scope,
+      // rather than inheriting the preceding task's drain microtask.
+      run: asyncLocalStorage ? asyncLocalStorage.bind(run) : run,
       resolve: (value) => resolve(value as T),
       reject,
     };
@@ -92,7 +100,7 @@ export class BoundedSerialQueue {
       this.pendingWeight += weight;
     } else {
       this.active = true;
-      this.startTask(task);
+      runInDetachedAsyncContext(() => void this.runTask(task));
     }
     return { accepted: true, completion };
   }
@@ -106,38 +114,32 @@ export class BoundedSerialQueue {
    *
    * Later admissions do not extend this barrier, which keeps consult flushes
    * finite while close can seal first to drain the entire accepted prefix.
-   * Close owners can require that prefix to have completed without failures.
+   * Success checks exclude later tasks that fail before this barrier resumes.
    */
   flush(options: { requireSuccess?: boolean } = {}): Promise<void> {
     const prefix = this.settledPrefix;
+    const sequence = this.acceptedSequence;
     if (options.requireSuccess !== true) {
       return prefix;
     }
     return prefix.then(() => {
-      if (this.failed) {
-        throw this.firstFailure;
+      if (this.firstFailure && this.firstFailure.sequence <= sequence) {
+        throw this.firstFailure.error;
       }
     });
-  }
-
-  private startTask(task: BoundedSerialQueueTask): void {
-    void this.runTask(task);
   }
 
   private async runTask(task: BoundedSerialQueueTask): Promise<void> {
     try {
       task.resolve(await task.run());
     } catch (error) {
-      if (!this.failed) {
-        this.failed = true;
-        this.firstFailure = error;
-      }
+      this.firstFailure ??= { sequence: task.sequence, error };
       task.reject(error);
     } finally {
       const next = this.pending.shift();
       if (next) {
         this.pendingWeight -= next.weight;
-        queueMicrotask(() => this.startTask(next));
+        queueMicrotask(() => void this.runTask(next));
       } else {
         this.active = false;
       }

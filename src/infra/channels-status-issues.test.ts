@@ -1,7 +1,6 @@
 // Covers channel plugin status issue collection.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin, ChannelStatusIssue } from "../channels/plugins/types.public.js";
-import { DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS } from "../gateway/channel-health-policy.js";
 
 const mocks = vi.hoisted(() => ({
   listChannelPlugins: vi.fn(),
@@ -47,138 +46,18 @@ describe("collectChannelStatusIssues", () => {
     expect(collectTelegramIssues).not.toHaveBeenCalled();
   });
 
-  it("skips plugins without collectors and concatenates collector output in plugin order", () => {
-    const collectTelegramIssues = vi.fn((): ChannelStatusIssue[] => [
+  it("uses Gateway-owned diagnostics without loading local plugins or duplicating issues", () => {
+    const statusIssues: ChannelStatusIssue[] = [
       {
-        channel: "telegram",
-        accountId: "default",
-        kind: "runtime",
-        message: "telegram down",
+        channel: "guildchat",
+        accountId: "work",
+        kind: "config",
+        message: "Channel configuration reload is deferred while active work finishes.",
       },
-    ]);
-    const collectSlackIssues = vi.fn((): ChannelStatusIssue[] => [
-      {
-        channel: "slack",
-        accountId: "default",
-        kind: "permissions",
-        message: "slack warning",
-      },
-      {
-        channel: "slack",
-        accountId: "default",
-        kind: "auth",
-        message: "slack auth failed",
-      },
-    ]);
-    const telegramAccounts = [{ accountId: "tg-1" }];
-    const slackAccounts = [{ accountId: "sl-1" }];
-    mocks.listChannelPlugins.mockReturnValueOnce([
-      createPlugin("discord"),
-      createPlugin("telegram", collectTelegramIssues),
-      createPlugin("slack", collectSlackIssues),
-    ]);
-
-    expect(
-      collectChannelStatusIssues({
-        channelAccounts: {
-          discord: [{ accountId: "dc-1" }],
-          telegram: telegramAccounts,
-          slack: slackAccounts,
-        },
-      }),
-    ).toEqual([
-      {
-        channel: "telegram",
-        accountId: "default",
-        kind: "runtime",
-        message: "telegram down",
-      },
-      {
-        channel: "slack",
-        accountId: "default",
-        kind: "permissions",
-        message: "slack warning",
-      },
-      {
-        channel: "slack",
-        accountId: "default",
-        kind: "auth",
-        message: "slack auth failed",
-      },
-    ]);
-
-    expect(collectTelegramIssues).toHaveBeenCalledWith(telegramAccounts);
-    expect(collectSlackIssues).toHaveBeenCalledWith(slackAccounts);
-  });
-
-  it("adds runtime warnings for stale connected channel transports", () => {
-    const now = Date.now();
-    vi.useFakeTimers();
-    vi.setSystemTime(now);
-    mocks.listChannelPlugins.mockReturnValue([createPlugin("feishu")]);
-
-    const issues = collectChannelStatusIssues({
-      channelAccounts: {
-        feishu: [
-          {
-            accountId: "work",
-            enabled: true,
-            configured: true,
-            running: true,
-            connected: true,
-            lastStartAt: now - DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS - 120_000,
-            lastTransportActivityAt: now - DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS - 60_000,
-          },
-        ],
-      },
-    });
-
-    expect(issues).toContainEqual({
-      channel: "feishu",
-      accountId: "work",
-      kind: "runtime",
-      message:
-        "Channel reports connected, but transport activity is stale; inbound delivery may be broken.",
-      fix: "restart the channel or gateway",
-    });
-  });
-
-  it.each([
-    {
-      name: "stale socket",
-      account: {
-        running: true,
-        connected: true,
-        lifecycle: "ready",
-        lastStartAt: 0,
-        lastTransportActivityAt: 0,
-      },
-      message:
-        "Channel reports connected, but transport activity is stale; inbound delivery may be broken.",
-    },
-    {
-      name: "running but disconnected",
-      account: { running: true, connected: false, lifecycle: "ready" },
-      message: "Channel reports running, but the runtime is disconnected.",
-    },
-  ])("reports Discord $name through the generic runtime path", ({ account, message }) => {
-    vi.useFakeTimers();
-    vi.setSystemTime(DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS + 1);
-    mocks.listChannelPlugins.mockReturnValue([createPlugin("discord")]);
-
-    expect(
-      collectChannelStatusIssues({
-        channelAccounts: {
-          discord: [{ accountId: "ops", enabled: true, configured: true, ...account }],
-        },
-      }),
-    ).toContainEqual({
-      channel: "discord",
-      accountId: "ops",
-      kind: "runtime",
-      message,
-      fix: "restart the channel or gateway",
-    });
+    ];
+    expect(collectChannelStatusIssues({ statusIssues })).toEqual(statusIssues);
+    expect(collectChannelStatusIssues({ statusIssues: [] })).toEqual([]);
+    expect(mocks.listChannelPlugins).not.toHaveBeenCalled();
   });
 
   it("reports blocked lifecycle through the generic runtime path", () => {

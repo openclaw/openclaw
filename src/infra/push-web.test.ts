@@ -2,23 +2,109 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import webPush from "web-push";
-import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  insertOperatorApproval,
+  resolveOperatorApproval,
+} from "../gateway/operator-approval-store.js";
+import { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
+import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
-  createWebPushVapidKeyPair,
+  deleteWebPushApprovalDeliveryTargets,
+  withBoundWebPushSubscriptionByEndpoint,
+  hashWebPushEndpoint,
+  hasBoundWebPushSubscriptions,
+  withBoundWebPushSubscriptions,
+  listTerminalWebPushApprovalDeliveryIds,
+  listWebPushApprovalDeliveryTargets,
   listWebPushSubscriptions,
+  prepareWebPushApprovalDeliveries,
   readPersistedVapidKeyPair,
+  setWebPushSubscriptionPreferences,
 } from "./push-web-store.js";
 import {
   broadcastWebPush,
-  clearWebPushSubscriptionByEndpoint,
+  clearBoundWebPushSubscription,
+  prepareWebPushNotificationSender,
   registerWebPushSubscription,
   resolveVapidKeys,
 } from "./push-web.js";
+import { runSqliteReadOperationSync } from "./sqlite-schema-facts.js";
 
 let tmpDir: string;
+const defaultDevicePreferences = { enabled: true, label: "" };
+
+async function readBoundSubscriptions(stateDir: string) {
+  return expectDefined(
+    await withBoundWebPushSubscriptions(stateDir, (subscriptions) => ({
+      start: () => subscriptions,
+    })),
+    "bound subscription snapshot",
+  );
+}
+
+const defaultSubscriptionKeys = { p256dh: "p256dh-key", auth: "auth-key" };
+
+type SubscriptionOverrides = Partial<
+  Omit<Parameters<typeof registerWebPushSubscription>[0], "endpoint" | "baseDir">
+>;
+
+function registerSubscription(endpoint: string, overrides: SubscriptionOverrides = {}) {
+  return registerWebPushSubscription({
+    endpoint,
+    keys: defaultSubscriptionKeys,
+    ...overrides,
+    baseDir: tmpDir,
+  });
+}
+
+function findBoundWebPushSubscriptionByEndpoint(
+  params: Parameters<typeof withBoundWebPushSubscriptionByEndpoint>[0],
+) {
+  return withBoundWebPushSubscriptionByEndpoint(params, (subscription) => ({
+    start: () => subscription,
+  }));
+}
+
+async function insertPendingApproval(id: string): Promise<void> {
+  const inserted = await insertOperatorApproval({
+    approval: {
+      id,
+      kind: "exec",
+      presentation: {
+        kind: "exec",
+        commandText: "echo approval",
+        commandPreview: "echo approval",
+        warningText: null,
+        host: "gateway",
+        nodeId: null,
+        agentId: "main",
+        allowedDecisions: ["allow-once", "deny"],
+      },
+      runtimeEpoch: "web-push-test-runtime",
+      createdAtMs: 1_000,
+      expiresAtMs: 60_000,
+    },
+    databaseOptions: { env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir } },
+  });
+  if (inserted.outcome !== "inserted") {
+    throw new Error("expected pending approval insert");
+  }
+}
 const generatedVapidKeys = vi.hoisted(
   () =>
     Object.fromEntries([
@@ -45,27 +131,62 @@ vi.mock("web-push", () => ({
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "push-web-test-"));
   vi.clearAllMocks();
-  vi.mocked(webPush.sendNotification).mockResolvedValue({ statusCode: 201 } as never);
+  vi.mocked(webPush.sendNotification)
+    .mockReset()
+    .mockResolvedValue({ statusCode: 201 } as never);
 });
 
 afterEach(async () => {
-  closeOpenClawStateDatabase();
+  vi.restoreAllMocks();
+  await closeOpenClawStateDatabaseAsync();
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
+
+function startExpiredWebPushBroadcast(
+  payload: Parameters<typeof broadcastWebPush>[0],
+  signal: AbortSignal,
+) {
+  const started = createDeferred();
+  const release = createDeferred();
+  vi.mocked(webPush.sendNotification).mockImplementationOnce(async () => {
+    started.resolve();
+    await release.promise;
+    throw Object.assign(new Error("gone"), { statusCode: 410 });
+  });
+  const broadcast = broadcastWebPush(payload, tmpDir);
+  const finish = () => {
+    release.resolve();
+    return broadcast;
+  };
+  return {
+    // Bind the gate to the test signal so a stall still reaches the async disposer.
+    started: withinTest(
+      awaitGateBeforeSettlement(
+        started.promise,
+        broadcast,
+        "Web Push broadcast completed before send started",
+      ),
+      signal,
+    ),
+    finish,
+    // Join the send before afterEach removes the real SQLite fixture, even when a case fails.
+    async [Symbol.asyncDispose]() {
+      await finish();
+    },
+  };
+}
 
 describe("resolveVapidKeys", () => {
   it("generates one durable SQLite VAPID identity", async () => {
     const keys = await resolveVapidKeys(tmpDir);
-    expect(keys).toEqual(
-      createWebPushVapidKeyPair(
-        "test-public-key-base64url",
-        "test-private-key-base64url",
-        "https://openclaw.ai",
-      ),
-    );
-    expect(readPersistedVapidKeyPair(tmpDir)).toEqual(keys);
+    expect(keys).toEqual({
+      publicKey: "test-public-key-base64url",
+      privateKey: "test-private-key-base64url",
+      subject: "https://openclaw.ai",
+    });
+    expect(await readPersistedVapidKeyPair(tmpDir)).toEqual(keys);
 
-    closeOpenClawStateDatabase();
+    await closeOpenClawStateDatabaseAsync();
     await expect(resolveVapidKeys(tmpDir)).resolves.toEqual(keys);
     expect(vi.mocked(webPush.generateVAPIDKeys)).toHaveBeenCalledTimes(1);
     await expect(fs.stat(path.join(tmpDir, "push", "vapid-keys.json"))).rejects.toMatchObject({
@@ -80,7 +201,7 @@ describe("resolveVapidKeys", () => {
     await fs.writeFile(legacyPath, "{}", "utf8");
 
     await expect(resolveVapidKeys(tmpDir)).rejects.toThrow("openclaw doctor --fix");
-    expect(readPersistedVapidKeyPair(tmpDir)).toBeNull();
+    expect(await readPersistedVapidKeyPair(tmpDir)).toBeNull();
     expect(vi.mocked(webPush.generateVAPIDKeys)).not.toHaveBeenCalled();
 
     await fs.rename(legacyPath, `${legacyPath}.doctor-importing`);
@@ -95,22 +216,22 @@ describe("resolveVapidKeys", () => {
 
   it("converges concurrent first-use generation on the first committed identity", async () => {
     vi.mocked(webPush.generateVAPIDKeys)
-      .mockReturnValueOnce(createWebPushVapidKeyPair("public-a", "private-a", "ignored"))
-      .mockReturnValueOnce(createWebPushVapidKeyPair("public-b", "private-b", "ignored"));
+      .mockReturnValueOnce({ publicKey: "public-a", privateKey: "private-a" })
+      .mockReturnValueOnce({ publicKey: "public-b", privateKey: "private-b" });
 
     const [first, second] = await Promise.all([resolveVapidKeys(tmpDir), resolveVapidKeys(tmpDir)]);
 
     expect(first).toEqual(second);
-    expect(readPersistedVapidKeyPair(tmpDir)).toEqual(first);
+    expect(await readPersistedVapidKeyPair(tmpDir)).toEqual(first);
     expect(vi.mocked(webPush.generateVAPIDKeys)).toHaveBeenCalledTimes(2);
   });
 
   it("prefers a complete environment override without persisting it", async () => {
-    const environmentKeys = createWebPushVapidKeyPair(
-      "env-public",
-      "env-private",
-      "mailto:env@test.com",
-    );
+    const environmentKeys = {
+      publicKey: "env-public",
+      privateKey: "env-private",
+      subject: "mailto:env@test.com",
+    };
     const envSnapshot = captureEnv([
       "OPENCLAW_VAPID_PUBLIC_KEY",
       "OPENCLAW_VAPID_PRIVATE_KEY",
@@ -121,7 +242,7 @@ describe("resolveVapidKeys", () => {
     setTestEnvValue("OPENCLAW_VAPID_SUBJECT", `  ${environmentKeys.subject}  `);
     try {
       await expect(resolveVapidKeys(tmpDir)).resolves.toEqual(environmentKeys);
-      expect(readPersistedVapidKeyPair(tmpDir)).toBeNull();
+      expect(await readPersistedVapidKeyPair(tmpDir)).toBeNull();
       expect(vi.mocked(webPush.generateVAPIDKeys)).not.toHaveBeenCalled();
     } finally {
       envSnapshot.restore();
@@ -139,14 +260,12 @@ describe("resolveVapidKeys", () => {
     setTestEnvValue("OPENCLAW_VAPID_SUBJECT", "   ");
     try {
       const keys = await resolveVapidKeys(tmpDir);
-      expect(keys).toEqual(
-        createWebPushVapidKeyPair(
-          "test-public-key-base64url",
-          "test-private-key-base64url",
-          "https://openclaw.ai",
-        ),
-      );
-      expect(readPersistedVapidKeyPair(tmpDir)).toEqual(keys);
+      expect(keys).toEqual({
+        publicKey: "test-public-key-base64url",
+        privateKey: "test-private-key-base64url",
+        subject: "https://openclaw.ai",
+      });
+      expect(await readPersistedVapidKeyPair(tmpDir)).toEqual(keys);
       expect(vi.mocked(webPush.generateVAPIDKeys)).toHaveBeenCalledTimes(1);
     } finally {
       envSnapshot.restore();
@@ -161,7 +280,7 @@ describe("resolveVapidKeys", () => {
         ...initial,
         subject: "mailto:changed@test.com",
       });
-      expect(readPersistedVapidKeyPair(tmpDir)?.subject).toBe("https://openclaw.ai");
+      expect((await readPersistedVapidKeyPair(tmpDir))?.subject).toBe("https://openclaw.ai");
     } finally {
       delete process.env.OPENCLAW_VAPID_SUBJECT;
     }
@@ -170,14 +289,11 @@ describe("resolveVapidKeys", () => {
 
 describe("subscription CRUD", () => {
   const endpoint = "https://push.example.com/send/abc123";
-  const keys = { p256dh: "p256dh-key", auth: "auth-key" };
 
   it("registers, updates, and reopens a durable subscription", async () => {
-    const first = await registerWebPushSubscription({ endpoint, keys, baseDir: tmpDir });
-    const updated = await registerWebPushSubscription({
-      endpoint,
+    const first = await registerSubscription(endpoint);
+    const updated = await registerSubscription(endpoint, {
       keys: { p256dh: "new-p256dh", auth: "new-auth" },
-      baseDir: tmpDir,
     });
     expect(updated).toMatchObject({
       subscriptionId: first.subscriptionId,
@@ -186,25 +302,183 @@ describe("subscription CRUD", () => {
       keys: { p256dh: "new-p256dh", auth: "new-auth" },
     });
 
-    closeOpenClawStateDatabase();
-    expect(listWebPushSubscriptions(tmpDir)).toEqual([updated]);
+    await closeOpenClawStateDatabaseAsync();
+    expect(await listWebPushSubscriptions(tmpDir)).toEqual([updated]);
     await expect(fs.stat(path.join(tmpDir, "push"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("lazily adds and persists authenticated device bindings", async () => {
+    const environment = { ...process.env, OPENCLAW_STATE_DIR: tmpDir };
+    const database = openOpenClawStateDatabase({ env: environment });
+    database.db.exec("ALTER TABLE web_push_subscriptions DROP COLUMN device_id;");
+    database.db.exec("ALTER TABLE web_push_subscriptions DROP COLUMN user_profile_id;");
+    database.db.exec("ALTER TABLE web_push_subscriptions DROP COLUMN preferences_json;");
+    expect(tableHasColumn(database.db, "web_push_subscriptions", "device_id")).toBe(false);
+    expect(tableHasColumn(database.db, "web_push_subscriptions", "user_profile_id")).toBe(false);
+    expect(tableHasColumn(database.db, "web_push_subscriptions", "preferences_json")).toBe(false);
+
+    const subscription = await registerSubscription(endpoint, {
+      binding: { deviceId: "browser-device", userProfileId: "profile-1" },
+    });
+
+    expect(tableHasColumn(database.db, "web_push_subscriptions", "device_id")).toBe(true);
+    expect(tableHasColumn(database.db, "web_push_subscriptions", "user_profile_id")).toBe(true);
+    expect(tableHasColumn(database.db, "web_push_subscriptions", "preferences_json")).toBe(true);
+    expect(await readBoundSubscriptions(tmpDir)).toEqual([
+      {
+        ...subscription,
+        deviceId: "browser-device",
+        userProfileId: "profile-1",
+        devicePreferences: defaultDevicePreferences,
+      },
+    ]);
+  });
+
+  it("retains bound-subscription presence until registration or removal changes it", async () => {
+    const execute = vi.spyOn(stateWorker, "executeOpenClawStateWorker");
+    expect(await hasBoundWebPushSubscriptions(tmpDir)).toBe(false);
+    execute.mockClear();
+    expect(await hasBoundWebPushSubscriptions(tmpDir)).toBe(false);
+    expect(await hasBoundWebPushSubscriptions(tmpDir)).toBe(false);
+    expect(execute).not.toHaveBeenCalled();
+    await registerSubscription(endpoint);
+    expect(await readBoundSubscriptions(tmpDir)).toEqual([]);
+    expect(await hasBoundWebPushSubscriptions(tmpDir)).toBe(false);
+    const { db } = openOpenClawStateDatabase({
+      env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir },
+    });
+    db.exec("UPDATE web_push_subscriptions SET device_id = ''");
+    expect(await readBoundSubscriptions(tmpDir)).toEqual([]);
+    expect(await hasBoundWebPushSubscriptions(tmpDir)).toBe(false);
+
+    const rebound = await registerSubscription(endpoint, {
+      binding: { deviceId: "browser-device", userProfileId: null },
+    });
+    expect(await hasBoundWebPushSubscriptions(tmpDir)).toBe(true);
+    execute.mockClear();
+    expect(await hasBoundWebPushSubscriptions(tmpDir)).toBe(true);
+    expect(execute).not.toHaveBeenCalled();
+    expect(await readBoundSubscriptions(tmpDir)).toEqual([
+      {
+        ...rebound,
+        deviceId: "browser-device",
+        userProfileId: null,
+        devicePreferences: defaultDevicePreferences,
+      },
+    ]);
+    await registerSubscription(endpoint);
+    expect(await hasBoundWebPushSubscriptions(tmpDir)).toBe(false);
+    await registerSubscription(endpoint, {
+      binding: { deviceId: "browser-device", userProfileId: null },
+    });
+    expect(await hasBoundWebPushSubscriptions(tmpDir)).toBe(true);
+    expect(
+      await clearBoundWebPushSubscription({
+        endpoint,
+        expectedDeviceId: "browser-device",
+        expectedUserProfileId: null,
+        baseDir: tmpDir,
+      }),
+    ).toBe(true);
+    expect(await hasBoundWebPushSubscriptions(tmpDir)).toBe(false);
+    execute.mockClear();
+    expect(await hasBoundWebPushSubscriptions(tmpDir)).toBe(false);
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("preserves bindings when an older writer updates only the original columns", async () => {
+    const subscription = await registerSubscription(endpoint, {
+      binding: { deviceId: "browser-device", userProfileId: "profile-1" },
+    });
+    await closeOpenClawStateDatabaseAsync();
+
+    const olderWriter = new DatabaseSync(path.join(tmpDir, "state", "openclaw.sqlite"));
+    olderWriter
+      .prepare(
+        "UPDATE web_push_subscriptions SET auth = ?, updated_at_ms = ? WHERE endpoint_hash = ?",
+      )
+      .run("older-auth", subscription.updatedAtMs + 1, hashWebPushEndpoint(endpoint));
+    olderWriter.close();
+
+    expect(await readBoundSubscriptions(tmpDir)).toEqual([
+      {
+        ...subscription,
+        keys: { ...subscription.keys, auth: "older-auth" },
+        updatedAtMs: subscription.updatedAtMs + 1,
+        deviceId: "browser-device",
+        userProfileId: "profile-1",
+        devicePreferences: defaultDevicePreferences,
+      },
+    ]);
+  });
+
+  it("persists preferences only while the authenticated subscription binding still matches", async () => {
+    await registerSubscription(endpoint, {
+      binding: { deviceId: "browser-device", userProfileId: "profile-1" },
+    });
+    expect(
+      await setWebPushSubscriptionPreferences({
+        endpoint,
+        expectedDeviceId: "different-device",
+        expectedUserProfileId: "profile-1",
+        preferences: { enabled: false, label: "Wrong" },
+        stateDir: tmpDir,
+      }),
+    ).toBe(false);
+    expect(
+      await setWebPushSubscriptionPreferences({
+        endpoint,
+        expectedDeviceId: "browser-device",
+        expectedUserProfileId: "profile-1",
+        preferences: {
+          enabled: true,
+          label: "Slot 1",
+          categories: { agentQuestion: true },
+        },
+        stateDir: tmpDir,
+      }),
+    ).toBe(true);
+    expect(
+      await findBoundWebPushSubscriptionByEndpoint({ endpoint, stateDir: tmpDir }),
+    ).toMatchObject({
+      deviceId: "browser-device",
+      userProfileId: "profile-1",
+      devicePreferences: {
+        enabled: true,
+        label: "Slot 1",
+        categories: { agentQuestion: true },
+      },
+    });
+
+    await registerSubscription(endpoint, {
+      keys: { p256dh: "refreshed-p256dh", auth: "refreshed-auth" },
+      binding: { deviceId: "browser-device", userProfileId: "profile-1" },
+    });
+    expect(
+      await findBoundWebPushSubscriptionByEndpoint({ endpoint, stateDir: tmpDir }),
+    ).toMatchObject({
+      devicePreferences: { enabled: true, label: "Slot 1" },
+    });
+
+    await registerSubscription(endpoint, {
+      keys: { p256dh: "refreshed-p256dh", auth: "refreshed-auth" },
+      binding: { deviceId: "other-device", userProfileId: "profile-2" },
+    });
+    expect(
+      await findBoundWebPushSubscriptionByEndpoint({ endpoint, stateDir: tmpDir }),
+    ).toMatchObject({
+      deviceId: "other-device",
+      userProfileId: "profile-2",
+      devicePreferences: defaultDevicePreferences,
+    });
   });
 
   it("preserves unrelated concurrent registrations", async () => {
     await Promise.all(
-      ["a", "b", "c"].map((suffix) =>
-        registerWebPushSubscription({
-          endpoint: `https://push.example.com/${suffix}`,
-          keys,
-          baseDir: tmpDir,
-        }),
-      ),
+      ["a", "b", "c"].map((suffix) => registerSubscription(`https://push.example.com/${suffix}`)),
     );
     expect(
-      listWebPushSubscriptions(tmpDir)
-        .map((entry) => entry.endpoint)
-        .toSorted(),
+      (await listWebPushSubscriptions(tmpDir)).map((entry) => entry.endpoint).toSorted(),
     ).toEqual([
       "https://push.example.com/a",
       "https://push.example.com/b",
@@ -213,24 +487,73 @@ describe("subscription CRUD", () => {
   });
 
   it("clears only the matching endpoint", async () => {
-    await registerWebPushSubscription({ endpoint, keys, baseDir: tmpDir });
-    await expect(clearWebPushSubscriptionByEndpoint(endpoint, tmpDir)).resolves.toBe(true);
-    await expect(clearWebPushSubscriptionByEndpoint(endpoint, tmpDir)).resolves.toBe(false);
+    await registerSubscription(endpoint, {
+      binding: { deviceId: "browser-device", userProfileId: null },
+    });
+    const target = {
+      endpoint,
+      expectedDeviceId: "browser-device",
+      expectedUserProfileId: null,
+      baseDir: tmpDir,
+    };
+    await expect(clearBoundWebPushSubscription(target)).resolves.toBe(true);
+    await expect(clearBoundWebPushSubscription(target)).resolves.toBe(false);
+  });
+
+  it("rejects an endpoint-only ownership takeover without changing the subscription", async () => {
+    const original = await registerSubscription(endpoint, {
+      binding: { deviceId: "owner-device", userProfileId: "owner-profile" },
+    });
+    await expect(
+      registerSubscription(endpoint, {
+        keys: { p256dh: "forged-p256dh", auth: "forged-auth" },
+        binding: { deviceId: "other-device", userProfileId: "other-profile" },
+      }),
+    ).rejects.toThrow("existing browser subscription keys required");
+    expect(await listWebPushSubscriptions(tmpDir)).toEqual([original]);
+  });
+
+  it.each([
+    { deviceId: "other-device", userProfileId: "owner-profile" },
+    { deviceId: "owner-device", userProfileId: "other-profile" },
+    { deviceId: "owner-device", userProfileId: null },
+  ])("fences a stale unsubscribe after rebinding to %j", async (binding) => {
+    await registerSubscription(endpoint, {
+      binding: { deviceId: "owner-device", userProfileId: "owner-profile" },
+    });
+    const observed = await findBoundWebPushSubscriptionByEndpoint({ endpoint, stateDir: tmpDir });
+    expect(observed).not.toBeNull();
+    await registerSubscription(endpoint, {
+      binding,
+    });
+    await expect(
+      clearBoundWebPushSubscription({
+        endpoint,
+        expectedDeviceId: "owner-device",
+        expectedUserProfileId: "owner-profile",
+        baseDir: tmpDir,
+      }),
+    ).resolves.toBe(false);
+    expect(
+      await findBoundWebPushSubscriptionByEndpoint({ endpoint, stateDir: tmpDir }),
+    ).toMatchObject(binding);
+    await expect(
+      clearBoundWebPushSubscription({
+        endpoint,
+        expectedDeviceId: binding.deviceId,
+        expectedUserProfileId: binding.userProfileId,
+        baseDir: tmpDir,
+      }),
+    ).resolves.toBe(true);
   });
 
   it("rejects invalid registration data", async () => {
+    await expect(registerSubscription("http://insecure.example.com")).rejects.toThrow(
+      "invalid push subscription endpoint",
+    );
     await expect(
-      registerWebPushSubscription({
-        endpoint: "http://insecure.example.com",
-        keys,
-        baseDir: tmpDir,
-      }),
-    ).rejects.toThrow("invalid push subscription endpoint");
-    await expect(
-      registerWebPushSubscription({
-        endpoint,
+      registerSubscription(endpoint, {
         keys: { p256dh: "", auth: "auth" },
-        baseDir: tmpDir,
       }),
     ).rejects.toThrow("invalid push subscription keys");
   });
@@ -246,7 +569,7 @@ describe("subscription CRUD", () => {
           legacy: {
             subscriptionId: "c0a80101-0000-4000-8000-000000000001",
             endpoint: "https://push.example.com/legacy",
-            keys,
+            keys: defaultSubscriptionKeys,
             createdAtMs: 1,
             updatedAtMs: 1,
           },
@@ -254,7 +577,7 @@ describe("subscription CRUD", () => {
       }),
     );
 
-    expect(listWebPushSubscriptions(tmpDir)).toEqual([]);
+    expect(await listWebPushSubscriptions(tmpDir)).toEqual([]);
     await expect(broadcastWebPush({ title: "Blocked" }, tmpDir)).rejects.toThrow(
       "openclaw doctor --fix",
     );
@@ -262,86 +585,355 @@ describe("subscription CRUD", () => {
   });
 
   it("blocks mutations while a Doctor claim is pending", async () => {
-    const existing = await registerWebPushSubscription({ endpoint, keys, baseDir: tmpDir });
+    const existing = await registerSubscription(endpoint);
     const pushDir = path.join(tmpDir, "push");
     const claimPath = path.join(pushDir, "web-push-subscriptions.json.doctor-importing");
     await fs.mkdir(pushDir, { recursive: true });
     await fs.writeFile(claimPath, "{}", "utf8");
 
-    await expect(clearWebPushSubscriptionByEndpoint(endpoint, tmpDir)).rejects.toThrow(
-      "openclaw doctor --fix",
-    );
     await expect(
-      registerWebPushSubscription({
-        endpoint: "https://push.example.com/new",
-        keys,
+      clearBoundWebPushSubscription({
+        endpoint,
+        expectedDeviceId: "browser-device",
+        expectedUserProfileId: null,
         baseDir: tmpDir,
       }),
     ).rejects.toThrow("openclaw doctor --fix");
-    expect(listWebPushSubscriptions(tmpDir)).toEqual([existing]);
+    await expect(registerSubscription("https://push.example.com/new")).rejects.toThrow(
+      "openclaw doctor --fix",
+    );
+    expect(await listWebPushSubscriptions(tmpDir)).toEqual([existing]);
+  });
+});
+
+describe("approval delivery target persistence", () => {
+  it("lazily persists successful targets across reopen until terminal replacement", async () => {
+    const approvalId = "exec:restart-safe-push";
+    await insertPendingApproval(approvalId);
+    const first = await registerSubscription("https://push.example.com/approval-first", {
+      binding: { deviceId: "device-first", userProfileId: "profile-first" },
+    });
+    const second = await registerSubscription("https://push.example.com/approval-second", {
+      binding: { deviceId: "device-second", userProfileId: null },
+    });
+    const firstBound = {
+      ...first,
+      deviceId: "device-first",
+      userProfileId: "profile-first",
+      devicePreferences: defaultDevicePreferences,
+    };
+    const secondBound = {
+      ...second,
+      deviceId: "device-second",
+      userProfileId: null,
+      devicePreferences: defaultDevicePreferences,
+    };
+    const database = openOpenClawStateDatabase({
+      env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir },
+    });
+    expect(
+      runSqliteReadOperationSync(database.db, () =>
+        tableExists(database.db, "web_push_approval_deliveries"),
+      ),
+    ).toBe(false);
+
+    expect(
+      (
+        await prepareWebPushApprovalDeliveries({
+          approvalId,
+          subscriptions: [firstBound, secondBound],
+          preparedAtMs: 2_000,
+          stateDir: tmpDir,
+        })
+      ).toSorted(),
+    ).toEqual([first.subscriptionId, second.subscriptionId].toSorted());
+    expect(
+      runSqliteReadOperationSync(database.db, () =>
+        tableExists(database.db, "web_push_approval_deliveries"),
+      ),
+    ).toBe(true);
+    await closeOpenClawStateDatabaseAsync();
+
+    const expectedSubscriptionIds = [first, second]
+      .toSorted(
+        (a, b) => a.createdAtMs - b.createdAtMs || a.subscriptionId.localeCompare(b.subscriptionId),
+      )
+      .map((subscription) => subscription.subscriptionId);
+    expect(
+      (await listWebPushApprovalDeliveryTargets({ approvalId, stateDir: tmpDir })).map(
+        (subscription) => subscription.subscriptionId,
+      ),
+    ).toEqual(expectedSubscriptionIds);
+
+    await deleteWebPushApprovalDeliveryTargets({
+      approvalId,
+      subscriptionIds: [second.subscriptionId],
+      stateDir: tmpDir,
+    });
+    await closeOpenClawStateDatabaseAsync();
+    expect(await listWebPushApprovalDeliveryTargets({ approvalId, stateDir: tmpDir })).toEqual([
+      firstBound,
+    ]);
+
+    expect(
+      (
+        await resolveOperatorApproval({
+          id: approvalId,
+          decision: "deny",
+          resolver: { kind: "system", id: null },
+          nowMs: 3_000,
+          databaseOptions: { env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir } },
+        })
+      ).outcome,
+    ).toBe("resolved");
+    expect(await listTerminalWebPushApprovalDeliveryIds({ stateDir: tmpDir })).toEqual({
+      approvalIds: [approvalId],
+      nextAfterApprovalId: null,
+      throughApprovalId: approvalId,
+    });
+
+    await deleteWebPushApprovalDeliveryTargets({
+      approvalId,
+      subscriptionIds: [first.subscriptionId],
+      stateDir: tmpDir,
+    });
+    expect(await listWebPushApprovalDeliveryTargets({ approvalId, stateDir: tmpDir })).toEqual([]);
+  });
+
+  it("prepares remaining approval targets after subscriptions are removed or rebound", async () => {
+    const approvalId = "exec:changed-push-targets";
+    await insertPendingApproval(approvalId);
+    for (const deviceId of ["removed", "rebound", "unchanged"]) {
+      await registerWebPushSubscription({
+        endpoint: `https://push.example.com/approval-${deviceId}`,
+        keys: defaultSubscriptionKeys,
+        binding: { deviceId, userProfileId: `profile-${deviceId}` },
+        baseDir: tmpDir,
+      });
+    }
+    const originalSubscriptions = await readBoundSubscriptions(tmpDir);
+    const unchanged = originalSubscriptions.filter(
+      (subscription) => subscription.deviceId === "unchanged",
+    );
+    expect(unchanged).toHaveLength(1);
+    await expect(
+      clearBoundWebPushSubscription({
+        endpoint: "https://push.example.com/approval-removed",
+        expectedDeviceId: "removed",
+        expectedUserProfileId: "profile-removed",
+        baseDir: tmpDir,
+      }),
+    ).resolves.toBe(true);
+    await registerWebPushSubscription({
+      endpoint: "https://push.example.com/approval-rebound",
+      keys: defaultSubscriptionKeys,
+      binding: { deviceId: "new-device", userProfileId: "new-profile" },
+      baseDir: tmpDir,
+    });
+
+    await expect(
+      prepareWebPushApprovalDeliveries({
+        approvalId,
+        subscriptions: originalSubscriptions,
+        preparedAtMs: 2_000,
+        stateDir: tmpDir,
+      }),
+    ).resolves.toEqual(unchanged.map((subscription) => subscription.subscriptionId));
+    expect(await listWebPushApprovalDeliveryTargets({ approvalId, stateDir: tmpDir })).toEqual(
+      unchanged,
+    );
+  });
+
+  it("cascades delivery targets when the browser subscription is removed", async () => {
+    const approvalId = "exec:removed-push-target";
+    await insertPendingApproval(approvalId);
+    const subscription = await registerSubscription("https://push.example.com/approval-removed", {
+      binding: { deviceId: "device-removed", userProfileId: "profile-removed" },
+    });
+    expect(
+      await prepareWebPushApprovalDeliveries({
+        approvalId,
+        subscriptions: [
+          {
+            ...subscription,
+            deviceId: "device-removed",
+            userProfileId: "profile-removed",
+            devicePreferences: defaultDevicePreferences,
+          },
+        ],
+        preparedAtMs: 2_000,
+        stateDir: tmpDir,
+      }),
+    ).toEqual([subscription.subscriptionId]);
+
+    await expect(
+      clearBoundWebPushSubscription({
+        endpoint: subscription.endpoint,
+        expectedDeviceId: "device-removed",
+        expectedUserProfileId: "profile-removed",
+        baseDir: tmpDir,
+      }),
+    ).resolves.toBe(true);
+    expect(await listWebPushApprovalDeliveryTargets({ approvalId, stateDir: tmpDir })).toEqual([]);
+  });
+
+  it("rejects a terminal target after the endpoint is rebound to another owner", async () => {
+    const approvalId = "exec:rebound-push-target";
+    await insertPendingApproval(approvalId);
+    const original = await registerSubscription("https://push.example.com/approval-rebound", {
+      binding: { deviceId: "device-original", userProfileId: "profile-original" },
+    });
+    expect(
+      await prepareWebPushApprovalDeliveries({
+        approvalId,
+        subscriptions: [
+          {
+            ...original,
+            deviceId: "device-original",
+            userProfileId: "profile-original",
+            devicePreferences: defaultDevicePreferences,
+          },
+        ],
+        preparedAtMs: 2_000,
+        stateDir: tmpDir,
+      }),
+    ).toEqual([original.subscriptionId]);
+    expect(
+      (
+        await resolveOperatorApproval({
+          id: approvalId,
+          decision: "deny",
+          resolver: { kind: "system", id: null },
+          nowMs: 3_000,
+          databaseOptions: { env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir } },
+        })
+      ).outcome,
+    ).toBe("resolved");
+    await closeOpenClawStateDatabaseAsync();
+
+    const rebound = await registerSubscription(original.endpoint, {
+      keys: original.keys,
+      binding: { deviceId: "device-rebound", userProfileId: "profile-rebound" },
+    });
+    expect(rebound.subscriptionId).toBe(original.subscriptionId);
+    expect(
+      (await listTerminalWebPushApprovalDeliveryIds({ stateDir: tmpDir })).approvalIds,
+    ).toContain(approvalId);
+    expect(await listWebPushApprovalDeliveryTargets({ approvalId, stateDir: tmpDir })).toEqual([]);
+    expect(
+      (await listTerminalWebPushApprovalDeliveryIds({ stateDir: tmpDir })).approvalIds,
+    ).not.toContain(approvalId);
   });
 });
 
 describe("sending", () => {
   const keys = { p256dh: "p256dh-key", auth: "auth-key" };
 
-  it("configures VAPID details once before broadcasting", async () => {
-    await registerWebPushSubscription({
-      endpoint: "https://push.example.com/a",
-      keys,
-      baseDir: tmpDir,
+  it("configures VAPID once and broadcasts to registered subscriptions", async () => {
+    for (const suffix of ["a", "b"]) {
+      const endpoint = `https://push.example.com/${suffix}`;
+      await registerWebPushSubscription({
+        endpoint,
+        keys,
+        binding: { deviceId: suffix, userProfileId: null },
+        baseDir: tmpDir,
+      });
+      expect(
+        await setWebPushSubscriptionPreferences({
+          endpoint,
+          expectedDeviceId: suffix,
+          expectedUserProfileId: null,
+          preferences: {
+            enabled: true,
+            label: "Browser",
+            agentIds: Array.from({ length: 128 }, (_, i) => `agent-${i}`.padEnd(128, "x")),
+          },
+          stateDir: tmpDir,
+        }),
+      ).toBe(true);
+    }
+    const subscriptions = await listWebPushSubscriptions(tmpDir);
+    const { db } = openOpenClawStateDatabase({
+      env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir },
     });
-    await registerWebPushSubscription({
-      endpoint: "https://push.example.com/b",
-      keys,
-      baseDir: tmpDir,
-    });
+    const reads = trackSqliteStatementExecutions(db, ["subscriptions"], (sql) =>
+      /^select\b/i.test(sql) && sql.includes('"web_push_subscriptions"') ? "subscriptions" : null,
+    );
+    try {
+      const results = await broadcastWebPush({ title: "Broadcast" }, tmpDir);
 
-    const results = await broadcastWebPush({ title: "Broadcast" }, tmpDir);
-
-    expect(results).toHaveLength(2);
-    expect(results.every((result) => result.ok)).toBe(true);
-    expect(vi.mocked(webPush.setVapidDetails)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(webPush.sendNotification)).toHaveBeenCalledTimes(2);
+      expect(results).toEqual(
+        subscriptions.map(({ subscriptionId }) => ({ ok: true, subscriptionId, statusCode: 201 })),
+      );
+      expect(vi.mocked(webPush.setVapidDetails)).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(webPush.sendNotification).mock.calls).toEqual(
+        subscriptions.map(({ endpoint, keys: subscriptionKeys }) => [
+          { endpoint, keys: subscriptionKeys },
+          JSON.stringify({ title: "Broadcast" }),
+          undefined,
+        ]),
+      );
+      expect(reads.counts.subscriptions).toBe(0);
+    } finally {
+      reads.restore();
+    }
   });
 
-  it("does not delete a subscription re-registered during an expired send", async () => {
+  it("sends a bounded high-urgency notification only to selected subscriptions", async () => {
+    const selected = await registerSubscription("https://push.example.com/selected");
+    await registerSubscription("https://push.example.com/not-selected");
+
+    const send = await prepareWebPushNotificationSender(tmpDir);
+    await expect(
+      send({
+        subscriptions: [selected],
+        payload: { title: "Approval", url: "/approve/1" },
+        deliveryOptions: { TTL: 60, urgency: "high", timeout: 10_000 },
+      }),
+    ).resolves.toEqual([{ ok: true, subscriptionId: selected.subscriptionId, statusCode: 201 }]);
+    expect(vi.mocked(webPush.sendNotification)).toHaveBeenCalledOnce();
+    expect(vi.mocked(webPush.sendNotification)).toHaveBeenCalledWith(
+      {
+        endpoint: selected.endpoint,
+        keys: selected.keys,
+      },
+      JSON.stringify({ title: "Approval", url: "/approve/1" }),
+      { TTL: 60, urgency: "high", timeout: 10_000 },
+    );
+  });
+
+  it("does not delete a subscription re-registered during an expired send", async ({ signal }) => {
     const endpoint = "https://push.example.com/reregistered";
-    await registerWebPushSubscription({ endpoint, keys, baseDir: tmpDir });
-    let rejectSend: ((error: unknown) => void) | undefined;
-    vi.mocked(webPush.sendNotification).mockImplementationOnce(
-      () =>
-        new Promise((_, reject) => {
-          rejectSend = reject;
-        }),
-    );
-
-    const broadcast = broadcastWebPush({ title: "Race" }, tmpDir);
-    await vi.waitFor(() => expect(rejectSend).toBeTypeOf("function"));
-    const replacement = await registerWebPushSubscription({
-      endpoint,
+    await registerSubscription(endpoint);
+    await using broadcast = startExpiredWebPushBroadcast({ title: "Race" }, signal);
+    await broadcast.started;
+    const replacement = await registerSubscription(endpoint, {
       keys: { p256dh: "replacement-p256dh", auth: "replacement-auth" },
-      baseDir: tmpDir,
     });
-    rejectSend?.(Object.assign(new Error("gone"), { statusCode: 410 }));
-    await broadcast;
+    await broadcast.finish();
 
-    expect(listWebPushSubscriptions(tmpDir)).toEqual([replacement]);
+    expect(await listWebPushSubscriptions(tmpDir)).toEqual([replacement]);
   });
 
-  it("does not delete an expired subscription after a legacy claim appears", async () => {
-    const endpoint = "https://push.example.com/pending-claim";
-    const subscription = await registerWebPushSubscription({ endpoint, keys, baseDir: tmpDir });
-    let rejectSend: ((error: unknown) => void) | undefined;
-    vi.mocked(webPush.sendNotification).mockImplementationOnce(
-      () =>
-        new Promise((_, reject) => {
-          rejectSend = reject;
-        }),
+  it("refreshes bound-subscription presence after expired-delivery cleanup", async () => {
+    await registerSubscription("https://push.example.com/expired-bound", {
+      binding: { deviceId: "browser-device", userProfileId: null },
+    });
+    expect(await hasBoundWebPushSubscriptions(tmpDir)).toBe(true);
+    vi.mocked(webPush.sendNotification).mockRejectedValueOnce(
+      Object.assign(new Error("gone"), { statusCode: 410 }),
     );
+    expect(await broadcastWebPush({ title: "Expired" }, tmpDir)).toEqual([
+      expect.objectContaining({ ok: false, statusCode: 410 }),
+    ]);
+    expect(await hasBoundWebPushSubscriptions(tmpDir)).toBe(false);
+  });
 
-    const broadcast = broadcastWebPush({ title: "Race" }, tmpDir);
-    await vi.waitFor(() => expect(rejectSend).toBeTypeOf("function"));
+  it("does not delete an expired subscription after a legacy claim appears", async ({ signal }) => {
+    const endpoint = "https://push.example.com/pending-claim";
+    const subscription = await registerSubscription(endpoint);
+    await using broadcast = startExpiredWebPushBroadcast({ title: "Race" }, signal);
+    await broadcast.started;
     const pushDir = path.join(tmpDir, "push");
     await fs.mkdir(pushDir, { recursive: true });
     await fs.writeFile(
@@ -349,35 +941,27 @@ describe("sending", () => {
       "{}",
       "utf8",
     );
-    rejectSend?.(Object.assign(new Error("gone"), { statusCode: 410 }));
 
-    await expect(broadcast).resolves.toEqual([
+    await expect(broadcast.finish()).resolves.toEqual([
       expect.objectContaining({ ok: false, statusCode: 410 }),
     ]);
-    expect(listWebPushSubscriptions(tmpDir)).toEqual([subscription]);
+    expect(await listWebPushSubscriptions(tmpDir)).toEqual([subscription]);
   });
 
-  it("keeps completed delivery results when expired-subscription cleanup fails", async () => {
+  it("keeps completed delivery results when expired-subscription cleanup fails", async ({
+    signal,
+  }) => {
     const endpoint = "https://push.example.com/expired";
-    await registerWebPushSubscription({ endpoint, keys, baseDir: tmpDir });
+    await registerSubscription(endpoint);
     await resolveVapidKeys(tmpDir);
-    let rejectSend: ((error: unknown) => void) | undefined;
-    vi.mocked(webPush.sendNotification).mockImplementationOnce(
-      () =>
-        new Promise((_, reject) => {
-          rejectSend = reject;
-        }),
-    );
-
-    const broadcast = broadcastWebPush({ title: "Expired" }, tmpDir);
-    await vi.waitFor(() => expect(rejectSend).toBeTypeOf("function"));
-    closeOpenClawStateDatabase();
+    await using broadcast = startExpiredWebPushBroadcast({ title: "Expired" }, signal);
+    await broadcast.started;
+    await closeOpenClawStateDatabaseAsync();
     const databasePath = path.join(tmpDir, "state", "openclaw.sqlite");
     await fs.rename(databasePath, `${databasePath}.backup`);
     await fs.mkdir(databasePath);
-    rejectSend?.(Object.assign(new Error("gone"), { statusCode: 410 }));
 
-    await expect(broadcast).resolves.toEqual([
+    await expect(broadcast.finish()).resolves.toEqual([
       expect.objectContaining({ ok: false, statusCode: 410 }),
     ]);
   });

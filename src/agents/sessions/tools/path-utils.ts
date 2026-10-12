@@ -6,6 +6,8 @@
 import { basename, isAbsolute, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expandHomePrefix, resolveOsHomeDir } from "../../../infra/home-dir.js";
+import { preserveAtPrefixedRelativePath } from "../../path-policy.js";
+import { normalizeFileReferencePrefix } from "../../sandbox-paths.js";
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 const NARROW_NO_BREAK_SPACE = "\u202F";
@@ -15,10 +17,6 @@ function normalizeUnicodeSpaces(str: string): string {
 
 function tryMacOSScreenshotPath(filePath: string): string {
   return filePath.replace(/ (?=(?:AM|PM)(?:\b|\.))/gi, NARROW_NO_BREAK_SPACE);
-}
-
-function normalizeAtPrefix(filePath: string): string {
-  return filePath.startsWith("@") ? filePath.slice(1) : filePath;
 }
 
 /** Expand OS-home syntax without treating a POSIX backslash as a separator. */
@@ -35,7 +33,7 @@ export function expandOsHomePrefix(filePath: string): string {
 }
 
 function expandPath(filePath: string): string {
-  const normalized = normalizeAtPrefix(filePath);
+  const normalized = normalizeFileReferencePrefix(filePath);
   if (normalized.startsWith("file://")) {
     try {
       return fileURLToPath(normalized);
@@ -55,8 +53,12 @@ export function resolveToCwd(filePath: string, cwd: string): string {
   return isAbsolute(expanded) ? expanded : resolvePath(cwd, expanded);
 }
 
-/** Equivalent filename spellings worth probing after an exact read path misses. */
-export function getReadPathVariants(filePath: string): string[] {
+/** Resolve local file paths using the filesystem that owns literal @ names. */
+export function resolveLocalPathToCwd(filePath: string, cwd: string): string {
+  return resolveToCwd(preserveAtPrefixedRelativePath(filePath, cwd), cwd);
+}
+
+function collectReadPathVariants(filePath: string, includeNfd: boolean): string[] {
   const variants = new Set<string>();
   const fileName = basename(filePath);
   const parentPrefix = filePath.slice(0, filePath.length - fileName.length);
@@ -70,11 +72,21 @@ export function getReadPathVariants(filePath: string): string[] {
       variants.add(`${parentPrefix}${quoted.normalize("NFC")}`);
       // macOS filesystems resolve NFC/NFD spellings to the same entry; probing both
       // makes one file look ambiguous. Other platforms can store both distinctly.
-      if (process.platform !== "darwin") {
+      if (includeNfd) {
         variants.add(`${parentPrefix}${quoted.normalize("NFD")}`);
       }
     }
   }
   variants.delete(filePath);
   return [...variants];
+}
+
+/** Equivalent filename spellings worth probing after an exact read path misses. */
+export function getReadPathVariants(filePath: string): string[] {
+  return collectReadPathVariants(filePath, process.platform !== "darwin");
+}
+
+/** Every spelling an exact read or its fallback probes can accept. */
+export function getReadQueuePaths(filePath: string): string[] {
+  return [filePath, ...collectReadPathVariants(filePath, true)];
 }

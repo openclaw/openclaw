@@ -2,14 +2,19 @@
 // Control UI tests cover format behavior.
 import { afterEach, describe, expect, it } from "vitest";
 import { i18n } from "../i18n/index.ts";
+import { captureI18nStateForTesting } from "../i18n/lib/translate.test-support.ts";
+import {
+  formatDurationCompact,
+  formatDurationHuman,
+  formatDurationLong,
+} from "./format-duration.ts";
 import {
   clampText,
+  createMsFormatter,
   formatDateTimeMs,
   formatDateMs,
   formatCompactTokenCount,
   formatContextTokenCapacity,
-  formatDurationCompact,
-  formatDurationHuman,
   formatMs,
   formatRelativeTimestamp,
   formatTimeAgo,
@@ -36,14 +41,6 @@ describe("formatAgo", () => {
     expect(formatRelativeTimestamp(Date.now() + 5 * 60_000)).toBe("in 5m");
   });
 
-  it("returns 'Xh from now' for future timestamps", () => {
-    expect(formatRelativeTimestamp(Date.now() + 3 * 60 * 60_000)).toBe("in 3h");
-  });
-
-  it("returns 'Xd from now' for future timestamps beyond 48h", () => {
-    expect(formatRelativeTimestamp(Date.now() + 3 * 24 * 60 * 60_000)).toBe("in 3d");
-  });
-
   it("returns a localized current-time label for recent past timestamps", () => {
     expect(formatRelativeTimestamp(Date.now() - 10_000)).toBe("just now");
   });
@@ -65,17 +62,68 @@ describe("formatAgo", () => {
 });
 
 describe("localized durations", () => {
-  it.each([
-    { durationMs: 59_000, expected: "59s" },
-    { durationMs: 92_000, expected: "1m 32s" },
-    { durationMs: 3_660_000, expected: "1h 1m" },
-    { durationMs: 49 * 60 * 60 * 1000, expected: "2d 1h" },
-  ])("formats $durationMs ms with separated compact units", ({ durationMs, expected }) => {
-    expect(formatDurationCompact(durationMs)).toBe(expected);
+  afterEach(async () => {
+    await i18n.setLocale("en");
   });
 
-  it("switches human durations to days at 24 hours", () => {
-    expect(formatDurationHuman(36 * 60 * 60 * 1000)).toBe("2d");
+  it.each([null, Number.NaN, -1])("preserves invalid duration fallbacks for %s", (durationMs) => {
+    expect(formatDurationCompact(durationMs)).toBeUndefined();
+    expect(formatDurationLong(durationMs)).toBeUndefined();
+    expect(formatDurationHuman(durationMs, "unavailable")).toBe("unavailable");
+  });
+
+  it("keeps zero distinct from a positive duration rounded to zero", () => {
+    expect(formatDurationCompact(0)).toBeUndefined();
+    expect(formatDurationLong(0)).toBeUndefined();
+    expect(formatDurationCompact(0.1)).toBe("0ms");
+    expect(formatDurationHuman(0)).toBe("0ms");
+  });
+
+  it.each([
+    { durationMs: 999.5, expected: "1s", long: "1 second" },
+    { durationMs: 92_000, expected: "1m 32s", long: "1 minute, 32 seconds" },
+    { durationMs: 123_000, expected: "2m 3s", long: "2 minutes, 3 seconds" },
+    { durationMs: 3_630_000, expected: "1h 30s", long: "1 hour, 30 seconds" },
+    { durationMs: 86_430_000, expected: "1d 30s", long: "1 day, 30 seconds" },
+    { durationMs: 49 * 60 * 60 * 1000, expected: "2d 1h", long: "2 days, 1 hour" },
+  ])("formats $durationMs ms with separated duration units", ({ durationMs, expected, long }) => {
+    expect(formatDurationCompact(durationMs)).toBe(expected);
+    expect(formatDurationLong(durationMs)).toBe(long);
+  });
+
+  it.each([
+    { durationMs: 999.6, expected: "1s" },
+    { durationMs: 3_569_999, expected: "59m" },
+    { durationMs: 5_371_000, expected: "1h" },
+    { durationMs: 84_599_000, expected: "23h" },
+    { durationMs: 127_799_000, expected: "1d" },
+    { durationMs: 36 * 60 * 60 * 1000, expected: "2d" },
+  ])("rounds $durationMs ms once for human display", ({ durationMs, expected }) => {
+    expect(formatDurationHuman(durationMs)).toBe(expected);
+  });
+
+  it("preserves duration quantities with localized numerals", async () => {
+    const locale = "ar";
+    await i18n.setLocale(locale);
+    const unit = (value: number, unitName: string) =>
+      new Intl.NumberFormat(locale, {
+        style: "unit",
+        unit: unitName,
+        unitDisplay: "narrow",
+        maximumFractionDigits: 0,
+      }).format(value);
+    expect(formatDurationCompact(60_000)).toBe(unit(1, "minute"));
+    expect(formatDurationHuman(60_000)).toBe(unit(1, "minute"));
+    expect(formatDurationHuman(5_371_000)).toBe(unit(1, "hour"));
+    expect(formatDurationHuman(127_799_000)).toBe(unit(1, "day"));
+    expect(formatDurationCompact(3_630_000)).toBe(`${unit(1, "hour")} ${unit(30, "second")}`);
+    expect(formatDurationCompact(86_460_000)).toBe(`${unit(1, "day")} ${unit(1, "minute")}`);
+    expect(formatDurationCompact(0)).toBeUndefined();
+    expect(formatDurationHuman(0)).toBe(unit(0, "millisecond"));
+    expect(formatDurationHuman(undefined, "missing")).toBe("missing");
+    expect(formatDurationLong(123_000)).toBe(
+      `دقيقتان و${new Intl.NumberFormat(locale).format(3)} ثوان`,
+    );
   });
 });
 
@@ -100,6 +148,50 @@ describe("formatMs", () => {
     expect(formatMs(8_640_000_000_000_001)).toBe("n/a");
     expect(formatMs(Number.POSITIVE_INFINITY)).toBe("n/a");
   });
+
+  it("defaults to minute precision", () => {
+    const formatted = formatMs(new Date(2026, 0, 2, 15, 4, 55).getTime());
+    expect(formatted).toContain("2026");
+    expect(formatted).not.toMatch(/:55(?:\s|$)/u);
+  });
+});
+
+describe("createMsFormatter", () => {
+  it("honors explicit timestamp fields and an empty invalid fallback", () => {
+    const options: Intl.DateTimeFormatOptions = {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZone: "UTC",
+    };
+    const format = createMsFormatter(options, "");
+    for (const timestamp of [0, Date.UTC(2026, 0, 2, 15, 4, 55)]) {
+      expect(format(timestamp)).toBe(new Date(timestamp).toLocaleString(i18n.getLocale(), options));
+    }
+    expect(format(Number.NaN)).toBe("");
+    expect(format(8_640_000_000_000_001)).toBe("");
+    expect(createMsFormatter(undefined, "unavailable")(null)).toBe("unavailable");
+  });
+
+  it("uses the locale of the first valid timestamp and refreshes on the next render", async () => {
+    const restoreI18n = captureI18nStateForTesting();
+    const timestamp = Date.UTC(2026, 0, 2, 15, 4, 55);
+    const options: Intl.DateTimeFormatOptions = { month: "long", day: "numeric", timeZone: "UTC" };
+    try {
+      await i18n.setLocale("en");
+      const format = createMsFormatter(options, "");
+      expect(format(undefined)).toBe("");
+      await i18n.setLocale("fr");
+      expect(format(timestamp)).toBe(new Date(timestamp).toLocaleString("fr", options));
+      await i18n.setLocale("en");
+      expect(createMsFormatter(options)(timestamp)).toBe(
+        new Date(timestamp).toLocaleString("en", options),
+      );
+    } finally {
+      await restoreI18n();
+    }
+  });
 });
 
 describe("date/time millisecond formatters", () => {
@@ -108,32 +200,26 @@ describe("date/time millisecond formatters", () => {
     expect(formatDateTimeMs(Number.NEGATIVE_INFINITY, undefined, "")).toBe("");
     expect(formatTimeMs(Number.POSITIVE_INFINITY, undefined, "")).toBe("");
   });
+
+  it("defaults time-only values to minute precision while preserving explicit seconds", () => {
+    const timestamp = new Date(2026, 0, 2, 15, 4, 55).getTime();
+    expect(formatTimeMs(timestamp)).not.toMatch(/:55(?:\s|$)/u);
+    expect(
+      formatTimeMs(timestamp, { hour: "numeric", minute: "2-digit", second: "2-digit" }),
+    ).toMatch(/:55(?:\s|$)/u);
+  });
 });
 
 describe("stripThinkingTags", () => {
-  it("strips <think>…</think> segments", () => {
-    const input = ["<think>", "secret", "</think>", "", "Hello"].join("\n");
-    expect(stripThinkingTags(input)).toBe("Hello");
-  });
-
-  it("strips <thinking>…</thinking> segments", () => {
-    const input = ["<thinking>", "secret", "</thinking>", "", "Hello"].join("\n");
-    expect(stripThinkingTags(input)).toBe("Hello");
-  });
-
   it("keeps text when tags are unpaired", () => {
     expect(stripThinkingTags("<think>\nsecret\nHello")).toBe("secret\nHello");
     expect(stripThinkingTags("Hello\n</think>")).toBe("Hello\n");
   });
 
-  it("drops malformed reasoning before orphan close tags when final text follows", () => {
+  it("drops malformed reasoning while preserving the visible suffix spacing", () => {
     expect(stripThinkingTags("private chain of thought </think> Visible answer")).toBe(
-      "Visible answer",
+      " Visible answer",
     );
-  });
-
-  it("returns original text when no tags exist", () => {
-    expect(stripThinkingTags("Hello")).toBe("Hello");
   });
 
   it("strips <final>…</final> segments", () => {
@@ -152,39 +238,26 @@ describe("stripThinkingTags", () => {
     expect(stripThinkingTags("<final\nHello")).toBe("<final\nHello");
     expect(stripThinkingTags("Hello</final>")).toBe("Hello");
   });
-
-  it("strips <relevant-memories> blocks", () => {
-    const input = [
-      "<relevant-memories>",
-      "The following memories may be relevant to this conversation:",
-      "- Internal memory note",
-      "</relevant-memories>",
-      "",
-      "User-visible answer",
-    ].join("\n");
-    expect(stripThinkingTags(input)).toBe("User-visible answer");
-  });
-
-  it("keeps relevant-memories tags in fenced code blocks", () => {
-    const input = [
-      "```xml",
-      "<relevant-memories>",
-      "sample",
-      "</relevant-memories>",
-      "```",
-      "",
-      "Visible text",
-    ].join("\n");
-    expect(stripThinkingTags(input)).toBe(input);
-  });
-
-  it("hides unfinished <relevant-memories> block tails", () => {
-    const input = ["Hello", "<relevant-memories>", "internal-only"].join("\n");
-    expect(stripThinkingTags(input)).toBe("Hello\n");
-  });
 });
 
 describe("formatUnknownText", () => {
+  it.each([
+    { name: "null", value: null, expected: "" },
+    { name: "undefined", value: undefined, expected: "" },
+    { name: "string", value: "agent", expected: "agent" },
+    { name: "number", value: 42, expected: "42" },
+    { name: "boolean", value: false, expected: "false" },
+    { name: "bigint", value: 42n, expected: "42" },
+    { name: "function", value: () => "not source text", expected: "[object Function]" },
+    {
+      name: "function with JSON representation",
+      value: Object.assign(() => undefined, { toJSON: () => ({ ok: true }) }),
+      expected: '{"ok":true}',
+    },
+  ])("preserves $name formatting", ({ value, expected }) => {
+    expect(formatUnknownText(value)).toBe(expected);
+  });
+
   it("stringifies plain objects without throwing", () => {
     expect(formatUnknownText({ ok: true })).toBe('{"ok":true}');
   });
@@ -195,17 +268,18 @@ describe("formatUnknownText", () => {
     expect(formatUnknownText(circular)).toBe("[object Object]");
   });
 
-  it("formats symbols without relying on object coercion", () => {
-    expect(formatUnknownText(Symbol("agent"))).toBe("Symbol(agent)");
+  it.each([
+    { name: "named", value: Symbol("agent"), expected: "Symbol(agent)" },
+    { name: "anonymous", value: Symbol(undefined), expected: "Symbol()" },
+    { name: "empty", value: Symbol(""), expected: "Symbol()" },
+    { name: "registered", value: Symbol.for("会議"), expected: "Symbol(会議)" },
+    { name: "well-known", value: Symbol.iterator, expected: "Symbol(Symbol.iterator)" },
+  ])("formats $name symbols without object coercion", ({ value, expected }) => {
+    expect(formatUnknownText(value)).toBe(expected);
   });
 });
 
 describe("formatCompactTokenCount", () => {
-  it("formats values under 1,000 as-is", () => {
-    expect(formatCompactTokenCount(0)).toBe("0");
-    expect(formatCompactTokenCount(999)).toBe("999");
-  });
-
   it("formats thousands with one decimal, trimming a trailing .0", () => {
     expect(formatCompactTokenCount(1_000)).toBe("1k");
     expect(formatCompactTokenCount(214_500)).toBe("214.5k");

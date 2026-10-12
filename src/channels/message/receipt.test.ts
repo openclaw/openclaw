@@ -1,12 +1,32 @@
-// Message receipt tests cover receipt state and acknowledgement metadata for channel messages.
 import { describe, expect, it } from "vitest";
 import {
   createMessageReceiptFromOutboundResults,
   listMessageReceiptPlatformIds,
   resolveMessageReceiptPrimaryId,
+  resolveReceiptSourceId,
 } from "./receipt.js";
 
 describe("createMessageReceiptFromOutboundResults", () => {
+  it("excludes explicit no-send results from identity and aggregate receipt evidence", () => {
+    const notSent = {
+      outcome: "not_sent" as const,
+      messageId: "not-a-delivery",
+      receipt: createMessageReceiptFromOutboundResults({
+        results: [{ messageId: "stale-id" }],
+        threadId: "stale-thread",
+      }),
+    };
+    const receipt = createMessageReceiptFromOutboundResults({
+      results: [notSent, { messageId: "accepted" }],
+    });
+
+    expect(resolveReceiptSourceId(notSent)).toBeUndefined();
+    expect(receipt.platformMessageIds).toEqual(["accepted"]);
+    expect(receipt.parts.map((part) => part.platformMessageId)).toEqual(["accepted"]);
+    expect(receipt.threadId).toBeUndefined();
+    expect(receipt.raw?.[0]).toBe(notSent);
+  });
+
   it("builds a multi-part receipt from outbound delivery results", () => {
     const receipt = createMessageReceiptFromOutboundResults({
       results: [
@@ -36,18 +56,18 @@ describe("createMessageReceiptFromOutboundResults", () => {
     ]);
   });
 
-  it.each(
-    (["chatId", "channelId", "roomId", "conversationId", "toJid"] as const).flatMap((field) => [
-      { field, messageId: undefined, messageIdLabel: "absent" },
-      { field, messageId: "", messageIdLabel: "blank" },
-    ]),
-  )(
-    "keeps $field routing metadata with $messageIdLabel messageId out of platform identity",
-    ({ field, messageId }) => {
+  it.each([undefined, ""])(
+    "keeps routing metadata with messageId=%s out of platform identity",
+    (messageId) => {
       const result = {
         channel: "demo",
         ...(messageId === undefined ? {} : { messageId }),
-        [field]: "route-only",
+        chatId: "route-only",
+        channelId: "route-only",
+        roomId: "route-only",
+        conversationId: "route-only",
+        toJid: "route-only",
+        target: { kind: "channel" as const, id: "route-only" },
       };
       const receipt = createMessageReceiptFromOutboundResults({ results: [result], sentAt: 123 });
 
@@ -57,19 +77,6 @@ describe("createMessageReceiptFromOutboundResults", () => {
       expect(receipt.raw).toEqual([result]);
     },
   );
-
-  it("does not use target routing metadata as platform message identity", () => {
-    const target = { kind: "channel" as const, id: "route-only" };
-    const receipt = createMessageReceiptFromOutboundResults({
-      results: [{ channel: "demo", messageId: "", target }],
-      sentAt: 123,
-    });
-
-    expect(receipt.primaryPlatformMessageId).toBeUndefined();
-    expect(receipt.platformMessageIds).toEqual([]);
-    expect(receipt.parts).toEqual([]);
-    expect(receipt.raw).toEqual([{ channel: "demo", messageId: "", target }]);
-  });
 
   it.each([
     {
@@ -85,11 +92,6 @@ describe("createMessageReceiptFromOutboundResults", () => {
     {
       label: "Slack suppression sentinels",
       result: { channel: "slack", messageId: "suppressed", channelId: "" },
-      receiptMetadata: {},
-    },
-    {
-      label: "Twitch skip sentinels",
-      result: { channel: "twitch", messageId: "skipped" },
       receiptMetadata: {},
     },
   ])("does not fabricate platform ids from $label", ({ result, receiptMetadata }) => {

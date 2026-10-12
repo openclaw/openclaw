@@ -3,9 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import { catalogStartHandler } from "./session-catalog-terminal-start.js";
+import { sessionCatalogHandlers } from "./session-catalog.js";
 
 vi.mock("../../state/user-profiles.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/user-profiles.js")>()),
@@ -23,13 +24,11 @@ function provider(overrides: Partial<SessionCatalogProvider> = {}): SessionCatal
 }
 
 let activeProvider: SessionCatalogProvider;
-const resolveCreateTarget = vi.fn((): { ok: true } | { ok: false; message: string } => ({
-  ok: true,
+vi.mock("./session-catalog-provider-access.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-catalog-provider-access.js")>()),
+  catalogRegistrationSnapshot: () => ({ providers: [activeProvider] }),
 }));
-const handler = catalogStartHandler(
-  (catalogId) => (activeProvider.id === catalogId ? activeProvider : undefined),
-  resolveCreateTarget,
-);
+const handler = sessionCatalogHandlers["sessions.catalog.startTerminal"]!;
 
 function startCall(
   params: unknown,
@@ -75,19 +74,20 @@ describe("sessions.catalog.startTerminal", () => {
 
   beforeEach(() => {
     activeProvider = provider();
-    resolveCreateTarget.mockReset();
-    resolveCreateTarget.mockReturnValue({ ok: true });
   });
 
-  it("requires the cliAgents opt-in before terminal start", async () => {
+  it("honors the cliAgents opt-out before terminal start", async () => {
     const startTerminalSession = vi.fn();
     activeProvider = provider({ startTerminalSession });
 
-    const respond = await call({
-      catalogId: "codex",
-      agentId: "main",
-      cwd: process.cwd(),
-    });
+    const respond = await call(
+      {
+        catalogId: "codex",
+        agentId: "main",
+        cwd: process.cwd(),
+      },
+      { gateway: { cliAgents: { enabled: false } } },
+    );
 
     expect(startTerminalSession).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(
@@ -170,7 +170,6 @@ describe("sessions.catalog.startTerminal", () => {
       { isTerminalEnabled: () => true, terminalSessions: {} },
     );
 
-    expect(resolveCreateTarget).not.toHaveBeenCalled();
     expect(startTerminalSession).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(
       false,
@@ -184,10 +183,7 @@ describe("sessions.catalog.startTerminal", () => {
 
   it("rechecks local cwd after the provider plan resolves", async () => {
     const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-catalog-start-"));
-    let releasePlan!: () => void;
-    const planGate = new Promise<void>((resolve) => {
-      releasePlan = resolve;
-    });
+    const { promise: planGate, resolve: releasePlan } = createDeferred();
     const startTerminalSession = vi.fn(async () => {
       await planGate;
       return { kind: "local" as const, argv: ["codex"], cwd };
@@ -314,8 +310,9 @@ describe("sessions.catalog.startTerminal", () => {
     );
   });
 
-  it("reuses terminal.open admission and manager ownership for terminal start", async () => {
+  it("reuses terminal.open admission and ownership without an OpenClaw model target", async () => {
     const cwd = process.cwd();
+    const resolveCreateSession = vi.fn(() => undefined);
     const startTerminalSession = vi.fn(async () => ({
       kind: "local" as const,
       argv: ["codex", "--", "Inspect the failing test"],
@@ -331,9 +328,20 @@ describe("sessions.catalog.startTerminal", () => {
       cwd,
       shell: "/bin/zsh",
     }));
-    activeProvider = provider({ startTerminalSession });
+    activeProvider = provider({ startTerminalSession, resolveCreateSession });
 
-    const config = { gateway: { cliAgents: { enabled: true } } };
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5" },
+          models: {
+            "openai/gpt-5": {
+              params: { responsesServerCompaction: true, responsesCompactThreshold: 42_000 },
+            },
+          },
+        },
+      },
+    };
     const respond = await call(
       {
         catalogId: "codex",
@@ -356,9 +364,12 @@ describe("sessions.catalog.startTerminal", () => {
       },
     );
 
-    expect(resolveCreateTarget).toHaveBeenCalledWith("codex", "research", config);
+    expect(resolveCreateSession).not.toHaveBeenCalled();
+    expect(startTerminalSession).toHaveBeenCalledOnce();
+    expect(open).toHaveBeenCalledOnce();
     expect(startTerminalSession).toHaveBeenCalledWith({
       agentId: "research",
+      hostId: "gateway:local",
       allowProcessHomeFallback: false,
       cwd,
       initialMessage: "Inspect the failing test",
@@ -416,6 +427,7 @@ describe("sessions.catalog.startTerminal", () => {
       allowProcessHomeFallback: false,
       cwd: "/remote/worktree",
       nodeId: "remote",
+      hostId: "node:remote",
     });
     expect(open).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(

@@ -1,143 +1,142 @@
 import type { DatabaseSync } from "node:sqlite";
-import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
-import { SESSION_PARTICIPANTS_TABLE } from "../../state/openclaw-agent-session-participants-schema.js";
-import { tableExists, tableHasColumn } from "../../state/openclaw-state-db-schema-helpers.js";
+import type { Selectable } from "kysely";
 import {
-  getSessionKysely,
-  resolveSqliteReadScope,
-  toDatabaseOptions,
-} from "./session-accessor.sqlite-scope.js";
+  createSqliteQueryCache,
+  getNodeSqliteKysely,
+  executeSqliteQuerySync,
+  prepareSqliteQuerySync,
+  sqliteStringSet,
+} from "../../infra/kysely-sync.js";
 import {
-  MAX_SESSION_PARTICIPANTS,
-  type SessionCreatedActor,
-  type SessionParticipantSource,
-} from "./session-entry-provenance.js";
+  getSqliteReadScopeRevision,
+  runSqliteReadOperationSync,
+  type SqliteReadScopeRevision,
+} from "../../infra/sqlite-schema-facts.js";
+import { SESSION_PARTICIPANTS_TABLE } from "../../state/openclaw-agent-db-contract.js";
+import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
+import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
+import { readCurrentSessionEntryCacheParticipants } from "./session-accessor.sqlite-entry-cache-state.js";
+import type { SessionParticipantRecord } from "./session-membership-facts.types.js";
+import { readParticipantIdentity } from "./session-participant-identity.js";
+import { readPreparedSessionParticipants } from "./session-participant-prepared-read.js";
 import type { SessionEntry } from "./types.js";
 
-export type SessionParticipantRecord = {
-  actor: SessionCreatedActor & { id: string };
-  contributionCount: number;
-  firstPromptedAt: number;
-  lastPromptedAt: number;
-  source?: SessionParticipantSource;
-};
+export type { SessionParticipantRecord } from "./session-membership-facts.types.js";
 
-export function resolveBoundedProfileParticipantSnapshot(
-  records: readonly SessionParticipantRecord[],
-  currentProfileId?: string,
-): { profileIds: string[]; incomplete: boolean } {
-  const profileIds = new Set(
-    records.flatMap((record) =>
-      record.actor.type === "human" && record.source === "profile" ? [record.actor.id] : [],
-    ),
-  );
-  const current = currentProfileId?.trim();
-  if (current && !profileIds.has(current) && records.length < MAX_SESSION_PARTICIPANTS) {
-    profileIds.add(current);
-  }
-  return {
-    profileIds: [...profileIds],
-    incomplete: records.length >= MAX_SESSION_PARTICIPANTS,
-  };
-}
+type SessionParticipantRow = Selectable<OpenClawAgentKyselyDatabase["session_participants"]>;
 
-function projectParticipantRow(row: {
-  actor_id: string;
-  actor_source?: string | null;
-  actor_type: string;
-  contribution_count?: number | null;
-  first_prompted_at: number;
-  last_prompted_at: number;
-}): SessionParticipantRecord | null {
-  if (row.actor_type !== "agent" && row.actor_type !== "human") {
-    return null;
-  }
-  return {
-    actor: { type: row.actor_type, id: row.actor_id },
-    contributionCount: row.contribution_count ?? 1,
-    firstPromptedAt: row.first_prompted_at,
-    lastPromptedAt: row.last_prompted_at,
-    ...(row.actor_source === "profile" ||
-    row.actor_source === "channel" ||
-    row.actor_source === "agent"
-      ? { source: row.actor_source }
-      : {}),
-  };
-}
-
-function readParticipantRows(database: DatabaseSync, sessionKeys?: readonly string[]) {
-  if (!tableExists(database, SESSION_PARTICIPANTS_TABLE) || sessionKeys?.length === 0) {
-    return [];
-  }
-  // Lazy-ensured column: pre-feature databases lack actor_source, so select it
-  // only when present; projection treats the absent field as unknown/legacy.
-  const hasActorSource = tableHasColumn(database, SESSION_PARTICIPANTS_TABLE, "actor_source");
-  const hasContributionCount = tableHasColumn(
-    database,
-    SESSION_PARTICIPANTS_TABLE,
-    "contribution_count",
-  );
-  let query = getSessionKysely(database)
+function selectParticipantRows(database: DatabaseSync) {
+  return getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database)
     .selectFrom("session_participants")
     .select([
       "session_key",
-      "actor_type",
+      "identity_namespace",
       "actor_id",
-      ...(hasActorSource ? (["actor_source"] as const) : []),
-      ...(hasContributionCount ? (["contribution_count"] as const) : []),
+      "contribution_count",
       "first_prompted_at",
       "last_prompted_at",
-    ]);
-  if (sessionKeys) {
-    query = query.where("session_key", "in", sessionKeys);
-  }
-  return executeSqliteQuerySync(
-    database,
-    query
-      .orderBy("session_key")
-      .orderBy("first_prompted_at")
-      .orderBy("actor_id")
-      .orderBy("actor_type"),
-  ).rows;
+    ])
+    .orderBy("session_key")
+    .orderBy("first_prompted_at")
+    .orderBy("actor_id")
+    .orderBy("identity_namespace");
 }
 
-function participantRecordsBySessionKey(
+// The last exact read belongs to this connection's admitted revision, including its snapshot.
+const singleSessionParticipantQuery = createSqliteQueryCache((database) => {
+  const query = prepareSqliteQuerySync<string, SessionParticipantRow>(database, (parameter) =>
+    selectParticipantRows(database).where(
+      "session_key",
+      "=",
+      parameter((sessionKey) => sessionKey),
+    ),
+  );
+  let last:
+    | { key: string; revision: SqliteReadScopeRevision; rows: SessionParticipantRow[] }
+    | undefined;
+  return (key: string) =>
+    runSqliteReadOperationSync(database, () => {
+      const revision = getSqliteReadScopeRevision(database);
+      if (revision && last?.revision === revision && last.key === key) {
+        return last.rows;
+      }
+      const rows = query(key).rows;
+      last =
+        revision && getSqliteReadScopeRevision(database) === revision
+          ? { key, revision, rows }
+          : undefined;
+      return rows;
+    });
+});
+
+function readParticipantRows(database: DatabaseSync, sessionKeys?: readonly string[]) {
+  const sessionKey = sessionKeys?.length === 1 ? sessionKeys[0] : undefined;
+  if (sessionKey !== undefined) {
+    return singleSessionParticipantQuery(database)(sessionKey);
+  }
+  let query = selectParticipantRows(database);
+  if (sessionKeys) {
+    query = query.where("session_key", "in", sqliteStringSet(sessionKeys));
+  }
+  return executeSqliteQuerySync(database, query).rows;
+}
+
+export function readParticipantRecord(
+  row: Omit<SessionParticipantRow, "session_key">,
+): SessionParticipantRecord {
+  return {
+    identity: readParticipantIdentity(row.identity_namespace, row.actor_id),
+    contributionCount: row.contribution_count,
+    firstPromptedAt: row.first_prompted_at,
+    lastPromptedAt: row.last_prompted_at,
+  };
+}
+
+export function participantRecordsBySessionKey(
   database: DatabaseSync,
   sessionKeys?: readonly string[],
 ): Map<string, SessionParticipantRecord[]> {
-  const records = new Map<string, SessionParticipantRecord[]>();
-  for (const row of readParticipantRows(database, sessionKeys)) {
-    const projected = projectParticipantRow(row);
-    if (!projected) {
-      continue;
+  return runSqliteReadOperationSync(database, () => {
+    const records = new Map<string, SessionParticipantRecord[]>();
+    if (!tableExists(database, SESSION_PARTICIPANTS_TABLE)) {
+      return records;
     }
-    const participants = records.get(row.session_key) ?? [];
-    participants.push(projected);
-    records.set(row.session_key, participants);
-  }
-  return records;
+    for (const row of readParticipantRows(database, sessionKeys)) {
+      const participants = records.get(row.session_key) ?? [];
+      participants.push(readParticipantRecord(row));
+      records.set(row.session_key, participants);
+    }
+    return records;
+  });
 }
 
-function withProjectedParticipants(
+function participantProjection(
+  records: readonly SessionParticipantRecord[],
+): Pick<SessionEntry, "participants" | "participantCount"> {
+  if (records.length === 0) {
+    return {};
+  }
+  return {
+    participants: records.map(({ identity }) => ({ identity })),
+    participantCount: records.length,
+  };
+}
+
+export function withProjectedParticipants(
   entry: SessionEntry,
   records: readonly SessionParticipantRecord[],
 ): SessionEntry {
-  const owner = entry.owner?.actor ?? entry.createdActor;
-  const effective = records.filter(
-    (participant) => participant.actor.type !== owner?.type || participant.actor.id !== owner.id,
+  return records.length ? { ...entry, ...participantProjection(records) } : entry;
+}
+
+export function readSqliteSessionParticipantProjection(database: DatabaseSync, sessionKey: string) {
+  return (
+    readPreparedSessionParticipants(database, sessionKey) ??
+    readCurrentSessionEntryCacheParticipants(database, sessionKey) ??
+    participantProjection(
+      participantRecordsBySessionKey(database, [sessionKey]).get(sessionKey) ?? [],
+    )
   );
-  if (effective.length === 0) {
-    return entry;
-  }
-  return {
-    ...entry,
-    participants: effective.map((participant) => ({
-      ...participant.actor,
-      ...(participant.source ? { source: participant.source } : {}),
-    })),
-    participantCount: effective.length,
-  };
 }
 
 export function projectSqliteSessionParticipants(
@@ -145,39 +144,78 @@ export function projectSqliteSessionParticipants(
   sessionKey: string,
   entry: SessionEntry,
 ): SessionEntry {
+  const prepared =
+    readPreparedSessionParticipants(database, sessionKey) ??
+    readCurrentSessionEntryCacheParticipants(database, sessionKey);
+  if (prepared) {
+    return prepared.participants ? { ...entry, ...prepared } : entry;
+  }
   return withProjectedParticipants(
     entry,
     participantRecordsBySessionKey(database, [sessionKey]).get(sessionKey) ?? [],
   );
 }
 
+/** Acquire one fresh cohort lazily, then decode only the requested session's participants. */
+export function prepareSqliteSessionParticipantProjection(
+  database: DatabaseSync,
+  sessionKeys: readonly string[],
+): (sessionKey: string, entry: SessionEntry) => SessionEntry {
+  let rowsByKey: Map<string, SessionParticipantRow[]> | undefined;
+  let acquisitionFailed = false;
+  return (sessionKey, entry) => {
+    const prepared = readPreparedSessionParticipants(database, sessionKey);
+    if (prepared) {
+      return prepared.participants ? { ...entry, ...prepared } : entry;
+    }
+    if (!rowsByKey && !acquisitionFailed) {
+      try {
+        const rows = tableExists(database, SESSION_PARTICIPANTS_TABLE)
+          ? readParticipantRows(database, sessionKeys)
+          : [];
+        rowsByKey = new Map();
+        for (const row of rows) {
+          const participants = rowsByKey.get(row.session_key) ?? [];
+          participants.push(row);
+          rowsByKey.set(row.session_key, participants);
+        }
+      } catch {
+        // A native row-conversion failure must not poison healthy siblings.
+        acquisitionFailed = true;
+      }
+    }
+    if (acquisitionFailed) {
+      return projectSqliteSessionParticipants(database, sessionKey, entry);
+    }
+    return withProjectedParticipants(
+      entry,
+      (rowsByKey?.get(sessionKey) ?? []).map(readParticipantRecord),
+    );
+  };
+}
+
 export function projectSqliteSessionParticipantsBatch(
   database: DatabaseSync,
   entries: ReadonlyMap<string, SessionEntry>,
 ): Map<string, SessionEntry> {
+  const prepared = new Map<string, SessionEntry>();
+  for (const [sessionKey, entry] of entries) {
+    const projection = readPreparedSessionParticipants(database, sessionKey);
+    if (!projection) {
+      break;
+    }
+    prepared.set(sessionKey, projection.participants ? { ...entry, ...projection } : entry);
+  }
+  if (prepared.size === entries.size) {
+    return prepared;
+  }
   const records = participantRecordsBySessionKey(database, [...entries.keys()]);
-  return new Map(
-    [...entries].map(([sessionKey, entry]) => [
-      sessionKey,
-      withProjectedParticipants(entry, records.get(sessionKey) ?? []),
-    ]),
-  );
-}
-
-export function listSessionParticipantsReadOnly(scope: {
-  agentId: string;
-  env?: NodeJS.ProcessEnv;
-  sessionKey?: string;
-  storePath?: string;
-}): Map<string, SessionParticipantRecord[]> {
-  const resolved = resolveSqliteReadScope(scope);
-  const result = withOpenClawAgentDatabaseReadOnly(
-    (database) =>
-      participantRecordsBySessionKey(
-        database.db,
-        scope.sessionKey ? [scope.sessionKey] : undefined,
-      ),
-    toDatabaseOptions(resolved),
-  );
-  return result.found ? result.value : new Map();
+  const projected = new Map(entries);
+  for (const [sessionKey, participants] of records) {
+    const entry = entries.get(sessionKey);
+    if (entry) {
+      projected.set(sessionKey, withProjectedParticipants(entry, participants));
+    }
+  }
+  return projected;
 }

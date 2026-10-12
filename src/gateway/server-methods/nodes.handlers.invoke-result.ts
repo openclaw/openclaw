@@ -4,15 +4,14 @@ import {
   errorShape,
   validateNodeInvokeResultParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { respondInvalidParams } from "./nodes.helpers.js";
 import type { GatewayRequestHandler } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 function normalizeNodeInvokeResultParams(params: unknown): unknown {
   if (!params || typeof params !== "object") {
     return params;
   }
-  const raw = params as Record<string, unknown>;
-  const normalized: Record<string, unknown> = { ...raw };
+  const normalized = { ...(params as Record<string, unknown>) };
   if (normalized.payloadJSON === null) {
     delete normalized.payloadJSON;
   } else if (normalized.payloadJSON !== undefined && typeof normalized.payloadJSON !== "string") {
@@ -35,22 +34,17 @@ export const handleNodeInvokeResult: GatewayRequestHandler = async ({
   client,
 }) => {
   const normalizedParams = normalizeNodeInvokeResultParams(params);
-  if (!validateNodeInvokeResultParams(normalizedParams)) {
-    respondInvalidParams({
+  if (
+    !assertValidParams(
+      normalizedParams,
+      validateNodeInvokeResultParams,
+      "node.invoke.result",
       respond,
-      method: "node.invoke.result",
-      validator: validateNodeInvokeResultParams,
-    });
+    )
+  ) {
     return;
   }
-  const p = normalizedParams as {
-    id: string;
-    nodeId: string;
-    ok: boolean;
-    payload?: unknown;
-    payloadJSON?: string | null;
-    error?: { code?: string; message?: string } | null;
-  };
+  const p = normalizedParams;
   const callerNodeId = client?.connect?.device?.id ?? client?.connect?.client?.id;
   if (callerNodeId && callerNodeId !== p.nodeId) {
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId mismatch"));
@@ -70,9 +64,6 @@ export const handleNodeInvokeResult: GatewayRequestHandler = async ({
     // Late-arriving results (after invoke timeout) are expected and harmless.
     // Return success instead of error to reduce log noise; client can discard.
     context.logGateway.debug(`late invoke result ignored: id=${p.id} node=${p.nodeId}`);
-    respond(true, { ok: true, ignored: true }, undefined);
-    return;
   }
-
-  respond(true, { ok: true }, undefined);
+  respond(true, { ok: true, ...(!ok ? { ignored: true } : {}) }, undefined);
 };

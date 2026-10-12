@@ -11,21 +11,31 @@ import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/c
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext } from "../templating.js";
 import { handleStopCommand } from "./commands-session-abort.js";
-import "./commands-session-abort.test-support.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const abortEmbeddedAgentRunMock = vi.hoisted(() => vi.fn());
 const createInternalHookEventMock = vi.hoisted(() => vi.fn(() => ({})));
-const persistAbortTargetEntryMock = vi.hoisted(() => vi.fn(async () => true));
+const persistAbortTargetEntryMock = vi.hoisted(() =>
+  vi.fn<typeof import("./commands-session-store.js").persistAbortTargetEntry>(async () => true),
+);
 const resolveCommandSessionEntryForKeyMock = vi.hoisted(() =>
   vi.fn(() => ({ entry: undefined, key: undefined })),
 );
-const resolveSessionIdMock = vi.hoisted(() => vi.fn(() => undefined));
 const stopSubagentsForRequesterMock = vi.hoisted(() =>
-  vi.fn(async () => ({ stopped: 0, failed: 0 })),
+  vi.fn<typeof import("./abort-operation.js").stopSubagentsForRequester>(async (params) => {
+    await params.beforeKill?.(() => {});
+    return { stopped: 0, failed: 0 };
+  }),
 );
 const abortSessionRunTargetWithOutcomeMock = vi.hoisted(() =>
-  vi.fn(() => ({ active: false, aborted: false })),
+  vi.fn<
+    (
+      params: unknown,
+    ) => ReturnType<ReturnType<typeof import("./abort-operation.js").prepareSessionRunTargetAbort>>
+  >(() => ({
+    active: false,
+    aborted: false,
+  })),
 );
 const formatAbortReplyTextMock = vi.hoisted(() => vi.fn(() => "⚙️ Agent was aborted."));
 
@@ -47,12 +57,21 @@ vi.mock("./abort-cutoff.js", () => ({
   shouldPersistAbortCutoff: vi.fn(() => false),
 }));
 
-vi.mock("./abort.js", () => ({
-  abortSessionRunTargetWithOutcome: abortSessionRunTargetWithOutcomeMock,
-  formatAbortReplyText: formatAbortReplyTextMock,
-  isAbortTrigger: vi.fn(() => false),
-  setAbortMemory: vi.fn(),
+vi.mock(import("./abort-operation.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  prepareSessionRunTargetAbort: (params: unknown) => () =>
+    abortSessionRunTargetWithOutcomeMock(params),
   stopSubagentsForRequester: stopSubagentsForRequesterMock,
+}));
+
+vi.mock("./abort-trigger-text.js", () => ({ isAbortTrigger: vi.fn(() => false) }));
+
+vi.mock("./abort-primitives.js", () => ({
+  setAbortMemory: vi.fn(),
+}));
+
+vi.mock("./abort.js", () => ({
+  formatAbortReplyText: formatAbortReplyTextMock,
 }));
 
 vi.mock("./commands-session-store.js", () => ({
@@ -61,9 +80,7 @@ vi.mock("./commands-session-store.js", () => ({
 }));
 
 vi.mock("./reply-run-registry.js", () => ({
-  replyRunRegistry: {
-    resolveSessionId: resolveSessionIdMock,
-  },
+  resolveReplyOperationsForSession: vi.fn(() => []),
 }));
 
 const formatAllowFrom = ({ allowFrom }: { allowFrom: Array<string | number> }) => {
@@ -164,36 +181,22 @@ describe("handleStopCommand target fallback", () => {
       reply: { text: "⚙️ Agent was aborted." },
     });
     expect(abortSessionRunTargetWithOutcomeMock).toHaveBeenCalledWith({
+      agentId: "target",
       key: "agent:target:telegram:direct:123",
       sessionId: undefined,
     });
     expect(abortEmbeddedAgentRunMock).not.toHaveBeenCalledWith("wrapper-session-id");
     const [persistAbortTargetParams] = expectDefined(
-      (
-        persistAbortTargetEntryMock.mock.calls as unknown as Array<
-          [
-            {
-              key?: string;
-              entry?: unknown;
-              sessionStore?: unknown;
-              storePath?: string;
-            },
-          ]
-        >
-      )[0],
-      "(persistAbortTargetEntryMock.mock.calls as unknown as Array<\n        [\n          {\n            key?: string;\n            entry?: unknown;\n            sessionStore?: unknown;\n            storePath?: string;\n          },\n        ]\n      >)[0] test invariant",
+      persistAbortTargetEntryMock.mock.calls[0],
+      "persisted abort target",
     );
     expect(persistAbortTargetParams?.key).toBe("agent:target:telegram:direct:123");
     expect(persistAbortTargetParams?.entry).toBeUndefined();
     expect(persistAbortTargetParams?.sessionStore).toBe(params.sessionStore);
     expect(persistAbortTargetParams?.storePath).toBe("/tmp/sessions.json");
     const [stopSubagentsParams] = expectDefined(
-      (
-        stopSubagentsForRequesterMock.mock.calls as unknown as Array<
-          [{ cfg?: unknown; requesterSessionKey?: string }]
-        >
-      )[0],
-      "(stopSubagentsForRequesterMock.mock.calls as unknown as Array<\n        [{ cfg?: unknown; requesterSessionKey?: string }]\n      >)[0] test invariant",
+      stopSubagentsForRequesterMock.mock.calls[0],
+      "subagent stop target",
     );
     expect(stopSubagentsParams?.cfg).toBe(params.cfg);
     expect(stopSubagentsParams?.requesterSessionKey).toBe("agent:target:telegram:direct:123");
@@ -226,6 +229,37 @@ describe("handleStopCommand target fallback", () => {
     expect(formatAbortReplyTextMock).toHaveBeenCalledWith(0, "finalizing", 0);
     expect(persistAbortTargetEntryMock).not.toHaveBeenCalled();
   });
+
+  it.each([false, true])(
+    "joins cleanup without granting rejected cancellation authority (accepted=%s)",
+    async (accepted) => {
+      const params = buildStopParams();
+      const cleanupError = new Error("parent cancellation failed");
+      const descendantError = new Error("descendant cancellation failed");
+      const descendantCancellation = vi.fn(() => {
+        throw descendantError;
+      });
+      abortSessionRunTargetWithOutcomeMock.mockReturnValueOnce({
+        active: true,
+        aborted: accepted,
+        retirement: Promise.reject(cleanupError),
+      });
+      stopSubagentsForRequesterMock.mockImplementationOnce(async (request) => {
+        await request.beforeKill?.(() => {});
+        descendantCancellation();
+        return { stopped: 0, failed: 0 };
+      });
+
+      const stopping = handleStopCommand(params, true);
+      if (accepted) {
+        await expect(stopping).rejects.toMatchObject({ errors: [descendantError, cleanupError] });
+        expect(descendantCancellation).toHaveBeenCalledOnce();
+      } else {
+        await expect(stopping).rejects.toBe(cleanupError);
+        expect(descendantCancellation).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("surfaces child stop failures in the stop reply", async () => {
     const params = buildStopParams();

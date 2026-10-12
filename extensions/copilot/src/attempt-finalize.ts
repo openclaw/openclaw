@@ -6,6 +6,7 @@ import {
 import { finalizeCopilotAttempt } from "./attempt-cleanup.js";
 import { createResult } from "./attempt-config.js";
 import type { AttemptTranscriptJournal } from "./attempt-transcript-journal.js";
+import { isSameUserTurn } from "./attempt-transcript-replay.js";
 import { withPromptFailure } from "./attempt-types.js";
 import type {
   AgentHarnessAttemptResult,
@@ -15,6 +16,7 @@ import type {
 } from "./attempt-types.js";
 import { attachEventBridge } from "./event-bridge.js";
 export async function completeCopilotAttempt(params: {
+  acceptedSessionSpawns: NonNullable<AgentHarnessAttemptResult["acceptedSessionSpawns"]>;
   aborted: boolean;
   attemptStartedAt: number;
   bridge: ReturnType<typeof attachEventBridge> | undefined;
@@ -39,7 +41,6 @@ export async function completeCopilotAttempt(params: {
   resumeFailureRecovered: boolean;
   sdkSessionId: string | undefined;
   sentTurnStarted: boolean;
-  sessionIdUsed: string | undefined;
   settledFinalizationAssistantCompleted: boolean;
   settledToolFinalization: boolean;
   timedOut: boolean;
@@ -48,6 +49,7 @@ export async function completeCopilotAttempt(params: {
   yieldAcknowledgment?: string;
 }): Promise<AgentHarnessAttemptResult> {
   const {
+    acceptedSessionSpawns,
     aborted,
     attemptStartedAt,
     bridge,
@@ -68,7 +70,6 @@ export async function completeCopilotAttempt(params: {
     resumeFailureRecovered,
     sdkSessionId,
     sentTurnStarted,
-    sessionIdUsed,
     settledFinalizationAssistantCompleted,
     settledToolFinalization,
     timedOut,
@@ -95,6 +96,7 @@ export async function completeCopilotAttempt(params: {
           currentRunUserKey,
         ));
   const result = createResult(input, {
+    acceptedSessionSpawns,
     aborted,
     assistantTexts,
     codeModeEngaged,
@@ -125,11 +127,9 @@ export async function completeCopilotAttempt(params: {
     assistantTranscriptIdempotencyKey: transcript?.assistantTranscriptIdempotencyKey,
     contextEngineTerminalAnchor: transcript?.terminalAnchor,
     nativeReplayInvalid: transcript?.replayInvalid === true || nativeSessionHistoryUnvalidated,
-    now,
     promptError,
     resumeFailureRecovered,
     sdkSessionId,
-    sessionIdUsed,
     timedOut,
     timedOutDuringCompaction,
     toolMetas: snap ? [...snap.toolMetas] : [],
@@ -192,7 +192,7 @@ function includePreparedUser(
     message: prepared,
   }) as Extract<AgentMessage, { role: "user" }>;
   const tail = messages.at(-1);
-  if (isSamePreparedUser(tail, projected, currentRunUserKey)) {
+  if (isSameUserTurn(tail, projected, currentRunUserKey)) {
     return [...messages.slice(0, -1), projected];
   }
   return [...messages, projected];
@@ -203,51 +203,7 @@ function removePreparedUser(
   prepared: Extract<AgentMessage, { role: "user" }> | undefined,
   currentRunUserKey: string,
 ): AgentMessage[] {
-  return prepared && isSamePreparedUser(messages.at(-1), prepared, currentRunUserKey)
+  return prepared && isSameUserTurn(messages.at(-1), prepared, currentRunUserKey)
     ? messages.slice(0, -1)
     : messages;
-}
-
-function isSamePreparedUser(
-  candidate: AgentMessage | undefined,
-  prepared: Extract<AgentMessage, { role: "user" }>,
-  currentRunUserKey: string,
-): boolean {
-  if (candidate?.role !== "user") {
-    return false;
-  }
-  if (candidate === prepared) {
-    return true;
-  }
-  const candidateKey = (candidate as { idempotencyKey?: unknown }).idempotencyKey;
-  const preparedKey = (prepared as { idempotencyKey?: unknown }).idempotencyKey;
-  if (typeof candidateKey === "string" || typeof preparedKey === "string") {
-    if (typeof candidateKey === "string" && typeof preparedKey === "string") {
-      return candidateKey === preparedKey;
-    }
-    if (
-      typeof candidateKey !== "string" ||
-      typeof preparedKey === "string" ||
-      (!candidateKey.startsWith("copilot:") && candidateKey !== currentRunUserKey)
-    ) {
-      return false;
-    }
-  }
-  return (
-    candidate.timestamp === prepared.timestamp &&
-    userText(candidate.content) === userText(prepared.content)
-  );
-}
-
-function userText(content: unknown): string {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (Array.isArray(content) && content.length === 1) {
-    const part = content[0] as { text?: unknown; type?: unknown };
-    if (part?.type === "text" && typeof part.text === "string") {
-      return part.text;
-    }
-  }
-  return JSON.stringify(content) ?? "";
 }

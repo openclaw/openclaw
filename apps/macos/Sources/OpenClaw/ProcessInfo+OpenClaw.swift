@@ -13,11 +13,11 @@ extension ProcessInfo {
         return String(cString: raw) == "1"
     }
 
-    static func resolveStableNixSuite(bundleIdentifier: String?, isAppBundle: Bool) -> UserDefaults? {
+    static func resolveStableNixSuiteName(bundleIdentifier: String?, isAppBundle: Bool) -> String? {
         // The app's own defaults domain is already represented by AppDefaults.standard.
         // Passing that same identifier to suiteName triggers Foundation's nonsensical-suite warning.
         guard isAppBundle, bundleIdentifier != launchdLabel else { return nil }
-        return UserDefaults(suiteName: launchdLabel)
+        return launchdLabel
     }
 
     /// Nix deployments may write defaults into a stable suite (`ai.openclaw.mac`) even if the shipped
@@ -28,21 +28,17 @@ extension ProcessInfo {
         stableSuite: UserDefaults?,
         isAppBundle: Bool) -> Bool
     {
-        if environment["OPENCLAW_NIX_MODE"] == "1" { return true }
-        if standard.bool(forKey: "openclaw.nixMode") { return true }
-
         // Only consult the stable suite when running as a .app bundle.
         // This avoids local developer machines accidentally influencing unit tests.
-        if isAppBundle, let stableSuite, stableSuite.bool(forKey: "openclaw.nixMode") { return true }
-
-        return false
+        environment["OPENCLAW_NIX_MODE"] == "1" || standard.bool(forKey: "openclaw.nixMode") ||
+            (isAppBundle && stableSuite?.bool(forKey: "openclaw.nixMode") == true)
     }
 
     var isNixMode: Bool {
         let isAppBundle = Bundle.main.bundleURL.pathExtension == "app"
-        let stableSuite = Self.resolveStableNixSuite(
+        let stableSuite = Self.resolveStableNixSuiteName(
             bundleIdentifier: Bundle.main.bundleIdentifier,
-            isAppBundle: isAppBundle)
+            isAppBundle: isAppBundle).flatMap { UserDefaults(suiteName: $0) }
         return Self.resolveNixMode(
             environment: self.environment,
             standard: AppDefaults.standard,

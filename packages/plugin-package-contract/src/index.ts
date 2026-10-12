@@ -31,6 +31,9 @@ export const EXTERNAL_CODE_PLUGIN_REQUIRED_FIELD_PATHS = [
   "openclaw.build.openclawVersion",
 ] as const;
 
+export { PLUGIN_CATEGORY_SLUGS, validatePluginCategories } from "./categories.js";
+export type { PluginCategorySlug, PluginCategoriesValidationResult } from "./categories.js";
+
 /** Read OpenClaw package.json blocks without trusting caller input shape. */
 function readOpenClawBlock(packageJson: unknown) {
   const root = isRecord(packageJson) ? packageJson : undefined;
@@ -50,24 +53,16 @@ export function normalizeExternalPluginCompatibility(
   const minHostVersion = normalizeOptionalString(install?.minHostVersion);
   const compatibility: ExternalPluginCompatibility = {};
 
-  const pluginApi = normalizeOptionalString(compat?.pluginApi);
-  if (pluginApi) {
-    compatibility.pluginApiRange = pluginApi;
-  }
-
-  const minGatewayVersion = normalizeOptionalString(compat?.minGatewayVersion) ?? minHostVersion;
-  if (minGatewayVersion) {
-    compatibility.minGatewayVersion = minGatewayVersion;
-  }
-
-  const builtWithOpenClawVersion = normalizeOptionalString(build?.openclawVersion) ?? version;
-  if (builtWithOpenClawVersion) {
-    compatibility.builtWithOpenClawVersion = builtWithOpenClawVersion;
-  }
-
-  const pluginSdkVersion = normalizeOptionalString(build?.pluginSdkVersion);
-  if (pluginSdkVersion) {
-    compatibility.pluginSdkVersion = pluginSdkVersion;
+  const fields = [
+    ["pluginApiRange", normalizeOptionalString(compat?.pluginApi)],
+    ["minGatewayVersion", normalizeOptionalString(compat?.minGatewayVersion) ?? minHostVersion],
+    ["builtWithOpenClawVersion", normalizeOptionalString(build?.openclawVersion) ?? version],
+    ["pluginSdkVersion", normalizeOptionalString(build?.pluginSdkVersion)],
+  ] as const;
+  for (const [key, value] of fields) {
+    if (value) {
+      compatibility[key] = value;
+    }
   }
 
   return Object.keys(compatibility).length > 0 ? compatibility : undefined;

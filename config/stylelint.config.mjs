@@ -1,8 +1,46 @@
 // Control UI CSS hygiene: plain stylesheets plus css`` templates in Lit
 // components (postcss-lit). Error-class rules only — oxfmt owns formatting.
+const selectorFunction = String.raw`\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)`;
+const selectorTail = String.raw`(?:[^([]|${selectorFunction}|\[[^\]]*\])*`;
+const selectorCompound = String.raw`(?:[^\s>+~(),[\]]|${selectorFunction}|\[[^\]]*\])*`;
+const appAncestor = String.raw`(?:\.(?:shell|content|chat-thread|chat-split-view)(?:--[\w-]+)?|:root|(?<![.#\w-])(?:html|body))(?![\w-])`;
+const ancestorHas = String.raw`(?::(?:not|is|where)\(\s*)*:has`;
+const selectorList = String.raw`(?:[^()[\]]|${selectorFunction}|\[[^\]]*\])*`;
+const listSubject = (subject) =>
+  String.raw`:(?:is|where)\(${selectorList}${subject}${selectorCompound}\s*(?:,${selectorList})?\)`;
+// One nesting level covers forms such as :is(:where(html, body), .other).
+const ancestorSelectorList = listSubject(`(?:${appAncestor}|${listSubject(appAncestor)})`);
+const appAncestorSubject = String.raw`(?:${appAncestor}|${ancestorSelectorList})`;
+
 export default {
   extends: "stylelint-config-recommended",
   rules: {
+    // Chromium builds one invalidation set for every non-subject :has(). A universal
+    // selector or pseudo-element after one widens it to whole subtrees (~9 ms per
+    // insertion with 534 messages), ::placeholder on the :has() compound cost ~8 ms, and
+    // a tick after a sibling-relative :has() restyled every position-rail tick per
+    // transcript row. Style the element directly, or set a state class or custom
+    // property on the :has() subject. Functional arguments and attributes are skipped;
+    // split lists keep safe branches independent.
+    "selector-disallowed-list": [
+      [
+        new RegExp(
+          `:has${selectorFunction}${selectorTail}[\\s>+~](?:${selectorTail}[\\s>+~(])?\\*`,
+          "i",
+        ),
+        new RegExp(`:has${selectorFunction}${selectorTail}[\\s>+~]${selectorTail}::`, "i"),
+        new RegExp(`:has${selectorFunction}${selectorTail}::placeholder(?![\\w-])`, "i"),
+        new RegExp(`:has(?=\\(\\s*[+~])${selectorFunction}${selectorTail}[\\s>+~]`, "i"),
+        // An ancestor subject, including :is()/:where() lists, restyles on every insertion
+        // below it. The rule sees raw selectors; nested & forms remain policy-owned.
+        new RegExp(`${appAncestorSubject}${selectorCompound}${ancestorHas}\\(`, "i"),
+        new RegExp(
+          `${ancestorHas}${selectorFunction}\\)*${selectorCompound}${appAncestorSubject}`,
+          "i",
+        ),
+      ],
+      { splitList: true },
+    ],
     // Cascade-order advice, not an error class; 400+ intentional hits in the
     // existing token/override cascade make it pure noise here.
     "no-descending-specificity": null,
@@ -29,7 +67,7 @@ export default {
     },
     {
       // Theme token definitions are the one source of stylesheet hex colors.
-      files: ["../ui/src/styles/base.css"],
+      files: ["../ui/src/styles/base.css", "../ui/public/themes/*.css"],
       rules: {
         "color-no-hex": null,
       },
@@ -42,7 +80,7 @@ export default {
       },
     },
     {
-      files: ["**/*.ts"],
+      files: ["**/*.{ts,tsx}"],
       customSyntax: "postcss-lit",
     },
   ],

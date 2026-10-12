@@ -1,307 +1,389 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import type { AgentWaitParams } from "../../packages/gateway-protocol/src/index.js";
-import type { SubagentCompletionToolHandoffRegistration } from "../agents/subagents/announce/subagent-announce-handoff.js";
+import { readQuestionDispatchCapability } from "../agents/harness/host-private-capabilities.js";
+import { captureGatewayToolCallerAssertion } from "../agents/tools/gateway-caller-context.js";
+import {
+  captureExternalSessionCommitGuard,
+  composeSessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
+import { isGatewayWorkerApprovalMethod } from "../infra/approval-gateway-runtime-methods.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
-import type { PluginSubagentRequesterContext } from "../plugins/runtime/subagent-requester-context.js";
-import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import { readInProcessAgentRuntimeIdentity } from "./in-process-agent-runtime-identity.js";
-import { ADMIN_SCOPE, WRITE_SCOPE } from "./operator-scopes.js";
+import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.types.js";
+import {
+  hasPreparedGatewayDeviceAuthority,
+  readGatewayDeviceRevocationGuard,
+} from "./device-revocation.js";
+import {
+  isInternalApprovalCommitGuard,
+  retainInternalApprovalCommitGuard,
+} from "./internal-approval-authority.js";
+import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
+import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import {
+  readOperatorToolGatewayAuthority,
+  runOutsideOperatorToolGatewayAuthority,
+} from "./operator-tool-gateway-authority.js";
 import {
   dispatchGatewayRequestInProcessRaw,
   type GatewayMethodDispatchResponse,
+  throwIfGatewayDispatchAborted,
   unwrapGatewayMethodDispatchResponse,
 } from "./server-in-process-dispatch.js";
 import type { AgentRunRequest } from "./server-methods/agent-request-types.js";
-import type { TrustedSessionCreation } from "./server-methods/session-creation-provenance.js";
-import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
+import { resolveInProcessGatewayDispatch } from "./server-plugin-in-process-authority.js";
 import type {
-  GatewayAgentRunTaskOwner,
-  GatewayContextResolver,
-  GatewayNodeInvokeStream,
-  GatewayRequestContext,
-  GatewayRequestOptions,
-  TrustedAgentToolCaller,
-} from "./server-methods/types.js";
-import {
-  createSyntheticPluginRuntimeClient,
-  mergePluginRuntimeClientInternal,
-} from "./server-plugin-runtime-client.js";
-import {
-  cancelSubagentCompletionToolHandoff,
-  registerSubagentCompletionToolHandoff,
-} from "./subagent-completion-tool-handoff.js";
+  DispatchGatewayMethodInProcessOptions,
+  PrepareInProcessAgentExecutionOptions,
+  ResolvedInProcessGatewayDispatch,
+} from "./server-plugin-in-process-dispatch.types.js";
+import { mergePluginRuntimeClientInternal } from "./server-plugin-runtime-client.js";
+import { cancelSubagentCompletionToolHandoff } from "./subagent-completion-tool-handoff.js";
 
-const loadInternalAgentTurnFacade = createLazyRuntimeModule(
-  () => import("./agent-turn/internal-facade.runtime.js"),
-);
+export {
+  captureOperatorToolGatewayContinuationContext,
+  runWithOperatorToolGatewayCleanupContext,
+  runWithOperatorToolGatewayContinuationContext,
+  withOperatorToolGatewayAuthority,
+} from "./server-plugin-in-process-authority.js";
 
-type OperatorToolGatewayAuthority = {
-  authenticatedUserProfile: NonNullable<
-    NonNullable<GatewayRequestOptions["client"]>["authenticatedUserProfile"]
-  >;
-  scopes: readonly string[];
-  active: boolean;
-};
-
-const operatorToolGatewayAuthority = new AsyncLocalStorage<OperatorToolGatewayAuthority>();
-
-/** Retains one verified operator identity only for its awaited tool invocation. */
-export async function withOperatorToolGatewayAuthority<T>(
-  authority: Omit<OperatorToolGatewayAuthority, "active">,
-  run: () => Promise<T>,
-): Promise<T> {
-  const activeAuthority = { ...authority, active: true };
-  try {
-    return await operatorToolGatewayAuthority.run(activeAuthority, run);
-  } finally {
-    activeAuthority.active = false;
-  }
-}
-
-type DispatchGatewayMethodInProcessOptions = {
-  allowSyntheticModelOverride?: boolean;
-  allowSyntheticCronRunContinuation?: boolean;
-  agentToolCaller?: TrustedAgentToolCaller;
-  agentRunTracking?: GatewayAgentRunTaskOwner;
-  disableSyntheticClient?: boolean;
-  expectFinal?: boolean;
-  forceSyntheticClient?: boolean;
-  internalDeliveryMediaUrls?: string[];
-  internalDeliverySuppressText?: boolean;
-  nodeInvokeStream?: GatewayNodeInvokeStream;
-  onAccepted?: (payload: unknown) => void;
-  onSignalAbort?: () => Promise<void> | void;
-  operatorRoleActor?: GatewayOperatorRoleActor;
-  pluginRuntimeOwnerId?: string;
-  pluginSubagentRequester?: PluginSubagentRequesterContext;
-  runtimePluginToolGrant?: RuntimePluginToolGrant;
-  pluginSubagentToolsAllow?: string[];
-  delegatedToolPolicyHandoff?: SubagentCompletionToolHandoffRegistration;
-  sessionCreation?: TrustedSessionCreation;
-  requireScopedClient?: boolean;
-  syntheticScopes?: string[];
-  timeoutMs?: number;
-  signal?: AbortSignal;
-  resolveGatewayContext?: GatewayContextResolver;
-};
-
-type ResolvedInProcessGatewayDispatch = {
-  client: NonNullable<GatewayRequestOptions["client"]>;
-  context: GatewayRequestContext;
-  delegatedToolPolicyHandoffId?: string;
-  isWebchatConnect: NonNullable<GatewayRequestOptions["isWebchatConnect"]>;
-};
-
-function resolveInProcessGatewayDispatch(
-  method: string,
-  options?: DispatchGatewayMethodInProcessOptions,
-): ResolvedInProcessGatewayDispatch {
-  const inheritedOperatorAuthority = operatorToolGatewayAuthority.getStore();
-  if (inheritedOperatorAuthority && !inheritedOperatorAuthority.active) {
-    throw new Error("operator tool invocation authority expired");
-  }
-  const scope = getPluginRuntimeGatewayRequestScope();
-  const scopedOperatorProfile = scope?.client?.authenticatedUserProfile;
-  const scopedRoleActor = scope?.client?.internal?.operatorRoleActor;
-  const explicitSystemActor = !scope?.client ? options?.operatorRoleActor : undefined;
-  const verifiedOperatorAuthority =
-    inheritedOperatorAuthority ??
-    (scopedOperatorProfile?.profileId
-      ? {
-          authenticatedUserProfile: scopedOperatorProfile,
-          scopes: scope?.client?.connect.scopes ?? [],
-        }
-      : undefined);
-  // Subagent launch ownership stays with the host after its target was checked;
-  // retain the verified role actor separately so target policy remains enforced.
-  const isHostOwnedAgentRun = method === "agent" && Boolean(options?.agentRunTracking);
-  const operatorAuthority = isHostOwnedAgentRun ? undefined : verifiedOperatorAuthority;
-  const operatorRoleActor: GatewayOperatorRoleActor | undefined = isHostOwnedAgentRun
-    ? inheritedOperatorAuthority
-      ? {
-          kind: "operator",
-          profileId: inheritedOperatorAuthority.authenticatedUserProfile.profileId,
-        }
-      : (scopedRoleActor ??
-        (scopedOperatorProfile?.profileId
-          ? { kind: "operator", profileId: scopedOperatorProfile.profileId }
-          : scope?.client
-            ? undefined
-            : (explicitSystemActor ?? { kind: "system" })))
-    : (scopedRoleActor ?? explicitSystemActor);
-  const context =
-    options?.resolveGatewayContext?.() ?? scope?.resolveGatewayContext?.() ?? scope?.context;
-  const isWebchatConnect = scope?.isWebchatConnect ?? (() => false);
-  if (!context) {
-    throw new Error(
-      `In-process gateway dispatch requires a gateway request scope or instance binding (method: ${method}).`,
-    );
-  }
-  if (options?.requireScopedClient === true && !scope?.client) {
-    throw new Error(
-      `In-process gateway dispatch requires an authenticated plugin request scope (method: ${method}).`,
-    );
-  }
-
-  const pluginRuntimeOwnerId =
-    typeof options?.pluginRuntimeOwnerId === "string" && options.pluginRuntimeOwnerId.trim()
-      ? options.pluginRuntimeOwnerId.trim()
-      : undefined;
-  if (
-    options?.nodeInvokeStream &&
-    (method !== "node.invoke" || !pluginRuntimeOwnerId || options.forceSyntheticClient !== true)
-  ) {
-    throw new Error("Node invoke streaming requires an owner-bound trusted synthetic client.");
-  }
-  const delegatedToolPolicyHandoffId = options?.delegatedToolPolicyHandoff
-    ? registerSubagentCompletionToolHandoff(options.delegatedToolPolicyHandoff)
-    : undefined;
-  const requestedSyntheticScopes = options?.syntheticScopes ?? [WRITE_SCOPE];
-  const operatorScopes =
-    operatorAuthority?.scopes ??
-    (operatorRoleActor?.kind === "operator"
-      ? (verifiedOperatorAuthority?.scopes ?? scope?.client?.connect.scopes ?? [])
-      : undefined);
-  const syntheticScopes = operatorScopes
-    ? requestedSyntheticScopes.filter((requestedScope) => operatorScopes.includes(requestedScope))
-    : options?.syntheticScopes;
-  if (operatorScopes?.includes(ADMIN_SCOPE) && !syntheticScopes?.includes(ADMIN_SCOPE)) {
-    syntheticScopes?.push(ADMIN_SCOPE);
-  }
-  const baseSyntheticClient = createSyntheticPluginRuntimeClient({
-    ...(operatorAuthority
-      ? { authenticatedUserProfile: operatorAuthority.authenticatedUserProfile }
-      : {}),
-    allowModelOverride: options?.allowSyntheticModelOverride === true,
-    agentToolCaller: options?.agentToolCaller,
-    agentRunTracking: options?.agentRunTracking,
-    ...(operatorRoleActor ? { operatorRoleActor } : {}),
-    cronRunContinuation: options?.allowSyntheticCronRunContinuation === true,
-    internalDeliveryMediaUrls: options?.internalDeliveryMediaUrls,
-    internalDeliverySuppressText: options?.internalDeliverySuppressText,
-    ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
-    ...(options?.pluginSubagentRequester
-      ? { pluginSubagentRequester: options.pluginSubagentRequester }
-      : {}),
-    ...(options?.runtimePluginToolGrant
-      ? { runtimePluginToolGrant: options.runtimePluginToolGrant }
-      : {}),
-    ...(options?.pluginSubagentToolsAllow
-      ? { pluginSubagentToolsAllow: options.pluginSubagentToolsAllow }
-      : {}),
-    delegatedToolPolicyHandoffId,
-    ...(options?.sessionCreation ? { sessionCreation: options.sessionCreation } : {}),
-    scopes: syntheticScopes,
-  });
-  const scopedStreamClient = options?.nodeInvokeStream ? scope?.client : undefined;
-  const agentRuntimeIdentity =
-    scopedStreamClient?.internal?.agentRuntimeIdentity ??
-    readInProcessAgentRuntimeIdentity(options);
-  const syntheticClient =
-    agentRuntimeIdentity || options?.nodeInvokeStream
-      ? {
-          ...(scopedStreamClient ?? baseSyntheticClient),
-          ...(scopedStreamClient
-            ? {
-                connect: {
-                  ...scopedStreamClient.connect,
-                  scopes: baseSyntheticClient.connect.scopes,
-                },
-              }
-            : {}),
-          internal: {
-            ...scopedStreamClient?.internal,
-            ...baseSyntheticClient.internal,
-            ...(agentRuntimeIdentity ? { agentRuntimeIdentity } : {}),
-            ...(options?.nodeInvokeStream ? { nodeInvokeStream: options.nodeInvokeStream } : {}),
-          },
-        }
-      : baseSyntheticClient;
-  const scopedClient = mergePluginRuntimeClientInternal(
-    scope?.client,
-    pluginRuntimeOwnerId ||
-      options?.agentRunTracking ||
-      options?.pluginSubagentRequester ||
-      options?.runtimePluginToolGrant ||
-      options?.pluginSubagentToolsAllow ||
-      options?.delegatedToolPolicyHandoff ||
-      scope?.client?.internal?.delegatedToolPolicyHandoffId
-      ? {
-          ...(options?.agentRunTracking ? { agentRunTracking: options.agentRunTracking } : {}),
-          ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
-          ...(options?.pluginSubagentRequester
-            ? { pluginSubagentRequester: options.pluginSubagentRequester }
-            : {}),
-          runtimePluginToolGrant: options?.runtimePluginToolGrant,
-          pluginSubagentToolsAllow: options?.pluginSubagentToolsAllow,
-          delegatedToolPolicyHandoffId,
-        }
-      : undefined,
+/** Authorizes a sessionless agent execution against its captured Gateway and caller. */
+export async function prepareInProcessAgentExecution(input: PrepareInProcessAgentExecutionOptions) {
+  const params = { ...input };
+  const inheritedAuthority = readOperatorToolGatewayAuthority();
+  const resolved = resolveInProcessGatewayDispatch(
+    "agent",
+    { agentId: params.agentId },
+    {
+      agentRunTracking: "plugin_subagent",
+      pluginRuntimeOwnerId: params.pluginRuntimeOwnerId,
+      resolveGatewayContext: params.resolveGatewayContext,
+    },
   );
-  if (options?.disableSyntheticClient === true && !scopedClient) {
-    cancelSubagentCompletionToolHandoff(delegatedToolPolicyHandoffId);
-    throw new Error(`In-process gateway dispatch requires a scoped client (method: ${method}).`);
+  // Profile verification updates the original connection. Sessionless work needs
+  // that live principal, not the dispatch copy carrying session tracking metadata.
+  const client = getPluginRuntimeGatewayRequestScope()?.client ?? resolved.client;
+  let operatorSource = await captureGatewayOperatorRunAuthority({
+    client: resolved.operatorSourceClient,
+    context: resolved.context,
+    hasCurrentClientAuthority: resolved.hasCurrentClientAuthority,
+  });
+  const assertLifetime = () => {
+    resolved.assertContextCurrent();
+    resolved.assertInvocationCurrent();
+    operatorSource?.authority.assertCurrent();
+  };
+  const assertCurrent = () => {
+    assertLifetime();
+    const error = authorizeGatewaySessionCreation({
+      cfg: resolved.context.getRuntimeConfig(),
+      agentId: params.agentId,
+      client,
+    });
+    if (error) {
+      unwrapGatewayMethodDispatchResponse("agent", { ok: false, error });
+    }
+  };
+  try {
+    assertLifetime();
+  } catch (error) {
+    operatorSource?.release();
+    throw error;
   }
   return {
-    client:
-      options?.forceSyntheticClient === true ? syntheticClient : (scopedClient ?? syntheticClient),
-    context,
-    delegatedToolPolicyHandoffId,
-    isWebchatConnect,
+    context: resolved.context,
+    get operatorAuthority() {
+      return operatorSource?.authority;
+    },
+    get signal() {
+      return operatorSource?.authority.signal
+        ? inheritedAuthority
+          ? AbortSignal.any([inheritedAuthority.signal, operatorSource.authority.signal])
+          : operatorSource.authority.signal
+        : inheritedAuthority?.signal;
+    },
+    release: () => operatorSource?.release(),
+    assertCurrent,
+    async authorize() {
+      assertLifetime();
+      const [{ authorizeGatewayRequestPreDispatch }, { createRequestGatewayMethodRegistry }] =
+        await Promise.all([
+          import("./server-methods/request-authorization.js"),
+          import("./server-methods.js"),
+        ]);
+      assertLifetime();
+      const { error } = await authorizeGatewayRequestPreDispatch({
+        method: "agent",
+        requestParams: { agentId: params.agentId },
+        client,
+        context: resolved.context,
+        methodRegistry:
+          resolved.context.getGatewayMethodRegistry?.() ?? createRequestGatewayMethodRegistry(),
+      });
+      assertLifetime();
+      if (error) {
+        unwrapGatewayMethodDispatchResponse("agent", { ok: false, error });
+      }
+      operatorSource ??= await captureGatewayOperatorRunAuthority({
+        client,
+        context: resolved.context,
+        hasCurrentClientAuthority: resolved.hasCurrentClientAuthority,
+      });
+      assertCurrent();
+    },
+    run<T>(run: () => Promise<T>): Promise<T> {
+      assertCurrent();
+      return runOutsideOperatorToolGatewayAuthority(run);
+    },
   };
 }
 
 async function withInProcessGatewayDispatch<T>(
   method: string,
+  params: unknown,
   options: DispatchGatewayMethodInProcessOptions | undefined,
   run: (resolved: ResolvedInProcessGatewayDispatch) => Promise<T>,
 ): Promise<T> {
-  const resolved = resolveInProcessGatewayDispatch(method, options);
+  const resolved = resolveInProcessGatewayDispatch(method, params, options);
+  let releaseOperatorAuthority: (() => void) | undefined;
   try {
+    const captured = await captureGatewayOperatorRunAuthority({
+      client: resolved.operatorSourceClient,
+      context: resolved.context,
+      hasCurrentClientAuthority: resolved.hasCurrentClientAuthority,
+    });
+    releaseOperatorAuthority = captured?.release;
+    resolved.assertContextCurrent();
+    resolved.assertInvocationCurrent();
+    captured?.authority.assertCurrent();
+    if (captured) {
+      resolved.client = mergePluginRuntimeClientInternal(resolved.client, {
+        operatorRunAuthority: captured.authority,
+      });
+      const withCapturedAuthority = (assertCurrent: () => void) =>
+        composeSessionSourceAssertion([assertCurrent, captured.authority.assertCurrent]);
+      resolved.assertContextCurrent = withCapturedAuthority(resolved.assertContextCurrent);
+      resolved.assertSourceCurrent = withCapturedAuthority(resolved.assertSourceCurrent);
+      const assertCreatedInputSourceCurrent = resolved.assertCreatedInputSourceCurrent;
+      if (assertCreatedInputSourceCurrent) {
+        resolved.assertCreatedInputSourceCurrent = withCapturedAuthority(
+          assertCreatedInputSourceCurrent,
+        );
+      }
+    }
     // A launched agent is autonomous; retaining tool-call AsyncLocalStorage would
     // leak the human authority into later model-selected work after closure.
-    return method === "agent" && operatorToolGatewayAuthority.getStore()
-      ? await operatorToolGatewayAuthority.exit(() => run(resolved))
+    return method === "agent" && readOperatorToolGatewayAuthority()
+      ? await runOutsideOperatorToolGatewayAuthority(() => run(resolved))
       : await run(resolved);
   } finally {
+    releaseOperatorAuthority?.();
     cancelSubagentCompletionToolHandoff(resolved.delegatedToolPolicyHandoffId);
   }
 }
 
 export type { GatewayMethodDispatchResponse } from "./server-in-process-dispatch.js";
 
+export function withInProcessGatewayRead<T>(
+  params: {
+    method: "sessions.list" | "users.list";
+    scope: PluginRuntimeGatewayRequestScope | undefined;
+    resolveGatewayContext?: DispatchGatewayMethodInProcessOptions["resolveGatewayContext"];
+    callerAuthorityError: string;
+  },
+  run: (resolved: ResolvedInProcessGatewayDispatch, assertCurrent: () => void) => Promise<T>,
+): Promise<T> {
+  const { method, scope } = params;
+  return withInProcessGatewayDispatch(
+    method,
+    {},
+    {
+      forceSyntheticClient: true,
+      pluginRuntimeOwnerId: scope?.pluginId,
+      resolveGatewayContext: params.resolveGatewayContext,
+      syntheticScopes: ["operator.read"],
+      ...(!scope?.client ? { operatorRoleActor: { kind: "system" as const } } : {}),
+    },
+    async (resolved) => {
+      const assertLifetime = () => {
+        resolved.assertContextCurrent();
+        resolved.assertInvocationCurrent();
+        scope?.signal?.throwIfAborted();
+        if (resolved.hasCurrentClientAuthority?.() === false) {
+          throw new Error(params.callerAuthorityError);
+        }
+      };
+      const [{ authorizeGatewayRequestPreDispatch }, { createRequestGatewayMethodRegistry }] =
+        await Promise.all([
+          import("./server-methods/request-authorization.js"),
+          import("./server-methods.js"),
+        ]);
+      assertLifetime();
+      const authorization = await authorizeGatewayRequestPreDispatch({
+        method,
+        requestParams: {},
+        client: resolved.client,
+        context: resolved.context,
+        methodRegistry:
+          resolved.context.getGatewayMethodRegistry?.() ?? createRequestGatewayMethodRegistry(),
+        hasCurrentClientAuthority: resolved.hasCurrentClientAuthority,
+        assertInvocationCurrent: assertLifetime,
+      });
+      try {
+        const assertCurrent = () => {
+          assertLifetime();
+          if (authorization.error) {
+            throw new Error(authorization.error.message);
+          }
+          authorization.sessionAccessAuthority?.assertCurrent();
+          authorization.sessionMutationAuthorization?.assertCurrent();
+        };
+        assertCurrent();
+        return await run(resolved, assertCurrent);
+      } finally {
+        authorization.sessionAccessAuthority?.release();
+      }
+    },
+  );
+}
+
+/** Local session input retains its operation's authorization and commit fences. */
+export async function runWithInProcessGatewaySessionMutation<T>(
+  method: "agent" | "sessions.send",
+  params: { sessionKey: string; agentId?: string },
+  run: (assertCurrent: () => void) => Promise<T> | T,
+): Promise<T> {
+  const assertCallerCurrent = captureGatewayToolCallerAssertion();
+  const requestParams =
+    method === "sessions.send" ? { key: params.sessionKey, agentId: params.agentId } : params;
+  return await withInProcessGatewayDispatch(
+    method,
+    requestParams,
+    { forceSyntheticClient: true, syntheticScopeMode: "minimum" },
+    async (resolved) => {
+      const [{ authorizeGatewayRequestPreDispatch }, { createRequestGatewayMethodRegistry }] =
+        await Promise.all([
+          import("./server-methods/request-authorization.js"),
+          import("./server-methods.js"),
+        ]);
+      const assertInvocationCurrent = () => {
+        assertCallerCurrent?.(method);
+        resolved.assertContextCurrent();
+        resolved.assertInvocationCurrent();
+      };
+      assertInvocationCurrent();
+      const authorization = await authorizeGatewayRequestPreDispatch({
+        method,
+        requestParams,
+        client: resolved.client,
+        context: resolved.context,
+        methodRegistry:
+          resolved.context.getGatewayMethodRegistry?.() ?? createRequestGatewayMethodRegistry(),
+        hasCurrentClientAuthority: resolved.hasCurrentClientAuthority,
+        assertInvocationCurrent,
+      });
+      try {
+        const assertCurrent = () => {
+          assertInvocationCurrent();
+          if (authorization.error) {
+            unwrapGatewayMethodDispatchResponse(method, {
+              ok: false,
+              error: authorization.error,
+            });
+          }
+          // Unlike the public send RPC, local notifications cannot create a session.
+          if (
+            method === "sessions.send" &&
+            !authorization.sessionMutationAuthorization?.admittedTarget
+          ) {
+            throw new Error("Session target is unavailable for notification.");
+          }
+          authorization.sessionMutationAuthorization?.assertCurrent();
+          authorization.sessionAccessAuthority?.assertCurrent();
+        };
+        assertCurrent();
+        return await run(assertCurrent);
+      } finally {
+        authorization.sessionAccessAuthority?.release();
+      }
+    },
+  );
+}
+
 export async function dispatchGatewayMethodInProcessRaw(
   method: string,
   params: unknown,
   options?: DispatchGatewayMethodInProcessOptions,
 ): Promise<GatewayMethodDispatchResponse> {
-  return await withInProcessGatewayDispatch(
-    method,
-    options,
-    async (resolved) =>
-      await dispatchGatewayRequestInProcessRaw(method, params, {
-        client: resolved.client,
-        context: resolved.context,
-        expectFinal: options?.expectFinal,
-        isWebchatConnect: resolved.isWebchatConnect,
-        methodRegistry: resolved.context.getGatewayMethodRegistry?.(),
-        onAccepted: options?.onAccepted,
-        onSignalAbort: options?.onSignalAbort,
-        requestIdPrefix: "plugin-subagent",
-        timeoutMs: options?.timeoutMs,
-        ...(options?.signal ? { signal: options.signal } : {}),
-      }),
-  );
+  return await withInProcessGatewayDispatch(method, params, options, async (resolved) => {
+    const assertExplicitRequestCurrent = composeSessionSourceAssertion(
+      [captureExternalSessionCommitGuard(options?.sessionMutationCommitGuard)],
+      (assertSource) => {
+        throwIfGatewayDispatchAborted(method, options?.signal);
+        if (resolved.hasCurrentClientAuthority?.() === false) {
+          throw new Error(`Gateway client authority closed before dispatching ${method}.`);
+        }
+        assertSource();
+      },
+      {
+        preparedCheck: (assertSource) => {
+          throwIfGatewayDispatchAborted(method, options?.signal);
+          if (
+            !hasPreparedGatewayDeviceAuthority(resolved.client, resolved.hasCurrentClientAuthority)
+          ) {
+            throw new Error(`Gateway client authority closed before dispatching ${method}.`);
+          }
+          assertSource();
+        },
+      },
+    );
+    const assertCreatedInputSourceCurrent = resolved.assertCreatedInputSourceCurrent;
+    const sessionMutationCommitGuard = composeSessionSourceAssertion([
+      resolved.assertContextCurrent,
+      resolved.assertInvocationCurrent,
+      assertExplicitRequestCurrent,
+    ]);
+    if (
+      isGatewayWorkerApprovalMethod(method) &&
+      (!options?.sessionMutationCommitGuard ||
+        isInternalApprovalCommitGuard(options.sessionMutationCommitGuard)) &&
+      (!resolved.hasCurrentClientAuthority ||
+        readGatewayDeviceRevocationGuard(resolved.hasCurrentClientAuthority))
+    ) {
+      retainInternalApprovalCommitGuard(sessionMutationCommitGuard);
+    }
+    return await dispatchGatewayRequestInProcessRaw(method, params, {
+      client: resolved.client,
+      context: resolved.context,
+      expectFinal: options?.expectFinal,
+      isWebchatConnect: resolved.isWebchatConnect,
+      hasCurrentClientAuthority: resolved.hasCurrentClientAuthority,
+      methodRegistry: resolved.context.getGatewayMethodRegistry?.(),
+      onAccepted: options?.onAccepted,
+      onExecution: options?.onExecution,
+      onSignalAbort: options?.onSignalAbort,
+      requestIdPrefix: "plugin-subagent",
+      prepareDispatchCurrent: options?.prepareDispatchCurrent,
+      assertPreparationCurrent: composeSessionSourceAssertion([
+        resolved.assertContextCurrent,
+        resolved.assertInvocationCurrent,
+      ]),
+      sessionMutationCommitGuard,
+      questionCallerRead: readQuestionDispatchCapability(options?.prepareDispatchCurrent)
+        ?.callerRead,
+      ...(assertCreatedInputSourceCurrent
+        ? {
+            assertCreatedInputSourceCurrent: composeSessionSourceAssertion([
+              assertCreatedInputSourceCurrent,
+              assertExplicitRequestCurrent,
+            ]),
+          }
+        : {}),
+      timeoutMs: options?.timeoutMs,
+      ...(options?.signal ? { signal: options.signal } : {}),
+    });
+  });
 }
 
-/** Live request context for trusted built-in tools that need direct runtime state. */
-export function getInProcessGatewayRequestContext(
-  resolveGatewayContext?: GatewayContextResolver,
-): GatewayRequestContext | undefined {
-  const scope = getPluginRuntimeGatewayRequestScope();
-  return resolveGatewayContext?.() ?? scope?.resolveGatewayContext?.() ?? scope?.context;
-}
+export { getInProcessGatewayRequestContext } from "../plugins/runtime/gateway-request-scope.js";
 
 export async function dispatchGatewayMethodInProcess<T>(
   method: string,
@@ -309,20 +391,32 @@ export async function dispatchGatewayMethodInProcess<T>(
   options?: DispatchGatewayMethodInProcessOptions,
 ): Promise<T> {
   if (method === "agent" || method === "agent.wait") {
-    return await withInProcessGatewayDispatch(method, options, async (resolved) => {
-      const { createInternalAgentTurnFacade } = await loadInternalAgentTurnFacade();
-      const facade = createInternalAgentTurnFacade({
+    return await withInProcessGatewayDispatch(method, params, options, async (resolved) => {
+      const createAgentTurnFacade = resolved.context.createAgentTurnFacade;
+      if (!createAgentTurnFacade) {
+        throw new Error(`Gateway instance agent turn facade unavailable for ${method}`);
+      }
+      // Plugins may load through another source/bundle graph. Only the captured host can
+      // create turns against its published runtime; a local import creates a second owner.
+      const facade = await createAgentTurnFacade({
+        assertContextCurrent:
+          method === "agent" ? resolved.assertSourceCurrent : resolved.assertContextCurrent,
         client: resolved.client,
-        getContext: () => resolved.context,
-        ...(resolved.context.getGatewayMethodRegistry
-          ? { getMethodRegistry: resolved.context.getGatewayMethodRegistry }
-          : {}),
         isWebchatConnect: resolved.isWebchatConnect,
       });
       return method === "agent"
         ? await facade.dispatch<T>(params as AgentRunRequest, {
+            prepareDispatchCurrent: options?.prepareDispatchCurrent,
+            assertAdmissionCurrent: composeSessionSourceAssertion([
+              resolved.assertInvocationCurrent,
+              captureExternalSessionCommitGuard(options?.sessionMutationCommitGuard),
+            ]),
+            privateCompletion: options?.privateCompletion,
+            settleWakeReplay: options?.settleWakeReplay,
+            cancelOnDeadline: options?.cancelOnDeadline,
             expectFinal: options?.expectFinal,
             onAccepted: options?.onAccepted,
+            onExecutionStarted: options?.onExecutionStarted,
             onSignalAbort: options?.onSignalAbort,
             signal: options?.signal,
             timeoutMs: options?.timeoutMs,
@@ -332,6 +426,7 @@ export async function dispatchGatewayMethodInProcess<T>(
             options?.timeoutMs,
             options?.signal,
             options?.onSignalAbort,
+            options?.prepareDispatchCurrent,
           );
     });
   }

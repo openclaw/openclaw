@@ -1,5 +1,6 @@
 // Google Meet tests cover oauth plugin behavior.
 import { createServer, type Server } from "node:http";
+import * as providerAuthRuntime from "openclaw/plugin-sdk/provider-auth-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildGoogleMeetAuthUrl,
@@ -31,6 +32,18 @@ async function closeServer(server: Server): Promise<void> {
       resolve();
     });
   });
+}
+
+function mockTokenResponse(payload: Record<string, string | number>) {
+  const fetchMock = vi.fn(
+    async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+  );
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
 }
 
 describe("Google Meet OAuth", () => {
@@ -71,17 +84,11 @@ describe("Google Meet OAuth", () => {
   });
 
   it("refreshes access tokens with a refresh-token grant", async () => {
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
-      return new Response(
-        JSON.stringify({
-          access_token: "new-access-token",
-          expires_in: 3600,
-          token_type: "Bearer",
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      );
+    const fetchMock = mockTokenResponse({
+      access_token: "new-access-token",
+      expires_in: 3600,
+      token_type: "Bearer",
     });
-    vi.stubGlobal("fetch", fetchMock);
 
     const tokens = await resolveGoogleMeetAccessToken({
       clientId: "client-id",
@@ -120,16 +127,7 @@ describe("Google Meet OAuth", () => {
   });
 
   it("refreshes cached access tokens with Date-invalid expiries", async () => {
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
-      return new Response(
-        JSON.stringify({
-          access_token: "refreshed-token",
-          expires_in: 3600,
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      );
-    });
-    vi.stubGlobal("fetch", fetchMock);
+    mockTokenResponse({ access_token: "refreshed-token", expires_in: 3600 });
 
     const tokens = await resolveGoogleMeetAccessToken({
       clientId: "client-id",
@@ -145,16 +143,10 @@ describe("Google Meet OAuth", () => {
   it("falls back when refreshed token lifetimes overflow safe milliseconds", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-29T12:00:00.000Z"));
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
-      return new Response(
-        JSON.stringify({
-          access_token: "new-access-token",
-          expires_in: Number.MAX_SAFE_INTEGER,
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      );
+    mockTokenResponse({
+      access_token: "new-access-token",
+      expires_in: Number.MAX_SAFE_INTEGER,
     });
-    vi.stubGlobal("fetch", fetchMock);
 
     const tokens = await resolveGoogleMeetAccessToken({
       clientId: "client-id",
@@ -166,16 +158,10 @@ describe("Google Meet OAuth", () => {
 
   it("bounds fallback token lifetimes when the process clock is invalid", async () => {
     vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
-      return new Response(
-        JSON.stringify({
-          access_token: "new-access-token",
-          expires_in: Number.MAX_SAFE_INTEGER,
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      );
+    mockTokenResponse({
+      access_token: "new-access-token",
+      expires_in: Number.MAX_SAFE_INTEGER,
     });
-    vi.stubGlobal("fetch", fetchMock);
 
     const tokens = await resolveGoogleMeetAccessToken({
       clientId: "client-id",
@@ -188,16 +174,7 @@ describe("Google Meet OAuth", () => {
   it("keeps explicit zero-second token lifetimes immediately stale", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-29T12:00:00.000Z"));
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
-      return new Response(
-        JSON.stringify({
-          access_token: "new-access-token",
-          expires_in: 0,
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      );
-    });
-    vi.stubGlobal("fetch", fetchMock);
+    mockTokenResponse({ access_token: "new-access-token", expires_in: 0 });
 
     const tokens = await resolveGoogleMeetAccessToken({
       clientId: "client-id",
@@ -231,6 +208,9 @@ describe("Google Meet OAuth", () => {
   });
 
   it("propagates non-listener callback failures without manual fallback", async () => {
+    // Test the SDK rejection without requiring the fixed callback port to be free.
+    const timeoutError = new Error("OAuth callback timeout");
+    vi.spyOn(providerAuthRuntime, "waitForLocalOAuthCallback").mockRejectedValueOnce(timeoutError);
     const promptInput = vi.fn(async () => "unused");
     await expect(
       waitForGoogleMeetAuthCode({
@@ -241,7 +221,7 @@ describe("Google Meet OAuth", () => {
         promptInput,
         writeLine: () => {},
       }),
-    ).rejects.toThrow(/timeout/i);
+    ).rejects.toBe(timeoutError);
     expect(promptInput).not.toHaveBeenCalled();
   });
 });

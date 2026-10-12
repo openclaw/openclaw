@@ -1,5 +1,4 @@
-// QA channel protocol helpers validate synthetic channel messages used by QA plugins.
-import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 /** Conversation shape supported by the synthetic QA channel bus. */
 export type QaBusConversationKind = "direct" | "channel" | "group";
@@ -18,6 +17,12 @@ function buildQaTargetCore(params: {
   threadId?: string | null;
 }): string {
   if (params.threadId) {
+    // Direct/group thread targets need their kind and escaped ids to survive
+    // message-action parse/build cycles; channel threads retain shipped syntax.
+    if (params.chatType !== "channel") {
+      const kind = params.chatType === "direct" ? "dm" : "group";
+      return `thread:/v1/${kind}/${encodeURIComponent(params.conversationId)}/${encodeURIComponent(params.threadId)}`;
+    }
     return `thread:${params.conversationId}/${params.threadId}`;
   }
   return `${params.chatType === "direct" ? "dm" : params.chatType}:${params.conversationId}`;
@@ -44,17 +49,30 @@ function parseQaTargetCore(
     if (!rest) {
       throw new Error(`invalid qa-channel thread target: ${normalized}`);
     }
-    const slashIndex = rest.indexOf("/");
-    if (slashIndex <= 0 || slashIndex === rest.length - 1) {
+    const versioned = rest.startsWith("/v1/");
+    const components = rest.slice(versioned ? "/v1/".length : 0).split("/");
+    const explicitKind =
+      versioned && components.length === 3 && (components[0] === "dm" || components[0] === "group")
+        ? components.shift()
+        : undefined;
+    if (components.length !== 2) {
       throw new Error(`invalid qa-channel thread target: ${normalized}`);
     }
-    const conversationId = rest.slice(0, slashIndex).trim();
-    const threadId = rest.slice(slashIndex + 1).trim();
+    let conversationId = components[0]?.trim() ?? "";
+    let threadId = components[1]?.trim() ?? "";
+    if (versioned) {
+      try {
+        conversationId = decodeURIComponent(conversationId).trim();
+        threadId = decodeURIComponent(threadId).trim();
+      } catch {
+        throw new Error(`invalid qa-channel thread target: ${normalized}`);
+      }
+    }
     if (!conversationId || !threadId) {
       throw new Error(`invalid qa-channel thread target: ${normalized}`);
     }
     return {
-      chatType: "channel",
+      chatType: versioned ? (explicitKind === "dm" ? "direct" : "group") : "channel",
       conversationId,
       threadId,
     };
@@ -291,7 +309,7 @@ function sanitizeQaBusToolCallValue(value: unknown, depth: number, key?: string)
     return QA_BUS_TOOL_CALL_REDACTED;
   }
   if (value === null || typeof value === "boolean" || typeof value === "number") {
-    return Number.isFinite(value as number) || typeof value !== "number" ? value : String(value);
+    return typeof value === "number" && !Number.isFinite(value) ? String(value) : value;
   }
   if (typeof value === "string") {
     // Tool args often embed credentials in command/header/env shapes; keep structure, not raw text.
@@ -307,9 +325,9 @@ function sanitizeQaBusToolCallValue(value: unknown, depth: number, key?: string)
     return "[truncated]";
   }
   if (Array.isArray(value)) {
-    return value.slice(0, QA_BUS_TOOL_CALL_MAX_ARRAY_LENGTH).map((entry) => {
-      return sanitizeQaBusToolCallValue(entry, depth + 1);
-    });
+    return value
+      .slice(0, QA_BUS_TOOL_CALL_MAX_ARRAY_LENGTH)
+      .map((entry) => sanitizeQaBusToolCallValue(entry, depth + 1));
   }
   if (isRecord(value)) {
     return Object.fromEntries(

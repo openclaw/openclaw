@@ -1,82 +1,33 @@
 import type { PluginDiscoveryResult } from "../plugins/discovery.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import type {
+  PluginMetadataSnapshot,
+  ResolvePluginMetadataSnapshotParams,
+} from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
-  resolvePluginRuntimeLoadContext,
-  type PluginRuntimeLoadContext,
+  createPluginRuntimeLoaderLogger,
+  getPluginRuntimeLoadContext,
+  getReusablePluginRuntimeActivation,
+  setPluginRuntimeLoadContext,
 } from "../plugins/runtime/load-context.js";
+import { resolvePluginRuntimeLoadContext } from "../plugins/runtime/load-context.resolve.js";
 import { createAgentRuntimeMetadataPluginIdScope } from "./harness/runtime-plugin-load-plan.js";
 import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
 
-const preparedPluginRuntimeLoadContext = Symbol("preparedPluginRuntimeLoadContext");
+type PreparedPluginContextInput = Pick<
+  PreparedModelRuntimeInput,
+  "config" | "workspaceDir" | "loadRuntimePlugins" | "runtimePluginSelections"
+>;
+
 const emptyPluginDiscovery: PluginDiscoveryResult = { candidates: [], diagnostics: [] };
 
-type PreparedPluginRegistry = PluginRegistry & {
-  [preparedPluginRuntimeLoadContext]?: PluginRuntimeLoadContext;
-};
-
-function setPreparedPluginRuntimeLoadContext(
-  registry: PluginRegistry,
-  context: PluginRuntimeLoadContext,
-): void {
-  (registry as PreparedPluginRegistry)[preparedPluginRuntimeLoadContext] = context;
-}
-
-function preparePluginLoadContext(
-  input: PreparedModelRuntimeInput,
+export function prepareOwnedPluginMetadataSnapshotParams(
+  input: PreparedPluginContextInput,
   env: NodeJS.ProcessEnv,
-  registry: PluginRegistry | undefined,
-  metadataSnapshot: PluginMetadataSnapshot,
-  preferBuiltPluginArtifacts: boolean,
-): PluginRuntimeLoadContext & { metadataSnapshot: PluginMetadataSnapshot } {
-  const { config } = input;
-  const workspaceDir = metadataSnapshot.workspaceDir ?? input.workspaceDir;
-  // The prepared owner already selected the exact metadata generation for this runtime.
-  // Missing discovery facts stay empty here instead of reopening cold plugin discovery.
-  const preparedMetadataSnapshot = metadataSnapshot.discovery
-    ? metadataSnapshot
-    : { ...metadataSnapshot, discovery: emptyPluginDiscovery };
-  const context = {
-    ...resolvePluginRuntimeLoadContext({
-      config,
-      env,
-      workspaceDir,
-      metadataSnapshot: preparedMetadataSnapshot,
-      manifestRegistry: metadataSnapshot.manifestRegistry,
-      preferBuiltPluginArtifacts,
-    }),
-    metadataSnapshot,
-    installRecords: extractPluginInstallRecordsFromInstalledPluginIndex(metadataSnapshot.index),
-  };
-  if (registry) {
-    // The prepared registry is the lifecycle-owned carrier; standalone callers keep the cold path.
-    setPreparedPluginRuntimeLoadContext(registry, context);
-  }
-  return context;
-}
-
-/** Resolves and attaches the plugin facts owned by one prepared workspace generation. */
-export function prepareOwnedPluginLoadContext(
-  input: PreparedModelRuntimeInput,
-  env: NodeJS.ProcessEnv,
-  registry: PluginRegistry | undefined,
-  preparedMetadataSnapshot?: PluginMetadataSnapshot,
-  preferBuiltPluginArtifacts = false,
-): PluginMetadataSnapshot {
-  const metadataSnapshot = preparedMetadataSnapshot ?? resolveColdMetadataSnapshot(input, env);
-  preparePluginLoadContext(input, env, registry, metadataSnapshot, preferBuiltPluginArtifacts);
-  return metadataSnapshot;
-}
-
-function resolveColdMetadataSnapshot(
-  input: PreparedModelRuntimeInput,
-  env: NodeJS.ProcessEnv,
-): PluginMetadataSnapshot {
-  // Slot probing preserves the published Gateway generation identity; cold callers
-  // still fall through to a fresh metadata load.
-  const resolvedMetadataSnapshot = resolvePluginMetadataSnapshot({
+): ResolvePluginMetadataSnapshotParams {
+  return {
     config: input.config,
     env,
     ...(input.workspaceDir
@@ -91,12 +42,65 @@ function resolveColdMetadataSnapshot(
           }),
         }
       : {}),
-  });
-  return resolvedMetadataSnapshot;
+  };
 }
 
-/** Reads plugin facts carried by a lifecycle-owned prepared runtime snapshot. */
-export const getPreparedPluginRuntimeLoadContext = (
+/** Resolves and attaches the plugin facts owned by one prepared workspace generation. */
+export function prepareOwnedPluginLoadContext(
+  input: PreparedPluginContextInput,
+  env: NodeJS.ProcessEnv,
   registry: PluginRegistry | undefined,
-): PluginRuntimeLoadContext | undefined =>
-  (registry as PreparedPluginRegistry | undefined)?.[preparedPluginRuntimeLoadContext];
+  preparedMetadataSnapshot?: PluginMetadataSnapshot,
+  preferBuiltPluginArtifacts = false,
+  preparedRegistry?: PluginRegistry,
+): PluginMetadataSnapshot {
+  const metadataSnapshot =
+    preparedMetadataSnapshot ??
+    resolvePluginMetadataSnapshot(prepareOwnedPluginMetadataSnapshotParams(input, env));
+  if (!registry) {
+    return metadataSnapshot;
+  }
+  const { config } = input;
+  const workspaceDir = metadataSnapshot.workspaceDir ?? input.workspaceDir;
+  const preparedActivation = getReusablePluginRuntimeActivation(preparedRegistry ?? registry, {
+    config,
+    env,
+    workspaceDir,
+    metadataSnapshot,
+  });
+  if (preparedActivation) {
+    const targetContext = getPluginRuntimeLoadContext(registry);
+    setPluginRuntimeLoadContext(registry, {
+      ...preparedActivation,
+      rawConfig: config,
+      env,
+      workspaceDir,
+      metadataSnapshot,
+      manifestRegistry: metadataSnapshot.manifestRegistry,
+      installRecords: extractPluginInstallRecordsFromInstalledPluginIndex(metadataSnapshot.index),
+      logger: targetContext?.logger ?? createPluginRuntimeLoaderLogger(),
+      expectedSourceDigests: targetContext?.expectedSourceDigests,
+      preferBuiltPluginArtifacts,
+    });
+    return metadataSnapshot;
+  }
+  // The prepared owner already selected the exact metadata generation for this runtime.
+  // Missing discovery facts stay empty here instead of reopening cold plugin discovery.
+  const discoverySnapshot = metadataSnapshot.discovery
+    ? metadataSnapshot
+    : { ...metadataSnapshot, discovery: emptyPluginDiscovery };
+  const context = {
+    ...resolvePluginRuntimeLoadContext({
+      config,
+      env,
+      workspaceDir,
+      metadataSnapshot: discoverySnapshot,
+      manifestRegistry: metadataSnapshot.manifestRegistry,
+      preferBuiltPluginArtifacts,
+    }),
+    metadataSnapshot,
+  };
+  // The prepared registry is the lifecycle-owned carrier; standalone callers keep the cold path.
+  setPluginRuntimeLoadContext(registry, context);
+  return metadataSnapshot;
+}

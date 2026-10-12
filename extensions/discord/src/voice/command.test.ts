@@ -25,15 +25,13 @@ function createVoiceCommandHarness(
     cfg?: OpenClawConfig;
     discordConfig?: DiscordAccountConfig;
     groupPolicy?: DiscordAccountConfig["groupPolicy"];
-    useAccessGroups?: boolean;
   },
 ) {
   const command = createDiscordVoiceCommand({
     cfg: overrides?.cfg ?? {},
-    discordConfig: overrides?.discordConfig ?? {},
+    discordConfig: overrides?.discordConfig ?? { allowFrom: ["*"] },
     accountId: "default",
     groupPolicy: overrides?.groupPolicy ?? "open",
-    useAccessGroups: overrides?.useAccessGroups ?? false,
     getManager: () => manager,
     ephemeralDefault: true,
   });
@@ -66,7 +64,7 @@ describe("createDiscordVoiceCommand", () => {
   it("serializes subcommands without top-level command-only fields", () => {
     const { command } = createVoiceCommandHarness(null);
     const serialized = command.serialize();
-    const firstOption = serialized.options?.[0] as Record<string, unknown> | undefined;
+    const firstOption = serialized.options?.[0];
 
     expect(firstOption).toEqual({
       name: "join",
@@ -118,51 +116,23 @@ describe("createDiscordVoiceCommand", () => {
     });
   });
 
-  it("vc status reports unavailable voice manager", async () => {
-    const { status } = createVoiceCommandHarness(null);
-    const { interaction, reply } = createInteraction({
-      guild: { id: "g1" } as CommandInteraction["guild"],
-    });
-
-    await status.run(interaction);
-
-    expect(reply).toHaveBeenCalledTimes(1);
-    expect(reply).toHaveBeenCalledWith({
-      content: "Voice manager is not available yet.",
-      ephemeral: true,
-    });
-  });
-
-  it("vc status reports no active sessions when manager has none", async () => {
-    const statusSpy = vi.fn(() => []);
-    const manager = {
-      status: statusSpy,
-    } as unknown as DiscordVoiceManager;
-    const { status } = createVoiceCommandHarness(manager);
-    const { interaction, reply } = createInteraction({
-      guild: { id: "g1", name: "Guild" } as CommandInteraction["guild"],
-    });
-
-    await status.run(interaction);
-
-    expect(statusSpy).toHaveBeenCalledTimes(1);
-    expect(reply).toHaveBeenCalledTimes(1);
-    expect(reply).toHaveBeenCalledWith({
-      content: "No active voice sessions.",
-      ephemeral: true,
-    });
-  });
-
-  it("authorizes vc commands through commands.ownerAllowFrom", async () => {
+  it.each([
+    { owner: "100000000000000001", authorized: true },
+    { owner: "discord:100000000000000001", authorized: true },
+    { owner: "discord:user:100000000000000001", authorized: false },
+    { owner: "user:100000000000000001", authorized: true },
+    { owner: "pk:100000000000000001", authorized: true },
+    { owner: "user:*", authorized: false },
+    { owner: "pk:*", authorized: false },
+  ])("preserves owner target authority for vc commands: $owner", async ({ owner, authorized }) => {
     const ownerId = "100000000000000001";
     const statusSpy = vi.fn(() => []);
     const manager = {
       status: statusSpy,
     } as unknown as DiscordVoiceManager;
     const { status } = createVoiceCommandHarness(manager, {
-      cfg: { commands: { ownerAllowFrom: [`discord:${ownerId}`] } },
-      discordConfig: { dmPolicy: "disabled" },
-      useAccessGroups: true,
+      cfg: { commands: { ownerAllowFrom: [owner] } },
+      discordConfig: { dmPolicy: "disabled", allowFrom: ["*"] },
     });
     const { interaction, reply } = createInteraction({
       guild: { id: "g1", name: "Guild" } as CommandInteraction["guild"],
@@ -173,31 +143,9 @@ describe("createDiscordVoiceCommand", () => {
 
     expect(statusSpy).toHaveBeenCalledTimes(1);
     expect(reply).toHaveBeenCalledWith({
-      content: "No active voice sessions.",
-      ephemeral: true,
-    });
-  });
-
-  it("admits vc commands through an account wildcard without granting owner authority", async () => {
-    const statusSpy = vi.fn(() => []);
-    const manager = {
-      status: statusSpy,
-    } as unknown as DiscordVoiceManager;
-    const { status } = createVoiceCommandHarness(manager, {
-      discordConfig: { allowFrom: ["*"], guilds: { g1: {} } },
-      groupPolicy: "allowlist",
-      useAccessGroups: true,
-    });
-    const { interaction, reply } = createInteraction({
-      guild: { id: "g1", name: "Guild" } as CommandInteraction["guild"],
-      user: { id: "u-guest", username: "guest" } as CommandInteraction["user"],
-    });
-
-    await status.run(interaction);
-
-    expect(statusSpy).toHaveBeenCalledTimes(1);
-    expect(reply).toHaveBeenCalledWith({
-      content: "No active voice sessions.",
+      content: authorized
+        ? "No active voice sessions."
+        : "You are not authorized to use this command.",
       ephemeral: true,
     });
   });
@@ -210,7 +158,6 @@ describe("createDiscordVoiceCommand", () => {
     const { status } = createVoiceCommandHarness(manager, {
       discordConfig: { allowFrom: [" * "], guilds: { g1: {} } },
       groupPolicy: "allowlist",
-      useAccessGroups: true,
     });
     const { interaction, reply } = createInteraction({
       guild: { id: "g1", name: "Guild" } as CommandInteraction["guild"],

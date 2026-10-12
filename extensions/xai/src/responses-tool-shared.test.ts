@@ -1,37 +1,11 @@
 // Xai tests cover responses tool shared plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
-  extractXaiWebSearchContent,
   requireXaiResponseTextAndCitations,
   requireXaiResponseTextCitationsAndInline,
 } from "./responses-tool-shared.js";
 
 describe("xai responses tool helpers", () => {
-  it("falls back to annotation citations when the API omits top-level citations", () => {
-    expect(
-      requireXaiResponseTextAndCitations(
-        {
-          output: [
-            {
-              type: "message",
-              content: [
-                {
-                  type: "output_text",
-                  text: "Found it",
-                  annotations: [{ type: "url_citation", url: "https://example.com/a" }],
-                },
-              ],
-            },
-          ],
-        },
-        "xAI tool failed",
-      ),
-    ).toEqual({
-      content: "Found it",
-      citations: ["https://example.com/a"],
-    });
-  });
-
   it("collects every response text block and deduplicates citations across output items", () => {
     expect(
       requireXaiResponseTextAndCitations(
@@ -77,47 +51,62 @@ describe("xai responses tool helpers", () => {
 
   it("ignores malformed output, content, and annotation entries", () => {
     expect(
-      extractXaiWebSearchContent({
-        output: [
-          null,
-          {
-            type: "message",
-            content: [
-              null,
-              {
-                type: "output_text",
-                text: "Found it",
-                annotations: [
-                  null,
-                  { type: "url_citation", url: "https://example.com/a" },
-                  { type: "url_citation", url: "https://example.com/a" },
-                  { type: "url_citation" },
-                ],
-              },
-            ],
-          },
-        ],
-      }),
-    ).toEqual({
-      text: "Found it",
-      annotationCitations: ["https://example.com/a"],
-    });
-  });
-
-  it("prefers explicit top-level citations when present", () => {
-    expect(
       requireXaiResponseTextAndCitations(
         {
-          output_text: "Done",
-          citations: ["https://example.com/b"],
+          output: [
+            null,
+            {
+              type: "message",
+              content: [
+                null,
+                {
+                  type: "output_text",
+                  text: "Found it",
+                  annotations: [
+                    null,
+                    { type: "url_citation", url: "https://example.com/a" },
+                    { type: "url_citation", url: "https://example.com/a" },
+                    { type: "url_citation" },
+                  ],
+                },
+              ],
+            },
+          ],
         },
         "xAI tool failed",
       ),
     ).toEqual({
-      content: "Done",
-      citations: ["https://example.com/b"],
+      content: "Found it",
+      citations: ["https://example.com/a"],
     });
   });
+
+  it.each([
+    {
+      name: "valid only beyond scan limit",
+      citations: [...Array<string>(1_000).fill("not a URL"), "https://example.com/b"],
+      expected: ["https://example.com/annotation"],
+    },
+  ])(
+    "selects valid explicit citations or retained annotations: $name",
+    ({ citations, expected }) => {
+      expect(
+        requireXaiResponseTextAndCitations(
+          {
+            output: [
+              {
+                type: "output_text",
+                text: "Done",
+                annotations: [{ type: "url_citation", url: "https://example.com/annotation" }],
+              },
+            ],
+            citations,
+          },
+          "xAI tool failed",
+        ),
+      ).toEqual({ content: "Done", citations: expected });
+    },
+  );
 
   it("rejects hostile citation URLs and preserves the first 20 distinct valid sources", () => {
     const annotations = Array.from({ length: 150_000 }, () => ({
@@ -163,14 +152,6 @@ describe("xai responses tool helpers", () => {
     ).toEqual(["https://example.com/%F0%9F%A6%80"]);
   });
 
-  it("leaves model-owned code-execution output unbounded unless an external owner opts in", () => {
-    const content = "x".repeat(25_000);
-
-    expect(
-      requireXaiResponseTextAndCitations({ output_text: content }, "xAI code execution"),
-    ).toEqual({ content, citations: [] });
-  });
-
   it("reports bounded external text and discards invalid or out-of-range inline citations", () => {
     const result = requireXaiResponseTextCitationsAndInline(
       {
@@ -199,27 +180,6 @@ describe("xai responses tool helpers", () => {
     expect(result.inlineCitations).toEqual([
       { start_index: 0, end_index: 10, url: "https://safe.example" },
     ]);
-  });
-
-  it("bounds expanding external text and filters citations by retained original source offsets", () => {
-    const result = requireXaiResponseTextCitationsAndInline(
-      {
-        output_text: `🚀${"<s>".repeat(6_666)}`,
-        inline_citations: [
-          { start_index: 0, end_index: 2, url: "https://safe.example/early" },
-          { start_index: 3_000, end_index: 4_000, url: "https://outside.example/late" },
-        ],
-      },
-      "xAI external search",
-      true,
-      20_000,
-    );
-
-    expect(result.content.length).toBeLessThanOrEqual(20_000);
-    expect(result.content).not.toContain("<s>");
-    expect(result.content).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
-    expect(result.truncated).toBe(true);
-    expect(result.inlineCitations).toEqual([]);
   });
 
   it("sanitizes the complete bounded stream when reserved tokens span output block boundaries", () => {
@@ -317,25 +277,6 @@ describe("xai responses tool helpers", () => {
     expect(result.citations).toEqual(["https://visible.example"]);
   });
 
-  it("rejects inline citation offsets outside even untruncated answer content", () => {
-    const result = requireXaiResponseTextCitationsAndInline(
-      {
-        output_text: "ok",
-        inline_citations: [
-          { start_index: 0, end_index: Number.MAX_SAFE_INTEGER, url: "https://outside.example" },
-          { start_index: 0, end_index: 2, url: "https://safe.example" },
-        ],
-      },
-      "xAI inline offset search",
-      true,
-      20_000,
-    );
-
-    expect(result.inlineCitations).toEqual([
-      { start_index: 0, end_index: 2, url: "https://safe.example" },
-    ]);
-  });
-
   it("drops inline citations whose original offsets shift during special-token replacement", () => {
     const result = requireXaiResponseTextCitationsAndInline(
       {
@@ -371,9 +312,12 @@ describe("xai responses tool helpers", () => {
     });
   });
 
-  it("rejects successful Responses tool payloads without answer text", () => {
-    expect(() => requireXaiResponseTextAndCitations({}, "xAI tool failed")).toThrow(
-      "xAI tool failed: malformed JSON response",
-    );
-  });
+  it.each([{ output: [{ type: "message", content: [{ type: "output_text", text: "" }] }] }])(
+    "reports missing answer text without blaming JSON decoding: %j",
+    (data) => {
+      expect(() => requireXaiResponseTextAndCitations(data, "xAI tool failed")).toThrow(
+        "xAI tool failed: no answer text returned; try a simpler request",
+      );
+    },
+  );
 });

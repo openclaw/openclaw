@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawProtocol
 
 struct GatewayConnectFailureBackoff {
     private var milliseconds: Double = 500
@@ -14,8 +15,20 @@ struct GatewayConnectFailureBackoff {
         }
     }
 
-    mutating func record(error: Error, pendingDeviceTokenRetry: Bool) {
+    mutating func record(
+        error: Error,
+        pendingDeviceTokenRetry: Bool,
+        supportedProtocols: ClosedRange<Int>)
+    {
         guard !Self.isCancellation(error) else { return }
+        if let rejection = error as? GatewayConnectAuthError,
+           rejection.isProtocolMismatch(supportedProtocols: supportedProtocols)
+        {
+            // A subsequent setup probe must receive the rejection, not time out
+            // behind a transport backoff left by an incompatible handshake.
+            self.reset()
+            return
+        }
         let delayMs = pendingDeviceTokenRetry ? min(self.milliseconds, 250) : self.milliseconds
         let clock = ContinuousClock()
         self.retryNotBefore = clock.now.advanced(by: .milliseconds(Int64(delayMs.rounded(.up))))
@@ -36,20 +49,41 @@ struct GatewayConnectFailureBackoff {
 }
 
 extension GatewayChannelActor {
+    public func clearConnectFailureBackoff() {
+        self.backoffMs = 500
+        self.connectFailureBackoff.reset()
+        self.connectFailureBackoffWaitTask?.cancel()
+    }
+
+    nonisolated static func minimumProtocolVersion(role: String, clientMode: String) -> Int {
+        // Node RPC frames stayed compatible across v3/v4. Operator chat surfaces require v4.
+        if role == "node", clientMode == "node" {
+            return GATEWAY_MIN_NODE_PROTOCOL_VERSION
+        }
+        return GATEWAY_MIN_PROTOCOL_VERSION
+    }
+
     func waitForConnectFailureBackoff() async throws {
         guard let deadline = self.connectFailureBackoff.deadline else { return }
         // Delay inside the shared connect attempt so callers coalesce before a
         // socket is created instead of starting independent retry bursts.
-        #if DEBUG
-        if let testConnectFailureBackoffWaitHandler {
-            try await testConnectFailureBackoffWaitHandler()
-            self.connectFailureBackoff.clear(deadline: deadline)
-            return
+        let wait = Task {
+            #if DEBUG
+            if let testConnectFailureBackoffWaitHandler = self.testConnectFailureBackoffWaitHandler {
+                try await testConnectFailureBackoffWaitHandler()
+                return
+            }
+            #endif
+            let clock = ContinuousClock()
+            if clock.now < deadline { try await clock.sleep(until: deadline) }
         }
-        #endif
-        let clock = ContinuousClock()
-        if clock.now < deadline {
-            try await clock.sleep(until: deadline)
+        self.connectFailureBackoffWaitTask = wait
+        defer { self.connectFailureBackoffWaitTask = nil }
+        do {
+            try await withTaskCancellationHandler { try await wait.value } onCancel: { wait.cancel() }
+        } catch is CancellationError {
+            // A satisfied path cancels the delay, not the shared connection attempt.
+            try Task.checkCancellation()
         }
         self.connectFailureBackoff.clear(deadline: deadline)
     }

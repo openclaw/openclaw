@@ -1,15 +1,25 @@
-// Control UI view renders config form.render screen content.
 import { html, nothing, type TemplateResult } from "lit";
+import { ref } from "lit/directives/ref.js";
 import type { ConfigUiHints } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
-import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
-import "./web-awesome-popover.ts";
 import { SECTION_META } from "./config-form.meta.ts";
 import { renderNode } from "./config-form.node.ts";
 import { matchesConfigSectionSearch, parseConfigSearchQuery } from "./config-form.search.ts";
-import { hintForPath, humanize, schemaType, type JsonSchema } from "./config-form.shared.ts";
+import {
+  hintForPath,
+  humanize,
+  localizedHintForPath,
+  schemaType,
+  type JsonSchema,
+} from "./config-form.shared.ts";
 import { splitConfigSchemaByTier } from "./config-form.tiers.ts";
-import { renderSettingsEmpty, renderSettingsPage } from "./settings-ui.ts";
+import {
+  renderLearnMoreLink,
+  renderSettingsEmpty,
+  renderSettingsHelpTrigger,
+  renderSettingsPage,
+} from "./settings-ui.ts";
+import { syncPopoverLabel } from "./web-awesome-popover.ts";
 
 type ConfigFormProps = {
   schema: JsonSchema | null;
@@ -23,51 +33,37 @@ type ConfigFormProps = {
   activeSubsection?: string | null;
   showAdvanced?: boolean;
   forceAdvancedSection?: string | null;
-  /** Required: the collapsed-advanced ghost row's only action. Optional would
-   *  permit an inert "Show advanced" control that strands hidden settings. */
+  /** Required: the collapsed advanced disclosure's only action. Optional would
+   *  permit an inert control that strands hidden settings. */
   onShowAdvanced: () => void;
   /** Paired expanded-state action. Omit when search or a forced route owns the reveal. */
   onHideAdvanced?: () => void;
   /** Inline actions rendered next to the active section heading (e.g. env peek). */
   sectionActions?: TemplateResult;
+  showSectionDocs?: boolean;
   /** A Control UI-owned row rendered before common schema rows in the active section. */
   sectionPrelude?: TemplateResult;
   /** Composite pages render custom rows above the form; an empty schema
    *  section must stay silent there instead of claiming the page is empty. */
   embedded?: boolean;
   revealSensitive?: boolean;
+  /** Render sensitive strings as editable password inputs instead of redacted read-only text. */
+  maskSensitive?: boolean;
   isSensitivePathRevealed?: (path: Array<string | number>) => boolean;
   onToggleSensitivePath?: (path: Array<string | number>) => void;
   onPatch: (path: Array<string | number>, value: unknown) => void;
   onRemove?: (path: Array<string | number>) => void;
 };
 
-function renderAdvancedDivider(onHideAdvanced: (() => void) | undefined) {
-  return html`<div class="config-advanced-divider">
-    <span>${t("configForm.advancedDivider")}</span>
-    ${onHideAdvanced
-      ? html`<button
-          type="button"
-          class="config-advanced-divider__toggle config-show-advanced active"
-          aria-pressed="true"
-          @click=${() => onHideAdvanced()}
-        >
-          ${t("common.hideAdvanced")}
-        </button>`
-      : nothing}
-  </div>`;
-}
-
 /** Common/advanced split body shared by the config page and channel forms so
- *  every schema surface hides advanced settings behind the same ghost row. */
+ *  every schema surface uses the same native disclosure. */
 export function renderConfigTierGroups(params: {
   schema: JsonSchema;
   path: Array<string | number>;
   hints: ConfigUiHints;
   revealAdvanced: boolean;
   onShowAdvanced: () => void;
-  /** Surfaces with collapsible advanced fields pass this so the expanded
-   *  divider remains the single inverse of the collapsed ghost action. */
+  /** Surfaces with collapsible advanced fields pass this as the inverse action. */
   onHideAdvanced?: () => void;
   renderTier: (node: JsonSchema) => TemplateResult | typeof nothing;
   commonPrelude?: TemplateResult;
@@ -77,66 +73,54 @@ export function renderConfigTierGroups(params: {
     path: params.path.map(String),
     hints: params.hints,
   });
-  // An advanced-only schema needs no separator, but a surface whose only
-  // collapse control lives on the divider would otherwise strand the tier open.
-  const showDivider = Boolean(split.common) || Boolean(params.onHideAdvanced);
   // The wrapper owns tier spacing so embedders without a settings-section
   // parent (the channel forms) do not render the tiers flush against each other.
   return html`
     <div class="config-tier-groups">
-      ${split.common || params.commonPrelude
-        ? html`<div class="settings-group">
-            ${params.commonPrelude ?? nothing}${split.common
-              ? params.renderTier(split.common)
-              : nothing}
-          </div>`
-        : nothing}
-      ${split.advanced && split.advancedLeafCount > 0
-        ? params.revealAdvanced
-          ? html`
-              ${showDivider ? renderAdvancedDivider(params.onHideAdvanced) : nothing}
-              <div class="settings-group">${params.renderTier(split.advanced)}</div>
-            `
-          : html`
-              <button
-                type="button"
-                class="config-advanced-ghost config-show-advanced"
-                aria-pressed="false"
-                @click=${() => params.onShowAdvanced()}
-              >
-                <span class="config-advanced-ghost__count">
-                  ${t(
-                    split.advancedLeafCount === 1
-                      ? "configForm.advancedHidden"
-                      : "configForm.advancedHiddenPlural",
-                    { count: String(split.advancedLeafCount) },
-                  )}
-                </span>
-                <span class="config-advanced-ghost__action">${t("configForm.showAdvanced")}</span>
-              </button>
-            `
-        : nothing}
+      ${
+        split.common || params.commonPrelude
+          ? html`<div class="settings-group">
+              ${params.commonPrelude ?? nothing}${
+                split.common ? params.renderTier(split.common) : nothing
+              }
+            </div>`
+          : nothing
+      }
+      ${
+        split.advanced
+          ? html`<details
+              class="config-advanced-disclosure"
+              ?open=${params.revealAdvanced}
+              @toggle=${(event: Event) => {
+                const disclosure = event.currentTarget;
+                if (!(disclosure instanceof HTMLDetailsElement)) {
+                  return;
+                }
+                if (disclosure.open === params.revealAdvanced) {
+                  return;
+                }
+                if (disclosure.open) {
+                  params.onShowAdvanced();
+                } else if (params.onHideAdvanced) {
+                  params.onHideAdvanced();
+                } else {
+                  disclosure.open = true;
+                }
+              }}
+            >
+              <summary class="settings-section__heading config-advanced-disclosure__summary">
+                ${t("configForm.advancedSettings")}
+              </summary>
+              ${
+                params.revealAdvanced
+                  ? html`<div class="settings-group">${params.renderTier(split.advanced)}</div>`
+                  : nothing
+              }
+            </details>`
+          : nothing
+      }
     </div>
   `;
-}
-
-function matchesSearch(params: {
-  key: string;
-  schema: JsonSchema;
-  sectionValue: unknown;
-  uiHints: ConfigUiHints;
-  query: string;
-}): boolean {
-  const meta = SECTION_META[params.key];
-  return matchesConfigSectionSearch({
-    key: params.key,
-    schema: params.schema,
-    value: params.sectionValue,
-    hints: params.uiHints,
-    query: params.query,
-    label: meta?.label,
-    description: meta?.description,
-  });
 }
 
 export function renderConfigForm(props: ConfigFormProps) {
@@ -170,12 +154,14 @@ export function renderConfigForm(props: ConfigFormProps) {
     }
     if (
       searchQuery &&
-      !matchesSearch({
+      !matchesConfigSectionSearch({
         key,
         schema: node,
-        sectionValue: value[key],
-        uiHints: props.uiHints,
+        value: value[key],
+        hints: props.uiHints,
         query: searchQuery,
+        label: SECTION_META[key]?.label,
+        description: SECTION_META[key]?.description,
       })
     ) {
       return false;
@@ -223,7 +209,7 @@ export function renderConfigForm(props: ConfigFormProps) {
     path: Array<string | number>;
   }) => {
     const sectionHint = hintForPath(params.path.slice(0, 1), props.uiHints);
-    const docsUrl = sectionHint?.docsUrl;
+    const docsUrl = props.showSectionDocs === false ? undefined : sectionHint?.docsUrl;
     const docsTriggerId = `settings-section-help-${params.id}`;
     const revealAdvanced =
       props.showAdvanced === true ||
@@ -242,6 +228,7 @@ export function renderConfigForm(props: ConfigFormProps) {
         showHeaderMeta: true,
         searchCriteria,
         revealSensitive: props.revealSensitive ?? false,
+        maskSensitive: props.maskSensitive,
         isSensitivePathRevealed: props.isSensitivePathRevealed,
         onToggleSensitivePath: props.onToggleSensitivePath,
         onPatch: props.onPatch,
@@ -251,45 +238,46 @@ export function renderConfigForm(props: ConfigFormProps) {
       <section class="settings-section" id=${params.id}>
         <div class="settings-section__header">
           <h2 class="settings-section__heading">${params.label}</h2>
-          ${props.sectionActions || docsUrl
-            ? html`<div class="settings-section__actions">
-                ${props.sectionActions ?? nothing}
-                ${docsUrl
-                  ? html`
-                      <span class="settings-section__docs">
-                        <button
-                          id=${docsTriggerId}
-                          type="button"
-                          class="settings-section__help-button"
-                          aria-label=${t("configForm.sectionHelp", { section: params.label })}
-                          aria-haspopup="dialog"
-                        >
-                          <span aria-hidden="true">?</span>
-                        </button>
-                        <wa-popover
-                          class="settings-section__help-popover"
-                          for=${docsTriggerId}
-                          placement="bottom-end"
-                        >
-                          <div class="settings-section__help-panel">
-                            ${params.description ? html`<p>${params.description}</p>` : nothing}
-                            <a
-                              href=${docsUrl}
-                              target=${EXTERNAL_LINK_TARGET}
-                              rel=${buildExternalLinkRel()}
-                              >${t("configForm.readGuide")} <span aria-hidden="true">→</span></a
+          ${
+            props.sectionActions || docsUrl
+              ? html`<div class="settings-section__actions">
+                  ${props.sectionActions ?? nothing}
+                  ${
+                    docsUrl
+                      ? html`
+                          <span class="settings-section__docs">
+                            ${renderSettingsHelpTrigger({
+                              id: docsTriggerId,
+                              label: t("configForm.sectionHelp", { section: params.label }),
+                              tooltip: t("configForm.sectionHelp", { section: params.label }),
+                              icon: "question",
+                              popoverId: `settings-section-help-popover-${params.id}`,
+                            })}
+                            <wa-popover
+                              ${ref(syncPopoverLabel)}
+                              id=${`settings-section-help-popover-${params.id}`}
+                              class="settings-section__help-popover"
+                              for=${docsTriggerId}
+                              placement="bottom-end"
                             >
-                          </div>
-                        </wa-popover>
-                      </span>
-                    `
-                  : nothing}
-              </div>`
-            : nothing}
+                              <div class="settings-section__help-panel">
+                                ${params.description ? html`<p>${params.description}</p>` : nothing}
+                                ${renderLearnMoreLink(docsUrl)}
+                              </div>
+                            </wa-popover>
+                          </span>
+                        `
+                      : nothing
+                  }
+                </div>`
+              : nothing
+          }
         </div>
-        ${params.description
-          ? html`<p class="settings-section__desc">${params.description}</p>`
-          : nothing}
+        ${
+          params.description
+            ? html`<p class="settings-section__desc">${params.description}</p>`
+            : nothing
+        }
         ${renderConfigTierGroups({
           schema: params.node,
           path: params.path,
@@ -313,7 +301,7 @@ export function renderConfigForm(props: ConfigFormProps) {
     subsectionContext
       ? (() => {
           const { sectionKey, subsectionKey, schema: node } = subsectionContext;
-          const hint = hintForPath([sectionKey, subsectionKey], props.uiHints);
+          const hint = localizedHintForPath([sectionKey, subsectionKey], props.uiHints);
           const label = hint?.label ?? node.title ?? humanize(subsectionKey);
           const description = hint?.help ?? node.description ?? "";
           const sectionValue = value[sectionKey];
@@ -331,9 +319,10 @@ export function renderConfigForm(props: ConfigFormProps) {
           });
         })()
       : filteredEntries.map(([key, node]) => {
+          const hint = localizedHintForPath([key], props.uiHints);
           const meta = SECTION_META[key] ?? {
-            label: key.charAt(0).toUpperCase() + key.slice(1),
-            description: node.description ?? "",
+            label: hint?.label ?? key.charAt(0).toUpperCase() + key.slice(1),
+            description: hint?.help ?? node.description ?? "",
           };
 
           return renderSection({

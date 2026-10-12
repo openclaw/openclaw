@@ -30,15 +30,11 @@ From the OpenClaw repo root:
 ```bash
 pnpm docs:list
 git status --short --branch
-readlink node_modules
 pnpm changed:lanes --json
 ```
 
-In Codex worktrees under `.codex/worktrees`, `node_modules` must be a symlink to
-the main OpenClaw checkout. Do not run `pnpm install` there. For broad or
-package-heavy proof, use a prepared normal checkout on the current dedicated
-Linux worker, Blacksmith Testbox, or GitHub Actions according to the required
-artifact and capability boundary.
+Follow [`openclaw-testing`](../openclaw-testing/SKILL.md) for dependency
+ownership and the choice of local or remote proof.
 
 ## Runner Choice
 
@@ -68,7 +64,6 @@ pnpm run test:extensions:package-boundary:compile
 pnpm test:docker:plugins
 OPENCLAW_PLUGINS_E2E_CLAWHUB=0 pnpm test:docker:plugins
 pnpm test:docker:plugin-update
-pnpm test:docker:bundled-channel-deps:fast
 ```
 
 For full bundled install/uninstall proof, shard the packaged sweep:
@@ -79,7 +74,7 @@ OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX=<0-7> \
 pnpm test:docker:bundled-plugin-install-uninstall
 ```
 
-Expected current packaged scope: 116 public bundled plugins over shards `0-7`.
+This example partitions the selected package's plugin inventory over shards `0-7`.
 Private QA plugins are source-mode only unless a package explicitly includes
 them.
 
@@ -88,22 +83,23 @@ them.
 Use this matrix for pre-release signoff. Record pass/fail, run URL/Testbox ID,
 package SHA/version, and skipped-live reason.
 
-| Surface              | Proof                                                           | Preferred runner                     |
-| -------------------- | --------------------------------------------------------------- | ------------------------------------ |
-| Package artifact     | Package Acceptance `suite_profile=package` or custom lanes      | GitHub Actions                       |
-| Bundled lifecycle    | 8-shard `test:docker:bundled-plugin-install-uninstall`          | Testbox or release Docker            |
-| External plugins     | `test:docker:plugins` and `plugins-offline`                     | Testbox/package acceptance           |
-| Update no-op         | `test:docker:plugin-update`                                     | Testbox/package acceptance           |
-| Channel runtime deps | `test:docker:bundled-channel-deps:fast` plus key channels       | Testbox/package acceptance           |
-| Doctor/fix           | seeded bad configs + `doctor --fix --non-interactive`           | new Docker/Testbox harness           |
-| Config round-trip    | `config set/get`, inspect, doctor, reload, diff hash            | new Docker/Testbox harness           |
-| Gateway bootstrap    | clean `HOME`, plugin groups enabled/disabled, status JSON       | new Docker/Testbox harness           |
-| SDK compatibility    | directory, tgz, and `file:` external plugins using SDK subpaths | `test:docker:plugins` plus new smoke |
-| Live-ish             | redacted provider/channel probes only for present env           | Testbox live lanes                   |
+| Surface           | Proof                                                           | Preferred runner                     |
+| ----------------- | --------------------------------------------------------------- | ------------------------------------ |
+| Package artifact  | Package Acceptance `suite_profile=package` or custom lanes      | GitHub Actions                       |
+| Bundled lifecycle | Sharded `test:docker:bundled-plugin-install-uninstall`          | Testbox or release Docker            |
+| External plugins  | `test:docker:plugins` and `plugins-offline`                     | Testbox/package acceptance           |
+| Update no-op      | `test:docker:plugin-update`                                     | Testbox/package acceptance           |
+| Doctor/fix        | seeded bad configs + `doctor --fix --non-interactive`           | new Docker/Testbox harness           |
+| Config round-trip | `config set/get`, inspect, doctor, reload, diff hash            | new Docker/Testbox harness           |
+| Gateway bootstrap | clean `HOME`, plugin groups enabled/disabled, status JSON       | new Docker/Testbox harness           |
+| SDK compatibility | directory, tgz, and `file:` external plugins using SDK subpaths | `test:docker:plugins` plus new smoke |
+| Live-ish          | redacted provider/channel probes only for present env           | Testbox live lanes                   |
 
 ## Package Acceptance Plan
 
-Use this when validating a release branch, beta, or candidate package:
+Full Release Validation owns final candidate qualification with Q=C and the
+exact publication tarballs. Use standalone Package Acceptance for diagnostics
+or postpublish confidence, not as a replacement candidate qualification:
 
 ```bash
 gh workflow run package-acceptance.yml \
@@ -113,16 +109,19 @@ gh workflow run package-acceptance.yml \
   -f source=ref \
   -f package_ref=<branch-or-sha> \
   -f suite_profile=custom \
-  -f docker_lanes='plugins-offline plugin-update bundled-channel-deps-compat doctor-switch update-channel-switch config-reload mcp-channels npm-onboard-channel-agent' \
+  -f docker_lanes='plugins-offline plugin-update doctor-switch update-channel-switch config-reload mcp-channels npm-onboard-channel-agent' \
   -f telegram_mode=mock-openai
 ```
 
-Use `source=npm -f package_spec=openclaw@beta` for published beta proof. Keep
-`workflow_ref` as trusted current harness code unless the release process says
-otherwise.
+Use `source=npm -f package_spec=openclaw@beta` for published beta proof. These
+standalone diagnostic/confidence runs may use trusted current harness code;
+candidate qualification must retain the frozen candidate's harness instead.
 
-For extended-stable, branch-owned Full Release Validation is publication
-evidence; Package Acceptance is a post-publish selector smoke:
+For extended-stable shared publication, require complete exact-target Full
+Release Validation from the admitted candidate-owned `release-ci/*` harness at Q=C,
+with trusted P admission and publication tooling separate. Direct
+canonical-branch or `main` producers do not satisfy the protected publisher.
+Package Acceptance is a post-publish selector smoke:
 
 ```bash
 gh workflow run package-acceptance.yml \
@@ -138,15 +137,21 @@ gh workflow run package-acceptance.yml \
 Record the resolved version. Still verify every package and selector in the
 tag's `all-publishable` inventory; one smoke is not registry readback.
 
-## Plugin npm Artifact Preflight
+## Plugin npm Artifact Qualification
 
-Use the trusted `main` workflow to prepare and read back a selected plugin npm
-artifact from an exact release SHA without entering any publish approval,
-environment, secret, OIDC, npm mutation, or ClawHub mutation path:
+For a publication candidate, Full Release Validation owns plugin npm artifact
+qualification. Supply its publication selection at dispatch; the all-group
+parent invokes `plugin-npm-release.yml` in artifact-only mode against the exact
+Release SHA, requires successful tarball readback, and records the immutable
+aggregate descriptor in `publicationArtifacts.pluginNpm`. Release Prepare and
+publication must adopt that exact descriptor rather than repacking plugins.
+
+Use a standalone trusted-workflow preflight only for a focused diagnostic or a
+selected-plugin repair that is outside a regular publication candidate:
 
 ```bash
 release_sha="$(git rev-parse origin/release/2026.7.1)"
-ghx workflow run plugin-npm-release.yml \
+gh workflow run plugin-npm-release.yml \
   --repo openclaw/openclaw \
   --ref main \
   -f preflight_only=true \
@@ -161,13 +166,25 @@ Do not pass `release_publish_run_id`. Require the workflow to finish
 and source SHA. The workflow first creates the staging/readback artifact
 `plugin-npm-package-source-<source-sha>-<extension-id>` containing
 `npm-pack.json`, `preflight-manifest.json`, and the tarball. It then uploads the
-final consumer artifact `plugin-npm-package-<extension-id>-<version>` containing
-the tarball and `plugin-npm-package-evidence.json`.
+final consumer artifact
+`plugin-npm-package-<extension-id>-<version>-<route>-<run-id>-<attempt>` containing
+the tarball and `plugin-publication-manifest.json`.
 
-Record the final artifact name and digest separately. In the v2 evidence,
-`publicationArtifact` binds the staging artifact id, name, digest, source and
-packed `package.json` hashes, and tarball hash. This proof is validation-only;
-it does not authorize or stage publication. For an already-published version,
+Record the final artifact name and digest separately. The manifest uses
+`openclaw.plugin-publication-artifact/v1` and records the target SHA, package
+manifest hashes, publication route and policy, and tarball hashes and inventory.
+This standalone proof is validation-only; it does not authorize or stage
+publication and cannot replace Full Release Validation's manifest-bound
+descriptor. The artifact inventory, rather than the unpacked source tree, is
+the security and package-content boundary: source-only fixtures are irrelevant.
+Package-owned test and fixture paths outside shipped runtime and skill assets
+fail qualification; shipped runtime remains security-scanned. Bundled
+`node_modules` stays with dependency evidence rather than plugin-source policy.
+The separate `trusted_publisher_preflight=true` OIDC check requires a protected
+`release-publish/<tooling-sha12>-<epoch>` dispatch tag and runs in `npm-publish`.
+Real publication also requires that tooling tag; a direct human dispatch waits
+for its `npm-release` approval job before publishing.
+For an already-published version,
 require npm `dist.integrity` and `dist.shasum` to match the verified tarball.
 Treat only missing or provably older dist-tags as repairable; newer or
 incomparable selectors are a blocker.
@@ -186,8 +203,10 @@ that uses one package tarball and sharded plugin lists. Per plugin:
 7. `plugins registry --refresh`.
 8. `doctor --non-interactive`.
 9. `plugins uninstall <id> --force`.
-10. Assert no config entry, allow/deny residue, install record, managed dir, or
-    bundled `dist/extensions/...` load path remains.
+10. Assert the plugin's `plugins.entries` value is exactly `{ enabled: false }`,
+    while its allow/deny entries, install record, managed directory, and bundled
+    runtime load paths are gone. Use the existing harness's source-qualified
+    uninstall expectations for historical targets.
 11. Assert diagnostics contain no `level: "error"` and output redacts
     secret-looking values.
 

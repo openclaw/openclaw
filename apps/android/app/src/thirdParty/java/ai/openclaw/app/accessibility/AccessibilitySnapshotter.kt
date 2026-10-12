@@ -20,23 +20,9 @@ internal data class AccessibilitySnapshotCapture(
 internal class AccessibilitySnapshotter {
   fun capture(service: OpenClawAccessibilityService): AccessibilitySnapshotCapture {
     val root = service.rootInActiveWindow
-    if (root == null) {
-      return AccessibilitySnapshotCapture(
-        snapshot =
-          MobileUiSnapshot(
-            id = UUID.randomUUID().toString(),
-            capturedAtMs = System.currentTimeMillis(),
-            packageName = null,
-            windowTitle = null,
-            nodes = emptyList(),
-          ),
-        nodesByRef = emptyMap(),
-      )
-    }
-
-    val packageName = root.packageName?.toString()
-    val windowTitle = root.readWindowTitle()
-    val normalized = AccessibilityTreeNormalizer.normalize(AndroidAccessibilityNode(root))
+    val packageName = root?.packageName?.toString()
+    val windowTitle = root?.readWindowTitle()
+    val normalized = root?.let { AccessibilityTreeNormalizer.normalize(AndroidAccessibilityNode(it)) }
     return AccessibilitySnapshotCapture(
       snapshot =
         MobileUiSnapshot(
@@ -44,12 +30,14 @@ internal class AccessibilitySnapshotter {
           capturedAtMs = System.currentTimeMillis(),
           packageName = packageName,
           windowTitle = windowTitle,
-          nodes = normalized.nodes,
+          nodes = normalized?.nodes.orEmpty(),
         ),
       nodesByRef =
-        normalized.retainedNodes.mapValues { (_, node) ->
-          (node as AndroidAccessibilityNode).platformNode
-        },
+        normalized
+          ?.retainedNodes
+          ?.mapValues { (_, node) ->
+            (node as AndroidAccessibilityNode).platformNode
+          }.orEmpty(),
     )
   }
 }
@@ -137,12 +125,6 @@ internal object AccessibilityTreeNormalizer {
       while (pending.isNotEmpty()) {
         val item = pending.removeLast()
         current = item.node
-        if (item.depth > MAX_DEPTH) {
-          current.recycle()
-          current = null
-          continue
-        }
-
         val bounds = current.boundsInScreen
         val rawText = current.text
         val rawDescription = current.contentDescription
@@ -216,12 +198,19 @@ internal fun shouldRedactText(
   val inputClass = inputType and InputType.TYPE_MASK_CLASS
   val variation = inputType and InputType.TYPE_MASK_VARIATION
   return when (inputClass) {
-    InputType.TYPE_CLASS_TEXT ->
+    InputType.TYPE_CLASS_TEXT -> {
       variation == InputType.TYPE_TEXT_VARIATION_PASSWORD ||
         variation == InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD ||
         variation == InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD
-    InputType.TYPE_CLASS_NUMBER -> variation == InputType.TYPE_NUMBER_VARIATION_PASSWORD
-    else -> false
+    }
+
+    InputType.TYPE_CLASS_NUMBER -> {
+      variation == InputType.TYPE_NUMBER_VARIATION_PASSWORD
+    }
+
+    else -> {
+      false
+    }
   }
 }
 

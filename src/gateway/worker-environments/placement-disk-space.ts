@@ -3,7 +3,11 @@ import type { SessionPlacementDiskSpace } from "../../../packages/gateway-protoc
 import { formatErrorMessage } from "../../infra/errors.js";
 import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
-import type { WorkerPlacementDiskSpaceReader } from "./placement-projector.js";
+import { StaleWorkerBuildError } from "./admission.js";
+import type {
+  WorkerPlacementDiskSpaceReader,
+  WorkerPlacementRunnerAvailabilityReader,
+} from "./placement-projector.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerSessionPlacementStore,
@@ -28,16 +32,12 @@ fs.statfs(process.argv[1], { bigint: true }, (error, stats) => {
 
 type ActivePlacement = Extract<WorkerSessionPlacementRecord, { state: "active" }>;
 
-type DiskSpaceObservation = {
-  sessionId: string;
-  generation: number;
-  environmentId: string;
-  activeOwnerEpoch: number;
+type DiskSpaceObservation = ActivePlacement & {
   snapshot: SessionPlacementDiskSpace;
 };
 
 function hasExactBinding(
-  observation: DiskSpaceObservation,
+  observation: ActivePlacement,
   placement: WorkerSessionPlacementRecord | undefined,
 ): placement is ActivePlacement {
   return (
@@ -51,11 +51,11 @@ function hasExactBinding(
 
 function parseSafeByteCount(value: unknown, field: string): number {
   if (typeof value !== "string" || !/^(?:0|[1-9]\d*)$/u.test(value)) {
-    throw new Error(`Worker disk-space probe returned an invalid ${field}`);
+    throw new Error(`Worker disk-space check returned an invalid ${field}`);
   }
   const parsed = BigInt(value);
   if (parsed > BigInt(Number.MAX_SAFE_INTEGER)) {
-    throw new Error(`Worker disk-space probe ${field} exceeds the protocol limit`);
+    throw new Error(`Worker disk-space check ${field} exceeds the protocol limit`);
   }
   return Number(parsed);
 }
@@ -84,15 +84,15 @@ function parseDiskSpaceProbe(stdout: string, observedAtMs: number): SessionPlace
   try {
     value = JSON.parse(stdout);
   } catch {
-    throw new Error("Worker disk-space probe returned invalid JSON");
+    throw new Error("Worker disk-space check returned invalid JSON");
   }
   if (!isRecord(value)) {
-    throw new Error("Worker disk-space probe returned an invalid result");
+    throw new Error("Worker disk-space check returned an invalid result");
   }
   const availableBytes = parseSafeByteCount(value.availableBytes, "available byte count");
   const totalBytes = parseSafeByteCount(value.totalBytes, "total byte count");
   if (availableBytes > totalBytes) {
-    throw new Error("Worker disk-space probe returned more available bytes than total bytes");
+    throw new Error("Worker disk-space check returned more available bytes than total bytes");
   }
   return {
     status: classifyDiskSpace(availableBytes, totalBytes),
@@ -103,12 +103,14 @@ function parseDiskSpaceProbe(stdout: string, observedAtMs: number): SessionPlace
 }
 
 export function createWorkerPlacementDiskSpaceMonitor(params: {
-  placements: Pick<WorkerSessionPlacementStore, "get" | "list">;
+  placements: Pick<WorkerSessionPlacementStore, "get" | "readChangeSnapshot" | "readProjection">;
   environments: Pick<WorkerEnvironmentService, "startTunnel">;
+  runnerAvailability: Pick<WorkerPlacementRunnerAvailabilityReader, "read">;
   warn: (message: string) => void;
   now?: () => number;
 }) {
   const observations = new Map<string, DiskSpaceObservation>();
+  const staleBindings = new Map<string, ActivePlacement>();
   const now = params.now ?? Date.now;
   let observationVersion = 0;
 
@@ -120,6 +122,14 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
   };
 
   const probe = async (placement: ActivePlacement): Promise<void> => {
+    // A stale worker build cannot recover until its placement binding changes.
+    const stale = staleBindings.get(placement.sessionId);
+    if (stale && hasExactBinding(stale, placement)) {
+      return;
+    }
+    if (params.runnerAvailability.read(placement)?.status === "offline") {
+      return;
+    }
     const tunnel = await params.environments.startTunnel({
       environmentId: placement.environmentId,
       ownerEpoch: placement.activeOwnerEpoch,
@@ -130,7 +140,7 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
       timeoutMs: DISK_SPACE_PROBE_TIMEOUT_MS,
     });
     if (result.termination !== "exit" || result.code !== 0) {
-      throw new Error("Worker disk-space probe command failed");
+      throw new Error("Worker disk-space check command failed");
     }
     const snapshot = parseDiskSpaceProbe(
       result.stdout,
@@ -142,24 +152,17 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
     if (!hasExactBinding(candidate, current)) {
       return;
     }
-    const previous = observations.get(placement.sessionId);
-    const previousStatus =
-      previous && hasExactBinding(previous, current) ? previous.snapshot.status : undefined;
-    const snapshotChanged =
-      !previous ||
-      !hasExactBinding(previous, current) ||
-      previous.snapshot.status !== snapshot.status ||
-      previous.snapshot.availableBytes !== snapshot.availableBytes ||
-      previous.snapshot.totalBytes !== snapshot.totalBytes ||
-      previous.snapshot.observedAtMs !== snapshot.observedAtMs;
+    const previous = read(current);
     observations.set(placement.sessionId, candidate);
-    if (snapshotChanged) {
+    if (
+      !previous ||
+      previous.availableBytes !== snapshot.availableBytes ||
+      previous.totalBytes !== snapshot.totalBytes ||
+      previous.observedAtMs !== snapshot.observedAtMs
+    ) {
       observationVersion += 1;
     }
-    if (
-      previousStatus !== snapshot.status &&
-      (previousStatus !== undefined || snapshot.status !== "ok")
-    ) {
+    if (previous?.status !== snapshot.status && (previous || snapshot.status !== "ok")) {
       emitSessionLifecycleEvent({
         sessionKey: placement.sessionKey,
         agentId: placement.agentId,
@@ -169,14 +172,23 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
   };
 
   const sweep = async (): Promise<void> => {
-    const placements = params.placements.list();
-    const active = placements.filter(
-      (placement): placement is ActivePlacement => placement.state === "active",
+    const identities = await params.placements.readChangeSnapshot();
+    const projection = await params.placements.readProjection(
+      identities.map(({ sessionId }) => sessionId),
+      { current: true },
     );
+    const active = identities
+      .map(({ sessionId }) => projection.placements.get(sessionId))
+      .filter((placement): placement is ActivePlacement => placement?.state === "active");
     for (const [sessionId, observation] of observations) {
       if (!hasExactBinding(observation, params.placements.get(sessionId))) {
         observations.delete(sessionId);
         observationVersion += 1;
+      }
+    }
+    for (const [sessionId, binding] of staleBindings) {
+      if (!hasExactBinding(binding, params.placements.get(sessionId))) {
+        staleBindings.delete(sessionId);
       }
     }
     const tasks = active.map((placement) => () => probe(placement));
@@ -185,8 +197,11 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
       limit: DISK_SPACE_PROBE_CONCURRENCY,
       onTaskError: (error, index) => {
         const placement = active[index];
+        if (placement && error instanceof StaleWorkerBuildError) {
+          staleBindings.set(placement.sessionId, { ...placement });
+        }
         params.warn(
-          `Worker disk-space probe failed${placement ? ` (${placement.sessionId})` : ""}: ${formatErrorMessage(error)}`,
+          `Worker disk-space check failed${placement ? ` (${placement.sessionId})` : ""}: ${formatErrorMessage(error)}`,
         );
       },
     });

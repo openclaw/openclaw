@@ -2,18 +2,19 @@ package ai.openclaw.app.chat
 
 import android.content.Context
 import android.util.Log
-import androidx.room.Dao
-import androidx.room.Database
-import androidx.room.Entity
-import androidx.room.Insert
-import androidx.room.OnConflictStrategy
-import androidx.room.PrimaryKey
-import androidx.room.Query
-import androidx.room.Room
-import androidx.room.RoomDatabase
-import androidx.room.migration.Migration
-import androidx.room.withTransaction
-import androidx.sqlite.db.SupportSQLiteDatabase
+import androidx.room3.Dao
+import androidx.room3.Database
+import androidx.room3.Entity
+import androidx.room3.Insert
+import androidx.room3.OnConflictStrategy
+import androidx.room3.PrimaryKey
+import androidx.room3.Query
+import androidx.room3.Room
+import androidx.room3.RoomDatabase
+import androidx.room3.migration.Migration
+import androidx.room3.useReaderConnection
+import androidx.room3.withWriteTransaction
+import androidx.sqlite.execSQL
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
@@ -76,14 +77,14 @@ internal interface ClientStateControlDao {
 /** Disposable gateway-derived projections. Schema mismatches and corruption rebuild this file. */
 @Database(
   entities = [CachedSessionEntity::class, CachedMessageEntity::class, CachedGatewayOwnerEntity::class],
-  version = 2,
+  version = 3,
   exportSchema = true,
 )
 internal abstract class GatewayCacheDatabase : RoomDatabase() {
   abstract fun dao(): ChatCacheDao
 
   companion object {
-    fun open(
+    suspend fun open(
       context: Context,
       name: String = GATEWAY_CACHE_DB_NAME,
     ): GatewayCacheDatabase {
@@ -97,17 +98,14 @@ internal abstract class GatewayCacheDatabase : RoomDatabase() {
           .fallbackToDestructiveMigration(true)
           .build()
 
-      var database: GatewayCacheDatabase? = null
       return try {
-        build().also {
-          database = it
-          // Room opens lazily; force validation so corruption is repaired before publication.
-          it.openHelper.writableDatabase
-        }
+        build().openValidated()
+      } catch (error: CancellationException) {
+        // Cancellation is not corruption and must never discard a valid offline cache.
+        throw error
       } catch (_: Throwable) {
-        database?.close()
         appContext.deleteDatabase(name)
-        build().also { it.openHelper.writableDatabase }
+        build().openValidated()
       }
     }
   }
@@ -132,17 +130,15 @@ internal abstract class ClientStateDatabase : RoomDatabase() {
   abstract fun controlDao(): ClientStateControlDao
 
   companion object {
-    fun open(
+    suspend fun open(
       context: Context,
       name: String = CLIENT_STATE_DB_NAME,
     ): ClientStateDatabase =
       Room
         .databaseBuilder(context.applicationContext, ClientStateDatabase::class.java, name)
         .build()
-        .also {
-          // Fail closed and preserve the file if durable state cannot be opened or validated.
-          it.openHelper.writableDatabase
-        }
+        // Fail closed and preserve the file if durable state cannot be opened or validated.
+        .openValidated()
   }
 }
 
@@ -179,126 +175,116 @@ internal abstract class LegacyChatDatabase : RoomDatabase() {
 
   companion object {
     internal val MIGRATION_2_3 =
-      object : Migration(2, 3) {
-        override fun migrate(db: SupportSQLiteDatabase) {
-          // v2 persisted every post-dispatch exception as queued+lastError. Those rows may
-          // already have run, so upgrading must park them alongside crash-interrupted sends.
-          db.execSQL(
+      Migration(2, 3) { connection ->
+        // v2 persisted every post-dispatch exception as queued+lastError. Those rows may
+        // already have run, so upgrading must park them alongside crash-interrupted sends.
+        connection
+          .prepare(
             "UPDATE outbox_commands SET status = ?, lastError = ? " +
               "WHERE status = ? OR (status = ? AND lastError IS NOT NULL)",
-            arrayOf<Any?>(
-              ChatOutboxStatus.Failed.dbValue,
-              OUTBOX_DELIVERY_UNCONFIRMED_ERROR,
-              ChatOutboxStatus.Sending.dbValue,
-              ChatOutboxStatus.Queued.dbValue,
-            ),
-          )
-        }
+          ).use { statement ->
+            statement.bindText(1, ChatOutboxStatus.Failed.dbValue)
+            statement.bindText(2, OUTBOX_DELIVERY_UNCONFIRMED_ERROR)
+            statement.bindText(3, ChatOutboxStatus.Sending.dbValue)
+            statement.bindText(4, ChatOutboxStatus.Queued.dbValue)
+            statement.step()
+          }
       }
 
     internal val MIGRATION_3_4 =
-      object : Migration(3, 4) {
-        override fun migrate(db: SupportSQLiteDatabase) {
-          db.execSQL("ALTER TABLE `outbox_commands` ADD COLUMN `gatedEpoch` INTEGER")
-          // Legacy queued command-shaped rows predate connection epochs; the sentinel makes
-          // them park for explicit retry instead of silently replaying on the next reconnect.
-          db.execSQL(
+      Migration(3, 4) { connection ->
+        connection.execSQL("ALTER TABLE `outbox_commands` ADD COLUMN `gatedEpoch` INTEGER")
+        // Legacy queued command-shaped rows predate connection epochs; the sentinel makes
+        // them park for explicit retry instead of silently replaying on the next reconnect.
+        connection
+          .prepare(
             "UPDATE outbox_commands SET gatedEpoch = ? WHERE status = ? AND text LIKE '/%'",
-            arrayOf<Any?>(OUTBOX_GATED_EPOCH_NEVER, ChatOutboxStatus.Queued.dbValue),
-          )
-          db.execSQL(
-            "CREATE TABLE IF NOT EXISTS `outbox_attachments` (`id` TEXT NOT NULL, `commandId` TEXT NOT NULL, " +
-              "`position` INTEGER NOT NULL, `type` TEXT NOT NULL, `mimeType` TEXT NOT NULL, `fileName` TEXT NOT NULL, " +
-              "`durationMs` INTEGER, `byteLength` INTEGER NOT NULL, PRIMARY KEY(`id`))",
-          )
-          db.execSQL("CREATE INDEX IF NOT EXISTS `index_outbox_attachments_commandId` ON `outbox_attachments` (`commandId`)")
-          db.execSQL(
-            "CREATE TABLE IF NOT EXISTS `outbox_attachment_chunks` (`attachmentId` TEXT NOT NULL, " +
-              "`chunkIndex` INTEGER NOT NULL, `bytes` BLOB NOT NULL, PRIMARY KEY(`attachmentId`, `chunkIndex`))",
-          )
-        }
+          ).use { statement ->
+            statement.bindLong(1, OUTBOX_GATED_EPOCH_NEVER)
+            statement.bindText(2, ChatOutboxStatus.Queued.dbValue)
+            statement.step()
+          }
+        connection.execSQL(
+          "CREATE TABLE IF NOT EXISTS `outbox_attachments` (`id` TEXT NOT NULL, `commandId` TEXT NOT NULL, " +
+            "`position` INTEGER NOT NULL, `type` TEXT NOT NULL, `mimeType` TEXT NOT NULL, `fileName` TEXT NOT NULL, " +
+            "`durationMs` INTEGER, `byteLength` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        )
+        connection.execSQL("CREATE INDEX IF NOT EXISTS `index_outbox_attachments_commandId` ON `outbox_attachments` (`commandId`)")
+        connection.execSQL(
+          "CREATE TABLE IF NOT EXISTS `outbox_attachment_chunks` (`attachmentId` TEXT NOT NULL, " +
+            "`chunkIndex` INTEGER NOT NULL, `bytes` BLOB NOT NULL, PRIMARY KEY(`attachmentId`, `chunkIndex`))",
+        )
       }
 
     internal val MIGRATION_4_5 =
-      object : Migration(4, 5) {
-        override fun migrate(db: SupportSQLiteDatabase) {
-          db.execSQL("ALTER TABLE `outbox_commands` ADD COLUMN `ownerAgentId` TEXT")
-          // Agent-qualified keys carry a durable owner in the key itself. Backfill it so session
-          // deletion and replay keep working after upgrade without consulting mutable defaults.
-          db.execSQL(
-            "UPDATE outbox_commands SET ownerAgentId = " +
-              "substr(sessionKey, 7, instr(substr(sessionKey, 7), ':') - 1) " +
-              "WHERE sessionKey LIKE 'agent:%:%' AND instr(substr(sessionKey, 7), ':') > 1",
-          )
-          // Earlier rows did not persist the default agent that owned an unscoped key. Never
-          // guess after upgrade: queued input stays visible for manual resend, while accepted
-          // input remains delivery-ambiguous and must not be replayed under a different owner.
-          db.execSQL(
-            "UPDATE outbox_commands SET status = ?, lastError = ? " +
-              "WHERE status = ? AND sessionKey NOT LIKE 'agent:%'",
-            arrayOf<Any?>(
-              ChatOutboxStatus.Failed.dbValue,
-              OUTBOX_OWNER_CHANGED_ERROR,
-              ChatOutboxStatus.Queued.dbValue,
-            ),
-          )
-          db.execSQL(
-            "UPDATE outbox_commands SET status = ?, lastError = ? " +
-              "WHERE status = ? AND sessionKey NOT LIKE 'agent:%'",
-            arrayOf<Any?>(
-              ChatOutboxStatus.Failed.dbValue,
-              OUTBOX_DELIVERY_UNCONFIRMED_ERROR,
-              ChatOutboxStatus.Accepted.dbValue,
-            ),
-          )
+      Migration(4, 5) { connection ->
+        connection.execSQL("ALTER TABLE `outbox_commands` ADD COLUMN `ownerAgentId` TEXT")
+        // Agent-qualified keys carry a durable owner in the key itself. Backfill it so session
+        // deletion and replay keep working after upgrade without consulting mutable defaults.
+        connection.execSQL(
+          "UPDATE outbox_commands SET ownerAgentId = " +
+            "substr(sessionKey, 7, instr(substr(sessionKey, 7), ':') - 1) " +
+            "WHERE sessionKey LIKE 'agent:%:%' AND instr(substr(sessionKey, 7), ':') > 1",
+        )
+        // Earlier rows did not persist the default agent that owned an unscoped key. Never
+        // guess after upgrade: queued input stays visible for manual resend, while accepted
+        // input remains delivery-ambiguous and must not be replayed under a different owner.
+        for ((status, error) in listOf(
+          ChatOutboxStatus.Queued to OUTBOX_OWNER_CHANGED_ERROR,
+          ChatOutboxStatus.Accepted to OUTBOX_DELIVERY_UNCONFIRMED_ERROR,
+        )) {
+          connection
+            .prepare(
+              "UPDATE outbox_commands SET status = ?, lastError = ? " +
+                "WHERE status = ? AND sessionKey NOT LIKE 'agent:%'",
+            ).use { statement ->
+              statement.bindText(1, ChatOutboxStatus.Failed.dbValue)
+              statement.bindText(2, error)
+              statement.bindText(3, status.dbValue)
+              statement.step()
+            }
         }
       }
 
     internal val MIGRATION_5_6 =
-      object : Migration(5, 6) {
-        override fun migrate(db: SupportSQLiteDatabase) {
-          // Session and transcript caches are disposable, and legacy unscoped rows have no
-          // provable owner. Rebuild both; the durable outbox remains intact across the upgrade.
-          db.execSQL("DROP TABLE IF EXISTS `cached_sessions`")
-          db.execSQL("DROP TABLE IF EXISTS `cached_messages`")
-          db.execSQL(
-            "CREATE TABLE IF NOT EXISTS `cached_sessions` " +
-              "(`gatewayId` TEXT NOT NULL, `agentId` TEXT NOT NULL, `sessionKey` TEXT NOT NULL, " +
-              "`displayName` TEXT, `updatedAtMs` INTEGER, `rowOrder` INTEGER NOT NULL, " +
-              "PRIMARY KEY(`gatewayId`, `agentId`, `sessionKey`))",
-          )
-          db.execSQL(
-            "CREATE TABLE IF NOT EXISTS `cached_messages` " +
-              "(`gatewayId` TEXT NOT NULL, `agentId` TEXT NOT NULL, `sessionKey` TEXT NOT NULL, " +
-              "`rowOrder` INTEGER NOT NULL, `role` TEXT NOT NULL, `textPartsJson` TEXT NOT NULL, " +
-              "`timestampMs` INTEGER, `idempotencyKey` TEXT, " +
-              "PRIMARY KEY(`gatewayId`, `agentId`, `sessionKey`, `rowOrder`))",
-          )
-        }
+      Migration(5, 6) { connection ->
+        // Session and transcript caches are disposable, and legacy unscoped rows have no
+        // provable owner. Rebuild both; the durable outbox remains intact across the upgrade.
+        connection.execSQL("DROP TABLE IF EXISTS `cached_sessions`")
+        connection.execSQL("DROP TABLE IF EXISTS `cached_messages`")
+        connection.execSQL(
+          "CREATE TABLE IF NOT EXISTS `cached_sessions` " +
+            "(`gatewayId` TEXT NOT NULL, `agentId` TEXT NOT NULL, `sessionKey` TEXT NOT NULL, " +
+            "`displayName` TEXT, `updatedAtMs` INTEGER, `rowOrder` INTEGER NOT NULL, " +
+            "PRIMARY KEY(`gatewayId`, `agentId`, `sessionKey`))",
+        )
+        connection.execSQL(
+          "CREATE TABLE IF NOT EXISTS `cached_messages` " +
+            "(`gatewayId` TEXT NOT NULL, `agentId` TEXT NOT NULL, `sessionKey` TEXT NOT NULL, " +
+            "`rowOrder` INTEGER NOT NULL, `role` TEXT NOT NULL, `textPartsJson` TEXT NOT NULL, " +
+            "`timestampMs` INTEGER, `idempotencyKey` TEXT, " +
+            "PRIMARY KEY(`gatewayId`, `agentId`, `sessionKey`, `rowOrder`))",
+        )
       }
 
     internal val MIGRATION_6_7 =
-      object : Migration(6, 7) {
-        override fun migrate(db: SupportSQLiteDatabase) {
-          db.execSQL(
-            "CREATE TABLE IF NOT EXISTS `cached_gateway_owners` " +
-              "(`gatewayId` TEXT NOT NULL, `agentId` TEXT NOT NULL, PRIMARY KEY(`gatewayId`))",
-          )
-        }
+      Migration(6, 7) { connection ->
+        connection.execSQL(
+          "CREATE TABLE IF NOT EXISTS `cached_gateway_owners` " +
+            "(`gatewayId` TEXT NOT NULL, `agentId` TEXT NOT NULL, PRIMARY KEY(`gatewayId`))",
+        )
       }
 
     internal val MIGRATION_7_8 =
-      object : Migration(7, 8) {
-        override fun migrate(db: SupportSQLiteDatabase) {
-          db.execSQL(
-            "CREATE TABLE IF NOT EXISTS `composer_send_admissions` " +
-              "(`id` TEXT NOT NULL, `gatewayId` TEXT NOT NULL, `ownerAgentId` TEXT NOT NULL, " +
-              "`sessionKey` TEXT NOT NULL, PRIMARY KEY(`id`))",
-          )
-        }
+      Migration(7, 8) { connection ->
+        connection.execSQL(
+          "CREATE TABLE IF NOT EXISTS `composer_send_admissions` " +
+            "(`id` TEXT NOT NULL, `gatewayId` TEXT NOT NULL, `ownerAgentId` TEXT NOT NULL, " +
+            "`sessionKey` TEXT NOT NULL, PRIMARY KEY(`id`))",
+        )
       }
 
-    fun open(
+    suspend fun open(
       context: Context,
       name: String,
     ): LegacyChatDatabase =
@@ -308,7 +294,18 @@ internal abstract class LegacyChatDatabase : RoomDatabase() {
         // v1 contains only disposable transcripts. Durable state starts in v2.
         .fallbackToDestructiveMigrationFrom(true, 1)
         .build()
-        .also { it.openHelper.writableDatabase }
+        .openValidated()
+  }
+}
+
+private suspend fun <T : RoomDatabase> T.openValidated(): T {
+  try {
+    // Acquiring a connection forces Room's lazy schema validation before publishing the store.
+    useReaderConnection { }
+    return this
+  } catch (error: Throwable) {
+    close()
+    throw error
   }
 }
 
@@ -318,6 +315,18 @@ private class OpenedAndroidClientDatabases private constructor(
   val clientState: ClientStateDatabase,
 ) : AutoCloseable {
   companion object {
+    suspend fun inMemory(context: Context): OpenedAndroidClientDatabases {
+      val appContext = context.applicationContext
+      val state = Room.inMemoryDatabaseBuilder(appContext, ClientStateDatabase::class.java).build().openValidated()
+      return try {
+        val cache = Room.inMemoryDatabaseBuilder(appContext, GatewayCacheDatabase::class.java).build().openValidated()
+        OpenedAndroidClientDatabases(appContext, cache, state)
+      } catch (error: Throwable) {
+        state.close()
+        throw error
+      }
+    }
+
     suspend fun open(
       context: Context,
       gatewayCacheName: String = GATEWAY_CACHE_DB_NAME,
@@ -369,7 +378,7 @@ private class OpenedAndroidClientDatabases private constructor(
     withContext(NonCancellable) {
       // State deletion and its phase advance are atomic. A rollback leaves no irreversible marker;
       // after commit, startup may clear only disposable cache and must preserve any newer outbox rows.
-      clientState.withTransaction {
+      clientState.withWriteTransaction {
         clientState.controlDao().upsertGatewayRemoval(GatewayRemovalEntity(gateway, GATEWAY_REMOVAL_COMMITTING))
         commandOutbox.clearGateway(gateway)
         clientState.controlDao().upsertGatewayRemoval(GatewayRemovalEntity(gateway, GATEWAY_REMOVAL_CACHE_PENDING))
@@ -401,7 +410,7 @@ private class OpenedAndroidClientDatabases private constructor(
       val commands = source.allCommands()
       val admissions = source.allAdmissionReceipts()
       val attachments = source.allAttachments()
-      clientState.withTransaction {
+      clientState.withWriteTransaction {
         val destination = clientState.outboxDao()
         if (commands.isNotEmpty()) destination.upsertImportedCommands(commands)
         if (admissions.isNotEmpty()) destination.upsertImportedAdmissionReceipts(admissions)
@@ -413,7 +422,7 @@ private class OpenedAndroidClientDatabases private constructor(
       while (true) {
         val chunks = source.attachmentChunkPage(afterAttachmentId, afterChunkIndex, LEGACY_IMPORT_CHUNK_PAGE_ROWS)
         if (chunks.isEmpty()) break
-        clientState.withTransaction {
+        clientState.withWriteTransaction {
           clientState.outboxDao().upsertImportedAttachmentChunks(chunks)
         }
         chunks.last().let { cursor ->
@@ -421,7 +430,7 @@ private class OpenedAndroidClientDatabases private constructor(
           afterChunkIndex = cursor.chunkIndex
         }
       }
-      clientState.withTransaction {
+      clientState.withWriteTransaction {
         // Earlier page commits are idempotent. This marker publishes them only after the source
         // cursor is exhausted, so a crash simply replays REPLACE inserts on the next start.
         control.upsertMetadata(ClientStateMetadataEntity(LEGACY_IMPORT_KEY, LEGACY_IMPORT_COMPLETE))
@@ -437,9 +446,10 @@ private class OpenedAndroidClientDatabases private constructor(
     for (removal in clientState.controlDao().gatewayRemovals()) {
       when {
         removal.phase == GATEWAY_REMOVAL_CACHE_PENDING -> completeCacheRemoval(removal.gatewayId, propagateFailure = false)
-        removal.phase == GATEWAY_REMOVAL_COMMITTING -> commitGatewayRemoval(removal.gatewayId)
-        registeredGatewayIds != null && removal.gatewayId !in registeredGatewayIds ->
-          commitGatewayRemoval(removal.gatewayId)
+
+        removal.phase == GATEWAY_REMOVAL_COMMITTING ||
+          (registeredGatewayIds != null && removal.gatewayId !in registeredGatewayIds) -> commitGatewayRemoval(removal.gatewayId)
+
         registeredGatewayIds != null -> cancelGatewayRemoval(removal.gatewayId)
       }
     }
@@ -479,20 +489,26 @@ internal class AndroidClientDatabases private constructor(
       clientStateName: String = CLIENT_STATE_DB_NAME,
       legacyName: String = LEGACY_CHAT_DATABASE_NAME,
       registeredGatewayIds: Set<String>? = null,
-    ): AndroidClientDatabases {
+    ): AndroidClientDatabases =
+      start {
+        OpenedAndroidClientDatabases.open(
+          context = context.applicationContext,
+          gatewayCacheName = gatewayCacheName,
+          clientStateName = clientStateName,
+          legacyName = legacyName,
+          registeredGatewayIds = registeredGatewayIds,
+        )
+      }
+
+    fun inMemory(context: Context): AndroidClientDatabases = start { OpenedAndroidClientDatabases.inMemory(context) }
+
+    private fun start(open: suspend () -> OpenedAndroidClientDatabases): AndroidClientDatabases {
       val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
       val openedReference = AtomicReference<OpenedAndroidClientDatabases?>()
       val closed = AtomicBoolean(false)
       val initialization =
         scope.async {
-          val opened =
-            OpenedAndroidClientDatabases.open(
-              context = context.applicationContext,
-              gatewayCacheName = gatewayCacheName,
-              clientStateName = clientStateName,
-              legacyName = legacyName,
-              registeredGatewayIds = registeredGatewayIds,
-            )
+          val opened = open()
           if (closed.get()) {
             opened.close()
             throw CancellationException("Android client databases closed during initialization")
@@ -508,8 +524,8 @@ internal class AndroidClientDatabases private constructor(
     }
   }
 
-  private val transcriptCache = DeferredChatTranscriptCache(::ready)
-  private val commandOutbox = DeferredChatCommandOutbox(::ready)
+  private val transcriptCache = RoomChatTranscriptCache { ready().gatewayCache }
+  private val commandOutbox = RoomChatCommandOutbox { ready().clientState }
 
   fun transcriptCache(): ChatTranscriptCache = transcriptCache
 
@@ -540,233 +556,6 @@ internal class AndroidClientDatabases private constructor(
     scope.cancel()
     openedReference.getAndSet(null)?.close()
   }
-}
-
-private class DeferredChatTranscriptCache(
-  private val ready: suspend () -> OpenedAndroidClientDatabases,
-) : ChatTranscriptCache {
-  override suspend fun loadLastDefaultAgentId(gatewayId: String): String? = ready().transcriptCache.loadLastDefaultAgentId(gatewayId)
-
-  override suspend fun saveLastDefaultAgentId(
-    gatewayId: String,
-    agentId: String,
-  ) = ready().transcriptCache.saveLastDefaultAgentId(gatewayId, agentId)
-
-  override suspend fun loadSessions(
-    gatewayId: String,
-    agentId: String,
-  ): List<ChatSessionEntry> = ready().transcriptCache.loadSessions(gatewayId, agentId)
-
-  override suspend fun loadTranscript(
-    gatewayId: String,
-    agentId: String,
-    sessionKey: String,
-  ): List<ChatMessage> = ready().transcriptCache.loadTranscript(gatewayId, agentId, sessionKey)
-
-  override suspend fun saveSessions(
-    gatewayId: String,
-    agentId: String,
-    sessions: List<ChatSessionEntry>,
-    retainedSessionKey: String?,
-  ) = ready().transcriptCache.saveSessions(gatewayId, agentId, sessions, retainedSessionKey)
-
-  override suspend fun saveTranscript(
-    gatewayId: String,
-    agentId: String,
-    sessionKey: String,
-    messages: List<ChatMessage>,
-  ) = ready().transcriptCache.saveTranscript(gatewayId, agentId, sessionKey, messages)
-
-  override suspend fun deleteSession(
-    gatewayId: String,
-    agentId: String,
-    sessionKey: String,
-  ) = ready().transcriptCache.deleteSession(gatewayId, agentId, sessionKey)
-
-  override suspend fun clearGateway(gatewayId: String) = ready().transcriptCache.clearGateway(gatewayId)
-}
-
-private class DeferredChatCommandOutbox(
-  private val ready: suspend () -> OpenedAndroidClientDatabases,
-) : ChatCommandOutbox {
-  override val supportsBranchCoordination: Boolean = true
-
-  override suspend fun load(gatewayId: String): List<ChatOutboxItem> = ready().commandOutbox.load(gatewayId)
-
-  override suspend fun wasAdmitted(id: String): Boolean = ready().commandOutbox.wasAdmitted(id)
-
-  override suspend fun enqueue(
-    gatewayId: String,
-    sessionKey: String,
-    text: String,
-    thinkingLevel: String,
-    nowMs: Long,
-    attachments: List<OutboxAttachmentPayload>,
-    gatedEpoch: Long?,
-    ownerAgentId: String,
-    idempotencyKey: String?,
-  ): ChatOutboxEnqueueResult =
-    ready()
-      .commandOutbox
-      .enqueue(gatewayId, sessionKey, text, thinkingLevel, nowMs, attachments, gatedEpoch, ownerAgentId, idempotencyKey)
-
-  override suspend fun loadAttachments(id: String): List<LoadedOutboxAttachment> = ready().commandOutbox.loadAttachments(id)
-
-  override suspend fun updateStatus(
-    id: String,
-    status: ChatOutboxStatus,
-    retryCount: Int,
-    lastError: String?,
-  ): Int = ready().commandOutbox.updateStatus(id, status, retryCount, lastError)
-
-  override suspend fun updateStatusIfAttempt(
-    id: String,
-    expectedAttemptVersion: Int,
-    status: ChatOutboxStatus,
-    retryCount: Int,
-    lastError: String?,
-    expectedStatus: ChatOutboxStatus?,
-  ): Int = ready().commandOutbox.updateStatusIfAttempt(id, expectedAttemptVersion, status, retryCount, lastError, expectedStatus)
-
-  override suspend fun claimForSending(
-    id: String,
-    retryCount: Int,
-    lastError: String?,
-  ): Int = ready().commandOutbox.claimForSending(id, retryCount, lastError)
-
-  override suspend fun claimForSendingIfAttempt(
-    id: String,
-    expectedAttemptVersion: Int,
-    retryCount: Int,
-    lastError: String?,
-  ): Int = ready().commandOutbox.claimForSendingIfAttempt(id, expectedAttemptVersion, retryCount, lastError)
-
-  override suspend fun pinSessionKey(
-    id: String,
-    sessionKey: String,
-  ) = ready().commandOutbox.pinSessionKey(id, sessionKey)
-
-  override suspend fun requeueForRetry(
-    gatewayId: String,
-    id: String,
-    nowMs: Long,
-    gatedEpoch: Long?,
-    ownerAgentId: String?,
-  ): Int = ready().commandOutbox.requeueForRetry(gatewayId, id, nowMs, gatedEpoch, ownerAgentId)
-
-  override suspend fun requeueForRetryIfCurrent(
-    gatewayId: String,
-    id: String,
-    expectedAttemptVersion: Int,
-    expectedRetryCount: Int,
-    expectedLastError: String?,
-    nowMs: Long,
-    gatedEpoch: Long?,
-    ownerAgentId: String?,
-    replacementId: String?,
-  ): Int =
-    ready()
-      .commandOutbox
-      .requeueForRetryIfCurrent(
-        gatewayId,
-        id,
-        expectedAttemptVersion,
-        expectedRetryCount,
-        expectedLastError,
-        nowMs,
-        gatedEpoch,
-        ownerAgentId,
-        replacementId,
-      )
-
-  override suspend fun delete(id: String) = ready().commandOutbox.delete(id)
-
-  override suspend fun deleteIfQueued(id: String): Boolean = ready().commandOutbox.deleteIfQueued(id)
-
-  override suspend fun confirmDelivered(ids: Set<String>): Int = ready().commandOutbox.confirmDelivered(ids)
-
-  override suspend fun confirmDeliveredAttempts(ids: Map<String, Int>): Int = ready().commandOutbox.confirmDeliveredAttempts(ids)
-
-  override suspend fun branchState(
-    gatewayId: String,
-    scope: ChatOutboxScope,
-  ): ChatOutboxBranchState? = ready().commandOutbox.branchState(gatewayId, scope)
-
-  override suspend fun beginSessionMutation(
-    gatewayId: String,
-    scope: ChatOutboxScope,
-    nowMs: Long,
-  ): ChatOutboxMutationLease? = ready().commandOutbox.beginSessionMutation(gatewayId, scope, nowMs)
-
-  override suspend fun cancelSessionMutation(
-    gatewayId: String,
-    scope: ChatOutboxScope,
-    lease: ChatOutboxMutationLease,
-  ): Boolean = ready().commandOutbox.cancelSessionMutation(gatewayId, scope, lease)
-
-  override suspend fun demoteSessionMutationToReconciliation(
-    gatewayId: String,
-    scope: ChatOutboxScope,
-    lease: ChatOutboxMutationLease?,
-  ): Boolean = ready().commandOutbox.demoteSessionMutationToReconciliation(gatewayId, scope, lease)
-
-  override suspend fun demoteSessionMutationToReconciliationState(
-    gatewayId: String,
-    scope: ChatOutboxScope,
-    lease: ChatOutboxMutationLease?,
-  ): ChatOutboxBranchState? = ready().commandOutbox.demoteSessionMutationToReconciliationState(gatewayId, scope, lease)
-
-  override suspend fun updateLastActiveLeafEntryId(
-    gatewayId: String,
-    scope: ChatOutboxScope,
-    leafEntryId: String,
-    expectedEpoch: Int,
-    expectedRevision: Int,
-  ): Boolean = ready().commandOutbox.updateLastActiveLeafEntryId(gatewayId, scope, leafEntryId, expectedEpoch, expectedRevision)
-
-  override suspend fun reconcileBranchScope(
-    gatewayId: String,
-    scope: ChatOutboxScope,
-    previousState: ChatOutboxBranchState,
-    activeLeafEntryId: String?,
-    branchLeafEntryIds: Set<String>,
-    activeTranscriptEntryIds: Set<String>,
-    lastError: String,
-  ): Boolean =
-    ready()
-      .commandOutbox
-      .reconcileBranchScope(
-        gatewayId,
-        scope,
-        previousState,
-        activeLeafEntryId,
-        branchLeafEntryIds,
-        activeTranscriptEntryIds,
-        lastError,
-      )
-
-  override suspend fun confirmBranchChange(
-    gatewayId: String,
-    scope: ChatOutboxScope,
-    activeLeafEntryId: String?,
-    lastError: String,
-    lease: ChatOutboxMutationLease?,
-  ): Boolean = ready().commandOutbox.confirmBranchChange(gatewayId, scope, activeLeafEntryId, lastError, lease)
-
-  override suspend fun deleteForSession(
-    gatewayId: String,
-    sessionKey: String,
-    ownerAgentId: String,
-  ) = ready().commandOutbox.deleteForSession(gatewayId, sessionKey, ownerAgentId)
-
-  override suspend fun clearGateway(gatewayId: String) = ready().commandOutbox.clearGateway(gatewayId)
-
-  override suspend fun failSendingAfterRestart() = ready().commandOutbox.failSendingAfterRestart()
-
-  override suspend fun expireStale(
-    gatewayId: String,
-    nowMs: Long,
-  ) = ready().commandOutbox.expireStale(gatewayId, nowMs)
 }
 
 private fun scopedGatewayId(gatewayId: String): String? = gatewayId.trim().takeIf { it.isNotEmpty() }

@@ -1,27 +1,32 @@
-import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import type { CronConfig } from "../../config/types.cron.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
+import { isCronTimeoutErrorText } from "../execution-error-constants.js";
 import { type CronRetryOn, resolveCronExecutionRetryHint } from "../retry-hint.js";
+import {
+  CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE,
+  hasCanonicalCronDeliveryMode,
+} from "../store/delivery-codec.js";
 import { createCronStreamSourceIdentity } from "../stream-schedule.js";
 import type {
   CronJob,
+  CronDeliveryTrace,
+  CronFailureNotificationDetail,
   CronResolvedDeliveryState,
   CronRunErrorClassification,
   CronRunStatus,
+  CronTriggerEvalOutcome,
 } from "../types.js";
-import { autoDisableCronJob } from "./auto-disable.js";
 import {
   DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
   errorBackoffMs,
-  isJobEnabled,
+  HEARTBEAT_SKIP_DISABLED,
+  resolveNextRunAtMsOrDisable,
 } from "./jobs-scheduling.js";
 import type {
+  CronJobPolicyContext,
   CronServiceState,
   CronSystemEventEnqueueResult,
   DeferredCronNotifications,
 } from "./state.js";
-import type { CronTriggerEvalOutcome } from "./timer-execution-timeout.js";
-import { HEARTBEAT_SKIP_DISABLED } from "./timer-execution-timeout.js";
 
 /** Default max retries for cron jobs on transient errors (#24355). */
 const DEFAULT_MAX_TRANSIENT_RETRIES = 3;
@@ -45,28 +50,6 @@ type QueuedSystemEventHandle = {
   accepted: boolean;
   remove?: () => boolean | void;
 };
-
-/** Rejects outcome-generated schedule timestamps before they can persist or arm a timer. */
-export function resolveNextRunAtMsOrDisable(params: {
-  state: CronServiceState;
-  job: CronJob;
-  candidate: unknown;
-  deferredNotifications?: DeferredCronNotifications;
-}): number | undefined {
-  const nextRunAtMs = asDateTimestampMs(params.candidate);
-  if (nextRunAtMs !== undefined && nextRunAtMs > 0) {
-    return nextRunAtMs;
-  }
-  autoDisableCronJob({
-    state: params.state,
-    job: params.job,
-    reason: "schedule-errors",
-    atMs: params.state.deps.nowMs(),
-    consecutiveErrors: 1,
-    deferredNotifications: params.deferredNotifications,
-  });
-  return undefined;
-}
 
 /** Persists non-busy trigger evaluation state without touching payload-run history. */
 export function applyTriggerEvaluationState(
@@ -117,11 +100,11 @@ export function applyTriggerRunResult(
 }
 
 export function resolveCronNextRunWithLowerBound(params: {
-  state: CronServiceState;
+  state: CronJobPolicyContext;
   job: CronJob;
   naturalNext: number | undefined;
   lowerBoundMs: number;
-  deferredNotifications?: DeferredCronNotifications;
+  deferredNotifications: DeferredCronNotifications;
 }): number | undefined {
   if (params.naturalNext === undefined) {
     params.state.deps.log.warn(
@@ -141,8 +124,27 @@ export function resolveCronNextRunWithLowerBound(params: {
   });
 }
 
+/**
+ * True when a scheduled quick re-run targets a provider outage, so the failure alert and
+ * owner repair wait for it. Provider transport failures (DNS, refused connections, request
+ * timeouts) classify as `timeout`. Failures the job owns are not held: its scripts, command
+ * payloads, and cron's own execution watchdog usually need the owner repair promptly.
+ */
+export function holdsFailureNotificationForRetry(
+  job: CronJob,
+  result: { error?: string; failureNotificationDetail?: CronFailureNotificationDetail },
+  category: CronRetryOn | undefined,
+): boolean {
+  if (category === undefined || result.failureNotificationDetail?.kind === "script-failure") {
+    return false;
+  }
+  return (
+    category !== "timeout" ||
+    (job.payload.kind !== "command" && !isCronTimeoutErrorText(result.error))
+  );
+}
+
 export function resolveTransientCronRetryDecision(params: {
-  cronConfig?: CronConfig;
   error: string | undefined;
   errorClassification?: CronRunErrorClassification;
   lastErrorReason?: CronJob["state"]["lastErrorReason"];
@@ -195,7 +197,6 @@ export function resolveTransientCronRetryDecision(params: {
 }
 
 export function resolveDisabledHeartbeatOneShotRetryDecision(params: {
-  cronConfig?: CronConfig;
   consecutiveSkipped: number | undefined;
 }): DisabledHeartbeatOneShotRetryDecision {
   const consecutiveSkipped = params.consecutiveSkipped ?? 0;
@@ -263,66 +264,37 @@ export function shouldRetryDisabledHeartbeatOneShot(
   );
 }
 
-export function isScheduledTerminalOneShotRetry(
-  job: CronJob,
-  lastRunStatus: CronRunStatus,
-  lastRun: unknown,
-  nextRun: unknown,
-): boolean {
-  if (
-    !isJobEnabled(job) ||
-    typeof nextRun !== "number" ||
-    typeof lastRun !== "number" ||
-    nextRun <= lastRun
-  ) {
-    return false;
-  }
-  if (lastRunStatus === "error") {
-    return true;
-  }
-  return (
-    lastRunStatus === "skipped" &&
-    job.sessionTarget === "main" &&
-    job.wakeMode === "now" &&
-    job.state.lastError === HEARTBEAT_SKIP_DISABLED
-  );
-}
-
 export function resolveDeliveryState(params: {
   job: CronJob;
   runStatus: CronRunStatus;
+  delivery?: CronDeliveryTrace;
   delivered?: boolean;
   deliveryAttempted?: boolean;
   error?: string;
+  deliverySuppressionReason?: CronResolvedDeliveryState["deliverySuppressionReason"];
 }): CronResolvedDeliveryState {
-  const primaryDeliveryPlan = resolveCronDeliveryPlan(params.job);
-  const primaryDeliveryRequested = primaryDeliveryPlan.requested;
   const noFailureNotification = { status: "not-requested" as const };
-  if (!primaryDeliveryRequested) {
-    if (primaryDeliveryPlan.mode === "webhook") {
-      if (params.delivered === true) {
-        return {
-          delivered: true,
-          status: "delivered",
-          failureNotification: noFailureNotification,
-        };
-      }
-      if (params.deliveryAttempted === true) {
-        return {
-          delivered: false,
-          status: "not-delivered",
-          error: params.error,
-          failureNotification: noFailureNotification,
-        };
-      }
-    }
+  const verifiedDelivery =
+    params.delivered === true &&
+    (params.runStatus !== "error" || params.delivery?.delivered === true);
+  if (verifiedDelivery) {
     return {
-      status: "not-requested",
+      delivered: true,
+      status: "delivered",
       failureNotification: noFailureNotification,
     };
   }
-  if (params.runStatus === "error") {
-    if (params.delivered === true) {
+  if (!hasCanonicalCronDeliveryMode(params.job.delivery)) {
+    return {
+      status: "unknown",
+      error: CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE,
+      failureNotification: noFailureNotification,
+    };
+  }
+  const primaryDeliveryPlan = resolveCronDeliveryPlan(params.job);
+  const primaryDeliveryRequested = primaryDeliveryPlan.requested;
+  if (!primaryDeliveryRequested) {
+    if (primaryDeliveryPlan.mode === "webhook" && params.deliveryAttempted === true) {
       return {
         delivered: false,
         status: "not-delivered",
@@ -330,11 +302,18 @@ export function resolveDeliveryState(params: {
         failureNotification: noFailureNotification,
       };
     }
-    if (params.delivered === false) {
+    return {
+      status: "not-requested",
+      failureNotification: noFailureNotification,
+    };
+  }
+  if (params.runStatus === "error") {
+    if (params.delivered !== undefined) {
       return {
         delivered: false,
         status: "not-delivered",
         error: params.error,
+        deliverySuppressionReason: params.deliverySuppressionReason,
         failureNotification: noFailureNotification,
       };
     }
@@ -344,18 +323,12 @@ export function resolveDeliveryState(params: {
       failureNotification: noFailureNotification,
     };
   }
-  if (params.delivered === true) {
-    return {
-      delivered: true,
-      status: "delivered",
-      failureNotification: { status: "not-requested" },
-    };
-  }
   if (params.delivered === false) {
     return {
       delivered: false,
       status: "not-delivered",
       error: params.error,
+      deliverySuppressionReason: params.deliverySuppressionReason,
       failureNotification: { status: "not-requested" },
     };
   }

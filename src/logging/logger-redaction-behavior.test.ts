@@ -1,15 +1,28 @@
 // Logger redaction behavior tests cover secret scrubbing before log writes.
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import {
   createDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
-import { getChildLogger, getLogger, resetLogger, setLoggerOverride } from "../logging.js";
-import { withEnv } from "../test-utils/env.js";
+import { markSqliteNativeOpenFailure } from "../infra/sqlite-error-diagnostics.js";
+import { PluginStateStoreError } from "../plugin-state/plugin-state-store.types.js";
+import {
+  capturePluginStateWorkerFailure,
+  restorePluginStateWorkerFailure,
+} from "../plugin-state/plugin-state-worker-errors.js";
+import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
+import {
+  getChildLogger,
+  getLogger,
+  resetLogger,
+  setLoggerOverride,
+  toPinoLikeLogger,
+} from "./logger.js";
 import { testApi as loggerTest } from "./logger.test-support.js";
 import { createDiagnosticLogRecordCapture } from "./test-helpers/diagnostic-log-capture.js";
 
@@ -35,6 +48,7 @@ afterEach(() => {
   resetDiagnosticEventsForTest();
   resetLogger();
   setLoggerOverride(null);
+  vi.restoreAllMocks();
 });
 
 afterAll(async () => {
@@ -42,28 +56,80 @@ afterAll(async () => {
 });
 
 describe("file log redaction", () => {
-  it("redacts credential fields before writing JSONL file logs", async () => {
-    const logPath = logPathTracker.nextPath();
-    setLoggerOverride({ level: "info", file: logPath });
+  it.each([
+    { canonical: false, aggregate: false },
+    { canonical: true, aggregate: false },
+    { canonical: false, aggregate: true },
+    { canonical: true, aggregate: true },
+  ])(
+    "retains plugin-state failure origin and redacted causes (canonical=$canonical, aggregate=$aggregate)",
+    async ({ canonical, aggregate }) => {
+      const logPath = logPathTracker.nextPath();
+      setLoggerOverride({ level: "info", file: logPath });
+      const native = Object.assign(
+        new Error(`Permission denied; Authorization: Bearer ${secret}`),
+        {
+          code: "EACCES",
+          errno: -13,
+          privateData: "unrelated stored value",
+        },
+      );
+      const cause = aggregate
+        ? new AggregateError([native], "Synthetic admission failed", {
+            cause: new Error("Synthetic cleanup failed"),
+          })
+        : new Error("Synthetic admission failed", { cause: native });
+      if (cause instanceof AggregateError) {
+        cause.errors.push(cause);
+      }
+      if (canonical) {
+        markSqliteNativeOpenFailure(cause);
+      }
+      const owner = { pid: 12345, threadId: 7, version: "2026.9.6" };
+      const original = new PluginStateStoreError("Failed to open the plugin state database.", {
+        code: "PLUGIN_STATE_OPEN_FAILED",
+        operation: "entries",
+        path: "/synthetic/state/openclaw.sqlite",
+        owner,
+        cause,
+      });
+      const error = restorePluginStateWorkerFailure(
+        structuredClone(capturePluginStateWorkerFailure(original)),
+      );
+      getChildLogger({ subsystem: "plugin-state-proof" }).warn(
+        { error },
+        "Background update failed",
+      );
 
-    getLogger().info({ apiKey: secret, message: "provider configured" });
-
-    const content = await readLogFile(logPath);
-    expect(content).toContain("provider configured");
-    expect(content).toContain('"apiKey"');
-    expect(content).not.toContain(secret);
-  });
-
-  it("redacts bearer tokens in file log message strings", async () => {
-    const logPath = logPathTracker.nextPath();
-    setLoggerOverride({ level: "info", file: logPath });
-
-    getLogger().warn({ message: `Authorization: Bearer ${secret}` });
-
-    const content = await readLogFile(logPath);
-    expect(content).toContain("Authorization: Bearer");
-    expect(content).not.toContain(secret);
-  });
+      const content = await readLogFile(logPath);
+      const record = JSON.parse(content.trim());
+      const nativeDetails = {
+        message: expect.stringContaining("Permission denied"),
+        errorCode: "EACCES",
+        errno: -13,
+      };
+      expect(record["1"].error).toMatchObject({
+        name: "PluginStateStoreError",
+        message: "Failed to open the plugin state database.",
+        code: "PLUGIN_STATE_OPEN_FAILED",
+        operation: "entries",
+        path: "/synthetic/state/openclaw.sqlite",
+        owner,
+        cause: {
+          message: "Synthetic admission failed",
+          ...(aggregate
+            ? {
+                cause: { message: "Synthetic cleanup failed" },
+                errors: [nativeDetails, { message: "Additional SQLite error cause omitted" }],
+              }
+            : { cause: nativeDetails }),
+        },
+      });
+      expect(content).not.toContain(secret);
+      expect(content).not.toContain("unrelated stored value");
+      expect(record["1"].error).not.toHaveProperty("stack");
+    },
+  );
 
   it("redacts structured authorization fields before writing JSONL file logs", async () => {
     const logPath = logPathTracker.nextPath();
@@ -162,30 +228,71 @@ describe("file log redaction", () => {
     expect(content).toContain("configured log path works");
   });
 
-  it("expands leading tilde in logging.file", () => {
+  it("expands leading tilde in logging.file", async () => {
     const home = path.join(path.dirname(logPathTracker.nextPath()), "home");
+    const logPath = path.join(home, "custom-openclaw.log");
 
-    withEnv({ HOME: home }, () => {
-      expect(loggerTest.resolveActiveLogFile("~/custom-openclaw.log")).toBe(
-        path.join(home, "custom-openclaw.log"),
-      );
+    await withEnvAsync({ HOME: home, OPENCLAW_HOME: undefined }, async () => {
+      setLoggerOverride({ level: "info", file: "~/custom-openclaw.log" });
+      getLogger().info("tilde log path works");
+
+      expect(await readLogFile(logPath)).toContain("tilde log path works");
     });
   });
 
-  it("writes trace context as top-level JSONL fields", async () => {
+  it.each(["bindings", "argument"])(
+    "writes %s trace context ahead of active scope",
+    async (source) => {
+      const logPath = logPathTracker.nextPath();
+      setLoggerOverride({ level: "info", file: logPath });
+      const trace = {
+        traceId: TRACE_ID,
+        spanId: SPAN_ID,
+        parentSpanId: "00f067aa0ba902b8",
+        traceFlags: "00",
+      };
+      const logger = getChildLogger({
+        subsystem: "gateway",
+        ...(source === "bindings" ? { trace } : {}),
+      });
+
+      runWithDiagnosticTraceContext(
+        createDiagnosticTraceContext({ traceId: "3bf92f3577b34da6a3ce929d0e0e4736" }),
+        () =>
+          logger.info(
+            { route: "/api/health", ...(source === "argument" ? { trace } : {}) },
+            "request completed",
+          ),
+      );
+
+      const [line] = (await readLogFile(logPath)).trim().split("\n");
+      const record = JSON.parse(line ?? "{}") as Record<string, unknown>;
+      expect(record.traceId).toBe(TRACE_ID);
+      expect(record.spanId).toBe(SPAN_ID);
+      expect(record.parentSpanId).toBe(trace.parentSpanId);
+      expect(record.traceFlags).toBe("00");
+    },
+  );
+
+  it("captures trace fields before message serialization invokes caller code", async () => {
     const logPath = logPathTracker.nextPath();
     setLoggerOverride({ level: "info", file: logPath });
-    const logger = getChildLogger({
-      subsystem: "gateway",
-      trace: { traceId: TRACE_ID, spanId: SPAN_ID },
-    });
+    const trace = { traceId: TRACE_ID, spanId: SPAN_ID };
 
-    logger.info({ route: "/api/health" }, "request completed");
+    toPinoLikeLogger(getLogger(), "info").info(
+      { trace },
+      {
+        toJSON() {
+          trace.traceId = "3bf92f3577b34da6a3ce929d0e0e4736";
+          return "serialized";
+        },
+      },
+    );
 
-    const [line] = (await readLogFile(logPath)).trim().split("\n");
-    const record = JSON.parse(line ?? "{}") as Record<string, unknown>;
+    const record = JSON.parse((await readLogFile(logPath)).trim()) as Record<string, unknown>;
     expect(record.traceId).toBe(TRACE_ID);
     expect(record.spanId).toBe(SPAN_ID);
+    expect(record.message).toBe('"serialized"');
   });
 
   it("writes active request trace context as top-level JSONL fields", async () => {
@@ -206,17 +313,28 @@ describe("file log redaction", () => {
     expect(record.spanId).toBe(SPAN_ID);
   });
 
-  it("writes hostname and flattened message as top-level JSONL fields", async () => {
+  it.each([
+    {
+      name: "structured arguments",
+      args: [{ route: "/api/health" }, "request completed"],
+      message: "request completed",
+    },
+    {
+      name: "sparse numeric keys",
+      args: [{ "11": "eleven", "2": "two", "01": "leading", "1": "one" }],
+      message: "one leading two eleven",
+    },
+  ])("writes hostname and flattened message for $name", async ({ args, message }) => {
     const logPath = logPathTracker.nextPath();
     setLoggerOverride({ level: "info", file: logPath });
 
-    getLogger().info({ route: "/api/health" }, "request completed");
+    toPinoLikeLogger(getLogger(), "info").info(...args);
 
     const [line] = (await readLogFile(logPath)).trim().split("\n");
     const record = JSON.parse(line ?? "{}") as Record<string, unknown>;
     expect(record.hostname).toBeTypeOf("string");
     expect(record.hostname).not.toBe("");
-    expect(record.message).toBe("request completed");
+    expect(record.message).toBe(message);
   });
 
   it("keeps bounded file-log messages UTF-16 safe", async () => {
@@ -236,15 +354,16 @@ describe("file log redaction", () => {
     setLoggerOverride({ level: "info", file: logPath });
     const hostnames = ["", "lr-macbook", "changed-host"];
     const resolvedHostnames: string[] = [];
-    loggerTest.setHostnameResolverForTests(() => {
+    const logger = getLogger();
+    vi.spyOn(os, "hostname").mockImplementation(() => {
       const hostname = hostnames.shift() ?? "changed-host";
       resolvedHostnames.push(hostname);
       return hostname;
     });
 
-    getLogger().info({ route: "/api/health" }, "first request");
-    getLogger().info({ route: "/api/health" }, "second request");
-    getLogger().info({ route: "/api/health" }, "third request");
+    logger.info({ route: "/api/health" }, "first request");
+    logger.info({ route: "/api/health" }, "second request");
+    logger.info({ route: "/api/health" }, "third request");
 
     const records = (await readLogFile(logPath))
       .trim()

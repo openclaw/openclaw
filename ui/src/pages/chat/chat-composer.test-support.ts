@@ -1,6 +1,11 @@
 import { render } from "lit";
 import { expect, vi } from "vitest";
+import type { ApplicationContext } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
+import {
+  createApplicationContextProvider,
+  createApplicationGateway,
+} from "../../test-helpers/application-context.ts";
 import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.ts";
 
 type ComposerProps = Parameters<typeof renderChatComposer>[0];
@@ -21,6 +26,9 @@ export function createComposerProps(overrides: Partial<ComposerProps> = {}): Com
     modelCatalog: [],
     modelSwitching: false,
     sessions: null,
+    selectedSession: overrides.sessions?.sessions.find(
+      (row) => row.key === (overrides.sessionKey ?? "main"),
+    ),
     assistantName: "OpenClaw",
     onDraftChange: vi.fn(),
     onSend: vi.fn(),
@@ -30,10 +38,25 @@ export function createComposerProps(overrides: Partial<ComposerProps> = {}): Com
 }
 
 export function renderComposerFixture(overrides: Partial<ComposerProps> = {}) {
-  const container = document.createElement("div");
+  const container = createComposerContainer();
   const props = createComposerProps(overrides);
   render(renderChatComposer(props), container);
   return { container, props };
+}
+
+export function createComposerContainer() {
+  const context: Pick<ApplicationContext, "gateway" | "agentSelection"> = {
+    gateway: createApplicationGateway().gateway,
+    agentSelection: {
+      state: { selectedId: "main", scopeId: "main" },
+      intentRevision: 0,
+      set: () => {},
+      setScope: () => {},
+      subscribe: () => () => {},
+    },
+  };
+  // SAFETY: Disconnected composer fixtures only read Gateway and agent selection; MCP discovery is unavailable.
+  return createApplicationContextProvider(context as ApplicationContext);
 }
 
 export function findComposerButton(container: Element, label: string): HTMLButtonElement {
@@ -46,11 +69,15 @@ export function findComposerButton(container: Element, label: string): HTMLButto
 
 export function findPrimaryButton(container: Element): HTMLButtonElement {
   const actions = container.querySelector(".agent-chat__composer-actions");
-  const result = actions?.querySelector<HTMLButtonElement>(":scope > openclaw-tooltip > button");
+  const result = actions?.querySelector<HTMLButtonElement>(
+    ":scope > .chat-desktop-primary-action > openclaw-tooltip > button",
+  );
   if (!result) {
     throw new Error("expected one primary composer button");
   }
-  expect(actions?.querySelectorAll(":scope > openclaw-tooltip > button")).toHaveLength(1);
+  expect(
+    actions?.querySelectorAll(":scope > .chat-desktop-primary-action > openclaw-tooltip > button"),
+  ).toHaveLength(1);
   return result;
 }
 

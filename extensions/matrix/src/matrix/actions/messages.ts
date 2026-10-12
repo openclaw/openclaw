@@ -1,11 +1,12 @@
 import type { Direction } from "matrix-js-sdk/lib/models/event-timeline.js";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveMatrixReplacementContent } from "../media-text.js";
 import { fetchMatrixPollMessageSummary, resolveMatrixPollRootEventId } from "../poll-summary.js";
 import { isPollEventType, isPollStartType } from "../poll-types.js";
 import { editMessageMatrix, sendMessageMatrix } from "../send.js";
 import { withResolvedRoomAction } from "./client.js";
 import { resolveMatrixActionLimit } from "./limits.js";
-import { summarizeMatrixRawEvent } from "./summary.js";
+import { fetchEventSummary, summarizeMatrixRawEvent } from "./summary.js";
 import {
   EventType,
   type MatrixActionClientOpts,
@@ -44,18 +45,7 @@ function resolveLatestMatrixReplacements(events: readonly MatrixRawEvent[]) {
   for (const event of events) {
     const targetId = resolveMatrixReplacementTarget(event);
     const original = targetId ? originals.get(targetId) : undefined;
-    const newContent = event.content["m.new_content"];
-    if (
-      !targetId ||
-      !original ||
-      event.sender !== original.sender ||
-      event.type !== original.type ||
-      event.state_key !== undefined ||
-      event.unsigned?.redacted_because ||
-      !newContent ||
-      typeof newContent !== "object" ||
-      Array.isArray(newContent)
-    ) {
+    if (!targetId || !original || !resolveMatrixReplacementContent(original, event)) {
       continue;
     }
 
@@ -130,6 +120,20 @@ export async function deleteMatrixMessage(
   });
 }
 
+export async function readMatrixMessage(
+  roomId: string,
+  eventId: string,
+  opts: MatrixActionClientOpts = {},
+): Promise<MatrixMessageSummary> {
+  return await withResolvedRoomAction(roomId, opts, async (client, resolvedRoom) => {
+    const message = await fetchEventSummary(client, resolvedRoom, eventId);
+    if (!message) {
+      throw new Error(`Matrix message ${eventId} was not found in room ${resolvedRoom}.`);
+    }
+    return message;
+  });
+}
+
 export async function readMatrixMessages(
   roomId: string,
   opts: MatrixActionClientOpts & {
@@ -150,7 +154,7 @@ export async function readMatrixMessages(
     const dir = opts.after ? "f" : "b";
     const threadId = normalizeOptionalString(opts.threadId);
     const isThreadRelationsStartCursor = threadId
-      ? isMatrixThreadRelationsStartCursor(rawBefore, threadId)
+      ? rawBefore === encodeMatrixThreadRelationsStartCursor(threadId)
       : false;
     const token = isThreadRelationsStartCursor ? undefined : (rawBefore ?? rawAfter);
     const includeThreadRoot = threadId !== undefined && !token && !isThreadRelationsStartCursor;
@@ -283,32 +287,8 @@ function encodeMatrixThreadRelationsStartCursor(threadId: string): string {
   return `${MATRIX_THREAD_RELATIONS_START_CURSOR_PREFIX}${payload}`;
 }
 
-function isMatrixThreadRelationsStartCursor(raw: string | undefined, threadId: string): boolean {
-  if (!raw?.startsWith(MATRIX_THREAD_RELATIONS_START_CURSOR_PREFIX)) {
-    return false;
-  }
-  const encoded = raw.slice(MATRIX_THREAD_RELATIONS_START_CURSOR_PREFIX.length);
-  try {
-    const bytes = Buffer.from(encoded, "base64url");
-    if (bytes.toString("base64url") !== encoded) {
-      return false;
-    }
-    const decoded = JSON.parse(bytes.toString("utf8")) as {
-      v?: unknown;
-      threadId?: unknown;
-    };
-    return (
-      decoded.v === 1 &&
-      decoded.threadId === threadId &&
-      encodeMatrixThreadRelationsStartCursor(decoded.threadId) === raw
-    );
-  } catch {
-    return false;
-  }
-}
-
 async function fetchDisplayableThreadRootSummary(
-  client: MatrixActionClientOpts["client"] & NonNullable<MatrixActionClientOpts["client"]>,
+  client: NonNullable<MatrixActionClientOpts["client"]>,
   resolvedRoom: string,
   threadId: string,
 ): Promise<MatrixMessageSummary | undefined> {
@@ -340,7 +320,7 @@ function isMatrixThreadEvent(event: MatrixRawEvent): boolean {
 }
 
 async function isMatrixPollRootThreaded(params: {
-  client: MatrixActionClientOpts["client"] & NonNullable<MatrixActionClientOpts["client"]>;
+  client: NonNullable<MatrixActionClientOpts["client"]>;
   event: MatrixRawEvent;
   pollRootId: string;
   resolvedRoom: string;

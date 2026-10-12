@@ -17,34 +17,44 @@ function resolveModel(modelId: string, provider = "anthropic") {
 }
 
 describe("unreleased Claude generations", () => {
-  it.each(["claude-opus-6", "claude-sonnet-6", "claude-opus-5-1"])(
+  it.each([
+    ["claude-opus-6", "claude-opus-5-5", true],
+    ["claude-sonnet-6", "claude-sonnet-5-5", true],
+    ["claude-haiku-5-1", "claude-opus-5-5", true],
+  ] as const)(
     "resolves %s onto the newest known contract",
-    (modelId) => {
+    (modelId, canonicalModelId, remapsMinimal) => {
       const model = resolveModel(modelId);
       expect(model).toBeDefined();
+      expect(model?.params?.canonicalModelId).toBe(canonicalModelId);
+      expect(model?.thinkingLevelMap).toEqual({
+        ...(remapsMinimal ? { minimal: "low" } : {}),
+        xhigh: "xhigh",
+        max: "max",
+      });
       // Without a canonical stamp the shared contracts fall through to pre-4.6
       // shaping (budget_tokens + caller sampling), which current models reject.
       expect(supportsClaudeAdaptiveThinking({ id: modelId, params: model?.params })).toBe(true);
     },
   );
 
-  it("keeps the family when it recognizes one", () => {
-    expect(resolveModel("claude-sonnet-6")?.params?.canonicalModelId).toBe("claude-sonnet-5");
-    expect(resolveModel("claude-opus-6")?.params?.canonicalModelId).toBe("claude-opus-5");
-  });
-
   it("does not stamp a canonical id onto released models", () => {
     // Released ids already carry their own contract; re-pointing them would
     // silently change shaping for models that work today.
-    expect(resolveModel("claude-opus-5")?.params?.canonicalModelId).toBeUndefined();
-    expect(resolveModel("claude-opus-4-8")?.params?.canonicalModelId).toBeUndefined();
-  });
-
-  it("does not mistake snapshot dates for minor versions", () => {
-    // claude-opus-4-20250514 is 4.0; a naive parse reads 4.20 and would treat it
-    // as newer than every released generation.
-    expect(resolveModel("claude-opus-4-20250514")?.params?.canonicalModelId).toBeUndefined();
-    expect(supportsClaudeAdaptiveThinking({ id: "claude-haiku-4-5-20251001" })).toBe(false);
+    for (const id of [
+      "claude-opus-5-5",
+      "claude-opus-5",
+      "claude-opus-4-8",
+      "claude-sonnet-5-5",
+      "claude-haiku-5-5",
+      "claude-sonnet-5",
+      "claude-fable-5",
+      "claude-fable-5-1",
+    ]) {
+      const model = resolveModel(id);
+      expect(model?.id).toBe(id);
+      expect(model?.params?.canonicalModelId).toBeUndefined();
+    }
   });
 
   it("clones released snapshot ids from their dateless manifest template", () => {
@@ -62,7 +72,7 @@ describe("unreleased Claude generations", () => {
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 200_000,
       maxTokens: 64_000,
-      compat: { codeMode: "preferred" },
+      compat: { codeMode: "capable" },
     });
     expect(resolveModel("claude-haiku-4-9-20251001")).toBeUndefined();
   });
@@ -72,11 +82,27 @@ describe("unreleased Claude generations", () => {
     // runtime prefers plugin-resolved modern models. Dropping compat here
     // silently disables catalog-driven behavior such as codeMode "auto",
     // including on env-key-only runs whose model registry is empty.
-    expect(resolveModel("claude-opus-5")?.compat).toEqual({ codeMode: "preferred" });
-    expect(resolveModel("claude-sonnet-5")?.compat).toEqual({ codeMode: "preferred" });
+    for (const id of [
+      "claude-opus-5-5",
+      "claude-opus-5",
+      "claude-sonnet-5-5",
+      "claude-haiku-5-5",
+      "claude-sonnet-5",
+      "claude-fable-5",
+      "claude-fable-5-1",
+    ]) {
+      expect(resolveModel(id)?.compat, id).toEqual({
+        codeMode: id === "claude-haiku-5-5" ? "capable" : "preferred",
+      });
+    }
     // The Claude CLI provider rows are intentionally unflagged: those runs use
     // the CLI harness where OpenClaw code mode does not apply.
-    expect(resolveModel("claude-opus-5", "claude-cli")?.compat).toBeUndefined();
+    for (const id of ["claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"]) {
+      const model = resolveModel(id, "claude-cli");
+      expect(model?.id).toBe(id);
+      expect(model?.compat).toBeUndefined();
+      expect(model?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+    }
   });
 
   it("prefers registry compat over the manifest index", () => {

@@ -1,45 +1,30 @@
-import type { RouteMatch, Router } from "@openclaw/uirouter";
-import { nothing } from "lit";
-import type { ReactiveController, ReactiveControllerHost } from "lit";
+import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
-import { renderLazyViewError } from "../components/lazy-view-error.ts";
+import { keyed } from "lit/directives/keyed.js";
+import { createRef, ref } from "lit/directives/ref.js";
+import { isSessionRouteId } from "../app-route-paths.ts";
+import type { ApplicationRouter } from "../app-routes.ts";
+import { renderAgentStartupState, renderLazyViewError } from "../components/lazy-view-error.ts";
 import { renderLoadingState } from "../components/loading-state.ts";
 import { McpAppUnmountGate } from "../components/mcp-app-unmount.ts";
 import { t } from "../i18n/index.ts";
+import { isAgentDatabaseInspectionPendingError } from "../lib/gateway-availability.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
-import {
-  RouterOutletController,
-  selectRenderedRouteMatch,
-  type RouterOutletSnapshot,
-} from "./router-outlet-controller.ts";
+import type { ApplicationContext } from "./context.ts";
+import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
+import { RouterOutletController, selectRenderedRouteMatch } from "./router-outlet-controller.ts";
 import {
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,
   scheduleStaleChunkReload,
 } from "./stale-chunk-reload.ts";
 
-export { selectRenderedRouteMatch } from "./router-outlet-controller.ts";
+type ApplicationRouteMatch = ReturnType<ApplicationRouter["getState"]>["matches"][number];
 
-type RenderableModule<TData> = {
-  render: (data: TData | undefined) => unknown;
-  renderOwnerKey?: (
-    match: Pick<RouteMatch<string, unknown, TData>, "data" | "location">,
-    settled: Pick<RouteMatch<string, unknown, TData>, "data" | "location"> | undefined,
-  ) => string | undefined;
+type RouterOutletOptions = {
+  retryContext?: ApplicationContext;
+  presented?: boolean;
 };
-
-type RouterOutletOptions<TLoadContext = unknown> = {
-  retryContext?: TLoadContext;
-};
-
-function isRenderableModule<TData>(module: unknown): module is RenderableModule<TData> {
-  return (
-    typeof module === "object" &&
-    module !== null &&
-    "render" in module &&
-    typeof module.render === "function"
-  );
-}
 
 function measureRoutedRender<T>(routeId: string, render: () => T): T {
   const startedAt = globalThis.performance?.now() ?? 0;
@@ -70,33 +55,31 @@ function markButtonReloading(button: HTMLButtonElement | null): () => void {
   };
 }
 
-function renderError<TRouteId extends string, TLoadContext, TModule, TData>(
-  router: Router<TRouteId, TLoadContext, TModule, TData>,
-  retryContext: TLoadContext | undefined,
+function renderError(
+  router: ApplicationRouter,
+  retryContext: ApplicationContext | undefined,
   error: unknown,
-  routeId: TRouteId,
+  routeId: ApplicationRouteMatch["routeId"],
   render?: () => unknown,
 ) {
+  if (isAgentDatabaseInspectionPendingError(error)) {
+    return renderAgentStartupState();
+  }
   const staleChunk = isStaleChunkImportError(error);
   if (staleChunk) {
-    // The chunk this document references was replaced by a newer build;
-    // revalidate cannot fix that, only a reload against the fresh index.html.
+    // Asset failures can mean an interrupted connection or a replaced build.
+    // Reload also resets failed browser imports and Vite stylesheet preloads.
     void scheduleStaleChunkReload();
   }
-  const revalidate = () => {
-    if (retryContext === undefined) {
-      return;
-    }
-    void router.revalidate(retryContext, routeId).catch(() => undefined);
-  };
   const handleRetry = (event: Event) => {
     if (!staleChunk) {
-      revalidate();
+      if (retryContext !== undefined) {
+        void router.revalidate(retryContext, routeId).catch(() => undefined);
+      }
       return;
     }
-    // The gateway is usually still restarting when this is clicked (that update
-    // is what stranded the chunk), so wait for it to answer and then reload
-    // instead of declining on the first failed probe — a silent no-op here is
+    // The Gateway may still be restarting or unreachable, so wait for it to answer
+    // and then reload instead of declining on the first failed probe — a silent no-op here is
     // what drives people to a manual hard reload. Reloading against an
     // unreachable gateway would replace the recoverable panel error with a
     // fatal navigation error in app webviews, so the wait is still bounded.
@@ -106,153 +89,346 @@ function renderError<TRouteId extends string, TLoadContext, TModule, TData>(
       if (reloading) {
         return;
       }
+      // Vite marks CSS dependencies seen before loading them. Retrying the
+      // module after a failed or blocked reload can mount it without its styles.
       restoreButton();
-      revalidate();
     });
   };
-  // Stale-chunk failures are routine after a gateway update, so present them
-  // as an update prompt instead of a generic failure.
+  // Resource errors alone cannot establish that a newer build exists.
   return renderLazyViewError({ error, onRetry: handleRetry, render, stale: staleChunk });
 }
 
-function renderRouterOutlet<TRouteId extends string, TLoadContext, TModule, TData = unknown>(
-  router: Router<TRouteId, TLoadContext, TModule, TData>,
-  selection: RouterOutletSnapshot<TRouteId, TModule, TData>,
-  renderedMatch: RouteMatch<TRouteId, TModule, TData> | undefined,
-  options: RouterOutletOptions<TLoadContext> = {},
+function renderRouterOutlet(
+  router: ApplicationRouter,
+  showPending: boolean,
+  renderedMatch: ApplicationRouteMatch | undefined,
+  options: RouterOutletOptions = {},
 ): unknown {
-  if (renderedMatch?.status === "notFound") {
-    return nothing;
-  }
-  if (renderedMatch?.status === "redirected") {
-    return nothing;
-  }
-  if (!renderedMatch) {
+  if (
+    !renderedMatch ||
+    renderedMatch.status === "notFound" ||
+    renderedMatch.status === "redirected"
+  ) {
     return nothing;
   }
 
   const routeId = renderedMatch.routeId;
-  if (!renderedMatch?.module) {
+  if (!renderedMatch.module) {
     return renderedMatch.error
-      ? renderError<TRouteId, TLoadContext, TModule, TData>(
-          router,
-          options.retryContext,
-          renderedMatch.error,
-          routeId,
-        )
-      : selection.showPending
+      ? renderError(router, options.retryContext, renderedMatch.error, routeId)
+      : showPending
         ? renderLoadingState()
         : nothing;
   }
   const routeModule = renderedMatch.module;
-  if (!isRenderableModule<TData>(routeModule)) {
-    return renderedMatch.error
-      ? renderError<TRouteId, TLoadContext, TModule, TData>(
-          router,
-          options.retryContext,
-          renderedMatch.error,
-          routeId,
-        )
-      : null;
-  }
   const renderedPage = () =>
-    measureRoutedRender(routeId, () => routeModule.render(renderedMatch.data));
+    measureRoutedRender(routeId, () =>
+      options.presented === false
+        ? routeModule.render(renderedMatch.data, renderedMatch.isFetching === "loader", false)
+        : routeModule.render(renderedMatch.data, renderedMatch.isFetching === "loader"),
+    );
   return renderedMatch.error
-    ? renderError<TRouteId, TLoadContext, TModule, TData>(
+    ? renderError(
         router,
         options.retryContext,
         renderedMatch.error,
         routeId,
-        renderedPage,
+        routeModule.retainOnNavigate ? undefined : renderedPage,
       )
     : renderedPage();
 }
 
-type RouterOutletInputs<TRouteId extends string, TLoadContext, TModule, TData> = {
-  router?: Router<TRouteId, TLoadContext, TModule, TData>;
-  onNotFound?: () => boolean | void;
-  notFoundRecoveryReady?: boolean;
-};
+/** Presentation can retire immediately while its connected subtree finishes MCP teardown. */
+class OpenClawRoutePresentation extends OpenClawLightDomElement {
+  @property({ attribute: false }) ownerKey = "";
+  @property({ attribute: false }) renderPage: (presented: boolean) => unknown = () => nothing;
+  private presentedValue = false;
 
-class LitRouterOutletController<
-  TRouteId extends string,
-  TLoadContext,
-  TModule,
-  TData,
-> implements ReactiveController {
-  private readonly controller: RouterOutletController<TRouteId, TLoadContext, TModule, TData>;
-
-  constructor(
-    host: ReactiveControllerHost,
-    private readonly inputs: () => RouterOutletInputs<TRouteId, TLoadContext, TModule, TData>,
-  ) {
-    this.controller = new RouterOutletController(() => host.requestUpdate());
-    host.addController(this);
+  @property({ attribute: false })
+  get presented(): boolean {
+    return this.presentedValue;
+  }
+  set presented(value: boolean) {
+    const previous = this.presentedValue;
+    this.presentedValue = value;
+    this.style.display = value ? "contents" : "none";
+    this.toggleAttribute("inert", !value);
+    this.setAttribute("aria-hidden", value ? "false" : "true");
+    this.requestUpdate("presented", previous);
   }
 
-  get snapshot(): RouterOutletSnapshot<TRouteId, TModule, TData> {
-    return this.controller.snapshot;
-  }
-
-  hostConnected(): void {
-    this.controller.setInputs(this.inputs());
-    this.controller.connect();
-  }
-
-  hostUpdate(): void {
-    this.controller.setInputs(this.inputs());
-  }
-
-  hostDisconnected(): void {
-    this.controller.disconnect();
+  override render() {
+    return this.renderPage(this.presented);
   }
 }
 
-class OpenClawRouterOutlet<
-  TRouteId extends string = string,
-  TLoadContext = unknown,
-  TModule = unknown,
-  TData = unknown,
-> extends OpenClawLightDomElement {
-  @property({ attribute: false }) router?: Router<TRouteId, TLoadContext, TModule, TData>;
-  @property({ attribute: false }) retryContext?: TLoadContext;
+class OpenClawRouterOutlet extends OpenClawLightDomElement implements ControlUiReadinessOutlet {
+  @property({ attribute: false }) router?: ApplicationRouter;
+  @property({ attribute: false }) retryContext?: ApplicationContext;
   @property({ attribute: false }) onNotFound?: () => boolean | void;
   @property({ attribute: false }) notFoundRecoveryReady?: boolean;
-  private readonly outlet = new LitRouterOutletController(this, () => ({
-    router: this.router,
-    onNotFound: this.onNotFound,
-    notFoundRecoveryReady: this.notFoundRecoveryReady,
-  }));
-  private readonly mcpAppUnmountGate = new McpAppUnmountGate(this);
+  @property({ attribute: false }) retryEnabled = true;
+  private readonly outlet = new RouterOutletController<
+    ApplicationRouteMatch["routeId"],
+    ApplicationContext,
+    NonNullable<ApplicationRouteMatch["module"]>
+  >(() => this.requestUpdate());
+  @property({ attribute: false }) retentionScope?: object;
+  private readonly retainedUnmountGate = new McpAppUnmountGate(this);
+  private readonly transientUnmountGate = new McpAppUnmountGate(this);
+  private readonly retainedPresentation = createRef<OpenClawRoutePresentation>();
+  private retainedMatch?: ApplicationRouteMatch;
+  private retainedOwnerKey?: string;
+  private retainedPresented = false;
+  private scopeRouter?: ApplicationRouter;
+  private scopeOwner?: object;
+  private scopeInitialized = false;
+  private scopeGeneration = 0;
+  private scopeRefreshing = false;
+  private retiredSessionMatches = new Set<string>();
+  private renderedPresentationSettled = false;
+  private committedPresentationSettled = false;
+  private readonly presentationWaiters = new Set<() => void>();
+
+  get presentationSettled(): boolean {
+    return this.isConnected && !this.isUpdatePending && this.committedPresentationSettled;
+  }
+
+  async settlePresentation(): Promise<boolean> {
+    while (this.isConnected) {
+      await this.updateComplete;
+      if (!this.isConnected) {
+        return false;
+      }
+      if (!this.retainedUnmountGate.retiring && !this.transientUnmountGate.retiring) {
+        await this.retainedPresentation.value?.updateComplete;
+        if (this.isUpdatePending) {
+          continue;
+        }
+        return this.presentationSettled;
+      }
+      await new Promise<void>((resolve) => {
+        this.presentationWaiters.add(resolve);
+      });
+    }
+    return false;
+  }
+
+  private notifyPresentationWaiters(): void {
+    for (const resolve of this.presentationWaiters) {
+      resolve();
+    }
+    this.presentationWaiters.clear();
+  }
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    this.synchronizeOutletInputs();
+    this.outlet.connect();
+  }
+
+  override disconnectedCallback(): void {
+    super.disconnectedCallback();
+    this.outlet.disconnect();
+    this.committedPresentationSettled = false;
+    this.notifyPresentationWaiters();
+  }
+
+  protected override willUpdate(): void {
+    this.committedPresentationSettled = false;
+    this.synchronizeOutletInputs();
+  }
+
+  protected override updated(): void {
+    this.committedPresentationSettled =
+      this.renderedPresentationSettled &&
+      !this.retainedUnmountGate.retiring &&
+      !this.transientUnmountGate.retiring;
+    this.notifyPresentationWaiters();
+  }
+
+  private synchronizeOutletInputs(): void {
+    this.outlet.setInputs({
+      router: this.router,
+      onNotFound: this.onNotFound,
+      notFoundRecoveryReady: this.notFoundRecoveryReady,
+      retryContext: this.retryContext,
+      retryEnabled: this.retryEnabled,
+    });
+  }
+
+  private synchronizeRetentionScope(router: ApplicationRouter): void {
+    const routerChanged = this.scopeRouter !== router;
+    const changed =
+      this.scopeInitialized && (routerChanged || this.scopeOwner !== this.retentionScope);
+    this.scopeInitialized = true;
+    this.scopeRouter = router;
+    this.scopeOwner = this.retentionScope;
+    if (!changed) {
+      return;
+    }
+    const generation = ++this.scopeGeneration;
+    this.retainedMatch = undefined;
+    this.retainedOwnerKey = undefined;
+    this.retainedPresented = false;
+    this.scopeRefreshing = false;
+    this.retiredSessionMatches = new Set(
+      routerChanged
+        ? []
+        : [...router.getState().matches, ...router.getState().pendingMatches]
+            .filter((match) => isSessionRouteId(match.routeId))
+            .map((match) => match.id),
+    );
+    if (routerChanged) {
+      return;
+    }
+    const context = this.retryContext;
+    const scope = this.retentionScope;
+    const state = router.getState();
+    const target = state.pendingMatches[0] ?? state.matches[0];
+    if (context === undefined || !target || !isSessionRouteId(target.routeId)) {
+      return;
+    }
+    this.scopeRefreshing = true;
+    // Session loader dependencies carry this same scope. Navigating the exact
+    // target retires the old load without reusing its cache or changing history.
+    void router
+      .navigate(target.routeId, context, { history: "none", revalidate: true }, target.location)
+      .finally(() => {
+        if (
+          this.router === router &&
+          this.retentionScope === scope &&
+          this.scopeGeneration === generation
+        ) {
+          this.scopeRefreshing = false;
+          this.requestUpdate();
+        }
+      })
+      .catch(() => undefined);
+  }
 
   override render() {
+    this.renderedPresentationSettled = false;
     const router = this.router;
     if (!router) {
       return nothing;
     }
     const snapshot = this.outlet.snapshot;
     const renderedMatch = selectRenderedRouteMatch(snapshot.active, snapshot.pending);
+    this.synchronizeRetentionScope(router);
+    const ready = renderedMatch?.status === "success" && renderedMatch.error === undefined;
+    const retiredSession =
+      renderedMatch !== undefined && this.retiredSessionMatches.has(renderedMatch.id);
+    const scopeReady = !this.scopeRefreshing && !retiredSession;
     const routeKey = renderedMatch ? `${renderedMatch.routeId}:${renderedMatch.status}` : "empty";
-    const routeModule = renderedMatch?.module;
-    const declaredOwnerKey =
-      renderedMatch && isRenderableModule<TData>(routeModule)
-        ? routeModule.renderOwnerKey?.(renderedMatch, snapshot.settled)
-        : undefined;
+    const module = renderedMatch?.module;
+    const declaredOwnerKey = renderedMatch
+      ? module?.renderOwnerKey?.(renderedMatch, snapshot.settled)
+      : undefined;
     const explicitOwnerKey = renderedMatch?.error === undefined ? declaredOwnerKey : undefined;
-    const retainCurrent =
+    const waiting = renderedMatch?.status === "pending" || renderedMatch?.isFetching === "loader";
+    this.renderedPresentationSettled =
+      snapshot.status !== "idle" &&
+      snapshot.status !== "loading" &&
+      !snapshot.pending &&
+      !snapshot.startupPending &&
+      scopeReady &&
+      !waiting;
+    const retainPending =
+      waiting && this.retainedPresented && this.retainedOwnerKey === explicitOwnerKey;
+    const presentRetained =
+      scopeReady &&
+      module?.retainOnNavigate === true &&
       explicitOwnerKey !== undefined &&
-      renderedMatch?.status === "pending" &&
-      renderedMatch.data === undefined;
-    return this.mcpAppUnmountGate.render(
-      explicitOwnerKey ?? routeKey,
-      () =>
-        renderRouterOutlet(router, snapshot, renderedMatch, {
-          retryContext: this.retryContext,
-        }),
-      () => [this],
-      { retainRenderedValue: retainCurrent },
-    );
+      (ready || retainPending);
+    if (presentRetained && ready) {
+      this.retainedMatch = renderedMatch;
+      this.retainedOwnerKey = explicitOwnerKey;
+    } else if (snapshot.status === "idle" || (scopeReady && module?.retainOnNavigate && !waiting)) {
+      // Invalid session destinations still replace their old owner; only a
+      // successful session page opts into retention across unrelated routes.
+      this.retainedMatch = undefined;
+      this.retainedOwnerKey = undefined;
+    }
+    this.retainedPresented = presentRetained;
+    const retained = this.retainedMatch;
+    const retainedKey = `${this.scopeGeneration}:${this.retainedOwnerKey ?? "empty"}`;
+    const transientKey = presentRetained ? "empty" : (explicitOwnerKey ?? routeKey);
+    const renderTransient = () => {
+      if (snapshot.startupPending) {
+        return renderAgentStartupState();
+      }
+      if (isSessionRouteId(renderedMatch?.routeId) && !scopeReady) {
+        return !retiredSession && renderedMatch?.error !== undefined
+          ? renderError(router, this.retryContext, renderedMatch.error, renderedMatch.routeId)
+          : renderLoadingState();
+      }
+      // Returning from another page must not revive the previously selected
+      // session while the requested destination is still unresolved.
+      if (module?.retainOnNavigate && waiting) {
+        // Chat's module can arrive before its submitted-prompt preview loader.
+        // Keep the launcher visible until that first Chat presentation is ready.
+        if (renderedMatch?.routeId === "chat" && snapshot.settled?.routeId === "new-session") {
+          return renderRouterOutlet(router, snapshot.showPending, snapshot.settled, {
+            retryContext: this.retryContext,
+          });
+        }
+        return renderLoadingState();
+      }
+      return renderRouterOutlet(router, snapshot.showPending, renderedMatch, {
+        retryContext: this.retryContext,
+      });
+    };
+    const rendered = html`
+      ${this.retainedUnmountGate.render(
+        retainedKey,
+        () =>
+          retained
+            ? keyed(
+                retainedKey,
+                html`<openclaw-route-presentation
+                  ${ref(this.retainedPresentation)}
+                  .ownerKey=${retainedKey}
+                  .presented=${presentRetained}
+                  .renderPage=${(presented: boolean) =>
+                    renderRouterOutlet(router, snapshot.showPending, retained, {
+                      retryContext: this.retryContext,
+                      presented,
+                    })}
+                ></openclaw-route-presentation>`,
+              )
+            : nothing,
+        () => (this.retainedPresentation.value ? [this.retainedPresentation.value] : []),
+      )}
+      ${this.transientUnmountGate.render(
+        transientKey,
+        () => (presentRetained ? nothing : renderTransient()),
+        () => [...this.children].filter((child) => child !== this.retainedPresentation.value),
+        {
+          retainRenderedValue:
+            !module?.retainOnNavigate &&
+            explicitOwnerKey !== undefined &&
+            renderedMatch?.status === "pending" &&
+            renderedMatch.data === undefined,
+        },
+      )}
+      ${presentRetained && this.retainedUnmountGate.retiring ? renderLoadingState() : nothing}
+    `;
+    // The gates publish retirement during render and schedule surviving MCP
+    // restarts before these presentation updates. A returning owner stays inert
+    // throughout teardown, even when its key matches the still-connected subtree.
+    if (this.retainedPresentation.value) {
+      this.retainedPresentation.value.presented =
+        presentRetained &&
+        !this.retainedUnmountGate.retiring &&
+        this.retainedPresentation.value.ownerKey === retainedKey;
+    }
+    return rendered;
   }
+}
+
+if (!customElements.get("openclaw-route-presentation")) {
+  customElements.define("openclaw-route-presentation", OpenClawRoutePresentation);
 }
 
 if (!customElements.get("openclaw-router-outlet")) {

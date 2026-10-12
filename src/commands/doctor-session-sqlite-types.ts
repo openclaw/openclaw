@@ -1,49 +1,55 @@
-/** Shared type contracts for doctor-owned session SQLite migration reports. */
+import type { SessionStoreTarget } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { DeferredPluginSessionImport } from "../infra/deferred-plugin-session-sources.js";
+import {
+  isSessionSqliteMigrationWarning,
+  type DoctorSessionSqliteIssue,
+  type DoctorSessionSqliteRestoreConflict,
+} from "../infra/session-sqlite-migration-issues.js";
+import type { SessionSqliteMigrationTargetInput } from "../infra/session-sqlite-migration-manifest.js";
+import type { readOnlySqliteDbStats } from "../infra/session-sqlite-migration-readers.js";
+import type { moveSqliteFilesAside } from "../infra/sqlite-recovery-files.js";
+import type { LegacySessionRecord } from "./doctor-session-sqlite-discovery.js";
 
-export type DoctorSessionSqliteIssue = {
-  code: string;
-  message: string;
-  sessionKey?: string;
+export type LegacyArchiveTarget = {
+  sourceTarget: SessionStoreTarget & { sqlitePath?: string };
+  target: SessionSqliteMigrationTargetInput;
+  report: DoctorSessionSqliteTargetReport;
+  validated: boolean;
+  records: Array<Omit<LegacySessionRecord, "entry"> & { sessionId: string }>;
+  deferredPluginIds: string[];
+  retainedImportVerified: boolean;
+  sourceConflicts?: Map<string, string>;
+  verifiedSources?: DeferredPluginSessionImport["sources"];
 };
 
-const SESSION_SQLITE_WARNING_ISSUE_CODES = new Set([
-  "entry_invalid",
-  "transcript_archive_failed",
-  "transcript_malformed",
-  "transcript_missing",
-  "unreferenced_jsonl_archive_failed",
-]);
-
-export function isSessionSqliteMigrationWarning(issue: DoctorSessionSqliteIssue): boolean {
-  return SESSION_SQLITE_WARNING_ISSUE_CODES.has(issue.code);
+export function countBlockingSessionSqliteIssues(report: DoctorSessionSqliteTargetReport): number {
+  return report.issues.filter((issue) => !isSessionSqliteMigrationWarning(issue)).length;
 }
 
-export type DoctorSessionSqliteRestoreConflict = {
-  archivePath: string;
-  reason: string;
-  sourcePath: string;
-};
+export function isRetainedSourceIssue(issue: DoctorSessionSqliteIssue): boolean {
+  return [
+    "entry_invalid",
+    "historical_duplicate_settled",
+    "legacy_import_deferred",
+    "transcript_malformed",
+    "transcript_missing",
+    "retained_plugin_source_index_rebuilt",
+    "retained_plugin_receipt_superseded",
+  ].includes(issue.code);
+}
+
+export function isInformationalMissingSessionIndex(
+  report: DoctorSessionSqliteTargetReport,
+): boolean {
+  return report.issues.some((issue) => issue.code === "legacy_index_informational");
+}
 
 export type DoctorSessionSqliteRestoreReport = {
   conflicts: DoctorSessionSqliteRestoreConflict[];
   manifestPaths: string[];
   restoredFiles: string[];
   skippedFiles: string[];
-};
-
-type DoctorSessionSqliteLargestSession = {
-  events: number;
-  rowBytes: number;
-  sessionId: string;
-};
-
-type DoctorSessionSqliteDbStats = {
-  dbSizeBytes: number;
-  integrityCheck?: string;
-  largestSessions: DoctorSessionSqliteLargestSession[];
-  totalTranscriptRowBytes: number;
-  walSizeBytes: number;
 };
 
 export type DoctorSessionSqliteCompactReport = {
@@ -58,22 +64,15 @@ export type DoctorSessionSqliteCompactReport = {
   walSizeBeforeBytes: number;
 };
 
-type DoctorSessionSqliteCorruptRecovery = {
-  movedFiles: string[];
-  skippedFiles: string[];
-};
-
 export type SessionSqliteMigrationFailureIssue = {
   body: string;
   bodyPath?: string;
   github?: {
-    fallbackUrl?: string;
     message?: string;
     status: "created" | "failed" | "skipped";
     url?: string;
   };
   title: string;
-  url: string;
 };
 
 export type DoctorSessionSqliteMode =
@@ -99,7 +98,7 @@ export type DoctorSessionSqliteTargetReport = {
   archivedLegacyStoreFiles?: string[];
   archivedTranscriptFiles: string[];
   archivedUnreferencedJsonlFiles: string[];
-  dbStats?: DoctorSessionSqliteDbStats;
+  dbStats?: Extract<ReturnType<typeof readOnlySqliteDbStats>, { ok: true }>["stats"];
   importedEntries: number;
   importedTranscriptEvents: number;
   issues: DoctorSessionSqliteIssue[];
@@ -112,7 +111,7 @@ export type DoctorSessionSqliteTargetReport = {
   validatedEntries: number;
   validatedTranscriptEvents: number;
   compact?: DoctorSessionSqliteCompactReport;
-  corruptRecovery?: DoctorSessionSqliteCorruptRecovery;
+  corruptRecovery?: ReturnType<typeof moveSqliteFilesAside>;
   restore?: DoctorSessionSqliteRestoreReport;
 };
 
@@ -162,41 +161,3 @@ export type DoctorSessionSqliteReport = {
     validatedTranscriptEvents: number;
   };
 };
-
-export function sumDoctorSessionSqliteTargets(
-  targets: DoctorSessionSqliteTargetReport[],
-  value: (target: DoctorSessionSqliteTargetReport) => number,
-): number {
-  return targets.reduce((total, target) => total + value(target), 0);
-}
-
-export function createDoctorSessionSqliteTotals(
-  targets: DoctorSessionSqliteTargetReport[],
-  values: Partial<
-    Omit<DoctorSessionSqliteReport["totals"], "issues" | "sqliteEntries" | "targets">
-  > = {},
-): DoctorSessionSqliteReport["totals"] {
-  const { archivedLegacyStoreFiles, reclaimedBytes } = values;
-  const sqliteEntries = new Map<string, number>();
-  for (const target of targets) {
-    sqliteEntries.set(
-      target.sqlitePath,
-      Math.max(sqliteEntries.get(target.sqlitePath) ?? 0, target.sqliteEntries),
-    );
-  }
-  return {
-    ...(archivedLegacyStoreFiles === undefined ? {} : { archivedLegacyStoreFiles }),
-    archivedTranscriptFiles: values.archivedTranscriptFiles ?? 0,
-    archivedUnreferencedJsonlFiles: values.archivedUnreferencedJsonlFiles ?? 0,
-    importedEntries: values.importedEntries ?? 0,
-    importedTranscriptEvents: values.importedTranscriptEvents ?? 0,
-    issues: sumDoctorSessionSqliteTargets(targets, (target) => target.issues.length),
-    legacyEntries: values.legacyEntries ?? 0,
-    ...(reclaimedBytes === undefined ? {} : { reclaimedBytes }),
-    sqliteEntries: [...sqliteEntries.values()].reduce((total, count) => total + count, 0),
-    targets: targets.length,
-    unreferencedJsonlFiles: values.unreferencedJsonlFiles ?? 0,
-    validatedEntries: values.validatedEntries ?? 0,
-    validatedTranscriptEvents: values.validatedTranscriptEvents ?? 0,
-  };
-}

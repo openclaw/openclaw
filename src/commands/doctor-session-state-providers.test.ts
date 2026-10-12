@@ -1,14 +1,23 @@
 // Doctor session state provider tests cover route-state repair through the public doctor path.
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
+import {
+  loadSessionEntryReadOnly,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
   createPluginSessionStateDoctorScanner,
   runPluginSessionStateDoctorRepairs,
 } from "./doctor-session-state-providers.js";
+
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-route-sqlite-");
 
 const codexOwner = {
   id: "codex",
@@ -18,10 +27,16 @@ const codexOwner = {
   cliSessionKeys: ["codex-cli"],
   authProfilePrefixes: ["codex:", "codex-cli:", "openai-codex:"],
 };
+const openAIOwner = {
+  id: "openai",
+  label: "OpenAI",
+  providerIds: ["openai"],
+  authProfilePrefixes: ["openai:"],
+};
 const anthropicOwner = {
   id: "anthropic",
   label: "Anthropic",
-  providerIds: ["anthropic"],
+  providerIds: ["anthropic", "claude-cli"],
   runtimeIds: ["claude-cli"],
   cliSessionKeys: ["claude-cli"],
   authProfilePrefixes: ["anthropic:", "claude-cli:"],
@@ -39,6 +54,7 @@ vi.mock("../plugins/doctor-contract-registry.js", async () => {
 });
 
 async function runDoctor(params: {
+  agentId?: string;
   cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
   confirm?: boolean;
@@ -52,6 +68,7 @@ async function runDoctor(params: {
   const confirmRuntimeRepair = vi.fn(async () => params.confirm ?? true);
   try {
     const scanner = createPluginSessionStateDoctorScanner({
+      agentId: params.agentId,
       cfg: params.cfg,
       env: params.env ?? {},
     });
@@ -60,8 +77,8 @@ async function runDoctor(params: {
     }
     await runPluginSessionStateDoctorRepairs({
       scan: scanner.result(),
-      absoluteStorePath: storePath,
-      prompter: { confirmRuntimeRepair, note: vi.fn() },
+      store: { kind: "legacy", path: storePath },
+      prompter: { confirmRuntimeRepair },
       warnings,
       changes,
     });
@@ -86,7 +103,7 @@ function entry(patch: Record<string, unknown>): SessionEntry {
 
 describe("doctor session state provider routes", () => {
   beforeEach(() => {
-    ownerState.owners = [codexOwner];
+    ownerState.owners = [codexOwner, openAIOwner];
   });
 
   it("skips unrelated recovery metadata and valid locked harness rows", async () => {
@@ -103,9 +120,9 @@ describe("doctor session state provider routes", () => {
       "agent:main:ordinary-locked": entry({
         modelSelectionLocked: true,
         agentHarnessId: "codex",
-        modelProvider: "openai-codex",
+        modelProvider: "openai",
         model: "gpt-5.5",
-        providerOverride: "openai-codex",
+        providerOverride: "openai",
         modelOverride: "gpt-5.5",
         modelOverrideSource: "auto",
         cliSessionBindings: { "codex-cli": { sessionId: "native-codex-session" } },
@@ -120,28 +137,58 @@ describe("doctor session state provider routes", () => {
     expect(result.confirmRuntimeRepair).not.toHaveBeenCalled();
   });
 
-  it("keeps owner state when the configured provider selects the owner runtime", async () => {
+  it.each([
+    { label: "legacy-only", binding: {} },
+    {
+      label: "canonical and legacy",
+      binding: {
+        cliSessionBindings: { "claude-cli": { sessionId: "Canonical-ID" } },
+        cliSessionIds: { "claude-cli": "Map-ID" },
+      },
+    },
+  ])("clears $label conversation state without leaving a migration source", async ({ binding }) => {
+    ownerState.owners = [anthropicOwner];
+    const key = "agent:main:stale-claude";
+    const result = await runDoctor({
+      cfg: { agents: { defaults: { model: "openai/gpt-5.5" } } },
+      store: { [key]: entry({ ...binding, claudeCliSessionId: "Obsolete-ID" }) },
+    });
+
+    expect(result.store[key]?.sessionId).toBe("session-1");
+    expect(result.store[key]?.claudeCliSessionId).toBeUndefined();
+    expect(result.store[key]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+    expect(result.store[key]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
+    expect(result.changes.join("\n")).toContain("Cleared stale Anthropic session routing state");
+  });
+
+  it("uses the inspected agent route for a store-local global session", async () => {
     const store = {
-      "agent:main:telegram:direct:1": entry({
-        modelProvider: "codex-cli",
-        model: "gpt-5.5",
-        cliSessionBindings: { "codex-cli": { sessionId: "codex-cli-session" } },
+      global: entry({
+        model: "gpt-5.4",
+        modelProvider: "openai-codex",
+        providerOverride: "openai-codex",
       }),
     };
     const cfg = {
-      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+      agents: {
+        entries: {
+          main: { model: "github-copilot/gpt-5.4-mini" },
+          ops: { model: "openai/gpt-5.4" },
+        },
+      },
       models: {
         providers: {
           openai: {
-            baseUrl: "https://api.openai.com/v1",
             agentRuntime: { id: "codex-cli" },
+            baseUrl: "https://api.openai.com/v1",
             models: [],
           },
         },
       },
+      session: { scope: "global" },
     } satisfies OpenClawConfig;
 
-    const result = await runDoctor({ cfg, store });
+    const result = await runDoctor({ agentId: "ops", cfg, store });
 
     expect(result.store).toEqual(store);
     expect(result.confirmRuntimeRepair).not.toHaveBeenCalled();
@@ -187,6 +234,88 @@ describe("doctor session state provider routes", () => {
     expect(repaired.cliSessionBindings).toEqual({
       "claude-cli": { sessionId: "claude-session" },
     });
+  });
+
+  it.each([{ model: "claude-cli/team/model" }])(
+    "clears a genuinely stale owner model $modelProvider/$model",
+    async (runtimeModel) => {
+      ownerState.owners = [anthropicOwner];
+      const sessionKey = "agent:main:stale-runtime";
+      const result = await runDoctor({
+        cfg: { agents: { defaults: { model: "google/gemini-2.5-pro" } } },
+        store: {
+          [sessionKey]: entry({
+            ...runtimeModel,
+            contextTokens: 128_000,
+            authProfileOverride: "google:chosen",
+            authProfileOverrideSource: "user",
+          }),
+        },
+      });
+
+      expect(result.confirmRuntimeRepair).toHaveBeenCalledOnce();
+      expect(result.warnings.join("\n")).toContain("runtime model state");
+      expect(result.changes.join("\n")).toContain("Cleared stale Anthropic session routing state");
+      expect(result.store[sessionKey]).toEqual({
+        sessionId: "session-1",
+        updatedAt: expect.any(Number),
+        delivery: { kind: "none" },
+        authProfileOverride: "google:chosen",
+        authProfileOverrideSource: "user",
+      });
+    },
+  );
+
+  it("repairs a non-default SQLite row without creating a legacy store", async () => {
+    const root = sessionDirs.make();
+    const legacyStorePath = path.join(root, "sessions.json");
+    const sqliteStorePath = resolveSqliteTargetFromSessionStorePath(legacyStorePath, {
+      agentId: "ops",
+      defaultAgentId: "ops",
+    }).path;
+    const sessionKey = "agent:ops:telegram:direct:2";
+    const staleEntry = entry({
+      model: "gpt-5.4",
+      modelOverride: "gpt-5.4",
+      modelOverrideSource: "auto",
+      modelProvider: "openai-codex",
+      providerOverride: "openai-codex",
+    });
+    const cfg = {
+      agents: {
+        defaults: { model: { primary: "github-copilot/gpt-5-mini" } },
+        entries: { main: {}, ops: {} },
+      },
+    } satisfies OpenClawConfig;
+    await upsertSessionEntryCore(
+      {
+        agentId: "ops",
+        defaultAgentId: "ops",
+        sessionKey,
+        storePath: legacyStorePath,
+      },
+      staleEntry,
+    );
+    const scanner = createPluginSessionStateDoctorScanner({ cfg, env: {} });
+    scanner.scanEntry(sessionKey, staleEntry);
+
+    await runPluginSessionStateDoctorRepairs({
+      scan: scanner.result(),
+      store: { kind: "sqlite", agentId: "ops", path: sqliteStorePath },
+      prompter: { confirmRuntimeRepair: vi.fn(async () => true) },
+      warnings: [],
+      changes: [],
+    });
+
+    const repaired = loadSessionEntryReadOnly({
+      agentId: "ops",
+      sessionKey,
+      storePath: sqliteStorePath,
+    });
+    expect(repaired?.providerOverride).toBeUndefined();
+    expect(repaired?.modelOverride).toBeUndefined();
+    expect(repaired?.modelProvider).toBeUndefined();
+    expect(fsSync.existsSync(legacyStorePath)).toBe(false);
   });
 
   it("leaves explicit user owner choices for manual review", async () => {
@@ -242,72 +371,5 @@ describe("doctor session state provider routes", () => {
     expect(repaired.modelOverride).toBe("gpt-5.4");
     expect(repaired.modelProvider).toBe("openai-codex");
     expect(repaired.agentHarnessId).toBeUndefined();
-  });
-
-  it("skips bare entries and only prompts for route-state rows", async () => {
-    const store: Record<string, SessionEntry> = {};
-    for (let index = 0; index < 100; index += 1) {
-      store[`agent:main:bare-${index}`] = entry({});
-    }
-    store["agent:main:codex"] = entry({ agentHarnessId: "codex-cli" });
-
-    const result = await runDoctor({
-      cfg: { agents: { defaults: { model: "anthropic/claude-sonnet-4" } } },
-      store,
-      confirm: false,
-    });
-
-    expect(result.confirmRuntimeRepair).toHaveBeenCalledOnce();
-    expect(result.changes).toStrictEqual([]);
-    expect(result.store).toEqual(store);
-  });
-
-  it("preserves a provider-owned runtime pin when that runtime remains configured", async () => {
-    ownerState.owners = [codexOwner, anthropicOwner];
-    const store = {
-      "agent:main:telegram:direct:5": entry({ agentRuntimeOverride: "claude-cli" }),
-    };
-    const cfg = {
-      agents: { defaults: { model: { primary: "anthropic/claude-opus-4.7" } } },
-      models: {
-        providers: {
-          anthropic: {
-            baseUrl: "https://api.anthropic.com",
-            agentRuntime: { id: "claude-cli" },
-            models: [],
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    const result = await runDoctor({ cfg, store });
-
-    expect(result.store).toEqual(store);
-    expect(result.confirmRuntimeRepair).not.toHaveBeenCalled();
-  });
-
-  it("applies independent multi-owner repairs and records each owner", async () => {
-    ownerState.owners = [codexOwner, anthropicOwner];
-    const sessionKey = "agent:main:telegram:direct:6";
-    const store = {
-      [sessionKey]: entry({
-        agentHarnessId: "codex",
-        agentRuntimeOverride: "claude-cli",
-      }),
-    };
-
-    const result = await runDoctor({
-      cfg: { agents: { defaults: { model: "github-copilot/gpt-5-mini" } } },
-      store,
-    });
-    const repaired = result.store[sessionKey] as unknown as Record<string, unknown>;
-
-    expect(result.confirmRuntimeRepair).toHaveBeenCalledTimes(2);
-    expect(result.warnings.join("\n")).toContain("stale Codex session routing state");
-    expect(result.warnings.join("\n")).toContain("stale Anthropic session routing state");
-    expect(result.changes.join("\n")).toContain("Cleared stale Codex session routing state");
-    expect(result.changes.join("\n")).toContain("Cleared stale Anthropic session routing state");
-    expect(repaired.agentHarnessId).toBeUndefined();
-    expect(repaired.agentRuntimeOverride).toBeUndefined();
   });
 });

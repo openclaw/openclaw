@@ -1,81 +1,237 @@
+import type { SchemaContract } from "../../../packages/gateway-protocol/src/schema-contract.js";
+import {
+  SESSION_EXPANDED_PARTICIPANT_LIMIT,
+  type SessionParticipant,
+} from "../../../packages/gateway-protocol/src/schema/session-participant.js";
+import type {
+  SessionCreatedActor as ProjectedSessionCreatedActor,
+  SessionRow,
+} from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
+import type { SkillLibrarySelection } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import type { HookExternalContentSource } from "../../security/external-content.js";
 
-/** Kept aligned with SessionStateActorType (src/sessions/session-state-event-kinds.ts); not imported to avoid layering config/sessions onto src/sessions. */
-export type SessionCreatedActor = {
-  type: "human" | "agent" | "system";
-  id?: string;
-  label?: string;
-};
+/** Persisted identity excludes display-only actor projections. */
+export type SessionActor = SchemaContract<
+  Pick<ProjectedSessionCreatedActor, "type" | "id" | "label">
+>;
 
-export type SessionParticipantSource = "profile" | "channel" | "agent";
-export const MAX_SESSION_PARTICIPANTS = 32;
+/** Only trusted creation owners may stamp a Gateway profile namespace. */
+export type SessionCreatedActor = SessionActor &
+  ({ type: "human"; source: "profile" | "channel" | "unknown" } | { type: "agent" | "system" });
 
-export type SessionParticipant = SessionCreatedActor & {
-  /** Identity namespace recorded at the participant producer; absent means unknown legacy data. */
-  source?: SessionParticipantSource;
-};
+export function sessionCreatorProfileId(
+  actor: (SessionActor & { source?: unknown }) | undefined,
+): string | undefined {
+  return actor?.type === "human" && actor.source === "profile" ? actor.id : undefined;
+}
 
-export function mergeSessionParticipantSource(
-  current: unknown,
-  incoming: unknown,
-): SessionParticipantSource | null {
-  // Canonical profile participation must survive later channel-id collisions.
-  if (current === "profile" || incoming === "profile") {
-    return "profile";
+export type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
+export const MAX_SESSION_PARTICIPANTS = SESSION_EXPANDED_PARTICIPANT_LIMIT;
+
+/** Delegation retains contributor identities without inventing child participation. */
+export function inheritSessionGitContributorProfileIds(
+  parent:
+    | {
+        incognito?: boolean;
+        inheritedGitContributorProfileIds?: string[];
+        participants?: SessionParticipant[];
+      }
+    | undefined,
+): string[] | undefined {
+  if (!parent || parent.incognito) {
+    return undefined;
   }
-  const next = incoming === "channel" || incoming === "agent" ? incoming : null;
-  if (next) {
-    return next;
-  }
-  return current === "channel" || current === "agent" ? current : null;
+  const directProfileIds = (parent.participants ?? [])
+    .flatMap(({ identity }) => (identity.type === "profile" ? [identity.id] : []))
+    .toSorted();
+  const profileIds = [
+    ...new Set([...(parent.inheritedGitContributorProfileIds ?? []), ...directProfileIds]),
+  ].slice(0, MAX_SESSION_PARTICIPANTS);
+  return profileIds.length > 0 ? profileIds : undefined;
 }
 
 export type SessionOwnerAssignment = {
-  actor: SessionCreatedActor;
-  assignedBy?: SessionCreatedActor;
+  actor: SessionActor;
+  assignedBy?: SessionActor;
   assignedAt?: number;
 };
-export type SessionCreatedVia =
-  | "operator" // gateway sessions.create (Control UI / operator clients)
-  | "spawn" // sessions_spawn native or ACP subagent spawn
-  | "channel" // inbound channel conversation materialization
-  | "cron"
-  | "talk"
-  | "run" // create-on-run materialization (agent-session-persist)
-  | "plugin" // trusted plugin runtime creation
-  | "internal"; // internal/hidden sessions (internal-session-effects, voice bare rows)
-
-export function resolveProfileParticipantIdFromSessionCreation(
-  creation:
-    | {
-        via: SessionCreatedVia;
-        actor?: SessionCreatedActor;
-      }
-    | undefined,
+/** Personal preferences follow the assigned human, otherwise the authenticated human creator. */
+export function sessionPersonalProfileId(
+  entry: { owner?: SessionOwnerAssignment; createdActor?: SessionCreatedActor } | undefined,
 ): string | undefined {
-  const profileId = creation?.actor?.id?.trim();
-  return creation?.actor?.type === "human" &&
-    (creation.via === "operator" || creation.via === "run") &&
-    profileId
-    ? profileId
-    : undefined;
+  const assigned = entry?.owner?.actor;
+  return assigned?.type === "human" ? assigned.id : sessionCreatorProfileId(entry?.createdActor);
 }
+
+/** Visible spawns keep the matching verified human parent owner without changing creator attribution. */
+export function inheritSpawnSessionOwner(
+  source: { owner?: SessionOwnerAssignment; createdActor?: SessionCreatedActor } | undefined,
+  assignedBy: SessionActor | undefined,
+  requesterProfileId: string | undefined,
+  now = Date.now(),
+  resolveProfileId: (profileId: string) => string | undefined = (profileId) => profileId,
+): SessionOwnerAssignment | undefined {
+  const assigned = source?.owner?.actor;
+  const owner = assigned
+    ? assigned.type === "human"
+      ? assigned
+      : undefined
+    : source?.createdActor?.type === "human" && source.createdActor.source === "profile"
+      ? source.createdActor
+      : undefined;
+  const directMatch = owner?.id && requesterProfileId && owner.id === requesterProfileId;
+  const resolvedOwnerId = !directMatch && owner?.id ? resolveProfileId(owner.id) : owner?.id;
+  const resolvedRequesterId =
+    !directMatch && requesterProfileId ? resolveProfileId(requesterProfileId) : requesterProfileId;
+  const assignmentActor =
+    resolvedOwnerId && resolvedOwnerId === resolvedRequesterId
+      ? {
+          type: "human" as const,
+          id: resolvedRequesterId,
+          ...(owner?.label ? { label: owner.label } : {}),
+        }
+      : assignedBy?.type === "agent" && assignedBy.id
+        ? {
+            type: "agent" as const,
+            id: assignedBy.id,
+            ...(assignedBy.label ? { label: assignedBy.label } : {}),
+          }
+        : undefined;
+  if (!assignmentActor) {
+    return undefined;
+  }
+  return {
+    actor: assignmentActor,
+    ...(assignedBy?.id
+      ? {
+          assignedBy: {
+            type: assignedBy.type,
+            id: assignedBy.id,
+            ...(assignedBy.label ? { label: assignedBy.label } : {}),
+          },
+        }
+      : {}),
+    assignedAt: now,
+  };
+}
+
+export type SessionCreatedVia = NonNullable<SessionRow["createdVia"]>;
 
 // Return shape mirrors the SessionEntry creation fields as a leaf contract;
 // types.ts imports from here, never the reverse (madge cycle guard).
 export function buildSessionCreationStamp(params: {
   via: SessionCreatedVia;
+  surface?: "plugin-dock";
   actor?: SessionCreatedActor;
   now?: number;
-}): { createdVia: SessionCreatedVia; createdActor?: SessionCreatedActor; createdAt: number } {
+  sandbox?: "required";
+  incognito?: boolean;
+  skillLibrarySelections?: SkillLibrarySelection[];
+  inheritedGitContributorProfileIds?: string[];
+}): {
+  createdVia: SessionCreatedVia;
+  createdSurface?: "plugin-dock";
+  createdActor?: SessionCreatedActor;
+  createdAt: number;
+  sandbox?: "required";
+  skillLibrarySelections?: SkillLibrarySelection[];
+  inheritedGitContributorProfileIds?: string[];
+} {
   return {
     createdVia: params.via,
+    ...(params.surface ? { createdSurface: params.surface } : {}),
     ...(params.actor ? { createdActor: params.actor } : {}),
     createdAt: params.now ?? Date.now(),
+    ...(params.sandbox === "required" ? { sandbox: "required" as const } : {}),
+    ...(params.via === "spawn" && !params.incognito && params.inheritedGitContributorProfileIds
+      ? { inheritedGitContributorProfileIds: [...params.inheritedGitContributorProfileIds] }
+      : {}),
+    ...(params.skillLibrarySelections
+      ? {
+          skillLibrarySelections: params.skillLibrarySelections.map((selection) => ({
+            ...selection,
+          })),
+        }
+      : {}),
+  };
+}
+
+export function buildInboundSessionCreationStamp(
+  ctx:
+    | {
+        SessionCreation?: Parameters<typeof buildSessionCreationStamp>[0];
+        SenderId?: string;
+        SenderName?: string;
+      }
+    | undefined,
+) {
+  const senderId = ctx?.SenderId?.trim();
+  return buildSessionCreationStamp(
+    ctx?.SessionCreation ?? {
+      via: "channel",
+      ...(senderId
+        ? {
+            actor: {
+              type: "human",
+              source: "channel",
+              id: senderId,
+              label: ctx?.SenderName?.trim() || undefined,
+            },
+          }
+        : {}),
+    },
+  );
+}
+
+/** Logical nodes retain creation attribution and isolation across writes and rollovers. */
+export function preserveCreationStamp<
+  T extends Partial<ReturnType<typeof buildSessionCreationStamp>>,
+>(entry: T, authoritative: Partial<ReturnType<typeof buildSessionCreationStamp>> | undefined): T {
+  return authoritative
+    ? {
+        ...entry,
+        createdVia: authoritative.createdVia,
+        createdSurface: authoritative.createdSurface,
+        createdActor: authoritative.createdActor,
+        createdAt: authoritative.createdAt,
+        inheritedGitContributorProfileIds: authoritative.inheritedGitContributorProfileIds,
+        ...(authoritative.sandbox === "required" ? { sandbox: authoritative.sandbox } : {}),
+      }
+    : entry;
+}
+
+/** Delegation keeps a required parent's human isolation identity, regardless of current roles. */
+export function inheritSessionCreationPolicy(
+  source:
+    | {
+        createdActor?: SessionCreatedActor;
+        sandbox?: "required";
+        skillLibrarySelections?: SkillLibrarySelection[];
+      }
+    | undefined,
+  actor?: SessionCreatedActor,
+): {
+  actor?: SessionCreatedActor;
+  sandbox?: "required";
+  skillLibrarySelections?: SkillLibrarySelection[];
+} {
+  return {
+    ...(source?.sandbox === "required"
+      ? { actor: source.createdActor, sandbox: "required" as const }
+      : { actor }),
+    ...(source?.skillLibrarySelections
+      ? {
+          skillLibrarySelections: source.skillLibrarySelections.map((selection) => ({
+            ...selection,
+          })),
+        }
+      : {}),
   };
 }
 
 export type SessionEntryProvenance = {
+  /** Human contributor candidates captured once by trusted delegation; not participant activity. */
+  inheritedGitContributorProfileIds?: string[];
   /** Plugin id that owns this session through a trusted runtime creation seam. */
   pluginOwnerId?: string;
   /** External hook source that has contributed content to this transcript. */

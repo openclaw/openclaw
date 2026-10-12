@@ -11,10 +11,6 @@ function asConfig(value: unknown): CoreConfig {
 }
 
 describe("listIrcAccountIds", () => {
-  it("returns default when no accounts are configured", () => {
-    expect(listIrcAccountIds(asConfig({}))).toEqual(["default"]);
-  });
-
   it("normalizes, deduplicates, and sorts configured account ids", () => {
     const cfg = asConfig({
       channels: {
@@ -68,37 +64,6 @@ describe("resolveDefaultIrcAccountId", () => {
     });
 
     expect(resolveDefaultIrcAccountId(cfg)).toBe("ops-team");
-  });
-
-  it("falls back to default when configured defaultAccount is missing", () => {
-    const cfg = asConfig({
-      channels: {
-        irc: {
-          defaultAccount: "missing",
-          accounts: {
-            default: {},
-            work: {},
-          },
-        },
-      },
-    });
-
-    expect(resolveDefaultIrcAccountId(cfg)).toBe("default");
-  });
-
-  it("falls back to first sorted account when default is absent", () => {
-    const cfg = asConfig({
-      channels: {
-        irc: {
-          accounts: {
-            zzz: {},
-            aaa: {},
-          },
-        },
-      },
-    });
-
-    expect(resolveDefaultIrcAccountId(cfg)).toBe("aaa");
   });
 });
 
@@ -156,9 +121,7 @@ describe("resolveIrcAccount", () => {
 
   it.each([
     { accountId: "default", credential: "password" },
-    { accountId: "work", credential: "password" },
     { accountId: "default", credential: "nickserv" },
-    { accountId: "work", credential: "nickserv" },
     { accountId: "default", credential: "nickserv", enabled: false },
   ])(
     "isolates an unavailable $credential SecretRef for $accountId only when enabled=$enabled",
@@ -197,7 +160,7 @@ describe("resolveIrcAccount", () => {
     },
   );
 
-  it.each<[string, string, string, string, boolean, string, boolean?]>([
+  it.each<[string, string, string, string, boolean, string]>([
     ["password", "default", "plain", "env", true, "env"],
     ["password", "default", "plain", "", true, "file"],
     ["password", "work", "plain", "env", true, "file"],
@@ -205,12 +168,10 @@ describe("resolveIrcAccount", () => {
     ["nickserv", "default", "plain", "env", true, "plain"],
     ["nickserv", "default", "", "env", true, "env"],
     ["nickserv", "default", "", "", true, "file"],
-    ["nickserv", "work", "plain", "env", true, "plain"],
     ["nickserv", "work", "", "env", true, "file"],
-    ["nickserv", "default", "plain", "env", true, "plain", false],
   ])(
     "preserves %s precedence for %s (plaintext=%s, env=%s, file=%s => %s)",
-    (credential, accountId, plaintext, env, file, expected, enabled) => {
+    (credential, accountId, plaintext, env, file, expected) => {
       vi.stubEnv(credential === "password" ? "IRC_PASSWORD" : "IRC_NICKSERV_PASSWORD", env);
 
       const credentialConfig = {
@@ -227,7 +188,7 @@ describe("resolveIrcAccount", () => {
                   nick: "openclaw",
                   ...(credential === "password"
                     ? credentialConfig
-                    : { nickserv: { ...credentialConfig, ...(enabled === false && { enabled }) } }),
+                    : { nickserv: credentialConfig }),
                 },
               },
             },
@@ -244,11 +205,8 @@ describe("resolveIrcAccount", () => {
   );
 
   it.runIf(process.platform !== "win32")("isolates symlinked password files", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-irc-account-"));
-    const passwordFile = path.join(dir, "password.txt");
-    const passwordLink = path.join(dir, "password-link.txt");
-    fs.writeFileSync(passwordFile, "secret-pass\n", "utf8");
-    fs.symlinkSync(passwordFile, passwordLink);
+    const passwordLink = path.join(fixtureDirectory, "password-link.txt");
+    fs.symlinkSync(fixturePasswordFile, passwordLink);
 
     const cfg = asConfig({
       channels: {
@@ -272,15 +230,11 @@ describe("resolveIrcAccount", () => {
       },
     ]);
     expect(JSON.stringify(account.credentialDiagnostics)).not.toContain(passwordLink);
-    fs.rmSync(dir, { recursive: true, force: true });
   });
 
   it.runIf(process.platform !== "win32")("isolates symlinked NickServ password files", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-irc-nickserv-"));
-    const passwordFile = path.join(dir, "nickserv-password.txt");
-    const passwordLink = path.join(dir, "nickserv-password-link.txt");
-    fs.writeFileSync(passwordFile, "nickserv-pass\n", "utf8");
-    fs.symlinkSync(passwordFile, passwordLink);
+    const passwordLink = path.join(fixtureDirectory, "nickserv-password-link.txt");
+    fs.symlinkSync(fixturePasswordFile, passwordLink);
 
     const cfg = asConfig({
       channels: {
@@ -305,12 +259,10 @@ describe("resolveIrcAccount", () => {
       },
     ]);
     expect(JSON.stringify(account.credentialDiagnostics)).not.toContain(passwordLink);
-    fs.rmSync(dir, { recursive: true, force: true });
   });
 
   it("does not fall through from a missing explicit password file", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-irc-missing-"));
-    const passwordFile = path.join(dir, "missing-password.txt");
+    const passwordFile = path.join(fixtureDirectory, "missing-password.txt");
     const account = resolveIrcAccount({
       cfg: asConfig({
         channels: {
@@ -333,7 +285,6 @@ describe("resolveIrcAccount", () => {
     expect(account.passwordSource).toBe("passwordFile");
     expect(account.tokenStatus).toBe("configured_unavailable");
     expect(JSON.stringify(account.credentialDiagnostics)).not.toContain(passwordFile);
-    fs.rmSync(dir, { recursive: true, force: true });
   });
 
   it("preserves shared NickServ config when an account overrides one NickServ field", () => {

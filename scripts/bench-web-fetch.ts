@@ -1,53 +1,19 @@
 // Web fetch benchmark covers direct response loading, HTML extraction, and fallback cleanup.
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { extractBasicHtmlContent } from "../src/agents/tools/web-fetch-utils.js";
-import { createWebFetchTool } from "../src/agents/tools/web-fetch.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import type { LookupFn } from "../src/infra/net/ssrf.js";
-import { extractReadableContent } from "../src/web-fetch/content-extractors.runtime.js";
-import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mts";
+import * as cliArgs from "./lib/arg-utils.mts";
+import { writeReportArtifact } from "./lib/report-cli-helpers.mts";
 
-type BenchmarkCaseId =
-  | "tool-create"
-  | "tool-text"
-  | "tool-markdown"
-  | "tool-html-article"
-  | "tool-html-article-text"
-  | "tool-html-shell"
-  | "extract-readable-article"
-  | "extract-readable-article-text"
-  | "extract-basic-shell";
+type BenchmarkCaseId = (typeof ALL_CASE_IDS)[number];
 
 type BenchmarkCase = {
-  id: BenchmarkCaseId;
   label: string;
   run: () => Promise<void> | void;
 };
 
-type Options = {
-  cases: BenchmarkCaseId[];
-  json: boolean;
-  output?: string;
-  runs: number;
-  warmup: number;
-};
-
-type SummaryStats = {
-  avg: number;
-  max: number;
-  min: number;
-  p50: number;
-  p95: number;
-};
-
-type CaseReport = {
-  id: BenchmarkCaseId;
-  label: string;
-  samplesMs: number[];
-  summaryMs: SummaryStats;
-};
+type Options = ReturnType<typeof parseOptions>;
+type CaseReport = Awaited<ReturnType<typeof measureCase>>;
 
 type BenchmarkReport = {
   cases: CaseReport[];
@@ -66,10 +32,9 @@ const ALL_CASE_IDS = [
   "extract-readable-article",
   "extract-readable-article-text",
   "extract-basic-shell",
-] as const satisfies readonly BenchmarkCaseId[];
+] as const;
 
-const BOOLEAN_FLAGS = new Set(["--help", "-h", "--json"]);
-const VALUE_FLAGS = new Set(["--case", "--output", "--runs", "--warmup"]);
+const SPLIT_VALUE_FLAG_OPTIONS = { allowInline: false, rejectShortOptions: true } as const;
 
 class CliArgumentError extends Error {
   override name = "CliArgumentError";
@@ -112,9 +77,8 @@ const SHELL_HTML = `<!doctype html>
 
 const TEXT_BODY = "OpenClaw web_fetch direct text benchmark body.".repeat(160);
 const MARKDOWN_BODY = "# Web Fetch Benchmark\n\n" + "- markdown list item\n".repeat(220);
-const OFFLINE_PROVIDER_ENV_VARS = ["FIRECRAWL_API_KEY"] as const;
 
-const lookupFn = (async () => [{ address: "93.184.216.34", family: 4 }]) as unknown as LookupFn;
+const lookupFn: LookupFn = async () => [{ address: "93.184.216.34", family: 4 }];
 const toolConfig: OpenClawConfig = {
   tools: {
     web: {
@@ -125,71 +89,7 @@ const toolConfig: OpenClawConfig = {
   },
 };
 
-function validateArgs(args: string[]): void {
-  const seenSingularValueFlags = new Set<string>();
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index] ?? "";
-    if (BOOLEAN_FLAGS.has(arg)) {
-      continue;
-    }
-    if (VALUE_FLAGS.has(arg)) {
-      if (arg !== "--case") {
-        if (seenSingularValueFlags.has(arg)) {
-          throw new CliArgumentError(`${arg} was provided more than once`);
-        }
-        seenSingularValueFlags.add(arg);
-      }
-      const value = args[index + 1];
-      if (!value || value.startsWith("-")) {
-        throw new CliArgumentError(`${arg} requires a value`);
-      }
-      index += 1;
-      continue;
-    }
-    throw new CliArgumentError(`Unknown argument: ${arg}`);
-  }
-}
-
-function parsePositiveInteger(flag: string, fallback: number, args: string[]): number {
-  const index = args.indexOf(flag);
-  if (index === -1) {
-    return fallback;
-  }
-  const raw = args[index + 1];
-  if (!/^\d+$/u.test(raw ?? "")) {
-    throw new CliArgumentError(`${flag} must be a positive integer`);
-  }
-  const value = Number(raw);
-  if (!Number.isSafeInteger(value) || value <= 0) {
-    throw new CliArgumentError(`${flag} must be a positive integer`);
-  }
-  return value;
-}
-
-function parseNonNegativeInteger(flag: string, fallback: number, args: string[]): number {
-  const index = args.indexOf(flag);
-  if (index === -1) {
-    return fallback;
-  }
-  const raw = args[index + 1];
-  if (!/^\d+$/u.test(raw ?? "")) {
-    throw new CliArgumentError(`${flag} must be a non-negative integer`);
-  }
-  const value = Number(raw);
-  if (!Number.isSafeInteger(value) || value < 0) {
-    throw new CliArgumentError(`${flag} must be a non-negative integer`);
-  }
-  return value;
-}
-
-function parseCases(args: string[]): BenchmarkCaseId[] {
-  const requested: string[] = [];
-  for (let index = 0; index < args.length; index += 1) {
-    if (args[index] === "--case") {
-      requested.push(args[index + 1] ?? "");
-      index += 1;
-    }
-  }
+function parseCases(requested: string[]): BenchmarkCaseId[] {
   if (requested.length === 0 || requested.includes("all")) {
     return [...ALL_CASE_IDS];
   }
@@ -204,21 +104,51 @@ function parseCases(args: string[]): BenchmarkCaseId[] {
   return requested as BenchmarkCaseId[];
 }
 
-function parseFlagValue(flag: string, args: string[]): string | undefined {
-  const index = args.indexOf(flag);
-  return index === -1 ? undefined : args[index + 1];
+function parseBenchmarkCount(raw: string, flag: string, minimum: 0 | 1): number {
+  const parsed = cliArgs.classifyBoundedUnsignedDecimal(raw, minimum, Number.MAX_SAFE_INTEGER);
+  if (parsed.kind === "value") {
+    return parsed.value;
+  }
+  const kind = minimum === 0 ? "non-negative" : "positive";
+  throw new CliArgumentError(`${flag} must be a ${kind} integer`);
 }
 
-function parseOptions(args = process.argv.slice(2)): Options {
-  const normalizedArgs = stripLeadingPackageManagerSeparator(args);
-  validateArgs(normalizedArgs);
-  return {
-    cases: parseCases(normalizedArgs),
-    json: normalizedArgs.includes("--json"),
-    output: parseFlagValue("--output", normalizedArgs),
-    runs: parsePositiveInteger("--runs", 20, normalizedArgs),
-    warmup: parseNonNegativeInteger("--warmup", 3, normalizedArgs),
-  };
+function parseOptions(args = process.argv.slice(2)) {
+  const normalizedArgs = cliArgs.stripLeadingPackageManagerSeparator(args);
+  try {
+    const parsed = cliArgs.parseFlagArgs(
+      normalizedArgs,
+      {
+        cases: [] as string[],
+        json: false,
+        output: undefined as string | undefined,
+        runs: "20",
+        warmup: "3",
+      },
+      [
+        cliArgs.stringListFlag("--case", "cases", SPLIT_VALUE_FLAG_OPTIONS),
+        cliArgs.stringFlag("--output", "output", SPLIT_VALUE_FLAG_OPTIONS),
+        cliArgs.stringFlag("--runs", "runs", SPLIT_VALUE_FLAG_OPTIONS),
+        cliArgs.stringFlag("--warmup", "warmup", SPLIT_VALUE_FLAG_OPTIONS),
+        cliArgs.booleanFlag("--json", "json", true, { repeatable: true }),
+      ],
+      {
+        ignoreDoubleDash: false,
+        onUnhandledArg(arg) {
+          throw new CliArgumentError(`Unknown argument: ${arg}`);
+        },
+      },
+    );
+    return {
+      cases: parseCases(parsed.cases),
+      json: parsed.json,
+      output: parsed.output,
+      runs: parseBenchmarkCount(parsed.runs, "--runs", 1),
+      warmup: parseBenchmarkCount(parsed.warmup, "--warmup", 0),
+    };
+  } catch (error) {
+    throw new CliArgumentError(error instanceof Error ? error.message : String(error));
+  }
 }
 
 function printUsage(): void {
@@ -254,7 +184,7 @@ function percentile(values: number[], p: number): number {
   return round(sorted[index] ?? 0);
 }
 
-function stats(values: number[]): SummaryStats {
+function stats(values: number[]) {
   if (values.length === 0) {
     return { avg: 0, max: 0, min: 0, p50: 0, p95: 0 };
   }
@@ -269,109 +199,86 @@ function stats(values: number[]): SummaryStats {
 }
 
 function installMockFetch(params: { body: string; contentType: string }) {
-  const fetchImpl = (async () =>
-    new Response(params.body, {
-      status: 200,
-      headers: {
-        "content-type": params.contentType,
-      },
-    })) as unknown as typeof globalThis.fetch & { mock: object };
   // fetchWithSsrFGuard preserves dispatcher support unless global fetch is a
   // test double. The marker keeps this benchmark offline and deterministic.
-  fetchImpl.mock = {};
-  globalThis.fetch = fetchImpl;
+  globalThis.fetch = Object.assign(
+    async () =>
+      new Response(params.body, {
+        status: 200,
+        headers: { "content-type": params.contentType },
+      }),
+    { mock: {} },
+  );
 }
 
-async function withOfflineProviderEnv<T>(run: () => Promise<T>): Promise<T> {
-  const previous = new Map<string, string | undefined>();
-  for (const name of OFFLINE_PROVIDER_ENV_VARS) {
-    previous.set(name, process.env[name]);
-    process.env[name] = "";
-  }
-  try {
-    return await run();
-  } finally {
-    for (const [name, value] of previous) {
-      if (value === undefined) {
-        delete process.env[name];
-      } else {
-        process.env[name] = value;
-      }
+async function loadCaseFactory(): Promise<() => Record<BenchmarkCaseId, BenchmarkCase>> {
+  const { extractBasicHtmlContent } = await import("../src/agents/tools/web-fetch-utils.js");
+  const { createWebFetchTool } = await import("../src/agents/tools/web-fetch.js");
+  const { extractReadableContent } = await import("../src/web-fetch/content-extractors.runtime.js");
+
+  function createTool() {
+    const tool = createWebFetchTool({
+      config: toolConfig,
+      lookupFn,
+      sandboxed: false,
+    });
+    if (!tool?.execute) {
+      throw new Error("web_fetch tool was not created");
     }
+    return tool;
   }
-}
 
-function createTool() {
-  const tool = createWebFetchTool({
-    config: toolConfig,
-    lookupFn,
-    sandboxed: false,
-  });
-  if (!tool?.execute) {
-    throw new Error("web_fetch tool was not created");
+  function fetchCase(
+    label: string,
+    body: string,
+    contentType: string,
+    request: { url: string; extractMode?: "text" },
+  ): BenchmarkCase {
+    const tool = createTool();
+    return {
+      label,
+      run: async () => {
+        installMockFetch({ body, contentType });
+        await tool.execute("bench", { ...request });
+      },
+    };
   }
-  return tool;
-}
 
-function createCases(): Record<BenchmarkCaseId, BenchmarkCase> {
-  const textTool = createTool();
-  const markdownTool = createTool();
-  const articleTool = createTool();
-  const articleTextTool = createTool();
-  const shellTool = createTool();
-  return {
+  return () => ({
     "tool-create": {
-      id: "tool-create",
       label: "create web_fetch tool",
       run: () => {
         createTool();
       },
     },
-    "tool-text": {
-      id: "tool-text",
-      label: "execute text/plain fetch",
-      run: async () => {
-        installMockFetch({ body: TEXT_BODY, contentType: "text/plain; charset=utf-8" });
-        await textTool.execute("bench", { url: "https://example.com/plain" });
-      },
-    },
-    "tool-markdown": {
-      id: "tool-markdown",
-      label: "execute text/markdown fetch",
-      run: async () => {
-        installMockFetch({ body: MARKDOWN_BODY, contentType: "text/markdown; charset=utf-8" });
-        await markdownTool.execute("bench", { url: "https://example.com/markdown" });
-      },
-    },
-    "tool-html-article": {
-      id: "tool-html-article",
-      label: "execute article HTML fetch",
-      run: async () => {
-        installMockFetch({ body: ARTICLE_HTML, contentType: "text/html; charset=utf-8" });
-        await articleTool.execute("bench", { url: "https://example.com/article" });
-      },
-    },
-    "tool-html-article-text": {
-      id: "tool-html-article-text",
-      label: "execute article HTML fetch as text",
-      run: async () => {
-        installMockFetch({ body: ARTICLE_HTML, contentType: "text/html; charset=utf-8" });
-        await articleTextTool.execute("bench", {
-          url: "https://example.com/article-text",
-          extractMode: "text",
-        });
-      },
-    },
-    "tool-html-shell": {
-      id: "tool-html-shell",
-      label: "execute shell HTML fallback fetch",
-      run: async () => {
-        installMockFetch({ body: SHELL_HTML, contentType: "text/html; charset=utf-8" });
-        await shellTool.execute("bench", { url: "https://example.com/shell" });
-      },
-    },
+    "tool-text": fetchCase("execute text/plain fetch", TEXT_BODY, "text/plain; charset=utf-8", {
+      url: "https://example.com/plain",
+    }),
+    "tool-markdown": fetchCase(
+      "execute text/markdown fetch",
+      MARKDOWN_BODY,
+      "text/markdown; charset=utf-8",
+      { url: "https://example.com/markdown" },
+    ),
+    "tool-html-article": fetchCase(
+      "execute article HTML fetch",
+      ARTICLE_HTML,
+      "text/html; charset=utf-8",
+      { url: "https://example.com/article" },
+    ),
+    "tool-html-article-text": fetchCase(
+      "execute article HTML fetch as text",
+      ARTICLE_HTML,
+      "text/html; charset=utf-8",
+      { url: "https://example.com/article-text", extractMode: "text" },
+    ),
+    "tool-html-shell": fetchCase(
+      "execute shell HTML fallback fetch",
+      SHELL_HTML,
+      "text/html; charset=utf-8",
+      { url: "https://example.com/shell" },
+    ),
     "extract-readable-article": {
-      id: "extract-readable-article",
       label: "extract readable article HTML",
       run: async () => {
         await extractReadableContent({
@@ -383,7 +290,6 @@ function createCases(): Record<BenchmarkCaseId, BenchmarkCase> {
       },
     },
     "extract-readable-article-text": {
-      id: "extract-readable-article-text",
       label: "extract readable article HTML as text",
       run: async () => {
         await extractReadableContent({
@@ -395,7 +301,6 @@ function createCases(): Record<BenchmarkCaseId, BenchmarkCase> {
       },
     },
     "extract-basic-shell": {
-      id: "extract-basic-shell",
       label: "extract basic shell HTML",
       run: async () => {
         await extractBasicHtmlContent({
@@ -404,10 +309,10 @@ function createCases(): Record<BenchmarkCaseId, BenchmarkCase> {
         });
       },
     },
-  };
+  });
 }
 
-async function measureCase(testCase: BenchmarkCase, options: Options): Promise<CaseReport> {
+async function measureCase(id: BenchmarkCaseId, testCase: BenchmarkCase, options: Options) {
   for (let index = 0; index < options.warmup; index += 1) {
     await testCase.run();
   }
@@ -418,7 +323,7 @@ async function measureCase(testCase: BenchmarkCase, options: Options): Promise<C
     samplesMs.push(round(performance.now() - started));
   }
   return {
-    id: testCase.id,
+    id,
     label: testCase.label,
     samplesMs,
     summaryMs: stats(samplesMs),
@@ -442,13 +347,18 @@ async function main(): Promise<void> {
     return;
   }
   const options = parseOptions(args);
-  const report = await withOfflineProviderEnv(async () => {
+  // Preserve runtime import environment, then construct tools inside the offline scope.
+  const createCases = await loadCaseFactory();
+  const previousApiKey = process.env.FIRECRAWL_API_KEY;
+  process.env.FIRECRAWL_API_KEY = "";
+  let report: BenchmarkReport;
+  try {
     const casesById = createCases();
     const cases: CaseReport[] = [];
     for (const caseId of options.cases) {
-      cases.push(await measureCase(casesById[caseId], options));
+      cases.push(await measureCase(caseId, casesById[caseId], options));
     }
-    return {
+    report = {
       cases,
       node: process.version,
       options: {
@@ -459,11 +369,14 @@ async function main(): Promise<void> {
       },
       rssMb: Math.round((process.memoryUsage().rss / 1024 / 1024) * 10) / 10,
     };
-  });
-  if (options.output) {
-    await mkdir(path.dirname(options.output), { recursive: true });
-    await writeFile(options.output, `${JSON.stringify(report, null, 2)}\n`);
+  } finally {
+    if (previousApiKey === undefined) {
+      delete process.env.FIRECRAWL_API_KEY;
+    } else {
+      process.env.FIRECRAWL_API_KEY = previousApiKey;
+    }
   }
+  await writeReportArtifact(options.output ?? null, `${JSON.stringify(report, null, 2)}\n`);
   if (options.json) {
     console.log(JSON.stringify(report, null, 2));
   } else {

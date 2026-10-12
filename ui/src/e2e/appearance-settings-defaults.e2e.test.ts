@@ -1,19 +1,24 @@
 // Control UI tests cover Appearance override provenance and restoring product defaults.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
-import { expect, it } from "vitest";
-import { importCustomThemeFromUrl } from "../app/custom-theme.ts";
+import { beforeEach, expect, it } from "vitest";
+import { importCustomThemeFromUrl } from "../pages/config/custom-theme-import.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
   createControlUiMockBootstrapConfig,
   installMockGateway,
   waitForControlUiSettingsTakeover,
-  type MockGatewayControls,
   type MockGatewayRequest,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createTweakcnThemePayload } from "../test-helpers/custom-theme.ts";
+import {
+  configResponse,
+  patchPrefs,
+  resetSyncedPreference,
+  waitForRequestCount,
+} from "./appearance-prefs.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -24,42 +29,14 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const uiProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "appearance-settings-defaults",
-);
+let uiProofArtifactDir: string;
+beforeEach(() => {
+  if (captureUiProofEnabled) {
+    uiProofArtifactDir = createControlUiE2eArtifactDir("appearance-settings-defaults");
+  }
+});
 function settingsStorageKey(): string {
   return controlUiBundledSettingsStorageKey(suite.server.baseUrl);
-}
-
-function configResponse(prefs: Record<string, unknown>, hash: string) {
-  const config = { ui: { prefs } };
-  return {
-    appliedConfigHash: hash,
-    config,
-    configRevisionHash: hash,
-    hash,
-    issues: [],
-    raw: JSON.stringify(config),
-    valid: true,
-  };
-}
-
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value, label).toBeTruthy();
-  expect(typeof value, label).toBe("object");
-  expect(Array.isArray(value), label).toBe(false);
-  return value as Record<string, unknown>;
-}
-
-function patchPrefs(request: MockGatewayRequest): Record<string, unknown> {
-  const params = requireRecord(request.params, "config.patch params");
-  expect(typeof params.raw).toBe("string");
-  const parsed = requireRecord(JSON.parse(String(params.raw)), "config.patch raw");
-  const ui = requireRecord(parsed.ui, "config.patch ui");
-  return requireRecord(ui.prefs, "config.patch ui.prefs");
 }
 
 function settingsRow(page: Page, title: string): Locator {
@@ -73,39 +50,6 @@ async function selectValue(locator: Locator): Promise<string> {
   return locator.evaluate((element) =>
     String((element as HTMLElement & { value?: unknown }).value),
   );
-}
-
-async function waitForRequestCount(
-  gateway: MockGatewayControls,
-  method: string,
-  count: number,
-): Promise<void> {
-  await expect
-    .poll(async () => (await gateway.getRequests(method)).length, { timeout: 10_000 })
-    .toBe(count);
-}
-
-async function resetSyncedPreference(options: {
-  click: () => Promise<void>;
-  expectedKey: string;
-  gateway: MockGatewayControls;
-  hash: string;
-  remainingPrefs: Record<string, unknown>;
-}): Promise<void> {
-  const patchCount = (await options.gateway.getRequests("config.patch")).length;
-  const configGetCount = (await options.gateway.getRequests("config.get")).length;
-  await options.gateway.setMethodResponse(
-    "config.get",
-    configResponse(options.remainingPrefs, options.hash),
-  );
-
-  await options.click();
-  await waitForRequestCount(options.gateway, "config.patch", patchCount + 1);
-  const patches = await options.gateway.getRequests("config.patch");
-  expect(patchPrefs(patches[patchCount] as MockGatewayRequest)).toEqual({
-    [options.expectedKey]: null,
-  });
-  await waitForRequestCount(options.gateway, "config.get", configGetCount + 1);
 }
 
 async function readPersistedSettings(page: Page): Promise<Record<string, unknown>> {
@@ -169,7 +113,6 @@ async function captureViewport(page: Page, filename: string): Promise<void> {
   if (!captureUiProofEnabled) {
     return;
   }
-  await mkdir(uiProofArtifactDir, { recursive: true });
   await page.screenshot({
     animations: "disabled",
     path: path.join(uiProofArtifactDir, filename),
@@ -177,6 +120,47 @@ async function captureViewport(page: Page, filename: string): Promise<void> {
 }
 
 suite.define(() => {
+  it("shows task progress auto-collapse off by default and persists the opt-in", async () => {
+    await suite.withPage(
+      {
+        colorScheme: "dark",
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1440 },
+      },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "config.get": configResponse({}, "appearance-task-progress-1"),
+          },
+        });
+
+        const response = await page.goto(
+          `${suite.server.baseUrl}settings/appearance?section=__appearance__#settings-appearance-chat`,
+        );
+        expect(response?.status()).toBe(200);
+        await waitForControlUiSettingsTakeover(page);
+        await gateway.waitForRequest("config.get");
+
+        const row = settingsRow(page, "Collapse task progress by default on desktop");
+        const toggle = row.getByRole("switch");
+        await row.scrollIntoViewIfNeeded();
+        await expect.poll(() => toggle.isChecked()).toBe(false);
+        await expect.poll(() => row.textContent()).not.toContain("Using default:");
+        await captureViewport(page, "11-task-progress-collapse-off.png");
+
+        await row.click();
+        await expect.poll(() => toggle.isChecked()).toBe(true);
+        await expect
+          .poll(() => readPersistedSettings(page))
+          .toMatchObject({
+            chatCollapseTaskProgress: true,
+          });
+        await captureViewport(page, "12-task-progress-collapse-on.png");
+      },
+    );
+  });
+
   it("removes synced and browser-local overrides, then reloads inherited defaults", async () => {
     const context = await suite.browser.newContext({
       colorScheme: "dark",
@@ -203,7 +187,6 @@ suite.define(() => {
     );
     const page = await context.newPage();
     const initialPrefs: Record<string, unknown> = {
-      chatSendShortcut: "modifier-enter",
       locale: "en",
       theme: "knot",
       themeMode: "dark",
@@ -225,16 +208,14 @@ suite.define(() => {
       const themeSection = page.locator("#settings-appearance-theme");
       const colorModeRow = settingsRow(page, "Color mode");
       const textSizeSection = page.locator("#settings-appearance-text-size");
-      const sendShortcutRow = settingsRow(page, "Send shortcut");
       const languageSelect = languageRow.locator("wa-select");
-      const colorModeGroup = colorModeRow.locator("wa-radio-group");
-      const sendShortcutSelect = sendShortcutRow.locator("[data-settings-send-shortcut]");
+      const colorModeGroup = colorModeRow.getByRole("radiogroup");
 
       await expect.poll(() => selectValue(languageSelect)).toBe("en");
       await expect
         .poll(() => themeSection.locator(".settings-theme-card--knot").getAttribute("aria-pressed"))
         .toBe("true");
-      await expect.poll(() => selectValue(colorModeGroup)).toBe("dark");
+      await expect.poll(() => colorModeGroup.locator("input:checked").inputValue()).toBe("dark");
       await expect
         .poll(() =>
           textSizeSection
@@ -242,34 +223,31 @@ suite.define(() => {
             .getAttribute("aria-pressed"),
         )
         .toBe("true");
-      await expect.poll(() => sendShortcutSelect.inputValue()).toBe("modifier-enter");
       await expect.poll(() => languageRow.textContent()).toContain("Default: System");
       await expect.poll(() => themeSection.textContent()).toContain("Default: Claw");
       await expect.poll(() => colorModeRow.textContent()).toContain("Default: System");
       await expect.poll(() => textSizeSection.textContent()).toContain("Default: 100%");
-      await expect.poll(() => sendShortcutRow.textContent()).toContain("Default: Enter");
       await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");
 
       await page.evaluate(() => window.scrollTo(0, 0));
       await captureViewport(page, "01-explicit-overrides.png");
-      await sendShortcutRow.scrollIntoViewIfNeeded();
-      await captureViewport(page, "02-explicit-chat-override.png");
 
       const withoutLocale = { ...initialPrefs };
       delete withoutLocale.locale;
       await resetSyncedPreference({
         click: () =>
-          languageRow
-            .getByRole("button", { name: "Reset to default" })
-            .click()
-            .then(() => undefined),
+          languageSelect.evaluate((element) => {
+            const select = element as HTMLElement & { value: string };
+            select.value = "system";
+            select.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+          }),
         expectedKey: "locale",
         gateway,
         hash: "appearance-defaults-2",
         remainingPrefs: withoutLocale,
       });
 
-      const withoutTheme = { ...withoutLocale };
+      const withoutTheme: Record<string, unknown> = { ...withoutLocale, accent: "theme" };
       delete withoutTheme.theme;
       await resetSyncedPreference({
         click: () =>
@@ -278,6 +256,7 @@ suite.define(() => {
             .click()
             .then(() => undefined),
         expectedKey: "theme",
+        expectedPrefs: { theme: null, accent: "theme" },
         gateway,
         hash: "appearance-defaults-3",
         remainingPrefs: withoutTheme,
@@ -288,7 +267,7 @@ suite.define(() => {
       await resetSyncedPreference({
         click: () =>
           colorModeRow
-            .locator('wa-radio[value="system"]')
+            .getByRole("radio", { name: "System", exact: true })
             .click()
             .then(() => undefined),
         expectedKey: "themeMode",
@@ -300,23 +279,11 @@ suite.define(() => {
       await textSizeSection.locator(".settings-text-scale__btn", { hasText: "100%" }).click();
       await expect.poll(() => readPersistedSettings(page)).not.toHaveProperty("textScale");
 
-      await resetSyncedPreference({
-        click: () =>
-          sendShortcutRow
-            .getByRole("button", { name: "Reset to default" })
-            .click()
-            .then(() => undefined),
-        expectedKey: "chatSendShortcut",
-        gateway,
-        hash: "appearance-defaults-5",
-        remainingPrefs: {},
-      });
-
       await expect.poll(() => selectValue(languageSelect)).toBe("system");
       await expect
         .poll(() => themeSection.locator(".settings-theme-card--claw").getAttribute("aria-pressed"))
         .toBe("true");
-      await expect.poll(() => selectValue(colorModeGroup)).toBe("system");
+      await expect.poll(() => colorModeGroup.locator("input:checked").inputValue()).toBe("system");
       await expect
         .poll(() =>
           textSizeSection
@@ -324,7 +291,6 @@ suite.define(() => {
             .getAttribute("aria-pressed"),
         )
         .toBe("true");
-      await expect.poll(() => sendShortcutSelect.inputValue()).toBe("enter");
 
       await page.reload();
       await waitForControlUiSettingsTakeover(page);
@@ -334,7 +300,6 @@ suite.define(() => {
       const reloadedThemeSection = page.locator("#settings-appearance-theme");
       const reloadedColorModeRow = settingsRow(page, "Color mode");
       const reloadedTextSizeSection = page.locator("#settings-appearance-text-size");
-      const reloadedSendShortcutRow = settingsRow(page, "Send shortcut");
 
       await expect.poll(() => selectValue(reloadedLanguageRow.locator("wa-select"))).toBe("system");
       await expect
@@ -343,7 +308,9 @@ suite.define(() => {
         )
         .toBe("true");
       await expect
-        .poll(() => selectValue(reloadedColorModeRow.locator("wa-radio-group")))
+        .poll(() =>
+          reloadedColorModeRow.getByRole("radiogroup").locator("input:checked").inputValue(),
+        )
         .toBe("system");
       await expect
         .poll(() =>
@@ -352,30 +319,17 @@ suite.define(() => {
             .getAttribute("aria-pressed"),
         )
         .toBe("true");
-      await expect
-        .poll(() => reloadedSendShortcutRow.locator("[data-settings-send-shortcut]").inputValue())
-        .toBe("enter");
-      await expect.poll(() => reloadedLanguageRow.textContent()).toContain("Using default: System");
-      await expect.poll(() => reloadedThemeSection.textContent()).toContain("Using default: Claw");
-      await expect
-        .poll(() => reloadedColorModeRow.textContent())
-        .toContain("Using default: System");
+      await expect.poll(() => reloadedLanguageRow.textContent()).not.toContain("Using default:");
+      await expect.poll(() => reloadedThemeSection.textContent()).not.toContain("Using default:");
+      await expect.poll(() => reloadedColorModeRow.textContent()).not.toContain("Using default:");
       await expect
         .poll(() => reloadedTextSizeSection.textContent())
-        .toContain("Using default: 100%");
-      await expect
-        .poll(() => reloadedSendShortcutRow.textContent())
-        .toContain("Using default: Enter");
-      await expect
-        .poll(() => page.getByRole("button", { name: "Reset to default" }).count())
-        .toBe(0);
+        .not.toContain("Using default:");
       await expect.poll(() => readPersistedSettings(page)).not.toHaveProperty("textScale");
       await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");
 
       await page.evaluate(() => window.scrollTo(0, 0));
       await captureViewport(page, "03-inherited-defaults.png");
-      await reloadedSendShortcutRow.scrollIntoViewIfNeeded();
-      await captureViewport(page, "04-inherited-chat-default.png");
     } finally {
       await context.close();
     }
@@ -483,13 +437,15 @@ suite.define(() => {
             .click()
             .then(() => undefined),
         expectedKey: "theme",
+        expectedPrefs: { theme: null, accent: "theme" },
         gateway,
         hash: "appearance-accent-3",
-        remainingPrefs: { accent: mintAccent },
+        remainingPrefs: { accent: "theme" },
       });
       await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe("dark");
-      await expect.poll(() => readAccentPresentation(page)).toMatchObject({ accent: mintAccent });
-      await expect.poll(() => mintPreset.getAttribute("aria-pressed")).toBe("true");
+      await expect.poll(() => readAccentPresentation(page)).toMatchObject({ accent: "#ff5c5c" });
+      await expect.poll(() => readPersistedSettings(page)).toMatchObject({ accent: "theme" });
+      await expect.poll(() => mintPreset.getAttribute("aria-pressed")).toBe("false");
 
       await gateway.setMethodResponse(
         "config.get",
@@ -583,7 +539,7 @@ suite.define(() => {
         await waitForRequestCount(gateway, "config.patch", 1);
         expect(
           patchPrefs((await gateway.getRequests("config.patch"))[0] as MockGatewayRequest),
-        ).toEqual({ theme: "knot" });
+        ).toEqual({ theme: "knot", accent: "theme" });
         await gateway.rejectDeferred("config.patch", {
           code: "INVALID_REQUEST",
           message: "mock validation failure",
@@ -637,7 +593,11 @@ suite.define(() => {
           .toContain("Stocké uniquement dans ce navigateur");
 
         await themeSection.locator(".settings-theme-card--claw").click();
-        await languageRow.locator("button.btn--icon").click();
+        await languageSelect.evaluate((element) => {
+          const select = element as HTMLElement & { value: string };
+          select.value = "system";
+          select.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+        });
         await followUpRow.locator("button.btn--sm").click();
 
         await expect
@@ -724,23 +684,29 @@ suite.define(() => {
       await reasoning.click();
       await expect.poll(() => reasoning.getAttribute("aria-checked")).toBe("false");
 
+      await page.keyboard.press("Escape");
+      await page.keyboard.press("Escape");
       const sidebar = page.locator("openclaw-app-sidebar");
-      await sidebar.locator(".sidebar-nav__head-action").click();
-      await sidebar
-        .locator("wa-dropdown.sidebar-more-menu")
-        .getByRole("menuitem", { name: "Edit pinned items" })
-        .click();
-      const customizeMenu = sidebar.locator(
-        "wa-dropdown.sidebar-customize-menu:not(.sidebar-more-menu):not(.sidebar-agent-menu)",
-      );
+      await sidebar.getByRole("button", { name: "Pages", exact: true }).click();
+      const usage = sidebar.locator(".sidebar-pages__entry").filter({
+        has: page.locator('[data-sidebar-entry="route:usage"]'),
+      });
+      const pinnedUsage = sidebar.locator('.sidebar-rail__pin[data-sidebar-entry="route:usage"]');
+      const pinsBefore = await sidebar
+        .locator(".sidebar-rail__pin")
+        .evaluateAll((pins) => pins.map((pin) => pin.getAttribute("data-sidebar-entry")));
+      expect(await pinnedUsage.count()).toBe(0);
+      await usage.getByRole("button", { name: "Pin", exact: true }).click();
+      await pinnedUsage.getByRole("link", { name: "Usage", exact: true }).waitFor();
+      await usage.getByRole("button", { name: "Unpin", exact: true }).waitFor();
+      // Personal navigation has no global config fallback. With no writable
+      // profile, prove browser-local provenance through storage and both write boundaries.
       await expect
-        .poll(() => customizeMenu.locator(".sidebar-customize-menu__provenance").textContent())
-        .toContain("Stored in this browser only");
-      const tasks = customizeMenu.getByRole("menuitemcheckbox", { name: "Tasks" });
-      await tasks.click();
-      await expect.poll(() => tasks.getAttribute("aria-checked")).toBe("true");
-      await page.waitForTimeout(100);
+        .poll(() => readPersistedSettings(page))
+        .toMatchObject({ sidebarEntries: [...pinsBefore, "route:usage"] });
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+      expect(await gateway.getRequests("users.prefs.set")).toHaveLength(0);
+      expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
 
       await page.reload();
       await viewMenuTrigger.click();
@@ -756,30 +722,26 @@ suite.define(() => {
         )
         .toBe("false");
 
-      await sidebar.locator(".sidebar-nav__head-action").click();
-      await sidebar
-        .locator("wa-dropdown.sidebar-more-menu")
-        .getByRole("menuitem", { name: "Edit pinned items" })
-        .click();
+      await page.keyboard.press("Escape");
+      await page.keyboard.press("Escape");
+      await pinnedUsage.getByRole("link", { name: "Usage", exact: true }).waitFor();
+      await sidebar.getByRole("button", { name: "Pages", exact: true }).click();
+      await usage.getByRole("button", { name: "Unpin", exact: true }).waitFor();
       await expect
-        .poll(() => customizeMenu.locator(".sidebar-customize-menu__provenance").textContent())
-        .toContain("Stored in this browser only");
-      await expect
-        .poll(() =>
-          customizeMenu
-            .getByRole("menuitemcheckbox", { name: "Tasks" })
-            .getAttribute("aria-checked"),
-        )
-        .toBe("true");
+        .poll(() => readPersistedSettings(page))
+        .toMatchObject({ sidebarEntries: [...pinsBefore, "route:usage"] });
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+      expect(await gateway.getRequests("users.prefs.set")).toHaveLength(0);
+      expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
     } finally {
       await context.close();
     }
   });
 
-  it("announces a failed custom-theme import", async () => {
+  it("announces a failed custom-theme import, then persists a successful retry across reload", async () => {
     await suite.withPage(
       {
+        colorScheme: "dark",
         locale: "en-US",
         serviceWorkers: "block",
         viewport: { height: 900, width: 1440 },
@@ -788,10 +750,16 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           methodResponses: {
             "config.get": configResponse({}, "custom-theme-invalid-1"),
+            "config.patch": { ok: true },
           },
         });
         await page.route("https://tweakcn.com/r/themes/network-failure", async (route) => {
           await route.fulfill({ status: 503 });
+        });
+        let successfulImports = 0;
+        await page.route("https://tweakcn.com/r/themes/retry-theme", async (route) => {
+          successfulImports += 1;
+          await route.fulfill({ json: createTweakcnThemePayload() });
         });
 
         const response = await page.goto(`${suite.server.baseUrl}settings/appearance`);
@@ -809,6 +777,40 @@ suite.define(() => {
           .toBe("tweakcn import failed (503).");
         expect(await gateway.getRequests("config.patch")).toHaveLength(0);
         await captureViewport(page, "07-custom-theme-import-error-announced.png");
+
+        await gateway.setMethodResponse(
+          "config.get",
+          configResponse({ theme: "custom", accent: "theme" }, "custom-theme-imported-2"),
+        );
+        await importer.locator("input").fill("https://tweakcn.com/themes/retry-theme");
+        await importer.locator("button.primary").click();
+        await expect.poll(() => importer.getByRole("status").textContent()).toContain("Imported");
+        await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe("custom");
+        const importedSettings = await readPersistedSettings(page);
+        expect(importedSettings).toMatchObject({
+          customTheme: { themeId: "retry-theme", label: "Light Green" },
+          theme: "custom",
+        });
+        const importedAccent = await readAccentPresentation(page);
+        expect(importedAccent.accent).toBe(createTweakcnThemePayload().cssVars.dark.accent);
+        await waitForRequestCount(gateway, "config.patch", 1);
+        const [themePatch] = await gateway.getRequests("config.patch");
+        expect(patchPrefs(themePatch!)).toEqual({ theme: "custom", accent: "theme" });
+        await captureViewport(page, "08-custom-theme-imported.png");
+
+        await page.reload();
+        await waitForControlUiSettingsTakeover(page);
+        await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe("custom");
+        await expect
+          .poll(() => importer.locator(".settings-theme-import__meta-value").textContent())
+          .toContain("Light Green");
+        expect((await readPersistedSettings(page)).customTheme).toEqual(
+          importedSettings.customTheme,
+        );
+        expect(await readAccentPresentation(page)).toEqual(importedAccent);
+        expect(successfulImports).toBe(1);
+        expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+        await captureViewport(page, "09-custom-theme-reloaded.png");
       },
     );
   });

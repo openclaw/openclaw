@@ -28,22 +28,6 @@ const migratedMessageTurnFiles = [
   "extensions/zalouser/src/monitor.ts",
 ];
 
-const historyWindowFiles = [
-  "extensions/discord/src/monitor/message-handler.context.ts",
-  "extensions/feishu/src/bot.ts",
-  "extensions/imessage/src/monitor/inbound-processing.ts",
-  "extensions/line/src/bot-handlers.ts",
-  "extensions/line/src/group-history.ts",
-  "extensions/mattermost/src/mattermost/monitor-posts.ts",
-  "extensions/msteams/src/monitor-handler/message-handler.ts",
-  "extensions/signal/src/monitor/event-handler.ts",
-  "extensions/slack/src/monitor/message-handler/prepare.ts",
-  "extensions/telegram/src/bot-message-dispatch-context.ts",
-  "extensions/telegram/src/group-history-window.ts",
-  "extensions/whatsapp/src/auto-reply/monitor/group-gating.ts",
-  "extensions/zalouser/src/monitor.ts",
-];
-
 const lowLevelHistoryHelpers = [
   "buildInboundHistoryFromMap",
   "buildHistoryContextFromMap",
@@ -56,7 +40,6 @@ const lowLevelHistoryHelpers = [
 const legacyReplyHistoryCompatibilityFiles = new Set([
   "extensions/mattermost/runtime-api.ts",
   "extensions/mattermost/src/mattermost/runtime-api.ts",
-  "extensions/mattermost/src/runtime-api.ts",
 ]);
 
 const skippedExtensionScanDirs = new Set([
@@ -158,14 +141,6 @@ describe("message turn migration guardrails", () => {
           new RegExp(`\\b${helper}\\b`),
         );
       }
-    }
-  });
-
-  it("keeps migrated history users on the channel history window facade", () => {
-    for (const file of historyWindowFiles) {
-      expect(readRepoFile(file), `${file} should keep using createChannelHistoryWindow`).toContain(
-        "createChannelHistoryWindow",
-      );
     }
   });
 

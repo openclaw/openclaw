@@ -1,15 +1,10 @@
-/**
- * Output helpers for non-interactive onboarding.
- *
- * JSON success/failure payloads and human-readable gateway health diagnostics
- * are kept here so local and remote setup report failures consistently.
- */
+import { formatCliCommand } from "../../../cli/command-format.js";
+import { formatCliJsonFailure } from "../../../cli/failure-output.js";
 import type { GatewayServiceLoadState } from "../../../daemon/service-types.js";
 import { redactSecrets } from "../../../logging/redact.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../../runtime.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 
-/** Structured daemon/service details attached to gateway health failures. */
 export type GatewayHealthFailureDiagnostics = {
   service?: {
     label: string;
@@ -26,7 +21,6 @@ export type GatewayHealthFailureDiagnostics = {
   inspectError?: string;
 };
 
-/** Coarse recovery category for gateway health failures. */
 type GatewayHealthFailureClassification =
   | "not-listening"
   | "auth-mismatch"
@@ -35,7 +29,6 @@ type GatewayHealthFailureClassification =
   | "startup-blocked"
   | "module-missing";
 
-/** Emits the JSON success payload for non-interactive onboarding when requested. */
 export function logNonInteractiveOnboardingJson(params: {
   opts: OnboardOptions;
   runtime: RuntimeEnv;
@@ -99,15 +92,12 @@ function formatGatewayRuntimeSummary(
   return parts.join(", ");
 }
 
-function hasConnectionRefusedDetail(detail: string): boolean {
-  return /\b(?:econnrefused|connection refused|connect refused)\b/i.test(detail);
-}
-
 export function classifyGatewayHealthFailure(params: {
   detail?: string;
   diagnostics?: GatewayHealthFailureDiagnostics;
 }): GatewayHealthFailureClassification | undefined {
   const detail = params.detail ?? "";
+  const connectionRefused = /\b(?:econnrefused|connection refused|connect refused)\b/i.test(detail);
   const lastGatewayError = params.diagnostics?.lastGatewayError ?? "";
   const combined = `${detail}\n${lastGatewayError}`;
   // Classify from both the active probe and the daemon's last error so a fast
@@ -118,16 +108,13 @@ export function classifyGatewayHealthFailure(params: {
     return "auth-mismatch";
   }
   if (
-    /\b(?:runtime[- ]deps?|runtime dependencies|cannot find module|sqlite-vec|loadextension)\b/i.test(
+    /\b(?:runtime[- ]deps?|runtime dependencies|cannot find (?:module|package)|(?:err_)?module_not_found|sqlite-vec|loadextension)\b/i.test(
       combined,
     )
   ) {
     return "module-missing";
   }
-  if (
-    params.diagnostics?.service?.loadState.status === "not-loaded" &&
-    hasConnectionRefusedDetail(detail)
-  ) {
+  if (params.diagnostics?.service?.loadState.status === "not-loaded" && connectionRefused) {
     return "service-missing";
   }
   const runtimeStatus = params.diagnostics?.service?.runtimeStatus;
@@ -135,14 +122,14 @@ export function classifyGatewayHealthFailure(params: {
     runtimeStatus &&
     runtimeStatus !== "running" &&
     runtimeStatus !== "active" &&
-    hasConnectionRefusedDetail(detail)
+    connectionRefused
   ) {
     return "service-stopped";
   }
   if (lastGatewayError.trim()) {
     return "startup-blocked";
   }
-  if (hasConnectionRefusedDetail(detail)) {
+  if (connectionRefused) {
     return "not-listening";
   }
   return undefined;
@@ -153,23 +140,21 @@ function recoveryHintForGatewayHealthFailure(
 ): string | undefined {
   switch (classification) {
     case "auth-mismatch":
-      return "Fix: run `openclaw doctor --fix`.";
     case "module-missing":
-      return "Fix: run `openclaw doctor --fix`.";
+      return `Fix: run \`${formatCliCommand("openclaw doctor --fix")}\`.`;
     case "service-missing":
-      return "Fix: run `openclaw gateway install --force`.";
+      return `Fix: run \`${formatCliCommand("openclaw gateway install --force")}\`.`;
     case "service-stopped":
-      return "Fix: run `openclaw gateway restart`.";
+      return `Fix: run \`${formatCliCommand("openclaw gateway restart")}\`.`;
     case "startup-blocked":
-      return "Fix: run `openclaw gateway status --deep`.";
+      return `Fix: run \`${formatCliCommand("openclaw gateway status --deep")}\`.`;
     case "not-listening":
-      return "Fix: start `openclaw gateway run`, or run `openclaw gateway restart` for a managed gateway.";
+      return `Fix: start \`${formatCliCommand("openclaw gateway run")}\`, or run \`${formatCliCommand("openclaw gateway restart")}\` for a managed gateway.`;
     default:
       return undefined;
   }
 }
 
-/** Emits JSON or human-readable failure output for non-interactive onboarding. */
 export function logNonInteractiveOnboardingFailure(params: {
   opts: OnboardOptions;
   runtime: RuntimeEnv;
@@ -221,7 +206,7 @@ export function logNonInteractiveOnboardingFailure(params: {
 
   if (params.opts.json) {
     writeRuntimeJson(params.runtime, {
-      ok: false,
+      ...formatCliJsonFailure(output.message),
       mode: params.mode,
       phase: params.phase,
       message: output.message,
@@ -240,11 +225,11 @@ export function logNonInteractiveOnboardingFailure(params: {
   const lines = [
     output.message,
     classification ? `Classification: ${classification}` : undefined,
-    output.detail ? `Last probe: ${output.detail}` : undefined,
+    output.detail ? `Last check: ${output.detail}` : undefined,
     service ? `Service: ${service.label} (${serviceLoadText})` : undefined,
     gatewayRuntime ? `Runtime: ${gatewayRuntime}` : undefined,
     output.diagnostics?.lastGatewayError
-      ? `Last gateway error: ${output.diagnostics.lastGatewayError}`
+      ? `Recent Gateway log error (may be from an earlier run): ${output.diagnostics.lastGatewayError}`
       : undefined,
     output.diagnostics?.inspectError
       ? `Diagnostics warning: ${output.diagnostics.inspectError}`

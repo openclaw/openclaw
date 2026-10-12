@@ -5,16 +5,11 @@ import type {
   AcpJsonRpcId,
 } from "@openclaw/acp-core/runtime/types";
 import { runStructuredInput } from "../../agents/harness/structured-input-execution.js";
-import { callGatewayTool } from "../../agents/tools/gateway.js";
 import type { ReplyPayload } from "../types.js";
 import { parseAcpElicitationRequest } from "./acp-elicitation.js";
 
 const DEFAULT_ELICITATION_TIMEOUT_MS = 15 * 60_000;
 const MAX_REQUEST_ID_TEXT = 128;
-
-type AcpElicitationDelivery = {
-  deliver: (kind: "block", payload: ReplyPayload) => Promise<boolean>;
-};
 
 export type AcpElicitationHandlerParams = {
   sourceSessionKey: string;
@@ -22,7 +17,9 @@ export type AcpElicitationHandlerParams = {
   outerRequestId: string;
   agentId: string;
   runId: string;
-  delivery: AcpElicitationDelivery;
+  delivery: {
+    deliver: (kind: "block", payload: ReplyPayload) => Promise<boolean>;
+  };
   isActive: () => boolean;
 };
 
@@ -40,10 +37,6 @@ function questionId(params: {
 
 function cancellation(message: string): AcpElicitationResponse {
   return { action: "cancel", _meta: { message } };
-}
-
-function decline(message?: string): AcpElicitationResponse {
-  return { action: "decline", ...(message ? { _meta: { message } } : {}) };
 }
 
 function isContextRequestIdValid(value: AcpJsonRpcId): boolean {
@@ -78,7 +71,6 @@ export function createAcpElicitationHandler(
       agentId: params.agentId,
       runId: params.runId,
       timeoutMs: DEFAULT_ELICITATION_TIMEOUT_MS,
-      gatewayCall: callGatewayTool,
       delivery,
       signal: context.signal,
       isActive: params.isActive,
@@ -101,11 +93,11 @@ export function createAcpElicitationHandler(
         ? { action: "accept" }
         : { action: "accept", content: result.content };
     }
-    if (result.status === "declined") {
-      return decline(result.message);
-    }
-    if (result.status === "unsupported") {
-      return decline(result.message);
+    if (result.status === "declined" || result.status === "unsupported") {
+      return {
+        action: "decline",
+        ...(result.message ? { _meta: { message: result.message } } : {}),
+      };
     }
     return cancellation(result.message ?? "ACP input request was cancelled.");
   };

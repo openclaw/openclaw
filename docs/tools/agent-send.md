@@ -100,7 +100,7 @@ output projection, and process status, use [`openclaw agent exec`](/cli/agent#ag
   and session state before retrying or rerunning with `--local`.
 - Session selection: `--to` derives the session key (group/channel targets
   preserve isolation; direct chats collapse to `main`). With `--agent`,
-  `--channel`, and `--to` together, routing follows the channel's canonical
+  `--channel`, and `--to` together, routing follows the channel's resolved
   recipient and `session.dmScope`. Stable outbound-only identities use a
   provider-owned session isolated from the agent's main session.
 - `--session-key` selects an explicit key. Agent-prefixed keys must use
@@ -135,7 +135,7 @@ openclaw agent --agent ops --message-file ./task.md
 # Exact session key
 openclaw agent --session-key agent:ops:incident-42 --message "Summarize status"
 
-# Legacy key scoped to an agent
+# Bare key scoped to an agent
 openclaw agent --agent ops --session-key incident-42 --message "Summarize status"
 
 # Deliver to a different channel than the session
@@ -154,7 +154,13 @@ openclaw agent --agent ops --message "Alert" --deliver --reply-channel telegram 
   <Card title="Sessions" href="/concepts/session" icon="comments">
     How session keys work and how `--to`, `--agent`, and `--session-id` resolve them.
   </Card>
+  <Card title="Reactions" href="/tools/reactions" icon="thumbs-up">
+    Emoji reaction semantics for the `react` action, per channel.
+  </Card>
   <Card title="Slash commands" href="/tools/slash-commands" icon="slash">
     Native command catalog used inside agent sessions.
+  </Card>
+  <Card title="ACP agents" href="/tools/acp-agents" icon="robot">
+    External agents reachable over ACP.
   </Card>
 </CardGroup>

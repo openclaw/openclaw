@@ -1,57 +1,67 @@
+import { isDeepStrictEqual } from "node:util";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import {
   ErrorCodes,
   errorShape,
   type ErrorShape,
-  type SessionCreatedActor,
   type SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
+import type { ModelCatalogSnapshot } from "../../agents/model-catalog.js";
+import { SessionWorktreeLifecycleError } from "../../agents/worktrees/errors.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { SESSION_LIFECYCLE_CHANGED_ERROR_REASON } from "../../config/sessions/lifecycle.js";
+import type { SessionAccessScope } from "../../config/sessions/session-accessor.js";
+import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
+import { restoreSessionWorktree } from "../../sessions/session-worktree-lifecycle.js";
+import type { UserModelAccountSelection } from "../model-account-authority.js";
+import { ModelAccountConnectAuthorityError } from "../model-account-connect-errors.js";
 import { resolvePluginSessionOwnershipError } from "../session-plugin-ownership.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
+import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
+import { withGatewaySessionEntryReadOnly } from "../session-utils-read-lifetime.js";
+import type { GatewaySessionStoreTargetWithStore } from "../session-utils-store.types.js";
 import {
   resolveCanonicalGatewaySessionStoreKey,
   resolveGatewaySessionStoreTargetWithStore,
 } from "../session-utils.js";
 import { projectSessionsPatchEntry } from "../sessions-patch.js";
+import { WorkerInferenceSessionDrainBusyError } from "../worker-environments/inference-control-internal.js";
 import {
-  prepareSessionArchiveLifecycle,
-  type SessionArchiveLifecycleDrain,
-} from "./sessions-archive-lifecycle.js";
+  prepareSessionWorkerPlacementArchiveCheckAsync,
+  prepareSessionWorkerPlacementMutationCheck,
+  SessionWorkerPlacementStopError,
+} from "../worker-environments/session-placement-lifecycle.js";
 import {
-  isAgentMainSessionKey,
+  prepareSessionLifecycleDrain,
+  SessionLifecycleWorkspaceRecoveryError,
+} from "./sessions-lifecycle-drain.js";
+import type {
+  SessionPatchArchivePreparation,
+  SessionPatchArchiveTarget,
+} from "./sessions-patch-archive.types.js";
+import {
+  sessionChangedError as archiveChangedError,
+  unexpectedPatchError,
+} from "./sessions-patch-errors.js";
+import { resolveSessionPatchTargetError } from "./sessions-patch-expectations.js";
+import {
+  resolveProtectedSessionVisibilityError,
   resolveSessionWorkerPlacementPatchError,
+  prepareSessionWorkerPlacementPatchError,
   sessionLog,
 } from "./sessions-shared.js";
 import type { GatewayRequestContext } from "./types.js";
 
-export type SessionPatchArchivePreparation = {
-  canonicalKey: string;
-  drain: SessionArchiveLifecycleDrain;
-  entry?: SessionEntry;
-};
-
-type SessionPatchArchiveTarget = {
-  archiveActor: SessionCreatedActor | undefined;
-  canonicalKey: string;
-  fullPatch: SessionsPatchParams;
-  initialEntry?: SessionEntry;
-  initialStoreKeys: string[];
-  key: string;
-  lifecycleIdentities: Array<string | undefined>;
-  requestedAgentId?: string;
-  storePath: string;
-};
-
-function archiveChangedError(key: string): ErrorShape {
-  return errorShape(ErrorCodes.INVALID_REQUEST, `Session ${key} changed before patch. Retry.`, {
-    details: { reason: SESSION_LIFECYCLE_CHANGED_ERROR_REASON },
-  });
+export function releaseSessionPatchArchive(preparation?: SessionPatchArchivePreparation): void {
+  try {
+    preparation?.drain.release();
+  } catch (error) {
+    sessionLog.warn(
+      `sessions.patch: archive drain release failed for ${preparation?.canonicalKey}: ${formatErrorMessage(error)}`,
+    );
+  }
 }
 
 function archiveUnavailableError(key: string, message: "active" | "stopping"): ErrorShape {
@@ -64,112 +74,190 @@ function archiveUnavailableError(key: string, message: "active" | "stopping"): E
   );
 }
 
-function protectedArchiveError(cfg: OpenClawConfig, canonicalKey: string): ErrorShape | undefined {
-  if (canonicalKey === "unknown") {
-    return errorShape(ErrorCodes.INVALID_REQUEST, "Cannot archive the unknown session sentinel.");
-  }
-  if (canonicalKey === "global" || isAgentMainSessionKey(cfg, canonicalKey)) {
-    return errorShape(ErrorCodes.INVALID_REQUEST, "Cannot archive an agent's main session.");
-  }
-  return undefined;
-}
-
 function archiveTargetChanged(params: {
   baselineEntry: SessionEntry | undefined;
   currentEntry: SessionEntry | undefined;
   patch: SessionsPatchParams;
 }): boolean {
   const { baselineEntry, currentEntry, patch } = params;
-  const expectedSessionChanged =
+  return (
     (patch.expectedSessionId !== undefined &&
       currentEntry?.sessionId !== patch.expectedSessionId) ||
     (patch.expectedLifecycleRevision !== undefined &&
-      currentEntry?.lifecycleRevision !== patch.expectedLifecycleRevision);
-  const generationChanged =
-    baselineEntry !== undefined &&
-    currentEntry !== undefined &&
-    (currentEntry.sessionId !== baselineEntry.sessionId ||
-      currentEntry.lifecycleRevision !== baselineEntry.lifecycleRevision);
-  return (
-    expectedSessionChanged ||
-    (baselineEntry !== undefined && currentEntry === undefined) ||
-    (baselineEntry === undefined && currentEntry !== undefined) ||
-    generationChanged
+      currentEntry?.lifecycleRevision !== patch.expectedLifecycleRevision) ||
+    (baselineEntry === undefined) !== (currentEntry === undefined) ||
+    currentEntry?.sessionId !== baselineEntry?.sessionId ||
+    currentEntry?.lifecycleRevision !== baselineEntry?.lifecycleRevision
   );
 }
 
-export async function prepareSessionPatchArchive(params: {
+type SessionPatchArchiveParams = {
   commitGuard: () => ErrorShape | undefined;
   cfg: OpenClawConfig;
   context: GatewayRequestContext;
-  loadGatewayModelCatalog: () => Promise<ModelCatalogEntry[]>;
+  loadGatewayModelCatalogSnapshot: () => Promise<ModelCatalogSnapshot>;
+  personalModelSelection?: UserModelAccountSelection;
   pluginOwnerId?: string;
   target: SessionPatchArchiveTarget;
-}): Promise<Result<SessionPatchArchivePreparation, ErrorShape>> {
-  const { cfg, target } = params;
-  const freshResolved = resolveGatewaySessionStoreTargetWithStore({
-    cfg,
-    key: target.key,
-    ...(target.requestedAgentId ? { agentId: target.requestedAgentId } : {}),
-    exactRead: true,
+};
+
+export function prepareSessionPatchArchive(
+  params: SessionPatchArchiveParams,
+): Promise<Result<SessionPatchArchivePreparation, ErrorShape>> {
+  const metadata = captureSessionEntryMetadataRead({
+    agentId: params.target.requestedAgentId,
+    sessionKey: params.target.canonicalKey,
+    storePath: params.target.storePath,
   });
-  if (freshResolved.storePath !== target.storePath) {
-    return err(archiveChangedError(target.key));
+  if (!metadata) {
+    return prepareSessionPatchArchiveFromSource(params);
   }
-  const fresh = resolveCanonicalGatewaySessionStoreKey({
-    cfg,
-    key: target.key,
-    store: freshResolved.store,
-    agentId: target.requestedAgentId,
-  });
-  const freshCanonicalKey = fresh.target.canonicalKey ?? target.key;
-  const ownershipError = resolvePluginSessionOwnershipError({
-    action: "patch",
-    entry: fresh.entry,
-    key: freshCanonicalKey,
-    pluginOwnerId: params.pluginOwnerId,
-  });
-  if (ownershipError) {
-    return err(ownershipError);
-  }
-  if (
-    freshCanonicalKey !== target.canonicalKey ||
-    archiveTargetChanged({
-      currentEntry: fresh.entry,
-      baselineEntry: target.initialEntry,
-      patch: target.fullPatch,
-    })
-  ) {
-    return err(archiveChangedError(target.key));
-  }
-  const missingHarnessSessionError = resolveMissingAgentHarnessSessionError(
-    freshCanonicalKey,
-    fresh.entry,
+  return withGatewaySessionEntryReadOnly(
+    { cfg: params.cfg, key: params.target.key, agentId: params.target.requestedAgentId },
+    async (selected) => prepareSessionPatchArchiveFromSource(params, { selected, metadata }),
   );
-  if (missingHarnessSessionError) {
-    return err(errorShape(ErrorCodes.INVALID_REQUEST, missingHarnessSessionError));
+}
+
+async function prepareSessionPatchArchiveFromSource(
+  params: SessionPatchArchiveParams,
+  actor?: {
+    selected: GatewaySessionStoreTargetWithStore;
+    metadata: NonNullable<ReturnType<typeof captureSessionEntryMetadataRead>>;
+  },
+): Promise<Result<SessionPatchArchivePreparation, ErrorShape>> {
+  const { cfg, target } = params;
+  const resolveCurrent = (): Result<
+    {
+      freshResolved: ReturnType<typeof resolveGatewaySessionStoreTargetWithStore>;
+      fresh: ReturnType<typeof resolveCanonicalGatewaySessionStoreKey>;
+      freshCanonicalKey: string;
+    },
+    ErrorShape
+  > => {
+    const freshResolved =
+      actor?.selected ??
+      resolveGatewaySessionStoreTargetWithStore({
+        cfg,
+        key: target.key,
+        ...(target.requestedAgentId ? { agentId: target.requestedAgentId } : {}),
+        exactRead: true,
+      });
+    if (freshResolved.storePath !== target.storePath) {
+      return err(archiveChangedError(target.key));
+    }
+    const fresh = actor
+      ? {
+          target: freshResolved,
+          primaryKey: freshResolved.canonicalKey,
+          entry: actor.metadata.readCurrent(),
+        }
+      : resolveCanonicalGatewaySessionStoreKey({
+          cfg,
+          key: target.key,
+          store: freshResolved.store,
+          agentId: target.requestedAgentId,
+        });
+    const freshCanonicalKey = fresh.target.canonicalKey ?? target.key;
+    const ownershipError = resolvePluginSessionOwnershipError({
+      action: "patch",
+      entry: fresh.entry,
+      key: freshCanonicalKey,
+      pluginOwnerId: params.pluginOwnerId,
+    });
+    if (ownershipError) {
+      return err(ownershipError);
+    }
+    if (
+      freshCanonicalKey !== target.canonicalKey ||
+      archiveTargetChanged({
+        currentEntry: fresh.entry,
+        baselineEntry: target.initialEntry,
+        patch: target.fullPatch,
+      }) ||
+      (actor &&
+        (
+          [
+            "archivedAt",
+            "sandbox",
+            "sandboxMode",
+            "permissionMode",
+            "nativeRuntimeConsent",
+            "agentHarnessId",
+            "agentRuntimeOverride",
+            "authProfileOverride",
+            "modelSelectionLocked",
+            "toolOverrides",
+            "modelOverride",
+            "providerOverride",
+            "modelOverrideRouteResolution",
+            "modelOverrideFallbackOriginProvider",
+            "modelOverrideFallbackOriginModel",
+          ] as const
+        ).some(
+          (field) =>
+            !isDeepStrictEqual(
+              fresh.entry?.[field],
+              freshResolved.store[freshCanonicalKey]?.[field],
+            ),
+        ))
+    ) {
+      return err(archiveChangedError(target.key));
+    }
+    const expectationError = resolveSessionPatchTargetError(fresh.entry, target);
+    if (expectationError) {
+      return err(expectationError);
+    }
+    const missingHarnessSessionError = resolveMissingAgentHarnessSessionError(
+      freshCanonicalKey,
+      fresh.entry,
+    );
+    if (missingHarnessSessionError) {
+      return err(errorShape(ErrorCodes.INVALID_REQUEST, missingHarnessSessionError));
+    }
+    const protectedError = resolveProtectedSessionVisibilityError(
+      cfg,
+      freshCanonicalKey,
+      "archive",
+    );
+    if (protectedError) {
+      return err(protectedError);
+    }
+    const placementError = resolveSessionWorkerPlacementPatchError({
+      agentId: freshResolved.agentId,
+      cfg,
+      context: params.context,
+      entry: fresh.entry,
+      key: target.key,
+      patch: target.fullPatch,
+      sessionKey: freshCanonicalKey,
+      validateModelRuntime: false,
+    });
+    if (placementError) {
+      return err(errorShape(ErrorCodes.INVALID_REQUEST, placementError));
+    }
+    return ok({ freshResolved, fresh, freshCanonicalKey });
+  };
+  const resolved = resolveCurrent();
+  if (!resolved.ok) {
+    return resolved;
   }
-  const protectedError = protectedArchiveError(cfg, freshCanonicalKey);
-  if (protectedError) {
-    return err(protectedError);
-  }
-  const placementError = resolveSessionWorkerPlacementPatchError({
-    agentId: freshResolved.agentId,
-    cfg,
-    context: params.context,
-    entry: fresh.entry,
-    key: target.key,
-    patch: target.fullPatch,
-    sessionKey: freshCanonicalKey,
-    validateModelRuntime: false,
-  });
-  if (placementError) {
-    return err(errorShape(ErrorCodes.INVALID_REQUEST, placementError));
-  }
+  const { freshResolved, fresh, freshCanonicalKey } = resolved.value;
+  const planningEntry = actor ? freshResolved.store[freshCanonicalKey] : fresh.entry;
+  const assertCurrent = () => {
+    params.personalModelSelection?.assertCurrent();
+    const authorizationError = params.commitGuard();
+    if (authorizationError) {
+      throw new SessionMutationAuthorizationChangedError(authorizationError);
+    }
+    const current = resolveCurrent();
+    if (!current.ok) {
+      throw new SessionMutationAuthorizationChangedError(current.error);
+    }
+  };
   const freshCandidateKeys = new Set(fresh.target.storeKeys);
   const preview = await projectSessionsPatchEntry({
     cfg,
-    existingEntry: fresh.entry,
+    existingEntry: planningEntry,
     isLabelInUse: (label) =>
       Object.entries(freshResolved.store).some(
         ([sessionKey, entry]) => !freshCandidateKeys.has(sessionKey) && entry.label === label,
@@ -178,12 +266,13 @@ export async function prepareSessionPatchArchive(params: {
     agentId: target.requestedAgentId,
     patch: target.fullPatch,
     archivedBy: target.archiveActor,
-    loadGatewayModelCatalog: params.loadGatewayModelCatalog,
+    loadGatewayModelCatalogSnapshot: params.loadGatewayModelCatalogSnapshot,
+    personalModelSelection: params.personalModelSelection,
   });
   if (!preview.ok) {
     return err(preview.error);
   }
-  const previewPlacementError = resolveSessionWorkerPlacementPatchError({
+  const previewPlacementError = await prepareSessionWorkerPlacementPatchError({
     agentId: freshResolved.agentId,
     cfg,
     context: params.context,
@@ -196,13 +285,10 @@ export async function prepareSessionPatchArchive(params: {
   if (previewPlacementError) {
     return err(errorShape(ErrorCodes.INVALID_REQUEST, previewPlacementError));
   }
-  const authorizationError = params.commitGuard();
-  if (authorizationError) {
-    return err(authorizationError);
-  }
-
   try {
-    const drain = await prepareSessionArchiveLifecycle({
+    const drain = await prepareSessionLifecycleDrain({
+      action: "archive",
+      authorize: assertCurrent,
       context: params.context,
       storePath: target.storePath,
       sessionKeys: Array.from(
@@ -225,9 +311,30 @@ export async function prepareSessionPatchArchive(params: {
     return ok({
       canonicalKey: freshCanonicalKey,
       drain,
-      ...(fresh.entry ? { entry: fresh.entry } : {}),
+      ...(planningEntry ? { entry: planningEntry } : {}),
     });
   } catch (error) {
+    if (error instanceof SessionLifecycleWorkspaceRecoveryError) {
+      return err(error.error);
+    }
+    if (error instanceof WorkerInferenceSessionDrainBusyError) {
+      return err(
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          `Session ${target.key} is already being stopped by another archive or delete request. Wait for that request to finish.`,
+          { retryable: true },
+        ),
+      );
+    }
+    if (error instanceof SessionWorkerPlacementStopError) {
+      return err(errorShape(ErrorCodes.UNAVAILABLE, error.message, { retryable: true }));
+    }
+    if (
+      error instanceof SessionMutationAuthorizationChangedError ||
+      error instanceof ModelAccountConnectAuthorityError
+    ) {
+      return err(unexpectedPatchError(target.key, error));
+    }
     sessionLog.warn(
       `sessions.patch: archive drain failed for ${target.canonicalKey}: ${formatErrorMessage(error)}`,
     );
@@ -258,7 +365,7 @@ export function validateSessionPatchArchiveProjection(params: {
     return archiveChangedError(params.key);
   }
   return (
-    protectedArchiveError(params.cfg, params.primaryKey) ??
+    resolveProtectedSessionVisibilityError(params.cfg, params.primaryKey, "archive") ??
     resolvePluginSessionOwnershipError({
       action: "patch",
       entry: params.existingEntry,
@@ -266,4 +373,50 @@ export function validateSessionPatchArchiveProjection(params: {
       pluginOwnerId: params.pluginOwnerId,
     })
   );
+}
+
+/** Restore before opening admission; durable archive metadata delegates removal to GC. */
+export async function prepareSessionPatchArchiveTransition(params: {
+  archived: boolean;
+  entry: SessionEntry;
+  context: GatewayRequestContext;
+  scope: SessionAccessScope;
+  authorize: () => ErrorShape | undefined;
+  preparation?: SessionPatchArchivePreparation;
+}): Promise<{
+  assertCommitAllowed: () => void;
+}> {
+  const placementTarget = {
+    context: params.context,
+    sessionId: params.entry.sessionId,
+  };
+  const placement = await prepareSessionWorkerPlacementArchiveCheckAsync(placementTarget);
+  let assertWorktreeMutationAllowed: (() => void) | undefined;
+  const commitGuard = () => {
+    const authorizationError = params.authorize();
+    if (authorizationError) {
+      throw new SessionMutationAuthorizationChangedError(authorizationError);
+    }
+    placement.assertCurrent();
+    assertWorktreeMutationAllowed?.();
+    if (params.preparation?.drain.hasAuthoritativeWork()) {
+      throw new SessionWorktreeLifecycleError(
+        "Session worktree is still active; retry the archive after work settles.",
+        "busy",
+      );
+    }
+  };
+  return {
+    assertCommitAllowed: params.archived
+      ? commitGuard
+      : await restoreSessionWorktree({
+          entry: params.entry,
+          scope: params.scope,
+          commitGuard,
+          assertRestoreAllowed: () => {
+            assertWorktreeMutationAllowed =
+              prepareSessionWorkerPlacementMutationCheck(placementTarget);
+          },
+        }),
+  };
 }

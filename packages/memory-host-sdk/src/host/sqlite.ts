@@ -1,15 +1,14 @@
-// Memory Host SDK module implements sqlite behavior.
 import { createRequire } from "node:module";
 import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "./error-utils.js";
-import { installProcessWarningFilter } from "./openclaw-runtime-io.js";
 import {
   configureSqliteConnectionPragmas,
   configureSqliteWalMaintenance,
+  installProcessWarningFilter,
   type SqliteConnectionPragmaOptions,
   type SqliteWalMaintenance,
   type SqliteWalMaintenanceOptions,
-} from "./sqlite-wal.js";
+} from "./openclaw-runtime-io.js";
 
 const require = createRequire(import.meta.url);
 const sqliteWalMaintenanceByDb = new WeakMap<DatabaseSync, SqliteWalMaintenance>();
@@ -54,4 +53,8 @@ export function closeMemorySqliteWalMaintenance(db: DatabaseSync): boolean {
   }
   sqliteWalMaintenanceByDb.delete(db);
   return maintenance.close();
+}
+
+export async function stopMemorySqliteWalMaintenance(db: DatabaseSync): Promise<void> {
+  await sqliteWalMaintenanceByDb.get(db)?.stop();
 }
