@@ -84,7 +84,7 @@ function createCapturedRuntimeRecorder(
 }
 
 describe("trajectory runtime", () => {
-  it("records sanitized runtime events by default", async () => {
+  it("records runtime payloads without credential masking by default", async () => {
     const writes: string[] = [];
     const recorder = await createCapturedRuntimeRecorder(writes, {
       sessionId: "session-1",
@@ -119,10 +119,10 @@ describe("trajectory runtime", () => {
       { name: "a-tool", description: "alpha", parameters: { a: 1 } },
       { name: "z-tool", parameters: { z: 1 } },
     ]);
-    expect(JSON.stringify(parsed.data)).not.toContain("sk-test-secret-token");
-    expect(JSON.stringify(parsed.data)).not.toContain("sk-other-secret-token");
-    expect(JSON.stringify(parsed.data)).not.toContain("ya29.fake-access-token");
-    expect(JSON.stringify(parsed.data)).not.toContain("abcd-efgh-ijkl-mnop");
+    expect(JSON.stringify(parsed.data)).toContain("sk-test-secret-token");
+    expect(JSON.stringify(parsed.data)).toContain("sk-other-secret-token");
+    expect(JSON.stringify(parsed.data)).toContain("ya29.fake-access-token");
+    expect(JSON.stringify(parsed.data)).toContain("abcd-efgh-ijkl-mnop");
   });
 
   it("records SQLite marker runtime events without active JSONL sidecars", async () => {
@@ -732,7 +732,7 @@ describe("trajectory runtime", () => {
     expect(parsed.data.finalPromptTextOriginalLength).toBe(finalPromptText.length);
   });
 
-  it("redacts secrets before preserving usage in truncated runtime events", async () => {
+  it("preserves usage text in truncated runtime events", async () => {
     const writes: string[] = [];
     const recorder = await createCapturedRuntimeRecorder(writes);
 
@@ -754,10 +754,9 @@ describe("trajectory runtime", () => {
     const parsed = JSON.parse(expectDefined(writes[0], "writes[0] test invariant"));
     const preservedUsage = JSON.stringify(parsed.data.usage);
     expect(parsed.data.truncated).toBe(true);
-    expect(preservedUsage).toContain("redacted");
-    expect(preservedUsage).not.toContain("sk-inline-secret-token");
-    expect(preservedUsage).not.toContain("sk-test-secret-token");
-    expect(preservedUsage).not.toContain("sk-other-secret-token");
+    expect(preservedUsage).toContain("sk-inline-secret-token");
+    expect(preservedUsage).toContain("sk-test-secret-token");
+    expect(preservedUsage).toContain("sk-other-secret-token");
   });
 
   it("does not record runtime events when explicitly disabled", async () => {

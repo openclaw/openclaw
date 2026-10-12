@@ -3,6 +3,7 @@ import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
+import { scopeCommandTranscriptId } from "../../config/sessions/command-transcript.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { withClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
@@ -43,7 +44,6 @@ import {
   captureDeliveredTranscriptMirror,
   mirrorDeliveredReplyToTranscript,
   transcriptMirrorForDeliveredPayload,
-  scopeCommandTranscriptId,
 } from "./dispatch-from-config.transcript.js";
 import type { NormalizeReplySkipReason } from "./normalize-reply.js";
 import {
@@ -218,7 +218,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       ctx.CommandInterpretationSuppressed ||
       !commandText?.startsWith("/") ||
       !commandId ||
-      metadata?.assistantTranscriptOwned ||
+      Boolean(metadata?.inlineCommandReply || metadata?.assistantTranscriptOwned) ||
       metadata?.assistantMessageIndex !== undefined
     ) {
       return undefined;
@@ -399,7 +399,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       : undefined;
     const hasTranscriptOwner =
       payloadMetadata?.assistantMessageIndex !== undefined ||
-      payloadMetadata?.assistantTranscriptOwned === true;
+      Boolean(payloadMetadata?.inlineCommandReply || payloadMetadata?.assistantTranscriptOwned);
     const hasVisibleFinalContent = hasOutboundReplyContent(payload, { trimText: true });
     if (hasVisibleFinalContent) {
       markInboundDedupeReplayUnsafe();

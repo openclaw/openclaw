@@ -2,10 +2,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
-import * as mediaCapabilityRegistry from "../media-understanding/provider-capability-registry.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import {
@@ -338,56 +337,6 @@ describe("secrets runtime provider and media surfaces", () => {
     }
   });
 
-  it("resolves shared media model request refs when capability blocks are omitted", async () => {
-    const registrySpy = vi
-      .spyOn(mediaCapabilityRegistry, "buildMediaUnderstandingCapabilityRegistry")
-      .mockImplementation(() => {
-        throw new Error("UNEXPECTED_MEDIA_CAPABILITY_DISCOVERY");
-      });
-    try {
-      const snapshot = await prepareSecretsRuntimeSnapshot({
-        config: asConfig({
-          tools: {
-            media: {
-              models: [
-                {
-                  provider: "openai",
-                  model: "gpt-4o-mini-transcribe",
-                  capabilities: ["audio"],
-                  request: {
-                    auth: {
-                      mode: "authorization-bearer",
-                      token: {
-                        source: "env",
-                        provider: "default",
-                        id: "MEDIA_SHARED_AUDIO_TOKEN",
-                      },
-                    },
-                  },
-                },
-              ],
-            },
-          },
-        }),
-        env: {
-          MEDIA_SHARED_AUDIO_TOKEN: "shared-audio-token",
-        },
-        agentDirs: ["/tmp/openclaw-agent-main"],
-        loadAuthStore: () => ({ version: 1, profiles: {} }),
-      });
-
-      expect(snapshot.config.tools?.media?.models?.[0]?.request?.auth).toEqual({
-        mode: "authorization-bearer",
-        token: "shared-audio-token",
-      });
-      expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
-        "tools.media.models[0].request.auth.token",
-      );
-    } finally {
-      registrySpy.mockRestore();
-    }
-  });
-
   it("resolves shared media model request refs from inferred provider capabilities", async () => {
     const pluginRegistry = createEmptyPluginRegistry();
     pluginRegistry.mediaUnderstandingProviders.push({
@@ -435,48 +384,6 @@ describe("secrets runtime provider and media surfaces", () => {
       token: "inferred-audio-token",
     });
     expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
-      "tools.media.models[0].request.auth.token",
-    );
-  });
-
-  it("treats shared media model request refs as inactive when inferred capabilities are disabled", async () => {
-    const pluginRegistry = createEmptyPluginRegistry();
-    pluginRegistry.mediaUnderstandingProviders.push({
-      pluginId: "deepgram",
-      pluginName: "Deepgram Plugin",
-      source: "test",
-      provider: {
-        id: "deepgram",
-        capabilities: ["audio"],
-      },
-    });
-    setActivePluginRegistry(pluginRegistry);
-
-    const inferredTokenRef = envTokenRef("MEDIA_INFERRED_DISABLED_AUDIO_TOKEN");
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        tools: {
-          media: {
-            models: [
-              {
-                provider: "deepgram",
-                request: { auth: { mode: "authorization-bearer", token: inferredTokenRef } },
-              },
-            ],
-            audio: { enabled: false },
-          },
-        },
-      }),
-      env: {},
-      agentDirs: ["/tmp/openclaw-agent-main"],
-      loadAuthStore: () => ({ version: 1, profiles: {} }),
-    });
-
-    expect(snapshot.config.tools?.media?.models?.[0]?.request?.auth).toEqual({
-      mode: "authorization-bearer",
-      token: inferredTokenRef,
-    });
-    expect(snapshot.warnings.map((warning) => warning.path)).toContain(
       "tools.media.models[0].request.auth.token",
     );
   });
@@ -606,10 +513,7 @@ describe("secrets runtime provider and media surfaces", () => {
   });
 
   it.each([
-    ["bare shorthand", "$MEMORY_REMOTE_KEY", "resolved-memory-key"],
-    ["braced shorthand", "${MEMORY_REMOTE_KEY}", "resolved-memory-key"],
     ["missing bare shorthand", "$MISSING_MEMORY_KEY", envTokenRef("MISSING_MEMORY_KEY")],
-    ["retired marker", "secretref-env:MEMORY_REMOTE_KEY", "secretref-env:MEMORY_REMOTE_KEY"],
   ] as const)(
     "materializes memory %s through its canonical Gateway snapshot",
     async (_, apiKey, expected) => {

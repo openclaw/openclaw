@@ -263,6 +263,44 @@ describe("session activity", () => {
     expect(container.textContent).not.toContain("Original receipt");
   });
 
+  it("retains a focused action while a same-key forwarded message refreshes", () => {
+    const message = update("retained");
+    const onReply = vi.fn();
+    const draw = (content: string) => {
+      const group = chain([{ ...message, content }]).transcriptItems[0];
+      if (group?.kind !== "group") {
+        throw new Error("expected activity group");
+      }
+      render(
+        renderMessageGroup(group, {
+          showReasoning: false,
+          isToolMessageExpanded: () => true,
+          onReply,
+        }),
+        container,
+      );
+    };
+    document.body.append(container);
+    try {
+      draw(message.content);
+      const action = container.querySelector<HTMLButtonElement>(
+        ".chat-group-footer-actions .chat-reply-btn",
+      );
+      expect(action).not.toBeNull();
+      action!.focus();
+      expect(document.activeElement).toBe(action);
+      draw("refreshed " + message.content);
+      expect(container.textContent).toContain("refreshed");
+      expect(container.querySelector(".chat-group-footer-actions .chat-reply-btn")).toBe(action);
+      expect(document.activeElement).toBe(action);
+      action!.click();
+      expect(onReply).toHaveBeenCalledOnce();
+      expect(onReply.mock.calls[0]?.[0].text).toContain("refreshed");
+    } finally {
+      container.remove();
+    }
+  });
+
   it("keeps reply-bearing receipts separate and preserves navigation to their original", () => {
     const reply = update("reply");
     const messages = [

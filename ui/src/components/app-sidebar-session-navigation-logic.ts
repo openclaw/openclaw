@@ -1,6 +1,7 @@
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui.js";
+import { isIncognitoSessionKey } from "../../../src/shared/incognito-session-key.js";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { parseSidebarEntry, serializeSidebarEntry, SIDEBAR_NAV_ROUTES } from "../app-navigation.ts";
@@ -21,7 +22,6 @@ import {
   resolveSessionNavigation,
   sessionMatchesVisibleSessionScope,
 } from "../lib/sessions/index.ts";
-import type { SessionListSnapshot } from "../lib/sessions/session-capability.ts";
 import {
   buildAgentMainSessionKey,
   isAcpSessionKey,
@@ -188,7 +188,7 @@ export function buildSidebarSessionNavigationState(input: {
       agentId: resolveUiSessionRowAgentId(row, defaultAgentId),
       sessionId: row.sessionId,
       displayName: row.displayName,
-      incognito: row.incognito === true,
+      incognito: row.incognito === true || isIncognitoSessionKey(row.key),
       createdActor: row.createdActor,
       owner: row.owner,
       participants: row.participants,
@@ -557,7 +557,6 @@ export function projectSidebarVisibleMainSession(
       agentId: string,
     ): SidebarRecentSession & { metadataVisible: boolean };
     selectedAgentMainSessionKey(agentId: string): string;
-    readonly effectiveNavigationScope: "mine" | "all";
     readonly sessionOwnerFilterActive: boolean;
     readonly sessionInvolvingMeFilterActive: boolean;
     readonly sessionsStatusFilter: SidebarSessionStatusFilter;
@@ -576,7 +575,6 @@ export function projectSidebarVisibleMainSession(
   }
   const key = host.selectedAgentMainSessionKey(agentId);
   if (
-    host.effectiveNavigationScope === "mine" ||
     host.sessionOwnerFilterActive ||
     host.sessionInvolvingMeFilterActive ||
     (host.sessionsStatusFilter !== "active" && host.sessionsStatusFilter !== "all") ||
@@ -602,24 +600,4 @@ export function projectSidebarVisibleMainSession(
     outboxAttentionCount: 0,
     hasComposerDraft: false,
   };
-}
-
-export function navigationScopesEquivalent(
-  snapshot: SessionListSnapshot | undefined,
-  viewerId: string,
-): boolean {
-  const result = snapshot?.result;
-  const counts = result?.ownerSessionCounts;
-  const ownCount = counts?.find((entry) => entry.profileId === viewerId)?.open ?? 0;
-  return Boolean(
-    snapshot &&
-    !snapshot.loading &&
-    !snapshot.startupPending &&
-    snapshot.readSucceeded !== false &&
-    !snapshot.error &&
-    counts &&
-    result?.totalCount !== undefined &&
-    result.totalCount === ownCount &&
-    counts.every((entry) => entry.profileId === viewerId),
-  );
 }

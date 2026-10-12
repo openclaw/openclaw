@@ -37,7 +37,8 @@ import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { readProcessMemoryCapacity } from "./lib/process-memory.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { resolveTsgoTimeoutMs } from "./run-tsgo.mts";
-const repoRoot = resolveRepoRoot(import.meta.url);
+// Native compiler output uses long Windows paths even when Node entered through an 8.3 alias.
+const repoRoot = fs.realpathSync.native(resolveRepoRoot(import.meta.url));
 const DEFAULT_NODE_STEP_ABORT_KILL_GRACE_MS = 1_000;
 type NodeStepParams = {
   bin?: string;

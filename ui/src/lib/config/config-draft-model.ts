@@ -308,6 +308,11 @@ export type ConfigSubmittedDraft = {
 
 export type ConfigWriteAck = { config: Record<string, unknown>; hash: string };
 
+// Gateway writes return persisted hashes; only a no-op patch omits one.
+export type ConfigPatchAck =
+  | { noop: true; config: Record<string, unknown> }
+  | (ConfigWriteAck & { noop?: false });
+
 export function isConfigWriteAck(value: unknown): value is ConfigWriteAck {
   return (
     isRecord(value) &&

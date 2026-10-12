@@ -27,7 +27,7 @@ import {
 import { inspectors } from "./gateway-suspend-coordinator.test-support.js";
 
 const SUSPEND_TTL_MS = 2 * 60_000;
-const SUSPEND_RETRY_AFTER_MS = 20_000;
+const SUSPEND_BUSY_RETRY_AFTER_MS = 20_000;
 
 beforeEach(() => {
   resetProcessRegistryForTests();
@@ -116,7 +116,7 @@ describe("gateway suspend coordinator", () => {
       status: "draining",
       suspensionId: "suspension-preserve-drain",
       expiresAtMs: 1_000 + SUSPEND_TTL_MS,
-      retryAfterMs: SUSPEND_RETRY_AFTER_MS,
+      retryAfterMs: 5_000,
       activeCount: 3,
       writeCustody: [{ phase: "terminal-persistence", count: 1 }],
       blockers: [
@@ -140,7 +140,7 @@ describe("gateway suspend coordinator", () => {
     expect(getGatewaySuspendStatus("suspension-preserve-drain")).toEqual({
       status: "draining",
       expiresAtMs: 1_000 + SUSPEND_TTL_MS,
-      retryAfterMs: SUSPEND_RETRY_AFTER_MS,
+      retryAfterMs: 5_000,
       activeCount: 1,
       blockers: [{ kind: "reply", count: 1, message: "1 pending reply delivery operation(s)" }],
       writeCustody: [],
@@ -276,7 +276,7 @@ describe("gateway suspend coordinator", () => {
     ).toEqual({
       status: "busy",
       reason: "active-work",
-      retryAfterMs: SUSPEND_RETRY_AFTER_MS,
+      retryAfterMs: SUSPEND_BUSY_RETRY_AFTER_MS,
       activeCount: 1,
       writeCustody: [],
       blockers: [

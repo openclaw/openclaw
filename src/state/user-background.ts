@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import type {
   UsersBackgroundRemoveParams,
   UsersBackgroundResult,
@@ -116,16 +115,8 @@ async function mutateBackground(
   if (!reply.ok || reply.type !== "userBackground.snapshot") {
     throw new Error("Unexpected background snapshot reply");
   }
-  const current = reply.result;
-  if (current.status !== "ok" || !reply.profileId) {
-    return current;
-  }
-  if (
-    reply.profileId !== profileId ||
-    (current.asset?.assetId ?? null) !== expected.expectedAssetId ||
-    !isDeepStrictEqual(current.preference, expected.expectedPreference)
-  ) {
-    return { status: "conflict" };
+  if (reply.result.status !== "ok" || !reply.profileId) {
+    return reply.result;
   }
   const image =
     imageBase64 === undefined
@@ -136,7 +127,7 @@ async function mutateBackground(
   options.assertCurrent?.();
   const finishMutation = beginUserPreferenceMutation(context.admission);
   try {
-    const mutation: UserBackgroundWriteInput = { profileId: reply.profileId, expected, image };
+    const mutation: UserBackgroundWriteInput = { profileId, expected, image };
     return await runOpenClawStateWorkerOperation(
       context,
       (scope) => scope.execute({ type: "userBackground.write", input: mutation }),

@@ -1,6 +1,6 @@
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { lookupContextTokens } from "../agents/context.js";
+import { resolveContextTokensForModel } from "../agents/context.js";
 import { resetContextWindowCacheForTest } from "../agents/context.test-support.js";
 import { closePreparedModelRuntimeSnapshots } from "../agents/prepared-model-runtime.lifecycle.js";
 import { createModelProviderRouteOverrideResolver } from "../config/model-provider-config.js";
@@ -170,6 +170,7 @@ async function createReload(
       expectedRevision: getActiveSecretsRuntimeSnapshotRevision(),
     }),
     applyHotReload,
+    hasPendingModelRuntimeReload: () => false,
   });
   const ownership: GatewayConfigReloadTransactionOwnership = {
     isCurrent: () => true,
@@ -499,8 +500,12 @@ describe("managed reload authored source", () => {
     const { ownership, run } = await createReload(
       async () => {
         // The candidate is visible before commit; a cold synchronous reader can cache its limits.
-        expect(lookupContextTokens("gpt-5.6-luna", { allowAsyncLoad: false })).toBe(65_536);
-        expect(lookupContextTokens(candidateOnlyModel, { allowAsyncLoad: false })).toBe(16_384);
+        expect(resolveContextTokensForModel({ model: "gpt-5.6-luna", allowAsyncLoad: false })).toBe(
+          65_536,
+        );
+        expect(
+          resolveContextTokensForModel({ model: candidateOnlyModel, allowAsyncLoad: false }),
+        ).toBe(16_384);
         throw failure;
       },
       undefined,
@@ -524,8 +529,12 @@ describe("managed reload authored source", () => {
       expect(ownership.markRuntimeCommitted).not.toHaveBeenCalled();
       expectAuthoredSource(initial.source);
       expect(getActiveSecretsRuntimeSnapshotState()?.config).toEqual(initial.config);
-      expect(lookupContextTokens("gpt-5.6-luna", { allowAsyncLoad: false })).toBe(32_768);
-      expect(lookupContextTokens(candidateOnlyModel, { allowAsyncLoad: false })).toBeUndefined();
+      expect(resolveContextTokensForModel({ model: "gpt-5.6-luna", allowAsyncLoad: false })).toBe(
+        32_768,
+      );
+      expect(
+        resolveContextTokensForModel({ model: candidateOnlyModel, allowAsyncLoad: false }),
+      ).toBeUndefined();
     })();
     await verification;
   });

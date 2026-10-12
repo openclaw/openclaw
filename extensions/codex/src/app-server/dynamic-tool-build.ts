@@ -9,7 +9,7 @@ import {
   isSubagentSessionKey,
   normalizeAgentRuntimeTools,
   resolveAttemptSpawnWorkspaceDir,
-  resolveModelAuthMode,
+  resolveModelAuthModeAsync,
   resolveSandboxContext,
   supportsModelTools,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
@@ -178,7 +178,6 @@ export async function buildDynamicTools(
       runtimeSessionKey: input.sandboxSessionKey,
       sandbox: input.sandbox,
     }));
-  preparedExecution.assertCurrent();
   const nativeExecutionPolicy = preparedExecution.policy;
   const webSearchPlan = resolveCodexWebSearchPlan({
     config: params.config,
@@ -259,7 +258,7 @@ export async function buildDynamicTools(
     modelApi: params.model.api,
     modelContextWindowTokens: params.model.contextWindow,
     delegationCapability: params.delegationCapability,
-    modelAuthMode: resolveModelAuthMode(
+    modelAuthMode: await resolveModelAuthModeAsync(
       params.model.provider,
       params.config,
       params.toolAuthProfileStore ?? params.authProfileStore,
@@ -494,7 +493,6 @@ export async function buildDynamicTools(
       },
     );
   }
-  preparedExecution.assertCurrent();
   return exposedTools;
 }
 export function shouldEnableCodexAppServerNativeToolSurface(

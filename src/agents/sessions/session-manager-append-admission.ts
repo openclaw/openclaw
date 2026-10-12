@@ -33,7 +33,7 @@ export async function withSessionManagerAppend<T>(
 ): Promise<T> {
   const target = manager.getSessionTarget();
   const binding = !nativeMaintenance && target ? getOwnedSessionTranscriptActor(target) : undefined;
-  if (!binding || !target) {
+  if (!binding || !target || binding.actor.target.database.kind === "memory") {
     // Released unbound SDK managers and the dedicated compaction transaction keep their owner.
     return withSessionManagerWrite(manager, append);
   }

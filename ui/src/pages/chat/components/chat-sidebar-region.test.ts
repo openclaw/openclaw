@@ -24,7 +24,7 @@ import {
   type SidebarLayout,
 } from "../sidebar-layout.ts";
 import type { SidebarPanelDefinition } from "./chat-sidebar-region-types.ts";
-import "./chat-sidebar-region.runtime.ts";
+import "./chat-sidebar-region.runtime.tsx";
 
 type Region = HTMLElementTagNameMap["openclaw-chat-sidebar-region"] & {
   updateComplete: Promise<unknown>;
@@ -90,6 +90,25 @@ afterEach(() => {
 });
 
 describe("chat sidebar region", () => {
+  it("restores an expanded panel from its active tab with pointer or keyboard", async () => {
+    const region = await createRegion({
+      ...openSlot({ columns: [] }, "workspace"),
+      expanded: true,
+      expandedSide: true,
+    });
+    const tab = root(region).querySelector<HTMLElement>('wa-tab[panel="workspace"]')!;
+    tab.click();
+    tab.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    tab.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
+    expect(region.callbacks?.togglePanelExpanded).toHaveBeenCalledTimes(3);
+    expect(region.callbacks?.togglePanelExpanded).toHaveBeenLastCalledWith("workspace");
+
+    region.sideFocusLocked = true;
+    await region.updateComplete;
+    tab.click();
+    expect(region.callbacks?.togglePanelExpanded).toHaveBeenCalledTimes(3);
+  });
+
   it("updates the conversation tab identity without relabeling other panels or their controls", async () => {
     const layout = openSlot(openSlot({ columns: [] }, "dashboard"), "workspace");
     const dashboard = layout.columns[0]!.panels.find((panel) => panel.slot === "dashboard")!;
@@ -160,7 +179,7 @@ describe("chat sidebar region", () => {
     commits.length = 0;
 
     for (let index = 0; index < 4; index++) {
-      region.requestUpdate();
+      region.layout = { ...region.layout };
       await region.updateComplete;
     }
     expect(measure).not.toHaveBeenCalled();
@@ -172,13 +191,13 @@ describe("chat sidebar region", () => {
     // Swapping content can keep the total width while changing each transcript.
     mainWidth = 400;
     sideWidth = 800;
-    region.requestUpdate();
+    region.layout = { ...region.layout };
     await region.updateComplete;
     vi.advanceTimersToNextFrame();
     expect(commits).toEqual([false, true]);
 
     measure.mockClear();
-    region.requestUpdate();
+    region.layout = { ...region.layout };
     await region.updateComplete;
     shell.remove();
     vi.advanceTimersToNextFrame();
@@ -361,7 +380,6 @@ describe("chat sidebar region", () => {
       subagentsInputRegion: "page",
       subagentsPresented: false,
       subagentsAvailable: false,
-      onRefreshSubagents: vi.fn(),
       onSubagentSessionSelect: vi.fn(),
       themeMode: "dark",
       agentId: "main",
@@ -566,10 +584,11 @@ describe("chat sidebar region", () => {
 
   it("keeps side tab dismissal separate from task toolbar actions", async () => {
     const region = await createRegion();
-    root(region)
-      .querySelector<HTMLButtonElement>('[data-region-header="side"] .side-panel__minimize')
-      ?.click();
-    expect(region.callbacks?.setOpen).toHaveBeenCalledWith(false);
+    expect(
+      root(region).querySelector('[data-region-header="side"] .rail-header__actions'),
+    ).toBeNull();
+    root(region).querySelector<HTMLButtonElement>('button[aria-label="Close Review"]')!.click();
+    expect(region.callbacks?.closeSlot).toHaveBeenCalledWith("detail");
     region.layout = setSidebarExpanded(promoteSidebarPanel(region.layout, "detail"), true);
     await region.updateComplete;
     expect(root(region).querySelector('[data-region-header="main"]')).toBeNull();

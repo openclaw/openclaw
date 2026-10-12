@@ -102,39 +102,14 @@ function prepareReplayCompletion(
   key: Uint8Array,
   rng: (length: number) => Uint8Array,
 ): () => Pick<ReefReplayRecord, "receipt" | "body"> {
-  type Input = { receipt: SignedReceipt; body?: MessageBody };
-  type Prepared<T> = { ok: true; value: T } | { ok: false; error: unknown };
-  let input: Prepared<Input>;
-  try {
-    input = { ok: true, value: structuredClone({ receipt, body }) };
-  } catch (error) {
-    input = { ok: false, error };
-  }
-  let prepared: Prepared<Pick<ReefReplayRecord, "receipt" | "body">> | undefined;
-  // Capture inputs before storage waits, but defer validation and randomness until
-  // a matching claim is observed. Conflicts reuse both successful and failed preparation.
-  return () => {
-    if (!prepared) {
-      try {
-        if (!input.ok) {
-          throw input.error;
-        }
-        prepared = {
-          ok: true,
-          value: {
-            receipt: structuredClone(input.value.receipt),
-            ...(input.value.body ? { body: encryptReplayBody(input.value.body, key, rng) } : {}),
-          },
-        };
-      } catch (error) {
-        prepared = { ok: false, error };
-      }
-    }
-    if (!prepared.ok) {
-      throw prepared.error;
-    }
-    return prepared.value;
-  };
+  const input = structuredClone({ receipt, body });
+  let prepared: Pick<ReefReplayRecord, "receipt" | "body"> | undefined;
+  // Freeze input before yielding and reuse ciphertext if a competing write wins.
+  return () =>
+    (prepared ??= {
+      receipt: input.receipt,
+      ...(input.body ? { body: encryptReplayBody(input.body, key, rng) } : {}),
+    });
 }
 
 export class ReefSqliteReplayStore implements ReplayStore {
@@ -173,22 +148,9 @@ export class ReefSqliteReplayStore implements ReplayStore {
       const mutation = prepare();
       let observation = await comparison.observe(key);
       for (;;) {
-        let decision: ReplayDecision<T>;
-        try {
-          decision = mutation.decide(parseReplayRecord(observation.value));
-        } catch (error) {
-          // A failed native callback rolls back expiry cleanup. Validate this error's
-          // observation without sweeping or writing before exposing it to the caller.
-          const result = await comparison.compareAndApply(key, observation.comparison, {
-            operation: "delete",
-            action: "keep",
-          });
-          if (result.status !== "conflict") {
-            throw error;
-          }
-          observation = result.current;
-          continue;
-        }
+        // A validation/preparation failure has no write to settle. A concurrent
+        // repair can take effect on the next request instead of retrying the error.
+        const decision = mutation.decide(parseReplayRecord(observation.value));
         const result = await comparison.compareAndApply(
           key,
           observation.comparison,

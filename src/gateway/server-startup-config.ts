@@ -26,6 +26,7 @@ import {
   resolvePreparedSecretsStateScope,
   type SecretsStateScope,
 } from "../secrets/runtime-provider-auth-scope.js";
+import { hasSameSecretReloadContract } from "../secrets/runtime-source-contract.js";
 import {
   activateSecretsRuntimeSnapshotState,
   clearSecretsRuntimeSnapshotState,
@@ -33,7 +34,6 @@ import {
   getActiveSecretsRuntimeSnapshotState,
   getActiveSecretsRuntimeSnapshotRevisionState,
   hasActiveSecretsRuntimeSnapshotLineage,
-  hasSameSecretReloadContract,
   hasCurrentAuthStoreCredentialsRevision,
   registerProviderAuthRuntimeSnapshotActivationOwner,
 } from "../secrets/runtime-state.js";
@@ -440,7 +440,8 @@ export function createRuntimeSecretsActivator(params: {
           }
         }
         const loadAuthStore = startupPreflight
-          ? (await import("../agents/auth-profiles.js")).loadAuthProfileStoreWithoutExternalProfiles
+          ? (await import("../agents/auth-profiles.js"))
+              .loadAuthProfileStoreWithoutExternalProfilesAsync
           : undefined;
         const secretsRuntime =
           params.prepareRuntimeSecretsSnapshot && params.activateRuntimeSecretsSnapshot

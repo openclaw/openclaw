@@ -4,20 +4,19 @@ import {
   createDefaultIsolatedRunner,
   createDueIsolatedJob,
   createIsolatedRegressionJob,
-  createRunningCronServiceState,
   noopLogger,
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as schedule from "../schedule.js";
+import { createCronServiceStateWithJobs } from "../service.test-harness.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import type { CronJob } from "../types.js";
 import type { DeferredCronNotifications } from "./state.js";
 import { runPostPersistCronNotifications } from "./store.js";
-import { runMissedJobs } from "./timer-catchup.js";
 import { applyJobResult } from "./timer-outcomes.js";
-import { onTimer } from "./timer.test-support.js";
+import { onTimer, runMissedJobs } from "./timer.test-support.js";
 
 const timerRegressionFixtures = setupCronRegressionFixtures({
   prefix: "cron-service-timer-outcomes-regressions-",
@@ -64,7 +63,7 @@ describe("cron timer outcome and failure policy regressions", () => {
         consecutiveErrors: 1,
       },
     });
-    const state = createRunningCronServiceState({
+    const state = createCronServiceStateWithJobs({
       storePath: "/tmp/cron-recurring-rate-limit-edited.json",
       log: noopLogger,
       nowMs: () => retryStartedAt,
@@ -141,7 +140,7 @@ describe("cron timer outcome and failure policy regressions", () => {
     },
   );
 
-  it("records failure diagnostics and auto-disables on the tenth consecutive failure", () => {
+  it("records failure diagnostics and auto-disables on the tenth consecutive failure", async () => {
     const startedAt = Date.parse("2026-08-01T12:00:00.000Z");
     const deferredNotifications: DeferredCronNotifications = [];
     const enqueueSystemEvent = vi.fn();
@@ -218,7 +217,7 @@ describe("cron timer outcome and failure policy regressions", () => {
       consecutiveErrors: 10,
     });
     expect(deferredNotifications).toHaveLength(1);
-    runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
+    await runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
     expect(enqueueSystemEvent).toHaveBeenCalledOnce();
     expect(sendCronFailureAlert).not.toHaveBeenCalled();
   });
@@ -392,7 +391,7 @@ describe("cron timer outcome and failure policy regressions", () => {
         payload,
         state: { runningAtMs: startedAt },
       });
-      const state = createRunningCronServiceState({
+      const state = createCronServiceStateWithJobs({
         storePath: `/tmp/cron-${id}.json`,
         log: noopLogger,
         nowMs: () => endedAt,
@@ -453,7 +452,7 @@ describe("cron timer outcome and failure policy regressions", () => {
           nextRunAtMs: expectedNextMs,
         },
       };
-      const state = createRunningCronServiceState({
+      const state = createCronServiceStateWithJobs({
         storePath: `/tmp/cron-force-run-${path}.json`,
         log: noopLogger,
         nowMs: () => nowMs,

@@ -176,7 +176,6 @@ export function retryServerUiPrefWrite(
   outbox.updateRetainedLocalKeys(effectiveScope, [key], false);
   outbox.pendingPrefs = { ...outbox.pendingPrefs, [key]: retryValue };
   outbox.mergePendingIntoStorage();
-  outbox.clearConflictRedrain();
   outbox.publishPreferenceWrites();
   outbox.startPendingDrain(writer);
   return true;

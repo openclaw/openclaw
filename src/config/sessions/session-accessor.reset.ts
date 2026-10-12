@@ -1,3 +1,4 @@
+import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import {
   readDatabasePathIdentitySync,
@@ -220,7 +221,7 @@ export async function loadReplySessionInitializationSnapshot(
     lifecycleTimestamps = prepared.lifecycleTimestamps;
     coldArchives = prepared.coldArchives;
   } else {
-    const { database, source, assertSourceCurrent } = captureReplySessionInitializationSource({
+    const { database, source } = captureReplySessionInitializationSource({
       ...params,
       storePath,
     });
@@ -229,7 +230,6 @@ export async function loadReplySessionInitializationSnapshot(
       database,
       source,
     );
-    assertSourceCurrent();
   }
   assertCurrent();
   const resolved = resolveSessionEntryFromStore({ store, sessionKey: params.sessionKey });
@@ -293,12 +293,9 @@ export async function commitReplySessionInitialization(params: {
       ...params,
       storePath,
     });
-  const store = await loadReplySessionInitializationEntriesAsync(
-    { ...params, storePath },
-    database,
-    source,
+  const store = await measureDiagnosticsTimelineSpan("reply.session.commit.fresh_read", () =>
+    loadReplySessionInitializationEntriesAsync({ ...params, storePath }, database, source),
   );
-  assertSourceCurrent();
   const resolved = resolveSessionEntryFromStore({ store, sessionKey: params.sessionKey });
   const currentEntry = resolved.existing ? { ...resolved.existing } : undefined;
   const revision = createReplySessionInitializationRevision(currentEntry);
@@ -360,7 +357,6 @@ export async function commitReplySessionInitialization(params: {
     });
   }
   try {
-    assertSourceCurrent();
     const mutation = {
       activeSessionKey: params.activeSessionKey,
       agentId: params.agentId,
@@ -372,39 +368,42 @@ export async function commitReplySessionInitialization(params: {
         params.commitGuard?.();
       },
     };
-    const bindCreation = params.bindCreation;
-    if (bindCreation) {
-      if (currentEntry || !source?.key.startsWith("file:")) {
-        throw new Error("The original absent session no longer has its prepared creation source");
-      }
-      await withSessionEntryCreationPublication(
-        {
-          agentId: params.agentId,
-          sessionKey: resolved.normalizedKey,
-          file: {
-            path: database.path,
-            agentId: captured.agentId,
-            databaseIdentity: source.key.slice("file:".length),
-            assertCurrent: assertSourceCurrent,
-          },
-        },
-        async (operation) => {
-          const assertCreationCurrent = bindCreation(operation);
-          await applySessionEntryLifecycleMutation(
-            {
-              ...mutation,
-              commitGuard: () => {
-                mutation.commitGuard();
-                assertCreationCurrent();
-              },
+    const mutate = async () => {
+      const bindCreation = params.bindCreation;
+      if (bindCreation) {
+        if (currentEntry || !source?.key.startsWith("file:")) {
+          throw new Error("The original absent session no longer has its prepared creation source");
+        }
+        await withSessionEntryCreationPublication(
+          {
+            agentId: params.agentId,
+            sessionKey: resolved.normalizedKey,
+            file: {
+              path: database.path,
+              agentId: captured.agentId,
+              databaseIdentity: source.key.slice("file:".length),
+              assertCurrent: assertSourceCurrent,
             },
-            { ...captured, path: database.path },
-          );
-        },
-      );
-    } else {
-      await applySessionEntryLifecycleMutation(mutation, { ...captured, path: database.path });
-    }
+          },
+          async (operation) => {
+            const assertCreationCurrent = bindCreation(operation);
+            await applySessionEntryLifecycleMutation(
+              {
+                ...mutation,
+                commitGuard: () => {
+                  mutation.commitGuard();
+                  assertCreationCurrent();
+                },
+              },
+              { ...captured, path: database.path },
+            );
+          },
+        );
+      } else {
+        await applySessionEntryLifecycleMutation(mutation, { ...captured, path: database.path });
+      }
+    };
+    await measureDiagnosticsTimelineSpan("reply.session.commit.mutation", mutate);
   } catch (error) {
     if (
       !(
@@ -425,7 +424,6 @@ export async function commitReplySessionInitialization(params: {
       database,
       source?.key.startsWith("file:") ? source : undefined,
     );
-    assertSourceCurrent(true);
     return createStaleReplySessionInitializationResult(current[resolved.normalizedKey]);
   }
   if (staleCommit !== undefined) {

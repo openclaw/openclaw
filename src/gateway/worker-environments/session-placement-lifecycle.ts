@@ -33,6 +33,8 @@ export type SessionWorkerPlacementContext = {
         | "retireSessionPlacement"
         | "listForReconcile"
         | "listAsync"
+        | "prepareMaintenancePlacements"
+        | "prepareSessionPlacement"
         | "retireSessionPlacementAsync"
         | "prepareRuntimeRefresh"
       >
@@ -347,21 +349,25 @@ export async function prepareSessionWorkerPlacementRetirement(
 }
 
 /** Validate before cancellation; the returned stop remains bound to this placement across drains. */
-export function prepareSessionWorkerPlacementStop(params: {
+export async function prepareSessionWorkerPlacementStop(params: {
   action: "archive" | "delete" | "recover";
   agentId: string;
   authorize?: () => void;
   context: SessionWorkerPlacementContext;
   sessionId?: string;
   sessionKey: string;
-}): { stop: () => Promise<void>; startBeforeDrain: boolean } {
+  sessionKeys?: readonly string[];
+}): Promise<{ stop: () => Promise<void>; startBeforeDrain: boolean }> {
   const { agentId, context, sessionId, sessionKey } = params;
-  const expected = readSessionWorkerPlacement(params);
+  const expected = await readSessionWorkerPlacementAsync(params);
   // Cron run aliases share their base's physical session, even after session-id adoption.
   const matches = (candidate: Placement) =>
     candidate.sessionId === sessionId &&
-    (candidate.sessionKey === sessionKey ||
-      parseCronRunScopeSuffix(candidate.sessionKey).baseSessionKey === sessionKey) &&
+    [sessionKey, ...(params.sessionKeys ?? [])].some(
+      (key) =>
+        candidate.sessionKey === key ||
+        parseCronRunScopeSuffix(candidate.sessionKey).baseSessionKey === key,
+    ) &&
     candidate.agentId === agentId;
   if (expected && !matches(expected)) {
     throw new Error(`Session ${sessionKey} cloud worker placement identity changed.`);

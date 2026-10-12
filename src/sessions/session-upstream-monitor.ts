@@ -16,10 +16,7 @@ import {
   recordSessionHumanDirectMessage,
   recordSessionStateEventAsync,
 } from "./session-state-events.js";
-import {
-  isSessionUpstreamLinkCurrent,
-  settleSessionUpstreamLink,
-} from "./session-upstream-links-runtime.js";
+import { settleSessionUpstreamLink } from "./session-upstream-links-runtime.js";
 import { listWatchedSessionUpstreamLinks } from "./session-upstream-links.js";
 
 const SESSION_UPSTREAM_MONITOR_INTERVAL_MS = 60_000;
@@ -248,11 +245,6 @@ async function runSessionUpstreamMonitorTick(
           const admission = { assertCurrent: () => assertMonitorCurrent(options) };
           const missingCountKey = upstreamMonitorLinkKey(probe);
           if (outcome.kind === "missing") {
-            // Provider I/O may outlive a new run or Continue. Only the scanned owner counts.
-            if (!(await isSessionUpstreamLinkCurrent(currentLink, dbOptions))) {
-              missingCounts.delete(missingCountKey);
-              continue;
-            }
             const previous = missingCounts.get(missingCountKey);
             const missingCount = Math.min(
               SESSION_UPSTREAM_MISSING_THRESHOLD,

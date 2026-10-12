@@ -18,7 +18,13 @@ export function CopyButton(props: CopyButtonProps): SolidJSX.Element {
             class={props.bare ? "chat-copy-btn" : "btn btn--xs chat-copy-btn"}
             type="button"
             aria-label={label()}
-            onClick={(event) => void handleCopyButton(event, text, label())}
+            ref={(button) => {
+              // Native handlers run before an enclosing native click boundary stops bubbling.
+              button.addEventListener(
+                "click",
+                (event) => void handleCopyButton(event, text, label()),
+              );
+            }}
           >
             <span class="chat-copy-btn__icon" aria-hidden="true">
               <span class="chat-copy-btn__icon-copy">
@@ -34,8 +40,4 @@ export function CopyButton(props: CopyButtonProps): SolidJSX.Element {
       )}
     </For>
   );
-}
-
-export function CopyAsMarkdownButton(props: { markdown: string }) {
-  return <CopyButton text={props.markdown} bare />;
 }

@@ -1,6 +1,8 @@
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { onAgentEventForRun } from "../../infra/agent-events.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   buildDashboardSessionTitleSource,
   isDashboardSessionTitleCandidate,
@@ -26,6 +28,44 @@ type DashboardSessionTitleTurn = {
   released: Promise<boolean>;
   settled: Promise<void>;
 };
+
+export function createChatSendTitleTurn() {
+  const ready = createDeferredCore<boolean>();
+  const settled = createDeferredCore();
+  let waiting = true;
+  let stop: (() => void) | undefined;
+  // The first release wins, including empty, rejected, and interrupted turns.
+  const release = (duringTurn: boolean) => {
+    stop?.();
+    stop = undefined;
+    waiting = false;
+    ready.resolve(duringTurn);
+  };
+  return {
+    released: ready.promise,
+    settled: settled.promise,
+    onAgentRunStart(runId: string) {
+      if (waiting) {
+        stop?.();
+        stop = onAgentEventForRun(runId, (event) => {
+          if (
+            event.stream === "assistant" ||
+            event.stream === "item" ||
+            event.stream === "tool" ||
+            event.stream === "thinking" ||
+            event.stream === "approval"
+          ) {
+            release(true);
+          }
+        });
+      }
+    },
+    finish() {
+      release(false);
+      settled.resolve();
+    },
+  };
+}
 
 export function scheduleCreatedDashboardSessionTitle(
   created: {

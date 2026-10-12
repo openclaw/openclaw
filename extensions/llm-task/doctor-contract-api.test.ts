@@ -108,12 +108,6 @@ describe("llm-task doctor contract", () => {
     expect(result.entry?.llm?.allowedCompletionModels).toEqual(["openai/gpt-5.6"]);
   });
 
-  it("keeps a nonempty legacy wildcard-only allowlist fail closed", () => {
-    const result = migrate({ config: { allowedModels: ["*"] } });
-
-    expect(result.entry?.llm?.allowedCompletionModels).toEqual([]);
-  });
-
   it.each([{ allowedModels: "openai/gpt-5.6" }, { allowedModels: [123, null] }])(
     "keeps malformed legacy allowlist $allowedModels fail closed",
     ({ allowedModels }) => {

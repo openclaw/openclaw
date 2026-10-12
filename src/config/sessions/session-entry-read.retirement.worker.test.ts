@@ -58,7 +58,16 @@ it.each(["refusal", "eviction"] as const)(
       });
       const consume = vi.fn();
       const reading = withSessionEntriesFromStoresInWorker(
-        [{ agentId: "main", storePath: database.path, sessionKeys: [sessionKey], env }],
+        [
+          {
+            agentId: "main",
+            storePath: database.path,
+            sessionKeys: [sessionKey],
+            env,
+            // Exercise worker cleanup even when creation receipts retain the full entry.
+            projection: "list",
+          },
+        ],
         ([read]) => {
           consume();
           return read!.result.entries[0]?.entry;

@@ -579,7 +579,9 @@ describe("Models page catalog publication", () => {
 
     await retryCatalog(page);
     await waitForSolid(() =>
-      expect(page.querySelector('.model-providers__catalog-progress[role="alert"]')).not.toBeNull(),
+      expect(
+        page.querySelector('.model-providers__catalog-progress[role="alert"] span')?.textContent,
+      ).toBe("discovery failed"),
     );
     expect(displayedCatalog(page)?.models).toEqual(preparedCatalog.models);
     await retryCatalog(page);

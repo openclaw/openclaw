@@ -52,11 +52,7 @@ export function UsageCreatorFilter(props: {
     <select
       class="usage-select usage-creator-filter"
       aria-label={t("usage.creators.select")}
-      onChange={(event: Event) => {
-        // SAFETY: This listener is attached directly to the identity select.
-        const key = (event.currentTarget as HTMLSelectElement).value;
-        props.onSelect(key || null);
-      }}
+      onChange={(event) => props.onSelect(event.currentTarget.value || null)}
     >
       <option value="" selected={props.selectedKey === null}>
         {t("usage.creators.all")}

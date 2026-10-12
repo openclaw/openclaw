@@ -346,6 +346,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
         content: "transcript prompt",
         timestamp: 1,
         idempotencyKey: "same-turn",
+        __openclaw: { modelPromptProjection: { version: 1, text: "transcript prompt" } },
       };
       sessionManager.appendMessage(user);
       const carrier = contextMessage("original context");

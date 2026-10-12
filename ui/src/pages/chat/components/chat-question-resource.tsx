@@ -158,13 +158,7 @@ export const ChatQuestionResource = defineSolidBridge<ResourceProps>(
           for (const resource of result.resources) {
             values.add(resource.uri);
           }
-          host.dispatchEvent(
-            new CustomEvent("resource-selection", {
-              detail: { values: [...values] },
-              bubbles: true,
-              composed: true,
-            }),
-          );
+          dispatchSelection([...values]);
         } else if ("preview" in result) {
           if (result.preview.viewId) {
             const { McpAppView } = await import("../../../components/mcp-app-view-registration.ts");

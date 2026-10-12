@@ -1,3 +1,4 @@
+import type { SessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
@@ -8,6 +9,7 @@ import {
   type UsageCostIncognitoBinding,
 } from "./session-cost-usage-incognito.js";
 import { prepareUsageCostWorker, runUsageCostWorker } from "./session-cost-usage-worker-runtime.js";
+import type { UsageCostPendingFile } from "./session-cost-usage-worker.types.js";
 
 export async function refreshCostUsageCacheForAgent(params: {
   config?: OpenClawConfig;
@@ -16,12 +18,14 @@ export async function refreshCostUsageCacheForAgent(params: {
   agentDir?: string;
   databasePath?: string;
   maxFiles?: number;
+  onRemaining?: (files: UsageCostPendingFile[]) => void;
   sessionsDir?: string;
   storePath?: string;
   sessionFiles?: string[];
   startMs?: number;
   rebuildRows?: SessionCostUsageRollupRow[];
   incognito?: UsageCostIncognitoBinding;
+  sessionActor?: SessionActorStorageBinding;
 }): Promise<"refreshed" | "busy"> {
   const prepared = prepareUsageCostWorker(params);
   return withUsageCostIncognitoScope<"refreshed" | "busy">(
@@ -52,6 +56,9 @@ export async function refreshCostUsageCacheForAgent(params: {
           scoped.incognito?.actor.assertCurrent();
           scoped.incognito?.authority.assertCurrent();
           publishSessionCostUsageUpdated(agentId);
+        }
+        if (result.remainingFiles?.length) {
+          scoped.onRemaining?.(result.remainingFiles);
         }
         return "refreshed";
       } catch (error) {

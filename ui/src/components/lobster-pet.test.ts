@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getLobsterdex, getLobsterdexEntries } from "./lobster-dex.ts";
 import { resolveLobsterPetMode, resolveLobsterRunOutcome } from "./lobster-pet-contract.ts";
@@ -745,9 +744,9 @@ describe("lobster pet element", () => {
   it("ships a hidden peek eye only in sleeping renders", () => {
     const container = document.createElement("div");
     const look = createLobsterPetLook(42, new Date("2026-07-09T12:00:00"));
-    render(renderLobsterSvg(look, { sleeping: true }), container);
+    container.replaceChildren(renderLobsterSvg(look, { sleeping: true }));
     expect(container.querySelector(".lob-eye-peek")).not.toBeNull();
-    render(renderLobsterSvg(look, { standalone: true }), container);
+    container.replaceChildren(renderLobsterSvg(look, { standalone: true }));
     expect(container.querySelector(".lob-eye-peek")).toBeNull();
   });
 
@@ -757,9 +756,8 @@ describe("lobster pet element", () => {
       "crimson palette",
     );
     const container = document.createElement("div");
-    render(
+    container.replaceChildren(
       renderLobsterSvg(canonicalLobsterLook(palette), { reading: true, standalone: true }),
-      container,
     );
 
     expect(container.querySelector(".lob-reading-book")).not.toBeNull();
@@ -774,9 +772,8 @@ describe("lobster pet element", () => {
         id,
       );
       const container = document.createElement("div");
-      render(
+      container.replaceChildren(
         renderLobsterSvg({ ...canonicalLobsterLook(palette), accessory }, { standalone: true }),
-        container,
       );
       return container;
     };
@@ -814,9 +811,8 @@ describe("lobster pet element", () => {
       "tinfoil palette",
     );
     const container = document.createElement("div");
-    render(
+    container.replaceChildren(
       renderLobsterSvg(canonicalLobsterLook(tinfoilPalette), { standalone: true, sailorCap: true }),
-      container,
     );
     expect(container.querySelector(".lob-tinfoil-hat")).not.toBeNull();
     expect(container.querySelector(".lob-cap")).toBeNull();

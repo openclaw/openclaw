@@ -2,16 +2,17 @@
 
 import { render } from "lit";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { solidContent } from "../../../lit/solid-content.tsx";
 import { groupMessages } from "../chat-thread-grouping.ts";
 import { buildMessageItems } from "../chat-thread-items.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
 import { renderMessageGroup, renderMessageGroupContent } from "./chat-message-group.ts";
 import { prepareChatMessageRender } from "./chat-message-markdown.ts";
-import { renderStreamGroupParts } from "./chat-message-stream.ts";
+import { StreamGroupParts } from "./chat-message-stream-view.tsx";
 
 describe("assistant message embed policy", () => {
   it.each(["persisted", "streaming"] as const)(
-    "revokes YouTube playback on policy, source, and session changes in %s messages",
+    "preserves YouTube playback on refresh and revokes it on policy, source, and session changes in %s messages",
     async (surface) => {
       vi.stubGlobal(
         "ResizeObserver",
@@ -36,11 +37,11 @@ describe("assistant message embed policy", () => {
         const options = { allowExternalEmbedUrls: false, embedSandboxMode, sessionKey };
         render(
           surface === "streaming"
-            ? renderStreamGroupParts(
-                [{ kind: "stream", key: "message", text, startedAt: 1, isStreaming: true }],
+            ? solidContent(StreamGroupParts, {
+                parts: [{ kind: "stream", key: "message", text, startedAt: 1, isStreaming: true }],
                 options,
-                "standalone",
-              )
+                presentation: "standalone",
+              })
             : renderGroupedMessage(
                 prepareChatMessageRender({ role: "assistant", content: [{ type: "text", text }] }),
                 "message",
@@ -69,6 +70,8 @@ describe("assistant message embed policy", () => {
       const first = await show();
       expect(first.querySelector("iframe")).toBeNull();
       const firstFrame = await play(first);
+      expect(await show()).toBe(first);
+      expect(first.querySelector("iframe")).toBe(firstFrame);
       await show("strict");
       expect(firstFrame.isConnected).toBe(false);
       expect(first.querySelector("button")).toBeNull();
@@ -107,11 +110,11 @@ describe("assistant message embed policy", () => {
         const options = { allowExternalEmbedUrls: allowed, embedSandboxMode: "scripts" as const };
         render(
           surface === "streaming"
-            ? renderStreamGroupParts(
-                [{ kind: "stream", key: "message", text, startedAt: 1, isStreaming: true }],
+            ? solidContent(StreamGroupParts, {
+                parts: [{ kind: "stream", key: "message", text, startedAt: 1, isStreaming: true }],
                 options,
-                "standalone",
-              )
+                presentation: "standalone",
+              })
             : renderGroupedMessage(prepareChatMessageRender(message), "message", {
                 ...options,
                 isStreaming: false,

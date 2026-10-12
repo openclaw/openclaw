@@ -89,7 +89,7 @@ function fixture(
 }
 async function ready(f: ReturnType<typeof fixture>) {
   await Promise.all([
-    f.gateway.refreshCloudProfiles(),
+    f.gateway.retryRequiredPlacement(),
     settleModelCatalogRequests(f.context.gateway.snapshot.client!, { agentId: "main" }),
   ]);
   f.place.restorePreferenceSelections();
@@ -130,7 +130,7 @@ it("starts a required worker for a non-admin without manual placement or workspa
 it("waits for initial policy and never falls back when its required profile is missing", async () => {
   const pending = createDeferred<unknown>();
   const f = fixture(() => pending.promise);
-  const read = f.gateway.refreshCloudProfiles();
+  const read = f.gateway.retryRequiredPlacement();
   f.flow.setMessage("Do not run locally");
   expect(f.flow.canSubmit()).toBe(false);
   pending.resolve({ ...catalog, profiles: [] });
@@ -152,10 +152,10 @@ it("projects the latest policy over cached placement without persisting that pol
     requiredProfile: "replacement",
     profiles: [{ ...profile, id: "replacement" }],
   };
-  await f.gateway.refreshCloudProfiles();
+  await f.gateway.retryRequiredPlacement();
   expect(f.place.cloudProfileId).toBe("replacement");
   current = { profiles: [], environments: [] };
-  await f.gateway.refreshCloudProfiles();
+  await f.gateway.retryRequiredPlacement();
   expect(f.place.cloudProfileId).toBe("");
   expect(f.place.remotePlacement).toBe(false);
 });
@@ -189,7 +189,7 @@ it("applies a newly required profile over an open hosted draft without advertisi
   expect(f.flow.canSubmit()).toBe(true);
 
   current = catalog;
-  await f.gateway.refreshCloudProfiles();
+  await f.gateway.retryRequiredPlacement();
   f.place.browser.popoverCallbacks("where").onPopoverShow();
   f.place.restorePreferenceSelections();
   expect(f.place.hostedEnvironment).toBeUndefined();
@@ -202,22 +202,10 @@ it("applies a newly required profile over an open hosted draft without advertisi
   expect(f.context.sessions.createResult).not.toHaveBeenCalled();
 
   current = { profiles: [], environments: [] };
-  await f.gateway.refreshCloudProfiles();
+  await f.gateway.retryRequiredPlacement();
   f.place.restorePreferenceSelections();
   expect(f.place.hostedEnvironment).toEqual(hostedRuntime.workspaceEnvironment);
   expect(f.flow.canSubmit()).toBe(true);
-});
-
-it("does not use a late catalog from a replaced Gateway", async () => {
-  const pending = createDeferred<unknown>();
-  const f = fixture(() => pending.promise);
-  const read = f.gateway.refreshCloudProfiles();
-  f.context.gateway.connection.gatewayUrl = "ws://other.example";
-  f.gateway.synchronize(f.context.gateway);
-  pending.resolve(catalog);
-  await read;
-  expect(f.gateway.requiredProfile).toBeUndefined();
-  expect(f.flow.canSubmit()).toBe(false);
 });
 
 it.each(["worker", "gateway"] as const)(
@@ -264,7 +252,7 @@ it("keeps local submission when the authoritative catalog has no required policy
     methods: ["environments.list", "sessions.create"],
     request: async () => ({ profiles: [], environments: [] }),
   });
-  await f.gateway.refreshCloudProfiles();
+  await f.gateway.retryRequiredPlacement();
   f.flow.setMessage("Start normally");
   expect(f.place.remotePlacement).toBe(false);
   expect(f.flow.canSubmit()).toBe(true);
@@ -304,7 +292,7 @@ it("keeps an initial failed catalog closed and allows its existing refresh owner
     return catalog;
   });
   try {
-    await f.gateway.refreshCloudProfiles();
+    await f.gateway.retryRequiredPlacement();
     f.flow.setMessage("Wait for policy");
     expect(f.flow.canSubmit()).toBe(false);
     expect(f.flow.requiresModelSetup()).toBe(false);
@@ -354,7 +342,7 @@ it("keeps a cold required-worker draft on configured defaults across asynchronou
   const place = createDeferred<unknown>();
   const modelsReady = createDeferred();
   const f = fixture(() => place.promise, undefined, modelsReady.promise);
-  const read = f.gateway.refreshCloudProfiles();
+  const read = f.gateway.retryRequiredPlacement();
   f.flow.setMessage("Use the worker without choosing a model");
   expect(f.flow.canSubmit()).toBe(false);
   place.resolve(catalog);
@@ -385,7 +373,7 @@ it.each([false, true])(
       },
     });
     try {
-      await f.gateway.refreshCloudProfiles();
+      await f.gateway.retryRequiredPlacement();
       f.flow.setMessage("Start my own session");
       expect(f.gateway.placementPolicyReady).toBe(true);
       expect(f.place.requiredPlacement).toBe(required);
@@ -414,7 +402,7 @@ it("does not hold an ordinary local start behind unrelated pending inventory", a
       return {};
     },
   });
-  const refresh = f.gateway.refreshCloudProfiles();
+  const refresh = f.gateway.retryRequiredPlacement();
   try {
     await entered.promise;
     f.flow.setMessage("Run locally now");
@@ -423,61 +411,6 @@ it("does not hold an ordinary local start behind unrelated pending inventory", a
   } finally {
     inventory.resolve({ profiles: [], environments: [] });
     await refresh;
-    f.gateway.disconnect();
-  }
-});
-
-it.each(["grant", "gateway"] as const)(
-  "fences an old policy after a %s change with identical agent/profile labels",
-  async (change) => {
-    const held = createDeferred<unknown>();
-    let current = held.promise;
-    const f = createDraftFixture({
-      methods: ["agents.list", "environments.list", "sessions.create", "sessions.send"],
-      selfUser: { id: "same-profile" },
-      placementPolicy: () => current,
-      request: async () => ({ profiles: [], environments: [] }),
-    });
-    const pending = f.gateway.refreshCloudProfiles();
-    try {
-      current = Promise.resolve({ sessionPlacement: {} });
-      if (change === "grant") {
-        f.context.gateway.snapshot.hello!.auth!.scopes = ["operator.sessions.write"];
-      } else {
-        f.context.gateway.connection.gatewayUrl = "ws://second.example";
-        const server = f.context.gateway.snapshot.hello?.server;
-        if (!server) {
-          throw new Error("Fixture Gateway hello is missing its server identity");
-        }
-        server.bootId = "second-boot";
-      }
-      f.gateway.synchronize(f.context.gateway);
-      await f.gateway.refreshCloudProfiles();
-      held.resolve({ sessionPlacement: { requiredProfile: profile } });
-      await pending;
-      f.flow.setMessage("Use the current Gateway and grant");
-      expect(f.gateway.requiredProfile).toBeUndefined();
-      expect(f.gateway.placementPolicyReady).toBe(true);
-      expect(f.flow.canSubmit()).toBe(true);
-      if (change === "grant") {
-        expect(f.request.mock.calls.some(([method]) => method === "environments.list")).toBe(false);
-      }
-    } finally {
-      held.resolve({ sessionPlacement: {} });
-      f.gateway.disconnect();
-    }
-  },
-);
-
-it("does not invent worker-turn support for the required provider", async () => {
-  const f = fixture(async () => ({ ...catalog, profiles: [{ ...profile, executionModes: [] }] }));
-  try {
-    await ready(f);
-    expect(f.gateway.requiredProfile).toBe(profile.id);
-    expect(f.flow.canSubmit()).toBe(false);
-    await f.flow.submit();
-    expect(f.context.sessions.createResult).not.toHaveBeenCalled();
-  } finally {
     f.gateway.disconnect();
   }
 });

@@ -84,8 +84,9 @@ vi.mock("../../../agents/embedded-agent.js", () => ({ runEmbeddedAgent: mocks.ru
 vi.mock("../../../agents/bootstrap-files.js", () => ({
   resolveBootstrapFilesForRun: async () => [],
 }));
+// mock-isolation: Keep provider registration and credential state outside handler tests.
 vi.mock("../../../talk/provider-resolver.js", () => ({
-  resolveConfiguredRealtimeVoiceProvider: mocks.resolveProvider,
+  resolveConfiguredRealtimeVoiceProviderAsync: mocks.resolveProvider,
 }));
 vi.mock("../../../talk/provider-registry.js", () => ({ listRealtimeVoiceProviders: () => [] }));
 

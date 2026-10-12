@@ -77,50 +77,45 @@ describe("AppSidebar new session navigation", () => {
     sidebar.onToggleSidebar = onToggleSidebar;
     await sidebar.updateComplete;
 
-    const actions = sidebar.querySelector(".sidebar-brand__actions");
-    const brandLink = sidebar.querySelector<HTMLAnchorElement>(".sidebar-brand__new-thread");
-    expect(
-      Array.from(actions?.querySelectorAll("[aria-label]") ?? [], (action) =>
-        action.getAttribute("aria-label"),
-      ),
-    ).toEqual(["Collapse sidebar", "Open command palette", "New conversation"]);
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-brand__collapse")?.click();
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-brand__search")?.click();
+    const newSessionLink = sidebar.querySelector<HTMLAnchorElement>(
+      ".sidebar-session-toolbar .sidebar-new-session",
+    );
+    expect(sidebar.querySelectorAll(".sidebar-new-session")).toHaveLength(1);
+    expect(sidebar.querySelector(".sidebar-brand__collapse")).toBeNull();
+    sidebar.querySelector<HTMLButtonElement>('[data-navigation-view="sessions"]')?.click();
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-rail .sidebar-brand__search")?.click();
     expect(onToggleSidebar).toHaveBeenCalledOnce();
     expect(onOpenPalette).toHaveBeenCalledOnce();
-    expect(brandLink?.getAttribute("aria-label")).toBe("New conversation");
-    expect(brandLink).toBeInstanceOf(HTMLAnchorElement);
-    expect(brandLink?.getAttribute("aria-disabled")).toBe("true");
-    expect(brandLink?.hasAttribute("href")).toBe(false);
-    expect(brandLink?.tabIndex).toBe(-1);
-    brandLink?.click();
+    expect(newSessionLink?.getAttribute("aria-label")).toBe("New conversation");
+    expect(newSessionLink).toBeInstanceOf(HTMLAnchorElement);
+    expect(newSessionLink?.getAttribute("aria-disabled")).toBe("true");
+    expect(newSessionLink?.hasAttribute("href")).toBe(false);
+    expect(newSessionLink?.tabIndex).toBe(-1);
+    newSessionLink?.click();
     expect(onOpenNewSession).not.toHaveBeenCalled();
 
     sidebar.connected = true;
     await sidebar.updateComplete;
-    for (const selector of [
-      ".sidebar-brand__new-thread",
+    const link = sidebar.querySelector<HTMLAnchorElement>(
       ".sidebar-session-toolbar .sidebar-new-session",
+    )!;
+    expect(link.getAttribute("aria-label")).toBe("New conversation");
+    expect(link.getAttribute("href")).toBe("/control/new?agent=research");
+    expect(link.hasAttribute("aria-disabled")).toBe(false);
+    for (const modifiers of [
+      { metaKey: true },
+      { ctrlKey: true },
+      { shiftKey: true },
+      { button: 1 },
     ]) {
-      const link = sidebar.querySelector<HTMLAnchorElement>(selector)!;
-      expect(link.getAttribute("aria-label")).toBe("New conversation");
-      expect(link.getAttribute("href")).toBe("/control/new?agent=research");
-      expect(link.hasAttribute("aria-disabled")).toBe(false);
-      for (const modifiers of [
-        { metaKey: true },
-        { ctrlKey: true },
-        { shiftKey: true },
-        { button: 1 },
-      ]) {
-        const event = new MouseEvent("click", { bubbles: true, cancelable: true, ...modifiers });
-        link.dispatchEvent(event);
-        expect(event.defaultPrevented).toBe(false);
-        expect(onOpenNewSession).not.toHaveBeenCalled();
-      }
-      link.click();
-      expect(onOpenNewSession).toHaveBeenCalledExactlyOnceWith("research");
-      onOpenNewSession.mockClear();
+      const event = new MouseEvent("click", { bubbles: true, cancelable: true, ...modifiers });
+      link.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(false);
+      expect(onOpenNewSession).not.toHaveBeenCalled();
     }
+    link.click();
+    expect(onOpenNewSession).toHaveBeenCalledExactlyOnceWith("research");
+    onOpenNewSession.mockClear();
   });
 
   it("opens a catalog-targeted draft from its new-session action", async () => {

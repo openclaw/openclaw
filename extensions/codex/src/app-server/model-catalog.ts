@@ -8,6 +8,7 @@ import { prepareCodexAppServerAuthBinding } from "./auth-binding.js";
 import {
   resolveCodexAppServerAuthProfileId,
   resolveCodexAppServerAuthProfileStore,
+  resolveCodexAppServerAuthProfileStoreAtEffect,
 } from "./auth-profile.js";
 import { isCodexAppServerIndeterminateRequestCancellationError } from "./client.js";
 import { readCodexPluginConfig } from "./config-parsing.js";
@@ -106,7 +107,7 @@ export function createCodexAppServerModelCatalog(runtime: string) {
       return false;
     }
     try {
-      const store = resolveCodexAppServerAuthProfileStore({
+      const store = resolveCodexAppServerAuthProfileStoreAtEffect({
         agentDir: params.agentDir,
         authProfileId,
         config: params.config,
@@ -226,7 +227,7 @@ export function createCodexAppServerModelCatalog(runtime: string) {
       }
       const authProfileStore =
         ownsLocalProcess && options.start.homeScope === "agent"
-          ? resolveCodexAppServerAuthProfileStore({
+          ? await resolveCodexAppServerAuthProfileStore({
               agentDir: params.agentDir,
               authProfileId: requestedAuthProfileId,
               config: params.config,
@@ -279,10 +280,19 @@ export function createCodexAppServerModelCatalog(runtime: string) {
           agentDir: params.agentDir,
           timeoutMs,
           ...(authProfileStore ? { authProfileStore, authProfileId } : {}),
+          ...(ownsLocalProcess && start.homeScope === "agent" && !authProfileId
+            ? { authRequirement: "environment-api-key" as const }
+            : {}),
         },
         async (request, client) => {
           try {
             const discover = async () => {
+              // Codex serializes this read after login's delayed account/updated.
+              // Drain startup before pinning the account revision for discovery.
+              await request<CodexGetAccountResponse>({
+                method: "account/read",
+                requestParams: { refreshToken: false },
+              });
               const isCurrent = captureSharedCodexAppServerCatalogLifetime(client);
               const isClientCurrent = captureSharedClientRegistration(client);
               const listed = await listAllCodexAppServerModels({

@@ -31,7 +31,6 @@ import {
   isGatewayWorkAdmissionClosed,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
-import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { registerSkillUsageTracking } from "../skills/workshop/skill-usage.js";
 import { pruneExpiredArtifactDownloads } from "./artifact-download-grants.js";
 import {
@@ -301,26 +300,6 @@ export function startGatewayMaintenanceTimers(params: {
       pruneExpiredDevicePairSetupCompletions({ nowMs: scheduler.now() }).catch((error: unknown) => {
         params.logHealth.error(`device pair setup cleanup failed: ${formatError(error)}`);
       }),
-    true,
-  );
-
-  // Plugin-state expiry belongs to Gateway maintenance, not background-run tracking.
-  schedulePeriodic(
-    "plugin-state",
-    60_000,
-    async () => {
-      // Accepted writes retain their job scope until the scheduler joins their cleanup.
-      const signal = getAsyncWorkSignal();
-      try {
-        const { sweepExpiredPluginStateEntriesInWorker } =
-          await import("../plugin-state/plugin-state-worker-client.js");
-        await sweepExpiredPluginStateEntriesInWorker({
-          assertActive: () => signal?.throwIfAborted(),
-        });
-      } catch (error) {
-        params.logHealth.error(`plugin state cleanup failed: ${formatError(error)}`);
-      }
-    },
     true,
   );
 

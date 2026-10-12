@@ -374,6 +374,7 @@ export function createPageState(
       chatPersistCommentary: next.chatPersistCommentary,
       chatSendShortcut: next.chatSendShortcut,
       chatBubbleSessionKeys: next.chatBubbleSessionKeys,
+      chatBubbleDisabledSessionKeys: next.chatBubbleDisabledSessionKeys,
     });
     renderLifecycle.invalidate();
   };

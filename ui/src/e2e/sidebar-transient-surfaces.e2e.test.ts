@@ -74,12 +74,6 @@ suite.define(() => {
         const root = page.locator("html");
         await expect.poll(() => root.getAttribute("data-theme")).toBe(resolvedTheme);
 
-        // These ownerless fixture rows belong to All, not the current human's Mine scope.
-        await page.locator('[data-navigation-view="sessions"]').click();
-        await page
-          .locator(".sidebar-navigation-scope")
-          .getByRole("button", { name: "All", exact: true })
-          .click();
         const session = page.locator(`openclaw-app-sidebar [data-session-key="${sessionKey}"]`);
         await session.waitFor();
         await session.hover();

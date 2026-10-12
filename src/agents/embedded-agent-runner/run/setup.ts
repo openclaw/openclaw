@@ -8,6 +8,7 @@ import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-mod
 import type {
   PluginHookBeforeModelResolveAttachment,
   PluginHookBeforeModelResolveEvent,
+  PluginHookBeforeModelResolveResult,
 } from "../../../plugins/types.js";
 import {
   AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE,
@@ -83,10 +84,17 @@ export async function resolveHookModelSelection(params: {
   provider: string;
   modelId: string;
   modelSelectionLocked?: boolean;
+  awaitSessionDiffBaseline?: () => Promise<void>;
   hookRunner?: HookRunnerLike | null;
   hookContext: HookContext;
 }) {
-  const selection = { provider: params.provider, modelId: params.modelId };
+  const selection: { provider: string; modelId: string } & Pick<
+    PluginHookBeforeModelResolveResult,
+    "fallbacksOverride"
+  > = {
+    provider: params.provider,
+    modelId: params.modelId,
+  };
   if (params.modelSelectionLocked === true) {
     return selection;
   }
@@ -97,6 +105,7 @@ export async function resolveHookModelSelection(params: {
   // provider/model before resolveModel().
   if (hookRunner?.hasHooks("before_model_resolve")) {
     const assertCurrent = readClaimingHookAdmission(params.hookContext)?.assertCurrent;
+    await params.awaitSessionDiffBaseline?.();
     assertCurrent?.();
     try {
       const event: PluginHookBeforeModelResolveEvent = params.attachments
@@ -119,6 +128,9 @@ export async function resolveHookModelSelection(params: {
   if (modelResolveOverride?.modelOverride) {
     selection.modelId = modelResolveOverride.modelOverride;
     log.info(`[hooks] model overridden to ${selection.modelId}`);
+  }
+  if (modelResolveOverride?.fallbacksOverride !== undefined) {
+    selection.fallbacksOverride = modelResolveOverride.fallbacksOverride;
   }
 
   return selection;
@@ -173,6 +185,9 @@ export function resolveEmbeddedRuntimeModelPolicy(params: {
     modelId: params.modelId,
     modelContextTokens: asFiniteNumber(params.runtimeModel.contextTokens),
     modelContextWindow: contextWindowProfile.contextTokens,
+    modelContextWindowSource: contextWindowProfile.contextWindow
+      ? undefined
+      : params.runtimeModel.contextWindowSource,
     defaultTokens: DEFAULT_CONTEXT_TOKENS,
   });
   // resolveContextWindowInfo ranks the passed selection below both the

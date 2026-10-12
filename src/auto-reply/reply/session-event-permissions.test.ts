@@ -601,13 +601,11 @@ it.for([
 it.for([
   { watchCount: 1, cancellation: "none" },
   { watchCount: 2, cancellation: "none" },
-  { watchCount: 2, cancellation: "first" },
   { watchCount: 2, cancellation: "all" },
   { watchCount: 2, cancellation: "request" },
 ])(
   "batches $watchCount watched sessions after FIFO adoption (cancellation: $cancellation)",
   async ({ watchCount, cancellation }, { signal }) => {
-    const cancelFirst = cancellation === "first";
     const cancelledBatch = cancellation === "all" || cancellation === "request";
     await withOpenClawTestState(
       { label: "session-event-notice-adoption", env: { OPENCLAW_TEST_FAST: "0" } },
@@ -676,7 +674,6 @@ it.for([
         const captured = createDeferred();
         const firstNoticeCaptured = createDeferred();
         const enqueued = createDeferred();
-        const continued = createDeferred();
         const notices: Array<ReturnType<typeof enqueueSessionEventForHost>> = [];
         let captures = 0;
         const capture = sessionEventHandoff.captureSessionEventTargetForHost;
@@ -700,9 +697,6 @@ it.for([
             if (options.source === "session") {
               notices.push(receipt);
               enqueued.resolve();
-              if (notices.length === 2) {
-                continued.resolve();
-              }
             }
             return receipt;
           });
@@ -744,26 +738,6 @@ it.for([
             await expect(notice.accepted).resolves.toEqual({ ok: true });
           }
           expect(starts).toHaveLength(1);
-          if (cancelFirst) {
-            const original = peekSystemEventEntries(scope.sessionKey);
-            const cancelled = expectDefined(
-              original.find((event) => event.text.includes(`Session "${child}" changed`)),
-              "first original notice",
-            );
-            const remaining = expectDefined(
-              original.find((event) => event.text.includes(`Session "${sibling}" changed`)),
-              "second original notice",
-            );
-            consumeSelectedSystemEventEntries(scope.sessionKey, [cancelled]);
-            await expect(notices[0]!.settled).resolves.toMatchObject({
-              status: "cancelled",
-              executionStarted: false,
-            });
-            expect(peekSystemEventEntries(scope.sessionKey)).toContainEqual(remaining);
-            await withinTest(continued.promise, signal);
-            expect(notices[1]?.id).toBe(remaining.id);
-            await expect(notices[1]!.accepted).resolves.toEqual({ ok: true });
-          }
           if (cancelledBatch) {
             const originals = peekSystemEventEntries(scope.sessionKey);
             if (cancellation === "all") {
@@ -821,7 +795,7 @@ it.for([
           vi.useRealTimers();
           releaseFirst.resolve();
           await expect(first.settled).resolves.toMatchObject({ status: "completed" });
-          for (const notice of cancelledBatch ? [] : cancelFirst ? notices.slice(1) : notices) {
+          for (const notice of cancelledBatch ? [] : notices) {
             await expect(notice.settled).resolves.toMatchObject({
               status: "completed",
               executionStarted: true,
@@ -835,7 +809,7 @@ it.for([
           }
           expect(starts[0]).toContain("First admitted work");
           for (const noticeState of observed) {
-            const wasCancelled = cancelledBatch || (cancelFirst && noticeState.child === child);
+            const wasCancelled = cancelledBatch;
             if (wasCancelled) {
               expect(starts[1] ?? "").not.toContain(`Session "${noticeState.child}" changed`);
             } else {

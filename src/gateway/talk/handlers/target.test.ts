@@ -10,6 +10,7 @@ import { setActivePluginRegistry } from "../../../plugins/runtime.js";
 import type { RealtimeVoiceProviderPlugin } from "../../../plugins/types.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
+import { prepareUserProfileCatalog } from "../../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import * as clientVoiceSession from "../../../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
@@ -28,7 +29,7 @@ import { talkClientHandlers } from "./client.js";
 import { talkSessionHandlers } from "./session.js";
 
 const mocks = vi.hoisted(() => ({
-  resolveConfiguredRealtimeVoiceProvider: vi.fn(),
+  resolveConfiguredRealtimeVoiceProviderAsync: vi.fn(),
   bootstrap: vi.fn(async () => "Agent context fixture."),
   createRelay: vi.fn(() => ({
     relaySessionId: "test-relay",
@@ -39,8 +40,9 @@ const mocks = vi.hoisted(() => ({
   transcriptionProviders: vi.fn(() => []),
 }));
 
+// mock-isolation: Keep provider registration and credential state outside handler tests.
 vi.mock("../../../talk/provider-resolver.js", () => ({
-  resolveConfiguredRealtimeVoiceProvider: mocks.resolveConfiguredRealtimeVoiceProvider,
+  resolveConfiguredRealtimeVoiceProviderAsync: mocks.resolveConfiguredRealtimeVoiceProviderAsync,
 }));
 vi.mock("../../../talk/provider-registry.js", () => ({ listRealtimeVoiceProviders: () => [] }));
 vi.mock("../../../agents/realtime-bootstrap-context.js", () => ({
@@ -75,6 +77,7 @@ const browserSession = {
 };
 
 let state: OpenClawTestState;
+let releaseProfileCatalog: (() => void) | undefined;
 let config: OpenClawConfig;
 let client: ReturnType<typeof sharingPolicyClient> & { connId: string };
 const createBrowserSession = vi.fn<
@@ -122,6 +125,7 @@ beforeEach(async () => {
     ...sharingPolicyClient({ user: ensureProfileForEmail("listener@example.test").id }),
     connId: "talk-target-test",
   };
+  releaseProfileCatalog = (await prepareUserProfileCatalog()).release;
   config = {
     agents: { ownership: "explicit", entries: { primary: {}, voice: {} } },
     talk: { agentId: "voice" },
@@ -139,7 +143,7 @@ beforeEach(async () => {
   Object.defineProperty(provider, Symbol.for("openclaw.internal.realtime-voice-provider.v1"), {
     value: { isBrowserSessionConfigured: () => true, cancelBrowserSession },
   });
-  mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+  mocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
     provider,
     providerConfig: {},
     capabilities: provider.capabilities,
@@ -156,6 +160,8 @@ afterEach(async () => {
     vi.restoreAllMocks();
     clientVoiceSessionTesting.reset();
     setActivePluginRegistry(createEmptyPluginRegistry());
+    releaseProfileCatalog?.();
+    releaseProfileCatalog = undefined;
     await state.cleanup();
   }
 });

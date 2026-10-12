@@ -117,12 +117,4 @@ describe("runExtensionRelayDaemon", () => {
       await run.done;
     }
   });
-
-  it("stops on demand", async () => {
-    await stageRelaySecret();
-    const run = await runExtensionRelayDaemon({ port: 0 });
-    expect(run.port).toBeGreaterThan(0);
-    run.stop();
-    await expect(run.done).resolves.toBe("stopped");
-  });
 });

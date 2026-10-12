@@ -10,6 +10,7 @@ import { SqliteCoordinatorError } from "../infra/sqlite-lifecycle-errors.js";
 import {
   retainSnapshotTempDirectory,
   retainSnapshotWork,
+  deferSqliteSnapshotCleanupAfterRead,
   SqliteSnapshotCleanupError,
 } from "../infra/sqlite-readonly-location-cleanup.js";
 import { prepareSqliteReadOnlyLocationSyncInProcess } from "../infra/sqlite-readonly-location.js";
@@ -160,6 +161,7 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
     const releaseSource = retainSnapshotTempDirectory(
       prepared.cleanupRoot ?? path.dirname(prepared.location),
     );
+    let readSucceeded = false;
     const snapshot = Object.assign(
       createRetainedReadScope(pathname, admission.identity, async () => {
         releaseSource();
@@ -169,6 +171,9 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
             return;
           }
         } catch (error) {
+          if (readSucceeded && deferSqliteSnapshotCleanupAfterRead(error, prepared.cleanupRoot)) {
+            return;
+          }
           cause = error;
         }
         throw new SqliteSnapshotCleanupError(
@@ -194,7 +199,9 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
         controller.signal.throwIfAborted();
         assertHostAdmission();
         admission.assertCurrent();
-        return await operation();
+        const result = await operation();
+        readSucceeded = true;
+        return result;
       });
     } finally {
       callerSignal?.removeEventListener("abort", closeFromCaller);

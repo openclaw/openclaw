@@ -1,18 +1,19 @@
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
+import { getContextWindowCaches, providerContextTokenCacheKey } from "../agents/context-cache.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   appendTranscriptMessageSync,
   loadSessionEntryReadOnly,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
-import * as transcriptTail from "../config/sessions/session-accessor.sqlite-active-events.js";
 import {
   SessionTranscriptProjectionUnavailableError,
   SessionTranscriptStorageUnavailableError,
 } from "../config/sessions/session-transcript-projection-error.js";
 import type { InternalSessionEntry, SessionContextBudgetStatus } from "../config/sessions/types.js";
+import * as transcriptTail from "../gateway/session-transcript-readers.js";
 import * as transcriptUsage from "../gateway/session-transcript-usage.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
@@ -109,6 +110,66 @@ describe("buildStatusText prepared context windows", () => {
       ...overrides,
     });
   }
+
+  it.each([
+    { name: "current discovered limits", window: 262_144, expected: "45k/262k" },
+    { name: "unknown limits", window: undefined, expected: "45k/?" },
+    {
+      name: "another runtime's limits",
+      window: 262_144,
+      nativeRuntime: "other-runtime",
+      expected: "45k/?",
+    },
+    {
+      name: "API limits for a native runtime",
+      window: 262_144,
+      resolvedHarness: "fixture-native",
+      expected: "45k/?",
+    },
+  ])("renders $name without reusing a stale cache or estimate", async (scenario) => {
+    const provider = "ollama";
+    const model = "qwen3:8b";
+    const key = providerContextTokenCacheKey(provider, model);
+    const caches = getContextWindowCaches();
+    const cacheMaps = [caches.discoveredTokenCache, caches.contextWindowCache];
+    const previous = cacheMaps.map((cache) => cache.get(key));
+    for (const cache of cacheMaps) {
+      cache.set(key, 128_000);
+    }
+    try {
+      const parts = await renderPreparedStatus({
+        provider,
+        model,
+        resolvedHarness: scenario.resolvedHarness ?? "openclaw",
+        contextTokens: 200_000,
+        thinkingCatalog: [
+          {
+            provider,
+            id: model,
+            nativeRuntime: scenario.nativeRuntime,
+            contextWindow: scenario.window,
+            contextTokens: scenario.window,
+          },
+        ],
+      });
+
+      expect(parts.text).toContain(`Context: ${scenario.expected}`);
+      const table = parts.presentation.blocks.find((block) => block.type === "table");
+      expect(table?.type === "table" ? table.rows : []).toContainEqual([
+        "📚 Context",
+        expect.stringContaining(scenario.expected),
+      ]);
+    } finally {
+      cacheMaps.forEach((cache, index) => {
+        const value = previous[index];
+        if (value === undefined) {
+          cache.delete(key);
+        } else {
+          cache.set(key, value);
+        }
+      });
+    }
+  });
 
   it("renders the agent thinking default ahead of model and global defaults", async () => {
     const parts = await renderPreparedStatus({
@@ -354,7 +415,7 @@ describe("buildStatusText prepared context windows", () => {
   );
 
   it("skips terminal transcript access for a stale selected notice", async () => {
-    const readTail = vi.spyOn(transcriptTail, "readSessionTranscriptBoundedMessageTailPage");
+    const readTail = vi.spyOn(transcriptTail, "readSessionTranscriptBoundedMessageTailPageAsync");
     const parts = await renderTerminalFallback({
       entry: {
         fallbackNotice: {
@@ -368,17 +429,17 @@ describe("buildStatusText prepared context windows", () => {
     expect(readTail).not.toHaveBeenCalled();
   });
 
-  it("retains the incoming prepared cap when it already belongs to the terminal pair", async () => {
+  it("uses the admitted effective cap for the terminal pair", async () => {
     const parts = await renderTerminalFallback({
       entry: { providerOverride: "deepseek", modelOverride: "deepseek-v4-flash" },
       status: {
         provider: "fallback",
         model: "small-model",
-        contextTokens: 96_000,
         thinkingCatalog: catalog.map(({ provider, id, contextWindow }) => ({
           provider,
           id,
           contextWindow,
+          contextTokens: id === "small-model" ? 96_000 : contextWindow,
         })),
       },
     });
@@ -391,8 +452,8 @@ describe("buildStatusText prepared context windows", () => {
     ["legacy usage fallback", "usage/previous-model"],
   ])("keeps %s through independent usage hydration", async (_name, notice) => {
     const readUsage = vi
-      .spyOn(transcriptUsage, "readRecentSessionUsageFromTranscript")
-      .mockReturnValue({
+      .spyOn(transcriptUsage, "readRecentSessionUsageFromTranscriptAsync")
+      .mockResolvedValue({
         modelProvider: "usage",
         model: "previous-model",
         inputTokens: 10,
@@ -533,10 +594,8 @@ describe("buildStatusText prepared context windows", () => {
     { error: new Error("unexpected reader failure"), unavailable: false },
   ])("catches only unavailable terminal data ($error.name)", async ({ error, unavailable }) => {
     const readTail = vi
-      .spyOn(transcriptTail, "readSessionTranscriptBoundedMessageTailPage")
-      .mockImplementation(() => {
-        throw error;
-      });
+      .spyOn(transcriptTail, "readSessionTranscriptBoundedMessageTailPageAsync")
+      .mockRejectedValue(error);
     const sessionEntry: InternalSessionEntry = {
       sessionId: "projection",
       updatedAt: 1,

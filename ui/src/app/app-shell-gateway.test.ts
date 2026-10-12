@@ -77,7 +77,7 @@ describe("ShellGatewayOwner profile appearance integration", () => {
     const readStarted = createDeferred();
     const reply = createDeferred<{
       status: string;
-      entries: { "ui.accent": string; "ui.sidebarEntries": string[] };
+      entries: { "ui.accent": string; "ui.railShortcuts": string[] };
     }>();
     request.mockImplementationOnce(() => {
       readStarted.resolve();
@@ -91,7 +91,7 @@ describe("ShellGatewayOwner profile appearance integration", () => {
     });
     await readStarted.promise;
     expect(complete).toBe(false);
-    reply.resolve({ status: "ok", entries: { "ui.accent": "#336699", "ui.sidebarEntries": [] } });
+    reply.resolve({ status: "ok", entries: { "ui.accent": "#336699", "ui.railShortcuts": [] } });
     await ready;
     expect(complete).toBe(true);
     expect(loadSettings().accent).toBe("#336699");
@@ -103,7 +103,7 @@ describe("ShellGatewayOwner profile appearance integration", () => {
     const readStarted = createDeferred();
     const reply = createDeferred<{
       status: string;
-      entries: { "ui.accent": string; "ui.sidebarEntries": string[] };
+      entries: { "ui.accent": string; "ui.railShortcuts": string[] };
     }>();
     request.mockImplementationOnce(() => {
       readStarted.resolve();
@@ -115,7 +115,7 @@ describe("ShellGatewayOwner profile appearance integration", () => {
     expect(refreshTheme).toHaveBeenCalledOnce();
     refreshTheme.mockClear();
     Object.assign(context.runtimeConfig.state, { configSnapshot: { config: {} } });
-    reply.resolve({ status: "ok", entries: { "ui.accent": "#336699", "ui.sidebarEntries": [] } });
+    reply.resolve({ status: "ok", entries: { "ui.accent": "#336699", "ui.railShortcuts": [] } });
     await ready;
     expect(loadSettings().accent).not.toBe("#336699");
     expect(refreshTheme).not.toHaveBeenCalled();

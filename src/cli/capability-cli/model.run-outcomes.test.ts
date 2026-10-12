@@ -27,6 +27,11 @@ vi.mock("./shared.js", async (importOriginal) => ({
   resolveLocalCapabilityRuntimeConfig: vi.fn(async () => ({})),
 }));
 
+// mock-isolation: Ordinary model runs must not load the catalog used for case-only overrides.
+vi.mock("../../agents/prepared-model-catalog.js", () => {
+  throw new Error("Model runs without a case-only override must not load catalog runtime");
+});
+
 // mock-isolation: Supply final Gateway run outcomes without opening a WebSocket connection.
 vi.mock("../../gateway/call.js", () => ({
   callGateway: mocks.callGateway,

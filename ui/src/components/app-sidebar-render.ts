@@ -3,6 +3,7 @@ import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import { serializeSidebarEntry, type SidebarZoneEntry } from "../app-navigation.ts";
 import { isRouteId, pluginTabLocation } from "../app-route-paths.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
+import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import type { NativeGateway, NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
 import { isHomePanelAvailable } from "../app/panel-availability.ts";
 import { currentThemeBranding } from "../app/theme-branding.ts";
@@ -16,16 +17,15 @@ import {
   formatKeyboardShortcutCombo,
   KEYBOARD_SHORTCUT_COMBOS,
 } from "../lib/keyboard-shortcut-contract.ts";
+import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { pluginTabKey } from "../pages/plugin/route.ts";
 import { renderSidebarNavLink } from "./app-sidebar-nav-menus.ts";
-import { renderSidebarSessionFilter } from "./app-sidebar-session-filter-summary.ts";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { renderGatewayStatus } from "./gateway-status.ts";
 import { icons } from "./icons.ts";
 import { renderShortcutHint } from "./kbd.ts";
-import { renderNewSessionLink } from "./new-session-link.ts";
 import { HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import { renderSessionLeadingState } from "./session-leading-indicator.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
@@ -51,7 +51,10 @@ function readSidebarNativeGateway(): NativeGateway | null {
   return snapshot.gateways.find((gateway) => gateway.id === snapshot.currentId) ?? null;
 }
 
-function renderSidebarAgentCard(host: AppSidebarRenderHost) {
+export function renderSidebarAgentCard(host: AppSidebarRenderHost) {
+  if (host.sidebarAgentsMode === "roster") {
+    return renderSidebarWorkspaceHeader(host);
+  }
   const {
     activeId: cardAgentId,
     agent: rosterAgent,
@@ -92,30 +95,33 @@ function renderSidebarAgentCard(host: AppSidebarRenderHost) {
       bootstrapIdentity?.agentId === cardAgentId),
   );
   return html`
-    <openclaw-sidebar-agent-card
-      .agentName=${cardName}
-      .agentId=${cardAgentId}
-      .avatarUrl=${cached ? cached.avatar : cardAgent ? resolveAgentAvatarUrl(cardAgent, cardIdentity) : null}
-      .avatarAuthReady=${avatarAuthReady}
-      .avatarText=${cached ? (cached.textAvatar ?? null) : cardAgent ? resolveAgentTextAvatar(cardAgent, cardIdentity) : null}
-      .environment=${host.sessionDataContext?.config?.current?.environment ?? null}
-      .menuOpen=${host.sidebarMenus.agentMenuPosition !== null}
-      .menuUnread=${menuUnread}
-      .switcherAvailable=${cardAgents.length > 1}
-      .onToggleMenu=${(trigger: HTMLElement) => host.sidebarMenus.toggleAgentMenu(trigger)}
-      .onMenuPointerMove=${(trigger: HTMLElement, event: PointerEvent) =>
-        host.sidebarMenus.scheduleAgentMenuHoverOpen(trigger, event)}
-      .onMenuPointerLeave=${() => host.sidebarMenus.handleAgentMenuTriggerPointerLeave()}
-      @contextmenu=${(event: MouseEvent) => {
-        event.preventDefault();
-        if (host.sidebarMenus.agentMenuPosition !== null) {
-          return;
-        }
-        const card = event.currentTarget as HTMLElement;
-        const trigger = card.querySelector<HTMLElement>(".sidebar-agent-card__main") ?? card;
-        host.sidebarMenus.toggleAgentMenu(trigger);
-      }}
-    ></openclaw-sidebar-agent-card>
+    <openclaw-tooltip .content=${cardName}
+      ><openclaw-sidebar-agent-card
+        .compact=${true}
+        .agentName=${cardName}
+        .agentId=${cardAgentId}
+        .avatarUrl=${cached ? cached.avatar : cardAgent ? resolveAgentAvatarUrl(cardAgent, cardIdentity) : null}
+        .avatarAuthReady=${avatarAuthReady}
+        .avatarText=${cached ? (cached.textAvatar ?? null) : cardAgent ? resolveAgentTextAvatar(cardAgent, cardIdentity) : null}
+        .environment=${host.sessionDataContext?.config?.current?.environment ?? null}
+        .menuOpen=${host.sidebarMenus.agentMenuPosition !== null}
+        .menuUnread=${menuUnread}
+        .switcherAvailable=${cardAgents.length > 1}
+        .onToggleMenu=${(trigger: HTMLElement) => host.sidebarMenus.toggleAgentMenu(trigger)}
+        .onMenuPointerMove=${(trigger: HTMLElement, event: PointerEvent) =>
+          host.sidebarMenus.scheduleAgentMenuHoverOpen(trigger, event)}
+        .onMenuPointerLeave=${() => host.sidebarMenus.handleAgentMenuTriggerPointerLeave()}
+        @contextmenu=${(event: MouseEvent) => {
+          event.preventDefault();
+          if (host.sidebarMenus.agentMenuPosition !== null) {
+            return;
+          }
+          const card = event.currentTarget as HTMLElement;
+          const trigger = card.querySelector<HTMLElement>(".sidebar-agent-card__main") ?? card;
+          host.sidebarMenus.toggleAgentMenu(trigger);
+        }}
+      ></openclaw-sidebar-agent-card
+    ></openclaw-tooltip>
   `;
 }
 
@@ -158,122 +164,63 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost) {
   const name = brand.name;
   const menuOpen = host.sidebarMenus.agentMenuPosition !== null;
   return html`
-    <div class="sidebar-workspace-header">
-      <button
-        type="button"
-        class="sidebar-workspace-header__main"
-        aria-haspopup="menu"
-        aria-expanded=${String(menuOpen)}
-        aria-label="${name} · ${t("agentChip.workspaceMenuLabel")}"
-        @pointermove=${(event: PointerEvent) => {
-          if (event.currentTarget instanceof HTMLElement) {
-            host.sidebarMenus.scheduleAgentMenuHoverOpen(event.currentTarget, event);
-          }
-        }}
-        @pointerleave=${() => host.sidebarMenus.handleAgentMenuTriggerPointerLeave()}
-        @pointerdown=${(event: PointerEvent) => event.stopPropagation()}
-        @click=${(event: MouseEvent) => {
-          event.stopPropagation();
-          if (event.currentTarget instanceof HTMLElement) {
-            host.sidebarMenus.toggleAgentMenu(event.currentTarget);
-          }
-        }}
-        @contextmenu=${(event: MouseEvent) => {
-          event.preventDefault();
-          if (!menuOpen && event.currentTarget instanceof HTMLElement) {
-            host.sidebarMenus.toggleAgentMenu(event.currentTarget);
-          }
-        }}
-      >
-        ${
-          branding.brandIcon !== "claw"
-            ? html`<span
-                class="sidebar-workspace-header__mark sidebar-workspace-header__mark--neutral"
-                aria-hidden="true"
-                >${renderThemeBrandIcon(icons.lobster, branding)}</span
-              >`
-            : html`<span class="sidebar-workspace-header__mark" aria-hidden="true"
-                >${icons.lobster}</span
-              >`
-        }
-        <span class="sidebar-agent-card__text">
-          <span class="sidebar-agent-card__name">
-            ${renderHoverMarquee(name, "sidebar-agent-card__name-text", { loop: true, delay: 300, speed: 35 })}
-            <span class="sidebar-agent-card__chevron" aria-hidden="true"
-              >${icons.chevronsUpDown}</span
-            >
-          </span>
+    <openclaw-tooltip .content=${name}
+      ><div class="sidebar-workspace-header sidebar-workspace-header--rail">
+        <button
+          type="button"
+          class="sidebar-workspace-header__main"
+          aria-haspopup="menu"
+          aria-expanded=${String(menuOpen)}
+          aria-label="${name} · ${t("agentChip.workspaceMenuLabel")}"
+          @pointermove=${(event: PointerEvent) => {
+            if (event.currentTarget instanceof HTMLElement) {
+              host.sidebarMenus.scheduleAgentMenuHoverOpen(event.currentTarget, event);
+            }
+          }}
+          @pointerleave=${() => host.sidebarMenus.handleAgentMenuTriggerPointerLeave()}
+          @pointerdown=${(event: PointerEvent) => event.stopPropagation()}
+          @click=${(event: MouseEvent) => {
+            event.stopPropagation();
+            if (event.currentTarget instanceof HTMLElement) {
+              host.sidebarMenus.toggleAgentMenu(event.currentTarget);
+            }
+          }}
+          @contextmenu=${(event: MouseEvent) => {
+            event.preventDefault();
+            if (!menuOpen && event.currentTarget instanceof HTMLElement) {
+              host.sidebarMenus.toggleAgentMenu(event.currentTarget);
+            }
+          }}
+        >
           ${
-            brand.environment
-              ? html`<span class="control-ui-environment-pill">${brand.environment}</span>`
-              : nothing
+            branding.brandIcon !== "claw"
+              ? html`<span
+                  class="sidebar-workspace-header__mark sidebar-workspace-header__mark--neutral"
+                  aria-hidden="true"
+                  >${renderThemeBrandIcon(icons.lobster, branding)}</span
+                >`
+              : html`<span class="sidebar-workspace-header__mark" aria-hidden="true"
+                  >${icons.lobster}</span
+                >`
           }
-        </span>
-      </button>
-    </div>
-  `;
-}
-
-export function renderAppSidebarBrand(
-  host: AppSidebarRenderHost,
-  teamNewSession: unknown = nothing,
-) {
-  const newSessionAccess = host.readNewSessionAccess();
-  const collapseLabel = t("nav.collapse");
-  return html`
-    <div class="sidebar-brand">
-      ${host.sidebarAgentsMode === "roster" ? renderSidebarWorkspaceHeader(host) : renderSidebarAgentCard(host)}
-      <div class="sidebar-brand__actions">
-        <openclaw-tooltip
-          .content=${`${collapseLabel} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar)})`}
-          .contentTemplate=${renderShortcutHint(collapseLabel, KEYBOARD_SHORTCUT_COMBOS.toggleSidebar)}
-        >
-          <button
-            type="button"
-            class="sidebar-brand__icon sidebar-brand__header-control sidebar-brand__desktop-control sidebar-brand__collapse"
-            aria-label=${collapseLabel}
-            aria-expanded="true"
-            ?disabled=${!host.onToggleSidebar}
-            @click=${() => host.onToggleSidebar?.()}
-          >
-            ${icons.panelLeftClose}
-          </button>
-        </openclaw-tooltip>
-        <openclaw-tooltip
-          .content=${`${t("chat.openCommandPalette")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.commandPalette)})`}
-          .contentTemplate=${renderShortcutHint(t("chat.openCommandPalette"), KEYBOARD_SHORTCUT_COMBOS.commandPalette)}
-        >
-          <button
-            type="button"
-            class="sidebar-brand__icon sidebar-brand__header-control sidebar-brand__desktop-control sidebar-brand__search"
-            aria-label=${t("chat.openCommandPalette")}
-            ?disabled=${!host.onOpenPalette}
-            @click=${() => host.onOpenPalette?.()}
-          >
-            ${icons.search}
-          </button>
-        </openclaw-tooltip>
-        ${
-          host.sidebarAgentsMode === "roster"
-            ? renderSidebarSessionFilter(host, "sidebar-brand__icon sidebar-brand__header-control")
-            : nothing
-        }
-        ${
-          host.sidebarAgentsMode === "roster"
-            ? teamNewSession
-            : renderNewSessionLink({
-                basePath: host.basePath,
-                agentId: host.expandedAgentId(),
-                className:
-                  "sidebar-brand__icon sidebar-brand__header-control sidebar-brand__new-thread",
-                label: t("agentChip.newConversation"),
-                showShortcut: true,
-                disabledReason: newSessionAccess.allowed ? undefined : newSessionAccess.reason,
-                onOpen: (agentId, target) => host.requestOpenNewSession(agentId, target),
-              })
-        }
-      </div>
-    </div>
+          <span class="sidebar-agent-card__text">
+            <span class="sidebar-agent-card__name">
+              ${renderHoverMarquee(name, "sidebar-agent-card__name-text", { loop: true, delay: 300, speed: 35 })}
+              <span class="sidebar-agent-card__chevron" aria-hidden="true"
+                >${icons.chevronsUpDown}</span
+              >
+            </span>
+            ${
+              host.sessionDataContext?.config.current.environment
+                ? html`<span class="control-ui-environment-pill"
+                    >${host.sessionDataContext.config.current.environment.label}</span
+                  >`
+                : nothing
+            }
+          </span>
+        </button>
+      </div></openclaw-tooltip
+    >
   `;
 }
 
@@ -316,9 +263,15 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
             class="sidebar-brand__icon sidebar-footer-bar__home"
             aria-label=${t("assistantPanel.toggle")}
             ?disabled=${!isHomePanelAvailable(host.sessionDataContext?.gateway)}
-            @click=${() => {
-              host.personalNavigationEpoch += 1;
+            @click=${(event: MouseEvent) => {
               window.dispatchEvent(new CustomEvent(HOME_PANEL_TOGGLE_EVENT));
+              if (
+                !isMobileNavLayout() &&
+                !host.navigationCollapsed &&
+                shouldHandleNavigationClick(event)
+              ) {
+                host.onToggleSidebar?.();
+              }
             }}
           >
             ${home ? renderSessionLeadingState(home, undefined, "owned", undefined, undefined, false, html`<span class="nav-item__icon" aria-hidden="true">${icons.home}</span>`).leadingIndicator : icons.home}

@@ -299,6 +299,12 @@ describe("LabsPage", () => {
       note: "labs: update codeMode",
     },
     {
+      label: "Speech bubbles",
+      sourceConfig: {},
+      expectedPatch: { gateway: { controlUi: { experimental: { chatBubbles: true } } } },
+      note: "labs: update chatBubbles",
+    },
+    {
       label: "Custom plugin UI",
       sourceConfig: {},
       expectedPatch: { gateway: { controlUi: { experimental: { customPlugins: true } } } },

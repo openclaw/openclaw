@@ -23,6 +23,7 @@ import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-rea
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 
 const requireRecord = createRequireRecord("record", "expected-object-value");
 const agentIds = ["main", "second", "third", "fourth", "fifth"];
@@ -597,10 +598,7 @@ suite.define(() => {
           ]);
 
           // Category membership spans accessible owners, beyond the default Mine scope.
-          await page
-            .locator(".sidebar-navigation-scope")
-            .getByRole("button", { name: "All", exact: true })
-            .click();
+          await selectAllSidebarSessions(page);
           const otherKey = "agent:fifth:search-roster-4";
           await page
             .locator(

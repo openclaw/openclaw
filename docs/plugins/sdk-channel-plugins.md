@@ -71,6 +71,16 @@ creator/admin authority or change Team collaboration permissions. Consumers
 of `onVisibleWorkSessions` may use `publicRead: true` as the creation receipt;
 a canonical URL alone is not proof of anonymous access.
 
+The host awaits `onVisibleWorkSessions(sessions, creation)` for fresh visible
+children before their first turn starts, so a channel can persist session-scoped
+origin context before prompt assembly. The optional second argument supplies
+`creation.createdSessionKey` even when there is no public Gateway origin or the
+Control UI is disabled; in that case `sessions` is empty. Existing one-argument
+consumers still receive only usable URL descriptors. The callback may receive the
+same child again when the parent turn settles; make writes idempotent by child
+session key. Only immediate children of that turn are reported. Return a Promise
+when initialization must finish before the child runs.
+
 ## Walkthrough
 
 <Steps>
@@ -364,6 +374,10 @@ a canonical URL alone is not proof of anonymous access.
       Send contexts also include `replyToIdSource` (`implicit` or `explicit`)
       when a native reply target was resolved, so payload helpers can preserve
       explicit reply tags without consuming an implicit single-use reply slot.
+      The optional `sessionKey` identifies the host-resolved session that produced
+      the send, including core-routed and durable sends. It is the source session,
+      not a session inferred from the delivery target or its policy. It does not
+      identify whether the current turn came from a user or an internal event.
 
       For payload planning, `openclaw/plugin-sdk/channel-outbound` exports
       `createOutboundPayloadPlan(payloads, context)` for raw reply text, including
@@ -407,6 +421,16 @@ a canonical URL alone is not proof of anonymous access.
       Entries can also carry `sourceUrls` for references staged by the host. When recording
       delivered media, request entries for only the URLs confirmed accepted by the transport;
       source aliases for removed or unsent media are not delivery evidence.
+
+      A block with `ReplyPayload.textMode: "delta"` carries a disjoint text chunk.
+      Preview adapters append it within the current answer lane; omitted `textMode`
+      means a replacement snapshot. Never infer this from matching prefixes.
+      Finals always replace, and durable sends/transcripts use the payload's own
+      `text`, not an accumulated preview. A text-rewriting delivery modifier clears
+      delta mode so its replacement remains authoritative. When appending a chunk
+      to an existing preview, use `stripReplyPayloadResponsePrefix(payload, text)`
+      to remove only the response prefix recorded by normalization; retain the
+      decorated text for the first chunk and for independent durable sends.
 
       Streaming delivery can carry one `OutboundPayloadPlan` through the optional
       `onPreparedBlockReply(plan, context)`, dispatcher `sendPreparedReply(kind, plan)`,

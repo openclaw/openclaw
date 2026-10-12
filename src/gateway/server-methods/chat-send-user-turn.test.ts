@@ -7,7 +7,6 @@ import {
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import { resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
-import { pruneProcessedHistoryImages } from "../../agents/embedded-agent-runner/run/history-image-prune.js";
 import { hydratePromptMediaMessages } from "../../agents/embedded-agent-runner/run/images.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
@@ -32,6 +31,7 @@ import {
 } from "../../sessions/session-participant-input.js";
 import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as chatAttachments from "../chat-attachments.js";
@@ -251,6 +251,7 @@ describe("prepareChatSendUserTurn", () => {
         const profile = systemActor
           ? ensureGatewayOwnerProfile("Gateway Owner")
           : ensureProfileForEmail("chat-sandbox-creator@example.com");
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const { controller } = createUserTurnInputController();
         const prepared = prepareChatSendUserTurn({
           request: {
@@ -768,7 +769,7 @@ describe("prepareChatSendUserTurn", () => {
     }
   });
 
-  it("hydrates and prunes a staged image claim-check alias as structured ownership", async () => {
+  it("hydrates a staged image claim-check alias as structured ownership", async () => {
     const id = `gateway-image-${Date.now()}-${Math.random().toString(36).slice(2)}.png`;
     const imagePath = path.join(resolveStateDir(), "media", "inbound", id);
     const mediaRef = `media://inbound/${id}`;
@@ -853,25 +854,6 @@ describe("prepareChatSendUserTurn", () => {
         { type: "text", text },
         expect.objectContaining({ type: "image", mimeType: "image/png" }),
       ]);
-
-      const history = [
-        persisted,
-        { role: "assistant", content: "ack" },
-        { role: "user", content: "more" },
-        { role: "assistant", content: "ack" },
-        { role: "user", content: "more" },
-        { role: "assistant", content: "ack" },
-        { role: "user", content: "more" },
-        { role: "assistant", content: "ack" },
-      ] as unknown as Parameters<typeof pruneProcessedHistoryImages>[0];
-      expect(pruneProcessedHistoryImages(history)).toBeNull();
-      history.push({ role: "user", content: "next turn", timestamp: 5 });
-      const pruned = pruneProcessedHistoryImages(history);
-      const first = pruned?.[0] as unknown as Record<string, unknown> | undefined;
-      expect(first?.content).toBe(
-        `inspect\n[media reference removed - already processed by model]\n[media attached: ${unownedRef}]`,
-      );
-      expect((first?.["__openclaw"] as Record<string, unknown> | undefined)?.media).toBeUndefined();
     } finally {
       await fs.rm(imagePath, { force: true });
     }

@@ -640,25 +640,28 @@ export function throwFallbackFailureSummary(params: {
   });
 }
 
-export function resolveFallbackSoonestCooldownExpiry(params: {
+export async function resolveFallbackSoonestCooldownExpiry(params: {
   authRuntime: ModelFallbackAuthRuntime | null;
   userLockedAuthProfileId?: string;
   agentDir?: string;
   cfg: OpenClawConfig | undefined;
   profileIdsByCandidate: ReadonlyMap<ModelCandidate, string[]>;
-}): number | null {
+}): Promise<number | null> {
   if (!params.authRuntime || params.profileIdsByCandidate.size === 0) {
     return null;
   }
   // Reload attempt-written cooldowns without losing the admitted profile scope.
-  const refreshedStore = params.authRuntime.loadAuthProfileStoreForRuntime(params.agentDir, {
-    readOnly: true,
-    profileId: params.userLockedAuthProfileId,
-    externalCli: externalCliDiscoveryForProviders({
-      cfg: params.cfg,
-      providers: [...params.profileIdsByCandidate.keys()].map((candidate) => candidate.provider),
-    }),
-  });
+  const refreshedStore = await params.authRuntime.loadAuthProfileStoreForRuntimeAsync(
+    params.agentDir,
+    {
+      readOnly: true,
+      profileId: params.userLockedAuthProfileId,
+      externalCli: externalCliDiscoveryForProviders({
+        cfg: params.cfg,
+        providers: [...params.profileIdsByCandidate.keys()].map((candidate) => candidate.provider),
+      }),
+    },
+  );
   let soonest: number | null = null;
   for (const [candidate, ids] of params.profileIdsByCandidate) {
     const candidateSoonest = params.authRuntime.getSoonestCooldownExpiry(refreshedStore, ids, {

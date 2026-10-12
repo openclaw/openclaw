@@ -176,7 +176,7 @@ describe("submitEmbeddedAttemptPrompt foreground dispatch", () => {
         });
       const setPreparation = installAttemptPermissionPrompt({
         activeSession: session,
-        attempt: {},
+        attempt: { model: { api: "anthropic-messages" } },
         runAbortSignal: new AbortController().signal,
         setActiveSessionSystemPrompt: (prompt) => {
           session.setBaseSystemPrompt(prompt);

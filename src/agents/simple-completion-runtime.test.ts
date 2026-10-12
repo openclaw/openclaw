@@ -63,8 +63,10 @@ vi.mock("./embedded-agent-runner/model.js", () => ({
   resolveModelAsync: hoisted.resolveModelAsyncMock,
 }));
 
+// mock-isolation: Completion credential binding uses the fixture store without loading host profiles.
 vi.mock("./auth-profiles/store-runtime.js", () => ({
   ensureAuthProfileStore: hoisted.ensureAuthProfileStoreMock,
+  ensureAuthProfileStoreAsync: hoisted.ensureAuthProfileStoreMock,
 }));
 
 vi.mock("./auth-profiles/usage.js", () => ({

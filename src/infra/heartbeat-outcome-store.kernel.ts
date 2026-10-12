@@ -7,7 +7,7 @@ type HeartbeatDatabase = Pick<OpenClawAgentKyselyDatabase, "heartbeat_outcomes" 
 export type HeartbeatOutcomeInput = Insertable<OpenClawAgentKyselyDatabase["heartbeat_outcomes"]>;
 export type HeartbeatOutcomeRow = Selectable<OpenClawAgentKyselyDatabase["heartbeat_outcomes"]>;
 
-/** The caller owns the synchronous transaction and its current admission. */
+/** The caller admits this single atomic statement before execution. */
 export function persistHeartbeatOutcomeInDatabase(
   db: DatabaseSync,
   values: HeartbeatOutcomeInput,

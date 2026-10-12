@@ -67,6 +67,10 @@ export function registerQueuedStopControlTests({
       const runningFixture = createSubagentRunRecord({
         runId: "running-collector",
         childSessionKey: "agent:main:subagent:running-collector",
+        childSessionIdentity: {
+          sessionId: "running-session",
+          lifecycleRevision: "running-session-revision",
+        },
         controllerSessionKey,
         requesterSessionKey: controllerSessionKey,
         task: "running collector",
@@ -78,6 +82,10 @@ export function registerQueuedStopControlTests({
         ...runningFixture,
         runId: "queued-collector",
         childSessionKey: "agent:main:subagent:queued-collector",
+        childSessionIdentity: {
+          sessionId: "queued-session",
+          lifecycleRevision: "queued-session-revision",
+        },
         controllerSessionKey: kind.endsWith("tree")
           ? runningFixture.childSessionKey
           : controllerSessionKey,
@@ -316,6 +324,7 @@ export function registerRequestFrontierControlTests(fixture: { readonly stateDir
           sessionKey: key,
           agentId: "main",
           defaultSessionId: `session-${key}`,
+          lifecycleRevision: `session-${key}-revision`,
         });
       }
       const cfg = getRuntimeConfig();
@@ -422,6 +431,11 @@ export function registerRequestFrontierControlTests(fixture: { readonly stateDir
             {
               runId: childRunId,
               childSessionKey,
+              childAgentId: "main",
+              sessionEntry: {
+                sessionId: `session-${childSessionKey}`,
+                lifecycleRevision: `session-${childSessionKey}-revision`,
+              },
               requesterSessionKey: identity.sessionKey,
               requesterAgentId: "main",
               requesterTurnRunId,

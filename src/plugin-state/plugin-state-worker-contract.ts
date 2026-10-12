@@ -90,7 +90,6 @@ export type PluginStateWorkerRequests = {
     input: Namespace & { processId: number; selection: RuntimeHealthClearSelection };
     output: void;
   };
-  "pluginState.sweep": { input: undefined; output: number };
 };
 
 export type PluginStateWorkerOperations = {
@@ -204,11 +203,6 @@ export const pluginStateWorkerOperations = {
     operation: "clear",
     code: "PLUGIN_STATE_WRITE_FAILED",
     message: "Failed to clear runtime health records.",
-  },
-  "pluginState.sweep": {
-    operation: "sweep",
-    code: "PLUGIN_STATE_WRITE_FAILED",
-    message: "Failed to sweep expired plugin state entries.",
   },
 } as const satisfies Record<
   keyof PluginStateWorkerOperations,

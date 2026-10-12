@@ -11,6 +11,14 @@ export type SessionUsageQuery = {
   timeZone: "local" | "utc";
   agentId?: string;
   creatorKey?: string;
+  query?: string;
+  selectedDays?: string[];
+  selectedHours?: number[];
+  selectedSessions?: string[];
+  recentKeys?: string[];
+  offset?: number;
+  sort?: "recent" | "tokens" | "cost" | "messages" | "errors";
+  sortDirection?: "asc" | "desc";
 };
 
 function formatUtcOffset(timezoneOffsetMinutes: number): string {
@@ -37,7 +45,13 @@ function buildSessionUsageDateParams(timeZone: "local" | "utc") {
 export function requestSessionUsage(
   client: SessionRequestClient,
   query: SessionUsageQuery,
-  options?: { key?: string; includeContextWeight?: boolean; signal?: AbortSignal },
+  options?: {
+    key?: string;
+    projection?: "overview";
+    limit?: number;
+    includeContextWeight?: boolean;
+    signal?: AbortSignal;
+  },
 ): Promise<SessionsUsageResult> {
   const key = options?.key;
   const params = {
@@ -47,7 +61,20 @@ export function requestSessionUsage(
     ...buildSessionUsageDateParams(query.timeZone),
     ...(query.creatorKey ? { creatorKey: query.creatorKey } : {}),
     groupBy: query.scope,
-    ...(key ? { key, limit: 1 } : { limit: 1000 }),
+    ...(key
+      ? { key, limit: 1 }
+      : {
+          limit: options?.limit ?? (options?.projection === "overview" ? 50 : 1000),
+          ...(options?.projection ? { projection: options.projection } : {}),
+          ...(query.query ? { query: query.query } : {}),
+          ...(query.selectedDays?.length ? { selectedDays: query.selectedDays } : {}),
+          ...(query.selectedHours?.length ? { selectedHours: query.selectedHours } : {}),
+          ...(query.selectedSessions?.length ? { selectedSessions: query.selectedSessions } : {}),
+          ...(query.offset ? { offset: query.offset } : {}),
+          ...(query.recentKeys ? { recentKeys: query.recentKeys } : {}),
+          ...(query.sort ? { sort: query.sort } : {}),
+          ...(query.sortDirection ? { sortDirection: query.sortDirection } : {}),
+        }),
     includeContextWeight: options?.includeContextWeight === true,
   };
   return options?.signal

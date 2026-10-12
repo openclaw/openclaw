@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
-import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
+import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { applyMergePatch } from "../config/merge-patch.js";
@@ -71,12 +71,12 @@ export function selectSetupCredential(
   );
 }
 
-export function isSetupCredentialReplacement(params: {
+export async function isSetupCredentialReplacement(params: {
   provider: string;
   baseConfig: OpenClawConfig;
   agentDir: string;
-}): boolean {
-  const store = loadAuthProfileStoreWithoutExternalProfiles(params.agentDir);
+}): Promise<boolean> {
+  const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(params.agentDir);
   const provider = resolveProviderIdForAuth(params.provider, {
     config: params.baseConfig,
     storedCredential: true,
@@ -113,7 +113,7 @@ export async function saveSetupCredential(params: {
   /** Retains the wizard auth owner's selected state directory and cancellation boundary. */
   persistAuthProfiles?: (profiles: ProviderAuthResult["profiles"]) => Promise<void>;
 }): Promise<{ profile: ProviderAuthResult["profiles"][number]; config: OpenClawConfig }> {
-  const replacement = isSetupCredentialReplacement({
+  const replacement = await isSetupCredentialReplacement({
     ...params,
     provider: params.profile.credential.provider,
   });
@@ -165,9 +165,8 @@ export async function saveSetupCredential(params: {
   await params.beforePersistentEffect?.();
   if (params.persistAuthProfiles) {
     await params.persistAuthProfiles([candidate]);
-    const credential = loadAuthProfileStoreWithoutExternalProfiles(params.agentDir).profiles[
-      candidate.profileId
-    ];
+    const credential = (await loadAuthProfileStoreWithoutExternalProfilesAsync(params.agentDir))
+      .profiles[candidate.profileId];
     if (!credential) {
       throw new Error(
         "The saved setup credential could not be read. Check Model Setup before retrying.",
@@ -281,7 +280,7 @@ export async function stageSavedAuthCandidate(
   ctx: StageContext,
   profileId: string,
 ): Promise<StagedCandidate | StageFailure> {
-  const store = loadAuthProfileStoreWithoutExternalProfiles(ctx.agentDir);
+  const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(ctx.agentDir);
   const credential = store.profiles[profileId];
   if (!credential) {
     return {
@@ -569,7 +568,7 @@ export async function stageProviderAuthCandidate(
         }
         throwIfSetupInferenceCancelled(params);
         const store = interactive
-          ? loadAuthProfileStoreWithoutExternalProfiles(ctx.agentDir)
+          ? await loadAuthProfileStoreWithoutExternalProfilesAsync(ctx.agentDir)
           : undefined;
         let result = await waitForProviderAuth(
           runProviderPluginAuthMethodUnpersisted({

@@ -246,13 +246,12 @@ describe("application shell pairing access", () => {
     "does not rerender navigation chrome for unrelated shell updates (outbox runtime: %s)",
     async (withOutboxes) => {
       vi.useFakeTimers();
-      const { shell, context, renderSidebar, container, overlaySnapshot } = createPairingShell({
+      const { shell, renderSidebar, container, overlaySnapshot } = createPairingShell({
         auth: { role: "operator", scopes: ["operator.admin"] },
       });
       // This render-isolation case observes an ordinary conversation in the All list,
       // not the compact Home control, which no longer has a row endcap.
       const sessionKey = "agent:main:queued";
-      Object.assign(context.navigation.snapshot, { navigationScope: "all" });
       let storedOutboxes = {
         total: 1,
         sessions: [

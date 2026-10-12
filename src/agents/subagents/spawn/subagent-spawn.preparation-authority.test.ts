@@ -392,8 +392,9 @@ describe("pending spawn preparation authority", () => {
         ],
       );
     }
-    const readChildKey = () =>
-      listSessionChildEntriesReadOnly({ storePath, sessionKey: parentSessionKey })[0]!.sessionKey;
+    const readChildKey = async () =>
+      (await listSessionChildEntriesReadOnly({ storePath, sessionKey: parentSessionKey }))[0]!
+        .sessionKey;
     const attachmentFixture = hasAttachments
       ? installSpawnAttachmentFixture({
           stateDir: fixture.stateDir,
@@ -404,7 +405,7 @@ describe("pending spawn preparation authority", () => {
               : closure === "native attachment files"
                 ? "files"
                 : undefined,
-          entered: () => entered.resolve(readChildKey()),
+          entered: async () => entered.resolve(await readChildKey()),
           release: release.promise,
         })
       : undefined;
@@ -431,7 +432,7 @@ describe("pending spawn preparation authority", () => {
       },
       resolveContextEngine: async () => {
         if (closure === "native engine resolution") {
-          entered.resolve(readChildKey());
+          entered.resolve(await readChildKey());
           await release.promise;
         }
         return Object.assign(new LegacyContextEngine(), { prepareSubagentSpawn: prepare });

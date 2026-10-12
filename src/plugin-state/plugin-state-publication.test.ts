@@ -27,7 +27,6 @@ import {
   clearPluginStateStoreForTests,
   seedPluginStateEntriesForTests,
 } from "./plugin-state-store.test-helpers.js";
-import { sweepExpiredPluginStateEntriesInWorker } from "./plugin-state-worker-client.js";
 import { executePluginStateCommand } from "./plugin-state.worker.js";
 
 type PluginStateChange = Parameters<Parameters<typeof pluginStatePublication.subscribe>[0]>[0];
@@ -170,8 +169,8 @@ describe("plugin state committed facts", () => {
     );
   });
 
-  it("delivers empty sweep receipts at settlement and changed sweeps immediately", async () => {
-    await withOpenClawTestState({ label: "plugin-state-empty-sweep-delivery" }, async ({ env }) => {
+  it("delivers empty deletion receipts at settlement and changed deletions immediately", async () => {
+    await withOpenClawTestState({ label: "plugin-state-delete-receipts" }, async ({ env }) => {
       const database = openOpenClawStateDatabase({ env });
       for (const changed of [false, true]) {
         if (changed) {
@@ -204,13 +203,16 @@ describe("plugin state committed facts", () => {
         try {
           const result = admission.withSqliteWorkerOperationAdmission(owner, () =>
             executePluginStateCommand(
-              { type: "pluginState.sweep", input: undefined },
+              {
+                type: "pluginState.delete",
+                input: { pluginId: "receipt-test", namespace: "receipts", key: "expired" },
+              },
               { path: database.path, env },
               () => database,
               true,
             ),
           );
-          expect(result).toEqual({ ok: true, value: Number(changed) });
+          expect(result).toEqual({ ok: true, value: changed });
           expect(
             database.db.prepare("SELECT count(*) AS count FROM plugin_state_entries").get(),
           ).toEqual({ count: 0 });
@@ -424,7 +426,7 @@ describe("plugin state committed facts", () => {
     });
   });
 
-  it("installs whole worker receipts before atomic operation replies, including sweep", async () => {
+  it("installs whole worker receipts before atomic operation replies and write-time expiry", async () => {
     await withOpenClawTestState({ label: "plugin-state-worker-facts" }, async ({ env }) => {
       const store = createPluginStateKeyedStore("receipt-test", {
         namespace: "receipts",
@@ -454,9 +456,8 @@ describe("plugin state committed facts", () => {
             expiresAt: 1,
           },
         ]);
-        expect(await sweepExpiredPluginStateEntriesInWorker({ env })).toBe(1);
-        expect(seen.fact("expired")).toEqual({ kind: "absent" });
         await store.register("a", true);
+        expect(seen.fact("expired")).toEqual({ kind: "absent" });
         await store.register("b", true);
         await store.clear();
         const clear = seen.changes.findLast((change) => change.kind === "committed");

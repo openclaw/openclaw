@@ -1,6 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
 import { serialize } from "node:v8";
-import { readSqliteDatabasePendingWriteToken } from "../../infra/sqlite-database-admission.js";
+import {
+  readSqliteDatabasePendingWriteToken,
+  readSqliteDatabaseWriteTokenForPath,
+} from "../../infra/sqlite-database-admission.js";
 import { readSqliteNativeMutationRevision } from "../../infra/sqlite-schema-facts.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { SessionEntryPublicationSource } from "./session-accessor.sqlite-entry-cache.types.js";
@@ -25,6 +28,12 @@ const selectedSources = resolveGlobalSingleton(
     >(),
 );
 
+/** Dropped optional facts cannot be certified again when native publication settles. */
+export function discardSessionEntryPublicationSource(source: SessionEntryPublicationSource): void {
+  selectedSources.delete(source);
+  delete source.writeToken;
+}
+
 /** Selection and final serialization must describe the same native transaction state. */
 export function captureSessionEntryPublicationSource(
   database: DatabaseSync,
@@ -37,11 +46,13 @@ export function captureSessionEntryPublicationSource(
   return source;
 }
 
-/** Called only at the writer's final candidate serialization, after its last row mutation. */
+/** Seal final worker candidates or committed native publications after their last row mutation. */
 export function sealSessionEntryPublicationSource(source: SessionEntryPublicationSource): void {
   const selected = selectedSources.get(source);
   source.writeToken =
     selected && readSqliteNativeMutationRevision(selected.database) === selected.mutationRevision
-      ? readSqliteDatabasePendingWriteToken(selected.database)
+      ? selected.database.isTransaction
+        ? readSqliteDatabasePendingWriteToken(selected.database)
+        : readSqliteDatabaseWriteTokenForPath(source.canonicalPath ?? source.filename)
       : undefined;
 }

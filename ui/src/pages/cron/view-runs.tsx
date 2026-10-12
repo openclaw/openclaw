@@ -477,11 +477,7 @@ function Run(props: {
             <div>
               <button
                 class="btn btn--sm"
-                onClick={(event: MouseEvent) => {
-                  if (event.currentTarget instanceof HTMLButtonElement) {
-                    props.onViewRunTranscript?.(props.entry, event.currentTarget);
-                  }
-                }}
+                onClick={(event) => props.onViewRunTranscript?.(props.entry, event.currentTarget)}
               >
                 {t("cron.runEntry.viewTranscript")}
               </button>

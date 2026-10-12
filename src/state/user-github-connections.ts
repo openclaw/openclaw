@@ -1,24 +1,22 @@
+import { normalizeDatabasePath } from "../infra/sqlite-worker-identity.js";
 import {
   createSqliteWorkerOperationAdmission,
   observeSqliteWorkerCommittedFacts,
 } from "../infra/sqlite-worker-operation-admission.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabaseOptions,
-} from "./openclaw-state-db.js";
+import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
 import {
   captureOpenClawStateReadWorkerContext,
   captureOpenClawStateWorkerContext,
 } from "./openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "./openclaw-state-worker-store.js";
-import { publishUserGitHubConnectionCommit } from "./user-github-connection-events.js";
+import {
+  observeUserGitHubConnectionAuthority,
+  publishUserGitHubConnectionCommit,
+} from "./user-github-connection-events.js";
 import {
   cancelUserGitHubAuthorizationInDatabase,
   disconnectUserGitHubConnectionInDatabase,
   parseUserGitHubConnection,
-  readUserGitHubConnectionInDatabase,
-  resolvePersonalGitHubOwnerInDatabase,
 } from "./user-github-connections.kernel.js";
 import {
   isUserGitHubConnectionCommit,
@@ -36,20 +34,69 @@ export type {
   UserGitHubDevice,
 } from "./user-github-connections.types.js";
 
-/** Native final-effect guard; preparation uses the shared-state worker. */
-export function resolvePersonalGitHubOwner(
-  profile: string,
-  db = openOpenClawStateDatabase().db,
-): string | undefined {
-  return resolvePersonalGitHubOwnerInDatabase(profile, db);
+export class UserGitHubConnectionAuthorityChangedError extends Error {
+  constructor() {
+    super("My GitHub connection changed; reload its status.");
+  }
 }
 
-/** Native final-effect guard; never substitute a pre-await connection snapshot. */
-export function readUserGitHubConnection(
-  owner: string,
-  database?: OpenClawStateDatabaseOptions,
-): UserGitHubConnection | undefined {
-  return readUserGitHubConnectionInDatabase(openOpenClawStateDatabase(database).db, owner);
+const connectionAuthorities = new Map<string, Map<string, { current: boolean }>>();
+observeUserGitHubConnectionAuthority(({ databasePath, changedOwners }) => {
+  const authorities = connectionAuthorities.get(databasePath);
+  if (!authorities) {
+    return;
+  }
+  for (const owner of changedOwners) {
+    const authority = authorities.get(owner);
+    if (authority) {
+      authority.current = false;
+      authorities.delete(owner);
+    }
+  }
+});
+
+/** Worker facts retain live credential authority through in-process write receipts. */
+export async function prepareUserGitHubConnection(owner: string) {
+  const context = captureOpenClawStateReadWorkerContext();
+  const databasePath = normalizeDatabasePath(context.admission.databasePath);
+  let authorities = connectionAuthorities.get(databasePath);
+  if (!authorities) {
+    authorities = new Map();
+    connectionAuthorities.set(databasePath, authorities);
+  }
+  let authority = authorities.get(owner);
+  if (!authority) {
+    authority = { current: true };
+    authorities.set(owner, authority);
+  }
+  const capturedAuthority = authority;
+  const assertCurrent = () => {
+    context.admission.assertCurrent();
+    if (!capturedAuthority.current) {
+      throw new UserGitHubConnectionAuthorityChangedError();
+    }
+  };
+  const connection = await runOpenClawStateWorkerOperation(
+    context,
+    (scope) => scope.execute({ type: "userGitHubConnections.read", input: { owner } }),
+    { existingOnly: true },
+  );
+  assertCurrent();
+  return {
+    connection: connection ? parseUserGitHubConnection(JSON.stringify(connection)) : undefined,
+    assertCurrent,
+  };
+}
+
+export async function resolvePersonalGitHubOwnerAsync(profile: string) {
+  const context = captureOpenClawStateReadWorkerContext();
+  const resolved = await runOpenClawStateWorkerOperation(
+    context,
+    (scope) => scope.execute({ type: "userGitHubConnections.resolveOwner", input: { profile } }),
+    { existingOnly: true },
+  );
+  context.admission.assertCurrent();
+  return resolved;
 }
 
 /** Native adapter for the released synchronous personal OAuth service contract. */
@@ -58,17 +105,10 @@ export function cancelUserGitHubAuthorizationSync(
   requestId: string,
   assertCurrent: () => void,
 ): boolean {
-  assertCurrent();
-  if (readUserGitHubConnection(owner)?.pending?.requestId !== requestId) {
-    return false;
-  }
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       assertCurrent();
-      if (!cancelUserGitHubAuthorizationInDatabase(db, owner, requestId)) {
-        throw new Error("My GitHub authorization changed.");
-      }
-      return true;
+      return Boolean(cancelUserGitHubAuthorizationInDatabase(db, owner, requestId));
     },
     undefined,
     { operationLabel: "users.github.cancel" },
@@ -77,7 +117,6 @@ export function cancelUserGitHubAuthorizationSync(
 
 /** Native adapter for the released synchronous personal OAuth service contract. */
 export function disconnectUserGitHubConnectionSync(owner: string, assertCurrent: () => void): void {
-  assertCurrent();
   runOpenClawStateWriteTransaction(
     ({ db }) => {
       assertCurrent();

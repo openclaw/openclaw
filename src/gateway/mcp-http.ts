@@ -10,7 +10,7 @@ import {
   withGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { resolveSessionEntryAccessTarget } from "../config/sessions/session-accessor.js";
+import { readResolvedSessionEntryInWorker } from "../config/sessions/session-accessor.entry.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isRequestBodyLimitError, readRequestBodyWithLimit } from "../infra/http-body.js";
 import {
@@ -255,7 +255,7 @@ async function startMcpLoopbackServer(
           getActiveMcpLoopbackRuntime()?.ownerToken === ownerToken &&
           isGrantAndLineageCurrent();
         const harnessEntry = isAgentHarnessSessionKey(requestContext.sessionKey)
-          ? resolveSessionEntryAccessTarget({ cfg, sessionKey: requestContext.sessionKey }).entry
+          ? await readResolvedSessionEntryInWorker({ cfg, sessionKey: requestContext.sessionKey })
           : undefined;
         if (
           isAgentHarnessSessionKey(requestContext.sessionKey) &&

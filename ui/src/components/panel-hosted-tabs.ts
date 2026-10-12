@@ -4,7 +4,10 @@ export const PANEL_HOSTED_TABS_CHANGE_EVENT = "openclaw:panel-hosted-tabs-change
 
 const hostedTabsChangeKeys = new WeakMap<HTMLElement, string>();
 
-export function notifyPanelHostedTabsChanged(element: HTMLElement, facts: unknown[]): void {
+export function notifyPanelHostedTabsChanged(
+  element: HTMLElement,
+  facts: readonly unknown[],
+): void {
   const key = JSON.stringify(facts);
   if (hostedTabsChangeKeys.get(element) !== key) {
     hostedTabsChangeKeys.set(element, key);

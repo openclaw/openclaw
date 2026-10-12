@@ -1,8 +1,8 @@
 import { html, render, type LitElement } from "lit";
 import { expect, it, vi } from "vitest";
-import type { SettingsSaveIndicatorProps } from "./settings-save-indicator.ts";
+import type { SettingsSaveIndicatorProps } from "./settings-save-indicator.tsx";
 import { renderSettingsSegmented } from "./settings-ui.ts";
-import "./settings-save-indicator.ts";
+import "./settings-save-indicator.tsx";
 import startupStyles from "../styles.css?inline";
 
 function drawRadioGroups(

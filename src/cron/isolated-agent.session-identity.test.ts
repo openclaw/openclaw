@@ -7,6 +7,7 @@ import * as modelThinkingDefault from "../agents/model-thinking-default.js";
 import { SessionManager } from "../agents/sessions/index.js";
 import * as thinking from "../auto-reply/thinking.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import {
@@ -158,6 +159,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
       await withTempHome(async (home) => {
         const storePath = await writeSessionStore(home, { delivery: { kind: "internal" } });
         const profile = ensureProfileForEmail("cron-creator@example.test");
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const createdActor = { type: "human" as const, source, id: profile.id };
         const job: CronStoredJob = {
           ...makeJob({ kind: "agentTurn", message: "persist this turn" }),

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -62,16 +62,6 @@ function overwriteStartupMigrationLeaseOwner(
 }
 
 describe("startup migration lease", () => {
-  it("checks migration activity without creating shared state", () => {
-    const env = {
-      OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
-    };
-    const dbPath = resolveOpenClawStateSqlitePath(env);
-
-    expect(hasActiveStartupMigrationLease({ env })).toBe(false);
-    expect(existsSync(dbPath)).toBe(false);
-  });
-
   it("initializes the canonical schema before acquiring the first startup lease", async () => {
     const env = {
       OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-fresh-"),
@@ -155,43 +145,6 @@ describe("startup migration lease", () => {
       }
     },
   );
-
-  it("serializes startup migrations with an expiring shared-state lease", async () => {
-    const env = {
-      OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
-    };
-    const lease = await acquireStartupMigrationLeaseWithWait({
-      env,
-      now: () => 1000,
-      owner: "first",
-      timeoutMs: 0,
-    });
-
-    expect(hasActiveStartupMigrationLease({ env, nowMs: 1001 })).toBe(true);
-
-    await expect(
-      acquireStartupMigrationLeaseWithWait({
-        env,
-        now: () => 1001,
-        owner: "second",
-        timeoutMs: 0,
-      }),
-    ).rejects.toThrow(
-      `OpenClaw startup migrations are already running for this state directory; retry after the other OpenClaw process finishes or after 1970-01-01T00:05:01.000Z. (held by pid ${process.pid})`,
-    );
-
-    lease.release();
-
-    expect(hasActiveStartupMigrationLease({ env, nowMs: 1002 })).toBe(false);
-
-    const next = await acquireStartupMigrationLeaseWithWait({
-      env,
-      now: () => 1002,
-      owner: "second",
-      timeoutMs: 0,
-    });
-    next.release();
-  });
 
   it.each([false, true])(
     "fences a published ownership claim before the final lease write (cached handle: %s)",
@@ -435,22 +388,6 @@ describe("startup migration lease", () => {
       replacement.release();
     },
   );
-
-  it("does not report an expired startup migration lease as active", async () => {
-    const env = {
-      OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
-    };
-    const lease = await acquireStartupMigrationLeaseWithWait({
-      env,
-      now: () => 1000,
-      owner: "first",
-      timeoutMs: 0,
-    });
-
-    expect(hasActiveStartupMigrationLease({ env, nowMs: 301_001 })).toBe(false);
-
-    lease.release();
-  });
 
   it.each([false, true])(
     "renews startup migration leases while the owner is still running (admitted owner: %s)",

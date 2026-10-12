@@ -56,7 +56,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-group-policy";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import {
-  getSessionEntry,
+  getSessionEntryAsync,
   readSessionUpdatedAtAsync,
   resolveSendPolicy,
   resolveStorePath,
@@ -768,7 +768,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
       cfg.agents?.defaults?.typingMode;
     const sendPolicy = resolveSendPolicy({
       cfg,
-      entry: getSessionEntry({ storePath, sessionKey: decision.route.sessionKey }),
+      entry: await getSessionEntryAsync({ storePath, sessionKey: decision.route.sessionKey }),
       sessionKey: decision.route.sessionKey,
       channel: "imessage",
       chatType: decision.isGroup ? "group" : "direct",

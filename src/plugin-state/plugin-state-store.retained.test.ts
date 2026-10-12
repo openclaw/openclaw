@@ -1,9 +1,6 @@
 import { afterEach, describe, expect, it, afterAll, beforeAll, beforeEach, vi } from "vitest";
 import type { OpenRetainedKeyedStoreOptions } from "../plugin-sdk/plugin-state-runtime.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   withOpenClawTestState,
   createOpenClawTestState,
@@ -18,12 +15,10 @@ import {
   importPluginStateEntriesForDoctor,
   registerPluginStateSequencedJournalEntry,
 } from "./plugin-state-store.js";
-import { deleteExpiredPluginStateEntries } from "./plugin-state-store.kernel.js";
 import {
   seedPluginStateEntriesForTests,
   clearPluginStateStoreForTests,
 } from "./plugin-state-store.test-helpers.js";
-import { sweepExpiredPluginStateEntriesInWorker } from "./plugin-state-worker-client.js";
 
 describe("plugin-state-store.retained", () => {
   const pluginId = "retained-storage-test";
@@ -336,6 +331,12 @@ describe("plugin-state-store.expiry", () => {
     }));
   }
 
+  function expiredCount() {
+    return openOpenClawStateDatabase()
+      .db.prepare("SELECT count(*) AS count FROM plugin_state_entries WHERE expires_at <= ?")
+      .get(Date.now())?.count;
+  }
+
   describe("plugin state expiry cleanup", () => {
     it("registerIfAbsent replaces an expired target beyond the namespace cleanup batch", async () => {
       const namespace = "claims-batched-expiry";
@@ -356,38 +357,7 @@ describe("plugin-state-store.expiry", () => {
       });
       await expect(store.registerIfAbsent("zz-target", { version: 2 })).resolves.toBe(true);
       await expect(store.lookup("zz-target")).resolves.toEqual({ version: 2 });
-      expect(await sweepExpiredPluginStateEntriesInWorker()).toBe(1);
-    });
-
-    it("sweeps expired plugin state in bounded batches without touching live rows", async () => {
-      const namespace = "batched-expiry";
-      seedPluginStateEntriesForTests([
-        ...expiredRows(namespace, 2_050).map((row, index) => {
-          row.pluginId = index % 2 === 0 ? "discord" : "telegram";
-          return row;
-        }),
-        { pluginId: "discord", namespace, key: "permanent", value: { durable: true } },
-        {
-          pluginId: "discord",
-          namespace,
-          key: "live",
-          value: { live: true },
-          expiresAt: Date.now() + 86_400_000,
-        },
-        { pluginId: "sibling-plugin", namespace, key: "permanent", value: { sibling: true } },
-      ]);
-      expect(await sweepExpiredPluginStateEntriesInWorker()).toBe(1_024);
-      expect(await sweepExpiredPluginStateEntriesInWorker()).toBe(1_024);
-      expect(await sweepExpiredPluginStateEntriesInWorker()).toBe(2);
-      expect(await sweepExpiredPluginStateEntriesInWorker()).toBe(0);
-      const store = createPluginStateSyncKeyedStore("discord", { namespace, maxEntries: 10 });
-      const sibling = createPluginStateSyncKeyedStore("sibling-plugin", {
-        namespace,
-        maxEntries: 10,
-      });
-      expect(store.lookup("permanent")).toEqual({ durable: true });
-      expect(store.lookup("live")).toEqual({ live: true });
-      expect(sibling.lookup("permanent")).toEqual({ sibling: true });
+      expect(expiredCount()).toBe(1);
     });
 
     it("bounds expired namespace cleanup during update without touching sibling rows", async () => {
@@ -417,16 +387,12 @@ describe("plugin-state-store.expiry", () => {
       expect(store.update("fresh", () => ({ fresh: true }))).toBe(true);
       expect(store.lookup("fresh")).toEqual({ fresh: true });
       expect(store.lookup("permanent")).toEqual({ durable: true });
-      expect(await sweepExpiredPluginStateEntriesInWorker()).toBe(9);
+      expect(expiredCount()).toBe(9);
     });
 
     it("rechecks expiry time and newly written rows after an empty namespace cleanup", () => {
       vi.useFakeTimers();
       vi.setSystemTime(1_000);
-      const sweep = () =>
-        runOpenClawStateWriteTransaction(({ db }) =>
-          deleteExpiredPluginStateEntries(db, Date.now()),
-        );
       const scope = { pluginId: "discord", namespace: "fresh-expiry" };
       const store = createPluginStateSyncKeyedStore(scope.pluginId, {
         namespace: scope.namespace,
@@ -434,11 +400,11 @@ describe("plugin-state-store.expiry", () => {
       });
       seedPluginStateEntriesForTests([{ ...scope, key: "future", value: 1, expiresAt: 1_200 }]);
       store.register("permanent", 2);
-      expect(sweep()).toBe(0);
+      expect(expiredCount()).toBe(0);
 
       vi.setSystemTime(1_200);
       store.register("permanent", 3);
-      expect(sweep()).toBe(0);
+      expect(expiredCount()).toBe(0);
       expect(store.lookup("future")).toBeUndefined();
 
       seedPluginStateEntriesForTests([
@@ -446,7 +412,7 @@ describe("plugin-state-store.expiry", () => {
         { ...scope, namespace: "sibling", key: "expired", value: 5, expiresAt: 1_100 },
       ]);
       store.register("permanent", 6);
-      expect(sweep()).toBe(1);
+      expect(expiredCount()).toBe(1);
       expect(store.entries()).toEqual([{ key: "permanent", value: 6, createdAt: 1_200 }]);
     });
   });

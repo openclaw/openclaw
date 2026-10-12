@@ -106,18 +106,18 @@ function createOpenClawModelRegistry(
 }
 
 /** Captures the effective profile store and its AuthStorage projection as one generation. */
-export function discoverAuthStorageFacts(
+export async function discoverAuthStorageFacts(
   agentDir: string,
   options?: DiscoverAuthStorageOptions,
-): {
+): Promise<{
   authStorage: AuthStorage;
   store: import("./auth-profiles/types.js").AuthProfileStore;
   credentials: import("./agent-auth-credentials.js").AgentCredentialMap;
-} {
+}> {
   const facts =
     options?.skipCredentials === true
       ? { store: { version: 1, profiles: {} }, credentials: {} }
-      : resolveAgentDiscoveryAuthFacts(agentDir, options);
+      : await resolveAgentDiscoveryAuthFacts(agentDir, options);
   return { ...facts, authStorage: AuthStorage.inMemory(facts.credentials) };
 }
 

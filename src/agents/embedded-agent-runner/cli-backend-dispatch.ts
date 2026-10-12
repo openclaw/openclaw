@@ -7,7 +7,7 @@ import { resolvePreparedRunAdmission } from "../admitted-run-context.js";
 import { stripOpenClawMcpToolPrefix } from "../cli-runner/tool-policy.js";
 import { normalizeToolPolicyName } from "../tool-policy.js";
 import { isToolResultError } from "../tool-result-error.js";
-import { resolveEmbeddedCliBackendDispatchEligibility } from "./cli-backend-dispatch-eligibility.js";
+import { resolveEmbeddedCliBackendDispatchEligibilityAsync } from "./cli-backend-dispatch-eligibility.js";
 import { createCliDispatchTranscriptRecorder } from "./cli-backend-dispatch-transcript.js";
 import type { RunEmbeddedAgentInternalParams } from "./run/internal-params.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
@@ -48,7 +48,7 @@ export async function runEmbeddedAgentViaCliBackendIfEligible(
     return undefined;
   }
   const toolsAllow = [...new Set(names)];
-  const eligibility = resolveEmbeddedCliBackendDispatchEligibility(params);
+  const eligibility = await resolveEmbeddedCliBackendDispatchEligibilityAsync(params);
   if (!eligibility) {
     return undefined;
   }

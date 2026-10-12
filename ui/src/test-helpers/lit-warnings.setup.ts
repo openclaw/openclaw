@@ -1,5 +1,8 @@
 import { vi } from "vitest";
+import { installPopoverPolyfill } from "./popover.ts";
 import { installSafeLocalStorageForTesting } from "./storage.ts";
+
+installPopoverPolyfill();
 
 if (typeof document !== "undefined" && !("__vitest_browser__" in globalThis)) {
   // mock-isolation: JSDOM rendering tests assume admission; the real browser gate has E2E coverage.

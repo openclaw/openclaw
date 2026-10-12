@@ -7,7 +7,7 @@ import { replaceSessionEntry } from "./session-accessor.js";
 import {
   resolveExistingAgentSessionStoreTargetsReadOnlyResult,
   type SessionStoreTargetsReadCache,
-} from "./targets-read-availability.js";
+} from "./targets-read-availability.worker.js";
 
 describe("session store availability", () => {
   it("uses admitted per-agent availability without probing session rows", async () => {

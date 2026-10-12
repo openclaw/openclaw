@@ -206,6 +206,12 @@
   --focus: rgba(255, 92, 92, 0.2);
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 80%, transparent);
   --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 16px var(--accent-glow);
+  /* Native primitives keep the typography, timing, and outline previously supplied by the theme. */
+  --control-ui-font-weight-normal: 400;
+  --control-ui-font-weight-semibold: 500;
+  --control-ui-transition-fast: 75ms;
+  --control-ui-focus-ring: solid 0.1875rem var(--ring);
+  --control-ui-focus-ring-offset: 0.0625rem;
 
   --grid-line: rgba(255, 255, 255, 0.03);
 

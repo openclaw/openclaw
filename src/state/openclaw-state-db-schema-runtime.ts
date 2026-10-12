@@ -45,6 +45,7 @@ import {
   repairLegacyGatewayRestartHandoffsForStrictMigration,
 } from "./openclaw-state-db-schema-repair.js";
 import { migrateSingletonStateFoldInV12 } from "./openclaw-state-db-schema-v12-foldin.js";
+import { migratePredicateColumnsV21 } from "./openclaw-state-db-schema-v21-columns.js";
 import {
   assertSupportedStateSchemaVersion,
   readStateSchemaContentVersion,
@@ -144,7 +145,14 @@ export function ensureOpenClawStateRuntimeSchema(
         }
         const pathMigration = migrateAgentDatabaseRelativePaths(db, previousVersion, pathname);
         changes.push(...describeAgentPathMigration(pathMigration));
-        ensureAdditiveStateColumns(db, "repair");
+        // Historical delivery repair below already writes and reads the promoted columns.
+        if (migratePredicateColumnsV21(db, previousVersion)) {
+          changes.push(
+            "Derived meeting transcript selectors and bounded delivery retention columns (v21)",
+          );
+        }
+        // v21 only derives predicates; don't replay legacy payload repair on v20 rows.
+        ensureAdditiveStateColumns(db, previousVersion < 20 ? "repair" : "runtime");
         for (const migration of versionedStateMigrations) {
           if (migration.migrate(db, previousVersion)) {
             changes.push(migration.applied);

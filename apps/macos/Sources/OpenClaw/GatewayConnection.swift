@@ -974,6 +974,10 @@ extension GatewayConnection {
         return await connection.client.authSource()
     }
 
+    func clearConnectFailureBackoff() async {
+        await self.configuredConnection?.client.clearConnectFailureBackoff()
+    }
+
     func shutdown(ifCurrent: @Sendable () -> Bool = { true }) async {
         // Revalidate at the socket owner, after the actor hop: a superseded
         // credential save must not disconnect a newer same-account renewal.

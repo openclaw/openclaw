@@ -65,12 +65,6 @@ function commitReceipt(value: unknown): DevicePairingCommitReceipt {
       (entry) =>
         isRecord(entry) &&
         typeof entry.deviceId === "string" &&
-        (entry.operatorBinding === undefined ||
-          entry.operatorBinding === null ||
-          (isRecord(entry.operatorBinding) &&
-            typeof entry.operatorBinding.identity === "string" &&
-            Array.isArray(entry.operatorBinding.scopes) &&
-            entry.operatorBinding.scopes.every((scope) => typeof scope === "string"))) &&
         (entry.binding === null ||
           (isRecord(entry.binding) &&
             typeof entry.binding.identity === "string" &&
@@ -118,9 +112,6 @@ function commitReceipt(value: unknown): DevicePairingCommitReceipt {
     ...(workerEnvironment ? { workerEnvironment } : {}),
     changed: value.changed.map((entry) => ({
       deviceId: entry.deviceId,
-      operatorBinding: entry.operatorBinding
-        ? { identity: entry.operatorBinding.identity, scopes: [...entry.operatorBinding.scopes] }
-        : null,
       binding:
         entry.binding === null
           ? null
@@ -140,7 +131,7 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
     baseDir?: string;
     context?: OpenClawStateWorkerContext;
     assertCurrent?: () => void;
-    admit?: (facts: Exclude<DevicePairingAdmissionFacts, { kind: "pairing-publication" }>) => void;
+    admit?: (facts: DevicePairingAdmissionFacts) => void;
     onTokensReplaced?: (deviceId: string, roles: readonly string[]) => void;
     /** Map a refused operation only after its admission and publication have settled. */
     onAuthorityRefused?: () => DevicePairingWorkerOperations[Key]["output"];
@@ -162,12 +153,7 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
       captured.type === "bootstrap.prune"
         ? undefined
         : captureDevicePairingPublication(context.admission);
-    // Runtime facts preserve pairing identity; publishing them must not interrupt live node work.
-    const mutation = publication?.beginMutation(
-      captured.type !== "node.updateSessionHost" &&
-        captured.type !== "node.recordHostStats" &&
-        captured.type !== "node.updateBins",
-    );
+    const mutation = publication?.beginMutation();
     let admission: SqliteWorkerOperationAdmission | undefined;
     let published = false;
     let publishEnvironment: ReturnType<typeof reserveWorkerEnvironmentNativePublication>;
@@ -205,12 +191,7 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
         context,
         async (scope) => {
           try {
-            const result = await scope.execute(captured);
-            if (captured.type === "bootstrap.prune" && result === 0) {
-              context.admission.assertCurrent();
-              options.assertCurrent?.();
-            }
-            return result;
+            return await scope.execute(captured);
           } finally {
             install();
           }
@@ -225,19 +206,8 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
               }
               context.admission.assertCurrent();
               options.assertCurrent?.();
-              const facts = admissionFacts(request.facts);
-              // Publication receipts belong to this broker, not domain policy callbacks.
-              for (const fact of facts) {
-                if (fact.kind !== "pairing-publication") {
-                  options.admit?.(fact);
-                }
-              }
-              if (request.stage === "commit" && mutation) {
-                const publicationFact = facts.find((fact) => fact.kind === "pairing-publication");
-                if (!publicationFact) {
-                  throw new Error("Pairing commit requires its prospective publication");
-                }
-                mutation.prepare(commitReceipt(publicationFact.receipt));
+              for (const fact of admissionFacts(request.facts)) {
+                options.admit?.(fact);
               }
               if (request.stage === "commit" && captured.type === "bootstrap.consume") {
                 publishEnvironment = reserveWorkerEnvironmentNativePublication(

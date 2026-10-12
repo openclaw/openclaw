@@ -11,7 +11,6 @@ import { hasOpenClawAgentDatabaseAsyncResources } from "../state/openclaw-agent-
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
-  getOpenClawAgentDatabaseIfOpen,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import {
@@ -20,11 +19,13 @@ import {
 } from "../state/openclaw-state-db.js";
 import {
   captureSessionEntryCurrentCheck,
+  captureSessionEntryCurrentCheckAsync,
   composeSessionEntryCommitGuards,
 } from "./session-binding-runtime.js";
 import {
   deleteSessionEntry,
   getConversationSession,
+  getConversationSessionAsync,
   getSessionEntry,
   normalizeSessionDeliveryState,
   patchSessionEntry,
@@ -50,6 +51,68 @@ describe("current conversation session binding", () => {
     // A Vitest thread cannot retire an escaped reclamation lease after this case.
     expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
   });
+
+  it.each(["policy", "conversation"] as const)(
+    "observes committed %s changes in async effect checks without host SQLite",
+    async (change) => {
+      const scope = { agentId: "main", storePath, sessionKey: "agent:main:reef:group:room" };
+      const address = {
+        ...scope,
+        channel: "reef",
+        accountId: "default",
+        kind: "group" as const,
+        peerId: "room",
+        threadId: "first",
+      };
+      const delivery = normalizeSessionDeliveryState({
+        context: { channel: "reef", accountId: "default", to: "group:room", threadId: "first" },
+      });
+      await upsertSessionEntry({
+        ...scope,
+        entry: {
+          sessionId: "original",
+          updatedAt: 100,
+          permissionMode: "workspace",
+          chatType: "group",
+          delivery,
+        },
+      });
+      const current = await captureSessionEntryCurrentCheckAsync({
+        ...scope,
+        fields: ["permissionMode"],
+        alternatives: [{ conversations: [{ ...address, sessionKey: scope.sessionKey }] }],
+      });
+      const hostSql = observeHostDataSql();
+      try {
+        await expect(current.isCurrent()).resolves.toBe(true);
+        await expect(current.assertCurrent()).resolves.toBeUndefined();
+        current.source.assertScopeCurrent();
+      } finally {
+        hostSql.restore();
+      }
+      expect(hostSql.queries.filter(isSessionEntryDataSql)).toEqual([]);
+      await upsertSessionEntry({
+        ...scope,
+        sessionKey:
+          change === "conversation" ? `${scope.sessionKey}:thread:first` : scope.sessionKey,
+        entry: {
+          sessionId: change === "conversation" ? "replacement" : "original",
+          updatedAt: 200,
+          permissionMode: "full",
+          chatType: "group",
+          delivery,
+        },
+      });
+      const changedSql = observeHostDataSql();
+      try {
+        await expect(current.isCurrent()).resolves.toBe(false);
+        await expect(current.assertCurrent()).rejects.toThrow("selected session changed");
+      } finally {
+        changedSql.restore();
+      }
+      expect(changedSql.queries.filter(isSessionEntryDataSql)).toEqual([]);
+    },
+  );
 
   it("reads conversation changes inside their owning transaction and respects rollback", async () => {
     const databaseOptions = { agentId: "main", env: { OPENCLAW_STATE_DIR: tempDir } };
@@ -91,6 +154,24 @@ describe("current conversation session binding", () => {
       sessionId: "original",
     });
     expect(getSessionEntry(replacementScope)).toBeUndefined();
+    const hostSql = observeHostDataSql();
+    try {
+      expect(await getConversationSessionAsync(address)).toEqual({
+        sessionKey: scope.sessionKey,
+        sessionId: "original",
+      });
+      await upsertSessionEntry({
+        ...replacementScope,
+        entry: { sessionId: "replacement", updatedAt: 200, chatType: "group", delivery },
+      });
+      expect(await getConversationSessionAsync(address)).toEqual({
+        sessionKey: replacementScope.sessionKey,
+        sessionId: "replacement",
+      });
+    } finally {
+      hostSql.restore();
+    }
+    expect(hostSql.queries.filter(isSessionEntryDataSql)).toEqual([]);
   });
 
   it("keeps prepared guards on the canonical row selected by shorthand and normalized keys", async () => {
@@ -188,13 +269,13 @@ describe("current conversation session binding", () => {
     expect(getSessionEntry(scope)?.displayName).toBe("Accepted title");
   });
 
-  it("preserves native transaction visibility for composed opaque SDK commit guards", async () => {
+  it("runs composed opaque SDK guards before committing the title change", async () => {
     const scope = { agentId: "main", storePath, sessionKey: "agent:main:main" };
     await upsertSessionEntry({
       ...scope,
       entry: { sessionId: "original", updatedAt: 100, displayName: "Original title" },
     });
-    const observed: Array<{ inTransaction: boolean; displayName: string | undefined }> = [];
+    const observed: Array<string | undefined> = [];
     const refusal = new Error("Opaque SDK guard refused the title change");
     await expect(
       patchSessionEntry({
@@ -202,19 +283,14 @@ describe("current conversation session binding", () => {
         skipMaintenance: true,
         assertCommitAllowed: composeSessionEntryCommitGuards([
           () => {
-            observed.push({
-              inTransaction:
-                getOpenClawAgentDatabaseIfOpen({ agentId: "main", path: storePath })?.db
-                  .isTransaction === true,
-              displayName: getSessionEntry(scope)?.displayName,
-            });
+            observed.push(getSessionEntry(scope)?.displayName);
             throw refusal;
           },
         ]),
         update: () => ({ displayName: "Rejected title" }),
       }),
     ).rejects.toThrow(refusal);
-    expect(observed).toEqual([{ inTransaction: true, displayName: "Original title" }]);
+    expect(observed).toEqual(["Original title"]);
     expect(getSessionEntry(scope)?.displayName).toBe("Original title");
   });
 

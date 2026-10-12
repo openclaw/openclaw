@@ -121,7 +121,6 @@ export function createSessionRowProjectionContext(subagents: SubagentSessionList
         ) {
           return true;
         }
-        modelFactsDirty = true;
         return false;
       }
       if (typeof change.scope === "object" && change.scope.topology && !change.factsInvalidated) {

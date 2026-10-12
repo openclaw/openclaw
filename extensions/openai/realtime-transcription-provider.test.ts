@@ -66,6 +66,7 @@ const { FakeWebSocket, providerAuthMocks, ssrfMocks } = vi.hoisted(() => {
     FakeWebSocket: MockWebSocket,
     providerAuthMocks: {
       isProviderAuthProfileConfigured: vi.fn(),
+      isProviderAuthProfileConfiguredAsync: vi.fn(),
       resolveProviderAuthProfileApiKey: vi.fn(),
     },
     ssrfMocks: {
@@ -79,8 +80,10 @@ vi.mock("../../packages/gateway-client/src/websocket.js", () => ({
   WebSocket: FakeWebSocket,
 }));
 
+// mock-isolation: Transcription transport tests supply synthetic credentials without opening host auth storage.
 vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
   isProviderAuthProfileConfigured: providerAuthMocks.isProviderAuthProfileConfigured,
+  isProviderAuthProfileConfiguredAsync: providerAuthMocks.isProviderAuthProfileConfiguredAsync,
   resolveProviderAuthProfileApiKey: providerAuthMocks.resolveProviderAuthProfileApiKey,
 }));
 
@@ -149,6 +152,7 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
   beforeEach(() => {
     FakeWebSocket.instances = [];
     providerAuthMocks.isProviderAuthProfileConfigured.mockReset();
+    providerAuthMocks.isProviderAuthProfileConfiguredAsync.mockReset();
     providerAuthMocks.resolveProviderAuthProfileApiKey.mockReset();
     ssrfMocks.fetchWithSsrFGuard.mockReset();
     vi.stubEnv("OPENAI_API_KEY", "");
@@ -184,13 +188,16 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
     expect(resolved?.vadThreshold).toBe(0);
   });
 
-  it("treats an OpenAI API-key profile as configured", () => {
+  it("treats an OpenAI API-key profile as configured through its asynchronous owner", async () => {
     const provider = buildOpenAIRealtimeTranscriptionProvider();
     const cfg = { auth: { order: { openai: ["openai:default"] } } };
-    providerAuthMocks.isProviderAuthProfileConfigured.mockReturnValue(true);
+    providerAuthMocks.isProviderAuthProfileConfiguredAsync.mockResolvedValue(true);
 
-    expect(provider.isConfigured({ cfg: cfg as never, providerConfig: {} })).toBe(true);
-    expect(providerAuthMocks.isProviderAuthProfileConfigured).toHaveBeenCalledWith({
+    expect(await provider.isConfiguredAsync?.({ cfg: cfg as never, providerConfig: {} })).toBe(
+      true,
+    );
+    expect(providerAuthMocks.isProviderAuthProfileConfigured).not.toHaveBeenCalled();
+    expect(providerAuthMocks.isProviderAuthProfileConfiguredAsync).toHaveBeenCalledWith({
       provider: "openai",
       cfg,
       profileTypes: ["api_key"],

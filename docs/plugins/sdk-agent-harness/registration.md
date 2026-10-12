@@ -143,6 +143,13 @@ deadline controls, and one prepared `authorization`:
   snapshot restricted to the single profile selected for that call. Core owns
   automatic fallback order and invokes the harness separately for each candidate.
 
+When supplied, `onRequestComplete(durationMs)` reports inference dispatch through
+settlement, including a dispatched failure. Measure at the runtime's request
+boundary, not around its entire completion method: credential, model, client,
+and session preparation and post-request cleanup are excluded. Preparation
+failures must not report request timing. Core does not invent a duration when
+a harness does not report one.
+
 Agents API is a documented exception to the literal empty tool surface: it
 creates a fresh session without an executor, supplied functions, web search,
 vaults, or subagents, but the service may retain built-in helpers. This restricted

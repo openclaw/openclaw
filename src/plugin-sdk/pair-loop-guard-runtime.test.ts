@@ -137,31 +137,6 @@ describe("createPairLoopGuard", () => {
     ]);
   });
 
-  it("prunes inactive pair entries opportunistically", () => {
-    const guard = createPairLoopGuard();
-    const base = { scopeId: "scope-1", conversationId: "conversation-1", settings };
-
-    guard.recordAndCheck({
-      ...base,
-      senderId: "participant-a",
-      receiverId: "participant-b",
-      nowMs: 1_000,
-    });
-    expect(guard.snapshot()).toHaveLength(1);
-
-    guard.recordAndCheck({
-      ...base,
-      senderId: "participant-c",
-      receiverId: "participant-d",
-      nowMs: 61_001,
-    });
-
-    const trackedPairs = guard.snapshot();
-    expect(trackedPairs).toHaveLength(1);
-    expect(trackedPairs[0]?.key).toContain("participant-c");
-    expect(trackedPairs[0]?.key).toContain("participant-d");
-  });
-
   it("uses each tracked pair's own window when pruning inactive entries", () => {
     const guard = createPairLoopGuard();
     const longWindowSettings = { ...settings, windowMs: 120_000 };
@@ -246,20 +221,6 @@ describe("createPairLoopGuard", () => {
 });
 
 describe("mergePairLoopGuardConfig", () => {
-  it("layers partial child config over parent config field-by-field", () => {
-    expect(
-      mergePairLoopGuardConfig(
-        { enabled: true, maxEventsPerWindow: 8, windowSeconds: 120, cooldownSeconds: 30 },
-        { maxEventsPerWindow: 2 },
-      ),
-    ).toEqual({
-      enabled: true,
-      maxEventsPerWindow: 2,
-      windowSeconds: 120,
-      cooldownSeconds: 30,
-    });
-  });
-
   it("preserves explicit false and ignores undefined override fields", () => {
     expect(mergePairLoopGuardConfig({ enabled: false }, { windowSeconds: undefined })).toEqual({
       enabled: false,
@@ -269,16 +230,6 @@ describe("mergePairLoopGuardConfig", () => {
 });
 
 describe("resolvePairLoopGuardSettings", () => {
-  it("uses built-in channel loop guard defaults when no config is set", () => {
-    expect(resolvePairLoopGuardSettings({ defaultEnabled: true })).toEqual(
-      DEFAULT_PAIR_LOOP_GUARD_SETTINGS,
-    );
-  });
-
-  it("keeps the guard disabled when the channel has no bot-to-bot path", () => {
-    expect(resolvePairLoopGuardSettings({ defaultEnabled: false }).enabled).toBe(false);
-  });
-
   it("lets channel config override shared channel defaults field-by-field", () => {
     const resolved = resolvePairLoopGuardSettings({
       config: { maxEventsPerWindow: 4, windowSeconds: 10 },

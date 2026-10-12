@@ -16,6 +16,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
@@ -164,6 +165,7 @@ it.each([
     await withOpenClawTestState({ label: "chat-native-mandatory" }, async (state) => {
       const config = nativeConfig(state.workspaceDir);
       const profile = ensureProfileForEmail("native-creator@example.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const client = nativeClient(
         kind === "non-admin" ? ["operator.write"] : undefined,
         profile.id,

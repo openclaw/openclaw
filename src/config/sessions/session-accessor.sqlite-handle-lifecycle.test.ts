@@ -186,6 +186,49 @@ describe("SQLite session handle lifecycle", () => {
       }
     },
   );
+
+  it("reads assistant run candidates alongside older idempotency keys", async () => {
+    const messages = [
+      {
+        eventId: "old-key",
+        message: { role: "assistant", content: "old answer", idempotencyKey: "old-delivery" },
+      },
+      {
+        eventId: "run-input",
+        message: { role: "user", content: "question", idempotencyKey: "source-run:user" },
+      },
+      ...Array.from({ length: 20 }, (_, index) => ({
+        eventId: `tool-${index}`,
+        message: {
+          role: "toolResult",
+          content: "Unneeded tool output ".repeat(128),
+          __openclaw: { runId: "source-run" },
+        },
+      })),
+      {
+        eventId: "run-answer",
+        message: {
+          role: "assistant",
+          content: "delivered answer",
+          __openclaw: { runId: "source-run" },
+        },
+      },
+    ];
+    await persistSessionTranscriptTurn(scope, { messages, touchSessionEntry: false });
+    const facts = await withTranscriptWriteLock(scope, (transcript) =>
+      transcript.readMessageFacts({
+        idempotencyKeys: ["old-delivery"],
+        sourceRunId: "source-run",
+      }),
+    );
+    expect(facts.sourceEvents).toMatchObject([{ id: "run-answer" }]);
+    expect(facts.messagesByIdempotencyKey.get("old-delivery")).toEqual({
+      role: "assistant",
+      content: "old answer",
+      idempotencyKey: "old-delivery",
+    });
+    expect(facts.anchorsByIdempotencyKey.get("old-delivery")?.entryId).toBe("old-key");
+  });
   it.each([
     ["missing projection", "DELETE FROM session_transcript_index_state"],
     ["ahead projection", "UPDATE session_transcript_index_state SET indexed_seq = 100"],

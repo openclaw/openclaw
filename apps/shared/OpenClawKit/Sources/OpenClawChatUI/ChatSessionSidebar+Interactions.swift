@@ -210,7 +210,6 @@ extension ChatSessionSidebar {
 
     func interact<T>(
         refresh: Bool = true,
-        refreshAcrossQueries: Bool = false,
         _ operation: @escaping @MainActor (OpenClawSessionMenuConnection) async throws -> T,
         apply: @escaping @MainActor (T) -> Void)
     {
@@ -221,16 +220,14 @@ extension ChatSessionSidebar {
         Task { @MainActor in
             defer { if scope == self.batch.scope { self.batch.running = false } }
             do {
-                guard scope == self.batch.scope else { return }
                 let result = try await operation(connection)
                 guard connection.isCurrent() else { return }
-                let currentQuery = scope == self.batch.scope
-                if currentQuery { apply(result) }
-                if refresh, currentQuery || refreshAcrossQueries {
+                apply(result)
+                if refresh {
                     self.viewModel.refreshSessions(limit: 200)
                     self.viewModel.refreshSidebarData()
                 }
-            } catch { if scope == self.batch.scope { self.batch.notices = [error.localizedDescription] } }
+            } catch { if connection.isCurrent() { self.batch.notices = [error.localizedDescription] } }
         }
     }
 
@@ -245,7 +242,7 @@ extension ChatSessionSidebar {
             return
         }
         self.batch.pendingDelete = []
-        self.interact(refreshAcrossQueries: action == .archived(true)) { connection in
+        self.interact { connection in
             let successful = await self.batch.run(action, rows: rows, mainKey: mainKey, connection: connection)
             if action == .archived(true), successful.contains(where: self.isCurrentArchiveTarget) {
                 self.viewModel.switchSession(to: self.viewModel.selectedAgentMainSessionKey)
@@ -312,7 +309,6 @@ extension ChatSessionSidebar {
         guard let held = self.visibleInteractionRows.first(where: { self.interactionIdentity($0) == item.key }),
               held.sessionId == item.sessionID else { return false }
         let row = self.batchTarget(held)
-        let scope = self.batch.scope
         let patch: [String: AnyCodable]?
         switch ChatSessionSidebarBatch.drop(row, section: section, target: pinTarget.map(self.batchTarget)) {
         case .selfDrop?: return true
@@ -331,14 +327,12 @@ extension ChatSessionSidebar {
                     fields: patch))
                 var receipt = try JSONDecoder().decode(OpenClawChatSessionPatchReceipt.self, from: data)
                 receipt.agentID = OpenClawChatSessionKey.agentID(from: row.key) ?? row.agentId
-                guard scope == self.batch.scope else { throw CancellationError() }
                 // Pin state is already committed even if persisting its subsequent placement fails.
                 let fields = [OpenClawChatSessionSidebarData.Field.category, .pinned]
                     .filter { patch[$0.rawValue] != nil }
                 owner?.confirmFields(receipt, target: row, fields: fields)
             }
             if section == "pinned" {
-                guard scope == self.batch.scope else { throw CancellationError() }
                 try await self.batch.movePin(
                     keys: keys,
                     key: row.key,

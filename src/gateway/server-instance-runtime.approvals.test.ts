@@ -359,22 +359,20 @@ it.each(["channel", "tool"] as const)(
   },
 );
 
-it("keeps an opaque SDK commit callback on its native transaction boundary", async () => {
+it("runs legacy SDK approval callbacks at worker commit without host SQLite", async () => {
   const fixture = createFixture();
   const record = fixture.exec.create({ command: "echo synthetic" }, 60_000, "opaque-verdict");
   const { decision } = await fixture.exec.register(record, 60_000);
-  const callback = vi.fn(() => {
-    expect(
-      getOperatorApproval({ id: record.id, databaseOptions: fixture.databaseOptions }),
-    ).not.toBeNull();
-  });
-  const admission = vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission");
+  const callback = vi.fn();
+  const sql = observeMainThreadSql();
   try {
+    sql.calibrate();
     await fixture.resolve(record.id, "tool", () => true, callback);
     await expect(decision).resolves.toBe("allow-once");
     expect(callback).toHaveBeenCalled();
-    expect(admission).not.toHaveBeenCalled();
+    sql.expectIdle();
   } finally {
+    sql.restore();
     await fixture.close();
   }
 });

@@ -1,10 +1,9 @@
-import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { page } from "vitest/browser";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { renderChatImageLightbox } from "../pages/chat/components/chat-image-lightbox.ts";
 import { nextFrame } from "../test-helpers/modal-dialog.ts";
 import type { ImageLightboxItem } from "./image-lightbox.types.ts";
+import "./image-lightbox.ts";
 
 const containers = new Set<HTMLElement>();
 let previousViewport: { width: number; height: number };
@@ -16,7 +15,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   for (const container of containers) {
-    render(nothing, container);
+    container.replaceChildren();
     container.remove();
   }
   containers.clear();
@@ -26,11 +25,20 @@ afterEach(async () => {
 async function mountImage(item: ImageLightboxItem) {
   const container = document.body.appendChild(document.createElement("div"));
   containers.add(container);
-  render(
-    renderChatImageLightbox(item, () => render(nothing, container)),
-    container,
-  );
-  const viewer = container.querySelector("openclaw-image-lightbox")!;
+  const viewer = document.createElement("openclaw-image-lightbox");
+  Object.assign(viewer, {
+    mediaKind: item.kind ?? "image",
+    gallery: item.gallery,
+    connectVideo: item.connectVideo,
+    loadFullResolution: item.loadFullResolution,
+    src: item.src,
+    originalSrc: item.originalSrc ?? "",
+    imageTitle: item.title,
+    imageWidth: item.width,
+    imageHeight: item.height,
+  });
+  viewer.addEventListener("image-lightbox-close", () => container.replaceChildren());
+  container.append(viewer);
   await viewer.updateComplete;
   const modal = viewer.querySelector("openclaw-modal-dialog")!;
   await modal.updateComplete;

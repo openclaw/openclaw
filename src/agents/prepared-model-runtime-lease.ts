@@ -41,7 +41,9 @@ type PreparedModelRuntimeLeaseContext = {
   retainedGatewayRunOwners: PreparedModelRuntimeOwnerRetention;
   getBuildTimeoutMs(): number;
   getGatewayLifecycleActive(): boolean;
-  getPendingReplacement(): PreparedModelRuntimeReplacement | undefined;
+  getPendingReplacement(
+    input?: PreparedModelRuntimeInput,
+  ): PreparedModelRuntimeReplacement | undefined;
 };
 
 function createPreparedModelRuntimeAdmissionClaim(context: PreparedModelRuntimeLeaseContext) {
@@ -96,13 +98,13 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
     }
   };
   assertAdmission();
-  let replacement = context.getPendingReplacement();
+  let replacement = context.getPendingReplacement(rawInput);
   // Drain, retirement, and failed-activation recovery each own one gate; further churn is best effort.
   for (let waits = 0; replacement && waits < 3; waits += 1) {
     assertPreparedModelRuntimeAdmissionCanWait();
     await racePromiseWithAbortSignal(replacement.promise, options.abortSignal);
     assertAdmission();
-    replacement = context.getPendingReplacement();
+    replacement = context.getPendingReplacement(rawInput);
   }
   if (replacement) {
     throw new PreparedModelRuntimeOwnerNotPublishedError(

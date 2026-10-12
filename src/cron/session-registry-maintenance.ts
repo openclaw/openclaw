@@ -2,17 +2,17 @@
 import { formatCliCommand } from "../cli/command-format.js";
 import { getRuntimeConfig } from "../config/config.js";
 import {
-  resolveAllAgentSessionStoreTargetsSync,
   resolveConfiguredAgentDatabaseTargets,
   runSessionRegistryMaintenanceForStore,
 } from "../config/sessions.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { resolveAllAgentSessionStoreTargetsAsync } from "../config/sessions/targets-runtime.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createRetainedAgentDatabaseMatcherFromSnapshot } from "../state/agent-deletion-discovery.js";
 import { prepareAgentDatabaseDeletionSnapshotRead } from "../state/agent-deletion-journal.read.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
-import { loadCronJobsStore, resolveCronJobsStorePath } from "./store.js";
+import { loadCronJobsStore } from "./store.js";
 
 const log = createSubsystemLogger("cron/maintenance");
 
@@ -27,6 +27,7 @@ type SessionRegistryMaintenanceStoreSummary =
   | (SessionRegistryMaintenanceStoreIdentity & {
       pruned: number;
       preservedRunning: number;
+      nextSweepAtMs: number | null;
     })
   | (SessionRegistryMaintenanceStoreIdentity & {
       skippedReason: "agent-deletion-pending" | "agent-deletion-complete";
@@ -42,6 +43,7 @@ type SessionRegistryMaintenanceSummary = {
   pruned: number;
   skippedStores: number;
   stores: SessionRegistryMaintenanceStoreSummary[];
+  nextSweepAtMs: number | null;
   /** Set when the sweep did not run; pruning without cron facts would archive live transcripts. */
   skippedReason?: string;
 };
@@ -57,8 +59,7 @@ type RunningCronJobIds =
 
 async function readRunningCronJobIds(): Promise<RunningCronJobIds> {
   try {
-    const cronStorePath = resolveCronJobsStorePath();
-    const runningJobs = (await loadCronJobsStore(cronStorePath)).jobs.filter(
+    const runningJobs = (await loadCronJobsStore()).jobs.filter(
       (job) => typeof job.state?.runningAtMs === "number",
     );
     // A running detached job may have been retargeted after its session was created. Keep its
@@ -101,6 +102,7 @@ export async function runSessionRegistryMaintenance(params: {
       pruned: 0,
       skippedStores: 0,
       stores: [],
+      nextSweepAtMs: Date.now() + 60_000,
       skippedReason: `cron store unreadable: ${runningCronJobs.reason}`,
     };
   }
@@ -124,7 +126,7 @@ export async function runSessionRegistryMaintenance(params: {
       const deletedAgents = new Map(
         snapshot?.deletedAgents.map(({ agentId, status }) => [agentId, status]),
       );
-      for (const target of resolveAllAgentSessionStoreTargetsSync(cfg, {
+      for (const target of await resolveAllAgentSessionStoreTargetsAsync(cfg, {
         env,
         registeredDatabases,
       })) {
@@ -172,9 +174,20 @@ export async function runSessionRegistryMaintenance(params: {
           storePath: target.storePath,
           pruned: result.pruned,
           preservedRunning: result.preservedRunning,
+          nextSweepAtMs: result.nextSweepAtMs,
         });
       }
+      const deadlines = stores.flatMap((store) =>
+        "nextSweepAtMs" in store
+          ? store.nextSweepAtMs === null
+            ? []
+            : [store.nextSweepAtMs]
+          : store.skippedReason === "agent-deletion-complete"
+            ? []
+            : [Date.now() + 60_000],
+      );
       return {
+        nextSweepAtMs: deadlines.length > 0 ? Math.min(...deadlines) : null,
         retentionMs: SESSION_REGISTRY_RETENTION_MS,
         runningCronJobs: runningCronJobs.count,
         pruned: stores.reduce((total, store) => total + ("pruned" in store ? store.pruned : 0), 0),

@@ -1,6 +1,6 @@
 import {
   clearExpiredCooldowns,
-  ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
   isProfileInCooldown,
   resolveProfilesUnavailableReason,
   type AuthProfileFailureReason,
@@ -130,9 +130,9 @@ function stablePresenceSignature(payload: UpdatePresenceData): string {
 }
 
 type DiscordAutoPresenceController = {
-  start: () => void;
+  start: () => Promise<void>;
   stop: () => Promise<void>;
-  refresh: () => void;
+  refresh: () => Promise<void>;
   enabled: boolean;
 };
 
@@ -141,11 +141,11 @@ export function createDiscordAutoPresenceController(params: {
   accountId: string;
   discordConfig: DiscordPresenceConfig;
   gateway: PresenceGateway;
-  loadAuthStore?: () => AuthProfileStore;
+  loadAuthStore?: () => AuthProfileStore | Promise<AuthProfileStore>;
   log?: (message: string) => void;
 }): DiscordAutoPresenceController {
   const autoCfg = resolveAutoPresenceConfig(params.discordConfig.autoPresence);
-  const loadAuthStore = params.loadAuthStore ?? (() => ensureAuthProfileStore());
+  const loadAuthStore = params.loadAuthStore ?? (() => ensureAuthProfileStoreAsync());
   const now = params.scheduler.now;
 
   const scheduler = params.scheduler.scope();
@@ -153,7 +153,7 @@ export function createDiscordAutoPresenceController(params: {
   let lastAppliedSignature: string | null = null;
   let lastAppliedAt = 0;
 
-  const runEvaluation = (options?: { force?: boolean }) => {
+  const runEvaluation = async (options?: { force?: boolean }) => {
     if (!autoCfg.enabled || scheduler.signal.aborted) {
       return;
     }
@@ -161,7 +161,7 @@ export function createDiscordAutoPresenceController(params: {
     try {
       presence = resolveDiscordAutoPresenceUpdate({
         discordConfig: params.discordConfig,
-        authStore: loadAuthStore(),
+        authStore: await loadAuthStore(),
         gatewayConnected: params.gateway.isConnected,
         now: now(),
       });
@@ -174,7 +174,7 @@ export function createDiscordAutoPresenceController(params: {
       return;
     }
 
-    if (!params.gateway.isConnected) {
+    if (scheduler.signal.aborted || !params.gateway.isConnected) {
       return;
     }
 
@@ -196,18 +196,19 @@ export function createDiscordAutoPresenceController(params: {
   return {
     enabled: autoCfg.enabled,
     refresh: () => runEvaluation({ force: true }),
-    start: () => {
+    start: async () => {
       if (!autoCfg.enabled || started || scheduler.signal.aborted) {
         return;
       }
       started = true;
-      runEvaluation({ force: true });
+      const initialEvaluation = runEvaluation({ force: true });
       scheduler.schedule({
         id: "presence",
         delayMs: autoCfg.intervalMs,
         everyMs: autoCfg.intervalMs,
         run: () => runEvaluation(),
       });
+      await initialEvaluation;
     },
     stop: () => scheduler.stop(),
   };

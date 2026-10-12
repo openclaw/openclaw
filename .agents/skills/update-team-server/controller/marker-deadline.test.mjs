@@ -39,7 +39,7 @@ const record=value=>appendFileSync(join(root,"events.jsonl"),JSON.stringify(valu
 if(kind==="proof") {
   const [operation,...rest]=args;
   switch(operation) {
-    case "worker-config": case "migration-status": process.stdout.write("none"); break;
+    case "worker-config": process.stdout.write("none"); break;
     case "journal-read": process.stdout.write(readFileSync(rest[0],"utf8")); break;
     case "journal-field": {
       const value=rest[1].split(".").reduce((value,key)=>value[key],JSON.parse(readFileSync(rest[0],"utf8")));
@@ -273,6 +273,7 @@ session_witness=""
 session_witness_record=""
 gateway_runtime_snapshot=""
 runtime_target=""
+native_update_root=""
 capture_startup_profile=0
 arm_steady_profile=0
 profile_operation=""
@@ -350,7 +351,6 @@ proof() {
       esac ;;
     session-preservation-witness) printf witness ;;
     unlink-exact) record journal-retired; rm "$journal_file" ;;
-    migration-status) printf none ;;
     probes) printf READY ;;
     channels) printf CHANNELS_OK ;;
     validate-release|gateway-runtime) : ;;

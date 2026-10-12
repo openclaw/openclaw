@@ -9,8 +9,14 @@ import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { prepareOpenClawAgentDatabaseRegistrySnapshotRead } from "./openclaw-agent-db-registry-listing.js";
+import {
+  registerOpenClawAgentDatabase,
+  unregisterOpenClawAgentDatabase,
+} from "./openclaw-agent-db-registry.js";
 import { readRegisteredAgentDatabaseRows } from "./openclaw-agent-db-registry.read.js";
 import { readOpenClawStateReadOnlyLocation } from "./openclaw-state-db-read-connection.js";
+import * as stateReads from "./openclaw-state-db-readonly.js";
+import { detectOpenClawStateDatabaseSchemaMigrationsFromDatabase } from "./openclaw-state-db-schema-repair.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -37,7 +43,44 @@ function createRegistry(malformed: boolean) {
   return options;
 }
 
-it("reuses migration admission across registry writes and refuses a changed legacy schema", () => {
+it("discovers the published registry across overlapping creation and deletion", async () => {
+  const options = createRegistry(false);
+  const target = (agentId: string) => ({
+    agentId,
+    env: options.env,
+    path: path.join(
+      options.env.OPENCLAW_STATE_DIR,
+      "agents",
+      agentId,
+      "agent",
+      "openclaw-agent.sqlite",
+    ),
+  });
+  registerOpenClawAgentDatabase(target("main"));
+  registerOpenClawAgentDatabase(target("temporary-0"));
+  const read = stateReads.executeExistingOpenClawStateRead;
+  let publications = 0;
+  const reads = vi
+    .spyOn(stateReads, "executeExistingOpenClawStateRead")
+    .mockImplementation(async (...args) => {
+      const reply = await read(...args);
+      if (args[1].type === "agentDatabaseRegistry.read" && publications < 3) {
+        registerOpenClawAgentDatabase(target(`temporary-${publications + 1}`));
+        unregisterOpenClawAgentDatabase(target(`temporary-${publications}`));
+        publications++;
+      }
+      return reply;
+    });
+  const snapshot = await prepareOpenClawAgentDatabaseRegistrySnapshotRead(options).read();
+  expect(snapshot.result).toMatchObject({
+    status: "available",
+    entries: [{ agentId: "main" }, { agentId: "temporary-3" }],
+  });
+  expect(snapshot.assertCurrent).not.toThrow();
+  expect(reads).toHaveBeenCalledTimes(4);
+});
+
+it("reuses registry admission across writes and unrelated pending migrations", () => {
   const options = createRegistry(false);
   const { db } = openOpenClawStateDatabase(options);
   const read = (artifactPreserving = false) =>
@@ -76,7 +119,7 @@ it("reuses migration admission across registry writes and refuses a changed lega
     expect(probes.counts.registryCatalog).toBe(0);
 
     db.exec("ALTER TABLE session_watch_cursors DROP COLUMN provenance");
-    expect(() => read()).toThrow("legacy agent database registry schema");
+    expect(read()).toHaveLength(1);
     expect(read(true)).toHaveLength(1);
     db.exec(`DROP TABLE agent_databases;
       CREATE TABLE agent_databases (agent_id TEXT PRIMARY KEY, path TEXT, schema_version INTEGER,
@@ -87,8 +130,23 @@ it("reuses migration admission across registry writes and refuses a changed lega
   }
 });
 
+it("refuses a pending migration that changes agent database registry paths", () => {
+  const options = createRegistry(false);
+  const { db } = openOpenClawStateDatabase(options);
+  db.exec(`PRAGMA user_version = 8;
+    UPDATE schema_meta SET schema_version = 8;
+    DELETE FROM config_machine_state WHERE state_key = 'state.schema.contentVersion';`);
+  expect(detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(db, options.path)).toContainEqual({
+    kind: "agent-databases-relative-paths-v9",
+    path: options.path,
+  });
+  expect(() =>
+    runSqliteReadOperationSync(db, () => readRegisteredAgentDatabaseRows(db, options.path, false)),
+  ).toThrow("legacy agent database registry schema");
+});
+
 it.each(["native", "replacement"] as const)(
-  "refuses audit contract drift after %s schema changes and accepts repaired facts",
+  "keeps registry reads independent of audit contract drift after %s schema changes",
   (source) => {
     const options = createRegistry(false);
     let db = openNodeSqliteDatabase(options.path);
@@ -123,7 +181,13 @@ it.each(["native", "replacement"] as const)(
         const malformed = canonical.replace(constraint, replacement);
         expect(malformed).not.toBe(canonical);
         changeSchema(`DROP TABLE ${table}; ${malformed}`);
-        expect(() => read()).toThrow("legacy agent database registry schema");
+        expect(
+          detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(db, options.path),
+        ).toContainEqual({
+          kind: "audit-events-v2",
+          path: options.path,
+        });
+        expect(read()).toEqual([]);
         changeSchema(`DROP TABLE ${table}; ${canonical}`);
         expect(read()).toEqual([]);
       }

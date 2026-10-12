@@ -1,10 +1,8 @@
 /* @vitest-environment jsdom */
 
 import Panzoom from "@panzoom/panzoom";
-import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { renderChatImageLightbox } from "../pages/chat/components/chat-image-lightbox.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
@@ -80,7 +78,7 @@ describe("openclaw-image-lightbox", () => {
   });
 
   afterEach(async () => {
-    render(nothing, container);
+    container.replaceChildren();
     container.remove();
     await Promise.resolve();
     restoreDialogPolyfill();
@@ -160,18 +158,12 @@ describe("openclaw-image-lightbox", () => {
       },
     );
     const original = { src: "blob:original", title: "Screenshot", release: vi.fn() };
-    render(
-      renderChatImageLightbox(
-        {
-          src: "blob:preview",
-          title: "Screenshot",
-          loadFullResolution: () => full.promise,
-        },
-        () => render(nothing, container),
-      ),
-      container,
-    );
-    const modal = container.querySelector("openclaw-image-lightbox")!;
+    const modal = document.createElement("openclaw-image-lightbox");
+    modal.src = "blob:preview";
+    modal.imageTitle = "Screenshot";
+    modal.loadFullResolution = () => full.promise;
+    modal.addEventListener("image-lightbox-close", () => container.replaceChildren());
+    container.append(modal);
     await modal.updateComplete;
     const image = modal.querySelector<HTMLImageElement>("img")!;
     expect(image.src).toBe("blob:preview");

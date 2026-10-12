@@ -50,6 +50,8 @@ async function createFixture(
         resolveStorePath: () => path.join(stateDir, "sessions.json"),
         getSessionEntry: ({ sessionKey: key }: { sessionKey: string }) =>
           key === sessionKey ? entry : undefined,
+        getSessionEntryAsync: async ({ sessionKey: key }: { sessionKey: string }) =>
+          key === sessionKey ? entry : undefined,
         prepareSessionEntryPatch: async ({
           prepare,
           authority,

@@ -30,7 +30,7 @@ it("attributes nested preparation once per owner and retains failed phase time",
   await expect(
     withWorktreePreparationTiming("sandbox", async () => {
       markManagedWorktreePreparation();
-      setWorktreePreparationTemplate("warm");
+      setWorktreePreparationTemplate("warm", { reason: "ready", backend: "btrfs", cloneBytes: 42 });
       await timeWorktreePreparationPhase("templateApply", async () => {
         clock += 12;
         await withWorktreePreparationTiming("managed", async () => {
@@ -52,6 +52,7 @@ it("attributes nested preparation once per owner and retains failed phase time",
         consoleMessage: expect.stringContaining('phaseDurationsMs={"checkout":40}'),
         kind: "managed",
         template: "unavailable",
+        templateDetails: { reason: "not-requested" },
         outcome: "returned",
         durationMs: 40,
         unattributedMs: 0,
@@ -66,6 +67,7 @@ it("attributes nested preparation once per owner and retains failed phase time",
         ),
         kind: "sandbox",
         template: "warm",
+        templateDetails: { reason: "ready", backend: "btrfs", cloneBytes: 42 },
         outcome: "threw",
         durationMs: 60,
         unattributedMs: 0,
@@ -80,6 +82,9 @@ it("attributes nested preparation once per owner and retains failed phase time",
     details: {
       kind: "sandbox",
       template: "warm",
+      "template.reason": "ready",
+      "template.backend": "btrfs",
+      "template.cloneBytes": 42,
       outcome: "threw",
       templateApply: 52,
       containerStart: 8,

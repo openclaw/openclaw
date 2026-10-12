@@ -536,20 +536,30 @@ describe("markdown sidebar", () => {
     const panel = document.createElement("openclaw-chat-detail-panel") as DetailPanel;
     panel.embedSandboxMode = "trusted";
     panel.canvasPluginSurfaceUrl = "https://canvas.example";
-    panel.content = {
+    const content = {
       kind: "canvas",
       docId: "preview-1",
       title: "Preview",
       entryUrl: "https://canvas.example/previews/preview-1",
       sandbox: "scripts",
-    };
+    } satisfies SidebarContent;
+    panel.content = content;
     container.append(panel);
     await panel.updateComplete;
 
-    expect(panel.querySelector("iframe")?.getAttribute("sandbox")).toBe("allow-scripts");
-    expect(panel.querySelector("iframe")?.getAttribute("sandbox")).not.toContain(
-      "allow-same-origin",
-    );
+    const frame = panel.querySelector("iframe");
+    expect(frame?.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(frame?.getAttribute("sandbox")).not.toContain("allow-same-origin");
+
+    panel.content = { ...content, title: "Renamed preview" };
+    await panel.updateComplete;
+    expect(panel.querySelector("iframe")).toBe(frame);
+    expect(frame?.title).toBe("Renamed preview");
+
+    panel.content = { ...content, sandbox: "strict" };
+    await panel.updateComplete;
+    expect(panel.querySelector("iframe")).not.toBe(frame);
+    expect(panel.querySelector("iframe")?.getAttribute("sandbox")).toBe("");
     panel.remove();
   });
 });

@@ -1,9 +1,6 @@
 // Every-job firing tests cover repeated schedule execution semantics.
 import { describe, expect, it, vi } from "vitest";
-import {
-  getGatewaySuspendStatus,
-  prepareGatewaySuspend,
-} from "../infra/gateway-suspend-coordinator.js";
+import { prepareGatewaySuspend } from "../infra/gateway-suspend-coordinator.js";
 import {
   beginGatewayRestartSignalAdmission,
   isGatewayWorkAdmissionClosed,
@@ -21,6 +18,8 @@ import {
   installCronTestHooks,
   writeCronStoreSnapshot,
 } from "./service.test-harness.js";
+import { waitForCronRunQueue } from "./service/run-queue.js";
+import { captureCronSchedulerWakeForTest } from "./service/scheduler-actor.test-support.js";
 
 const noopLogger = createNoopLogger();
 const { makeStorePath } = createCronStoreHarness();
@@ -35,7 +34,7 @@ async function startEveryJob(text: string) {
     storePath: store.storePath,
     logger,
   });
-  await fixture.cron.start();
+  const { wake } = await captureCronSchedulerWakeForTest(() => fixture.cron.start());
   const job = await fixture.cron.add({
     name: text,
     enabled: true,
@@ -44,7 +43,7 @@ async function startEveryJob(text: string) {
     wakeMode: "next-heartbeat",
     payload: { kind: "systemEvent", text },
   });
-  return { ...fixture, store, logger, clock, job };
+  return { ...fixture, store, logger, clock, job, wake };
 }
 
 describe("CronService interval/cron jobs fire on time", () => {
@@ -63,16 +62,12 @@ describe("CronService interval/cron jobs fire on time", () => {
     expect(String(options.contextKey).startsWith("cron:")).toBe(true);
   };
 
-  it("keeps admission closed until a real cron scheduler resume retry succeeds", async () => {
-    const { cron, enqueueSystemEvent, finished, store, clock, job, logger } =
+  it("resumes due cron work after a busy suspension attempt", async () => {
+    const { cron, state, enqueueSystemEvent, finished, store, clock, job, wake } =
       await startEveryJob("recovered-tick");
     resetGatewayWorkAdmission();
 
     try {
-      logger.debug.mockImplementationOnce(() => {
-        throw new Error("arm failed");
-      });
-
       expect(
         prepareGatewaySuspend({
           requestId: "cron-resume-retry",
@@ -80,17 +75,14 @@ describe("CronService interval/cron jobs fire on time", () => {
           resumeScheduling: () => cron.resumeScheduling(),
           inspect: { getQueueSize: () => 1 },
         }),
-      ).toMatchObject({ status: "recovering" });
-      expect(isGatewayWorkAdmissionClosed()).toBe(true);
-
-      await clock.advanceBy(1_000);
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(getGatewaySuspendStatus("stale-id")).toEqual({ status: "running" });
+      ).toMatchObject({ status: "busy" });
       expect(isGatewayWorkAdmissionClosed()).toBe(false);
 
       const finishedRun = finished.waitForOk(job.id);
-      await clock.advanceBy(9_005);
+      clock.setTime(job.state.nextRunAtMs! + 5);
+      await wake(state);
       await finishedRun;
+      await waitForCronRunQueue(state);
       expectMainSystemEvent(enqueueSystemEvent, "recovered-tick");
     } finally {
       cron.stop();
@@ -100,20 +92,31 @@ describe("CronService interval/cron jobs fire on time", () => {
   });
 
   it("keeps a due timer pending when restart signal admission rolls back", async () => {
-    const { cron, enqueueSystemEvent, finished, store, clock, job } =
-      await startEveryJob("rollback-tick");
+    const {
+      cron,
+      state,
+      enqueueSystemEvent,
+      finished,
+      store,
+      clock,
+      job,
+      wake: wakeScheduler,
+    } = await startEveryJob("rollback-tick");
     resetGatewayWorkAdmission();
-    let wake: ReturnType<typeof clock.advanceBy> = undefined;
+    let wake: Promise<void> | undefined;
 
     try {
       const pendingSignal = beginGatewayRestartSignalAdmission();
       expect(pendingSignal).not.toBeNull();
       const finishedRun = finished.waitForOk(job.id);
-      wake = clock.advanceBy(10_005);
+      clock.setTime(job.state.nextRunAtMs! + 5);
+      wake = wakeScheduler(state);
       expect(enqueueSystemEvent).not.toHaveBeenCalled();
 
       expect(pendingSignal?.rollback()).toBe(true);
+      await wake;
       await finishedRun;
+      await waitForCronRunQueue(state);
       expectMainSystemEvent(enqueueSystemEvent, "rollback-tick");
     } finally {
       cron.stop();

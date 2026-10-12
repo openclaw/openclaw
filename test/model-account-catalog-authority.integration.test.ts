@@ -34,6 +34,7 @@ import {
   listUserProfileAuthLinks,
   readUserModelAuthProfile,
 } from "../src/state/user-model-accounts.js";
+import { prepareUserProfileCatalog } from "../src/state/user-profile-list.js";
 import { ensureProfileForEmail } from "../src/state/user-profiles.js";
 import { withOpenClawTestState } from "../src/test-utils/openclaw-test-state.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
@@ -45,9 +46,10 @@ const transport = vi.hoisted(() => ({
   resolveAuth: vi.fn<() => Promise<unknown>>(),
 }));
 
+// mock-isolation: Synthetic selected-account auth avoids host credentials while preserving guarded HTTP dispatch.
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: transport.resolveAuth,
-  resolveProviderAuthProfileMetadata: () => ({ accountId: "synthetic-account" }),
+  resolveProviderAuthProfileMetadataAsync: async () => ({ accountId: "synthetic-account" }),
 }));
 
 // Only the destination and DNS fixture change. Acquisition, guarded fetch,
@@ -229,6 +231,7 @@ describe("Gateway automatic account dispatch authority", () => {
           }).authProfileId;
           const saved = scenario.startsWith("saved-");
           const viewer = saved ? ensureProfileForEmail("catalog-viewer@example.test") : person;
+          using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
           const sessionKey = "agent:main:catalog-authority-saved";
           const cfg: OpenClawConfig = {
             agents: {

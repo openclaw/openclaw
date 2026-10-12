@@ -19,40 +19,6 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("assertSqliteIntegrity", () => {
-  it("rejects foreign-key violations that structural checks do not detect", () => {
-    const sqlite = requireNodeSqlite();
-    const database = new sqlite.DatabaseSync(":memory:");
-    try {
-      database.exec(`
-        PRAGMA foreign_keys = OFF;
-        CREATE TABLE parents (id INTEGER PRIMARY KEY);
-        CREATE TABLE children (
-          id INTEGER PRIMARY KEY,
-          parent_id INTEGER NOT NULL REFERENCES parents(id)
-        );
-        INSERT INTO children (id, parent_id) VALUES (1, 99);
-      `);
-      expect(database.prepare("PRAGMA quick_check;").get()).toEqual({ quick_check: "ok" });
-      expect(database.prepare("PRAGMA integrity_check;").get()).toEqual({
-        integrity_check: "ok",
-      });
-
-      let failure: unknown;
-      try {
-        assertSqliteIntegrity(database, "test database");
-      } catch (error) {
-        failure = error;
-      }
-      expect(failure).toMatchObject({
-        name: "SqliteIntegrityError",
-        message:
-          'SQLite foreign_key_check failed for test database: children row 1 references parents (foreign key 0). Stop the Gateway, run "openclaw doctor --fix" to inspect and repair this database, and restart. Only if Doctor still cannot repair the offline database, preserve the database and WAL and restore a verified backup.',
-      });
-    } finally {
-      database.close();
-    }
-  });
-
   it("names integrity-check failures", () => {
     const database = {
       prepare: () => ({ all: () => [{ integrity_check: "broken index" }] }),

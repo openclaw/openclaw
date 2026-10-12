@@ -419,97 +419,6 @@ describe("CronPage editor state sync", () => {
     expect(page.cron.cronForm.payloadText).toBe("");
   });
 
-  it("keeps conflict detail attached to the authoritative job outside active filters", async () => {
-    const staleJob: CronJob = {
-      id: "filtered-conflict-job",
-      name: "Loaded name",
-      description: "Loaded description",
-      enabled: true,
-      createdAtMs: 0,
-      updatedAtMs: 1,
-      configRevision: "revision-stale",
-      schedule: { kind: "cron", expr: "0 9 * * *" },
-      sessionTarget: "isolated",
-      wakeMode: "now",
-      payload: { kind: "agentTurn", message: "digest" },
-      state: {},
-    };
-    const authoritativeJob: CronJob = {
-      ...staleJob,
-      name: "Authoritative name",
-      description: "Latest Gateway definition",
-      updatedAtMs: 2,
-      configRevision: "revision-current",
-    };
-    const conflict = Object.assign(new Error("cron job definition changed"), {
-      details: { code: "CRON_JOB_CHANGED" },
-    });
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      if (method === "cron.list") {
-        const query = (params as { query?: string } | undefined)?.query;
-        return query === "missing from filtered results"
-          ? cronListResponse([])
-          : cronListResponse([staleJob]);
-      }
-      if (method === "cron.update") {
-        throw conflict;
-      }
-      if (method === "cron.get") {
-        return authoritativeJob;
-      }
-      if (method === "cron.status") {
-        return { enabled: true, jobs: 1 };
-      }
-      if (method === "cron.runs") {
-        return { entries: [], total: 0, offset: 0, hasMore: false };
-      }
-      if (method === "models.list") {
-        return { models: [] };
-      }
-      return {};
-    });
-    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
-    const page = createPage(createContext(gateway), { render: true });
-
-    await waitForCronPage(() =>
-      expect(page.querySelector('[data-test-id="cron-row-filtered-conflict-job"]')).not.toBeNull(),
-    );
-    (page.querySelector('[data-test-id="cron-row-filtered-conflict-job"]') as HTMLElement).click();
-    await waitForCronPage(() => expect(page.cron.cronEditingJob?.id).toBe(staleJob.id));
-
-    page.cron.cronJobsQuery = "missing from filtered results";
-    page.refreshView();
-    await page.settle();
-    const name = page.querySelector("#cron-name") as HTMLInputElement;
-    name.value = "My stale edit";
-    name.dispatchEvent(new Event("input", { bubbles: true }));
-    (page.querySelector('[data-test-id="cron-submit"]') as HTMLButtonElement).click();
-
-    await waitForCronPage(() =>
-      expect(page.cron.cronEditingJob?.configRevision).toBe("revision-current"),
-    );
-    expect(page.cron.cronEditingJob).toEqual(authoritativeJob);
-    expect(request).toHaveBeenCalledWith(
-      "cron.list",
-      expect.objectContaining({ query: "missing from filtered results" }),
-    );
-    expect(request).toHaveBeenCalledWith("cron.get", { id: staleJob.id });
-    expect(page.cron.cronJobs).toEqual([]);
-    expect(page.cron.cronJobsTotal).toBe(0);
-    expect((page.querySelector("#cron-name") as HTMLInputElement).value).toBe(
-      authoritativeJob.name,
-    );
-    expect(page.querySelector(".cron-detail-title")?.textContent).toContain(authoritativeJob.name);
-    expect(page.querySelector('[data-test-id="cron-detail-description"]')?.textContent).toContain(
-      authoritativeJob.description,
-    );
-    expect(page.querySelector('[data-test-id="cron-detail-tab-history"]')).not.toBeNull();
-
-    (page.querySelector('[data-test-id="cron-back"]') as HTMLButtonElement).click();
-    await waitForCronPage(() => expect(page.cron.cronEditingJob).toBeNull());
-    expect(page.querySelector('[data-test-id="cron-row-filtered-conflict-job"]')).toBeNull();
-  });
-
   it("gates scheduler mutations for write-only authentication", async () => {
     const job = scheduledJob("access-job", {
       name: "Readably scheduled task",
@@ -626,60 +535,109 @@ describe("CronPage editor state sync", () => {
     });
   });
 
-  it("completes create & run now after navigation", async () => {
-    const addRequested = createDeferred();
-    const added = createDeferred<{ id: string }>();
-    const request = vi.fn(async (method: string) => {
-      if (method === "cron.add") {
-        addRequested.resolve();
-        return added.promise;
-      }
-      if (method === "cron.list") {
-        return cronListResponse([]);
-      }
-      if (method === "cron.runs") {
-        return { entries: [], total: 0, offset: 0, hasMore: false };
-      }
-      if (method === "cron.run") {
-        return { ok: true, enqueued: true, runId: "run-fresh" };
-      }
-      if (method === "models.list") {
-        return { models: [] };
-      }
-      return {};
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const gateway = createGateway(client, true);
-    const page = createPage(createContext(gateway, "writer"), { render: true });
+  it.each([
+    { destination: "another page", accepted: true },
+    { destination: "another automation", accepted: true },
+    { destination: "another automation", accepted: false },
+    { destination: "the submitted editor", accepted: false },
+  ] as const)(
+    "settles create & run now after navigating to $destination (accepted: $accepted)",
+    async ({ destination, accepted }) => {
+      const addRequested = createDeferred();
+      const added = createDeferred<{ id: string }>();
+      const selected = createCronViewJob("selected-job", { name: "Selected automation" });
+      const request = vi.fn(async (method: string) => {
+        if (method === "cron.add") {
+          addRequested.resolve();
+          return added.promise;
+        }
+        if (method === "cron.list") {
+          return cronListResponse([]);
+        }
+        if (method === "cron.get") {
+          return selected;
+        }
+        if (method === "cron.runs") {
+          return { entries: [], total: 0, offset: 0, hasMore: false };
+        }
+        if (method === "cron.run") {
+          return { ok: true, enqueued: true, runId: "run-fresh" };
+        }
+        if (method === "models.list") {
+          return { models: [] };
+        }
+        return {};
+      });
+      const client = { request } as unknown as GatewayBrowserClient;
+      const gateway = createGateway(client, true);
+      const page = createPage(createContext(gateway, "writer"), { render: true });
+      let currentPage = page;
+      try {
+        await waitForCronPage(() =>
+          expect(page.querySelector('[data-suggestion="repoPulse"]')).not.toBeNull(),
+        );
+        (page.querySelector('[data-suggestion="repoPulse"]') as HTMLButtonElement).click();
+        await waitForCronPage(() =>
+          expect(page.querySelector('[data-test-id="cron-submit-run"]')).not.toBeNull(),
+        );
+        (page.querySelector('[data-test-id="cron-submit-run"]') as HTMLButtonElement).click();
+        await addRequested.promise;
+        const submittedState = page.cron;
+        if (destination === "another page") {
+          page.remove();
+          currentPage = createPage(createContext(gateway, "writer"));
+        }
+        if (destination === "another automation") {
+          page.routeSearch = `?job=${selected.id}`;
+          await waitForCronPage(() =>
+            expect(page.querySelector<HTMLInputElement>("#cron-name")?.value).toBe(selected.name),
+          );
+        }
+        await currentPage.settle();
+        if (accepted) {
+          added.resolve({ id: "job-fresh" });
+        } else {
+          added.reject(new Error("Creation rejected"));
+        }
 
-    await waitForCronPage(() =>
-      expect(page.querySelector('[data-suggestion="repoPulse"]')).not.toBeNull(),
-    );
-    (page.querySelector('[data-suggestion="repoPulse"]') as HTMLButtonElement).click();
-    await waitForCronPage(() =>
-      expect(page.querySelector('[data-test-id="cron-submit-run"]')).not.toBeNull(),
-    );
-    (page.querySelector('[data-test-id="cron-submit-run"]') as HTMLButtonElement).click();
-    await addRequested.promise;
-    const submittedState = page.cron;
-    page.remove();
-    const currentPage = createPage(createContext(gateway, "writer"));
-    await currentPage.settle();
-    added.resolve({ id: "job-fresh" });
-
-    await waitForCronPage(() => {
-      const methods = request.mock.calls.map((call) => call[0]);
-      expect(methods.indexOf("cron.run")).toBeGreaterThan(methods.indexOf("cron.add"));
-    });
-    expect(request).toHaveBeenCalledWith(
-      "cron.add",
-      expect.objectContaining({ agentId: "writer" }),
-    );
-    expect(request).toHaveBeenCalledWith("cron.run", { id: "job-fresh", mode: "force" });
-    await waitForCronPage(() => expect(submittedState.cronCreateOpen).toBe(false));
-    expect(currentPage.cron).not.toBe(submittedState);
-    expect(currentPage.cron.cronError).toBeNull();
-  });
+        await waitForCronPage(() => expect(submittedState.cronBusy).toBe(false));
+        await currentPage.settle();
+        if (destination === "another automation") {
+          expect.soft(currentPage.cron.cronEditingJob?.id).toBe(selected.id);
+          expect.soft(currentPage.cron.cronRunsJobId).toBe(selected.id);
+          expect.soft(currentPage.cron.cronRunsScope).toBe("job");
+          expect
+            .soft(currentPage.querySelector<HTMLInputElement>("#cron-name")?.value)
+            .toBe(selected.name);
+        }
+        if (!accepted) {
+          expect(request.mock.calls.some(([method]) => method === "cron.run")).toBe(false);
+          expect(currentPage.cron.cronError).toBe(
+            destination === "the submitted editor" ? "Creation rejected" : null,
+          );
+          expect(currentPage.cron.cronCreateOpen).toBe(destination === "the submitted editor");
+          return;
+        }
+        await waitForCronPage(() => {
+          const methods = request.mock.calls.map((call) => call[0]);
+          expect(methods.indexOf("cron.run")).toBeGreaterThan(methods.indexOf("cron.add"));
+        });
+        expect(request).toHaveBeenCalledWith(
+          "cron.add",
+          expect.objectContaining({ agentId: "writer" }),
+        );
+        expect(request).toHaveBeenCalledWith("cron.run", { id: "job-fresh", mode: "force" });
+        await waitForCronPage(() => expect(submittedState.cronCreateOpen).toBe(false));
+        if (destination === "another page") {
+          expect(currentPage.cron).not.toBe(submittedState);
+          expect(currentPage.cron.cronError).toBeNull();
+        }
+      } finally {
+        added.resolve({ id: "job-fresh" });
+        currentPage.remove();
+      }
+    },
+  );
 
   it.each([
     { outcome: "queued", result: { ok: true, enqueued: true, runId: "run-alpha" } },

@@ -17,8 +17,6 @@ export function createShellViewCallbacks(host: ShellViewCallbackHost) {
     toggleSidebar: () => host.toggleNavigationSurface(),
     updateSidebarEntries: (entries: string[]) =>
       host.context?.navigation.update({ sidebarEntries: entries }),
-    updateNavigationScope: (navigationScope: "mine" | "all") =>
-      host.context?.navigation.update({ navigationScope }),
     openDevicePairSetup: () => void host.context?.overlays.openDevicePairSetup(),
     preloadRoute: (routeId: string): Promise<void> =>
       isRouteId(routeId)

@@ -135,11 +135,7 @@ function ToolFilter(props: { activity: ActivityProps; toolNames: string[] }) {
               class="settings-select"
               aria-label={t("activity.toolFilter")}
               value={props.activity.toolFilter}
-              onChange={(event: Event) => {
-                if (event.currentTarget instanceof HTMLSelectElement) {
-                  props.activity.onToolFilterChange(event.currentTarget.value);
-                }
-              }}
+              onChange={(event) => props.activity.onToolFilterChange(event.currentTarget.value)}
             >
               <option value="" selected={props.activity.toolFilter === ""}>
                 {t("activity.allTools")}
@@ -172,11 +168,7 @@ function LiveToolbar(props: { activity: ActivityProps; toolNames: string[] }) {
           aria-label={t("activity.search")}
           value={props.activity.filterText}
           placeholder={t("activity.searchPlaceholder")}
-          onInput={(event: Event) => {
-            if (event.currentTarget instanceof HTMLInputElement) {
-              props.activity.onFilterTextChange(event.currentTarget.value);
-            }
-          }}
+          onInput={(event) => props.activity.onFilterTextChange(event.currentTarget.value)}
         />
       </div>
       <span role="group" aria-label={t("activity.statusFilters")} class="activity-status-filters">

@@ -45,12 +45,13 @@ platform-send start use a lazy progress companion, while terminal message rows
 remain in the activity ledger. Run inspection merges both sources directly;
 neither is copied into the generic decision-fact table.
 
-Scheduled runs are an owner-native source too. After exact run admission, a lazy
-lifecycle metadata table binds the admitted context and execution ids to the
-stored `cron_run_receipts` row. Inspection joins that metadata to the receipt
-directly and preserves its recorded status. New task and flow lifecycle binding
-writes and inspection joins are retired, but their existing tables and rows are
-not dropped or migrated. This removal leaves the database schemas unchanged;
+Scheduled runs with execution identity collection enabled bind their admitted
+context and execution ids to the stored `cron_run_receipts` row. Inspection joins
+that exact binding and preserves the receipt's recorded status, including for
+runs recorded by older versions. Disabled collection creates no binding table
+or rows. New task and flow lifecycle binding writes and inspection joins are
+retired, but their existing tables and rows are not dropped or migrated. These
+changes leave the database schemas unchanged;
 see the [versioning contract](/reference/database-schemas/versioning).
 Independent audit events and decision facts retain their existing retention
 policies; they are not reconstructed from retained Task or TaskFlow rows. A

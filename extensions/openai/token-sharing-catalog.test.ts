@@ -13,8 +13,9 @@ import { buildOpenAIProvider } from "./openai-provider.js";
 
 const mocks = vi.hoisted(() => ({
   resolveApiKeyForProvider: vi.fn(),
-  resolveProviderAuthProfileMetadata: vi.fn(),
+  resolveProviderAuthProfileMetadataAsync: vi.fn(),
 }));
+// mock-isolation: Token-sharing catalog fixtures do not read host credentials.
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => mocks);
 
 type OpenAITestCatalogResult = {

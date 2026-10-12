@@ -58,18 +58,26 @@ export function getCronJobsStoreRevision(storePath: string): number {
   return cronStoreRevisions.get(cronStoreKey(storePath)) ?? nextCronStoreRevision;
 }
 
-export function noteCronJobsStoreCommit(storeKey: string): void {
+export function noteCronJobsStoreCommit(storeKey?: string): void {
   invalidateCronJobNames(storeKey);
   // A bounded monotonic fact invalidates sibling service snapshots without
   // polling SQLite or discarding the current scheduler's transient run state.
+  if (storeKey === undefined) {
+    // A lost default-load reply can hide both the selected partition and a committed repair.
+    cronStoreRevisions.clear();
+    nextCronStoreRevision += 1;
+    return;
+  }
   cronStoreRevisions.delete(storeKey);
   cronStoreRevisions.set(storeKey, ++nextCronStoreRevision);
   pruneMapToMaxSize(cronStoreRevisions, MAX_TRACKED_CRON_STORE_REVISIONS);
 }
 
 /** Loads cron jobs plus config/runtime sidecars from the SQLite-backed store. */
-export async function loadCronJobsStoreWithConfigJobs(storePath: string): Promise<LoadedCronStore> {
-  const storeKey = cronStoreKey(storePath);
+export async function loadCronJobsStoreWithConfigJobs(
+  storePath?: string,
+): Promise<LoadedCronStore> {
+  const storeKey = storePath === undefined ? undefined : cronStoreKey(storePath);
   const context = captureOpenClawStateWorkerContext();
   let received = false;
   try {
@@ -77,12 +85,12 @@ export async function loadCronJobsStoreWithConfigJobs(storePath: string): Promis
       const result = await scope.execute({ type: "cron.loadMutable", input: { storeKey } });
       received = true;
       for (let index = 0; index < result.repairCommits; index += 1) {
-        noteCronJobsStoreCommit(storeKey);
+        noteCronJobsStoreCommit(result.storeKey);
       }
       if (!result.ok) {
         // Coordinator cleanup can fail after COMMIT but before a repair is reported.
         if (result.repairCommits === 0) {
-          noteCronJobsStoreCommit(storeKey);
+          noteCronJobsStoreCommit(result.storeKey);
         }
         throw restoreCronLoadError(result.error);
       }
@@ -139,7 +147,7 @@ export async function removeStaleCronJobFamilyRows(
 }
 
 /** Loads only the persisted cron job store payload. */
-export async function loadCronJobsStore(storePath: string): Promise<CronStoreFile> {
+export async function loadCronJobsStore(storePath?: string): Promise<CronStoreFile> {
   return (await loadCronJobsStoreWithConfigJobs(storePath)).store;
 }
 

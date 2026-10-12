@@ -14,7 +14,7 @@ import {
   findCommandByNativeName,
   formatCommandArgMenuTitle,
   parseCommandArgs,
-  resolveCommandArgMenu,
+  resolveCommandArgMenuAsync,
 } from "./commands-registry.js";
 import type { VerboseLevel } from "./thinking.js";
 
@@ -66,7 +66,10 @@ describe("native verbose menu status", () => {
       });
     }
     const before = loadSessionEntryReadOnly(session);
-    const menu = expectDefined(resolveCommandArgMenu({ command, cfg, session }), "verbose menu");
+    const menu = expectDefined(
+      await resolveCommandArgMenuAsync({ command, cfg, session }),
+      "verbose menu",
+    );
     expect(formatCommandArgMenuTitle({ command, menu })).toBe(
       `Current verbose level: ${testCase.expected}.\nChoose on, off, or full for /verbose.`,
     );
@@ -76,11 +79,24 @@ describe("native verbose menu status", () => {
       ),
     ).toEqual(["/verbose on", "/verbose off", "/verbose full"]);
     expect(loadSessionEntryReadOnly(session)).toEqual(before);
+    const changedLevel = testCase.expected === "full" ? "off" : "full";
+    await replaceSessionEntry(session, {
+      sessionId: "target-session",
+      updatedAt: 2,
+      verboseLevel: changedLevel,
+    });
+    const changedMenu = expectDefined(
+      await resolveCommandArgMenuAsync({ command, cfg, session }),
+      "updated verbose menu",
+    );
+    expect(formatCommandArgMenuTitle({ command, menu: changedMenu })).toBe(
+      `Current verbose level: ${changedLevel}.\nChoose on, off, or full for /verbose.`,
+    );
   });
 
-  it("leaves explicit arguments to directive dispatch, including invalid levels", () => {
+  it("leaves explicit arguments to directive dispatch, including invalid levels", async () => {
     expect(
-      resolveCommandArgMenu({ command, args: parseCommandArgs(command, "invalid") }),
+      await resolveCommandArgMenuAsync({ command, args: parseCommandArgs(command, "invalid") }),
     ).toBeNull();
   });
 });

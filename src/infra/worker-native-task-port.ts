@@ -1,5 +1,6 @@
 import { receiveMessageOnPort, type MessagePort, type Transferable } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { runWithMainThreadTask } from "./main-thread-stall.js";
 import { nativePortIsOpen } from "./worker-native-port.js";
 
 type TaskPortMessage = { type: "message"; value: unknown } | { type: "messageerror"; error: Error };
@@ -75,7 +76,9 @@ export class NativeWorkerTaskPort {
         }
         let next: ReturnType<typeof receiveMessageOnPort>;
         try {
-          next = receiveMessageOnPort(this.port);
+          next = runWithMainThreadTask("worker:message-decode", () =>
+            receiveMessageOnPort(this.port),
+          );
         } catch (error) {
           this.fail(toErrorObject(error, "Native worker task channel observation failed"));
           return;

@@ -165,7 +165,7 @@ describe("runSessionRegistryMaintenance", () => {
         const mainKey = await writeStaleCronSession(mainStorePath, "main");
         await writeStaleCronSession(retiredStorePath, "retired");
         writeAgentDeletion(state, "retired", cleanupCompleted);
-        closeOpenClawAgentDatabasesForTest();
+        await closeOpenClawAgentDatabasesAsync(state.stateDir);
 
         const summary = await runSessionRegistryMaintenance({ apply });
 

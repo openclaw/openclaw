@@ -10,6 +10,7 @@ import {
   type AgentDeletionOperation,
 } from "../agents/agent-lifecycle-registry.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { publishAgentDeletionJournalStatus } from "../state/agent-deletion-journal-status.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -44,7 +45,6 @@ import {
   loadExecApprovals,
   loadExecApprovalsReadOnly,
   loadExecApprovalsReadOnlyAsync,
-  prepareExecApprovalsCurrentRead,
   readExecApprovalsSnapshot,
   restoreExecApprovalsSnapshotLocked,
   updateExecApprovals,
@@ -366,6 +366,9 @@ describe("exec approvals SQLite store", () => {
                 : "UPDATE agent_deletion_journal SET operation_id = 'replacement' WHERE agent_id = 'removed'",
             )
             .run();
+          if (journal === "missing") {
+            publishAgentDeletionJournalStatus(openOpenClawStateDatabase().db, "removed", "absent");
+          }
         } finally {
           foreign.close();
         }
@@ -568,8 +571,6 @@ describe("exec approvals SQLite store", () => {
         allowlistSatisfied: true,
       },
     };
-    // Admit the final reader before checking the warmed write path for caller SQL.
-    prepareExecApprovalsCurrentRead(captureOpenClawStateWorkerContext());
     const sql = observeMainThreadSql();
     const publications: ExecApprovalsPublicationValue[] = [];
     const releaseFacts = execApprovalsPublication.subscribeFacts((change) => {

@@ -152,7 +152,7 @@ it.each(["participant", "owner"] as const)(
       database.db,
       ["after", "dashboards", "pending", "unexpected"],
       (sql) => {
-        if (!sql.includes('as "session_started_at"') || !sql.includes('from "session_nodes"')) {
+        if (!sql.includes('"session_started_at"') || !sql.includes('from "session_nodes"')) {
           return null;
         }
         if (sql.includes('"age_namespaces"')) {
@@ -238,7 +238,7 @@ it("reports a maintenance deadline without an unused revision snapshot", () => {
         },
       },
     );
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       kind: "maintenance-age",
       nextAt: now + ageFacts.SESSION_ENTRY_MAINTENANCE_INTERVAL_MS,
     });

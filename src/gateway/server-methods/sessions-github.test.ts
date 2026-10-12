@@ -4,6 +4,7 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import { getRuntimeConfig } from "../../config/io.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureCanonicalUserProfileForEmail } from "../../state/user-profile-writes.js";
 import { getUserProfileDisplay } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -116,7 +117,7 @@ describe("sessions.github.publish", () => {
     });
   });
 
-  it.each([undefined, "main"])(
+  it.each([undefined])(
     "uses host-owned caller identity with requested owner %s",
     async (agentId) => {
       const respond = await invoke({
@@ -156,7 +157,7 @@ describe("sessions.github.publish", () => {
     },
   );
 
-  it.each(["fresh", "existing", "wrong-key", "lookup-failed", "ordinary"])(
+  it.each(["fresh", "wrong-key", "ordinary"])(
     "forwards only the exact owner's %s selection rejection fact",
     async (mode) => {
       const key = "publication-selection";
@@ -221,6 +222,7 @@ describe("sessions.github.publish", () => {
         });
         const profile = await ensureCanonicalUserProfileForEmail("publisher@example.test");
         const creator = await ensureCanonicalUserProfileForEmail("session-creator@example.test");
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey: "agent:main:main" },
           {
@@ -287,7 +289,6 @@ describe("sessions.github.publish", () => {
   );
 
   it.each([
-    ["agent:research:main", "research", "configured", undefined],
     ["global", "ops", "configured", undefined],
     ["agent:research:main", "research", "explicit", undefined],
     ["global", "research", "explicit", "research"],

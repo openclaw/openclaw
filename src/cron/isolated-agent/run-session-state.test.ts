@@ -33,7 +33,6 @@ import {
   createCronRunContinuationSession,
   createPersistCronSessionEntry,
   setCronSessionRuntimeModel,
-  resolveCronLifecycleRevisionIdentity,
   syncCronSessionLiveSelection,
   type CronSessionRowWriter,
   type MutableCronSession,
@@ -473,17 +472,23 @@ describe("createPersistCronSessionEntry", () => {
       },
     });
 
-    await continuation.setCliExecutionProvider("claude-cli");
-    expect(store[runSessionKey]?.cronRunContinuation?.cliExecutionProvider).toBe("claude-cli");
-
     cronSession.sessionEntry.cliSessionBindings = {
       "claude-cli": { sessionId: "native-claude-session", forceReuse: true },
     };
-    await continuation.sync();
+    const writesBeforeSelection = persistSessionEntry.mock.calls.length;
+    await continuation.sync(undefined, { cliExecutionProvider: "claude-cli" });
+    expect(persistSessionEntry.mock.calls.length).toBe(writesBeforeSelection + 1);
+    expect(store[runSessionKey]?.cronRunContinuation?.cliExecutionProvider).toBe("claude-cli");
     expect(store[runSessionKey]?.cliSessionBindings?.["claude-cli"]).toEqual({
       sessionId: "native-claude-session",
       forceReuse: true,
     });
+
+    await continuation.sync(undefined, {});
+    expect(store[runSessionKey]?.cronRunContinuation?.cliExecutionProvider).toBeUndefined();
+    expect(store[runSessionKey]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(
+      "native-claude-session",
+    );
 
     await continuation.seal({ basePersisted: true });
     expect(store[runSessionKey]?.cronRunContinuation).toMatchObject({
@@ -773,7 +778,7 @@ describe("createPersistCronSessionEntry", () => {
     });
     const activeLease = await beginSessionWorkAdmission({
       scope: storePath,
-      identities: [resolveCronLifecycleRevisionIdentity(activeRevision)],
+      identities: [`cron-lifecycle-revision:${activeRevision}`],
       assertAllowed: () => {},
     });
 

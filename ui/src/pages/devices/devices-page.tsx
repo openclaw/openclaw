@@ -12,7 +12,7 @@ import { hasOperatorAdminAccess, hasOperatorPairingAccess } from "../../app/oper
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { readPresenceEntries } from "../../app/user-profile.ts";
-import { showSecretRevealDialog } from "../../components/secret-reveal-dialog.ts";
+import { showSecretRevealDialog } from "../../components/secret-reveal-dialog.tsx";
 import { LearnMoreLink } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";

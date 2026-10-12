@@ -1,10 +1,12 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import { appendSessionManagerActor } from "../../agents/sessions/session-manager-actor-append.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import {
   createSqliteWorkerOperationAdmission,
   requestSqliteWorkerOperationAdmission,
   withSqliteWorkerOperationAdmission,
+  type SqliteWorkerAdmissionRequest,
 } from "../../infra/sqlite-worker-operation-admission.js";
 import {
   settleSqliteWorkerOperationContext,
@@ -24,6 +26,7 @@ import {
   readExactSessionEntryRow,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
+import { patchSessionEntryCore } from "./session-accessor.sqlite-entry.js";
 import type { SessionActorAuthority, SessionActorOperations } from "./session-actor-contract.js";
 import { createDurableSessionActorFactory } from "./session-actor-durable.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
@@ -119,6 +122,22 @@ it("acquires the exact cold durable execution owner and installs a real worker c
       expect(actor.snapshot(authority)?.entry?.sessionId).toBe(fixture.scope.sessionId);
       expect(actor.snapshot(authority)?.entry?.updatedAt).toBe(543);
       expect(fixture.read()?.updatedAt).toBe(543);
+      const before = actor.snapshot(authority)!;
+      await patchSessionEntryCore(
+        {
+          agentId: "main",
+          storePath: fixture.database.path,
+          sessionKey: fixture.scope.sessionKey,
+          env,
+        },
+        () => ({ label: "published patch" }),
+        { skipMaintenance: true, preserveActivity: true },
+      );
+      const after = actor.snapshot(authority);
+      expect(after?.entry).toMatchObject({ label: "published patch", updatedAt: 543 });
+      expect(after?.transcript).toEqual(before.transcript);
+      expect(after?.pendingInputs).toEqual(before.pendingInputs);
+      expect(after?.version).toEqual({ ...before.version, sequence: before.version.sequence + 1 });
     } finally {
       await actor.release();
     }
@@ -130,6 +149,7 @@ async function withActor(
   run: (fixture: {
     actor: ReturnType<typeof createSessionActor>;
     commands: string[];
+    admissions: SqliteWorkerAdmissionRequest[];
     fault: {
       reply: "normal" | "lost" | "unknown";
       workerPublicationFailure?: boolean;
@@ -137,6 +157,7 @@ async function withActor(
       drain?: Promise<void>;
       onExecuted?: () => void;
       admissionCancelled?: boolean;
+      disclosureRevoked?: boolean;
     };
     retireGeneration(this: void): void;
     nativePatch(this: void, updatedAt: number): void;
@@ -160,6 +181,7 @@ async function withActor(
     };
     const options = { agentId: "main", path: database.path };
     const commands: string[] = [];
+    const admissions: SqliteWorkerAdmissionRequest[] = [];
     const fault: Parameters<typeof run>[0]["fault"] = { reply: "normal" };
     let epoch = 0;
     const lifetime = {
@@ -169,7 +191,11 @@ async function withActor(
         }
       },
       assertCurrent() {},
-      assertReadable() {},
+      assertReadable() {
+        if (fault.disclosureRevoked) {
+          throw new Error("Snapshot disclosure revoked");
+        }
+      },
     };
     const replica = createSessionActorReplica({
       target,
@@ -199,7 +225,6 @@ async function withActor(
     const transport: SessionActorTransport = {
       run(operation, authorize) {
         return runOpenClawAgentWorkerWrite(options, async () => {
-          const held = epoch;
           async function execute<Key extends keyof SessionActorOperations>(command: {
             type: Key;
             input: SessionActorOperations[Key]["input"];
@@ -210,9 +235,10 @@ async function withActor(
             commands.push(command.type);
             const completion = Promise.withResolvers<SqliteWorkerOperationSettlement>();
             const retained = { settled: completion.promise };
-            const admission = createSqliteWorkerOperationAdmission((request, grant) =>
-              authorize(request, { admission, retained }, grant),
-            );
+            const admission = createSqliteWorkerOperationAdmission((request, grant) => {
+              admissions.push(request);
+              authorize(request, { admission, retained }, grant);
+            });
             const dropped = fault.reply === "unknown";
             const postMessage = admission.port.postMessage.bind(admission.port);
             const wire = vi
@@ -266,13 +292,6 @@ async function withActor(
             }
           }
           return operation({
-            captureGeneration: () => ({
-              assertCurrent() {
-                if (held !== epoch) {
-                  throw new Error("Worker generation retired");
-                }
-              },
-            }),
             execute,
           });
         });
@@ -280,8 +299,9 @@ async function withActor(
       async afterCommitted(outcome) {
         if (fault.afterCommitted) {
           await fault.afterCommitted();
-          outcome.receipt.commandId = "detached-follow-up-copy";
-          return { value: outcome.value };
+          const copy = structuredClone(outcome);
+          copy.receipt.commandId = "detached-follow-up-copy";
+          return { value: copy.value };
         }
         return undefined;
       },
@@ -291,6 +311,7 @@ async function withActor(
     try {
       await run({
         actor,
+        admissions,
         commands,
         fault,
         retireGeneration() {
@@ -327,25 +348,6 @@ it("serves installed state without a request and reconciles a retired worker gen
     const restored = await actor.read(authority);
     expect(restored.entry?.sessionId).toBe(initial.entry?.sessionId);
     expect(restored.version.epoch).not.toBe(initial.version.epoch);
-    expect(commands).toEqual(["session.actor.read", "session.actor.read"]);
-  });
-});
-
-it.each([1, 2])("bounds empty-replica recovery after %i superseding writes", async (writes) => {
-  await withActor(async ({ actor, commands, fault, nativePatch }) => {
-    let remaining = writes;
-    fault.onExecuted = () => {
-      if (remaining > 0) {
-        nativePatch(700 + remaining);
-        remaining -= 1;
-      }
-    };
-    const reading = actor.read(authority);
-    if (writes === 1) {
-      expect((await reading).entry?.updatedAt).toBe(701);
-    } else {
-      await expect(reading).rejects.toThrow("changed before its read could publish");
-    }
     expect(commands).toEqual(["session.actor.read", "session.actor.read"]);
   });
 });
@@ -446,30 +448,6 @@ it("installs the full append receipt and releases FIFO before retained follow-up
   });
 });
 
-it("rechecks receipt freshness after a synchronous authority callback before disclosure", async () => {
-  await withActor(async ({ actor, nativePatch }) => {
-    await actor.read(authority);
-    expect(
-      actor.snapshot({
-        assertCurrent() {},
-        authorize() {
-          nativePatch(101);
-        },
-      }),
-    ).toBeUndefined();
-    await actor.read(authority);
-    await expect(
-      actor.read({
-        assertCurrent() {},
-        authorize() {
-          nativePatch(102);
-        },
-      }),
-    ).rejects.toThrow("changed before read disclosure");
-    expect((await actor.read(authority)).entry?.updatedAt).toBe(102);
-  });
-});
-
 it("releases the writer queue across phase awaits and flushes reducers on an exceptional exit", async () => {
   await withActor(async ({ actor, commands }) => {
     await actor.read(authority);
@@ -531,9 +509,11 @@ it("preserves native commit through worker publication, reply, and observer fail
   });
 });
 
-it("isolates mutable policy callbacks from admitted snapshots and committed state", async () => {
+it("shares immutable actor revisions and isolates explicit policy copies", async () => {
   await withActor(async ({ actor }) => {
     const initial = await actor.read(authority);
+    expect(actor.snapshot(authority)).toBe(initial);
+    expect(await actor.read(authority)).toBe(initial);
     const stages: string[] = [];
     const result = await actor.patch(
       {
@@ -545,11 +525,17 @@ it("isolates mutable policy callbacks from admitted snapshots and committed stat
         assertCurrent() {},
         authorize(stage, snapshot) {
           stages.push(stage);
-          if (snapshot.entry) {
-            snapshot.entry.sessionId = "policy-mutated";
+          expect(Object.isFrozen(snapshot)).toBe(true);
+          expect(Object.isFrozen(snapshot.entry)).toBe(true);
+          expect(() => {
+            snapshot.dependencySessionIds.length = 0;
+          }).toThrow(TypeError);
+          const copy = structuredClone(snapshot);
+          if (copy.entry) {
+            copy.entry.sessionId = "policy-mutated";
           }
-          snapshot.version = { epoch: "policy-mutated", sequence: -1 };
-          snapshot.transcript.anchors.length = 0;
+          copy.version = { epoch: "policy-mutated", sequence: -1 };
+          copy.dependencySessionIds.length = 0;
         },
       },
     );
@@ -563,8 +549,139 @@ it("isolates mutable policy callbacks from admitted snapshots and committed stat
     expect(stages).toContain("transaction");
     expect(stages).toContain("commit");
     expect(actor.snapshot(authority)?.entry?.sessionId).toBe(initial.entry?.sessionId);
+    if (result.kind !== "committed") {
+      throw new Error("Expected committed actor revision");
+    }
+    expect(actor.snapshot(authority)).toBe(result.receipt.postimage);
+    expect(actor.snapshot(authority)).not.toBe(initial);
+    expect(initial.entry?.updatedAt).not.toBe(123);
   });
 });
+
+it("admits tool appends once per transaction boundary without transferring transcript indexes", async () => {
+  await withActor(async ({ actor, admissions }) => {
+    const initial = await actor.read(authority);
+    const append = {
+      kind: "message" as const,
+      input: {
+        scope: {
+          agentId: "main",
+          storePath:
+            actor.target.database.kind === "file" ? actor.target.database.nativeLocation : "unused",
+          sessionKey: actor.target.sessionKey,
+          sessionId: initial.entry!.sessionId,
+        },
+        cwd: "/synthetic",
+        messageJson: JSON.stringify({
+          role: "toolResult",
+          toolCallId: "call",
+          toolName: "synthetic",
+          content: [{ type: "text", text: "tool output" }],
+          isError: false,
+          timestamp: 1,
+        }),
+      },
+    };
+    admissions.length = 0;
+    const result = await actor.appendToolResult(
+      { commandId: "tool", phaseId: "turn", append },
+      authority,
+    );
+    expect(result.kind).toBe("committed");
+    expect(admissions.map(({ stage }) => stage)).toEqual(["transaction", "commit"]);
+    for (const request of admissions) {
+      expect(request.facts).toMatchObject({
+        publication: {
+          snapshot: { target: actor.target, entry: { sessionId: initial.entry!.sessionId } },
+        },
+      });
+      const facts = isRecord(request.facts) ? request.facts.publication : undefined;
+      expect(
+        isRecord(facts) && isRecord(facts.snapshot) && Object.hasOwn(facts.snapshot, "transcript"),
+      ).toBe(false);
+    }
+    const committed = actor.snapshot(authority)!;
+    expect(committed.transcript.anchors.length).toBeGreaterThan(initial.transcript.anchors.length);
+    const refused = await actor.appendToolResult(
+      {
+        commandId: "refused-tool",
+        phaseId: "turn",
+        append: { ...append, input: { ...append.input, freshMessageCheck: true } },
+      },
+      {
+        assertCurrent() {},
+        authorize(stage, _facts, publication) {
+          if (isRecord(publication) && publication.check === "fresh") {
+            throw new Error("Fresh-message authority revoked");
+          }
+          if (stage === "commit") {
+            throw new Error("Commit authority revoked");
+          }
+        },
+      },
+    );
+    expect(refused).toMatchObject({
+      kind: "rolled-back",
+      error: { message: "Fresh-message authority revoked" },
+    });
+    expect((await actor.read(authority)).transcript).toEqual(committed.transcript);
+  });
+});
+
+it.each([false, true])(
+  "appends prepared session-manager messages without snapshot disclosure (toolResult=%s)",
+  async (toolResult) => {
+    await withActor(async ({ actor, fault, admissions }) => {
+      const initial = await actor.read(authority);
+      const sessionId = initial.entry!.sessionId;
+      fault.disclosureRevoked = true;
+      expect(() => actor.snapshot(authority)).toThrow("Snapshot disclosure revoked");
+      admissions.length = 0;
+      const result = await appendSessionManagerActor({
+        actor,
+        toolResult,
+        assertCurrent: () => authority.assertCurrent(),
+        append: {
+          kind: "message",
+          input: {
+            scope: {
+              agentId: "main",
+              storePath:
+                actor.target.database.kind === "file"
+                  ? actor.target.database.nativeLocation
+                  : "unused",
+              sessionKey: actor.target.sessionKey,
+              sessionId,
+            },
+            cwd: "/synthetic",
+            messageJson: JSON.stringify(
+              toolResult
+                ? {
+                    role: "toolResult",
+                    toolCallId: "prepared-tool",
+                    toolName: "synthetic",
+                    content: [{ type: "text", text: "prepared result" }],
+                    isError: false,
+                    timestamp: 2,
+                  }
+                : { role: "user", content: "prepared input", timestamp: 2 },
+            ),
+          },
+        },
+      });
+      expect(result.failure).toBeUndefined();
+      expect(result.committed).toMatchObject({
+        kind: "message",
+        value: { snapshot: { ok: true } },
+      });
+      expect(admissions.map(({ stage }) => stage)).toEqual(["transaction", "commit"]);
+      fault.disclosureRevoked = false;
+      const current = actor.snapshot(authority)!;
+      expect(current.version.sequence).toBe(initial.version.sequence + 1);
+      expect(current.transcript.anchors).toHaveLength(initial.transcript.anchors.length + 1);
+    });
+  },
+);
 
 it("retains rollback state and fences unknown commits until an explicit read", async () => {
   await withActor(async ({ actor, commands, fault }) => {

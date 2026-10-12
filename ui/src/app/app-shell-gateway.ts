@@ -555,8 +555,6 @@ export class ShellGatewayOwner {
           configObject,
           scope,
           isCurrent: remainsCurrent,
-          onError: reportError,
-          canWrite: () => hasOperatorWriteAccess(context.gateway.snapshot.hello?.auth ?? null),
           onApplied: () => {
             if (remainsCurrent()) {
               context.theme.refresh({ notify: true });

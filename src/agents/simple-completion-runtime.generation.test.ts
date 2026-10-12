@@ -24,6 +24,11 @@ vi.mock("./prepared-model-runtime.js", () => ({
   acquireAgentRunPreparedModelRuntime: mocks.acquireRuntimeLease,
 }));
 
+// mock-isolation: generation ownership uses an empty auth store without host credential discovery.
+vi.mock("./auth-profiles/store-runtime.js", () => ({
+  ensureAuthProfileStoreAsync: async () => ({ version: 1, profiles: {} }),
+}));
+
 vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
   resolvePluginMetadataSnapshot: mocks.resolvePluginMetadataSnapshot,

@@ -91,7 +91,11 @@ async function writeConfig(config: OpenClawConfig) {
     throw new Error("OPENCLAW_CONFIG_PATH missing in gateway test environment");
   }
   await fs.mkdir(path.dirname(configPath), { recursive: true });
-  await fs.writeFile(configPath, `${JSON.stringify(config)}\n`, "utf-8");
+  const fixtureConfig = {
+    ...config,
+    session: { ...config.session, store: testState.sessionStorePath },
+  };
+  await fs.writeFile(configPath, `${JSON.stringify(fixtureConfig)}\n`, "utf-8");
 }
 
 async function emitLifecycleAssistantReply(params: {

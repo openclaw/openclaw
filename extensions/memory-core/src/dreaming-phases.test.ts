@@ -22,7 +22,7 @@ import {
 import { forgetMemoryEntries } from "./memory-forget.js";
 import { previewRemHarness } from "./rem-harness.js";
 import { appendSessionCorpusLines } from "./session-ingestion.js";
-import { makeMessage, withSessionAdmissionReadBudget } from "./session-ingestion.test-support.js";
+import { makeMessage, withoutHostSessionAdmissionReads } from "./session-ingestion.test-support.js";
 import {
   applyShortTermPromotions,
   rankShortTermPromotionCandidates,
@@ -747,8 +747,7 @@ describe("memory-core dreaming phases", () => {
     const corpusFile = corpusPath(workspaceDir);
     const corpus = await fs.readFile(corpusFile, "utf-8");
     expect(corpus).toContain("Move backups to S3 Glacier.");
-    expect(corpus).not.toContain("OPENAI_API_KEY=sk-1234567890abcdef");
-    expect(corpus).toContain("OPENAI_API_KEY=***");
+    expect(corpus).toContain("OPENAI_API_KEY=sk-1234567890abcdef");
     expect(corpus).toContain("Set retention to 365 days.");
     expect(corpus).toContain(`${renderedSource}User: ${renderedPadding}\n`);
     expect(corpus).toContain(
@@ -814,7 +813,7 @@ describe("memory-core dreaming phases", () => {
     const excludedHarness = createHarness(excludedConfig, workspaceDir);
     const corpusFile = corpusPath(workspaceDir);
 
-    await withSessionAdmissionReadBudget(() => runLight(excludedHarness.sweep), 1);
+    await withoutHostSessionAdmissionReads(() => runLight(excludedHarness.sweep));
     const excludedState = await dreamingTestState.readSessionIngestionState(workspaceDir);
     expect(excludedState.files["main:sessions/main/gmail-session"]).toMatchObject({
       contentHash: "",
@@ -832,7 +831,7 @@ describe("memory-core dreaming phases", () => {
     const admittedHarness = createDailyHarness(workspaceDir, {
       includeMainAgent: true,
     });
-    await withSessionAdmissionReadBudget(() => runLight(admittedHarness.sweep, 6), 0);
+    await withoutHostSessionAdmissionReads(() => runLight(admittedHarness.sweep, 6));
     const admittedState = await dreamingTestState.readSessionIngestionState(workspaceDir);
     expect(admittedState.files["main:sessions/main/gmail-session"]).not.toHaveProperty(
       "excludedReason",

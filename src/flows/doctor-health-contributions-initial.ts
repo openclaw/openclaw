@@ -29,7 +29,11 @@ import type {
   DoctorHealthContribution,
   DoctorHealthFlowContext,
 } from "./doctor-health-contribution-types.js";
-import { createDoctorHealthContribution, legacyOwnedRepair } from "./doctor-health-contribution.js";
+import {
+  createDoctorHealthContribution,
+  legacyOwnedRepair,
+  recordDoctorHealthWarnings,
+} from "./doctor-health-contribution.js";
 
 function coreHealthRunner(checkId: string): DoctorHealthContribution["run"] {
   return async (ctx) => {
@@ -86,6 +90,22 @@ export function resolveInitialDoctorHealthContributions(params: {
     createDoctorHealthContribution("doctor:gateway-config", "Gateway config", {
       healthCheckIds: ["core/doctor/gateway-config"],
       run: params.runGatewayConfigHealth,
+    }),
+    createDoctorHealthContribution("doctor:database-engine", "Database engines", {
+      healthChecks: {
+        description: "Selected database engines and experimental PostgreSQL limitations.",
+        async detect(ctx) {
+          const { collectDatabaseEngineHealthFindings } =
+            await import("../commands/doctor-database-engine.js");
+          return collectDatabaseEngineHealthFindings(ctx.cfg);
+        },
+      },
+      async run(ctx) {
+        const { noteDatabaseEngines, collectDatabaseEngineHealthFindings } =
+          await import("../commands/doctor-database-engine.js");
+        noteDatabaseEngines(ctx.cfg);
+        recordDoctorHealthWarnings(ctx, collectDatabaseEngineHealthFindings(ctx.cfg));
+      },
     }),
     createDoctorHealthContribution("doctor:auth-profile-migration", "Auth profile migration", {
       updateWork: { kind: "startup" },

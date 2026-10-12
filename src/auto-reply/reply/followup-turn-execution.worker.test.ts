@@ -1,7 +1,10 @@
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.sqlite-entry.js";
-import * as historyReaders from "../../config/sessions/session-transcript-worker-readers.js";
+import {
+  loadSessionEntryReadOnly,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
   openOpenClawAgentDatabase,
@@ -11,6 +14,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import {
   createFollowupTurnTestTypingController,
   createFollowupTurnTestTurn,
@@ -24,20 +28,15 @@ const state = getFollowupTurnTestState();
 let testState: OpenClawTestState;
 let database: ReturnType<typeof openOpenClawAgentDatabase>;
 let reads: typeof import("../../config/sessions/session-entry-read-runtime.js");
-let orderedReads: typeof import("../../config/sessions/session-entry-read-ordered.js");
 
 beforeAll(async () => {
   testState = await createOpenClawTestState({ scenario: "minimal" });
   database = openOpenClawAgentDatabase({ agentId: "main", env: testState.env });
   reads = await vi.importActual("../../config/sessions/session-entry-read-runtime.js");
-  orderedReads = await vi.importActual("../../config/sessions/session-entry-read-ordered.js");
 });
 beforeEach(() => {
   resetFollowupTurnTestState();
-  state.withStoreReaderInWorker.mockImplementation(reads.withSessionStoreReaderInWorker);
-  state.withOrderedEntriesInWorker.mockImplementation(
-    orderedReads.withOrderedSessionEntriesInWorker,
-  );
+  state.withEntryReader.mockImplementation(reads.withSessionEntryReadOnlyInWorker);
   state.loadEntryReadOnly.mockImplementation(loadSessionEntryReadOnly);
 });
 afterAll(async () => testState.cleanup());
@@ -131,38 +130,31 @@ it("refreshes incognito visibility from its process-held session", async () => {
   });
 });
 
-it("refuses scanned verbosity rewritten before awaited visibility consumes it", async () => {
+it("updates synchronous tool gates from committed preferences without main-thread reads", async () => {
   const key = "agent:main:followup-visibility";
-  const { turn, entry, handle } = createStoredTurn({ key });
-  let rewritten = false;
-  const rewriteAfterScan = () => {
-    if (!rewritten) {
-      rewritten = true;
-      writeSessionEntry(database, key, { ...entry, updatedAt: 3 });
-    }
+  const { turn, entry } = createStoredTurn({ key });
+  const scope = {
+    agentId: "main",
+    storePath: database.path,
+    sessionKey: key,
+    env: testState.env,
   };
-  const createReaders = historyReaders.createSessionHistoryWorkerReaders;
-  const intercept = vi
-    .spyOn(historyReaders, "createSessionHistoryWorkerReaders")
-    .mockImplementation((runRequest) => {
-      const reader = createReaders(runRequest);
-      return {
-        ...reader,
-        readExactEntries: async (...args) => {
-          const result = await reader.readExactEntries(...args);
-          rewriteAfterScan();
-          return result;
-        },
-      };
-    });
-  try {
-    await inspectVisibility(turn, async (isActive) => {
-      const visible = await isActive();
-      expect(rewritten).toBe(true);
-      expect(handle.getCurrent()).toEqual(entry);
-      expect(visible).toBe(false);
-    });
-  } finally {
-    intercept.mockRestore();
-  }
+  await upsertSessionEntryCore(scope, { ...entry, updatedAt: 2, verboseLevel: "full" });
+  state.execute.mockImplementation(async (params: AgentTurnParams) => {
+    for (const level of ["off", "full"] as const) {
+      await upsertSessionEntryCore(scope, { ...entry, updatedAt: 3, verboseLevel: level });
+      const sql = observeHostDataSql();
+      try {
+        expect(params.shouldEmitToolResult()).toBe(level === "full");
+        expect(params.shouldEmitToolOutput()).toBe(level === "full");
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
+      }
+    }
+    return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
+  });
+  await inspectVisibility(turn, async (isActive) => {
+    expect(await isActive()).toBe(true);
+  });
 });

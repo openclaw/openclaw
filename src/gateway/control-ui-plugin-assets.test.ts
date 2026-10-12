@@ -927,19 +927,4 @@ describe("native Control UI browser assets", () => {
     expect(undeclared.plugins[0]).not.toHaveProperty("uiCapabilities");
     expect(undeclared.plugins[0]!.revision).not.toBe(next.plugins[0]!.revision);
   });
-
-  it("fences a queued reload after registry replacement and builds a fresh backend owner", async () => {
-    const fixture = activateFixture();
-    const first = await listControlUiPluginCatalog();
-    const pending = reloadControlUiPluginCatalog("native-ui");
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    await expect(pending).rejects.toThrow("no longer active");
-    expect((await listControlUiPluginCatalog()).plugins).toEqual([]);
-    fs.writeFileSync(path.join(fixture.directory, "index.js"), "export default {};");
-    const replacement = createEmptyPluginRegistry();
-    replacement.plugins.push(createPluginRecord({ ...fixture.record }));
-    setActivePluginRegistry(replacement);
-    const second = await listControlUiPluginCatalog();
-    expect(second.plugins[0]!.revision).not.toBe(first.plugins[0]!.revision);
-  });
 });

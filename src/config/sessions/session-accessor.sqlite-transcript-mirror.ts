@@ -14,7 +14,6 @@ import {
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { createTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-anchor.js";
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
-import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 import { transcriptEventJsonSql, transcriptEventRunIdSql } from "./transcript-payload.js";
@@ -22,6 +21,8 @@ import { selectVisibleTranscriptEvents } from "./transcript-visible-events.js";
 
 // Keep supplied-key probes below SQLite's conservative variable ceiling.
 const TRANSCRIPT_MIRROR_KEY_QUERY_BATCH_SIZE = 900;
+// Legacy runs without an indexed input can only be correlated while still recent.
+const TRANSCRIPT_MIRROR_RUN_LOOKBACK_EVENTS = 4096;
 
 type TranscriptMirrorFacts = {
   anchorsByIdempotencyKey: Map<string, TranscriptEntryAnchor>;
@@ -30,36 +31,48 @@ type TranscriptMirrorFacts = {
   sourceEvents?: TranscriptEvent[];
 };
 
-/** Returns raw events only when the transcript identity projection is not current. */
-function loadTranscriptEventsForMirrorFallback(
-  database: OpenClawAgentDatabase,
-  sessionId: string,
-): TranscriptEvent[] | undefined {
+/** Read projection readiness once in the mirror's transaction snapshot. */
+function readTranscriptMirrorProjection(database: OpenClawAgentDatabase, sessionId: string) {
   const db = getSessionKysely(database.db);
-  const latest = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db
-      .selectFrom("transcript_events")
-      .select("seq")
-      .where("session_id", "=", sessionId)
-      .orderBy("seq", "desc")
-      .limit(1),
-  );
-  if (!latest) {
-    return [];
-  }
   const state = executeSqliteQueryTakeFirstSync(
     database.db,
     db
-      .selectFrom("session_transcript_index_state")
-      .select(["indexed_seq", "needs_rebuild"])
-      .where("session_id", "=", sessionId),
+      .selectFrom(
+        db
+          .selectFrom("transcript_events")
+          .select("seq")
+          .where("session_id", "=", sessionId)
+          .orderBy("seq", "desc")
+          .limit(1)
+          .as("latest"),
+      )
+      .leftJoin("session_transcript_index_state as state", (join) =>
+        join.on("state.session_id", "=", sessionId),
+      )
+      .select(["latest.seq", "state.indexed_seq", "state.needs_rebuild"])
+      .select((eb) =>
+        eb
+          .exists(
+            eb
+              .selectFrom("session_transcript_active_events")
+              .select("session_id")
+              .where("session_id", "=", sessionId)
+              .where("context_eligible", "is", null),
+          )
+          .as("has_unclassified"),
+      ),
   );
-  if (state && state.needs_rebuild === 0 && state.indexed_seq === latest.seq) {
-    return undefined;
+  if (!state) {
+    return { fallbackEvents: [], anchorsReady: false };
+  }
+  if (state.needs_rebuild === 0 && state.indexed_seq === state.seq) {
+    return { fallbackEvents: undefined, anchorsReady: !state.has_unclassified };
   }
   // Raw rows stay authoritative if projection maintenance has not caught up.
-  return loadTranscriptEventsFromDatabase(database, sessionId);
+  return {
+    fallbackEvents: loadTranscriptEventsFromDatabase(database, sessionId),
+    anchorsReady: false,
+  };
 }
 
 /** Reads the bounded identity facts needed by transcript mirrors. */
@@ -76,7 +89,10 @@ export function readTranscriptMirrorFacts(
     () => {
       assertSessionTranscriptHot(database.db, resolved.sessionId);
       const idempotencyKeys = [...new Set(params.idempotencyKeys)];
-      const fallbackEvents = loadTranscriptEventsForMirrorFallback(database, resolved.sessionId);
+      const { fallbackEvents, anchorsReady } = readTranscriptMirrorProjection(
+        database,
+        resolved.sessionId,
+      );
       if (fallbackEvents !== undefined) {
         return readMirrorFactsFromEvents(
           fallbackEvents,
@@ -98,67 +114,79 @@ export function readTranscriptMirrorFacts(
           batches.push([]);
         }
       }
-      let anchorsReady: boolean | undefined;
+      const events = db
+        .selectFrom("transcript_event_identities as identity")
+        .innerJoin("transcript_events as event", (join) =>
+          join
+            .onRef("identity.session_id", "=", "event.session_id")
+            .onRef("identity.seq", "=", "event.seq"),
+        )
+        .leftJoin("session_transcript_active_events as active", (join) =>
+          join
+            .onRef("active.session_id", "=", "event.session_id")
+            .onRef("active.event_seq", "=", "event.seq"),
+        )
+        .leftJoin("transcript_rewrite_watermarks as rewrite", (join) =>
+          join.onRef("rewrite.session_id", "=", "event.session_id"),
+        )
+        .select([
+          "identity.event_id",
+          "identity.message_idempotency_key",
+          "event.seq",
+          "identity.parent_id",
+          transcriptEventJsonSql(database.db, "event").as("event_json"),
+          "active.message_position",
+          "rewrite.generation",
+        ]);
       for (const batch of batches) {
+        let query = events
+          .where("identity.session_id", "=", resolved.sessionId)
+          .where("identity.message_idempotency_key", "in", batch)
+          .select((eb) => eb.val(0).as("is_source"));
         const sourceRunId = batch === batches[0] ? params.sourceRunId : undefined;
-        const rows = executeSqliteQuerySync(
-          database.db,
-          db
-            .selectFrom("transcript_events as event")
-            .leftJoin("transcript_event_identities as identity", (join) =>
-              join
-                .onRef("identity.session_id", "=", "event.session_id")
-                .onRef("identity.seq", "=", "event.seq"),
-            )
-            .leftJoin("session_transcript_active_events as active", (join) =>
-              join
-                .onRef("active.session_id", "=", "event.session_id")
-                .onRef("active.event_seq", "=", "event.seq"),
-            )
-            .leftJoin("transcript_rewrite_watermarks as rewrite", (join) =>
-              join.onRef("rewrite.session_id", "=", "event.session_id"),
-            )
-            .select([
-              "identity.event_id",
-              "identity.message_idempotency_key",
-              "event.seq",
-              "identity.parent_id",
-              transcriptEventJsonSql(database.db, "event").as("event_json"),
-              "active.message_position",
-              "rewrite.generation",
-            ])
-            .where("event.session_id", "=", resolved.sessionId)
-            .where((eb) => {
-              const matchesKey = eb("identity.message_idempotency_key", "in", batch);
-              return sourceRunId
-                ? eb.or([
-                    matchesKey,
-                    eb.and([
-                      eb("active.event_seq", "is not", null),
-                      eb(transcriptEventRunIdSql("event"), "=", sourceRunId),
-                    ]),
-                  ])
-                : matchesKey;
-            })
-            .orderBy("event.seq", "asc"),
-        ).rows;
+        if (sourceRunId) {
+          // UNION keeps each branch independently indexable; an OR here scans
+          // the session. The input bounds long runs without truncating them.
+          query = query.unionAll(
+            events
+              .where("event.session_id", "=", resolved.sessionId)
+              .where("active.event_seq", "is not", null)
+              .where("event.message_role", "=", "assistant")
+              .where("event.seq", ">=", (eb) =>
+                eb.fn.coalesce(
+                  db
+                    .selectFrom("transcript_event_identities")
+                    .select("seq")
+                    .where("session_id", "=", resolved.sessionId)
+                    .where("message_idempotency_key", "=", `${sourceRunId}:user`),
+                  eb(
+                    db
+                      .selectFrom("transcript_events")
+                      .select((latest) => latest.fn.max<number>("seq").as("seq"))
+                      .where("session_id", "=", resolved.sessionId),
+                    "-",
+                    TRANSCRIPT_MIRROR_RUN_LOOKBACK_EVENTS - 1,
+                  ),
+                ),
+              )
+              .where(transcriptEventRunIdSql("event"), "=", sourceRunId)
+              .select((eb) => eb.val(1).as("is_source")),
+          );
+        }
+        const rows = executeSqliteQuerySync(database.db, query.orderBy("event.seq", "asc")).rows;
         for (const row of rows) {
           // SAFETY: event_json reconstructs the stored TranscriptEvent via transcriptEventJsonSql.
           const event = JSON.parse(row.event_json) as TranscriptEvent;
-          const message = readTranscriptEventMessage(event);
-          if (
-            sourceRunId &&
-            row.message_position !== null &&
-            readSessionTranscriptRunId(message) === sourceRunId
-          ) {
+          if (row.is_source) {
             facts.sourceEvents?.push(event);
+            continue;
           }
+          const message = readTranscriptEventMessage(event);
           const idempotencyKey = row.message_idempotency_key;
           if (!idempotencyKey || !row.event_id || !batch.includes(idempotencyKey)) {
             continue;
           }
           facts.existingIdempotencyKeys.add(idempotencyKey);
-          anchorsReady ??= !sessionTranscriptIndexNeedsReconcile(database.db, resolved.sessionId);
           const anchor = anchorsReady
             ? createTranscriptEntryAnchor({
                 database,
@@ -196,9 +224,10 @@ function readMirrorFactsFromEvents(
     messagesByIdempotencyKey: new Map(),
   };
   if (sourceRunId) {
-    facts.sourceEvents = selectVisibleTranscriptEvents(events).filter(
-      (event) => readSessionTranscriptRunId(readTranscriptEventMessage(event)) === sourceRunId,
-    );
+    facts.sourceEvents = selectVisibleTranscriptEvents(events).filter((event) => {
+      const message = readTranscriptEventMessage(event);
+      return message?.role === "assistant" && readSessionTranscriptRunId(message) === sourceRunId;
+    });
   }
   for (const event of events) {
     const message = readTranscriptEventMessage(event);
