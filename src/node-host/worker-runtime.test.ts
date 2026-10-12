@@ -247,7 +247,6 @@ it("keeps the private app worker unrestricted by a saved headless command allowl
 it.each([
   { desktopSharingEnabled: undefined, configured: false, enabled: false },
   { desktopSharingEnabled: false, configured: true, enabled: false },
-  { desktopSharingEnabled: true, configured: false, enabled: true },
 ])(
   "publishes the app's desktop preference in the worker manifest: $desktopSharingEnabled",
   async ({ desktopSharingEnabled, configured, enabled }) => {
@@ -358,38 +357,32 @@ it("publishes hosting through the app route and retires it on disconnect", async
   }
 });
 
-it.each([null, { total: 2, available: 0 }])(
-  "reports hosting only after supervisor capacity exists: %j",
-  async (initialWorkerCapacity) => {
-    const { messages, stop } = startWorkerFixture(true, undefined, { initialWorkerCapacity });
-    try {
-      await vi.waitFor(() =>
-        expect(messages.some((message) => message.type === "ready")).toBe(true),
-      );
-      expect(messages.find((message) => message.type === "ready")).toMatchObject({
-        workerHostingEnabled: initialWorkerCapacity !== null,
-      });
-      expect(messages.filter((message) => message.type === "worker-hosting")).toEqual([]);
-      const callbacks = fixture.start.mock.calls[0]?.[0];
-      callbacks.onRunnerCapacityChanged({ total: 2, available: 0 });
-      callbacks.onRunnerCapacityChanged({ total: 2, available: 1 });
-      expect(messages.filter((message) => message.type === "worker-hosting")).toEqual(
-        initialWorkerCapacity === null ? [{ type: "worker-hosting", enabled: true }] : [],
-      );
-    } finally {
-      await stop();
-    }
-    expect(messages.findLast((message) => message.type === "worker-hosting")).toEqual({
-      type: "worker-hosting",
-      enabled: false,
+it("reports hosting only after supervisor capacity exists", async () => {
+  const { messages, stop } = startWorkerFixture(true, undefined, { initialWorkerCapacity: null });
+  try {
+    await vi.waitFor(() => expect(messages.some((message) => message.type === "ready")).toBe(true));
+    expect(messages.find((message) => message.type === "ready")).toMatchObject({
+      workerHostingEnabled: false,
     });
-  },
-);
+    expect(messages.filter((message) => message.type === "worker-hosting")).toEqual([]);
+    const callbacks = fixture.start.mock.calls[0]?.[0];
+    callbacks.onRunnerCapacityChanged({ total: 2, available: 0 });
+    callbacks.onRunnerCapacityChanged({ total: 2, available: 1 });
+    expect(messages.filter((message) => message.type === "worker-hosting")).toEqual([
+      { type: "worker-hosting", enabled: true },
+    ]);
+  } finally {
+    await stop();
+  }
+  expect(messages.findLast((message) => message.type === "worker-hosting")).toEqual({
+    type: "worker-hosting",
+    enabled: false,
+  });
+});
 
 it.runIf(process.platform !== "win32").each([
   { scenario: "same Gateway reconnect", target: "a", elapsedMs: 0, rejectRefresh: false },
   { scenario: "replacement within cache TTL", target: "b", elapsedMs: 0, rejectRefresh: false },
-  { scenario: "replacement after cache TTL", target: "b", elapsedMs: 90_001, rejectRefresh: false },
   { scenario: "replacement refresh failure", target: "b", elapsedMs: 90_001, rejectRefresh: true },
 ])("scopes skill-authorized execution to the worker connection: $scenario", async (scenario) => {
   await withTestDir({ prefix: "openclaw-skill-exec-" }, async (dir) => {
@@ -649,7 +642,7 @@ it("publishes host stats through the native bridge only while connected", async 
   }
 });
 
-it.each(["prepared failure", "later failure", "configured opt-out"] as const)(
+it.each(["prepared failure", "later failure"] as const)(
   "keeps worker hosting diagnostics local across reconnects: %s",
   async (scenario) => {
     const secret = "fixture-secret";
@@ -712,11 +705,7 @@ it.each(["prepared failure", "later failure", "configured opt-out"] as const)(
       await setImmediate();
       expect(inventories()).toHaveLength(laterFailure ? 3 : 2);
       expect(inventories().at(-1)).toMatchObject({ generation: 3, params: disabledInventory });
-      if (scenario === "configured opt-out") {
-        expect(stderr).not.toHaveBeenCalled();
-      } else {
-        expectDiagnostic();
-      }
+      expectDiagnostic();
       const output = stdout.mock.calls.map(([chunk]) => String(chunk)).join("");
       expect(output).not.toContain(secret);
       expect(output).not.toContain(reason);

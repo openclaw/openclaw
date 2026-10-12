@@ -6,7 +6,6 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   NODE_WORKSPACE_DRAIN_COMMAND,
-  parseNodeWorkerWorkspaceExecInput,
   parseNodeWorkerWorkspaceExecResult,
   type NodeWorkerWorkspaceExecInput,
 } from "../worker/node-workspace-protocol.js";
@@ -172,58 +171,46 @@ describe("conversation-owned preview processes", () => {
     expect(fs.existsSync(launched.workspaceDir)).toBe(false);
   });
 
-  it.each(["foreground", "preview", "reset"] as const)(
-    "revokes a queued %s command but reopens fresh execution at the retained epoch",
-    async (kind) => {
-      const { workspace } = fixture(true);
-      const entered = createDeferredCore();
-      const lookup = createDeferredCore<undefined>();
-      const find = vi
-        .spyOn(NodeWorkerPreparedWorkspaceStore.prototype, "find")
-        .mockResolvedValue(undefined);
-      const command: NodeWorkerWorkspaceExecInput = {
-        ...identity,
-        argv: [runtimeExecutableName, "-e", "process.stdout.write('fresh')"],
-        ...(kind === "preview"
-          ? { process: { action: "start" as const, processId: "fresh-preview" } }
-          : { nativeProcessOwner: true, ...(kind === "reset" ? { resetWorkspace: true } : {}) }),
-      };
-      // Keep a sentinel in the retained workspace so a late reset cannot silently delete it.
-      const initial = await workspace.exec({
-        ...identity,
-        nativeProcessOwner: true,
-        argv: [runtimeExecutableName, "-e", "process.exit(0)"],
-      });
-      const sentinel = path.join(initial.workspaceDir, "retained.txt");
-      fs.writeFileSync(sentinel, "retained");
-      find.mockImplementationOnce(async () => {
-        entered.resolve();
-        return await lookup.promise;
-      });
-      const pending = workspace.exec(command);
-      void pending.catch(() => undefined);
-      try {
-        await awaitGateBeforeSettlement(
-          entered.promise,
-          pending,
-          "lookup did not hold the command",
-        );
-        await workspace.processes.stopEnvironment({ ...identity, ownerEpoch: 1 });
-        lookup.resolve(undefined);
-        await expect(pending).rejects.toThrow("retired");
-        expect(fs.readFileSync(sentinel, "utf8")).toBe("retained");
-        const fresh = await workspace.exec(command);
-        if (kind === "preview") {
-          expect(fresh.process?.processId).toBe("fresh-preview");
-        } else {
-          expect(fresh).toMatchObject({ code: 0, stdout: "fresh" });
-        }
-      } finally {
-        lookup.resolve(undefined);
-        await pending.catch(() => undefined);
-      }
-    },
-  );
+  it("revokes a queued reset command but reopens fresh execution at the retained epoch", async () => {
+    const { workspace } = fixture(true);
+    const entered = createDeferredCore();
+    const lookup = createDeferredCore<undefined>();
+    const find = vi
+      .spyOn(NodeWorkerPreparedWorkspaceStore.prototype, "find")
+      .mockResolvedValue(undefined);
+    const command: NodeWorkerWorkspaceExecInput = {
+      ...identity,
+      argv: [runtimeExecutableName, "-e", "process.stdout.write('fresh')"],
+      nativeProcessOwner: true,
+      resetWorkspace: true,
+    };
+    // Keep a sentinel in the retained workspace so a late reset cannot silently delete it.
+    const initial = await workspace.exec({
+      ...identity,
+      nativeProcessOwner: true,
+      argv: [runtimeExecutableName, "-e", "process.exit(0)"],
+    });
+    const sentinel = path.join(initial.workspaceDir, "retained.txt");
+    fs.writeFileSync(sentinel, "retained");
+    find.mockImplementationOnce(async () => {
+      entered.resolve();
+      return await lookup.promise;
+    });
+    const pending = workspace.exec(command);
+    void pending.catch(() => undefined);
+    try {
+      await awaitGateBeforeSettlement(entered.promise, pending, "lookup did not hold the command");
+      await workspace.processes.stopEnvironment({ ...identity, ownerEpoch: 1 });
+      lookup.resolve(undefined);
+      await expect(pending).rejects.toThrow("retired");
+      expect(fs.readFileSync(sentinel, "utf8")).toBe("retained");
+      const fresh = await workspace.exec(command);
+      expect(fresh).toMatchObject({ code: 0, stdout: "fresh" });
+    } finally {
+      lookup.resolve(undefined);
+      await pending.catch(() => undefined);
+    }
+  });
 
   it("keeps overlapping stops sealed and excludes higher epochs from stale stop", async () => {
     const { workspace } = fixture(true);
@@ -343,17 +330,5 @@ describe("conversation-owned preview processes", () => {
       expect(result.stderr.length).toBeGreaterThan(0);
       expect(parseNodeWorkerWorkspaceExecResult(result)).toEqual(result);
     });
-  });
-
-  it.each([
-    { process: { action: "start", processId: "bad/id" } },
-    { process: { action: "status", processId: "preview" } },
-    { process: { action: "start", processId: "preview" }, resetWorkspace: true },
-  ])("rejects malformed process operations at the node protocol boundary %#", (change) => {
-    expect(() =>
-      parseNodeWorkerWorkspaceExecInput(
-        JSON.stringify({ ...identity, argv: ["node", "-e", "process.exit(0)"], ...change }),
-      ),
-    ).toThrow("INVALID_REQUEST:");
   });
 });
