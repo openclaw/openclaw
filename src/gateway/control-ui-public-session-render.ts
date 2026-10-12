@@ -176,8 +176,7 @@ h1{margin:0 0 16px;color:var(--text-strong);font-size:clamp(30px,5vw,40px);font-
 
 export function publicSessionTitle(title: string): string {
   return (
-    truncateUtf16Safe(stripInternalMetadataForDisplay(title), 200).trim() ||
-    "Shared conversation"
+    truncateUtf16Safe(stripInternalMetadataForDisplay(title), 200).trim() || "Shared conversation"
   );
 }
 
@@ -237,7 +236,7 @@ export function renderPublicSessionDocument(params: {
     const entryId = getPublicSessionEntryId(item.message);
     const media: string[] = [];
     for (const attachment of collectPublicSessionAttachments(item.message)) {
-      const name = escapeHtml(truncateUtf16Safe(redactToolPayloadText(attachment.name), 200));
+      const name = escapeHtml(truncateUtf16Safe(attachment.name, 200));
       const url =
         params.mediaBaseUrl && entryId && attachment.image
           ? escapeHtml(buildPublicSessionMediaUrl(params.mediaBaseUrl, entryId, attachment.id))

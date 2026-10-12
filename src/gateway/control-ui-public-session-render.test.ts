@@ -256,6 +256,7 @@ describe("public session document", () => {
       expect(html).not.toContain("OPENCLAW_INTERNAL_CONTEXT");
       expect(html).toContain(token);
       expect(html).toContain(operatorSecret);
+      expect(html).toContain(`<title>Shared ${token} ${operatorSecret} · OpenClaw</title>`);
     } finally {
       resetLogger();
     }

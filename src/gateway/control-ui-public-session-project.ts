@@ -2,7 +2,6 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { unwrapToolCallForDisplay } from "../agents/tool-display-call.js";
 import { isToolCallContentType, resolveToolBlockArgs } from "../chat/tool-content.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import { collectPublicSessionAttachments } from "./control-ui-public-session-attachments.js";
 import {
   publicSessionMessageEntry,
@@ -30,7 +29,7 @@ function toolSummary(args: unknown): string {
       ? args
       : undefined;
   return typeof selected === "string"
-    ? truncateUtf16Safe(redactToolPayloadText(selected).replace(/\s+/gu, " ").trim(), 160)
+    ? truncateUtf16Safe(selected.replace(/\s+/gu, " ").trim(), 160)
     : "";
 }
 
@@ -65,7 +64,7 @@ export function projectPublicSessionItems(messages: unknown[]): PublicSessionIte
         name: typeof block.name === "string" ? block.name : "tool",
         args: resolveToolBlockArgs(block),
       });
-      const name = truncateUtf16Safe(redactToolPayloadText(call.name), 80);
+      const name = truncateUtf16Safe(call.name, 80);
       const summary = toolSummary(call.args);
       const previous = items.at(-1);
       if (previous?.kind === "tools") {

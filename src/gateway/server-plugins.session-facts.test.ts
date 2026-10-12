@@ -412,13 +412,15 @@ describe("trusted plugin selected session facts", () => {
       const describeRow = vi.spyOn(projection, "describe");
       try {
         sessionChanges.emit({ agentId: "main", sessionKey, scope: "runtime" });
-        acquisition.mockRejectedValueOnce(new Error("Synthetic facts read failed"));
+        acquisition.mockRejectedValueOnce(
+          new Error("Synthetic facts read failed: API_TOKEN = computeToken()"),
+        );
         const failed = await selected();
         expect(failed.sessions).toMatchObject([
           {
             key: sessionKey,
             sessionId: fixture.sessionId,
-            unavailable: "Error: Synthetic facts read failed",
+            unavailable: "Error: Synthetic facts read failed: API_TOKEN = computeToken()",
           },
         ]);
         expect(failed.missingSessionKeys).toBeUndefined();

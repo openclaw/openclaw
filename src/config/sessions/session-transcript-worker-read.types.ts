@@ -201,7 +201,4 @@ type SessionEntryWorkerRequest = {
 };
 
 export type SessionEntryWorkerInput = SessionEntryWorkerRequest &
-  (
-    | { mode?: "entry"; redaction: SensitiveTextRedactionSnapshot }
-    | { mode: "snapshot"; includeOriginalMessages: boolean }
-  );
+  ({ mode?: "entry" } | { mode: "snapshot"; includeOriginalMessages: boolean });

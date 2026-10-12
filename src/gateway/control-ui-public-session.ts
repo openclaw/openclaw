@@ -90,7 +90,7 @@ export async function serveControlUiPublicSession(params: {
   if (!secureIngress) {
     return unavailable(404);
   }
-  // A truthful HEAD would still need authorization, transcript I/O, redaction, and
+  // A truthful HEAD would still need authorization, transcript I/O, projection, and
   // rendering to compute the GET status and length. Refuse it instead of doing that work.
   if (req.method === "HEAD") {
     if (isCard) {

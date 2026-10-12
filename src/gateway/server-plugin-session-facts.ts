@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../packages/gateway-protocol/src/schema/primitives.js";
 import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { getRuntimeConfigSnapshotMetadata } from "../config/runtime-snapshot.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type {
   RuntimeSessionFactsResult,
@@ -366,9 +365,7 @@ export async function withTrustedPluginSessionFacts<T>(
           } catch (error) {
             assertAuthority();
             complete = false;
-            const unavailable = redactToolPayloadText(String(error))
-              .replace(/\s+/g, " ")
-              .slice(0, 300);
+            const unavailable = String(error).replace(/\s+/g, " ").slice(0, 300);
             for (const { key, target } of batch) {
               const { entry } = target;
               if (
