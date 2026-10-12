@@ -835,14 +835,31 @@ export function readTestSelectorSourceFacts(
   if (!executable) {
     throw new Error("A Node executable is required for test selection; add node to PATH.");
   }
-  const result = spawnSync(executable, [fileURLToPath(import.meta.url)], {
-    cwd,
-    env,
-    input: JSON.stringify({ files, terms, matchingOnly: options.matchingOnly === true }),
-    encoding: "utf8",
-    maxBuffer,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
+  const scan = (singleThreaded = false) =>
+    spawnSync(executable, [fileURLToPath(import.meta.url)], {
+      cwd,
+      env,
+      input: JSON.stringify({
+        files,
+        terms,
+        matchingOnly: options.matchingOnly === true,
+        singleThreaded,
+      }),
+      encoding: "utf8",
+      maxBuffer,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+  let result = scan();
+  // Recover only the observed V8 JIT-page assertion, without scan workers.
+  // Node 24 has a related concurrent WASM teardown defect (nodejs/node#66366).
+  // Parser errors, output overflow, and cancellation must remain fatal.
+  if (
+    !result.error &&
+    result.signal === "SIGTRAP" &&
+    result.stderr.includes("Check failed: jit_page.has_value()")
+  ) {
+    result = scan(true);
+  }
   if (result.error || result.status !== 0 || result.signal) {
     throw new Error(
       `Test selector source scan failed (${result.signal ?? result.status}): ${result.stderr}`,
@@ -895,11 +912,14 @@ async function readSourceFacts() {
   };
   // Tokenizing the full inventory is CPU-bound; stripe large scans across
   // worker threads and reassemble rows in request order.
-  const workerCount = Math.min(
-    availableParallelism(),
-    MAX_SCAN_WORKERS,
-    Math.floor(files.length / MIN_FILES_PER_SCAN_WORKER),
-  );
+  const workerCount =
+    "singleThreaded" in request && request.singleThreaded === true
+      ? 1
+      : Math.min(
+          availableParallelism(),
+          MAX_SCAN_WORKERS,
+          Math.floor(files.length / MIN_FILES_PER_SCAN_WORKER),
+        );
   const facts =
     workerCount > 1
       ? await scanSourceFactsInWorkers(scan, workerCount)

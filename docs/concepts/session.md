@@ -18,6 +18,16 @@ For the personal-agent default — one rolling conversation shared by all your
 DM channels, with group activity and background work flowing into it — see
 [The main session](/concepts/main-session).
 
+Delivered command exchanges from the shared dispatcher are conversation history
+too. OpenClaw appends the user's command and delivered reply as ordinary
+user/assistant messages. Native menus and command acknowledgements on Discord
+and Telegram, Slack argument menus, and Mattermost model pickers are also retained after delivery.
+Later turns and chat history can read these exchanges.
+Login, pairing, and sensitive `/config set` or `/debug set` values are redacted before storage.
+`/new` and `/reset` put their confirmation exchange in the new session; they do not
+rewrite the old session. `/btw` and `/side` stay ephemeral, and message edits or
+deletions do not rewrite earlier transcript rows.
+
 ## How messages are routed
 
 | Source          | Behavior                      |
@@ -133,6 +143,10 @@ context, and replies to the source room remain unchanged.
 ## Incognito sessions
 
 Incognito sessions are available only from the Control UI's **New thread** screen. Turn on **Incognito** before starting the thread to keep its session entry, transcript, and compaction state in process memory instead of on disk. The thread expires 24 hours after creation or when the Gateway restarts, whichever comes first. Activity does not extend its lifetime. Expiry stops active work and deletes the session and transcript without an archive. Incognito does not run OpenClaw's automatic memory flush, and does not create a transcript archive when you reset or delete it. Codex-backed runs also start their harness thread in ephemeral mode, so Codex writes no rollout or local session-state files; other model providers use HTTP APIs and keep no local provider transcript in OpenClaw.
+
+<Warning>
+On the Codex runtime, the Codex app-server still writes each message you submit to its own diagnostic log database (`logs_2.sqlite` in that agent's Codex home), including messages in incognito threads. Codex currently offers no setting that turns this log off, so OpenClaw cannot prevent it. For conversations that must not reach disk, use an agent on the OpenClaw runtime.
+</Warning>
 
 Delegated work uses its native execution and completion owners. Live subagent activity and completion delivery remain available.
 

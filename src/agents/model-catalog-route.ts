@@ -196,8 +196,13 @@ export function projectModelCatalogEntryForRoute(params: {
       ...projected,
       api: route.api,
       baseUrl: route.baseUrl,
-      ...(donor?.contextWindow !== undefined ? { contextWindow: donor.contextWindow } : {}),
+      ...(donor?.contextWindow !== undefined
+        ? { contextWindow: donor.contextWindow, contextWindowSource: donor.contextWindowSource }
+        : {}),
       ...(donor?.contextTokens !== undefined ? { contextTokens: donor.contextTokens } : {}),
+      ...(donor?.contextCapacitySource
+        ? { contextCapacitySource: donor.contextCapacitySource }
+        : {}),
       ...(donor?.contextWindows !== undefined ? { contextWindows: donor.contextWindows } : {}),
       ...(donor?.contextWindowDefault !== undefined
         ? { contextWindowDefault: donor.contextWindowDefault }

@@ -47,30 +47,24 @@ export async function readPreflightTranscriptContextMessages(
     return await readLegacyProjection();
   }
   const target = { ...scope, sessionKey: scope.sessionKey, storePath: scope.storePath };
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      const context = await SessionManager.openModelContextAsync(target, { signal });
-      const messages = context.buildSessionContext().messages;
-      if (messages.length > 0 || context.getEntries().length > 0) {
-        return messages;
-      }
-      // Headerless legacy projections have no canonical model-context entries.
-      return await readLegacyProjection();
-    } catch (error) {
-      if (error instanceof SessionTranscriptReadFenceError && attempt === 0) {
-        continue;
-      }
-      if (
-        !(error instanceof Error) ||
-        error.message !==
-          "Persisted legacy session transcripts require doctor/import migration before runtime use"
-      ) {
-        throw error;
-      }
-      return await readLegacyProjection();
+  try {
+    const context = await SessionManager.openModelContextAsync(target, { signal });
+    const messages = context.buildSessionContext().messages;
+    if (messages.length > 0 || context.getEntries().length > 0) {
+      return messages;
     }
+    // Headerless legacy projections have no canonical model-context entries.
+    return await readLegacyProjection();
+  } catch (error) {
+    if (
+      !(error instanceof Error) ||
+      error.message !==
+        "Persisted legacy session transcripts require doctor/import migration before runtime use"
+    ) {
+      throw error;
+    }
+    return await readLegacyProjection();
   }
-  throw new Error("Preflight transcript context retry exhausted");
 }
 
 export async function readSessionLogSnapshot(params: {

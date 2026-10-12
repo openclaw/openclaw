@@ -29,10 +29,31 @@ import type {
 import { resolveTaskUser } from "./service-process-env.js";
 import type { GatewayServiceEnv } from "./service-types.js";
 
+const WINDOWS_SID_RE = /^S-1-[\d-]+$/u;
+
 function elementKey(node: ReturnType<DOMParser["parseFromString"]>["documentElement"]): string {
   return !node.parentElement || node.parentElement.tagName === "Task"
     ? node.tagName
     : `${elementKey(node.parentElement)}.${node.tagName}`;
+}
+
+async function resolveTaskAccountSid(
+  name: string,
+  timeoutMs?: number,
+): Promise<string | undefined> {
+  const encoded = Buffer.from(name).toString("base64");
+  const identity = await execFileUtf8(
+    getWindowsPowerShellExePath(),
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      `$ErrorActionPreference='Stop'; $name=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}')); ([Security.Principal.NTAccount]$name).Translate([Security.Principal.SecurityIdentifier]).Value`,
+    ],
+    { timeout: timeoutMs ?? 15_000 },
+  );
+  const sid = identity.stdout.trim();
+  return identity.code === 0 && WINDOWS_SID_RE.test(sid) ? sid : undefined;
 }
 
 export async function auditScheduledTaskDefinition(
@@ -90,7 +111,7 @@ export async function auditScheduledTaskDefinition(
       sourcePath,
       message: `Scheduled Task ${key} differs from the installer value ${value}.`,
     });
-  // Task Scheduler exports the installer's account as a SID rather than a name.
+  // Task Scheduler can export a bare local account as a SID or a qualified name.
   let userSid: string | undefined;
   if (
     taskUser &&
@@ -98,20 +119,7 @@ export async function auditScheduledTaskDefinition(
       (node) => node.textContent.toLowerCase() !== taskUser.toLowerCase(),
     )
   ) {
-    const encoded = Buffer.from(taskUser).toString("base64");
-    const identity = await execFileUtf8(
-      getWindowsPowerShellExePath(),
-      [
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        `$ErrorActionPreference='Stop'; $name=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}')); ([Security.Principal.NTAccount]$name).Translate([Security.Principal.SecurityIdentifier]).Value`,
-      ],
-      { timeout: timeoutMs ?? 15_000 },
-    );
-    if (identity.code === 0 && /^S-1-[\d-]+$/u.test(identity.stdout.trim())) {
-      userSid = identity.stdout.trim();
-    }
+    userSid = await resolveTaskAccountSid(taskUser, timeoutMs);
   }
   const nativeDefaults: Record<string, string> = {
     // https://learn.microsoft.com/en-us/windows/win32/taskschd/task-scheduler-schema
@@ -208,7 +216,11 @@ export async function auditScheduledTaskDefinition(
       (node.tagName === "UserId" &&
         canonical &&
         taskUser &&
-        (current.toLowerCase() === taskUser.toLowerCase() || current === userSid))
+        (current.toLowerCase() === taskUser.toLowerCase() ||
+          current === userSid ||
+          (userSid !== undefined &&
+            !WINDOWS_SID_RE.test(current) &&
+            (await resolveTaskAccountSid(current, timeoutMs)) === userSid)))
     ) {
       continue;
     }

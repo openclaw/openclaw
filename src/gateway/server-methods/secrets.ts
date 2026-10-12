@@ -21,10 +21,8 @@ import {
 import { formatErrorMessage as errorMessage } from "../../infra/errors.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import type { resolveCommandSecretsFromActiveRuntimeSnapshot } from "../../secrets/runtime-command-secrets.js";
-import {
-  collectSecretStoreRefKeysInSnapshot,
-  getActiveSecretsRuntimeSnapshotState,
-} from "../../secrets/runtime-state.js";
+import { collectSecretStoreRefKeysInSnapshot } from "../../secrets/runtime-source-contract.js";
+import { getActiveSecretsRuntimeSnapshotState } from "../../secrets/runtime-state.js";
 import {
   deleteSecretStoreEntry,
   listSecretStoreEntries,

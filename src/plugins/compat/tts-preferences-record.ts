@@ -9,14 +9,14 @@ export const TTS_PREFERENCES_COMPAT_RECORD = {
   warningStarts: "2026-10-03",
   removalGate: "next-plugin-sdk-major",
   replacement:
-    "Host dispatch prepares the machine-owned TTS preference path through the shared-state reader. Retain released resolveTtsPrefsPath(config) and buildTtsSystemPromptHint(config, agentId, options) calls with synchronous return values until a public preparation contract is available, published plugin readers migrate, and a breaking Plugin SDK release is explicitly approved.",
+    "Await resolveTtsPrefsPathAsync(config) for the machine-owned path. Host dispatch carries worker-prepared preferences into synchronous prompt helpers. Retain released resolveTtsPrefsPath(config) and buildTtsSystemPromptHint(config, agentId, options) signatures until published plugin readers migrate and a breaking Plugin SDK release is explicitly approved.",
   docsPath: "/plugins/sdk-migration/compatibility-policy#tts-preference-resolution",
   surfaces: [
     "openclaw/plugin-sdk/agent-runtime resolveTtsPrefsPath",
     "openclaw/plugin-sdk/tts-runtime resolveTtsPrefsPath",
     "openclaw/plugin-sdk/tts-runtime buildTtsSystemPromptHint",
   ],
-  diagnostics: ["Compatibility registry and migration documentation; no runtime warnings"],
+  diagnostics: ["Bounded DEP_PLUGIN_SDK warning for legacy path resolution"],
   tests: [
     "src/plugin-sdk/tts-preferences-compat.test.ts",
     "src/tts/tts-preferences.worker.test.ts",

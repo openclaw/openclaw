@@ -5,13 +5,11 @@ import path from "node:path";
 import { normalizeAgentId } from "./config-utils.js";
 import { isFileMissingError, normalizeComparablePath } from "./fs-utils.js";
 import {
-  isDreamingNarrativeSessionStoreKey,
   extractAgentIdFromSessionsDir,
   canonicalizeMainSessionAlias,
   type CanonicalSessionReaderContinuation,
   cloneEnvWithPlatformSemantics,
   getRuntimeConfig,
-  isCronRunSessionKey,
   isSessionArchiveArtifactName,
   isIncognitoOpenClawAgentSqlitePath,
   isUsageCountedSessionTranscriptFileName,
@@ -28,13 +26,16 @@ import {
   resolveStorePath,
   type SessionEntry,
 } from "./openclaw-runtime-session.js";
+import {
+  classifySessionEntry,
+  collectCronGeneratedSessionKeys,
+} from "./session-transcript-corpus-policy.js";
 import type {
   SessionTranscriptCorpusEntry,
   SessionTranscriptCorpusOptions,
   SessionTranscriptCorpusScope,
   SessionTranscriptCorpusArtifact,
 } from "./session-transcript-corpus.types.js";
-import type { MemorySessionKind } from "./types.js";
 
 export type {
   SessionTranscriptCorpusEntry,
@@ -74,10 +75,6 @@ type SessionEntrySummary = {
   entry: SessionEntry;
 };
 
-function isDreamingNarrativeSessionKeyLike(value: unknown): boolean {
-  return typeof value === "string" && isDreamingNarrativeSessionStoreKey(value);
-}
-
 function normalizeRealComparablePath(pathname: string): string {
   try {
     return normalizeComparablePath(fsSync.realpathSync(pathname));
@@ -104,95 +101,6 @@ async function normalizeRealComparablePathAsync(pathname: string): Promise<strin
       return normalizeComparablePath(pathname);
     }
   }
-}
-
-function classifySessionEntry(
-  sessionKey: string,
-  entry: SessionEntry,
-  cronGeneratedSessionKeys: ReadonlySet<string>,
-): {
-  generatedByDreamingNarrative: boolean;
-  generatedByCronRun: boolean;
-  sessionKind: MemorySessionKind;
-} {
-  const generatedByDreamingNarrative =
-    isDreamingNarrativeSessionStoreKey(sessionKey) ||
-    isDreamingNarrativeSessionKeyLike(entry.spawnedBy);
-  const generatedByCronRun = cronGeneratedSessionKeys.has(sessionKey);
-  return {
-    generatedByDreamingNarrative,
-    generatedByCronRun,
-    sessionKind: generatedByCronRun
-      ? "cron"
-      : typeof entry.heartbeatIsolatedBaseSessionKey === "string" &&
-          entry.heartbeatIsolatedBaseSessionKey.trim()
-        ? "heartbeat"
-        : generatedByDreamingNarrative || Boolean(entry.spawnedBy)
-          ? "subagent"
-          : sessionKey.includes(":subagent:")
-            ? "subagent"
-            : "interactive",
-  };
-}
-
-function readParentSessionKeys(entry: SessionEntry | undefined): string[] {
-  const keys = new Set<string>();
-  for (const value of [entry?.parentSessionKey, entry?.spawnedBy]) {
-    if (typeof value !== "string") {
-      continue;
-    }
-    const trimmed = value.trim();
-    if (trimmed) {
-      keys.add(trimmed);
-    }
-  }
-  return [...keys];
-}
-
-function collectCronGeneratedSessionKeys(
-  summaries: readonly SessionEntrySummary[],
-): ReadonlySet<string> {
-  // Build the cron-generated closure once so active entries and archive
-  // artifacts share the same lineage classification.
-  const entriesByKey = new Map(summaries.map((summary) => [summary.sessionKey, summary.entry]));
-  const cronGeneratedKeys = new Set<string>();
-  const visited = new Set<string>();
-  const childrenByKey = new Map<string, string[]>();
-
-  const isCronGenerated = (sessionKey: string, entry: SessionEntry | undefined): boolean => {
-    if (isCronRunSessionKey(sessionKey)) {
-      cronGeneratedKeys.add(sessionKey);
-      return true;
-    }
-    if (visited.has(sessionKey)) {
-      return cronGeneratedKeys.has(sessionKey);
-    }
-
-    visited.add(sessionKey);
-    const generated = readParentSessionKeys(entry).some((parentKey) => {
-      const children = childrenByKey.get(parentKey) ?? [];
-      children.push(sessionKey);
-      childrenByKey.set(parentKey, children);
-      // Pruned parents still carry lineage through a cron-shaped key.
-      return isCronGenerated(parentKey, entriesByKey.get(parentKey));
-    });
-    if (generated) {
-      cronGeneratedKeys.add(sessionKey);
-    }
-    return generated;
-  };
-
-  for (const summary of summaries) {
-    isCronGenerated(summary.sessionKey, summary.entry);
-  }
-  // A cycle may be visited before another parent establishes its cron lineage.
-  // Expand only observed edges, retaining which duplicate entry the walk selected.
-  for (const sessionKey of cronGeneratedKeys) {
-    for (const child of childrenByKey.get(sessionKey) ?? []) {
-      cronGeneratedKeys.add(child);
-    }
-  }
-  return cronGeneratedKeys;
 }
 
 function listSessionTranscriptArtifactFiles(sessionsDir: string): string[] {

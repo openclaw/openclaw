@@ -189,7 +189,7 @@ check the per-agent setting if the model default still does not take effect.
 - Directive-only message toggles whether thinking blocks are shown in replies.
 - When enabled, reasoning is sent as a **separate message** prefixed with `Thinking`.
 - `stream`: streams reasoning while the reply is generating when the active channel supports reasoning previews, then sends the final answer without reasoning. Channel previews remove recognized internal runtime context before delivery; the original reasoning remains unchanged for model replay.
-- Control UI shows native-provider reasoning during generation for `on` and `stream`, with **View → Reasoning** enabled. In `on`, the preview hands off to the saved reasoning; in `stream`, it disappears when the run ends.
+- Control UI shows native-provider reasoning during generation for `on` and `stream`, with **View → Reasoning** enabled. Each tool step keeps the reasoning that preceded it while later steps run. In `on`, each preview hands off to its saved reasoning without duplication; in `stream`, all previews disappear when the run ends.
 - Control UI history shows saved reasoning only for `on`, with **View → Reasoning** enabled. `off` and `stream` keep it hidden, including after reload.
 - Visible Control UI reasoning preserves Markdown paragraphs and fenced code blocks, including blank lines inside code.
 - Alias: `/reason`.
@@ -227,7 +227,7 @@ Malformed local-model reasoning tags are handled conservatively. Closed `<think>
 
 - Provider plugins can expose `resolveThinkingProfile(ctx)` to define the model's supported levels and default.
 - Provider plugins that proxy Claude models should reuse `resolveClaudeThinkingProfile(modelId)` from `openclaw/plugin-sdk/provider-model-shared` so direct Anthropic and proxy catalogs stay aligned.
-- Each profile level has a stored canonical `id` (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `adaptive`, `max`, or `ultra`) and may include a display `label`. Binary providers use `{ id: "low", label: "on" }`.
+- Each profile level has a stored `id` (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `adaptive`, `max`, or `ultra`) and may include a display `label`. Binary providers use `{ id: "low", label: "on" }`.
 - Profile hooks receive merged catalog facts when available, including `reasoning`, `thinkingLevelMap`, `compat.thinkingFormat`, `compat.supportsReasoningEffort`, and `compat.supportedReasoningEfforts`. Use those facts to expose binary or custom profiles only when the configured request contract supports the matching payload. A `null` entry in `thinkingLevelMap` removes that level before choosing a default.
 - Tool plugins that need to validate an explicit thinking override should use `api.runtime.agent.resolveThinkingPolicy({ provider, model, agentRuntime })` plus `api.runtime.agent.normalizeThinkingLevel(...)`; they should not keep their own provider/model level lists. Pass `agentRuntime` when the tool owns the execution path, such as an always-embedded run.
 - Tool plugins with access to configured custom model metadata can pass `catalog` into `resolveThinkingPolicy` so `compat.supportedReasoningEfforts` opt-ins are reflected in plugin-side validation.

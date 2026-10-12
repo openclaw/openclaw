@@ -20,7 +20,7 @@ import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import {
   clearEmbeddedSessionPromptStates,
   createToolResultPromptProjectionState,
-  getEmbeddedSessionPromptState,
+  retainEmbeddedSessionPromptState,
 } from "../session-prompt-state.js";
 import { installContextEngineLoopHook } from "../tool-result-context-guard.js";
 import { prepareEmbeddedAttemptPromptContext } from "./attempt-prompt-build.js";
@@ -294,7 +294,8 @@ describe("context advancement through embedded attempt guards", () => {
           ),
         );
       };
-      const sessionPromptState = getEmbeddedSessionPromptState(sessionId);
+      using promptStateLease = retainEmbeddedSessionPromptState(sessionId);
+      const sessionPromptState = promptStateLease.state;
       const promptContext = await prepareEmbeddedAttemptPromptContext({
         attempt: { config: {}, contextTokenBudget: 8192, sessionId },
         capabilityToolNames: new Set(["read_fixture"]),

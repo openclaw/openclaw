@@ -12,10 +12,7 @@ import {
 import { CompilerInputSnapshot } from "../../scripts/lib/compiler-input-snapshot.mts";
 import { createDeclarationFileSystem } from "../../scripts/lib/native-declaration-filesystem.mts";
 import { emitNativeDeclarationsInSubprocess } from "../../scripts/lib/native-declaration-subprocess.mts";
-import {
-  createNativeTypeScriptProject,
-  resolveInstalledNativeTypeScriptCompiler,
-} from "../../scripts/lib/native-typescript.mts";
+import { createNativeTypeScriptProject } from "../../scripts/lib/native-typescript.mts";
 import {
   pluginSdkDocMetadata,
   type PluginSdkDocCategory,
@@ -168,17 +165,9 @@ async function createCompilerContext(
       },
       fs: view.filesystem,
     });
-    for (const file of [
-      ...emitted.inputs,
-      ...source.project.program.getSourceFileNames(),
-      ...declarations.project.program.getSourceFileNames(),
-    ]) {
-      view.inputs.add(file);
-    }
     view.assertValid();
     return {
       checker: source.project.checker,
-      inputs: view.inputs,
       assertValid: view.assertValid,
       declarationClosure: createDeclarationClosureRenderer({
         project: declarations.project,
@@ -414,14 +403,8 @@ export async function renderPluginSdkApiBaseline(params?: {
   if (params?.entrypoints === undefined) {
     validateMetadata();
   }
-  const configPath = path.join(repoRoot, "tsconfig.json");
-  const { executable: binary } = resolveInstalledNativeTypeScriptCompiler();
-  const snapshot = () =>
-    new CompilerInputSnapshot(repoRoot, { toolchainFiles: [binary], generatorInputs: [] });
-  const before = snapshot();
-  before.signature(configPath, [], []);
-  const startedAt = Date.now();
-  const context = await createCompilerContext(repoRoot, entrypoints, before);
+  const inputs = new CompilerInputSnapshot(repoRoot, { toolchainFiles: [], generatorInputs: [] });
+  const context = await createCompilerContext(repoRoot, entrypoints, inputs);
   const { checker, declarationClosure, printer, program } = context;
   try {
     const modules = [...entrypoints].toSorted(compareText).map((entrypoint) =>
@@ -473,9 +456,7 @@ export async function renderPluginSdkApiBaseline(params?: {
         }))
         .toSorted((left, right) => compareText(left.importSpecifier, right.importSpecifier)),
     };
-    // Source symbols and emitted closure text must describe the same input generation.
     context.assertValid();
-    snapshot().seal(configPath, [], [...context.inputs], before, startedAt);
     return baseline;
   } catch (error) {
     context.assertValid();

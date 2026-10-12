@@ -4,7 +4,10 @@ import type { BoardSnapshot } from "../../lib/board/types.ts";
 // Side-effect import: registers the custom elements mount() depends on
 // without relying on transitive fixture imports.
 import "./board-view.ts";
-import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import {
+  createApplicationContextProvider,
+  createApplicationGateway,
+} from "../../test-helpers/application-context.ts";
 import { applyBoardFixtureOps } from "../../test-helpers/board-fixture.ts";
 import {
   boardWidget,
@@ -20,21 +23,22 @@ afterEach(() => {
   document.body.replaceChildren();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
-  vi.useRealTimers();
 });
+
+function stubBoardDocumentFetch(read: () => Promise<Response>): void {
+  const originalFetch = globalThis.fetch;
+  vi.stubGlobal("fetch", ((input, init) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    return url.includes("/__openclaw__/board/") ? read() : originalFetch(input, init);
+  }) satisfies typeof fetch);
+}
 
 describe("openclaw-board-view", () => {
   it("retains one loading surface through snapshot and sandbox document readiness", async () => {
     vi.useFakeTimers();
     const response = deferred<Response>();
     const fetchMock = vi.fn(() => response.promise);
-    const originalFetch = globalThis.fetch;
-    vi.stubGlobal("fetch", ((input, init) =>
-      (typeof input === "string" ? input : input instanceof URL ? input.href : input.url).includes(
-        "/__openclaw__/board/",
-      )
-        ? fetchMock()
-        : originalFetch(input, init)) satisfies typeof fetch);
+    stubBoardDocumentFetch(fetchMock);
     const view = document.createElement("openclaw-board-view");
     view.activeTabId = "main";
     view.callbacks = callbacks();
@@ -194,7 +198,7 @@ describe("openclaw-board-view", () => {
     const firstRequest = vi.fn(async () => ({ ok: true }));
     const secondRequest = vi.fn(async () => ({ ok: true }));
     const fetchMock = vi.fn(async () => new Response("<!doctype html><p>weather</p>"));
-    vi.stubGlobal("fetch", fetchMock);
+    stubBoardDocumentFetch(fetchMock);
     let ticket = "ticket";
     const widget = () =>
       boardWidget({
@@ -203,8 +207,11 @@ describe("openclaw-board-view", () => {
         viewTicket: ticket,
         viewGeneration: "retained-document",
       });
+    const context = gatewayContext({ request: firstRequest }, "/control");
+    const connection = createApplicationGateway(context.gateway.snapshot);
+    connection.gateway.connection.gatewayUrl = context.gateway.connection.gatewayUrl;
     const view = await mount({
-      context: gatewayContext({ request: firstRequest }, "/control"),
+      context: { ...context, gateway: connection.gateway },
       snapshot: snapshot({ widgets: [widget()] }),
       widgetFrameUrl: () => "/__openclaw__/board/session/alpha/index.html?bt=" + ticket,
     });
@@ -268,8 +275,10 @@ describe("openclaw-board-view", () => {
       ticket,
       payload: { status: "connecting" },
     });
-    const provider = view.parentElement as ReturnType<typeof createApplicationContextProvider>;
-    provider.setContext(gatewayContext({ request: secondRequest }, "/control"));
+    connection.publish({
+      ...connection.gateway.snapshot,
+      client: gatewayContext({ request: secondRequest }).gateway.snapshot.client,
+    });
     await settleCells(view);
     await expect(emit("retired-ticket", ticket, "online")).resolves.toMatchObject({
       ok: false,
@@ -312,15 +321,20 @@ describe("openclaw-board-view", () => {
 
   it("retries proactive ticket refresh without replacing the current view", async () => {
     vi.useFakeTimers();
+    stubBoardDocumentFetch(async () => new Response("<p>Current widget</p>"));
     const frameLoadFailed = vi
       .fn<() => Promise<void>>()
       .mockRejectedValueOnce(new Error("gateway reconnecting"))
       .mockResolvedValue(undefined);
     const view = await mount({
+      context: gatewayContext(null),
+      widgetFrameUrl: () => "/__openclaw__/board/session/alpha/index.html?bt=ticket",
       callbacks: callbacks({ frameLoadFailed }),
       snapshot: snapshot({
         widgets: [
           boardWidget({
+            sandboxUrl: "/mcp-app-sandbox",
+            sandboxPort: 18790,
             viewTicket: "ticket",
             viewTicketTtlMs: 15_000,
           }),
@@ -328,14 +342,20 @@ describe("openclaw-board-view", () => {
       }),
     });
     const cell = view.querySelector("openclaw-board-widget-cell")!;
+    const frame = cell.querySelector("iframe");
+    expect(frame).not.toBeNull();
 
     await vi.advanceTimersByTimeAsync(1_000);
     expect(frameLoadFailed).toHaveBeenCalledTimes(1);
-    expect((cell as unknown as { frame: { error: string } }).frame.error).toBe("");
+    await settleCells(view);
+    expect(cell.querySelector("iframe")).toBe(frame);
+    expect(cell.querySelector('[data-test-id="board-widget-error"]')).toBeNull();
 
     await vi.advanceTimersByTimeAsync(1_000);
     expect(frameLoadFailed).toHaveBeenCalledTimes(2);
-    expect((cell as unknown as { frame: { error: string } }).frame.error).toBe("");
+    await settleCells(view);
+    expect(cell.querySelector("iframe")).toBe(frame);
+    expect(cell.querySelector('[data-test-id="board-widget-error"]')).toBeNull();
 
     await vi.advanceTimersByTimeAsync(1_999);
     expect(frameLoadFailed).toHaveBeenCalledTimes(2);
@@ -372,6 +392,7 @@ describe("openclaw-board-view", () => {
 
   it("keeps retrying proactive ticket refresh after the initial outage", async () => {
     vi.useFakeTimers();
+    stubBoardDocumentFetch(async () => new Response("<p>Current widget</p>"));
     const frameLoadFailed = vi
       .fn<() => Promise<void>>()
       .mockRejectedValueOnce(new Error("gateway reconnecting"))
@@ -380,10 +401,14 @@ describe("openclaw-board-view", () => {
       .mockRejectedValueOnce(new Error("gateway reconnecting"))
       .mockResolvedValue(undefined);
     const view = await mount({
+      context: gatewayContext(null),
+      widgetFrameUrl: () => "/__openclaw__/board/session/alpha/index.html?bt=ticket",
       callbacks: callbacks({ frameLoadFailed }),
       snapshot: snapshot({
         widgets: [
           boardWidget({
+            sandboxUrl: "/mcp-app-sandbox",
+            sandboxPort: 18790,
             viewTicket: "ticket",
             viewTicketTtlMs: 15_000,
           }),
@@ -391,6 +416,8 @@ describe("openclaw-board-view", () => {
       }),
     });
     const cell = view.querySelector("openclaw-board-widget-cell")!;
+    const frame = cell.querySelector("iframe");
+    expect(frame).not.toBeNull();
 
     await vi.advanceTimersByTimeAsync(1_000);
     await vi.advanceTimersByTimeAsync(1_000);
@@ -399,7 +426,9 @@ describe("openclaw-board-view", () => {
     await vi.advanceTimersByTimeAsync(4_000);
 
     expect(frameLoadFailed).toHaveBeenCalledTimes(5);
-    expect((cell as unknown as { frame: { error: string } }).frame.error).toBe("");
+    await settleCells(view);
+    expect(cell.querySelector("iframe")).toBe(frame);
+    expect(cell.querySelector('[data-test-id="board-widget-error"]')).toBeNull();
   });
 
   it("bounds repeated frame ticket refreshes after persistent 401 responses", async () => {
@@ -949,7 +978,7 @@ describe("openclaw-board-view", () => {
     await view.updateComplete;
     const firstAnnouncement = view.querySelector(".board-announcer > span");
     const cell = secondCell?.closest("openclaw-board-widget-cell");
-    await vi.waitFor(() => expect(Reflect.get(cell ?? {}, "actionPending")).toBe(false));
+    await vi.waitFor(() => expect(cell?.querySelector("wa-dropdown-item")?.disabled).toBe(false));
 
     move();
     await vi.waitFor(() => expect(applyOps).toHaveBeenCalledTimes(2));

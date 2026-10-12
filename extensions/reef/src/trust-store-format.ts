@@ -2,8 +2,14 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { ReefChannelConfig } from "./config-schema.js";
 import { normalizeReefTarget } from "./config-schema.js";
-import { ReefPeerIdentitySchema, ReefPeerTrustSchema, type ReefPeerTrust } from "./friend-types.js";
-import type { RelayFriend, ReefRejectionRecovery } from "./types.js";
+import {
+  ReefPeerIdentitySchema,
+  ReefPeerTrustSchema,
+  matchesReefPeerIdentity,
+  sameReefPeerIdentity,
+  type ReefPeerTrust,
+} from "./friend-types.js";
+import type { RelayFriend, ReefRejectionRecovery, ReefRejectionNoticeState } from "./types.js";
 
 export const REEF_TRUST_STORE_MAX_ENTRIES = 4_096;
 export const REEF_TRUST_STORE_NAMESPACE = "peer-state";
@@ -11,6 +17,18 @@ export const REEF_OUTBOUND_DELIVERY_STORE_NAMESPACE = "outbound-deliveries";
 export const REEF_OUTBOUND_DELIVERY_MAX_ENTRIES = 32_768;
 const REEF_RELAY_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
 export const REEF_OUTBOUND_DELIVERY_TTL_MS = REEF_RELAY_RETENTION_MS * 2 + 24 * 60 * 60 * 1_000;
+export const REEF_TRUST_STORE_OPTIONS = {
+  namespace: REEF_TRUST_STORE_NAMESPACE,
+  maxEntries: REEF_TRUST_STORE_MAX_ENTRIES,
+  overflowPolicy: "reject-new",
+} as const;
+// Both the envelope and receipt can spend 30 days queued at the relay.
+export const REEF_DELIVERY_STORE_OPTIONS = {
+  namespace: REEF_OUTBOUND_DELIVERY_STORE_NAMESPACE,
+  maxEntries: REEF_OUTBOUND_DELIVERY_MAX_ENTRIES,
+  overflowPolicy: "reject-new",
+  defaultTtlMs: REEF_OUTBOUND_DELIVERY_TTL_MS,
+} as const;
 const REEF_PAIRING_APPROVAL_PREFIX = "reef-approval-v1:";
 const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/;
 export const MESSAGE_ID_PATTERN = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/;
@@ -54,6 +72,73 @@ export const ReefPeerStateSchema = z
 export type ReefPeerStateSnapshot = z.infer<typeof ReefPeerStateSchema>;
 export type ReefOutboundDeliveryBinding = z.infer<typeof ReefOutboundDeliveryBindingSchema>;
 export type ReefOutboundDelivery = z.infer<typeof ReefOutboundDeliverySchema>;
+
+export function parseReefPeerState(value: unknown): ReefPeerStateSnapshot {
+  return value === undefined ? { revision: 0 } : ReefPeerStateSchema.parse(value);
+}
+
+export function listReefPeerTrust(
+  entries: Array<{ key: string; value: unknown }>,
+  prefix: string,
+): Array<{ peer: string; trust: ReefPeerTrust }> {
+  return entries
+    .filter((entry) => entry.key.startsWith(prefix))
+    .flatMap((entry) => {
+      const { trust } = ReefPeerStateSchema.parse(entry.value);
+      return trust ? [{ peer: requirePeer(entry.key.slice(prefix.length)), trust }] : [];
+    })
+    .toSorted((left, right) => (left.peer < right.peer ? -1 : left.peer > right.peer ? 1 : 0));
+}
+
+export function currentReefDeliveries(
+  entries: Array<{ key: string; value: unknown }>,
+  prefix: string,
+  getTrust: (peer: string) => ReefPeerTrust | undefined,
+  requireValid = false,
+) {
+  return entries
+    .filter((entry) => entry.key.startsWith(prefix))
+    .flatMap((entry) => {
+      const parsed = ReefOutboundDeliverySchema.safeParse(entry.value);
+      if (!parsed.success) {
+        if (requireValid) {
+          throw parsed.error;
+        }
+        return [];
+      }
+      const separator = entry.key.lastIndexOf(":");
+      const peer = requirePeer(entry.key.slice(prefix.length, separator));
+      const id = entry.key.slice(separator + 1);
+      return MESSAGE_ID_PATTERN.test(id) &&
+        matchesReefPeerIdentity(getTrust(peer), parsed.data.recipient)
+        ? [{ peer, id, delivery: parsed.data }]
+        : [];
+    });
+}
+
+export function matchesReefDeliveryBinding(
+  current: ReefOutboundDelivery,
+  expected: ReefOutboundDeliveryBinding,
+): boolean {
+  return (
+    current.bodyHash === expected.bodyHash &&
+    current.textHash === expected.textHash &&
+    sameReefPeerIdentity(current.recipient, expected.recipient)
+  );
+}
+
+export function mergeReefRejectionNotice(
+  current: ReefRejectionNoticeState | undefined,
+  persisted: ReefRejectionNoticeState,
+): ReefRejectionNoticeState {
+  const hasResendAt = current?.lastResendAt !== undefined || persisted.lastResendAt !== undefined;
+  return {
+    lastRejectionAt: Math.max(current?.lastRejectionAt ?? 0, persisted.lastRejectionAt),
+    ...(hasResendAt
+      ? { lastResendAt: Math.max(current?.lastResendAt ?? 0, persisted.lastResendAt ?? 0) }
+      : {}),
+  };
+}
 
 export type { ReefOutboundDeliveryPreparation } from "./types.js";
 

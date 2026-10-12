@@ -335,16 +335,23 @@ Profile theme and theme mode preferences override their gateway-wide `ui.prefs` 
 ## Personal navigation preferences
 
 For an authenticated profile with write access, the Control UI stores sidebar
-shortcut references, their order, and the preferred session scope in the existing
+shortcut references and their order in the existing
 `user_preferences` table. These preferences follow that profile across devices without rearranging another
 person's navigation. They are independent of a session's shared metadata and do
 not grant access to a referenced session, dashboard, plugin, or person.
 
-The browser retains device-specific geometry and transient presentation. Existing
-navigation choices are migration input only when the profile has no saved value;
-concurrent initialization must preserve the first confirmed profile value.
+The browser retains device-specific geometry and transient presentation. A profile
+without saved shortcuts starts with an empty rail. Reading preferences never
+imports shared navigation or pinned sessions, and only a user edit writes the
+shortcut preference. Existing saved shortcuts remain unchanged.
 Navigation changes on read-only connections or connections without a durable
 profile stay browser-local rather than writing shared server configuration. See [Navigation rail](/web/control-ui/sessions-and-sidebar#navigation-rail).
+
+The Sessions owner filter is stored separately in the browser for each Gateway
+and profile. A profile without a saved choice starts with **My sessions**;
+unresolved identities and connections without a durable profile show **All owners**.
+Choosing **Involving me**, **All owners**, or a person changes that owner filter
+directly.
 
 ## Write directives, not observations
 

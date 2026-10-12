@@ -67,10 +67,10 @@ export type CurrentTurnTranscriptFinal = Pick<
 export type FreshTelegramSessionEntryLoader = ((
   agentId: string,
   sessionKey: string,
-) => {
+) => Promise<{
   storePath: string;
   entry?: SessionEntry;
-}) & {
+}>) & {
   clear: () => void;
 };
 
@@ -157,6 +157,7 @@ export type TelegramDeliveryStateSlice = {
   resolveCurrentTurnTranscriptFinal: () => Promise<CurrentTurnTranscriptFinal | undefined>;
   transcriptMirrorSequence: number;
   transcriptMirrorTurnId: string;
+  transcriptMirrorRunId?: string;
   implicitQuoteReplyTargetId: string | undefined;
   currentMessageIdForQuoteReply: string | undefined;
 };

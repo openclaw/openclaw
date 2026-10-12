@@ -81,7 +81,6 @@ export function registerNativeDeviceDispatchTests({
         prepareInstallation: async () => BUNDLE_ARTIFACT,
         bootstrapWorker,
         ensureNodeWorkerBundle,
-        executeInference: vi.fn(),
       });
       const previousRegistry = getActivePluginRegistry();
       // Core device placement must not require a fabricated plugin owner/manifest.

@@ -26,6 +26,7 @@ import { GitHubPublicationController } from "../../lib/sessions/github-publicati
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { resolveUiConfiguredMainKey } from "../../lib/sessions/session-key.ts";
 import { navigateToModelProvider } from "../model-providers/navigation.ts";
+import { isChatBubbleMode } from "./chat-bubble-mode.ts";
 import { chatGoalRecovery, mutateChatGoal, submitChatGoalDraft } from "./chat-goals.ts";
 import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
 import { resolveChatModelSetup } from "./chat-model-setup.ts";
@@ -74,13 +75,6 @@ export class ChatPane extends ChatPaneLayoutRender {
     this,
     () => this.state ?? undefined,
   );
-  private presentationUserId: string | null = null;
-  private readonly retrySessionPlacementStartup = () => {
-    const sessionKey = this.state?.sessionKey;
-    if (sessionKey) {
-      this.context.placementStartup.retry(sessionKey);
-    }
-  };
 
   override render() {
     const state = this.state;
@@ -681,6 +675,15 @@ export class ChatPane extends ChatPaneLayoutRender {
       allowExternalEmbedUrls: state.allowExternalEmbedUrls,
       fetchLinkFavicon: resolveChatLinkFaviconFetcher(state),
       chatMessageMaxWidth: state.settings.chatMessageMaxWidth,
+      chatBubbleMode: isChatBubbleMode(
+        state.settings,
+        state.sessionKey,
+        this.context.config.current.chatBubblesEnabled,
+        resolveUiConfiguredMainKey({
+          agentsList: this.context.agents.state.agentsList,
+          hello: this.context.gateway.snapshot.hello,
+        }),
+      ),
       branding: this.context?.theme.branding,
       assistantAttachmentAuthToken: resolveControlUiAuthToken(state),
       resolveArtifactDownload: (params, signal) =>

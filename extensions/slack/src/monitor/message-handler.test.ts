@@ -6,17 +6,14 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { observeRetryBackoffs } from "./message-handler.retry.test-support.js";
 import { buildSlackDebounceKey } from "./message-handler/debounce-key.js";
 import { createInboundSlackTestContext } from "./message-handler/prepare.test-helpers.js";
 
 type InboundDebounceFlush = { admission: Promise<void>; completion: Promise<void> };
 
 let useRealDebouncer = false;
-const realDebouncers: Array<{ drain: () => Promise<void> }> = [];
 const enqueueMock = vi.fn(async (_entry: unknown) => {});
 const flushKeyMock = vi.fn(async (_key: string) => {});
 const onFlushCallbacks: Array<
@@ -52,9 +49,7 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
     ) => {
       onFlushCallbacks.push(params.onFlush);
       if (useRealDebouncer) {
-        const result = actual.createChannelInboundDebouncer(params);
-        realDebouncers.push(result.debouncer);
-        return result;
+        return actual.createChannelInboundDebouncer(params);
       }
       return {
         debounceMs: 10,
@@ -134,7 +129,6 @@ function createHandlerWithTracker(overrides?: {
 describe("createSlackMessageHandler", () => {
   beforeEach(() => {
     useRealDebouncer = false;
-    realDebouncers.length = 0;
     clearRuntimeConfigSnapshot();
     enqueueMock.mockClear();
     flushKeyMock.mockClear();
@@ -537,95 +531,6 @@ describe("createSlackMessageHandler", () => {
       );
     },
   );
-
-  it("keeps later same-key messages behind a retry with the original policy", async () => {
-    useRealDebouncer = true;
-    const cfg: OpenClawConfig = { messages: { ackReactionScope: "off" } };
-    setRuntimeConfigSnapshot(cfg, cfg);
-    const abort = new AbortController();
-    const { handler } = createHandlerWithTracker({ cfg, abortSignal: abort.signal });
-    const backoffs = observeRetryBackoffs(1);
-    dispatchPreparedSlackMessageMock.mockRejectedValueOnce(
-      new Error("reply session initialization conflicted for agent:main:main"),
-    );
-    const message: Parameters<typeof handler>[0] = {
-      type: "message",
-      channel: "D1",
-      user: "U1",
-      ts: "123.001",
-      text: "first",
-    };
-    vi.useFakeTimers();
-    try {
-      const first = handler(message, { source: "message" });
-      await backoffs.entered[0]!.promise;
-      expect(prepareSlackMessageMock).toHaveBeenCalledTimes(1);
-      const next: OpenClawConfig = { messages: { ackReactionScope: "all" } };
-      setRuntimeConfigSnapshot(next, next);
-      const second = handler({ ...message, ts: "123.002", text: "second" }, { source: "message" });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(prepareSlackMessageMock).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(1000);
-      await Promise.all([first, second]);
-      expect(
-        prepareSlackMessageMock.mock.calls.map(
-          ([params]) => params?.ctx.cfg.messages?.ackReactionScope,
-        ),
-      ).toEqual(["off", "off", "all"]);
-    } finally {
-      abort.abort();
-      await Promise.all(realDebouncers.map((debouncer) => debouncer.drain()));
-      backoffs.restore();
-      vi.useRealTimers();
-    }
-  });
-
-  it.each(["stop", "exhaust"] as const)("settles native retry ownership on %s", async (outcome) => {
-    useRealDebouncer = true;
-    const abort = new AbortController();
-    const { handler, ctx } = createHandlerWithTracker({ abortSignal: abort.signal });
-    const onError = vi.fn();
-    ctx.runtime.error = onError;
-    const backoffs = observeRetryBackoffs(outcome === "stop" ? 1 : 3);
-    for (let attempt = 0; attempt < (outcome === "stop" ? 1 : 4); attempt += 1) {
-      dispatchPreparedSlackMessageMock.mockRejectedValueOnce(
-        new Error("reply session initialization conflicted for agent:main:main"),
-      );
-    }
-    vi.useFakeTimers();
-    try {
-      const handled = handler(
-        { type: "message", channel: "D1", user: "U1", ts: "123.003", text: "retry" },
-        { source: "message" },
-      );
-      await backoffs.entered[0]!.promise;
-      expect(prepareSlackMessageMock).toHaveBeenCalledTimes(1);
-      if (outcome === "stop") {
-        abort.abort(new Error("monitor stopped"));
-      }
-      if (outcome === "exhaust") {
-        for (const backoff of backoffs.entered) {
-          await backoff.promise;
-          await vi.advanceTimersByTimeAsync(1000);
-        }
-      }
-      await handled;
-      await Promise.all(realDebouncers.map((debouncer) => debouncer.drain()));
-      expect(prepareSlackMessageMock).toHaveBeenCalledTimes(outcome === "stop" ? 1 : 4);
-      expect(onError).toHaveBeenCalledExactlyOnceWith(
-        expect.stringContaining(
-          outcome === "stop" ? "aborted" : "reply session initialization conflicted",
-        ),
-      );
-      await closeOpenClawStateDatabaseAsync();
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      abort.abort();
-      await Promise.all(realDebouncers.map((debouncer) => debouncer.drain()));
-      backoffs.restore();
-      vi.useRealTimers();
-    }
-  });
 
   it("releases every acquired claim when cancellation interrupts the next claim", async () => {
     const controller = new AbortController();

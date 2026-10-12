@@ -1,3 +1,4 @@
+import { withoutGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { PluginInstanceUnavailableError } from "../plugins/plugin-instance-error.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { runOutsidePluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
@@ -6,12 +7,17 @@ import { runOutsidePluginRuntimeGenerationScope } from "../plugins/runtime/gener
 import { runOutsideGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { runOutsideOperatorToolGatewayAuthority } from "./operator-tool-gateway-authority.js";
 
-/** Channel tasks outlive their caller's work scope, reload lease, and request generation. */
+/** Channel tasks outlive their caller's authority, work scope, lease, and generation. */
 export function runChannelAccountStartup<T>(start: () => T): T {
-  return runOutsidePluginLifecycleLease(() =>
-    runOutsideGatewayRootWorkAdmission(() =>
-      runOutsidePluginRuntimeGenerationScope(() => runOutsideAsyncWorkScope(start)),
+  return withoutGatewayToolCallerIdentity(() =>
+    runOutsideOperatorToolGatewayAuthority(() =>
+      runOutsidePluginLifecycleLease(() =>
+        runOutsideGatewayRootWorkAdmission(() =>
+          runOutsidePluginRuntimeGenerationScope(() => runOutsideAsyncWorkScope(start)),
+        ),
+      ),
     ),
   );
 }

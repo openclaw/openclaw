@@ -189,7 +189,9 @@ describe("processDiscordMessage ack reactions", () => {
     { target: "user", args: { to: "user:u1" }, channelId: "dm-u1", messageId: "m1" },
   ])("routes source acknowledgements and tracked $target reactions", async (scenario) => {
     vi.useFakeTimers();
+    const dispatchEntered = createDeferred<void>();
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      dispatchEntered.resolve();
       await params?.replyOptions?.onToolStart?.({
         name: "message",
         phase: "start",
@@ -211,6 +213,7 @@ describe("processDiscordMessage ack reactions", () => {
       messageChannelId: "fallback-channel",
     });
     const runPromise = runProcessDiscordMessage(ctx);
+    await dispatchEntered.promise;
     await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
     await vi.runAllTimersAsync();
     await runPromise;
@@ -236,7 +239,9 @@ describe("processDiscordMessage ack reactions", () => {
 
   it("keeps one acknowledgement through reasoning, tools, compaction, silence, and success", async () => {
     vi.useFakeTimers();
+    const dispatchEntered = createDeferred<void>();
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      dispatchEntered.resolve();
       await params?.replyOptions?.onReasoningStream?.({});
       await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
       await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
@@ -256,6 +261,7 @@ describe("processDiscordMessage ack reactions", () => {
     });
 
     const runPromise = runProcessDiscordMessage(ctx);
+    await dispatchEntered.promise;
     await vi.runAllTimersAsync();
     await runPromise;
 

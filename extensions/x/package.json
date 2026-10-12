@@ -4,15 +4,15 @@
   "description": "OpenClaw X mentions and public reply channel plugin",
   "type": "module",
   "dependencies": {
-    "@solidjs/web": "2.0.0-rc.13",
+    "@solidjs/web": "2.0.0-rc.14",
     "linkify-it": "6.1.0",
-    "solid-js": "2.0.0-rc.13",
+    "solid-js": "2.0.0-rc.14",
     "tlds": "1.261.0",
     "zod": "4.6.5"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
-    "@solidjs/compiler": "2.0.0-rc.13",
+    "@solidjs/compiler": "2.0.0-rc.14",
     "esbuild": "0.28.2",
     "openclaw": "workspace:*"
   },

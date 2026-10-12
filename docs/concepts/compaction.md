@@ -55,6 +55,10 @@ Auto-compaction is on by default. It runs when the session nears the context lim
 
 If the provider rejects a request after tool calls have completed, the built-in runtime can compact and continue from their recorded results. It keeps the current model and account, preserves the original request, and does not replay completed actions. This recovery requires settled tool results; pending tools, approvals, cancellation, and a tool that intentionally ended the turn retain their normal handling. If a Gateway restart later interrupts that continuing run, recovery preserves the accepted input even when compaction has summarized it.
 
+For OpenAI-compatible Chat Completions, an automatically context-capped response that ends with `length` also enters this recovery. OpenClaw withholds the incomplete candidate and its tool calls until the finish reason is known. This buffering is bounded; an oversized response resumes ordinary streaming and retains its normal `length` result. Explicit output limits retain their normal behavior.
+
+Before automatically reducing the output budget for an OpenAI-compatible tool request, OpenClaw uses a minimum output budget equal to one eighth of the model’s declared maximum output, bounded between 16 and 2,048 tokens. If that minimum cannot fit, compaction runs before the request is sent. Requests without active tools keep the 16-token floor, and explicit output limits that fit remain valid.
+
 Overflow recovery trims tool results within the current model-context window. Older messages and reset boundaries remain in retained history without being copied into new transcript entries.
 
 If overflow recovery cannot make the prompt fit, the failed reply suggests `/reset`, `/new`, or a larger-context model. The Control UI shows this guidance in Details and keeps it in saved chat history. For a single oversized prompt, shorten the prompt before resending it in a new session.
@@ -289,6 +293,10 @@ The memory-flush model override is exact and does not inherit the active session
 When an embedded Responses provider returns a compacted window, OpenClaw preserves the complete returned context alongside the checkpoint. Recent-turn history limits do not discard an eligible checkpoint, and the retained context still counts toward the model's prompt budget. The saved checkpoint is limited to 16 MiB; oversized or incompatible endpoint output uses the normal client-side compaction path instead of being truncated.
 
 After a successful continuation, OpenClaw uses the provider's measured context usage when the saved request prefix still matches the current checkpoint, conversation, and provider identity. New content and current request overhead still receive a local estimate. Edited or incompatible history falls back to estimation without changing the saved conversation.
+
+The native ChatGPT sign-in route uses streamed Codex V2 compaction at the next normal model-request boundary, including between settled tool rounds. It preserves the normal request surface and saves retained user messages plus an opaque checkpoint through the existing session owner. Failed or cancelled streams do not install a checkpoint. On this route, manual `/compact` (with or without focus instructions) and provider-confirmed overflow use client-side compaction, not V2. See [OpenAI advanced configuration](/providers/openai/advanced#server-side-compaction-responses-api) for controls and fallback behavior.
+
+For V2-eligible requests, reply-level token maintenance and the optional mid-turn precheck defer local recovery to this boundary so they cannot preempt provider compaction. Memory flushing and transcript-byte maintenance still run. Other requests keep the provider-bound precheck, including saved checkpoint pressure when no matching current-run usage is available.
 
 Predicted context pressure uses budget compaction before the next request. The public OpenAI Responses API and native xAI use their compact endpoint by default for budget compaction and for `/compact` without focus instructions. `params.responsesCompactEndpoint: false` disables that endpoint for a model. `/compact <focus>` keeps client-side summarization so the instructions apply. A provider-confirmed overflow keeps the client recovery path because compact endpoints also require their input to fit. Endpoint failures fall back to client-side summarization.
 

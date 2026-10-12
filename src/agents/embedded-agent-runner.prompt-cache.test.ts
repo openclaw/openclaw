@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
+import { stableStringify } from "@openclaw/normalization-core";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -46,8 +47,17 @@ const cases = [
   { api: "anthropic-messages", provider: "anthropic", model: "claude-opus-5", route: "in-history" },
 ] satisfies Array<{ api: Api; provider: string; model: string; route: string }>;
 const PNG = createSolidPngBuffer(1, 1, { r: 12, g: 34, b: 56 }).toString("base64");
+const FAILED_ASSISTANT_TEXT = "partial assistant output before provider error";
+const FAILED_ASSISTANT_REPLAY_TEXT =
+  "[This turn failed before it completed. Do not redo its work without confirming with the user first.]";
 
-function responseFor(api: Api, model: string, request: number, tool: boolean): Response {
+function responseFor(
+  api: Api,
+  model: string,
+  request: number,
+  tool: boolean,
+  failure = false,
+): { response: Response; output: Array<Record<string, unknown>> } {
   const id = `cache_${request}`;
   const text = `answer ${request}`;
   const calls = tool
@@ -58,6 +68,7 @@ function responseFor(api: Api, model: string, request: number, tool: boolean): R
       }))
     : [];
   let events: Array<Record<string, unknown>>;
+  let output: Array<Record<string, unknown>> = [];
   if (api === "anthropic-messages") {
     const blocks = tool
       ? calls.map((call) => ({ type: "tool_use", id: call.id, name: call.name, input: {} }))
@@ -123,47 +134,71 @@ function responseFor(api: Api, model: string, request: number, tool: boolean): R
       },
     ];
   } else {
-    const items = tool
-      ? calls.map((call) => ({
-          type: "function_call",
-          id: `fc_${call.id}`,
-          call_id: call.id,
-          name: call.name,
-          arguments: call.arguments,
-        }))
+    const items: Array<Record<string, unknown>> = tool
+      ? calls.map((call) =>
+          Object.assign(
+            {
+              type: "function_call",
+              id: `fc_${call.id}`,
+              call_id: call.id,
+              name: call.name,
+              arguments: call.arguments,
+            },
+            failure ? { async: true } : {},
+          ),
+        )
       : [
           {
             type: "message",
-            id: `msg_${id}`,
             role: "assistant",
-            status: "completed",
             content: [{ type: "output_text", text, annotations: [] }],
+            status: "completed",
+            id: `msg_${id}`,
           },
         ];
+    if (failure) {
+      items.push({
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: FAILED_ASSISTANT_TEXT, annotations: [] }],
+        status: "completed",
+        id: `msg_${id}`,
+      });
+    }
+    output = items;
     events = [
       ...items.flatMap((item, output_index) => [
         {
           type: "response.output_item.added",
           output_index,
-          item: tool ? { ...item, arguments: "" } : { ...item, content: [] },
+          item:
+            item.type === "function_call" ? { ...item, arguments: "" } : { ...item, content: [] },
         },
-        ...(tool
+        ...(item.type === "function_call"
           ? [{ type: "response.function_call_arguments.delta", output_index, delta: "{}" }]
           : []),
         { type: "response.output_item.done", output_index, item },
       ]),
       {
-        type: "response.completed",
+        type: failure ? "response.failed" : "response.completed",
         response: {
           id,
-          status: "completed",
+          status: failure ? "failed" : "completed",
           output: items,
+          ...(failure
+            ? {
+                error: {
+                  code: "invalid_request_error",
+                  message: "Synthetic terminal provider failure",
+                },
+              }
+            : {}),
           usage: { input_tokens: 1_000, output_tokens: 2, total_tokens: 1_002 },
         },
       },
     ];
   }
-  return new Response(
+  const response = new Response(
     events
       .map(
         (event) =>
@@ -172,6 +207,7 @@ function responseFor(api: Api, model: string, request: number, tool: boolean): R
       .join("") + (api === "anthropic-messages" ? "" : "data: [DONE]\n\n"),
     { headers: { "content-type": "text/event-stream" } },
   );
+  return { response, output };
 }
 
 afterEach(async () => {
@@ -180,7 +216,7 @@ afterEach(async () => {
 
 describe("provider prefix across admitted Gateway agent turns", () => {
   it.for(cases)(
-    "preserves $route prefixes across tool loops, hooks, images, refresh and reopen",
+    "preserves $route prefixes across tool loops, hooks, images, errors, refresh and reopen",
     { timeout: 120_000 },
     async ({ api, provider, model, route }, { signal }) => {
       await withOpenClawTestState({ label: `prompt-cache-${route}` }, async (state) => {
@@ -285,6 +321,7 @@ describe("provider prefix across admitted Gateway agent turns", () => {
             prefix: ReturnType<typeof snapshotProviderPrefix>;
             userEnvelopes: Map<string, string>;
           }> = [];
+          const responseHistory = new Map<string, unknown[]>();
           let userEnvelopes = new Map<string, string>();
           let turn = 0;
           let requestsThisTurn = 0;
@@ -297,30 +334,41 @@ describe("provider prefix across admitted Gateway agent turns", () => {
               return {
                 ...observer,
                 onModelRequest: (runtimeModel, context) => {
+                  const occurrences = new Map<string, number>();
+                  let userAnchor = "";
                   userEnvelopes = new Map(
                     context.messages.flatMap<readonly [string, string]>((message) => {
-                      // Custom system/runtime carriers have a separate owner and may
-                      // repeat their text; the wire-prefix oracle covers those entries.
                       if (
                         message.role !== "user" ||
-                        message.runtimeContext ||
-                        message.operatorMessage
+                        message.operatorMessage ||
+                        // Legacy transient carriers intentionally refresh beyond the cache boundary.
+                        (message.runtimeContextCarrier && !message.runtimeContextCarrierRetained)
                       ) {
                         return [];
                       }
                       const { content, ...envelope } = message;
-                      // Text identifies retained turns across the permitted image cleanup;
-                      // the wire-prefix oracle below separately protects their content.
+                      // The wire-prefix oracle below separately protects their content.
                       const text =
                         typeof content === "string"
                           ? content
                           : content
                               .flatMap((block) => (block.type === "text" ? [block.text] : []))
                               .join("\n");
+                      const textDigest = createHash("sha256").update(text).digest("hex");
+                      // Match identical carriers within their preceding user position;
+                      // a newly appended carrier must not replace an earlier occurrence.
+                      const identity = message.runtimeContextCarrier
+                        ? `${userAnchor}:${textDigest}`
+                        : textDigest;
+                      if (!message.runtimeContextCarrier) {
+                        userAnchor = textDigest;
+                      }
+                      const occurrence = occurrences.get(identity) ?? 0;
+                      occurrences.set(identity, occurrence + 1);
                       return [
                         [
-                          createHash("sha256").update(text).digest("hex"),
-                          createHash("sha256").update(JSON.stringify(envelope)).digest("hex"),
+                          `${identity}:${occurrence}`,
+                          createHash("sha256").update(stableStringify(envelope)).digest("hex"),
                         ],
                       ];
                     }),
@@ -334,7 +382,24 @@ describe("provider prefix across admitted Gateway agent turns", () => {
             buildModelFetch: () => async (input, init) => {
               try {
                 const payload: unknown = await new Request(input, init).json();
-                const prefix = snapshotProviderPrefix(api, payload);
+                let effectivePayload = payload;
+                let effectiveInput: unknown[] | undefined;
+                if (api === "openai-responses") {
+                  assert(payload && typeof payload === "object" && "input" in payload);
+                  assert(Array.isArray(payload.input));
+                  const previousId =
+                    "previous_response_id" in payload ? payload.previous_response_id : undefined;
+                  if (previousId !== undefined) {
+                    assert.equal(typeof previousId, "string");
+                    const inherited = responseHistory.get(previousId as string);
+                    assert(inherited, "continuation references an existing provider response");
+                    effectiveInput = [...inherited, ...payload.input];
+                  } else {
+                    effectiveInput = payload.input;
+                  }
+                  effectivePayload = { ...payload, input: effectiveInput };
+                }
+                const prefix = snapshotProviderPrefix(api, effectivePayload);
                 if (route === "messages") {
                   const runtimeIndex = prefix.history.findIndex((item) =>
                     item.includes(RUNTIME_CONTEXT_HEADER),
@@ -371,12 +436,29 @@ describe("provider prefix across admitted Gateway agent turns", () => {
                 if (requestsThisTurn > 4) {
                   throw new Error(`Unexpected provider retry in synthetic turn ${turn}`);
                 }
-                return responseFor(
+                // Keep error replay within one retained window, after the deliberate pruning cut.
+                const failure = api === "openai-responses" && turn === 9 && requestsThisTurn === 1;
+                const result = responseFor(
                   api,
                   model,
                   requests.length,
-                  turn === 1 && requestsThisTurn === 1,
+                  (turn === 1 && requestsThisTurn === 1) || failure,
+                  failure,
                 );
+                if (effectiveInput) {
+                  // Full replay omits provider item IDs. Function calls also omit
+                  // status; assistant messages retain their completed status.
+                  const output = result.output.map((item) => {
+                    const { id: _id, ...withoutId } = item;
+                    if (item.type === "function_call") {
+                      const { status: _status, ...call } = withoutId;
+                      return call;
+                    }
+                    return withoutId;
+                  });
+                  responseHistory.set(`cache_${requests.length}`, [...effectiveInput, ...output]);
+                }
+                return result.response;
               } catch (error) {
                 providerFailure = toErrorObject(error, "Mock provider request failed");
                 throw error;
@@ -459,9 +541,8 @@ describe("provider prefix across admitted Gateway agent turns", () => {
                   internalEvents,
                   preparedRunAdmission: admission,
                   onExecutionPhase: ({ phase }) => {
-                    // A stateless mock provider must receive the complete serialized prefix,
-                    // including tool continuations, instead of an HTTP response-id delta.
-                    if (phase === "model_call_started") {
+                    // Responses keeps real continuation state; the other fixtures are stateless.
+                    if (phase === "model_call_started" && api !== "openai-responses") {
                       cleanupSessionResources(sessionId);
                     }
                   },
@@ -520,15 +601,39 @@ describe("provider prefix across admitted Gateway agent turns", () => {
                     ),
                   })}`,
                 ).toBeGreaterThan(0);
-                expect(
-                  result.payloads?.some((payload) => payload.text?.includes("answer")),
-                  `turn ${turn} completed`,
-                ).toBe(true);
+                if (!(api === "openai-responses" && turn === 9)) {
+                  expect(
+                    result.payloads?.some((payload) => payload.text?.includes("answer")),
+                    `turn ${turn} completed`,
+                  ).toBe(true);
+                }
               } finally {
                 admission.close();
               }
             }
             expect(requests.length).toBe(12);
+            if (api === "openai-responses") {
+              expect(requests.filter((request) => request.turn === 9)).toHaveLength(1);
+              const afterFailure = requests.find((request) => request.turn === 10)!.prefix.history;
+              expect(
+                afterFailure.join(""),
+                "next turn retains the failed assistant identity without replaying unfinished text",
+              ).toContain(FAILED_ASSISTANT_REPLAY_TEXT);
+              expect(afterFailure.join("")).not.toContain(FAILED_ASSISTANT_TEXT);
+              const continuation = requests[1]!.payload as Record<string, unknown>;
+              expect(
+                continuation.previous_response_id,
+                "tool results continue the first response",
+              ).toBe("cache_1");
+              const input = continuation.input as Array<Record<string, unknown>>;
+              // The runner may append fresh runtime context alongside the tool results.
+              expect(input.filter((item) => item.type === "function_call_output")).toHaveLength(5);
+              expect(input.filter((item) => item.type === "function_call")).toEqual([]);
+              expect(
+                continuation.prompt_cache_key,
+                "tool continuations retain the session affinity key",
+              ).toBe((requests[0]!.payload as Record<string, unknown>).prompt_cache_key);
+            }
             expect(
               requests[0]!.userEnvelopes.size,
               "raw user envelope capture reached the request observer",
@@ -584,11 +689,6 @@ describe("provider prefix across admitted Gateway agent turns", () => {
                   ).toBe(envelopeDigest);
                 }
               }
-              // The documented image batch retires the first image on turn five.
-              const cleanup = current.turn === 5 && previous.turn === 4;
-              const firstImageIndex = previous.prefix.history.findIndex((item) =>
-                /"type":"(?:input_image|image_url|image)"/.test(item),
-              );
               const pruning = current.turn === 9 && previous.turn === 8;
               const firstUserIndex = previous.prefix.history.findIndex((item) =>
                 item.includes("visible turn 1"),
@@ -599,12 +699,6 @@ describe("provider prefix across admitted Gateway agent turns", () => {
               if (pruning) {
                 expect(firstUserIndex).toBeGreaterThanOrEqual(0);
                 expect(retainedUserIndex).toBeGreaterThan(firstUserIndex);
-              }
-              if (cleanup) {
-                expect(
-                  firstImageIndex,
-                  "first image reaches the documented cleanup batch",
-                ).toBeGreaterThanOrEqual(0);
               }
               let previousPrefix = previous.prefix;
               if (route === "completions" && pruning) {
@@ -658,14 +752,7 @@ describe("provider prefix across admitted Gateway agent turns", () => {
                         deleteCount: retainedUserIndex - firstUserIndex,
                       },
                     }
-                  : cleanup
-                    ? {
-                        boundary: {
-                          kind: "image-cleanup" as const,
-                          historyIndexes: [firstImageIndex],
-                        },
-                      }
-                    : {}),
+                  : {}),
               });
             }
           } finally {

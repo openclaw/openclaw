@@ -13,11 +13,11 @@ Where a finished run sends its output, what happens when a run or a delivery fai
 
 ## Delivery and output
 
-| Mode       | What happens                                                        |
-| ---------- | ------------------------------------------------------------------- |
-| `announce` | Fallback-deliver final text to the target if the agent did not send |
-| `webhook`  | POST finished event payload to a URL                                |
-| `none`     | No runner fallback delivery                                         |
+| Mode       | What happens                                                       |
+| ---------- | ------------------------------------------------------------------ |
+| `announce` | Send the result, then record confirmed delivery in the destination |
+| `webhook`  | POST finished event payload to a URL                               |
+| `none`     | No automatic conversation result or notification                   |
 
 A successful primary webhook run with no nonblank summary intentionally skips the POST and records `deliverySuppressionReason: "empty"`, matching announce delivery's optional-output contract. Execution errors still send the error event even without a summary.
 
@@ -32,29 +32,27 @@ notifications include an `Inspect` link into the Control UI. Command and script
 completion announcements open the automation run; isolated agent announcements
 open the run's session.
 
-For a `current` job using `announce` (the default), the final assistant result is a first-class session completion, not a WebChat-specific outbound message. OpenClaw waits for active turns in the creation-bound conversation, verifies that the same session generation still owns the key, and commits the result through the session transcript writer with cron job/run provenance and a job/run key that prevents duplicate writes. A retry cannot append the same result twice.
+With `announce`, the chat that receives the result owns it. The result is added to the conversation after the channel confirms delivery, using the content actually sent after channel transforms and hooks. OpenClaw writes one assistant message into that chat's transcript so the next reply can use it as context. The result records its job and run; retries do not duplicate it, and OpenClaw waits for active turns before committing it. Destination creation and remembered-route updates happen only after confirmed delivery; newly created destinations inherit the source session's required sandbox policy.
 
-Isolated agent-turn jobs created from a conversation also capture that conversation's session key and generation at creation. When `announce` has no explicit channel, recipient, account, or thread and the creating conversation has no remembered external route, the final result uses the same conversation-completion path. `channel: "last"` also allows this behavior. The run keeps its own isolated session; delivering its result does not make it a `current` run or give it the creating conversation's history. This applies to the automations tool and `cron.add` requests that supply the creating session.
+- Delivery to the creating chat writes the result there.
+- Delivery to a different chat or topic writes the result **only in the destination**, not in the creating chat.
+- With no external route, such as a WebChat-created job, the creating conversation receives the result.
+- Jobs created through the CLI or older releases also get a destination transcript when they deliver to a chat, even without a creating conversation.
+- `none` and `webhook` do not write a conversation result.
 
-That creating-conversation binding is immutable. Editing the public `sessionKey` does not redirect implicit announce delivery; recreate the job from the intended conversation or set explicit delivery coordinates. Implicit channel delivery also checks the captured generation before using its route and before sending, including queued recovery.
+If the destination chat belongs to a different agent, the result is sent but not added to either agent’s conversation.
+Channel-native payloads without a text projection are sent without a conversation entry and record a warning.
 
-Conversation results use the same silent-reply handling as channel announcements. Internal control tokens stay out of conversation history, and suppressing a caption preserves its attached media.
+Execution context is separate: `isolated` starts without conversation history, `current` reads bounded creating-conversation context in a detached run, and `session:<key>` uses a persistent execution session. The private run transcript and tool history are not copied into the destination.
+When a persistent execution session is already the destination conversation, its final assistant message is the result; OpenClaw does not append a second copy.
 
-If the run is canceled while waiting for the conversation, it stops waiting without interrupting the active turn or appending a result.
+Editing explicit delivery coordinates moves future results to that chat or topic. The captured creating-conversation binding remains immutable; changing the public `sessionKey` does not redirect implicit delivery. For an explicit external destination, starting a new session or resetting the destination chat does not stop delivery: the result goes into that chat's current session. Implicit creator-bound delivery requires the captured creating conversation to exist and match its generation before resolving a remembered external route. Implicit agent-turn announcements retain that generation through sending and recovery; routeless WebChat results also require it at commit. If the creating conversation was deleted or reset, recreate the job or configure an explicit external destination. Command and script announcements keep an already resolved route without a source-generation check, matching their existing behavior. Cancellation does not interrupt the destination's active turn. A verified matching `message` tool send suppresses automatic resend, not the conversation result.
 
-WebChat receives the committed `session.message` event immediately. The same assistant result comes from `chat.history` after a refresh or reconnect; no follow-up user message is required. Delivery is successful only after that transcript/event commit succeeds.
+With no external route, the conversation commit itself completes delivery. WebChat receives the committed result immediately and returns the same message from `chat.history` after reconnect. Failed or uncertain external sends do not add a conversation result. Uncertain sends record a warning and are not blindly replayed. If the channel confirms delivery but the conversation write fails, delivery remains successful and the run records a warning that the result was not added to the conversation.
 
-For isolated jobs, if the creating conversation was deleted or reset, OpenClaw records a delivery failure instead of appending the result to a missing or replacement conversation. Inspect the run's delivery error and recreate the job from the intended conversation.
+Conversation results and notifications share silent-reply handling. Suppressing a caption preserves attached media, and internal control tokens stay out of history. `none` disables automatic results and notifications; primary `webhook` delivery remains an external-only mode.
 
-For `current` jobs whose bound conversation is an external channel, OpenClaw also performs its normal durable channel send. That send still happens at most once, and the required session commit does not create a second external message. A verified `message` tool send suppresses the automatic channel resend but does not suppress the session commit. The run is reported delivered only after both the external recipient handoff (when required) and the session transcript write succeed.
-
-When the bound conversation has no external channel route — WebChat/Control UI conversations, or a gateway with no channel plugins configured — the session commit alone completes delivery and the run succeeds without attempting an external send. For `current` jobs, if the conversation does name an external route that cannot be resolved at run time, the committed result stays in the conversation and the run records the resolution failure as its delivery error: a delivery failure, not a turn failure.
-
-For current agent-turn jobs, configuring unrelated external channels does not change this behavior. An explicit delivery channel, recipient, account, or thread still uses normal channel resolution. If that resolution fails, the report remains in the conversation and the run records the delivery error, even when no external channel could be selected.
-
-From WebChat, create a `current` or `isolated` agent-turn job with `delivery: { mode: "announce" }` (or omit `delivery`). The tool does not copy internal WebChat conversation coordinates into an external announce route. Do not set `delivery.channel: "webchat"`; explicit channels still must pass normal configured-channel validation. Condition triggers use the same delivery rules.
-
-Isolated jobs whose creating conversation has an external route retain normal channel delivery. Explicit channel, recipient, account, or thread settings also use normal channel resolution; `webhook` and `none` are unchanged. An isolated job without a captured creating conversation cannot commit into one. If its channel route is unresolved, or an explicit channel is unavailable, delivery is still blocked. Create and list results preview the conversation commit or unresolved route; update results include unresolved-route warnings. For an unresolved route, recreate the job from the intended conversation, configure a channel and target, or choose `delivery: { mode: "none" }` for silent runs. A warning does not reject the write or change delivery settings.
+Do not set `delivery.channel: "webchat"`: internal conversation coordinates are not channel delivery targets. Leave the external route unset to deliver to the creating WebChat conversation.
 
 <Warning>
   Every outbound automation webhook uses the strict SSRF guard. Loopback,
@@ -117,6 +115,8 @@ notification. An unknown outcome does not trigger that fallback.
 
 Execution failures use one scheduler-owned threshold and cooldown policy. A job with an existing failure route is covered by default after 2 consecutive failures with a 1-hour cooldown. The route can be a resolved failure destination or the job's primary announce target. Jobs with no such route stay quiet unless a per-job or global `failureAlert` object explicitly activates the policy.
 
+A one-shot job that is disabled after a permanent failure or exhausted retries notifies on that terminal failure without waiting for the consecutive-failure threshold. Eligible owned jobs receive a repair request in their owner conversation; other jobs use the resolved failure-alert route. The same opt-outs, best-effort policy, and cooldown still apply.
+
 Repeated failures with the same cause form one incident and do not send repeated alerts, even after the cooldown expires or the Gateway restarts. A changed cause or destination can send a new alert after the cooldown. A successful run clears the incident and its cooldown without sending a notification, so the next failure can alert again; the recovery stays visible in automation history. Skipped runs and unknown delivery outcomes do not establish recovery. A successful quiet trigger check can recover a trigger failure, but cannot establish that a previously failed payload has recovered.
 
 Startup recovery reconciles incidents from saved run outcomes without sending historical notifications. A saved successful run clears the old incident even if its job-state update was interrupted, so a later recurrence can alert again.
@@ -132,7 +132,8 @@ Failure notification routes resolve in this order:
 - A per-job `failureAlert` object or any global `cron.failureAlert` object activates and tunes the policy even when the job had no existing route.
 - `delivery.bestEffort: true` suppresses inherited/default execution-failure alerts. An explicit per-job `failureAlert` remains authoritative.
 - `delivery.failureDestination` is only supported on `sessionTarget="isolated"` jobs unless the primary delivery mode is `webhook`.
-- `failureAlert.includeSkipped: true` opts a job or global automation alert policy into repeated skipped-run alerts. Skipped runs keep a separate consecutive-skip counter, so they do not affect execution-error backoff.
+- Local-provider preflight skips use the normal failure-alert threshold, incident deduplication, and cooldown even when `failureAlert.includeSkipped` is unset or false. Start the provider or check its endpoint in automation history; recurring jobs remain enabled and resume after a later preflight succeeds. When a skipped one-shot has no remaining scheduled run, or the job is paused, restore the provider and use **Run Now** or reschedule the automation. Failure alerts distinguish these cases from jobs with another scheduled run. These skips do not request owner-conversation repair. Explicit alert opt-outs and best-effort policy still apply.
+- `failureAlert.includeSkipped: true` opts a job or global automation alert policy into other repeated skipped-run alerts. Skipped runs keep a separate consecutive-skip counter, so they do not affect execution-error backoff.
 - `openclaw automations edit` exposes per-job alert tuning: `--failure-alert`/`--no-failure-alert`, `--failure-alert-after <n>`, `--failure-alert-channel`, `--failure-alert-to`, `--failure-alert-cooldown`, `--failure-alert-include-skipped`/`--failure-alert-exclude-skipped`, `--failure-alert-mode`, and `--failure-alert-account-id`.
 
 In the Control UI, custom failure alerts show stored threshold, cooldown, and mode overrides. An omitted channel displays the neutral `last` choice without storing it. Leave the threshold or cooldown blank, or choose **Inherit global setting** for alert mode, to use the Gateway's normal global and routing defaults. Cooldowns accept decimal seconds with millisecond precision, including `0` for no cooldown; for example, `1.001` seconds preserves `1001` milliseconds. Editing other job fields or cloning a job preserves its alert policy, including the skipped-run setting.
@@ -148,9 +149,9 @@ Repair is on by default. Upgrading changes what you see for owned automations th
 
 When a job created from a conversation (it has an owner session) reaches its execution-failure alert threshold and the alert would go to chat (`announce` mode), OpenClaw sends a repair request to that owner conversation instead of the alert. The request names the job and includes its schedule, name, payload, and last error; the name, payload, and error are marked as untrusted data. Command jobs and on-exit or stream schedules are operator-only and alert as before.
 
-The conversation handles the request as an ordinary agent turn, as if it had received a message: it runs in that conversation's session, with its transcript, workspace, and tool policy, and the reply goes to the conversation's own route, including its thread or topic. Heartbeat settings do not apply. A transient outage gets no reply, a problem it can fix in the workspace (for example the helper script or instructions file the job follows) gets fixed with a one-line note, and otherwise it asks you for exactly what it needs. The request does not carry your sender identity, so owner-only tools such as automation control stay unavailable; changing the job itself happens in your reply turn.
+The conversation handles the request as an ordinary agent turn, as if it had received a message: it runs in that conversation's session, with its transcript, workspace, and tool policy, and the reply goes to the conversation's own route, including its thread or topic. Heartbeat settings do not apply. For recurring jobs, a transient outage gets no reply, a problem it can fix in the workspace (for example the helper script or instructions file the job follows) gets fixed with a one-line note, and otherwise it asks you for exactly what it needs. For a terminal one-shot failure, the agent does the still-needed work or schedules a corrected automation, stays silent if the work is no longer needed, or asks you for what is missing. The request does not carry your sender identity, so owner-only tools such as automation control stay unavailable; changing the job itself happens in your reply turn.
 
-Each failure streak gets at most one repair request, even if its cause changes later. The alert is sent as before when the job has no owner conversation, or when it will not run again (for example a one-shot job that used up its retries). If the job fails again after the request, you get the normal failure alert, noting that a repair was requested; later alerts in the streak follow the usual cooldown. A successful run clears the streak silently.
+Each failure streak gets at most one repair request, even if its cause changes later. The alert is sent as before when the job has no owner conversation or is excluded from repair. If a one-shot's repair request cannot start, the normal failure alert is sent instead. If the job fails again after the request, you get the normal failure alert, noting that a repair was requested; later alerts in the streak follow the usual cooldown. A successful run clears the streak silently.
 
 While a provider network failure, request timeout, overload, rate limit, or server error gets its quick scheduler re-runs (30 seconds, 1 minute, then 5 minutes, or the job's next scheduled run when that comes first), the alert and the repair request wait. The hold covers at most those three re-runs, whatever the schedule, and never applies when the job has no next run (disabled job, finished one-shot, or a schedule with no future slot). If those re-runs also fail, the normal alert or repair follows with the full failure count; if one succeeds, nothing is sent. Failures the job causes itself are not held: its own execution timeout, script failures, and command-job timeouts usually point at the job, so they alert or repair at the normal threshold.
 

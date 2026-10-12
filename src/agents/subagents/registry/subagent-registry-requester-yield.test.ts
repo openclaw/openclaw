@@ -288,6 +288,21 @@ describe("adoptSubagentRunForRequesterTurnInRuns", () => {
 });
 
 describe("settleRequesterTurnAfterSessionSpawns", () => {
+  it("commits the wake and requester release in one durable write", async () => {
+    const child = makeRun("atomic-transfer");
+    const runs = new Map([[child.runId, child]]);
+    const write = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
+
+    expect(await settleRuns([child], { runs })).toBe(true);
+
+    expect(write).toHaveBeenCalledOnce();
+    expect(loadSubagentRegistryFromSqlite().get(child.runId)).toMatchObject({
+      requesterTurnRunId: undefined,
+      requesterTurnYielded: undefined,
+      requesterSettleWake: { status: "pending", requesterYieldBatch: true },
+    });
+  });
+
   function nestedRequester(delivery: "pending" | "delivered" = "delivered"): SubagentRunRecord {
     return {
       ...makeRun(REQUESTER_TURN),

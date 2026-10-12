@@ -73,7 +73,7 @@ The built-in `computer` tool takes one action per call. Choose `target: "gateway
 
 On the MCP tool path, computer control belongs to the admitted agent run and is released when that run ends. A later run can then use the same computer. Recording and file-transfer actions remain unavailable on this path.
 
-Coordinates are non-negative integer pixels in the most recent screenshot; the provider maps them to display points. Coordinate actions must echo the screenshot result's `frameId`, and an explicit `screenIndex` must match that frame. OpenClaw also carries a provider-issued display identity from the screenshot into the action, so a display reconnect or geometry change fails closed instead of silently retargeting the same index. These checks reject guessed tokens and tokens from another delivered frame or display. A token is not a freshness guarantee: apps can change pixels on the same display after capture, so take a new screenshot whenever the scene may have changed.
+Coordinates are non-negative integer pixels in the most recent screenshot; the provider maps them to display points. Coordinate actions must echo the screenshot result's `frameId`, and an explicit `screenIndex` must match that frame. OpenClaw also carries a provider-issued display identity from the screenshot into the action, so a display reconnect or geometry change blocks the action instead of silently retargeting the same index. These checks reject guessed tokens and tokens from another delivered frame or display. A token is not a freshness guarantee: apps can change pixels on the same display after capture, so take a new screenshot whenever the scene may have changed.
 
 - Reads: `screenshot` captures a desktop screen and returns `frameId`. It does not accept window, browser, element, or observation references.
 - Pointer: `left_click`, `right_click`, `middle_click`, `double_click`, `triple_click`, `mouse_move`, `left_click_drag` (with `startCoordinate`), `left_mouse_down`, `left_mouse_up`.
@@ -297,7 +297,7 @@ On macOS, default-on means a paired gateway can drive pointer and keyboard input
 
 ### Gateway computer unavailable
 
-Enable `cua-computer` on the Gateway host, verify the focused artifact check, and check the Gateway logs for the provider's startup error. For managed Linux desktops, install the required TigerVNC, XFCE, and D-Bus binaries and confirm that an external VNC listener has not selected attach mode. For an existing desktop, ensure the Gateway starts in the intended graphical session with its display environment and permissions. Enabling the Desktop panel alone does not enable CUA.
+Enable `cua-computer` on the Gateway host, verify the focused artifact check, and check the Gateway logs for the provider's startup error. For managed Linux desktops, install the required TigerVNC, XFCE, and D-Bus binaries and confirm that an external VNC listener has not selected attach mode. For an existing desktop, check that the Gateway starts in the intended graphical session with its display environment and permissions. Enabling the Desktop panel alone does not enable CUA.
 
 If you intended to control a paired desktop, select `target: "node"` and its `node` explicitly. An unavailable Gateway target never redirects a possibly completed action to a different computer.
 

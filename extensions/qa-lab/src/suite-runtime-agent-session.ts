@@ -1,6 +1,4 @@
 import path from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { buildSessionEntry } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
   listSessionEntries,
@@ -45,7 +43,6 @@ type QaSessionEntrySeed = {
   sessionKey: string;
 };
 
-const SESSION_STORE_FTS_SETTLE_RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000] as const;
 const MAX_COMPACTION_SUMMARIES = 16;
 const MAX_SUCCESSFUL_TOOL_CALL_EVENTS = 64;
 const SESSION_RESET_RECALL_CUTOFF = Symbol.for("openclaw.memory.sessionResetRecallCutoff");
@@ -62,15 +59,6 @@ type QaSessionTranscriptSummaryOptions = {
   pendingCodeModeExecNeedle?: string;
   probeText?: string;
 };
-
-function isSessionStoreFtsSettleRace(error: unknown) {
-  const text = formatErrorMessage(error);
-  return (
-    text.includes("SQLite integrity_check failed") &&
-    text.includes("fts5: checksum mismatch") &&
-    text.includes("session_transcript_fts")
-  );
-}
 
 function readSessionTranscriptEventMessage(event: unknown) {
   return isRecord(event) && isRecord(event.message) ? event.message : undefined;
@@ -424,31 +412,16 @@ async function readRawQaSessionStore(
   env: { gateway: Pick<QaSuiteRuntimeEnv["gateway"], "tempRoot"> },
   options: {
     agentId?: string;
-    readEntries?: typeof listSessionEntries;
-    retryDelaysMs?: readonly number[];
   } = {},
 ): Promise<Record<string, SessionEntry>> {
   const runtimeEnv = qaSessionRuntimeEnv(env.gateway.tempRoot);
   const agentId = readNonEmptyString(options.agentId) ?? "qa";
-  const readEntries = options.readEntries ?? listSessionEntries;
-  const retryDelaysMs = options.retryDelaysMs ?? SESSION_STORE_FTS_SETTLE_RETRY_DELAYS_MS;
-  for (let attempt = 0; attempt <= retryDelaysMs.length; attempt += 1) {
-    try {
-      return Object.fromEntries(
-        readEntries({ agentId, env: runtimeEnv }).map(({ sessionKey, entry }) => [
-          sessionKey,
-          entry,
-        ]),
-      );
-    } catch (error) {
-      if (!isSessionStoreFtsSettleRace(error) || attempt === retryDelaysMs.length) {
-        throw error;
-      }
-      // Child completion can publish before its transcript writer has settled the FTS state.
-      await sleep(retryDelaysMs[attempt]);
-    }
-  }
-  throw new Error("QA session store read failed after FTS settle retries");
+  return Object.fromEntries(
+    listSessionEntries({ agentId, env: runtimeEnv }).map(({ sessionKey, entry }) => [
+      sessionKey,
+      entry,
+    ]),
+  );
 }
 
 async function readQaSessionTranscriptEvents(
