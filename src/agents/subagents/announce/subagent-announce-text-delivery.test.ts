@@ -8,7 +8,7 @@ import { readTranscriptEventMessage } from "../../../config/sessions/session-acc
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { buildChannelOutboundSessionRoute } from "../../../plugin-sdk/core.js";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
-import * as transcript from "../../../sessions/confirmed-visible-message.js";
+import * as transcript from "../../../sessions/background-session-result.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import {
   createOutboundTestPlugin,

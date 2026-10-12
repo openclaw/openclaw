@@ -11,7 +11,7 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { readTranscriptEventMessage } from "../../config/sessions/session-accessor.sqlite-read.js";
-import * as confirmedVisibleMessage from "../../sessions/confirmed-visible-message.js";
+import * as confirmedVisibleMessage from "../../sessions/background-session-result.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,

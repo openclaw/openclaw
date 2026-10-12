@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createMessageReceiptFromOutboundResults } from "../../channels/message/receipt.js";
 import { createChannelPartialDeliveryError } from "../../channels/turn/partial-delivery-error.js";
-import type * as ConfirmedVisibleMessage from "../../sessions/confirmed-visible-message.js";
+import type * as ConfirmedVisibleMessage from "../../sessions/background-session-result.js";
 import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
 import { executeSendAction } from "./outbound-send-service.js";
 
@@ -15,7 +15,7 @@ vi.mock("../../channels/plugins/message-action-dispatch.js", () => ({
   dispatchChannelMessageAction: mocks.dispatchChannelMessageAction,
 }));
 
-vi.mock("../../sessions/confirmed-visible-message.js", async (importOriginal) => ({
+vi.mock("../../sessions/background-session-result.js", async (importOriginal) => ({
   ...(await importOriginal<typeof ConfirmedVisibleMessage>()),
   commitConfirmedVisibleMessage: mocks.commitConfirmedVisibleMessage,
 }));

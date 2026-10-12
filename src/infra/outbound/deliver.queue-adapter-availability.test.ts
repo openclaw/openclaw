@@ -5,7 +5,7 @@ import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
-import type * as ConfirmedVisibleMessage from "../../sessions/confirmed-visible-message.js";
+import type * as ConfirmedVisibleMessage from "../../sessions/background-session-result.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.test-support.js";
 import { isProvenDeliveryNotSentError } from "../delivery-recovery.shared.js";
@@ -25,7 +25,7 @@ import {
 } from "./delivery-queue.test-helpers.js";
 
 // Adapter lookup and recovery custody do not own transcript persistence.
-vi.mock("../../sessions/confirmed-visible-message.js", async (importOriginal) => ({
+vi.mock("../../sessions/background-session-result.js", async (importOriginal) => ({
   ...(await importOriginal<typeof ConfirmedVisibleMessage>()),
   commitConfirmedVisibleMessage: vi.fn(async () => ({ ok: true })),
 }));

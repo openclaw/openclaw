@@ -99,7 +99,7 @@ remains transcript-only for UI display when the runtime did not persist a final.
    (`src/sessions/background-session-result.ts`), after confirmed delivery.
    Mirrors and awareness notes are removed.
 2. **Done.** The outbound send owner writes confirmed visible messages through
-   `src/sessions/confirmed-visible-message.ts`. Cron, the `message` tool, failure
+   `src/sessions/background-session-result.ts`. Cron, the `message` tool, failure
    alerts, external heartbeats, and subagent announcements use the same writer.
    A producing conversation keeps its own turn instead of a second delivery row;
    cross-conversation sends enter the destination's model history once. External

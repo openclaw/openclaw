@@ -5,7 +5,7 @@ import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { payloadRequiresDurablePayloadTransport } from "../../channels/message/capabilities.js";
 import { renderPresentationForDelivery } from "../../channels/plugins/outbound/presentation-delivery.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { commitConfirmedVisibleMessage } from "../../sessions/confirmed-visible-message.js";
+import { commitConfirmedVisibleMessage } from "../../sessions/background-session-result.js";
 import { getOrCreatePromise } from "../../shared/lazy-promise.js";
 import { diagnosticErrorCategory } from "../diagnostic-error-metadata.js";
 import {
@@ -218,6 +218,7 @@ export async function deliverOutboundPayloadsCore(
         signal: abortSignal,
         expectedGeneration: threadChanged ? undefined : params.transcriptExpectedGeneration,
         assertCurrent: params.assertTranscriptCurrent,
+        assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
       });
       diagnostic = result.ok
         ? result.diagnostics

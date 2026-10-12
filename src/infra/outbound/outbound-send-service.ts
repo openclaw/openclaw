@@ -19,7 +19,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
-import { commitConfirmedVisibleMessage } from "../../sessions/confirmed-visible-message.js";
+import { commitConfirmedVisibleMessage } from "../../sessions/background-session-result.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import type { NormalizedOutboundPayload } from "./deliver.js";
@@ -232,6 +232,7 @@ export async function executeSendAction(params: SendActionParams): Promise<{
                 params.ctx.input.deliveryIntentId ?? params.ctx.idempotencyKey ?? randomUUID(),
               payloadIndex: 0,
               signal: params.ctx.abortSignal,
+              assertDirectAdapterHandoff: params.ctx.input.assertDirectAdapterHandoff,
             });
             const diagnostic = result.ok ? result.diagnostics : result.reason;
             if (diagnostic) {

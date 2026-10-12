@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMessageReceiptFromOutboundResults } from "../../channels/message/receipt.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import type * as ConfirmedVisibleMessage from "../../sessions/confirmed-visible-message.js";
-import type { commitConfirmedVisibleMessage } from "../../sessions/confirmed-visible-message.js";
+import type * as ConfirmedVisibleMessage from "../../sessions/background-session-result.js";
+import type { commitConfirmedVisibleMessage } from "../../sessions/background-session-result.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { deliverOutboundPayloadsCore } from "./deliver-core.js";
 import { createUnmodifiedPreparedOutboundBatch } from "./prepared-batch.js";
@@ -12,7 +12,7 @@ const mocks = vi.hoisted(() => ({
   commit: vi.fn<typeof commitConfirmedVisibleMessage>(async () => ({ ok: true })),
 }));
 
-vi.mock("../../sessions/confirmed-visible-message.js", async (importOriginal) => ({
+vi.mock("../../sessions/background-session-result.js", async (importOriginal) => ({
   ...(await importOriginal<typeof ConfirmedVisibleMessage>()),
   commitConfirmedVisibleMessage: mocks.commit,
 }));
@@ -51,6 +51,8 @@ describe("confirmed outbound logical payloads", () => {
       preparedBatch,
       deliveryQueueId: "durable-queue-id",
       session: { key: "agent:main:source", agentId: "main" },
+      assertDirectAdapterHandoff: vi.fn(),
+      assertTranscriptCurrent: vi.fn(),
     };
     await deliverOutboundPayloadsCore(params);
     await deliverOutboundPayloadsCore(params);
@@ -61,6 +63,8 @@ describe("confirmed outbound logical payloads", () => {
         payloadIndex: 3,
         producer: params.session,
         payload,
+        assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
+        assertCurrent: params.assertTranscriptCurrent,
       });
     }
   });

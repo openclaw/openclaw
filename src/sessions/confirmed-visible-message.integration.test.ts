@@ -11,7 +11,6 @@ import type { OutboundSessionRoute } from "../infra/outbound/outbound-session.js
 import {
   sendDurableMessageBatch,
   withDurableMessageSendContext,
-  type DeliveryMirror,
 } from "../plugin-sdk/channel-outbound.js";
 import {
   captureActivePluginRegistrySnapshot,
@@ -21,7 +20,7 @@ import {
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { commitConfirmedVisibleMessage } from "./confirmed-visible-message.js";
+import { commitConfirmedVisibleMessage } from "./background-session-result.js";
 import { beginSessionWorkAdmission } from "./session-lifecycle-admission.js";
 
 const route: OutboundSessionRoute = {
@@ -105,7 +104,7 @@ describe("confirmed visible message ownership", () => {
         createTestRegistry([{ pluginId: "telegram", source: "test", plugin }]),
       );
       const otherSessionKey = "agent:main:telegram:group:-100456";
-      const mirror: DeliveryMirror = { sessionKey: route.sessionKey };
+      const mirror = { sessionKey: route.sessionKey };
       const input = {
         cfg: params.config,
         channel: "telegram" as const,

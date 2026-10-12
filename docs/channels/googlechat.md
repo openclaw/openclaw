@@ -145,6 +145,13 @@ Configure the tunnel ingress rules to route only the webhook path:
 6. Group spaces require @-mention by default. Mentions are detected from Chat `USER_MENTION` annotations targeting the app. Set `botUser` (e.g., `users/1234567890`) if detection needs the app's user resource name.
 7. When an exec or plugin approval starts from Google Chat and a stable `users/<id>` approver is configured, OpenClaw posts a native approval card (`cardsV2`) in the originating space or thread. Card buttons carry opaque callback tokens. The manual `/approve <id> <decision>` prompt appears only when native delivery is unavailable.
 
+Confirmed outbound messages are recorded in the destination conversation's history.
+OpenClaw reuses existing session routes and space types learned from inbound events,
+direct-message lookups, and send responses. The first send to a previously unseen
+space can make one metadata request to distinguish a DM from a group; repeated
+sends reuse the bounded account-scoped cache. If the type remains unavailable,
+delivery still succeeds and a diagnostic explains why history recording was skipped.
+
 ### Inbound durability
 
 After request authentication, OpenClaw removes the add-on authorization object from storage and durably queues Google Chat `MESSAGE` events before returning `200`. A persistence failure returns `503`, allowing Google Chat to retry instead of acknowledging an event that could be lost. A durably queued `200` carries `x-openclaw-delivery-accepted: durable`. Non-message action acks and error responses omit the marker, so reverse proxies can require it to distinguish durable acceptance from a generic `200`.

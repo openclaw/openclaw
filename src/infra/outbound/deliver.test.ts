@@ -18,8 +18,8 @@ import { resolveStateDir } from "../../config/state-dir.js";
 import * as mediaCapabilityModule from "../../media/read-capability.js";
 import type { PluginHookHandlerMap } from "../../plugins/hook-types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import type * as ConfirmedVisibleMessage from "../../sessions/confirmed-visible-message.js";
-import type { commitConfirmedVisibleMessage } from "../../sessions/confirmed-visible-message.js";
+import type * as ConfirmedVisibleMessage from "../../sessions/background-session-result.js";
+import type { commitConfirmedVisibleMessage } from "../../sessions/background-session-result.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
@@ -152,7 +152,7 @@ async function ackDeliveryMock(
   return queueMocks.ackDelivery(id, stateDir, hasOptions ? legacyOptions : undefined);
 }
 
-vi.mock("../../sessions/confirmed-visible-message.js", async (importOriginal) => ({
+vi.mock("../../sessions/background-session-result.js", async (importOriginal) => ({
   ...(await importOriginal<typeof ConfirmedVisibleMessage>()),
   commitConfirmedVisibleMessage: mocks.commitConfirmedVisibleMessage,
 }));

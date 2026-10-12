@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ResolvedGoogleChatAccount } from "./accounts.js";
+import { resolveGoogleChatAccount, type ResolvedGoogleChatAccount } from "./accounts.js";
 import type { GoogleChatCoreRuntime, GoogleChatRuntimeEnv } from "./monitor-types.js";
 import "./monitor.js";
+import { startGoogleChatSpaceCache } from "./space-cache.js";
+import { resolveGoogleChatOutboundSessionRoute } from "./targets.js";
 import type { GoogleChatEvent } from "./types.js";
 
 const apiMocks = vi.hoisted(() => ({
@@ -162,6 +164,57 @@ const THREAD = `${SPACE}/threads/requested`;
 const TYPING = `${SPACE}/messages/typing`;
 
 describe("Google Chat automatic reply target reconciliation", () => {
+  it("reuses inbound space classification for repeated outbound replies", async () => {
+    const cfg = {
+      channels: {
+        googlechat: {
+          accounts: {
+            work: {
+              serviceAccount: {
+                client_email: "inbound@example.test",
+                private_key: "not-a-real-key",
+              },
+            },
+          },
+        },
+      },
+    };
+    const account = resolveGoogleChatAccount({ cfg, accountId: "work" });
+    const stop = startGoogleChatSpaceCache(account);
+    apiMocks.sendGoogleChatMessage
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue({ messageName: `${SPACE}/messages/reply` });
+    try {
+      await processEvent({
+        account,
+        core: createCore({
+          run: async (delivery) => {
+            for (const text of ["first reply", "second reply"]) {
+              await delivery.deliver({ text });
+              expect(
+                await resolveGoogleChatOutboundSessionRoute({
+                  cfg,
+                  accountId: "work",
+                  agentId: "agent-1",
+                  target: SPACE,
+                }),
+              ).toMatchObject({
+                peer: { kind: "direct", id: SPACE },
+                recipientSessionExact: true,
+              });
+            }
+          },
+        }),
+        event: createEvent({ spaceType: "DIRECT_MESSAGE" }),
+      });
+      expect(
+        apiMocks.sendGoogleChatMessage.mock.calls.slice(1).map(([params]) => params.text),
+      ).toEqual(["first reply", "second reply"]);
+    } finally {
+      stop();
+    }
+  });
+
   it("keeps automatic replies top-level with reply mode off", async () => {
     const account = createAccount({ replyToMode: "off" });
     const payload = Object.freeze({ text: "top-level reply", replyToId: SOURCE });

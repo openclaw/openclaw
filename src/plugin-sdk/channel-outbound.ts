@@ -25,7 +25,6 @@ const loadChannelMessageRuntimeModule = createLazyRuntimeModule(
 );
 
 export type { DurableMessageBatchSendResult } from "../channels/message/runtime.js";
-export type { DeliveryMirror } from "../infra/outbound/mirror.js";
 export {
   isRecentOutboundMessageIdentity,
   recordOutboundMessageIdentity,

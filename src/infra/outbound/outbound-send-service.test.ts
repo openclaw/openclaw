@@ -5,7 +5,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import type * as ConfirmedVisibleMessage from "../../sessions/confirmed-visible-message.js";
+import type * as ConfirmedVisibleMessage from "../../sessions/background-session-result.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -102,7 +102,7 @@ vi.mock("../../media/local-roots.js", async () => {
   };
 });
 
-vi.mock("../../sessions/confirmed-visible-message.js", async (importOriginal) => ({
+vi.mock("../../sessions/background-session-result.js", async (importOriginal) => ({
   ...(await importOriginal<typeof ConfirmedVisibleMessage>()),
   commitConfirmedVisibleMessage: mocks.commitConfirmedVisibleMessage,
 }));

@@ -10,7 +10,7 @@ import type { ChannelMessageSendTextContext } from "../../channels/message/types
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import type * as ConfirmedVisibleMessage from "../../sessions/confirmed-visible-message.js";
+import type * as ConfirmedVisibleMessage from "../../sessions/background-session-result.js";
 import * as stateDatabase from "../../state/openclaw-state-db.js";
 import {
   createChannelTestPluginBase,
@@ -37,7 +37,7 @@ vi.mock("../../agents/runtime-plan/build.js", () => ({
 }));
 
 // These assertions cover delivery custody, not destination transcript storage.
-vi.mock("../../sessions/confirmed-visible-message.js", async (importOriginal) => ({
+vi.mock("../../sessions/background-session-result.js", async (importOriginal) => ({
   ...(await importOriginal<typeof ConfirmedVisibleMessage>()),
   commitConfirmedVisibleMessage: vi.fn(async () => ({ ok: true })),
 }));

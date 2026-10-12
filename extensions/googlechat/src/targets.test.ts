@@ -1,12 +1,13 @@
 // Googlechat tests cover targets plugin behavior.
 import { createServer } from "node:http";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ResolvedGoogleChatAccount } from "./accounts.js";
+import { resolveGoogleChatAccount, type ResolvedGoogleChatAccount } from "./accounts.js";
 import { downloadGoogleChatMedia, sendGoogleChatMessage, updateGoogleChatMessage } from "./api.js";
 import {
   registerGoogleChatManualApprovalFollowupSuppression,
   unregisterGoogleChatManualApprovalFollowupSuppression,
 } from "./approval-card-actions.js";
+import { startGoogleChatSpaceCache } from "./space-cache.js";
 import { isGoogleChatGroupSpace, resolveGoogleChatOutboundSessionRoute } from "./targets.js";
 
 const mocks = vi.hoisted(() => ({
@@ -167,7 +168,12 @@ describe("target helpers", () => {
 });
 
 describe("outbound session routing", () => {
+  let stopSpaceCache: () => void;
+  beforeEach(() => {
+    stopSpaceCache = startGoogleChatSpaceCache(resolveGoogleChatAccount({ cfg: {} }));
+  });
   afterEach(() => {
+    stopSpaceCache();
     vi.unstubAllGlobals();
   });
 
@@ -203,34 +209,22 @@ describe("outbound session routing", () => {
     },
   );
 
-  it("rejects an unclassified space response", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi
-        .fn()
-        .mockResolvedValue(new Response(JSON.stringify({ name: "spaces/AAA" }), { status: 200 })),
-    );
-
-    await expect(
-      resolveGoogleChatOutboundSessionRoute({
-        cfg: {},
-        agentId: "main",
-        target: "spaces/AAA",
-      }),
-    ).resolves.toBeNull();
-  });
-
-  it("keeps session-route classification failures non-fatal", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("read unavailable")));
-
-    await expect(
-      resolveGoogleChatOutboundSessionRoute({
-        cfg: {},
-        agentId: "main",
-        target: "spaces/AAA",
-      }),
-    ).resolves.toBeNull();
-  });
+  it.each(["unclassified", "failed"] as const)(
+    "does not retry a %s space classification on later sends",
+    async (outcome) => {
+      const fetchMock = vi.fn().mockImplementation(async () => {
+        if (outcome === "failed") {
+          throw new Error("read unavailable");
+        }
+        return new Response(JSON.stringify({ name: "spaces/AAA" }), { status: 200 });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const destination = { cfg: {}, agentId: "main", target: "spaces/AAA" };
+      await expect(resolveGoogleChatOutboundSessionRoute(destination)).resolves.toBeNull();
+      await expect(resolveGoogleChatOutboundSessionRoute(destination)).resolves.toBeNull();
+      expect(fetchMock).toHaveBeenCalledOnce();
+    },
+  );
 });
 
 describe("downloadGoogleChatMedia", () => {

@@ -1,5 +1,10 @@
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import { resolveGoogleChatOutboundSessionRoute } from "./targets.js";
+import { resolveGoogleChatAccount } from "./accounts.js";
+import { startGoogleChatSpaceCache } from "./space-cache.js";
+import {
+  resolveGoogleChatOutboundSessionRoute,
+  resolveGoogleChatOutboundSpace,
+} from "./targets.js";
 
 const mocks = vi.hoisted(() => ({
   fetchWithSsrFGuard: vi.fn(
@@ -30,18 +35,22 @@ afterAll(() => {
 });
 
 describe("outbound session routing", () => {
-  it("reuses direct-message metadata for route classification", async () => {
+  it("retains delivery's direct-message lookup metadata for later route classification", async () => {
     const fetchMock = vi.fn().mockImplementation(async () => {
       return new Response(JSON.stringify({ name: "spaces/DM-AAA", spaceType: "DIRECT_MESSAGE" }), {
         status: 200,
       });
     });
     vi.stubGlobal("fetch", fetchMock);
+    const space = await resolveGoogleChatOutboundSpace({
+      account: resolveGoogleChatAccount({ cfg: {} }),
+      target: "users/alice",
+    });
 
     const route = await resolveGoogleChatOutboundSessionRoute({
       cfg: {},
       agentId: "main",
-      target: "users/alice",
+      target: space,
     });
 
     expect(route).toMatchObject({
@@ -61,5 +70,49 @@ describe("outbound session routing", () => {
         },
       },
     );
+  });
+
+  it("isolates classification by account, credentials, and monitor lifecycle", async () => {
+    let requestCount = 0;
+    const fetchMock = vi.fn().mockImplementation(async () => {
+      const spaceType = ++requestCount === 1 ? "DIRECT_MESSAGE" : "SPACE";
+      return new Response(JSON.stringify({ name: "spaces/SHARED", spaceType }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const cfg = {
+      channels: {
+        googlechat: {
+          accounts: {
+            first: {
+              serviceAccount: { client_email: "first@example.test", private_key: "first-key" },
+            },
+            second: {
+              serviceAccount: { client_email: "second@example.test", private_key: "second-key" },
+            },
+          },
+        },
+      },
+    };
+    const destination = { cfg, agentId: "main", target: "spaces/SHARED" };
+    expect(
+      await resolveGoogleChatOutboundSessionRoute({ ...destination, accountId: "first" }),
+    ).toMatchObject({ chatType: "direct" });
+    expect(
+      await resolveGoogleChatOutboundSessionRoute({ ...destination, accountId: "second" }),
+    ).toMatchObject({ chatType: "group" });
+    cfg.channels.googlechat.accounts.first.serviceAccount.private_key = "rotated-key";
+    expect(
+      await resolveGoogleChatOutboundSessionRoute({ ...destination, accountId: "first" }),
+    ).toMatchObject({ chatType: "group" });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+
+    const stop = startGoogleChatSpaceCache(resolveGoogleChatAccount({ cfg, accountId: "first" }));
+    try {
+      await resolveGoogleChatOutboundSessionRoute({ ...destination, accountId: "first" });
+      await resolveGoogleChatOutboundSessionRoute({ ...destination, accountId: "first" });
+      expect(fetchMock).toHaveBeenCalledTimes(4);
+    } finally {
+      stop();
+    }
   });
 });

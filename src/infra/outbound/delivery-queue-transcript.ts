@@ -1,7 +1,7 @@
 import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { toAgentStoreSessionKey } from "../../routing/session-key.js";
-import { commitConfirmedVisibleMessage } from "../../sessions/confirmed-visible-message.js";
+import { commitConfirmedVisibleMessage } from "../../sessions/background-session-result.js";
 import type { DeliveryQueueStateContext } from "../delivery-queue-sqlite.js";
 import { formatErrorMessage } from "../errors.js";
 import type { QueuedDelivery } from "./delivery-queue-types.js";
