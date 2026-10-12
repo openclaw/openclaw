@@ -809,6 +809,7 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
     validateReplayTurns: validateReplayTurnsMock,
   }));
 
+  // mock-isolation: Isolate fixture transports/auth from provider state; claim and request guards stay real.
   vi.doMock("./stream-resolution.js", () => ({
     resolveEmbeddedAgentApiKey: resolveCompactHooksApiKeyMock,
     resolveEmbeddedAgentBaseStreamFn: vi.fn(() => vi.fn()),
