@@ -82,7 +82,7 @@ function probeDeps(found: Record<string, boolean>) {
 }
 
 describe("detectInferenceBackends", () => {
-  it.each([true])(
+  it.each([false, true])(
     "keeps native detection passive with stored Codex credentials: %s",
     async (stored) => {
       const calls: Array<{ command: string; args: string[] }> = [];
@@ -95,7 +95,6 @@ describe("detectInferenceBackends", () => {
             return { command, found: command === "codex" || command === "claude" };
           },
           readCodexCliCredentials: () => (stored ? { type: "oauth" } : null),
-          randomInt: () => 0,
         },
       });
       expect(facadeRuntime.tryLoadActivatedBundledPluginPublicSurfaceModule).not.toHaveBeenCalled();
@@ -107,9 +106,10 @@ describe("detectInferenceBackends", () => {
           detail: stored
             ? "installed; stored credentials found; login status unverified"
             : "installed; login status unverified",
+          credentials: stored,
         },
       ]);
-      expect(candidates.every((candidate) => candidate.credentials === undefined)).toBe(true);
+      expect(candidates[0]?.credentials).toBeUndefined();
     },
   );
 
@@ -149,7 +149,7 @@ describe("detectInferenceBackends", () => {
             detail: "installed; stored credentials found; login status unverified",
           },
         ]);
-        expect(candidates[0]?.credentials).toBeUndefined();
+        expect(candidates[0]?.credentials).toBe(true);
         expect(await fs.readFile(authPath, "utf8")).toBe(raw);
         expect(JSON.stringify(candidates)).not.toContain("synthetic-");
         expect(
@@ -172,7 +172,7 @@ describe("detectInferenceBackends", () => {
           timedOut: true,
           error: "timed out after 1500ms",
         }),
-        readCodexCliCredentials: () => ({ type: "oauth" }),
+        readCodexCliCredentials: () => null,
         readGeminiCliCredentials: () => ({ type: "oauth" }),
       },
     });
@@ -194,7 +194,6 @@ describe("detectInferenceBackends", () => {
         probeLocalCommand: probeDeps({ claude: true, codex: true, gemini: true }),
         readCodexCliCredentials: () => ({ type: "oauth" }),
         readGeminiCliCredentials: () => ({ type: "oauth" }),
-        randomInt: () => 0,
       },
     });
     expect(candidates.map((candidate) => candidate.kind)).toEqual([
@@ -287,7 +286,6 @@ describe("detectInferenceBackends", () => {
         probeLocalCommand: probeDeps({ claude: true, codex: true, gemini: true }),
         readCodexCliCredentials: () => null,
         readGeminiCliCredentials: () => null,
-        randomInt: () => 0,
       },
     });
 
@@ -301,25 +299,23 @@ describe("detectInferenceBackends", () => {
     ).toBeUndefined();
   });
 
-  it("randomizes the two unverified native CLIs without treating saved credentials as login proof", async () => {
-    const detectWithPick = async (pick: number) =>
-      await detectInferenceBackends({
-        env: {},
-        platform: "linux",
-        deps: {
-          probeLocalCommand: probeDeps({ claude: true, codex: true }),
-          readCodexCliCredentials: () => ({ type: "oauth" }),
-          randomInt: () => pick,
-        },
-      });
+  it("offers stored Codex credentials when its runtime still needs installation", async () => {
+    const candidates = await detectInferenceBackends({
+      env: {},
+      platform: "linux",
+      deps: {
+        probeLocalCommand: probeDeps({ claude: true }),
+        readCodexCliCredentials: () => ({ type: "oauth" }),
+      },
+    });
 
-    expect((await detectWithPick(0)).map((candidate) => candidate.kind)).toEqual([
-      "claude-cli",
-      "codex-cli",
-    ]);
-    expect((await detectWithPick(1)).map((candidate) => candidate.kind)).toEqual([
-      "codex-cli",
-      "claude-cli",
+    expect(candidates).toMatchObject([
+      { kind: "claude-cli" },
+      {
+        kind: "codex-cli",
+        credentials: true,
+        detail: "stored credentials found; runtime installation required",
+      },
     ]);
   });
 
@@ -344,7 +340,7 @@ describe("detectInferenceBackends", () => {
     expect(candidates).toMatchObject([
       { kind: "codex-cli", detail: "installed; login status unverified" },
     ]);
-    expect(candidates[0]?.credentials).toBeUndefined();
+    expect(candidates[0]?.credentials).toBe(false);
     expect(probed).toContainEqual({ command, args: ["--version"], timeoutMs: 3_000 });
     expect(probed.filter((entry) => entry.command === command)).toEqual([
       { command, args: ["--version"], timeoutMs: 3_000 },

@@ -64,18 +64,25 @@ has no macOS app asset, use the newest one that does, or build from source with
 3. For a new local Gateway, wait while the app installs its external CLI runtime
    and starts the Gateway. Connecting to a remote or independently managed local
    Gateway does not require installing a CLI on this Mac.
-4. Choose the AI connection you want. Detection only presents available
-   connections; selecting one starts its live model check. An existing configured
-   route appears as **Current model**.
+4. Let OpenClaw pick an AI connection automatically. It preserves an existing
+   configured model; otherwise it verifies available access and activates the
+   first usable connection.
 5. Finish. The app opens the dashboard, where OpenClaw guides the rest of the
    setup (memory import, channels, permissions) in one conversation. Grant
    macOS permissions any time from **Dashboard → Settings → This Mac → Permissions**.
 
-During onboarding, an existing Gateway's configured model also waits for your
-selection before its live check. A successful check opens the normal dashboard
-and preserves the configured route. If the Gateway cannot connect or its default
-agent has no model, inference onboarding remains available for recovery.
-Normal app launches after onboarding continue to use the saved Gateway.
+Automatic first run tries saved OpenClaw auth profiles, a stored Codex login, a
+Claude CLI login, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, then eligible loaded
+models in Ollama, LM Studio, or llama.cpp. If none works, it installs or enables
+the official Codex plugin and uses its login or asks you to sign in with ChatGPT.
+Apple Foundation Models is never selected as the primary model, and native
+Claude/Codex conversation discovery stays off.
+
+The dashboard tells you what was picked and offers alternatives. You can switch
+providers or models there, or choose another Gateway from
+**Connection… → Gateways**. The manual provider picker still waits for your
+selection before activation. Normal app launches continue to use the saved
+Gateway and configured model.
 
 For the CLI/Gateway setup path, use [Getting started](/start/getting-started).
 For permission recovery, use [macOS permissions](/platforms/mac/permissions).

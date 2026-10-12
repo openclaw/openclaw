@@ -157,7 +157,6 @@ describe("guided onboarding inference composition", () => {
                   probeLocalCommand,
                   readCodexCliCredentials: () => null,
                   readGeminiCliCredentials: () => null,
-                  randomInt: () => 0,
                 },
               }),
             resolveManifestProviderAuthChoices: () => [],

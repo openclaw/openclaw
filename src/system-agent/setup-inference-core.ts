@@ -77,8 +77,8 @@ export type SetupInferenceCandidate = {
   label: string;
   detail: string;
   modelRef: string;
-  /** @deprecated Gateway wire compatibility for older macOS clients. Always false. */
-  recommended: false;
+  /** Highest-ranked usable primary-model candidate from passive discovery. */
+  recommended: boolean;
   credentials?: boolean;
   icon?: string;
   website?: string;
@@ -184,6 +184,8 @@ export type BoundVerifySetupInferenceResult =
 
 export type ActivateSetupInferenceParams = {
   kind: SetupInferenceKind | "api-key" | "provider-auth";
+  /** Gateway first-run policy; never inherited by the manual picker. */
+  automaticSetup?: true;
   /** Acknowledge utility-only activation; older clients must not promote it as primary-ready. */
   modelTarget?: "utility";
   /** Configured agent that owns the route being tested and persisted. */
@@ -264,6 +266,7 @@ export type ActivateSetupInferenceDeps = {
   resolveApiKeyForProvider?: typeof import("../agents/model-auth.js").resolveApiKeyForProviderCore;
   resolvePluginMetadataSnapshot?: typeof import("../plugins/plugin-metadata-snapshot.js").resolvePluginMetadataSnapshot;
   readCodexCliActiveApiKey?: typeof readCodexCliActiveApiKey;
+  readCodexCliCredentialsCached?: typeof import("../agents/cli-credentials.js").readCodexCliCredentialsCached;
   loadPluginRegistrySnapshot?: SystemAgentVerifiedInferenceDeps["loadPluginRegistrySnapshot"];
   fingerprintPluginRuntimeArtifact?: SystemAgentVerifiedInferenceDeps["fingerprintPluginRuntimeArtifact"];
   captureSystemAgentOwnerPluginArtifacts?: typeof captureSystemAgentOwnerPluginArtifacts;

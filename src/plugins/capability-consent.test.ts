@@ -55,6 +55,69 @@ function createDeclaredSurface(
 
 describe("plugin capability consent", () => {
   it.each([
+    { recordOfficialCapabilities: false, accepted: false },
+    { recordOfficialCapabilities: true, accepted: false },
+    { recordOfficialCapabilities: true, accepted: true },
+  ])(
+    "records official capability acceptance only after requested review ($recordOfficialCapabilities/$accepted)",
+    async ({ recordOfficialCapabilities, accepted }) => {
+      const artifactDir = createArtifactFixture({
+        "package.json": {
+          name: "@openclaw/codex",
+          openclaw: { extensions: ["./index.js"] },
+        },
+        "index.js": "export {};",
+        "openclaw.plugin.json": {
+          id: "codex",
+          contracts: { tools: ["fixture.tool"] },
+          configSchema: { type: "object" },
+        },
+      });
+      const reviewed: string[] = [];
+      const consent = createManagedPluginArtifactConsentHandler({
+        config: {},
+        source: "npm",
+        spec: "@openclaw/codex@1.0.0",
+        recordOfficialCapabilities,
+        onCapabilityConsent: async (review) => {
+          reviewed.push(review.pluginId);
+          return accepted ? { reviewToken: review.reviewToken } : undefined;
+        },
+      });
+      const record: PluginInstallRecord = {
+        source: "npm",
+        spec: "@openclaw/codex@1.0.0",
+        integrity: "sha512-fixture",
+      };
+      const preparation = consent.onBeforePluginArtifactCommit({
+        pluginId: "codex",
+        mode: "install",
+        stagedArtifactDir: artifactDir,
+        sourceRecord: record,
+      });
+      if (recordOfficialCapabilities && !accepted) {
+        await expect(preparation).rejects.toMatchObject({
+          capabilityConsent: { pluginId: "codex" },
+        });
+      } else {
+        await preparation;
+        const prepared = consent.applyAcceptedSurface("codex", record);
+        if (recordOfficialCapabilities) {
+          expect(prepared).toMatchObject({
+            acceptedSurface: { tools: ["fixture.tool"] },
+            acceptedSurfaceAt: expect.any(String),
+            acceptedSurfaceIntegrity: "sha512-fixture",
+          });
+          expect(prepared.acceptedSurfaceHash).toMatch(/^[a-f0-9]{64}$/u);
+        } else {
+          expect(prepared).not.toHaveProperty("acceptedSurface");
+        }
+      }
+      expect(reviewed).toEqual(recordOfficialCapabilities ? ["codex"] : []);
+    },
+  );
+
+  it.each([
     { label: "native package entries", explicitPath: false, staged: false },
     { label: "a configured file override", explicitPath: true, staged: false },
     {

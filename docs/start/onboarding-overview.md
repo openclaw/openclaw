@@ -8,10 +8,9 @@ sidebarTitle: "Onboarding Overview"
 ---
 
 OpenClaw supports onboarding from the terminal, the macOS app, and the Linux
-desktop companion. Every path establishes inference first: it detects existing
-AI access, requires a live completion, and only then starts OpenClaw to
-configure the remaining setup. During macOS onboarding, selecting an already
-configured model verifies that route before opening the normal dashboard.
+desktop companion. Every path establishes inference first. On macOS, a fresh
+Gateway automatically picks available AI access and verifies a real completion
+before configuring the remaining setup. An existing configured model is kept.
 The terminal flow also offers the full classic wizard for detailed setup.
 
 ## Which path should I use?
@@ -22,7 +21,7 @@ The terminal flow also offers the full classic wizard for detailed setup.
 | **Interface**  | Terminal or guided setup               | Native desktop setup                                | Native desktop setup                      |
 | **Gateway**    | Local or remote                        | Local, direct remote, or SSH                        | Local, direct remote, or SSH              |
 | **Best for**   | Servers, headless, full control        | Desktop Mac, visual setup                           | Linux desktop, visual setup               |
-| **Automation** | `--non-interactive` for scripts        | Manual only                                         | Manual only                               |
+| **Automation** | `--non-interactive` for scripts        | Automatic first-run inference                       | Manual only                               |
 | **Start**      | `openclaw onboard`                     | [Download the macOS app](/platforms/macos#download) | [Install the Linux app](/platforms/linux) |
 
 Most users should start with **CLI onboarding** — it works everywhere and gives
@@ -77,19 +76,28 @@ CLI command docs: [`openclaw onboard`](/cli/onboard)
 
 ## macOS app onboarding
 
-[Download the macOS app](/platforms/macos#download), then open it. If its
-configured local or remote Gateway is reachable and the default agent already
-has a configured model, onboarding offers **Current model**. Select it to run a
-real model check and open the normal dashboard. Loading the page only detects
-available connections, including when this Mac is new to an existing Gateway.
+[Download the macOS app](/platforms/macos#download), then open it. Once its local
+or remote Gateway is reachable, OpenClaw keeps an existing configured model.
+For a fresh Gateway, it automatically tries usable connections in this order:
+
+1. Saved OpenClaw auth profiles.
+2. Codex with stored credentials on the Gateway host.
+3. A Claude CLI login.
+4. `OPENAI_API_KEY`, then `ANTHROPIC_API_KEY`.
+5. Eligible loaded models in Ollama, LM Studio, or llama.cpp.
+
+The first connection that passes a live completion becomes the primary model.
+If none works, OpenClaw installs or enables the official Codex plugin and uses
+its existing login, or asks you to sign in with ChatGPT. Apple Foundation Models
+is a utility option and is never chosen as the primary model.
 
 For a fresh or incomplete Gateway, native setup handles the Gateway connection,
-any needed local CLI/runtime install, and AI access. It detects existing
-credentials or eligible loaded local models without testing or selecting them,
-then waits for an explicit click before activation. The provider list includes
-installable official provider plugins and a custom OpenAI/Anthropic-compatible
-endpoint flow. Fresh installs default native Claude/Codex conversation discovery
-off and ask before enabling it. After a new model
+any needed local CLI/runtime install, and AI access. The dashboard tells you what
+was picked and offers alternatives. You can switch providers or models there,
+or use **Connection… → Gateways** to choose another Gateway. The manual provider
+picker still waits for your selection and supports official provider plugins
+and custom OpenAI/Anthropic-compatible endpoints. Native Claude/Codex
+conversation discovery stays off during automatic setup. After a new model
 passes, the app opens guided onboarding in the dashboard for optional setup,
 including memory import and channels, before the handoff to normal agent chat.
 Memory import and permissions are not separate native first-run pages;

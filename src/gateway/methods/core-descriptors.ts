@@ -71,6 +71,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["openclaw.changes.list", "system-changes", "operator.admin", "<=2026.7"],
   ["openclaw.approval.list", "system-agent-approvals", "operator.approvals", "<=2026.7"],
   ["openclaw.setup.detect", "system-agent", "operator.admin", "<=2026.7"],
+  ["openclaw.setup.auto", "system-agent", "operator.admin", "2026.9"],
   // Failed activation candidates are non-mutating probes. Keep this admin-only
   // without the shared three-write budget so the automatic ladder can finish.
   ["openclaw.setup.activate", "system-agent", "operator.admin", "<=2026.7"],

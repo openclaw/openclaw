@@ -123,6 +123,45 @@ afterEach(() => {
 });
 
 describe("setup inference discovery deadline", () => {
+  it("recomputes the recommendation for partial and final detection without changing older results", async () => {
+    const partials: SetupInferenceDetection[] = [];
+    const result = await detectWithProvider(
+      async () => ({ modelRef: "fixture/local" }),
+      [
+        {
+          kind: "existing-model",
+          modelRef: "fixture/configured",
+          label: "Current model",
+          detail: "configured",
+          credentials: true,
+        },
+        {
+          kind: "codex-cli",
+          modelRef: "openai/model",
+          label: "Codex",
+          detail: "installed; login status unverified",
+          credentials: false,
+        },
+      ],
+      { onPartial: (partial) => partials.push(partial) },
+    );
+
+    expect(partials[0]?.candidates.filter(({ recommended }) => recommended)).toMatchObject([
+      { kind: "saved-auth:fixture%3Asaved" },
+    ]);
+    for (const detection of [...partials.slice(1), result]) {
+      expect(detection.candidates.filter(({ recommended }) => recommended)).toMatchObject([
+        { kind: "existing-model" },
+      ]);
+      expect(detection.candidates).toContainEqual(
+        expect.objectContaining({ kind: "codex-cli", recommended: false }),
+      );
+    }
+    expect(result.candidates).toContainEqual(
+      expect.objectContaining({ kind: "provider-auto:fixture-local", recommended: false }),
+    );
+  });
+
   it("waits for the worker's saved credentials before publishing candidates", async () => {
     const requested = createDeferred();
     const loaded = createDeferred<AuthProfileStore>();

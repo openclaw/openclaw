@@ -48,7 +48,6 @@ import {
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "../plugins/installed-plugin-index-records.js";
 import { buildNpmResolutionInstallFields, recordPluginInstall } from "../plugins/installs.js";
 import { ManagedPluginLifecycleError } from "../plugins/management-lifecycle-error.js";
-import type { PluginPackageInstall } from "../plugins/manifest.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { invalidatePluginRuntimeDiscoveryAfterConfigMutation } from "../plugins/registry-refresh.js";
@@ -62,6 +61,13 @@ import {
   WizardNavigationError,
   type WizardPrompter,
 } from "../wizard/prompts.js";
+import type {
+  OnboardingPluginInstallEntry,
+  OnboardingPluginInstallOptions,
+  OnboardingPluginInstallResult,
+} from "./onboarding-plugin-install.types.js";
+
+export type { OnboardingPluginInstallEntry } from "./onboarding-plugin-install.types.js";
 
 type InstallChoice = "clawhub" | "npm" | "local" | "skip";
 type InstallPluginFromClawHubResult = Awaited<
@@ -77,27 +83,7 @@ type InstallOutcome<T> =
 const ONBOARDING_PLUGIN_INSTALL_TIMEOUT_MS = 5 * 60 * 1000;
 const ONBOARDING_PLUGIN_INSTALL_WATCHDOG_TIMEOUT_MS = ONBOARDING_PLUGIN_INSTALL_TIMEOUT_MS + 5_000;
 
-/** Catalog entry used by onboarding to offer or require a plugin install. */
-export type OnboardingPluginInstallEntry = {
-  pluginId: string;
-  label: string;
-  install: PluginPackageInstall;
-  trustedSourceLinkedOfficialInstall?: boolean;
-  /** Keep this official runtime package on the same release cohort as OpenClaw. */
-  versionBoundToOpenClaw?: boolean;
-};
-
-/** Config and status returned after attempting an onboarding plugin install. */
-type OnboardingPluginInstallResult = {
-  cfg: OpenClawConfig;
-  installed: boolean;
-  pluginId: string;
-  status: "installed" | "skipped" | "failed" | "timed_out";
-  /** Sanitized actionable detail for non-interactive callers. */
-  error?: string;
-};
-
-type OnboardingPluginInstallParams = Parameters<typeof ensureOnboardingPluginInstalled>[0] & {
+type OnboardingPluginInstallParams = OnboardingPluginInstallOptions & {
   onCapabilityConsent: PluginCapabilityConsentHandler;
 };
 
@@ -589,6 +575,7 @@ async function installPluginWithProgress(
     spec: source.kind === "npm-pack" ? `npm-pack:${source.archivePath}` : source.spec,
     expectedIntegrity: params.entry.install.expectedIntegrity,
     onCapabilityConsent: consent.onCapabilityConsent,
+    recordOfficialCapabilities: params.recordOfficialCapabilities,
     beforePersistentEffect: params.beforePersistentEffect,
   });
   const safeLabel = sanitizeTerminalText(params.entry.label);
@@ -752,17 +739,9 @@ async function installPluginFromOverride(
 }
 
 /** Ensures an onboarding plugin is installed, enabled, and recorded in config. */
-export async function ensureOnboardingPluginInstalled(params: {
-  cfg: OpenClawConfig;
-  entry: OnboardingPluginInstallEntry;
-  prompter: WizardPrompter;
-  runtime: RuntimeEnv;
-  workspaceDir?: string;
-  promptInstall?: boolean;
-  autoConfirmSingleSource?: boolean;
-  beforePersistentEffect?: () => void | Promise<void>;
-  onCapabilityConsent?: PluginCapabilityConsentHandler;
-}): Promise<OnboardingPluginInstallResult> {
+export async function ensureOnboardingPluginInstalled(
+  params: OnboardingPluginInstallOptions,
+): Promise<OnboardingPluginInstallResult> {
   const { entry, prompter, runtime, workspaceDir } = params;
   const next = params.cfg;
   const onCapabilityConsent =

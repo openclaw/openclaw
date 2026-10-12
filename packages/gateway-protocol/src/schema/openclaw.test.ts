@@ -5,6 +5,7 @@ import {
   validateSystemAgentChatHistoryParams,
   validateSystemAgentSetupActivateParams,
   validateSystemAgentSetupActivateStartParams,
+  validateSystemAgentSetupAutoParams,
   validateSystemAgentSetupAuthStartParams,
   validateSystemAgentSetupDetectParams,
   validateSystemAgentSetupVerifyParams,
@@ -14,6 +15,7 @@ import {
   SystemAgentChatHistoryResultSchema,
   SystemAgentSetupDetectResultSchema,
   SystemAgentSetupActivateResultSchema,
+  SystemAgentSetupAutoResultSchema,
   SystemAgentSetupVerifyResultSchema,
 } from "./openclaw.js";
 
@@ -254,6 +256,56 @@ describe("OpenClaw setup detection protocol", () => {
       Value.Check(SystemAgentSetupDetectResultSchema, {
         ...result,
         recommendedInstalls: [{ ...result.recommendedInstalls[0], website: "http://example.test" }],
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("OpenClaw automatic setup protocol", () => {
+  it("accepts only an empty params object", () => {
+    expect(validateSystemAgentSetupAutoParams({})).toBe(true);
+    expect(validateSystemAgentSetupAutoParams({ agentId: "research" })).toBe(false);
+    expect(validateSystemAgentSetupAutoParams({ acceptCapabilities: true })).toBe(false);
+  });
+
+  it("preserves the four outcomes, candidate metadata, and required collections", () => {
+    const candidate = {
+      kind: "codex-cli",
+      label: "Codex",
+      detail: "Stored login",
+      modelRef: "openai/example-model",
+      brandId: "openai",
+      icon: "https://example.com/codex.svg",
+    };
+    const collections = { alternatives: [], attempts: [], installedPlugins: [] };
+    const results = [
+      { ...collections, status: "configured", selected: candidate },
+      { ...collections, status: "activated", selected: candidate, installedPlugins: ["codex"] },
+      {
+        ...collections,
+        status: "needs-sign-in",
+        signIn: { authOptionId: "codex-chatgpt", label: "Sign in with ChatGPT" },
+        installedPlugins: ["codex"],
+      },
+      {
+        ...collections,
+        status: "unavailable",
+        attempts: [{ kind: "codex-cli", label: "Codex", error: "Installation unavailable" }],
+      },
+    ];
+    for (const result of results) {
+      expect(Value.Check(SystemAgentSetupAutoResultSchema, result)).toBe(true);
+    }
+    expect(
+      Value.Check(SystemAgentSetupAutoResultSchema, { status: "configured", selected: candidate }),
+    ).toBe(false);
+    expect(Value.Check(SystemAgentSetupAutoResultSchema, { ...collections, status: "ok" })).toBe(
+      false,
+    );
+    expect(
+      Value.Check(SystemAgentSetupAutoResultSchema, {
+        ...results[0],
+        selected: { ...candidate, recommended: true },
       }),
     ).toBe(false);
   });

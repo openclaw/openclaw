@@ -1,8 +1,6 @@
-import { randomInt } from "node:crypto";
 // Inference backend detection shared by onboarding bootstrap and OpenClaw setup.
 import os from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 import {
   readCodexCliCredentialsCached,
@@ -42,7 +40,6 @@ type DetectInferenceBackendsDeps = {
   probeLocalCommand?: typeof probeLocalCommand;
   readCodexCliCredentials?: () => { type: string } | null;
   readGeminiCliCredentials?: () => { type: string } | null;
-  randomInt?: (maxExclusive: number) => number;
 };
 
 type DetectInferenceBackendsOptions = {
@@ -52,21 +49,6 @@ type DetectInferenceBackendsOptions = {
   platform?: NodeJS.Platform;
   deps?: DetectInferenceBackendsDeps;
 };
-
-function randomizeClaudeCodexTie(
-  candidates: InferenceBackendCandidate[],
-  pickRandomInt: (maxExclusive: number) => number,
-): void {
-  const claudeIndex = candidates.findIndex((candidate) => candidate.kind === "claude-cli");
-  const codexIndex = candidates.findIndex((candidate) => candidate.kind === "codex-cli");
-  if (claudeIndex === -1 || codexIndex === -1 || pickRandomInt(2) === 0) {
-    return;
-  }
-  const claudeCandidate = candidates[claudeIndex];
-  const codexCandidate = candidates[codexIndex];
-  candidates[claudeIndex] = expectDefined(codexCandidate, "Codex onboarding candidate");
-  candidates[codexIndex] = expectDefined(claudeCandidate, "Claude onboarding candidate");
-}
 
 // ChatGPT.app is the current desktop owner; keep Codex stable/beta as fallbacks.
 const CODEX_MACOS_APP_NAMES = ["ChatGPT.app", "Codex.app", "Codex Beta.app"] as const;
@@ -173,17 +155,20 @@ export async function detectInferenceBackends(
       detail: "installed; login status unverified",
     });
   }
-  if (codexProbe.found && !codexProbe.timedOut) {
-    const storedCredentials = readCodex() !== null;
+  const storedCodexCredentials = readCodex() !== null;
+  if ((codexProbe.found && !codexProbe.timedOut) || storedCodexCredentials) {
     // Native status starts provider initialization (including migrations and
     // token refresh). A saved record proves neither the active store nor login.
     cliCandidates.push({
       kind: "codex-cli",
       modelRef: CODEX_APP_SERVER_DEFAULT_MODEL_REF,
       label: "Codex",
-      detail: storedCredentials
-        ? "installed; stored credentials found; login status unverified"
+      detail: storedCodexCredentials
+        ? codexProbe.found && !codexProbe.timedOut
+          ? "installed; stored credentials found; login status unverified"
+          : "stored credentials found; runtime installation required"
         : "installed; login status unverified",
+      credentials: storedCodexCredentials,
     });
   }
   if (geminiProbe.found && !geminiProbe.timedOut) {
@@ -200,7 +185,5 @@ export async function detectInferenceBackends(
       ...(credentials === undefined ? {} : { credentials }),
     });
   }
-  // Stored CLI credentials do not establish a verified subscription.
-  randomizeClaudeCodexTie(cliCandidates, options.deps?.randomInt ?? randomInt);
   return [...candidates, ...envCandidates, ...cliCandidates];
 }

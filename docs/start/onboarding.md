@@ -9,7 +9,7 @@ sidebarTitle: "Onboarding: macOS App"
 ---
 
 The macOS app's first-run flow: pick where the Gateway runs, install any
-missing local runtime, and connect a verified AI backend. The app then opens
+missing local runtime, and automatically connect a verified AI backend. The app then opens
 guided onboarding in the dashboard for optional setup and the handoff to your
 agent.
 For CLI onboarding and a comparison of both paths, see [Onboarding Overview](/start/onboarding-overview).
@@ -86,27 +86,38 @@ and proceeds to AI checks without taking over its CLI or service installation.
 See [Gateway on macOS](/platforms/mac/bundled-gateway#automatic-setup).
 </Step>
 <Step title="Connect your AI">
-If the connected Gateway already has a configured agent model, it appears as
-**Current model**. Select it to verify that exact route with a real completion
-and open the normal dashboard. Opening onboarding does not test an existing
-route or choose a different provider.
+If the connected Gateway already has a configured agent model, automatic setup
+keeps it without writing new settings. Otherwise the Gateway automatically
+tries usable AI access in this deterministic order:
 
-Once the Gateway is ready, onboarding looks for AI access you already have:
-a Claude Code or Codex login, `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`, or a
-tool-capable model with at least 16K of measured effective context already
-loaded in a reachable LM Studio or Ollama server. Detection runs on the
-Gateway host, including when the macOS app connects to a Linux Gateway. Detection
-only presents choices: it does not test, activate, install, or save any candidate.
-Select the connection you want before OpenClaw saves any returned credential and runs one
-confirmation turn without tools. It activates the connection only after success.
-In particular, an existing Codex subscription is never selected automatically.
-If setup fails, the app keeps the detailed reason visible so you can retry or
-choose another connection. Local discovery never pulls or downloads a model.
+1. Saved OpenClaw auth profiles.
+2. Codex credentials from `~/.codex` or `CODEX_HOME` on the Gateway host.
+3. A Claude CLI login.
+4. `OPENAI_API_KEY`, then `ANTHROPIC_API_KEY`.
+5. Eligible loaded models in Ollama, LM Studio, or llama.cpp.
+
+Setup runs on the Gateway host, including when the Mac connects to a Linux
+Gateway. It tries at most four detected connections, verifies each through the
+existing activation flow, and stops at the first successful completion before
+saving the primary model. Apple Foundation Models remains a utility option and
+is never selected as the primary model.
+
+If no detected connection works, OpenClaw automatically installs or enables the
+official Codex plugin. It then uses an existing Codex login or offers ChatGPT
+sign-in. This first-party Codex installation is the only plugin capability
+approval granted by automatic setup. If installation or activation fails, the
+dashboard shows the reason and lets you choose another connection.
+
+The dashboard explains what OpenClaw picked and lists alternatives. Use its
+provider and model settings to switch, or **Connection… → Gateways** to connect
+to another Gateway. The manual picker still only detects and presents choices;
+it waits for your selection before testing, installing, or saving a connection.
+Local discovery never pulls or downloads a model.
 Ollama checks `/api/ps` for loaded models; an eligible
 model that is only installed on disk requires explicit setup through
 **Choose connection** → **Local only**. See [Ollama](/providers/ollama).
 
-The provider picker is built from installed manifests and OpenClaw's official
+The manual provider picker is built from installed manifests and OpenClaw's official
 provider-plugin catalog, so installable providers such as Meta appear before their
 plugin is present. When a connection needs a runtime plugin, the app and dashboard show the
 staged package's source and capabilities, with integrity when available before installing or
@@ -117,11 +128,10 @@ inference route. If the confirmation turn fails, the app shows the failure and
 keeps the saved credential. Choose the saved sign-in in **Model Setup** to retry
 without signing in again. Runtime plugins installed for that attempt are kept.
 
-Fresh installs also ask whether existing native provider conversations should
-appear in the sidebar. This is discovery in place, not transcript copying, and is
-off until selected. Turning it off persists `sessionCatalog.enabled=false` for
-the available native catalog plugins; existing upgraded installations keep their
-current behavior.
+Automatic setup leaves native Claude/Codex conversation discovery off. You can
+enable it separately to show existing native conversations in the sidebar.
+This discovers conversations in place without copying transcripts; choosing a
+Codex or Claude inference route does not enable it.
 
 For a custom OpenAI- or Anthropic-compatible endpoint on a local Gateway, choose
 **Custom OpenAI/Anthropic-compatible endpoint** and complete the Gateway-owned
@@ -181,7 +191,7 @@ chat cannot start without working inference.
 After a new model passes its live check, native setup closes and opens guided
 onboarding in the dashboard. OpenClaw helps configure the remaining workspace,
 Gateway, channels, and other optional features, then hands you off to normal
-agent chat. A verified pre-existing model opens the normal dashboard instead.
+agent chat. An already configured model opens the normal dashboard instead.
 
 Memory import is part of guided setup, not a separate native onboarding page.
 For a local Gateway, supported sources include Claude Code auto-memory, Codex

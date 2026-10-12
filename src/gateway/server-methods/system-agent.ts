@@ -9,6 +9,7 @@ import {
   validateSystemAgentSetupActivateStartParams,
   validateSystemAgentSetupAuthStartParams,
   validateSystemAgentSetupDetectParams,
+  validateSystemAgentSetupAutoParams,
   validateSystemAgentSetupVerifyParams,
   type SystemAgentChatQuestion,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -150,6 +151,21 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     async ({ params, respond }) => {
       const { detectSetupInference } = await import("../../system-agent/setup-inference.js");
       respond(true, await detectSetupInference({}, params.agentId), undefined);
+    },
+  ),
+  "openclaw.setup.auto": defineValidatedGatewayHandler(
+    "openclaw.setup.auto",
+    validateSystemAgentSetupAutoParams,
+    async ({ context, respond }) => {
+      try {
+        const { runGatewayAutomaticSetup } = await import("./system-agent-setup-auto.js");
+        respond(true, await runGatewayAutomaticSetup(context), undefined);
+      } catch (error) {
+        if (!(error instanceof SetupAdmissionBusyError)) {
+          throw error;
+        }
+        respondSetupAdmissionBusy(respond);
+      }
     },
   ),
   "openclaw.setup.verify": defineValidatedGatewayHandler(

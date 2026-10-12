@@ -18,6 +18,7 @@ import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-proven
 import { clearConfigCache, readConfigFileSnapshot } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { validateConfigObjectRaw } from "../config/validation-core.js";
+import { computeDeclaredSurfaceHash } from "../plugins/capability-summary.js";
 import { persistProviderAuthProfilesAfterLogin } from "../plugins/provider-auth-persistence.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
@@ -42,7 +43,7 @@ import {
 import * as credentialActivation from "./setup-inference-credential-access.js";
 import { saveSetupCredential } from "./setup-inference-credentials.js";
 import * as activationTransition from "./setup-inference-transition.js";
-import { codexRuntimeArtifactAuth } from "./verified-inference.test-support.js";
+import { codexRuntimeArtifactAuth, pluginRecord } from "./verified-inference.test-support.js";
 
 afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
@@ -162,6 +163,106 @@ describe("setup activation credentials and configuration", () => {
       (await readConfigFileSnapshot()).config.plugins?.entries?.codex?.config?.appServer,
     ).toMatchObject({ homeScope: "user" });
   });
+
+  it("automatically imports stored Codex OAuth into an OpenClaw-owned home without login", async () => {
+    const setup = await fixture({ codex: true, subscription: true, homeScope: "user" });
+    const stored = {
+      type: "oauth" as const,
+      provider: "openai" as const,
+      access: "fixture-subscription-access",
+      refresh: "fixture-subscription-refresh",
+      expires: Date.now() + 3_600_000,
+      accountId: "fixture-chatgpt-account",
+    };
+    const readCredentials = vi.fn(() => stored);
+    setup.deps.readCodexCliCredentialsCached = readCredentials;
+
+    expect(await setup.activate("codex-cli", true, { automaticSetup: true })).toMatchObject({
+      ok: true,
+    });
+    expect(readCredentials).toHaveBeenCalledWith({ allowKeychainPrompt: false });
+    expect(setup.login).not.toHaveBeenCalled();
+    expect(setup.run).toHaveBeenCalledOnce();
+    expect(setup.readProfile()?.[1]).toMatchObject(stored);
+    expect(
+      (await readConfigFileSnapshot()).config.plugins?.entries?.codex?.config?.appServer,
+    ).toMatchObject({ homeScope: "agent" });
+    expect(setup.config.plugins?.entries?.codex?.config?.appServer).toMatchObject({
+      homeScope: "user",
+    });
+  });
+
+  it("returns from automatic Codex setup without opening login when stored credentials disappear", async () => {
+    const setup = await fixture({ codex: true });
+    setup.deps.readCodexCliCredentialsCached = () => null;
+
+    expect(await setup.activate("codex-cli", true, { automaticSetup: true })).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("ChatGPT sign-in"),
+    });
+    expect(setup.login).not.toHaveBeenCalled();
+    expect(setup.run).not.toHaveBeenCalled();
+    expect(setup.readProfile()).toBeUndefined();
+    expect(await fs.readFile(setup.configPath, "utf8")).toBe(setup.before);
+  });
+
+  it.each([true, false])(
+    "requires the official Codex source only for automatic setup (automatic: %s)",
+    async (automatic) => {
+      const setup = await fixture({ codex: true });
+      const resolveMetadata = setup.deps.resolvePluginMetadataSnapshot;
+      assert.ok(resolveMetadata);
+      const acceptedSurface = {
+        channels: [],
+        providers: [],
+        tools: [],
+        contracts: [],
+        hooks: [],
+        mcpServers: [],
+        cliCommands: [],
+        cliBackends: [],
+        skills: [],
+        dangerousConfigFlags: [],
+      };
+      setup.deps.resolvePluginMetadataSnapshot = (params) => {
+        const metadata = resolveMetadata(params);
+        return {
+          ...metadata,
+          index: {
+            ...metadata.index,
+            plugins: [
+              ...metadata.index.plugins.filter((plugin) => plugin.pluginId !== "codex"),
+              pluginRecord("codex", { packageName: "@example/codex" }),
+            ],
+            installRecords: {
+              ...metadata.index.installRecords,
+              codex: {
+                source: "npm",
+                spec: "@example/codex@1.0.0",
+                acceptedSurface,
+                acceptedSurfaceHash: computeDeclaredSurfaceHash(acceptedSurface),
+                acceptedSurfaceAt: "2026-01-01T00:00:00.000Z",
+              },
+            },
+          },
+        };
+      };
+
+      const result = await setup.activate("codex-cli", automatic ? true : undefined, {
+        ...(automatic ? { automaticSetup: true } : {}),
+      });
+      expect(result).toMatchObject({ ok: !automatic });
+      if (automatic) {
+        expect(result).toMatchObject({ error: expect.stringContaining("official Codex plugin") });
+        expect(setup.login).not.toHaveBeenCalled();
+        expect(setup.run).not.toHaveBeenCalled();
+        expect(await fs.readFile(setup.configPath, "utf8")).toBe(setup.before);
+      } else {
+        expect(setup.login).toHaveBeenCalledOnce();
+        expect(setup.run).toHaveBeenCalledOnce();
+      }
+    },
+  );
 
   it("cancels detected Codex sign-in without verification or promotion", async () => {
     const controller = new AbortController();
