@@ -1,7 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { retryAsync } from "../infra/retry.js";
 import {
   getOrLoadSqliteDatabaseAdmissionForPath,
   prepareSqliteDatabaseAdmission,
@@ -9,6 +11,7 @@ import {
 import { readSqliteIntegrityFileIdentity } from "../infra/sqlite-file-generation.js";
 import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { schemaAdmission } from "../infra/sqlite-schema-admission.js";
+import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -27,6 +30,7 @@ import { readAgentDeletionJournalStatusInWorker } from "./agent-deletion-journal
 import {
   AGENT_DATABASE_PREFLIGHT_CONCURRENCY,
   AGENT_DATABASE_PREPARATION_CONCURRENCY,
+  AGENT_DATABASE_STARTUP_JOURNAL_CONCURRENCY,
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "./openclaw-agent-db-contract.js";
 import {
@@ -36,6 +40,13 @@ import {
 import type { AgentSchemaInspection } from "./openclaw-agent-schema-inspection.js";
 import type { OpenClawDatabaseSchemaPreflight } from "./openclaw-database-preflight.types.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+
+// A saturated shared state-read pool drains its short SQLite reads within seconds;
+// a few escalating waits give an admission-rejected journal read a bounded second
+// chance without retrying forever or masking tombstone verdicts.
+const JOURNAL_READ_CAPACITY_RETRY_ATTEMPTS = 4;
+const JOURNAL_READ_CAPACITY_RETRY_MIN_DELAY_MS = 500;
+const JOURNAL_READ_CAPACITY_RETRY_MAX_DELAY_MS = 8000;
 
 type PendingInspection = {
   target: { agentId?: string; path: string };
@@ -135,6 +146,7 @@ class AgentDatabaseStartupAdmission {
   private progressTimer?: ReturnType<typeof setInterval>;
   private readonly opening = createPermitPool(AGENT_DATABASE_PREFLIGHT_CONCURRENCY);
   private readonly migrating = createPermitPool(AGENT_DATABASE_PREPARATION_CONCURRENCY);
+  private readonly journalReads = createPermitPool(AGENT_DATABASE_STARTUP_JOURNAL_CONCURRENCY);
   private preparedSchemaHeaders?: PreparedSchemaHeaders;
 
   get signal(): AbortSignal {
@@ -418,15 +430,48 @@ class AgentDatabaseStartupAdmission {
           };
           const assertNotDeleted = async () => {
             assertCurrent();
-            const deletion = await readAgentDeletionJournalStatusInWorker(
-              agentId,
-              { env },
-              this.signal,
+            // Readiness releases every deferred agent at once; without this bound the
+            // fan-out overflows the shared state-read pool's pending-task admission and
+            // a transient capacity rejection fails the agent permanently. The permit
+            // bound only caps this producer: a pool already saturated by other state-
+            // read sources can still reject an admitted read at admission, so only the
+            // typed transient overload is retried — tombstone verdicts and genuine
+            // read failures stay terminal through the outer preparation catch.
+            await retryAsync(
+              async () => {
+                assertCurrent();
+                const releaseJournalRead = await this.journalReads.acquire({
+                  signal: this.signal,
+                });
+                try {
+                  const deletion = await readAgentDeletionJournalStatusInWorker(
+                    agentId,
+                    { env },
+                    this.signal,
+                  );
+                  assertCurrent();
+                  if (deletion !== "absent") {
+                    throw new Error(`Agent ${agentId} was deleted during startup inspection`);
+                  }
+                } finally {
+                  releaseJournalRead?.();
+                }
+              },
+              {
+                attempts: JOURNAL_READ_CAPACITY_RETRY_ATTEMPTS,
+                minDelayMs: JOURNAL_READ_CAPACITY_RETRY_MIN_DELAY_MS,
+                maxDelayMs: JOURNAL_READ_CAPACITY_RETRY_MAX_DELAY_MS,
+                jitter: 0.2,
+                label: "agent-database-startup/journal-deletion-read",
+                // The backoff must honor caller cancellation; otherwise an abort
+                // during the wait would stall preparation until the delay elapses.
+                sleep: (ms) => sleepWithAbort(ms, this.signal),
+                // Only the typed transient pool-capacity rejection is retried:
+                // tombstone verdicts and genuine read failures stay terminal.
+                shouldRetry: (error) =>
+                  error instanceof WorkerTaskError && error.code === "overloaded",
+              },
             );
-            assertCurrent();
-            if (deletion !== "absent") {
-              throw new Error(`Agent ${agentId} was deleted during startup inspection`);
-            }
           };
           assertCurrent();
           for (const result of results) {
