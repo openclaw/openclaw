@@ -43,6 +43,7 @@ export function finalizeCronRunsInWorker(
             deps: {
               nowMs: () => policy.nowMs,
               cronConfig: policy.cronConfig,
+              failureRepairTimeoutMs: policy.failureRepairTimeoutMs,
               log: createCronMutationLogger(outcome.logs),
             },
           };

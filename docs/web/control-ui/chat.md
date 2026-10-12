@@ -53,18 +53,20 @@ list it. The rows reuse the chat's loaded subagent list; they do not load each
 child's transcript.
 
 When a turn hands off with `sessions_yield` and its subagents are still active,
-their live rows stay under that reply without a separate **Waiting on…** line
-or wait timer. The same applies when a turn ends without a handoff. Until the
-subagent list is available, **Waiting on subagents** remains as a fallback;
-its elapsed time counts from the handoff when known. The parent's own working
-indicator remains visible while the parent is actively working. Child sessions that are
-not subagents are counted without names once no subagent is left, as **Waiting
-on 2 sessions**. Once everything it waited on has finished, the line goes away
-until the agent resumes. Tool rows you opened stay open through the handoff. A
+their live rows stay under that reply without a separate **Waiting on…** line.
+One muted timer at the far right of those rows shows the total time since your
+message, including subagent waits—not the sum of worker runtimes. It stays on
+the same clock across handoffs and resumes. If the loaded history cannot identify
+the complete request, the timer is omitted instead of estimating a total.
+Child activity also stays visible when a turn ends without a handoff. Until the
+subagent list is available, the existing working indicator remains as a fallback.
+The parent's own working indicator remains visible while the parent is actively
+working. There is no additional waiting-status line above the composer. Once
+everything it waited on has finished, the activity rows disappear until the agent resumes. Tool rows you opened stay open through the handoff. A
 successful `sessions_yield` leaves no marker in the transcript, and its private
 continuation context stays hidden.
 
-When the last subagent finishes, the wait line ends and the block stays as it
+When the last subagent finishes, its activity row disappears and the block stays as it
 is, without a working indicator, until the turn resumes. Its answer then
 continues in that same block, with one footer at the end. Tool activity that
 resumes with nothing written in between joins the activity row from before the
