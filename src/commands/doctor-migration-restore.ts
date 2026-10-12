@@ -86,7 +86,7 @@ export async function restoreDoctorMigrationDatabases(
       });
       try {
         assertCurrent();
-        await backupNodeSqliteDatabase(source, snapshot.path, assertCurrent);
+        await backupNodeSqliteDatabase(source, snapshot.path, () => assertCurrent());
       } finally {
         source.close();
       }

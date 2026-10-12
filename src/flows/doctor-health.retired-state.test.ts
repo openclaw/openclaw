@@ -1,6 +1,7 @@
 import "./doctor-health.test-support.js";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { inspect } from "node:util";
 import { expect, it, vi } from "vitest";
 import * as doctorConfigFlow from "../commands/doctor-config-flow.js";
 import { runDoctorConfigPreflight } from "../commands/doctor-config-preflight.js";
@@ -73,18 +74,24 @@ it.each(["before", "after"])(
         return loadConfig(params);
       });
 
+      let refusal: unknown;
       try {
-        await expect(
-          runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true }),
-        ).rejects.toThrow("Upgrade through OpenClaw 2026.9.7");
+        await runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true });
+      } catch (error) {
+        refusal = error;
       } finally {
         configFlow.mockRestore();
       }
+      expect(refusal).toBeInstanceOf(Error);
+      expect(String(refusal)).toContain("Upgrade through OpenClaw 2026.9.7");
 
       await closeOpenClawStateDatabaseAsync();
       const preserved = openNodeSqliteDatabase(databasePath, { readOnly: true });
       try {
-        expect(preserved.prepare("PRAGMA user_version").get()).toEqual({ user_version: 16 });
+        expect(
+          preserved.prepare("PRAGMA user_version").get(),
+          inspect({ refusal, logs: runtime.log.mock.calls, errors: runtime.error.mock.calls }),
+        ).toEqual({ user_version: 16 });
       } finally {
         preserved.close();
       }
