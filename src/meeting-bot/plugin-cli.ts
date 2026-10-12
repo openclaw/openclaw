@@ -71,8 +71,10 @@ function markMeetingSetupFailure(result: unknown): void {
 function joinPayload(url: string, options: JoinOptions): Record<string, unknown> {
   return {
     url,
-    ...(options.transport ? { transport: parseMeetingCliTransport(options.transport) } : {}),
-    ...(options.mode ? { mode: parseMeetingCliMode(options.mode) } : {}),
+    ...(options.transport === undefined
+      ? {}
+      : { transport: parseMeetingCliTransport(options.transport) }),
+    ...(options.mode === undefined ? {} : { mode: parseMeetingCliMode(options.mode) }),
     ...(options.message ? { message: options.message } : {}),
     ...(options.timeoutMs === undefined ? {} : { timeoutMs: parseTimeout(options.timeoutMs) }),
   };
