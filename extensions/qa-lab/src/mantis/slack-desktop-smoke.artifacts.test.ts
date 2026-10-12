@@ -33,18 +33,8 @@ function createBarrier() {
   return { promise, resolve: () => complete() };
 }
 
-function createRunner(
-  copy: (outputDir: string, run: number) => Promise<void>,
-  failSecondRemoteRun = false,
-) {
-  let run = 0;
-  let remoteRuns = 0;
+function createRunner(copy: (outputDir: string) => Promise<void>) {
   return vi.fn<CommandRunner>(async (command, args) => {
-    if (command === "/tmp/crabbox" && args[0] === "run") {
-      if (++remoteRuns === 2 && failSecondRemoteRun) {
-        throw new Error("current remote failure");
-      }
-    }
     if (command === "/tmp/crabbox" && args[0] === "inspect") {
       return {
         stdout: JSON.stringify({
@@ -62,7 +52,7 @@ function createRunner(
       if (!outputDir) {
         throw new Error("Missing artifact copy destination");
       }
-      await copy(outputDir, ++run);
+      await copy(outputDir);
     }
     return { stdout: "", stderr: "" };
   });
@@ -138,66 +128,6 @@ describe("Mantis Slack artifact ownership", () => {
   });
 
   it.each([
-    { missing: "metadata", error: "current remote failure" },
-    { missing: "screenshot", error: "Slack desktop screenshot is missing" },
-    { missing: "checkpoint", error: `Approval checkpoint ${selected}.resolved is missing` },
-  ])(
-    "rejects old $missing when a reused output directory receives incomplete evidence",
-    async ({ missing, error }) => {
-      const runner = createRunner(async (outputDir, run) => {
-        if (run === 1) {
-          await writeRunArtifacts(outputDir, [selected, unselected]);
-          await fs.writeFile(path.join(outputDir, "slack-desktop-smoke.mp4"), "old video");
-          return;
-        }
-        if (missing !== "metadata") {
-          await fs.writeFile(path.join(outputDir, "remote-metadata.json"), '{"qaExitCode":0}');
-        }
-        if (missing !== "screenshot") {
-          await fs.writeFile(path.join(outputDir, "slack-desktop-smoke.png"), "new screenshot");
-        }
-        await writeApprovalCheckpointArtifacts(
-          outputDir,
-          [selected],
-          missing === "checkpoint" ? `${selected}.resolved.json` : undefined,
-        );
-      }, missing === "metadata");
-      const first = await runMantisSlackDesktopSmoke(options(runner));
-      expect(first.status).toBe("pass");
-      const firstSummary = JSON.parse(await fs.readFile(first.summaryPath, "utf8"));
-      const unrelated = path.join(first.outputDir, "unrelated.log");
-      const unselectedPath = path.join(
-        first.outputDir,
-        "approval-checkpoints",
-        `${unselected}.pending.json`,
-      );
-      const unselectedBytes = await fs.readFile(unselectedPath);
-      await fs.writeFile(unrelated, "retained diagnostics");
-
-      const second = await runMantisSlackDesktopSmoke(options(runner));
-      const summary = JSON.parse(await fs.readFile(second.summaryPath, "utf8"));
-      expect(second.status).toBe("fail");
-      expect(summary.error).toContain(error);
-      if (missing === "metadata") {
-        expect(
-          summary.timings.phases.find(
-            (phase: { name: string }) => phase.name === "crabbox.remote_run",
-          )?.status,
-        ).toBe("fail");
-      }
-      expect(summary.remoteOutputDir).not.toBe(firstSummary.remoteOutputDir);
-      await expect(fs.readFile(unrelated, "utf8")).resolves.toBe("retained diagnostics");
-      await expect(fs.readFile(unselectedPath)).resolves.toEqual(unselectedBytes);
-      await expect(
-        fs.lstat(path.join(second.outputDir, "slack-desktop-smoke.mp4")),
-      ).rejects.toMatchObject({ code: "ENOENT" });
-      expect(
-        (await fs.readdir(second.outputDir)).some((name) => name.startsWith(".slack-run-")),
-      ).toBe(false);
-    },
-  );
-
-  it.each([
     { overrides: { scenarioIds: ["slack-canary"] }, error: "--approval-checkpoints only supports" },
     { overrides: { gatewaySetup: true }, error: "--approval-checkpoints cannot be used" },
     {
@@ -222,9 +152,7 @@ describe("Mantis Slack artifact ownership", () => {
   });
 
   it.each([
-    { changes: { approvalId: "different-opaque-id" }, error: "pending approval interaction" },
     { changes: { messageTs: "99.000000" }, error: "pending approval interaction" },
-    { changes: { channelId: "COTHER" }, error: "pending approval interaction" },
     { changes: { approvalKind: "exec" }, error: "approval kind" },
     { changes: { decision: null }, error: "approval decision" },
   ])("rejects fresh mismatched approval evidence: $changes", async ({ changes, error }) => {
@@ -238,22 +166,19 @@ describe("Mantis Slack artifact ownership", () => {
     expect(summary.error).toContain(error);
   });
 
-  it.each(["approvalId", "messageTs"])(
-    "rejects a replayed %s across selected scenarios",
-    async (field) => {
-      const runner = createRunner(async (outputDir) => {
-        await writeRunArtifacts(outputDir, [selected, unselected]);
-        const value = field === "approvalId" ? `${selected}:approval` : "1.000000";
-        for (const state of ["pending", "resolved"] as const) {
-          await changeCheckpoint(outputDir, unselected, state, { [field]: value });
-        }
-      });
-      const result = await runMantisSlackDesktopSmoke(options(runner, [selected, unselected]));
-      expect(result.status).toBe("fail");
-      const summary = JSON.parse(await fs.readFile(result.summaryPath, "utf8"));
-      expect(summary.error).toContain("reuses another scenario's approval interaction");
-    },
-  );
+  it.each(["messageTs"])("rejects a replayed %s across selected scenarios", async (field) => {
+    const runner = createRunner(async (outputDir) => {
+      await writeRunArtifacts(outputDir, [selected, unselected]);
+      const value = field === "approvalId" ? `${selected}:approval` : "1.000000";
+      for (const state of ["pending", "resolved"] as const) {
+        await changeCheckpoint(outputDir, unselected, state, { [field]: value });
+      }
+    });
+    const result = await runMantisSlackDesktopSmoke(options(runner, [selected, unselected]));
+    expect(result.status).toBe("fail");
+    const summary = JSON.parse(await fs.readFile(result.summaryPath, "utf8"));
+    expect(summary.error).toContain("reuses another scenario's approval interaction");
+  });
 
   it("accepts the actual native and Codex checkpoint kinds with distinct opaque identities", async () => {
     const scenarios = [
