@@ -4,7 +4,10 @@ export const PANEL_HOSTED_TABS_CHANGE_EVENT = "openclaw:panel-hosted-tabs-change
 
 const hostedTabsChangeKeys = new WeakMap<HTMLElement, string>();
 
-export function notifyPanelHostedTabsChanged(element: HTMLElement, facts: unknown[]): void {
+export function notifyPanelHostedTabsChanged(
+  element: HTMLElement,
+  facts: readonly unknown[],
+): void {
   const key = JSON.stringify(facts);
   if (hostedTabsChangeKeys.get(element) !== key) {
     hostedTabsChangeKeys.set(element, key);
@@ -32,7 +35,7 @@ export type PanelHostedTabsElement = HTMLElement & {
   readonly hostedTabs: PanelHostedTab[];
   readonly activeHostedTabId: string | null;
   /** Header actions while this panel is the active side panel; rendered by the host in light DOM. */
-  readonly hostedActions?: TemplateResult | typeof nothing;
+  readonly hostedActions?: TemplateResult | Node | typeof nothing;
   selectHostedTab(id: string): void;
   closeHostedTab(id: string): Promise<void>;
 };

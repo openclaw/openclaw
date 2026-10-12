@@ -271,11 +271,7 @@ describe("sidebar session feedback", () => {
         }
         await sidebar.updateComplete;
         expect(sidebar.textContent).not.toContain(hint);
-        if (mode === "chip") {
-          sidebar.querySelector<HTMLButtonElement>(".sidebar-session-filter-summary")!.click();
-        } else {
-          await selectFilter(sidebar, "owner:");
-        }
+        await selectFilter(sidebar, "owner:");
         await sidebar.updateComplete;
         expect(sidebar.textContent).not.toContain(hint);
       }

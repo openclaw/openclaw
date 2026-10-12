@@ -1,12 +1,9 @@
 import path from "node:path";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { MemoryEntryOrigin } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { isFileMissingError } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
-import {
-  openOpenClawAgentSqliteWorkerStore,
-  runOpenClawAgentWriteAdmission,
-  withOpenClawAgentDatabaseRuntime,
-} from "openclaw/plugin-sdk/sqlite-runtime";
+import { openOpenClawAgentSqliteWorkerStoreV2 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { DREAMS_FILENAMES, readDreamsFile } from "./dreaming-dreams-file.js";
 import {
   captureMemoryAgentDatabaseOptions,
@@ -19,6 +16,10 @@ import {
   type MemoryOriginRecord,
 } from "./memory-entry-origins-task.js";
 import { captureMemoryMutationAuthority } from "./memory-mutation-authority.js";
+import {
+  assertMemoryShadowIdentity,
+  readMemoryShadowIdentity,
+} from "./memory/manager-shadow-task.js";
 import { extractPromotionKeys } from "./short-term-promotion-memory-write.js";
 
 export type { MemoryEntryOrigin };
@@ -32,43 +33,31 @@ const loadMemoryCpuWorkerRuntime = createLazyRuntimeModule(
 );
 type OriginDatabaseOptions = ReturnType<typeof captureMemoryAgentDatabaseOptions>;
 
-async function executeOriginCommand<Key extends "record" | "delete">(
+async function executeOriginCommand<Key extends "record" | "delete" | "reserve" | "prune">(
   options: OriginDatabaseOptions,
   command: { type: Key; input: MemoryEntryOriginOperations[Key]["input"] },
   assertOriginal?: () => void,
-): Promise<MemoryEntryOriginOperations[Key]["output"]> {
+): Promise<MemoryEntryOriginOperations[Key]["output"] | undefined> {
   const { memoryCpuProcessEntrypoints } = await loadMemoryCpuProcessEntrypoints();
   const moduleUrl = resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.entryOrigins);
   assertOriginal?.();
-  return runOpenClawAgentWriteAdmission(
+  const worker = await openOpenClawAgentSqliteWorkerStoreV2<MemoryEntryOriginOperations>(
     options,
-    async (_identity, assertAdmission) => {
-      const assertCurrent = () => {
-        assertOriginal?.();
-        assertAdmission();
-      };
-      return withOpenClawAgentDatabaseRuntime(
-        options,
-        async ({ db }) => {
-          const worker = await openOpenClawAgentSqliteWorkerStore<MemoryEntryOriginOperations>(
-            options,
-            db,
-            {
-              moduleUrl,
-              input: { kind: "origin" },
-            },
-          );
-          try {
-            return await worker.run((scope) => scope.execute(command), assertCurrent);
-          } finally {
-            await worker.close();
-          }
-        },
-        assertCurrent,
-      );
-    },
-    true,
+    { version: 2, assertCurrent: () => assertOriginal?.() },
+    { moduleUrl, input: { kind: command.type === "record" ? "origin" : "origin-existing" } },
   );
+  try {
+    if (command.type === "record") {
+      await worker.prepare();
+      return await worker.run(
+        (scope) => scope.execute(command),
+        () => assertOriginal?.(),
+      );
+    }
+    return (await worker.executeExisting(command, () => assertOriginal?.()))?.value;
+  } finally {
+    await worker.close();
+  }
 }
 
 export async function listMemoryEntryOrigins(
@@ -77,7 +66,7 @@ export async function listMemoryEntryOrigins(
     sessionIds?: readonly string[];
     entryKeys?: readonly string[];
   },
-  options?: Parameters<typeof withOpenClawAgentDatabaseRuntime>[0],
+  options?: OriginDatabaseOptions,
 ): Promise<MemoryEntryOrigin[]> {
   if (params.sessionIds?.length === 0 || params.entryKeys?.length === 0) {
     return [];
@@ -136,13 +125,15 @@ export async function recordMemoryEntryOrigins(
       observedAt: origin.observedAt,
     })),
   };
-  return executeOriginCommand(
-    captureMemoryAgentDatabaseOptions(params.agentId),
-    {
-      type: "record",
-      input,
-    },
-    captureMemoryMutationAuthority(),
+  return (
+    (await executeOriginCommand(
+      captureMemoryAgentDatabaseOptions(params.agentId),
+      {
+        type: "record",
+        input,
+      },
+      captureMemoryMutationAuthority(),
+    )) ?? []
   );
 }
 
@@ -167,7 +158,9 @@ async function deleteMemoryEntryOrigins(
   if (!exists) {
     return 0;
   }
-  return executeOriginCommand(options, { type: "delete", input: params }, assertOriginal);
+  return (
+    (await executeOriginCommand(options, { type: "delete", input: params }, assertOriginal)) ?? 0
+  );
 }
 
 export async function reserveMemoryEntryOrigins(params: {
@@ -215,44 +208,34 @@ export async function reserveMemoryEntryOrigins(params: {
   };
   try {
     for (const options of owners) {
-      await runOpenClawAgentWriteAdmission(
-        options,
-        async (_identity, assertCurrent) => {
-          const agentId = options.agentId;
-          assertCurrent();
-          const origins = await listMemoryEntryOrigins(
-            { agentId, entryKeys: affectedKeys },
-            options,
-          );
-          assertCurrent();
-          for (const { operation, parentKeys } of operationParents) {
-            const selected = origins.filter((origin) => parentKeys.has(origin.entryKey));
-            if (selected.length === 0) {
-              continue;
-            }
-            const added = await executeOriginCommand(
-              options,
-              {
-                type: "record",
-                input: { agentId, origins: selected, entryKey: operation.candidateKey },
-              },
-              assertCurrent,
-            );
-            if (added.length > 0) {
-              reservations.push({
-                params: {
-                  agentId,
-                  entryKeys: [operation.candidateKey],
-                  sessionIds: added.map((origin) => origin.sessionId),
-                },
-                options,
-                assertCurrent,
-              });
-            }
-          }
-        },
-        true,
-      );
+      let identity: ReturnType<typeof readMemoryShadowIdentity>;
+      try {
+        identity = readMemoryShadowIdentity(options.path);
+      } catch (error) {
+        if (isFileMissingError(error)) {
+          continue;
+        }
+        throw error;
+      }
+      const assertCurrent = () => assertMemoryShadowIdentity(options.path, identity);
+      const added =
+        (await executeOriginCommand(
+          options,
+          {
+            type: "reserve",
+            input: {
+              agentId: options.agentId,
+              operations: operationParents.map(({ operation, parentKeys }) => ({
+                entryKey: operation.candidateKey,
+                parentKeys: [...parentKeys],
+              })),
+            },
+          },
+          assertCurrent,
+        )) ?? [];
+      for (const deletion of added) {
+        reservations.push({ params: deletion, options, assertCurrent });
+      }
     }
   } catch (error) {
     await rollback();
@@ -281,31 +264,13 @@ export async function pruneMemoryEntryOrigins(params: {
     ),
   );
   const diaryKeys = new Set(diaries.flatMap(extractPromotionKeys));
-  const { runMemoryOriginRead } = await loadMemoryCpuWorkerRuntime();
   for (const options of owners) {
-    await runOpenClawAgentWriteAdmission(
-      options,
-      async (_identity, assertCurrent) => {
-        const agentId = options.agentId;
-        // A sibling may still index an older shared MEMORY snapshot. Retain its
-        // lineage until that agent can identify and purge those derived records.
-        assertCurrent();
-        const { keys } = await runMemoryOriginRead({
-          ...captureMemoryAgentReadTarget(options),
-          kind: "origin-index-keys",
-        });
-        const indexed = new Set(keys);
-        assertCurrent();
-        await deleteMemoryEntryOrigins(
-          {
-            agentId,
-            entryKeys: entryKeys.filter((key) => !diaryKeys.has(key) && !indexed.has(key)),
-          },
-          options,
-          assertCurrent,
-        );
+    await executeOriginCommand(options, {
+      type: "prune",
+      input: {
+        agentId: options.agentId,
+        entryKeys: entryKeys.filter((key) => !diaryKeys.has(key)),
       },
-      true,
-    );
+    });
   }
 }

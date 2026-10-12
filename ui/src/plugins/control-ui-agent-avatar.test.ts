@@ -56,7 +56,9 @@ it.each([
       container.remove();
     });
 
+    await vi.dynamicImportSettled();
     await vi.waitFor(() => {
+      expect(onError).not.toHaveBeenCalled();
       expect(container.querySelector("img")?.getAttribute("src")).toBe(identityAvatar);
     });
 

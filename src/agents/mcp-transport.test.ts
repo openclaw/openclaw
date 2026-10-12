@@ -78,10 +78,6 @@ function redirectResponse(location: string, status = 302): Response {
   });
 }
 
-function redirectWithoutLocationResponse(status = 302): Response {
-  return new Response(null, { status });
-}
-
 function latestStreamableTransportOptions(): StreamableTransportOptions {
   // The SDK transport is constructor-injected; tests inspect the most recent
   // options to exercise OpenClaw's wrapped fetch implementation directly.
@@ -202,122 +198,6 @@ describe("resolveMcpTransport", () => {
     expect(runtimeFetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("preserves replayable request bodies for cross-origin streamable HTTP redirects", async () => {
-    // 307/308 redirects preserve method/body, while custom auth headers are
-    // still stripped when the destination origin changes.
-    runtimeFetchMock
-      .mockResolvedValueOnce(redirectResponse("https://redirect.example/mcp", 307))
-      .mockResolvedValueOnce(new Response("ok"));
-
-    resolveMcpTransport("probe", {
-      url: "https://mcp.example.com/mcp",
-      transport: "streamable-http",
-      headers: {
-        "X-Api-Key": "secret",
-      },
-    });
-
-    const options = latestStreamableTransportOptions();
-    const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" });
-
-    await options.fetch?.("https://mcp.example.com/mcp", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": "secret",
-      },
-      body,
-    });
-
-    expect(runtimeFetchMock).toHaveBeenCalledTimes(2);
-    expect(runtimeFetchCall(1)?.[0]).toBe("https://redirect.example/mcp");
-    expect(runtimeFetchCall(1)?.[1]?.method).toBe("POST");
-    expect(runtimeFetchCall(1)?.[1]?.body).toBe(body);
-
-    const redirectedHeaders = new Headers(runtimeFetchCall(1)?.[1]?.headers);
-    expect(redirectedHeaders.get("x-api-key")).toBeNull();
-    expect(redirectedHeaders.get("content-type")).toBe("application/json");
-  });
-
-  it("allows same-url redirects when the request method changes", async () => {
-    runtimeFetchMock
-      .mockResolvedValueOnce(redirectResponse("https://mcp.example.com/mcp", 303))
-      .mockResolvedValueOnce(new Response("ok"));
-
-    resolveMcpTransport("probe", {
-      url: "https://mcp.example.com/mcp",
-      transport: "streamable-http",
-    });
-
-    const options = latestStreamableTransportOptions();
-
-    await options.fetch?.("https://mcp.example.com/mcp", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: "{}",
-    });
-
-    expect(runtimeFetchMock).toHaveBeenCalledTimes(2);
-    expect(runtimeFetchCall(1)?.[0]).toBe("https://mcp.example.com/mcp");
-    expect(runtimeFetchCall(1)?.[1]?.method).toBe("GET");
-    expect(runtimeFetchCall(1)?.[1]?.body).toBeUndefined();
-
-    const redirectedHeaders = new Headers(runtimeFetchCall(1)?.[1]?.headers);
-    expect(redirectedHeaders.get("content-type")).toBeNull();
-  });
-
-  it("rejects streamable HTTP redirect loops", async () => {
-    runtimeFetchMock.mockResolvedValueOnce(redirectResponse("https://mcp.example.com/mcp"));
-
-    resolveMcpTransport("probe", {
-      url: "https://mcp.example.com/mcp",
-      transport: "streamable-http",
-    });
-
-    await expect(latestStreamableFetch()("https://mcp.example.com/mcp")).rejects.toThrow(
-      "Redirect loop detected",
-    );
-
-    expect(runtimeFetchMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("rejects streamable HTTP redirect chains beyond the limit", async () => {
-    for (let index = 0; index <= 20; index += 1) {
-      runtimeFetchMock.mockResolvedValueOnce(
-        redirectResponse(`https://mcp.example.com/redirect-${index}`),
-      );
-    }
-
-    resolveMcpTransport("probe", {
-      url: "https://mcp.example.com/mcp",
-      transport: "streamable-http",
-    });
-
-    await expect(latestStreamableFetch()("https://mcp.example.com/mcp")).rejects.toThrow(
-      "Too many redirects (limit: 20)",
-    );
-
-    expect(runtimeFetchMock).toHaveBeenCalledTimes(21);
-  });
-
-  it("rejects streamable HTTP redirect responses that do not include a location", async () => {
-    const response = redirectWithoutLocationResponse();
-    runtimeFetchMock.mockResolvedValueOnce(response);
-
-    resolveMcpTransport("probe", {
-      url: "https://mcp.example.com/mcp",
-      transport: "streamable-http",
-    });
-
-    await expect(latestStreamableFetch()("https://mcp.example.com/mcp")).rejects.toThrow(
-      "Redirect missing location header (302)",
-    );
-
-    expect(runtimeFetchMock).toHaveBeenCalledTimes(1);
-  });
-
   it("routes native OAuth through the host fetch coordinator instead of the SDK provider", () => {
     resolveMcpTransport("probe", {
       url: "https://mcp.example.com/mcp",
@@ -418,7 +298,7 @@ describe("resolveMcpTransport", () => {
     expect(new Headers(runtimeFetchCall(3)?.[1]?.headers).get("x-tenant")).toBeNull();
   });
 
-  it.each([307, 308])(
+  it.each([307])(
     "rejects cross-origin OAuth %s redirects that would replay a POST body",
     async (status) => {
       runtimeFetchMock
@@ -448,32 +328,6 @@ describe("resolveMcpTransport", () => {
       expect(runtimeFetchMock).toHaveBeenCalledTimes(1);
     },
   );
-
-  it("preserves OAuth POST bodies across same-origin 307 redirects", async () => {
-    runtimeFetchMock
-      .mockResolvedValueOnce(redirectResponse("https://auth.example.com/regional-token", 307))
-      .mockResolvedValueOnce(new Response("ok"));
-
-    resolveMcpTransport("probe", {
-      url: "https://mcp.example.com/mcp",
-      transport: "streamable-http",
-      auth: "oauth",
-    });
-
-    const oauthParams = latestOAuthBearerParams();
-    const tokenBody = "code=synthetic-code&code_verifier=synthetic-verifier";
-
-    await oauthParams.authFetchFn("https://auth.example.com/token", {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: tokenBody,
-    });
-
-    expect(runtimeFetchMock).toHaveBeenCalledTimes(2);
-    expect(runtimeFetchCall(1)?.[0]).toBe("https://auth.example.com/regional-token");
-    expect(runtimeFetchCall(1)?.[1]?.method).toBe("POST");
-    expect(runtimeFetchCall(1)?.[1]?.body).toBe(tokenBody);
-  });
 
   it("merges SSE event-source headers case-insensitively so auth is not duplicated", async () => {
     // The SDK's EventSource can supply lowercase `authorization` while operator

@@ -33,9 +33,9 @@ import { createIncognitoProgressCardStore, progressCardStore } from "./progress-
 import { createIncognitoSessionComputeReader } from "./session-history-snapshot.js";
 
 // The retained suite actor, shared state, and closing actor require three broker slots.
-vi.mock("node:os", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:os")>()),
-  availableParallelism: () => 24,
+vi.mock("../infra/worker-pool-sizing.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/worker-pool-sizing.js")>()),
+  resolveSqliteBrokerWorkerCount: () => 3,
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);

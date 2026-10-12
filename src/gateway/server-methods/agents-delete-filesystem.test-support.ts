@@ -2,7 +2,7 @@ import type { Stats } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { expectRespondOk } from "./agents-mutate.test-support.js";
+import { expectPendingDeletion, expectRespondOk } from "./agents-mutate.test-support.js";
 
 type AgentDeleteFilesystemHarness = {
   mocks: {
@@ -53,7 +53,7 @@ export function registerAgentDeleteFilesystemTests(harness: AgentDeleteFilesyste
       const { respond, promise } = makeCall("agents.delete", { agentId: "test-agent" });
       await promise;
 
-      expectRespondOk(respond, {
+      expectPendingDeletion(respond, {
         failed: expect.arrayContaining([
           { path: "/workspace/test-agent", reason: retired.message },
         ]),
@@ -115,7 +115,7 @@ export function registerAgentDeleteFilesystemTests(harness: AgentDeleteFilesyste
       const { respond, promise } = makeCall("agents.delete", { agentId: "test-agent" });
       await promise;
 
-      expectRespondOk(respond, {
+      expectPendingDeletion(respond, {
         failed: [{ path: workspaceDir, reason: "trash destination missing" }],
       });
       await expect(actualFs.stat(workspaceDir)).resolves.toBeDefined();

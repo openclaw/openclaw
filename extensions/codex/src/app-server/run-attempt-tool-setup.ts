@@ -33,6 +33,7 @@ import {
   selectInactiveCodexHeartbeatResponseTool,
 } from "./heartbeat-tool-fallback.js";
 import { buildCodexHookRequester } from "./hook-requester.js";
+import type { NativePendingChild } from "./native-subagent-monitor-types.js";
 import { hasCodexNativeToolCatalog, loadCodexNativeToolCatalog } from "./native-tool-catalog.js";
 import { CodexCompactionPlanState } from "./plan-compaction-state.js";
 import { requestPluginApprovalOutcome } from "./plugin-approval-roundtrip.js";
@@ -199,7 +200,9 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   >;
   let creatorAuthorityPromise: ReturnType<CreatorAuthorityResolver> | undefined;
   let resolveCreatorAuthorityImpl: CreatorAuthorityResolver | undefined;
-  const runtimeYieldCompletionClaim: { current?: () => boolean } = {};
+  const runtimeYieldCompletionClaim: {
+    current?: () => boolean | { pendingChildren: NativePendingChild[] };
+  } = {};
   const commonToolParams = {
     nativeExecutionPolicy: runtime.nativeExecutionPolicy,
     // Both catalogs describe one attempt; a later attempt discovers fresh connections.

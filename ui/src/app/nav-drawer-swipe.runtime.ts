@@ -1,5 +1,4 @@
 import { isMobileNavLayout } from "./mobile-nav-layout.ts";
-import { navDrawerFocusableElements } from "./navigation-surface.ts";
 
 const MIN_OPEN_DISTANCE_PX = 44;
 const OPEN_RATIO = 0.15;
@@ -18,7 +17,6 @@ type Swipe = {
 
 export type NavDrawerHost = HTMLElement & {
   readonly onboardingMode: boolean;
-  readonly updateComplete: Promise<boolean>;
   readonly navDrawerOpen: boolean;
 };
 
@@ -44,9 +42,6 @@ export class NavDrawerSwipeOwner {
     this.host.addEventListener("touchmove", this.handleMove, { passive: false });
     this.host.addEventListener("touchend", this.handleEnd, { passive: true });
     this.host.addEventListener("touchcancel", this.cancel, { passive: true });
-    if (this.host.navDrawerOpen) {
-      this.opened();
-    }
   }
 
   disconnect(): void {
@@ -67,19 +62,6 @@ export class NavDrawerSwipeOwner {
     backdrop?.removeAttribute("data-nav-drawer-dragging");
     backdrop?.style.removeProperty("visibility");
     backdrop?.style.removeProperty("opacity");
-  }
-
-  opened(): void {
-    void this.host.updateComplete.then(() => {
-      if (!this.host.isConnected || !this.host.navDrawerOpen) {
-        return;
-      }
-      this.reset();
-      const drawer = this.host.querySelector<HTMLElement>(".shell-nav");
-      if (drawer) {
-        (navDrawerFocusableElements(drawer)[0] ?? drawer).focus({ preventScroll: true });
-      }
-    });
   }
 
   private paint(swipe: Swipe, deltaX: number): void {

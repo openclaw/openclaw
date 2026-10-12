@@ -34,8 +34,10 @@ import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir
 
 function formatClaudeCliFallbackPrelude(
   seed: NonNullable<
-    ReturnType<
-      typeof import("../../gateway/cli-session-history.claude.js").readClaudeCliFallbackSeed
+    Awaited<
+      ReturnType<
+        typeof import("../../gateway/cli-session-history.claude.js").readClaudeCliFallbackSeed
+      >
     >
   >,
   options?: { charBudget?: number },
@@ -62,10 +64,10 @@ describe("resolveFallbackRetryPrompt", () => {
 });
 
 describe("formatClaudeCliFallbackPrelude", () => {
-  it("formats user/assistant turns and tags tool blocks with compact hints", () => {
+  it("formats user/assistant turns and tags tool blocks with compact hints", async () => {
     // Tool-use blocks are represented as compact hints because fallback prompts
     // should preserve intent without replaying full tool schemas or outputs.
-    const out = formatClaudeCliFallbackPrelude({
+    const out = await formatClaudeCliFallbackPrelude({
       summaryText: "Earlier summary",
       recentTurns: [
         {
@@ -100,9 +102,9 @@ describe("formatClaudeCliFallbackPrelude", () => {
     expect(out).toContain("(tool result: Earlier tool output)");
   });
 
-  it("truncates an oversized summary instead of dropping it silently", () => {
+  it("truncates an oversized summary instead of dropping it silently", async () => {
     const huge = "x ".repeat(10_000).trim();
-    const out = formatClaudeCliFallbackPrelude(
+    const out = await formatClaudeCliFallbackPrelude(
       { summaryText: huge, recentTurns: [] },
       { charBudget: 600 },
     );
@@ -113,8 +115,8 @@ describe("formatClaudeCliFallbackPrelude", () => {
 
   it.each([["a surrogate boundary", `${"x".repeat(21)}😀${"y".repeat(100)}`, "x".repeat(21)]])(
     "preserves %s when truncating an oversized summary",
-    (_label, summaryText, expected) => {
-      const out = formatClaudeCliFallbackPrelude(
+    async (_label, summaryText, expected) => {
+      const out = await formatClaudeCliFallbackPrelude(
         { summaryText, recentTurns: [] },
         { charBudget: 128 },
       );
@@ -123,8 +125,8 @@ describe("formatClaudeCliFallbackPrelude", () => {
     },
   );
 
-  it("keeps the recent turn window contiguous when an adjacent turn is oversized", () => {
-    const out = formatClaudeCliFallbackPrelude(
+  it("keeps the recent turn window contiguous when an adjacent turn is oversized", async () => {
+    const out = await formatClaudeCliFallbackPrelude(
       {
         recentTurns: [
           { role: "user", content: "older small turn" },
@@ -146,11 +148,11 @@ describe("buildClaudeCliFallbackContextPrelude", () => {
     mocks.readClaudeCliFallbackSeed.mockReset();
   });
 
-  it("returns empty string when the Claude session loader finds no seed", () => {
+  it("returns empty string when the Claude session loader finds no seed", async () => {
     mocks.readClaudeCliFallbackSeed.mockReturnValue(undefined);
 
     expect(
-      buildClaudeCliFallbackContextPrelude({
+      await buildClaudeCliFallbackContextPrelude({
         cliSessionId: "missing-session",
         homeDir: "/tmp/test-home",
       }),

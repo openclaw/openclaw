@@ -116,7 +116,7 @@ export function createCodexAppServerModelCatalog(runtime: string) {
         options.start.transport === "stdio" && !isCodexAppServerProxyLaunch(options.start.args);
       const authProfileStore =
         ownsLocalProcess && options.start.homeScope === "agent"
-          ? resolveCodexAppServerAuthProfileStore({
+          ? await resolveCodexAppServerAuthProfileStore({
               agentDir: params.agentDir,
               config: params.config,
             })
@@ -143,9 +143,18 @@ export function createCodexAppServerModelCatalog(runtime: string) {
           agentDir: params.agentDir,
           timeoutMs,
           ...(authProfileStore ? { authProfileStore, authProfileId } : {}),
+          ...(ownsLocalProcess && start.homeScope === "agent" && !authProfileId
+            ? { authRequirement: "environment-api-key" as const }
+            : {}),
         },
         async (request, client) => {
           try {
+            // Codex serializes this read after login's delayed account/updated.
+            // Drain startup before pinning the account revision for discovery.
+            await request<CodexGetAccountResponse>({
+              method: "account/read",
+              requestParams: { refreshToken: false },
+            });
             const isCurrent = captureSharedCodexAppServerCatalogLifetime(client);
             const listed = await listAllCodexAppServerModels({
               request,

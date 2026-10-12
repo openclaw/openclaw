@@ -6,11 +6,15 @@ import {
   resolvePreparedProviderStaticConfigs,
 } from "../plugins/provider-discovery.js";
 import * as providerPolicy from "../plugins/provider-policy-surface.js";
+import { resolveEmbeddedRuntimeModelPolicy } from "./embedded-agent-runner/run/setup.js";
+import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { orderModelCatalogForPicker } from "./model-catalog-order.js";
 import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { createModelVisibilityPolicy } from "./model-visibility-policy.js";
+import { prepareModelCatalogPublication } from "./prepared-model-runtime.catalog-publication.js";
 import { prepareCapturedRuntimeFacts } from "./prepared-model-runtime.configured-catalog.js";
+import { materializePreparedModelCatalog } from "./prepared-model-runtime.full-catalog.js";
 import type { PreparedConfiguredRuntimeModel } from "./prepared-model-runtime.types.js";
 import { AuthStorage, ModelRegistry } from "./sessions/index.js";
 
@@ -392,4 +396,267 @@ describe("configured catalog registry composition", () => {
       );
     },
   );
+});
+
+describe("synthetic configured context publication", () => {
+  const fallback = {
+    provider: "fixture",
+    id: "new-model",
+    name: "New model",
+    api: "openai-responses" as const,
+    contextWindow: 128_000,
+    // Only the provider's unknown-model fallback opts into replacement.
+    contextWindowSource: "synthetic" as const,
+  };
+  const discovered = {
+    provider: "fixture",
+    id: "new-model",
+    name: "New model",
+    api: "openai-responses" as const,
+    baseUrl: "https://account.example/v1",
+    contextWindow: 1_000_000,
+    contextTokens: 872_000,
+  };
+  const auth = (account: string) => ({
+    authStore: { version: 1 as const, profiles: {} },
+    authModes: {},
+    providerAuthLabels: new Map(),
+    credentials: { fixture: { type: "api_key" as const, key: account } },
+  });
+  function budget(
+    entries: ModelCatalogEntry[] = [discovered],
+    staticEntry: ModelCatalogEntry = fallback,
+    config: OpenClawConfig = {},
+  ) {
+    const publication = prepareModelCatalogPublication(
+      {
+        entries,
+        routeVariants: entries,
+        providerOutcomes: [{ provider: "fixture", status: "ready" }],
+      },
+      new Map(),
+      undefined,
+      auth("account-a"),
+      (provider) => provider,
+      new Map(),
+    );
+    const catalog = materializePreparedModelCatalog(
+      publication.catalog,
+      [],
+      [staticEntry],
+      new Set(publication.discoveryOrigins.map(({ provider }) => provider)),
+    );
+    const selected =
+      catalog.staticEntries?.find(
+        (entry) => entry.provider === "fixture" && entry.id === "new-model",
+      ) ??
+      catalog.entries.find((entry) => entry.provider === "fixture" && entry.id === "new-model");
+    expect(selected).toBeDefined();
+    return resolveEmbeddedRuntimeModelPolicy({
+      cfg: config,
+      provider: "fixture",
+      modelId: "new-model",
+      nativeModelOwned: false,
+      runtimeModel: {
+        id: "new-model",
+        name: "New model",
+        api: "openai-responses",
+        provider: "fixture",
+        baseUrl: discovered.baseUrl,
+        reasoning: false,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        maxTokens: 4096,
+        ...selected,
+        input: ["text"],
+      },
+    }).contextTokenBudget;
+  }
+  it("preserves provider synthetic provenance through the catalog row projection", () => {
+    expect(modelCatalogRowToEntry(fallback)).toHaveProperty("contextWindowSource", "synthetic");
+  });
+  it("uses accepted account prompt limits instead of the superseded synthetic window", () => {
+    expect(budget()).toBe(872_000);
+  });
+  it.each([false, undefined])(
+    "preserves configured non-sizing metadata with reasoning override %s",
+    (configuredReasoning) => {
+      const accepted = { ...discovered, reasoning: true, input: ["text" as const] };
+      const catalog = materializePreparedModelCatalog(
+        { entries: [accepted], routeVariants: [accepted] },
+        [
+          {
+            provider: "fixture",
+            modelId: "new-model",
+            model: {
+              ...fallback,
+              baseUrl: discovered.baseUrl,
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              maxTokens: 4096,
+            },
+          },
+        ],
+        [
+          {
+            ...fallback,
+            reasoning: false,
+            configuredReasoning,
+            input: ["text", "image"],
+            params: { temperature: 0.25 },
+            compat: { supportsDeveloperRole: false },
+          },
+        ],
+        new Set(["fixture"]),
+      );
+      const selected = catalog.staticEntries?.find((entry) => entry.id === "new-model");
+      expect(selected).toMatchObject({
+        contextWindow: 1_000_000,
+        contextTokens: 872_000,
+        reasoning: configuredReasoning !== false,
+        input: ["text", "image"],
+        params: { temperature: 0.25 },
+        compat: { supportsDeveloperRole: false },
+      });
+      expect(selected?.contextWindowSource).toBeUndefined();
+      expect(selected?.configuredReasoning).toBe(configuredReasoning);
+      expect(budget([accepted], { ...fallback, configuredReasoning, reasoning: false })).toBe(
+        872_000,
+      );
+    },
+  );
+  it.each([
+    ["matching physical route", discovered, false],
+    ["different physical endpoint", { ...discovered, baseUrl: "https://other.example/v1" }, true],
+  ] as const)("replaces only the %s synthetic fallback", (_name, physical, retained) => {
+    const logical = { ...discovered, api: "openai-completions" as const };
+    const publication = prepareModelCatalogPublication(
+      {
+        entries: [logical],
+        routeVariants: [logical, physical],
+        providerOutcomes: [{ provider: "fixture", status: "ready" }],
+      },
+      new Map(),
+      undefined,
+      auth("account-a"),
+      (provider) => provider,
+      new Map(),
+    );
+    const catalog = materializePreparedModelCatalog(
+      publication.catalog,
+      [],
+      [{ ...fallback, baseUrl: discovered.baseUrl }],
+      new Set(publication.discoveryOrigins.map(({ provider }) => provider)),
+    );
+    expect(catalog.entries[0]?.api).toBe("openai-completions");
+    expect(catalog.routeVariants).toContainEqual(physical);
+    expect(catalog.staticEntries?.some((entry) => entry.contextWindowSource === "synthetic")).toBe(
+      retained,
+    );
+  });
+  it.each([
+    ["curated static", { ...fallback, contextWindowSource: undefined }],
+    ["other API", { ...fallback, api: "openai-completions" as const }],
+    ["other endpoint", { ...fallback, baseUrl: "https://other.example/v1" }],
+  ])("preserves %s limits", (_name, row) => {
+    expect(budget([discovered], row)).toBe(128_000);
+  });
+  it("preserves explicit authored prompt and native-window caps", () => {
+    for (const limits of [{ contextTokens: 64_000 }, { contextWindow: 64_000 }]) {
+      const config: OpenClawConfig = {
+        models: {
+          providers: {
+            fixture: {
+              baseUrl: discovered.baseUrl,
+              models: [
+                {
+                  id: "new-model",
+                  name: "New model",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: discovered.contextWindow,
+                  maxTokens: 4096,
+                  ...limits,
+                },
+              ],
+            },
+          },
+        },
+      };
+      expect(budget([discovered], fallback, config)).toBe(64_000);
+    }
+  });
+  it("keeps fallback for empty discovery and a same-id different provider", () => {
+    expect(budget([])).toBe(128_000);
+    expect(budget([{ ...discovered, provider: "other" }])).toBe(128_000);
+  });
+  it("does not promote a static starter after first-load discovery failure", () => {
+    const publication = prepareModelCatalogPublication(
+      {
+        entries: [],
+        routeVariants: [],
+        staticEntries: [discovered],
+        providerOutcomes: [{ provider: "fixture", status: "unavailable" }],
+      },
+      new Map(),
+      undefined,
+      auth("account-a"),
+      (provider) => provider,
+      new Map(),
+    );
+    const catalog = materializePreparedModelCatalog(
+      publication.catalog,
+      [],
+      [fallback],
+      new Set(publication.discoveryOrigins.map(({ provider }) => provider)),
+    );
+    expect(publication.discoveryOrigins).toEqual([]);
+    expect(catalog.staticEntries).toContainEqual(fallback);
+    expect(catalog.entries).toContainEqual(expect.objectContaining(discovered));
+  });
+
+  it("retains only same-account inventory after failure", () => {
+    const accepted = prepareModelCatalogPublication(
+      {
+        entries: [discovered],
+        routeVariants: [],
+        providerOutcomes: [{ provider: "fixture", status: "ready", profileId: "a" }],
+      },
+      new Map(),
+      undefined,
+      auth("account-a"),
+      (provider) => provider,
+      new Map(),
+    );
+    for (const account of ["account-a", "account-b"]) {
+      const failed = prepareModelCatalogPublication(
+        {
+          entries: [],
+          routeVariants: [],
+          providerOutcomes: [{ provider: "fixture", status: "unavailable", profileId: "a" }],
+        },
+        new Map(),
+        { ...accepted, providers: new Map() },
+        auth(account),
+        (provider) => provider,
+        new Map(),
+      );
+      const catalog = materializePreparedModelCatalog(
+        failed.catalog,
+        [],
+        [fallback],
+        new Set(failed.discoveryOrigins.map(({ provider }) => provider)),
+      );
+      if (account === "account-a") {
+        expect(catalog.entries).toContainEqual(discovered);
+        expect(catalog.staticEntries).not.toContainEqual(fallback);
+        expect(failed.discoveryOrigins).toEqual(accepted.discoveryOrigins);
+      } else {
+        expect(catalog.entries).not.toContainEqual(discovered);
+        expect(catalog.staticEntries).toContainEqual(fallback);
+        expect(failed.discoveryOrigins).toEqual([]);
+      }
+    }
+  });
 });

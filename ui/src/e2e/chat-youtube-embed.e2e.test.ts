@@ -104,12 +104,7 @@ suite.define(() => {
         await play.waitFor();
         expect(await loadedFrame!.evaluate((element) => element.isConnected)).toBe(false);
         expect(await card.locator("iframe").count()).toBe(0);
-        expect(
-          await play.evaluate((button) => {
-            const root = button.getRootNode();
-            return root instanceof ShadowRoot && root.activeElement === button;
-          }),
-        ).toBe(true);
+        expect(await play.evaluate((button) => button.matches(":focus"))).toBe(true);
 
         await play.click();
         await frame.contentFrame().getByText("Player fixture loaded", { exact: true }).waitFor();

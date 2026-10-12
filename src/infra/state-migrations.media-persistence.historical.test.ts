@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { listSessionEntriesCore } from "../config/sessions/session-accessor.js";
 import * as transcriptFts from "../config/sessions/session-transcript-fts.js";
+import { createTranscriptEventInserter } from "../config/sessions/transcript-payload.js";
 import { assertAgentDatabaseMaintenanceAuthority } from "../state/openclaw-agent-db-lease.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
@@ -38,27 +39,32 @@ import { repairDoctorSessionWindowsBeforeMigration } from "./state-migrations.se
 
 const tempDirs: string[] = [];
 
-function seedOrphanSessionWindows(pathname: string) {
+function seedOrphanSessionWindows(pathname: string, schemaVersion: number) {
   using database = new NativeDatabaseSync(pathname);
   database.exec("PRAGMA foreign_keys = OFF;");
   const insertNode = database.prepare(`INSERT INTO session_nodes
     (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, 1)`);
   const insertWindow = database.prepare(`INSERT INTO session_windows
     (session_id, session_key, created_at, updated_at) VALUES (?, ?, 1, 1)`);
-  const insertEvent = database.prepare(`INSERT INTO transcript_events
-    (session_id, seq, event_json, created_at) VALUES (?, 0, ?, 1)`);
+  const insertLegacyEvent =
+    schemaVersion < OPENCLAW_AGENT_SCHEMA_VERSION
+      ? database.prepare(`INSERT INTO transcript_events
+        (session_id, seq, event_json, created_at) VALUES (?, 0, ?, 1)`)
+      : undefined;
   for (const sessionId of ["retained", "orphan-one", "orphan-two"]) {
     const sessionKey = `agent:main:${sessionId}`;
     insertNode.run(sessionKey, sessionId, JSON.stringify({ sessionId, updatedAt: 1 }));
     insertWindow.run(sessionId, sessionKey);
-    insertEvent.run(
-      sessionId,
-      JSON.stringify({
-        id: `message-${sessionId}`,
-        type: "message",
-        message: { role: "user", content: sessionId },
-      }),
-    );
+    const eventJson = JSON.stringify({
+      id: `message-${sessionId}`,
+      type: "message",
+      message: { role: "user", content: sessionId },
+    });
+    if (insertLegacyEvent) {
+      insertLegacyEvent.run(sessionId, eventJson);
+    } else {
+      createTranscriptEventInserter(database, sessionId)({ seq: 0, eventJson, createdAt: 1 });
+    }
     transcriptFts.createSessionTranscriptFtsInserter(
       database,
       sessionId,
@@ -100,10 +106,14 @@ it.each([
         openOpenClawAgentDatabase(options);
       }
       closeOpenClawAgentDatabasesForTest();
-      seedOrphanSessionWindows(pathname);
+      seedOrphanSessionWindows(pathname, schemaVersion);
       const readRows = (database: DatabaseSync) => ({
         windows: database.prepare("SELECT * FROM session_windows ORDER BY session_id").all(),
-        events: database.prepare("SELECT * FROM transcript_events ORDER BY session_id, seq").all(),
+        events: database
+          .prepare(
+            "SELECT session_id, seq, event_json, event_zstd, event_utf8_bytes, navigation_json, created_at FROM transcript_events ORDER BY session_id, seq",
+          )
+          .all(),
         search: database
           .prepare("SELECT session_id, text FROM session_transcript_fts ORDER BY session_id")
           .all(),

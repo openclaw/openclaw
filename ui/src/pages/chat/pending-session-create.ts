@@ -14,7 +14,7 @@ import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { renderCreationComposer } from "../new-session/creation-composer-render.ts";
 import { renderNewSessionBody } from "../new-session/draft-body.ts";
 import { chatStartupStatusLabel } from "./chat-run-startup.ts";
-import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.ts";
+import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.tsx";
 import { renderChatImageLightbox } from "./components/chat-image-lightbox.ts";
 import { renderChatPaneHeader } from "./components/chat-pane-header.ts";
 import { buildLocalUserMessage } from "./user-message-content.ts";

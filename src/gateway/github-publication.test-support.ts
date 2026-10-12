@@ -7,7 +7,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeEach, expect, onTestFinished, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { insertRegistryWorktree, updateRegistryWorktree } from "../agents/worktrees/registry.js";
+import {
+  deleteRegistryWorktree,
+  insertRegistryWorktree,
+  updateRegistryWorktree,
+} from "../agents/worktrees/registry.js";
 import { findLiveRegistryWorktreeByOwner } from "../agents/worktrees/registry.test-support.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import {
@@ -22,6 +26,7 @@ import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../state/openclaw-agent-db.js";
+import { ensureGitHubPublicationSchema } from "../state/openclaw-state-db-schema-additive.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -30,7 +35,7 @@ import {
 import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
 import { currentGitHubPublicationConfig } from "./github-publication-availability.js";
 import {
-  captureGitHubPublicationRequester,
+  prepareGitHubPublicationRequesterV2,
   type GitHubPublicationRequester,
 } from "./github-publication-requester.js";
 import { createGitHubPublicationRuntime as createRuntime } from "./github-publication-runtime.js";
@@ -165,37 +170,20 @@ export const systemPublicationRequester: GitHubPublicationRequester = Object.fre
   assertInvocationCurrent: () => {},
 });
 
-export async function createGitHubPublicationRequesterFixture(params: {
-  profileId: string;
-  scopes: readonly string[];
-  sessionKey: string;
-  agentId: string;
-  getCommittedRuntimeConfig?: () => OpenClawConfig;
-}) {
-  const [{ createOperatorWsClient }, { prepareGatewayConnectOperatorAccess }] = await Promise.all([
-    import("./server/ws-connection/authenticated-request-dispatch.test-support.js"),
-    import("./server/ws-connection/connect-operator-access.js"),
-  ]);
-  const client = createOperatorWsClient({
-    connId: params.profileId,
-    scopes: [...params.scopes],
-  });
-  client.authenticatedUserProfile = {
-    profileId: params.profileId,
-    displayName: null,
-    avatarRevision: "fixture",
-    hasAvatar: false,
-    updatedAt: 1,
-  };
-  prepareGatewayConnectOperatorAccess(client);
-  const context = {
-    getRuntimeConfig: currentGitHubPublicationConfig,
-    getCommittedRuntimeConfig: params.getCommittedRuntimeConfig ?? currentGitHubPublicationConfig,
-  };
-  const session = { sessionKey: params.sessionKey, agentId: params.agentId };
-  const captured = await captureGitHubPublicationRequester({ client, context }, session);
+export async function createSystemGitHubPublicationRequesterFixture() {
+  const { createSyntheticPluginRuntimeClient } = await import("./server-plugin-runtime-client.js");
+  const captured = await prepareGitHubPublicationRequesterV2(
+    {
+      client: createSyntheticPluginRuntimeClient({
+        operatorRoleActor: { kind: "system" },
+        scopes: ["operator.admin"],
+      }),
+      context: { getRuntimeConfig: currentGitHubPublicationConfig },
+    },
+    { sessionKey: SESSION_KEY, agentId: "main" },
+  );
   onTestFinished(captured.release);
-  return { ...captured, client, context, session };
+  return captured;
 }
 
 type PublicationFixtureRequest<T> = Omit<T, "requester"> & {
@@ -291,6 +279,7 @@ export function seedLocalPublication(
     requester?: GitHubPublicationRequesterSnapshot | null;
   },
 ): void {
+  ensureGitHubPublicationSchema(database.db);
   database.db
     .prepare(
       `INSERT INTO github_publication_requests (
@@ -457,6 +446,18 @@ export async function persistPublicationTestSession(sessionKey = SESSION_KEY) {
       return after;
     },
   };
+}
+
+export async function persistClaimPublicationWorkspace() {
+  await persistPublicationTestSession(REQUEST.sessionKey);
+  const worktree = mocks.findWorktree("session", REQUEST.sessionKey);
+  await deleteRegistryWorktree(process.env, worktree.id);
+  await insertRegistryWorktree(process.env, {
+    ...worktree,
+    name: "publication",
+    createdAt: Date.now(),
+    lastActiveAt: Date.now(),
+  });
 }
 
 export function installGitHubPublicationTestHarness(

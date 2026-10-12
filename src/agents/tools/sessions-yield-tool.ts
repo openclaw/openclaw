@@ -7,11 +7,17 @@ import { jsonResult, readToolStringParam } from "./common.js";
 const NO_PENDING_CHILD_COMPLETION_MESSAGE =
   'No pending child completion is owned by this turn. This call did not pause the turn or schedule a continuation. Continue unfinished work; return its final result when complete. For background tools, follow their result\'s continuation instructions. An unfinished subagent waiting for an incoming continuation must explicitly set waitFor: "message".';
 
-export type SessionsYieldClaimResult =
+/**
+ * A harness runtime's yield claim: true when this turn owns a pending completion,
+ * or the children an earlier turn left pending that will resume the session.
+ */
+export type SessionsYieldRuntimeClaim =
   | boolean
-  | { messageWaitRegistered: boolean }
-  | { error: string }
   | { pendingChildren: readonly UnsettledRequesterChild[] };
+export type SessionsYieldClaimResult =
+  | SessionsYieldRuntimeClaim
+  | { messageWaitRegistered: boolean }
+  | { error: string };
 export type SessionsYieldIntent = { waitFor?: "message"; acknowledgment?: string };
 export type SessionsYieldCallback = (
   message: string,

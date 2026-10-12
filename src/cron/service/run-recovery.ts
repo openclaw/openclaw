@@ -84,7 +84,9 @@ function observedRecoveryResult(
 ): Exclude<CronRunRecoveryResult, { kind: "repaired" }> | undefined {
   const receipt = observed.receipt;
   if (!receipt) {
-    return undefined;
+    return proposal.queuedAtMs === undefined && proposal.runningAtMs === undefined
+      ? { kind: "superseded" }
+      : undefined;
   }
   if (!proposal.receipt || !exactCronRunReceiptMatches(receipt, proposal.receipt)) {
     return { kind: "superseded", receipt };
@@ -100,7 +102,7 @@ async function repairRecoveryProposal(
   proposal: CronRunRecoveryProposal,
   mode: "startup" | "reclaim",
   assertOwnerCurrent: () => void,
-  publish: (result: CronRunRecoveryResult) => void,
+  publish: (result: CronRunRecoveryResult) => void | Promise<void>,
 ): Promise<void> {
   const input = {
     storeKey: cronStoreKey(state.deps.storePath),
@@ -108,6 +110,7 @@ async function repairRecoveryProposal(
     mode,
   };
   let retired = false;
+  let recoveryResult: CronRunRecoveryResult | undefined;
   try {
     await runCronRuntimeMutation({
       context,
@@ -133,12 +136,15 @@ async function repairRecoveryProposal(
         if (outcome.result.kind === "repaired") {
           noteCronJobsStoreCommit(input.storeKey);
         }
-        publish(outcome.result);
+        recoveryResult = outcome.result;
         for (const entry of outcome.logs) {
           state.deps.log[entry.level](entry.fields, entry.message);
         }
       },
     });
+    if (recoveryResult) {
+      await publish(recoveryResult);
+    }
   } catch (error) {
     if (retired) {
       throw new RetiredCronRecoveryError();
@@ -155,7 +161,10 @@ export async function recoverCronRunProposals(
     mode?: "startup" | "reclaim";
     signal?: AbortSignal;
     isCurrent?: () => boolean;
-    onRecovery: (proposal: CronRunRecoveryProposal, result: CronRunRecoveryResult) => void;
+    onRecovery: (
+      proposal: CronRunRecoveryProposal,
+      result: CronRunRecoveryResult,
+    ) => void | Promise<void>;
   },
 ): Promise<void> {
   const context = captureOpenClawStateWorkerContext();
@@ -169,7 +178,7 @@ export async function recoverCronRunProposals(
       const proposal = target.receipt ? target : current;
       const result = observedRecoveryResult(state, proposal, current);
       if (result) {
-        options.onRecovery(proposal, result);
+        await options.onRecovery(proposal, result);
       } else {
         repairs.push(proposal);
       }

@@ -112,7 +112,7 @@ describe("resizeExecApprovalContinuationPrompt", () => {
 describe("exec output rendering", () => {
   it("warns against retrying after a no-output timeout", () => {
     expect(appendExecTimeoutRetryGuidance("Command timed out.", "no-output-timeout")).toContain(
-      "Do not automatically rerun non-idempotent commands",
+      "Do not automatically rerun commands unless repeating them is safe",
     );
   });
 });

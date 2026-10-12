@@ -168,7 +168,7 @@ function repairLegacyRow(database: OpenClawAgentDatabase, legacyConversationId: 
       existing.thread_id !== GENERAL_TOPIC_ID ||
       existing.parent_conversation_id !== null)
   ) {
-    throw new Error(`canonical Telegram conversation id collision: ${canonical.conversationId}`);
+    throw new Error(`normalized Telegram conversation ID collision: ${canonical.conversationId}`);
   }
 
   const merged = {

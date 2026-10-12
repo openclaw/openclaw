@@ -562,9 +562,14 @@ describe("scripts/test-docker-all scheduler", () => {
     );
   });
 
-  it("serializes complete candidate and registry tuples in lane reruns", () => {
+  it("serializes complete candidate, registry, and survivor inputs in lane reruns", () => {
     const fixture = candidateFixture();
-    const env = addRegistry(fixture);
+    const env = {
+      ...addRegistry(fixture),
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "openclaw@2026.5.3",
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: "openclaw@2026.5.3 openclaw@2026.5.2",
+      OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: "plugin-dependency-cleanup",
+    };
     const command = buildLaneRerunCommand("gateway-network", env);
     for (const key of [
       "OPENCLAW_DOCKER_E2E_SELECTED_SHA",
@@ -574,6 +579,9 @@ describe("scripts/test-docker-all scheduler", () => {
       "OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR",
       "OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION",
       "OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256",
+      "OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC",
+      "OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS",
+      "OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS",
     ] as const) {
       expect(command).toContain(`${key}='${env[key]}'`);
     }
@@ -651,15 +659,25 @@ describe("scripts/test-docker-all scheduler", () => {
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: "openclaw@2026.5.3 openclaw@2026.5.2",
       OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: "plugin-dependency-cleanup",
     });
-    expect(registryCommand).toContain("--ref 'main'");
-    expect(registryCommand).toContain(
-      "docker_e2e_bare_image='ghcr.io/openclaw/openclaw-docker-e2e-bare:test'",
+    expect(registryCommand).toBe(
+      [
+        "gh workflow run 'openclaw-live-and-e2e-checks-reusable.yml' --ref 'main'",
+        `-f ref='${"b".repeat(40)}'`,
+        "-f include_repo_e2e=false",
+        "-f include_release_path_suites=false",
+        "-f include_openwebui=false",
+        "-f docker_lanes='install-e2e'",
+        "-f include_live_suites=false",
+        "-f live_models_only=false",
+        "-f allow_unreleased_changelog=true",
+        "-f published_upgrade_survivor_baseline='openclaw@2026.5.3'",
+        "-f published_upgrade_survivor_baselines='openclaw@2026.5.3 openclaw@2026.5.2'",
+        "-f published_upgrade_survivor_scenarios='plugin-dependency-cleanup'",
+        "-f docker_e2e_bare_image='ghcr.io/openclaw/openclaw-docker-e2e-bare:test'",
+        "-f docker_e2e_functional_image='ghcr.io/openclaw/openclaw-docker-e2e-functional:test'",
+        "-f shared_image_policy=existing-only",
+      ].join(" "),
     );
-    expect(registryCommand).toContain(
-      "docker_e2e_functional_image='ghcr.io/openclaw/openclaw-docker-e2e-functional:test'",
-    );
-    expect(registryCommand).toContain("shared_image_policy=existing-only");
-    expect(registryCommand).toContain("allow_unreleased_changelog=true");
     expectDeclaredDispatchInputs(registryCommand);
   });
 

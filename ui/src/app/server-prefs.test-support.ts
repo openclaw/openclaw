@@ -66,17 +66,6 @@ export function createServerPrefsWriter(
   return writer;
 }
 
-export function pinnedPage(keys: string[] = [], offset = 0, totalCount = offset + keys.length) {
-  const next = offset + keys.length;
-  return {
-    count: keys.length,
-    totalCount,
-    offset,
-    hasMore: next < totalCount,
-    nextOffset: next < totalCount ? next : null,
-    sessions: keys.map((key) => ({ key, pinned: true })),
-  };
-}
 export function createProfilePrefsServer(
   initial: Record<string, Record<string, unknown>> = {},
   scope = "ws://navigation",
@@ -91,9 +80,6 @@ export function createProfilePrefsServer(
         const entries = (profiles[profileId] ??= {});
         if (method === "users.prefs.get") {
           return { status: "ok", entries: structuredClone(entries) };
-        }
-        if (method === "sessions.list") {
-          return pinnedPage();
         }
         if (method !== "users.prefs.set") {
           throw new Error("unexpected global mutation: " + method);
@@ -118,7 +104,6 @@ export function createProfilePrefsServer(
         profileId,
         configObject: config,
         scope,
-        canWrite: true,
         onApplied: vi.fn(),
       });
     return { writer, request, refresh };

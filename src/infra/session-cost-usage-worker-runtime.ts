@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { setImmediate as yieldImmediate } from "node:timers/promises";
 import type { Transferable } from "node:worker_threads";
@@ -19,6 +18,10 @@ import {
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { readTranscriptStatsBatchFromDatabase } from "../config/sessions/session-accessor.sqlite-transcript-stats.js";
+import {
+  getSessionActorStorageBinding,
+  type SessionActorStorageBinding,
+} from "../config/sessions/session-actor-storage-binding.js";
 import { restoreSessionColdTranscript } from "../config/sessions/session-cold-storage.js";
 import { listDurableSqliteTargetPathsForSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
@@ -29,14 +32,11 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import type { OpenClawAgentDatabaseOptions } from "../state/openclaw-agent-db-contract.js";
-import { isOpenClawAgentDatabasePathCurrent } from "../state/openclaw-agent-db-identity.js";
 import {
   getOpenClawAgentDatabaseIfOpen,
   isIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
-  type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import type { OpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution-contract.js";
 import {
   hydrateOpenClawStateWorkerError,
   retainOpenClawStateWorkerErrorPayload,
@@ -53,6 +53,7 @@ import {
   captureUsageCostIncognitoBinding,
   type UsageCostIncognitoBinding,
 } from "./session-cost-usage-incognito.js";
+import { runSessionActorUsage } from "./session-cost-usage-memory.js";
 import {
   createUsageCostResolver,
   prepareUsageCostPricing,
@@ -81,6 +82,7 @@ export type PreparedUsageCostWorker = {
   agentDir: string;
   databases: Array<OpenClawAgentDatabaseOptions & { agentId: string; path: string }>;
   incognito?: UsageCostIncognitoBinding;
+  sessionActor?: SessionActorStorageBinding;
 };
 
 export function prepareUsageCostWorker(params: {
@@ -93,7 +95,28 @@ export function prepareUsageCostWorker(params: {
   sessionFiles?: readonly string[];
   env?: NodeJS.ProcessEnv;
   incognito?: UsageCostIncognitoBinding;
+  sessionActor?: SessionActorStorageBinding;
 }): PreparedUsageCostWorker {
+  const sessionActor = getSessionActorStorageBinding({
+    ...params,
+    storePath: params.storePath ?? params.databasePath,
+  });
+  if (sessionActor) {
+    const env = cloneEnvWithPlatformSemantics(params.env ?? process.env);
+    env.OPENCLAW_STATE_DIR = resolveStateDir(env);
+    return {
+      location: {
+        agentId: sessionActor.agentId,
+        databasePath: sessionActor.path,
+        storePath: sessionActor.path,
+        env: { ...env },
+      },
+      config: params.config,
+      agentDir: params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionActor.agentId),
+      databases: [],
+      sessionActor,
+    };
+  }
   const incognito = captureUsageCostIncognitoBinding(params);
   const agentId = normalizeAgentId(params.agentId);
   const env = cloneEnvWithPlatformSemantics(params.env ?? process.env);
@@ -217,6 +240,21 @@ export async function runUsageCostWorker(
   operation: UsageCostWorkerRequest,
   suppliedIncognito?: UsageCostIncognitoBinding,
 ): Promise<UsageCostWorkerResult | { kind: "busy" }> {
+  if (prepared.sessionActor) {
+    const pricing =
+      operation.kind === "refresh"
+        ? await prepareUsageCostPricing(prepared.config, prepared.agentDir)
+        : undefined;
+    const request: UsageCostWorkerOperation =
+      operation.kind === "refresh"
+        ? { ...operation, pricingFingerprint: pricing!.fingerprint() }
+        : operation;
+    return runSessionActorUsage(
+      prepared.sessionActor,
+      request,
+      createUsageCostResolver(prepared, pricing),
+    );
+  }
   const incognito = suppliedIncognito ?? prepared.incognito;
   if (!incognito) {
     return runPreparedUsageCostWorker(prepared, operation);
@@ -309,81 +347,12 @@ async function runPreparedUsageCostWorker(
         options,
         memory,
         database: memory && !incognito ? getOpenClawAgentDatabaseIfOpen(options) : undefined,
-        identity: memory
-          ? undefined
-          : fs.statSync(options.path, { bigint: true, throwIfNoEntry: false }),
       };
     });
-    const cacheBinding = bindings.find(
-      (binding) =>
-        binding.options.agentId === location.agentId &&
-        binding.options.path === location.databasePath,
-    );
-    if (!cacheBinding) {
-      throw new Error("Usage cache database has no captured owner");
-    }
-    const assertBindingCurrent = (
-      binding: (typeof bindings)[number],
-      admittedDatabase?: OpenClawAgentDatabase,
-      execution?: OpenClawAgentDatabaseExecution,
-      opening?: boolean,
-    ) => {
-      const admittedCache =
-        admittedDatabase &&
-        binding === cacheBinding &&
-        admittedDatabase.agentId === binding.options.agentId &&
-        admittedDatabase.path === binding.options.path &&
-        getOpenClawAgentDatabaseIfOpen(binding.options) === admittedDatabase &&
-        isOpenClawAgentDatabasePathCurrent(admittedDatabase);
-      if (incognito?.owns(binding.options.agentId, binding.options.path)) {
-        return;
-      }
-      if (binding.memory) {
-        const current = getOpenClawAgentDatabaseIfOpen(binding.options);
-        if (!binding.database && current && admittedCache) {
-          binding.database = current;
-        }
-        if (current !== binding.database || (binding.database && !binding.database.db.isOpen)) {
-          throw new Error("Usage memory database changed during worker operation");
-        }
-        return;
-      }
-      const current = fs.statSync(binding.options.path, { bigint: true, throwIfNoEntry: false });
-      const admittedFile =
-        binding === cacheBinding &&
-        execution?.agentId === binding.options.agentId &&
-        execution.path === binding.options.path &&
-        execution.fileIdentity?.physicalIdentity === (current && `${current.dev}:${current.ino}`);
-      if (!binding.identity && current && (admittedCache || admittedFile)) {
-        binding.identity = current;
-      }
-      if (!binding.identity && opening && execution && !execution.fileIdentity) {
-        execution.assertCurrent();
-        return;
-      }
-      if (
-        binding.identity
-          ? !current || current.dev !== binding.identity.dev || current.ino !== binding.identity.ino
-          : current !== undefined
-      ) {
-        throw new Error("Usage database changed during worker operation");
-      }
-    };
-    const assertCurrent = (
-      admittedDatabase?: OpenClawAgentDatabase,
-      execution?: OpenClawAgentDatabaseExecution,
-      opening?: boolean,
-    ) => {
+    const assertCurrent = () => {
       incognito?.assertCurrent();
       scope.assertCurrent();
       signal?.throwIfAborted();
-      for (const binding of bindings) {
-        if (binding !== cacheBinding) {
-          assertBindingCurrent(binding);
-        }
-      }
-      // Only the lock owner's admitted writer may create a previously absent cache.
-      assertBindingCurrent(cacheBinding, admittedDatabase, execution, opening);
     };
     const resolveBinding = (
       target: Pick<SqliteSessionFileMarker, "agentId" | "storePath">,
@@ -399,6 +368,9 @@ async function runPreparedUsageCostWorker(
       }
       if (memoryOnly && !binding.memory) {
         throw new Error("Usage worker requested an unowned memory database");
+      }
+      if (binding.memory && !incognito) {
+        binding.database ??= getOpenClawAgentDatabaseIfOpen(binding.options);
       }
       return binding;
     };

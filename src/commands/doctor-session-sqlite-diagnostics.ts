@@ -51,7 +51,7 @@ export function appendRetainedPluginSessionSourceIssue(
     : "await archival. Run openclaw doctor --fix to finish.";
   report.issues.push({
     code: "plugin_migration_source_retained",
-    message: `Canonical session import is verified. Original session migration inputs, including unindexed history, ${pending}`,
+    message: `Session import is verified. Original session migration inputs, including unindexed history, ${pending}`,
   });
 }
 
