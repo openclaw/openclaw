@@ -161,6 +161,11 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
         );
         const guards: Array<() => void> = [];
         const result = operation(draft, guards, prepared);
+        if (draft.dirtySources.size === 0) {
+          // No durable effect needs commit admission; publish maintenance bookkeeping in this turn.
+          state = prepared.publish(expectedHead);
+          return result;
+        }
         const profiles = readUserProfileVersion();
         const access = readGatewayAccessRevision();
         const sessions = sessionRevision;
