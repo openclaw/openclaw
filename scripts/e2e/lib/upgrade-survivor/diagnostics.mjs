@@ -109,6 +109,12 @@ const logNames = [
   "update-report-pending-status.err",
   "update-report-retry.output.log",
   "update-report-pending.output.log",
+  "update-recovery-crashing-candidate.json",
+  "update-recovery-crash-update.log",
+  "update-recovery-crash-update.err",
+  "update-recovery-crash-status.log",
+  "update-recovery-crash-status.err",
+  "update-recovery-crash-report.md",
   "workshop-published-refusal.json",
   "workshop-baseline-doctor.json",
   "workshop-recovered-upgrade.json",
@@ -1861,6 +1867,14 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
               "update-report-pending-status.log",
               "update-report-retry.gh.jsonl",
               "update-report-pending.gh.jsonl",
+            ]
+          : []),
+        ...(snapshot.scenario === "update-recovery-crashing-candidate"
+          ? [
+              "update-recovery-crashing-candidate.json",
+              "update-recovery-crash-update.log",
+              "update-recovery-crash-status.log",
+              "update-recovery-crash-report.md",
             ]
           : []),
         ...(snapshot.scenario === "dreaming-cron-doctor" ? ["dreaming-cron-proof.json"] : []),

@@ -2437,6 +2437,33 @@ if [ "$SCENARIO" = "update-report-recovery" ]; then
   echo "Update report recovery passed: published updater installed the candidate; rejected uploads retry and uncertain uploads only reconcile."
   exit 0
 fi
+if [ "$SCENARIO" = "update-recovery-crashing-candidate" ]; then
+  if [ "$baseline_spec" != "openclaw@2026.9.6" ] || [ "$CANDIDATE_KIND" != "tarball" ] ||
+    [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_ENABLED" != "0" ]; then
+    echo "update-recovery-crashing-candidate requires published openclaw@2026.9.6, a candidate tarball, isolated manual restart, and no live provider" >&2
+    exit 2
+  fi
+  export OPENCLAW_E2E_COMMAND_TIMEOUT="$COMMAND_TIMEOUT"
+  phase configure-crash-baseline openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw config set gateway.mode local
+  phase validate-crash-baseline validate_baseline_config
+  phase resolve-crash-candidate resolve_candidate_version
+  phase capture-crash-candidate node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs candidate "$(package_root)" "${CANDIDATE_SPEC#file:}"
+  phase update-crash-candidate update_candidate
+  if [ "$update_outcome" != "success" ] || [ "$update_repair_required" != "0" ]; then
+    echo "update-recovery-crashing-candidate requires successful original-driver replacement without follow-up repair" >&2
+    exit 1
+  fi
+  phase assert-crash-installed-package node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs installed "$(package_root)" "${CANDIDATE_SPEC#file:}"
+  # The candidate's own updater, not the published driver, renders the failure report.
+  phase crash-gateway-start start_gateway
+  phase crash-gateway-probes check_gateway_probes
+  phase prove-crash-recovery node scripts/e2e/lib/upgrade-survivor/update-recovery-crashing-candidate.mjs "$(package_root)" "${CANDIDATE_SPEC#file:}"
+  phase crash-gateway-still-serving check_gateway_probes
+  phase crash-gateway-stop stop_gateway
+  run_completed="1"
+  echo "Update recovery crashing candidate passed: a rejected candidate left the verified Gateway serving, and the report kept restart unsafe."
+  exit 0
+fi
 if [ "$SCENARIO" = "workshop-doctor-recovery" ]; then
   if [ "$baseline_spec" != "openclaw@2026.9.4" ]; then
     echo "workshop-doctor-recovery requires the exact published openclaw@2026.9.4 baseline" >&2

@@ -773,6 +773,7 @@ export function requiredPrepublishPluginPackagesForLanes(
       scenario === "projects-startup-migration" ||
       scenario === "workshop-doctor-recovery" ||
       scenario === "update-report-recovery" ||
+      scenario === "update-recovery-crashing-candidate" ||
       scenario === "dreaming-cron-doctor"
     ) {
       continue;
