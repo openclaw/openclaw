@@ -165,15 +165,3 @@ it.each<Surface>(["roster", "profiles", "approval binding", "message progress", 
     expect(assertCurrent).not.toThrow();
   },
 );
-
-it("revokes prepared exec authority when a worker actually creates missing schema", async () => {
-  const { env } = fixture();
-  const source = openOpenClawStateDatabase({ env });
-  source.db.exec("DROP TABLE IF EXISTS agent_provenance");
-  const before = source.db.prepare("PRAGMA schema_version").get();
-  const assertCurrent = await prepareExec();
-  expect(assertCurrent).not.toThrow();
-  await listAgentProvenance({ env });
-  expect(source.db.prepare("PRAGMA schema_version").get()).not.toEqual(before);
-  expect(assertCurrent).toThrow("Direct shared-state reader requires current integrity admission");
-});

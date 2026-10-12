@@ -379,9 +379,6 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
 
     let runFailure: Error | undefined;
     try {
-      if (params.signal?.aborted) {
-        throw toWorkerAgentError(params.signal.reason, "Worker agent turn aborted.");
-      }
       const content =
         typeof params.prompt === "string"
           ? [{ type: "text" as const, text: params.prompt }]
@@ -395,7 +392,10 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
       }
       const fragments = params.runtimeContext
         ? [
-            ...buildExecutionHostRuntimeFacts({ ...params, capabilityToolNames: activeToolNames }),
+            ...(await buildExecutionHostRuntimeFacts({
+              ...params,
+              capabilityToolNames: activeToolNames,
+            })),
             ...params.runtimeContext,
           ]
         : [];
@@ -404,6 +404,9 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
         fragments,
         params.inHistorySystemUpdates,
       );
+      if (params.signal?.aborted) {
+        throw toWorkerAgentError(params.signal.reason, "Worker agent turn aborted.");
+      }
       await session.agent.prompt([
         { role: "user", content, timestamp: Date.now() },
         ...(runtimeContext ? [runtimeContext] : []),

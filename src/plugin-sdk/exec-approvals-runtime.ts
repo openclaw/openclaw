@@ -6,7 +6,7 @@ import {
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 
 /** @deprecated Await loadExecApprovalsReadOnlyAsync; removed in the next Plugin SDK major. */
-export function loadExecApprovals() {
+function loadExecApprovalsDeprecated() {
   warnPluginSdkDeprecation({
     family: "exec-approvals-sync-read",
     method: "loadExecApprovals",
@@ -16,7 +16,7 @@ export function loadExecApprovals() {
 }
 
 /** @deprecated Await readExecApprovalsSnapshotAsync; removed in the next Plugin SDK major. */
-export function readExecApprovalsSnapshot() {
+function readExecApprovalsSnapshotDeprecated() {
   warnPluginSdkDeprecation({
     family: "exec-approvals-sync-read",
     method: "readExecApprovalsSnapshot",
@@ -24,6 +24,11 @@ export function readExecApprovalsSnapshot() {
   });
   return readExecApprovalsSnapshotSync();
 }
+
+export {
+  loadExecApprovalsDeprecated as loadExecApprovals,
+  readExecApprovalsSnapshotDeprecated as readExecApprovalsSnapshot,
+};
 
 export {
   loadExecApprovalsReadOnlyAsync,

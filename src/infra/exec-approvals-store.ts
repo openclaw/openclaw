@@ -288,7 +288,7 @@ export async function prepareExecApprovalsCurrentRead(
 ): Promise<() => ExecApprovalsFile> {
   const policy = retainExecApprovalsCurrentRead(context);
   policy.seed((await readExecApprovalsSnapshotAsync(context)).file);
-  return policy.read;
+  return () => policy.read();
 }
 
 /** Capture the policy owner before yielding; reads never initialize or migrate state. */
@@ -558,6 +558,7 @@ function enqueueExecAuthorization(
               item.resolve({
                 snapshot: result.snapshot,
                 readCurrent: () => {
+                  item.signal?.throwIfAborted();
                   item.assertCurrent?.();
                   return item.policy.read();
                 },
