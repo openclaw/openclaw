@@ -2,7 +2,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, expect, it } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
-import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { seedUnindexedTranscriptForTest } from "../../config/sessions/session-accessor.sqlite-import.test-support.js";
 import { replaceTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
@@ -29,7 +29,7 @@ async function createSessionScope(sessionId: string) {
     sessionKey: `agent:main:${sessionId}`,
     storePath: path.join(dir, "sessions.json"),
   };
-  replaceSessionEntrySync(scope, { sessionId, updatedAt: 1 });
+  await upsertSessionEntryCore(scope, { sessionId, updatedAt: 1 });
   return { dir, scope };
 }
 
