@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/io.js";
 import { updateSessionEntry } from "../config/sessions/session-accessor.entry-mutation.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { recordSessionParticipant as recordNativeParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
@@ -129,6 +130,7 @@ it("reuses placement after runtime events and entry writes and refreshes actual 
         defaults: { model: "unit-test/model", utilityModel: "" },
       },
     };
+    setRuntimeConfigSnapshot(cfg);
     const target = {
       agentId: "main",
       sessionKey: "agent:main:entry-placement",

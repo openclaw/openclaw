@@ -18,6 +18,7 @@ import {
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
 import { runHttpConnectionRequest } from "../infra/http-request-lifecycle.js";
+import { runWithMainThreadTask } from "../infra/main-thread-stall.js";
 import { readTailscaleWhoisIdentity } from "../infra/tailscale.js";
 import { parseDevicePairingJoinRequestPath } from "../pairing/join-code.js";
 import { getWebhookLegacyListener } from "../plugins/http-legacy-listener.js";
@@ -25,9 +26,12 @@ import { NODE_WORKER_BUNDLE_TRANSFER_PATH } from "../worker/node-bundle-install-
 import { resolveAssistantAgentId } from "./assistant-identity.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { parseControlUiUserAvatarPath, parseControlUiResourcePath } from "./control-ui-contract.js";
+import { parseControlUiResourcePath } from "./control-ui-contract.js";
 import { respondNotFound, respondPlainText } from "./control-ui-http-utils.js";
-import { CONTROL_UI_IMAGE_HTTP_ROUTES } from "./control-ui-image-http-routes.js";
+import {
+  CONTROL_UI_IMAGE_HTTP_ROUTES,
+  CONTROL_UI_USER_IMAGE_HTTP_ROUTES,
+} from "./control-ui-image-http-routes.js";
 import { controlUiPluginAssetRoot } from "./control-ui-plugin-assets-contract.js";
 import { resolveAssistantMediaRoutePath } from "./control-ui-resource-routes.js";
 import {
@@ -87,7 +91,6 @@ import {
   getSessionHistoryHttpModule,
   getSessionKillHttpModule,
   getToolsInvokeHttpModule,
-  getUserProfilesHttpModule,
   getDevicePairingJoinHttpModule,
   getPluginNodeCapabilityAuthModule,
   getHttpAuthUtilsModule,
@@ -189,7 +192,7 @@ export function createGatewayHttpServer(opts: {
     markGatewayIngressTransport(req, opts.ingressTransport ?? { kind: "ordinary" });
     void runGatewayHttpRequest(req, res, opts.httpRequestLifetime, () =>
       runWithDiagnosticTraceContext(createDiagnosticTraceContext(), () =>
-        handleRequest(req, res, expectation),
+        runWithMainThreadTask("gateway:http", () => handleRequest(req, res, expectation)),
       ),
     ).catch((error: unknown) => {
       console.error("[gateway-http] failed to finalize request:", error);
@@ -528,18 +531,14 @@ export function createGatewayHttpServer(opts: {
           await getControlUiPluginAssetsModule()
         ).handleControlUiPluginAssetRequest(req, res, controlUiRouteOptions);
       });
-      const userProfileAvatarRoute = parseControlUiUserAvatarPath(
-        scopedRequestPath,
-        controlUiRouteBasePath,
-      );
-      addAdmittedStage(userProfileAvatarRoute.matched, async () =>
-        (await getUserProfilesHttpModule()).handleUserProfileAvatarHttpRequest(
-          req,
-          res,
-          scopedRequestPath,
-          { ...routeAuth, basePath: controlUiRouteBasePath },
-        ),
-      );
+      for (const [parse, loadHandler] of CONTROL_UI_USER_IMAGE_HTTP_ROUTES) {
+        addAdmittedStage(parse(scopedRequestPath, controlUiRouteBasePath).matched, async () =>
+          (await loadHandler())(req, res, scopedRequestPath, {
+            ...routeAuth,
+            basePath: controlUiRouteBasePath,
+          }),
+        );
+      }
       addAdmittedStage(openResponsesEnabled && scopedRequestPath === "/v1/responses", async () =>
         (await getOpenResponsesHttpModule()).handleOpenResponsesHttpRequest(req, res, {
           ...operatorAuth(),

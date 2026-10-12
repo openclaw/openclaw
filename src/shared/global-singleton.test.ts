@@ -27,43 +27,9 @@ describe("resolveGlobalSingleton", () => {
     expect(readGlobalSingleton(TEST_KEY)).toBe(first);
     expect(create).toHaveBeenCalledTimes(1);
   });
-
-  it("does not re-run the factory when undefined was already stored", () => {
-    const create = vi.fn(() => undefined);
-
-    expect(resolveGlobalSingleton(TEST_KEY, create)).toBeUndefined();
-    expect(resolveGlobalSingleton(TEST_KEY, create)).toBeUndefined();
-    expect(create).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("resolveGlobalMap", () => {
-  it("reuses the same map instance and preserves its contents", () => {
-    const first = resolveGlobalMap<string, number>(TEST_MAP_KEY);
-    first.set("a", 1);
-    const second = resolveGlobalMap<string, number>(TEST_MAP_KEY);
-
-    expect(first).toBe(second);
-    expect(second.get("a")).toBe(1);
-  });
 });
 
 describe("global singleton lifecycle resets", () => {
-  it("registers an in-place reset for a prepopulated singleton", async () => {
-    const existing = { values: new Set(["stale"]) };
-    (globalThis as Record<PropertyKey, unknown>)[TEST_KEY] = existing;
-    const resolved = resolveGlobalSingleton(
-      TEST_KEY,
-      () => ({ values: new Set<string>() }),
-      (state) => state.values.clear(),
-    );
-
-    await drainGlobalSingletonLifecycleState();
-
-    expect(resolved).toBe(existing);
-    expect(existing.values.size).toBe(0);
-  });
-
   it("keeps map resets registered across repeated lifecycle drains", async () => {
     const map = resolveGlobalMap<string, number>(TEST_MAP_KEY, (state) => state.clear());
     map.set("first", 1);

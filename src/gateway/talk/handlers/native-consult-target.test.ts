@@ -9,6 +9,7 @@ import {
 import { testing as embeddedRunTesting } from "../../../agents/embedded-agent-runner/runs.test-support.js";
 import { REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS } from "../../../agents/realtime-bootstrap-context.test-support.js";
 import { replyRunRegistry } from "../../../auto-reply/reply/reply-run-registry.js";
+import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import {
   listSessionEntriesReadOnly,
   loadSessionEntry,
@@ -84,8 +85,9 @@ vi.mock("../../../agents/embedded-agent.js", () => ({ runEmbeddedAgent: mocks.ru
 vi.mock("../../../agents/bootstrap-files.js", () => ({
   resolveBootstrapFilesForRun: async () => [],
 }));
+// mock-isolation: Keep provider registration and credential state outside handler tests.
 vi.mock("../../../talk/provider-resolver.js", () => ({
-  resolveConfiguredRealtimeVoiceProvider: mocks.resolveProvider,
+  resolveConfiguredRealtimeVoiceProviderAsync: mocks.resolveProvider,
 }));
 vi.mock("../../../talk/provider-registry.js", () => ({ listRealtimeVoiceProviders: () => [] }));
 
@@ -143,6 +145,7 @@ beforeEach(async () => {
     },
     talk: { agentId: "voice" },
   };
+  setRuntimeConfigSnapshot(config);
   client = {
     ...sharingPolicyClient({ user: ensureProfileForEmail("native-listener@example.test").id }),
     connId: "native-consult-client",
@@ -273,6 +276,7 @@ it.each([undefined, "main"])(
       },
     );
     config = { ...config, talk: { agentId: "primary" } };
+    setRuntimeConfigSnapshot(config);
     expect(
       await dispatch("talk.session.steer", {
         sessionId,
@@ -330,6 +334,7 @@ it.each([undefined, "main"])(
 it("rejects retained relay mapping changes even when the physical store is unchanged", async () => {
   const { sessionId } = await createRelayCall();
   config = { ...config, session: { mainKey: "home" } };
+  setRuntimeConfigSnapshot(config);
   expect(
     await dispatch("talk.session.steer", { sessionId, text: "status", mode: "status" }),
   ).toHaveBeenCalledWith(

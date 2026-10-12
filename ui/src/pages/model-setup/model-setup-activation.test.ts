@@ -21,6 +21,7 @@ import {
   waitForModelSetupDetection,
 } from "./model-setup-first-run.test-support.ts";
 import { MODEL_SETUP_AUTH_START_TIMEOUT_MS } from "./state.ts";
+import { unmountModelSetupPage } from "./test-helpers/solid-page.test-support.tsx";
 
 describe("ModelSetupPage first-run activation ownership", () => {
   beforeEach(async () => {
@@ -497,6 +498,7 @@ describe("ModelSetupPage first-run activation ownership", () => {
         next.request.mockImplementation(respond);
       }
       if (replacement !== "same page") {
+        unmountModelSetupPage(page);
         page.remove();
         ({ page } = await mountPage(next.context, {
           state: { phase: "ready", result },
@@ -930,6 +932,7 @@ describe("ModelSetupPage first-run activation ownership", () => {
         await page.updateComplete;
         publishGatewaySnapshot({ ...snapshot, hello: { ...snapshot.hello } });
       } else if (lifecycle === "unmount") {
+        unmountModelSetupPage(page);
         page.remove();
       }
       await page.updateComplete;

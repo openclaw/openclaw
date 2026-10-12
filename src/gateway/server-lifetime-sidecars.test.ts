@@ -6,6 +6,10 @@ import { MessageChannel, Worker } from "node:worker_threads";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import {
   getProcessCleanupBudget,
@@ -47,6 +51,11 @@ vi.mock("./github-oauth-lifecycle.js", () => ({
   installActiveGitHubOAuthLifecycle: oauth.install,
 }));
 
+// mock-isolation: Prevent unrelated backfill; real lifetime/worker proof covers publication.
+vi.mock("./session-cost-usage-lifetime.js", () => ({
+  startSessionCostUsageProjectionLifetime: () => ({ stop: async () => {} }),
+}));
+
 const roots: string[] = [];
 
 function createStateDir(): string {
@@ -77,6 +86,7 @@ afterEach(async () => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   await closeOpenClawStateDatabaseAsync();
+  clearRuntimeConfigSnapshot();
   for (const root of roots.splice(0)) {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -256,9 +266,11 @@ describe("gateway lifetime sidecars", () => {
   });
 
   test("joins session events admitted after the initial sidecar drain", async () => {
+    const cfg = {};
+    setRuntimeConfigSnapshot(cfg);
     const sessionKey = "agent:main:late";
     const projection = createSessionRowProjectionFixture({
-      cfg: {},
+      cfg,
       agentId: "main",
       store: { [sessionKey]: { sessionId: "late", updatedAt: 1 } },
     });
@@ -266,7 +278,7 @@ describe("gateway lifetime sidecars", () => {
     const context = {
       broadcastToConnIds: vi.fn(),
       chatAbortControllers: new Map(),
-      getRuntimeConfig: () => ({}),
+      getRuntimeConfig: () => cfg,
       getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
       ...bindSessionRowProjection({}, () => projection),
     } as unknown as GatewayRequestContext;

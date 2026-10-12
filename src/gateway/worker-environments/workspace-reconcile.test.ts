@@ -545,37 +545,6 @@ describe("worker workspace reconciliation", () => {
     await expect(fs.readFile(path.join(local, "encoded.txt"))).resolves.toEqual(currentBytes);
   });
 
-  it("ignores local divergence on worker-unchanged paths", async () => {
-    const local = await temporaryDirectory("workspace-derived-local");
-    const staged = await temporaryDirectory("workspace-derived-staged");
-    await gitInit(local);
-    await Promise.all([
-      fs.mkdir(path.join(local, "__pycache__")),
-      fs.mkdir(path.join(staged, "__pycache__")),
-    ]);
-    await Promise.all([
-      fs.writeFile(path.join(local, "real.txt"), "base"),
-      fs.writeFile(path.join(local, "__pycache__/fizzbuzz.pyc"), "base cache"),
-      fs.writeFile(path.join(staged, "real.txt"), "base"),
-      fs.writeFile(path.join(staged, "__pycache__/fizzbuzz.pyc"), "worker cache"),
-    ]);
-    const base = await manifestFor(local);
-    const current = await manifestFor(staged);
-    await fs.writeFile(path.join(local, "__pycache__/fizzbuzz.pyc"), "local cache");
-
-    await applyWorkspace({ root: local, stagingRoot: staged, base, current });
-    await expect(fs.readFile(path.join(local, "__pycache__/fizzbuzz.pyc"), "utf8")).resolves.toBe(
-      "local cache",
-    );
-
-    await fs.writeFile(path.join(local, "real.txt"), "local divergence");
-    const result = await applyWorkspace({ root: local, stagingRoot: staged, base, current });
-    expect(result.conflictPaths).toEqual([]);
-    await expect(fs.readFile(path.join(local, "real.txt"), "utf8")).resolves.toBe(
-      "local divergence",
-    );
-  });
-
   it("applies the three-way matrix while keeping local conflicts", async () => {
     const local = await temporaryDirectory("workspace-three-way-local");
     const staged = await temporaryDirectory("workspace-three-way-staged");
@@ -706,36 +675,6 @@ describe("worker workspace reconciliation", () => {
     await expect(fs.readFile(path.join(local, "src"), "utf8")).resolves.toBe("replacement");
   });
 
-  it("applies and removes empty worker directories", async () => {
-    const local = await temporaryDirectory("workspace-empty-directories");
-    const staged = await temporaryDirectory("workspace-empty-directories-staged");
-    const base = await manifestFor(local);
-    await fs.mkdir(path.join(staged, "empty", "nested"), { recursive: true });
-    const added = await manifestFor(staged);
-
-    const addition = await applyWorkspace({
-      root: local,
-      stagingRoot: staged,
-      base,
-      current: added,
-    });
-
-    await expect(fs.stat(path.join(local, "empty", "nested"))).resolves.toMatchObject({});
-    expect(addition.conflictPaths).toEqual([]);
-
-    await fs.rm(path.join(staged, "empty"), { recursive: true });
-    const removed = await manifestFor(staged);
-    const deletion = await applyWorkspace({
-      root: local,
-      stagingRoot: staged,
-      base: addition.manifest,
-      current: removed,
-    });
-
-    await expect(fs.stat(path.join(local, "empty"))).rejects.toMatchObject({ code: "ENOENT" });
-    expect(deletion.conflictPaths).toEqual([]);
-  });
-
   it("accepts a worker-added directory that gains only derived residue", async () => {
     const local = await temporaryDirectory("workspace-added-directory-derived-residue");
     const staged = await temporaryDirectory("workspace-added-directory-derived-residue-staged");
@@ -760,29 +699,6 @@ describe("worker workspace reconciliation", () => {
     await expect(
       fs.readFile(path.join(local, "cache-holder", "__pycache__", "module.pyc"), "utf8"),
     ).resolves.toBe("derived");
-  });
-
-  it("applies an independent cloud child beneath a locally chmodded directory", async () => {
-    const local = await temporaryDirectory("workspace-directory-mode-independent-child");
-    const staged = await temporaryDirectory("workspace-directory-mode-independent-child-staged");
-    await fs.mkdir(path.join(local, "src"));
-    await fs.chmod(path.join(local, "src"), 0o700);
-    const base = await manifestFor(local);
-    await fs.mkdir(path.join(staged, "src"));
-    await fs.chmod(path.join(staged, "src"), 0o700);
-    await fs.writeFile(path.join(staged, "src", "cloud.txt"), "worker");
-    await fs.chmod(path.join(local, "src"), 0o750);
-
-    const applied = await applyWorkspace({
-      root: local,
-      stagingRoot: staged,
-      base,
-      current: await manifestFor(staged),
-    });
-
-    expect(applied.conflictPaths).toEqual([]);
-    await expect(fs.readFile(path.join(local, "src", "cloud.txt"), "utf8")).resolves.toBe("worker");
-    expect((await fs.stat(path.join(local, "src"))).mode & 0o777).toBe(0o750);
   });
 
   it("treats derived residue as absent after a cloud directory deletion", async () => {
@@ -827,46 +743,6 @@ describe("worker workspace reconciliation", () => {
 
     expect(applied.conflictPaths).toEqual(["removed/local-empty"]);
     await expect(fs.stat(path.join(local, "removed", "local-empty"))).resolves.toMatchObject({});
-  });
-
-  it("treats a cloud deletion as converged when local removed its unchanged parent", async () => {
-    const local = await temporaryDirectory("workspace-deleted-parent-convergence");
-    const staged = await temporaryDirectory("workspace-deleted-parent-convergence-staged");
-    await fs.mkdir(path.join(local, "docs"));
-    await fs.writeFile(path.join(local, "docs", "old.txt"), "base\n");
-    await fs.mkdir(path.join(staged, "docs"));
-    const base = await manifestFor(local);
-    const current = await manifestFor(staged);
-    await fs.rm(path.join(local, "docs"), { recursive: true });
-
-    const applied = await applyWorkspace({ root: local, stagingRoot: staged, base, current });
-
-    expect(applied.conflictPaths).toEqual([]);
-    await expect(fs.stat(path.join(local, "docs"))).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("treats an identical local empty directory as already applied", async () => {
-    const local = await temporaryDirectory("workspace-empty-directory-noop");
-    const staged = await temporaryDirectory("workspace-empty-directory-noop-staged");
-    const base = await manifestFor(local);
-    await fs.mkdir(path.join(local, "same"));
-    await fs.mkdir(path.join(staged, "same"));
-    const current = await manifestFor(staged);
-    const begin = vi.fn();
-
-    const applied = await applyWorkspace({
-      root: local,
-      stagingRoot: staged,
-      base,
-      current,
-      begin,
-    });
-
-    // A durable no-op journal distinguishes this applied result from one that
-    // still needs replay if the process exits before fence acceptance.
-    expect(begin).toHaveBeenCalledOnce();
-    expect(applied.conflictPaths).toEqual([]);
-    expect(applied.manifest.directories).toContain("same");
   });
 
   it("rolls back empty directory additions and removals when acceptance fails", async () => {

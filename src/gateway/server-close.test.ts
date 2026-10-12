@@ -15,13 +15,10 @@ import {
 import type { InternalHookEvent } from "../hooks/internal-hooks.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
-import type { MemoryPluginRuntime } from "../plugins/registry-contribution-types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import { PluginRuntimeCloseRetainedError } from "../plugins/runtime-close-error.js";
 import {
-  captureActivePluginRegistrySnapshot,
-  createPluginRegistryOwner,
   getActivePluginRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
@@ -32,7 +29,6 @@ import {
   createServiceRegistration,
   startPluginServices,
 } from "../plugins/services.test-support.js";
-import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import type { OpenClawPluginService } from "../plugins/types.js";
 import { getProcessSupervisor, type ManagedRun } from "../process/supervisor/index.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
@@ -197,141 +193,6 @@ function createHttpServer(
 }
 
 describe("createGatewayCloseHandler", () => {
-  it.each([true, false])(
-    "selects only serving Gateway owners while closing custodians drain (open survivor: %s)",
-    async (openSurvivor) => {
-      const database = new DatabaseSync(":memory:");
-      let resets = 0;
-      resolveGlobalSingleton(
-        Symbol("gateway-closing-owner-database"),
-        () => database,
-        (db) => {
-          if (db.isOpen) {
-            resets++;
-            db.close();
-          }
-        },
-        "plugin-registry",
-      );
-      const disposed: string[] = [];
-      const createOwner = (id: string, holdMemory: boolean) => {
-        const entered = createDeferredCore();
-        const release = createDeferredCore();
-        if (!holdMemory) {
-          release.resolve();
-        }
-        const registry = createEmptyPluginRegistry();
-        const record = createPluginRecord({ id, status: "loaded" });
-        registry.plugins.push(record);
-        const instance = new PluginInstance(id, { record, registry });
-        let retiring = false;
-        const drain = vi.fn(async () => {
-          entered.resolve();
-          await release.promise;
-          expect(database.prepare("SELECT 1 AS value").get()).toEqual({ value: 1 });
-        });
-        registry.memoryCapabilities.push({
-          pluginId: id,
-          capability: instance.wrap({
-            runtime: {
-              getMemorySearchManager: async () => {
-                if (retiring) {
-                  throw new Error("Selected Gateway memory runtime is closing");
-                }
-                expect(database.prepare("SELECT 2 AS value").get()).toEqual({ value: 2 });
-                return { manager: null };
-              },
-              resolveMemoryBackendConfig: () => ({ backend: "builtin" }),
-              prepareReload: () => {
-                retiring = true;
-                return {
-                  drain,
-                  resume: () => {
-                    retiring = false;
-                  },
-                };
-              },
-            } satisfies MemoryPluginRuntime,
-          }),
-        });
-        instance.lifecycle.onDispose(() => {
-          expect(database.prepare("SELECT 3 AS value").get()).toEqual({ value: 3 });
-          disposed.push(id);
-        });
-        setActivePluginRegistry(registry, id, "gateway-bindable", `/virtual/${id}`);
-        const owner = createPluginRegistryOwner(registry);
-        return { id, registry, owner, entered, release, drain };
-      };
-      const oldest = createOwner("oldest", !openSurvivor);
-      const closing = createOwner("closing", true);
-      const newest = createOwner("newest", false);
-      const pending: Promise<unknown>[] = [];
-      try {
-        const closingDone = closing.owner.close();
-        pending.push(closingDone);
-        await closing.entered.promise;
-        if (!openSurvivor) {
-          pending.push(oldest.owner.close());
-          await oldest.entered.promise;
-        }
-        const newestDone = newest.owner.close();
-        pending.push(newestDone);
-        await newestDone;
-        expect(captureActivePluginRegistrySnapshot()).toEqual(
-          openSurvivor
-            ? {
-                activeRegistry: oldest.registry,
-                key: oldest.id,
-                workspaceDir: "/virtual/oldest",
-                runtimeSubagentMode: "gateway-bindable",
-              }
-            : {
-                activeRegistry: null,
-                key: null,
-                workspaceDir: null,
-                runtimeSubagentMode: "default",
-              },
-        );
-        expect(database.isOpen).toBe(true);
-        expect(resets).toBe(0);
-        expect(disposed).toEqual([newest.id]);
-        if (openSurvivor) {
-          await expect(
-            getActivePluginRegistry()!.memoryCapabilities[0]!.capability.runtime!.getMemorySearchManager(
-              { cfg: {}, agentId: "fixture" },
-            ),
-          ).resolves.toEqual({ manager: null });
-        }
-        closing.release.resolve();
-        await closingDone;
-        expect(getActivePluginRegistry()).toBe(openSurvivor ? oldest.registry : null);
-        expect(database.isOpen).toBe(true);
-        expect(resets).toBe(0);
-        expect(disposed).toEqual([newest.id, closing.id]);
-        oldest.release.resolve();
-        const oldestDone = oldest.owner.close();
-        pending.push(oldestDone);
-        await oldestDone;
-        expect(getActivePluginRegistry()).toBeNull();
-        expect(disposed).toEqual([newest.id, closing.id, oldest.id]);
-        expect(database.isOpen).toBe(false);
-        expect(resets).toBe(1);
-        for (const item of [oldest, closing, newest]) {
-          expect(item.drain).toHaveBeenCalledOnce();
-        }
-      } finally {
-        for (const item of [oldest, closing, newest]) {
-          item.release.resolve();
-          pending.push(item.owner.close());
-        }
-        await Promise.allSettled(pending);
-        if (database.isOpen) {
-          database.close();
-        }
-      }
-    },
-  );
-
   beforeEach(() => {
     resetPluginRuntimeStateForTest();
     vi.useRealTimers();

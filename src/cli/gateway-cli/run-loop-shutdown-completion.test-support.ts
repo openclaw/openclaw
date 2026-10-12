@@ -133,7 +133,10 @@ export function registerGracefulGatewayShutdownTests({
       const closed = createDeferredCore();
       try {
         await withIsolatedSignals(async ({ captureSignal }) => {
-          const { close, runtime, exited, start } = await createSignaledLoopHarness();
+          const { close, runtime, exited, start } = await createSignaledLoopHarness(
+            undefined,
+            true,
+          );
           close.mockImplementationOnce(async () => {
             closing.resolve();
             await closed.promise;
@@ -206,7 +209,10 @@ export function registerGracefulGatewayShutdownTests({
         let finishLoop: Promise<number> | undefined;
         try {
           await withIsolatedSignals(async ({ captureSignal }) => {
-            const { close, runtime, exited, start } = await createSignaledLoopHarness();
+            const { close, runtime, exited, start } = await createSignaledLoopHarness(
+              undefined,
+              true,
+            );
             finishLoop = exited;
             if (restart) {
               const restarted = createDeferredCore();
@@ -380,6 +386,8 @@ export function registerShutdownCompletionTests({
           expect(stopManagedProviderLocalServices).toHaveBeenCalledOnce();
           expect(runtime.exit).not.toHaveBeenCalled();
           await vi.advanceTimersByTimeAsync(1);
+          expect(runtime.exit).not.toHaveBeenCalled();
+          await vi.advanceTimersByTimeAsync(2_000);
           expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
           if (closeFails) {
             expect(writeDiagnosticStabilityBundleForFailureSync).toHaveBeenLastCalledWith(
@@ -416,7 +424,8 @@ export function registerShutdownCompletionTests({
         .mockResolvedValue("restored-in-process");
       commitManagedServiceUpdateHandoff.mockResolvedValueOnce(restoreCommitted);
       await withShutdownClock(async ({ captureSignal, close, start, runtime }) => {
-        close.mockReturnValue(new Promise<void>(() => {}));
+        const cleanup = createDeferredCore();
+        close.mockReturnValue(cleanup.promise);
         captureSignal("SIGUSR2")();
         await vi.advanceTimersByTimeAsync(9_999);
         expect(requestManagedServiceUpdateHandoffPark).toHaveBeenCalledWith(
@@ -425,6 +434,9 @@ export function registerShutdownCompletionTests({
         expect(close).toHaveBeenCalledOnce();
         expect(runtime.exit).not.toHaveBeenCalled();
         await vi.advanceTimersByTimeAsync(1);
+        expect(runtime.exit).not.toHaveBeenCalled();
+        cleanup.resolve();
+        await vi.advanceTimersByTimeAsync(0);
         expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(0);
         expect(start).toHaveBeenCalledOnce();
         expect(commitManagedServiceUpdateHandoff).toHaveBeenCalledWith(
@@ -440,77 +452,51 @@ export function registerShutdownCompletionTests({
   );
 
   it.each([{ signal: "SIGUSR2", timeoutMs: 1_000 }] as const)(
-    "bounds the file-log flush before a $signal exit",
+    "warns but joins the file-log flush before a $signal exit",
     async ({ signal, timeoutMs }) => {
       await withShutdownClock(async ({ captureSignal, close, runtime, exited }) => {
         if (signal === "SIGUSR2") {
           close.mockRejectedValueOnce(new Error("close owner failed"));
         }
-        flushLogger.mockReturnValueOnce(new Promise<void>(() => {}));
-        captureSignal(signal)();
-        await vi.advanceTimersByTimeAsync(timeoutMs - 1);
-        expect(runtime.exit).not.toHaveBeenCalled();
-        await vi.advanceTimersByTimeAsync(1);
+        const flushed = createDeferredCore();
+        flushLogger.mockReturnValueOnce(flushed.promise);
+        try {
+          captureSignal(signal)();
+          await vi.advanceTimersByTimeAsync(timeoutMs - 1);
+          expect(runtime.exit).not.toHaveBeenCalled();
+          await vi.advanceTimersByTimeAsync(1);
+          expect(runtime.exit).not.toHaveBeenCalled();
+          expect(gatewayLog.warn).toHaveBeenCalledWith(
+            `log flush did not settle within ${timeoutMs}ms; waiting for accepted writes`,
+          );
+        } finally {
+          flushed.resolve();
+          await vi.advanceTimersByTimeAsync(0);
+        }
         await expect(exited).resolves.toBe(signal === "SIGUSR2" ? 1 : 0);
       });
     },
   );
 
-  it.each([
-    { signal: "SIGTERM", failure: "exit handler", managedUpdate: false },
-    { signal: "SIGUSR2", failure: "log flush", managedUpdate: true },
-  ] as const)(
-    "retains $signal deadlines after $failure throws (managed update=$managedUpdate)",
-    async ({ signal, failure, managedUpdate }) => {
-      process.env.OPENCLAW_SUPERVISOR_MODE = "external";
-      if (managedUpdate) {
-        consumeGatewayRestartIntent.mockReturnValueOnce({ force: true, waitMs: 0 });
-      }
-      restartGatewayProcessWithFreshPid.mockReturnValueOnce({ mode: "supervised" });
-      await withShutdownClock(async ({ captureSignal, close, start, runtime, exited }) => {
-        const error = managedUpdate
-          ? new Error("shutdown cleanup failed")
-          : new TypeError("shutdown cleanup failed");
-        if (failure === "exit handler") {
-          runtime.exit.mockImplementationOnce(() => {
-            throw error;
-          });
-        } else {
-          flushLogger.mockRejectedValueOnce(error);
-        }
-        const signalExit = captureSignal(signal);
-        signalExit();
-        await vi.advanceTimersByTimeAsync(0);
-        expect(close).toHaveBeenCalledOnce();
-        expect(gatewayLog.error).toHaveBeenCalledWith(
-          "gateway lifecycle completion failed: shutdown cleanup failed",
-        );
-        if (managedUpdate) {
-          consumeGatewayRestartIntent.mockReturnValueOnce({
-            force: true,
-            reason: "update.run",
-            successorOwner: managedUpdateSuccessorOwner,
-          });
-          signalExit();
-          await vi.advanceTimersByTimeAsync(9_999);
-          expect(runtime.exit).not.toHaveBeenCalled();
-          await vi.advanceTimersByTimeAsync(1);
-          expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
-          expect(cancelManagedServiceUpdateHandoff).toHaveBeenCalledExactlyOnceWith(
-            managedUpdateSuccessorOwner,
-          );
-          expect(requestManagedServiceUpdateHandoffPark).not.toHaveBeenCalled();
-          expect(start).toHaveBeenCalledOnce();
-        }
-        expect(armShutdownHardExitWatchdog).toHaveBeenCalledOnce();
-        expect(cancelShutdownHardExitWatchdog).not.toHaveBeenCalled();
-        if (!managedUpdate) {
-          await vi.advanceTimersByTimeAsync(625_000);
-        }
-        await expect(exited).resolves.toBe(1);
-      }, true);
-    },
-  );
+  it("retains the deadline after owned log cleanup fails", async () => {
+    process.env.OPENCLAW_SUPERVISOR_MODE = "external";
+    consumeGatewayRestartIntent.mockReturnValueOnce({ force: true, waitMs: 0 });
+    restartGatewayProcessWithFreshPid.mockReturnValueOnce({ mode: "supervised" });
+    await withShutdownClock(async ({ captureSignal, close, runtime, exited }) => {
+      flushLogger.mockRejectedValueOnce(new Error("shutdown cleanup failed"));
+      captureSignal("SIGUSR2")();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(close).toHaveBeenCalledOnce();
+      expect(gatewayLog.error).toHaveBeenCalledWith(
+        "gateway lifecycle completion failed: shutdown cleanup failed",
+      );
+      expect(runtime.exit).not.toHaveBeenCalled();
+      expect(armShutdownHardExitWatchdog).toHaveBeenCalledOnce();
+      expect(cancelShutdownHardExitWatchdog).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(10_000);
+      await expect(exited).resolves.toBe(1);
+    }, true);
+  });
 
   it("waits for the drain before handing recovery ownership to server close", async () => {
     consumeGatewayRestartIntentPayload.mockResolvedValueOnce({ waitMs: 0 });

@@ -8,7 +8,6 @@ import { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  captureSystemEventStoreCurrentCheck,
   prepareSystemEventStorePath,
   withSystemEventOwner,
 } from "../infra/system-event-ownership.js";
@@ -27,11 +26,7 @@ const CREATION_SUMMARY_HEADER =
   "Recent session creations (bounded summary; older entries may be omitted):";
 
 function reportCreationSignalFailure(error: unknown): void {
-  try {
-    log.warn(`failed to record session creation: ${String(error)}`);
-  } catch {
-    // A diagnostic sink cannot fail the already committed creation.
-  }
+  log.warn(`failed to record session creation: ${String(error)}`);
 }
 
 /** Notify Home of a new logical session and record its trusted creation attribution. */
@@ -117,11 +112,7 @@ async function enqueueSessionCreatedNotice(params: {
         }
       : undefined,
   };
-  const isStoreCurrent = captureSystemEventStoreCurrentCheck(mainSessionKey, agentId);
   const sessionStorePath = await prepareSystemEventStorePath(mainSessionKey, agentId);
-  if (!isStoreCurrent(sessionStorePath)) {
-    return;
-  }
   const options = withSystemEventOwner(
     {
       sessionKey: mainSessionKey,

@@ -18,12 +18,10 @@ import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write
 import {
   appendTranscriptMessage,
   appendTranscriptMessageSync,
-  appendTranscriptEventSync,
   deleteSessionEntryLifecycle,
   loadTranscriptEvents,
   readActiveTranscriptEntryAnchor,
   readSessionSubmittedInput,
-  replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import {
@@ -35,14 +33,18 @@ import {
   type SessionPendingInputReceipt,
 } from "./session-accessor.pending-inputs.js";
 import { copySessionNodeArtifactsForRepair } from "./session-accessor.sqlite-node-artifacts.js";
-import { listSessionPendingInputReceipts } from "./session-accessor.sqlite-pending-input-receipts.js";
 import { withSessionPendingInputRelocation } from "./session-accessor.sqlite-pending-inputs.js";
 import {
   resolveSqliteScope,
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import {
+  appendTranscriptEventSync,
+  replaceTranscriptEvents,
+} from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
+import { readSessionPendingInputReceiptsInWorker as listSessionPendingInputReceipts } from "./session-pending-input-receipts.js";
 import { waitForSessionTranscriptProjection } from "./session-transcript-reconcile.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 
@@ -424,22 +426,6 @@ describe("accepted input custody", () => {
     ).toMatchObject({ ok: true, value: { appended: false } });
   });
 
-  it("does not use a dirty projection to excuse an inactive admitted user", async () => {
-    const receipt = await stage("dirty-off-path");
-    await promote(receipt);
-    expect(
-      appendTranscriptMessageSync(scope(), {
-        eventId: "other-root",
-        message: message("other-root"),
-        parentId: null,
-      }),
-    ).toMatchObject({ ok: true, value: { appended: true, messageId: "other-root" } });
-
-    expect(() =>
-      receipt.run(() => appendTranscriptMessageSync(scope(), { message: receipt.message })),
-    ).toThrow("no longer active");
-  });
-
   it("rejects a split-cursor replay before and after projection reconciliation", async () => {
     const visible = await appendTranscriptMessage(scope(), {
       message: message("visible", "Visible history"),
@@ -506,7 +492,9 @@ describe("accepted input custody", () => {
     await expect(promote(aggregate)).rejects.toThrow("collect consume failed");
     expect(await loadTranscriptEvents(scope())).toEqual(before);
     expect((await listSessionPendingInputs(scope())).total).toBe(2);
-    expect(listSessionPendingInputReceipts(scope(), { runIds: ["atomic-a", "atomic-b"] })).toEqual([
+    expect(
+      await listSessionPendingInputReceipts(scope(), { runIds: ["atomic-a", "atomic-b"] }),
+    ).toEqual([
       { runId: "atomic-a", state: "pending" },
       { runId: "atomic-b", state: "pending" },
     ]);
@@ -849,7 +837,7 @@ describe("accepted input custody", () => {
         });
         expect(duplicate?.state).toBe("consumed");
         expect(
-          listSessionPendingInputReceipts(destinationScope, { runIds: ["cross-agent"] }),
+          await listSessionPendingInputReceipts(destinationScope, { runIds: ["cross-agent"] }),
         ).toEqual([
           {
             runId: "cross-agent",

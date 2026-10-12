@@ -40,7 +40,7 @@ import {
   shouldCloseDebugOverlay,
   type DebugOverlayElement,
   type DebugOverlayMode,
-} from "../pages/debug/debug-overlay-frame.ts";
+} from "../pages/debug/debug-overlay-state.ts";
 import { ShellCommandPaletteOwner } from "./app-shell-command-palette-loading.ts";
 import { openShellNewSession, type ShellNewSessionHost } from "./app-shell-new-session.ts";
 import { ShellPanelOwner, type ShellPanelHost } from "./app-shell-panels.ts";
@@ -67,9 +67,11 @@ import {
 } from "./native-web-chrome.ts";
 import { NavDrawerSwipeLoader } from "./nav-drawer-swipe-loader.ts";
 import {
+  NAVIGATION_RAIL_WIDTH,
   dismissNavigationTransientSurfaces,
   handleNavDrawerKeydown,
   moveToastToNavDrawer,
+  navDrawerFocusableElements,
   restoreToastFromNavDrawer,
   visibleNavDrawerToggle,
 } from "./navigation-surface.ts";
@@ -204,13 +206,16 @@ export class ShellChromeOwner {
       host.navDrawerTrigger = trigger ?? visibleNavDrawerToggle(host) ?? null;
       host.navDrawerOpen = true;
       moveToastToNavDrawer(host);
-      if (!this.navDrawerSwipe.opened()) {
-        void host.updateComplete.then(() => {
-          if (host.isConnected && host.navDrawerOpen) {
-            host.querySelector<HTMLElement>(".shell-nav")?.focus({ preventScroll: true });
-          }
-        });
-      }
+      void host.updateComplete.then(() => {
+        if (!host.isConnected || !host.navDrawerOpen) {
+          return;
+        }
+        this.navDrawerSwipe.reset();
+        const drawer = host.querySelector<HTMLElement>(".shell-nav");
+        if (drawer) {
+          (navDrawerFocusableElements(drawer)[0] ?? drawer).focus({ preventScroll: true });
+        }
+      });
       return;
     }
     // A responsive handoff expands this shell without overwriting the desktop preference.
@@ -244,7 +249,7 @@ export class ShellChromeOwner {
     const restoreFocus = host.navDrawerOpen && options.restoreFocus;
     if (host.navDrawerOpen) {
       this.dismissSidebarTransientMenus();
-      this.navDrawerSwipe.closed();
+      this.navDrawerSwipe.reset();
     }
     restoreToastFromNavDrawer(host);
     const trigger = restoreFocus ? host.navDrawerTrigger : null;
@@ -262,8 +267,11 @@ export class ShellChromeOwner {
     if (!shell || !context) {
       return;
     }
+    const railWidth = shell.classList.contains("shell--navigation-rail")
+      ? NAVIGATION_RAIL_WIDTH
+      : 0;
     const navWidth = Math.round(
-      Math.min(NAV_WIDTH_MAX, Math.max(NAV_WIDTH_MIN, splitRatio * shell.clientWidth)),
+      Math.min(NAV_WIDTH_MAX, Math.max(NAV_WIDTH_MIN, splitRatio * shell.clientWidth - railWidth)),
     );
     context.navigation.update({ navWidth });
   };

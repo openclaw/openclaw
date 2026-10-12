@@ -162,6 +162,11 @@ openclaw onboard --install-daemon
 
 `pnpm add --global "openclaw@link:$PWD"` links the CLI to this checkout without changing its package files. If pnpm reports that its global bin directory is not on `PATH`, run `pnpm setup`, reopen your shell, and retry.
 
+For a server checkout that only runs OpenClaw, use `pnpm build:runtime` to build
+the JavaScript, plugins, Control UI, and metadata without TypeScript declarations.
+Use `pnpm build` for development or packaging that needs declarations and their
+validation; CI typechecks still apply to runtime-only builds.
+
 Corepack selects the exact pnpm version from `package.json` (currently pnpm 12).
 If Corepack is unavailable, read that version from the checkout and install it explicitly:
 

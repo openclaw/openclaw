@@ -27,7 +27,7 @@ Long polling is the default. Webhook mode is the alternative when an HTTPS ingre
 
     Doctor saves the pin and its `meta.migrations.webhookListeners` completion record together. Keep that record when removing the pin so later Doctor runs and updates leave it removed. See [webhook migrations](/gateway/doctor/config-migrations#channel-webhook-listeners) for included and read-only config sources.
 
-    The legacy port preserves its unauthenticated `/healthz` response (`200`, plain `ok`) and account-local failed-secret rate limit. Health matching is exact: query strings, trailing slashes, case changes, and encoded variants are not health checks. HEAD returns the same status without a body. The canonical Gateway port keeps its own check and response-header behavior.
+    The legacy port preserves its unauthenticated `/healthz` response (`200`, plain `ok`) and account-local failed-secret rate limit. Health matching is exact: query strings, trailing slashes, case changes, and encoded variants are not health checks. HEAD returns the same status without a body. The main Gateway port keeps its own check and response-header behavior.
 
     After upgrading, run `openclaw doctor --fix`. Doctor backs up the config and migrates old `webhookPort` and `webhookHost` settings to `legacyWebhook: { port, host }`, preserving a host-only setting with port `8787`. An explicit endpoint object overrides the default; an omitted object host uses `127.0.0.1`. Existing `legacyWebhook: false` settings remain disabled during migration.
 

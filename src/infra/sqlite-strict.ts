@@ -69,6 +69,11 @@ function readMainTableList(db: DatabaseSync): Array<TableListRow & { name: strin
   );
 }
 
+/** Canonical bootstrap needs no legacy rebuild when every ordinary table is already STRICT. */
+export function hasNonStrictSqliteTables(db: DatabaseSync): boolean {
+  return readMainTableList(db).some((row) => row.type === "table" && Number(row.strict) !== 1);
+}
+
 function readTableColumns(db: DatabaseSync, tableName: string): TableColumnRow[] {
   return db
     .prepare(`PRAGMA table_xinfo(${quoteSqliteIdentifier(tableName)})`)

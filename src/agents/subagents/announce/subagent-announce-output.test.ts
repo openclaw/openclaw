@@ -13,11 +13,11 @@ import { assistantCallsSessionsYield } from "./subagent-yield-output.js";
 
 type CallGateway = typeof import("../../../gateway/call.js").callGateway;
 type GetRuntimeConfig = typeof import("./subagent-announce.runtime.js").getRuntimeConfig;
-type ReadSessionEntry = typeof import("./subagent-announce.runtime.js").readSubagentSessionEntry;
+type ReadSessionEntry = (
+  ...args: Parameters<typeof import("./subagent-announce.runtime.js").readSubagentSessionEntry>
+) => Awaited<ReturnType<typeof import("./subagent-announce.runtime.js").readSubagentSessionEntry>>;
 type ReadSessionMessagesAsync =
   typeof import("./subagent-announce.runtime.js").readSessionMessagesAsync;
-type ResolveAgentIdFromSessionKey =
-  typeof import("./subagent-announce.runtime.js").resolveAgentIdFromSessionKey;
 type ResolveStorePath = typeof import("./subagent-announce.runtime.js").resolveSessionStorePathCore;
 
 function installOutputDeps(params: {
@@ -116,7 +116,6 @@ describe("buildCompactAnnounceStatsLine", () => {
         updatedAt: 0,
         ...usage,
       })) as ReadSessionEntry,
-      resolveAgentIdFromSessionKey: (() => "main") as ResolveAgentIdFromSessionKey,
       resolveSessionStorePathCore: (() => "/tmp/openclaw-session-store") as ResolveStorePath,
     });
 
@@ -129,6 +128,24 @@ describe("buildCompactAnnounceStatsLine", () => {
 describe("readSubagentOutput", () => {
   afterEach(() => {
     testing.setDepsForTest();
+  });
+
+  it("refuses unowned raw history and sends the recorded owner for scoped reads", async () => {
+    const deps = installOutputDeps({ messages: [textAssistant("owned answer")] });
+    await expect(readSubagentOutput("global")).resolves.toBeUndefined();
+    expect(deps.callGateway).not.toHaveBeenCalled();
+    await expect(readSubagentOutput("global", undefined, { childAgentId: "worker" })).resolves.toBe(
+      "owned answer",
+    );
+    expect(deps.callGateway).toHaveBeenCalledWith({
+      method: "chat.history",
+      params: { sessionKey: "global", limit: 100, agentId: "worker" },
+    });
+    await expect(readSubagentOutput("agent:worker:subagent:owned")).resolves.toBe("owned answer");
+    expect(deps.callGateway).toHaveBeenLastCalledWith({
+      method: "chat.history",
+      params: { sessionKey: "agent:worker:subagent:owned", limit: 100, agentId: "worker" },
+    });
   });
 
   it("does not treat a sessions_yield wait turn as subagent completion output", async () => {

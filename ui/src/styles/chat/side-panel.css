@@ -165,14 +165,18 @@
   color: var(--text);
 }
 
-.side-panel__header .tabstrip-tab__icon {
+.side-panel__header .tabstrip-tab__icon,
+.side-panel-type-option__icon {
   display: inline-flex;
   width: 16px;
   height: 16px;
-  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
   color: var(--muted);
+}
+
+.side-panel__header .tabstrip-tab__icon {
+  flex: 0 0 auto;
 }
 
 .side-panel__header .tabstrip-tab__favicon {
@@ -351,13 +355,7 @@ openclaw-chat-detail-panel,
 }
 
 .side-panel-type-option__icon {
-  display: inline-flex;
-  width: 16px;
-  height: 16px;
-  align-items: center;
-  justify-content: center;
   flex: 0 0 16px;
-  color: var(--muted);
 }
 
 .side-panel-type-option__label {

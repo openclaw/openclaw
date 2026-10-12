@@ -1,9 +1,9 @@
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { asOptionalRecord as record } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { fetchXService } from "./fetch.js";
 import { X_POST_READ_MICRO_USD, X_USER_READ_MICRO_USD, xReadCost, xReplyCost } from "./pricing.js";
 import { XBudgetExceededError, type XSpend } from "./spend.js";
 
-const X_API_ORIGIN = "https://api.x.com";
 const POST_FIELDS =
   "author_id,conversation_id,created_at,in_reply_to_user_id,referenced_tweets,entities,withheld";
 
@@ -205,44 +205,6 @@ export function createXApiClient(options: {
   let pendingRefreshToken: string | undefined;
   let refreshTask: Promise<void> | undefined;
 
-  async function fetcher(
-    url: string,
-    init: RequestInit,
-    assertActive?: XAssertActive,
-    onDispatch?: () => void,
-  ) {
-    if (options.fetch) {
-      const assertCurrent = await assertActive?.();
-      init.signal?.throwIfAborted();
-      assertCurrent?.();
-      onDispatch?.();
-      return options.fetch(url, init);
-    }
-    const [{ fetchWithSsrFGuard }, { responseWithRelease }, { fetchWithRuntimeDispatcher }] =
-      await Promise.all([
-        import("openclaw/plugin-sdk/ssrf-runtime"),
-        import("openclaw/plugin-sdk/fetch-runtime"),
-        import("openclaw/plugin-sdk/runtime-fetch"),
-      ]);
-    const guarded = await fetchWithSsrFGuard({
-      url,
-      init,
-      capture: false,
-      requireHttps: true,
-      policy: { hostnameAllowlist: ["api.x.com"] },
-      maxRedirects: 0,
-      fetchImpl: async (input, prepared) => {
-        const assertCurrent = await assertActive?.();
-        prepared?.signal?.throwIfAborted();
-        assertCurrent?.();
-        onDispatch?.();
-        return fetchWithRuntimeDispatcher(input, prepared);
-      },
-    });
-    // Includes long-lived Activity bodies: release the pinned dispatcher only after consumption.
-    return responseWithRelease(guarded.response, guarded.release);
-  }
-
   function requestSignal(signal?: AbortSignal): AbortSignal {
     return AbortSignal.any([
       ...[options.signal, signal].filter((value): value is AbortSignal => Boolean(value)),
@@ -261,19 +223,24 @@ export function createXApiClient(options: {
         await options.saveRefreshToken(pendingRefreshToken);
         pendingRefreshToken = undefined;
       }
-      const response = await fetcher(`${X_API_ORIGIN}/2/oauth2/token`, {
-        method: "POST",
-        redirect: "error",
-        headers: {
-          Authorization: `Basic ${Buffer.from(`${encodeURIComponent(options.clientId)}:${encodeURIComponent(options.clientSecret)}`).toString("base64")}`,
-          "Content-Type": "application/x-www-form-urlencoded",
+      const response = await fetchXService(
+        "api.x.com",
+        "/2/oauth2/token",
+        {
+          method: "POST",
+          redirect: "error",
+          headers: {
+            Authorization: `Basic ${Buffer.from(`${encodeURIComponent(options.clientId)}:${encodeURIComponent(options.clientSecret)}`).toString("base64")}`,
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: new URLSearchParams({
+            grant_type: "refresh_token",
+            refresh_token: refreshToken,
+          }).toString(),
+          signal: requestSignal(),
         },
-        body: new URLSearchParams({
-          grant_type: "refresh_token",
-          refresh_token: refreshToken,
-        }).toString(),
-        signal: requestSignal(),
-      });
+        options.fetch,
+      );
       if (!response.ok) {
         await response.body?.cancel();
         throw new XApiError(response.status, "token refresh");
@@ -361,8 +328,9 @@ export function createXApiClient(options: {
         let authorityRejected = false;
         let authorityError: unknown;
         try {
-          response = await fetcher(
-            `${X_API_ORIGIN}${path}`,
+          response = await fetchXService(
+            "api.x.com",
+            path,
             {
               method: params.method ?? "GET",
               redirect: "error",
@@ -373,6 +341,7 @@ export function createXApiClient(options: {
               ...(params.body ? { body: JSON.stringify(params.body) } : {}),
               signal,
             },
+            options.fetch,
             params.assertActive
               ? async () => {
                   try {

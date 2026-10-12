@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveDefaultSessionStorePath } from "../../config/sessions/paths.js";
 import {
   recordInboundSessionMeta,
@@ -20,6 +21,7 @@ describe("sharing owner display", () => {
     { senderName: undefined, label: undefined },
   ])("presents channel owner attribution with name $senderName", async ({ senderName, label }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const profile = ensureProfileForEmail("channel-id-collision@example.test");
       setDisplayName(profile.id, "Gateway profile name");
       const sessionKey = "agent:main:slack:channel:c-owner:thread:123.456";
@@ -57,6 +59,7 @@ describe("sharing owner display", () => {
 
   it("hydrates persisted profile attribution on every read without changing the access identity", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const profile = ensureProfileForEmail("sharing-owner@example.test");
       const sessionKey = "agent:main:sharing-profile-display";
       await upsertSessionEntryCore(

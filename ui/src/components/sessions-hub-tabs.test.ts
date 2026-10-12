@@ -3,17 +3,29 @@
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
-import { renderSessionsHubHeader } from "./sessions-hub-header.ts";
+import { renderHubTabs } from "./hub-tabs.ts";
 
-type SessionsHubTabsProps = Pick<
-  Parameters<typeof renderSessionsHubHeader>[0],
-  "active" | "onSelect"
->;
+type SessionsHubTabsProps = {
+  active: "sessions" | "worktrees";
+  onSelect: (tab: "sessions" | "worktrees") => void;
+};
 
 async function mount(props: SessionsHubTabsProps): Promise<HTMLDivElement> {
   const container = document.createElement("div");
   document.body.append(container);
-  render(renderSessionsHubHeader({ ...props, title: "Sessions" }), container);
+  render(
+    renderHubTabs({
+      ...props,
+      id: "sessions",
+      tabs: [
+        { value: "sessions", label: "Sessions" },
+        { value: "worktrees", label: "Worktrees" },
+      ],
+      ariaLabel: "Sessions",
+      panelId: "sessions-hub-panel",
+    }),
+    container,
+  );
   const group = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
     "wa-tab-group",
   );

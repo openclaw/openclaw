@@ -8,6 +8,7 @@ import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnost
 import type { AssistantMessage } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
+  CONTEXT_OVERFLOW_ERROR_MESSAGE,
   extractErrorHttpStatus,
   extractLeadingHttpStatus,
   formatProviderRefusalText,
@@ -134,6 +135,9 @@ export function formatAssistantErrorText(
     status: formatStatus,
     providerRuntimeFailureKind,
   } = classifiedFacts;
+  if (formatStatus === 403 && (msg.errorType ?? parseApiErrorInfo(raw)?.type) === "FreeTierError") {
+    return "This model's free tier is limited to the provider's own client. Choose another model or use a paid plan.";
+  }
   const unknownTool =
     raw.match(/unknown tool[:\s]+["']?([a-z0-9_-]+)["']?/i) ??
     raw.match(/tool\s+["']?([a-z0-9_-]+)["']?\s+(?:not found|is not available)/i);
@@ -180,10 +184,7 @@ export function formatAssistantErrorText(
     return formatCopy;
   }
   if (failoverReason === "context_overflow") {
-    return (
-      "Context overflow: prompt too large for the model. " +
-      "Try /reset (or /new) to start a fresh session, or use a larger-context model."
-    );
+    return CONTEXT_OVERFLOW_ERROR_MESSAGE;
   }
   if (isReasoningConstraintErrorMessage(raw)) {
     return (

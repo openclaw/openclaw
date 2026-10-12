@@ -493,7 +493,7 @@ describe("codex cli node sessions", () => {
         payloadJSON: await command.handle(JSON.stringify(request.params)),
       }));
       const runtime = createPluginRuntimeMock({
-        agent: { session: { getSessionEntry: () => entry } },
+        agent: { session: { getSessionEntryAsync: async () => entry } },
         nodes: { invoke },
       });
       const request = {
@@ -602,7 +602,7 @@ describe("codex cli node sessions", () => {
       const runtime = createPluginRuntimeMock({
         agent: {
           session: {
-            getSessionEntry: () =>
+            getSessionEntryAsync: async () =>
               changed === "missing row"
                 ? undefined
                 : {

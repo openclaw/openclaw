@@ -135,14 +135,10 @@ function createSharedStateWorkerOwner() {
       return;
     }
     const store = entry.store;
-    const generation = entry.operationGeneration;
     const deadline = performance.now() + SQLITE_IDLE_HANDLE_TTL_MS;
     const arm = (delay: number, inspect: boolean) => {
       const isCurrentIdle = () =>
-        entry.idleTimer === timer &&
-        entry.operationGeneration === generation &&
-        entry.activeOperations === 0 &&
-        stores.has(entry);
+        entry.idleTimer === timer && entry.activeOperations === 0 && stores.has(entry);
       const settle = async () => {
         if (!isCurrentIdle()) {
           return;
@@ -220,7 +216,6 @@ function createSharedStateWorkerOwner() {
       throw new Error("Shared-state worker operation lost its actor owner");
     }
     clearIdleRetirement(entry);
-    entry.operationGeneration += 1;
     entry.activeOperations += 1;
     activeEntries.add(entry);
     let released = false;
@@ -635,7 +630,6 @@ function createSharedStateWorkerOwner() {
           openingAdmission: openingGuard.admission,
           existingOnly,
           activeOperations: 0,
-          operationGeneration: 0,
           // Maintenance may already be draining an accepted callback; its native
           // opening must retain that callback's live admission through settlement.
           opening: context.maintenanceScope ? open() : runInDetachedAsyncContext(open),

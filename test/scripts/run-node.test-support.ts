@@ -20,10 +20,7 @@ import {
   writeBuildStamp,
   writeRuntimePostBuildStamp,
 } from "../../scripts/lib/local-build-metadata.mts";
-import {
-  UPDATE_COMPATIBILITY_INVENTORY_FILE,
-  writeUpdateCompatibilityChunks,
-} from "../../scripts/lib/update-compat-chunks.mts";
+import { writeUpdateCompatibilityChunks } from "../../scripts/lib/update-compat-chunks.mts";
 import { withTestDir } from "../../src/test-helpers/temp-dir.js";
 import { runNodeMain } from "./run-node-boundary.test-support.js";
 // These launcher fixtures have no service. Publication custody is covered at its owner.
@@ -205,7 +202,6 @@ export async function writeRuntimePostBuildScaffold(tmp: string): Promise<void> 
       DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT,
       DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_ALT,
       DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_0229A108,
-      `dist/${UPDATE_COMPATIBILITY_INVENTORY_FILE}`,
       ...previousReleaseInventory.releases.flatMap((release) =>
         release.chunks.map((chunk) => `dist/${chunk.path}`),
       ),

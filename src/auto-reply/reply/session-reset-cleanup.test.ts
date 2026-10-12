@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   clearEmbeddedSessionPromptStates,
-  getEmbeddedSessionPromptState,
+  retainEmbeddedSessionPromptState,
 } from "../../agents/embedded-agent-runner/session-prompt-state.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import {
@@ -24,7 +24,8 @@ afterEach(() => {
 
 describe("clearSessionResetRuntimeState", () => {
   it("disposes prompt projections with the archived session", () => {
-    const state = getEmbeddedSessionPromptState("old-session");
+    using original = retainEmbeddedSessionPromptState("old-session");
+    const state = original.state;
     state.toolResults.frozen.add("sent-tool-result");
 
     clearSessionResetRuntimeState(["old-session"], {
@@ -34,7 +35,8 @@ describe("clearSessionResetRuntimeState", () => {
       assertCurrent: () => {},
     });
 
-    expect(getEmbeddedSessionPromptState("old-session")).not.toBe(state);
+    using replacement = retainEmbeddedSessionPromptState("old-session");
+    expect(replacement.state).not.toBe(state);
   });
 
   it("clears reset queues and drains system events for normalized keys", () => {

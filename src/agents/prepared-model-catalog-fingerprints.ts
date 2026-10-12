@@ -5,7 +5,7 @@ import type {
   PreparedModelCatalogWorkerInput,
   PreparedModelWorkerRequest,
 } from "./prepared-model-catalog-worker.types.js";
-import { fingerprintPreparedRuntimeFacts } from "./prepared-model-runtime.facts.js";
+import { fingerprintPreparedRuntimeFacts } from "./prepared-model-runtime.fingerprint.js";
 
 export function fingerprintPreparedModelWorkerRequest(
   input: PreparedModelCatalogWorkerInput,

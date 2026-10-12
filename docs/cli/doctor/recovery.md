@@ -204,6 +204,10 @@ Packaged installs without UI sources receive reinstall guidance instead of a
 source-build command. Doctor does not download a source checkout to repair a
 packaged installation.
 
+Doctor reports obsolete `cache/control-ui-assets` directories left by older
+installs. `openclaw doctor --fix` removes them; the update command's Doctor pass
+also runs this repair. Cleanup failures are warnings and do not abort Doctor.
+
 ## Invalid Gateway tokens
 
 Doctor flags active Gateway tokens that are blank or contain the literal string

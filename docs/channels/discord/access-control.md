@@ -14,7 +14,7 @@ Who may reach the bot, which guild channels it answers in, and which Discord act
 
 <Tabs>
   <Tab title="DM policy">
-    `channels.discord.dmPolicy` controls DM access. `channels.discord.allowFrom` is the canonical DM allowlist.
+    `channels.discord.dmPolicy` controls DM access. `channels.discord.allowFrom` is the DM allowlist.
 
     - `pairing` (default)
     - `allowlist` (requires at least one `allowFrom` sender)
@@ -111,7 +111,7 @@ Who may reach the bot, which guild channels it answers in, and which Discord act
 }
 ```
 
-    Lookups fail closed. If Discord returns `Missing Access`, the member lookup fails, or the channel belongs to a different guild, the DM sender is treated as unauthorized.
+    Failed lookups grant no access. If Discord returns `Missing Access`, the member lookup fails, or the channel belongs to a different guild, the DM sender is treated as unauthorized.
 
     Enable the Discord Developer Portal **Server Members Intent** when using channel-audience access groups. DMs do not include guild member state, so OpenClaw resolves the member through Discord REST at authorization time.
 
@@ -174,7 +174,7 @@ Who may reach the bot, which guild channels it answers in, and which Discord act
     - configured mention patterns (`agents.entries.*.groupChat.mentionPatterns`, fallback `messages.groupChat.mentionPatterns`)
     - implicit reply-to-bot behavior in supported cases
 
-    When writing outbound Discord messages, use canonical mention syntax: `<@USER_ID>` for users, `<#CHANNEL_ID>` for channels, and `<@&ROLE_ID>` for roles. Do not use the legacy `<@!USER_ID>` nickname mention form.
+    When writing outbound Discord messages, use the supported mention syntax: `<@USER_ID>` for users, `<#CHANNEL_ID>` for channels, and `<@&ROLE_ID>` for roles. Do not use the legacy `<@!USER_ID>` nickname mention form.
 
     `requireMention` is configured per guild/channel (`channels.discord.guilds...`).
 

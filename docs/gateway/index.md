@@ -75,6 +75,27 @@ Gateway config reload watches the active config file path (resolved from profile
 - Default bind mode: `loopback`. Inside a detected container environment the effective default is `auto` (resolves to `0.0.0.0` for port-forwarding), unless Tailscale serve/funnel is active, which always forces `loopback`.
 - Auth is required by default. Shared-secret setups use `gateway.auth.token` / `gateway.auth.password` (or `OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD`), and non-loopback reverse-proxy setups can use `gateway.auth.mode: "trusted-proxy"`.
 
+### Module compile cache
+
+The packaged CLI and the compiled `dist/index.js` entry automatically enable
+Node's on-disk module compile cache. This includes compiled source deployments
+that retain their Git checkout. Cache entries live outside the release directory,
+under the operating system's temporary directory by default. Set
+`NODE_COMPILE_CACHE` to a writable persistent cache root to retain them across
+host reboots. OpenClaw namespaces that root by package version and build identity;
+each new build starts with its own cache. `NODE_DISABLE_COMPILE_CACHE=1` disables
+it. An unavailable cache produces one diagnostic and startup continues.
+With Node's permission model enabled, an already-active cache remains caller-owned
+so cache scoping never requires launching a process that permissions may forbid.
+
+The first boot populates the cache; later boots reuse it. Deployment systems can
+warm a candidate before cutover by booting and cleanly stopping it with isolated
+state, a loopback port, the runtime user, and the same cache root. Warm it at its
+final release path: moving the release after warming can prevent Node from
+reusing its entries. Recent build caches coexist, including the serving release
+and a prepared candidate. Cleanup bounds the combined cache to 512 MiB and
+expires bytecode older than seven days.
+
 ## OpenAI-compatible endpoints
 
 OpenClaw's highest-leverage compatibility surface:

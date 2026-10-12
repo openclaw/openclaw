@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
@@ -126,6 +127,7 @@ afterEach(async () => {
 describe("typed Goal management RPCs", () => {
   it("edits literal objectives without chat rows and rejects a changed retry", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot(cfg);
       await seedSession();
       const objective = "clear the backlog\n/goal pause is part of the objective";
       const request = operation("edit", { objective });
@@ -161,6 +163,7 @@ describe("typed Goal management RPCs", () => {
 
   it("replays a clear without deleting a replacement Goal", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot(cfg);
       await seedSession();
       const request = operation("clear");
       const first = await invoke(request, { method: "sessions.goal.clear" });
@@ -185,6 +188,7 @@ describe("typed Goal management RPCs", () => {
     "%s requires write scope and session participation before mutation or continuation",
     async (method) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot(cfg);
         const owner = ensureProfileForEmail("goal-owner@example.test");
         const viewer = ensureProfileForEmail("goal-viewer@example.test");
         await seedSession({
@@ -227,6 +231,7 @@ describe("typed Goal management RPCs", () => {
     { name: "agent owner", patch: { agentId: "other" } },
   ])("rejects stale $name without changing state", async ({ patch }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot(cfg);
       await seedSession();
       const result = await invoke(operation("pause", patch));
       expect(result).toHaveBeenCalledWith(
@@ -241,6 +246,7 @@ describe("typed Goal management RPCs", () => {
 
   it("checks caller lifetime again inside the mutation transaction", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot(cfg);
       await seedSession();
       let checks = 0;
       const request = operation("complete");
@@ -273,6 +279,7 @@ describe("typed Goal management RPCs", () => {
 
   it("rejects a plugin caller that does not own the session", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot(cfg);
       await seedSession({ pluginOwnerId: "owning-plugin" });
       const pluginClient: GatewayClient = {
         ...client(),
@@ -293,6 +300,7 @@ describe("typed Goal management RPCs", () => {
 
   it("does not activate a Goal before continuation admission succeeds", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot(cfg);
       await seedSession();
       resumeChat.mockImplementation(async (options: GatewayRequestHandlerOptions) => {
         options.respond(false, undefined, { code: "UNAVAILABLE", message: "session busy" });

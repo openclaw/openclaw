@@ -75,10 +75,10 @@ vi.mock("node:worker_threads", async (importOriginal) => {
         if (controls.constructorError) {
           throw controls.constructorError;
         }
-        const data: LeaseHeartbeatWorkerData & { completedRequest?: SharedArrayBuffer } =
-          structuredClone(workerOptions.workerData);
+        const { databaseAdmissionPort, ...data } = workerOptions.workerData;
         this.data = {
-          ...data,
+          ...structuredClone(data),
+          databaseAdmissionPort,
           completedRequest:
             data.completedRequest ?? new SharedArrayBuffer(BigInt64Array.BYTES_PER_ELEMENT),
         };

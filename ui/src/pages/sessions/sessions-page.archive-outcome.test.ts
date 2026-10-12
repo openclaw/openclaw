@@ -1,5 +1,4 @@
 /* @vitest-environment jsdom */
-import { nothing } from "lit";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -9,11 +8,7 @@ import {
   createTestSessionCapability,
   sessionsResult,
 } from "../../lib/sessions/session-capability.test-support.ts";
-import {
-  createContext,
-  createGateway,
-  type TestSessionsPage,
-} from "./sessions-page.test-support.ts";
+import { createContext, createGateway, createPage } from "./sessions-page.test-support.ts";
 
 const row: GatewaySessionRow = {
   key: "agent:main:archive-target",
@@ -44,12 +39,9 @@ async function setup() {
   const gateway = createGateway(client);
   const sessions = createTestSessionCapability(gateway.gateway);
   onTestFinished(() => sessions.dispose());
-  const page = document.createElement("openclaw-sessions-page") as TestSessionsPage;
-  page.context = createContext(gateway.gateway, sessions);
-  page.render = () => nothing;
+  const page = await createPage(createContext(gateway.gateway, sessions));
   const toast = document.createElement("openclaw-toast-host");
-  document.body.append(page, toast);
-  await page.updateComplete;
+  document.body.append(toast);
   await sessions.refresh();
   const patches = () => request.mock.calls.filter(([method]) => method === "sessions.patch");
   const undo = () => toast.querySelector<HTMLButtonElement>(".app-toast__action");

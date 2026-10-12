@@ -12,7 +12,6 @@ import type {
   WorkerWorkspaceManifest,
   WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
-import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import { reconciliationDirectories } from "./workspace-reconcile-derived-paths.js";
 import { removeEmptyWorkspaceDirectory } from "./workspace-reconcile-fs.js";
 export { preflightWorkspaceApply } from "./workspace-manifest-worker.js";
@@ -169,20 +168,6 @@ export async function applyWorkspaceDirectoryChanges(params: {
     }
     await removeEmptyWorkspaceDirectory(workspaceRoot, entryPath);
   }
-}
-
-export function hasReplacedBaseEntryAncestor(
-  entryPath: string,
-  baseByPath: ReadonlyMap<string, WorkerWorkspaceManifestEntry>,
-  currentByPath: ReadonlyMap<string, WorkerWorkspaceManifestEntry>,
-): boolean {
-  for (const ancestor of workspacePathAncestors(entryPath)) {
-    const baseEntry = baseByPath.get(ancestor);
-    if (baseEntry && !sameEntry(baseEntry, currentByPath.get(ancestor))) {
-      return true;
-    }
-  }
-  return false;
 }
 
 export function retainedConflictPaths(

@@ -1,3 +1,4 @@
+import { getSessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
 import {
   captureIncognitoSessionOperation,
   withIncognitoSessionBinding,
@@ -23,6 +24,7 @@ import {
   type AcpSessionEntryExpectation,
 } from "./session-meta-entry.kernel.js";
 import { buildAcpDatabaseSessionKey } from "./session-meta-keys.js";
+import { prepareMemoryAcpSessionControlRead } from "./session-meta-memory-control.js";
 import { captureAcpSessionReadContext } from "./session-meta-read-context.js";
 import { withAcpSessionEntryRead } from "./session-meta-read.js";
 import { readAcpSessionMetaForEntry } from "./session-meta-readonly.js";
@@ -43,6 +45,10 @@ type AcpSessionControlReadParams = {
 
 /** Retain source custody; each effect gets a fresh metadata join, never a presence cache. */
 export function prepareAcpSessionControlRead(params: AcpSessionControlReadParams) {
+  const memory = getSessionActorStorageBinding({ ...params, sessionKey: params.sessionKey.trim() });
+  if (memory) {
+    return prepareMemoryAcpSessionControlRead(params, memory);
+  }
   const binding = captureIncognitoSessionOperation(params);
   if (!binding) {
     return prepareAcpSessionControlReadOwned(params);

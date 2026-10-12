@@ -12,7 +12,7 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import { createCronTool } from "../agents/tools/cron-tool.js";
 import { createSystemAgentTool } from "../agents/tools/system-agent-tool.js";
 import type { SystemAgentToolOptions } from "../agents/tools/system-agent-tool.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
@@ -35,8 +35,6 @@ export {
 } from "./openclaw-tools-serve-config.js";
 
 export { OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV } from "./agent-session-env.js";
-
-export { resolveOpenClawToolsMcpAgentSessionKey };
 
 export function resolveOpenClawToolsForMcp(
   params: {
@@ -94,7 +92,10 @@ export function resolveOpenClawToolsForMcp(
 async function serveOpenClawToolsMcp(): Promise<void> {
   const server = createToolsMcpServer({
     name: "openclaw-tools",
-    tools: resolveOpenClawToolsForMcp({ agentId: resolveToolsMcpAgentId() }),
+    tools: resolveOpenClawToolsForMcp({
+      agentId: resolveToolsMcpAgentId(),
+      config: await captureRuntimeConfigAsyncReader()(),
+    }),
   });
   await connectToolsMcpServerToStdio(server);
 }
@@ -102,6 +103,6 @@ async function serveOpenClawToolsMcp(): Promise<void> {
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   serveOpenClawToolsMcp().catch((err: unknown) => {
     process.stderr.write(`openclaw-tools-serve: ${formatErrorMessage(err)}\n`);
-    process.exit(1);
+    process.exitCode = 1;
   });
 }

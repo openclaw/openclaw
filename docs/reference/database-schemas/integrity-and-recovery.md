@@ -23,6 +23,12 @@ explicit verification keep their independent checks. Proven corruption still
 revokes admission; current ownership and cached-row freshness are separate from
 format validation.
 
+Shared-state admission checks schema eligibility before scanning database contents.
+Stores that need canonical index repair receive their full integrity check from
+the repair owner before mutation, followed by verification of the rebuilt indexes.
+Repair publishes the passing integrity fact with its committed schema so later
+schema additions and worker opens do not repeat the full check.
+
 Gateway agent inspections share a five-second foreground wait. Unfinished stores
 remain unavailable while the startup admission owner completes their inspection
 and session/model preparation after the listener is ready. Other agents and the
@@ -161,6 +167,10 @@ or lock failures remain inconclusive and are logged, not relabeled as corruption
 Confirmation treats an empty WAL and an absent WAL as equivalent: SQLite readers
 can create or remove those empty sidecars without changing committed contents.
 Nonempty WALs, rollback journals, and the main file retain full generation checks.
+Terminal-failure and quarantine generation checks hash those files in an isolated
+child process. Closing a raw file descriptor in any Gateway thread would release
+that process's SQLite locks on the same inode. The child preserves the complete
+fingerprint without changing schemas, quarantine policy, or update behavior.
 
 The Gateway does not repeat full scans on a daily timer. For operator-requested or scheduled full verification,
 use `openclaw doctor --fix --non-interactive` during a planned maintenance window.
@@ -965,3 +975,16 @@ Follow [Downgrade](/install/updating#downgrade) for the managed rollback path,
 retained-originals limits, and restoring a verified pre-update backup. A complete
 recovery point includes the matching package, config, shared state, and every
 agent database. Keep writers stopped while activating restored state.
+
+### Example: state schema 21 to 20
+
+Schema 21 derives meeting-transcript selectors and bounded delivery-retention
+columns from canonical JSON. A schema-20 writer can change that JSON without
+updating the derived columns, so package-only downgrade is unsafe and older
+builds refuse the migrated database.
+
+Stop writers and restore the verified pre-migration backup together with its
+matching build. Keep the migrated database separately until recovery is verified;
+restoring the backup loses captures and delivery-state changes recorded after
+that backup and does not undo messages already sent. Never lower schema markers,
+drop the new columns, or copy individual tables between the two databases.

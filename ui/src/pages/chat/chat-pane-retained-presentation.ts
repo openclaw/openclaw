@@ -18,6 +18,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { storeChatComposerMemoryFallback } from "./chat-composer-memory-fallback.ts";
+import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { loadChatBranches, retireChatBranchRequests } from "./chat-history-branches.ts";
 import {
   chatHistoryRequests,
@@ -629,8 +630,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
         if (this.state !== state || state.sessionKey !== sessionKey) {
           return;
         }
-        const client = state.client;
-        const connectionEpoch = state.connectionEpoch;
+        const connectionIsCurrent = captureChatConnectionOwner(state);
         const sessions = state.sessions;
         const attachments = state.chatAttachments;
         const mentions = state.chatMentions;
@@ -640,9 +640,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
         const isCurrent = () =>
           this.state === state &&
           state.sessionKey === sessionKey &&
-          state.connected &&
-          state.client === client &&
-          state.connectionEpoch === connectionEpoch &&
+          connectionIsCurrent() &&
           state.sessions === sessions &&
           this.isConnected &&
           this.active &&

@@ -184,7 +184,7 @@ export function createChatPageStateContext() {
         embedSandboxMode: "scripts",
       },
     },
-    gateway,
+    gateway: { ...gateway, connection: { gatewayUrl: "ws://gateway.example.test" } },
     chatSubmissions: createChatSubmissions(),
     sessions: {},
   } as unknown as ApplicationContext;

@@ -173,20 +173,19 @@ export abstract class ExecApprovalLifecycle<TPayload> {
     const liveRecord = entry?.record;
     const uncertainty = entry?.uncertainVerdict;
     let observedSource: ExecApprovalResolutionSource = "operator";
-    if (localResolutionSource === undefined && uncertainty) {
+    if (
+      localResolutionSource === undefined &&
+      uncertainty?.autoReview &&
+      record.status === "allowed" &&
+      record.decision === "allow-once"
+    ) {
       if (
-        uncertainty.autoReview &&
-        record.status === "allowed" &&
-        record.decision === "allow-once"
+        uncertainty.autoReview.committedResolutionKey === getOperatorApprovalResolutionKey(record)
       ) {
-        if (
-          uncertainty.autoReview.committedResolutionKey === getOperatorApprovalResolutionKey(record)
-        ) {
-          observedSource = "auto-review";
-        } else if (record.resolver?.kind === "runtime") {
-          // Runtime IDs are shared by operator and auto-review callers, including null IDs.
-          return false;
-        }
+        observedSource = "auto-review";
+      } else if (record.resolver?.kind === "runtime") {
+        // Runtime IDs are shared by operator and auto-review callers, including null IDs.
+        return false;
       }
     }
     const settlement = prepareExecApprovalSettlement({

@@ -86,6 +86,9 @@ export function registerGatewayForcedRestartTests({
             await vi.advanceTimersByTimeAsync(9_999);
             expect(runtime.exit).not.toHaveBeenCalled();
             await vi.advanceTimersByTimeAsync(1);
+            expect(runtime.exit).not.toHaveBeenCalled();
+            closing.resolve();
+            await vi.advanceTimersByTimeAsync(0);
             expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
             expect(start).toHaveBeenCalledOnce();
           }
@@ -174,6 +177,9 @@ export function registerGatewayForcedRestartTests({
             expect(completeBoot).not.toHaveBeenCalled();
             expect(runtime.exit).not.toHaveBeenCalled();
             await vi.advanceTimersByTimeAsync(1);
+            expect(runtime.exit).not.toHaveBeenCalled();
+            closing.resolve();
+            await vi.advanceTimersByTimeAsync(0);
             expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
             expect(completeBoot).toHaveBeenCalledExactlyOnceWith({
               outcome: "forced_stop",

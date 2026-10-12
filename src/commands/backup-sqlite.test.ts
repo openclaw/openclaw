@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { deriveDeliveryQueueRetentionColumns } from "../infra/delivery-queue-retention-columns.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLocalSqliteSnapshotProvider } from "../snapshot/local-repository.js";
@@ -24,7 +25,15 @@ const configMocks = vi.hoisted(() => ({
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
-  return { ...actual, getRuntimeConfig: configMocks.getRuntimeConfig };
+  return {
+    ...actual,
+    getRuntimeConfig: configMocks.getRuntimeConfig,
+    loadConfig: configMocks.getRuntimeConfig,
+    captureRuntimeConfigAsyncReader:
+      (...args: Parameters<typeof configMocks.getRuntimeConfig>) =>
+      async () =>
+        configMocks.getRuntimeConfig(...args),
+  };
 });
 
 let state: OpenClawTestState;
@@ -73,6 +82,7 @@ function createGlobalDatabase(databasePath: string): void {
         `,
       )
       .run(OPENCLAW_STATE_SCHEMA_VERSION);
+    const entryJson = '{"payload":"do-not-restore"}';
     database
       .prepare(
         `
@@ -81,12 +91,16 @@ function createGlobalDatabase(databasePath: string): void {
             id,
             status,
             entry_json,
+            retention_id_prefix,
+            retention_max_age_ms,
+            retention_max_entries,
             enqueued_at,
             updated_at
-          ) VALUES ('delivery', 'queued', 'pending', ?, 1, 1)
+          ) VALUES ('delivery', 'queued', 'pending', ?,
+            @retention_id_prefix, @retention_max_age_ms, @retention_max_entries, 1, 1)
         `,
       )
-      .run('{"payload":"do-not-restore"}');
+      .run(deriveDeliveryQueueRetentionColumns("queued", entryJson), entryJson);
     database.prepare("INSERT INTO durable_entries (value) VALUES (?)").run("checkpointed");
     database.exec("PRAGMA wal_checkpoint(TRUNCATE);");
     database.prepare("INSERT INTO durable_entries (value) VALUES (?)").run("committed-in-wal");
@@ -237,7 +251,7 @@ describe("SQLite backup commands", () => {
     ).rejects.toThrow(/cannot be snapshotted safely/u);
 
     expect(runtime.errors).toEqual([
-      "Warning: the backup outcome could not be recorded: file is not a database",
+      `Warning: the backup outcome could not be recorded: Cannot admit backup.recordOutcome for backup outcome ledger in state root ${path.dirname(path.dirname(databasePath))}: failed to acquire gateway state ownership | file is not a database | ERR_SQLITE_ERROR. No local mutation was attempted. Inspect openclaw gateway status. Update the Gateway or fix authentication and retry. To run offline, stop the Gateway through its service owner, wait for ownership to release, then rerun this exact command. | ERR_SQLITE_ERROR`,
     ]);
     await expect(fs.readdir(repositoryPath)).resolves.toEqual([]);
   });

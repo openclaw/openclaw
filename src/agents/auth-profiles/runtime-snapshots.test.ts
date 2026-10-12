@@ -1,3 +1,4 @@
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import * as authProfileClone from "./clone.js";
@@ -21,6 +22,7 @@ import {
   noteRuntimeAuthProfileStorePersistedMutation,
   registerRuntimeAuthProfileStoreMutationListener,
   replaceRuntimeAuthProfileStoreSnapshots,
+  replaceOwnedRuntimeAuthProfileStoreSnapshots,
   setRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
 import { createSnapshotStore as createStore, testing } from "./runtime-snapshots.test-support.js";
@@ -176,6 +178,51 @@ describe("runtime auth profile snapshots", () => {
           missingRevision,
         );
         expect(listener).not.toHaveBeenCalled();
+      } finally {
+        unregister();
+        clearRuntimeAuthProfileStoreSnapshots();
+      }
+    },
+  );
+
+  it.each(["replace", "remove"] as const)(
+    "invalidates inherited runtimes after a shared-store %s publishes the complete roster",
+    (operation) => {
+      const sharedPath = "/tmp/openclaw-auth-publication/state/openclaw.sqlite";
+      const agentPath = "/tmp/openclaw-auth-publication/agents/other/agent/openclaw-agent.sqlite";
+      const entry = (databasePath: string, key: string) => ({
+        databasePath,
+        agentDir: path.dirname(databasePath),
+        owner: {
+          kind: "resolved" as const,
+          sharedDatabasePath: sharedPath,
+          location: "state-db" as const,
+        },
+        store: { version: 1, profiles: { "acme:primary": createApiKeyCredential("acme", key) } },
+      });
+      const shared = entry(sharedPath, "shared-not-real");
+      const local = entry(agentPath, "local-not-real");
+      replaceOwnedRuntimeAuthProfileStoreSnapshots([shared, local]);
+      const nextLocal = entry(agentPath, "replacement-local-not-real");
+      const nextShared =
+        operation === "replace" ? entry(sharedPath, "replacement-shared-not-real") : undefined;
+      const listener = vi.fn(() => {
+        expect(getOwnedRuntimeAuthProfileStoreSnapshotAtDatabasePath(agentPath)?.store).toEqual(
+          nextLocal.store,
+        );
+        expect(getOwnedRuntimeAuthProfileStoreSnapshotAtDatabasePath(sharedPath)?.store).toEqual(
+          nextShared?.store,
+        );
+      });
+      const unregister = registerRuntimeAuthProfileStoreMutationListener(listener);
+      try {
+        replaceOwnedRuntimeAuthProfileStoreSnapshots(
+          nextShared ? [nextShared, nextLocal] : [nextLocal],
+        );
+        expect(listener).toHaveBeenCalledExactlyOnceWith({
+          affectsInheritedStores: true,
+          profileSetChanged: operation === "remove",
+        });
       } finally {
         unregister();
         clearRuntimeAuthProfileStoreSnapshots();

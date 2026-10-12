@@ -15,6 +15,10 @@ import {
   resolveSqliteSessionKey,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import {
+  getSessionActorStorageBinding,
+  type SessionActorStorageBinding,
+} from "../config/sessions/session-actor-storage-binding.js";
 import { isNativeSessionEntryRead } from "../config/sessions/session-entry-read-request.js";
 import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { captureIncognitoSessionOperation } from "../config/sessions/session-incognito-binding.js";
@@ -51,10 +55,12 @@ import {
   scheduleSqliteTrajectoryRuntimeRetention,
   settleIncognitoTrajectoryRuntimeRetention,
 } from "./runtime-retention.js";
-import {
-  appendSqliteTrajectoryRuntimeEvents,
-  type SqliteTrajectoryRuntimeAppend,
-} from "./runtime-store.sqlite.js";
+import { createMemoryTrajectoryRuntimeSink } from "./runtime-store-memory.js";
+import type {
+  SerializedTrajectoryEvent,
+  SqliteTrajectoryRuntimeAppend,
+} from "./runtime-store.contract.js";
+import { appendSqliteTrajectoryRuntimeEvents } from "./runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "./types.js";
 
 type TrajectoryRuntimeSinkParams = {
@@ -65,6 +71,7 @@ type TrajectoryRuntimeSinkParams = {
   sessionKey?: string;
   sessionTarget?: SessionTranscriptRuntimeTarget;
   assertCommitAllowed?: () => void;
+  sessionActor?: SessionActorStorageBinding;
 };
 
 type IncognitoTrajectoryTarget = NonNullable<
@@ -106,6 +113,14 @@ export async function createSqliteTrajectoryRuntimeSink(input: TrajectoryRuntime
         : undefined;
   params.assertCommitAllowed?.();
   const selected = scope ?? marker;
+  const memory = getSessionActorStorageBinding({
+    ...selected,
+    sessionKey: scope?.sessionKey ?? params.sessionKey,
+    sessionActor: params.sessionActor,
+  });
+  if (memory) {
+    return createMemoryTrajectoryRuntimeSink(memory, params);
+  }
   const incognito = selected && captureIncognitoSessionOperation({ ...selected, env: params.env });
   if (incognito) {
     const sessionKey =
@@ -226,11 +241,11 @@ function buildSqliteTrajectoryRuntimeSink(
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const databaseOptions =
     preparedDatabase ?? toDatabaseOptions(resolveSqliteReadScope({ ...marker, env }));
-  let pendingEvents = new Map<TrajectoryEvent, number>();
+  let pendingEvents = new Map<SerializedTrajectoryEvent, number>();
   let queuedBytes = 0;
   let discardPrevious = false;
   let inFlight:
-    | { events: Map<TrajectoryEvent, number>; bytes: number; discardPrevious: boolean }
+    | { events: typeof pendingEvents; bytes: number; discardPrevious: boolean }
     | undefined;
   let unsettledAppend: SqliteWorkerError | undefined;
   const trimPending = () => {
@@ -420,7 +435,7 @@ function buildSqliteTrajectoryRuntimeSink(
     },
     write: (event: TrajectoryEvent, line: string) => {
       const bytes = Buffer.byteLength(line, "utf8") + 1;
-      pendingEvents.set(event, bytes);
+      pendingEvents.set({ runId: event.runId, ts: event.ts, line }, bytes);
       queuedBytes += bytes;
       trimPending();
       scheduleFlush();

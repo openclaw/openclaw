@@ -13,6 +13,7 @@ Dreaming is the background memory consolidation system in `memory-core`. It move
 <Note>
 Dreaming is enabled by default. Set
 `plugins.entries.memory-core.config.dreaming.enabled: false` to disable it.
+Disabled dreaming does not inspect heartbeat system-event queues.
 </Note>
 
 When the cron scheduler is disabled (`cron.enabled: false` or
@@ -63,7 +64,7 @@ Dreaming runs three cooperative phases per sweep, in order: light -> REM -> deep
 
 <AccordionGroup>
   <Accordion title="Light phase">
-    - Reads recent short-term recall state, daily memory files, and redacted session transcripts when available.
+    - Reads recent short-term recall state, daily memory files, and session transcripts when available.
     - Dedupes signals and stages candidate lines.
     - Writes a managed `## Light Sleep` block when storage includes inline output.
     - Records reinforcement signals for later deep ranking.
@@ -90,7 +91,7 @@ Dreaming runs three cooperative phases per sweep, in order: light -> REM -> deep
 
 ## Session transcript ingestion
 
-Dreaming can ingest redacted session transcripts into the dreaming corpus. Only interactive sessions are eligible. Cron, heartbeat, subagent, and unknown sessions stay out of durable candidate ingestion. Personal and sensitive content is redacted before ingestion, and runtime-marked recalled context is removed so recalled snippets cannot be learned again as new memory.
+Dreaming can ingest session transcripts into the dreaming corpus. Only interactive sessions are eligible. Cron, heartbeat, subagent, and unknown sessions stay out of durable candidate ingestion. Transcript text is not secret-masked before ingestion. Runtime-marked recalled context is removed so recalled snippets cannot be learned again as new memory.
 
 Two operator controls exclude sessions from automatic ingestion, each with a recorded reason: the [memory admission policy](/concepts/memory-provenance#admission-keeping-sources-out-of-memory) matches retained hook-source, channel, or chat-type metadata, and [`memory forget`](/cli/memory#memory-forget) records selected session IDs as `forgotten` for future scans. Policy changes do not erase existing candidates or prevent direct file writes. Manual session backfill applies both controls in preview, REM, and apply modes, and preserves source-session origins when staging candidates.
 
@@ -125,7 +126,7 @@ memory framing in the Generative Agents research.
 
 ## Dream Diary
 
-Dreaming keeps a narrative **Dream Diary** in `DREAMS.md`. After each phase has enough material, `memory-core` runs a tool-free background completion and appends a short diary entry, using the workspace agent's default model unless `dreaming.model` is configured. If the configured model is unavailable, the diary run retries once with that agent's default model. Trust or allowlist failures are not retried.
+Dreaming keeps a narrative **Dream Diary** in `DREAMS.md`. Each sweep with useful material combines its Light, REM, and successfully promoted Deep inputs into one short diary entry, including when nothing qualifies for durable promotion. The tool-free background completion uses the workspace agent's default model unless `dreaming.model` is configured. If the configured model is unavailable, the diary run retries once with that agent's default model. Trust or allowlist failures are not retried.
 
 Diary and consolidation completions use fresh contexts without retaining conversation sessions or delivering chat replies. Failed or empty diary generation writes a local fallback entry and reports a degraded outcome, so missing model output leaves a visible trace.
 

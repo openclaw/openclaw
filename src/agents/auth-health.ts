@@ -132,6 +132,20 @@ function buildProfileHealth(params: {
     source: "store" as const,
     label,
   };
+  const expiringProfileHealth = (
+    expires: number | undefined,
+    expiringWithinMs: number,
+    includeExpiredReason = false,
+  ): AuthProfileHealth => {
+    const { status, expiresAt, remainingMs } = resolveOAuthStatus(expires, now, expiringWithinMs);
+    return {
+      ...profile,
+      status,
+      ...(includeExpiredReason ? { reasonCode: status === "expired" ? "expired" : undefined } : {}),
+      expiresAt,
+      remainingMs,
+    };
+  };
 
   if (credential.setup?.replacement) {
     return {
@@ -174,18 +188,7 @@ function buildProfileHealth(params: {
         status: "static",
       };
     }
-    const {
-      status,
-      expiresAt: normalizedExpiresAt,
-      remainingMs,
-    } = resolveOAuthStatus(expiresAt, now, warnAfterMs ?? DEFAULT_OAUTH_WARN_MS);
-    return {
-      ...profile,
-      status,
-      reasonCode: status === "expired" ? "expired" : undefined,
-      expiresAt: normalizedExpiresAt,
-      remainingMs,
-    };
+    return expiringProfileHealth(expiresAt, warnAfterMs ?? DEFAULT_OAUTH_WARN_MS, true);
   }
 
   const effectiveCredential = resolveEffectiveOAuthCredential({
@@ -209,17 +212,7 @@ function buildProfileHealth(params: {
       (normalizeSecretInputString(effectiveCredential.refresh) ? 0 : DEFAULT_OAUTH_WARN_MS),
     DEFAULT_OAUTH_REFRESH_MARGIN_MS,
   );
-  const { status, expiresAt, remainingMs } = resolveOAuthStatus(
-    effectiveCredential.expires,
-    now,
-    oauthWarnAfterMs,
-  );
-  return {
-    ...profile,
-    status,
-    expiresAt,
-    remainingMs,
-  };
+  return expiringProfileHealth(effectiveCredential.expires, oauthWarnAfterMs);
 }
 
 /** Build profile and provider auth health rollups from an auth profile store. */

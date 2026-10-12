@@ -12,11 +12,12 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { setTestEnvValue, withEnvAsync } from "../test-utils/env.js";
 import { prepareDoctorContext } from "./doctor-config-flow.test-support.js";
-import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
+import { useDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
 
 const note = vi.hoisted(() => vi.fn<(message: string, title?: string) => void>());
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
+const withDoctorConfigPreflightHome = useDoctorConfigPreflightHome();
 
 function fixture(home: string, owner?: string, store?: string): OpenClawConfig {
   return {
@@ -75,7 +76,7 @@ describe("Doctor session-store owner recovery", () => {
         await withEnvAsync(
           { OPENCLAW_UPDATE_IN_PROGRESS: scenario === "noninteractive update" ? "1" : undefined },
           async () => {
-            const ctx = await prepareDoctorContext(
+            await using ctx = await prepareDoctorContext(
               configPath,
               scenario === "noninteractive update"
                 ? { options: { repair: true, yes: true, nonInteractive: true } }
@@ -140,7 +141,7 @@ describe("Doctor session-store owner recovery", () => {
           await fs.writeFile(`${configPath}.bak.1`, JSON.stringify(fixture(home, "research")));
         }
         const prompter = recoveryPrompter(async () => true);
-        const ctx = await prepareDoctorContext(configPath, { prompter });
+        await using ctx = await prepareDoctorContext(configPath, { prompter });
         expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
         expect(ctx.cfg.agents?.defaults?.sessionStore?.agentId).toBeUndefined();
         if (scenario === "retired-agent") {
@@ -200,7 +201,7 @@ describe("Doctor repair confirmation conflicts", () => {
           2,
         );
         let confirmationShown = false;
-        const ctx = await prepareDoctorContext(configPath, {
+        await using ctx = await prepareDoctorContext(configPath, {
           options: {},
           confirm: async ({ message }) => {
             expect(message).toBe("Apply recommended config repairs now?");
@@ -255,7 +256,7 @@ describe("Doctor repair confirmation conflicts", () => {
 
         await withEnvAsync({ OPENCLAW_CONFIG_PATH: configPath }, async () => {
           let confirmationShown = false;
-          const ctx = await prepareDoctorContext(configPath, {
+          await using ctx = await prepareDoctorContext(configPath, {
             options: {},
             confirm: async ({ message }) => {
               expect(message).toBe("Apply recommended config repairs now?");
@@ -357,7 +358,7 @@ describe("Doctor Codex activation advisory", () => {
           plugins: { ...(allow === undefined ? {} : { allow }), entries: { codex: entry } },
         });
         const before = await fs.readFile(configPath, "utf8");
-        const ctx = await prepareDoctorContext(configPath);
+        await using ctx = await prepareDoctorContext(configPath);
         expect(await fs.readFile(configPath, "utf8")).toBe(before);
         const advisory = note.mock.calls
           .filter(

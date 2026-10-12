@@ -436,7 +436,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
 });
 
 describe("resolveHeartbeatSenderContext", () => {
-  it("prefers delivery accountId for allowFrom resolution", () => {
+  it("prefers delivery accountId for allowFrom resolution", async () => {
     const cfg: OpenClawConfig = {
       channels: {
         telegram: {
@@ -462,7 +462,7 @@ describe("resolveHeartbeatSenderContext", () => {
       lastAccountId: "default",
     };
 
-    const ctx = resolveHeartbeatSenderContext({ cfg, entry, delivery });
+    const ctx = await resolveHeartbeatSenderContext({ cfg, entry, delivery });
 
     expect(ctx.allowFrom).toEqual(["222"]);
   });

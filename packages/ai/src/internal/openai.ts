@@ -35,5 +35,4 @@ export { bindResponsesInputMessage } from "../transports/openai-responses-replay
 export {
   encodedModelRequestBodyStream,
   modelRequestBodyState,
-  serializeModelRequestBody,
 } from "../transports/model-request-body.js";

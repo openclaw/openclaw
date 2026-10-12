@@ -27,7 +27,6 @@ import {
 } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import type { SessionEntryPublicationSource } from "./session-accessor.sqlite-entry-cache.types.js";
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
-import { SessionTranscriptReadFenceError } from "./session-transcript-read-fence-error.js";
 
 /** Context postimage; exact anchor membership still belongs to the native projection reader. */
 export type SessionTranscriptAuthority = SessionTranscriptContextVersion & {
@@ -158,6 +157,26 @@ export function readStagedSessionTranscriptAuthority(database: { db: DatabaseSyn
     (receipt) => typeof receipt.source.identity === "string",
   );
   return transferable.length ? transferable : undefined;
+}
+
+/** A following entry write consumes the transcript owner's staged watermark. */
+export function readStagedSessionTranscriptUpdatedAt(
+  database: { db: DatabaseSync },
+  sessionId: string,
+): number | undefined {
+  let updatedAt: number | undefined;
+  for (const receipt of readStagedSessionTranscriptAuthority(database) ?? []) {
+    for (const fact of receipt.facts.values()) {
+      if (
+        fact.kind === "postimage" &&
+        fact.value.sessionId === sessionId &&
+        fact.value.updatedAt !== null
+      ) {
+        updatedAt = Math.max(updatedAt ?? 0, fact.value.updatedAt);
+      }
+    }
+  }
+  return updatedAt;
 }
 
 export function parseSessionTranscriptAuthorityReceipts(
@@ -332,91 +351,6 @@ export function retainSessionTranscriptWorkerPublication(params: {
       }
       receipts = [];
       return changes;
-    },
-  };
-}
-
-/**
- * A destructive commit cannot be undone by restoring bytes while a consumer awaits.
- * This latch only refuses; final acceptance still joins the owner FIFO and validates
- * exact anchors with its native mutation witness, including pending worker writes.
- */
-export function retainSessionTranscriptContextGeneration(
-  params: { agentId?: string; sessionKey: string; sessionId: string; storePath?: string },
-  version: SessionTranscriptContextVersion | undefined,
-  databaseIdentity?: string,
-) {
-  let revoked = false;
-  const release = sessionChanges.subscribeFacts((change) => {
-    const source = readPreparedSessionEntryPublicationSource(change);
-    if (databaseIdentity && source.identity && source.identity !== databaseIdentity) {
-      return;
-    }
-    if ("all" in change) {
-      if (
-        source.identity === undefined &&
-        typeof change.scope !== "string" &&
-        change.scope.storePath &&
-        params.storePath &&
-        change.scope.storePath !== params.storePath
-      ) {
-        return;
-      }
-      if (
-        typeof change.scope !== "string" &&
-        change.scope.agentId &&
-        params.agentId &&
-        change.scope.agentId !== params.agentId
-      ) {
-        return;
-      }
-      if (
-        change.factsInvalidated ||
-        change.scope === "stores" ||
-        (typeof change.scope !== "string" && change.scope.topology)
-      ) {
-        revoked = true;
-      }
-      return;
-    }
-    if (
-      change.sessionKey !== params.sessionKey ||
-      (change.agentId && params.agentId && change.agentId !== params.agentId) ||
-      (source.identity === undefined &&
-        change.storePath &&
-        params.storePath &&
-        change.storePath !== params.storePath)
-    ) {
-      return;
-    }
-    if (
-      change.factsInvalidated === true ||
-      change.facts?.kind === "removed" ||
-      ((change.facts?.kind === "entry" || change.facts?.kind === "replacement") &&
-        change.facts.lifecycleChanged) ||
-      (change.facts?.kind === "entry" && change.facts.sessionId !== params.sessionId)
-    ) {
-      revoked = true;
-    }
-    const fact = readPreparedSessionTranscriptChange(change);
-    if (fact?.kind === "unknown" || fact?.kind === "absent") {
-      revoked = true;
-    }
-    if (
-      fact?.kind === "postimage" &&
-      fact.value.sessionId === params.sessionId &&
-      version &&
-      fact.value.generation !== version.generation
-    ) {
-      revoked = true;
-    }
-  });
-  return {
-    release,
-    assertCurrent() {
-      if (revoked) {
-        throw new SessionTranscriptReadFenceError("Session transcript changed during context read");
-      }
     },
   };
 }

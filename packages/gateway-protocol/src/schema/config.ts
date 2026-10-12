@@ -49,6 +49,7 @@ export const ConfigApplyParamsSchema = closedObject(ConfigApplyLikeParamProperti
 export const ConfigPatchParamsSchema = closedObject({
   ...ConfigApplyLikeParamProperties,
   replacePaths: Type.Optional(Type.Array(NonEmptyString, { maxItems: 256 })),
+  response: Type.Optional(Type.Literal("summary")),
 });
 
 /** Empty request payload for fetching the generated config schema. */
@@ -130,6 +131,24 @@ const UpdateImmutableInstallSchema = closedObject({
   currentSha: ImmutableGenerationSha,
   currentPath: NonEmptyString,
   activationEnabled: Type.Optional(Type.Boolean()),
+  releaseRetention: Type.Optional(
+    closedObject({
+      version: Type.Literal(1),
+      mode: Type.Literal("inspect"),
+      keepVerifiedGenerations: Type.Literal(3),
+      pins: Type.Array(closedObject({ sha: ImmutableGenerationSha, identity: NonEmptyString })),
+      generations: Type.Array(
+        closedObject({
+          sha: ImmutableGenerationSha,
+          path: NonEmptyString,
+          identity: NonEmptyString,
+          buildDigest: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+          publishedRevision: Type.Integer({ minimum: 0 }),
+          verifiedRevision: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
+        }),
+      ),
+    }),
+  ),
   activation: Type.Optional(
     closedObject({
       operationId: ImmutableOperationId,

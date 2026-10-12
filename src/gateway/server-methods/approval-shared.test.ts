@@ -13,7 +13,7 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
-import { ExecApprovalManager, type ExecApprovalRecord } from "../exec-approval-manager.js";
+import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
 import {
   bindApprovalReviewerDeviceIds,
@@ -21,8 +21,13 @@ import {
   handlePendingApprovalRequest,
   isApprovalRecordVisibleToClient,
 } from "./approval-shared.js";
-import { handleApprovalResolve } from "./approval.test-support.js";
-import type { GatewayClient, GatewayRequestContext } from "./types.js";
+import {
+  createApprovalClient,
+  createApprovalClientLookup,
+  handleApprovalResolve,
+  requestedEvent,
+} from "./approval.test-support.js";
+import type { GatewayRequestContext } from "./types.js";
 
 const hasApprovalTurnSourceRouteMock = vi.hoisted(() => vi.fn(() => true));
 const prepareApprovalChannelCustodyMock = vi.hoisted(() => vi.fn());
@@ -34,50 +39,6 @@ vi.mock("../../infra/approval-turn-source.js", () => ({
 vi.mock("../approval-channel-custody.js", () => ({
   prepareApprovalChannelCustody: prepareApprovalChannelCustodyMock,
 }));
-
-function requestedEvent<TPayload>(record: ExecApprovalRecord<TPayload>) {
-  return {
-    id: record.id,
-    request: record.request,
-    createdAtMs: record.createdAtMs,
-    expiresAtMs: record.expiresAtMs,
-  };
-}
-
-type ApprovalClientLookup = NonNullable<GatewayRequestContext["getApprovalClientConnIds"]>;
-
-function createApprovalClient(params: {
-  connId: string;
-  clientId: string;
-  deviceId?: string;
-  scopes?: string[];
-  approvalRuntime?: boolean;
-}): GatewayClient {
-  return {
-    connId: params.connId,
-    connect: {
-      client: { id: params.clientId },
-      device: params.deviceId ? { id: params.deviceId } : undefined,
-      scopes: params.scopes ?? ["operator.approvals"],
-    },
-    ...(params.approvalRuntime ? { internal: { approvalRuntime: true } } : {}),
-  } as GatewayClient;
-}
-
-function createApprovalClientLookup(clients: GatewayClient[]): ApprovalClientLookup {
-  return (opts = {}) =>
-    new Set(
-      clients
-        .filter((client) => {
-          if (opts.excludeConnId && client.connId === opts.excludeConnId) {
-            return false;
-          }
-          return opts.filter?.(client, opts.record) ?? true;
-        })
-        .map((client) => client.connId)
-        .filter((connId): connId is string => typeof connId === "string" && connId.length > 0),
-    );
-}
 
 describe("handlePendingApprovalRequest", () => {
   afterEach(() => {
@@ -482,6 +443,48 @@ describe("handlePendingApprovalRequest", () => {
 
     expect(await manager.resolve(record.id, "allow-once")).toBe(true);
     await requestPromise;
+  });
+
+  it("does not forward a request resolved during async native eligibility", async (testContext) => {
+    const manager = createTestApprovalManager(testContext);
+    const record = manager.create({ command: "echo ok" }, 60_000, "approval-publication-race");
+    await manager.register(record, 60_000);
+    const publishing = createDeferredCore();
+    const publication = createDeferredCore<number>();
+    const publishRequested = vi.fn(() => 0);
+    const respond = vi.fn();
+    const deliverRequest = vi.fn(() => true);
+    const requestPromise = handlePendingApprovalRequest({
+      manager,
+      record,
+      respond,
+      context: {
+        broadcast: vi.fn(),
+        approvalEvents: {
+          publishRequested,
+          publishRequestedAsync: () => {
+            publishing.resolve();
+            return publication.promise;
+          },
+          publishResolved: vi.fn(),
+        },
+      } as unknown as GatewayRequestContext,
+      requestEventName: "exec.approval.requested",
+      requestEvent: requestedEvent(record),
+      twoPhase: true,
+      deliverRequest,
+    });
+    await publishing.promise;
+    await manager.resolve(record.id, "deny", "control-ui");
+    publication.resolve(0);
+    await requestPromise;
+    expect(publishRequested).not.toHaveBeenCalled();
+    expect(deliverRequest).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledExactlyOnceWith(
+      true,
+      expect.objectContaining({ id: record.id, decision: "deny" }),
+      undefined,
+    );
   });
 
   it("returns a concurrent first answer when no-route denial loses after delivery", async (testContext) => {
@@ -1224,12 +1227,7 @@ describe("handlePendingApprovalRequest", () => {
     );
     await manager.register(record, 60_000);
     const respond = vi.fn();
-    const event = {
-      id: record.id,
-      request: record.request,
-      createdAtMs: record.createdAtMs,
-      expiresAtMs: record.expiresAtMs,
-    };
+    const event = requestedEvent(record);
 
     await handlePendingApprovalRequest({
       manager,

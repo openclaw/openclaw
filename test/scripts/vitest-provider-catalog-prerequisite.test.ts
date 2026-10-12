@@ -12,6 +12,11 @@ it.each([
     config: "test/vitest/vitest.agents-core.config.ts",
     build: "runtime",
   },
+  {
+    file: "src/agents/prepared-model-catalog-worker.oauth-peers.integration.test.ts",
+    config: "test/vitest/vitest.infra.config.ts",
+    build: "runtime",
+  },
   { file: unitFile, config: "test/vitest/vitest.unit-fast.config.ts", build: undefined },
 ])("prepares only the selected provider runtime consumer: $file", ({ file, config, build }) => {
   const plans = buildVitestRunPlans([file]);

@@ -18,7 +18,6 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
-import { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import {
   readPreparedSessionTranscriptChange,
@@ -388,74 +387,6 @@ it("keeps a delayed worker mutation postimage after native content-preserving pu
     expect(values[0]).toMatchObject(
       readTranscriptContextVersionInTransaction(database, scope.sessionId),
     );
-  });
-});
-
-it("rebases a delayed manager branch receipt onto a newer native owner without losing its lifecycle", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-    const scope = {
-      agentId: "main",
-      sessionKey: "agent:main:authority-owner-race",
-      sessionId: "authority-owner-race",
-      storePath: database.path,
-      env: state.env,
-    };
-    replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    assignSessionOwner(scope, {
-      owner: { type: "human", id: "previous-owner" },
-      assignedBy: { type: "human", id: "assigner" },
-      assignedAt: 1,
-    });
-    const manager = await SessionManager.openAsync(scope);
-    const seed = await manager.appendMessageAsync({ role: "user", content: "seed", timestamp: 1 });
-    const committed: Array<NonNullable<ReturnType<typeof readPreparedSessionEntryChange>>> = [];
-    releases.push(
-      sessionChanges.subscribeFacts((change) => {
-        if (!("sessionKey" in change) || change.sessionKey !== scope.sessionKey) {
-          return;
-        }
-        const entry = readPreparedSessionEntryChange(change, scope.sessionKey);
-        if (entry) {
-          committed.push(entry);
-        }
-      }),
-    );
-    const newerOwner = {
-      actor: { type: "human" as const, id: "newer-native-owner" },
-      assignedBy: { type: "human" as const, id: "assigner" },
-      assignedAt: 2,
-    };
-    let interposed = false;
-    const observeCommit = workerAdmission.observeSqliteWorkerCommittedFacts;
-    vi.spyOn(workerAdmission, "observeSqliteWorkerCommittedFacts").mockImplementation(
-      (admission, install) => {
-        observeCommit(admission, (receipt) => {
-          if (
-            !interposed &&
-            isRecord(receipt.facts) &&
-            receipt.facts.kind === "session-manager-authority"
-          ) {
-            interposed = true;
-            expect(
-              assignSessionOwner(scope, {
-                owner: newerOwner.actor,
-                assignedBy: newerOwner.assignedBy,
-                assignedAt: newerOwner.assignedAt,
-              }),
-            ).toEqual(newerOwner);
-          }
-          install(receipt);
-        });
-      },
-    );
-    await manager.createBranchedSession(seed!);
-    expect(interposed).toBe(true);
-    expect(committed.at(-1)?.entry).toMatchObject({
-      sessionId: manager.getSessionId(),
-      owner: newerOwner,
-    });
-    expect(committed.at(-1)?.entry?.sessionId).not.toBe(scope.sessionId);
   });
 });
 

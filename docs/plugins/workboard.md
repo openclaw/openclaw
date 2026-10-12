@@ -292,11 +292,11 @@ notification kinds are ignored until both surfaces support them. They are never
 rewritten into another valid state.
 
 The open Workboard tab updates from `plugin.workboard.changed` invalidations. Each
-event contains only a store epoch and revision. The UI then rereads canonical
+event contains only a store epoch and revision. The UI then rereads stored
 cards through the normal `operator.read` RPC. Multiple revisions coalesce into
 one follow-up read. Workboard defers that read while a card is being dragged,
 edited, or written, then resumes after the local interaction finishes. A
-reconnect always performs a canonical reload. There is no routine full-card
+reconnect always performs a reload from the store. There is no routine full-card
 poll, and **Refresh** remains available as manual recovery.
 
 The Gateway shares one immutable `workboard.cards.list` payload per normalized
@@ -310,7 +310,7 @@ shape is unchanged.
 When more than one board exists, the toolbar includes a **Board** filter backed
 by persisted board metadata rather than only the currently visible cards. Empty
 and archived boards therefore remain selectable. Cards without an explicit
-board id belong to the canonical `default` board. Each board has a canonical
+board id belong to the primary `default` board. Each board has a primary
 `/workboard/<boardId>` page that can be bookmarked, shared, or pinned in the
 sidebar. The previously shipped `/workboard?board=<boardId>` form remains a
 compatibility alias and redirects to that page while preserving other query
@@ -482,7 +482,7 @@ status are never selected for worker starts (they can still be affected by the
 data side of dispatch: stale-claim cleanup, dependency promotion, timeout
 cleanup).
 
-Session keys are deterministic per board/card, so repeated dispatches route
+Session keys are fixed per board/card, so repeated dispatches route
 back to the same worker lane instead of creating unrelated sessions:
 
 - Assigned cards: `agent:<agentId>:subagent:workboard-<boardId>-<cardId>`
@@ -529,9 +529,15 @@ openclaw workboard dispatch [--board <id>] [--json]
 `list` text output hides archived cards by default (`--include-archived`
 overrides). `--json` always includes archived cards, matching the full-card
 contract used by existing scripts. `show` and `move` accept an unambiguous id
-prefix. `list`, `create`, `show`, and `move` always read/write local plugin
-state directly. Only `dispatch` calls the running Gateway, with the fallback
-described above.
+prefix. `list`, `create`, `show`, and `move` access local plugin state directly.
+Stop the Gateway before local `create` or `move`; while it is running, use the
+Control UI or Gateway RPC for mutations. Only `dispatch` calls the running
+Gateway, with the fallback described above. Data-only dispatch also requires the
+Gateway to be stopped; a connection error alone does not establish that it stopped.
+Plugin loading can also initialize or upgrade the local database before choosing
+the subcommand. Do that preparation with the Gateway stopped, including when the
+requested command is `list` or `show`. Use the Control UI or Gateway RPC for online
+access when local state still needs preparation.
 
 See [Workboard CLI](/cli/workboard) for full flags, JSON output, Gateway
 fallback behavior, id-prefix handling, dispatch selection rules, and
@@ -589,7 +595,7 @@ finishing a model attempt does not move a card into `review` or `blocked` while
 its run is still active. A bounded session sweep runs once per minute to reconcile
 terminal, active, idle, missing, and stale session state. Each store mutation emits
 the normal `plugin.workboard.changed` invalidation, so an open Workboard tab reloads
-the canonical card instead of writing its own lifecycle projection.
+the stored card instead of writing its own lifecycle projection.
 
 Incognito sessions remain absent from session discovery. Explicitly linked
 Incognito cards use authorized exact-session metadata reads, without derived
@@ -712,6 +718,15 @@ conversation remain in the normal session store.
 SQLite opening, queries, and transactions run in a background database worker.
 Disabling or reloading the plugin drains admitted storage work before closing
 its connections.
+
+Workboard instances invalidate cached card lists and board revisions using the
+physical database's in-process writer receipts, including commits through sibling
+instances. Card-list reuse checks that receipt; an unsettled receipt leaves the
+read uncached. A read overlapping a mutation can return its older snapshot; the
+next request observes the writer receipt and reloads it. Change notifications use owner publications;
+there is no timer polling SQLite for writes from other processes. If a worker
+reply fails after a possible commit, the owner discards cached facts and rereads
+them on the next use without replaying the mutation.
 
 Installations with retained pre-July 2026 Workboard plugin-state KV data must
 upgrade through OpenClaw `2026.9.7` and run `openclaw doctor --fix` before upgrading

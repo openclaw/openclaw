@@ -4,7 +4,10 @@ import { createAssistantMessageEventStream, EventStream } from "@openclaw/llm-co
 import type { AssistantMessageEvent } from "@openclaw/llm-core/types";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { processCompletionsStream } from "../../../../packages/ai/src/transports/openai-completions-stream.js";
+import {
+  observeOpenAICompletionsProgress,
+  processCompletionsStream,
+} from "../../../../packages/ai/src/transports/openai-completions-stream.js";
 import {
   createAssistantOutput,
   makeCompletionsChunk,
@@ -38,10 +41,13 @@ async function openStream(scope: "creation-and-gaps" | "creation-only" = "creati
     const stopChunks = () => chunks.end(true);
     requestSignal.addEventListener("abort", stopChunks, { once: true });
     const stream = createAssistantMessageEventStream();
-    void processCompletionsStream(chunks, output, model, stream, {
-      signal: requestSignal,
-      emitReasoning: false,
-    })
+    void processCompletionsStream(
+      observeOpenAICompletionsProgress(chunks, requestSignal),
+      output,
+      model,
+      stream,
+      { signal: requestSignal, emitReasoning: false },
+    )
       .then(
         () => stream.end(output),
         (error: unknown) => {

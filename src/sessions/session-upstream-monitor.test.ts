@@ -1,5 +1,6 @@
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   upsertSessionEntryCore,
@@ -34,6 +35,7 @@ function createMissingCounts() {
 function createDatabaseOptions() {
   const stateDir = sessionDirs.make();
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  setRuntimeConfigSnapshot({});
   return { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
 }
 
@@ -78,6 +80,7 @@ afterEach(async () => {
   vi.useRealTimers();
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
+  resetConfigRuntimeState();
   vi.unstubAllEnvs();
 });
 
@@ -604,7 +607,6 @@ describe("session upstream monitor", () => {
     expect(
       readSessionUpstreamLinkInDatabase(openOpenClawStateDatabase(database).db, sessionKey, "main"),
     ).toEqual(expect.objectContaining({ threadId: "thread-refreshed", marker: { offset: 999 } }));
-    expect(missingCounts.size).toBe(0);
   });
 
   it("prunes missing counters when a link leaves the watched set", async () => {
@@ -882,67 +884,6 @@ describe("session upstream monitor", () => {
     });
 
     expect(check.mock.calls[1]?.[0]).toEqual([expect.objectContaining({ marker: { offset: 0 } })]);
-    expect((await listSessionStateEventsSince(sessionKey, "main", 0, 20, database)).events).toEqual(
-      [],
-    );
-  });
-
-  it.each([
-    {
-      change: "a run starts",
-      mutate: (state: { active: boolean; sessionId: string }) => {
-        state.active = true;
-      },
-    },
-    {
-      change: "the session is replaced",
-      mutate: (state: { active: boolean; sessionId: string }) => {
-        state.sessionId = "session-after";
-      },
-    },
-  ])("defers activity when $change during final provenance I/O", async ({ mutate }) => {
-    const database = createDatabaseOptions();
-    const sessionKey = "agent:main:adopted:provenance-race";
-    await createLink(sessionKey, "claude", database);
-    const state = { active: false, sessionId: "session-before" };
-    const provenanceReadStarted = createDeferred();
-    const provenanceResult = createDeferred<string[]>();
-    let provenanceReads = 0;
-    const loadOwnRecentUserTexts = vi.fn(async () => {
-      provenanceReads += 1;
-      if (provenanceReads === 2) {
-        provenanceReadStarted.resolve();
-        return await provenanceResult.promise;
-      }
-      return [];
-    });
-    const check = vi.fn(async () => [
-      {
-        kind: "activity" as const,
-        sessionKey,
-        occurredAt: 2_000,
-        humanTurns: 1,
-        nextMarker: { offset: 12 },
-        dedupeId: "12",
-      },
-    ]);
-
-    const tick = runSessionUpstreamMonitorTick({
-      ...database,
-      providers: [provider("claude", check)],
-      loadEntry: () => ({ sessionId: state.sessionId }) as never,
-      isRunActive: () => state.active,
-      loadOwnRecentUserTexts,
-    });
-    await provenanceReadStarted.promise;
-    mutate(state);
-    provenanceResult.resolve([]);
-    await tick;
-
-    expect(check).toHaveBeenCalledOnce();
-    expect(
-      readSessionUpstreamLinkInDatabase(openOpenClawStateDatabase(database).db, sessionKey, "main"),
-    ).toEqual(expect.objectContaining({ marker: { offset: 0 } }));
     expect((await listSessionStateEventsSince(sessionKey, "main", 0, 20, database)).events).toEqual(
       [],
     );

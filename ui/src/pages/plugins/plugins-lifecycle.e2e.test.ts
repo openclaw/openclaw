@@ -102,11 +102,18 @@ describeControlUiE2e("Control UI plugin lifecycle", () => {
         expect(await page.locator(".plugin-catalog-detail__actions .btn__spinner").count()).toBe(0);
       }
       await page.locator(".settings-sidebar").getByRole("button", { name: "Back to app" }).click();
-      const workboardRoute = page.locator(
-        'openclaw-app-sidebar .sidebar-zone-entry[data-sidebar-entry="plugin:workboard/workboard"] > .nav-item',
+      const sidebar = page.locator("openclaw-app-sidebar");
+      await sidebar.getByRole("button", { name: "Pages", exact: true }).click();
+      const workboardRoute = sidebar.locator(
+        '.sidebar-pages [data-sidebar-entry="plugin:workboard/workboard"] > .nav-item',
       );
       await workboardRoute.waitFor();
       expect(await workboardRoute.getAttribute("href")).toBe("/workboard");
+      expect(
+        await sidebar
+          .locator('.sidebar-rail [data-sidebar-entry="plugin:workboard/workboard"]')
+          .count(),
+      ).toBe(0);
       expect(await gateway.getRequests("plugins.setEnabled")).toHaveLength(3);
       expect(await gateway.getRequests("connect")).toHaveLength(connects);
       expect(await gateway.getRequests("gateway.restart.request")).toHaveLength(0);

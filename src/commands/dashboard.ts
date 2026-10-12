@@ -1,7 +1,7 @@
 import { readConfigFileSnapshot } from "../config/config.js";
 import { copyToClipboard } from "../infra/clipboard.js";
 import { isRemoteEnvironment } from "../infra/remote-env.js";
-import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { defaultRuntime, ExitError, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import {
   hasVerifiedControlUiLoopbackAlias,
   issueControlUiBrowserHandoff,
@@ -107,6 +107,9 @@ async function dashboardJsonCommand(runtime: RuntimeEnv): Promise<void> {
       0,
     );
   } catch (err) {
+    if (err instanceof ExitError) {
+      throw err;
+    }
     const reason = err instanceof Error ? err.message : String(err);
     dashboardJsonFailure(runtime, reason || "Dashboard target resolution failed.");
   }

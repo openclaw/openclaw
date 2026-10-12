@@ -6,15 +6,12 @@ import {
   readMcpOAuthStoreIfPresentInDatabase,
   readMcpOAuthStatusesInDatabase,
 } from "../agents/mcp-oauth-store.kernel.js";
-import type {
-  OpenClawStateReadCommand,
-  OpenClawStateReadResult,
-} from "./openclaw-state-read.types.js";
+import type { OpenClawStateReadCommand } from "./openclaw-state-read.types.js";
 
 export function readMcpOAuthStateCommand(
   db: DatabaseSync,
   command: Extract<OpenClawStateReadCommand, { type: `mcpOAuth.${string}` }>,
-): OpenClawStateReadResult {
+) {
   if (command.type === "mcpOAuth.statuses") {
     return { type: command.type, value: readMcpOAuthStatusesInDatabase(db, command.input) };
   }

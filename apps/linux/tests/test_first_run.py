@@ -2,11 +2,54 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from first_run import role_matches
-from gateway_switch import GatewayOnboardingFixture
+from gateway_switch import GatewayOnboardingFixture, GatewaySwitchFixture
+
+
+class GatewayPointerTests(unittest.TestCase):
+    def test_reacquires_a_replaced_accessible_before_sending_one_click(self):
+        fixture = GatewaySwitchFixture.__new__(GatewaySwitchFixture)
+        fixture.chrome = Mock()
+        fixture.chrome.until.side_effect = lambda predicate, _label: predicate()
+        fixture.windows = Mock(return_value={"1": "OpenClaw"})
+        fixture.capture = Mock()
+        fixture.open_native_menu = Mock()
+        atspi = SimpleNamespace(
+            StateType=SimpleNamespace(ACTIVE="active"),
+            ScrollType=SimpleNamespace(ANYWHERE="anywhere"),
+            CoordType=SimpleNamespace(SCREEN="screen"),
+        )
+        stale, fresh = Mock(), Mock()
+        for node in (stale, fresh):
+            node.get_localized_role_name.return_value = "button"
+            node.get_state_set.return_value.contains.return_value = True
+        stale.get_component_iface.return_value = None
+        component = fresh.get_component_iface.return_value
+        component.get_extents.return_value = SimpleNamespace(x=10, y=20, width=80, height=30)
+
+        class ClickFinished(Exception):
+            pass
+
+        def wait(label, role=None, *, predicate=None):
+            if label != "Add Gateway":
+                return None
+            if role == "heading":
+                raise ClickFinished
+            for node in (stale, fresh):
+                if predicate(node):
+                    return node
+            self.fail("No clickable accessible found")
+
+        with patch("gateway_switch.time.sleep"), self.assertRaises(ClickFinished):
+            fixture.exercise(Mock(), None, wait, atspi, None)
+        component.scroll_to.assert_called_once_with("anywhere")
+        component.get_extents.assert_called_once_with("screen")
+        pointer_calls = [call.args for call in fixture.chrome.command.call_args_list if call.args[0] == "xdotool"]
+        self.assertEqual(pointer_calls, [("xdotool", "mousemove", "50", "35", "click", "1")])
 
 
 class OnboardingResourcesTests(unittest.TestCase):

@@ -9,6 +9,8 @@ import {
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
 
+const WINDOW_UNITS: Partial<Record<number, string>> = { 1: "d", 3: "h", 5: "m" };
+
 export async function fetchZaiUsage(
   apiKey: string,
   timeoutMs: number,
@@ -47,14 +49,8 @@ export async function fetchZaiUsage(
     const unit = asFiniteNumber(limit.unit);
     const number = asFiniteNumber(limit.number);
     const nextReset = parseUsageResetAt(normalizeOptionalString(limit.nextResetTime));
-    let windowLabel = "Limit";
-    if (unit === 1 && number !== undefined) {
-      windowLabel = `${number}d`;
-    } else if (unit === 3 && number !== undefined) {
-      windowLabel = `${number}h`;
-    } else if (unit === 5 && number !== undefined) {
-      windowLabel = `${number}m`;
-    }
+    const suffix = WINDOW_UNITS[unit ?? 0];
+    const windowLabel = suffix && number !== undefined ? `${number}${suffix}` : "Limit";
 
     if (type === "TOKENS_LIMIT" || type === "TIME_LIMIT") {
       windows.push({

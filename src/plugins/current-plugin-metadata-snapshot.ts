@@ -193,15 +193,15 @@ export function adoptCurrentPluginMetadataSnapshotIfAbsent(
   prepareCurrentPluginMetadataSnapshotPublication(snapshot, options)();
 }
 
-/** Installation revokes operation facts even when it runs between metadata scopes. */
-function revokeCurrentPluginMetadataSnapshotScopes(): void {
+/** Explicit installation refreshes the command before its next metadata phase. */
+function clearCurrentPluginMetadataOperation(): void {
   const caches = new Set(getScopedPluginCaches());
   const runtimeCaches = new Set();
-  for (let scoped = getPluginExecutionFrame()?.metadataScope; scoped; scoped = scoped.parent) {
-    if (scoped.immutableRuntimeGeneration) {
-      runtimeCaches.add(scoped.cache);
+  for (let scope = getPluginExecutionFrame()?.metadataScope; scope; scope = scope.parent) {
+    if (scope.immutableRuntimeGeneration) {
+      runtimeCaches.add(scope.cache);
     } else {
-      caches.add(scoped.cache);
+      caches.add(scope.cache);
     }
   }
   for (const cache of caches) {
@@ -472,6 +472,6 @@ registerPluginMetadataSnapshotReaders({
   getCurrentPluginMetadataSnapshot,
 });
 
-registerPluginMetadataProcessMemoLifecycleClear(revokeCurrentPluginMetadataSnapshotScopes, {
+registerPluginMetadataProcessMemoLifecycleClear(clearCurrentPluginMetadataOperation, {
   owner: "operation",
 });

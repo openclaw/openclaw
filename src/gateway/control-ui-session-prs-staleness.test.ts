@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { deleteSessionEntryLifecycle } from "../config/sessions.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -35,6 +36,7 @@ afterEach(() => {
 it("marks retained PR data unavailable after a refresh fails, then recovers", async () => {
   vi.useRealTimers();
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await captureRuntimeConfigAsyncReader()();
     const sessionKey = "agent:main:stale-preview";
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey },
@@ -87,6 +89,7 @@ it.each(["replacement", "metadata"] as const)(
   async (change) => {
     vi.useRealTimers();
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await captureRuntimeConfigAsyncReader()();
       const replaced = change === "replacement";
       const owner = replaced ? ensureProfileForEmail("original-pr-reader@example.test") : undefined;
       const replacementOwner = replaced
@@ -191,6 +194,7 @@ it.each(["replacement", "metadata"] as const)(
 it("retires a repository-only target without falling back to its local workspace", async () => {
   vi.useRealTimers();
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await captureRuntimeConfigAsyncReader()();
     const sessionKey = "agent:main:repository-only";
     const repositories = getSessionRepositoryWorkspaceStore();
     const repository = await repositories.create({

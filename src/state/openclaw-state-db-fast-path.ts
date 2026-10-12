@@ -109,12 +109,6 @@ export function isOpenClawStateSchemaFastPathEligible(
         if (typeof schemaVersion !== "number") {
           throw new Error(`Shared-state database ${pathname} schema version is unavailable.`);
         }
-        publishIntegrity = assertOpenClawStateRuntimeIntegrity(
-          database,
-          pathname,
-          { schemaVersion, userVersion },
-          integrity,
-        );
         // Both policies see this read transaction; repair must collect fresh facts after it ends.
         const readTable = createSqliteTableContractReader(database);
         assertCurrentStateRuntimeSchema(database, pathname, readTable);
@@ -128,6 +122,12 @@ export function isOpenClawStateSchemaFastPathEligible(
           return false;
         }
         assertNoLegacyStateRuntimeRepair(database, pathname);
+        publishIntegrity = assertOpenClawStateRuntimeIntegrity(
+          database,
+          pathname,
+          { schemaVersion, userVersion },
+          integrity,
+        );
         return true;
       },
       { operationLabel: "state.admission.fast-path" },

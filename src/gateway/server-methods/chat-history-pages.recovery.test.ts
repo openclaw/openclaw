@@ -2,11 +2,12 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { installSessionToolResultGuard } from "../../agents/session-tool-result-guard.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import {
   appendTranscriptMessage,
   replaceSessionEntry,
-  replaceTranscriptEvents,
 } from "../../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import * as nestedActivity from "../../sessions/nested-tool-activity.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as historySanitize from "../chat-display-projection.sanitize.js";
@@ -49,6 +50,7 @@ async function withTranscript(
   entryOptions: { sessionStartedAt?: number } = {},
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await captureRuntimeConfigAsyncReader()();
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:page-recovery",

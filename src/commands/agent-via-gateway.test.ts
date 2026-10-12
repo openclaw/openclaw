@@ -2,7 +2,6 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 // Agent via gateway tests cover gateway-backed agent command dispatch and session loading.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -26,6 +25,7 @@ import {
   createGatewayNormalCloseError,
   createGatewayTimeoutError,
   createLocalGatewayLockOptions,
+  createSignalProcess,
   settleGatewayAgentRequest,
 } from "./agent-via-gateway.test-support.js";
 import type { agentCommand as AgentCommand } from "./agent.js";
@@ -181,35 +181,6 @@ function requireFirstCallOrder(
 
 const requireRecord = createRequireRecord("record", "expected-label-object-short");
 
-function createSignalProcess() {
-  type SignalName = "SIGINT" | "SIGTERM";
-  const listeners = new Map<SignalName, Set<() => void>>();
-  const processLike = {
-    exitCode: undefined as NodeJS.Process["exitCode"],
-    on(signal: SignalName, handler: () => void) {
-      const current = listeners.get(signal) ?? new Set<() => void>();
-      current.add(handler);
-      listeners.set(signal, current);
-      return processLike;
-    },
-    off(signal: SignalName, handler: () => void) {
-      listeners.get(signal)?.delete(handler);
-      return processLike;
-    },
-  };
-  return {
-    processLike,
-    emit(signal: SignalName) {
-      for (const handler of listeners.get(signal) ?? []) {
-        handler();
-      }
-    },
-    listenerCount(signal: SignalName) {
-      return listeners.get(signal)?.size ?? 0;
-    },
-  };
-}
-
 function rejectOnGatewayAbort(signal: AbortSignal | undefined, onAbort?: () => Promise<void>) {
   return new Promise<never>((_, reject) => {
     signal?.addEventListener(
@@ -250,8 +221,10 @@ vi.mock("../config/gateway-dispatch-config.js", () => ({
   readGatewayDispatchConfig: loadConfig,
   readGatewayDispatchConfigWithShellEnvFallback: loadConfigWithShellEnvFallback,
 }));
+// mock-isolation: Gateway dispatch fixtures control runtime config without loading operator state.
 vi.mock("../config/io.js", () => ({
   getRuntimeConfig: loadRuntimeConfig,
+  captureRuntimeConfigAsyncReader: () => async () => loadRuntimeConfig(),
   loadConfig: loadRuntimeConfig,
 }));
 vi.mock("../gateway/call.js", () => ({
@@ -326,17 +299,14 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it("clamps oversized gateway timeout seconds at the command boundary", async () => {
+  it("lets the Gateway own each attempt budget across fallbacks", async () => {
     await withTempStore(async () => {
       mockGatewaySuccessReply();
-
-      await agentCliCommand(
-        { message: "hi", to: "+1555", timeout: String(Number.MAX_SAFE_INTEGER) },
-        runtime,
-      );
-
-      const request = requireFirstCallArg(callGateway, "gateway") as { timeoutMs?: number };
-      expect(request.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
+      await agentCliCommand({ message: "hi", to: "+1555", timeout: "20" }, runtime);
+      expect(requireFirstCallArg(callGateway, "gateway")).toMatchObject({
+        timeoutMs: null,
+        params: { timeout: 20 },
+      });
     });
   });
 
@@ -374,6 +344,25 @@ describe("agentCliCommand", () => {
       },
       { agents: { ownership: "explicit", entries: { solo: {} } } },
     );
+  });
+
+  it("prints a Gateway thinking clamp without changing the assistant reply", async () => {
+    await withTempStore(async () => {
+      const thinkingClamp =
+        "Thinking level clamped to off for ollama/llama3.2 (requested high; preference retained).";
+      callGateway.mockResolvedValue({
+        ...gatewaySuccessReply("hello"),
+        result: {
+          payloads: [{ text: "hello" }],
+          meta: { requestShaping: { thinking: "off", thinkingClamp } },
+        },
+      });
+
+      await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+
+      expect(runtime.log).toHaveBeenCalledWith(thinkingClamp);
+      expect(runtime.log).toHaveBeenCalledWith("hello");
+    });
   });
 
   it("keeps ordinary gateway URL override runs least-privilege", async () => {
@@ -1821,9 +1810,9 @@ describe("agentCliCommand", () => {
 
     expect(callGateway).toHaveBeenCalledTimes(1);
     expect(runtime.exit).not.toHaveBeenCalledWith(1);
-    expect(requireRecord(requireFirstCallArg(callGateway, "gateway"), "request").timeoutMs).toBe(
-      2_147_000_000,
-    );
+    expect(
+      requireRecord(requireFirstCallArg(callGateway, "gateway"), "request").timeoutMs,
+    ).toBeNull();
   });
 
   it("stops dispatch and releases signal listeners when the session module fails to load", async () => {

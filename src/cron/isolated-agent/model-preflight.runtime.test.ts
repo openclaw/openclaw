@@ -257,6 +257,7 @@ describe("preflightCronModelProvider", () => {
     expect(first.baseUrl).toBe("http://localhost:11434");
     expect(first.retryAfterMs).toBe(300000);
     expect(first.reason).toContain("the local provider preflight failed");
+    expect(first.reason).toContain("Start the local provider or correct its configured endpoint");
     expect(first.reason).not.toContain("endpoint is not reachable");
     expect(first.reason).toContain("Last error: ECONNREFUSED");
     expect(first.reason).not.toContain("timed out after");

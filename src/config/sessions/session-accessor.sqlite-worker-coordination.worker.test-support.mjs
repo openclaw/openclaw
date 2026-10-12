@@ -13,7 +13,6 @@ const { closeOpenClawStateDatabase } = await import("../../state/openclaw-state-
 const [coordination] = await once(parentPort, "message");
 await runWithSqliteMutationWorkerCoordination(
   coordination,
-  1,
   { agentId: workerData.operation, path: workerData.agentPath },
   async (options) => {
     if (workerData.operation === "hold") {

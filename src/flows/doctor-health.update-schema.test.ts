@@ -6,6 +6,9 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as originalCapture from "../commands/doctor-original-capture.js";
 import { preflightUpdateDoctorCli } from "../commands/doctor-update-schema-guard.js";
+import { createTranscriptEventInserter } from "../config/sessions/transcript-payload.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import * as sqliteSnapshot from "../infra/sqlite-snapshot-source.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
 import { createUpdateRun, recordUpdateRunStep } from "../infra/update-run-ledger.js";
@@ -105,14 +108,21 @@ describe("Doctor schema bumps under an updating parent", () => {
         });
         let original: ReturnType<typeof readRows>;
         {
-          using db = new DatabaseSync(agent);
+          using db = openNodeSqliteDatabase(agent);
+          admitSqliteSchema(db);
           db.exec(`PRAGMA foreign_keys = OFF;
             INSERT INTO session_nodes(session_key, current_session_id, entry_json, updated_at)
             VALUES ('agent:main:retained', 'retained', '{"sessionId":"retained","updatedAt":1}', 1);
             INSERT INTO session_windows(session_id, session_key, created_at, updated_at)
-            VALUES ('retained', 'agent:main:retained', 1, 1);
-            INSERT INTO transcript_events(session_id, seq, event_json, created_at)
-            VALUES ('retained', 0, '{"type":"message","message":{"role":"user","content":"keep"}}', 1);`);
+            VALUES ('retained', 'agent:main:retained', 1, 1);`);
+          createTranscriptEventInserter(
+            db,
+            "retained",
+          )({
+            seq: 0,
+            eventJson: '{"type":"message","message":{"role":"user","content":"keep"}}',
+            createdAt: 1,
+          });
           if (damage.includes("orphan")) {
             db.exec(`INSERT INTO session_windows(session_id, session_key, created_at, updated_at)
               VALUES ('orphan', 'agent:main:missing', 1, 1)`);
@@ -128,7 +138,7 @@ describe("Doctor schema bumps under an updating parent", () => {
         const doctor = runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true });
         if (damage === "orphan") {
           await doctor;
-          expect(readDatabase(shared).version).toBe(20);
+          expect(readDatabase(shared).version).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
           const migrationBackup = fs
             .readdirSync(path.dirname(shared))
             .find(

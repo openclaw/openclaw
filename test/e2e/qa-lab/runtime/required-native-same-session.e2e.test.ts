@@ -517,10 +517,10 @@ it.skipIf(process.platform === "win32")(
                 expect(state.pending).toMatchObject({
                   claim_id: aClaim,
                   run_id: aRun,
-                  staged_result_ref: expect.any(String),
+                  staged_result_ref: null,
                   workspace_accepted_at_ms: expect.any(Number),
                 });
-                record("A-staged-and-accepted", { creation, timing, state });
+                record("A-unchanged-and-accepted", { creation, timing, state });
                 atResume.resolve();
                 await continueResume.promise;
               }
@@ -622,7 +622,7 @@ it.skipIf(process.platform === "win32")(
               record("B-durable-pending-input", pendingInput);
             }
             continueQuiesce.resolve();
-            await checkpoint(atResume.promise, "A never staged/accepted its workspace result");
+            await checkpoint(atResume.promise, "A never accepted its unchanged workspace result");
             expect(aDone).toBe(false);
             finishReleased = true;
             continueResume.resolve();

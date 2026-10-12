@@ -73,14 +73,18 @@ vi.mock("../src/gateway/talk/client-agent-consult.js", () => ({
 }));
 vi.mock("../src/gateway/talk/client-gateway-control.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/gateway/talk/client-gateway-control.js")>()),
-  createTalkClientGatewayControlOwner: () => ({
-    control: { bindBridge: () => undefined },
-    runAgentConsult: async () => ({ text: "Done" }),
-    assertOpen: () => undefined,
-    adoptProvider: async () => undefined,
-    activate: () => undefined,
-    close: async () => undefined,
-  }),
+  createTalkClientGatewayControlOwner: () => {
+    const lifetime = new AbortController();
+    return {
+      signal: lifetime.signal,
+      control: { bindBridge: () => undefined },
+      runAgentConsult: async () => ({ text: "Done" }),
+      assertOpen: () => undefined,
+      adoptProvider: async () => undefined,
+      activate: () => undefined,
+      close: async () => lifetime.abort(),
+    };
+  },
 }));
 vi.mock("../src/talk/client-voice-session-read.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/talk/client-voice-session-read.js")>()),

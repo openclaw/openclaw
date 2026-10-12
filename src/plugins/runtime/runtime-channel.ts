@@ -74,7 +74,6 @@ import {
 import {
   readSessionUpdatedAtCore,
   recordInboundSessionMeta,
-  updateSessionLastRoute,
 } from "../../config/sessions/session-accessor.js";
 import { readSessionUpdatedAtInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { getChannelActivity, recordChannelActivity } from "../../infra/channel-activity.js";
@@ -91,6 +90,10 @@ import {
   publicChannelTurnParams,
   type PublicChannelTurnParams,
 } from "../../plugin-sdk/reply-options.js";
+import {
+  updateLastRoute,
+  updateLastRouteWithAuthority,
+} from "../../plugin-sdk/session-store-runtime.js";
 import { buildAgentSessionKey, resolveAgentRoute } from "../../routing/resolve-route.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { createChannelRuntimeContextRegistry } from "./channel-runtime-contexts.js";
@@ -163,7 +166,8 @@ export function createRuntimeChannel(options?: {
     // route through the session accessor boundary.
     recordSessionMetaFromInbound: recordInboundSessionMeta,
     recordInboundSession,
-    updateLastRoute: updateSessionLastRoute,
+    updateLastRoute,
+    updateLastRouteWithAuthority,
     resolveEntryResetFreshness: resolveSessionEntryResetFreshness,
     resolveEntryResetFreshnessAsync: resolveSessionEntryResetFreshnessAsync,
   };

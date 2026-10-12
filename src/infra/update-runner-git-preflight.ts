@@ -408,7 +408,7 @@ async function testPreflightCandidate(
     // the resulting candidate only after that preparation finishes.
     await params.prepareGitExposure?.(params.worktreeDir, candidateSha, candidateCommand.env);
     await candidateCommand.restoreWorkspace?.();
-    await params.validateCandidate(params.worktreeDir);
+    params.steps.push(...((await params.validateCandidate(params.worktreeDir)) ?? []));
     // Activation checks out candidateSha and promotes only generated runtime paths.
     // Check after repair so validated source edits cannot disappear at activation.
     const { result: cleanCheck } = await runGitCleanCheckStep(
@@ -461,6 +461,7 @@ export async function runGitCandidatePreflight(params: {
   prepareGitExposure?: UpdateRunnerOptions["prepareGitExposure"];
   prepareCandidate?: (root: string, cleanupRoot: string) => Promise<void>;
   retainCleanup?: (cleanup: () => Promise<boolean>) => boolean;
+  onCleanupReportingError?: (error: unknown) => void;
   needsCheckoutMain: boolean;
   runCommand: CommandRunner;
   timeoutMs: number;

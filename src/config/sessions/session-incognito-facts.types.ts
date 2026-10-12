@@ -14,6 +14,7 @@ export type IncognitoSessionFacts = {
   capability?: SessionEntryCurrentFacts;
   chatMetadataRevision?: string;
   entryReadRevision?: string;
+  initializationFingerprint?: string;
   delivery?: Pick<SessionEntry, "sessionId" | "updatedAt" | "delivery">;
   media?: Pick<
     SessionEntry,
@@ -28,10 +29,29 @@ export type IncognitoSessionFacts = {
     | "spawnedWorkspaceDir"
     | "pendingWorktree"
     | "pendingProjectGitUrl"
+    | "projectId"
+    | "worktree"
+    | "pluginOwnerId"
   > & { worktreeId?: string };
+  modelSelection?: Pick<
+    SessionEntry,
+    | "modelOverride"
+    | "modelOverrideSource"
+    | "providerOverride"
+    | "modelOverrideRouteResolution"
+    | "modelOverrideFallbackOriginProvider"
+    | "modelOverrideFallbackOriginModel"
+    | "agentRuntimeOverride"
+    | "agentHarnessId"
+    | "authProfileOverride"
+    | "sandboxMode"
+    | "nativeRuntimeConsent"
+  >;
   policy?: Pick<
     SessionEntry,
     | "sessionId"
+    | "lifecycleRevision"
+    | "skillLibrarySelections"
     | "sandbox"
     | "sandboxMode"
     | "createdActor"
@@ -40,6 +60,9 @@ export type IncognitoSessionFacts = {
     | "permissionMode"
     | "execHost"
     | "execNode"
+    | "execCwd"
+    | "pluginOwnerId"
+    | "agentHarnessId"
   >;
   cliHistory?: {
     boundary: SessionEntry["cliHistoryBoundary"];

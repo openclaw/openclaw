@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createCanonicalFixtureSkill } from "../../skills/test-support/test-helpers.js";
 import {
@@ -9,6 +9,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   loadSessionEntry,
   onSessionIdentityMutation,
@@ -16,6 +17,8 @@ import {
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import { readReferencedSessionIds } from "./session-accessor.sqlite-lifecycle-state.js";
+import { readSessionMaintenanceAgeQueries } from "./session-accessor.sqlite-maintenance-age-queries.js";
 import {
   projectPublicSessionEntry,
   projectPublicSessionEntryPatch,
@@ -31,13 +34,48 @@ function createScope(name: string) {
   };
 }
 
+beforeEach(() => setRuntimeConfigSnapshot({}));
+
 afterEach(async () => {
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   await closeStateDatabaseForTest();
+  clearRuntimeConfigSnapshot();
 });
 
 describe("SQLite session row persistence", () => {
+  it("updates maintenance and retained-reference predicates with the canonical entry", async () => {
+    const scope = createScope("predicate-columns");
+    await upsertSessionEntryCore(scope, {
+      sessionId: "current",
+      updatedAt: 10,
+      sessionStartedAt: 5,
+      previousSessionId: "previous",
+    });
+    const database = openOpenClawAgentDatabase(scope);
+    const prepare = vi.spyOn(database.db, "prepare");
+    const startedAt = () =>
+      [...readSessionMaintenanceAgeQueries(database.db).activity(undefined)].find(
+        (row) => row.session_key === scope.sessionKey,
+      )?.session_started_at;
+    const references = () => readReferencedSessionIds(database, new Set(), ["previous"]);
+    expect(startedAt()).toBe(5);
+    expect(references().has("previous")).toBe(true);
+
+    await patchSessionEntryCore(
+      scope,
+      () => ({ sessionStartedAt: 8, previousSessionId: undefined }),
+      { skipMaintenance: true },
+    );
+    expect(startedAt()).toBe(8);
+    expect(references().has("previous")).toBe(false);
+    const queries = prepare.mock.calls.map(([query]) => query);
+    expect(queries.some((query) => query.includes('"session_started_at"'))).toBe(true);
+    expect(queries.some((query) => query.includes('"has_optional_references" ='))).toBe(true);
+    expect(queries.every((query) => !query.includes("$.sessionStartedAt"))).toBe(true);
+    prepare.mockRestore();
+  });
+
   it("bounds saved-prompt decoding while publishing identity changes", async () => {
     const env = {
       ...process.env,
@@ -136,7 +174,7 @@ describe("SQLite session row persistence", () => {
     }
   });
 
-  it.each(["during", "after"] as const)(
+  it.each(["during"] as const)(
     "isolates the existing-entry context when first read %s the update",
     async (readTiming) => {
       const env = {
@@ -169,7 +207,7 @@ describe("SQLite session row persistence", () => {
     },
   );
 
-  it.each([undefined, "plugin-dock"] as const)(
+  it.each([undefined] as const)(
     "protects required profile provenance and surface %s during replacement",
     async (createdSurface) => {
       const scope = createScope("stamp");

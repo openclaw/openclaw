@@ -518,6 +518,8 @@ export {
   SkillsWorkshopArchiveParamsSchema,
   SkillsWorkshopRestoreParamsSchema,
   SkillsWorkshopChangeResultSchema,
+  SkillsWorkshopUndoParamsSchema,
+  SkillsWorkshopUndoResultSchema,
   SkillsSecurityVerdictsParamsSchema,
   SkillsSecurityVerdictsResultSchema,
   SkillsSkillCardParamsSchema,

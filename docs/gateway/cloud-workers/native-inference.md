@@ -203,6 +203,13 @@ and placement; initial-message recovery never falls back to Gateway execution.
 
 Leave `requiredProfile` unset for the optional, administrator-selected flow below.
 
+An optional profile routes only its bound session turns. Sessionless helpers,
+including Activity recaps, still run on the Gateway and need their own Gateway
+credentials. On a credential-free Gateway, automatic helpers can therefore
+report authentication failures even while worker turns succeed. Use
+`requiredProfile` when all inference must stay off the Gateway; that policy also
+blocks sessionless model helpers. It does not move those helpers to the node.
+
 ### Create and dispatch with worker proxy authentication
 
 Use an authenticated operator CLI/API connection and the configured default

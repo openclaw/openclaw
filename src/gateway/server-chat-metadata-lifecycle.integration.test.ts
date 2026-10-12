@@ -398,8 +398,9 @@ describe("gateway chat metadata lifecycle composition", () => {
       const loader = nativeContext.loadGatewayModelCatalogSnapshot;
       try {
         await publishOwner(nativeConfig);
+        // This fixture tests retained discovery; startup now acquires provider inventory only.
+        await readOwner()?.loadNativeModelCatalog?.();
         expect(loadModelCatalog).toHaveBeenCalled();
-        const preparationCalls = loadModelCatalog.mock.calls.length;
         loadModelCatalog.mockClear();
         revision += 1;
         const lifecycle = await createLifecycle(() => currentConfig);
@@ -589,14 +590,26 @@ describe("gateway chat metadata lifecycle composition", () => {
             await published.promise;
             expect(events).toContain("published");
             expect(events).not.toContain("failed");
-            await expect(nextRead).resolves.toMatchObject({ models: expectedModels(true) });
+            await expect(nextRead).resolves.toMatchObject({
+              models: [
+                expect.objectContaining({
+                  id: "codex-latest",
+                  name: "codex-latest",
+                  available: true,
+                }),
+              ],
+            });
             const replacement = readOwner();
             expect(replacement).toBeDefined();
             expect(replacement).not.toBe(owner);
             expect(replacement?.pluginRegistry).toBe(owner.pluginRegistry);
-            expect(loadModelCatalog).toHaveBeenCalledTimes(1 + preparationCalls);
+            await replacement?.loadNativeModelCatalog?.();
+            const nativeCalls = loadModelCatalog.mock.calls.length;
+            await expect(lifecycle.read({ agentId: "main" })).resolves.toMatchObject({
+              models: expectedModels(true),
+            });
             await lifecycle.read({ agentId: "main" });
-            expect(loadModelCatalog).toHaveBeenCalledTimes(1 + preparationCalls);
+            expect(loadModelCatalog).toHaveBeenCalledTimes(nativeCalls);
             expect({ current: staleCurrent, models: staleModels }).toMatchObject({
               current: false,
               models: expectedModels(false),
@@ -609,13 +622,16 @@ describe("gateway chat metadata lifecycle composition", () => {
           return;
         }
 
+        const retainedStartup = await lifecycle.readStartup({
+          agentId: "main",
+          readPolicy: "ready",
+        });
+        expect(retainedStartup).toBeDefined();
         currentConfig = { ...nativeConfig };
         await lifecycle.refresh();
-        // Equivalent lifecycle facts can retain a generation, but its prepared wrappers
-        // still belong to the previous config object until a canonical read refreshes them.
-        await expect(
-          lifecycle.readStartup({ agentId: "main", readPolicy: "ready" }),
-        ).resolves.toBeUndefined();
+        const copiedStartup = await lifecycle.readStartup({ agentId: "main", readPolicy: "ready" });
+        expect(copiedStartup?.sessionModelCatalog).toBe(retainedStartup?.sessionModelCatalog);
+        expect(copiedStartup?.defaultModelCatalog).toBe(retainedStartup?.defaultModelCatalog);
         await lifecycle.read({ agentId: "main" });
         await expectNativeAvailable(true);
 

@@ -11,6 +11,7 @@ import type {
   WorkerOperationContext,
   WorkerOperationHandlers,
 } from "../../state/worker-operation-registry.js";
+import { readWorkerPlacementsInDatabase } from "./placement-row-codec.js";
 import { createWorkerEnvironmentCommitAdmission } from "./store-commit-authority.js";
 import { reconcileAttachedSessionOwners } from "./store-mutations.js";
 import { createWorkerEnvironmentReceipt } from "./store-receipt.js";
@@ -46,13 +47,20 @@ function mutation<Name extends Method, Result>(
     return runOpenClawStateWriteTransaction(
       (transactionDatabase) => {
         const { db } = transactionDatabase;
-        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
         const now = () => input.nowMs ?? Date.now();
         const store = createWorkerEnvironmentStoreKernel(transactionDatabase, now);
         const changesBefore = readTotalChanges(db);
         const touched = new Set<string>();
         const result = execute(input, { db, store, now, touch: (id) => touched.add(id.trim()) });
         const facts = readWorkerEnvironmentFacts(db, [...touched]);
+        if (name === "refreshBootstrapReceipt") {
+          const sessionIds = facts.environments.flatMap((environment) =>
+            environment.state === "attached" ? environment.attachedSessionIds : [],
+          );
+          if (sessionIds.length > 0) {
+            facts.placements = readWorkerPlacementsInDatabase(db, sessionIds);
+          }
+        }
         const receipt = {
           result,
           changed: readTotalChanges(db) !== changesBefore,
@@ -77,6 +85,24 @@ function mutation<Name extends Method, Result>(
   };
 }
 
+type EnvironmentMethod = Exclude<
+  keyof WorkerEnvironmentMutationMethods,
+  | "ensureNodeEnrollment"
+  | "ensurePreparedIntent"
+  | "createSessionAttachmentIntent"
+  | "closeSessionAttachment"
+  | "pruneTerminalEnvironments"
+>;
+function environmentMutation<Name extends EnvironmentMethod, Result>(
+  name: Name,
+  execute: (input: Input<Name>["input"], store: MutationContext["store"]) => Result,
+) {
+  return mutation(name, ({ input }, { store, touch }) => {
+    touch(input.environmentId);
+    return execute(input, store);
+  });
+}
+
 export const workerEnvironmentOperations = {
   "workerEnvironments.initialize": mutation("initialize", (_input, { db, now, touch }) => {
     for (const id of reconcileAttachedSessionOwners(db, now())) {
@@ -84,10 +110,9 @@ export const workerEnvironmentOperations = {
     }
     return undefined;
   }),
-  "workerEnvironments.createIntent": mutation("createIntent", ({ input }, { store, touch }) => {
-    touch(input.environmentId);
-    return store.createIntent(input);
-  }),
+  "workerEnvironments.createIntent": environmentMutation("createIntent", (input, store) =>
+    store.createIntent(input),
+  ),
   "workerEnvironments.ensureNodeEnrollment": mutation(
     "ensureNodeEnrollment",
     ({ input }, { store, touch }) => {
@@ -95,60 +120,38 @@ export const workerEnvironmentOperations = {
       return store.ensureNodeEnrollment(input);
     },
   ),
-  "workerEnvironments.revokeEnvironmentCredential": mutation(
+  "workerEnvironments.revokeEnvironmentCredential": environmentMutation(
     "revokeEnvironmentCredential",
-    ({ input }, { store, touch }) => {
-      touch(input.environmentId);
-      return store.revokeEnvironmentCredential(input);
-    },
+    (input, store) => store.revokeEnvironmentCredential(input),
   ),
-  "workerEnvironments.reconcileSharedHost": mutation(
+  "workerEnvironments.reconcileSharedHost": environmentMutation(
     "reconcileSharedHost",
-    ({ input }, { store, touch }) => {
-      touch(input.environmentId);
-      return store.reconcileSharedHost(input);
-    },
+    (input, store) => store.reconcileSharedHost(input),
   ),
-  "workerEnvironments.adoptProvisionCleanupFailure": mutation(
+  "workerEnvironments.adoptProvisionCleanupFailure": environmentMutation(
     "adoptProvisionCleanupFailure",
-    ({ input }, { store, touch }) => {
-      touch(input.environmentId);
-      return store.adoptProvisionCleanupFailure(input);
-    },
+    (input, store) => store.adoptProvisionCleanupFailure(input),
   ),
-  "workerEnvironments.requestDestroy": mutation("requestDestroy", ({ input }, { store, touch }) => {
-    touch(input.environmentId);
-    return store.requestDestroy(input);
-  }),
-  "workerEnvironments.refreshBootstrapReceipt": mutation(
+  "workerEnvironments.requestDestroy": environmentMutation("requestDestroy", (input, store) =>
+    store.requestDestroy(input),
+  ),
+  "workerEnvironments.refreshBootstrapReceipt": environmentMutation(
     "refreshBootstrapReceipt",
-    ({ input }, { store, touch }) => {
-      touch(input.environmentId);
-      return store.refreshBootstrapReceipt(input);
-    },
+    (input, store) => store.refreshBootstrapReceipt(input),
   ),
-  "workerEnvironments.transition": mutation("transition", ({ input }, { store, touch }) => {
-    touch(input.environmentId);
-    return store.transition(input);
-  }),
-  "workerEnvironments.renewCredential": mutation(
-    "renewCredential",
-    ({ input }, { store, touch }) => {
-      touch(input.environmentId);
-      return store.renewCredential(input);
-    },
+  "workerEnvironments.transition": environmentMutation("transition", (input, store) =>
+    store.transition(input),
   ),
-  "workerEnvironments.markCredentialDelivered": mutation(
+  "workerEnvironments.renewCredential": environmentMutation("renewCredential", (input, store) =>
+    store.renewCredential(input),
+  ),
+  "workerEnvironments.markCredentialDelivered": environmentMutation(
     "markCredentialDelivered",
-    ({ input }, { store, touch }) => {
-      touch(input.environmentId);
-      return store.markCredentialDelivered(input);
-    },
+    (input, store) => store.markCredentialDelivered(input),
   ),
-  "workerEnvironments.recordError": mutation("recordError", ({ input }, { store, touch }) => {
-    touch(input.environmentId);
-    return store.recordError(input);
-  }),
+  "workerEnvironments.recordError": environmentMutation("recordError", (input, store) =>
+    store.recordError(input),
+  ),
   "workerEnvironments.ensurePreparedIntent": mutation(
     "ensurePreparedIntent",
     ({ input }, { store, touch }) => {
@@ -160,12 +163,9 @@ export const workerEnvironmentOperations = {
       return value;
     },
   ),
-  "workerEnvironments.requestPreparedDestroy": mutation(
+  "workerEnvironments.requestPreparedDestroy": environmentMutation(
     "requestPreparedDestroy",
-    ({ input }, { store, touch }) => {
-      touch(input.environmentId);
-      return store.requestPreparedDestroy(input);
-    },
+    (input, store) => store.requestPreparedDestroy(input),
   ),
   "workerEnvironments.createSessionAttachmentIntent": mutation(
     "createSessionAttachmentIntent",
@@ -188,19 +188,13 @@ export const workerEnvironmentOperations = {
       return value;
     },
   ),
-  "workerEnvironments.cancelSessionAttachmentReservation": mutation(
+  "workerEnvironments.cancelSessionAttachmentReservation": environmentMutation(
     "cancelSessionAttachmentReservation",
-    ({ input }, { store, touch }) => {
-      touch(input.environmentId);
-      return store.cancelSessionAttachmentReservation(input);
-    },
+    (input, store) => store.cancelSessionAttachmentReservation(input),
   ),
-  "workerEnvironments.touchSessionAttachment": mutation(
+  "workerEnvironments.touchSessionAttachment": environmentMutation(
     "touchSessionAttachment",
-    ({ input }, { store, touch }) => {
-      touch(input.environmentId);
-      return store.touchSessionAttachment(input);
-    },
+    (input, store) => store.touchSessionAttachment(input),
   ),
   "workerEnvironments.pruneTerminalEnvironments": mutation(
     "pruneTerminalEnvironments",

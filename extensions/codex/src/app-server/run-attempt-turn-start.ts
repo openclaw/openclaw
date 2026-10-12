@@ -24,7 +24,6 @@ import type {
 } from "./run-attempt-turn-request.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import { assertCodexBindingMayBeReplaced, clearCodexBindingForClient } from "./session-binding.js";
-import { isCodexContextRestartSelectionChangedError } from "./thread-lifecycle-errors.js";
 import {
   CodexUsageLimitPromptError,
   formatCodexTurnStartUsageLimitError,
@@ -204,7 +203,7 @@ export async function startCodexAttemptTurn(
           authProfileId: startupAuthProfileId,
           rateLimits: usageLimitError.rateLimitsForProfile,
         });
-      } else if (!isCodexContextRestartSelectionChangedError(turnStartError)) {
+      } else {
         throw turnStartError;
       }
       const result = buildCodexTurnStartFailureResult({

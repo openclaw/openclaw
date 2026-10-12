@@ -173,6 +173,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "contextTokensSource",
   "contextBudgetStatus",
   "compactionCount",
+  "compactionQualityDegraded",
   "transcriptByteCompactionLatch",
   "memoryFlush",
   "cliHistoryBoundary",
@@ -203,6 +204,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "quotaSuspension",
   "pendingTranscriptRepair",
   "visibility",
+  "communication",
   "publicShare",
   "profileInvolvement",
 ] as const satisfies ReadonlyArray<

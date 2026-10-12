@@ -1,3 +1,4 @@
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -111,4 +112,22 @@ it("refreshes unchanged hashes so disappearance protection survives a database r
     code: WORKSPACE_VANISHED_ERROR_CODE,
   });
   await expect(fs.stat(state.workspaceDir)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it("does not synchronously inventory skills when a recent attestation prevents expiry", async () => {
+  const skillDir = path.join(state.workspaceDir, "skills", "synthetic");
+  await fs.mkdir(skillDir, { recursive: true });
+  await fs.writeFile(path.join(skillDir, "SKILL.md"), "# Synthetic skill\n");
+  await ensureAgentWorkspace({ dir: state.workspaceDir, ensureBootstrapFiles: false });
+  const lstat = vi.spyOn(syncFs, "lstatSync");
+  const stat = vi.spyOn(syncFs, "statSync");
+  await ensureAgentWorkspace({ dir: state.workspaceDir, ensureBootstrapFiles: false });
+  const skillReads = [...lstat.mock.calls, ...stat.mock.calls].filter(([file]) =>
+    String(file).startsWith(path.join(state.workspaceDir, "skills") + path.sep),
+  );
+  expect(skillReads).toHaveLength(0);
+  await fs.rm(state.workspaceDir, { recursive: true });
+  await expect(ensureAgentWorkspace({ dir: state.workspaceDir })).rejects.toMatchObject({
+    code: WORKSPACE_VANISHED_ERROR_CODE,
+  });
 });

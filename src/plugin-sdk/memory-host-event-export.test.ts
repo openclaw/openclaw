@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { root as createFsSafeRoot } from "../infra/fs-safe.js";
+import * as fsSafe from "../infra/fs-safe.js";
 import * as eventStore from "../memory-host-sdk/event-store.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { clearMemoryPluginState } from "../plugins/memory-state.test-fixtures.js";
@@ -24,6 +24,76 @@ describe("memory host event export recovery", () => {
     resetPluginStateStoreForTests();
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
+  });
+
+  it.each([
+    { name: "positive v3", identity: { dev: 7n, ino: 11n } },
+    {
+      name: "signed exact",
+      identity: { dev: -9_223_372_036_854_775_807n, ino: -9_223_372_036_854_775_805n },
+    },
+  ])("refreshes an export after publishing a $name identity marker", async ({ identity }) => {
+    const state = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "memory-host-exact-export-",
+    });
+    const { workspaceDir } = state;
+    const cfg = { agents: { entries: { main: { workspace: workspaceDir } } } };
+    const event = {
+      type: "memory.recall.recorded" as const,
+      timestamp: "2026-09-10T12:00:00.000Z",
+      query: "first",
+      resultCount: 0,
+      results: [],
+    };
+    const createRoot = fsSafe.root;
+    vi.spyOn(fsSafe, "root").mockImplementation(async (...args) => {
+      const root = await createRoot(...args);
+      // Preserve real file I/O while modeling the dependency's platform identity receipt.
+      const open = root.open.bind(root);
+      vi.spyOn(root, "open").mockImplementation(async (relativePath, options) => {
+        const opened = await open(relativePath, options);
+        if (relativePath.endsWith("/memory-host-events.jsonl")) {
+          Object.defineProperty(opened, "exactIdentity", { value: identity });
+        }
+        return opened;
+      });
+      const openWritable = root.openWritable.bind(root);
+      vi.spyOn(root, "openWritable").mockImplementation(async (relativePath, options) => {
+        const opened = await openWritable(relativePath, options);
+        if (relativePath.endsWith("/memory-host-events.jsonl")) {
+          Object.defineProperty(opened, "exactIdentity", { value: identity });
+        }
+        return opened;
+      });
+      return root;
+    });
+    try {
+      await appendMemoryHostEvent(workspaceDir, event);
+      const artifact = (await listMemoryHostPublicArtifacts({ cfg })).find(
+        (entry) => entry.kind === "event-log",
+      );
+      expect(artifact).toBeDefined();
+      if (!artifact) {
+        throw new Error("expected initial event export");
+      }
+      const ownerPath = path.join(
+        path.dirname(artifact.absolutePath),
+        ".openclaw-memory-host-events-owner.json",
+      );
+      expect(JSON.parse(await fs.readFile(ownerPath, "utf8"))).toMatchObject({
+        schemaVersion: 3,
+        fileDev: String(identity.dev),
+        fileIno: String(identity.ino),
+      });
+      await appendMemoryHostEvent(workspaceDir, { ...event, query: "second" });
+      expect(await listMemoryHostPublicArtifacts({ cfg })).toContainEqual(artifact);
+      await expect(fs.readFile(artifact.absolutePath, "utf8")).resolves.toBe(
+        `${JSON.stringify(event)}\n${JSON.stringify({ ...event, query: "second" })}\n`,
+      );
+    } finally {
+      await state.cleanup();
+    }
   });
 
   it.each([false, true])(
@@ -120,7 +190,7 @@ describe("memory host event export recovery", () => {
     try {
       await fs.mkdir(path.dirname(absolutePath), { recursive: true });
       await fs.writeFile(path.join(workspaceDir, ownerRelativePath), expectedOwnerContent, "utf8");
-      const workspaceRoot = await createFsSafeRoot(workspaceDir, {
+      const workspaceRoot = await fsSafe.root(workspaceDir, {
         hardlinks: "reject",
         mkdir: true,
         mode: 0o600,

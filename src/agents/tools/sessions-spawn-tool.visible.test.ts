@@ -40,6 +40,7 @@ describe("sessions_spawn visible work receipts", () => {
   it("delegates an explicitly granted coding target without the front-door local tool ceiling", async () => {
     hoisted.inProcessCreationMock.mockResolvedValue({
       key: "agent:worker:dashboard:coding-child",
+      sessionId: "coding-child-session",
       runStarted: true,
       runId: "coding-child-run",
     });
@@ -123,6 +124,7 @@ describe("sessions_spawn visible work receipts", () => {
   it("does not accept a delegated ceiling or grant from model arguments", async () => {
     hoisted.inProcessCreationMock.mockResolvedValue({
       key: "agent:worker:dashboard:ordinary-child",
+      sessionId: "ordinary-child-session",
       runStarted: true,
       runId: "ordinary-child-run",
     });
@@ -201,6 +203,7 @@ describe("sessions_spawn visible work receipts", () => {
     const runs = new Map([[otherAgentRun.runId, otherAgentRun]]);
     hoisted.inProcessCreationMock.mockResolvedValue({
       key: "agent:main:dashboard:quota-child",
+      sessionId: "quota-child",
       runStarted: true,
       runId: "quota-child-run",
     });
@@ -234,6 +237,7 @@ describe("sessions_spawn visible work receipts", () => {
     async (source) => {
       hoisted.inProcessCreationMock.mockResolvedValue({
         key: "agent:main:dashboard:restricted-child",
+        sessionId: "restricted-child",
         runStarted: true,
         runId: "run-visible-restricted",
       });

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -46,6 +47,27 @@ async function readLive(name: string) {
 }
 
 describe("workshop library", () => {
+  it("reuses retained changes across runs and refreshes after a workshop write", async () => {
+    const reads = vi.spyOn(stateWorker, "executeOpenClawStateWorker");
+    try {
+      expect(await listWorkshopChanges("main", { runId: "before" })).toEqual([]);
+      const count = reads.mock.calls.length;
+      expect(await listWorkshopChanges("main", { runId: "another" })).toEqual([]);
+      expect(reads.mock.calls).toHaveLength(count);
+
+      await createWorkshopSkill(ctx, { name: "deploy", content: skill("deploy", "1. Deploy.") });
+      const changes = await listWorkshopChanges("main", { runId: "run-1" });
+      expect(changes).toMatchObject([{ action: "create", skillName: "deploy" }]);
+      changes[0]!.summary = "caller mutation";
+      expect(await listWorkshopChanges("main", { beforeMs: changes[0]!.createdAtMs })).toEqual([]);
+      expect(await listWorkshopChanges("main", { runId: "run-1" })).toMatchObject([
+        { summary: "created: Deploy staging builds" },
+      ]);
+    } finally {
+      reads.mockRestore();
+    }
+  });
+
   it("versions every mutation so restore undoes it, and undoing the undo is possible", async () => {
     await createWorkshopSkill(ctx, {
       name: "deploy",

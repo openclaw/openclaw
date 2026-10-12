@@ -40,7 +40,8 @@ export class CodexNativeSubagentCompletionDelivery {
     if (existing) {
       return existing;
     }
-    const attempt = this.deliverAttempt(state, childState);
+    // Publish the shared attempt before releasing a client can synchronously close it.
+    const attempt = Promise.resolve().then(() => this.deliverAttempt(state, childState));
     this.attempts.set(childState, attempt);
     const release = () => {
       if (this.attempts.get(childState) === attempt) {
@@ -51,17 +52,27 @@ export class CodexNativeSubagentCompletionDelivery {
     return attempt;
   }
 
+  async join(child: ChildState): Promise<void> {
+    await this.attempts.get(child);
+  }
+
   private async deliverAttempt(state: ParentState, childState: ChildState): Promise<void> {
     const completion = childState.pendingCompletion;
     if (!completion || !this.isCurrent(state, childState)) {
       return;
     }
-    if (childState.deliveringCompletion || childState.completionDeliveryTimer) {
+    if (childState.completionDeliveryTimer) {
       return;
     }
-    childState.deliveringCompletion = true;
     let deferredToForeground = false;
     try {
+      if (
+        childState.cancellationRequested &&
+        childState.pendingCompletion?.status === "cancelled"
+      ) {
+        // Stop owns durable cancellation acknowledgement before releasing this child.
+        return;
+      }
       if (!this.prepareDelivery(state, childState)) {
         return;
       }
@@ -140,7 +151,6 @@ export class CodexNativeSubagentCompletionDelivery {
         // pending unregister. Once attempted, sleeping retries retain only delivery authority.
         childState.completionCustody?.settleExecution();
       }
-      childState.deliveringCompletion = false;
     }
   }
 
@@ -187,7 +197,7 @@ export class CodexNativeSubagentCompletionDelivery {
         }
       }
       child.nativeCompletionDelivered = true;
-      if (child.pendingCompletion && !child.deliveringCompletion) {
+      if (child.pendingCompletion && !this.attempts.has(child)) {
         this.finish(deliveryParent, child);
       }
     }

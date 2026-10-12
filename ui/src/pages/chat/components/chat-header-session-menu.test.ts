@@ -1,13 +1,15 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { ApplicationContext } from "../../../app/context.ts";
 import type { UiSettings } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
+import { LitContent } from "../../../lit/solid-content.tsx";
 import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import {
   clearNativeGatewayTestState,
   setNativeGatewayTestState,
@@ -66,6 +68,7 @@ async function mountMenu({
     | "onboarding"
     | "preferencesBrowserOnly"
     | "compact"
+    | "bubbleModeEnabled"
     | "copyMarkdownAllowed"
     | "splitAllowed"
     | "panelActions"
@@ -261,16 +264,19 @@ describe("chat header session menu", () => {
       const container = document.createElement("div");
       document.body.append(container);
       containers.push(container);
-      render(
-        pane.renderPaneHeader(
-          createPaneHeaderWorkspaceFixture(state),
-          session,
-          false,
-          undefined,
-          false,
-          null,
-        ),
-        container,
+      mountSolid(
+        () =>
+          createComponent(LitContent, {
+            value: pane.renderPaneHeader(
+              createPaneHeaderWorkspaceFixture(state),
+              session,
+              false,
+              undefined,
+              false,
+              null,
+            ),
+          }),
+        { container },
       );
       const menu = container.querySelector<HeaderMenuElement>("openclaw-chat-header-session-menu");
       await menu?.updateComplete;
@@ -315,16 +321,19 @@ describe("chat header session menu", () => {
     const container = document.createElement("div");
     document.body.append(container);
     containers.push(container);
-    render(
-      pane.renderPaneHeader(
-        createPaneHeaderWorkspaceFixture(state),
-        session,
-        false,
-        undefined,
-        false,
-        null,
-      ),
-      container,
+    mountSolid(
+      () =>
+        createComponent(LitContent, {
+          value: pane.renderPaneHeader(
+            createPaneHeaderWorkspaceFixture(state),
+            session,
+            false,
+            undefined,
+            false,
+            null,
+          ),
+        }),
+      { container },
     );
     const menu = container.querySelector<HeaderMenuElement>("openclaw-chat-header-session-menu");
     if (!menu) {
@@ -343,7 +352,9 @@ describe("chat header session menu", () => {
     const onSettingsChange = vi.fn<(patch: Partial<UiSettings>) => void>();
     const menu = await mountMenu({
       onboarding,
+      bubbleModeEnabled: true,
       preferencesBrowserOnly: !onboarding,
+      session: { target: { key: "agent:main:test" } },
       onSettingsChange,
     });
     const view = item(menu, "View");
@@ -351,8 +362,13 @@ describe("chat header session menu", () => {
       view.querySelectorAll<MenuItemElement>("wa-dropdown-item[slot='submenu']"),
     );
 
-    expect(viewItems.map(itemLabel)).toEqual(["Reasoning", "Tool calls", "Keep commentary"]);
-    expect(viewItems.map((entry) => entry.checked)).toEqual([!onboarding, true, true]);
+    expect(viewItems.map(itemLabel)).toEqual([
+      "Reasoning",
+      "Tool calls",
+      "Keep commentary",
+      "Speech bubbles",
+    ]);
+    expect(viewItems.map((entry) => entry.checked)).toEqual([!onboarding, true, true, false]);
     if (onboarding) {
       expect(viewItems.every((entry) => entry.disabled)).toBe(true);
       expect(
@@ -366,6 +382,7 @@ describe("chat header session menu", () => {
     select(menu, "view:reasoning");
     select(menu, "view:tool-calls");
     select(menu, "view:commentary");
+    select(menu, "view:speech-bubbles");
     expect(onSettingsChange.mock.calls).toEqual(
       onboarding
         ? []
@@ -373,8 +390,51 @@ describe("chat header session menu", () => {
             [{ chatShowThinking: false }],
             [{ chatShowToolCalls: false }],
             [{ chatPersistCommentary: false }],
+            [
+              {
+                chatBubbleSessionKeys: ["agent:main:test"],
+                chatBubbleDisabledSessionKeys: undefined,
+              },
+            ],
           ],
     );
+  });
+
+  it.each([false, true])("keeps bubble mode on the menu session in compact=%s", async (compact) => {
+    const onSettingsChange = vi.fn<(patch: Partial<UiSettings>) => void>();
+    const menu = await mountMenu({
+      compact,
+      bubbleModeEnabled: true,
+      session: { target: { key: "agent:main:other" } },
+      onSettingsChange,
+    });
+    menu.settings = { ...settings(), chatBubbleSessionKeys: ["agent:main:main"] };
+    if (compact) {
+      select(menu, "compact:open-view");
+    }
+    await menu.updateComplete;
+    const bubbleItem = item(menu, "Speech bubbles");
+    expect(bubbleItem.checked).toBe(false);
+    select(menu, "view:speech-bubbles");
+    expect(onSettingsChange).toHaveBeenLastCalledWith({
+      chatBubbleSessionKeys: ["agent:main:main", "agent:main:other"],
+      chatBubbleDisabledSessionKeys: undefined,
+    });
+    menu.settings = { ...menu.settings, ...onSettingsChange.mock.calls[0]![0] };
+    await menu.updateComplete;
+    // The open checkbox keeps its DOM identity and keyboard navigation position.
+    expect(item(menu, "Speech bubbles")).toBe(bubbleItem);
+    expect(bubbleItem.checked).toBe(true);
+    menu.session = { ...menu.session, target: { key: "agent:main:third" } };
+    await menu.updateComplete;
+    expect(item(menu, "Speech bubbles").checked).toBe(false);
+    menu.session = { ...menu.session, target: { key: "agent:main:other" } };
+    await menu.updateComplete;
+    select(menu, "view:speech-bubbles");
+    expect(onSettingsChange).toHaveBeenLastCalledWith({
+      chatBubbleSessionKeys: ["agent:main:main"],
+      chatBubbleDisabledSessionKeys: ["agent:main:other"],
+    });
   });
 
   it.each([false, true])(
@@ -442,14 +502,11 @@ describe("chat header session menu", () => {
           "Pin session",
           "Rename…",
           "Mark as unread",
-          "Archive session",
-          "Icon & color",
-          "Move to group",
+          "Copy link",
           "Assign to…",
-          "Fork conversation",
-          "Copy",
-          "Open in",
-          "Delete…",
+          "Move to group",
+          "Archive session",
+          "Advanced",
         ]);
         expect(menu.querySelector("[slot='submenu']")).toBeNull();
         select(menu, "open-command-palette");
@@ -457,7 +514,6 @@ describe("chat header session menu", () => {
         await navigate("open-copy");
         expect(rootLabels(menu)).toEqual([
           "Back",
-          "Session link",
           "Preview link",
           "Conversation as Markdown",
           "Session ID",

@@ -65,6 +65,11 @@ import {
   loadManagedChildSpawner,
 } from "./lib/managed-child-process.mts";
 import {
+  claimManagedCleanup,
+  failManagedCleanup,
+  ManagedCleanupCancelled,
+} from "./lib/managed-cleanup-handoff.mts";
+import {
   prepareTestboxLeaseFreshness,
   recordTestboxLeaseFreshness,
 } from "./testbox-lease-freshness.mts";
@@ -1310,9 +1315,6 @@ function restoreTemporaryLeaseClaimPath(claimPath: string) {
       encoding: "utf8",
       mode: 0o600,
     });
-    if (readFileSync(claimPath, "utf8") !== original) {
-      return;
-    }
     renameSync(temporaryPath, claimPath);
   } finally {
     rmSync(temporaryPath, { force: true });
@@ -4148,6 +4150,7 @@ function cleanupOnce() {
   }
   cleanupSucceeded = false;
   if (!childTreeSettled) {
+    failManagedCleanup();
     try {
       sourceStaging?.hold("writers");
     } catch {
@@ -4325,8 +4328,7 @@ const FAST_FAIL_HINT_WINDOW_MS = 15_000;
 const spawnManagedChild = await loadManagedChildSpawner();
 await preparationCheckpoint();
 try {
-  // Preparation can yield while a receipt or source changes. Keep the original
-  // capsule provenance and refuse before native Testbox I/O if it no longer matches.
+  // Verify the allocation still belongs to this caller before native Testbox I/O.
   testboxLeaseFreshness?.assertCurrent();
 } catch (error) {
   cleanupOnce();
@@ -4345,6 +4347,17 @@ if (sourceStaging?.recorded) {
   }
   const leaseId = optionValue(normalizedArgs, "--id");
   sourceStaging.admitted(namespace, leaseId ? [leaseId] : undefined);
+}
+try {
+  await claimManagedCleanup();
+  await preparationCheckpoint();
+} catch (error) {
+  if (error instanceof ManagedCleanupCancelled) {
+    cancellationSignal ??= error.signal;
+  }
+  await preparationCheckpoint(error);
+  cleanupOnce();
+  throw error;
 }
 const child = spawnManagedChild(childInvocation.command, childInvocation.args, {
   cwd: childCwd,

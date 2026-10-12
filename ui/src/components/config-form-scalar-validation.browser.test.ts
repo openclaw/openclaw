@@ -1,7 +1,7 @@
 // Control UI tests cover the visible reason for an invalid scalar config value.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "../styles.css";
-import { renderNumberInputFixture } from "../test-helpers/config-form-fixtures.ts";
+import { renderNumberInputFixture } from "../test-helpers/config-form-fixtures.tsx";
 import { configFieldId } from "./config-form.shared.ts";
 
 const hasBrowserLayout = !navigator.userAgent.toLowerCase().includes("jsdom");

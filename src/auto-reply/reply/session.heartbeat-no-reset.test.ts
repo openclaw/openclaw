@@ -22,6 +22,7 @@ it("keeps an expired session unchanged for heartbeat and resets on the next user
   const sessionKey = "agent:main:main:user123";
   const staleTime = Date.now() - 25 * 60 * 60 * 1000;
   const snooze = { snoozedUntil: Date.now() + 3_600_000, snoozedAt: staleTime };
+  const communication = { send: "never", receive: "ask" } as const;
   await replaceSessionEntry(
     { storePath, sessionKey },
     {
@@ -32,6 +33,7 @@ it("keeps an expired session unchanged for heartbeat and resets on the next user
       sessionStartedAt: staleTime,
       lastInteractionAt: staleTime,
       ...snooze,
+      communication,
     },
   );
   const cfg = {
@@ -75,4 +77,6 @@ it("keeps an expired session unchanged for heartbeat and resets on the next user
   expect(persisted?.sidebarRoot).toBe(true);
   expect(persisted?.snoozedUntil).toBeUndefined();
   expect(persisted?.snoozedAt).toBeUndefined();
+  expect(user.sessionEntry.communication).toEqual(communication);
+  expect(loadSessionEntry({ storePath, sessionKey })?.communication).toEqual(communication);
 });

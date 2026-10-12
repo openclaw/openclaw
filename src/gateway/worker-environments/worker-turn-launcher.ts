@@ -4,13 +4,13 @@ import { withRequiredSessionPlacement } from "../../agents/session-placement-adm
 import type {
   PreparedSessionPlacementSandbox,
   SessionPlacementAdmissionProvider,
+  SessionPlacementSandboxParams,
 } from "../../agents/session-placement-admission.js";
 import { getReplyOperationSessionReader } from "../../auto-reply/reply/reply-run-registry.state.js";
 import {
   composeSessionSourceAssertion,
   createDynamicSessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
 import { markDiagnosticRunProgress } from "../../logging/diagnostic-run-activity.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
@@ -18,9 +18,9 @@ import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { WORKER_ADMISSION_DEADLINE_MS } from "../../worker/worker-connection-contract.js";
 import { StaleWorkerBuildError } from "./admission.js";
 import { raceNodeWorkerOperation } from "./node-worker-abort.js";
-import { sameWorkerSessionTurnClaim } from "./placement-record.js";
+import { isCurrentPlacementTurnClaim, sameWorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerSessionPlacementRecord, WorkerSessionTurnClaim } from "./placement-store.js";
-import { matchesWorkerPlacementTarget } from "./placement-target.js";
+import { isWorkerEnvironmentAttachedTo, matchesWorkerPlacementTarget } from "./placement-target.js";
 import { ActiveTurnClaimError } from "./placement-turn-claims.js";
 import { findPendingWorkerWorkspaceResult } from "./placement-workspace-result.js";
 import { WorkerRuntimeRefreshPendingError } from "./provider-runtime-refresh.js";
@@ -51,7 +51,7 @@ import {
   type ActiveWorkerPlacement,
 } from "./worker-turn-failure.js";
 import type { WorkerTurnLauncherOptions } from "./worker-turn-launcher.types.js";
-import { createWorkerTurnRunOwner, type ActiveWorkerTurn } from "./worker-turn-run-owner.js";
+import * as workerTurnOwner from "./worker-turn-run-owner.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 
 const loadWorkerTurnExecution = createLazyRuntimeModule(() => import("./worker-turn-execution.js"));
@@ -61,16 +61,10 @@ const loadPlacementSandbox = createLazyRuntimeModule(() => import("./placement-s
 class WorkerRuntimeRefreshInFlightError extends Error {}
 
 export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLauncherOptions) {
-  const activeWorkerTurns = new Map<string, ActiveWorkerTurn>();
+  const activeWorkerTurns = new Map<string, workerTurnOwner.ActiveWorkerTurn>();
   const requiredAdmission = createRequiredWorkerTurnAdmission(options);
   const provider: SessionPlacementAdmissionProvider & {
-    prepareSandbox(params: {
-      agentId: string;
-      config?: OpenClawConfig;
-      sessionId: string;
-      sessionKey?: string;
-      workspaceDir: string;
-    }): Promise<PreparedSessionPlacementSandbox>;
+    prepareSandbox(params: SessionPlacementSandboxParams): Promise<PreparedSessionPlacementSandbox>;
   } = {
     withRequiredSession: options.withRequiredSession,
     usesWorkerInference: requiredAdmission.usesWorkerInference,
@@ -127,11 +121,8 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
         prepared.assertCurrent();
         const currentEnvironment = options.environments.get(placement.environmentId);
         if (
-          currentEnvironment?.state !== "attached" ||
+          !isWorkerEnvironmentAttachedTo(currentEnvironment, placement) ||
           currentEnvironment.environmentId !== placement.environmentId ||
-          currentEnvironment.ownerEpoch !== placement.activeOwnerEpoch ||
-          currentEnvironment.attachedSessionIds.length !== 1 ||
-          currentEnvironment.attachedSessionIds[0] !== placement.sessionId ||
           (sandbox.backendId === "node" &&
             currentEnvironment.nodeDeviceId !== sandbox.placementNodeId)
         ) {
@@ -151,7 +142,9 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
       });
     },
     async executeTurn(claim, inputTurn, runLocal, onAdmitted, assertRunCurrent) {
-      return await withRequiredSessionPlacement(
+      const previous = activeWorkerTurns.get(claim.sessionId);
+      const reply = await workerTurnOwner.prepareWorkerTurnReplyDelivery(previous, inputTurn);
+      const execution = withRequiredSessionPlacement(
         claim,
         {
           config: inputTurn.config,
@@ -160,10 +153,13 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
         },
         async () => {
           const restartSignal = getGatewayRestartDrainSignal();
-          const assertCurrent = () => {
-            inputTurn.abortSignal?.throwIfAborted();
-            assertRunCurrent?.();
-          };
+          const assertCurrent = composeSessionSourceAssertion(
+            [assertRunCurrent],
+            (assertSource) => {
+              inputTurn.abortSignal?.throwIfAborted();
+              assertSource();
+            },
+          );
           const runLocalTurn = (
             preparedPlacement?: Parameters<typeof executeLocalTurn>[0]["preparedPlacement"],
           ) =>
@@ -379,18 +375,19 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             }
             placement = admitted.placement;
             turnClaim = admitted.turnClaim;
-            let activeWorkerTurn: ActiveWorkerTurn | undefined;
+            let activeWorkerTurn: workerTurnOwner.ActiveWorkerTurn | undefined;
             let handedOff = false;
             let terminalReceiptRequired = false;
             let terminalAtMs: number | undefined;
             let workspaceResolutionFailed = false;
             try {
               if (!remoteExec) {
-                activeWorkerTurn = await createWorkerTurnRunOwner({
+                activeWorkerTurn = await workerTurnOwner.createWorkerTurnRunOwner({
                   placements: options.placements,
                   claim: turnClaim,
                   sessionKey: placement.sessionKey,
                   turn,
+                  isReplyDelivered: reply.isDelivered,
                   assertCurrent: assertAdmissionCurrent,
                 });
                 activeWorkerTurn.signal.throwIfAborted();
@@ -405,15 +402,20 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
                 };
                 activeWorkerTurns.set(turnClaim.sessionId, activeWorkerTurn);
               }
+              using placementReadCleanup = new DisposableStack();
+              const placementRead = await options.placements.prepareSessionPlacement(
+                turnClaim.sessionId,
+              );
+              placementReadCleanup.defer(placementRead.release);
               const readPreparedPlacement = (assertAdmission: () => void) => {
                 turn.abortSignal?.throwIfAborted();
                 assertAdmission();
-                const preparedPlacement = options.placements.get(turnClaim.sessionId);
+                const preparedPlacement = placementRead.current();
                 if (
                   preparedPlacement?.state !== "active" ||
                   preparedPlacement.executionMode !== placement.executionMode ||
                   !matchesWorkerPlacementTarget(preparedPlacement, placement) ||
-                  !options.placements.validateTurnClaim(turnClaim)
+                  !isCurrentPlacementTurnClaim(preparedPlacement, turnClaim)
                 ) {
                   throw new Error("Worker placement changed while loading turn execution");
                 }
@@ -466,6 +468,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
                 onTerminal: () => {
                   terminalAtMs = Date.now();
                 },
+                onReply: reply.deliver,
                 placement,
                 placements: options.placements,
                 workspace,
@@ -475,7 +478,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
                 turn,
                 turnClaim,
                 runLocal,
-                assertRunCurrent: remoteExec ? assertRunCurrent : assertPreparationCurrent,
+                assertRunCurrent: remoteExec ? assertCurrent : assertPreparationCurrent,
               };
               return await withWorkerTurnTranscriptDatabase(
                 turn,
@@ -713,6 +716,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
           }
         },
       );
+      return await reply.wait(execution);
     },
   };
   return provider;

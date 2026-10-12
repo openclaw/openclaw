@@ -6,12 +6,18 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { matrixPlugin } from "./channel.js";
 import { registerMatrixCli } from "./cli.js";
-import { loadMatrixCredentials, saveMatrixCredentials } from "./matrix/credentials.js";
+import { prepareMockMatrixClientStorage } from "./matrix/client/shared.test-support.js";
+import { loadMatrixCredentialsAsync } from "./matrix/credentials-read.js";
+import { saveMatrixCredentials } from "./matrix/credentials.js";
 import { installMatrixTestRuntime } from "./test-runtime.js";
 import type { CoreConfig } from "./types.js";
 
 const createMatrixClient = vi.hoisted(() => vi.fn());
-vi.mock("./matrix/client/create-client.js", () => ({ createMatrixClient }));
+// mock-isolation: Direct-room action proof supplies SDK I/O without opening client storage.
+vi.mock("./matrix/client/create-client.js", () => ({
+  createMatrixClient,
+  prepareMatrixClientStorage: prepareMockMatrixClientStorage,
+}));
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
@@ -113,7 +119,7 @@ async function seed(cfg: CoreConfig) {
     process.env,
     "ops",
   );
-  expect(loadMatrixCredentials(process.env, "ops")?.userId).toBe("@ops:example.org");
+  expect((await loadMatrixCredentialsAsync(process.env, "ops"))?.userId).toBe("@ops:example.org");
 }
 
 function expectRepair(client: ReturnType<typeof createClient>, encrypted: boolean) {
@@ -133,11 +139,11 @@ function expectRepair(client: ReturnType<typeof createClient>, encrypted: boolea
 describe.each([true, false])(
   "registered Matrix direct repair with named encryption=%s",
   (encrypted) => {
-    it("prepares the native approval target without reading credentials for encryption", async () => {
+    it("prepares native approval eligibility and targets with saved credentials off-thread", async () => {
       const cfg = config(encrypted);
       await seed(cfg);
       const client = createClient();
-      const runtime = matrixPlugin.approvalCapability?.nativeRuntime;
+      const runtime = matrixPlugin.approvalCapability?.nativeRuntimeAsync;
       expect(runtime).toBeDefined();
       if (!runtime) {
         throw new Error("Matrix native approval runtime missing");
@@ -145,9 +151,17 @@ describe.each([true, false])(
       const counters = recordHostSql();
       try {
         expect(
-          runtime.availability.isConfigured({ cfg, accountId: "ops", context: { client } }),
+          await runtime.availability.isConfigured({ cfg, accountId: "ops", context: { client } }),
         ).toBe(true);
+        expect(
+          await matrixPlugin.approvalCapability?.getExecInitiatingSurfaceStateAsync?.({
+            cfg,
+            accountId: "ops",
+            action: "approve",
+          }),
+        ).toEqual({ kind: "enabled" });
         const availability = counters.counts();
+        expect(availability).toEqual([0, 0, 0, 0, 0, 0]);
         const result = await runtime.transport.prepareTarget({
           cfg,
           accountId: "ops",
@@ -193,46 +207,37 @@ describe.each([true, false])(
       const output = vi.spyOn(process.stdout, "write").mockReturnValue(true);
       const program = new Command();
       registerMatrixCli({ program });
-      const counters = recordHostSql();
-      try {
-        await program.parseAsync(
-          ["matrix", "direct", "repair", "--account", "ops", "--user-id", peer, "--json"],
-          { from: "user" },
-        );
-        const total = counters.counts();
-        const result = JSON.parse(String(output.mock.calls.at(-1)?.[0]));
-        expect(result).toEqual({
-          accountId: "ops",
-          remoteUserId: "@owner:example.org",
-          selfUserId: "@ops:example.org",
-          mappedRoomIds: [],
-          mappedRooms: [],
-          discoveredStrictRoomIds: [],
-          activeRoomId: roomId,
-          encrypted,
-          createdRoomId: roomId,
-          changed: true,
-          directContentBefore: { "@other:example.org": ["!other:example.org"] },
-          directContentAfter: {
-            "@other:example.org": ["!other:example.org"],
-            "@owner:example.org": ["!created:example.org"],
-          },
-        });
-        expectRepair(client, encrypted);
-        expect(client.events[0]).toBe("start");
-        expect(client.events.at(-1)).toBe("persist");
-        expect(createMatrixClient).toHaveBeenCalledWith(
-          expect.objectContaining({
-            accountId: "ops",
-            userId: "@ops:example.org",
-            accessToken: "synthetic-matrix-token",
-            encryption: encrypted,
-          }),
-        );
-        expect(total).toEqual([0, 0, 0, 0, 0, 0]);
-      } finally {
-        counters.restore();
-      }
+      await program.parseAsync(
+        ["matrix", "direct", "repair", "--account", "ops", "--user-id", peer, "--json"],
+        { from: "user" },
+      );
+      const result = JSON.parse(String(output.mock.calls.at(-1)?.[0]));
+      expect(result).toEqual({
+        accountId: "ops",
+        remoteUserId: "@owner:example.org",
+        selfUserId: "@ops:example.org",
+        mappedRoomIds: [],
+        mappedRooms: [],
+        discoveredStrictRoomIds: [],
+        activeRoomId: roomId,
+        encrypted,
+        createdRoomId: roomId,
+        changed: true,
+        directContentBefore: { "@other:example.org": ["!other:example.org"] },
+        directContentAfter: {
+          "@other:example.org": ["!other:example.org"],
+          "@owner:example.org": ["!created:example.org"],
+        },
+      });
+      expectRepair(client, encrypted);
+      expect(client.events[0]).toBe("start");
+      expect(client.events.at(-1)).toBe("persist");
+      expect(createMatrixClient.mock.calls[0]?.[0]).toMatchObject({
+        accountId: "ops",
+        userId: "@ops:example.org",
+        accessToken: "synthetic-matrix-token",
+        encryption: encrypted,
+      });
     });
   },
 );

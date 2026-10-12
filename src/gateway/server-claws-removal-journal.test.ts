@@ -11,7 +11,7 @@ import { persistClawInstallRecord, readClawInstallRecord } from "../claws/proven
 import { clawRemovalJournalResultSchema } from "../claws/removal-journal-contract.js";
 import { clawRemovalJournalGateway } from "../cli/claws-cli.removal-journal.js";
 import * as gatewayRpc from "../cli/gateway-rpc.js";
-import { getRuntimeConfig, resetConfigRuntimeState } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader, resetConfigRuntimeState } from "../config/config.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import type { AgentDeletionJournalTransport } from "../state/agent-deletion-journal-transport.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
@@ -49,7 +49,7 @@ describe("Gateway-owned Claw removal journal", () => {
       if (scenario === "shared-session-owner") {
         openOpenClawAgentDatabase({ agentId: "worker", path: sharedStorePath, env: state.env });
       }
-      const config = getRuntimeConfig();
+      const config = await captureRuntimeConfigAsyncReader()();
       const phases: string[] = [];
       let committedOperation: string | undefined;
       vi.spyOn(gatewayRpc, "callGatewayFromCli").mockImplementation(
@@ -118,7 +118,9 @@ describe("Gateway-owned Claw removal journal", () => {
             operationId: deletion.entry.operationId,
             workspaceDir: plan.agent.workspace,
             cleanupCompleted: false,
+            phase: "retiring",
           });
+          expect(deletion.entry.phase).toBe("retiring");
           await deletion.assertCurrentAsync();
           deletion.assertCurrentFinal();
           await deletion.rollback();

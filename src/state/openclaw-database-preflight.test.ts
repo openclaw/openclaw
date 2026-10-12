@@ -7,6 +7,7 @@ import packageJson from "../../package.json" with { type: "json" };
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import { SQLITE_STAGING_TOKEN_FILES } from "../infra/sqlite-staging-token.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
@@ -81,11 +82,13 @@ describe("OpenClaw database schema preflight", () => {
         VALUES ('retained', ?, '', '', ?, 1, 1, 0)`)
         .run(path.dirname(agent.path), JSON.stringify([agent.path]));
     });
+    revokeSqliteDatabaseAdmissionsForPath(statePath);
     for (const retained of [true, false]) {
       if (!retained) {
         withDatabase(statePath, (database) => {
           database.exec("DELETE FROM agent_deletion_journal WHERE agent_id = 'retained';");
         });
+        revokeSqliteDatabaseAdmissionsForPath(statePath);
       }
       const callerSql: string[] = [];
       const observer = observeHostDataSql((sql, database) => {

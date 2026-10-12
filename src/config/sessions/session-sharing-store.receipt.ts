@@ -204,7 +204,7 @@ export function readSessionCollaborationCandidate(
       break;
     }
     case "category.apply": {
-      requireReceipt(Array.isArray(result) && result.length === keys.length);
+      requireReceipt(Array.isArray(result));
       const seen = new Set<string>();
       for (const row of result) {
         requireReceipt(

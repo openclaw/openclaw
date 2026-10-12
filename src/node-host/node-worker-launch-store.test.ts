@@ -119,7 +119,7 @@ describe("node worker launch admitted schema", () => {
     return { ...opened, opened, env, kernel, admission };
   }
 
-  it("shares admitted facts across warm launch joins without suppressing operation freshness", () => {
+  it("shares admitted facts across warm launch joins without freshness probes", () => {
     const { db, kernel, admission } = kernelFixture();
     try {
       const pending = kernel.get("schema-launch")!;
@@ -154,8 +154,7 @@ describe("node worker launch admitted schema", () => {
               ),
             ).toEqual(receipt);
           }
-          // Each launch read probes freshness once, not once per optional companion join.
-          expect(reads.counts).toEqual({ schema: 0, dataVersion: 9, launch: 9 });
+          expect(reads.counts).toEqual({ schema: 0, dataVersion: 0, launch: 9 });
           expect(reads.rowCounts.launch).toBe(9);
         } finally {
           reads.restore();

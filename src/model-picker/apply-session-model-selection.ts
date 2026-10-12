@@ -24,8 +24,8 @@ import {
 } from "../auto-reply/reply/model-runtime-normalization.js";
 import { resolveContextTokens } from "../auto-reply/reply/model-selection-context.js";
 import { refreshQueuedFollowupSession } from "../auto-reply/reply/queue.js";
+import { hasPendingFollowupQueueWork } from "../auto-reply/reply/queue/state.js";
 import { persistReplySessionEntry } from "../auto-reply/reply/session-entry-persistence.js";
-import { resolveSupportedThinkingLevel } from "../auto-reply/thinking.js";
 import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
 import { resolveCollapsedSessionAuthPinSource } from "../config/sessions/auth-profile-override-provenance.js";
 import {
@@ -38,7 +38,10 @@ import type { InternalSessionEntry as SessionEntry } from "../config/sessions/ty
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { triggerSessionPatchHook } from "../gateway/session-patch-hooks.js";
 import { resolveSessionWorkerPlacementContext } from "../gateway/session-worker-placement-context.js";
-import { resolveWorkerPlacementSessionRuntimeCapabilities } from "../gateway/worker-environments/placement-session-runtime.js";
+import {
+  resolveWorkerPlacementSessionRuntimeCapabilities,
+  resolveWorkerPlacementSessionRuntimeCapabilitiesAsync,
+} from "../gateway/worker-environments/placement-session-runtime.js";
 import { readSessionWorkerPlacementAsync } from "../gateway/worker-environments/session-placement-lifecycle.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveSystemEventQueueKey } from "../infra/system-event-ownership.js";
@@ -101,6 +104,7 @@ export type ApplySessionModelSelectionResult =
       contextTokens: number;
       configuredDefaultUpdate?: StickyModelSelectionDispatchOutcome;
       runtimeChange?: { kind: "clear" } | { kind: "set"; runtime: string };
+      /** @deprecated No longer emitted; retained for source compatibility until the next SDK major. */
       thinkingRemap?: {
         from: ThinkLevel;
         to: ThinkLevel;
@@ -140,7 +144,10 @@ function resolveActivePlacementModelSelectionError(
     sessionKey: string;
     entry: SessionEntry;
   },
-  prepared?: { placement: Awaited<ReturnType<typeof readSessionWorkerPlacementAsync>> },
+  prepared?: {
+    placement: Awaited<ReturnType<typeof readSessionWorkerPlacementAsync>>;
+    runtime?: ReturnType<typeof resolveWorkerPlacementSessionRuntimeCapabilities>;
+  },
 ): string | undefined {
   const sessionId = params.entry.sessionId;
   if (!sessionId) {
@@ -153,12 +160,14 @@ function resolveActivePlacementModelSelectionError(
   if (!placement || placement.state === "local") {
     return undefined;
   }
-  const { executionMode } = resolveWorkerPlacementSessionRuntimeCapabilities({
-    cfg: params.cfg,
-    entry: params.entry,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-  });
+  const { executionMode } =
+    prepared?.runtime ??
+    resolveWorkerPlacementSessionRuntimeCapabilities({
+      cfg: params.cfg,
+      entry: params.entry,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+    });
   if (executionMode === placement.executionMode) {
     return undefined;
   }
@@ -244,6 +253,7 @@ export async function applySessionModelSelectionInternal(
     provider: request.provider,
     model: request.model,
     catalog: params.thinkingCatalog ?? params.modelCatalog,
+    thinkingPolicyRequired: hasPendingFollowupQueueWork([params.sessionKey]),
     rawRuntime:
       request.runtime.kind === "set"
         ? request.runtime.runtime
@@ -278,39 +288,19 @@ export async function applySessionModelSelectionInternal(
   });
   const runtimeChange = applyModelRuntimeDirective(nextEntry, runtime);
   const selectionChanged = modelChange.updated || runtimeChange.updated;
-  const thinkingRuntime = resolveEffectiveAgentRuntime({
-    cfg: params.cfg,
-    provider: request.provider,
-    modelId: request.model,
-    modelApi: selectedCatalogEntry?.api,
-    modelBaseUrl: selectedCatalogEntry?.baseUrl,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    sessionEntry: nextEntry,
+  const placement = await readSessionWorkerPlacementAsync({
+    context: resolveSessionWorkerPlacementContext(),
+    sessionId: nextEntry.sessionId,
   });
-  const currentThinkingLevel = nextEntry.thinkingLevel as ThinkLevel | undefined;
-  let thinkingRemap: Extract<
-    ApplySessionModelSelectionResult,
-    { status: "applied" }
-  >["thinkingRemap"];
-  if (currentThinkingLevel) {
-    const remapped = resolveSupportedThinkingLevel({
-      provider: request.provider,
-      model: request.model,
-      level: currentThinkingLevel,
-      catalog: [...thinkingCatalog],
-      agentRuntime: thinkingRuntime,
-    });
-    if (remapped !== currentThinkingLevel) {
-      nextEntry.thinkingLevel = remapped;
-      thinkingRemap = {
-        from: currentThinkingLevel,
-        to: remapped,
-        provider: request.provider,
-        model: request.model,
-      };
-    }
-  }
+  const placementRuntime =
+    placement && placement.state !== "local"
+      ? await resolveWorkerPlacementSessionRuntimeCapabilitiesAsync({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          entry: nextEntry,
+        })
+      : undefined;
   const placementError = resolveActivePlacementModelSelectionError(
     {
       cfg: params.cfg,
@@ -319,10 +309,8 @@ export async function applySessionModelSelectionInternal(
       entry: nextEntry,
     },
     {
-      placement: await readSessionWorkerPlacementAsync({
-        context: resolveSessionWorkerPlacementContext(),
-        sessionId: nextEntry.sessionId,
-      }),
+      placement,
+      runtime: placementRuntime,
     },
   );
   if (placementError) {
@@ -425,7 +413,6 @@ export async function applySessionModelSelectionInternal(
   const provider = request.provider;
   const model = request.model;
   const effectiveModelRef = `${provider}/${model}`;
-  const changed = selectionChanged || thinkingRemap !== undefined;
   operatorScope?.assertCurrent();
   assertOperatorModelAllowed(operatorAuthority, request);
   const configuredDefaultUpdate =
@@ -439,7 +426,7 @@ export async function applySessionModelSelectionInternal(
           target: params.stickyModelSelectionTarget ?? "effective",
         })
       : undefined;
-  if (changed) {
+  if (selectionChanged) {
     emitSessionLifecycleEvent({
       sessionKey: params.sessionKey,
       agentId: params.agentId,
@@ -486,7 +473,7 @@ export async function applySessionModelSelectionInternal(
     model,
     effectiveModelRef,
     agentRuntime,
-    changed,
+    changed: selectionChanged,
     contextTokens: resolveContextTokens({
       cfg: params.cfg,
       provider: contextProvider,
@@ -496,6 +483,5 @@ export async function applySessionModelSelectionInternal(
     }),
     ...(configuredDefaultUpdate ? { configuredDefaultUpdate } : {}),
     ...(runtime.kind === "clear" || runtime.kind === "set" ? { runtimeChange: runtime } : {}),
-    ...(thinkingRemap ? { thinkingRemap } : {}),
   };
 }

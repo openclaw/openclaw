@@ -273,7 +273,7 @@ export const dispatchTelegramMessage = async (
   };
   const richMessages = resolveTelegramRichMessages(richMessagesParams);
   const tableMode = resolveTelegramTableMode(richMessagesParams);
-  const resolvedReasoningLevel = resolveTelegramReasoningLevel({
+  const resolvedReasoningLevel = await resolveTelegramReasoningLevel({
     cfg,
     sessionKey: dispatchContext.ctxPayload.SessionKey,
     agentId: dispatchContext.route.agentId,
@@ -332,8 +332,9 @@ export const dispatchTelegramMessage = async (
     try {
       const sessionKey = dispatchContext.ctxPayload.SessionKey;
       if (sessionKey) {
-        isFirstTurnInSession = !loadFreshSessionEntry(dispatchContext.route.agentId, sessionKey)
-          .entry?.systemSent;
+        isFirstTurnInSession = !(
+          await loadFreshSessionEntry(dispatchContext.route.agentId, sessionKey)
+        ).entry?.systemSent;
       } else {
         logVerbose("auto-topic-label: SessionKey is absent, skipping first-turn detection");
       }

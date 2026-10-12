@@ -4,6 +4,7 @@ import {
   estimateUtf8Bytes,
   type EmbeddingInput,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import {
   asOptionalRecord,
@@ -107,6 +108,21 @@ type MemoryEmbeddingRetryBudget = {
   retryAfterMs?: number;
 };
 
+const MEMORY_EMBEDDING_BATCH_ITEM_LIMIT_RE =
+  /\b(?:embeddings api input limit exceeded:\s*max\s+(\d+)\s*,\s*got\s+\d+|embeddings max input length is\s+(\d+(?:\.\d+)?)|batch size is invalid,?\s+it should not be larger than\s+(\d+(?:\.\d+)?)|input array max\s+(\d+)(?=\s*(?:["'}]|$))|input\s*数组最大不得超过\s*(\d+)\s*条)/gi;
+
+function parseMemoryEmbeddingBatchItemLimit(message: string): number | undefined {
+  const limits = new Set<number>();
+  for (const match of message.matchAll(MEMORY_EMBEDDING_BATCH_ITEM_LIMIT_RE)) {
+    const value = Number(match[1] ?? match[2] ?? match[3] ?? match[4] ?? match[5]);
+    if (!Number.isSafeInteger(value) || value <= 0) {
+      return undefined;
+    }
+    limits.add(value);
+  }
+  return limits.size === 1 ? limits.values().next().value : undefined;
+}
+
 function isInvalidEmbeddingResponse(error: unknown): boolean {
   // Diagnostic counts and model names must not be mistaken for HTTP status or input limits.
   return asOptionalRecord(error)?.code === "INVALID_EMBEDDING_RESPONSE";
@@ -200,11 +216,29 @@ export async function runMemoryEmbeddingRetryLoop<T>(params: {
 
 export async function runMemoryEmbeddingBatchRetryWithSplit<TInput, TOutput>(params: {
   items: TInput[];
+  maxInputsPerRequest?: number;
   run: (items: TInput[]) => Promise<TOutput[]>;
   onSuccess?: (items: TInput[], outputs: TOutput[]) => void | Promise<void>;
   waitForRetry: (delayMs: number) => Promise<void>;
   onSplit?: (info: { itemCount: number; splitAt: number; message: string }) => void;
 }): Promise<TOutput[]> {
+  const split = async (splitAt: number): Promise<TOutput[]> => {
+    const results: TOutput[] = [];
+    for (let start = 0; start < params.items.length; start += splitAt) {
+      results.push(
+        ...(await runMemoryEmbeddingBatchRetryWithSplit({
+          ...params,
+          items: params.items.slice(start, start + splitAt),
+        })),
+      );
+    }
+    return results;
+  };
+  const cap = params.maxInputsPerRequest;
+  if (cap !== undefined && Number.isSafeInteger(cap) && cap > 0 && params.items.length > cap) {
+    return await split(cap);
+  }
+
   let outputs: TOutput[];
   try {
     outputs = await runMemoryEmbeddingRetryLoop({
@@ -222,18 +256,31 @@ export async function runMemoryEmbeddingBatchRetryWithSplit<TInput, TOutput>(par
       throw err;
     }
 
-    const splitAt = Math.ceil(params.items.length / 2);
+    const itemLimit = parseMemoryEmbeddingBatchItemLimit(message);
+    const splitAt =
+      itemLimit !== undefined && itemLimit < params.items.length
+        ? itemLimit
+        : Math.ceil(params.items.length / 2);
     params.onSplit?.({ itemCount: params.items.length, splitAt, message });
-    const left = await runMemoryEmbeddingBatchRetryWithSplit({
-      ...params,
-      items: params.items.slice(0, splitAt),
-    });
-    const right = await runMemoryEmbeddingBatchRetryWithSplit({
-      ...params,
-      items: params.items.slice(splitAt),
-    });
-    return [...left, ...right];
+    return await split(splitAt);
   }
   await params.onSuccess?.(params.items, outputs);
   return outputs;
+}
+
+export function countBatchSources(items: Array<{ source: MemorySource }>): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const item of items) {
+    counts[item.source] = (counts[item.source] ?? 0) + 1;
+  }
+  return counts;
+}
+
+export function formatBatchSourceCounts(counts: Record<string, number>): string {
+  return (
+    Object.entries(counts)
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([source, count]) => `${source}=${count}`)
+      .join(",") || "none"
+  );
 }

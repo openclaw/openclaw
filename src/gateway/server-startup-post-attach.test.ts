@@ -210,9 +210,12 @@ vi.mock("../infra/update-startup.js", () => ({
   createGatewayUpdateCheck: hoisted.createGatewayUpdateCheck,
 }));
 
+// mock-isolation: Sidecar scheduling does not own catalog or native-runtime preparation.
 vi.mock("../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
-  readPreparedModelCatalog: hoisted.loadModelCatalog,
+  loadPreparedModelCatalogOwnerSnapshot: async (options: unknown) => ({
+    modelCatalog: { entries: await hoisted.loadModelCatalog(options) },
+  }),
 }));
 
 vi.mock("../agents/model-selection.js", () => ({

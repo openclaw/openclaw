@@ -1,9 +1,10 @@
 import fs from "node:fs";
+import path from "node:path";
 import {
   type JsonSchemaObject,
   validateJsonSchemaValue,
 } from "openclaw/plugin-sdk/json-schema-runtime";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { memoryConfigSchema } from "./config.js";
 
 const manifest = JSON.parse(
@@ -23,6 +24,26 @@ function configWith(overrides: Record<string, unknown> = {}) {
 }
 
 describe("memory-lancedb config", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("resolves the default database path from the state directory at parse time", () => {
+    const stateDir = path.resolve("/tmp/openclaw-state-after-import");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
+    expect(memoryConfigSchema.parse(configWith()).dbPath).toBe(
+      path.join(stateDir, "memory", "lancedb"),
+    );
+  });
+
+  it("preserves an explicit database path under a custom state directory", () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/tmp/openclaw-custom-state");
+    const dbPath = "~/shared-memory/lancedb";
+
+    expect(memoryConfigSchema.parse(configWith({ dbPath })).dbPath).toBe(dbPath);
+  });
+
   it("keeps config presentation metadata manifest-owned", () => {
     expect(memoryConfigSchema).not.toHaveProperty("uiHints");
     expect(manifest.uiHints?.["embedding.apiKey"]).toMatchObject({

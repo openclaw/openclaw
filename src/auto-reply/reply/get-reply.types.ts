@@ -43,6 +43,8 @@ export type ReplyRunVerbosity = {
 };
 
 type InternalReplySessionOptions = {
+  /** Settles attribution before tool effects; model preparation may run concurrently. */
+  awaitSessionDiffBaseline?: () => Promise<void>;
   /** Producer callbacks follow this occurrence through queueing and delivery. */
   internalEventExecution?: SessionEventExecution;
   /** Source-owned cancellation retained when dispatch borrows an active lane for queued followups. */
@@ -73,6 +75,8 @@ type InternalReplySessionOptions = {
   onDeliberateSilentTerminalReply?: () => void;
   /** Source-specific final delivery, e.g. a committed answer in the current WebChat history. */
   resolveReplyDelivery?: ReplyDeliveryObserver;
+  /** Heartbeat-owner policy: only an admitted current source permits implicit message replies. */
+  requireExplicitMessageTarget?: boolean;
   /** Retire the run's bundle MCP runtime at settlement. Set by one-shot isolated runs (isolated heartbeats) whose session ID is never reused. */
   cleanupBundleMcpOnRunEnd?: boolean;
   /** Defers the child-completion wake until the visible waiting status is delivered. */

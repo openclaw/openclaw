@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   normalizeStringEntriesLower,
@@ -182,8 +183,12 @@ function registerSubstringSqlFunction(db: DatabaseSync, terms: readonly string[]
   );
 }
 
-function buildSubstringFilter(terms: string[], column: string): string {
-  return terms.map(() => ` AND ${NORMALIZED_CONTAINS_SQL_FUNCTION}(${column}, ?) = 1`).join("");
+function buildSubstringFilter(terms: string[], column: string, matchAny = false): string {
+  if (terms.length === 0) {
+    return "";
+  }
+  const predicates = terms.map(() => `${NORMALIZED_CONTAINS_SQL_FUNCTION}(${column}, ?) = 1`);
+  return ` AND (${predicates.join(matchAny ? " OR " : " AND ")})`;
 }
 
 function buildExactPathCandidatePatterns(query: string): string[] {
@@ -283,7 +288,7 @@ export async function searchKeyword(params: {
   snippetMaxChars: number;
   sourceFilter: { sql: string; params: MemorySource[] };
   boostFallbackRanking?: boolean;
-  rankingQuery?: string;
+  matchAny?: boolean;
 }): Promise<Array<SearchRowResult & { textScore: number; hasBodyMatch: true }>> {
   if (params.limit <= 0) {
     return [];
@@ -292,6 +297,7 @@ export async function searchKeyword(params: {
     query: params.query,
     ftsTokenizer: params.ftsTokenizer,
     canonicalVariants: true,
+    matchAny: params.matchAny,
   });
   if (!plan.matchQuery && plan.substringTerms.length === 0) {
     return [];
@@ -303,8 +309,8 @@ export async function searchKeyword(params: {
   const loadRows = (
     matchQuery: string | null,
     terms: string[],
-  ): Array<MemorySearchRow & { rank: number }> => {
-    const filter = buildSubstringFilter(terms, "text");
+  ): Array<MemorySearchRow & { rank: number | null }> => {
+    const filter = buildSubstringFilter(terms, "text", params.matchAny);
     if (terms.length > 0) {
       registerSubstringSqlFunction(params.db, terms);
     }
@@ -313,32 +319,47 @@ export async function searchKeyword(params: {
     const matchClause = matchQuery
       ? `${params.ftsTable} MATCH ? AND ${params.ftsTable}.rank MATCH 'bm25()'`
       : "1=1";
+    const columns = "id, path, source, start_line, end_line, text";
+    const ranked = `SELECT ${columns}, ${params.ftsTable}.rank AS rank
+      FROM ${params.ftsTable}
+      WHERE ${matchClause}${liveChunkClause}${params.sourceFilter.sql}
+      ORDER BY rank ASC LIMIT ?`;
+    // SQLite cannot combine MATCH with scalar OR predicates. Bound the BM25
+    // leg first; substring-only trigram hits fill spare capacity without a score.
+    const mixedOr = params.matchAny && matchQuery && terms.length > 0;
+    const sql = mixedOr
+      ? `WITH matches AS MATERIALIZED (${ranked}), substrings AS (
+           SELECT ${columns}, NULL AS rank FROM ${params.ftsTable}
+           WHERE 1=1${filter}${liveChunkClause}${params.sourceFilter.sql}
+             AND id NOT IN (SELECT id FROM matches)
+           LIMIT max(0, ? - (SELECT count(*) FROM matches))
+         )
+         SELECT * FROM matches UNION ALL SELECT * FROM substrings
+         ORDER BY rank ASC NULLS LAST`
+      : `SELECT ${columns}, ${matchQuery ? `${params.ftsTable}.rank` : "NULL"} AS rank
+         FROM ${params.ftsTable}
+         WHERE ${matchClause}${filter}${liveChunkClause}${params.sourceFilter.sql}
+         ${matchQuery ? "ORDER BY rank ASC" : ""} LIMIT ?`;
     return params.db
-      .prepare(
-        `SELECT id, path, source, start_line, end_line, text,\n` +
-          `       ${matchQuery ? `${params.ftsTable}.rank` : "0"} AS rank\n` +
-          `  FROM ${params.ftsTable}\n` +
-          ` WHERE ${matchClause}${filter}${liveChunkClause}${params.sourceFilter.sql}\n` +
-          (matchQuery ? ` ORDER BY rank ASC\n` : "") +
-          ` LIMIT ?`,
-      )
+      .prepare(sql)
       .all(
         ...(matchQuery ? [matchQuery] : []),
+        ...(mixedOr ? [...params.sourceFilter.params, params.limit] : []),
         ...terms,
         ...params.sourceFilter.params,
         params.limit,
-      ) as Array<MemorySearchRow & { rank: number }>;
+      ) as Array<MemorySearchRow & { rank: number | null }>;
   };
 
   const { rows, usedMatch } = loadKeywordRowsWithFallback(
     plan,
     loadRows,
-    () => tokenizeFtsQuery(params.query),
+    () => plan.tokens,
     "memory search: FTS5 MATCH failed, falling back to substring search",
   );
 
   const queryMatchers = params.boostFallbackRanking
-    ? uniqueStrings(normalizeSearchTokens(params.rankingQuery ?? params.query)).map((token) => ({
+    ? uniqueStrings(normalizeSearchTokens(params.query)).map((token) => ({
         word: literalSearchMatcher(token, true),
         substring: literalSearchMatcher(token),
       }))
@@ -351,7 +372,7 @@ export async function searchKeyword(params: {
     // signal so only the vector score contributes to contentScore; boost mode
     // still derives a lexicalBoost from query/text overlap via
     // scoreFallbackKeywordResult below.
-    const textScore = usedMatch ? bm25RankToScore(row.rank) : 0;
+    const textScore = usedMatch && row.rank !== null ? bm25RankToScore(row.rank) : 0;
     const score = params.boostFallbackRanking
       ? scoreFallbackKeywordResult({
           queryMatchers,
@@ -367,11 +388,30 @@ export async function searchKeyword(params: {
   });
 }
 
+export async function searchKeywordWithFallback(params: {
+  db: DatabaseSync;
+  body: Omit<Parameters<typeof searchKeyword>[0], "db" | "matchAny">;
+  path: Omit<Parameters<typeof searchPathKeyword>[0], "db">;
+}) {
+  const runBody = (matchAny = false) =>
+    searchKeyword({ ...params.body, db: params.db, matchAny })
+      .then((rows) => ({ rows, error: undefined }))
+      .catch((error: unknown) => ({ rows: [], error: formatErrorMessage(error) }));
+  let body = await runBody();
+  const path = await searchPathKeyword({ ...params.path, db: params.db })
+    .then((rows) => ({ rows, error: undefined }))
+    .catch((error: unknown) => ({ rows: [], error: formatErrorMessage(error) }));
+  // A filename hit also preserves AND precision. Expand only an empty result.
+  if (body.rows.length === 0 && path.rows.length === 0 && !body.error && !path.error) {
+    body = await runBody(true);
+  }
+  return { body, path };
+}
+
 export async function searchPathKeyword(params: {
   db: DatabaseSync;
   pathFtsTable: string;
   query: string;
-  exactPathQuery?: string;
   exactPathLimit?: number;
   ftsTokenizer?: "unicode61" | "trigram";
   limit: number;
@@ -390,8 +430,7 @@ export async function searchPathKeyword(params: {
   const plan = pathPlans[0] ?? { query: params.query, matchQuery: null, substringTerms: [] };
   const planSubstringFilter = buildSubstringFilter(plan.substringTerms, pathColumn);
   registerSubstringSqlFunction(params.db, plan.substringTerms);
-  const exactPathQuery = params.exactPathQuery ?? params.query;
-  const matchExactPath = prepareExactPathMatcher(exactPathQuery);
+  const matchExactPath = prepareExactPathMatcher(params.query);
   // This reader consumes the query synchronously; substring plans can change
   // without replacing the original-query matcher.
   params.db.function(
@@ -428,7 +467,7 @@ export async function searchPathKeyword(params: {
     ` ORDER BY ${paths}.${score} ${direction}, ${paths}.path ASC, ${paths}.source ASC`;
   const hasExplicitExactPathHeadroom = params.exactPathLimit !== undefined;
   const exactPathLimit = Math.max(0, Math.floor(params.exactPathLimit ?? params.limit));
-  const exactCandidatePatterns = buildExactPathCandidatePatterns(exactPathQuery);
+  const exactCandidatePatterns = buildExactPathCandidatePatterns(params.query);
   type ExactPathRow = MemorySearchRow & {
     exact_path_specificity: ExactPathSpecificity;
   };
@@ -481,7 +520,7 @@ export async function searchPathKeyword(params: {
       .all(...candidateParams, exactPathLimit, ...snippet.params) as ExactPathRow[];
   };
   const useLexicalExactCandidates =
-    isAscii(exactPathQuery) && (plan.matchQuery !== null || plan.substringTerms.length > 0);
+    isAscii(params.query) && (plan.matchQuery !== null || plan.substringTerms.length > 0);
   let exactRows: ExactPathRow[] = [];
   if (exactCandidatePatterns.length > 0 && exactPathLimit > 0) {
     try {

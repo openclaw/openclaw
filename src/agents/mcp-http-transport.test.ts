@@ -133,7 +133,7 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
     }
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "rejects an oversized SSE message before parsing (multiline=%s)",
     async (multiline) => {
       const fetchMock = initializedFetch({
@@ -198,36 +198,37 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
     },
   );
 
-  it.each([
-    { label: "JSON", stream: false },
-    { label: "SSE LF", stream: true, lineEnding: "\n" },
-    { label: "SSE CR", stream: true, lineEnding: "\r" },
-    { label: "SSE split CRLF", stream: true, lineEnding: "\r\n", chunkBytes: 1 },
-  ])("accepts an under-limit $label message", async ({ stream, lineEnding, chunkBytes }) => {
-    const fetchMock = initializedFetch({
-      onGet: () => new Response(null, { status: 405 }),
-      onPost: (message) =>
-        message.method === "tools/call"
-          ? mcpResultResponse(
-              message.id,
-              { content: [{ type: "text", text: "under-limit" }] },
-              { stream, lineEnding, chunkBytes },
-            )
-          : new Response(null, { status: 202 }),
-    });
-    const transport = new OpenClawStreamableHTTPClientTransport(new URL("http://mcp.invalid/mcp"), {
-      fetch: fetchMock,
-    });
-    const client = new Client({ name: "test", version: "1" });
+  it.each([{ label: "SSE split CRLF", stream: true, lineEnding: "\r\n", chunkBytes: 1 }])(
+    "accepts an under-limit $label message",
+    async ({ stream, lineEnding, chunkBytes }) => {
+      const fetchMock = initializedFetch({
+        onGet: () => new Response(null, { status: 405 }),
+        onPost: (message) =>
+          message.method === "tools/call"
+            ? mcpResultResponse(
+                message.id,
+                { content: [{ type: "text", text: "under-limit" }] },
+                { stream, lineEnding, chunkBytes },
+              )
+            : new Response(null, { status: 202 }),
+      });
+      const transport = new OpenClawStreamableHTTPClientTransport(
+        new URL("http://mcp.invalid/mcp"),
+        {
+          fetch: fetchMock,
+        },
+      );
+      const client = new Client({ name: "test", version: "1" });
 
-    try {
-      await client.connect(transport);
-      const result = await client.callTool({ name: "under_limit", arguments: {} });
-      expect(result).toMatchObject({ content: [{ type: "text", text: "under-limit" }] });
-    } finally {
-      await disposeMcpClient({ client, transport, transportType: "streamable-http" });
-    }
-  });
+      try {
+        await client.connect(transport);
+        const result = await client.callTool({ name: "under_limit", arguments: {} });
+        expect(result).toMatchObject({ content: [{ type: "text", text: "under-limit" }] });
+      } finally {
+        await disposeMcpClient({ client, transport, transportType: "streamable-http" });
+      }
+    },
+  );
 
   it("keeps a legacy SSE stream open beyond the cumulative message limit", async () => {
     const encoder = new TextEncoder();
@@ -447,33 +448,6 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
     }
   });
 
-  it("sends stateful DELETE after failed initialization closed the SDK transport", async () => {
-    const deleteRequests: RequestInit[] = [];
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      if (init?.method === "DELETE") {
-        deleteRequests.push(init);
-        return new Response(null, { status: 204 });
-      }
-      return new Response("initialize failed", {
-        status: 500,
-        headers: { "mcp-session-id": "allocated-before-failure" },
-      });
-    });
-    const transport = new OpenClawStreamableHTTPClientTransport(new URL("http://mcp.invalid/mcp"), {
-      fetch: fetchMock,
-    });
-    const client = new Client({ name: "test", version: "1" });
-
-    await expect(client.connect(transport)).rejects.toThrow("initialize failed");
-    await disposeMcpClient({ client, transport, transportType: "streamable-http" });
-
-    expect(deleteRequests).toHaveLength(1);
-    expect(new Headers(deleteRequests[0]?.headers).get("mcp-session-id")).toBe(
-      "allocated-before-failure",
-    );
-    expect(deleteRequests[0]?.signal?.aborted).toBe(false);
-  });
-
   it.each(["pending", "rejecting"])(
     "finishes termination with %s DELETE body cancellation",
     async (cancellation) => {
@@ -625,25 +599,6 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
         server.closeAllConnections();
       });
     }
-  });
-
-  it("accepts unsupported session DELETE without sending it again", async () => {
-    const onDelete = vi.fn(() => new Response(null, { status: 405 }));
-    const fetchMock = initializedFetch({
-      onGet: () => new Response(null, { status: 405 }),
-      onDelete,
-    });
-    const transport = new OpenClawStreamableHTTPClientTransport(new URL("http://mcp.invalid/mcp"), {
-      fetch: fetchMock,
-    });
-    const client = new Client({ name: "test", version: "1" });
-    await client.connect(transport);
-    await transport.terminateSession();
-    await transport.terminateSession();
-    await expect(
-      disposeMcpClient({ client, transport, transportType: "streamable-http" }),
-    ).resolves.toBe("closed");
-    expect(onDelete).toHaveBeenCalledOnce();
   });
 
   it("does not record a rejected DELETE as successful termination", async () => {

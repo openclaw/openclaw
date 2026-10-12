@@ -1,6 +1,7 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import type { ErrorShape } from "../../packages/gateway-protocol/src/index.js";
 import { deleteSessionEntryLifecycle, type SessionEntry } from "../config/sessions.js";
+import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import {
   captureIncognitoSessionOperation,
   withIncognitoSessionBinding,
@@ -24,6 +25,9 @@ type IncognitoResetParams = {
 export async function deleteIncognitoSessionForReset(
   params: IncognitoResetParams,
 ): Promise<Result<{ deletedSessionId?: string }, ErrorShape>> {
+  if (getSessionActorStorageBinding({ ...params, sessionKey: params.target.canonicalKey })) {
+    return deleteIncognitoSessionForResetInScope(params);
+  }
   const binding = captureIncognitoSessionOperation({
     ...params,
     sessionKey: params.target.canonicalKey,
@@ -61,15 +65,19 @@ async function deleteIncognitoSessionForResetInScope(
       }
     }
     await params.beforeDelete();
+    const memory = getSessionActorStorageBinding({
+      ...params,
+      sessionKey: params.target.canonicalKey,
+    });
     const deleted = await deleteSessionEntryLifecycle({
       commitGuard: params.commitGuard,
       agentId: params.agentId,
       archiveTranscript: false,
       deleteDeliveryArtifacts: true,
       deleteTranscriptWithoutArchive: true,
-      expectedEntry: params.entry,
+      expectedEntry: memory ? undefined : params.entry,
       expectedSessionId: params.entry.sessionId,
-      expectedUpdatedAt: params.entry.updatedAt,
+      expectedUpdatedAt: memory ? undefined : params.entry.updatedAt,
       storePath: params.storePath,
       target: params.target,
     });

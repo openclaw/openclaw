@@ -87,12 +87,12 @@ function seedStoppedWalDatabase(filename: string, sql: string): void {
 }
 
 it.each([
-  { args: ["--lint", "--json"], exitCode: 1, customStore: false },
-  { args: ["--json"], exitCode: 0, customStore: true },
-  { args: ["--lint", "--all", "--json"], exitCode: 1, customStore: false },
+  { args: ["--lint", "--json"], exitCode: 1, customStore: false, schemaVersion: 20 },
+  { args: ["--json"], exitCode: 0, customStore: true, schemaVersion: 19 },
+  { args: ["--lint", "--all", "--json"], exitCode: 1, customStore: false, schemaVersion: 19 },
 ])(
-  "doctor $args preserves previous-schema SQLite artifacts and reports pending repairs",
-  async ({ args, exitCode, customStore }) => {
+  "doctor $args preserves schema $schemaVersion SQLite artifacts and reports pending repairs",
+  async ({ args, exitCode, customStore, schemaVersion }) => {
     await withOpenClawTestState(
       {
         label: "doctor-readonly-sqlite",
@@ -136,11 +136,26 @@ it.each([
         }
         seedStoppedWalDatabase(
           sharedPath,
-          `ALTER TABLE cron_run_receipts DROP COLUMN delivery_attempt_state;
+          `DROP INDEX idx_meeting_transcript_sessions_source;
+       DROP INDEX idx_meeting_transcript_sessions_account;
+       DROP INDEX idx_meeting_transcript_sessions_agent;
+       DROP INDEX idx_delivery_queue_bounded_retention;
+       ALTER TABLE meeting_transcript_sessions DROP COLUMN source_account_id;
+       ALTER TABLE meeting_transcript_sessions DROP COLUMN source_guild_id;
+       ALTER TABLE meeting_transcript_sessions DROP COLUMN source_channel_id;
+       ALTER TABLE meeting_transcript_sessions DROP COLUMN source_meeting_url;
+       ALTER TABLE meeting_transcript_sessions DROP COLUMN source_thread_ts;
+       ALTER TABLE meeting_transcript_sessions DROP COLUMN source_file_id;
+       ALTER TABLE meeting_transcript_sessions DROP COLUMN metadata_agent_id;
+       ALTER TABLE meeting_transcript_summaries DROP COLUMN overview;
+       ALTER TABLE delivery_queue_entries DROP COLUMN retention_id_prefix;
+       ALTER TABLE delivery_queue_entries DROP COLUMN retention_max_age_ms;
+       ALTER TABLE delivery_queue_entries DROP COLUMN retention_max_entries;
+       ${schemaVersion === 19 ? "ALTER TABLE cron_run_receipts DROP COLUMN delivery_attempt_state;" : ""}
        DELETE FROM agent_databases;
-       PRAGMA user_version = 19;
-       UPDATE schema_meta SET schema_version = 19 WHERE meta_key = 'primary';
-       UPDATE config_machine_state SET value_json = '19'
+       PRAGMA user_version = ${schemaVersion};
+       UPDATE schema_meta SET schema_version = ${schemaVersion} WHERE meta_key = 'primary';
+       UPDATE config_machine_state SET value_json = '${schemaVersion}'
          WHERE state_key = 'state.schema.contentVersion';
        INSERT INTO cron_run_receipts (
          receipt_id, store_key, job_id, config_revision, agent_id, status,

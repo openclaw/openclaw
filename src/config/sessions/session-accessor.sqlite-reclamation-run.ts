@@ -7,18 +7,22 @@ import {
 import { ownedWorkerBytes } from "../../infra/worker-transfer-bytes.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
+import { hasAgentDatabaseMaintenanceAuthority } from "../../state/openclaw-agent-db-lease.js";
 import { retainOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { captureOpenClawAgentDatabaseValidationTransfer } from "../../state/openclaw-agent-db-validation-cache.js";
 import {
   deferOpenClawAgentPostCommitPublication,
   getOpenClawAgentDatabaseIfOpen,
   isIncognitoOpenClawAgentSqlitePath,
+  resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabase,
+  type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
+import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import {
-  captureOpenClawAgentDatabaseExecution,
-  supportsOpenClawAgentDatabaseExecution,
-} from "../../state/openclaw-agent-execution.js";
+  getOpenClawDatabaseMaintenanceScope,
+  isOpenClawDatabaseMaintenanceWorkerAccess,
+} from "../../state/openclaw-state-db-async-lifecycle.js";
 import type {
   DeleteSessionEntryLifecycleParams,
   SqliteSessionReclamationDiagnostics,
@@ -28,7 +32,6 @@ import {
   captureNativeSessionWorkerDeletion,
   preparedSessionDeletionRequiresNativeTransaction,
 } from "./session-accessor.sqlite-deletion.js";
-import { assertSessionSubagentRunsCurrent } from "./session-accessor.sqlite-descendant-basis.js";
 import { publishSessionEntryWorkerInvalidations } from "./session-accessor.sqlite-entry-worker-publication.js";
 import type {
   SessionDeletionPlanningOperation,
@@ -39,7 +42,6 @@ import type {
   SqliteSessionReclamationPlan,
   SqliteSessionReclamationResult,
 } from "./session-accessor.sqlite-lifecycle-types.js";
-import { withSqliteReclamationAuthorization } from "./session-accessor.sqlite-reclamation-commit.js";
 import {
   collectReclamationChangedSessionKeys,
   collectReclamationDeletionEntries,
@@ -68,6 +70,16 @@ import { captureSessionEntryNativeMutationWitness } from "./session-entry-read-o
 import { publishSessionLifecycleWorkerEffects } from "./session-lifecycle-worker-publication.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
+function hasNativeReclamationOwner(options: OpenClawAgentDatabaseOptions): boolean {
+  return (
+    !isMainThread ||
+    (!isOpenClawDatabaseMaintenanceWorkerAccess() &&
+      (getOpenClawDatabaseMaintenanceScope()?.ownsSchemaMaintenance === true ||
+        hasAgentDatabaseMaintenanceAuthority())) ||
+    isIncognitoOpenClawAgentSqlitePath(resolveOpenClawAgentSqlitePath(options), options)
+  );
+}
+
 export async function runSessionDeletionPlanning(
   resolved: ReturnType<typeof resolveSqliteStoreScope>,
   params: DeleteSessionEntryLifecycleParams,
@@ -76,12 +88,11 @@ export async function runSessionDeletionPlanning(
   diagnostics?: SqliteSessionReclamationDiagnostics,
 ): Promise<SessionDeletionPlanningResult> {
   const databaseOptions = toDatabaseOptions(resolved);
-  // Cross-store handoffs retain their original connection identity comparison.
+  // Boot migration handoffs and the remaining incognito owner retain native planning.
   if (
     preparedSessionDeletionRequiresNativeTransaction() ||
     params.expectedDatabaseIdentity !== undefined ||
-    !isMainThread ||
-    !supportsOpenClawAgentDatabaseExecution(databaseOptions)
+    hasNativeReclamationOwner(databaseOptions)
   ) {
     return await runExclusiveSqliteSessionWrite(
       resolved,
@@ -103,7 +114,6 @@ export async function runSessionDeletionPlanning(
   const result = await runSqliteSessionReclamation({
     diagnostics,
     assertCommitAllowed: assertCurrent,
-    forceInProcess: false,
     plan: {
       kind: "deletion-plan",
       databaseOptions: resolveSessionReclamationDatabaseOptions(databaseOptions),
@@ -125,7 +135,6 @@ export async function runSqliteSessionReclamation(params: {
     result: Extract<SessionMaintenanceReadResult, { kind: "maintenance-plan" }>,
     assertCurrent: () => void,
   ) => void;
-  forceInProcess: boolean;
   onInProcessCommit?: (database: OpenClawAgentDatabase) => void;
   onWorkerResult?: (
     result: SqliteSessionReclamationResult,
@@ -136,14 +145,14 @@ export async function runSqliteSessionReclamation(params: {
   if (params.diagnostics) {
     params.diagnostics.kind = params.plan.kind;
   }
-  const nativeAuthority = preparedSessionDeletionRequiresNativeTransaction();
+  // Doctor/migrations retain exclusive native ownership; worker callers cannot redispatch.
+  const native = hasNativeReclamationOwner(params.plan.databaseOptions);
   if (
-    !nativeAuthority &&
+    !native &&
     (params.plan.kind === "entry" ||
       params.plan.kind === "lifecycle-artifacts" ||
       params.plan.kind === "maintenance-finalize" ||
-      params.plan.kind === "lifecycle-projection-commit") &&
-    supportsOpenClawAgentDatabaseExecution(params.plan.databaseOptions)
+      params.plan.kind === "lifecycle-projection-commit")
   ) {
     const participants = captureNativeSessionWorkerDeletion(
       collectReclamationDeletionEntries(params.plan),
@@ -159,18 +168,7 @@ export async function runSqliteSessionReclamation(params: {
       );
     }
   }
-  if (
-    nativeAuthority ||
-    params.forceInProcess ||
-    ((params.plan.kind === "maintenance-plan" ||
-      params.plan.kind === "maintenance-statistics" ||
-      params.plan.kind === "maintenance-age") &&
-      !supportsOpenClawAgentDatabaseExecution(params.plan.databaseOptions)) ||
-    isIncognitoOpenClawAgentSqlitePath(params.plan.databaseOptions.path, {
-      agentId: params.plan.databaseOptions.agentId,
-      env: params.plan.databaseOptions.env,
-    })
-  ) {
+  if (native) {
     return await runExclusiveSqliteSessionWrite(
       params.plan.databaseOptions,
       async () => {
@@ -186,7 +184,6 @@ export async function runSqliteSessionReclamation(params: {
               beforeMutation: params.assertCommitAllowed,
               onCommit: (database, result) => {
                 // The native connection now sees its own removals; row guards ran before mutation.
-                assertSessionSubagentRunsCurrent(params.plan, params.plan.databaseOptions.env);
                 const publish = prepareReclamationPublication(
                   params.plan,
                   readOpenClawAgentDatabaseIdentity(database).identity,
@@ -213,7 +210,7 @@ export async function runSqliteSessionReclamation(params: {
       : undefined;
   return await withSqliteMutationWorkerLifetime(
     params.plan.databaseOptions,
-    async ({ assertCurrent, commitGate, signal }) => {
+    async ({ assertCurrent, signal }) => {
       const assertRequestCurrent = () => {
         assertCurrent();
         params.assertCommitAllowed?.();
@@ -413,7 +410,6 @@ export async function runSqliteSessionReclamation(params: {
                 claim,
                 worker,
                 assertRequestCurrent,
-                commitGate,
                 signal,
               },
             ),
@@ -529,10 +525,6 @@ export async function runSqliteSessionReclamation(params: {
               diagnostics: params.diagnostics,
               expectedSource,
               assertCurrent: assertOpeningCurrent,
-              commitGate,
-              onCommitRequest: () => {
-                throw new Error("SQLite source preparation cannot request a mutation commit");
-              },
               withWriteAdmission: (run, diagnostics) =>
                 runExclusiveSqliteSessionWrite(
                   databaseOptions,
@@ -562,7 +554,6 @@ export async function runSqliteSessionReclamation(params: {
                 validationOwner: { source: validationSource, claim: prepared.claim },
                 worker,
                 assertRequestCurrent: assertOpeningCurrent,
-                commitGate,
                 signal,
               },
             );
@@ -607,11 +598,10 @@ async function runPreparedSqliteSessionReclamation(
     claim: SqliteReclamationClaim;
     worker: SqliteReclamationWorker;
     assertRequestCurrent: () => void;
-    commitGate: SharedArrayBuffer;
     signal: AbortSignal;
   },
 ): Promise<SqliteSessionReclamationResult> {
-  const { claim, worker, assertRequestCurrent, commitGate } = owner;
+  const { claim, worker, assertRequestCurrent } = owner;
   const identity = claim.identity;
   if (typeof identity !== "string") {
     throw new Error("SQLite reclamation Worker requires an admitted file generation");
@@ -622,80 +612,66 @@ async function runPreparedSqliteSessionReclamation(
     assertRequestCurrent();
   };
   assertCommitAllowed();
-  let publishCommitted: (() => void) | undefined;
-  return await withSqliteReclamationAuthorization(
-    commitGate,
-    owner.nativeLocation,
-    () => {
-      assertCommitAllowed();
-      // A blocked writer may authorize before the Worker's queued request.
-      publishCommitted = prepareReclamationPublication(plan, identity);
-    },
-    (authorize) =>
-      worker.run({
-        claim,
-        validationOwner: owner.validationOwner,
-        commitGate,
-        plan,
-        diagnostics: params.diagnostics,
-        onCommitRequest: authorize,
-        withWriteAdmission: async (run, reclamationAdmission) =>
-          await runExclusiveSqliteSessionWrite(
-            plan.databaseOptions,
-            async () => {
-              let refusal: { error: unknown } | undefined;
-              try {
-                assertCommitAllowed();
-              } catch (error) {
-                refusal = { error };
-              }
-              const completed = await run(refusal);
-              if (completed) {
-                // Publish captured identities after transaction settlement, before releasing the writer.
-                const publishRemoval =
-                  plan.kind === "maintenance-finalize" ||
-                  plan.kind === "lifecycle-projection-commit"
-                    ? prepareReclamationPublication(plan, identity, completed)
-                    : publishCommitted;
-                const removedSessionKeys =
-                  completed.kind === "lifecycle-projection-commit"
-                    ? completed.value.removedSessionKeys
-                    : completed.kind === "maintenance-finalize"
-                      ? collectReclamationChangedSessionKeys(plan, completed)
-                      : completed.kind === "entry" &&
-                          plan.kind === "entry" &&
-                          completed.value.deleted
-                        ? plan.preparedTargetSnapshot.map(({ sessionKey }) => sessionKey)
-                        : [];
-                publishSessionEntryWorkerInvalidations(
-                  {
-                    agentId: plan.databaseOptions.agentId,
-                    storePath: owner.nativeLocation,
-                    databaseIdentity: identity,
-                    removedSessionKeys: new Set(removedSessionKeys),
-                  },
-                  collectReclamationChangedSessionKeys(plan, completed),
-                  () => {
-                    params.onWorkerResult?.(completed, identity);
-                    publishSessionLifecycleWorkerEffects(plan, completed);
-                    publishRemoval?.();
-                  },
-                );
-              }
-            },
-            "session.reclamation.worker-commit",
-            { ...params.diagnostics, reclamationAdmission },
-            "worker",
-            owner.signal,
-          ).catch((error: unknown) => {
-            // Queue cancellation must retain the domain owner's more specific
-            // claim/authority refusal, just like an admitted callback does.
-            if (owner.signal.aborted) {
-              assertCommitAllowed();
-            }
-            throw error;
-          }),
-        transferList: prepareReclamationWorkerTransferList(plan),
+  return await worker.run({
+    claim,
+    validationOwner: owner.validationOwner,
+    plan,
+    diagnostics: params.diagnostics,
+    withWriteAdmission: async (run, reclamationAdmission) =>
+      await runExclusiveSqliteSessionWrite(
+        plan.databaseOptions,
+        async () => {
+          let refusal: { error: unknown } | undefined;
+          let publishCommitted: (() => void) | undefined;
+          try {
+            assertCommitAllowed();
+            publishCommitted = prepareReclamationPublication(plan, identity);
+          } catch (error) {
+            refusal = { error };
+          }
+          const completed = await run(refusal);
+          if (completed) {
+            // Publish captured identities after transaction settlement, before releasing the writer.
+            const publishRemoval =
+              plan.kind === "maintenance-finalize" || plan.kind === "lifecycle-projection-commit"
+                ? prepareReclamationPublication(plan, identity, completed)
+                : publishCommitted;
+            const removedSessionKeys =
+              completed.kind === "lifecycle-projection-commit"
+                ? completed.value.removedSessionKeys
+                : completed.kind === "maintenance-finalize"
+                  ? collectReclamationChangedSessionKeys(plan, completed)
+                  : completed.kind === "entry" && plan.kind === "entry" && completed.value.deleted
+                    ? plan.preparedTargetSnapshot.map(({ sessionKey }) => sessionKey)
+                    : [];
+            publishSessionEntryWorkerInvalidations(
+              {
+                agentId: plan.databaseOptions.agentId,
+                storePath: owner.nativeLocation,
+                databaseIdentity: identity,
+                removedSessionKeys: new Set(removedSessionKeys),
+              },
+              collectReclamationChangedSessionKeys(plan, completed),
+              () => {
+                params.onWorkerResult?.(completed, identity);
+                publishSessionLifecycleWorkerEffects(plan, completed);
+                publishRemoval?.();
+              },
+            );
+          }
+        },
+        "session.reclamation.worker-commit",
+        { ...params.diagnostics, reclamationAdmission },
+        "worker",
+        owner.signal,
+      ).catch((error: unknown) => {
+        // Queue cancellation must retain the domain owner's more specific
+        // claim/authority refusal, just like an admitted callback does.
+        if (owner.signal.aborted) {
+          assertCommitAllowed();
+        }
+        throw error;
       }),
-  );
+    transferList: prepareReclamationWorkerTransferList(plan),
+  });
 }

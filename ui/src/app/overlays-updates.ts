@@ -25,7 +25,6 @@ import {
   createUpdateStatusRefresher,
   projectUpdateSentinel,
   projectUpdateStatusResponse,
-  projectUpdateCheckoutResponse,
   projectUpdateRunFailure,
   resolveUnknownUpdateOutcomeBanner,
   resolveUpdateStatusBanner,
@@ -84,6 +83,9 @@ export function createApplicationUpdateOverlays(
   let activeHello = gateway.snapshot.hello;
   let connectedSource: NonNullable<typeof activeClient> | null = null;
   let connectedEpoch = 0;
+  // connectedEpoch also fences scope changes, so it cannot tell a first
+  // connection from a reconnect; legacy version-only skew needs that fact.
+  let connectedBefore = false;
   let operatorAccess = readGatewayOperatorAccess(gateway.snapshot);
   let updateGatewayScope = gatewayCredentialScope(gateway.connection.gatewayUrl);
   let profileId = gateway.snapshot.selfUser?.id ?? null;
@@ -311,12 +313,9 @@ export function createApplicationUpdateOverlays(
     }
   };
 
-  const applyUpdateStatusResponse = (
-    response: UpdateRestartStatusResponse,
-    preserveInstall = false,
-  ) => {
+  const applyUpdateStatusResponse = (response: UpdateRestartStatusResponse) => {
     const { failure, updateStatusBanner, recordedUpdateAttempt, ...status } =
-      projectUpdateStatusResponse(response, snapshot, preserveInstall);
+      projectUpdateStatusResponse(response, snapshot);
     const run = response.activeRun ?? response.lastRun;
     const history = updateAttempt?.history;
     // A failed history read is not an empty baseline. Until a current identity
@@ -354,7 +353,7 @@ export function createApplicationUpdateOverlays(
   const refreshUpdateStatus = createUpdateStatusRefresher({
     getClient: () => activeClient,
     getEpoch: () => connectedEpoch,
-    getRevision: () => updateStatusRevision,
+    getAuthorization: () => activeHello?.auth,
     canRefresh: () => !disposed && operatorAccess.canAdmin,
     isCurrent: (client, epoch) => epoch === connectedEpoch && isCurrentClient(client),
     onRefreshing: (updateStatusRefreshing) => {
@@ -362,18 +361,6 @@ export function createApplicationUpdateOverlays(
       publish();
     },
     onStatus: applyUpdateStatusResponse,
-    onCheckout: (response, preserveSchedule) => {
-      snapshot = {
-        ...snapshot,
-        ...projectUpdateCheckoutResponse(
-          response,
-          snapshot,
-          preserveSchedule ? "schedule" : undefined,
-        ),
-        updateStatusCheckBanner: null,
-      };
-      publish(true);
-    },
     onError: (error, mode) => {
       if (mode === "completion" && snapshot.updateStatusCheckBanner?.mode === "manual") {
         return;
@@ -421,6 +408,7 @@ export function createApplicationUpdateOverlays(
       (connected && nextProfile !== profileId) ||
       (Boolean(next.hello?.auth) && !nextAccess.canAdmin);
     if (scopeChanged) {
+      connectedEpoch++;
       updateFailureReporter.invalidate();
       updateRunGeneration++;
       updateReadGeneration++;
@@ -482,6 +470,7 @@ export function createApplicationUpdateOverlays(
         snapshot = { ...snapshot, controlUiRefreshRequired: true };
       } else if (!next.client) {
         connectedEpoch = 0;
+        connectedBefore = false;
         snapshot = { ...snapshot, controlUiRefreshRequired: false };
       } else if (next.hello) {
         snapshot = { ...snapshot, controlUiRefreshRequired: true };
@@ -502,10 +491,11 @@ export function createApplicationUpdateOverlays(
       // Vite owns this document; reloading cannot adopt its proxied Gateway's build.
       controlUiRefreshRequired: connectedSourceChanged
         ? !isConfiguredUiDevGateway(gateway.connection.gatewayUrl) &&
-          (Boolean(serverBuildIdentity.buildId?.trim()) || connectedEpoch > 1) &&
+          (Boolean(serverBuildIdentity.buildId?.trim()) || connectedBefore) &&
           controlUiBuildDiffersFrom(serverBuildIdentity)
         : snapshot.controlUiRefreshRequired,
     };
+    connectedBefore = true;
     publish(true);
     if ((connectedSourceChanged || scopeChanged || accessGranted) && operatorAccess.canAdmin) {
       void runConnectionBootstrap("update-run", () =>

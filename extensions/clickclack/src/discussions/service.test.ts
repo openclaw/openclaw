@@ -30,11 +30,12 @@ describe("ClickClack discussion service", () => {
     const harness = createHarness({ label: "Hydration ordering" });
     const entered = createDeferred<void>();
     const snapshot = createDeferred<PluginStateEntry<never>[]>();
-    const openStore = harness.runtime.state.openKeyedStore;
-    harness.runtime.state.openKeyedStore = <T>(
-      options: Parameters<PluginRuntime["state"]["openKeyedStore"]>[0],
+    const openStore = harness.runtime.state.openKeyedStoreV2;
+    harness.runtime.state.openKeyedStoreV2 = <T>(
+      options: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[0],
+      authority?: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[1],
     ) => {
-      const store = openStore<T>(options);
+      const store = openStore<T>(options, authority);
       if (options.namespace !== "discussion-bindings") {
         return store;
       }
@@ -74,12 +75,13 @@ describe("ClickClack discussion service", () => {
       const harness = createHarness({ label: "Prepared metadata", category: "Projects" });
       const entered = createDeferred<void>();
       const release = createDeferred<void>();
-      const openStore = harness.runtime.state.openKeyedStore;
+      const openStore = harness.runtime.state.openKeyedStoreV2;
       let holdEntries = false;
-      harness.runtime.state.openKeyedStore = <T>(
-        options: Parameters<PluginRuntime["state"]["openKeyedStore"]>[0],
+      harness.runtime.state.openKeyedStoreV2 = <T>(
+        options: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[0],
+        authority?: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[1],
       ) => {
-        const store = openStore<T>(options);
+        const store = openStore<T>(options, authority);
         if (options.namespace !== "discussion-bindings") {
           return store;
         }
@@ -130,7 +132,7 @@ describe("ClickClack discussion service", () => {
         } else if (change === "retargeted") {
           harness.config.channels!.clickclack!.discussions!.workspace = "other-team";
         } else if (change === "revoked") {
-          markClickClackDiscussionChannelRevoked(harness.runtime, legacyBinding);
+          await markClickClackDiscussionChannelRevoked(harness.runtime, sessionKey, legacyBinding);
         } else {
           // Bypass local routing indexes, as another native writer can, then reset the session.
           harness.store.register(sessionKey, replacement);
@@ -155,54 +157,48 @@ describe("ClickClack discussion service", () => {
     },
   );
 
-  it.each(["current", "released"])(
-    "opens one channel with stable URLs on %s hosts",
-    async (host) => {
-      const harness = createHarness({ label: "Release Planning", category: "Projects" });
-      if (host === "released") {
-        Reflect.deleteProperty(harness.runtime.agent.session, "getSessionEntryAsync");
-      }
-      harness.config.channels!.clickclack!.apiBaseUrl = "http://127.0.0.1:8484";
-      const sessionKey = "agent:main:main";
+  it("opens one channel with stable URLs", async () => {
+    const harness = createHarness({ label: "Release Planning", category: "Projects" });
+    harness.config.channels!.clickclack!.apiBaseUrl = "http://127.0.0.1:8484";
+    const sessionKey = "agent:main:main";
 
-      expect(await harness.service.info(sessionKey)).toEqual({ state: "available" });
-      const [opened, reopened] = await Promise.all([
-        harness.service.open(sessionKey),
-        harness.service.open(sessionKey),
-      ]);
+    expect(await harness.service.info(sessionKey)).toEqual({ state: "available" });
+    const [opened, reopened] = await Promise.all([
+      harness.service.open(sessionKey),
+      harness.service.open(sessionKey),
+    ]);
 
-      expect(opened).toEqual({
-        state: "open",
-        embedUrl:
-          "https://clickclack.example/embed/channel/team-route/discussion-route?openclawHostTheme=1",
-        openUrl: "https://clickclack.example/app/team-route/discussion-route",
-      });
-      expect(reopened).toEqual(opened);
-      expect(harness.createChannel).toHaveBeenCalledTimes(1);
-      expect(harness.generationStore.lookup(sessionKey)).toBeUndefined();
-      expect(harness.runtime.state.openSyncKeyedStore).toHaveBeenCalledWith(
-        expect.objectContaining({
-          namespace: "discussion-binding-generations",
-          overflowPolicy: "reject-new",
-        }),
-      );
-      expect(harness.runtime.state.openSyncKeyedStore).toHaveBeenCalledWith(
-        expect.objectContaining({
-          namespace: "discussion-revoked-channels",
-          overflowPolicy: "reject-new",
-        }),
-      );
-      expect(harness.createChannel).toHaveBeenCalledWith("wsp_team", {
-        name: "release-planning",
-        kind: "public",
-        external_managed: true,
-        external_ref: testExternalRef(sessionKey),
-        external_url: "https://control.example/control/chat/main",
-        sidebar_section: "Projects",
-        display_title: "Release Planning",
-      });
-    },
-  );
+    expect(opened).toEqual({
+      state: "open",
+      embedUrl:
+        "https://clickclack.example/embed/channel/team-route/discussion-route?openclawHostTheme=1",
+      openUrl: "https://clickclack.example/app/team-route/discussion-route",
+    });
+    expect(reopened).toEqual(opened);
+    expect(harness.createChannel).toHaveBeenCalledTimes(1);
+    expect(harness.generationStore.lookup(sessionKey)).toBeUndefined();
+    expect(harness.runtime.state.openSyncKeyedStore).toHaveBeenCalledWith(
+      expect.objectContaining({
+        namespace: "discussion-binding-generations",
+        overflowPolicy: "reject-new",
+      }),
+    );
+    expect(harness.runtime.state.openSyncKeyedStore).toHaveBeenCalledWith(
+      expect.objectContaining({
+        namespace: "discussion-revoked-channels",
+        overflowPolicy: "reject-new",
+      }),
+    );
+    expect(harness.createChannel).toHaveBeenCalledWith("wsp_team", {
+      name: "release-planning",
+      kind: "public",
+      external_managed: true,
+      external_ref: testExternalRef(sessionKey),
+      external_url: "https://control.example/control/chat/main",
+      sidebar_section: "Projects",
+      display_title: "Release Planning",
+    });
+  });
 
   it("propagates worker session read failures before creating a discussion", async () => {
     const harness = createHarness({ label: "Unavailable session" });

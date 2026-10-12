@@ -587,7 +587,9 @@ suite.define(() => {
             label.trim(),
           ),
         ).toEqual(["All", "Active", "Paused", "Run history"]);
-        expect(await page.locator(".cron-toolbar__filters wa-radio-group").count()).toBe(0);
+        expect(await page.locator(".cron-toolbar__filters").getByRole("radiogroup").count()).toBe(
+          0,
+        );
         expect(await page.locator(".cron-stats").count()).toBe(0);
         expect(await page.locator(".agent-scope-control__label").count()).toBe(0);
         expect(await page.locator(".cron-table__name-text").allTextContents()).toEqual([

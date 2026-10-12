@@ -111,6 +111,8 @@ export function buildGatewaySessionSnapshot(params: {
     spawnedWorkspaceDir: sessionRow.spawnedWorkspaceDir,
     spawnedCwd: sessionRow.spawnedCwd,
     permissionMode: sessionRow.permissionMode ?? null,
+    communication: sessionRow.communication ?? null,
+    effectiveCommunication: sessionRow.effectiveCommunication,
     permissionModePending: sessionRow.permissionModePending ?? false,
     ...(sessionRow.permissionMode !== undefined && sessionRow.sessionRoot !== undefined
       ? { sessionRoot: sessionRow.sessionRoot }

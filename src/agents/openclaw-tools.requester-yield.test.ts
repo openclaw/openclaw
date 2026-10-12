@@ -1,7 +1,7 @@
 import path from "node:path";
 import { afterAll, afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
-import type { OpenClawConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader, type OpenClawConfig } from "../config/config.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
@@ -26,6 +26,10 @@ import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 
 const CRON_RUN_KEY = "agent:main:cron:daily-report:run:run-42";
 const sessionDirs = useSessionStoreTempDirs(afterAll, "cron-yield-policy-");
+
+beforeEach(async () => {
+  await captureRuntimeConfigAsyncReader()();
+});
 
 async function seedRequiredChild(
   requesterSessionKey = CRON_RUN_KEY,
@@ -766,6 +770,30 @@ describe("requester yield ownership", () => {
       status: "already_pending",
       message: expect.stringContaining("already spawned 1 child session"),
       pendingChildren: [{ runId: "run-child", state: "running", wakeArmed: false }],
+    });
+    expect(onYield).not.toHaveBeenCalled();
+  });
+
+  it("reports runtime-owned earlier-turn children beside registry children", async () => {
+    const requesterSessionKey = "agent:main:main";
+    await seedRequiredChild(requesterSessionKey, { requesterTurnRunId: undefined });
+    const nativeChild = {
+      runId: "codex-thread:native-child",
+      childSessionKey: "codex-thread:native-child",
+      state: "running" as const,
+      wakeArmed: false,
+    };
+    const onYield = vi.fn();
+    const tool = createYieldToolForTurn({
+      requesterSessionKey,
+      requesterTurnRunId: "run-turn-2",
+      claimYieldCompletion: () => ({ pendingChildren: [nativeChild] }),
+      onYield,
+    });
+    expect((await tool.execute("yield-turn-2", {})).details).toMatchObject({
+      status: "already_pending",
+      message: expect.stringContaining("already spawned 2 child sessions"),
+      pendingChildren: [nativeChild, { runId: "run-child", state: "running" }],
     });
     expect(onYield).not.toHaveBeenCalled();
   });

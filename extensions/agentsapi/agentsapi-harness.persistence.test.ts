@@ -846,19 +846,15 @@ it.each([false, true])(
 
         await harness.withSessionDeletion(
           { ...fixture.params.sessionTarget, assertCurrent: () => {} },
-          async (mutation) => {
+          async (settle) => {
             expect(fixture.events).toEqual(["cancel", "retire"]);
-            mutation.commit();
-            fixture.events.push("commit");
-            if (rollback) {
-              mutation.rollback();
-              fixture.events.push("rollback");
-            }
+            await settle(rollback ? "rollback" : "commit");
+            fixture.events.push(rollback ? "rollback" : "commit");
           },
         );
 
         expect(fixture.events).toEqual(
-          rollback ? ["cancel", "retire", "commit", "rollback"] : ["cancel", "retire", "commit"],
+          rollback ? ["cancel", "retire", "rollback"] : ["cancel", "retire", "commit"],
         );
         expect(await fixture.openStore().lookup(fixture.params.sessionId)).toEqual(
           rollback ? saved : undefined,
@@ -866,7 +862,7 @@ it.each([false, true])(
         if (rollback) {
           await harness.withSessionDeletion(
             { ...fixture.params.sessionTarget, assertCurrent: () => {} },
-            async (mutation) => mutation.commit(),
+            async (settle) => settle(),
           );
           expect(fixture.controller.retire.mock.calls.map(([binding]) => binding)).toEqual([
             saved?.executor,
@@ -892,7 +888,7 @@ it("completes session deletion when unused executor retirement fails", async () 
         new Error("Executor retirement was not acknowledged"),
       );
       const target = { ...fixture.params.sessionTarget, assertCurrent: () => {} };
-      await harness.withSessionDeletion(target, async (mutation) => mutation.commit());
+      await harness.withSessionDeletion(target, async (settle) => settle());
       expect(fixture.controller.retire).toHaveBeenCalledExactlyOnceWith(
         saved?.executor,
         expect.any(Object),
@@ -947,7 +943,7 @@ it.each([
               ? harness.reset({ sessionId: fixture.params.sessionId, reason: "reset" })
               : harness.withSessionDeletion(
                   { ...fixture.params.sessionTarget, assertCurrent: () => {} },
-                  async (mutation) => mutation.commit(),
+                  async (settle) => settle(),
                 );
           if (operation === "reset") {
             await expect(cleanup()).rejects.toMatchObject({
@@ -1013,7 +1009,7 @@ it.each(["auth failure", "authority revoked", "missing key", "oauth credential"]
                 }
               },
             },
-            async (mutation) => mutation.commit(),
+            async (settle) => settle(),
           );
         if (failureMode === "missing key" || failureMode === "oauth credential") {
           await expect(cleanup()).rejects.toThrow();

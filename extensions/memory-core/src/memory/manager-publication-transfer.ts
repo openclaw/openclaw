@@ -1,8 +1,10 @@
 import type {
   MemoryEmbeddingCacheEntry,
+  MemoryEmbeddingCacheHeader,
   MemoryPublicationFragment,
 } from "./manager-publication-task.js";
 import type {
+  MemorySourceIndexHeader,
   MemorySourceIndexReplacement,
   MemorySourceIndexRow,
 } from "./manager-source-index-kernel.js";
@@ -11,6 +13,29 @@ const FRAGMENT_CHARS = 16 * 1024;
 const BATCH_BYTES = 512 * 1024;
 // Numeric JSON uses fewer than 32 characters per item, including its separator.
 const NUMERIC_PART_ITEMS = 512;
+
+/** Bound the direct command before serializing; oversized vectors retain streamed staging. */
+export function memoryEmbeddingCacheFitsInline(
+  header: MemoryEmbeddingCacheHeader,
+  entries: readonly MemoryEmbeddingCacheEntry[],
+): boolean {
+  let bytes =
+    512 +
+    2 *
+      (header.agentId.length +
+        header.provider.id.length +
+        header.provider.model.length +
+        header.providerKey.length);
+  for (const entry of entries) {
+    bytes +=
+      128 + 2 * (entry.hash.length + (entry.sessionId?.length ?? 0)) + 32 * entry.embedding.length;
+    if (bytes > BATCH_BYTES) {
+      return false;
+    }
+  }
+  // The staged JSON path normalizes invalid numeric values; keep that legacy behavior.
+  return bytes <= BATCH_BYTES && entries.every((entry) => entry.embedding.every(Number.isFinite));
+}
 
 // Encode at most one bounded string slice at a time. A single oversized record
 // must not turn v8.serialize/JSON.stringify into a source-sized host operation.
@@ -92,27 +117,59 @@ function* rowFragments(
   }
 }
 
+export function memoryPublicationHeader(
+  replacement: MemorySourceIndexReplacement,
+): MemorySourceIndexHeader {
+  const { chunks: _chunks, embeddings: _embeddings, ...fields } = replacement;
+  if (fields.source !== "sessions") {
+    return fields;
+  }
+  // Retained rows travel in the bounded transfer, never the header.
+  const { retained = [], ...header } = fields;
+  return { ...header, delta: retained.length > 0 };
+}
+
 export function* memoryPublicationBatches(
   replacement: MemorySourceIndexReplacement,
 ): Generator<MemoryPublicationFragment[]> {
   function* rows(): Generator<MemorySourceIndexRow> {
-    for (const [row, chunk] of replacement.chunks.entries()) {
+    // The kernel validates every retained row before it writes the first new row.
+    const retained = replacement.source === "sessions" ? (replacement.retained ?? []) : [];
+    for (const chunk of retained) {
       yield {
-        chunk: {
-          startLine: chunk.startLine,
-          endLine: chunk.endLine,
-          text: chunk.text,
-          hash: chunk.hash,
-          importance: chunk.importance,
-          triggers: chunk.triggers,
-          projectKey: chunk.projectKey,
-          ...(chunk.provenance ? { provenance: { ...chunk.provenance } } : {}),
-        },
-        embedding: replacement.embeddings[row] ?? [],
+        // Retained rows keep their stored text; identity and provenance suffice.
+        chunk: { ...row(chunk), text: "" },
+        embedding: [],
+        retained: true,
       };
     }
+    for (const [index, chunk] of replacement.chunks.entries()) {
+      yield { chunk: row(chunk), embedding: replacement.embeddings[index] ?? [] };
+    }
+  }
+  function row(chunk: MemorySourceIndexReplacement["chunks"][number]) {
+    return {
+      startLine: chunk.startLine,
+      endLine: chunk.endLine,
+      text: chunk.text,
+      hash: chunk.hash,
+      importance: chunk.importance,
+      triggers: chunk.triggers,
+      projectKey: chunk.projectKey,
+      ...(chunk.provenance ? { provenance: { ...chunk.provenance } } : {}),
+    };
   }
   yield* publicationBatches(rows());
+}
+
+/** Ordinary sources fit one bounded command; larger sources retain chunked transfer. */
+export function memoryPublicationInline(replacement: MemorySourceIndexReplacement) {
+  const batches = memoryPublicationBatches(replacement);
+  const first = batches.next();
+  if (!batches.next().done) {
+    return undefined;
+  }
+  return { header: memoryPublicationHeader(replacement), fragments: first.value ?? [] };
 }
 
 export function* memoryEmbeddingCacheBatches(
@@ -127,11 +184,9 @@ function* publicationBatches(
 ): Generator<MemoryPublicationFragment[]> {
   let batch: MemoryPublicationFragment[] = [];
   let bytes = 0;
-  let row = 0;
   for (const value of rows) {
     const fragments = rowFragments(value, preserveNegativeZero);
     let current = fragments.next();
-    let part = 0;
     while (!current.done) {
       const next = fragments.next();
       const cost = Math.max(Buffer.byteLength(current.value), current.value.length * 2) + 128;
@@ -140,11 +195,10 @@ function* publicationBatches(
         batch = [];
         bytes = 0;
       }
-      batch.push({ row, part: part++, json: current.value, last: next.done === true });
+      batch.push({ json: current.value, last: next.done === true });
       bytes += cost;
       current = next;
     }
-    row++;
   }
   if (batch.length) {
     yield batch;

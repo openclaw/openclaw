@@ -2,8 +2,10 @@ import fs from "node:fs";
 import type { MessagePort } from "node:worker_threads";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { hasErrnoCode } from "./errno.js";
+import { parseGatewayLockPayload } from "./gateway-lock-payload.js";
 
 export type GatewayStateOwnerHeartbeatData = {
+  clock?: "epoch";
   locks: Record<string, string>;
   intervalMs: number;
   failureMs: number;
@@ -11,14 +13,47 @@ export type GatewayStateOwnerHeartbeatData = {
   events: MessagePort;
 };
 
+function selectHeartbeatClock(data: GatewayStateOwnerHeartbeatData, seed: bigint) {
+  if (data.clock === "epoch") {
+    return "epoch";
+  }
+  if (data.clock !== undefined) {
+    return undefined;
+  }
+  const payload = parseGatewayLockPayload(Object.values(data.locks)[0] ?? "");
+  const createdAt = Date.parse(payload?.createdAt ?? "");
+  const epoch = Date.now();
+  const monotonic = process.hrtime.bigint() / 1_000_000n;
+  if (!Number.isFinite(createdAt) || createdAt > epoch || monotonic >= BigInt(createdAt)) {
+    return undefined;
+  }
+  // Shipped drivers omitted the clock. Classify its domain once without refreshing custody.
+  const processStart = monotonic - BigInt(Math.ceil(process.uptime() * 1_000));
+  if (!process.versions.bun && seed >= processStart && seed <= monotonic) {
+    return "monotonic";
+  }
+  if (seed >= BigInt(createdAt) && seed <= BigInt(epoch)) {
+    return "epoch";
+  }
+  return undefined;
+}
+
 /** Native main-thread work cannot stall renewal; an expired worker never resumes custody. */
 export function runGatewayStateOwnerHeartbeat(
   data: GatewayStateOwnerHeartbeatData,
   parent: MessagePort | null,
 ) {
   const lastBeat = new BigInt64Array(data.lastBeat);
-  const now = () => BigInt(Date.now());
   const rootPath = Object.keys(data.locks)[0];
+  const clock = selectHeartbeatClock(data, Atomics.load(lastBeat, 0));
+  if (!clock) {
+    data.events.postMessage(`${rootPath}: heartbeat clock could not be identified`, []);
+    data.events.close();
+    parent?.close();
+    return;
+  }
+  const now =
+    clock === "epoch" ? () => BigInt(Date.now()) : () => process.hrtime.bigint() / 1_000_000n;
   const remainingMs = (at = now()) => {
     const renewedAt = Atomics.load(lastBeat, 0);
     const age = Number(at - renewedAt);
@@ -86,13 +121,13 @@ export function runGatewayStateOwnerHeartbeat(
           continue;
         }
         const renewalStartedAt = now();
+        const stamp = new Date(clock === "epoch" ? Number(renewalStartedAt) : Date.now());
         // A recovered clock cannot make an older captured timestamp safe to write.
         if (remainingMs(renewalStartedAt) <= 0 || remainingMs() <= 0) {
           stop();
           return;
         }
         // A suspension after verification can only touch this held inode, never its successor.
-        const stamp = new Date(Number(renewalStartedAt));
         fs.futimesSync(fd, stamp, stamp);
         if (renewedAt === undefined || renewalStartedAt < renewedAt) {
           renewedAt = renewalStartedAt;

@@ -359,9 +359,20 @@ describe("config.openFile", () => {
 });
 
 describe("config schema response cache", () => {
-  it("rebuilds after config writes change schema inputs", async () => {
+  it.each([
+    {
+      name: "retains the schema after a display-only write",
+      raw: { ui: { prefs: { theme: "knot" } } },
+      expectedLoads: 1,
+    },
+    {
+      name: "rebuilds after a plugin config write",
+      raw: { plugins: { entries: { example: { enabled: false } } } },
+      expectedLoads: 2,
+    },
+  ])("$name", async ({ raw, expectedLoads }) => {
     await invokeConfigSchema();
-    const patch = await invokeConfigPatch({ raw: { ui: { prefs: { theme: "knot" } } } });
+    const patch = await invokeConfigPatch({ raw, baseHash: storedHash });
 
     expect(patch.respond).toHaveBeenCalledWith(
       true,
@@ -372,7 +383,7 @@ describe("config schema response cache", () => {
 
     await invokeConfigSchema();
 
-    expect(loadGatewayRuntimeConfigSchemaMock).toHaveBeenCalledTimes(2);
+    expect(loadGatewayRuntimeConfigSchemaMock).toHaveBeenCalledTimes(expectedLoads);
   });
 
   it("rebuilds when the active plugin registry generation changes", async () => {

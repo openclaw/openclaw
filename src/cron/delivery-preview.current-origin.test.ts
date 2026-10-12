@@ -141,7 +141,7 @@ describe("current cron delivery origin", () => {
           expect(previews).toEqual({
             healthy: {
               label: "announce -> telegram:recipient",
-              detail: `resolved from last, session ${job.sessionKey}`,
+              detail: "commits to the destination conversation; sends one external notification",
             },
             "missing-current": {
               label: "announce -> current session",
@@ -155,7 +155,7 @@ describe("current cron delivery origin", () => {
             },
             "missing-explicit": {
               label: "announce -> telegram:explicit-recipient",
-              detail: "explicit",
+              detail: "commits to the destination conversation; sends one external notification",
             },
           });
           expect(fs.existsSync(databasePath)).toBe(false);
@@ -197,7 +197,7 @@ describe("current cron delivery origin", () => {
         expect(previews).toEqual({
           "healthy-current": {
             label: "announce -> telegram:recipient",
-            detail: `resolved from last, session ${job.sessionKey}`,
+            detail: "commits to the destination conversation; sends one external notification",
           },
           interrupted: {
             label: "announce -> last",
@@ -205,7 +205,7 @@ describe("current cron delivery origin", () => {
           },
           "healthy-explicit": {
             label: "announce -> telegram:other-recipient",
-            detail: "explicit",
+            detail: "commits to the destination conversation; sends one external notification",
           },
         });
       },
@@ -236,7 +236,7 @@ describe("current cron delivery origin", () => {
         });
         const expected = {
           label: "announce -> telegram:recipient",
-          detail: `resolved from last, session ${job.sessionKey}`,
+          detail: "commits to the destination conversation; sends one external notification",
         };
         expect(await resolveCronDeliveryPreview({ cfg, job })).toEqual(expected);
         expect(await resolveCronDeliveryPreviews({ cfg, jobs: [job] })).toEqual({
@@ -407,11 +407,10 @@ describe("current cron delivery origin", () => {
     await withCurrentOrigin(
       { sessionTarget: "isolated", source: { channel: "telegram", to: "recipient" } },
       async ({ cfg, job }) => {
-        const sessionKey = job.sessionKey;
         job.sessionKey = undefined;
         expect(await resolveCronDeliveryPreview({ cfg, job })).toEqual({
           label: "announce -> telegram:recipient",
-          detail: `resolved from last, session ${sessionKey}`,
+          detail: "commits to the destination conversation; sends one external notification",
         });
       },
     );
@@ -435,10 +434,10 @@ describe("current cron delivery origin", () => {
         label: "announce -> creating conversation",
         detail: "commits to this conversation (no external channel route)",
       });
-      job.delivery = { mode: "announce", channel: "telegram" };
+      job.delivery = { mode: "announce", channel: "telegram", to: "other-recipient" };
       expect(await resolveCronDeliveryPreview({ cfg, job })).toEqual({
         label: "announce -> telegram:other-recipient",
-        detail: "explicit",
+        detail: "commits to the destination conversation; sends one external notification",
       });
     });
   });

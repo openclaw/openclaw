@@ -207,6 +207,7 @@ describe("cron event refresh replacement", () => {
 
   it.each<Partial<CronState>>([
     { cronRunsQuery: "new filter" },
+    { cronRunsRunId: "linked-run" },
     { cronRunsScope: "job", cronRunsJobId: "selected-job" },
     { cronAgentId: "writer" },
     { cronRunsLimit: 10 },
@@ -267,6 +268,7 @@ describe("cron event refresh replacement", () => {
 describe("cron retained history ownership", () => {
   it.each<Partial<CronState>>([
     { cronRunsQuery: "new filter" },
+    { cronRunsRunId: "linked-run" },
     { cronRunsScope: "job", cronRunsJobId: "selected-job" },
     { cronAgentId: "writer" },
     { cronRunsLimit: 10 },

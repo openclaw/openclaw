@@ -14,10 +14,9 @@ import {
   policyEvidenceRuleFindings,
   type PolicyEvidenceRule,
 } from "./policy-evidence-finding.js";
-import { agentScopedPolicyTargets, scopedAgentEvidenceMatches } from "./policy-scope.js";
-import { posturePolicyShapeFinding } from "./posture-shapes.js";
-import { hasValidScopedPolicy } from "./scoped-policy-shape.js";
-import { ocPathSegment, readPolicyBoolean, readStringList } from "./utils.js";
+import { scopedAgentEvidenceMatches } from "./policy-scope.js";
+import { policySectionTargets } from "./policy-section-targets.js";
+import { readPolicyBoolean, readStringList } from "./utils.js";
 
 export function toolPostureFindings(
   policy: unknown,
@@ -27,46 +26,25 @@ export function toolPostureFindings(
 ): readonly HealthFinding[] {
   const findings: HealthFinding[] = [];
   const entries = evidence.toolPosture ?? [];
-  if (
-    isRecord(policy) &&
-    isRecord(policy.tools) &&
-    posturePolicyShapeFinding("tools", policy.tools, { policyDocName, policyPath }) === undefined
-  ) {
-    findings.push(...toolPostureFindingsForRule(policy.tools, policyDocName, "tools", entries));
-  }
-  if (!hasValidScopedPolicy(policy, policyPath, policyDocName)) {
-    return findings;
-  }
-  for (const target of agentScopedPolicyTargets(policy)) {
-    if (!isRecord(target.overlay.tools)) {
-      continue;
+  for (const target of policySectionTargets(policy, policyPath, policyDocName, "tools")) {
+    const agentId = target.selectorId;
+    const scopedEntries =
+      agentId === undefined
+        ? entries
+        : entries.filter((entry) =>
+            scopedAgentEvidenceMatches(entry, agentId, entries, entry.scope === "global"),
+          );
+    for (const collect of [
+      toolValuePostureFindings,
+      toolAlsoAllowExpectedFindings,
+      toolRequiredDenyFindings,
+    ]) {
+      findings.push(
+        ...collect(target.policy, policyDocName, target.requirementBase, scopedEntries),
+      );
     }
-    const requirementBase = `scopes/${ocPathSegment(target.scopeName)}/tools`;
-    findings.push(
-      ...toolPostureFindingsForRule(
-        target.overlay.tools,
-        policyDocName,
-        requirementBase,
-        entries.filter((entry) =>
-          scopedAgentEvidenceMatches(entry, target.agentId, entries, entry.scope === "global"),
-        ),
-      ),
-    );
   }
   return findings;
-}
-
-function toolPostureFindingsForRule(
-  toolsPolicy: Record<string, unknown>,
-  policyDocName: string,
-  requirementBase: string,
-  entries: readonly PolicyToolPostureEvidence[],
-): readonly HealthFinding[] {
-  return [
-    ...toolValuePostureFindings(toolsPolicy, policyDocName, requirementBase, entries),
-    ...toolAlsoAllowExpectedFindings(toolsPolicy, policyDocName, requirementBase, entries),
-    ...toolRequiredDenyFindings(toolsPolicy, policyDocName, requirementBase, entries),
-  ];
 }
 
 function toolValuePostureFindings(

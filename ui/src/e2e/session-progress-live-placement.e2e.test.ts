@@ -2,6 +2,7 @@ import { mkdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledGatewayUrl,
@@ -136,18 +137,10 @@ suite.define(() => {
           }),
         })
         .first();
-      const settingSwitch = settingRow.locator("wa-switch");
-      await expect
-        .poll(() =>
-          settingSwitch.evaluate((element) => Boolean((element as { checked?: boolean }).checked)),
-        )
-        .toBe(false);
+      const settingSwitch = settingRow.getByRole("switch");
+      await expect.poll(() => settingSwitch.isChecked()).toBe(false);
       await settingRow.click();
-      await expect
-        .poll(() =>
-          settingSwitch.evaluate((element) => Boolean((element as { checked?: boolean }).checked)),
-        )
-        .toBe(true);
+      await expect.poll(() => settingSwitch.isChecked()).toBe(true);
       await captureLifecycleState("01-setting-enabled.png", settingRow);
 
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
@@ -378,10 +371,7 @@ suite.define(() => {
         await expect
           .poll(() => visiblePane.locator('[data-progress-card-placement="rail"]').count())
           .toBe(0);
-        await page
-          .locator(".chat-pane__header")
-          .getByRole("button", { name: "Restore split", exact: true })
-          .click();
+        await selectChatLayoutAction(page, "Restore split");
         await restoreChatAsMain(page);
         await openChatDetails(visiblePane);
 
@@ -393,7 +383,7 @@ suite.define(() => {
           .poll(() => visiblePane.locator('[data-progress-card-placement="rail"]').count())
           .toBe(0);
         const sideHeader = sidePanel.locator('[data-region-header="side"]');
-        await sideHeader.getByRole("button", { name: "Close", exact: true }).click();
+        await selectChatLayoutAction(page, "Minimize side panel");
         await sideHeader.waitFor({ state: "hidden" });
         await openChatDetails(visiblePane);
         await expect.poll(() => visiblePane.locator(".session-progress-card").count()).toBe(1);
@@ -501,20 +491,6 @@ suite.define(() => {
   });
 
   it.each([
-    {
-      name: "completed",
-      colorScheme: "light" as const,
-      width: 560,
-      status: "completed",
-      active: false,
-    },
-    {
-      name: "paused",
-      colorScheme: "dark" as const,
-      width: 1280,
-      status: "in_progress",
-      active: false,
-    },
     {
       name: "active",
       colorScheme: "dark" as const,

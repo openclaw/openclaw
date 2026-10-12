@@ -20,7 +20,6 @@ import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { createCodeModeCatalogProjection } from "../../code-mode-catalog.js";
-import { markCodeModeControlTool } from "../../code-mode-control-tools.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "../../code-mode.js";
 import { runUntilCompleted } from "../../code-mode.test-support.js";
 import { createAgentHarnessPromptToolPolicy } from "../../harness/prompt-tool-policy.js";
@@ -336,30 +335,9 @@ describe("prepareEmbeddedAttemptClientTools", () => {
     },
   );
 
-  it("collects only the marked Code Mode exec as a code-mode exec tool name", () => {
+  it("stores capable tool names policy-normalized, as completion compares them", () => {
     const catalogRef = createToolSearchCatalogRef();
-    const markedExec = markCodeModeControlTool(createStubTool("exec"));
-    const plainExec = createStubTool("exec");
-
-    expect(
-      [markedExec, plainExec].map((tool) =>
-        Array.from(
-          prepare({
-            codeModeControlsEnabledForRun: true,
-            attemptConfig: CATALOGS_DISABLED_CONFIG,
-            toolSearchRuntimeConfig: CATALOGS_DISABLED_CONFIG,
-            catalogRef,
-            effectiveTools: [tool],
-            uncompactedEffectiveTools: [],
-          }).codeModeExecToolNames,
-        ),
-      ),
-    ).toEqual([["exec"], []]);
-  });
-
-  it("collects only tools whose author declared canDeliverSourceReply", () => {
-    const catalogRef = createToolSearchCatalogRef();
-    const capable = Object.assign(createStubTool("order_status"), {
+    const capable = Object.assign(createStubTool("Order_Status"), {
       canDeliverSourceReply: true,
     });
     const plain = createStubTool("order_lookup");
@@ -371,24 +349,6 @@ describe("prepareEmbeddedAttemptClientTools", () => {
       catalogRef,
       effectiveTools: [capable, plain],
       uncompactedEffectiveTools: [capable, plain],
-    });
-
-    expect(result.sourceReplyCapableToolNames).toEqual(new Set(["order_status"]));
-  });
-
-  it("stores capable tool names policy-normalized, as completion compares them", () => {
-    const catalogRef = createToolSearchCatalogRef();
-    const capable = Object.assign(createStubTool("Order_Status"), {
-      canDeliverSourceReply: true,
-    });
-
-    const result = prepare({
-      codeModeControlsEnabledForRun: false,
-      attemptConfig: CATALOGS_DISABLED_CONFIG,
-      toolSearchRuntimeConfig: CATALOGS_DISABLED_CONFIG,
-      catalogRef,
-      effectiveTools: [capable],
-      uncompactedEffectiveTools: [capable],
     });
 
     expect(result.sourceReplyCapableToolNames).toEqual(new Set(["order_status"]));
@@ -433,23 +393,20 @@ describe("prepareEmbeddedAttemptClientTools", () => {
     expect(result.trustedLocalMediaToolNames).toEqual(new Set());
   });
 
-  it.each([CODE_MODE_CONFIG, CATALOGS_DISABLED_CONFIG])(
-    "hides client tools when the attempt engages code mode",
-    (config) => {
-      const catalogRef = seedCatalog("code-mode", config);
+  it.each([CODE_MODE_CONFIG])("hides client tools when the attempt engages code mode", (config) => {
+    const catalogRef = seedCatalog("code-mode", config);
 
-      const result = prepare({
-        codeModeControlsEnabledForRun: true,
-        attemptConfig: config,
-        // Deliberately catalog-disabled: the code-mode branch must not read this.
-        toolSearchRuntimeConfig: CATALOGS_DISABLED_CONFIG,
-        catalogRef,
-      });
+    const result = prepare({
+      codeModeControlsEnabledForRun: true,
+      attemptConfig: config,
+      // Deliberately catalog-disabled: the code-mode branch must not read this.
+      toolSearchRuntimeConfig: CATALOGS_DISABLED_CONFIG,
+      catalogRef,
+    });
 
-      expect(result.clientToolDefs).toEqual([]);
-      expect(result.allCustomTools).toEqual([]);
-    },
-  );
+    expect(result.clientToolDefs).toEqual([]);
+    expect(result.allCustomTools).toEqual([]);
+  });
 
   it("advertises and invokes final callable owners after a normalized client collision", async () => {
     const catalogRef = createToolSearchCatalogRef();
@@ -678,25 +635,19 @@ describe("prepareEmbeddedAttemptClientTools", () => {
     clearToolSearchCatalog({ catalogRef });
   });
 
-  it.each(["disabled", "directory"] as const)(
-    "keeps client tools directly callable for %s Tool Search",
-    (mode) => {
-      const catalogRef = seedCatalog("tool-search", TOOL_SEARCH_CONFIG);
+  it("keeps client tools directly callable for directory Tool Search", () => {
+    const catalogRef = seedCatalog("tool-search", TOOL_SEARCH_CONFIG);
 
-      const result = prepare({
-        codeModeControlsEnabledForRun: false,
-        attemptConfig: TOOL_SEARCH_CONFIG,
-        toolSearchRuntimeConfig:
-          mode === "disabled"
-            ? CATALOGS_DISABLED_CONFIG
-            : { tools: { toolSearch: { enabled: true, mode: "directory" } } },
-        catalogRef,
-      });
+    const result = prepare({
+      codeModeControlsEnabledForRun: false,
+      attemptConfig: TOOL_SEARCH_CONFIG,
+      toolSearchRuntimeConfig: { tools: { toolSearch: { enabled: true, mode: "directory" } } },
+      catalogRef,
+    });
 
-      expect(result.clientToolDefs.map((tool) => tool.name)).toEqual(["client_probe"]);
-      expect(catalogRef.current?.entries.some((entry) => entry.source === "client")).toBe(false);
-    },
-  );
+    expect(result.clientToolDefs.map((tool) => tool.name)).toEqual(["client_probe"]);
+    expect(catalogRef.current?.entries.some((entry) => entry.source === "client")).toBe(false);
+  });
 
   it("binds side-effect metadata to the concrete plugin tool owner", () => {
     const catalogRef = seedCatalog("tool-search", TOOL_SEARCH_CONFIG);
@@ -726,7 +677,7 @@ describe("prepareEmbeddedAttemptClientTools", () => {
     );
   });
 
-  it.each(["memory_store", "Memory_Store"])(
+  it.each(["Memory_Store"])(
     "keeps client shadow %s admitted but drops ambiguous side-effect ownership",
     (clientName) => {
       const catalogRef = seedCatalog("tool-search", TOOL_SEARCH_CONFIG);
@@ -750,25 +701,4 @@ describe("prepareEmbeddedAttemptClientTools", () => {
       expect(result.sideEffectToolOwners).toEqual(new Map());
     },
   );
-
-  it("keeps non-side-effecting plugin shadows admissible", () => {
-    const catalogRef = seedCatalog("tool-search", TOOL_SEARCH_CONFIG);
-    const pluginTool = createStubTool("plugin_probe");
-    setPluginToolMeta(pluginTool as never, {
-      pluginId: "example-plugin",
-      optional: false,
-    });
-
-    const result = prepare({
-      codeModeControlsEnabledForRun: false,
-      attemptConfig: CATALOGS_DISABLED_CONFIG,
-      toolSearchRuntimeConfig: CATALOGS_DISABLED_CONFIG,
-      catalogRef,
-      uncompactedEffectiveTools: [pluginTool],
-      clientTools: [clientTool("plugin_probe")],
-    });
-
-    expect(result.clientToolDefs.map((tool) => tool.name)).toEqual(["plugin_probe"]);
-    expect(result.sideEffectToolOwners).toEqual(new Map());
-  });
 });

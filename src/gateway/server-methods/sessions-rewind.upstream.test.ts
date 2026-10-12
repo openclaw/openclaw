@@ -4,15 +4,11 @@ import { expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { loadSessionEntry } from "../../config/sessions/session-accessor.entry.js";
 import {
-  getSessionKysely,
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
-import { loadTranscriptEvents } from "../../config/sessions/session-accessor.transcript.js";
 import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
-import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -23,7 +19,6 @@ import {
   readCurrentSessionUpstreamLink,
 } from "../../sessions/session-upstream-links-runtime.js";
 import * as upstreamReads from "../../sessions/session-upstream-links-runtime.js";
-import { deleteSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
 import { upsertSessionUpstreamLinkInDatabase } from "../../sessions/session-upstream-links.kernel.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -278,130 +273,3 @@ it("refuses a shared-state owner retired while rewind waits for the lifecycle lo
     expect(mutation.respond).not.toHaveBeenCalledWith(true, expect.anything(), undefined);
   });
 });
-
-it.each(["replace", "delete"] as const)(
-  "refuses a native fork effect after the synchronous owner %ss its source link",
-  async (change) => {
-    await withOpenClawTestState({ label: "message-cut-upstream-replacement" }, async (state) => {
-      await state.writeConfig(cfg);
-      const scope = await seedMessageCutSource();
-      const shared = openOpenClawStateDatabase();
-      expect(adoptUpstreamSource(shared.db, scope)).toBe(true);
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const nativeEffect = vi.fn();
-      const registry = createEmptyPluginRegistry();
-      registry.agentHarnesses.push({
-        pluginId: "fixture",
-        source: "runtime",
-        harness: {
-          id: "upstream-fixture",
-          label: "Upstream source fixture",
-          supports: () => ({ supported: true }),
-          runAttempt: async () => {
-            throw new Error("not used");
-          },
-          sessionForkV2: {
-            upstreamKinds: ["codex-app-server"],
-            fork: async ({ assertCurrent }) => {
-              entered.resolve();
-              await release.promise;
-              assertCurrent();
-              nativeEffect();
-              return { status: "created", key: "agent:main:dashboard:forked" };
-            },
-          },
-        },
-      });
-      setActivePluginRegistry(registry);
-      const mutation = invokeMessageCut("sessions.fork", scope);
-      try {
-        await awaitGateBeforeSettlement(entered.promise, mutation.error, "upstream fork dispatch");
-        if (change === "replace") {
-          expect(adoptUpstreamSource(shared.db, scope, "replacement-thread")).toBe(true);
-        } else {
-          expect(deleteSessionUpstreamLink(scope.sessionKey, scope.agentId)).toBe("deleted");
-        }
-      } finally {
-        release.resolve();
-      }
-      expect(await mutation.error).toEqual(
-        expect.objectContaining({
-          message: expect.stringContaining("changed during fork"),
-        }),
-      );
-      expect(nativeEffect).not.toHaveBeenCalled();
-    });
-  },
-);
-
-it.each(["preparation", "commit"] as const)(
-  "refuses incognito fork when a missing upstream database appears during %s",
-  async (phase) => {
-    await withOpenClawTestState({ label: "message-cut-upstream-appearance" }, async (state) => {
-      await state.writeConfig(cfg);
-      const scope = await seedMessageCutSource(true);
-      const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope)));
-      const sessionKeys = () =>
-        executeSqliteQuerySync(
-          database.db,
-          getSessionKysely(database.db)
-            .selectFrom("session_nodes")
-            .select("session_key")
-            .orderBy("session_key"),
-        ).rows;
-      const before = {
-        entry: loadSessionEntry(scope),
-        history: await loadTranscriptEvents(scope),
-        sessionKeys: sessionKeys(),
-      };
-      const source = captureSessionUpstreamLinkReadSource();
-      expect(source.present).toBe(false);
-      let appeared = false;
-      const createUpstream = () => {
-        const shared = openOpenClawStateDatabase();
-        expect(shared.path).toBe(source.context.admission.databasePath);
-        appeared = adoptUpstreamSource(shared.db, scope);
-        return Number(appeared);
-      };
-      if (phase === "preparation") {
-        const prepare = upstreamReads.prepareSessionUpstreamLink;
-        vi.spyOn(upstreamReads, "prepareSessionUpstreamLink").mockImplementationOnce(
-          async (...args) => {
-            const prepared = await prepare(...args);
-            expect(prepared).toBeUndefined();
-            createUpstream();
-            return prepared;
-          },
-        );
-      } else {
-        database.db.function("fixture_create_upstream_database", createUpstream);
-        database.db.exec(
-          "CREATE TEMP TRIGGER fixture_create_upstream_database AFTER INSERT ON session_nodes WHEN NEW.session_key != 'agent:main:dashboard:incognito-source' BEGIN SELECT fixture_create_upstream_database(); END",
-        );
-      }
-      const mutation = invokeMessageCut("sessions.fork", scope);
-      const failure = await mutation.error;
-      expect(appeared).toBe(true);
-      expect(() => source.assertCurrent()).toThrow("database path identity changed");
-      if (phase === "preparation") {
-        expect(failure).toEqual(
-          expect.objectContaining({
-            message: expect.stringContaining("database path identity changed"),
-          }),
-        );
-      } else {
-        expect(failure).toBeUndefined();
-        expect(mutation.respond).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({ code: ErrorCodes.UNAVAILABLE }),
-        );
-      }
-      expect(loadSessionEntry(scope)).toEqual(before.entry);
-      expect(await loadTranscriptEvents(scope)).toEqual(before.history);
-      expect(sessionKeys()).toEqual(before.sessionKeys);
-      expect(mutation.respond).not.toHaveBeenCalledWith(true, expect.anything(), undefined);
-    });
-  },
-);

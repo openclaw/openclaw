@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -8,11 +9,13 @@ import { toAgentStoreSessionKey } from "../routing/session-key.js";
 import type { SessionOperatorScope } from "../shared/session-method-scopes-base.js";
 import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
 import { authenticatedProfileUnavailableError } from "./server-methods/gateway-client-identity.js";
+import { isSyntheticGatewayCaller } from "./server-methods/gateway-personal-caller.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
   SessionMutationAuthorization,
 } from "./server-methods/types.js";
+import { isSessionArchiveMutation } from "./session-method-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
@@ -24,7 +27,10 @@ import type {
   PreparedMutationSharing,
   PreparedSessionSharingProfiles,
 } from "./session-sharing-read.js";
-import type { SessionMutationTarget } from "./session-sharing-target-input.js";
+import {
+  resolveChatSendAuthorizationParams,
+  type SessionMutationTarget,
+} from "./session-sharing-target-input.js";
 import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
 import type { GatewaySessionStoreCache } from "./session-utils-store-lookup.js";
 import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
@@ -42,6 +48,54 @@ export type SessionMutationAuthorizationParams = {
   preparedSharing?: PreparedMutationSharing;
   preparedProfiles?: PreparedSessionSharingProfiles;
 };
+
+export function prepareSessionMutationAuthorizationRequest(
+  request: SessionMutationAuthorizationParams,
+) {
+  let params = { ...request };
+  params.preparedProfiles?.readCurrent();
+  if (params.method === "chat.send") {
+    const normalized = resolveChatSendAuthorizationParams(
+      params.context.getRuntimeConfig(),
+      params.requestParams,
+    );
+    if (!normalized.ok) {
+      return { ok: false as const, error: normalized.error };
+    }
+    params = { ...params, requestParams: normalized.value };
+  }
+  const patch =
+    params.method === "sessions.patchMany" && isRecord(params.requestParams)
+      ? params.requestParams.patch
+      : params.requestParams;
+  const requiresCommunicationAuthority =
+    ["sessions.create", "sessions.patch", "sessions.patchMany"].includes(params.method) &&
+    isRecord(patch) &&
+    Object.hasOwn(patch, "communication");
+  if (
+    requiresCommunicationAuthority &&
+    (!params.client || isSyntheticGatewayCaller(params.client))
+  ) {
+    return {
+      ok: false as const,
+      error: errorShape(
+        ErrorCodes.FORBIDDEN,
+        "Session communication settings require a direct human request.",
+      ),
+    };
+  }
+  return {
+    ok: true as const,
+    params,
+    requiresCommunicationAuthority,
+    targetOwnership: {
+      requireOwner:
+        requiresCommunicationAuthority ||
+        isSessionArchiveMutation(params.method, params.requestParams),
+      ownerAction: requiresCommunicationAuthority ? "change communication settings" : undefined,
+    },
+  };
+}
 
 export type AuthorizedSessionMutationTarget = SessionMutationTarget & {
   resolved: Omit<SessionSharingTarget, "entry" | "storeKeys"> | null;

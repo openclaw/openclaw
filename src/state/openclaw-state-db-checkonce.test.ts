@@ -39,7 +39,48 @@ function validationStatements(queries: string[]): string[] {
   );
 }
 
-it("reuses shared-state admission after DDL revalidation, readers, and writer retirement", () => {
+it("checks integrity once before index repair and once after rebuilding the index", () => {
+  const env = { OPENCLAW_STATE_DIR: directories.make("state-checkonce-repair-") };
+  const pathname = openOpenClawStateDatabase({ env }).path;
+  closeOpenClawStateDatabaseForTest();
+  const replacement = `${pathname}.replacement`;
+  copyFileSync(pathname, replacement);
+  {
+    using database = new DatabaseSync(replacement);
+    database.exec("DROP INDEX idx_task_runs_status");
+  }
+  renameSync(replacement, pathname);
+  const observation = observeSqliteReadSql(StatementSync.prototype);
+  try {
+    const repaired = openOpenClawStateDatabase({ env });
+    expect(
+      repaired.db
+        .prepare("PRAGMA index_info(idx_task_runs_status)")
+        .all()
+        .map((row) => row.name),
+    ).toEqual(["status"]);
+    repaired.db.exec("CREATE TABLE checkonce_later (value TEXT)");
+    assertExistingOpenClawStateRuntimeSchema(repaired.db, pathname);
+    expect(observation.queries.filter((sql) => sql === "PRAGMA integrity_check;")).toHaveLength(2);
+    expect(observation.queries.filter((sql) => sql === "PRAGMA foreign_key_check;")).toHaveLength(
+      2,
+    );
+    closeOpenClawStateDatabaseForTest();
+    observation.queries.length = 0;
+    expect(openOpenClawStateDatabase({ env }).db.isOpen).toBe(true);
+    expect(observation.queries.filter((sql) => sql === "PRAGMA integrity_check;")).toHaveLength(1);
+    expect(observation.queries.filter((sql) => sql === "PRAGMA foreign_key_check;")).toHaveLength(
+      1,
+    );
+    observation.queries.length = 0;
+    expect(openOpenClawStateDatabase({ env }).db.isOpen).toBe(true);
+    expect(validationStatements(observation.queries)).toEqual([]);
+  } finally {
+    observation.restore();
+  }
+});
+
+it("reuses live shared-state admission and revalidates after the final reader and writer close", () => {
   const env = { OPENCLAW_STATE_DIR: directories.make("state-checkonce-") };
   const first = openOpenClawStateDatabase({ env });
   const pathname = first.path;
@@ -47,18 +88,27 @@ it("reuses shared-state admission after DDL revalidation, readers, and writer re
     CREATE INDEX checkonce_unrelated_value ON checkonce_unrelated(value)`);
   // Equal catalog definitions cannot prove that metadata rows survived arbitrary DDL.
   assertExistingOpenClawStateRuntimeSchema(first.db, pathname);
+  const survivingReader = openOpenClawStateReadOnlyLocation(pathname, pathname);
   closeOpenClawStateDatabaseForTest();
   const observation = observeSqliteReadSql(StatementSync.prototype);
   try {
     const second = openOpenClawStateDatabase({ env });
     expect(second.db.isOpen).toBe(true);
+    expect(validationStatements(observation.queries)).toEqual([]);
+    survivingReader.close();
     closeOpenClawStateDatabaseForTest();
     const reopened = openOpenClawStateDatabase({ env });
+    expect(observation.queries.filter((sql) => sql === "PRAGMA integrity_check;")).toHaveLength(1);
+    expect(observation.queries.filter((sql) => sql === "PRAGMA foreign_key_check;")).toHaveLength(
+      1,
+    );
+    observation.queries.length = 0;
     const reader = openOpenClawStateReadOnlyLocation(pathname, pathname);
     reader.close();
     expect(reopened.db.isOpen).toBe(true);
     expect(validationStatements(observation.queries)).toEqual([]);
   } finally {
+    survivingReader.close();
     observation.restore();
   }
 });

@@ -43,6 +43,8 @@ In the embedded runtime, a model idle timeout after tool activity also uses this
 
 A Responses stream that ends before its terminal event also qualifies for transient recovery, including when a tool call is still unfinished. Partial tool arguments are never executed. A completed response with inconsistent tool-call identities does not qualify as a disconnected stream. A Gemini or Vertex AI stream that ends inside an event frame qualifies the same way; a whole frame of malformed JSON does not.
 
+Completed Responses replies are delivered immediately, even if the provider has not closed the HTTP response yet. OpenClaw discards up to 64 KiB of trailing bytes for at most 250 ms in the background so a finished connection can be reused. Trailing events never add output or tool calls. Cancellation and Gateway shutdown stop the drain.
+
 If a Responses request reaches its output-token limit while generating a tool call, the embedded runner also continues automatically from recorded results after admitted tools settle. It keeps the same model and account, preserves completed actions, and never executes partial arguments. This continuation shares the retry-count budget and run deadline, but not the 90-second outage window: generating a full response can take longer than that. Cancellation, pending approval, active asynchronous work, and intentional tool termination still stop continuation. Provider refusals and unknown incomplete-response reasons do not qualify.
 
 Exhausted subscription, daily, weekly, or monthly usage windows go directly to eligible auth-profile or model fallback. A `Retry-After` value alone does not establish usage-window exhaustion: temporary throttles still honor the provider's minimum wait up to the saved `retry.provider.maxRetryDelayMs` (default 60 seconds). A rate-limit floor longer than that cap goes directly to fallback when one is configured, since the operator has already said how long a server-requested wait may hold the run; with no fallback configured the floor is honored in full, and `maxRetryDelayMs: 0` disables the cap.
@@ -97,6 +99,11 @@ The embedded runtime's existing session setting `retry.provider.maxRetries` over
 - Composite flows do not retry completed steps.
 
 ### Durable outbound delivery
+
+The Gateway checks for unfinished outbound deliveries once at startup. New
+durable enqueues wake recovery after their database transaction commits. Recovery
+keeps retrying while unfinished deliveries remain and stops waking when the queue
+is empty; an idle Gateway does not poll an empty outbound queue.
 
 The durable outbound queue has a separate delivery-attempt budget. When a
 delivery uses a producer claim, reservation checks the exact owner and its lease

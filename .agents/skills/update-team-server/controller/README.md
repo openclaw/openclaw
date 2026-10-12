@@ -1,0 +1,269 @@
+# Interim deployment controller
+
+This is the deployment controller bundled with the repository's
+[update-team-server skill](../SKILL.md). It preserves the existing managed-release
+owner while native `openclaw update` gains and proves the remaining migration,
+recovery, acceptance, and adoption contracts. It is not another scheduler or an
+alternative public update CLI. Do not add it to runtime packages or default
+Vitest projects.
+
+The controller originated in Manager commit
+`d02035d40a9a2a9d73afee700aec26a10d1c66a9`, directory
+`ops/openclaw/team-hourly-update/`. Schema migrations now belong to the candidate
+release's native update/Doctor path. The controller does not enumerate supported
+schema edges or rehearse migrations on copied databases. See the
+[immutable update design](https://docs.openclaw.ai/reference/team-immutable-update-design).
+
+## Schema updates and recovery
+
+The incumbent keeps serving while the controller builds and seals the candidate.
+For a schema crossing, the controller takes its ordinary maintenance suspension,
+drains and stops the Gateway, then invokes the candidate:
+
+```sh
+node <candidate>/dist/index.js update migrate --backup-root <transaction>/native
+```
+
+This internal supervisor command uses the same native database backup and Doctor
+owners as `openclaw update`. It rejects databases newer than the candidate,
+captures WAL-safe backups and authored configuration before repair, and writes a
+durable receipt before Doctor can migrate. Forward migrations are selected by
+OpenClaw, including crossings that the controller has never seen.
+
+After migration, the controller selects the candidate, starts it, and verifies
+readiness and real session continuity through the existing acceptance path.
+When activation fails, it stops the owned candidate, invokes its `update restore`
+command with the same backup root, restores the old release pointers, and
+verifies the predecessor. Native restore retains the displaced candidate
+databases for diagnosis. If restoration cannot complete, the Gateway stays
+stopped with the journal and backup intact; it never starts an old reader on
+newer state. A retained transaction resumes through `--recover`.
+
+For a retained native-update transaction, `--recover` first checks whether the
+selected candidate is already the running system Gateway. It binds that
+candidate's process generation and runs full deployment acceptance, including
+identity, RPC, health/startup/readiness, configured channels, and session
+continuity. Successful forward recovery records the verified candidate and
+retires the exact journal without draining, stopping, restarting, or restoring
+the Gateway. The native backup remains on disk. This also applies to
+`ROLLBACK_FAILED` with the candidate still selected. An absent or unverifiable
+candidate follows the existing compatibility-checked rollback path.
+
+An interruption while the native owner publishes restored database files can
+require explicit recovery of the retained backup and displaced files. Database
+publication is not resumable per file; recovery fails closed instead of starting
+the predecessor on a mixture of database generations.
+
+These commands are lifecycle-owner interfaces, not a second public updater.
+They require stopped writers. Build, drain, migration, and readiness have their
+own existing budgets. A migration can still take substantial downtime: the
+controller removes deployment-specific admission machinery, not the work
+performed by the database migration itself.
+
+Migration and restoration receive at least two hours, or the existing build
+budget when larger. A measured synthetic 25 → 26 crossing took 4m04s for
+3.865 GiB, roughly 39 minutes at 37 GiB by linear extrapolation before backup;
+this estimate does not predict production downtime.
+
+Complete any transaction created by the former controller using its original
+installed closure before adopting this version. Its edge-specific journals and
+rehearsal artifacts are not inputs to the generic update path.
+
+## Installed closure
+
+Install from one reviewed, merged OpenClaw commit. These four files are one
+versioned closure; a new deploy script with an old library is not supported.
+All installed files and their parent directories are owned by `root:root`, with
+no group or other write access. Libraries use mode `0644`; the executable uses
+`0755`; parent directories use `0755`.
+
+| File                              | Installed path                                                 | Responsibility                                                              |
+| --------------------------------- | -------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `openclaw-release-deploy`         | `/usr/local/sbin/openclaw-release-deploy`                      | Deployment, recovery, and maintenance orchestration under the existing lock |
+| `release-lib.mjs`                 | `/usr/local/lib/openclaw-team/release-lib.mjs`                 | Release admission, journal, native-update handoff, and acceptance           |
+| `gateway-suspension-contract.mjs` | `/usr/local/lib/openclaw-team/gateway-suspension-contract.mjs` | Self-contained pinned suspension protocol validator                         |
+| `startup-profile.mjs`             | `/usr/local/lib/openclaw-team/startup-profile.mjs`             | Controller-owned startup capture lifecycle                                  |
+
+The suspension bundle is unchanged and its SHA-256 is pinned by the library.
+The library imports the startup profiler beside itself. Candidate config repair
+modules and SQLite extensions come from the sealed candidate release, not this
+directory. Existing host maintenance commands remain separate owners.
+
+Install [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) alongside the libraries
+as `root:root`, mode `0644`: the unchanged suspension bundle includes TypeBox
+1.3.34 under its MIT license. The notice is distribution metadata, not another
+runtime module.
+
+The effective existing updater service must execute
+`/usr/local/sbin/openclaw-release-deploy` as root. The historical
+`openclaw-hourly-update.release.conf` clears `ExecStart` and selects this command;
+it is an existing operator-owned service input, not a new installer. Preserve
+all current service limits, environment, locks, and drop-ins. Do not install the
+old mutable wrapper, enable the historical timer, or invent a second cadence.
+
+## Private operator configuration
+
+Supply `OPENCLAW_TEAM_OPERATOR_PROFILE` as JSON in the updater's private,
+root-controlled environment. Keep its source file `root:root`, mode `0600`,
+outside the source checkout. Reuse the same value for every controller and
+library invocation, including recovery and manual read-only diagnostics.
+Do not derive expected values from the candidate: they express the operator's
+previously approved acceptance policy. Missing or malformed required values
+fail verification.
+
+The object has these fields:
+
+- `channels`: a nonempty array of distinct `[pluginId, accountId]` pairs that
+  must each be exactly ready.
+- `modelAgent`: the configured agent whose model is checked and whose isolated,
+  non-delivering acceptance marker runs. The existing default-model fallback
+  remains unchanged.
+- `policy`: expected `mode`, `workspaceOnly`, `updateAuto`,
+  `clickclackCommandMenu`, and `appServer`. The latter contains `mode`,
+  `approvalPolicy`, `approvalsReviewer`, `sandbox`, and `defaultWorkspaceDir`.
+  Other actual app-server fields remain in the captured policy, preserving
+  subsequent drift detection. `updateAuto` must remain `false`. The complete
+  profile is checked during the pre-cutover policy check, including channels.
+- `handoff`: only required for the existing host-handoff config verification;
+  contains `provider`, `sourceBaseUrl`, and `targetBaseUrl`. Verification still
+  allows only the approved endpoint change, worktree-root relocation, and
+  native metadata normalization.
+
+`test-environment.mjs` is a synthetic test profile, **not a deployment default**.
+Night Watch must transcribe the incumbent's approved private values and compare
+its policy/channel/handoff results before adopting this closure. Protect and
+bind the profile together with the code; changing it changes acceptance policy
+and requires its own operator authorization.
+
+Privacy changes are limited to replacing hard-coded deployment expectations
+with this profile, generic error wording, removal of private campaign labels,
+and synthetic test identities/endpoints/models. The deploy script's marker
+uses `modelAgent` for both dispatch and acknowledgement checks. With the
+incumbent values configured, these comparisons and marker addressing are the
+same as the source. No private endpoint, coordinator session ID, credentials,
+operator notes, or host inventory belongs in this public directory.
+
+Independent import review also identified existing runtime defects repaired
+here: stopped-owner checks now reuse the native stopped-manager proof when the
+retired user bus is absent; source export distinguishes PID reuse from the
+original Gateway generation while still checking database writers; and optional
+profile closure compares activation hashes from the same phase. Pointer
+publication propagates failures before another lifecycle step; history
+verification checks captured transcript generations even when a logical session
+key survives. Rollback arms the native handoff before stopping a
+draining successor, and recovery verifies the restored predecessor
+before retiring its journal. Stopped-current recovery waits for a restored
+persistent timer's catch-up invocation before applying its final snapshot checks.
+The profile inspection change is transient; persisted arm records keep their existing shape.
+Tests cover these repairs and use one prepared lease expiry in custody fixtures.
+
+The controller delegates retired Workshop proposal preservation to native Doctor.
+Doctor owns draft export and recovery warnings before dropping the retired tables;
+the controller must not require those rows to remain in SQLite. Its original
+lossless backups, physical database ownership checks, and session witnesses still
+apply. See the [state schema history](../../../../docs/reference/database-schemas/state-schema-history.md#skill-workshop-proposal-retirement-state-schema-20-same-version)
+for the retirement contract.
+
+## Complete-pair adoption
+
+Release publication now prewarms Node's release-scoped compile cache before
+cutover, including reuse of an already published release. The bounded import
+runs as `openclaw`, with the selected Gateway runtime, after publication at its
+final path. It loads the Gateway graph without starting a server or reading
+Gateway state; the existing cache owner chooses the build-ID namespace and
+retention policy. Missing prewarm entries in older releases are skipped, and
+prewarm failures warn and leave ordinary cold startup available. Bun does not
+use Node's compile cache. Night Watch must adopt this reviewed controller
+change through the complete-pair procedure below; landing it does not change
+the installed controller or authorize a Team deployment.
+
+Only the designated Night Watch executor performs these steps. Resolve its
+exact host and coordinator session from the private operator record, preserve
+per-deployment approval, and coordinate any intentional restart there. A code
+publication is not a deployment or a request to restart the Gateway.
+
+1. Stage the four files from one merged OpenClaw commit, verify their reviewed
+   hashes, and run `bash -n` on the executable and `node --check` on the modules.
+   Prepare the private profile from incumbent expectations. Never stage Manager
+   source, notes, or an operations repository on the deployment host.
+2. Through the current owner, settle all old controller readers, including
+   manual and pre-lock invocations. Require the updater service's `MainPID` and
+   `ControlPID` to be zero, no queued job, and no unresolved activation journal.
+   Bind the installed closure/profile identities and hashes, Gateway
+   PID/start/invocation, release pointers, config/database identities, loaded
+   startup guard/permit, and disabled deployment schedule.
+3. Acquire the existing deployment lock on file descriptor 9 without replacing
+   its inode. Recheck the bound facts under that lock. An unresolved transaction
+   needs its existing recovery closure and a separately reviewed exact-phase
+   procedure; never clear its journal to make installation possible.
+4. Preserve exact predecessor bytes, ownership, modes, and profile in a private
+   recovery directory and fsync it. Stage replacement files alongside their
+   destinations with the modes above; fsync files and parent directories.
+   Recheck admission, then rename the complete pair and matching changed helpers
+   while all readers remain excluded. Multiple renames are not an atomic pair:
+   on interruption, keep exclusion and reconcile every file before allowing
+   any reader. Restore only through that same bound recovery procedure.
+5. Verify all four installed hashes, ownership/modes, profile, syntax, and the
+   unchanged runtime bindings before unlocking. Retain predecessor recovery
+   artifacts while referenced. Report publication to Night Watch's coordinator;
+   actual deployment and native acceptance remain a separate approved action.
+
+## Standalone tests
+
+Use disposable Linux with Node 24.16+ or 26.1+, Bun 1.4+, Bash, Python 3, GNU
+coreutils, `flock`, and `/usr/bin/bwrap`. Full coverage requires root and working user/mount
+namespaces. Tests use synthetic temporary state, services, processes, and
+Gateways; they do not contact Team. Some boundary tests extract Bash functions;
+owner-flow tests execute the real deploy entrypoint with external service stubs.
+This suite does not prove a live systemd cutover or production acceptance.
+
+The runtime deliberately pins the suspension bundle's installed path. Runtime
+tests require actual root-owned Node and Bun binaries under root-owned,
+non-writable ancestors; symlinks into a user's toolcache do not qualify. Provide
+them at `/usr/bin/node` and `/usr/local/bin/bun` on the disposable host. Copy the
+test closure with matching ownership. Run the suite as root for its explicitly privileged cases:
+
+```sh
+controller=.agents/skills/update-team-server/controller
+sudo install -d -o root -g root -m 0755 /usr/local/lib/openclaw-team /opt/openclaw-controller-test
+sudo cp -R "$controller/." /opt/openclaw-controller-test/
+sudo chown -R root:root /opt/openclaw-controller-test
+sudo chmod -R a+rX /opt/openclaw-controller-test
+sudo install -o root -g root -m 0644 "$controller/gateway-suspension-contract.mjs" \
+  /usr/local/lib/openclaw-team/gateway-suspension-contract.mjs
+sudo install -d -o root -g root -m 0755 /var/tmp/openclaw-controller-root
+cd /opt/openclaw-controller-test
+sudo env TMPDIR=/var/tmp/openclaw-controller-root /usr/bin/node \
+  --import ./test-environment.mjs --test ./*.test.mjs
+```
+
+Use disk-backed temporary storage with at least 18 GiB free. A smaller `/tmp`
+tmpfs correctly fails the controller's production headroom checks before these
+fixtures reach their intended boundaries.
+
+Inspect failed **and skipped** counts. Non-root or unavailable bubblewrap skips
+are coverage gaps, not full success. Run the repository changed-file gate and
+closure guards on the same candidate as well. The Node suite stays opt-in;
+there is no new default CI/Vitest workload.
+
+## Deliberately omitted
+
+The mutable `openclaw-hourly-update`, `openclaw-release-cutover`, old service and
+timer templates, and Manager installer/inventory/runbook test are not loaded by
+this closure. Existing host service configuration stays with the operator.
+The two `team-metal-*.py` tools are one-off transaction glue. The historical
+`suspension-contract-provenance/` toolchain, manifests, and legacy pair are not
+runtime inputs; the validated generated bundle is retained byte-for-byte.
+
+`update.test.mjs` becomes `release.test.mjs` after removing only its retired
+mutable-updater fixture and cases. `suspension-custody.test.mjs` retains current
+custody/tamper coverage and omits the two historical mixed-pair cases that need
+the excluded legacy snapshot. Other controller tests and their support fixtures remain. New profile tests cover the publication substitutions.
+The lease and handoff fixtures retain their assertions while updating their
+canonical database layout, command responses, and independent capacity inputs.
+
+## Source integrity
+
+Hash all four files from the exact reviewed, merged tree before adoption. Retain
+those hashes with the operator's installation receipt and predecessor closure.
+A historical import hash is provenance, not approval to install modified bytes.

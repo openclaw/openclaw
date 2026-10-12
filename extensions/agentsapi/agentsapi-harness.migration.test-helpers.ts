@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { patchSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, it, vi } from "vitest";
 import type { StoredBinding } from "./agentsapi-binding-record.js";
@@ -331,13 +332,22 @@ export function registerMigrationTests(
           status: "in_progress",
         });
         const harness = fixture.createHarness();
+        if (operation === "context rollback") {
+          await patchSessionEntry({
+            ...fixture.params.sessionTarget,
+            update: () => ({
+              sessionId: "successor-local-session",
+              previousSessionId: fixture.params.sessionId,
+            }),
+          });
+        }
         const cleanup = () =>
           operation === "reset"
             ? harness.reset({ ...fixture.params.sessionTarget, reason: "reset" })
             : operation === "delete"
               ? harness.withSessionDeletion(
                   { ...fixture.params.sessionTarget, assertCurrent: () => {} },
-                  async (mutation) => mutation.commit(),
+                  async (settle) => settle(),
                 )
               : harness.withSessionContextReset(
                   {
@@ -346,9 +356,8 @@ export function registerMigrationTests(
                     previousSessionId: fixture.params.sessionId,
                     assertCurrent: () => {},
                   },
-                  async (mutation) => {
-                    mutation.commit();
-                    mutation.rollback();
+                  async (settle) => {
+                    await settle("rollback");
                   },
                 );
         try {

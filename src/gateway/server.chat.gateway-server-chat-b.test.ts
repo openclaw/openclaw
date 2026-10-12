@@ -104,6 +104,7 @@ import {
   type StoredChatSessionEntry as StoredSessionEntry,
 } from "./server.chat-session-store.test-support.js";
 import type { GatewaySessionsDefaults } from "./session-utils.types.js";
+import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
 import {
   connectOk,
   createGatewaySuiteHarness,
@@ -248,6 +249,7 @@ async function writeGatewayConfig(config: Record<string, unknown>) {
   await fs.mkdir(path.dirname(configPath), { recursive: true });
   await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");
   resetConfigRuntimeState();
+  setRuntimeConfigSnapshot(loadGatewayTestConfig());
 }
 
 async function withDirectChatSession(
@@ -2315,9 +2317,11 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.send returns in_flight when duplicate attachment send wins parsing race", async () => {
+  test("chat.send returns in_flight when duplicate attachment send wins parsing race", async ({
+    signal,
+  }) => {
     openDirectChatSession();
-    const dispatchRelease = createDeferred();
+    const [dispatchEntered, dispatchRelease] = [createDeferred(), createDeferred()];
     try {
       await writeStoredMainSession({
         modelProvider: "test-provider",
@@ -2325,9 +2329,7 @@ describe("gateway server chat", () => {
       });
 
       const firstCatalogSnapshot =
-        createDeferred<
-          Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>>
-        >();
+        createDeferred<ReturnType<typeof createChatVisionModelCatalogSnapshot>>();
       const responses: Array<{ id: string; ok: boolean; payload?: unknown; error?: unknown }> = [];
       const context = createDirectChatContext({
         loadGatewayModelCatalogSnapshot: vi
@@ -2335,10 +2337,11 @@ describe("gateway server chat", () => {
           .mockImplementationOnce(() => firstCatalogSnapshot.promise)
           .mockResolvedValue(createChatVisionModelCatalogSnapshot()),
       });
-      dispatchInboundMessageMock.mockImplementation(async () => dispatchRelease.promise);
+      dispatchInboundMessageMock.mockImplementation(async () => {
+        dispatchEntered.resolve();
+        await dispatchRelease.promise;
+      });
 
-      const pngB64 =
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
       const params = makeChatSendParams({
         message: "see image",
         idempotencyKey: "idem-attachment-race",
@@ -2347,7 +2350,8 @@ describe("gateway server chat", () => {
             type: "image",
             mimeType: "image/png",
             fileName: "dot.png",
-            content: pngB64,
+            content:
+              "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
           },
         ],
       });
@@ -2361,31 +2365,25 @@ describe("gateway server chat", () => {
           context,
         });
 
+      const duplicateResponse = {
+        id: "duplicate",
+        ok: true,
+        payload: { runId: "idem-attachment-race", status: "in_flight" },
+        error: undefined,
+      };
       const first = Promise.resolve(callSend("first"));
       await waitForFast(() => {
         expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledTimes(1);
       }, FAST_WAIT_OPTS);
 
       await callSend("duplicate");
-      expect(responses).toEqual([
-        {
-          id: "duplicate",
-          ok: true,
-          payload: { runId: "idem-attachment-race", status: "in_flight" },
-          error: undefined,
-        },
-      ]);
+      expect(responses).toEqual([duplicateResponse]);
 
       firstCatalogSnapshot.resolve(createChatVisionModelCatalogSnapshot());
       await first;
 
       expect(responses).toEqual([
-        {
-          id: "duplicate",
-          ok: true,
-          payload: { runId: "idem-attachment-race", status: "in_flight" },
-          error: undefined,
-        },
+        duplicateResponse,
         {
           id: "first",
           ok: true,
@@ -2393,6 +2391,7 @@ describe("gateway server chat", () => {
           error: undefined,
         },
       ]);
+      await withinTest(dispatchEntered.promise, signal);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
       expect(context.addChatRun).toHaveBeenCalledTimes(1);
       dispatchRelease.resolve();

@@ -20,7 +20,15 @@ vi.mock("./subagent-announce.requester-settle-descendants.js", () => ({
 const startTurn = vi.hoisted(() => vi.fn());
 const deliver = vi.hoisted(() => vi.fn());
 const loadRequester = vi.hoisted(() =>
-  vi.fn<typeof import("./subagent-announce-delivery.runtime.js").loadRequesterSessionEntry>(),
+  vi.fn<
+    (
+      ...args: Parameters<
+        typeof import("./subagent-announce-delivery.runtime.js").loadRequesterSessionEntry
+      >
+    ) => Awaited<
+      ReturnType<typeof import("./subagent-announce-delivery.runtime.js").loadRequesterSessionEntry>
+    >
+  >(),
 );
 const registryRead = vi.hoisted(() => ({
   countPendingDescendantRuns: vi.fn<typeof countPendingDescendantRuns>(

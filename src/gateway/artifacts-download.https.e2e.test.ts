@@ -9,7 +9,7 @@ import type {
 import { acquireGatewayTestClient } from "../../test/helpers/gateway-client.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
-import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";

@@ -1,7 +1,7 @@
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { extractQueryTerms } from "./helpers.ts";
-import type { CostDailyEntry, UsageAggregates, UsageSessionEntry } from "./types.ts";
+import { extractQueryTerms } from "../../../../src/shared/usage-query.js";
+import type { CostDailyEntry, UsageSessionEntry } from "./types.ts";
 
 function csvEscape(value: string, neutralizeFormulas = true): string {
   const safeValue =
@@ -79,41 +79,10 @@ type QuerySuggestion = {
   value: string;
 };
 
-type UsageFilterOptions = Record<"agent" | "channel" | "provider" | "model" | "tool", string[]>;
-
-function appendFilterValues<T>(
-  values: string[],
-  entries: readonly T[],
-  read: (entry: T) => string | undefined,
-  limit = 12,
-): void {
-  for (const entry of entries) {
-    if (values.length >= limit) {
-      break;
-    }
-    const value = read(entry);
-    if (value && !values.includes(value)) {
-      values.push(value);
-    }
-  }
-}
-
-export function buildUsageFilterOptions(
-  sessions: readonly UsageSessionEntry[],
-  aggregates?: UsageAggregates | null,
-): UsageFilterOptions {
-  const options: UsageFilterOptions = { agent: [], channel: [], provider: [], model: [], tool: [] };
-  appendFilterValues(options.agent, sessions, (session) => session.agentId, 6);
-  appendFilterValues(options.channel, sessions, (session) => session.channel);
-  appendFilterValues(options.provider, sessions, (session) => session.modelProvider);
-  // Overrides follow every observed provider, preserving the menu's first-seen order.
-  appendFilterValues(options.provider, sessions, (session) => session.providerOverride);
-  appendFilterValues(options.provider, aggregates?.byProvider ?? [], (entry) => entry.provider);
-  appendFilterValues(options.model, sessions, (session) => session.model);
-  appendFilterValues(options.model, aggregates?.byModel ?? [], (entry) => entry.model);
-  appendFilterValues(options.tool, aggregates?.tools.tools ?? [], (entry) => entry.name);
-  return options;
-}
+export type UsageFilterOptions = Record<
+  "agent" | "channel" | "provider" | "model" | "tool",
+  string[]
+>;
 
 const buildQuerySuggestions = (query: string, options: UsageFilterOptions): QuerySuggestion[] => {
   const trimmed = query.trim();

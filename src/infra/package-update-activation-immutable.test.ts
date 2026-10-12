@@ -309,6 +309,113 @@ it.each([
     expect(projection).not.toHaveProperty("activation");
   },
 );
+it("retains publication provenance across preparations without backfilling older releases", () => {
+  const adopted = createImmutableInstallRecord(descriptor, () => {});
+  const legacy = recordImmutablePreparedGeneration(adopted, prepared, () => {});
+  const enabled = updateImmutableInstallRecord(
+    legacy,
+    {
+      ...legacy,
+      descriptor: {
+        ...descriptor,
+        version: 3,
+        activationEnabled: true,
+        releaseRetention: {
+          version: 1,
+          mode: "inspect",
+          keepVerifiedGenerations: 3,
+          pins: [{ sha, identity: descriptor.current.identity }],
+        },
+      },
+    },
+    () => {},
+  );
+  expect(enabled.releases).toEqual([]);
+  const publish = (previous: ImmutableInstallRecord, nextSha: string) => {
+    const nextPath = path.join(root, "releases", nextSha);
+    fs.mkdirSync(nextPath, { mode: 0o755 });
+    return recordImmutablePreparedGeneration(
+      previous,
+      {
+        ...prepared,
+        sha: nextSha,
+        path: nextPath,
+        identity: identity(nextPath),
+      },
+      () => {},
+    );
+  };
+  const first = publish(enabled, "c".repeat(40));
+  const second = publish(first, "d".repeat(40));
+  expect(
+    second.releases?.map((entry) => [entry.sha, entry.publishedRevision, entry.verifiedRevision]),
+  ).toEqual([
+    ["c".repeat(40), first.revision, null],
+    ["d".repeat(40), second.revision, null],
+  ]);
+  expect(read()).toEqual(second);
+  expect(fs.readdirSync(path.join(root, "releases")).toSorted()).toEqual([
+    sha,
+    candidateSha,
+    "c".repeat(40),
+    "d".repeat(40),
+  ]);
+  expect(fs.readlinkSync(path.join(root, "current"))).toBe(`releases/${sha}`);
+  expect(() => recordImmutablePreparedGeneration(first, prepared, () => {})).toThrow(
+    "no longer current",
+  );
+  expect(read()).toEqual(second);
+});
+
+it("rolls back inventory publication with a failed preparation receipt", () => {
+  const adopted = createImmutableInstallRecord(
+    {
+      ...descriptor,
+      version: 3,
+      activationEnabled: true,
+      releaseRetention: { version: 1, mode: "inspect", keepVerifiedGenerations: 3, pins: [] },
+    },
+    () => {},
+  );
+  const db = new DatabaseSync(journalPath());
+  try {
+    db.exec(
+      "CREATE TRIGGER fail_receipt BEFORE UPDATE ON immutable_installation BEGIN SELECT RAISE(ABORT, 'synthetic receipt failure'); END",
+    );
+  } finally {
+    db.close();
+  }
+  expect(() => recordImmutablePreparedGeneration(adopted, prepared, () => {})).toThrow(
+    "synthetic receipt failure",
+  );
+  expect(read()).toEqual(adopted);
+  expect(read().releases).toEqual([]);
+  expect(fs.existsSync(prepared.path)).toBe(true);
+});
+
+it("refuses conflicting publication identities instead of rewriting owned provenance", () => {
+  const adopted = createImmutableInstallRecord(
+    {
+      ...descriptor,
+      version: 3,
+      activationEnabled: true,
+      releaseRetention: { version: 1, mode: "inspect", keepVerifiedGenerations: 3, pins: [] },
+    },
+    () => {},
+  );
+  const published = recordImmutablePreparedGeneration(adopted, prepared, () => {});
+  expect(() =>
+    recordImmutablePreparedGeneration(
+      published,
+      {
+        ...prepared,
+        buildDigest: "9".repeat(64),
+      },
+      () => {},
+    ),
+  ).toThrow("conflicts with its retained identity");
+  expect(read()).toEqual(published);
+});
 
 it("rejects a stale preparation instead of replacing a newer receipt", () => {
   const adopted = createImmutableInstallRecord(descriptor, () => {});

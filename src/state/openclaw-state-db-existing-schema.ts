@@ -5,6 +5,7 @@ import {
   createSqliteTableContractReader,
   readSqliteSchemaCookie,
 } from "../infra/sqlite-schema-contract.js";
+import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import {
   getStateRuntimeSchemaAdmission,
@@ -83,7 +84,18 @@ export function assertExistingOpenClawStateRuntimeSchema(
   integrity?: OpenClawStateIntegrityAdmission,
   integrityPolicy?: OpenClawStateIntegrityPolicy,
 ): void {
-  if (getStateRuntimeSchemaAdmission(database)) {
+  const admitted = getStateRuntimeSchemaAdmission(database)
+    ? getAdmittedSqliteSchemaFacts(database)
+    : undefined;
+  if (admitted) {
+    // Every warm handle must retain revocation custody for the integrity proof it borrows.
+    assertOpenClawStateRuntimeIntegrity(
+      database,
+      pathname,
+      admitted,
+      integrity,
+      integrityPolicy,
+    )?.();
     return;
   }
   let publishIntegrity: (() => void) | undefined;

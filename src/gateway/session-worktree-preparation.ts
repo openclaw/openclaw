@@ -8,7 +8,6 @@ import {
   ErrorCodes,
   errorShape,
   type ErrorShape,
-  type SessionsCreateParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
@@ -29,12 +28,16 @@ import type {
   WorktreeSourceStage,
 } from "../agents/worktrees/types.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { captureSessionEntrySourceAssertion } from "../config/sessions/session-entry-source-authority.js";
+import {
+  captureSessionEntryMetadataRead,
+  captureSessionEntrySourceAssertion,
+} from "../config/sessions/session-entry-source-authority.js";
 import {
   composeSessionSourceAssertion,
   type SessionSourceAssertion,
 } from "../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { hasInternalHookListeners } from "../hooks/internal-hooks.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isPathInside } from "../infra/path-guards.js";
 import {
@@ -54,6 +57,7 @@ import type {
 import { invalidSessionRequest } from "./session-request-error.js";
 import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
 import { resolveExplicitSessionName } from "./session-title-state.js";
+import { withGatewaySessionEntryReadOnly } from "./session-utils-read-lifetime.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
 
 /** Resolve registered sources identically for dashboard and native child sessions. */
@@ -85,44 +89,6 @@ export async function resolveSessionProjectRoot(
   }
 }
 
-export function validateSessionWorktreeSelection(
-  params: SessionsCreateParams,
-): ErrorShape | undefined {
-  if (
-    params.worktreeSource === "empty" &&
-    (params.worktree !== true ||
-      params.cwd ||
-      params.projectId ||
-      params.projectGitUrl ||
-      params.repository ||
-      params.catalogId ||
-      params.execNode ||
-      params.worktreeBaseRef)
-  ) {
-    return errorShape(
-      ErrorCodes.INVALID_REQUEST,
-      "sessions.create worktreeSource=empty requires worktree=true and cannot include another workspace source, catalog, execNode, or worktreeBaseRef",
-    );
-  }
-  if (normalizeOptionalString(params.execNode) && params.worktree === true) {
-    return errorShape(
-      ErrorCodes.INVALID_REQUEST,
-      "sessions.create worktree cannot target execNode",
-    );
-  }
-  if (
-    (normalizeOptionalString(params.worktreeBaseRef) ||
-      normalizeOptionalString(params.worktreeName)) &&
-    params.worktree !== true
-  ) {
-    return errorShape(
-      ErrorCodes.INVALID_REQUEST,
-      "sessions.create worktreeBaseRef/worktreeName require worktree=true",
-    );
-  }
-  return undefined;
-}
-
 type AcceptedWorktreeSource = NonNullable<
   PreparedGatewaySessionLifecycle["pendingWorktree"]
 >["source"];
@@ -139,28 +105,54 @@ async function resolveSpawnParentWorktreeSource(
   agentId: string,
   options: { signal?: AbortSignal } = {},
 ): Promise<SpawnParentWorktreeSource | undefined> {
-  const parent = loadGatewaySessionEntryReadOnly(parentSessionKey, { agentId });
+  return withGatewaySessionEntryReadOnly(
+    {
+      cfg: getRuntimeConfig(),
+      key: parentSessionKey,
+      agentId,
+      assertActive: () => options.signal?.throwIfAborted(),
+    },
+    async (parent) => prepareSpawnParentWorktreeSource(parent, agentId, options),
+  );
+}
+
+async function prepareSpawnParentWorktreeSource(
+  parent: ReturnType<typeof loadGatewaySessionEntryReadOnly>,
+  agentId: string,
+  options: { signal?: AbortSignal },
+): Promise<SpawnParentWorktreeSource | undefined> {
   if (!parent.entry) {
     return undefined;
   }
-  const fields = ["sessionId", "archivedAt", "projectId", "sessionRoot", "worktree"] as const;
+  const fields = [
+    "sessionId",
+    "lifecycleRevision",
+    "archivedAt",
+    "projectId",
+    "sessionRoot",
+    "worktree",
+  ] as const;
   const sourceKind = parent.entry.worktree ? "managed worktree" : "project";
   const refuse = (): never => {
     throw new SessionWorktreeSourceChangedError(
       `Spawn parent ${sourceKind} changed; retry from its current session`,
     );
   };
-  const assertRouting = captureSessionMutationRouting(parent.cfg, refuse);
+  const scope = { agentId, sessionKey: parent.canonicalKey, storePath: parent.storePath };
+  const assertRouting = captureSessionMutationRouting(parent.cfg, refuse, [scope]);
+  const metadata = captureSessionEntryMetadataRead(scope);
   const parentSource = captureSessionEntrySourceAssertion({
-    scope: { agentId, sessionKey: parent.canonicalKey, storePath: parent.storePath },
+    scope,
     readSource: parent.capturedReadSource,
     expected: parent.entry,
     fields,
     assertCurrent: () => {
-      const current = loadGatewaySessionEntryReadOnly(parent.canonicalKey, { agentId });
+      const current = metadata
+        ? metadata.readCurrent()
+        : loadGatewaySessionEntryReadOnly(parent.canonicalKey, { agentId }).entry;
       if (
-        !current.entry ||
-        fields.some((field) => !isDeepStrictEqual(current.entry?.[field], parent.entry?.[field]))
+        !current ||
+        fields.some((field) => !isDeepStrictEqual(current?.[field], parent.entry?.[field]))
       ) {
         refuse();
       }
@@ -312,6 +304,7 @@ export async function prepareSessionWorktree(params: {
   acceptedSource?: AcceptedWorktreeSource;
   withRollback?: SpawnParentWorktreeSource["withRollback"];
   onProgress?: CreateManagedWorktreeParams["onProgress"];
+  onPromptReady?: (prepared: PreparedGatewaySessionLifecycle) => Promise<void>;
 }): ReturnType<PrepareGatewaySessionLifecycle> {
   const { target, commitGuard } = params;
   const context = captureWorktreeRunEndContext(process.env);
@@ -473,6 +466,33 @@ export async function prepareSessionWorktree(params: {
       withSource,
       withRollback,
       onProgress: params.onProgress,
+      // Sandboxes require a published registry owner before creating their projection.
+      // Nested cwd discovery also retains complete checkout as its prompt boundary.
+      ...(params.onPromptReady &&
+      !sandboxRequired &&
+      // Bootstrap hooks can read configured or custom paths outside the prepared files.
+      !hasInternalHookListeners("agent", "bootstrap") &&
+      repository &&
+      workspace === repository.sourceRoot
+        ? {
+            onPromptReady: async (
+              worktree: Parameters<NonNullable<CreateManagedWorktreeParams["onPromptReady"]>>[0],
+            ) => {
+              commitGuard?.();
+              await params.onPromptReady!({
+                spawnedCwd: worktree.path,
+                sessionRoot: worktree.path,
+                worktree: {
+                  id: worktree.id,
+                  branch: worktree.branch,
+                  repoRoot: worktree.repoRoot,
+                  canonicalWorkspaceDir: workspace,
+                },
+              });
+              commitGuard?.();
+            },
+          }
+        : {}),
     };
     const { record: worktree, materialized } = workspace
       ? await worktrees.createWithOutcome({
@@ -580,7 +600,7 @@ export async function prepareSessionWorktreeCreation(params: {
   onTitleError: (error: unknown) => void;
   onTitlePersisted: () => void;
 }): ReturnType<PrepareGatewaySessionLifecycle> {
-  const { cfg, target: lifecycleTarget, signal, commitGuard } = params;
+  const { cfg, target: lifecycleTarget, signal, commitGuard, name, baseRef } = params;
   commitGuard();
   const acceptedWorktree = params.inheritParentKey ? lifecycleTarget.entry?.worktree : undefined;
   const acceptedPending = params.inheritParentKey
@@ -620,8 +640,6 @@ export async function prepareSessionWorktreeCreation(params: {
     acceptedPending?.workspace ??
     inheritedSource?.workspace ??
     resolveAgentWorkspaceDir(cfg, lifecycleTarget.agentId);
-  const name = params.name;
-  const baseRef = params.baseRef;
   if (withSource) {
     await withSource((current) => {
       commitGuard();
@@ -670,7 +688,6 @@ export async function prepareSessionWorktreeCreation(params: {
       },
     };
   }
-  const source = params.titleSource;
   // Empty creates have no persisted generation until the lifecycle owner commits.
   const title =
     !name && !params.label && lifecycleTarget.entry && lifecycleTarget.titleModelSelection !== null
@@ -685,7 +702,7 @@ export async function prepareSessionWorktreeCreation(params: {
           sessionKey: lifecycleTarget.key,
           storePath: lifecycleTarget.storePath,
           currentUserMessage: params.currentUserMessage,
-          userMessage: source,
+          userMessage: params.titleSource,
           commitGuard,
           withSource,
           onError: params.onTitleError,
@@ -706,8 +723,5 @@ export async function prepareSessionWorktreeCreation(params: {
     withSource,
     withRollback: inheritedSource?.withRollback,
   });
-  if (prepared.ok) {
-    return ok({ ...prepared.value, ...(withCommit ? { withCommit } : {}) });
-  }
-  return prepared;
+  return prepared.ok ? ok({ ...prepared.value, ...(withCommit ? { withCommit } : {}) }) : prepared;
 }

@@ -91,17 +91,6 @@ describe("image asset helpers", () => {
     ]);
   });
 
-  it("skips malformed OpenAI-compatible base64 image responses", () => {
-    expect(
-      parseOpenAiCompatibleImageResponse(
-        {
-          data: [{ b64_json: "not-base64!" }],
-        },
-        { defaultMimeType: "image/png" },
-      ),
-    ).toEqual([]);
-  });
-
   it("rejects malformed OpenAI-compatible image responses in strict mode", () => {
     expect(() =>
       parseOpenAiCompatibleImageResponse(

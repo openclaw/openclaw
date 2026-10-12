@@ -23,9 +23,8 @@ if (!fullRootWorkspace || !fullExtensionWorkspace || !fullUiWorkspace || !script
 
 describe("check-deadcode-exports", () => {
   it("makes tests in every workspace roots of the full-tree export audit", () => {
-    expect(knipConfig.workspaces["."].entry).not.toContain(
-      "test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
-    );
+    const isEntry = (entries: readonly string[], file: string) =>
+      entries.some((entry) => path.matchesGlob(file, entry.replace(/!$/u, "")));
     expect(knipConfig.workspaces["."].entry).toEqual(
       expect.arrayContaining([
         "config/knip.config.ts!",
@@ -36,10 +35,6 @@ describe("check-deadcode-exports", () => {
     expect(knipConfig.workspaces["."].project).toContain("config/**/*.{ts,mts,cts}!");
     expect(fullRootWorkspace.entry).toEqual(
       expect.arrayContaining([
-        ".agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,mts,cts}!",
-        "src/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
-        "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
-        "test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
         "test/vitest/vitest*.config.ts!",
         "scripts/crabbox-wrapper.mjs!",
         "scripts/crabbox-wrapper.mts!",
@@ -47,8 +42,19 @@ describe("check-deadcode-exports", () => {
         "scripts/check-openclaw-package-tarball.mts!",
       ]),
     );
-    expect(fullExtensionWorkspace.entry).toContain("**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!");
-    expect(fullUiWorkspace.entry).toContain("**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!");
+    for (const extension of ["js", "mjs", "cjs", "ts", "tsx", "mts", "cts"]) {
+      for (const directory of ["src", "scripts", "test"]) {
+        expect(isEntry(fullRootWorkspace.entry, `${directory}/example.test.${extension}`)).toBe(
+          true,
+        );
+      }
+      expect(isEntry(fullExtensionWorkspace.entry, `src/example.spec.${extension}`)).toBe(true);
+      expect(isEntry(fullUiWorkspace.entry, `src/example.test.${extension}`)).toBe(true);
+      expect(isEntry(knipConfig.workspaces["."].entry, `test/example.test.${extension}`)).toBe(
+        false,
+      );
+    }
+    expect(isEntry(fullRootWorkspace.entry, ".agents/skills/example/scripts/probe.ts")).toBe(true);
   });
 
   it("models both compiled subprocess registries as workspace-relative full-tree roots", () => {

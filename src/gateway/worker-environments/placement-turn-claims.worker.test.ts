@@ -1,13 +1,14 @@
 import { DatabaseSync } from "node:sqlite";
 import { deserialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   resolveSessionPlacementForcedTerminalSettlement,
   resolveSessionPlacementTurnSettlementAssertion,
 } from "../../agents/session-placement-forced-terminal-settlement.js";
+import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import * as brokerReply from "../../infra/sqlite-worker-broker-reply.js";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
@@ -18,7 +19,12 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import {
+  acquireOpenClawStateLeaseInTransaction,
+  releaseOpenClawStateLeaseInTransaction,
+} from "../../state/openclaw-state-lease-store.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import type { WorkerTurnClaimInput } from "./placement-record.js";
 import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
@@ -29,6 +35,7 @@ import {
 } from "./placement-test-fixtures.js";
 import { ActiveTurnClaimError, createPlacementTurnClaimOps } from "./placement-turn-claims.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
+import { PERSONAL_SCOPE } from "./placement-workspace-reservation.kernel.js";
 import { createWorkerEnvironmentStore } from "./store.js";
 import { executeLocalTurn } from "./worker-turn-admission.js";
 
@@ -61,6 +68,7 @@ beforeAll(async () => {
   await placements.releaseTurn(warm);
 });
 
+beforeEach(() => setRuntimeConfigSnapshot({}));
 afterEach(() => vi.restoreAllMocks());
 
 async function workerClaim(name: string) {
@@ -393,7 +401,10 @@ it.each(["committed", "unknown"] as const)(
       await expect(ack).rejects.toThrow();
     }
     expect(corrupted()).toBe(1);
-    expect(placements.get(claim.sessionId)?.lastLiveEventAckCursor).toBe(1);
+    if (outcome === "unknown") {
+      expect(() => placements.get(claim.sessionId)).toThrow("Await getAsync");
+    }
+    expect((await placements.getAsync(claim.sessionId))?.lastLiveEventAckCursor).toBe(1);
     expect(await placements.listPendingWorkspaceResultsAsync(claim.sessionId)).toMatchObject([
       { claimId: claim.claimId, gatewayInstanceId: placements.workspaceResultInstanceId() },
     ]);
@@ -428,12 +439,13 @@ it("claims and strictly releases durable turns without host SQLite", async () =>
   expect(placements.get("placement-worker-sql-free")?.turnClaim).toBeNull();
 });
 
-it.each(["committed", "unknown", "reentrant"] as const)(
+it.each(["committed", "unknown"] as const)(
   "certifies local projection facts across %s claim settlement",
   async (outcome) => {
     const requested = input(`projection-${outcome}`);
     // The fault belongs to the claim admission, not the worker's first open admission.
     await placements.releaseTurn(await placements.claimTurn(requested));
+    await placements.readProjection([requested.sessionId]);
     const snapshots: ReturnType<typeof placements.readPublishedProjection>[] = [];
     const changes: SessionRowChange[] = [];
     const stop = sessionChanges.subscribeProjection((change) => {
@@ -442,60 +454,91 @@ it.each(["committed", "unknown", "reentrant"] as const)(
         snapshots.push(placements.readPublishedProjection(change));
       }
     });
-    let replaced = false;
-    const stopReplacement = sessionChanges.subscribeFacts((change) => {
-      if (
-        outcome !== "reentrant" ||
-        replaced ||
-        !("sessionKey" in change) ||
-        change.sessionKey !== requested.sessionKey
-      ) {
-        return;
-      }
-      replaced = true;
-      const native = createPlacementTurnClaimOps({
-        path: database.path,
-        instanceId: "reentrant-placement-fixture",
-        now: () => 1_001,
-        read: () => database.db,
-        write: (operation) =>
-          runOpenClawStateWriteTransaction(({ db }) => operation(db), { database }),
-      });
-      native.releaseTurn({ ...requested, placementGeneration: 0 });
-      native.claimTurn(requested);
-    });
-    const corrupted =
-      outcome === "reentrant" ? undefined : losePlacementReply(requested.sessionId, outcome);
+    const corrupted = losePlacementReply(requested.sessionId, outcome);
     try {
       const claim = await placements.claimTurn(requested);
-      if (corrupted) {
-        expect(corrupted()).toBe(1);
-      }
-      if (outcome === "committed") {
-        expect(snapshots).toHaveLength(1);
-        expect(snapshots[0]?.placements.get(requested.sessionId)?.turnClaim?.claimId).toBe(
-          requested.claimId,
-        );
-      } else if (outcome === "unknown") {
-        expect(snapshots).toEqual([undefined]);
-      } else {
-        expect(replaced).toBe(true);
-        expect(placements.get(requested.sessionId)).toMatchObject({
-          updatedAtMs: 1_001,
-          turnClaim: { claimId: requested.claimId },
-        });
-        expect(snapshots).toEqual([undefined, undefined, undefined]);
-      }
+      expect(corrupted()).toBe(1);
+      expect(snapshots).toHaveLength(1);
+      expect(snapshots[0]?.placements.get(requested.sessionId)?.turnClaim?.claimId).toBe(
+        requested.claimId,
+      );
       expect(
         changes.every((change) => placements.readPublishedProjection(change) === undefined),
       ).toBe(true);
       stop();
-      stopReplacement();
       await placements.releaseTurn(claim);
     } finally {
       stop();
-      stopReplacement();
     }
+  },
+);
+
+it("replays the same local claim without replacing its identity or a successor", async () => {
+  const requested = input("idempotent");
+  const claim = await placements.claimTurn(requested);
+  const replay = await placements.claimTurn(requested);
+  expect(replay).toEqual(claim);
+  await expect(placements.claimTurn({ ...requested, agentId: "another-agent" })).rejects.toThrow(
+    "placement identity changed",
+  );
+  await expect(placements.claimTurn({ ...requested, runId: "another-run" })).rejects.toBeInstanceOf(
+    ActiveTurnClaimError,
+  );
+  expect(placements.get(requested.sessionId)?.turnClaim).toMatchObject({
+    claimId: requested.claimId,
+    runId: requested.runId,
+  });
+  await placements.releaseTurn(replay);
+  const successor = await placements.claimTurn({ ...requested, claimId: "successor" });
+  await placements.releaseTurnIfOwned(claim);
+  expect(placements.get(requested.sessionId)?.turnClaim?.claimId).toBe("successor");
+  await placements.releaseTurn(successor);
+});
+
+it.each(["new local", "existing local", "worker"] as const)(
+  "checks live publication exclusion in the %s claim write",
+  async (kind) => {
+    let requested: WorkerTurnClaimInput = input(
+      `publication-exclusion-${kind.replaceAll(" ", "-")}`,
+    );
+    if (kind === "existing local") {
+      await placements.releaseTurn(await placements.claimTurn(requested));
+    } else if (kind === "worker") {
+      const active = await advancePlacementFixtureToActive(placements, database, requested, {
+        environmentId: "publication-exclusion-environment",
+      });
+      requested = {
+        ...requested,
+        owner: {
+          kind: "worker",
+          environmentId: active.environmentId,
+          ownerEpoch: active.activeOwnerEpoch,
+        },
+      };
+    }
+    const lease = { scope: PERSONAL_SCOPE, key: requested.sessionId, owner: "publisher" };
+    runOpenClawStateWriteTransaction(
+      ({ db }) => acquireOpenClawStateLeaseInTransaction(db, lease, 60_000),
+      { database },
+    );
+    await expect(placements.claimTurn(requested)).rejects.toThrow(
+      "The session workspace is being published",
+    );
+    expect((await placements.getAsync(requested.sessionId))?.turnClaim ?? null).toBeNull();
+    runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        releaseOpenClawStateLeaseInTransaction(db, lease);
+        acquireOpenClawStateLeaseInTransaction(db, lease, 60_000, null, Date.now() - 120_000);
+      },
+      { database },
+    );
+    const claimed = await placements.claimTurn(requested);
+    expect(claimed.claimId).toBe(requested.claimId);
+    await placements.releaseTurn(claimed);
+    runOpenClawStateWriteTransaction(
+      ({ db }) => releaseOpenClawStateLeaseInTransaction(db, lease),
+      { database },
+    );
   },
 );
 
@@ -535,7 +578,7 @@ it("rolls back claim admission when live authority is revoked at commit", async 
     }),
   ).rejects.toThrow("synthetic placement admission revoked");
   expect(revoked).toBe(true);
-  expect(placements.get("placement-worker-refused")).toBeUndefined();
+  expect(await placements.getAsync("placement-worker-refused")).toBeUndefined();
 });
 
 it("fences retained authority before release commit and closes observers after settlement", async () => {
@@ -678,12 +721,6 @@ it("keeps a later same-byte native claim authoritative when the old release repl
   const deliver = await replyArrived.promise;
   let delivered = false;
   let next: Awaited<ReturnType<typeof placements.prepareTurnClaimAuthority>> | undefined;
-  const snapshots: ReturnType<typeof placements.readPublishedProjection>[] = [];
-  const stop = sessionChanges.subscribeProjection((change) => {
-    if ("sessionKey" in change && change.sessionKey === requested.sessionKey) {
-      snapshots.push(placements.readPublishedProjection(change));
-    }
-  });
   try {
     expect(previous.isCurrent()).toBe(false);
     const native = createPlacementTurnClaimOps({
@@ -694,7 +731,7 @@ it("keeps a later same-byte native claim authoritative when the old release repl
       write: (operation) =>
         runOpenClawStateWriteTransaction(({ db }) => operation(db), { database }),
     });
-    const replacement = native.claimTurn(requested);
+    const replacement = native.claimTurn(requested).claim;
     next = await placements.prepareTurnClaimAuthority(replacement);
     expect(next.isCurrent()).toBe(true);
     delivered = true;
@@ -705,11 +742,8 @@ it("keeps a later same-byte native claim authoritative when the old release repl
     expect(placements.get(claim.sessionId)?.turnClaim).toMatchObject({
       claimId: requested.claimId,
     });
-    expect(snapshots.filter((snapshot) => snapshot !== undefined)).toEqual([]);
-    stop();
     await placements.releaseTurn(replacement);
   } finally {
-    stop();
     if (!delivered) {
       deliver();
     }

@@ -30,10 +30,12 @@ import {
 } from "../test/vitest/vitest.shared.config.ts";
 import { uiIsolatedTestFiles } from "../test/vitest/vitest.ui-isolated-paths.mjs";
 import {
+  resolveUiTypeScriptPath,
   uiNodeDrivenBrowserTestFiles,
   uiTimingTestFiles,
 } from "../test/vitest/vitest.ui-paths.mjs";
 import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
+import { controlUiSolidPlugin } from "./config/control-ui-solid.ts";
 import { UiRuntimePartitionSequencer } from "./test/vitest-runtime-sequencer.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -111,9 +113,40 @@ function resolveChromiumLaunchOptions(): { executablePath: string } | undefined 
 
 let chromiumLaunchOptions: ReturnType<typeof resolveChromiumLaunchOptions> | null = null;
 
-export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
+// Re-add modal-dialog.browser (CDP media emulation) and web-awesome-accessibility.node
+// (CDP accessibility tree) after their browser-neutral replacements land.
+const webkitTestFiles = [
+  "src/components/web-awesome-dropdown.browser.test.ts",
+  "src/components/web-awesome-dropdown-owner.browser.test.ts",
+  "src/components/web-awesome-select-controls.browser.test.ts",
+  "src/components/web-awesome-select.browser.test.ts",
+  "src/components/web-awesome.test.ts",
+  "src/components/web-awesome-theme.browser.test.ts",
+  "src/components/menu-surface.browser.test.ts",
+  "src/components/modal-dialog.test.ts",
+  "src/components/tooltip.test.ts",
+  "src/components/tooltip.browser.test.ts",
+  "src/components/panel-tab-strip.test.ts",
+  "src/components/panel-tab-strip.browser.test.ts",
+  "src/components/tooltip-title.browser.test.ts",
+  "src/pages/chat/chat-composer-context.browser.test.ts",
+  "src/pages/chat/chat-composer-context.palette.browser.test.ts",
+  "src/pages/chat/chat-composer-overflow.browser.test.tsx",
+  "src/pages/chat/components/chat-effort-picker.browser.test.tsx",
+  "src/pages/chat/components/chat-details.browser.test.ts",
+  "src/pages/chat/components/chat-model-picker.browser.test.tsx",
+  "src/pages/chat/components/chat-pane-header.browser.test.ts",
+  "src/pages/chat/components/chat-pane-versions-menu.browser.test.ts",
+].map((file) => resolveUiTypeScriptPath(file, here));
+
+export function createUiBrowserVitestConfig(
+  env = process.env,
+  browser: "chromium" | "webkit" = "chromium",
+): ViteUserConfig {
   const include = includeUiTests(
-    ["src/**/*.browser.test.ts", "../extensions/*/browser/**/*.browser.test.ts"],
+    browser === "webkit"
+      ? webkitTestFiles
+      : ["src/**/*.browser.test.{ts,tsx}", "../extensions/*/browser/**/*.browser.test.{ts,tsx}"],
     env,
   );
   const runtimeFiles = loadPatternListFromEnv("OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE", env);
@@ -125,15 +158,18 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
       nodeDrivenBrowserLayoutTests,
       matchesVitestGlob,
     ).length === 0;
-  if (!excludesBrowserFiles && chromiumLaunchOptions === null) {
+  if (browser === "chromium" && !excludesBrowserFiles && chromiumLaunchOptions === null) {
     chromiumLaunchOptions = resolveChromiumLaunchOptions();
   }
   const provider = playwright({
-    launchOptions: {
-      ...chromiumLaunchOptions,
-      // Keep real canvas encoding without Chromium's idle-task watchdog in test pages.
-      args: ["--enable-blink-features=NoIdleEncodingForWebTests"],
-    },
+    launchOptions:
+      browser === "chromium"
+        ? {
+            ...chromiumLaunchOptions,
+            // Keep real canvas encoding without Chromium's idle-task watchdog in test pages.
+            args: ["--enable-blink-features=NoIdleEncodingForWebTests"],
+          }
+        : undefined,
   });
   if (excludesBrowserFiles) {
     // Keep browser discovery for native sharding; only skip its speculative launch.
@@ -142,6 +178,7 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
   return defineProject({
     root: here,
     plugins: [
+      controlUiSolidPlugin(),
       mermaidClassicBundlePlugin(),
       controlUiLocaleModulesPlugin(),
       createVitestProjectCachePlugin(),
@@ -168,8 +205,11 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
         "@awesome.me/webawesome/dist/components/switch/switch.js",
         "@awesome.me/webawesome/dist/components/tooltip/tooltip.js",
         "@codemirror/commands",
+        "@codemirror/language",
+        "@codemirror/language-data",
         "@codemirror/state",
         "@codemirror/view",
+        "@lezer/highlight",
         "@lit/context",
         "@lit/task",
         "@noble/ed25519",
@@ -179,6 +219,7 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
         "@openclaw/normalization-core > libphonenumber-js/min/metadata",
         "@openclaw/uirouter",
         "@panzoom/panzoom",
+        "@solidjs/testing-library",
         "@tanstack/lit-virtual",
         "@tanstack/virtual-core",
         "dompurify",
@@ -224,7 +265,7 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
       // File-project loading overrides Vite's root with the config directory.
       // Keep discovery and setup paths rooted in the UI in every entrypoint.
       root: here,
-      name: "browser",
+      name: browser === "webkit" ? "webkit" : "browser",
       // No cleanup runner: it imports node:fs and repo server modules, which
       // cannot load in browser mode. Browser files own their own teardown.
       include,
@@ -233,7 +274,7 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
       browser: {
         enabled: true,
         provider,
-        instances: [{ browser: "chromium", name: "chromium" }],
+        instances: [{ browser, name: browser }],
         headless: true,
         ui: false,
       },
@@ -298,7 +339,11 @@ export default defineConfig({
     projects: [
       {
         extends: false,
-        plugins: [controlUiLocaleModulesPlugin(), createVitestProjectCachePlugin()],
+        plugins: [
+          controlUiSolidPlugin(),
+          controlUiLocaleModulesPlugin(),
+          createVitestProjectCachePlugin(),
+        ],
         resolve: {
           alias: workspaceSourceAliases,
         },
@@ -312,14 +357,17 @@ export default defineConfig({
           // The cleanup runner retires that state per file; without it the lane
           // fails whichever sibling the size sequencer happens to pack together.
           runner: nonIsolatedRunnerPath,
-          include: includeUiTests(["src/**/*.test.ts", "../extensions/*/browser/**/*.test.ts"]),
+          include: includeUiTests([
+            "src/**/*.test.{ts,tsx}",
+            "../extensions/*/browser/**/*.test.{ts,tsx}",
+          ]),
           exclude: [
-            "src/**/*.browser.test.ts",
-            "src/**/*.e2e.test.ts",
-            "src/**/*.node.test.ts",
-            "../extensions/*/browser/**/*.browser.test.ts",
-            "../extensions/*/browser/**/*.e2e.test.ts",
-            "../extensions/*/browser/**/*.node.test.ts",
+            "src/**/*.browser.test.{ts,tsx}",
+            "src/**/*.e2e.test.{ts,tsx}",
+            "src/**/*.node.test.{ts,tsx}",
+            "../extensions/*/browser/**/*.browser.test.{ts,tsx}",
+            "../extensions/*/browser/**/*.e2e.test.{ts,tsx}",
+            "../extensions/*/browser/**/*.node.test.{ts,tsx}",
             ...mockRegistryUnitTests,
           ],
           environment: "jsdom",
@@ -328,7 +376,11 @@ export default defineConfig({
       },
       {
         extends: false,
-        plugins: [controlUiLocaleModulesPlugin(), createVitestProjectCachePlugin()],
+        plugins: [
+          controlUiSolidPlugin(),
+          controlUiLocaleModulesPlugin(),
+          createVitestProjectCachePlugin(),
+        ],
         resolve: {
           alias: workspaceSourceAliases,
         },
@@ -346,7 +398,11 @@ export default defineConfig({
       },
       {
         extends: false,
-        plugins: [controlUiLocaleModulesPlugin(), createVitestProjectCachePlugin()],
+        plugins: [
+          controlUiSolidPlugin(),
+          controlUiLocaleModulesPlugin(),
+          createVitestProjectCachePlugin(),
+        ],
         resolve: {
           alias: workspaceSourceAliases,
         },
@@ -359,8 +415,8 @@ export default defineConfig({
           // layout tests, whose browser lives in module scope. Resetting the
           // module graph between files churns that browser and flakes them.
           include: includeUiTests([
-            "src/**/*.node.test.ts",
-            "../extensions/*/browser/**/*.node.test.ts",
+            "src/**/*.node.test.{ts,tsx}",
+            "../extensions/*/browser/**/*.node.test.{ts,tsx}",
             ...nodeDrivenBrowserLayoutTests,
           ]),
           environment: "jsdom",
@@ -368,9 +424,16 @@ export default defineConfig({
         },
       },
       { ...createUiBrowserVitestConfig(), extends: false },
+      ...(process.env.OPENCLAW_UI_WEBKIT === "1"
+        ? [{ ...createUiBrowserVitestConfig(process.env, "webkit"), extends: false }]
+        : []),
       {
         extends: false,
-        plugins: [controlUiLocaleModulesPlugin(), createVitestProjectCachePlugin()],
+        plugins: [
+          controlUiSolidPlugin(),
+          controlUiLocaleModulesPlugin(),
+          createVitestProjectCachePlugin(),
+        ],
         resolve: { alias: workspaceSourceAliases },
         test: {
           ...sharedUiTestConfig,

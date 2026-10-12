@@ -4,7 +4,10 @@ import {
   isReasoningOnlyLengthAssistantTurn,
   isStreamErrorFallbackContent,
 } from "@openclaw/ai/internal/shared";
-import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
+import {
+  isCompactionReplayCheckpoint,
+  replaceCompactionReplayOwnerContent,
+} from "@openclaw/ai/transports";
 import { asFiniteNumber as toFiniteCostNumber } from "@openclaw/normalization-core/number-coercion";
 import {
   asOptionalObjectRecord,
@@ -23,7 +26,10 @@ import {
   normalizeInputProvenance,
 } from "../../sessions/input-provenance.js";
 import { hasPersistedMedia } from "../../sessions/user-turn-media.js";
-import { isTranscriptOnlyOpenClawAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
+import {
+  isTranscriptOnlyOpenClawAssistantMessage,
+  OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
+} from "../../shared/transcript-only-openclaw-assistant.js";
 import { rethrowIncognitoSessionError } from "../../state/incognito-session-error.js";
 import { stripStaleAssistantUsageBeforeLatestCompaction } from "../compaction-usage.js";
 import {
@@ -54,6 +60,7 @@ import {
   extractToolResultId,
   sanitizeToolCallIdsForCloudCodeAssist,
 } from "../tool-call-id.js";
+import { createCompletedToolCallPredicate } from "../tool-call-shared.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import type { TranscriptPolicy } from "../transcript-policy.types.js";
 import {
@@ -247,6 +254,14 @@ function normalizeAssistantReplayBlockContent(
 }
 
 function isBareDeliveryMirrorDuplicate(out: AgentMessage[], next: AssistantReplayMessage): boolean {
+  // Canonical automation results are visible conversation turns, not mirrors,
+  // even when they repeat the preceding reply without using model tokens.
+  if (
+    next.provider === OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER &&
+    next.model === "automation-result"
+  ) {
+    return false;
+  }
   const previous = out.at(-1);
   if (!previous || previous.role !== "assistant") {
     return false;
@@ -286,7 +301,8 @@ function normalizeAssistantReplayMessage(
   if (
     isStreamErrorFallbackContent(message.content) &&
     (message.stopReason === "error" ||
-      isZeroUsageEmptyStopAssistantTurn({ ...message, content: [] }))
+      (isZeroUsageEmptyStopAssistantTurn({ ...message, content: [] }) &&
+        !isCompactionReplayCheckpoint(message.providerReplay)))
   ) {
     return null;
   }
@@ -321,16 +337,38 @@ function normalizeAssistantReplayMessage(
 
 export function normalizeAssistantReplayContent(messages: AgentMessage[]): AgentMessage[] {
   let touched = false;
+  let isCompletedToolCall: ReturnType<typeof createCompletedToolCallPredicate> | undefined;
   const out: AgentMessage[] = [];
   for (const message of messages) {
     if (message?.role !== "user" && message?.role !== "assistant") {
       out.push(message);
       continue;
     }
-    const normalized =
+    let normalized =
       message.role === "user"
         ? sanitizeUserReplayContent(message)
         : normalizeAssistantReplayMessage(message, out);
+    if (
+      normalized?.role === "assistant" &&
+      (normalized.stopReason === "error" || normalized.stopReason === "aborted") &&
+      normalized.content.some((block) => block.type === "toolCall")
+    ) {
+      const completedToolCall = (isCompletedToolCall ??=
+        createCompletedToolCallPredicate(messages));
+      if (
+        normalized.content.some((block) => block.type === "toolCall" && completedToolCall(block))
+      ) {
+        // Signed thinking belongs to the completed calls; the failed source stays intact for display.
+        const completed = normalized.content.filter(
+          (block) =>
+            block.type !== "text" && (block.type !== "toolCall" || completedToolCall(block)),
+        );
+        normalized = {
+          ...replaceCompactionReplayOwnerContent(normalized, completed),
+          stopReason: "toolUse",
+        };
+      }
+    }
     if (normalized) {
       out.push(normalized);
     }

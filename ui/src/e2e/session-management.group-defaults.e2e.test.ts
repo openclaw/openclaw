@@ -11,6 +11,7 @@ import {
   installMockGateway,
   sessionsListResponse,
 } from "./session-management.test-support.ts";
+import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -424,7 +425,7 @@ suite.define(() => {
     }
   });
 
-  it("revalidates an open group route when its defaults or identity change", async () => {
+  it("reloads changed group defaults and identity without losing its draft", async () => {
     const initialCwd = "/home/peter/client-work";
     const refreshedCwd = "/home/peter/refreshed-client-work";
     const context = await suite.browser.newContext(createControlUiE2eContextOptions());
@@ -449,6 +450,12 @@ suite.define(() => {
       const project = page.locator("#new-session-project-trigger .new-session-page__trigger-label");
       await expect.poll(() => project.textContent()).toContain("client-work");
       await page.locator(".new-session-page__message").fill("keep this draft");
+      await waitForCommittedComposerDraft(
+        page,
+        JSON.stringify(["", "", "Client work"]),
+        "keep this draft",
+        0,
+      );
 
       await page.evaluate(async (cwd) => {
         const app = document.querySelector("openclaw-app") as HTMLElement & {
@@ -469,6 +476,7 @@ suite.define(() => {
         });
       }, refreshedCwd);
 
+      await page.reload();
       await expect.poll(() => project.textContent()).toContain("refreshed-client-work");
       await expect
         .poll(() => page.locator("#new-session-checkout-trigger").getAttribute("data-worktree"))
@@ -490,6 +498,7 @@ suite.define(() => {
         await app.runtime?.context.sessions.groupsRename("Client work", "Customer work");
       });
 
+      await page.reload();
       const unavailable = page.locator(".new-session-page__catalog-unavailable");
       await expect
         .poll(() => unavailable.textContent())
@@ -497,12 +506,13 @@ suite.define(() => {
       await expect
         .poll(() => page.getByRole("button", { name: "Start session" }).isDisabled())
         .toBe(true);
+      expect(await page.locator(".new-session-page__message").inputValue()).toBe("keep this draft");
     } finally {
       await context.close();
     }
   });
 
-  it("fails an open group route closed while remote catalog invalidation is unresolved", async () => {
+  it("reloads a group draft after a background catalog failure", async () => {
     const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -527,6 +537,12 @@ suite.define(() => {
       const start = page.getByRole("button", { name: "Start session" });
       await page.locator(".new-session-page__message").fill("wait for fresh defaults");
       await expect.poll(() => start.isEnabled()).toBe(true);
+      await waitForCommittedComposerDraft(
+        page,
+        JSON.stringify(["", "", "Client work"]),
+        "wait for fresh defaults",
+        0,
+      );
 
       // Pin each wait past earlier sessions.groups.list traffic (the route
       // load already fetched the catalog) so a slow runner can't return a
@@ -536,28 +552,20 @@ suite.define(() => {
       await gateway.deferNext("sessions.groups.list");
       await gateway.emitGatewayEvent("sessions.changed", { reason: "groups" });
       await gateway.waitForRequest("sessions.groups.list", { after: groupListsBeforeInvalidation });
-      await expect.poll(() => start.isDisabled()).toBe(true);
-      await expect
-        .poll(() => page.locator(".new-session-page__catalog-unavailable button").isDisabled())
-        .toBe(true);
-      const groupListsBeforeReject = (await gateway.getRequests("sessions.groups.list")).length;
-      await gateway.deferNext("sessions.groups.list");
       await gateway.rejectDeferred("sessions.groups.list", {
         code: "UNAVAILABLE",
         message: "catalog reload failed",
       });
-      await gateway.waitForRequest("sessions.groups.list", { after: groupListsBeforeReject });
-      await expect
-        .poll(() => page.locator(".new-session-page__catalog-unavailable").textContent())
-        .toContain("This session target is unavailable.");
-      await expect.poll(() => start.isDisabled()).toBe(true);
-      await expect
-        .poll(() => page.locator(".new-session-page__catalog-unavailable button").isDisabled())
-        .toBe(true);
 
-      await gateway.resolveDeferred("sessions.groups.list", {
-        groups: [{ name: "Client work", position: 0 }],
-      });
+      await page.reload();
+      await gateway.waitForRequest("sessions.groups.defaults");
+      await expect
+        .poll(() => page.locator("#new-session-project-trigger").textContent())
+        .toContain("client-work");
+      expect(await page.locator(".new-session-page__message").inputValue()).toBe(
+        "wait for fresh defaults",
+      );
+      expect(await page.locator(".new-session-page__catalog-unavailable").count()).toBe(0);
       await expect.poll(() => start.isEnabled()).toBe(true);
     } finally {
       await context.close();

@@ -1,6 +1,7 @@
 export {
   createApproverRestrictedNativeApprovalAdapter,
   createApproverRestrictedNativeApprovalCapability,
+  createApproverRestrictedNativeApprovalCapabilityAsync,
   createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutes,
   createChannelApprovalCapability,
   splitChannelApprovalCapability,

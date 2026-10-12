@@ -12,7 +12,6 @@ import {
 import { truncateCodePoints } from "openclaw/plugin-sdk/text-utility-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
-  enqueueTelegramMenuSync,
   getProcessKnownTelegramMenuLocales,
   normalizeTelegramMenuLanguageCode,
   persistTelegramMenuLocaleLedger,
@@ -403,17 +402,18 @@ async function applyTelegramMenuCommandsForScopes(params: {
   return allCleared;
 }
 
-export function syncTelegramMenuCommands(params: {
+export async function syncTelegramMenuCommands(params: {
   bot: Bot;
   runtime: RuntimeEnv;
   commandsToRegister: TelegramMenuCommand[];
   accountId?: string;
   botId?: number;
   botToken?: string;
-}): void {
+}): Promise<void> {
   const { bot, runtime, commandsToRegister } = params;
   const owner = resolveTelegramMenuRemoteOwner(params);
-  const sync = async () => {
+  // A reload that overlaps this sync is best effort; the next sync reconciles it.
+  try {
     // Skip sync if the command list hasn't changed since the last successful
     // sync. This prevents hitting Telegram's 429 rate limit when the gateway
     // is restarted several times in quick succession.
@@ -555,13 +555,7 @@ export function syncTelegramMenuCommands(params: {
       });
     }
     recordSuccess(ledgerComplete);
-  };
-
-  enqueueTelegramMenuSync({
-    ownerKey: owner.queueKey,
-    sync,
-    onError: (error) => {
-      runtime.error?.(`Telegram command sync failed: ${String(error)}`);
-    },
-  });
+  } catch (error) {
+    runtime.error?.(`Telegram command sync failed: ${String(error)}`);
+  }
 }

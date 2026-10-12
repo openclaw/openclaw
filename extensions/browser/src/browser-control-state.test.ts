@@ -49,33 +49,29 @@ beforeEach(() => {
 });
 
 describe("browser control lifecycle", () => {
-  it("allows a start queued after a no-state stop", async () => {
-    const stopping = stop("service");
-    const starting = start();
-
-    await expect(stopping).resolves.toBeNull();
-    await expect(starting).resolves.toBeTruthy();
+  it("allows a start after a no-state stop settles", async () => {
+    await expect(stop("service")).resolves.toBeNull();
+    await expect(start()).resolves.toBeTruthy();
     await stop("service");
   });
 
-  it("rejects a start requested after stop intent but before stop drains", async () => {
+  it("rejects new starts while ordinary shutdown is pending", async () => {
     await start();
-    let releaseStop!: () => void;
-    const stopGate = new Promise<void>((resolve) => {
-      releaseStop = resolve;
-    });
+    const gate = Promise.withResolvers<void>();
     runtimeMocks.stopBrowserRuntime.mockImplementationOnce(async (params) => {
-      await stopGate;
+      await gate.promise;
       params.clearState();
     });
-
     const stopping = stop("service");
-    const starting = start();
-    releaseStop();
-
-    await stopping;
-    await expect(starting).rejects.toThrow("stopping");
+    try {
+      await expect(start()).rejects.toThrow("Browser runtime is stopping.");
+    } finally {
+      gate.resolve();
+      await stopping;
+    }
     expect(getBrowserControlState()).toBeNull();
+    await expect(start()).resolves.toBeTruthy();
+    await stop("service");
   });
 
   it("retains a failed stop owner for an exact retry", async () => {
@@ -110,14 +106,11 @@ describe("browser control lifecycle", () => {
     expect(runtimeMocks.stopBrowserRuntime).toHaveBeenCalledOnce();
   });
 
-  it("allows a start queued after a foreground-owned service stop", async () => {
+  it("allows a start after a foreground-owned service stop settles", async () => {
     await start();
     await start({} as Server);
-    const stopping = stop("service");
-    const starting = start();
-
-    await expect(stopping).resolves.toBeNull();
-    await expect(starting).resolves.toBeTruthy();
+    await expect(stop("service")).resolves.toBeNull();
+    await expect(start()).resolves.toBeTruthy();
     await stop("server");
   });
 

@@ -61,7 +61,7 @@ import {
 } from "./thread-requests.js";
 import { buildTurnStartParams } from "./turn-params.js";
 
-it("uses direct OpenClaw functions and hosted web search for subscription sharing", () => {
+it("uses direct OpenClaw functions and hosted web search for subscription sharing", async () => {
   const params = createAttemptParams({ provider: "openai", authProfileId: "openai:sharing" });
   const profile = params.authProfileStore!.profiles["openai:sharing"]!;
   params.authProfileStore!.profiles["openai:sharing"] = {
@@ -79,7 +79,7 @@ it("uses direct OpenClaw functions and hosted web search for subscription sharin
   } as NonNullable<EmbeddedRunAttemptParams["runtimePlan"]>;
   const nativeCodeModeEnabled = shouldEnableCodexAppServerNativeToolSurface(params);
   expect(nativeCodeModeEnabled).toBe(false);
-  const start = buildThreadStartParams(params, {
+  const start = await buildThreadStartParams(params, {
     appServer: createAppServerOptions() as never,
     cwd: "/repo",
     dynamicTools: [],
@@ -90,10 +90,12 @@ it("uses direct OpenClaw functions and hosted web search for subscription sharin
   expect(start.environments).toEqual([]);
   expect(start.modelProvider).toBe("openclaw_token_sharing");
   expect(
-    buildThreadResumeParams(params, {
-      appServer: createAppServerOptions() as never,
-      threadId: "thread-1",
-    }).modelProvider,
+    (
+      await buildThreadResumeParams(params, {
+        appServer: createAppServerOptions() as never,
+        threadId: "thread-1",
+      })
+    ).modelProvider,
   ).toBe("openclaw_token_sharing");
   expect(start.config).toMatchObject({
     "features.code_mode": false,
@@ -112,7 +114,7 @@ it("uses direct OpenClaw functions and hosted web search for subscription sharin
   params.scheduledRuntimeAuthority = {} as NonNullable<
     EmbeddedRunAttemptParams["scheduledRuntimeAuthority"]
   >;
-  const restricted = buildThreadStartParams(params, {
+  const restricted = await buildThreadStartParams(params, {
     appServer: createAppServerOptions() as never,
     cwd: "/repo",
     dynamicTools: [],
@@ -127,27 +129,27 @@ type CodexThreadLifecycleTimingLogger = NonNullable<
 >;
 
 describe("Codex context window config", () => {
-  it("forwards only a prepared cap on thread start and resume (#124702)", () => {
+  it("forwards only a prepared cap on thread start and resume (#124702)", async () => {
     const appServer = createAppServerOptions() as never;
     const capped = createAttemptParams({ provider: "openai" });
     capped.authoredContextTokenCap = 32_000;
     const uncapped = createAttemptParams({ provider: "openai" });
-    const build = (params: EmbeddedRunAttemptParams) => [
-      buildThreadStartParams(params, {
+    const build = async (params: EmbeddedRunAttemptParams) => [
+      await buildThreadStartParams(params, {
         appServer,
         cwd: "/repo",
         dynamicTools: [],
       }),
-      buildThreadResumeParams(params, {
+      await buildThreadResumeParams(params, {
         appServer,
         threadId: "thread-1",
       }),
     ];
 
-    for (const request of build(capped)) {
+    for (const request of await build(capped)) {
       expect(request.config?.model_context_window).toBe(32_000);
     }
-    for (const request of build(uncapped)) {
+    for (const request of await build(uncapped)) {
       expect(request.config).not.toHaveProperty("model_context_window");
     }
   });
@@ -216,18 +218,18 @@ describe("Codex ring-zero thread config", () => {
     }
   });
 
-  it("preserves project documents for ordinary policy-restricted turns", () => {
+  it("preserves project documents for ordinary policy-restricted turns", async () => {
     const params = createAttemptParams({ provider: "openai" });
     params.pluginHarnessToolPolicyRestricted = true;
     const appServer = createAppServerOptions() as never;
-    const start = buildThreadStartParams(params, {
+    const start = await buildThreadStartParams(params, {
       appServer,
       cwd: "/repo",
       dynamicTools: [],
       hostSystemAgentActive: false,
       nativeCodeModeEnabled: false,
     });
-    const resume = buildThreadResumeParams(params, {
+    const resume = await buildThreadResumeParams(params, {
       appServer,
       dynamicTools: [],
       hostSystemAgentActive: false,
@@ -246,7 +248,7 @@ describe("Codex ring-zero thread config", () => {
     const toolsDisabled = createAttemptParams({ provider: "openai" });
     toolsDisabled.disableTools = true;
     toolsDisabled.pluginHarnessToolPolicyRestricted = true;
-    const disabled = buildThreadStartParams(toolsDisabled, {
+    const disabled = await buildThreadStartParams(toolsDisabled, {
       appServer,
       cwd: "/repo",
       dynamicTools: [],
@@ -652,21 +654,21 @@ describe("Codex app-server native code mode config", () => {
     ).toBe(true);
   });
 
-  it("honors an explicit top-level reviewer on thread start and resume", () => {
+  it("honors an explicit top-level reviewer on thread start and resume", async () => {
     const appServer = {
       ...createAppServerOptions(),
       approvalsReviewer: "auto_review" as const,
     };
     const config = { approvals_reviewer: "user" };
 
-    const started = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
+    const started = await buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
       cwd: "/repo",
       dynamicTools: [],
       appServer: appServer as never,
       developerInstructions: "test instructions",
       config,
     });
-    const resumed = buildThreadResumeParams(createAttemptParams({ provider: "openai" }), {
+    const resumed = await buildThreadResumeParams(createAttemptParams({ provider: "openai" }), {
       threadId: "thread-1",
       appServer: appServer as never,
       developerInstructions: "test instructions",
@@ -677,14 +679,17 @@ describe("Codex app-server native code mode config", () => {
     expect(resumed.approvalsReviewer).toBe("user");
   });
 
-  it("preserves omitted native tiers until a previously owned sticky tier must be cleared", () => {
+  it("preserves omitted native tiers until a previously owned sticky tier must be cleared", async () => {
     const options = {
       threadId: "thread-1",
       cwd: "/repo",
       appServer: createAppServerOptions() as never,
     };
-    const inherited = buildTurnStartParams(createAttemptParams({ provider: "openai" }), options);
-    const cleared = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
+    const inherited = await buildTurnStartParams(
+      createAttemptParams({ provider: "openai" }),
+      options,
+    );
+    const cleared = await buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
       ...options,
       clearInheritedServiceTier: true,
     });
@@ -698,7 +703,7 @@ describe("Codex app-server native code mode config", () => {
     { nativeCodeModeOnlyEnabled: true, configured: true },
   ])(
     "keeps direct-only dynamic namespaces model-visible when code-mode-only=$nativeCodeModeOnlyEnabled, configured=$configured",
-    ({ nativeCodeModeOnlyEnabled, configured }) => {
+    async ({ nativeCodeModeOnlyEnabled, configured }) => {
       const dynamicTools = [
         {
           type: "namespace" as const,
@@ -717,20 +722,26 @@ describe("Codex app-server native code mode config", () => {
             },
           }
         : undefined;
-      const startRequest = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
-        cwd: "/repo",
-        dynamicTools,
-        appServer: createAppServerOptions() as never,
-        nativeCodeModeOnlyEnabled,
-        config,
-      });
-      const resumeRequest = buildThreadResumeParams(createAttemptParams({ provider: "openai" }), {
-        threadId: "thread-1",
-        dynamicTools,
-        appServer: createAppServerOptions() as never,
-        nativeCodeModeOnlyEnabled,
-        config,
-      });
+      const startRequest = await buildThreadStartParams(
+        createAttemptParams({ provider: "openai" }),
+        {
+          cwd: "/repo",
+          dynamicTools,
+          appServer: createAppServerOptions() as never,
+          nativeCodeModeOnlyEnabled,
+          config,
+        },
+      );
+      const resumeRequest = await buildThreadResumeParams(
+        createAttemptParams({ provider: "openai" }),
+        {
+          threadId: "thread-1",
+          dynamicTools,
+          appServer: createAppServerOptions() as never,
+          nativeCodeModeOnlyEnabled,
+          config,
+        },
+      );
 
       for (const request of [startRequest, resumeRequest]) {
         expect(request.config?.["features.code_mode"]).toEqual({
@@ -757,8 +768,8 @@ describe("Codex app-server native code mode config", () => {
 
   it.each([false, true])(
     "configures native tools and project documents for lightweight=%s",
-    (lightweight) => {
-      const request = buildThreadStartParams(
+    async (lightweight) => {
+      const request = await buildThreadStartParams(
         createAttemptParams({
           provider: "openai",
           ...(lightweight
@@ -850,8 +861,8 @@ describe("Codex app-server turn input image sanitizing", () => {
     },
   ])(
     "carries native workspace temporary-root overrides into turn policy: $name",
-    ({ args, excluded }) => {
-      const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
+    async ({ args, excluded }) => {
+      const request = await buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
         threadId: "thread-1",
         cwd: "/tmp/qa/workspace",
         appServer: {
@@ -869,8 +880,8 @@ describe("Codex app-server turn input image sanitizing", () => {
     },
   );
 
-  it("uses the explicit undefined sandbox override ahead of network-proxy permissions", () => {
-    const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
+  it("uses the explicit undefined sandbox override ahead of network-proxy permissions", async () => {
+    const request = await buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
       threadId: "thread-1",
       cwd: "/repo",
       appServer: { ...createNetworkProxyAppServerOptions(), start: excludedTmpStart } as never,
@@ -880,8 +891,8 @@ describe("Codex app-server turn input image sanitizing", () => {
     expect(request).not.toHaveProperty("sandboxPolicy");
   });
 
-  it("replaces malformed inline images before turn/start", () => {
-    const request = buildTurnStartParams(
+  it("replaces malformed inline images before turn/start", async () => {
+    const request = await buildTurnStartParams(
       createAttemptParams({
         provider: "openai",
         images: [{ type: "image", mimeType: "image/jpeg", data: "not base64!" }] as never,
@@ -907,7 +918,7 @@ describe("Codex app-server turn input image sanitizing", () => {
 describe("Codex app-server turn params", () => {
   it.each(["user", "cron"] as const)(
     "builds resume and %s turn params from the selected OpenClaw model",
-    (trigger) => {
+    async (trigger) => {
       const params = createAttemptParams({ provider: "codex" });
       params.modelId = "gpt-5.4-codex";
       params.thinkLevel = "medium";
@@ -929,7 +940,10 @@ describe("Codex app-server turn params", () => {
         serviceTier: "flex" as const,
       };
 
-      const resumeParams = buildThreadResumeParams(params, { threadId: "thread-1", appServer });
+      const resumeParams = await buildThreadResumeParams(params, {
+        threadId: "thread-1",
+        appServer,
+      });
       expect(resumeParams).toEqual({
         threadId: "thread-1",
         excludeTurns: true,
@@ -959,7 +973,7 @@ describe("Codex app-server turn params", () => {
         developerInstructions: resumeParams.developerInstructions,
       });
       expect(resumeParams.developerInstructions).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
-      const turnParams = buildTurnStartParams(params, {
+      const turnParams = await buildTurnStartParams(params, {
         threadId: "thread-1",
         cwd: "/tmp/workspace",
         appServer,
@@ -1020,19 +1034,19 @@ describe("Codex app-server model provider selection", () => {
       },
       expected: "openai",
     },
-  ])("selects the model provider from $name", ({ attempt, boundProfile, expected }) => {
+  ])("selects the model provider from $name", async ({ attempt, boundProfile, expected }) => {
     const params = createAttemptParams(attempt);
     const options = {
       appServer: createAppServerOptions() as never,
       developerInstructions: "test instructions",
     };
     const request = boundProfile
-      ? buildThreadResumeParams(params, {
+      ? await buildThreadResumeParams(params, {
           ...options,
           threadId: "thread-1",
           authProfileId: boundProfile,
         })
-      : buildThreadStartParams(params, { ...options, cwd: "/repo", dynamicTools: [] });
+      : await buildThreadStartParams(params, { ...options, cwd: "/repo", dynamicTools: [] });
     if (expected) {
       expect(request.modelProvider).toBe(expected);
     } else {
@@ -2629,11 +2643,11 @@ describe("Codex app-server supervised branch lifecycle", () => {
       });
       const bindingStore: CodexAppServerBindingStore = {
         ...testCodexAppServerBindingStore,
-        read: (storeIdentity) => {
+        readAsync: async (storeIdentity) => {
           if (failed && owner === "unreadable") {
             throw readError;
           }
-          return testCodexAppServerBindingStore.read(storeIdentity);
+          return await testCodexAppServerBindingStore.readAsync(storeIdentity);
         },
         mutate: async (storeIdentity, mutation) => {
           if (
@@ -2744,8 +2758,8 @@ describe("Codex app-server supervised branch lifecycle", () => {
       let commitFailed = false;
       const bindingStore: CodexAppServerBindingStore = {
         ...testCodexAppServerBindingStore,
-        read: vi.fn((storeIdentity) => {
-          const current = testCodexAppServerBindingStore.read(storeIdentity);
+        readAsync: vi.fn(async (storeIdentity) => {
+          const current = await testCodexAppServerBindingStore.readAsync(storeIdentity);
           if (!commitFailed) {
             return current;
           }
@@ -2944,7 +2958,7 @@ describe("resolveCodexAppServerReasoningEffort (#71946)", () => {
 });
 
 describe("native Codex Ultra turn mapping", () => {
-  it("preserves resolved ultra for gpt-5.6-sol with direct OpenAI API metadata", () => {
+  it("preserves resolved ultra for gpt-5.6-sol with direct OpenAI API metadata", async () => {
     const modelId = "gpt-5.6-sol";
     const params = createAttemptParams({
       provider: "openai",
@@ -2962,7 +2976,7 @@ describe("native Codex Ultra turn mapping", () => {
       compat,
     };
 
-    const request = buildTurnStartParams(params, {
+    const request = await buildTurnStartParams(params, {
       threadId: "thread-ultra",
       cwd: "/repo",
       appServer: createAppServerOptions() as never,

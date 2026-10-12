@@ -48,7 +48,7 @@ describe("resolveSessionAuthProfileOverride", () => {
       });
 
       expect(resolved).toBeUndefined();
-      expect(authStoreMocks.ensureAuthProfileStore).not.toHaveBeenCalled();
+      expect(authStoreMocks.ensureAuthProfileStoreAsync).not.toHaveBeenCalled();
       try {
         await fs.access(`${agentDir}/auth-profiles.json`);
       } catch (error) {

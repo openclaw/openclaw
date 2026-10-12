@@ -3,6 +3,7 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   loadExactSessionEntry,
   replaceSessionEntry,
@@ -302,6 +303,7 @@ it.each([
       async (state) => {
         const cfg: OpenClawConfig = { agents: { ownership: "explicit", entries: { main: {} } } };
         await state.writeConfig(cfg);
+        setRuntimeConfigSnapshot(cfg);
         const scope = {
           cfg,
           env: state.env,
@@ -434,6 +436,7 @@ it("does not close a lifecycle that appears after an absent-entry close was prep
     async (state) => {
       const cfg: OpenClawConfig = { agents: { ownership: "explicit", entries: { main: {} } } };
       await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
       openOpenClawAgentDatabase({ agentId: "main", env: state.env });
       const scope = {
         cfg,

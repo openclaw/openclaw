@@ -18,8 +18,8 @@ import {
   renderComposer,
   resetComposerTestFixtures,
 } from "./composer.test-support.ts";
+import { renderNewSessionComposer } from "./composer.ts";
 import { renderNewSessionBody } from "./draft-body.ts";
-import { renderNewSessionDraftComposer } from "./draft-composer.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 
 function composerTextarea(composer: HTMLElement): HTMLTextAreaElement {
@@ -650,7 +650,7 @@ describe("new-session composer sizing lifecycle", () => {
     expect(onInput).toHaveBeenCalledWith("typed");
     const readsAfterInput = scrollHeightReads;
     render(
-      renderNewSessionDraftComposer({
+      renderNewSessionComposer({
         agentId: "main",
         attachmentDraft: first.attachmentDraft,
         canSubmit: true,
@@ -676,7 +676,7 @@ describe("new-session composer sizing lifecycle", () => {
     expect(scrollHeightReads).toBe(readsAfterInput);
 
     render(
-      renderNewSessionDraftComposer({
+      renderNewSessionComposer({
         agentId: "main",
         attachmentDraft: first.attachmentDraft,
         canSubmit: true,

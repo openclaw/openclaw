@@ -19,6 +19,7 @@ import {
   waitForModelSetupDetection,
 } from "./model-setup-first-run.test-support.ts";
 import { MODEL_SETUP_VERIFY_TIMEOUT_MS } from "./state.ts";
+import { unmountModelSetupPage } from "./test-helpers/solid-page.test-support.tsx";
 
 describe("ModelSetupPage first-run application recovery", () => {
   beforeEach(async () => {
@@ -77,6 +78,7 @@ describe("ModelSetupPage first-run application recovery", () => {
         .querySelector<HTMLButtonElement>('[data-auth-choice="custom-api-key"] button')!
         .click();
       await waitForFast(() => expect(previous.textContent).toContain("API Base URL"));
+      unmountModelSetupPage(previous);
       provider.remove();
 
       const relaunched = createFirstRunContext();
@@ -199,6 +201,7 @@ describe("ModelSetupPage first-run application recovery", () => {
       expect(original.request).not.toHaveBeenCalled();
       await clickCandidate(page, "openai-api-key");
       await waitForFast(() => expect(page.textContent).toContain("The Gateway is restarting"));
+      unmountModelSetupPage(page);
       provider.remove();
 
       const relaunched = createFirstRunContext();
@@ -266,6 +269,7 @@ describe("ModelSetupPage first-run application recovery", () => {
     expect(original.request).not.toHaveBeenCalled();
     await clickCandidate(previous, "openai-api-key");
     await waitForFast(() => expect(previous.textContent).toContain("The Gateway is restarting"));
+    unmountModelSetupPage(previous);
     provider.remove();
 
     const relaunched = createFirstRunContext();
@@ -343,6 +347,7 @@ describe("ModelSetupPage first-run application recovery", () => {
     expect(original.request).not.toHaveBeenCalled();
     await clickCandidate(previous, "openai-api-key");
     await waitForFast(() => expect(previous.textContent).toContain("The Gateway is restarting"));
+    unmountModelSetupPage(previous);
     provider.remove();
 
     const relaunched = createFirstRunContext();
@@ -384,6 +389,7 @@ describe("ModelSetupPage first-run application recovery", () => {
     expect(original.request).not.toHaveBeenCalled();
     await clickCandidate(previous, "openai-api-key");
     await waitForFast(() => expect(previous.textContent).toContain("The Gateway is restarting"));
+    unmountModelSetupPage(previous);
     provider.remove();
 
     const relaunched = createFirstRunContext();

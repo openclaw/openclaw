@@ -1,3 +1,4 @@
+import type { MessagePort } from "node:worker_threads";
 import type { StateLeaseProcessOwner } from "../infra/state-lease-process-owner.js";
 import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease.types.js";
 import type { OpenClawStateWorkerErrorPayload } from "./openclaw-state-worker-error.js";
@@ -44,6 +45,7 @@ export type LeaseHeartbeatLoss = {
 };
 
 export type LeaseHeartbeatWorkerData = {
+  databaseAdmissionPort: MessagePort;
   path: string;
   expectedIdentity: string;
   /** The actor's startup operations settle before this worker begins renewal. */

@@ -92,7 +92,7 @@ export async function archiveSessionTreeWithUndo(
     if (rows.some((row) => !row.sessionId)) {
       throw new Error(t("sessionsView.archiveTreeChanged"));
     }
-    const hasActiveWork = rows.some((row) => row.hasActiveRun || row.hasActiveSubagentRun);
+    const hasActiveWork = rows.some(hasActiveArchiveWork);
     const confirmed = await showConfirmDialog({
       message:
         t("sessionsView.archiveSessionTreeConfirm", {
@@ -105,7 +105,7 @@ export async function archiveSessionTreeWithUndo(
     if (!isCurrent() || !confirmed) {
       return;
     }
-    await archiveSessionsWithUndo(
+    await archiveConfirmedSessionsWithUndo(
       host,
       // Descendants settle before their ancestors, which must remain unarchived.
       rows.toReversed().map((row) => ({
@@ -145,19 +145,32 @@ export async function archiveSessionTreeWithUndo(
   }
 }
 
-export async function confirmRunningSessionArchive(
-  session: Pick<
-    SessionActionRow,
-    "label" | "hasActiveRun" | "gatewayHasActiveRun" | "hasActiveSubagentRun"
-  >,
+type SessionArchiveActivity = Pick<
+  SessionActionRow,
+  "hasActiveRun" | "gatewayHasActiveRun" | "hasActiveSubagentRun"
+>;
+
+function hasActiveArchiveWork(session: SessionArchiveActivity): boolean {
+  return Boolean(
+    (session.gatewayHasActiveRun ?? session.hasActiveRun) || session.hasActiveSubagentRun,
+  );
+}
+
+export async function confirmRunningSessionsArchive(
+  sessions: readonly (SessionArchiveActivity & Pick<SessionActionRow, "label">)[],
   signal?: AbortSignal,
 ): Promise<boolean> {
-  if (!(session.gatewayHasActiveRun ?? session.hasActiveRun) && !session.hasActiveSubagentRun) {
+  if (!sessions.some(hasActiveArchiveWork)) {
     return true;
   }
+  const single = sessions.length === 1 ? sessions[0] : undefined;
   return showConfirmDialog({
-    message: t("sessionsView.archiveRunningSessionConfirm", { session: session.label }),
-    confirmLabel: t("sessionsView.archiveSession"),
+    message: single
+      ? t("sessionsView.archiveRunningSessionConfirm", { session: single.label })
+      : t("sessionsView.archiveRunningSessions"),
+    confirmLabel: single
+      ? t("sessionsView.archiveSession")
+      : t("sessionsView.archiveSessionCount", { count: String(sessions.length) }),
     signal,
   });
 }
@@ -171,7 +184,7 @@ export async function archiveSessionWithUndo(
     return;
   }
   if (
-    !(await confirmRunningSessionArchive(session, scope.signal)) ||
+    !(await confirmRunningSessionsArchive([session], scope.signal)) ||
     !host.sessionData.isSessionMutationScopeCurrent(scope)
   ) {
     return;
@@ -197,6 +210,19 @@ export async function archiveSessionWithUndo(
 }
 
 export async function archiveSessionsWithUndo(
+  host: SessionActionHost,
+  rows: readonly SessionActionRow[],
+  scope: SidebarSessionMutationScope,
+) {
+  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+    return;
+  }
+  if (await confirmRunningSessionsArchive(rows, scope.signal)) {
+    await archiveConfirmedSessionsWithUndo(host, rows, scope);
+  }
+}
+
+async function archiveConfirmedSessionsWithUndo(
   host: SessionActionHost,
   rows: readonly SessionActionRow[],
   scope: SidebarSessionMutationScope,

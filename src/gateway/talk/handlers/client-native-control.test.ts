@@ -13,12 +13,12 @@ import { readSessionTranscriptMessageEvents } from "../../../config/sessions/ses
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { prepareClientVoiceSessionClose } from "../../../talk/client-voice-session-lifecycle.js";
-import { resolveOpenClientVoiceSessionId } from "../../../talk/client-voice-session-read.js";
-import * as voiceSessionReads from "../../../talk/client-voice-session-read.js";
 import {
-  flushClientVoiceSessionWrites,
-  isClientVoiceSessionConfirmable,
-} from "../../../talk/client-voice-session.js";
+  assertClientVoiceSessionOpen,
+  resolveOpenClientVoiceSessionId,
+} from "../../../talk/client-voice-session-read.js";
+import * as voiceSessionReads from "../../../talk/client-voice-session-read.js";
+import { flushClientVoiceSessionWrites } from "../../../talk/client-voice-session.js";
 import { VoiceTranscriptOperationRegistry } from "../../../talk/voice-transcript.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import * as talkAgentConsult from "../agent-consult.js";
@@ -40,8 +40,8 @@ import {
   upstream,
   withNativePlugin,
   withParkedNativeTask,
-  withRegisteredNativeEmbeddedRun,
 } from "./client-native-control.test-support.js";
+import { withRegisteredNativeEmbeddedRun } from "./client-native-run.test-support.js";
 import { flushNativeTranscript } from "./client-native-transcript.test-support.js";
 
 describe("native Talk through the public OpenAI plugin registration", () => {
@@ -217,12 +217,12 @@ describe("native Talk through the public OpenAI plugin registration", () => {
       const { result, socket } = await connectNativeSession({ create, offer });
       expect(talkEventTypes(broadcast).filter((type) => type === "session.ready")).toHaveLength(1);
       expect(
-        isClientVoiceSessionConfirmable({
+        assertClientVoiceSessionOpen({
           agentId: AGENT_ID,
           sessionKey: SESSION_KEY,
           voiceSessionId: requireString(result, "voiceSessionId"),
         }),
-      ).toBe(true);
+      ).toBe("client");
       await flushNativeTranscript(
         result,
         () => {
@@ -360,14 +360,16 @@ describe("native Talk through the public OpenAI plugin registration", () => {
     });
   });
 
-  it.each(["empty", "partial", "rejection"] as const)(
+  it.for(["empty", "partial", "rejection"] as const)(
     "preserves intentional native cancellation after %s backend settlement",
-    async (settlement) => {
+    async (settlement, { signal }) => {
       const releaseBackend = createDeferredCore();
+      const cancellationObserved = createDeferredCore();
       let activeRun: RunEmbeddedAgentParams | undefined;
       let backendAborted = false;
       const abortOwned = vi.fn(() => {
         backendAborted = true;
+        cancellationObserved.resolve();
       });
       upstream.runEmbeddedAgent
         .mockImplementationOnce(async (params) => {
@@ -432,7 +434,8 @@ describe("native Talk through the public OpenAI plugin registration", () => {
 
           socket.serverEvent({ type: "turn.done", turn: { role: "user", transcript: "cancel" } });
           socket.serverEvent(nativeDelegation("cancel-request", "cancel"));
-          await vi.waitFor(() => expect(abortOwned).toHaveBeenCalledOnce());
+          await withinTest(cancellationObserved.promise, signal);
+          expect(abortOwned).toHaveBeenCalledOnce();
           await vi.waitFor(() =>
             expect(sentFrames()).toContainEqual(
               expect.objectContaining({
