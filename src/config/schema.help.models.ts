@@ -136,6 +136,8 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     "Preferred image resize side for balanced compression. Leave unset to use OpenClaw's conservative default.",
   "models.providers.*.models[].mediaInput.image.tokenMode":
     'Provider image token accounting style: "tile", "detail", or "provider".',
+  "models.providers.*.models[].responseModelEquivalent":
+    "Set true when the endpoint resolves this model id itself, such as a router or broker alias. OpenClaw then treats any response model the endpoint reports for this row as the requested route: the reported model is still recorded, but no model route change is announced. This accepts every response model id, overrides the provider's own equivalence policy on bundled-provider rows, and also hides substitutions made inside the endpoint. OpenClaw fallbacks to another model or provider are still reported.",
   auth: "Authentication profile root used for multi-profile provider credentials and cooldown-based failover ordering. Keep profiles minimal and explicit so automatic failover behavior stays auditable.",
   "auth.profiles": "Named auth profiles (provider + mode + optional email).",
   "auth.order": "Ordered auth profile IDs per provider (used for automatic failover).",

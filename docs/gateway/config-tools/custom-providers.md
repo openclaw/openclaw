@@ -97,6 +97,7 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
     - `models.providers.*.models.*.input`: model input modalities. Use `["text"]` for text-only models and `["text", "image"]` for native image/vision models. Image attachments are only injected into agent turns when the selected model is marked image-capable.
     - `models.providers.*.models.*.contextWindow`: native context-window metadata for that model.
     - `models.providers.*.models.*.contextTokens`: optional active-input cap for that model; use it when you want an effective budget distinct from the model's native `contextWindow`; `openclaw models list` shows both when they differ.
+    - `models.providers.*.models.*.responseModelEquivalent`: set `true` when the endpoint resolves this model id itself, such as a router or broker alias, and reports the concrete model it served. OpenClaw then treats any response model the endpoint reports for this row as the requested route: the reported model is still recorded in the terminal receipt, but no model route change is announced to parent agents. The key accepts every response model id. On a bundled-provider row it overrides the provider's own equivalence policy, and it also hides substitutions made inside the endpoint, such as the endpoint falling back to another upstream model. OpenClaw fallbacks to another configured model or provider are still reported.
 
     #### Custom provider capability declarations
 

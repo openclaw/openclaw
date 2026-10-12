@@ -1,6 +1,10 @@
 /** Generic core consumers for provider-owned model route facts. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { projectModelProviderConfig } from "../config/model-provider-config.js";
+import {
+  findConfiguredProviderModel,
+  projectModelProviderConfig,
+  resolveMergedModelProviderConfig,
+} from "../config/model-provider-config.js";
 import type { ModelApi, ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderModelRouteCandidate } from "../plugin-sdk/provider-model-types.js";
@@ -19,10 +23,15 @@ export function canonicalizeProviderModelId(providerId: string, modelId: string)
   return (provider && resolveProviderModelCatalogId({ provider, modelId })) || modelId;
 }
 
-/** Wire-id normalization and provider-declared response identity are not a model switch. */
+/**
+ * Wire-id normalization is not a model switch, nor is a response model that provider
+ * policy declares equivalent. An authored row's `responseModelEquivalent` accepts any
+ * response model and overrides that policy; a different effective model never matches.
+ */
 export function isProviderModelRerouted(
   requested: { provider: string; model: string },
   effective: { provider: string; model: string; responseModel?: string },
+  config?: OpenClawConfig,
 ): boolean {
   const provider = normalizeProviderId(requested.provider);
   if (provider !== normalizeProviderId(effective.provider)) {
@@ -32,17 +41,26 @@ export function isProviderModelRerouted(
   const canonicalize = (modelId: string) =>
     resolveProviderModelCatalogId({ provider, modelId, surface }) ?? modelId;
   const model = canonicalize(requested.model);
+  if (canonicalize(effective.model) !== model) {
+    return true;
+  }
   const responseModel = effective.responseModel;
-  return (
-    canonicalize(effective.model) !== model ||
-    (responseModel !== undefined &&
-      canonicalize(responseModel) !== model &&
-      surface?.isResponseModelEquivalent?.({
-        provider,
-        requestedModelId: requested.model,
-        responseModelId: responseModel,
-      }) !== true)
-  );
+  if (responseModel === undefined || canonicalize(responseModel) === model) {
+    return false;
+  }
+  const declaredEquivalent =
+    surface?.isResponseModelEquivalent?.({
+      provider,
+      requestedModelId: requested.model,
+      responseModelId: responseModel,
+    }) === true ||
+    findConfiguredProviderModel(
+      resolveMergedModelProviderConfig(config, provider),
+      provider,
+      requested.model,
+      canonicalize,
+    )?.responseModelEquivalent === true;
+  return !declaredEquivalent;
 }
 
 function routeTupleMatches(

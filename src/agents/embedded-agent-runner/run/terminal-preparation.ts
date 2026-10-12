@@ -177,7 +177,7 @@ export function prepareEmbeddedRunTerminal(input: {
       successfulToolNames: resolveSuccessfulToolNames(attempt),
       assistantTranscriptIdempotencyKey: attempt.assistantTranscriptIdempotencyKey,
       sourceReplyDelivered: resolveSourceReplyDelivery(attempt) === "delivered" ? true : undefined,
-      rerouted: isProviderModelRerouted(requestedModelRef, effectiveModelRef),
+      rerouted: isProviderModelRerouted(requestedModelRef, effectiveModelRef, runParams.config),
     } satisfies Omit<AgentRunTerminalReceipt, "terminalDisposition">,
   });
   const cleanYield = attempt.yieldDetected && input.terminalState.outcome.status === "ok";

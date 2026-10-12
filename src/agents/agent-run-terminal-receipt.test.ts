@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   formatAgentRunRouteChange,
   type AgentRunTerminalReceipt,
@@ -51,6 +52,54 @@ describe("isProviderModelRerouted", () => {
       );
     },
   );
+
+  describe("with a configured model row declaring response model equivalence", () => {
+    const declaredConfig = (provider: string, modelId: string): OpenClawConfig => ({
+      models: {
+        providers: {
+          [provider]: {
+            baseUrl: "https://endpoint.example/v1",
+            models: [
+              {
+                id: modelId,
+                name: modelId,
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128_000,
+                maxTokens: 8_192,
+                responseModelEquivalent: true,
+              },
+            ],
+          },
+        },
+      },
+    });
+    const requested = { provider: "broker", model: "team/chat" };
+    const config = declaredConfig("broker", "team/chat");
+
+    it("keeps the endpoint's concrete response model from producing a model-switch fact", () => {
+      const effective = { ...requested, responseModel: "upstream-model-2026-10-01" };
+      expect(isProviderModelRerouted(requested, effective, config)).toBe(false);
+      expect(isProviderModelRerouted(requested, effective)).toBe(true);
+    });
+
+    it.each([
+      { provider: "broker", model: "team/utility", responseModel: "upstream-model" },
+      { provider: "other-broker", model: "team/chat", responseModel: "upstream-model" },
+    ])("retains a fallback to $provider/$model", (effective) => {
+      expect(isProviderModelRerouted(requested, effective, config)).toBe(true);
+    });
+
+    it("accepts any response model on a bundled-provider row, overriding provider policy", () => {
+      const openaiRequested = { provider: "openai", model: "gpt-5.6" };
+      const effective = { ...openaiRequested, responseModel: "gpt-5.6-luna" };
+      expect(isProviderModelRerouted(openaiRequested, effective)).toBe(true);
+      expect(
+        isProviderModelRerouted(openaiRequested, effective, declaredConfig("openai", "gpt-5.6")),
+      ).toBe(false);
+    });
+  });
 
   it.each([
     {
