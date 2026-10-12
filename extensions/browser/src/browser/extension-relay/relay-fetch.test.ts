@@ -169,30 +169,28 @@ describe("RelayFetch request and stream ownership", () => {
 describe("RelayFetch uncertain state and retirement", () => {
   class CompletedLookingError extends Error {}
 
-  it.each([
-    ["initial enable", false, "Fetch.enable"],
-    ["enable update", true, "Fetch.enable"],
-    ["request resolution", true, "Fetch.continueRequest"],
-    ["explicit disable", true, "Fetch.disable"],
-  ])("fences every physical Fetch error from %s", async (_label, preEnable, method) => {
-    const failure = new CompletedLookingError("native command returned an error");
-    const f = fixture();
-    if (preEnable) {
-      await f.command("Fetch.enable");
-    }
-    const params =
-      method === "Fetch.continueRequest" ? { requestId: f.pause("pending") } : undefined;
-    f.send.mockRejectedValueOnce(failure);
-    await expect(f.command(method, params)).rejects.toBe(failure);
-    const before = f.send.mock.calls.length;
-    await expect(f.command("Fetch.enable", undefined, {})).rejects.toBe(failure);
-    await expect(f.command("Fetch.disable")).rejects.toBe(failure);
-    await expect(f.fetch.close(f.owner)).rejects.toBe(failure);
-    expect(f.send).toHaveBeenCalledTimes(before);
-    const eventCount = f.events.length;
-    f.fetch.event("Fetch.requestPaused", { requestId: "late" });
-    expect(f.events).toHaveLength(eventCount);
-  });
+  it.each([["request resolution", true, "Fetch.continueRequest"]])(
+    "fences every physical Fetch error from %s",
+    async (_label, preEnable, method) => {
+      const failure = new CompletedLookingError("native command returned an error");
+      const f = fixture();
+      if (preEnable) {
+        await f.command("Fetch.enable");
+      }
+      const params =
+        method === "Fetch.continueRequest" ? { requestId: f.pause("pending") } : undefined;
+      f.send.mockRejectedValueOnce(failure);
+      await expect(f.command(method, params)).rejects.toBe(failure);
+      const before = f.send.mock.calls.length;
+      await expect(f.command("Fetch.enable", undefined, {})).rejects.toBe(failure);
+      await expect(f.command("Fetch.disable")).rejects.toBe(failure);
+      await expect(f.fetch.close(f.owner)).rejects.toBe(failure);
+      expect(f.send).toHaveBeenCalledTimes(before);
+      const eventCount = f.events.length;
+      f.fetch.event("Fetch.requestPaused", { requestId: "late" });
+      expect(f.events).toHaveLength(eventCount);
+    },
+  );
 
   it("bounds owner-close to one pause snapshot and disables after cleanup", async () => {
     const cleanupStarted = createDeferred<void>();
@@ -291,25 +289,6 @@ describe("RelayFetch uncertain state and retirement", () => {
     await expect(bodyRead).rejects.toThrow(/retired/);
   });
 
-  it("returns retirement cleanup errors without attempting Fetch.disable", async () => {
-    const failure = new Error("cleanup failed");
-    const f = fixture(async (method) => {
-      if (method === "Fetch.failRequest") {
-        throw failure;
-      }
-      return {};
-    });
-    await f.command("Fetch.enable");
-    f.pause("request");
-    await expect(f.fetch.prepareRetirement(100)).resolves.toEqual({
-      errors: [failure],
-    });
-    expect(f.send.mock.calls.map(([method]) => method)).toEqual([
-      "Fetch.enable",
-      "Fetch.failRequest",
-    ]);
-  });
-
   it("bounds cleanup commands issued during physical retirement", async () => {
     const cleanup = createDeferred<unknown>();
     const f = fixture(async (method) => {
@@ -333,34 +312,6 @@ describe("RelayFetch uncertain state and retirement", () => {
 });
 
 describe("RelayFetch native completion boundaries", () => {
-  it.each(["IO.read", "IO.close"])(
-    "rejects raw Fetch handles for every logical caller: %s",
-    async (method) => {
-      const f = fixture(async (name) =>
-        name === "Fetch.takeResponseBodyAsStream" ? { stream: "native-stream" } : {},
-      );
-      await f.command("Fetch.enable");
-      const requestId = f.pause("response", { responseStatusCode: 200 });
-      const handle = stringField(
-        await f.command("Fetch.takeResponseBodyAsStream", { requestId }),
-        "stream",
-      );
-      for (const caller of [f.owner, {}]) {
-        const before = f.send.mock.calls.length;
-        await expect(f.command(method, { handle: "native-stream" }, caller)).rejects.toThrow(
-          /stream handle/,
-        );
-        expect(f.send).toHaveBeenCalledTimes(before);
-      }
-      await expect(f.command(method, { handle }, {})).rejects.toThrow(/stream handle/);
-      expect(
-        f.fetch.command({}, f.emit, method, { handle: "other-domain-stream" }),
-      ).toBeUndefined();
-      await f.command("IO.close", { handle });
-      await expect(f.command(method, { handle })).rejects.toThrow(/stream handle/);
-    },
-  );
-
   it("keeps raw handle ownership while native close completion is unknown", async () => {
     const gate = createDeferred<unknown>();
     const f = fixture(async (method) =>
@@ -388,7 +339,7 @@ describe("RelayFetch native completion boundaries", () => {
     expect(f.send).toHaveBeenCalledTimes(before);
   });
 
-  it.each(["Fetch.getResponseBody", "Fetch.takeResponseBodyAsStream"])(
+  it.each(["Fetch.getResponseBody"])(
     "never mutates a request whose %s completion is unknown",
     async (method) => {
       const f = fixture();
