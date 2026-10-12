@@ -1,5 +1,3 @@
-import "../../../styles/chat/side-panel.css";
-import "./chat-files-panel.tsx";
 import {
   html,
   nothing,
@@ -7,6 +5,8 @@ import {
   type PropertyValues,
   type TemplateResult,
 } from "lit";
+import "../../../styles/chat/side-panel.css";
+import "./chat-files-panel.tsx";
 import { property } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
@@ -25,8 +25,9 @@ import {
   TERMINAL_PANEL_TOGGLE_EVENT,
   type PanelToggleElement,
 } from "../../../components/panel-toggle-contract.ts";
-import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
+import "../../../components/tooltip.ts";
+import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import { sidebarPanelDefinitions } from "../chat-pane-embedded-panels.ts";
 import { readLinkFavicon, type LinkFaviconFetcher } from "../link-favicon-cache.ts";
@@ -105,7 +106,6 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
   @property({ attribute: false }) sideFocusOrigin?: () => HTMLElement | null;
   @property({ type: Number }) availableWidth = 0;
   private previousGeometry = "";
-  private geometryFrame: number | null = null;
   private contentMounted = false;
   private focusedSurface: Element | null = null;
   private focusBeforeSideLock: HTMLElement | null = null;
@@ -130,10 +130,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
     this.nativeCloseListeners?.abort();
     this.nativeCloseListeners = undefined;
     this.focusedSurface = null;
-    if (this.geometryFrame !== null) {
-      cancelAnimationFrame(this.geometryFrame);
-      this.geometryFrame = null;
-    }
+    cancelLayout(this);
     super.disconnectedCallback();
   }
 
@@ -655,16 +652,10 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
   }
 
   private scheduleGeometryCommit() {
-    if (this.geometryFrame !== null) {
-      return;
-    }
-    // Nested panels commit after this host. Measure their final geometry once,
-    // rather than forcing layout in the middle of each parent/child update.
-    this.geometryFrame = requestAnimationFrame(() => {
-      this.geometryFrame = null;
+    scheduleLayout(this, () => {
       const shell = this.parentElement;
       if (!this.isConnected || !shell) {
-        return;
+        return undefined;
       }
       const panel = shell.querySelector<HTMLElement>(
         ".sidebar-region__right-runtime > .side-panel",
@@ -677,15 +668,17 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
       // The manual panel render is the commit boundary for its transcript.
       // Track content, not region roles: swapping can keep the same main/side
       // widths while changing the transcript width and its row measurements.
-      panel?.dispatchEvent(
-        new CustomEvent(SIDEBAR_GEOMETRY_COMMIT_EVENT, {
-          bubbles: true,
-          detail: {
-            widthChanged: geometry !== this.previousGeometry,
-          },
-        }),
-      );
-      this.previousGeometry = geometry;
+      return () => {
+        panel?.dispatchEvent(
+          new CustomEvent(SIDEBAR_GEOMETRY_COMMIT_EVENT, {
+            bubbles: true,
+            detail: {
+              widthChanged: geometry !== this.previousGeometry,
+            },
+          }),
+        );
+        this.previousGeometry = geometry;
+      };
     });
   }
 

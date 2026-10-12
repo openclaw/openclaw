@@ -319,6 +319,7 @@ type AuthProfileUpsertParams = {
   validateCurrentCredential?: (credential: AuthProfileCredential | undefined) => void;
   assertCurrent?: () => void;
   preserveApiKeyMetadata?: boolean;
+  resetFailureState?: boolean;
   credential: AuthProfileCredential;
   agentDir?: string;
   stateDir?: string;
@@ -373,6 +374,10 @@ export async function upsertAuthProfileWithLock(
           store.profiles[params.profileId] = { ...metadata, ...credential };
         } else {
           store.profiles[params.profileId] = credential;
+        }
+        const existingStats = store.usageStats?.[params.profileId];
+        if (params.resetFailureState && store.usageStats && existingStats) {
+          store.usageStats[params.profileId] = resetAuthProfileFailureState(existingStats);
         }
         return true;
       },

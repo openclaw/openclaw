@@ -48,14 +48,15 @@ export function mountLitContent(
   }
   const end = document.createComment("lit-content");
   container.append(end);
+  const owner = getOwner();
   const renderOptions = { ...options, renderBefore: end };
   const roots = new Set<NestedSolidRoot>();
-  // Legacy directives own their signal writes, independently of the calling Solid effect.
+  // Later commits restore the creator owner for nested directive resources.
   const commit = (next: unknown) => {
     const previous = currentLitRoots;
     currentLitRoots = roots;
     try {
-      return runWithOwner(null, () => renderLit(next, container, renderOptions));
+      return runWithOwner(owner, () => renderLit(next, container, renderOptions));
     } finally {
       currentLitRoots = previous;
     }
@@ -97,7 +98,7 @@ export function mountLitContent(
       nodes.push(end);
       return nodes;
     },
-    setConnected: (connected) => runWithOwner(null, () => part.setConnected(connected)),
+    setConnected: (connected) => runWithOwner(owner, () => part.setConnected(connected)),
     dispose() {
       if (disposed) {
         return;
@@ -157,6 +158,7 @@ export function LitContent(props: { value: unknown }): JSX.Element {
 }
 
 class SolidContent extends AsyncDirective {
+  private readonly owner = getOwner();
   private element?: HTMLSpanElement;
   private component?: Component<Record<string, unknown>>;
   private props: Record<string, unknown> = {};
@@ -203,8 +205,8 @@ class SolidContent extends AsyncDirective {
     if (!component || !element) {
       return;
     }
-    // This directive owns the root, independently of a surrounding Solid effect.
-    this.dispose = runWithOwner(null, () =>
+    // The directive controls connection; its creator owns resources mounted by later effects.
+    this.dispose = runWithOwner(this.owner, () =>
       renderSolid(() => {
         // A legacy host can publish props during its parent's Solid commit.
         const [props, setProps] = createSignal(this.props, { ownedWrite: true });

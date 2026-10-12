@@ -645,17 +645,31 @@ for the weekly burst separately from PR and main admission.
 
 The same workflow file also runs Barnacle's `auto-response` job. GitHub creates one run per subscribing workflow before job `if:` admission, and ClawSweeper's own comments and labels arrive as ordinary events, so one shared listener starts one run per event instead of two. The `auto-response` job keeps Barnacle's original event set (issue opened/edited/labeled, comment created, pull request opened/edited/synchronize/reopened/labeled/unlabeled), credentials, trusted base checkout, and its own per-item concurrency group. The file path stays fixed because ClawSweeper's direct queue intake verifies the OIDC `workflow_ref` of `clawsweeper-dispatch.yml`.
 
-It also owns comment admission for Security Review. The `security-review-command` job admits only comments that mention an approval command (including deletions, which the `dispatch` job ignores), confirms the command with the shared approval parser, and dispatches `security-review.yml` for that pull request. See [Security review](/ci/pipeline) for the approval contract.
-
 Dispatch API calls retry rate-limit failures for up to five attempts with quadratic backoff. Other API errors stop immediately, and exhausted retries preserve the final API exit code. Dispatch callers warn and continue on failure rather than reporting a successful dispatch.
 
 The workflow has three lanes:
 
 - `clawsweeper_item` for exact issue and pull request review requests;
 - `clawsweeper_comment` for explicit ClawSweeper commands in issue comments;
-- `github_activity` for general GitHub activity that the ClawSweeper agent may inspect.
+- `github_activity` for activity not already covered by the ClawSweeper App webhook.
 
 The `github_activity` lane forwards normalized metadata only: event type, action, actor, repository, item number, URL, title, state, and short excerpts for comments or reviews when present. It intentionally avoids forwarding the full webhook body. The receiving workflow in `openclaw/clawsweeper` is `.github/workflows/github-activity.yml`, which posts the normalized event to the OpenClaw Gateway hook for the ClawSweeper agent.
+
+After the ClawSweeper Worker is deployed with activity forwarding enabled and a
+real hook receipt is verified, set repository variable
+`CLAWSWEEPER_GITHUB_ACTIVITY_RELAY_DISABLED=1` to stop relaying issues, issue
+comments, and pull requests. The signed App webhook already delivers those event
+families directly to the agent using the shared normalizer and filters. Pushes,
+pull-request reviews, and review comments still use this workflow's relay because
+the App does not subscribe to them. Leave the variable unset to preserve the
+previous relay behavior; unset it again before disabling Worker forwarding.
+
+Worker activity delivery is best effort, with at most two 12-second HTTP
+attempts and one 1-second retry backoff after acknowledging the webhook. It does
+not provide durable retry or Actions-style concurrency coalescing. During the
+brief enable-and-verify cutover window, both paths may deliver the same event
+with different keys; verify the Worker path before disabling the relay rather
+than risking a silent delivery gap.
 
 Main pushes remain `github_activity` observations. They do not produce hosted per-commit reports or commit Check Runs.
 

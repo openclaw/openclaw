@@ -767,6 +767,9 @@ describe("agent lifecycle registry", () => {
       });
       expect(isAgentDeletionBlocked("main", options)).toBe(true);
       await expect(first.assertCurrentAsync()).rejects.toThrow("no longer owns");
+      await expect(first.retire()).rejects.toThrow("no longer owns");
+      await expect(first.fenceDatabasePaths([])).rejects.toThrow("no longer owns");
+      await expect(first.fenceCleanupPaths([])).rejects.toThrow("no longer owns");
       expect(first.assertCurrentFinal).toThrow("no longer owns");
       expect(binding && matchesAgentLifecycleBinding(config, binding, options)).toBe(false);
       expect(await captureAgentLifecycleBinding(() => config, "main", options)).toBeUndefined();
