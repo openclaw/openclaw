@@ -115,8 +115,7 @@ export function reconstructAgentDeletionJournalSchema(
 
 export function ensureAgentDeletionJournalPhaseSchema(database: DatabaseSync): void {
   assertAgentDeletionJournalAvailable(database);
-  const sql = getAdmittedSqliteSchemaFacts(database)?.tableSql.get("agent_deletion_journal");
-  if (sql && parseSqliteTableDefinition(sql, "agent_deletion_journal").columns.has("phase")) {
+  if (tableHasColumn(database, "agent_deletion_journal", "phase")) {
     return;
   }
   ensureColumn(database, "agent_deletion_journal", "phase TEXT");
