@@ -56,6 +56,8 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-sessions", async (importOri
   return {
     ...actual,
     buildSessionEntry: buildSessionEntryMock,
+    buildSessionEntries: (inputs: Array<{ absPath: string; options?: unknown }>) =>
+      Promise.all(inputs.map(({ absPath, options }) => buildSessionEntryMock(absPath, options))),
     isSessionArchiveArtifactName: (fileName: string) => /\.jsonl\.(reset|deleted)\./.test(fileName),
     isUsageCountedSessionTranscriptFileName: (fileName: string) => fileName.endsWith(".jsonl"),
     listSessionTranscriptCorpusEntriesForAgent: vi.fn(async () => []),

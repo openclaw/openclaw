@@ -176,6 +176,27 @@ export function memoryPublicationInline(replacement: MemorySourceIndexReplacemen
   return { header: memoryPublicationHeader(replacement), fragments: first.value ?? [] };
 }
 
+/** A group shares one bounded worker request and one native transaction. */
+export function memoryPublicationGroup(replacements: readonly MemorySourceIndexReplacement[]) {
+  const sources = [];
+  let bytes = 0;
+  for (const replacement of replacements) {
+    const source = memoryPublicationInline(replacement);
+    if (!source) {
+      return undefined;
+    }
+    bytes += JSON.stringify(source.header).length * 2;
+    for (const fragment of source.fragments) {
+      bytes += Math.max(Buffer.byteLength(fragment.json), fragment.json.length * 2) + 128;
+    }
+    if (bytes > BATCH_BYTES) {
+      return undefined;
+    }
+    sources.push(source);
+  }
+  return sources;
+}
+
 export function* memoryEmbeddingCacheBatches(
   entries: readonly MemoryEmbeddingCacheEntry[],
 ): Generator<MemoryPublicationFragment[]> {

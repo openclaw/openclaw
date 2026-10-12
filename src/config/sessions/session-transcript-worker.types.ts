@@ -156,6 +156,8 @@ import type {
   SessionSqliteTargetWorkerInput,
   SessionResetRecallWorkerInput,
   SessionEntryWorkerInput,
+  SessionEntriesWorkerInput,
+  SessionEntriesWorkerResult,
   SessionEntryCurrentWorkerInput,
   SessionEntryCurrentWorkerResult,
   BoardSnapshotWorkerInput,
@@ -367,6 +369,7 @@ export type SessionTranscriptWorkerInput =
   | SessionModelContextWorkerInput
   | SessionContextMessagesWorkerInput
   | SessionEntryWorkerInput
+  | SessionEntriesWorkerInput
   | SessionResetRecallWorkerInput;
 
 /** Only the dispatch owner attaches live physical proof; caller-prepared inputs cannot supply it. */
@@ -526,6 +529,7 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
             typeof import("./session-accessor.sqlite-read.js").readTranscriptExportSnapshotReadOnlySync
           >;
         };
+    "session-entries": SessionEntriesWorkerResult;
   };
 
 export type SessionTranscriptWorkerError =
