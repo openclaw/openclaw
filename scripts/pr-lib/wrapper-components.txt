@@ -1303,6 +1303,7 @@ src/plugins/compat/progress-receipt-handoff-record.ts
 src/plugins/compat/sqlite-runtime-records.ts
 src/plugins/compat/binding-persistence-records.ts
 src/plugins/compat/registry-records.ts
+src/plugins/compat/memory-session-records.ts
 src/plugins/compat/registry.ts
 src/plugins/compat/reply-tool-authority-record.ts
 src/plugins/compat/session-persistence-records.ts

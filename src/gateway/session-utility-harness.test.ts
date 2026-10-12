@@ -5,6 +5,7 @@ import { makeAssistantMessageFixture } from "../agents/test-helpers/assistant-me
 import {
   loadSessionEntryReadOnly,
   persistSessionTranscriptTurn,
+  readSessionTranscriptWatermark,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { prewarmSessionHistoryWorker } from "../config/sessions/session-transcript-worker-runtime.js";
@@ -176,14 +177,21 @@ describe("utility completion with an unavailable implicit harness", () => {
       completeModel: complete,
     });
     try {
-      recaps.ensure(target);
+      await recaps.ensure(target);
       await vi.waitFor(() => expect(complete).toHaveBeenCalledOnce());
       await expect(complete.mock.results[0]?.value).resolves.toMatchObject({
         owner: { kind: "harness", id: "openclaw" },
       });
       await vi.waitFor(() => {
         const entry = loadSessionEntryReadOnly(scope);
-        expect(projectSessionActivitySummary({ ...target, cfg: config, entry })).toMatchObject({
+        expect(
+          projectSessionActivitySummary({
+            ...target,
+            cfg: config,
+            entry,
+            watermark: readSessionTranscriptWatermark(scope),
+          }),
+        ).toMatchObject({
           state: "current",
           text,
         });

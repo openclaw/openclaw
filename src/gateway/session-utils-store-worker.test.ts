@@ -28,7 +28,15 @@ it("prepares complete Gateway entries while preserving main aliases and exact-ro
         skillsSnapshot: { prompt: "Complete saved skill instructions", skills: [] },
       },
     );
-    const input = { cfg, key: "main", agentId: "main", env };
+    const childKey = "agent:main:child";
+    const childScope = { agentId: "main", sessionKey: childKey, env };
+    replaceSessionEntrySync(childScope, {
+      sessionId: "child",
+      updatedAt: 1,
+      parentSessionKey: sessionKey,
+      skillsSnapshot: { prompt: "Child payload stays out of discovery", skills: [] },
+    });
+    const input = { cfg, key: "main", agentId: "main", env, includeStoreChildEntries: true };
     await loadGatewaySessionEntryReadOnlyInWorker(input);
     const internalKey = "agent:main:internal-session-effects:fixture";
     replaceSessionEntrySync(
@@ -62,6 +70,11 @@ it("prepares complete Gateway entries while preserving main aliases and exact-ro
         sessionId: "worker-projection",
         skillsSnapshot: { prompt: "Complete saved skill instructions", skills: [] },
       });
+      expect(loaded.store[childKey]).toMatchObject({
+        sessionId: "child",
+        parentSessionKey: sessionKey,
+      });
+      expect(loaded.store[childKey]?.skillsSnapshot).toBeUndefined();
       const internal = { ...input, key: internalKey };
       const ordinary = await loadGatewaySessionEntryReadOnlyInWorker({
         ...internal,
@@ -88,6 +101,21 @@ it("prepares complete Gateway entries while preserving main aliases and exact-ro
       sessionId: "updated-worker-projection",
       label: "Updated in process",
     });
+    replaceSessionEntrySync(childScope, {
+      sessionId: "child",
+      updatedAt: 2,
+      spawnedBy: sessionKey,
+      label: "Changed in process",
+    });
+    expect((await loadGatewaySessionEntryReadOnlyInWorker(input)).store[childKey]?.label).toBe(
+      "Changed in process",
+    );
+    replaceSessionEntrySync(childScope, {
+      sessionId: "child",
+      updatedAt: 3,
+      parentSessionKey: "agent:main:other",
+    });
+    expect((await loadGatewaySessionEntryReadOnlyInWorker(input)).store[childKey]).toBeUndefined();
   });
 });
 

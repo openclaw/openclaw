@@ -31,7 +31,7 @@ import { executeSessionBackfillBatch, runSessionBackfill } from "./session-backf
 import {
   hashStagedContent,
   seedCanonicalTranscript,
-  withSessionAdmissionReadBudget,
+  withoutHostSessionAdmissionReads,
   writeTranscript,
 } from "./session-ingestion.test-support.js";
 import { readShortTermRecallEntries, recordShortTermRecalls } from "./short-term-promotion.js";
@@ -141,24 +141,22 @@ describe("runSessionBackfill", () => {
       if (mode === "preview") {
         await closeOpenClawAgentDatabasesAsync(path.join(workspaceDir, "state"));
       }
-      const result = await withSessionAdmissionReadBudget(
-        () =>
-          runSessionBackfill({
-            agentId: "main",
-            workspaceDir,
-            ...options,
-            timezone: "UTC",
-            pluginConfig: {
-              memoryPolicy: {
-                excludeSessions: {
-                  hookExternalContentSources: ["gmail"],
-                  channels: ["discord"],
-                  chatTypes: ["group"],
-                },
+      const result = await withoutHostSessionAdmissionReads(() =>
+        runSessionBackfill({
+          agentId: "main",
+          workspaceDir,
+          ...options,
+          timezone: "UTC",
+          pluginConfig: {
+            memoryPolicy: {
+              excludeSessions: {
+                hookExternalContentSources: ["gmail"],
+                channels: ["discord"],
+                chatTypes: ["group"],
               },
             },
-          }),
-        mode === "apply" ? 2 : 1,
+          },
+        }),
       );
 
       expect(result.candidateCount).toBe(1);

@@ -16,14 +16,16 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   assignSessionOwner,
-  listSessionChildEntriesReadOnly,
   listSessionEntriesReadOnly,
   loadExactSessionEntryCandidatesReadOnlyBatch,
   loadExactSessionEntryReadOnly,
   replaceSessionEntrySync,
 } from "./session-accessor.js";
 import { captureSessionEntryRead } from "./session-accessor.sqlite-entry-read-lifetime.js";
-import { prepareExactSessionEntryRowReads } from "./session-accessor.sqlite-entry-read.js";
+import {
+  prepareExactSessionEntryRowReads,
+  readSessionChildEntriesInDatabase,
+} from "./session-accessor.sqlite-entry-read.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
 import {
@@ -853,7 +855,7 @@ describe("exact SQLite session batches", () => {
     }, scope);
     const queries = vi.spyOn(sqliteQueries, "executeSqliteQuerySync");
     try {
-      const result = listSessionChildEntriesReadOnly({ ...scope, sessionKey: parent });
+      const result = readSessionChildEntriesInDatabase(database, parent);
       const names = [
         "a-spawn",
         "b-parent",
@@ -871,7 +873,7 @@ describe("exact SQLite session batches", () => {
       const childQueries = queries.mock.calls
         .map(([readDatabase, query]) => ({ readDatabase, ...query.compile() }))
         .filter(
-          ({ sql }) => /"parent_session_key"\s*=/u.test(sql) && /"spawned_by"\s*=/u.test(sql),
+          ({ sql }) => /"parent_session_key"\s+in/u.test(sql) && /"spawned_by"\s+in/u.test(sql),
         );
       expect(childQueries).toHaveLength(1);
       const childQuery = childQueries[0]!;
@@ -950,7 +952,7 @@ describe("exact SQLite session batches", () => {
         { ok: true, value: [{ sessionKey: healthy, entry: { sessionId: healthy } }] },
         { ok: true, value: [] },
       ]);
-      expect(listSessionChildEntriesReadOnly({ ...scope, sessionKey: parent })).toMatchObject([
+      expect(readSessionChildEntriesInDatabase(database, parent, scope.projection)).toMatchObject([
         { sessionKey: healthy, entry: { sessionId: healthy } },
       ]);
     },

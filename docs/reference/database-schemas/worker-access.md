@@ -304,6 +304,11 @@ from the canonical rows already compared inside the writer transaction; it does
 not reread the derived active-event prefix. Unsupported direct edits to derived
 rows are repaired by reconciliation rather than checked on every replacement.
 
+Activity recap presentation consumes the watermark prepared with its row. Explicit
+recap requests read freshness through the history worker and revalidate access
+before returning the result. The unused synchronous message-by-event-ID accessor
+has been removed; transaction owners retain their existing message lookup kernel.
+
 The session S–Z inventory still includes shared native kernels. They must not be
 marked worker-only merely because their ordinary durable callers use workers:
 

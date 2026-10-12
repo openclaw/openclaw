@@ -3,6 +3,8 @@ import type { SessionsListParams } from "../../packages/gateway-protocol/src/ind
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { prepareSubagentSessionListReadCache } from "../agents/subagents/registry/subagent-registry-state.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { readSessionActivitySummary } from "../config/sessions/activity-summary.js";
+import { readSessionTranscriptWatermarkAsync } from "../config/sessions/session-transcript-watermark.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { prepareUserProfileCatalog, readUserProfileAliases } from "../state/user-profile-list.js";
@@ -101,7 +103,17 @@ export async function listSessionFixture(
           cfg: params.cfg,
           target: row,
           entry: row.entry,
-          databaseFacts: { hasBoard: row.hasBoard ?? false },
+          databaseFacts: {
+            hasBoard: row.hasBoard ?? false,
+            activitySummaryWatermark: readSessionActivitySummary(row.entry)
+              ? await readSessionTranscriptWatermarkAsync({
+                  agentId: row.agentId,
+                  sessionKey: row.key,
+                  sessionId: row.entry.sessionId,
+                  storePath: row.storeTarget.storePath,
+                })
+              : undefined,
+          },
         });
         row.hasBoard = row.facts.hasBoard;
       }

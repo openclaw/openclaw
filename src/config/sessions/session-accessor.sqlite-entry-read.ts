@@ -296,21 +296,25 @@ function scanSessionEntryRows(
 /** Indexed child metadata shared by native compatibility and the incognito actor. */
 export function readSessionChildEntriesInDatabase(
   database: OpenClawAgentDatabaseReader,
-  sessionKey: string,
+  parentSessionKeys: string | readonly string[],
   projection: SessionEntryProjection = "full",
 ): SessionEntrySummary[] {
+  const parents = typeof parentSessionKeys === "string" ? [parentSessionKeys] : parentSessionKeys;
+  if (parents.length === 0) {
+    return [];
+  }
   const sessionKeys = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db)
     .selectFrom("session_nodes")
     .select("session_key");
   // Separate indexed lookups avoid a whole-store scan chosen for OR with ordering.
   const childKeys = sessionKeys
-    .where("parent_session_key", "=", sessionKey)
-    .union(sessionKeys.where("spawned_by", "=", sessionKey));
+    .where("parent_session_key", "in", parents)
+    .union(sessionKeys.where("spawned_by", "in", parents));
   const childRows = executeSqliteQuerySync(
     database.db,
     selectReadableSessionEntryRows(database, projection)
       .where("session_key", "in", childKeys)
-      .where("session_key", "!=", sessionKey)
+      .where("session_key", "not in", parents)
       .orderBy("session_key", "asc"),
   ).rows;
   return parseReadableSqliteSessionEntryRows(
