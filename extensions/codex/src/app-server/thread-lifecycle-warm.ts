@@ -11,6 +11,7 @@ import {
   consumeCodexAppServerLiveThread,
   isCodexAppServerClientRuntimeLive,
   isCodexAppServerLiveThreadClaimed,
+  isCodexAppServerLiveThreadProtected,
   releaseCodexAppServerLiveThread,
 } from "./client-runtime.js";
 import type { CodexAppServerClient } from "./client.js";
@@ -163,7 +164,10 @@ export async function releaseCodexBoundLiveThread(
   }
   const client = previous?.client ?? options.client;
   try {
-    if (isCodexAppServerLiveThreadClaimed(client, options.threadId)) {
+    if (
+      isCodexAppServerLiveThreadClaimed(client, options.threadId) ||
+      isCodexAppServerLiveThreadProtected(client, options.threadId)
+    ) {
       throw new Error(`Codex thread ${options.threadId} is claimed by active work; stop it first.`);
     }
     return await releaseCodexRetainedLiveThread({
@@ -183,7 +187,8 @@ export async function releaseCodexBoundLiveThread(
   } finally {
     // Rejection must free the lane so the claimed run can still be stopped.
     const retiredExit = previous?.release(
-      !isCodexAppServerLiveThreadClaimed(client, options.threadId),
+      !isCodexAppServerLiveThreadClaimed(client, options.threadId) &&
+        !isCodexAppServerLiveThreadProtected(client, options.threadId),
     );
     // Writer handoff waits for the retired owner to exit, but other leases can
     // keep it alive indefinitely. This runs under the thread queue and binding
@@ -298,6 +303,9 @@ export async function tryReuseCodexLiveThread(
     const pluginThreadConfig = await options.buildLoadedPluginThreadConfig(binding);
     assertWarmOwner();
     if (pluginThreadConfig && pluginThreadConfig.fingerprint !== binding.pluginAppsFingerprint) {
+      // Rotation has not changed native policy. Keep the idle owner available
+      // if background work prevents the caller from releasing this subscription.
+      preserveSubscription = true;
       return { kind: "rotate" };
     }
     // Engine identity, projection epoch, and policy were checked by the owner
