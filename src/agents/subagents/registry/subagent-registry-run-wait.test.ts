@@ -3,7 +3,9 @@
 // claim the run ended.
 import { describe, expect, it, vi } from "vitest";
 import type { CallGatewayOptions } from "../../../gateway/call.js";
-import { type SubagentManagerOptions, SubagentWaitManager } from "./subagent-registry-run-wait.js";
+import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
+import { createSubagentRunManager } from "./subagent-registry-run-manager.js";
+import type { SubagentManagerOptions } from "./subagent-registry-run-wait.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 
 const RUN_ID = "run-wait-disposition";
@@ -18,17 +20,18 @@ type AgentWaitResponse = {
 };
 
 function createRunningEntry(startedAt: number): SubagentRunRecord {
-  return {
+  // Build through the canonical factory, never a hand-rolled literal behind an
+  // `as` cast: row versioning binds the nested completion/delivery state, and
+  // without it every write dies with "missing canonical nested state" — which
+  // the wait manager swallows into its recovery path, so the suite goes quietly
+  // vacuous instead of red.
+  return createSubagentRunRecord({
     runId: RUN_ID,
-    childSessionKey: "agent:main:subagent:child",
-    requesterSessionKey: "agent:main:main",
-    requesterDisplayKey: "main",
     task: "hold a git worktree for a long time",
-    cleanup: "keep",
     createdAt: startedAt,
     runTimeoutSeconds: RUN_TIMEOUT_SECONDS,
-    execution: { status: "running", startedAt },
-  } as SubagentRunRecord;
+    startedAt,
+  });
 }
 
 function createWaitManager(params: {
@@ -42,11 +45,8 @@ function createWaitManager(params: {
   const options = {
     runs,
     getRunsForChildSession: () => runs.values(),
-    resumedRuns: new Set<string>(),
+    resumedRuns: new Set<object>(),
     acquireTerminalCompletionLock: async () => () => {},
-    persist: vi.fn(),
-    persistOrThrow: vi.fn(),
-    persistAsyncOrThrow: vi.fn(),
     callGateway: (async (_opts: CallGatewayOptions) =>
       params.wait) as SubagentManagerOptions["callGateway"],
     getRuntimeConfig: (() => ({})) as SubagentManagerOptions["getRuntimeConfig"],
@@ -72,7 +72,7 @@ function createWaitManager(params: {
         waitExpiries.push(request);
       }),
   } satisfies SubagentManagerOptions;
-  return { manager: new SubagentWaitManager(options), completions, waitExpiries };
+  return { manager: createSubagentRunManager(options), completions, waitExpiries };
 }
 
 describe("subagent run wait disposition", () => {
@@ -86,7 +86,7 @@ describe("subagent run wait disposition", () => {
       wait: { status: "timeout" },
     });
 
-    await manager.waitForSubagentCompletion(RUN_ID, 50, entry);
+    await manager.waitForSubagentCompletion(RUN_ID, entry, 50);
 
     expect(completions).toHaveLength(0);
     expect(waitExpiries).toHaveLength(1);
@@ -104,7 +104,7 @@ describe("subagent run wait disposition", () => {
       wait: { status: "timeout", endedAt: startedAt + 500 },
     });
 
-    await manager.waitForSubagentCompletion(RUN_ID, 50, entry);
+    await manager.waitForSubagentCompletion(RUN_ID, entry, 50);
 
     expect(completions).toHaveLength(1);
     expect(completions[0]?.outcome).toEqual({ status: "timeout", disposition: "exited" });
@@ -128,7 +128,7 @@ describe("subagent run wait disposition", () => {
         wait: { status, startedAt, endedAt: startedAt + 500, stopReason },
       });
 
-      await manager.waitForSubagentCompletion(RUN_ID, 50, entry);
+      await manager.waitForSubagentCompletion(RUN_ID, entry, 50);
 
       expect(waitExpiries).toHaveLength(0);
       expect(completions).toHaveLength(1);
@@ -146,23 +146,29 @@ describe("subagent run wait disposition", () => {
     },
   );
 
-  it("re-arms the wait after a transient provisional-expiry publication failure", async () => {
-    const entry = createRunningEntry(Date.now() - (RUN_TIMEOUT_SECONDS + 1) * 1_000);
-    let attempts = 0;
-    const reportSubagentWaitExpiry = vi.fn(async () => {
-      attempts += 1;
-      if (attempts === 1) {
-        throw new Error("transient publication failure");
-      }
-    });
-    const { manager } = createWaitManager({
+  // A re-arm counted on a mocked reporter proved nothing durable. The
+  // settlement regression that observes a committed row after an injected
+  // marker-write failure lives with the real registry owner, in
+  // `subagent-registry.test.ts`.
+  it("reuses the recorded observation timestamp when the child starts before a retry", async () => {
+    // The queued child had no start time when the first observation was
+    // recorded, so the deadline was `createdAt + timeout`. Once it starts, the
+    // deadline moves — and the reporter refuses any timestamp but the one it
+    // recorded, which silently discarded the pending notification.
+    const createdAt = Date.now() - (RUN_TIMEOUT_SECONDS + 1) * 1_000;
+    const entry = createRunningEntry(createdAt);
+    const recordedObservedAt = createdAt + RUN_TIMEOUT_SECONDS * 1_000;
+    entry.waitExpiryObservedAt = recordedObservedAt;
+    entry.execution = { status: "running", startedAt: createdAt + 500 };
+    const { manager, waitExpiries } = createWaitManager({
       entry,
       wait: { status: "timeout" },
-      reportSubagentWaitExpiry,
     });
 
-    await manager.waitForSubagentCompletion(RUN_ID, 50, entry);
-    await expect.poll(() => reportSubagentWaitExpiry.mock.calls.length).toBe(2);
+    await manager.waitForSubagentCompletion(RUN_ID, entry, 50);
+
+    expect(waitExpiries).toHaveLength(1);
+    expect(waitExpiries[0]?.observedAt).toBe(recordedObservedAt);
   });
 
   it("reports an exited child when a stop reason proves the run settled", async () => {
@@ -172,7 +178,7 @@ describe("subagent run wait disposition", () => {
       wait: { status: "timeout", stopReason: "timeout" },
     });
 
-    await manager.waitForSubagentCompletion(RUN_ID, 50, entry);
+    await manager.waitForSubagentCompletion(RUN_ID, entry, 50);
 
     expect(completions[0]?.outcome).toMatchObject({ disposition: "exited" });
   });

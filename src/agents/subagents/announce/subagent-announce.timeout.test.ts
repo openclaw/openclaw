@@ -102,6 +102,7 @@ vi.mock("./subagent-announce-delivery.runtime.js", () =>
     }),
   }),
 );
+// mock-isolation: Capture the announce request shape without real delivery, session-store or outbound state.
 vi.mock("./subagent-announce-delivery.js", () => ({
   deliverSubagentAnnouncement: async (params: {
     targetRequesterSessionKey: string;

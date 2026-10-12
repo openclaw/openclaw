@@ -3223,7 +3223,6 @@
 ["src/agents/subagents/announce/subagent-announce.timeout.test.ts","../registry/subagent-registry-read.js","8a361c6b92f043240c80f86804e07cec1733c26e6489e49cfe1c8521ff9be392",1]
 ["src/agents/subagents/announce/subagent-announce.timeout.test.ts","../registry/subagent-registry.js","eaa4f3163c43e7587a5e9c9df86c64bb2a1bc72cafb6d653760428a4d32421ba",1]
 ["src/agents/subagents/announce/subagent-announce.timeout.test.ts","../spawn/subagent-depth.js","614256f2358cd2eb452e3984b02fe78ee3196855547514419408bf3624133c0a",1]
-["src/agents/subagents/announce/subagent-announce.timeout.test.ts","./subagent-announce-delivery.js","27be720727124cca000f9f0125467cd4b941867bd7ac5c82289212f2dd22e407",1]
 ["src/agents/subagents/announce/subagent-announce.timeout.test.ts","./subagent-announce-delivery.runtime.js","10427ad1cd55346ec8f00eccce5c7d27d9ef2c16823fab455a6a90461f366810",1]
 ["src/agents/subagents/announce/subagent-announce.timeout.test.ts","./subagent-announce.runtime.js","fdd57efcf1e0ff980e4bf9f97c6dc12a4b788848cb2e5996dc376e9caf1b6d39",1]
 ["src/agents/subagents/completion/subagent-completion-admission.cancel-rollback.test.ts","../registry/subagent-registry.js","3e21cb1ac329bc7aea955fc581c3c4844e57106581418d1ead9de5a7ac6187f0",1]

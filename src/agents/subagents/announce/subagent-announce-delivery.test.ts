@@ -50,12 +50,14 @@ import {
 } from "../../subagent-test-fixtures.test-helpers.js";
 import {
   testing,
+  createSendMessageMock,
   deliverSubagentAnnouncement,
   loadRequesterSessionEntry,
   registerDescendantWakeCurrencyTests,
 } from "./subagent-announce-delivery.test-support.js";
 import { runDescendantWake } from "./subagent-announce-descendant-wake.js";
 import { privateCompletionCases } from "./subagent-announce-private-completion.test-fixtures.js";
+import { registerProvisionalExpiryDeliveryTests } from "./subagent-announce-provisional-expiry.test-support.js";
 
 const sessionDeliveryQueueMocks = vi.hoisted(() => ({
   enqueueClaimedSessionDelivery: vi.fn(
@@ -324,16 +326,6 @@ function createRoleRestrictedInProcessGatewayMock(response: Record<string, unkno
     },
   ) as unknown as typeof runtimeDispatchGatewayMethodInProcess;
   return { cfg, dispatchGatewayMethodInProcess };
-}
-
-function createSendMessageMock() {
-  return vi.fn(async () => ({
-    channel: "slack",
-    to: "channel:C123",
-    via: "direct" as const,
-    mediaUrl: null,
-    result: { messageId: "msg-1" },
-  })) as unknown as typeof runtimeSendMessage;
 }
 
 function readyCronContinuationEntry(sessionId: string): SessionEntry {
@@ -1254,70 +1246,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(content.length).toBeLessThanOrEqual(4_096);
   });
 
-  // Wait expiry observes only the waiter, not failure of its child. Exercise
-  // the actual DM fallback after the requester supplies no delivered update.
-  it.each([
-    { response: "silent", disposition: "still-running", failedChild: false },
-    { response: "synthesis error", disposition: "still-running", failedChild: false },
-    { response: "silent", disposition: "exited", failedChild: true },
-    { response: "synthesis error", disposition: "exited", failedChild: true },
-    { response: "silent", disposition: "killed", failedChild: true },
-    { response: "synthesis error", disposition: "killed", failedChild: true },
-  ] as const)(
-    "distinguishes provisional expiry from terminal failure for $response / $disposition",
-    async ({ response, disposition, failedChild }) => {
-      const requesterError = "requester synthesis unavailable";
-      const callGateway = createGatewayMock({ result: { payloads: [{ text: "NO_REPLY" }] } });
-      if (response === "synthesis error") {
-        vi.mocked(callGateway).mockRejectedValue(new Error(requesterError));
-      }
-      const sendMessage = createSendMessageMock();
-      const childSessionKey = "agent:worker:subagent:provisional-expiry";
-      const result = await deliverDiscordDirectMessageCompletion({
-        callGateway,
-        sendMessage,
-        sourceTool: "subagent_announce",
-        sourceSessionKey: childSessionKey,
-        internalEvents: taskCompletionEvents({
-          childSessionKey,
-          childSessionId: "provisional-expiry-session",
-          status: "timeout",
-          statusLabel: failedChild ? "timed out" : "wait expired; child stop NOT observed",
-          disposition,
-          result: failedChild
-            ? "(no output)"
-            : "(no output observed before this wait expired; the child may still be working — re-check before acting on this)",
-          noVisibleResult: true,
-        }),
-      });
-
-      expect(callGateway).toHaveBeenCalledOnce();
-      if (failedChild) {
-        expect(sendMessage).toHaveBeenCalledOnce();
-        expect(mockCallArg(sendMessage, 0, 0).content).toBe(
-          "A delegated task failed before it could report a result. Please retry the task.",
-        );
-        expectRecordFields(result, { delivered: true, path: "direct" });
-      } else {
-        expect(sendMessage).not.toHaveBeenCalled();
-        // An unobserved stop is neither a failed child nor a delivery receipt.
-        expectRecordFields(result, { delivered: false, path: "direct" });
-        expect(result.requesterVisibleFinalDelivered).toBeUndefined();
-        if (response === "synthesis error") {
-          expect(result.disposition).toBe("retryable");
-          expect(result.error).toContain(requesterError);
-        } else {
-          // Instructed silence is a settled non-delivery, not a failure to
-          // retry: a retryable result here re-announces every few seconds for
-          // as long as the child keeps working.
-          expect(result.disposition).toBe("intentional_non_delivery");
-          expect(result.terminal).toBe(true);
-          expect(result.error).toBeUndefined();
-        }
-      }
-    },
-  );
-
   it("sends one generic direct notice when requester synthesis repeats an error child completion", async () => {
     const status = "error";
     const childSessionKey = `agent:worker:subagent:${status}-child`;
@@ -1567,6 +1495,11 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     createRoleRestrictedInProcessGatewayMock,
     createGatewayMock,
     runDescendantWake,
+  });
+
+  registerProvisionalExpiryDeliveryTests({
+    createGatewayMock,
+    deliverDiscordDirectMessageCompletion,
   });
 
   it.each([

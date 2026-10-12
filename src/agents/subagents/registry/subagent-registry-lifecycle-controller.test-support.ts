@@ -5,6 +5,10 @@ import type { OpenClawStateWorkerOperations } from "../../../state/openclaw-stat
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import {
+  SUBAGENT_ENDED_REASON_COMPLETE,
+  SUBAGENT_ENDED_REASON_KILLED,
+} from "./subagent-lifecycle-events.js";
+import {
   SubagentLifecycleController,
   type SubagentLifecycleOptions,
 } from "./subagent-registry-lifecycle.js";
@@ -50,6 +54,33 @@ export function createRunEntry(overrides: RunEntryOverrides = {}): SubagentRunRe
 type RequesterSettleWakeParams = Parameters<
   SubagentLifecycleOptions["maybeWakeRequesterAfterAllChildrenSettled"]
 >[0];
+
+type SubagentCompletionParams = Parameters<SubagentLifecycleController["completeSubagentRun"]>[0];
+
+export function makeSubagentCompletion(
+  entry: SubagentRunRecord,
+  overrides: Omit<Partial<SubagentCompletionParams>, "runId"> = {},
+): SubagentCompletionParams {
+  return {
+    runId: entry.runId,
+    endedAt: 4_000,
+    outcome: { status: "ok" },
+    reason: SUBAGENT_ENDED_REASON_COMPLETE,
+    triggerCleanup: false,
+    ...overrides,
+  };
+}
+
+export function makeKilledSubagentCompletion(
+  entry: SubagentRunRecord,
+  overrides: Omit<Partial<SubagentCompletionParams>, "runId"> = {},
+): SubagentCompletionParams {
+  return makeSubagentCompletion(entry, {
+    outcome: { status: "error", error: "agent run aborted" },
+    reason: SUBAGENT_ENDED_REASON_KILLED,
+    ...overrides,
+  });
+}
 
 export type LifecycleFixtureWrite = {
   runIds: readonly string[];

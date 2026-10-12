@@ -51,7 +51,9 @@ export function registerSubagentOrphanTaskCases({
       const hasWait = () =>
         vi.mocked(callGateway).mock.calls.some(([request]) => request.method === "agent.wait");
       try {
-        restartRegistry();
+        // Deliberately unawaited: the poll below must observe whichever path the
+        // restart takes, not wait for the restart itself to settle.
+        void restartRegistry();
         // Reach either the legitimate re-wait or the erroneous terminal path;
         // do not use a sleep to infer absence of asynchronous completion.
         await waitForRegistryWork(
@@ -74,7 +76,9 @@ export function registerSubagentOrphanTaskCases({
             status: "error",
             error: "subagent run orphaned: missing-session-entry",
           });
-          await waitForRegistryWork(() => subagentRuns.get(runId)?.cleanupCompletedAt !== undefined);
+          await waitForRegistryWork(
+            () => subagentRuns.get(runId)?.cleanupCompletedAt !== undefined,
+          );
         }
       } finally {
         childResult.resolve({ status: "ok", startedAt: now - 10_000, endedAt: now });

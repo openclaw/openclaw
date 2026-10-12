@@ -2,6 +2,7 @@ export * from "./subagent-announce-delivery.js";
 
 import { expect, it, vi } from "vitest";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
+import type { sendMessage as runtimeSendMessage } from "../../../infra/outbound/message.js";
 import { mockCallArg } from "../../subagent-test-fixtures.test-helpers.js";
 import {
   hasAnnounceSendEvidence,
@@ -9,6 +10,16 @@ import {
   SourceOwnerChangedError,
 } from "./subagent-announce-delivery-retry.js";
 import { setSubagentAnnounceDeliveryDepsForTest } from "./subagent-announce-overrides.test-support.js";
+
+export function createSendMessageMock() {
+  return vi.fn(async () => ({
+    channel: "slack",
+    to: "channel:C123",
+    via: "direct" as const,
+    mediaUrl: null,
+    result: { messageId: "msg-1" },
+  })) as unknown as typeof runtimeSendMessage;
+}
 
 export const testing = {
   setDepsForTest: setSubagentAnnounceDeliveryDepsForTest,

@@ -539,6 +539,9 @@ it("settles a requester cohort while many children finish, wake, and one is kill
     notifyContextEngineSubagentEnded: async () => {},
     completeCleanupBookkeeping: async () => {},
     completeSubagentRun: async () => {},
+    reportSubagentWaitExpiry: async () => {
+      throw new Error("Stress fixture unexpectedly reported a wait expiry");
+    },
   });
   const context = captureOpenClawStateWorkerContext();
   const completions = children.map((child) =>

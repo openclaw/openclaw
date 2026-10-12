@@ -56,7 +56,6 @@ import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
 import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { createStructuredOutputTool } from "../../tools/structured-output-tool.js";
 import * as sessionEntryRuntime from "../announce/subagent-announce-delivery.runtime.js";
-import { resolveSubagentRunDisposition } from "../announce/subagent-announce-output.js";
 import { readSubagentRunAnnounceResultUsing } from "../announce/subagent-announce-result.js";
 import {
   consumeRequesterCronAuthorityAdmission,
@@ -90,12 +89,15 @@ import {
 import {
   createLifecycleControllerFixture,
   createRunEntry,
+  makeKilledSubagentCompletion,
+  makeSubagentCompletion,
   readLifecycleRun,
   mutateLifecycleRun,
   type LifecycleFixtureWrite,
   type RunEntryOverrides,
 } from "./subagent-registry-lifecycle-controller.test-support.js";
 import { registerLifecycleDeliveryReceiptCases } from "./subagent-registry-lifecycle-delivery.test-support.js";
+import { registerLifecycleDispositionTests } from "./subagent-registry-lifecycle-disposition.test-support.js";
 import type {
   SubagentLifecycleController,
   SubagentLifecycleOptions,
@@ -329,31 +331,6 @@ function makeRunModeCleanupEntry(
       },
       ...execution,
     },
-  });
-}
-
-function makeSubagentCompletion(
-  entry: SubagentRunRecord,
-  overrides: Omit<Partial<SubagentCompletionParams>, "runId"> = {},
-): SubagentCompletionParams {
-  return {
-    runId: entry.runId,
-    endedAt: 4_000,
-    outcome: { status: "ok" },
-    reason: SUBAGENT_ENDED_REASON_COMPLETE,
-    triggerCleanup: false,
-    ...overrides,
-  };
-}
-
-function makeKilledSubagentCompletion(
-  entry: SubagentRunRecord,
-  overrides: Omit<Partial<SubagentCompletionParams>, "runId"> = {},
-): SubagentCompletionParams {
-  return makeSubagentCompletion(entry, {
-    outcome: { status: "error", error: "agent run aborted" },
-    reason: SUBAGENT_ENDED_REASON_KILLED,
-    ...overrides,
   });
 }
 
@@ -1083,50 +1060,6 @@ describe("subagent registry lifecycle hardening", () => {
     expect(readLifecycleRun(entry).killReconciliation).toBeUndefined();
   });
 
-  // Every cancellation producer other than the entry.killIntent path reaches
-  // this boundary with the killed reason and no disposition. The default read
-  // of an absent disposition is `exited`, and announcement does not wait for
-  // completion, so each of these used to publish `exited` for a killed child.
-  it.each([
-    {
-      label: "a lifecycle cancellation without a durable kill intent",
-      outcome: { status: "error", error: "agent run aborted" } as const,
-    },
-    {
-      label: "the sweeper's cancellation-grace completion",
-      outcome: { status: "error", error: "killed" } as const,
-    },
-    {
-      label: "persisted killed-session reconciliation",
-      outcome: { status: "error", error: "subagent run terminated" } as const,
-    },
-  ])("stamps killed disposition for $label", async ({ outcome }) => {
-    const entry = createRunEntry({ execution: { status: "running", startedAt: 2_000 } });
-    const controller = createLifecycleController({ entry });
-
-    await controller.completeSubagentRun(makeKilledSubagentCompletion(entry, { outcome }));
-
-    expect(entry.endedReason).toBe(SUBAGENT_ENDED_REASON_KILLED);
-    expect(entry.execution.outcome).toMatchObject({ ...outcome, disposition: "killed" });
-    expect(resolveSubagentRunDisposition(entry.execution.outcome)).toBe("killed");
-  });
-
-  it("replaces a provisional still-running disposition on a cancellation completion", async () => {
-    const entry = createRunEntry({ execution: { status: "running", startedAt: 2_000 } });
-    const controller = createLifecycleController({ entry });
-
-    await controller.completeSubagentRun(
-      makeKilledSubagentCompletion(entry, {
-        // A wait-expiry publication describes the waiter, not the run. Carrying
-        // it onto a cancellation would tell the parent a killed child is still
-        // live and harvestable.
-        outcome: { status: "error", error: "agent run aborted", disposition: "still-running" },
-      }),
-    );
-
-    expect(resolveSubagentRunDisposition(entry.execution.outcome)).toBe("killed");
-  });
-
   it("keeps task finalization, resource retirement, and announce cleanup root-admitted", async () => {
     const entry = createRunEntry({ expectsCompletionMessage: true });
     const browserCleanup = createDeferredCore();
@@ -1194,6 +1127,8 @@ describe("subagent registry lifecycle hardening", () => {
       await admittedRun;
     }
   });
+
+  registerLifecycleDispositionTests({ createLifecycleController, completeAndJoinCleanup });
 
   registerDirectSessionCleanupAuthorityTests({
     createRunEntry,
@@ -3399,59 +3334,6 @@ describe("subagent registry lifecycle hardening", () => {
       expect(persist).toHaveBeenCalled();
     },
   );
-
-  it("re-announces when a live child's own completion supersedes a wait-expiry publication", async () => {
-    // A wait-expiry publication reported the waiter, not the run. Fencing the
-    // run behind it discarded the child's real ending, so the parent's last
-    // word stayed "still running" for a child that had finished 15m earlier.
-    const entry = createRunEntry({
-      runTimeoutSeconds: 3,
-      startedAt: 2_000,
-      endedAt: 5_000,
-      outcome: { status: "timeout", disposition: "still-running" },
-      endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
-      cleanupHandled: true,
-      cleanupCompletedAt: 5_000,
-      delivery: { status: "delivered", announcedAt: 5_000, deliveredAt: 5_000 },
-    });
-    const runSubagentAnnounceFlow = vi.fn(async () => "delivered" as const);
-    const controller = createLifecycleController({ entry, runSubagentAnnounceFlow });
-
-    await completeRun(controller, entry, {
-      endedAt: 6_500,
-      outcome: { status: "ok" },
-      triggerCleanup: true,
-    });
-
-    expect(runSubagentAnnounceFlow).toHaveBeenCalled();
-    // The superseding publication carries no still-running marker, so the event
-    // reads as an ended child.
-    expect(entry.execution.outcome?.disposition).toBeUndefined();
-  });
-
-  it("does not re-announce when a second wait also expires on the same live child", async () => {
-    const entry = createRunEntry({
-      runTimeoutSeconds: 3,
-      startedAt: 2_000,
-      endedAt: 5_000,
-      outcome: { status: "timeout", disposition: "still-running" },
-      endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
-      cleanupHandled: true,
-      cleanupCompletedAt: 5_000,
-      delivery: { status: "delivered", announcedAt: 5_000, deliveredAt: 5_000 },
-    });
-    const runSubagentAnnounceFlow = vi.fn(async () => "delivered" as const);
-    const controller = createLifecycleController({ entry, runSubagentAnnounceFlow });
-
-    await completeRun(controller, entry, {
-      endedAt: 6_500,
-      outcome: { status: "timeout", disposition: "still-running" },
-      triggerCleanup: true,
-    });
-
-    expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
-    expect(entry.delivery?.status).toBe("delivered");
-  });
 
   it("suppresses a deferred ended hook after a newer session generation registers", async () => {
     const entry = createRunEntry({

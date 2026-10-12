@@ -10,10 +10,7 @@ import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { mergeAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import { peekSwarmStructuredOutput } from "../../tools/structured-output-tool.js";
-import {
-  isSubagentRunStillRunning,
-  withSubagentOutcomeTiming,
-} from "../announce/subagent-announce-output.js";
+import { withSubagentOutcomeTiming } from "../announce/subagent-announce-output.js";
 import {
   clearPublishedSwarmCollectorOutput,
   updateSwarmCollectorCompletion,
@@ -29,6 +26,11 @@ import {
   SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
+import {
+  shouldPreservePublishedExplicitRunTimeout,
+  supersedesProvisionalWaitExpiry,
+  withCancellationDisposition,
+} from "./subagent-registry-completion-disposition.js";
 import { resolveKilledSubagentTaskEndedAt } from "./subagent-registry-completion.js";
 import { updateSubagentArchiveAtMs } from "./subagent-registry-helpers.js";
 import type { SubagentLifecycleCompletionContext } from "./subagent-registry-lifecycle-context.js";
@@ -42,40 +44,13 @@ import {
 import { completeTerminalEffects } from "./subagent-registry-terminal-effects.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
-import {
-  resolveSubagentRunDeadlineMs,
-  resolveSubagentRunEffectiveEndedAt,
-} from "./subagent-run-timeout.js";
+import { resolveSubagentRunEffectiveEndedAt } from "./subagent-run-timeout.js";
 
 const MISSING_REQUIRED_FINAL_REPLY_ERROR = "subagent run ended before producing a final reply";
 
 const browserCleanupLoader = createLazyImportLoader(
   () => import("../../../browser-lifecycle-cleanup.js"),
 );
-
-function shouldPreservePublishedExplicitRunTimeout(entry: SubagentRunRecord): boolean {
-  if (
-    entry.execution.outcome?.status !== "timeout" ||
-    typeof entry.execution.endedAt !== "number" ||
-    // A wait-expiry publication describes the waiter, not the run. Fencing the
-    // run behind it would discard the child's own terminal callback and leave
-    // the parent's last word "timed out" for a child that went on to finish.
-    isSubagentRunStillRunning(entry.execution.outcome)
-  ) {
-    return false;
-  }
-  const deadlineMs = resolveSubagentRunDeadlineMs(entry);
-  if (deadlineMs === undefined || entry.execution.endedAt < deadlineMs) {
-    return false;
-  }
-  return (
-    entry.cleanupHandled === true ||
-    typeof entry.cleanupCompletedAt === "number" ||
-    typeof entry.endedHookEmittedAt === "number" ||
-    entry.delivery?.status === "delivered" ||
-    typeof entry.delivery?.announcedAt === "number"
-  );
-}
 
 function resolveTerminalRequest(
   entry: SubagentRunRecord,
@@ -565,15 +540,9 @@ function planTerminalCompletion(
     clearDeliveryState(entry);
   }
 
-  // A wait-expiry publication described the waiter, not the run, so the
-  // announce it already delivered is provisional. Release the delivery and
-  // cleanup bookkeeping once the run's own terminal callback lands, or the
-  // parent's last word stays "still running" for a child that has finished.
-  // Guarded on the incoming disposition so a second expiry cannot re-announce.
   if (
     !recoveryRequested &&
-    isSubagentRunStillRunning(entry.execution.outcome) &&
-    !isSubagentRunStillRunning(completionOutcome)
+    supersedesProvisionalWaitExpiry(entry.execution.outcome, completionOutcome)
   ) {
     entry.cleanupHandled = false;
     entry.cleanupCompletedAt = undefined;
@@ -618,20 +587,8 @@ function planTerminalCompletion(
     completionOutcome = { status: "error", error: MISSING_REQUIRED_FINAL_REPLY_ERROR };
     completionReason = SUBAGENT_ENDED_REASON_ERROR;
   }
-  if (cancelledCompletion && completionOutcome.disposition !== "killed") {
-    // This boundary owns cancellation disposition for every producer, not
-    // just the `entry.killIntent` path above. The lifecycle cancellation
-    // listener, cancellation grace, and persisted killed-session
-    // reconciliation all supply the killed reason with no disposition, and
-    // `resolveSubagentRunDisposition` reads that absence as `exited` -- so
-    // announcement, which does not wait for completion, published `exited`
-    // for a child that was killed.
-    //
-    // A cancellation completion is terminal by construction, so the reason is
-    // the authority here: an absent disposition is not evidence of a clean
-    // exit, and a `still-running` disposition drained from an earlier
-    // provisional wait-expiry publication describes the waiter, not this run.
-    completionOutcome = { ...completionOutcome, disposition: "killed" };
+  if (cancelledCompletion) {
+    completionOutcome = withCancellationDisposition(completionOutcome);
   }
   const outcome =
     recoveryRequested && entry.execution.outcome

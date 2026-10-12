@@ -321,9 +321,18 @@ export abstract class SubagentWaitManager {
           // it earns the parent a wake, but must stay outside terminal completion
           // because that path owns browser/MCP/session cleanup.
           if (!isTerminalWaitTimeout) {
+            // A pending observation can be recorded before a queued child
+            // starts; once it starts, the deadline moves from `createdAt +
+            // timeout` to `startedAt + timeout`. The reporter refuses any
+            // timestamp other than the one it recorded, so recomputing here
+            // would discard the pending notification instead of retrying it.
+            const recordedObservedAt = entry.waitExpiryObservedAt;
             waitExpiryForRetry = {
               entry,
-              observedAt: timeoutEndedAt ?? now,
+              observedAt:
+                typeof recordedObservedAt === "number"
+                  ? recordedObservedAt
+                  : (timeoutEndedAt ?? now),
               startedAt: observedStartedAt,
               lifecycleGeneration,
             };
