@@ -71,15 +71,15 @@ export function renderChatAuthorAvatar(
           .fallback=${renderInitialsAvatar(view.fallback)}
         ></openclaw-channel-avatar>`
       : view.imageUrl
-      ? html`
-          ${renderIdentityAvatarImage({
-            view,
-            fallbackSelector: ".chat-author-avatar",
-            className: "chat-author-avatar__image",
-            ariaHidden: true,
-          })}${renderInitialsAvatar(view.fallback, true)}
-        `
-      : renderInitialsAvatar(view.fallback);
+        ? html`
+            ${renderIdentityAvatarImage({
+              view,
+              fallbackSelector: ".chat-author-avatar",
+              className: "chat-author-avatar__image",
+              ariaHidden: true,
+            })}${renderInitialsAvatar(view.fallback, true)}
+          `
+        : renderInitialsAvatar(view.fallback);
     return html`<span
       class=${identityAvatarClass("chat-author-avatar", view)}
       role="img"
