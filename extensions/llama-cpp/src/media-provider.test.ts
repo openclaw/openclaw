@@ -19,7 +19,8 @@ const transport = vi.hoisted(() => ({
   managed: vi.fn<typeof describeImagesWithModelPayloadTransform>(),
 }));
 
-vi.mock("openclaw/plugin-sdk/media-understanding", () => ({
+vi.mock("openclaw/plugin-sdk/media-understanding", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-understanding")>()),
   describeImageWithModel: transport.single,
   describeImagesWithModel: transport.multiple,
   describeImagesWithModelPayloadTransform: transport.managed,

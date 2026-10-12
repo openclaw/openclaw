@@ -150,7 +150,7 @@ export function recommendLlamaCppMedia(
   });
   if (LLAMA_SERVER_BUILD !== 10_809) {
     return unavailable(
-      `Local media requires verified llama.cpp build 10809; available build is ${LLAMA_SERVER_BUILD}. Use another image provider until these recipes are verified with the new runtime.`,
+      `Local media requires verified llama.cpp build 10809; available build is ${String(LLAMA_SERVER_BUILD)}. Use another image provider until these recipes are verified with the new runtime.`,
     );
   }
   const memoryBudgetBytes = resolveLlamaCppMemoryBudget(hardware, "cpu");
@@ -179,8 +179,8 @@ export function recommendLlamaCppMedia(
   const { modelDiskBudget, runtimeDiskBytes } = disk;
   const [ocr, vision] = LLAMA_CPP_MEDIA_RECIPES;
   const modelDiskBytes = [ocr.model, ocr.projector, vision.model, vision.projector].reduce(
-    (bytes, artifact) =>
-      bytes + (cached.artifactSha256?.has(artifact.expectedSha256) ? 0 : artifact.expectedSize),
+    (bytes, item) =>
+      bytes + (cached.artifactSha256?.has(item.expectedSha256) ? 0 : item.expectedSize),
     0,
   );
   if (modelDiskBytes > modelDiskBudget) {

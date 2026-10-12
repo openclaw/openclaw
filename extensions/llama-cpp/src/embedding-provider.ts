@@ -19,11 +19,13 @@ import {
 } from "./defaults.js";
 import { resolveManagedLlamaCppProviderConfig } from "./managed-provider-config.js";
 import {
-  ensureLlamaCppModel,
   inspectLlamaServerRuntime,
+  type LlamaServerRuntimeFacts,
+} from "./managed-server-inspection.js";
+import {
+  ensureLlamaCppModel,
   prepareManagedLlamaServer,
   reconcileManagedLlamaServer as reconcileLocalService,
-  type LlamaServerRuntimeFacts,
 } from "./managed-server.js";
 import { resolveLlamaCppMediaModels } from "./media-config.js";
 

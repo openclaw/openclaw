@@ -56,6 +56,10 @@ vi.mock("./src/managed-server.js", async (importOriginal) => ({
   ensureManagedLlamaServerForChat: mocks.ensureChat,
   prepareManagedLlamaServer: mocks.prepareServer,
   reconcileManagedLlamaServer: mocks.reconcileServer,
+}));
+
+vi.mock("./src/managed-server-inspection.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./src/managed-server-inspection.js")>()),
   inspectLlamaServerRuntime: mocks.inspectRuntime,
 }));
 
