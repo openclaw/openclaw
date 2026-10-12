@@ -3596,7 +3596,11 @@ Cold bootstrap retains its existing owner. Schemas, stored formats, and update
 behavior are unchanged.
 
 Memory dreaming and backfill retain the selected physical corpus file across
-filesystem discovery in the existing history reader. Their final ingestion-policy
+filesystem discovery in the existing history reader. Read scopes that explicitly
+capture a physical source recheck its retained identity after asynchronous
+preparation and before disclosure or writable admission. Deleted or replaced files
+are refused without repeating schema or integrity validation; ordinary admission
+lookups continue to reuse their retained facts. Their final ingestion-policy
 decision remains a synchronous, bounded batch of exact source metadata after the
 existing corpus and tombstone preparation. Forgotten sources and disabled policies
 require no metadata read. Raw synchronous SDK writers do not
