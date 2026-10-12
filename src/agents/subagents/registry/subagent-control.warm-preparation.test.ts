@@ -71,7 +71,10 @@ it.for(["unrelated", "same session"] as const)(
       const cfg = getRuntimeConfig();
       const writerKey = writerTarget === "unrelated" ? peerKey : childKey;
       const writerSessionId = writerTarget === "unrelated" ? peerId : childId;
-      initial = await prepareSubagentKillSession(cfg, childKey, () => {});
+      initial = await prepareSubagentKillSession(cfg, childKey, () => {}, undefined, "main", {
+        sessionId: childId,
+        lifecycleRevision: revision,
+      });
       execution = executionOwner.captureOpenClawAgentDatabaseExecution({
         agentId: "main",
         env: process.env,
@@ -205,7 +208,17 @@ it.for(["unrelated", "same session"] as const)(
         generationFacts.assertCurrent();
       }
       preparation = operationScope.run("preparation", () =>
-        prepareSubagentKillSession(cfg, childKey, () => nativeClaim.assertCurrent()),
+        prepareSubagentKillSession(
+          cfg,
+          childKey,
+          () => nativeClaim.assertCurrent(),
+          undefined,
+          "main",
+          {
+            sessionId: childId,
+            lifecycleRevision: revision,
+          },
+        ),
       );
       if (writerTarget === "same session") {
         await withinTest(

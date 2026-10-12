@@ -33,6 +33,7 @@ export function registerAdmissionDrainControlTests({
     let entry = createSubagentRunRecord({
       runId: "run-kill-admission-timeout",
       childSessionKey,
+      childSessionIdentity: { sessionId, lifecycleRevision: `${sessionId}-revision` },
       controllerSessionKey,
       requesterSessionKey: controllerSessionKey,
       task: "hold admission during kill",

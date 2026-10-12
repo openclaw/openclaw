@@ -522,6 +522,7 @@ export async function maybeSpawnVisibleSession(params: {
       throw error;
     }
     const childSessionKey = response.key?.trim();
+    const sessionId = response.sessionId?.trim();
     const cloudGatewayCall: InProcessGatewayCaller = (method, request, options) =>
       gatewayCall(method, request, { ...options, resolveGatewayContext });
     const cleanupGateway = resolveGatewayContext
@@ -546,13 +547,13 @@ export async function maybeSpawnVisibleSession(params: {
           }),
         cleanupGateway,
       );
-    if (placement && childSessionKey && response.sessionId) {
+    if (placement && childSessionKey && sessionId) {
       response = {
         ...response,
         ...(await startVisibleCloudSession({
           cfg,
           key: childSessionKey,
-          sessionId: response.sessionId,
+          sessionId,
           profileId: placement.profileId,
           os: placement.os,
           machineClass: placement.machineClass,
@@ -591,6 +592,7 @@ export async function maybeSpawnVisibleSession(params: {
       };
     }
     const runId = response.runId?.trim();
+    const lifecycleRevision = response.entry?.lifecycleRevision;
     const runError = response.runError
       ? summarizeVisibleSessionSpawnError(response.runError)
       : "Visible session run failed";
@@ -604,14 +606,14 @@ export async function maybeSpawnVisibleSession(params: {
       cleanupVisibleSpawnSession({
         callGateway: gatewayCall,
         childSessionKey,
-        expectedSessionId: response.sessionId,
-        expectedLifecycleRevision: response.entry?.lifecycleRevision,
+        expectedSessionId: sessionId,
+        expectedLifecycleRevision: lifecycleRevision,
       });
     if (placement && (response.runStarted !== true || !runId)) {
       return {
         status: "error",
         childSessionKey,
-        sessionId: response.sessionId,
+        sessionId,
         ...(runId ? { runId } : {}),
         initialTaskStatus: response.initialTaskStatus ?? "not-sent",
         ...(response.placement ? { placement: response.placement } : {}),
@@ -625,6 +627,15 @@ export async function maybeSpawnVisibleSession(params: {
         childSessionKey,
       };
     }
+    if (!sessionId) {
+      return {
+        status: "error",
+        childSessionKey,
+        runId,
+        error:
+          "Visible run cannot be registered because sessions.create did not return its sessionId. Child kept; inspect this child session and run before retrying. Do not spawn a replacement.",
+      };
+    }
     try {
       if (placement) {
         params.options?.assertActive?.();
@@ -634,6 +645,8 @@ export async function maybeSpawnVisibleSession(params: {
           runId,
           requesterTurnRunId: params.options?.requesterTurnRunId,
           childSessionKey,
+          childAgentId: targetAgentId,
+          sessionEntry: { sessionId, lifecycleRevision },
           controllerSessionKey: ownership.controllerSessionKey,
           requesterSessionKey: ownership.completionRequesterSessionKey,
           completionRequesterSessionId,
@@ -650,7 +663,6 @@ export async function maybeSpawnVisibleSession(params: {
           requesterDisplayKey: ownership.completionRequesterDisplayKey,
           task: params.task,
           taskName: params.taskName,
-          agentId: targetAgentId,
           requesterAgentId,
           cleanup: "keep",
           label: params.label || undefined,
