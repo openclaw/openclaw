@@ -128,9 +128,6 @@ describe("SQLite worker slots", () => {
     expect(cold.worker).not.toBe(ephemeral.worker);
     expect(cold.pendingOpens).toBe(1);
     expect(slots.size).toBe(1);
-    await expect(
-      lifecycle.acquireSlot(opening, source.moduleUrl, { maxWorkers: 1, maxStores: 1 }, replyOwner),
-    ).rejects.toMatchObject({ code: "closed" });
     await prepared.release();
     expect(slots.has(cold)).toBe(true);
     await expect(
@@ -139,16 +136,11 @@ describe("SQLite worker slots", () => {
   });
 
   it.each(
-    [
-      "before-close",
-      "second-close",
-      "failed-close",
-      "wrong-generation",
-      "wrong-module",
-      "wrong-carrier",
-    ].flatMap((failure) => [false, true].map((preempted) => ({ failure, preempted }))),
+    ["failed-close", "wrong-generation", "wrong-module", "wrong-carrier"].flatMap((failure) =>
+      [false, true].map((preempted) => ({ failure, preempted })),
+    ),
   )(
-    "refuses and retires $failure prepared runtime custody (preempted: $preempted)",
+    "opens cold after $failure preparation (preempted: $preempted)",
     async ({ failure, preempted }) => {
       const { lifecycle, close, slots, workers, options, source, replyOwner } = runtimeFixture();
       const prepared = lifecycle.prepareRuntime(source, 1, replyOwner);
@@ -166,10 +158,7 @@ describe("SQLite worker slots", () => {
       }
       if (failure === "failed-close") {
         await expect(close(false)).rejects.toThrow("SQLite worker host cleanup failed");
-      } else if (failure !== "before-close") {
-        await close();
-      }
-      if (failure === "second-close") {
+      } else {
         await close();
       }
       const opening = {
@@ -180,20 +169,23 @@ describe("SQLite worker slots", () => {
           : {}),
         ...(failure === "wrong-carrier" ? { carrierUrl: new URL("file:///other-carrier.js") } : {}),
       };
-      await expect(
-        lifecycle.acquireSlot(
-          opening,
-          failure === "wrong-module" ? "file:///other.js" : source.moduleUrl,
-          { maxWorkers: 1, maxStores: 1 },
-          replyOwner,
-        ),
-      ).rejects.toMatchObject({ code: "closed" });
-      expect(slots.size).toBe(0);
+      const cold = await lifecycle.acquireSlot(
+        opening,
+        failure === "wrong-module" ? "file:///other.js" : source.moduleUrl,
+        { maxWorkers: 1, maxStores: 1 },
+        replyOwner,
+      );
+      expect(cold.worker).not.toBe(workers[0]);
+      expect(cold.pendingOpens).toBe(1);
       expect(workers[0]?.terminate).toHaveBeenCalledOnce();
+      await expect(
+        lifecycle.rejectSlotAdmission(cold, new Error("fixture open finished")),
+      ).rejects.toThrow("fixture open finished");
+      expect(slots.size).toBe(0);
     },
   );
 
-  it("consumes captured preparation once without transferring another broker's custody", async () => {
+  it("does not transfer another broker's prepared worker", async () => {
     const { lifecycle, close, slots, options, source, replyOwner } = runtimeFixture();
     const prepared = lifecycle.prepareRuntime(source, 1, replyOwner);
     assert(prepared);
@@ -209,9 +201,15 @@ describe("SQLite worker slots", () => {
       undefined,
       { runtimePreparation: prepared },
     );
+    const cold = await foreign.acquireSlot(
+      opening,
+      source.moduleUrl,
+      { maxWorkers: 1, maxStores: 1 },
+      replyOwner,
+    );
     await expect(
-      foreign.acquireSlot(opening, source.moduleUrl, { maxWorkers: 1, maxStores: 1 }, replyOwner),
-    ).rejects.toMatchObject({ code: "closed" });
+      foreign.rejectSlotAdmission(cold, new Error("fixture open finished")),
+    ).rejects.toThrow("fixture open finished");
     const adopted = await lifecycle.acquireSlot(
       opening,
       source.moduleUrl,
@@ -219,9 +217,6 @@ describe("SQLite worker slots", () => {
       replyOwner,
     );
     expect(adopted.pendingOpens).toBe(1);
-    await expect(
-      lifecycle.acquireSlot(opening, source.moduleUrl, { maxWorkers: 1, maxStores: 1 }, replyOwner),
-    ).rejects.toMatchObject({ code: "closed" });
     await prepared.release();
     expect(slots.has(adopted)).toBe(true);
     await expect(
@@ -291,6 +286,7 @@ describe("SQLite worker slots", () => {
           ...options,
           signal: cancel.signal,
           ...(kind === "capacity-preemption" ? {} : { runtimePreparation: prepared }),
+          ...(kind === "invalid-preparation" ? { carrierUrl: new URL("file:///other.js") } : {}),
         },
         source.moduleUrl,
         limits,

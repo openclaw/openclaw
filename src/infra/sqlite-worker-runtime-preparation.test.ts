@@ -128,18 +128,6 @@ export function createSqliteWorkerBackend(input, context) {
       expect(await successor.execute({ type: "read", input: undefined })).toEqual(
         ordinaryWins ? ["ordinary", "after"] : ["after"],
       );
-      await expect(
-        broker.open(options, undefined, undefined, { runtimePreparation: prepared }),
-      ).rejects.toMatchObject({ code: "closed" });
-      await expect(
-        broker.open(
-          { ...options, databasePath: path.join(directory, "reused.sqlite") },
-          undefined,
-          undefined,
-          { runtimePreparation: prepared },
-        ),
-      ).rejects.toMatchObject({ code: "closed" });
-      expect(existsSync(path.join(directory, "reused.sqlite"))).toBe(false);
     } finally {
       channel.close();
       try {
@@ -152,7 +140,7 @@ export function createSqliteWorkerBackend(input, context) {
   },
 );
 
-it("refuses a failed preload instead of treating it as capacity preemption", async () => {
+it("reports a module load failure through ordinary admission after a failed preload", async () => {
   const directory = tempDirs.make("sqlite-runtime-preload-failure-");
   const moduleUrl = pathToFileURL(path.join(directory, "backend.mjs"));
   const databasePath = path.join(directory, "must-not-open.sqlite");
@@ -178,7 +166,7 @@ it("refuses a failed preload instead of treating it as capacity preemption", asy
       broker.open({ moduleUrl, databasePath, input: undefined }, undefined, undefined, {
         runtimePreparation: prepared,
       }),
-    ).rejects.toMatchObject({ code: "closed" });
+    ).rejects.toThrow("Fixture runtime import refused");
     expect(existsSync(databasePath)).toBe(false);
   } finally {
     try {
