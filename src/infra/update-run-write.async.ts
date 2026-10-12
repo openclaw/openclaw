@@ -136,7 +136,7 @@ export async function createUpdateRunAsync(
   const run = { ...input, runId: input.runId ?? randomUUID() };
   const record = await recordUpdateRunMutationAsync(
     run.runId,
-    (input) => ({ type: "updateRuns.create", input: { ...input, run } }),
+    (mutation) => ({ type: "updateRuns.create", input: { ...mutation, run } }),
     options,
   );
   if (!record) {

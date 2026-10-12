@@ -106,6 +106,8 @@ function captureSqliteSchemaFacts(
             facts.triggers.set(row.name, { table: row.tbl_name, sql });
           }
           break;
+        default:
+          break;
       }
     }
     return facts;

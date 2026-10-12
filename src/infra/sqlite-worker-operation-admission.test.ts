@@ -557,10 +557,13 @@ it.each(["settlement", "malformed"] as const)(
       if (delivery === "settlement") {
         settleSqliteWorkerOperationContext(owner, "completed");
       } else {
-        admission.port.postMessage({
-          kind: "native-commit",
-          committed: null,
-        });
+        admission.port.postMessage(
+          {
+            kind: "native-commit",
+            committed: null,
+          },
+          [],
+        );
       }
       admission.finish();
       expect(admission.committed).toEqual({ facts: { value: 2 } });
