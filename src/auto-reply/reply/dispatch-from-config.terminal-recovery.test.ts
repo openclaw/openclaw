@@ -25,6 +25,18 @@ import {
 } from "./reply-operation-run-state.js";
 import { buildTestCtx } from "./test-ctx.js";
 
+const { dispatchErrorLog } = vi.hoisted(() => ({ dispatchErrorLog: vi.fn() }));
+vi.mock("../../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (...args: Parameters<typeof actual.createSubsystemLogger>) => {
+      const logger = actual.createSubsystemLogger(...args);
+      return args[0] === "auto-reply/dispatch" ? { ...logger, error: dispatchErrorLog } : logger;
+    },
+  };
+});
+
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
 let createReplyOperation: typeof import("./reply-run-registry.js").createReplyOperation;
 let replyRunRegistry: typeof import("./reply-run-registry.js").replyRunRegistry;
@@ -66,6 +78,7 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
   });
 
   beforeEach(() => {
+    dispatchErrorLog.mockClear();
     replyRunTesting.resetReplyRunRegistry();
     resetInboundDedupe();
     resetPluginTtsAndThreadMocks();
@@ -285,6 +298,10 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
         });
       }
       expect(JSON.stringify(delivered)).not.toContain(resolverError.message);
+      expect(dispatchErrorLog).toHaveBeenCalledWith(
+        "reply failed after turn start",
+        expect.objectContaining({ sessionKey, error: resolverError.message }),
+      );
       expect(operation?.result).toEqual({
         kind: "failed",
         code: "run_failed",

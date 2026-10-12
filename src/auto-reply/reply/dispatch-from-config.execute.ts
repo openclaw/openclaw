@@ -8,6 +8,7 @@ import { settleProgressVisibilityCallbackResult } from "../../channels/progress-
 import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { cleanDeferredFinalText } from "../../tts/captioned-final.js";
 import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
 import {
@@ -31,6 +32,8 @@ import type { PendingContinuationSettlement } from "./get-reply.types.js";
 import { bindPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import { REPLY_OPERATION_RUN_STATE } from "./reply-operation-run-state.js";
+
+const log = createSubsystemLogger("auto-reply/dispatch");
 
 export async function executeDispatch(state: PrepareDispatchExecutionReadyState) {
   const {
@@ -479,6 +482,11 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     ) {
       throw error;
     }
+    // The reply below hides the cause.
+    log.error("reply failed after turn start", {
+      sessionKey: state.sessionKey,
+      error: formatErrorMessage(error),
+    });
     failDispatchReplyOperation(error, "failed");
     if (!didDeliverVisiblePartialReply) {
       // Adoption retires ingress replay before the model starts. A progress ACK
