@@ -225,6 +225,7 @@ async function promptFoundryApi(
 
 type ManualFoundryModelFamilyChoice = "claude" | "reasoning-family" | "mai-image" | "other-chat";
 type ManualFoundryMaiImageModel =
+  | "MAI-Image-2.6"
   | "MAI-Image-2.5-Flash"
   | "MAI-Image-2.5"
   | "MAI-Image-2e"
@@ -269,14 +270,19 @@ async function promptFoundryMaiImageModel(
     message: "MAI image base model",
     options: [
       {
+        value: "MAI-Image-2.6",
+        label: "MAI-Image-2.6",
+        hint: "Latest MAI image deployment",
+      },
+      {
         value: "MAI-Image-2.5-Flash",
         label: "MAI-Image-2.5-Flash",
-        hint: "Latest fast MAI image deployment",
+        hint: "Fast MAI image deployment",
       },
       {
         value: "MAI-Image-2.5",
         label: "MAI-Image-2.5",
-        hint: "Latest MAI image deployment",
+        hint: "MAI image deployment",
       },
       {
         value: "MAI-Image-2e",

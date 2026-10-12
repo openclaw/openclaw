@@ -340,6 +340,23 @@ describe("microsoft foundry image generation provider", () => {
     expect(result.images[0]?.buffer.toString()).toBe("edited");
   });
 
+  it("routes MAI-Image-2.6 edits to the MAI edit endpoint", async () => {
+    postMultipartRequestMock.mockResolvedValue(
+      imageResponse(Buffer.from("edited").toString("base64")),
+    );
+
+    await generateImage({
+      model: "MAI-Image-2.6",
+      prompt: "make it brighter",
+      cfg: buildConfig({ includeModel: false }),
+      inputImages: [{ buffer: Buffer.from("input"), mimeType: "image/png" }],
+    });
+
+    expect(requirePostMultipartRequest().url).toBe(
+      "https://example.services.ai.azure.com/mai/v1/images/edits",
+    );
+  });
+
   it("rejects image edits for MAI text-to-image-only deployments", async () => {
     await expect(
       generateImage({
@@ -415,7 +432,7 @@ describe("microsoft foundry image generation provider", () => {
         cfg: buildConfig({ includeModel: false }),
         inputImages: [{ buffer: Buffer.from("input"), mimeType: "image/png" }],
       }),
-    ).rejects.toThrow("edits require MAI-Image-2.5 model metadata");
+    ).rejects.toThrow("edits require MAI-Image-2.5 or MAI-Image-2.6 model metadata");
     expect(resolveApiKeyForProviderMock).not.toHaveBeenCalled();
     expect(postMultipartRequestMock).not.toHaveBeenCalled();
   });

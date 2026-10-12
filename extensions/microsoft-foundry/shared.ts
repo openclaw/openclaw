@@ -147,6 +147,7 @@ export function isFoundryMaiImageModel(value?: string | null): boolean {
     return false;
   }
   return (
+    normalized === "mai-image-2.6" ||
     normalized === "mai-image-2.5-flash" ||
     normalized === "mai-image-2.5" ||
     normalized === "mai-image-2e" ||
