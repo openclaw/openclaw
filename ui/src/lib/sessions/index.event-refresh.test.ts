@@ -314,7 +314,7 @@ describe("event-driven session list refresh", () => {
     firstList.resolve(sessionsResult([], 1));
     await secondListStarted.promise;
     expect(request.mock.calls[1]?.[1]).toEqual({
-      rowMode: "compact",
+      rowMode: "sidebar",
       source: "sidebar",
       excludeDock: true,
       includeGlobal: true,

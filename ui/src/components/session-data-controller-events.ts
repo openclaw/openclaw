@@ -117,7 +117,7 @@ export function sidebarSessionListQuery(owner: SidebarSessionQueryOwner, agentId
     agentId,
     archivedFilter: owner.sidebarSessionStatusFilter(),
     limit: SIDEBAR_SESSION_ROSTER_LIMIT,
-    rowMode: "compact",
+    rowMode: "sidebar",
     includeDerivedTitles: true,
     includeLastMessage: true,
   } as const;

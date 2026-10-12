@@ -487,6 +487,7 @@ export function prepareSessionRefreshOptions(
   // must inherit the UI default in both the request and its query identity.
   const prepared = {
     ...options,
+    rowMode: options.rowMode ?? "sidebar",
     source: options.source ?? "sidebar",
     excludeDock: options.excludeDock ?? true,
     includeDerivedTitles: options.includeDerivedTitles ?? true,

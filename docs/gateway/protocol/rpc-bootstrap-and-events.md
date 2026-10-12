@@ -32,7 +32,16 @@ or the full `chat.history.sessionInfo` for details. Omitting `rowMode` preserves
 the full row contract. Title, preview, and Activity recap enrichment remain
 controlled by their existing include flags.
 
-Control UI list requests use compact rows and a bounded diagnostic `source`:
+The sidebar requests `rowMode: "sidebar"` to retain navigation, identity, unread,
+run, placement, and membership facts while omitting execution settings and usage.
+Repeated display objects are sent once in the response's `sharedFacts` array.
+A row's optional `sharedFacts` contains indexes into that response-local array;
+merge those partial objects into the row before reconciling it with cached state.
+The row's own fields take precedence. Fields outside the sidebar projection are
+unrequested, not deletion receipts, just as with compact rows. Other clients can
+continue requesting compact or full rows without decoding shared facts.
+
+Control UI list requests use a bounded diagnostic `source`:
 `sidebar`, `dashboard`, `activity`, `sessions-page`, `chat-pane`, `agent-roster`,
 `command-palette`, or `skill-workshop`.
 The source does not change selection or access. List and event rows include

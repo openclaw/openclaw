@@ -5,6 +5,7 @@ import type {
   SessionsPatchManyParams,
   SessionsPatchManyResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { expandSessionRowFacts } from "../../../../packages/gateway-protocol/src/session-row-fields.js";
 import { SESSION_ARCHIVE_REQUEST_OPTIONS } from "../../../../src/shared/session-archive-timeout.ts";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.ts";
 import type { SessionsListResult, SessionsPatchResult } from "../../api/types.ts";
@@ -178,8 +179,16 @@ export async function requestSessionListParams(
   isCurrent: () => boolean,
 ): Promise<SessionsListResult | null> {
   const { pageSize, ...params } = query;
+  const read = async (request: SessionsListParams) => {
+    const result = await client.request<SessionsListResult | undefined>("sessions.list", request);
+    if (!result?.sharedFacts) {
+      return result ?? null;
+    }
+    const { sharedFacts, ...list } = result;
+    return { ...list, sessions: expandSessionRowFacts(list.sessions, sharedFacts) };
+  };
   if (!pageSize || !params.limit || params.limit <= pageSize) {
-    return (await client.request<SessionsListResult | undefined>("sessions.list", params)) ?? null;
+    return read(params);
   }
   // The Gateway enriches only a bounded prefix per response. Page the requested
   // window here so initial loads and retained-window refreshes keep the same fields.
@@ -189,7 +198,7 @@ export async function requestSessionListParams(
     if (!isCurrent()) {
       return null;
     }
-    const page = await client.request<SessionsListResult | undefined>("sessions.list", {
+    const page = await read({
       ...params,
       limit: Math.min(remaining, pageSize),
       ...(offset > 0 ? { offset } : {}),

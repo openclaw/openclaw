@@ -81,6 +81,8 @@ export type SessionsListResultBase<TDefaults, TRow> = {
   /** Canonical profile selected by the person-association filter. */
   involvingProfileId?: string;
   defaults: TDefaults;
+  /** Response-local display facts referenced by sidebar rows. */
+  sharedFacts?: Partial<TRow>[];
   sessions: TRow[];
 };
 
