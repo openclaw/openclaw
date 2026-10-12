@@ -349,6 +349,56 @@ describe("sessions.files RPC handlers", () => {
     expect(preview.file.content).toBe("# Notes\n");
   });
 
+  it.each([
+    { cwd: "", prefix: "" },
+    { cwd: "ui", prefix: "../" },
+  ])("omits existing directories from file activity with cwd '$cwd'", async ({ cwd, prefix }) => {
+    writeWorkspaceFile(workspaceRoot, ".cache/note.txt", "cached note\n");
+    fs.symlinkSync(
+      outsideDirs.make("session-files-directory-"),
+      path.join(workspaceRoot, "cache-link"),
+      "dir",
+    );
+    mockSession({
+      sessionId: "sess-directories",
+      spawnedCwd: path.join(workspaceRoot, cwd),
+      spawnedWorkspaceDir: workspaceRoot,
+    });
+    mockVisibleMessages(
+      [
+        prefix || ".",
+        `${prefix}.cache`,
+        `${prefix}ui`,
+        path.join(workspaceRoot, "src"),
+        `${prefix}src/readme.md`,
+        `${prefix}missing.txt`,
+        `${prefix}cache-link`,
+      ].map((filePath) => assistantToolCall("read", { path: filePath })),
+    );
+
+    const payload = expectOkPayload(await listFiles());
+
+    expect(payload.files).toEqual([
+      expect.objectContaining({ path: `${prefix}cache-link`, kind: "read", missing: true }),
+      expect.objectContaining({ path: `${prefix}missing.txt`, kind: "read", missing: true }),
+      expect.objectContaining({ path: `${prefix}src/readme.md`, kind: "read", missing: false }),
+    ]);
+    expect(payload.browser.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: ".cache", kind: "directory" }),
+        expect.objectContaining({ path: "src", kind: "directory" }),
+        expect.objectContaining({ path: "ui", kind: "directory" }),
+      ]),
+    );
+    expect(expectOkPayload(await listFiles({ path: ".cache" })).browser).toMatchObject({
+      path: ".cache",
+      entries: [{ path: ".cache/note.txt", kind: "file" }],
+    });
+    expect(expectError(await getFile(`${prefix}.cache`)).details.type).toBe(
+      "session_file_not_found",
+    );
+  });
+
   it("browses, searches, and previews files not referenced by the session", async () => {
     const folderPayload = expectOkPayload(await listFiles({ path: "ui" }));
 
