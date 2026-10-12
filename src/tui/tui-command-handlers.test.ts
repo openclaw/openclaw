@@ -885,18 +885,7 @@ describe("tui command handlers", () => {
     message?: string;
     result?: object;
   }>([
-    {
-      command: "/fast on",
-      params: { currentSessionKey: "global", currentAgentId: "work" },
-      patch: { key: "global", agentId: "work", fastMode: true },
-      result: { fastMode: true },
-    },
     { command: "/think default", patch: { key: "agent:main:main", thinkingLevel: null } },
-    {
-      command: "/fast default",
-      params: { opts: { local: true } },
-      patch: { key: "agent:main:main", fastMode: null },
-    },
     {
       command: "/think high",
       params: {
@@ -934,17 +923,6 @@ describe("tui command handlers", () => {
       message: "activation set to always",
     },
     {
-      command: "/fast auto",
-      patch: { key: "agent:main:main", fastMode: "auto" },
-      result: { fastMode: "auto" },
-      message: "fast mode set to auto",
-    },
-    {
-      command: "/fast ultrafast",
-      patch: { key: "agent:main:main", fastMode: "ultrafast" },
-      message: "fast mode set to ultrafast",
-    },
-    {
       command: "/model kimi",
       patch: { key: "agent:main:main", model: "kimi" },
       result: { entry: {}, resolved: { modelProvider: "nvidia", model: "moonshotai/kimi-k2.5" } },
@@ -975,11 +953,6 @@ describe("tui command handlers", () => {
       }
       if (command === "/verbose off") {
         expect(h.clearTools).toHaveBeenCalledOnce();
-      }
-      if (command === "/fast auto") {
-        h.state.sessionInfo.fastMode = "auto";
-        await h.handleCommand("/fast status");
-        expect(h.addSystem).toHaveBeenCalledWith("fast mode: auto");
       }
     },
   );
