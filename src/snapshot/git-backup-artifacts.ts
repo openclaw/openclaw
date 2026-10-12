@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { hasErrnoCode } from "../infra/errno.js";
+import { hasNodeErrorCode } from "@openclaw/fs-safe/path";
 import {
   executeGitCommand as runGit,
   normalizeGitPathForFilesystem,
@@ -41,7 +41,7 @@ async function lstatIfPresent(file: string) {
   try {
     return await fs.lstat(file);
   } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
+    if (hasNodeErrorCode(error, "ENOENT")) {
       return undefined;
     }
     throw error;
@@ -261,7 +261,7 @@ export async function applyScopeUpdate(
   if (update.files.length === 0) {
     for (const directory of [path.join(scopePath, GIT_BACKUP_TABLES), scopePath]) {
       await fs.rmdir(directory).catch((error: unknown) => {
-        if (!["ENOENT", "ENOTEMPTY", "EEXIST"].some((code) => hasErrnoCode(error, code))) {
+        if (!["ENOENT", "ENOTEMPTY", "EEXIST"].some((code) => hasNodeErrorCode(error, code))) {
           throw error;
         }
       });
