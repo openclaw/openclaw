@@ -254,4 +254,41 @@ describe("fetchCopilotUsage", () => {
     expect(canceled).toBe(true);
     expect(bytesPulled).toBeLessThan(TOTAL_CHUNKS * ONE_MIB);
   });
+
+  it.each([
+    ["invalid JSON", "{"],
+    ["invalid UTF-8", new Uint8Array([0xff])],
+  ])("returns a stable error snapshot for %s in a successful response", async (_label, body) => {
+    const mockFetch = createProviderUsageFetch(
+      async () =>
+        new Response(body, {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+
+    await expect(fetchCopilotUsage("token", 5000, mockFetch)).resolves.toEqual({
+      provider: "github-copilot",
+      displayName: "Copilot",
+      windows: [],
+      error: "Copilot returned unreadable usage data. Try refreshing usage later.",
+    });
+  });
+
+  it("preserves response body transport failures", async () => {
+    const failure = new TypeError("fixture connection closed");
+    const mockFetch = createProviderUsageFetch(
+      async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.error(failure);
+            },
+          }),
+          { status: 200 },
+        ),
+    );
+
+    await expect(fetchCopilotUsage("token", 5000, mockFetch)).rejects.toBe(failure);
+  });
 });
