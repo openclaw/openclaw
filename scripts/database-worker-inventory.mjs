@@ -2363,6 +2363,7 @@ const workerModules = new Set([
   "src/gateway/managed-image-record-store.kernel.ts", // Shared-state worker dispatch only; host exports are row codecs.
   "src/gateway/operator-approval-store.receipts.ts", // Audit read worker alone reaches receipt readers through the approval-store barrel.
   "src/gateway/session-group-registration.kernel.ts", // Session-group registration runs through shared-state worker dispatch.
+  "src/gateway/cli-session-history-index.coverage.ts", // Only cli-session-history-index.worker.ts:383,632 calls these reads. That index runs from session-history-worker-reader.ts and readProcessHeldCliHistoryInWorker, both dispatched by session-transcript.worker.ts.
   "src/gateway/session-history-worker-reader.ts", // Only session-transcript.worker.ts dispatches history metadata reads.
 
   "src/gateway/worker-environments/inference-store.kernel.ts", // Inference worker dispatcher creates this kernel only.
