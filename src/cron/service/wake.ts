@@ -5,6 +5,7 @@ import { isSubagentSessionKey, normalizeOptionalAgentId } from "../../routing/se
 import { isCronJobActive } from "../active-jobs.js";
 import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "../agent-id.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
+import type { CronServiceContract } from "../service-contract.js";
 import type { CronJob } from "../types.js";
 import {
   computeJobNextRunAtMs,
@@ -124,7 +125,7 @@ export async function wake(
     /** The agent that owns the targeted conversation, independent of the ambient default. */
     agentId?: string;
   },
-) {
+): ReturnType<CronServiceContract["wake"]> {
   opts.commitGuard?.();
   const text = opts.text.trim();
   if (!text) {
