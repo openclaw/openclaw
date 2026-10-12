@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { createSessionPlacementSettlementClosedAbortError } from "../../agents/run-termination.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
-import type { LocalTurnPlacementClaim } from "../../agents/session-placement-admission.types.js";
+import type {
+  LocalTurnPlacementClaim,
+  RequiredSessionPlacementAdmission,
+} from "../../agents/session-placement-admission.types.js";
 import { withSessionPlacementForcedTerminalSettlement } from "../../agents/session-placement-forced-terminal-settlement.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { getRuntimeConfig } from "../../config/config.js";
@@ -32,7 +35,7 @@ import {
 } from "./placement-target.js";
 import { ActiveTurnClaimError } from "./placement-turn-claims.js";
 import type { WorkerRuntimeRefreshInFlight } from "./provider-runtime-refresh.js";
-import type { WorkerTurnLauncherOptions } from "./worker-turn-launcher.types.js";
+import type { WorkerEnvironmentService } from "./service.js";
 import { captureWorkerTurnTranscriptSource } from "./worker-turn-transcript-target.js";
 import {
   projectWorkspaceResultConflict,
@@ -43,8 +46,21 @@ import {
 
 type ActiveWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "active" }>;
 
+export type WorkerTurnAdmissionOptions = {
+  environments: Pick<WorkerEnvironmentService, "get">;
+  placements: WorkerSessionPlacementStore;
+  reconcileActivePlacement: (environmentId: string) => Promise<void>;
+  isInterruptedTurn?: (placement: WorkerSessionPlacementRecord) => boolean;
+  waitForAdmissionNode: (params: {
+    placement: ActiveWorkerPlacement;
+    signal: AbortSignal;
+    assertCurrent: () => void;
+  }) => Promise<void>;
+  withRequiredSession?: RequiredSessionPlacementAdmission;
+};
+
 /** Required policy uses current placement facts at the existing turn-admission boundary. */
-export function createRequiredWorkerTurnAdmission(options: WorkerTurnLauncherOptions) {
+export function createRequiredWorkerTurnAdmission(options: WorkerTurnAdmissionOptions) {
   return {
     async recoverInterruptedTurn(
       placement: WorkerSessionPlacementRecord,
