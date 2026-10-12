@@ -53,7 +53,7 @@ type ChatContextWindowTarget = Pick<
   "contextWindow" | "contextWindows" | "contextWindowDefault"
 >;
 
-export type ChatModelControlsProps = {
+type ChatModelControlsProps = {
   modelAuthStatusResult?: ModelAuthStatusResult | null;
   accountSelection?: ChatAccountSelection | null;
   renderAccountSection?: (model: string) => ChatModelAccountSection | undefined;
@@ -647,7 +647,7 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
   });
 }
 
-export function ChatModelControls(props: ChatModelControlsProps) {
+function ChatModelControls(props: ChatModelControlsProps) {
   const controls = createChatModelControls(props);
   return (
     <div class="chat-controls__session chat-controls__model chat-controls__model-settings">

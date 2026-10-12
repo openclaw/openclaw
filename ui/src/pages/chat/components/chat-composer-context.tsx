@@ -406,16 +406,3 @@ export function ContextNotice(props: ContextNoticeProps) {
     </Show>
   );
 }
-
-export function renderContextNoticeSolid(
-  session: GatewaySessionRow | undefined,
-  options: ContextNoticeOptions = {},
-) {
-  return (
-    <ContextNotice
-      session={session}
-      messages={options.messages}
-      providerUsage={options.providerUsage}
-    />
-  );
-}

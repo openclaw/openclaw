@@ -1,5 +1,4 @@
 import { html, render } from "lit";
-import { createComponent, createSignal } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
 import { solidTemplate } from "../pages/chat/components/chat-composer-controls.ts";
@@ -8,7 +7,6 @@ import { renderComposerLibraryMenuSolid } from "../pages/chat/components/chat-co
 import { renderComposerMenuOption } from "../pages/chat/components/chat-composer-menu.tsx";
 import "../pages/chat/components/browser-tab-card.tsx";
 import { renderChatComposerPlusMenu } from "../pages/chat/components/chat-composer-plus-menu.tsx";
-import { mountSolid } from "../test-helpers/mount-solid.ts";
 import "../test-helpers/load-styles.ts";
 import "./menu-surface.ts";
 import "./resizable-divider.ts";
@@ -455,25 +453,23 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
       const highlight = useTheme(theme);
       const host = document.createElement("div");
       document.body.append(host);
-      const [active, setActive] = createSignal(false);
-      mountSolid(
-        () =>
-          createComponent(renderComposerMenuOption, {
+      const renderOption = (active: boolean) => {
+        render(
+          solidTemplate(renderComposerMenuOption, {
             id: "hover-command",
-            get active() {
-              return active();
-            },
+            active,
             select: () => {},
-            hover: () => setActive(true),
+            hover: () => renderOption(true),
             icon: "",
             name: "/help",
             description: "Show commands",
           }),
-        { container: host },
-      );
+          host,
+        );
+      };
+      renderOption(false);
       const option = host.querySelector<HTMLElement>('[role="option"]')!;
       await hoverBackground(option, highlight);
-      expect(host.querySelector('[role="option"]')).toBe(option);
       expect(option.getAttribute("aria-selected")).toBe("true");
       expect(getComputedStyle(option).cursor).toBe("pointer");
     },

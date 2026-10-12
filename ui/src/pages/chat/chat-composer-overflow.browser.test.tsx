@@ -1,5 +1,5 @@
 import { html, nothing, render } from "lit";
-import { createSignal, For } from "solid-js";
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page, server, userEvent } from "vitest/browser";
 import "@awesome.me/webawesome/dist/styles/themes/default.css";
@@ -689,9 +689,9 @@ describe("composer overflow presentation", () => {
         goal: ".agent-chat__goal-detail-objective",
       }[kind];
       const [currentGoal, setGoal] = createSignal(goal, { equals: false });
-      const [menuSize, setMenuSize] = createSignal(1);
       let goalView: ReturnType<typeof mountSolid> | undefined;
       let menuView: ReturnType<typeof mountSolid> | undefined;
+      const [menuExpanded, setMenuExpanded] = createSignal(false);
       const draw = (expanded: boolean) => {
         goal.objective = expanded ? "Fixture objective\n".repeat(30) : "Short objective";
         if (kind === "goal") {
@@ -708,18 +708,15 @@ describe("composer overflow presentation", () => {
         if (kind === "menu") {
           menuView ??= mountSolid(
             () => (
-              <ComposerMenu id="overflow-menu" label="Fixture results" revision={menuSize()}>
-                <For
-                  each={Array.from({ length: menuSize() }, (_, index) => index)}
-                  keyed={(index) => index}
-                >
-                  {(index) => <div style={{ height: "40px" }}>Result {index()}</div>}
-                </For>
+              <ComposerMenu id="overflow-menu" label="Fixture results" revision={menuExpanded()}>
+                {Array.from({ length: menuExpanded() ? 20 : 1 }, (_, index) => (
+                  <div style={{ height: "40px" }}>Result {index}</div>
+                ))}
               </ComposerMenu>
             ),
             { container },
           );
-          setMenuSize(expanded ? 20 : 1);
+          setMenuExpanded(expanded);
           flush();
           return;
         }
