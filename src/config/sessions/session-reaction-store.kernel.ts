@@ -5,26 +5,15 @@ import {
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { SessionWorkStartInvalidatedError } from "./lifecycle.js";
 import { readSessionEntryInstanceId } from "./session-accessor.sqlite-entry-identity.js";
+import {
+  SessionReactionLimitError,
+  SessionReactionMessageMissingError,
+} from "./session-reaction-errors.js";
 import { reactionDb, reactionRows, summarizeReactions } from "./session-reaction-store.read.js";
 import type {
   SessionReactionWrite,
   SetSessionReactionParams,
 } from "./session-reaction-store.types.js";
-
-export class SessionReactionLimitError extends Error {
-  constructor() {
-    super("reaction limit reached");
-    this.name = "SessionReactionLimitError";
-  }
-}
-
-/** The message was deleted between the caller's asynchronous read and this transaction. */
-export class SessionReactionMessageMissingError extends Error {
-  constructor() {
-    super("unknown message");
-    this.name = "SessionReactionMessageMissingError";
-  }
-}
 
 export function setSessionReactionInDatabase(
   database: OpenClawAgentDatabase,

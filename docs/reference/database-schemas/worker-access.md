@@ -4994,7 +4994,10 @@ accepted work before releasing their resources. Source receipts stay distinct
 from collected transcript messages, and processing completion remains distinct
 from transcript consumption. Incognito keeps its process-held owner, and the
 released synchronous recorder completion callback retains its native SDK
-contract; internal callers await its asynchronous companion. Schemas, stored
+contract with a deprecation warning; internal callers await its asynchronous
+companion. Confirmed worker receipts publish custody under the current owner
+without rereading a native handle's mutation revision: an independent committed
+write does not invalidate that receipt. Schemas, stored
 bytes, retention, and update behavior are unchanged.
 
 A missing resident row gets a bounded worker sharing read before history treats

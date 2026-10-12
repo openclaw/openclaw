@@ -11,6 +11,7 @@ import {
   assertAgentRunLifecycleGenerationCurrent,
 } from "../../infra/agent-events.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { rethrowIncognitoSessionError } from "../../state/incognito-session-error.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
@@ -379,6 +380,12 @@ async function stagePreparedPendingInput(
     });
     const complete = options.trackCompletion
       ? (outcome: AgentRunTerminalOutcome) => {
+          warnPluginSdkDeprecation({
+            family: "session-input-completion",
+            method: "SessionPendingInputReceipt.complete / completeProcessing",
+            replacement: "completeAsync / completeProcessingAsync",
+            compatibility: "Synchronous completion retains its native transaction boundary.",
+          });
           if (finished || completion) {
             throw new Error("Input completion owner has already been released or is settling");
           }

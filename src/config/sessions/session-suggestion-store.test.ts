@@ -4,30 +4,30 @@ import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.
 import { SessionWorkStartInvalidatedError } from "./lifecycle.js";
 import { upsertSessionEntryCore } from "./session-accessor.js";
 import {
-  addSessionSuggestion,
-  claimSessionSuggestionDispatch,
-  finalizeSessionSuggestionClaim,
-  releaseSessionSuggestionDispatch,
-  SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
-} from "./session-suggestion-store.js";
+  addSessionSuggestionInWorker as addSessionSuggestion,
+  claimSessionSuggestionDispatchInWorker as claimSessionSuggestionDispatch,
+  finalizeSessionSuggestionClaimInWorker as finalizeSessionSuggestionClaim,
+  releaseSessionSuggestionDispatchInWorker as releaseSessionSuggestionDispatch,
+} from "./session-metadata-write.async.js";
+import { SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS } from "./session-suggestion-policy.js";
 import { listSessionSuggestions } from "./session-suggestion-store.read.js";
 
 const MAX_PENDING_SESSION_SUGGESTIONS_PER_AUTHOR = 20;
 const MAX_RETAINED_RESOLVED_SESSION_SUGGESTIONS = 200;
 
-function resolvePendingSuggestion(params: {
+async function resolvePendingSuggestion(params: {
   scope: { agentId: string; env: NodeJS.ProcessEnv; sessionKey: string };
   id: string;
   state: "accepted" | "dismissed";
   expectedSessionId: string;
 }) {
-  const claim = claimSessionSuggestionDispatch(params.scope, {
+  const claim = await claimSessionSuggestionDispatch(params.scope, {
     id: params.id,
     resolution: params.state === "accepted" ? "edit" : "dismiss",
     expectedSessionId: params.expectedSessionId,
   });
   return claim?.kind === "claimed"
-    ? finalizeSessionSuggestionClaim(params.scope, {
+    ? await finalizeSessionSuggestionClaim(params.scope, {
         id: params.id,
         token: claim.token,
         state: params.state,
@@ -46,14 +46,14 @@ describe("session suggestion store", () => {
     await upsertSessionEntryCore(scope, { sessionId: "session-a", updatedAt: 1 });
 
     expect(await listSessionSuggestions(scope)).toEqual([]);
-    addSessionSuggestion(scope, {
+    await addSessionSuggestion(scope, {
       id: "b",
       authorId: "bob",
       text: "second",
       createdAt: 3,
       expectedSessionId: "session-a",
     });
-    addSessionSuggestion(scope, {
+    await addSessionSuggestion(scope, {
       id: "a",
       authorId: "alice",
       authorLabel: "Alice",
@@ -76,15 +76,17 @@ describe("session suggestion store", () => {
       expect.objectContaining({ text: "  first\n" }),
     ]);
     expect(
-      resolvePendingSuggestion({
-        scope,
-        id: "a",
-        state: "accepted",
-        expectedSessionId: "session-a",
-      })?.state,
+      (
+        await resolvePendingSuggestion({
+          scope,
+          id: "a",
+          state: "accepted",
+          expectedSessionId: "session-a",
+        })
+      )?.state,
     ).toBe("accepted");
     expect(
-      resolvePendingSuggestion({
+      await resolvePendingSuggestion({
         scope,
         id: "a",
         state: "dismissed",
@@ -121,19 +123,19 @@ describe("session suggestion store", () => {
     const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
     const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
     await upsertSessionEntryCore(scope, { sessionId: "session-a", updatedAt: 1 });
-    addSessionSuggestion(scope, {
+    await addSessionSuggestion(scope, {
       id: "suggestion",
       authorId: "alice",
       text: "do this",
       expectedSessionId: "session-a",
     });
-    expect(() =>
+    await expect(
       addSessionSuggestion(scope, {
         authorId: "alice",
         text: "stale",
         expectedSessionId: "session-b",
       }),
-    ).toThrow(/session changed/);
+    ).rejects.toThrow(/session changed/);
 
     await upsertSessionEntryCore(scope, { sessionId: "session-b", updatedAt: 2 });
     expect(await listSessionSuggestions(scope)).toEqual([]);
@@ -178,12 +180,12 @@ describe("session suggestion store", () => {
     ];
     for (const mutate of mutations) {
       for (const expectedSessionId of ["session-a", ""]) {
-        expect(() => mutate(expectedSessionId)).toThrow(SessionWorkStartInvalidatedError);
-        expect(() => mutate(expectedSessionId)).toThrow(
+        await expect(mutate(expectedSessionId)).rejects.toThrow(SessionWorkStartInvalidatedError);
+        await expect(mutate(expectedSessionId)).rejects.toThrow(
           "session changed before suggestion mutation",
         );
       }
-      expect(() => mutate()).not.toThrow();
+      await expect(mutate()).resolves.toBeDefined();
     }
   });
 
@@ -193,7 +195,7 @@ describe("session suggestion store", () => {
     const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
     await upsertSessionEntryCore(scope, { sessionId: "session-a", updatedAt: 1 });
     for (let index = 0; index < 100; index += 1) {
-      addSessionSuggestion(scope, {
+      await addSessionSuggestion(scope, {
         id: `suggestion-${index}`,
         authorId: `author-${Math.floor(index / MAX_PENDING_SESSION_SUGGESTIONS_PER_AUTHOR)}`,
         text: "idea",
@@ -202,15 +204,15 @@ describe("session suggestion store", () => {
     }
     const add = (authorId: string) =>
       addSessionSuggestion(scope, { authorId, text: "next", expectedSessionId: "session-a" });
-    expect(() => add("author-0")).toThrow("session pending suggestion limit reached");
-    resolvePendingSuggestion({
+    await expect(add("author-0")).rejects.toThrow("session pending suggestion limit reached");
+    await resolvePendingSuggestion({
       scope,
       id: "suggestion-20",
       state: "dismissed",
       expectedSessionId: "session-a",
     });
-    expect(() => add("author-0")).toThrow("author pending suggestion limit reached");
-    expect(() => add("author-1")).not.toThrow();
+    await expect(add("author-0")).rejects.toThrow("author pending suggestion limit reached");
+    await expect(add("author-1")).resolves.toMatchObject({ authorId: "author-1" });
     expect(await listSessionSuggestions(scope, { pendingOnly: true })).toHaveLength(100);
   });
 
@@ -221,14 +223,14 @@ describe("session suggestion store", () => {
     await upsertSessionEntryCore(scope, { sessionId: "session-a", updatedAt: 1 });
     for (let index = 0; index <= MAX_RETAINED_RESOLVED_SESSION_SUGGESTIONS; index += 1) {
       const id = index === 0 ? "z-oldest" : index === 1 ? "a-oldest" : `resolved-${index}`;
-      addSessionSuggestion(scope, {
+      await addSessionSuggestion(scope, {
         id,
         authorId: "alice",
         text: `resolved ${index}`,
         createdAt: index < 2 ? 1 : index + 1,
         expectedSessionId: "session-a",
       });
-      resolvePendingSuggestion({
+      await resolvePendingSuggestion({
         scope,
         id,
         state: index % 2 === 0 ? "accepted" : "dismissed",
@@ -248,14 +250,14 @@ describe("session suggestion store", () => {
     const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
     const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
     await upsertSessionEntryCore(scope, { sessionId: "session-a", updatedAt: 1 });
-    const suggestion = addSessionSuggestion(scope, {
+    const suggestion = await addSessionSuggestion(scope, {
       id: "claimed",
       authorId: "alice",
       text: "dispatch me",
       expectedSessionId: "session-a",
     });
 
-    const first = claimSessionSuggestionDispatch(scope, {
+    const first = await claimSessionSuggestionDispatch(scope, {
       id: "claimed",
       resolution: "send",
       expectedSessionId: "session-a",
@@ -263,7 +265,7 @@ describe("session suggestion store", () => {
     });
     expect(first?.kind).toBe("claimed");
     expect(
-      claimSessionSuggestionDispatch(scope, {
+      await claimSessionSuggestionDispatch(scope, {
         id: "claimed",
         resolution: "send",
         expectedSessionId: "session-a",
@@ -271,7 +273,7 @@ describe("session suggestion store", () => {
       }),
     ).toEqual({ kind: "busy" });
     expect(
-      resolvePendingSuggestion({
+      await resolvePendingSuggestion({
         scope,
         id: "claimed",
         state: "dismissed",
@@ -280,14 +282,14 @@ describe("session suggestion store", () => {
     ).toBeNull();
 
     expect(
-      claimSessionSuggestionDispatch(scope, {
+      await claimSessionSuggestionDispatch(scope, {
         id: "claimed",
         resolution: "queue",
         expectedSessionId: "session-a",
         now: 1_000 + SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
       }),
     ).toEqual({ kind: "mismatch", resolution: "send" });
-    const recovered = claimSessionSuggestionDispatch(scope, {
+    const recovered = await claimSessionSuggestionDispatch(scope, {
       id: "claimed",
       resolution: "send",
       expectedSessionId: "session-a",
@@ -299,7 +301,7 @@ describe("session suggestion store", () => {
     }
     expect(
       first?.kind === "claimed"
-        ? finalizeSessionSuggestionClaim(scope, {
+        ? await finalizeSessionSuggestionClaim(scope, {
             id: "claimed",
             token: first.token,
             state: "accepted",
@@ -307,7 +309,7 @@ describe("session suggestion store", () => {
           })
         : null,
     ).toBeNull();
-    const resolved = finalizeSessionSuggestionClaim(scope, {
+    const resolved = await finalizeSessionSuggestionClaim(scope, {
       id: "claimed",
       token: recovered.token,
       state: "accepted",

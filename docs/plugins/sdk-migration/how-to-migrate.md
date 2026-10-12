@@ -869,7 +869,10 @@ User-turn transcript recorders also provide optional
 Await processing completion before publishing its outcome. Completion records
 processing separately from transcript consumption; it does not append or consume
 the pending input. The synchronous `completeProcessing` callback shipped in
-`v2026.9.8` retains its immediate result for existing SDK consumers. The host
+`v2026.9.8` retains its immediate result for existing SDK consumers. It and the
+underlying pending-input receipt's `complete` method are deprecated in favor of
+`completeProcessingAsync` and `completeAsync`. Native completion warns once per
+plugin and remains supported until the next Plugin SDK major. The host
 uses that legacy callback only when a supplied recorder has no async companion,
 never after an async failure or an undefined async result.
 

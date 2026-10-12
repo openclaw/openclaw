@@ -5,6 +5,7 @@ import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-ou
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { runWithSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
 import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
+import { PluginInstance } from "../../plugins/plugin-instance.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -714,15 +715,24 @@ describe("committed pending input release", () => {
 
   it("preserves the released synchronous completion contract inside an outer rollback", async () => {
     const first = await stagePrivate();
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    onTestFinished(() => warning.mockRestore());
+    const plugin = new PluginInstance("pending-input-completion-compat");
     expect(() =>
-      runOpenClawAgentWriteTransaction(() => {
-        first.complete!(buildAgentRunTerminalOutcome({ status: "ok" }));
-        throw new Error("before commit");
-      }, options()),
+      plugin.run(() =>
+        runOpenClawAgentWriteTransaction(() => {
+          first.complete!(buildAgentRunTerminalOutcome({ status: "ok" }));
+          throw new Error("before commit");
+        }, options()),
+      ),
     ).toThrow("before commit");
     expect(completionRows()).toEqual([]);
     expect(pendingCount()).toBe(1);
-    first.complete!(buildAgentRunTerminalOutcome({ status: "ok" }));
+    plugin.run(() => first.complete!(buildAgentRunTerminalOutcome({ status: "ok" })));
+    expect(warning).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("completeAsync / completeProcessingAsync"),
+      { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
+    );
     expect(pendingCount()).toBe(0);
   });
 

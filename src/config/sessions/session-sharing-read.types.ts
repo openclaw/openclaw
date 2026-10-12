@@ -24,3 +24,11 @@ export type SessionMembershipFactsWorkerInput = {
   env: NodeJS.ProcessEnv;
   continuation?: CanonicalSessionReaderContinuation;
 };
+
+export type SessionReactionsWorkerInput = {
+  kind: "session-reactions";
+  database: { agentId: string; path: string };
+  sessionKey: string;
+  sessionId: string;
+  env: NodeJS.ProcessEnv;
+};

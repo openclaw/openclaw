@@ -22,6 +22,7 @@ import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as workerStore from "../../infra/sqlite-worker-store.js";
 import { readWithdrawnUserTurnInputId } from "../../sessions/user-turn-transcript-admission.js";
+import { completeUserTurnProcessing } from "../../sessions/user-turn-transcript-processing.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {
   openOpenClawAgentDatabase,
@@ -226,7 +227,7 @@ it("stages and settles an agent user-turn recorder without caller-thread SQL", a
       const cancelledReceipt = await fixture.stage("cancelled");
       cancelled = cancelledReceipt;
       const outcome = buildAgentRunTerminalOutcome({ status: "ok" });
-      expect(await recorder.completeProcessingAsync?.(outcome)).toEqual(outcome);
+      expect(await completeUserTurnProcessing(recorder, outcome)).toEqual(outcome);
       expect(recorder.getProcessingCompletion?.()).toEqual(outcome);
       recorder.finishPendingInput?.("interrupted");
       cancelledReceipt.finish("cancelled");
@@ -487,7 +488,7 @@ it("refuses processing completion when the admitted lifecycle changes during the
   });
 });
 
-it.each(["lost reply", "unknown settlement"] as const)(
+it.each(["lost reply", "unknown settlement", "independent committed write"] as const)(
   "settles staging with %s without replaying its native write",
   async (fault) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -525,6 +526,18 @@ it.each(["lost reply", "unknown settlement"] as const)(
                       facts: { kind: "pending-input-settlement", operation: "stage" },
                     });
                     expect(nativeAdmission?.settlement?.kind).toBe("completed");
+                    if (fault === "independent committed write") {
+                      runOpenClawAgentWriteTransaction(
+                        (database) => {
+                          writeSessionEntry(database, "agent:main:independent-input", {
+                            sessionId: "independent-input",
+                            updatedAt: 2,
+                          });
+                        },
+                        { agentId: scope.agentId },
+                      );
+                      return result;
+                    }
                     if (fault === "unknown settlement") {
                       const observed = expectDefined(nativeAdmission, "Expected native admission");
                       const settlement = vi
