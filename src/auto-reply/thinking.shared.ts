@@ -4,6 +4,7 @@ import {
   normalizeFastMode,
   normalizeOptionalLowercaseString,
 } from "../../packages/normalization-core/src/string-coerce.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import type { ThinkingLevelMap } from "../llm/types.js";
 
 export { normalizeFastMode };
@@ -36,6 +37,9 @@ export type ThinkingCatalogEntry = {
   baseUrl?: string;
   contextWindow?: number;
   contextTokens?: number;
+  contextWindows?: ModelCatalogEntry["contextWindows"];
+  contextWindowDefault?: ModelCatalogEntry["contextWindowDefault"];
+  contextWindowSource?: ModelCatalogEntry["contextWindowSource"];
   reasoning?: boolean;
   configuredReasoning?: boolean;
   /** Concrete runtime owner of thinking policy; internal and never project to clients. */
