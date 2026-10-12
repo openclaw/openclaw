@@ -331,6 +331,13 @@ describe("chat attachment reading", () => {
     expect(onSend).not.toHaveBeenCalled();
 
     const reader = expectDefined(readers[0], "deferred attachment reader");
+    reader.dispatchEvent(
+      new ProgressEvent("progress", { lengthComputable: true, loaded: 1, total: 2 }),
+    );
+    expect(container.querySelector(".chat-attachment-thumb")).toBe(pendingTile);
+    expect(
+      pendingTile?.querySelector<HTMLElement>(".chat-attachment-loading > span")?.style.transform,
+    ).toBe("scaleX(0.5)");
     Object.defineProperty(reader, "result", {
       configurable: true,
       value: `data:image/png;base64,${btoa("attachment proof")}`,

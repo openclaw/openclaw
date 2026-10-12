@@ -1,11 +1,6 @@
-import { html, nothing } from "lit";
-import { keyed } from "lit/directives/keyed.js";
+import type { JSX } from "@solidjs/web";
+import { For, Show, createMemo } from "solid-js";
 import type { ChatSendShortcut } from "../../../app/settings.ts";
-import {
-  handleComposerMenuKeydown,
-  renderComposerMenu,
-  renderComposerMenuOption,
-} from "../../../components/composer-menu.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import {
@@ -19,6 +14,7 @@ import {
   type SlashCommandCategory,
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
+import { solidTemplate } from "./chat-composer-controls.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
 import {
   beginInlineFreeformSlashArguments,
@@ -27,13 +23,19 @@ import {
   hasActiveInlineSlashArgumentPrefix,
   removeInlineSlashSelection,
 } from "./chat-composer-inline-slash.ts";
-import type { SkillMenuHost } from "./chat-composer-skill-menu.ts";
+import { LitContent } from "./chat-composer-interop.tsx";
+import {
+  handleComposerMenuKeydown,
+  ComposerMenu,
+  renderComposerMenuOption,
+} from "./chat-composer-menu.tsx";
+import type { SkillMenuHost } from "./chat-composer-skill-menu.tsx";
 import {
   getSlashArgOptionId,
   getSlashCommandOptionId,
   getSlashCommandOptionLabel,
   renderSlashMatchedName,
-} from "./chat-composer-slash-menu-dom.ts";
+} from "./chat-composer-slash-menu-dom.tsx";
 
 export type SlashMenuState = {
   slashCommandDispatchConnected: boolean;
@@ -510,15 +512,14 @@ export function getActiveSlashMenuOptionLabel(state: SlashMenuState): string {
   return getSlashCommandOptionLabel(state.slashMenuItems[state.slashMenuIndex]);
 }
 
-export function renderSlashMenu(
+function renderSlashMenuContents(
   state: SlashMenuState,
   host: SlashMenuHost,
   draft: string,
   requestUpdate: () => void,
-): ReturnType<typeof keyed> | typeof nothing {
-  const listboxId = paneDomId(host.paneId, "slash-menu-listbox");
+): JSX.Element {
   if (!state.slashMenuOpen) {
-    return nothing;
+    return null;
   }
 
   // Each mode owns its scroll viewport; switching modes starts at the first option.
@@ -527,39 +528,55 @@ export function renderSlashMenu(
     state.slashMenuCommand &&
     state.slashMenuArgItems.length > 0
   ) {
-    return keyed(
-      "args",
-      renderComposerMenu({
-        id: listboxId,
-        label: t("chat.commands.arguments"),
-        content: html` <div class="slash-menu-group">
+    return (
+      <>
+        {" "}
+        <div class="slash-menu-group">
           <div class="slash-menu-group__label">
-            /${state.slashMenuCommand.name} ${getSlashCommandDescription(state.slashMenuCommand)}
+            /{state.slashMenuCommand.name} {getSlashCommandDescription(state.slashMenuCommand)}
           </div>
-          ${state.slashMenuArgItems.map((arg, i) =>
-            renderComposerMenuOption({
-              id: getSlashArgOptionId(host.paneId, state.slashMenuCommand?.name ?? "", arg),
-              active: i === state.slashMenuIndex,
-              preserveFocus: false,
-              select: () => selectSlashArg(arg, state, host, requestUpdate, true),
-              hover: () => {
-                state.slashMenuIndex = i;
-                requestUpdate();
-              },
-              icon: state.slashMenuCommand?.icon
-                ? icons[state.slashMenuCommand.icon]
-                : icons.terminal,
-              name: arg,
-              description: html`/${state.slashMenuCommand?.name} ${arg}`,
-            }),
-          )}
-        </div>`,
-      }),
+          <For keyed={(item) => item} each={state.slashMenuArgItems}>
+            {(menuItem, menuIndex) => (
+              <>
+                {renderComposerMenuOption({
+                  id: getSlashArgOptionId(
+                    host.paneId,
+                    state.slashMenuCommand?.name ?? "",
+                    menuItem(),
+                  ),
+                  active: menuIndex() === state.slashMenuIndex,
+                  preserveFocus: false,
+                  select: () => selectSlashArg(menuItem(), state, host, requestUpdate, true),
+                  hover: () => {
+                    state.slashMenuIndex = menuIndex();
+                    requestUpdate();
+                  },
+                  icon: (
+                    <LitContent
+                      value={
+                        state.slashMenuCommand?.icon
+                          ? icons[state.slashMenuCommand.icon]
+                          : icons.terminal
+                      }
+                    />
+                  ),
+                  name: menuItem(),
+                  description: (
+                    <>
+                      /{state.slashMenuCommand?.name} {menuItem()}
+                    </>
+                  ),
+                })}
+              </>
+            )}
+          </For>
+        </div>
+      </>
     );
   }
 
   if (state.slashMenuItems.length === 0) {
-    return nothing;
+    return null;
   }
 
   const query = draft.slice(1);
@@ -572,9 +589,23 @@ export function renderSlashMenu(
         state.slashMenuIndex = index;
         requestUpdate();
       },
-      icon:
-        cmd.source === "skill" ? icons.pencilSparkles : cmd.icon ? icons[cmd.icon] : icons.terminal,
-      name: html`/${renderSlashMatchedName(cmd.name, query)}${cmd.args ? html`<span class="slash-menu-args"> ${cmd.args}</span>` : nothing}`,
+      icon: (
+        <LitContent
+          value={
+            cmd.source === "skill"
+              ? icons.pencilSparkles
+              : cmd.icon
+                ? icons[cmd.icon]
+                : icons.terminal
+          }
+        />
+      ),
+      name: (
+        <>
+          /{renderSlashMatchedName(cmd.name, query)}
+          {cmd.args ? <span class="slash-menu-args"> {cmd.args}</span> : null}
+        </>
+      ),
       description: getSlashCommandDescription(cmd),
     });
   const commands = state.slashMenuItems.filter((command) => command.source !== "skill");
@@ -592,27 +623,54 @@ export function renderSlashMenu(
     }
   }
 
-  return keyed(
-    "command",
-    renderComposerMenu({
-      id: listboxId,
-      label: t("chat.commands.menu"),
-      content: html`
-        ${groups.map(
-          ([category, entries]) => html`<div class="slash-menu-group">
-            <div class="slash-menu-group__label">${getSlashCommandCategoryLabel(category)}</div>
-            ${entries.map(({ command, index }) => renderCommandOption(command, index))}
-          </div>`,
+  return (
+    <>
+      <For keyed={(item) => item} each={groups}>
+        {(menuItem) => (
+          <div class="slash-menu-group">
+            <div class="slash-menu-group__label">{getSlashCommandCategoryLabel(menuItem()[0])}</div>
+            <For keyed={(item) => item} each={menuItem()[1]}>
+              {(entry) => <>{renderCommandOption(entry().command, entry().index)}</>}
+            </For>
+          </div>
         )}
-        ${
-          skills.length > 0
-            ? html`<div class="slash-menu-group slash-menu-group--skills">
-                <div class="slash-menu-group__label">${t("chat.skills.label")}</div>
-                ${skills.map((cmd, index) => renderCommandOption(cmd, commands.length + index))}
-              </div>`
-            : nothing
-        }
-      `,
-    }),
+      </For>
+      {skills.length > 0 ? (
+        <div class="slash-menu-group slash-menu-group--skills">
+          <div class="slash-menu-group__label">{t("chat.skills.label")}</div>
+          <For keyed={(item) => item} each={skills}>
+            {(command, index) => <>{renderCommandOption(command(), commands.length + index())}</>}
+          </For>
+        </div>
+      ) : null}
+    </>
   );
+}
+
+export function SlashMenu(props: { args: Parameters<typeof renderSlashMenuContents> }) {
+  const mode = createMemo(() => {
+    const state = props.args[0];
+    return isSlashMenuVisible(state) ? (state.slashMenuMode === "args" ? "args" : "command") : null;
+  });
+  return (
+    <Show when={mode()} keyed>
+      {(activeMode) => (
+        <ComposerMenu
+          id={paneDomId(props.args[1].paneId, "slash-menu-listbox")}
+          label={t(activeMode === "args" ? "chat.commands.arguments" : "chat.commands.menu")}
+          revision={props.args}
+        >
+          {renderSlashMenuContents(...props.args)}
+        </ComposerMenu>
+      )}
+    </Show>
+  );
+}
+
+export function renderSlashMenuSolid(...args: Parameters<typeof renderSlashMenuContents>) {
+  return <SlashMenu args={args} />;
+}
+
+export function renderSlashMenu(...args: Parameters<typeof renderSlashMenuContents>) {
+  return solidTemplate(SlashMenu, { args });
 }

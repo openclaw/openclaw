@@ -1,22 +1,24 @@
 import { ConnectErrorDetailCodes } from "@openclaw/gateway-client/browser";
 import type { UsersMentionableParams, UsersMentionableResult } from "@openclaw/gateway-protocol";
-import { html, nothing } from "lit";
+import { Show } from "solid-js";
 import {
   GatewayRequestError,
   resolveGatewayErrorDetailCode,
   type GatewayBrowserClient,
 } from "../../../api/gateway.ts";
-import {
-  handleComposerMenuKeydown,
-  renderComposerMenu,
-  renderComposerMenuOption,
-} from "../../../components/composer-menu.ts";
 import { t } from "../../../i18n/index.ts";
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
 import { MAX_HUMAN_MENTIONS, updateHumanMentions } from "../../../lib/chat/human-mentions.ts";
-import "../../../styles/chat/mention-menu.css";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
+import { solidTemplate } from "./chat-composer-controls.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
+import "../../../styles/chat/mention-menu.css";
+import { LitContent } from "./chat-composer-interop.tsx";
+import {
+  handleComposerMenuKeydown,
+  ComposerMenu,
+  renderComposerMenuOption,
+} from "./chat-composer-menu.tsx";
 
 export type HumanMentionDirectory = {
   client: GatewayBrowserClient;
@@ -379,8 +381,16 @@ export class HumanMentionMenu {
   }
 
   render(host: HumanMentionMenuHost, requestUpdate: () => void) {
+    return solidTemplate(HumanMentionMenuView, { args: [this, host, requestUpdate] });
+  }
+
+  renderSolid(host: HumanMentionMenuHost, requestUpdate: () => void) {
+    return <HumanMentionMenuView args={[this, host, requestUpdate]} />;
+  }
+
+  renderContents(host: HumanMentionMenuHost, requestUpdate: () => void) {
     if (!this.open) {
-      return nothing;
+      return null;
     }
     const result = this.search?.kind === "ready" ? this.search.result : undefined;
     const limited = host.getMentions().length >= MAX_HUMAN_MENTIONS;
@@ -392,42 +402,36 @@ export class HumanMentionMenu {
         : !loading && !result?.users.length
           ? t("chat.mentions.empty")
           : null;
-    return renderComposerMenu({
-      id: paneDomId(host.paneId, "mention-menu-listbox"),
-      className: "mention-menu",
-      label: t("chat.mentions.menu"),
-      trackScroll: false,
-      activeId: this.activeId(host.paneId),
-      content: html` <div class="slash-menu-group" aria-busy=${loading}>
-        <div class="slash-menu-group__label" role="status">
-          ${message ?? t("chat.mentions.menu")}
-        </div>
-        ${
-          this.search?.kind === "error" && !limited
-            ? html`<button
-                type="button"
-                class="btn btn--sm mention-menu__retry"
-                @click=${() => {
-                  this.searchPeople(requestUpdate);
-                  host.getTextarea()?.focus({ preventScroll: true });
-                }}
-              >
-                ${t("common.retry")}
-              </button>`
-            : nothing
-        }
-        ${
-          message
-            ? nothing
+    return (
+      <>
+        {" "}
+        <div class="slash-menu-group" aria-busy={loading ? "true" : "false"}>
+          <div class="slash-menu-group__label" role="status">
+            {message ?? t("chat.mentions.menu")}
+          </div>
+          {this.search?.kind === "error" && !limited ? (
+            <button
+              type="button"
+              class="btn btn--sm mention-menu__retry"
+              onClick={() => {
+                this.searchPeople(requestUpdate);
+                host.getTextarea()?.focus({ preventScroll: true });
+              }}
+            >
+              {t("common.retry")}
+            </button>
+          ) : null}
+          {message
+            ? null
             : loading
-              ? [0, 1, 2].map(
-                  () => html`<div class="slash-menu-item mention-menu__loading" aria-hidden="true">
-                    <span class="slash-menu-icon"
-                      ><span class="skeleton mention-menu__avatar"></span
-                    ></span>
+              ? [0, 1, 2].map(() => (
+                  <div class="slash-menu-item mention-menu__loading" aria-hidden="true">
+                    <span class="slash-menu-icon">
+                      <span class="skeleton mention-menu__avatar"></span>
+                    </span>
                     <span class="skeleton skeleton-line skeleton-line--medium"></span>
-                  </div>`,
-                )
+                  </div>
+                ))
               : result?.users.map((person, index) =>
                   renderComposerMenuOption({
                     id: paneDomId(host.paneId, `mention-option-${index}`),
@@ -438,24 +442,45 @@ export class HumanMentionMenu {
                       this.selectedProfileId = person.profileId;
                       requestUpdate();
                     },
-                    icon: renderChatAuthorAvatar({
-                      id: person.profileId,
-                      name: person.displayName,
-                      identity: { type: "profile", id: person.profileId },
-                      profileAvatarUrl: person.avatarUrl,
-                    }),
+                    icon: (
+                      <LitContent
+                        value={renderChatAuthorAvatar({
+                          id: person.profileId,
+                          name: person.displayName,
+                          identity: { type: "profile", id: person.profileId },
+                          profileAvatarUrl: person.avatarUrl,
+                        })}
+                      />
+                    ),
                     iconHidden: true,
                     name: person.displayName,
-                    description: person.online ? t("chat.mentions.online") : nothing,
+                    description: person.online ? t("chat.mentions.online") : null,
                   }),
-                )
-        }
-        ${
-          result?.truncated
-            ? html`<div class="slash-menu-group__label">${t("chat.mentions.truncated")}</div>`
-            : nothing
-        }
-      </div>`,
-    });
+                )}
+          {result?.truncated ? (
+            <div class="slash-menu-group__label">{t("chat.mentions.truncated")}</div>
+          ) : null}
+        </div>
+      </>
+    );
   }
+}
+
+export function HumanMentionMenuView(props: {
+  args: [HumanMentionMenu, HumanMentionMenuHost, () => void];
+}) {
+  return (
+    <Show when={props.args[0].open}>
+      <ComposerMenu
+        id={paneDomId(props.args[1].paneId, "mention-menu-listbox")}
+        class="mention-menu"
+        label={t("chat.mentions.menu")}
+        trackScroll={false}
+        activeId={props.args[0].activeId(props.args[1].paneId)}
+        revision={props.args}
+      >
+        {props.args[0].renderContents(props.args[1], props.args[2])}
+      </ComposerMenu>
+    </Show>
+  );
 }

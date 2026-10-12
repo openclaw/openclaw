@@ -1,4 +1,3 @@
-import { html } from "lit";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { base64ToBytes } from "../../../lib/bytes-base64.ts";
@@ -10,6 +9,8 @@ import {
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { currentAttachments, removeDraftAttachment } from "./chat-attachment-draft.ts";
 import { renderAttachmentRemove } from "./chat-attachment-file.ts";
+import { solidTemplate } from "./chat-composer-controls.ts";
+import { LitContent } from "./chat-composer-interop.tsx";
 
 function readTextFromDataUrl(dataUrl: string): string | null {
   const match = /^data:([^,]*),(.*)$/s.exec(dataUrl);
@@ -45,7 +46,10 @@ function showPastedTextInComposer(att: ChatAttachment, props: ChatAttachmentCont
   props.onRequestUpdate?.();
 }
 
-export function renderComposerPastedText(att: ChatAttachment, props: ChatAttachmentControlsProps) {
+export function renderComposerPastedTextSolid(
+  att: ChatAttachment,
+  props: ChatAttachmentControlsProps,
+) {
   const current = () =>
     props.readSignal?.aborted
       ? undefined
@@ -59,19 +63,22 @@ export function renderComposerPastedText(att: ChatAttachment, props: ChatAttachm
     }
     removeDraftAttachment(att, props);
   };
-  const renderRestoreAction = () => html`<button
-    class="chat-attachment-text-action"
-    type="button"
-    ?disabled=${props.disabled}
-    @click=${() => {
-      const attachment = current();
-      if (attachment && !props.disabled) {
-        showPastedTextInComposer(attachment, props);
-      }
-    }}
-  >
-    ${t("chat.attachments.showInTextField")}
-  </button>`;
+  const restoreAction = () => (
+    <button
+      class="chat-attachment-text-action"
+      type="button"
+      disabled={props.disabled}
+      onClick={() => {
+        const attachment = current();
+        if (attachment && !props.disabled) {
+          showPastedTextInComposer(attachment, props);
+        }
+      }}
+    >
+      {t("chat.attachments.showInTextField")}
+    </button>
+  );
+  const renderRestoreAction = () => solidTemplate(restoreAction, {});
   const open = () => {
     if (!current()) {
       return;
@@ -93,24 +100,46 @@ export function renderComposerPastedText(att: ChatAttachment, props: ChatAttachm
           ? { status: "ready", src, sizeBytes: attachment.sizeBytes }
           : { status: "unavailable" };
       },
-      renderActions: () => html`${renderRestoreAction()}
-        <button
-          class="btn btn--sm"
-          type="button"
-          aria-label=${removeLabel}
-          ?disabled=${props.disabled}
-          @click=${remove}
-        >
-          ${icons.trash}
-        </button>`,
+      renderActions: () =>
+        solidTemplate(
+          () => (
+            <>
+              {restoreAction()}
+              <button
+                class="btn btn--sm"
+                type="button"
+                aria-label={removeLabel}
+                disabled={props.disabled}
+                onClick={remove}
+              >
+                <LitContent value={icons.trash} />
+              </button>
+            </>
+          ),
+          {},
+        ),
     });
   };
-  return html`<openclaw-chat-pasted-text
-    .src=${getChatAttachmentDataUrl(att)}
-    .sizeBytes=${att.sizeBytes}
-    .scope=${att.id}
-    .onOpen=${open}
-    .composerAction=${renderRestoreAction()}
-    .composerRemoveAction=${renderAttachmentRemove(removeLabel, props.disabled, remove)}
-  ></openclaw-chat-pasted-text>`;
+  return (
+    <openclaw-chat-pasted-text
+      prop:src={getChatAttachmentDataUrl(att) ?? undefined}
+      prop:sizeBytes={att.sizeBytes}
+      prop:scope={att.id}
+      prop:onOpen={open}
+      prop:composerAction={renderRestoreAction()}
+      prop:composerRemoveAction={renderAttachmentRemove(removeLabel, props.disabled, remove)}
+    ></openclaw-chat-pasted-text>
+  );
+}
+
+function renderComposerPastedTextContent(props: {
+  args: Parameters<typeof renderComposerPastedTextSolid>;
+}) {
+  return <>{renderComposerPastedTextSolid(...props.args)}</>;
+}
+
+export function renderComposerPastedText(
+  ...args: Parameters<typeof renderComposerPastedTextSolid>
+) {
+  return solidTemplate(renderComposerPastedTextContent, { args });
 }

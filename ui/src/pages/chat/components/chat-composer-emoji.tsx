@@ -1,21 +1,21 @@
 import WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
-import { html, nothing } from "lit";
-import { ref } from "lit/directives/ref.js";
-import {
-  handleComposerMenuKeydown,
-  renderComposerMenu,
-  renderComposerMenuOption,
-} from "../../../components/composer-menu.ts";
-import "../../../styles/chat/emoji-menu.css";
+import { createEffect, For, onCleanup, Show, untrack } from "solid-js";
 import { TextareaTokenAnchor } from "../../../components/textarea-token-anchor.ts";
 import { t } from "../../../i18n/index.ts";
+import "../../../styles/chat/emoji-menu.css";
 import {
   emojiForShortcode,
   EmojiTargetResolver,
   suggestEmoji,
   type EmojiTarget,
 } from "../../../lib/chat/emoji.ts";
+import { solidTemplate } from "./chat-composer-controls.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
+import {
+  handleComposerMenuKeydown,
+  ComposerMenu,
+  renderComposerMenuOption,
+} from "./chat-composer-menu.tsx";
 
 /** Local editing state; both composer owners keep their existing draft/input pipeline. */
 export class ComposerEmojiMenu {
@@ -34,7 +34,7 @@ export class ComposerEmojiMenu {
   });
   private popup: WaPopup | null = null;
   private textarea: HTMLTextAreaElement | null = null;
-  private readonly popupRef = (element?: Element) => {
+  readonly popupRef = (element?: Element) => {
     this.popup = element instanceof WaPopup ? element : null;
     this.syncAnchor();
   };
@@ -233,32 +233,95 @@ export class ComposerEmojiMenu {
   }
 
   render(paneId: string, textarea: HTMLTextAreaElement | null, requestUpdate: () => void) {
-    if (!this.open || !textarea || textarea.disabled || textarea.readOnly) {
-      return nothing;
-    }
+    return solidTemplate(EmojiMenu, { args: [this, paneId, textarea, requestUpdate] });
+  }
+
+  updatePresentation(textarea: HTMLTextAreaElement, requestUpdate: () => void) {
     this.requestUpdate = requestUpdate;
     this.textarea = textarea;
     this.syncAnchor();
-    const menu = renderComposerMenu({
-      className: "emoji-menu",
-      id: paneDomId(paneId, "emoji-menu-listbox"),
-      label: t("chat.composer.emojiSuggestions"),
-      content: this.items.map((name, index) =>
-        renderComposerMenuOption({
-          id: paneDomId(paneId, `emoji-option-${index}`),
-          active: index === this.index,
-          select: () => this.select(textarea, requestUpdate, index),
-          hover: () => {
-            this.index = index;
-            requestUpdate();
-          },
-          icon: emojiForShortcode(name),
-          iconHidden: true,
-          name: `:${name}:`,
-          description: nothing,
-        }),
-      ),
-    });
-    return html`<wa-popup ${ref(this.popupRef)} class="emoji-menu-popup">${menu}</wa-popup>`;
   }
+
+  renderOptions(paneId: string, textarea: HTMLTextAreaElement, requestUpdate: () => void) {
+    return (
+      <For each={this.items} keyed={(name) => name}>
+        {(name, index) =>
+          renderComposerMenuOption({
+            id: paneDomId(paneId, `emoji-option-${index()}`),
+            active: index() === this.index,
+            select: () => this.select(textarea, requestUpdate, index()),
+            hover: () => {
+              this.index = index();
+              requestUpdate();
+            },
+            icon: emojiForShortcode(name()),
+            iconHidden: true,
+            name: `:${name()}:`,
+            description: undefined,
+          })
+        }
+      </For>
+    );
+  }
+}
+
+export function EmojiMenu(props: {
+  args: [ComposerEmojiMenu, string, HTMLTextAreaElement | null, () => void];
+}) {
+  const textarea = () => {
+    const target = props.args[2];
+    return props.args[0].open && target && !target.disabled && !target.readOnly
+      ? target
+      : undefined;
+  };
+  return (
+    <Show when={textarea()}>
+      {(target) => (
+        <EmojiPopup
+          menu={props.args[0]}
+          paneId={props.args[1]}
+          textarea={target()}
+          requestUpdate={props.args[3]}
+          revision={props.args}
+        />
+      )}
+    </Show>
+  );
+}
+
+function EmojiPopup(props: {
+  menu: ComposerEmojiMenu;
+  paneId: string;
+  textarea: HTMLTextAreaElement;
+  requestUpdate: () => void;
+  revision: unknown;
+}) {
+  createEffect(
+    () => props.revision,
+    () => {
+      props.menu.updatePresentation(props.textarea, props.requestUpdate);
+    },
+  );
+  onCleanup(() => props.menu.popupRef());
+  const activeId = () => {
+    void props.revision;
+    return props.menu.activeId(props.paneId) ?? undefined;
+  };
+  const options = () => {
+    void props.revision;
+    return props.menu.renderOptions(props.paneId, props.textarea, props.requestUpdate);
+  };
+  return (
+    <wa-popup ref={(node) => untrack(() => props.menu.popupRef(node))} class="emoji-menu-popup">
+      <ComposerMenu
+        class="emoji-menu"
+        id={paneDomId(props.paneId, "emoji-menu-listbox")}
+        label={t("chat.composer.emojiSuggestions")}
+        activeId={activeId()}
+        revision={props.revision}
+      >
+        {options()}
+      </ComposerMenu>
+    </wa-popup>
+  );
 }

@@ -1,9 +1,5 @@
-import { html, nothing, type TemplateResult } from "lit";
-import {
-  handleComposerMenuKeydown,
-  renderComposerMenu,
-  renderComposerMenuOption,
-} from "../../../components/composer-menu.ts";
+import type { JSX } from "@solidjs/web";
+import { Show } from "solid-js";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import {
@@ -12,8 +8,15 @@ import {
   getSlashCommandDescription,
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
+import { solidTemplate } from "./chat-composer-controls.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
-import { renderSlashMatchedName } from "./chat-composer-slash-menu-dom.ts";
+import { LitContent } from "./chat-composer-interop.tsx";
+import {
+  handleComposerMenuKeydown,
+  ComposerMenu,
+  renderComposerMenuOption,
+} from "./chat-composer-menu.tsx";
+import { renderSlashMatchedName } from "./chat-composer-slash-menu-dom.tsx";
 
 const SKILL_MENTION_CHAR = /[-a-zA-Z0-9_:]/u;
 
@@ -259,44 +262,62 @@ export function handleSkillMenuKeydown(
   });
 }
 
-export function renderSkillMenu(
+function renderSkillMenuContents(
   state: SkillMenuState,
   host: SkillMenuHost,
   requestUpdate: () => void,
-): TemplateResult | typeof nothing {
+): JSX.Element | null {
   if (!isSkillMenuVisible(state)) {
-    return nothing;
+    return null;
   }
   const loading = state.skillCommandRefreshPending || state.skillMenuItems.length === 0;
-  return renderComposerMenu({
-    id: paneDomId(host.paneId, "skill-menu-listbox"),
-    className: "skill-menu",
-    label: t("chat.skills.menu"),
-    content: html`<div class="slash-menu-group">
+  return (
+    <div class="slash-menu-group">
       <div class="slash-menu-group__label">
-        ${t(loading ? "chat.skills.loading" : "chat.skills.label")}
+        {t(loading ? "chat.skills.loading" : "chat.skills.label")}
       </div>
-      ${
-        loading
-          ? nothing
-          : state.skillMenuItems.map((command, index) =>
-              renderComposerMenuOption({
-                id: skillOptionId(host.paneId, command),
-                active: index === state.skillMenuIndex,
-                select: () => selectSkillMention(command, state, host, requestUpdate),
-                hover: () => {
-                  state.skillMenuIndex = index;
-                  requestUpdate();
-                },
-                icon: icons.pencilSparkles,
-                name: renderSlashMatchedName(
-                  getSkillDisplayName(command),
-                  state.skillMenuTarget?.query ?? "",
-                ),
-                description: getSlashCommandDescription(command),
-              }),
-            )
-      }
-    </div>`,
-  });
+      {loading
+        ? null
+        : state.skillMenuItems.map((command, index) =>
+            renderComposerMenuOption({
+              id: skillOptionId(host.paneId, command),
+              active: index === state.skillMenuIndex,
+              select: () => selectSkillMention(command, state, host, requestUpdate),
+              hover: () => {
+                state.skillMenuIndex = index;
+                requestUpdate();
+              },
+              icon: <LitContent value={icons.pencilSparkles} />,
+              name: renderSlashMatchedName(
+                getSkillDisplayName(command),
+                state.skillMenuTarget?.query ?? "",
+              ),
+              description: getSlashCommandDescription(command),
+            }),
+          )}
+    </div>
+  );
+}
+
+export function SkillMenu(props: { args: Parameters<typeof renderSkillMenuContents> }) {
+  return (
+    <Show when={isSkillMenuVisible(props.args[0])}>
+      <ComposerMenu
+        id={paneDomId(props.args[1].paneId, "skill-menu-listbox")}
+        class="skill-menu"
+        label={t("chat.skills.menu")}
+        revision={props.args}
+      >
+        {renderSkillMenuContents(...props.args)}
+      </ComposerMenu>
+    </Show>
+  );
+}
+
+export function renderSkillMenuSolid(...args: Parameters<typeof renderSkillMenuContents>) {
+  return <SkillMenu args={args} />;
+}
+
+export function renderSkillMenu(...args: Parameters<typeof renderSkillMenuContents>) {
+  return solidTemplate(SkillMenu, { args });
 }

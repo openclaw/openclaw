@@ -1,5 +1,5 @@
-import { html, nothing } from "lit";
 import { createAsyncQuestionPanelProps } from "./chat-async-question.ts";
+import { solidTemplate } from "./chat-composer-controls.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 import {
   createGatewayQuestionPanelProps,
@@ -7,12 +7,20 @@ import {
   type QuestionPanelProps,
 } from "./chat-question-card.ts";
 
-export function renderComposerQuestionDock(panel: QuestionPanelProps | null) {
-  return panel
-    ? html`<div class="agent-chat__question-dock">
-        <openclaw-chat-question-card .props=${panel}></openclaw-chat-question-card>
-      </div>`
-    : nothing;
+export function ComposerQuestionDock(props: { panel: QuestionPanelProps | null }) {
+  return (
+    <>
+      {props.panel ? (
+        <div class="agent-chat__question-dock">
+          <openclaw-chat-question-card prop:props={props.panel} />
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+export function renderComposerQuestionDockSolid(panel: QuestionPanelProps | null) {
+  return <ComposerQuestionDock panel={panel} />;
 }
 
 export function resolveComposerQuestionPanel(
@@ -129,4 +137,8 @@ export function resolveComposerQuestionPanel(
     onPreviousRequest: () => selectRequest((index - 1 + requests.length) % requests.length),
     onNextRequest: () => selectRequest((index + 1) % requests.length),
   });
+}
+
+export function renderComposerQuestionDock(panel: QuestionPanelProps | null) {
+  return solidTemplate(ComposerQuestionDock, { panel });
 }
