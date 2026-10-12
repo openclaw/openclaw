@@ -12,6 +12,7 @@ import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs
 import { markStartupOrphanedMainSessionsForRecovery } from "../../agents/main-session-recovery/main-session-restart-recovery-marking.js";
 import { resolveAgentRunAbortLifecycleFields } from "../../agents/run-termination.js";
 import {
+  cancelSubagentRequesterSettleWake,
   markRequesterTurnYielded,
   markSubagentRunTerminated,
   registerSubagentRun,
@@ -19,7 +20,7 @@ import {
 } from "../../agents/subagents/registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
-import { enqueueFollowupRun } from "../../auto-reply/reply/queue.js";
+import { enqueueFollowupRun, getFollowupQueueDepth } from "../../auto-reply/reply/queue.js";
 import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
 import { clearFollowupDrainCallback } from "../../auto-reply/reply/queue/drain.js";
 import { clearFollowupQueue } from "../../auto-reply/reply/queue/state.js";
@@ -300,15 +301,36 @@ it("leaves an ownerless session without yielded work unchanged", async () => {
   expect(loadSessionEntry({ agentId: "main", sessionKey: parentKey })).toEqual(before);
 });
 
-it("does not cancel a yielded parent when Stop only clears a queued follow-up", async () => {
+it.each([
+  {
+    name: "does not cancel a yielded parent when Stop only clears a queued follow-up",
+    pendingWake: false,
+  },
+  {
+    name: "cancels a yielded parent when Stop clears a queued follow-up and retires its child's wake",
+    pendingWake: true,
+  },
+])("$name", async ({ pendingWake }) => {
   await seedYieldedParent();
   expect(await markSubagentRunTerminated({ runId: childRunId, reason: "killed" })).toBe(1);
+  const completedChild = await getSubagentRunByChildSessionKey(childKey);
+  if (!completedChild) {
+    throw new Error("Missing completed child");
+  }
+  expect(completedChild.requesterSettleWake).toBeDefined();
+  const childOutcome = structuredClone(completedChild.execution.outcome);
+  if (!pendingWake) {
+    // Isolate queue clearing from a still-pending child continuation.
+    await cancelSubagentRequesterSettleWake(completedChild, () => {});
+    expect((await getSubagentRunByChildSessionKey(childKey))?.requesterSettleWake).toBeUndefined();
+  }
   const before = loadSessionEntry({ agentId: "main", sessionKey: parentKey });
   const followup = createQueueTestRun({ prompt: "Queued follow-up" });
   followup.run = { ...followup.run, agentId: "main", sessionId: parentId, sessionKey: parentKey };
   expect(
     enqueueFollowupRun(parentKey, followup, { mode: "followup" }, "none", undefined, false),
   ).toBe(true);
+  expect(getFollowupQueueDepth(parentKey)).toBe(1);
   const respond = vi.fn();
   const context = createChatAbortContext({
     getRuntimeConfig,
@@ -330,11 +352,31 @@ it("does not cancel a yielded parent when Stop only clears a queued follow-up", 
       true,
       { ok: true, abortedRunId: null, status: "aborted" },
     ]);
-    expect(loadSessionEntry({ agentId: "main", sessionKey: parentKey })).toEqual(before);
+    expect(getFollowupQueueDepth(parentKey)).toBe(0);
+    if (pendingWake) {
+      expect(loadSessionEntry({ agentId: "main", sessionKey: parentKey })).toMatchObject({
+        status: "killed",
+        abortedLastRun: true,
+        lastRunId: parentRunId,
+      });
+      await fixture.settle();
+      expect(
+        await markStartupOrphanedMainSessionsForRecovery({
+          cfg: getRuntimeConfig(),
+          stateDir: fixture.stateDir,
+        }),
+      ).toMatchObject({ marked: 0 });
+    } else {
+      expect(loadSessionEntry({ agentId: "main", sessionKey: parentKey })).toEqual(before);
+    }
+    const retiredChild = await getSubagentRunByChildSessionKey(childKey);
+    expect(retiredChild?.requesterSettleWake).toBeUndefined();
+    expect(retiredChild?.execution.outcome).toEqual(childOutcome);
   } finally {
     for (const key of [parentKey, parentId]) {
       clearFollowupQueue(key);
       clearFollowupDrainCallback(key);
+      expect(getFollowupQueueDepth(key)).toBe(0);
     }
   }
 });
