@@ -1,4 +1,5 @@
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { asOptionalRecord as record } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { fetchXService } from "./fetch.js";
 import { X_POST_READ_MICRO_USD, X_USER_READ_MICRO_USD, xReadCost, xReplyCost } from "./pricing.js";
@@ -64,9 +65,12 @@ async function readActivityErrorDetail(
 
 async function readJson(response: Response): Promise<unknown> {
   try {
-    return await response.json();
-  } catch {
-    throw new Error("X API returned an unreadable JSON response");
+    return await readProviderJsonResponse(response, "X API");
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("JSON response exceeds")) {
+      throw error;
+    }
+    throw new Error("X API returned an unreadable JSON response", { cause: error });
   }
 }
 
