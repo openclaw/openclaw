@@ -304,6 +304,12 @@ not establish which model a native runtime actually uses. Isolated prompt-only
 completions keep their separate exact-route contract and bind the selected model
 through completion and cleanup.
 
+Gateway turns capture their role and model ceiling from the current configuration
+after the profile lookup completes. A role policy downgrade reverted while that
+lookup is pending does not revoke the turn. A downgrade still in effect must pass
+the current scope checks; explicit role assignment changes and source revocations
+remain effective throughout preparation.
+
 Bounded automatic metadata, operator-configured
 inbound media preprocessing, and host-owned execution approval keep their
 existing service authority. Omitting `modelPolicy` preserves the role's existing
