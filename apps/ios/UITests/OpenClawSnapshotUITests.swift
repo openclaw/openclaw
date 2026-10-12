@@ -1487,7 +1487,21 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(app.staticTexts[
             "Authentication failed. Review the provider credential or sign-in, then retry.",
         ].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["chat-model-sign-in"].exists)
         self.attachScreenshot(named: "chat-composer-model-auth-failed")
+    }
+
+    func testModelSignInMovesToModelMenuWhileSelectedModelCanSend() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone composer proof only")
+        self.launchApp(for: Self.chatScreenshotTarget)
+        let app = try XCTUnwrap(self.app)
+        let modelMenu = app.buttons["chat-composer-inline-model"]
+        XCTAssertTrue(modelMenu.waitForExistence(timeout: 8))
+        XCTAssertFalse(app.buttons["chat-model-sign-in"].exists)
+        self.attachScreenshot(named: "chat-composer-no-sign-in-row")
+        modelMenu.tap()
+        XCTAssertTrue(app.buttons["chat-model-sign-in"].waitForExistence(timeout: 3))
+        self.attachScreenshot(named: "chat-composer-model-menu-sign-in")
     }
 
     func testModelSelectionTargetVariantsPersistAcrossBothPickers() throws {

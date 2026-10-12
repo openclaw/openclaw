@@ -193,13 +193,13 @@ struct OpenClawChatComposer: View {
                 .accessibilityIdentifier("chat-composer-model-sign-in-notice")
             }
             self.lifecycleComposer
-            if self.viewModel.modelCatalogMessage != nil || !self.usesDesktopModelMenu {
+            if self.viewModel.modelCatalogMessage != nil || self.showsModelSignInRow {
                 HStack {
                     if let message = self.viewModel.modelCatalogMessage {
                         Text(message).font(OpenClawChatTypography.caption)
                     }
                     Spacer()
-                    if !self.usesDesktopModelMenu {
+                    if self.showsModelSignInRow {
                         self.modelSignInButton
                     }
                 }
@@ -225,6 +225,18 @@ struct OpenClawChatComposer: View {
         self.isDesktopLayout && self.composerChrome == .clean
         #else
         false
+        #endif
+    }
+
+    /// The phone reaches sign-in from its model menu, as the desktop does, so the row under the
+    /// composer is kept for a selected model that cannot send without it. Composers without that
+    /// menu keep the row.
+    private var showsModelSignInRow: Bool {
+        #if os(iOS)
+        guard self.composerChrome == .clean else { return true }
+        return self.viewModel.composerModelAvailabilityMessage != nil
+        #else
+        !self.usesDesktopModelMenu
         #endif
     }
 

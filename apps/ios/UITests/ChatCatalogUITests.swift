@@ -51,7 +51,10 @@ final class ChatCatalogUITests: XCTestCase {
         }
         self.capture(app, named: "published-thinking-choices")
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
-        app.buttons["chat-model-sign-in"].tap()
+        modelPicker.tap()
+        let modelSignIn = app.buttons["chat-model-sign-in"]
+        XCTAssertTrue(modelSignIn.waitForExistence(timeout: 5))
+        modelSignIn.tap()
         let signIn = app.buttons["Catalog fixture sign-in"]
         XCTAssertTrue(signIn.waitForExistence(timeout: 15))
         signIn.tap()

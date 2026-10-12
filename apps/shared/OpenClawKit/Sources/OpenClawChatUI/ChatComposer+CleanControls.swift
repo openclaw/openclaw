@@ -192,6 +192,9 @@ extension OpenClawChatComposer {
                 Divider()
                 self.modelSignInButton
             }
+            #elseif os(iOS)
+            Divider()
+            self.modelSignInButton
             #endif
         } label: {
             self.cleanInlineModelLabel(compact: compact)
