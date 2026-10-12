@@ -162,6 +162,23 @@ describe("requireFromMe (edit / unsend authorization)", () => {
       }),
     ).rejects.toThrow("not one this agent sent");
   });
+
+  it("rejects when the cached entry has no isFromMe field (older persisted entry, treated as not-from-me)", async () => {
+    // Missing persisted provenance must not authorize editing or unsending.
+    await rememberIMessageReplyCache({
+      accountId: "default",
+      messageId: "legacy-guid",
+      chatGuid: "iMessage;+;chatA",
+      timestamp: Date.now(),
+    });
+
+    await expect(
+      resolveIMessageMessageId("legacy-guid", {
+        chatContext: { chatGuid: "iMessage;+;chatA" },
+        requireFromMe: true,
+      }),
+    ).rejects.toThrow("not one this agent sent");
+  });
 });
 
 describe("findLatestIMessageEntryForChat", () => {
