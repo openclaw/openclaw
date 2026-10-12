@@ -73,9 +73,11 @@ describe("gateway request suspension admission", () => {
       scope: "operator.admin",
       core: true,
       handler: expectDefined(handlers["update.runs.get"], "lazy update-run handler"),
-      context: { requestEntryLifetime, logGateway: { warn: vi.fn() } } as unknown as Parameters<
-        typeof handleGatewayRequest
-      >[0]["context"],
+      context: {
+        getRuntimeConfig: () => ({}),
+        requestEntryLifetime,
+        logGateway: { warn: vi.fn() },
+      } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],
     });
     await preparing.promise;
     requestEntryLifetime.beginClose();
@@ -175,6 +177,7 @@ describe("gateway request suspension admission", () => {
       }),
     ]);
     const context = {
+      getRuntimeConfig: () => ({}),
       logGateway: { warn: vi.fn() },
     } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"];
     let releaseContinuation: (() => void) | null = null;
@@ -275,6 +278,7 @@ describe("gateway request suspension admission", () => {
       getSuspensionBlockerCount: vi.fn(() => 0),
     };
     const context = {
+      getRuntimeConfig: () => ({}),
       cron,
       logGateway: { warn: vi.fn() },
       chatAbortControllers: new Map(),
@@ -373,6 +377,7 @@ describe("gateway request suspension admission", () => {
         ],
       ]);
       const context = {
+        getRuntimeConfig: () => ({}),
         cron,
         logGateway: { warn: vi.fn(), info: vi.fn() },
         chatAbortControllers,

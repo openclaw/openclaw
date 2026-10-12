@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   readResolvedSessionEntryInWorker,
   resolveSessionEntryCandidateTargetForRuntime,
@@ -24,6 +25,7 @@ it("keeps an unbound incognito read in its process-local store", async () => {
 
 it("keeps candidate order and observes a committed replacement through the worker", async () => {
   await withOpenClawTestState({ label: "candidate-runtime" }, async (state) => {
+    setRuntimeConfigSnapshot({});
     const scope = { agentId: "main", env: state.env };
     const firstKey = "agent:main:first";
     const secondKey = "agent:main:second";

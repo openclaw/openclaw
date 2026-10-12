@@ -330,7 +330,6 @@ function captureValidationTransfer(
         };
   validatedPaths.set(pathname, captured);
   const capturedValidation = captured.validation;
-  const capturedSchemaCell = capturedValidation?.schema?.valid;
   const wasValid = capturedValidation
     ? Atomics.load(new Int32Array(capturedValidation.valid), 0)
     : undefined;
@@ -355,17 +354,6 @@ function captureValidationTransfer(
       (schemaRequired && (!schema || (schemaValid !== 0 && schemaValid !== 1)))
     ) {
       return "invalid";
-    }
-    const currentSchemaCell = captured.validation?.schema?.valid;
-    // A checked opener can promote proof while admission is pending. Revocation
-    // of that newer proof must not be undone by the older independent handoff.
-    if (
-      schemaValid === 1 &&
-      currentSchemaCell !== undefined &&
-      currentSchemaCell !== capturedSchemaCell &&
-      Atomics.load(new Int32Array(currentSchemaCell), 0) !== 1
-    ) {
-      return "stale";
     }
     if (
       (schemaRequired && schemaValid !== 1) ||

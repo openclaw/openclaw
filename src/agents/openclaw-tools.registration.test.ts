@@ -21,6 +21,7 @@ import {
   shouldIncludePrimarySessionToolForOpenClawTools,
   shouldIncludeProgressCardToolForOpenClawTools,
 } from "./openclaw-tools.registration.js";
+import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 import * as inProcessGateway from "./tools/in-process-gateway.js";
 
@@ -146,7 +147,7 @@ describe("openclaw-tools progress_card gating", () => {
     },
   );
 
-  it("keeps human-question tools on permitted primary sessions", () => {
+  it("keeps human-question tools on permitted primary sessions", async () => {
     for (const toolName of ["ask_user", "secrets"] as const) {
       const includeTool = (agentSessionKey?: string) =>
         shouldIncludePrimarySessionToolForOpenClawTools(toolName, { agentSessionKey });
@@ -171,9 +172,11 @@ describe("openclaw-tools progress_card gating", () => {
     setEmbeddedMode(true);
 
     expect(
-      createFastToolNames({
-        agentSessionKey: "agent:main:subagent:worker",
-      }),
+      await withPreparedSessionCapabilityRead(() =>
+        createFastToolNames({
+          agentSessionKey: "agent:main:subagent:worker",
+        }),
+      ),
     ).not.toContain("ask_user");
     expect(
       createFastToolNames({

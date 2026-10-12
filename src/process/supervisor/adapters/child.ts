@@ -112,6 +112,7 @@ type ChildAdapterInput = ProcessAdapterConstruction & {
   argv0?: string;
   windowsVerbatimArguments?: boolean;
   input?: string;
+  prepareInput?: () => void | Promise<void>;
   stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
   secretInput?: SpawnSecretInput;
   stderrDestination?: Writable;
@@ -183,6 +184,7 @@ export async function createChildAdapter(
       env: preparedSpawn.env,
       stdinMode,
       input: params.input,
+      prepareInput: params.prepareInput,
       secretInput: params.secretInput,
       oomScoreWrapperSelected: preparedSpawn.wrapped,
       abortSignal: params.abortSignal,
@@ -711,6 +713,10 @@ export async function createChildAdapter(
         throw new Error("worker lifecycle IPC channel was not created");
       }
       if (params.input !== undefined) {
+        if (params.prepareInput) {
+          await params.prepareInput();
+          assertCurrent();
+        }
         childStdin?.write(params.input);
         stdin?.end();
       } else if (stdinMode === "pipe-closed") {

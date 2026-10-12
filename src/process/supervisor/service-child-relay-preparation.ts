@@ -20,6 +20,7 @@ export type ServiceChildRelayParams = ProcessAdapterConstruction & {
   cwd?: string;
   stdinMode: "inherit" | "pipe-open" | "pipe-closed";
   input?: string;
+  prepareInput?: () => void | Promise<void>;
   secretInput?: SpawnSecretInput;
   stderrDestination?: Writable;
   stdoutConsumption?: "awaited";

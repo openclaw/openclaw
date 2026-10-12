@@ -1,7 +1,9 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { composeTranscriptDisplay } from "../../../../src/chat/transcript-display-position.js";
+import { readModelFallbackNotice } from "../../../../src/shared/model-fallback-notice.js";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
+import { t } from "../../i18n/index.ts";
 import {
   type ChatGuardianNotice,
   type ChatItem,
@@ -223,6 +225,28 @@ export function buildChatItems(
     const itemKey = item.key;
     const raw = asRecord(msg) ?? {};
     const marker = asRecord(raw["__openclaw"]);
+    const fallback = readModelFallbackNotice(msg);
+    if (fallback) {
+      items.push({
+        kind: "divider",
+        key: `divider:model-fallback:${itemKey}`,
+        label: t(
+          fallback.phase === "restored"
+            ? "chat.composer.modelRestoredEvent"
+            : "chat.composer.modelFallbackEvent",
+          { from: fallback.fromModel, to: fallback.toModel },
+        ),
+        ...(fallback.reason
+          ? {
+              description: t("chat.composer.fallbackReason", {
+                reason: fallback.reason.replace(/_/g, " "),
+              }),
+            }
+          : {}),
+        timestamp: rawMessageTimestamp(msg) ?? Date.now(),
+      });
+      continue;
+    }
     if (marker?.kind === "compaction" || isContextCompactionMessage(msg)) {
       const matchesLive = compaction != null && matchesCompactionOperation(msg, compaction);
       const divider = buildCompactionDividerItem(

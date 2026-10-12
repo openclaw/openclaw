@@ -499,7 +499,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
   }
 
   private async writeChunks(
-    { entry, source, chunks, retained }: PreparedMemoryIndexEntry,
+    { entry, source, chunks, retained, removedIds }: PreparedMemoryIndexEntry,
     generation: MemorySyncProviderGeneration | null,
     embeddings: number[][],
     vectorReady: boolean,
@@ -513,7 +513,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
             sessionId: expectDefined(entry.sessionId, "memory index session identity"),
           }
         : undefined;
-    const retryInFull = await withMemoryWorkspaceLock(this.workspaceDir, async () => {
+    await withMemoryWorkspaceLock(this.workspaceDir, async () => {
       const assertCurrent = () => {
         this.memoryFiles?.assertCurrent();
         if (
@@ -540,7 +540,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
         model: generation?.provider?.model ?? "fts-only",
         now: Date.now(),
         vectorReady,
-        ...(session ? { source: "sessions", ...session, retained } : { source: "memory" }),
+        ...(session
+          ? { source: "sessions", ...session, retained, removedIds }
+          : { source: "memory" }),
       });
       const prepare = async (): Promise<boolean> => {
         if (source === "memory") {
@@ -562,7 +564,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
       };
       const published = await database.replaceSource(createReplacement(), assertCurrent, prepare);
       if (!published) {
-        return false;
+        return;
       }
       this.database.vectorDegradedWriteWarningShown = logMemoryVectorDegradedWrite({
         vectorEnabled: this.vector.enabled,
@@ -572,15 +574,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
         loadError: this.vector.loadError,
         warn: (message) => log.warn(message),
       });
-      return published.retainedDrift;
     }).catch((error: unknown) => {
       this.markFailedFullReindexRetry({ memory: false, sessions: Boolean(session) });
       throw error;
     });
-    // A drifted delta wrote nothing; rebuild once after releasing the workspace lock.
-    if (retryInFull) {
-      await this.indexFileWithGeneration(entry, source, generation, false);
-    }
   }
 
   private async prepareIndexEntry(

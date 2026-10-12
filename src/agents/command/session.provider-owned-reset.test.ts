@@ -7,16 +7,12 @@ const hoisted = vi.hoisted(() => ({
   terminalTranscriptNewer: false,
 }));
 
-vi.mock("../../config/sessions/session-accessor.js", () => ({
-  loadExactSessionEntryReadOnly: ({ sessionKey }: { sessionKey: string }) => {
+// mock-isolation: Provider-reset fixtures read cloned synthetic rows without opening a session store.
+vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
+  readSessionEntryReadOnlyInWorker: async ({ sessionKey }: { sessionKey: string }) => {
     const entry = hoisted.store[sessionKey];
-    return entry ? { sessionKey, entry: structuredClone(entry) } : undefined;
+    return entry ? structuredClone(entry) : undefined;
   },
-  listSessionEntriesReadOnly: () =>
-    Object.entries(hoisted.store).map(([sessionKey, entry]) => ({
-      sessionKey,
-      entry,
-    })),
 }));
 
 vi.mock("../../config/sessions/paths.js", () => ({

@@ -31,10 +31,8 @@ import {
   SessionTranscriptColdError,
 } from "./session-cold-storage-state.js";
 import { deriveSessionPredicateColumns } from "./session-predicate-columns.js";
-import {
-  publishSessionTranscriptAuthority,
-  type SessionTranscriptAuthority,
-} from "./session-transcript-authority.js";
+import { publishSessionTranscriptAuthority } from "./session-transcript-authority.js";
+import type { SessionTranscriptAuthority } from "./session-transcript-authority.types.js";
 import {
   readTranscriptContextFacts,
   retainTranscriptContextFacts,

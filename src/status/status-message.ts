@@ -104,6 +104,7 @@ type StatusArgs = {
   runtimeContextProvider?: string;
   runtimeContextTokens?: number;
   sessionEntry?: SessionEntry;
+  preparedSandboxRuntime?: ReturnType<typeof resolveSandboxRuntimeStatus>;
   sessionKey?: string;
   parentSessionKey?: string;
   sessionScope?: SessionScope;
@@ -170,15 +171,24 @@ function resolveConfiguredTextVerbosity(params: {
 }
 
 function resolveExecutionLabel(
-  args: Pick<StatusArgs, "config" | "agent" | "agentId" | "sessionKey">,
+  args: Pick<
+    StatusArgs,
+    "config" | "agent" | "agentId" | "sessionKey" | "sessionEntry" | "preparedSandboxRuntime"
+  >,
 ): string {
   const sessionKey = args.sessionKey?.trim();
   if (sessionKey) {
-    const runtimeStatus = resolveSandboxRuntimeStatus({
-      cfg: args.config,
-      sessionKey,
-      agentId: args.agentId,
-    });
+    if (args.preparedSandboxRuntime === undefined && args.sessionEntry === undefined) {
+      return "unknown";
+    }
+    const runtimeStatus =
+      args.preparedSandboxRuntime ??
+      resolveSandboxRuntimeStatus({
+        cfg: args.config,
+        sessionKey,
+        agentId: args.agentId,
+        preparedSessionEntry: args.sessionEntry,
+      });
     const sandboxMode = runtimeStatus.mode ?? "off";
     if (sandboxMode === "off") {
       return "direct";

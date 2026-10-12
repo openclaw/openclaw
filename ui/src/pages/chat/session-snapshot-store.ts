@@ -427,16 +427,9 @@ export class SessionSnapshotStore implements ChatCacheObserver {
     }
   }
 
-  async read(
-    sessionKey: string,
-    onPrewarm?: (readyAt: number | undefined) => void,
-  ): Promise<ChatSessionSnapshot | null> {
+  async read(sessionKey: string): Promise<ChatSessionSnapshot | null> {
     const isCurrent = this.captureReadScope(sessionKey);
     const prewarm = consumePrewarmedChatSnapshot(sessionKey);
-    if (prewarm) {
-      // The pane must know the read's origin before deciding whether startup can wait.
-      onPrewarm?.(prewarm.readyAt);
-    }
     const value = await (prewarm?.promise ?? readStoredChatSnapshotRecord(sessionKey));
     if (value === undefined || !isCurrent() || !isPersistableChatSnapshotKey(sessionKey)) {
       return null;

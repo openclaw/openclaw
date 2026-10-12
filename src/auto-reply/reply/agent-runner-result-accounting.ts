@@ -1,7 +1,11 @@
+import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import { persistModelFallbackRestoredTranscriptNotice } from "../../agents/embedded-agent-runner/model-fallback-transcript.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { prepareLiveModelSwitchAfterRun } from "../../agents/live-model-switch.js";
+import { areRuntimeModelRefsEquivalent } from "../../agents/model-runtime-aliases.js";
+import { resolvePersistedOverrideModelRef } from "../../agents/model-selection-persisted.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import type { SessionActorReducer } from "../../config/sessions/session-actor-contract.js";
 import { reduceSessionActorEntry } from "../../config/sessions/session-actor-reducers.js";
@@ -217,7 +221,8 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     followupRun.run.inputProvenance,
   );
   const fallbackStateEntry =
-    activeSessionEntry ?? (sessionKey ? activeSessionStore?.[sessionKey] : undefined);
+    (completion ? await completion.refresh() : activeSessionEntry) ??
+    (sessionKey ? activeSessionStore?.[sessionKey] : undefined);
   const configuredFallbackModel = resolveFallbackOriginModel({
     run: followupRun.run,
     fallbackStateEntry,
@@ -234,6 +239,79 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     state: fallbackStateEntry,
     cfg,
   });
+  if (fallbackTransition.fallbackCleared) {
+    const agentMeta = runResult.meta?.agentMeta;
+    const selectedRunSucceeded =
+      execution.status === "ok" &&
+      !fallbackExhausted &&
+      runResult.meta?.aborted !== true &&
+      !runResult.meta?.error &&
+      !runResult.meta?.replayInvalid &&
+      !runResult.meta?.failureSignal &&
+      !payloadArray.some((payload) => payload.isError) &&
+      operation?.abortSignal.aborted !== true &&
+      agentMeta !== undefined &&
+      areRuntimeModelRefsEquivalent(
+        buildModelCatalogRef(agentMeta.provider, agentMeta.model),
+        fallbackTransition.selectedModelRef,
+        { config: cfg },
+      );
+    const selectionUnchanged = (entry: SessionEntry) => {
+      const override =
+        entry.modelOverrideSource !== "auto"
+          ? resolvePersistedOverrideModelRef({
+              defaultProvider: selectedProvider,
+              overrideProvider: entry.providerOverride,
+              overrideModel: entry.modelOverride,
+              routeResolution: "resolved",
+            })
+          : null;
+      return (
+        entry.fallbackNotice?.selectedModel === fallbackTransition.selectedModelRef &&
+        (!override ||
+          areRuntimeModelRefsEquivalent(
+            buildModelCatalogRef(override.provider, override.model),
+            fallbackTransition.selectedModelRef,
+            { config: cfg },
+          ))
+      );
+    };
+    if (!selectedRunSucceeded) {
+      // A failed primary attempt is not recovery. Keep its prior fallback for the next success.
+      fallbackTransition.fallbackCleared = false;
+      fallbackTransition.stateChanged = false;
+    } else if (!fallbackStateEntry || !selectionUnchanged(fallbackStateEntry)) {
+      // A new user selection can retire stale notice state, but cannot restore the old primary.
+      fallbackTransition.fallbackCleared = false;
+    } else if (completion && sessionKey && context.storePath && !preserveUserFacingSessionState) {
+      const fromModel = fallbackTransition.previousState.activeModel!;
+      const recorded = await persistModelFallbackRestoredTranscriptNotice({
+        agentId: followupRun.run.agentId,
+        sessionKey,
+        storePath: context.storePath,
+        entry: fallbackStateEntry,
+        config: cfg,
+        runId,
+        fromModel,
+        toModel: fallbackTransition.selectedModelRef,
+        assertCurrent() {
+          operation?.abortSignal.throwIfAborted();
+          const current = completion.assertCurrent();
+          if (
+            !current ||
+            !selectionUnchanged(current) ||
+            current.fallbackNotice?.activeModel !== fromModel
+          ) {
+            throw new Error("Model restoration source changed before commit");
+          }
+        },
+      });
+      if (!recorded) {
+        fallbackTransition.fallbackCleared = false;
+        fallbackTransition.stateChanged = false;
+      }
+    }
+  }
   if (fallbackTransition.stateChanged && !fallbackExhausted && !preserveUserFacingSessionState) {
     const fallbackNotice = fallbackTransition.nextState.selectedModel
       ? {
@@ -295,7 +373,11 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     promptTokens,
     isHeartbeat,
     preserveRuntimeModel:
-      fallbackExhausted || fallbackTransition.nextState.selectedModel !== undefined,
+      fallbackExhausted ||
+      (fallbackTransition.stateChanged
+        ? fallbackTransition.nextState
+        : fallbackTransition.previousState
+      ).selectedModel !== undefined,
     preserveUserFacingSessionModelState: preserveUserFacingSessionState,
     modelUsed,
     providerUsed,

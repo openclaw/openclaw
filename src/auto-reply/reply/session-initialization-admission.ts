@@ -29,12 +29,14 @@ export type InitSessionStateParams = {
   commandAuthorized: boolean;
   ctx: FinalizedRuntimeMsgContext;
   expectedExistingSessionId?: string;
+  recordedSessionActivity?: InternalGetReplyOptions["recordedSessionActivity"];
   pinExpectedExistingSession?: boolean;
   newlyCreatedSessionId?: string;
   requestedSessionId?: string;
   resumeRequestedSession?: boolean;
   signal?: AbortSignal;
   bindSessionCreation?: SessionEventExecution["bindSessionCreation"];
+  onSessionCreated?: InternalGetReplyOptions["onSessionCreated"];
 };
 
 export type InitSessionStateAttemptContext = {
@@ -196,12 +198,15 @@ export function resolveReplySessionInitializationOptions(
   return {
     providerReviewAcknowledgment: opts?.providerReviewAcknowledgment,
     replyOperation: opts?.replyOperation,
+    recordedSessionActivity: opts?.recordedSessionActivity,
     ...(opts?.expectedExistingSessionId
       ? { expectedExistingSessionId: opts.expectedExistingSessionId }
       : {}),
     pinExpectedExistingSession: opts?.pinExpectedExistingSession === true,
     newlyCreatedSessionId: opts?.newlyCreatedSessionId,
-    bindSessionCreation: opts?.internalEventExecution?.bindSessionCreation,
+    bindSessionCreation:
+      opts?.internalEventExecution?.bindSessionCreation ?? opts?.bindSessionCreation,
+    onSessionCreated: opts?.onSessionCreated,
     requestedSessionId: opts?.requestedSessionId,
     resumeRequestedSession: opts?.resumeRequestedSession,
     signal: opts?.abortSignal,

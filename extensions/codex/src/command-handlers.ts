@@ -106,253 +106,259 @@ export async function handleCodexSubcommand(
     return { text: CODEX_NATIVE_EXECUTION_AUTH_ERROR };
   }
   const nativePolicy = await resolveCodexNativeCommandSandboxBlock(inputCtx, normalized, rest);
-  if (nativePolicy.block) {
-    return { text: nativePolicy.block };
-  }
-  const previousPolicyCheck = inputCtx.assertNativePolicyCurrent;
-  const ctx = {
-    ...inputCtx,
-    nativePolicySource: nativePolicy.source,
-    assertNativePolicyCurrent: async () => {
-      await previousPolicyCheck?.();
-      await nativePolicy.assertCurrent();
-    },
-  };
-  const usageCommand = normalized === "unbind" ? "detach" : normalized;
-  if (
-    rest.length > 0 &&
-    ["status", "models", "detach", "binding", "stop", "mcp", "skills", "account"].includes(
-      usageCommand,
-    )
-  ) {
-    return { text: `Usage: /codex ${usageCommand}` };
-  }
-  if (normalized === "plugins") {
-    // Account-wide hosted refresh does not require plugin-management configuration IO.
-    if (rest[0]?.toLowerCase() === "refresh") {
-      if (rest.length !== 1) {
-        return {
-          text: "Usage: /codex plugins refresh — refresh hosted app inventory for the current Codex account/runtime.",
-        };
-      }
-      if (!canMutateCodexHost(ctx)) {
-        return {
-          text: "Only an owner or operator.admin gateway client can refresh hosted app inventory.",
-        };
-      }
-      return await withCodexPluginCommandContext(
-        { deps, ctx, pluginConfig: options.pluginConfig },
-        (context) => refreshCodexHostedApps(context),
-      );
+  try {
+    if (nativePolicy.block) {
+      return { text: nativePolicy.block };
     }
-    if (!deps.codexPluginsManagementIo) {
+    const previousPolicyCheck = inputCtx.assertNativePolicyCurrent;
+    const ctx = {
+      ...inputCtx,
+      nativePolicySource: nativePolicy.source,
+      assertNativePolicyCurrent: async () => {
+        await previousPolicyCheck?.();
+        await nativePolicy.assertCurrent();
+      },
+    };
+    const usageCommand = normalized === "unbind" ? "detach" : normalized;
+    if (
+      rest.length > 0 &&
+      ["status", "models", "detach", "binding", "stop", "mcp", "skills", "account"].includes(
+        usageCommand,
+      )
+    ) {
+      return { text: `Usage: /codex ${usageCommand}` };
+    }
+    if (normalized === "plugins") {
+      // Account-wide hosted refresh does not require plugin-management configuration IO.
+      if (rest[0]?.toLowerCase() === "refresh") {
+        if (rest.length !== 1) {
+          return {
+            text: "Usage: /codex plugins refresh — refresh hosted app inventory for the current Codex account/runtime.",
+          };
+        }
+        if (!canMutateCodexHost(ctx)) {
+          return {
+            text: "Only an owner or operator.admin gateway client can refresh hosted app inventory.",
+          };
+        }
+        return await withCodexPluginCommandContext(
+          { deps, ctx, pluginConfig: options.pluginConfig },
+          (context) => refreshCodexHostedApps(context),
+        );
+      }
+      if (!deps.codexPluginsManagementIo) {
+        return {
+          text:
+            "Codex sub-plugin management is not wired up (codexPluginsManagementIo dep is undefined). " +
+            "Edit ~/.openclaw/openclaw.json or use `openclaw config patch` until the runtime exposes the IO.",
+        };
+      }
+      let appServerScope: ReturnType<typeof resolveCommandAppServerScope> | undefined;
+      const getAppServerScope = () =>
+        (appServerScope ??= resolveCommandAppServerScope(deps, ctx, options.pluginConfig));
+      return await handleCodexPluginsSubcommand(ctx, rest, deps.codexPluginsManagementIo, {
+        withContext: (run) =>
+          withCodexPluginCommandContext({ deps, ctx, pluginConfig: options.pluginConfig }, run),
+        workspaceDir: async () => {
+          const data = readCodexConversationBindingData(await ctx.getCurrentConversationBinding());
+          const workspaceDir =
+            data?.kind === "codex-app-server-session" ? data.workspaceDir : undefined;
+          return workspaceDir?.trim() || deps.resolveCodexDefaultWorkspaceDir(options.pluginConfig);
+        },
+        list: async (requestParams) => {
+          const scope = await getAppServerScope();
+          return (await deps.codexControlRequest(
+            options.pluginConfig,
+            CODEX_CONTROL_METHODS.listPlugins,
+            requestParams,
+            { ...scope, config: ctx.config },
+          )) as v2.PluginListResponse;
+        },
+        install: async (requestParams) => {
+          const scope = await getAppServerScope();
+          return (await deps.codexControlRequest(
+            options.pluginConfig,
+            CODEX_CONTROL_METHODS.installPlugin,
+            requestParams,
+            {
+              ...scope,
+              config: ctx.config,
+              assertOwnerCurrent: () => assertCodexHostOwnerCurrent(ctx),
+            },
+          )) as v2.PluginInstallResponse;
+        },
+        refresh: async (workspaceDir) => {
+          const scope = await getAppServerScope();
+          const configuredAppServer = resolveCodexAppServerRuntimeOptions({
+            pluginConfig: options.pluginConfig,
+          });
+          const appServer = scope.startOptions
+            ? { ...configuredAppServer, start: scope.startOptions }
+            : configuredAppServer;
+          const authProfileId = scope.authProfileId ?? undefined;
+          const accountId = await resolveCodexAppServerAuthAccountCacheKey({
+            authProfileId,
+            agentDir: scope.agentDir,
+            config: ctx.config,
+          });
+          const client = await getLeasedSharedCodexAppServerClient({
+            startOptions: appServer.start,
+            pluginConfig: options.pluginConfig,
+            authProfileId: scope.authProfileId,
+            agentDir: scope.agentDir,
+            config: ctx.config,
+          });
+          try {
+            const appCacheKey = buildCodexPluginAppCacheKey({
+              appServer,
+              agentDir: scope.agentDir,
+              authProfileId,
+              accountId,
+              envApiKeyFingerprint: authProfileId
+                ? undefined
+                : resolveCodexAppServerFallbackApiKeyCacheKey({ startOptions: appServer.start }),
+              appServerVersion: client.getServerVersion(),
+              runtimeIdentity: client.getRuntimeIdentity(),
+            });
+            return await refreshCodexPluginRuntimeState({
+              configCwd: workspaceDir,
+              appCache: defaultCodexAppInventoryCache,
+              appCacheKey,
+              metadataCache: defaultCodexPluginMetadataCache,
+              request: async (method, requestParams) => {
+                const requestMethod = resolvePluginRuntimeRefreshMethod(method);
+                return await deps.codexControlRequest(
+                  options.pluginConfig,
+                  requestMethod,
+                  requestParams as JsonValue | undefined,
+                  { ...scope, config: ctx.config },
+                );
+              },
+            });
+          } finally {
+            releaseLeasedSharedCodexAppServerClient(client);
+          }
+        },
+      });
+    }
+    if (normalized === "status") {
+      const { agentDir } = resolveCodexConversationControlScope(ctx);
       return {
-        text:
-          "Codex sub-plugin management is not wired up (codexPluginsManagementIo dep is undefined). " +
-          "Edit ~/.openclaw/openclaw.json or use `openclaw config patch` until the runtime exposes the IO.",
+        text: formatCodexStatus(
+          await deps.readCodexStatusProbes(options.pluginConfig, ctx.config, agentDir),
+        ),
       };
     }
-    let appServerScope: ReturnType<typeof resolveCommandAppServerScope> | undefined;
-    const getAppServerScope = () =>
-      (appServerScope ??= resolveCommandAppServerScope(deps, ctx, options.pluginConfig));
-    return await handleCodexPluginsSubcommand(ctx, rest, deps.codexPluginsManagementIo, {
-      withContext: (run) =>
-        withCodexPluginCommandContext({ deps, ctx, pluginConfig: options.pluginConfig }, run),
-      workspaceDir: async () => {
-        const data = readCodexConversationBindingData(await ctx.getCurrentConversationBinding());
-        const workspaceDir =
-          data?.kind === "codex-app-server-session" ? data.workspaceDir : undefined;
-        return workspaceDir?.trim() || deps.resolveCodexDefaultWorkspaceDir(options.pluginConfig);
-      },
-      list: async (requestParams) => {
-        const scope = await getAppServerScope();
-        return (await deps.codexControlRequest(
-          options.pluginConfig,
-          CODEX_CONTROL_METHODS.listPlugins,
-          requestParams,
-          { ...scope, config: ctx.config },
-        )) as v2.PluginListResponse;
-      },
-      install: async (requestParams) => {
-        const scope = await getAppServerScope();
-        return (await deps.codexControlRequest(
-          options.pluginConfig,
-          CODEX_CONTROL_METHODS.installPlugin,
-          requestParams,
-          {
-            ...scope,
-            config: ctx.config,
-            assertOwnerCurrent: () => assertCodexHostOwnerCurrent(ctx),
-          },
-        )) as v2.PluginInstallResponse;
-      },
-      refresh: async (workspaceDir) => {
-        const scope = await getAppServerScope();
-        const configuredAppServer = resolveCodexAppServerRuntimeOptions({
-          pluginConfig: options.pluginConfig,
-        });
-        const appServer = scope.startOptions
-          ? { ...configuredAppServer, start: scope.startOptions }
-          : configuredAppServer;
-        const authProfileId = scope.authProfileId ?? undefined;
-        const accountId = await resolveCodexAppServerAuthAccountCacheKey({
-          authProfileId,
-          agentDir: scope.agentDir,
-          config: ctx.config,
-        });
-        const client = await getLeasedSharedCodexAppServerClient({
-          startOptions: appServer.start,
-          pluginConfig: options.pluginConfig,
-          authProfileId: scope.authProfileId,
-          agentDir: scope.agentDir,
-          config: ctx.config,
-        });
-        try {
-          const appCacheKey = buildCodexPluginAppCacheKey({
-            appServer,
-            agentDir: scope.agentDir,
-            authProfileId,
-            accountId,
-            envApiKeyFingerprint: authProfileId
-              ? undefined
-              : resolveCodexAppServerFallbackApiKeyCacheKey({ startOptions: appServer.start }),
-            appServerVersion: client.getServerVersion(),
-            runtimeIdentity: client.getRuntimeIdentity(),
-          });
-          return await refreshCodexPluginRuntimeState({
-            configCwd: workspaceDir,
-            appCache: defaultCodexAppInventoryCache,
-            appCacheKey,
-            metadataCache: defaultCodexPluginMetadataCache,
-            request: async (method, requestParams) => {
-              const requestMethod = resolvePluginRuntimeRefreshMethod(method);
-              return await deps.codexControlRequest(
-                options.pluginConfig,
-                requestMethod,
-                requestParams as JsonValue | undefined,
-                { ...scope, config: ctx.config },
-              );
-            },
-          });
-        } finally {
-          releaseLeasedSharedCodexAppServerClient(client);
-        }
-      },
-    });
-  }
-  if (normalized === "status") {
-    const { agentDir } = resolveCodexConversationControlScope(ctx);
-    return {
-      text: formatCodexStatus(
-        await deps.readCodexStatusProbes(options.pluginConfig, ctx.config, agentDir),
-      ),
-    };
-  }
-  if (normalized === "models") {
-    const { agentDir } = resolveCodexConversationControlScope(ctx);
-    return {
-      text: formatModels(
-        await deps.listCodexAppServerModels(
-          deps.requestOptions(options.pluginConfig, 100, ctx.config, agentDir),
+    if (normalized === "models") {
+      const { agentDir } = resolveCodexConversationControlScope(ctx);
+      return {
+        text: formatModels(
+          await deps.listCodexAppServerModels(
+            deps.requestOptions(options.pluginConfig, 100, ctx.config, agentDir),
+          ),
         ),
-      ),
-    };
-  }
-  if (normalized === "threads") {
-    return { text: await buildThreads(deps, ctx, options.pluginConfig, rest.join(" ")) };
-  }
-  if (normalized === "goal") {
-    return { text: await handleNativeGoal(deps, ctx, options.pluginConfig, rest) };
-  }
-  if (normalized === "sessions") {
-    return { text: await buildCodexCliSessions(deps, rest) };
-  }
-  if (normalized === "resume") {
-    return { text: await resumeThread(deps, ctx, options.pluginConfig, rest) };
-  }
-  if (normalized === "bind") {
-    return await bindConversation(deps, ctx, options.pluginConfig, rest);
-  }
-  if (normalized === "detach" || normalized === "unbind") {
-    return { text: await detachConversation(deps, ctx) };
-  }
-  if (normalized === "binding") {
-    return { text: await describeConversationBinding(deps, ctx) };
-  }
-  if (normalized === "stop" || normalized === "steer") {
-    return { text: await controlConversationTurn(deps, ctx, normalized, rest.join(" ")) };
-  }
-  if (normalized === "model") {
-    return { text: await setConversationModel(deps, ctx, rest) };
-  }
-  if (normalized === "fast" || normalized === "permissions") {
-    if (isMenuVerb(rest)) {
-      return buildCodexChoiceMenuReply(normalized);
+      };
     }
-    return { text: await setConversationPreference(deps, ctx, rest, normalized) };
-  }
-  if (normalized === "compact" || normalized === "review") {
-    return { text: await startThreadAction(deps, ctx, options.pluginConfig, normalized, rest) };
-  }
-  if (normalized === "diagnostics") {
-    return await handleCodexDiagnosticsFeedback(deps, ctx, options.pluginConfig, rest.join(" "));
-  }
-  if (normalized === "computer-use" || normalized === "computeruse") {
-    if (isMenuVerb(rest)) {
-      return buildCodexChoiceMenuReply("computer-use");
+    if (normalized === "threads") {
+      return { text: await buildThreads(deps, ctx, options.pluginConfig, rest.join(" ")) };
     }
-    return {
-      text: await handleComputerUseCommand(deps, ctx, options.pluginConfig, rest),
-    };
-  }
-  if (normalized === "mcp" || normalized === "skills") {
-    const scope = await resolveCommandAppServerScope(deps, ctx, options.pluginConfig);
-    const response = await deps.codexControlRequest(
-      options.pluginConfig,
-      normalized === "mcp"
-        ? CODEX_CONTROL_METHODS.listMcpServers
-        : CODEX_CONTROL_METHODS.listSkills,
-      normalized === "mcp" ? { limit: 100 } : {},
-      { config: ctx.config, ...scope },
-    );
-    return {
-      text: normalized === "mcp" ? formatList(response, "MCP servers") : formatSkills(response),
-    };
-  }
-  if (normalized === "account") {
-    const scope = await resolveCommandAppServerScope(deps, ctx, options.pluginConfig);
-    const requestScope = { config: ctx.config, ...scope };
-    const [account, limits] = await Promise.all([
-      deps.safeCodexControlRequest(
+    if (normalized === "goal") {
+      return { text: await handleNativeGoal(deps, ctx, options.pluginConfig, rest) };
+    }
+    if (normalized === "sessions") {
+      return { text: await buildCodexCliSessions(deps, rest) };
+    }
+    if (normalized === "resume") {
+      return { text: await resumeThread(deps, ctx, options.pluginConfig, rest) };
+    }
+    if (normalized === "bind") {
+      return await bindConversation(deps, ctx, options.pluginConfig, rest);
+    }
+    if (normalized === "detach" || normalized === "unbind") {
+      return { text: await detachConversation(deps, ctx) };
+    }
+    if (normalized === "binding") {
+      return { text: await describeConversationBinding(deps, ctx) };
+    }
+    if (normalized === "stop" || normalized === "steer") {
+      return { text: await controlConversationTurn(deps, ctx, normalized, rest.join(" ")) };
+    }
+    if (normalized === "model") {
+      return { text: await setConversationModel(deps, ctx, rest) };
+    }
+    if (normalized === "fast" || normalized === "permissions") {
+      if (isMenuVerb(rest)) {
+        return buildCodexChoiceMenuReply(normalized);
+      }
+      return { text: await setConversationPreference(deps, ctx, rest, normalized) };
+    }
+    if (normalized === "compact" || normalized === "review") {
+      return { text: await startThreadAction(deps, ctx, options.pluginConfig, normalized, rest) };
+    }
+    if (normalized === "diagnostics") {
+      return await handleCodexDiagnosticsFeedback(deps, ctx, options.pluginConfig, rest.join(" "));
+    }
+    if (normalized === "computer-use" || normalized === "computeruse") {
+      if (isMenuVerb(rest)) {
+        return buildCodexChoiceMenuReply("computer-use");
+      }
+      return {
+        text: await handleComputerUseCommand(deps, ctx, options.pluginConfig, rest),
+      };
+    }
+    if (normalized === "mcp" || normalized === "skills") {
+      const scope = await resolveCommandAppServerScope(deps, ctx, options.pluginConfig);
+      const response = await deps.codexControlRequest(
         options.pluginConfig,
-        CODEX_CONTROL_METHODS.account,
-        { refreshToken: false },
-        requestScope,
-      ),
-      deps.safeCodexControlRequest(
-        options.pluginConfig,
-        CODEX_CONTROL_METHODS.rateLimits,
-        undefined,
-        requestScope,
-      ),
-    ]);
-    return {
-      text: formatAccount(
-        account,
-        limits,
-        await readCodexAccountAuthOverview({
-          ctx,
-          agentDir: scope.agentDir,
-          authProfileId: scope.authProfileId,
-          pluginConfig: options.pluginConfig,
-          safeCodexControlRequest: deps.safeCodexControlRequest,
+        normalized === "mcp"
+          ? CODEX_CONTROL_METHODS.listMcpServers
+          : CODEX_CONTROL_METHODS.listSkills,
+        normalized === "mcp" ? { limit: 100 } : {},
+        { config: ctx.config, ...scope },
+      );
+      return {
+        text: normalized === "mcp" ? formatList(response, "MCP servers") : formatSkills(response),
+      };
+    }
+    if (normalized === "account") {
+      const scope = await resolveCommandAppServerScope(deps, ctx, options.pluginConfig);
+      const requestScope = { config: ctx.config, ...scope };
+      const [account, limits] = await Promise.all([
+        deps.safeCodexControlRequest(
+          options.pluginConfig,
+          CODEX_CONTROL_METHODS.account,
+          { refreshToken: false },
+          requestScope,
+        ),
+        deps.safeCodexControlRequest(
+          options.pluginConfig,
+          CODEX_CONTROL_METHODS.rateLimits,
+          undefined,
+          requestScope,
+        ),
+      ]);
+      return {
+        text: formatAccount(
           account,
           limits,
-        }),
-      ),
+          await readCodexAccountAuthOverview({
+            ctx,
+            agentDir: scope.agentDir,
+            authProfileId: scope.authProfileId,
+            pluginConfig: options.pluginConfig,
+            safeCodexControlRequest: deps.safeCodexControlRequest,
+            account,
+            limits,
+          }),
+        ),
+      };
+    }
+    return {
+      text: `Unknown Codex command: ${formatCodexDisplayText(subcommand)}\n\n${buildHelp()}`,
     };
+  } finally {
+    nativePolicy.release();
   }
-  return { text: `Unknown Codex command: ${formatCodexDisplayText(subcommand)}\n\n${buildHelp()}` };
 }
 
 function resolvePluginRuntimeRefreshMethod(method: string) {

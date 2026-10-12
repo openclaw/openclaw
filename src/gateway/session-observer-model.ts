@@ -15,10 +15,10 @@ import {
 import type { prepareUtilityCompletionForAgent } from "../agents/utility-completion.js";
 import type { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import {
-  loadSessionEntryReadOnly,
   patchSessionEntryCore,
   patchSessionEntryTarget,
 } from "../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
@@ -30,6 +30,7 @@ import type {
   SessionEventSubscriberRegistry,
   SessionMessageSubscriberRegistry,
 } from "./server-chat-state.js";
+import type { SessionRowProjection } from "./session-row-projection.js";
 import { resolveSessionSubscriptionKey } from "./session-subscription-keys.js";
 
 const HEADLINE_MAX_CHARS = 120;
@@ -250,6 +251,7 @@ export type SessionObserverDeps = {
   prepareModel?: PrepareModel;
   completeModel?: CompleteModel;
   readSession?: (sessionKey: string, agentId: string) => SessionEntry | undefined;
+  getSessionRowProjection?: () => SessionRowProjection | undefined;
   persistDigest?: (params: {
     reader?: SessionObserverRead;
     sessionKey: string;
@@ -306,10 +308,14 @@ export function defaultReadSession(
   sessionKey: string,
   agentId: string,
   storePath?: string,
-): SessionEntry | undefined {
+): Promise<SessionEntry | undefined> {
   // Read-only: observation must never materialize agent state (dirs, agent DB
   // registration) for agents that are not configured.
-  return loadSessionEntryReadOnly({ sessionKey, agentId, ...(storePath ? { storePath } : {}) });
+  return readSessionEntryReadOnlyInWorker({
+    sessionKey,
+    agentId,
+    ...(storePath ? { storePath } : {}),
+  });
 }
 
 export async function defaultPersistDigest(params: {

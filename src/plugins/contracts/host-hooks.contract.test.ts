@@ -50,7 +50,7 @@ import { listPluginSessionSchedulerJobs } from "../host-hook-runtime.test-fixtur
 import {
   drainPluginNextTurnInjectionContext,
   enqueuePluginNextTurnInjection,
-  getPluginSessionExtensionStateSync,
+  getPluginSessionExtensionState,
   patchPluginSessionExtension,
   projectPluginSessionExtensionsSync,
 } from "../host-hook-state.js";
@@ -1531,7 +1531,7 @@ describe("host-hook fixture plugin contract", () => {
           }),
         ).resolves.toMatchObject({ ok: true });
         expect(
-          getPluginSessionExtensionStateSync({
+          await getPluginSessionExtensionState({
             cfg: tempConfig,
             agentId: "qa",
             sessionKey: "global",

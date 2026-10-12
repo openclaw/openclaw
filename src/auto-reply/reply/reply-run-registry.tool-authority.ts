@@ -188,6 +188,7 @@ export function createReplyOperationToolAuthority(lifecycle: {
       return participants;
     },
     close() {
+      snapshot?.close?.();
       participants?.close();
     },
     get toolAuthorityFingerprint() {
@@ -226,10 +227,15 @@ export function createReplyOperationToolAuthority(lifecycle: {
       if (snapshot) {
         throw new Error("Reply operation cannot change tool authority after admission");
       }
-      // Released plugins may still supply the original two-method snapshot.
-      const prepared = await (value.fingerprintAsync?.() ?? value.fingerprint());
-      assertCurrent();
-      installSnapshot(value, prepared);
+      try {
+        // Released plugins may still supply the original two-method snapshot.
+        const prepared = await (value.fingerprintAsync?.() ?? value.fingerprint());
+        assertCurrent();
+        installSnapshot(value, prepared);
+      } catch (error) {
+        value.close?.();
+        throw error;
+      }
     },
     projectToolAuthorityFingerprint(overlay) {
       if (!lifecycle.isOpen() || !snapshot || !route) {

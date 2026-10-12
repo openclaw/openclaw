@@ -10,7 +10,7 @@ import { saveChatSessionScrollPosition } from "../scroll.ts";
 import { SIDEBAR_GEOMETRY_COMMIT_EVENT } from "../sidebar-layout.ts";
 import { renderChatThread } from "./chat-thread.ts";
 import { ChatTranscriptController } from "./chat-transcript-controller.ts";
-import { measureConnectedTranscriptRows } from "./chat-transcript-geometry.ts";
+import { readConnectedTranscriptRows } from "./chat-transcript-geometry.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import {
   flushDeferredRowPrune,
@@ -133,9 +133,11 @@ describe("chat transcript geometry", () => {
     const virtualizer = controller.getVirtualizer();
     virtualizer.getVirtualItems();
     try {
-      expect(measureConnectedTranscriptRows(container, virtualizer)).toBe(true);
+      const commit = readConnectedTranscriptRows(container, virtualizer);
+      expect(virtualizer.itemSizeCache.has("fractional")).toBe(false);
+      expect(commit?.()).toBe(true);
       expect(virtualizer.itemSizeCache.get("fractional")).toBe(100.375);
-      expect(measureConnectedTranscriptRows(container, virtualizer)).toBe(false);
+      expect(readConnectedTranscriptRows(container, virtualizer)?.()).toBe(false);
     } finally {
       controller.hostDisconnected();
     }

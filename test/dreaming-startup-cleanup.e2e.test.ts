@@ -1,5 +1,9 @@
 // A real Gateway restart must remove interrupted Dreaming sessions from its public session list.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../src/config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
 import { listSessionEntries, upsertSessionEntry } from "../src/plugin-sdk/session-store-runtime.js";
@@ -21,6 +25,7 @@ type GatewaySessionClient = Awaited<ReturnType<typeof connectGatewayClient>>;
 afterEach(async () => {
   await Promise.all(instances.splice(0).map(async (instance) => await instance.cleanup()));
   closeOpenClawAgentDatabasesForTest();
+  clearRuntimeConfigSnapshot();
 });
 
 async function seedSession(params: {
@@ -32,15 +37,19 @@ async function seedSession(params: {
 }): Promise<string> {
   const sessionKey = `agent:${params.agentId}:${params.suffix}`;
   const sessionId = `${params.agentId}-${params.suffix}`;
-  await upsertSessionEntry({
-    agentId: params.agentId,
-    sessionKey,
-    entry: {
-      sessionId,
-      updatedAt: params.updatedAt,
-      ...(params.pluginOwnerId ? { pluginOwnerId: params.pluginOwnerId } : {}),
-    },
-  });
+  try {
+    await upsertSessionEntry({
+      agentId: params.agentId,
+      sessionKey,
+      entry: {
+        sessionId,
+        updatedAt: params.updatedAt,
+        ...(params.pluginOwnerId ? { pluginOwnerId: params.pluginOwnerId } : {}),
+      },
+    });
+  } catch (cause) {
+    throw new Error(`Could not seed session ${sessionKey}`, { cause });
+  }
   if (params.transcript) {
     await appendSqliteSessionTranscriptEventForTest({
       agentId: params.agentId,
@@ -101,6 +110,7 @@ describe("Gateway dreaming session restart cleanup", () => {
     });
     instances.push(instance);
     instance.state.applyEnv();
+    setRuntimeConfigSnapshot(config);
     expect(instance.env.OPENCLAW_SKIP_CRON).toBe("1");
 
     const sentinel = await seedSession({
@@ -122,6 +132,8 @@ describe("Gateway dreaming session restart cleanup", () => {
       // after it stops, so the next process admits them through startup.
       await disconnectGatewayClient(client);
       await instance.stopGateway();
+      // The child owned these databases; parent seeds cannot reuse pre-handoff admission proof.
+      closeOpenClawAgentDatabasesForTest(instance.state.root);
 
       const now = Date.now();
       const stale = await Promise.all([
