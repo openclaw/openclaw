@@ -15,6 +15,7 @@ import {
 import { clearExecutablePathCache } from "../infra/executable-path.js";
 import * as pathEnv from "../infra/path-env.js";
 import * as terminalUpload from "../infra/terminal-file-upload.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { NODE_HOST_STATS_EVENT, NODE_HOST_STATS_INTERVAL_MS } from "../shared/node-host-stats.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
@@ -283,6 +284,8 @@ it.each([
 
 it("publishes hosting through the app route and retires it on disconnect", async () => {
   const { input, messages, stderr, stop } = startWorkerFixture();
+  const resumeInvocation = createDeferredCore();
+  const capacityPublished = createDeferredCore();
   try {
     await vi.waitFor(() => expect(messages.some((message) => message.type === "ready")).toBe(true));
     expect(messages.find((message) => message.type === "ready")).toMatchObject({
@@ -308,6 +311,19 @@ it("publishes hosting through the app route and retires it on disconnect", async
     expect(fixture.runtime.updateGatewayConnection).toHaveBeenCalledWith(
       expect.objectContaining({ url: connection.url }),
     );
+    fixture.runtime.invoke.mockImplementationOnce(async () => {
+      await resumeInvocation.promise;
+      fixture.start.mock.calls[0]?.[0].onRunnerCapacityChanged({ total: 2, available: 1 });
+      capacityPublished.resolve();
+    });
+    input.emit(
+      "line",
+      JSON.stringify({
+        type: "invoke",
+        generation: 1,
+        request: { id: "old-route", nodeId: "node", command: "system.run" },
+      }),
+    );
     input.emit(
       "line",
       JSON.stringify({ type: "gateway-connection", generation: 2, connection: null }),
@@ -323,9 +339,8 @@ it("publishes hosting through the app route and retires it on disconnect", async
     const count = messages.length;
     // Capacity is owned by the supervisor; cleanup from an old invocation can
     // notify it after reconnect without acquiring that invocation's authority.
-    callbacks.client.withConnection(1, () =>
-      callbacks.onRunnerCapacityChanged({ total: 2, available: 1 }),
-    );
+    resumeInvocation.resolve();
+    await capacityPublished.promise;
     await vi.waitFor(() =>
       expect(messages.slice(count)).toContainEqual(
         expect.objectContaining({
@@ -351,9 +366,10 @@ it("publishes hosting through the app route and retires it on disconnect", async
         request: { id: "stale", nodeId: "node", command: "system.worker.start" },
       }),
     );
-    expect(fixture.runtime.invoke).not.toHaveBeenCalled();
+    expect(fixture.runtime.invoke).toHaveBeenCalledTimes(1);
     expect(stderr).not.toHaveBeenCalled();
   } finally {
+    resumeInvocation.resolve();
     await stop();
   }
 });

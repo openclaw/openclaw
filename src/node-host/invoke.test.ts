@@ -925,7 +925,10 @@ describe("node host invoke", () => {
     try {
       await state.writeConfig({});
       saveExecApprovals({ version: 1, defaults: { security: "full", ask: "off" } });
-      const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+      const client = Object.assign(new TestGatewayClient({ deviceIdentity: null }), {
+        serverCapabilities: new Set([GATEWAY_SERVER_CAPS.NODE_PERMISSION_ERRORS]),
+      });
+      const request = vi.spyOn(client, "request").mockResolvedValue(null);
       await handleInvoke(
         {
           id: "screen-capture",
@@ -936,7 +939,7 @@ describe("node host invoke", () => {
             needsScreenRecording: true,
           }),
         },
-        { request, serverCapabilities: new Set([GATEWAY_SERVER_CAPS.NODE_PERMISSION_ERRORS]) },
+        client,
         { current: async () => [] },
         undefined,
         { signal: new AbortController().signal },

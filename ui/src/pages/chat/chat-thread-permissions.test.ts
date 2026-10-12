@@ -81,7 +81,10 @@ it("renders a persisted standalone tool result as a Grant card without expanding
   if (!group || group.kind !== "group") {
     throw new Error("Expected a tool message group");
   }
-  await renderToolFixture(renderMessageGroup(group, { assistantName: "OpenClaw" }), container);
+  await renderToolFixture(
+    renderMessageGroup(group, { assistantName: "OpenClaw", showReasoning: false }),
+    container,
+  );
   expect(container.querySelector(".chat-permission-card")?.textContent).toContain(
     "Grant Screen Recording",
   );
