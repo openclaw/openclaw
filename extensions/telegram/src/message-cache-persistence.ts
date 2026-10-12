@@ -50,15 +50,14 @@ function parseStickerMetadata(value: unknown): StickerMetadata | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
-  return {
-    ...(typeof value.emoji === "string" ? { emoji: value.emoji } : {}),
-    ...(typeof value.setName === "string" ? { setName: value.setName } : {}),
-    ...(typeof value.fileId === "string" ? { fileId: value.fileId } : {}),
-    ...(typeof value.fileUniqueId === "string" ? { fileUniqueId: value.fileUniqueId } : {}),
-    ...(typeof value.cachedDescription === "string"
-      ? { cachedDescription: value.cachedDescription }
-      : {}),
-  };
+  const metadata: StickerMetadata = {};
+  for (const key of ["emoji", "setName", "fileId", "fileUniqueId", "cachedDescription"] as const) {
+    const field = value[key];
+    if (typeof field === "string") {
+      metadata[key] = field;
+    }
+  }
+  return metadata;
 }
 
 export function parseTelegramResolvedMedia(value: unknown): TelegramResolvedMedia | undefined {

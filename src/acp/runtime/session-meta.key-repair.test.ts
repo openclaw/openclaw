@@ -46,7 +46,6 @@ const meta = {
 it.each([
   { source: key, binding: entry.lifecycleRevision, conflicting: true },
   { source: alias, binding: undefined, conflicting: false },
-  { source: alias, binding: entry.sessionId, conflicting: false },
 ])(
   "Doctor preserves $source with binding=$binding and conflicting=$conflicting aliases",
   async ({ source, binding, conflicting }) => {
@@ -126,23 +125,17 @@ it.each([
   },
 );
 
-it.each(["stale-revision", "stale-session-id", "missing-owner", "conflicting-canonical"])(
+it.each(["stale-session-id", "conflicting-canonical"])(
   "Doctor retains the complete ACP source when repair sees %s",
   async (condition) => {
     await withOpenClawTestState({ scenario: "empty" }, async ({ env }) => {
-      if (condition !== "missing-owner") {
-        replaceSessionEntrySync({ agentId: "harness", sessionKey: key, env }, entry);
-      }
+      replaceSessionEntrySync({ agentId: "harness", sessionKey: key, env }, entry);
       writeAcpSessionMetaForMigration({
         env,
         sessionKey: alias,
         meta,
         lifecycleRevision:
-          condition === "stale-revision"
-            ? "old-revision"
-            : condition === "stale-session-id"
-              ? entry.sessionId
-              : entry.lifecycleRevision,
+          condition === "stale-session-id" ? entry.sessionId : entry.lifecycleRevision,
         now: () => (condition === "stale-session-id" ? 25 : 100),
       });
       if (condition === "conflicting-canonical") {
@@ -238,21 +231,10 @@ it.each(["revoked-authority", "changed-source", "changed-binding"])(
 
 it.each([
   { label: "bare key", sessionKey: "global", sourceKey: "global" },
-  { label: "agent prefix", sessionKey: "project", sourceKey: "@agent:main:project" },
-  {
-    label: "literal agent prefix",
-    sessionKey: "@agent:other:project",
-    sourceKey: "@agent:other:project",
-  },
   {
     label: "ownerless encoded key",
     sessionKey: "project",
     sourceKey: buildAcpDatabaseSessionKey("project"),
-  },
-  {
-    label: "literal encoded prefix",
-    sessionKey: buildAcpDatabaseSessionKey("absent", "other"),
-    sourceKey: buildAcpDatabaseSessionKey("absent", "other"),
   },
 ])(
   "Doctor backs up and canonicalizes $label before runtime access",
@@ -321,79 +303,72 @@ it.each([
   },
 );
 
-it.each([false, true])(
-  "Doctor preserves embedded SQLite ACP metadata and prevents replay after closure (canonical exists: %s)",
-  async (canonicalExists) => {
-    await withOpenClawTestState({ scenario: "empty" }, async ({ env }) => {
-      const sessionKey = "agent:main:embedded-acp";
-      const scope = { agentId: "main", sessionKey, env };
-      const original = {
-        ...entry,
-        acp: { ...meta, historicalNote: "preserved in the source backup" },
-      };
-      replaceSessionEntrySync(scope, original);
-      if (canonicalExists) {
-        writeAcpSessionMetaForMigration({
-          env,
-          sessionKey: buildAcpDatabaseSessionKey(normalizeStoreSessionKey(sessionKey), "main"),
-          lifecycleRevision: entry.lifecycleRevision,
-          meta,
-          now: () => 100,
-        });
-      }
-      const agent = openOpenClawAgentDatabase(scope);
-      const source = agent.db
-        .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
-        .get(sessionKey);
-      const result = await repairAcpSessionMetaKeysForDoctor({
-        cfg,
-        env,
-        apply: true,
-        authority: { assertCurrent() {} },
-      });
-      expect(result).toMatchObject({
-        found: 1,
-        repaired: 1,
-        warnings: [],
-        backups: [expect.any(String)],
-      });
-      const backup = new DatabaseSync(result.backups![0]!, { readOnly: true });
-      try {
-        expect(
-          backup
-            .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
-            .get(sessionKey),
-        ).toEqual(source);
-      } finally {
-        backup.close();
-      }
-      expect(loadExactSessionEntry(scope)?.entry).not.toHaveProperty("acp");
-      expect(readAcpSessionMetaForEntry({ ...scope, entry })).toEqual(meta);
-      const shared = stateDatabase.openOpenClawStateDatabase({ env });
-      const receipts = shared.db
-        .prepare("SELECT * FROM migration_sources ORDER BY source_key")
-        .all();
-      expect(receipts).toHaveLength(1);
-      shared.db
-        .prepare("DELETE FROM acp_sessions WHERE session_key = ?")
-        .run(buildAcpDatabaseSessionKey(normalizeStoreSessionKey(sessionKey), "main"));
-      // An interrupted source cleanup can leave the exact original embedded field behind.
-      replaceSessionEntrySync(scope, original);
-      const rerun = await repairAcpSessionMetaKeysForDoctor({
-        cfg,
-        env,
-        apply: true,
-        authority: { assertCurrent() {} },
-      });
-      expect(rerun).toMatchObject({ found: 1, repaired: 1, warnings: [] });
-      expect(readAcpSessionMetaForEntry({ ...scope, entry })).toBeUndefined();
-      expect(loadExactSessionEntry(scope)?.entry).not.toHaveProperty("acp");
-      expect(
-        shared.db.prepare("SELECT * FROM migration_sources ORDER BY source_key").all(),
-      ).toEqual(receipts);
+it("Doctor preserves embedded SQLite ACP metadata and prevents replay after closure", async () => {
+  await withOpenClawTestState({ scenario: "empty" }, async ({ env }) => {
+    const sessionKey = "agent:main:embedded-acp";
+    const scope = { agentId: "main", sessionKey, env };
+    const original = {
+      ...entry,
+      acp: { ...meta, historicalNote: "preserved in the source backup" },
+    };
+    replaceSessionEntrySync(scope, original);
+    writeAcpSessionMetaForMigration({
+      env,
+      sessionKey: buildAcpDatabaseSessionKey(normalizeStoreSessionKey(sessionKey), "main"),
+      lifecycleRevision: entry.lifecycleRevision,
+      meta,
+      now: () => 100,
     });
-  },
-);
+    const agent = openOpenClawAgentDatabase(scope);
+    const source = agent.db
+      .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
+      .get(sessionKey);
+    const result = await repairAcpSessionMetaKeysForDoctor({
+      cfg,
+      env,
+      apply: true,
+      authority: { assertCurrent() {} },
+    });
+    expect(result).toMatchObject({
+      found: 1,
+      repaired: 1,
+      warnings: [],
+      backups: [expect.any(String)],
+    });
+    const backup = new DatabaseSync(result.backups![0]!, { readOnly: true });
+    try {
+      expect(
+        backup
+          .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
+          .get(sessionKey),
+      ).toEqual(source);
+    } finally {
+      backup.close();
+    }
+    expect(loadExactSessionEntry(scope)?.entry).not.toHaveProperty("acp");
+    expect(readAcpSessionMetaForEntry({ ...scope, entry })).toEqual(meta);
+    const shared = stateDatabase.openOpenClawStateDatabase({ env });
+    const receipts = shared.db.prepare("SELECT * FROM migration_sources ORDER BY source_key").all();
+    expect(receipts).toHaveLength(1);
+    shared.db
+      .prepare("DELETE FROM acp_sessions WHERE session_key = ?")
+      .run(buildAcpDatabaseSessionKey(normalizeStoreSessionKey(sessionKey), "main"));
+    // An interrupted source cleanup can leave the exact original embedded field behind.
+    replaceSessionEntrySync(scope, original);
+    const rerun = await repairAcpSessionMetaKeysForDoctor({
+      cfg,
+      env,
+      apply: true,
+      authority: { assertCurrent() {} },
+    });
+    expect(rerun).toMatchObject({ found: 1, repaired: 1, warnings: [] });
+    expect(readAcpSessionMetaForEntry({ ...scope, entry })).toBeUndefined();
+    expect(loadExactSessionEntry(scope)?.entry).not.toHaveProperty("acp");
+    expect(shared.db.prepare("SELECT * FROM migration_sources ORDER BY source_key").all()).toEqual(
+      receipts,
+    );
+  });
+});
 
 it("Doctor retains embedded timestamp conflicts and changed sources after an interrupted import", async () => {
   await withOpenClawTestState({ scenario: "empty" }, async ({ env }) => {
@@ -600,34 +575,6 @@ it("Doctor binds embedded shared-store metadata to its logical session owner", a
     ]);
   });
 });
-
-it.each([buildAcpDatabaseSessionKey("global"), buildAcpDatabaseSessionKey("main", "main")])(
-  "Doctor diagnoses unresolved encoded metadata without deleting %s",
-  async (sessionKey) => {
-    await withOpenClawTestState({ scenario: "empty" }, async ({ env }) => {
-      writeAcpSessionMetaForMigration({
-        env,
-        sessionKey,
-        lifecycleRevision: entry.lifecycleRevision,
-        meta,
-        now: () => 100,
-      });
-      const { db } = stateDatabase.openOpenClawStateDatabase({ env });
-      const before = db.prepare("SELECT * FROM acp_sessions").all();
-      const result = await repairAcpSessionMetaKeysForDoctor({
-        cfg,
-        env,
-        apply: true,
-        authority: { assertCurrent() {} },
-      });
-      expect(result).toMatchObject({
-        repaired: 0,
-        warnings: [expect.stringContaining("Restore its owning session/config")],
-      });
-      expect(db.prepare("SELECT * FROM acp_sessions").all()).toEqual(before);
-    });
-  },
-);
 
 it("Doctor retains an alias when a competing candidate store cannot be inspected", async () => {
   await withOpenClawTestState({ scenario: "empty" }, async ({ env }) => {

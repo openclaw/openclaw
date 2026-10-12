@@ -1,18 +1,13 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
-import type { AgentDeletionJournalEntry } from "./agent-deletion-journal.js";
+import type {
+  AgentDeletionJournalEntry,
+  AgentDeletionJournalInput,
+} from "./agent-deletion-journal.types.js";
 import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease.types.js";
 
-export type AgentDeletionInput = Omit<
-  AgentDeletionJournalEntry,
-  | "createdAt"
-  | "operationId"
-  | "cleanupCompleted"
-  | "databasePaths"
-  | "cleanupPaths"
-  | "deleteFiles"
-> &
-  Partial<Pick<AgentDeletionJournalEntry, "databasePaths" | "cleanupPaths" | "deleteFiles">>;
+export type AgentDeletionInput = Omit<AgentDeletionJournalInput, "operationId" | "deleteFiles"> &
+  Partial<Pick<AgentDeletionJournalInput, "deleteFiles">>;
 
 type AgentDeletionJournalMutation =
   | {

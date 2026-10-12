@@ -27,15 +27,7 @@
   height: 8px;
 }
 .chat-processes__metadata {
-  display: flex;
-  align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  min-height: 17px;
-  margin-top: 3px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-variant-numeric: tabular-nums;
 }
 .chat-processes__metadata > :last-child {
   flex-shrink: 0;

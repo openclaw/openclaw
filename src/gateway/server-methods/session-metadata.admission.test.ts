@@ -162,11 +162,6 @@ describe("session metadata writer admission", () => {
         const reservation = runOpenClawAgentWorkerWrite(options, async () => {
           entered.resolve();
           await release.promise;
-          cfg = { session: { store: replacement.storePath } };
-          expect(await disposeOpenClawAgentDatabaseByPath(options.path, { env: state.env })).toBe(
-            true,
-          );
-          renameSync(options.path, retired.storePath);
         });
         await entered.promise;
         const params =
@@ -179,6 +174,12 @@ describe("session metadata writer admission", () => {
         try {
           await setImmediate();
           expect(request.respond).not.toHaveBeenCalled();
+          // External retirement must not inherit the writer whose waiting mutation it revokes.
+          cfg = { session: { store: replacement.storePath } };
+          expect(await disposeOpenClawAgentDatabaseByPath(options.path, { env: state.env })).toBe(
+            true,
+          );
+          renameSync(options.path, retired.storePath);
           release.resolve();
           await Promise.all([reservation, request.done]);
           expect(request.respond.mock.calls.some(([ok]) => ok)).toBe(false);

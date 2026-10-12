@@ -37,9 +37,7 @@ export function formatToolAggregateParts(
     const slash = m.lastIndexOf("/");
     const dir = m.slice(0, slash);
     const base = m.slice(slash + 1);
-    if (!grouped[dir]) {
-      grouped[dir] = [];
-    }
+    grouped[dir] ??= [];
     grouped[dir].push(base);
   }
 

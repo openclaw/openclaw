@@ -776,7 +776,8 @@ describe("cron service ops seam coverage", () => {
           "SELECT receipt_id AS receiptId FROM cron_run_receipts WHERE store_key = ? AND job_id = ? ORDER BY started_at_ms DESC, receipt_id DESC LIMIT 1",
         )
         .get(cronStoreKey(storePath), "isolated-timeout") as { receiptId: string };
-      const taskRunId = `cron:isolated-timeout:${now}:${receipt.receiptId}:${manualRunId}`;
+      expect(receipt.receiptId).toBe(manualRunId);
+      const taskRunId = `cron:isolated-timeout:${now}:${manualRunId}`;
       expectCronRun({
         runId: taskRunId,
         status: "succeeded",

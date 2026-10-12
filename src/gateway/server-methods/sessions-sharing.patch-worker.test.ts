@@ -1,14 +1,18 @@
-import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
-import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import { deleteSessionEntryRows } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
+import {
+  loadSessionEntry,
+  replaceSessionEntrySync,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.sqlite-entry.js";
 import * as entryPatch from "../../config/sessions/session-entry-patch.js";
 import { readSessionMembersInWorker } from "../../config/sessions/session-sharing-store.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import * as lifecycle from "../../sessions/session-lifecycle-admission.js";
 import {
   closeOpenClawAgentDatabasesAsync,
-  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -182,12 +186,11 @@ it.each([
   },
 );
 
-it.each(["caller", "foreign row", "revoked grant", "deleted row", "replaced generation"] as const)(
+it.each(["caller", "revoked grant", "deleted row", "replaced generation"] as const)(
   "withholds a committed public-share token if %s authority is revoked during lifecycle cleanup",
   async (revoked) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const f = await fixture();
-      const database = openOpenClawAgentDatabase({ agentId: "main" });
       await readSessionMembersInWorker(f.scope);
       const run = lifecycle.runExclusiveSessionLifecycleMutation;
       let acknowledgedShareId: string | undefined;
@@ -199,38 +202,18 @@ it.each(["caller", "foreign row", "revoked grant", "deleted row", "replaced gene
           acknowledgedShareId = committed?.id;
           if (revoked === "caller") {
             f.client.invalidated = true;
+          } else if (revoked === "deleted row") {
+            runOpenClawAgentWriteTransaction(
+              (database) => deleteSessionEntryRows(database, f.scope.sessionKey),
+              f.scope,
+            );
           } else {
-            const writer = new DatabaseSync(database.path);
-            try {
-              if (revoked === "deleted row") {
-                writer.exec("PRAGMA foreign_keys = ON");
-              }
-              const changed =
-                revoked === "foreign row"
-                  ? writer
-                      .prepare(
-                        "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.createdActor.id', ?, '$.visibility', 'draft') WHERE session_key = ?",
-                      )
-                      .run("replacement-owner", f.scope.sessionKey)
-                  : revoked === "revoked grant"
-                    ? writer
-                        .prepare(
-                          "UPDATE session_nodes SET entry_json = json_remove(entry_json, '$.publicShare') WHERE session_key = ?",
-                        )
-                        .run(f.scope.sessionKey)
-                    : revoked === "deleted row"
-                      ? writer
-                          .prepare("DELETE FROM session_nodes WHERE session_key = ?")
-                          .run(f.scope.sessionKey)
-                      : writer
-                          .prepare(
-                            "UPDATE session_nodes SET current_session_id = ?, entry_json = json_set(entry_json, '$.sessionId', ?) WHERE session_key = ?",
-                          )
-                          .run("replacement-session", "replacement-session", f.scope.sessionKey);
-              expect(changed.changes).toBe(1);
-            } finally {
-              writer.close();
-            }
+            await upsertSessionEntryCore(
+              f.scope,
+              revoked === "revoked grant"
+                ? { publicShare: undefined }
+                : { sessionId: "replacement-session" },
+            );
           }
           return result;
         },
@@ -240,41 +223,35 @@ it.each(["caller", "foreign row", "revoked grant", "deleted row", "replaced gene
         revoked === "revoked grant"
           ? "session publication changed before sharing response"
           : revoked === "deleted row" || revoked === "replaced generation"
-            ? "session changed before sharing mutation"
+            ? "Session access facts are unavailable"
             : "session ownership changed before sharing mutation";
       await expect(f.call("session.publicShare.set", { enabled: true }, respond)).rejects.toThrow(
         refusal,
       );
       expect(acknowledgedShareId).toEqual(expect.any(String));
       expect(respond).not.toHaveBeenCalled();
-      const entry = (await readSessionMembersInWorker(f.scope)).entry;
+      const entry = loadSessionEntry(f.scope);
       if (revoked === "deleted row") {
         expect(entry).toBeUndefined();
       } else if (revoked === "revoked grant") {
-        expect(entry?.sessionId).toBe(f.sessionId);
-        expect(entry?.publicShare).toBeUndefined();
+        expect(entry).toMatchObject({ sessionId: f.sessionId });
+        expect(entry).not.toHaveProperty("publicShare");
       } else if (revoked === "replaced generation") {
-        expect(entry?.sessionId).toBe("replacement-session");
+        expect(entry).toMatchObject({ sessionId: "replacement-session" });
       } else {
-        expect(entry?.publicShare).toMatchObject({
-          id: acknowledgedShareId,
-          sessionId: f.sessionId,
+        expect(entry).toMatchObject({
+          publicShare: { id: acknowledgedShareId, sessionId: f.sessionId },
         });
-      }
-      if (revoked === "foreign row") {
-        expect(entry?.createdActor?.id).toBe("replacement-owner");
-        expect(entry?.visibility).toBe("draft");
       }
     });
   },
 );
 
 it.each(["session.visibility.set", "session.publicShare.set"] as const)(
-  "refuses %s after a foreign ownership change between preparation and commit",
+  "refuses %s after a session reset between preparation and commit",
   async (method) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const f = await fixture();
-      const database = openOpenClawAgentDatabase({ agentId: "main" });
       const patch = entryPatch.patchSessionEntryInWorker;
       let changed = false;
       vi.spyOn(entryPatch, "patchSessionEntryInWorker").mockImplementation((params) =>
@@ -282,17 +259,12 @@ it.each(["session.visibility.set", "session.publicShare.set"] as const)(
           ...params,
           async prepare(snapshot) {
             const prepared = await params.prepare(snapshot);
-            const writer = new DatabaseSync(database.path);
-            try {
-              writer
-                .prepare(
-                  "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.createdActor.id', ?) WHERE session_key = ?",
-                )
-                .run("replacement-owner", f.scope.sessionKey);
-              changed = true;
-            } finally {
-              writer.close();
-            }
+            const current = loadSessionEntry(f.scope)!;
+            replaceSessionEntrySync(f.scope, {
+              ...current,
+              sessionId: "replacement-session",
+            });
+            changed = true;
             return prepared;
           },
         }),
@@ -304,10 +276,13 @@ it.each(["session.visibility.set", "session.publicShare.set"] as const)(
         ),
       ).rejects.toThrow();
       expect(changed).toBe(true);
-      const entry = (await readSessionMembersInWorker(f.scope)).entry;
-      expect(entry?.createdActor?.id).toBe("replacement-owner");
-      expect(entry?.visibility).toBeUndefined();
-      expect(entry?.publicShare).toBeUndefined();
+      const entry = loadSessionEntry(f.scope);
+      expect(entry).toMatchObject({
+        sessionId: "replacement-session",
+        createdActor: { id: "owner" },
+      });
+      expect(entry).not.toHaveProperty("visibility");
+      expect(entry).not.toHaveProperty("publicShare");
       expect(f.context.broadcast).not.toHaveBeenCalled();
     });
   },

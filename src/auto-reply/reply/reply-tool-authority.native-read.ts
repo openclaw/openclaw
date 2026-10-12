@@ -1,6 +1,6 @@
 import type { PreparedToolAuthorityRead } from "../../agents/harness/host-private-capabilities.js";
-import { assertCapturedSessionEntryReadSource } from "../../config/sessions/session-accessor.sqlite-exact-read.js";
 import { readIncognitoSessionEntryCurrent } from "../../config/sessions/session-accessor.sqlite-incognito-sharing.js";
+import { assertCapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.js";
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { getOpenIncognitoAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";

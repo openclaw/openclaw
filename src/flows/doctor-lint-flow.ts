@@ -73,10 +73,7 @@ export async function runDoctorLintChecks(
     if (only.size === 0 && !includeDefaultDisabled && !isHealthCheckEnabledByDefault(c)) {
       return false;
     }
-    if (skip.has(c.id)) {
-      return false;
-    }
-    return true;
+    return !skip.has(c.id);
   });
 
   const findings: HealthFinding[] = [];

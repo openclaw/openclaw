@@ -134,11 +134,11 @@ describe("Control UI build chunking", () => {
     // Recursive inclusion is a correctness requirement for this group: merging
     // the lazy boot graph without it emitted chunks whose execution order broke
     // at application start.
-    expect(controlUiCodeSplitting.groups[2]).toMatchObject({
-      name: "control-ui-boot-shared",
-      includeDependenciesRecursively: true,
-    });
-    const bootGroup = controlUiCodeSplitting.groups[2] as {
+    const sharedGroup = controlUiCodeSplitting.groups.find(
+      (group) => group.name === "control-ui-boot-shared",
+    );
+    expect(sharedGroup).toMatchObject({ includeDependenciesRecursively: true });
+    const bootGroup = sharedGroup as {
       test: (id: string) => boolean;
     };
     const repoRoot = new URL("../../..", import.meta.url).pathname.replace(/\/$/, "");
@@ -156,8 +156,9 @@ describe("Control UI build chunking", () => {
     expect(bootGroup.test(`${repoRoot}/ui/src/components/assistant-panel-content.ts`)).toBe(false);
     expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay-content.ts`)).toBe(false);
     expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay.ts`)).toBe(false);
-    expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay-frame.ts`)).toBe(true);
-    expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay-loading.ts`)).toBe(true);
+    expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay-state.ts`)).toBe(true);
+    expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay-frame.ts`)).toBe(false);
+    expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay-loading.ts`)).toBe(false);
     expect(bootGroup.test(`${repoRoot}/node_modules/ghostty-web/dist/index.js`)).toBe(false);
   });
 

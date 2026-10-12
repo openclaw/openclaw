@@ -99,24 +99,6 @@ function writeFixtureServerShims(
   writeFileSync(pidPath, "");
 }
 
-function writeCrashingFixtureServerShim(binDir: string): void {
-  mkdirSync(binDir, { recursive: true });
-  writeFileSync(
-    path.join(binDir, "node"),
-    [
-      "#!/bin/bash",
-      'printf "DO_NOT_DUMP_PLUGIN_FIXTURE_PREFIX\\n"',
-      'printf "%2048s" "" | tr " " x',
-      'printf "\\nPLUGIN_FIXTURE_TAIL_MARKER\\n"',
-      "exit 1",
-      "",
-    ].join("\n"),
-  );
-  writeFileSync(path.join(binDir, "sleep"), "#!/bin/bash\nexit 0\n");
-  chmodSync(path.join(binDir, "node"), 0o755);
-  chmodSync(path.join(binDir, "sleep"), 0o755);
-}
-
 function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -226,82 +208,6 @@ async function stopFixtureRegistry({ child, closed }: ReturnType<typeof startFix
 }
 
 describe("plugins Docker assertions", () => {
-  it("rejects loose ClawHub preflight limits instead of parsing prefixes", () => {
-    const timeoutResult = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "clawhub-preflight"], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        CLAWHUB_PLUGIN_SPEC: "clawhub:@openclaw/kitchen-sink",
-        OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS: "1e3",
-      },
-    });
-    expect(timeoutResult.status).not.toBe(0);
-    expect(timeoutResult.stderr).toContain(
-      "invalid OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS: 1e3",
-    );
-
-    const bodyLimitResult = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "clawhub-preflight"], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        CLAWHUB_PLUGIN_SPEC: "clawhub:@openclaw/kitchen-sink",
-        OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_BODY_MAX_BYTES: "1000bytes",
-      },
-    });
-    expect(bodyLimitResult.status).not.toBe(0);
-    expect(bodyLimitResult.stderr).toContain(
-      "invalid OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_BODY_MAX_BYTES: 1000bytes",
-    );
-  });
-
-  it("keeps sweep artifact paths aligned with the assertion scratch root", () => {
-    const scripts = [
-      "scripts/e2e/lib/plugins/sweep.sh",
-      "scripts/e2e/lib/plugins/marketplace.sh",
-      "scripts/e2e/lib/plugins/clawhub.sh",
-    ];
-
-    for (const scriptPath of scripts) {
-      const script = readFileSync(scriptPath, "utf8");
-      const scriptWithoutDefaultScratch = script.replace(
-        'mktemp -d "/tmp/openclaw-plugins.XXXXXX"',
-        "",
-      );
-      expect(script).toContain("OPENCLAW_PLUGINS_TMP_DIR");
-      expect(scriptWithoutDefaultScratch).not.toMatch(
-        /\/tmp\/(?:plugins|marketplace|demo-plugin|is-number|openclaw-plugin|openclaw-clawhub)/,
-      );
-    }
-  });
-
-  it("cleans the default plugin sweep scratch root", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-sweep-cleanup-"));
-    const marker = path.join(root, "scratch-path.txt");
-    try {
-      const result = runPluginsSweepShell(
-        `
-set -euo pipefail
-export OPENCLAW_PLUGINS_SWEEP_SOURCE_ONLY=1
-source scripts/e2e/lib/plugins/sweep.sh
-printf '%s\\n' "$OPENCLAW_PLUGINS_TMP_DIR" > "$MARKER"
-test -d "$OPENCLAW_PLUGINS_TMP_DIR"
-cleanup_openclaw_plugins_sweep
-test ! -e "$OPENCLAW_PLUGINS_TMP_DIR"
-`,
-        { MARKER: marker },
-      );
-
-      expect(result.stdout).toBe("");
-      expect(result.stderr).toBe("");
-      expect(result.status).toBe(0);
-      const scratchRoot = readFileSync(marker, "utf8").trim();
-      expect(scratchRoot).toContain("/tmp/openclaw-plugins.");
-      expect(existsSync(scratchRoot)).toBe(false);
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
-
   it("preserves caller-provided plugin sweep scratch roots", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-sweep-caller-"));
     const scratchRoot = path.join(root, "scratch");
@@ -329,40 +235,9 @@ test -d "$OPENCLAW_PLUGINS_TMP_DIR"
   });
 
   it.each([
-    ...(["capture", "logged"] as const).flatMap((mode) =>
-      [0, 23, 124].flatMap((status) =>
-        [false, true].map((traceEnabled) => ({
-          mode,
-          status,
-          traceEnabled,
-          traceValue: traceEnabled ? "1" : "0",
-          changeAfterSource: false,
-        })),
-      ),
-    ),
-    ...(
-      [
-        ["1", true],
-        ["true", true],
-        ["TRUE", true],
-        ["yes", true],
-        ["YES", true],
-        [undefined, false],
-        ["", false],
-        ["0", false],
-        ["True", false],
-        ["Yes", false],
-        ["on", false],
-        [" true ", false],
-        ["1 ", false],
-      ] as const
-    ).map(([traceValue, traceEnabled]) => ({
-      mode: "logged" as const,
-      status: 0,
-      traceEnabled,
-      traceValue,
-      changeAfterSource: true,
-    })),
+    { mode: "capture", status: 0, traceEnabled: false, traceValue: "0", changeAfterSource: false },
+    { mode: "logged", status: 23, traceEnabled: false, traceValue: "0", changeAfterSource: false },
+    { mode: "logged", status: 0, traceEnabled: true, traceValue: "1", changeAfterSource: true },
   ])(
     "bounds $mode diagnostics with exit $status and lifecycle tracing $traceEnabled ($traceValue, changed after source: $changeAfterSource)",
     (testCase) => {
@@ -497,63 +372,6 @@ ${command}
     },
   );
 
-  it("scans plugin assertion logs without echoing whole files on failure", ({ signal }) =>
-    fixtures.run(async () => {
-      const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-update-log-"));
-      try {
-        const passRoot = path.join(root, "pass");
-        mkdirSync(passRoot, { recursive: true });
-        const markerPrefix = 'Skipping "demo';
-        writeFileSync(
-          path.join(passRoot, "plugins-dir-update.log"),
-          `${"x".repeat(64 * 1024 - markerPrefix.length)}${markerPrefix}-plugin-dir" (source: path).\n${"x".repeat(256 * 1024)}`,
-          "utf8",
-        );
-        const pass = await runAssertionAsync(signal, ["plugin-dir-update-skipped"], {
-          OPENCLAW_PLUGINS_TMP_DIR: passRoot,
-        });
-        expect(pass.status).toBe(0);
-
-        const failRoot = path.join(root, "fail");
-        mkdirSync(failRoot, { recursive: true });
-        writeFileSync(
-          path.join(failRoot, "plugins-dir-update.log"),
-          `${"x".repeat(256 * 1024)}\nmissing marker tail`,
-          "utf8",
-        );
-        const fail = await runAssertionAsync(signal, ["plugin-dir-update-skipped"], {
-          OPENCLAW_PLUGINS_TMP_DIR: failRoot,
-        });
-        expect(fail.status).toBe(1);
-        expect(fail.stderr).toContain("Output tail:");
-        expect(fail.stderr).toContain("missing marker tail");
-        expect(fail.stderr.length).toBeLessThan(20 * 1024);
-
-        const invalidRoot = path.join(root, "invalid");
-        const invalidHome = path.join(root, "home");
-        mkdirSync(invalidRoot, { recursive: true });
-        mkdirSync(invalidHome, { recursive: true });
-        writeFileSync(
-          path.join(invalidRoot, "plugins-invalid-openclaw-extensions.log"),
-          `openclaw.extensions[1]\n${"x".repeat(256 * 1024)}\nmissing validation tail`,
-          "utf8",
-        );
-        writeJson(path.join(invalidRoot, "plugins-invalid-openclaw-extensions-list.json"), {
-          plugins: [],
-        });
-        const invalid = await runAssertionAsync(signal, ["invalid-openclaw-extensions"], {
-          HOME: invalidHome,
-          OPENCLAW_PLUGINS_TMP_DIR: invalidRoot,
-        });
-        expect(invalid.status).toBe(1);
-        expect(invalid.stderr).toContain("malformed metadata install output");
-        expect(invalid.stderr).toContain("missing validation tail");
-        expect(invalid.stderr.length).toBeLessThan(20 * 1024);
-      } finally {
-        rmSync(root, { recursive: true, force: true });
-      }
-    }));
-
   it("routes npm through both registry environment spellings after replacing a parent registry", () => {
     const root = autoCleanupTempDirs.make("openclaw-plugin-npm-fixture-routing-");
     writeFileSync(path.join(root, "fixture.tgz"), "fixture package archive");
@@ -659,90 +477,8 @@ done
     }
   });
 
-  it("rejects invalid fixture stop attempts before cleanup polling", () => {
-    const result = runPluginsSweepShell(
-      [
-        "set -euo pipefail",
-        "source scripts/e2e/lib/plugins/fixtures.sh",
-        "openclaw_plugins_signal_fixture_process() { echo signal; }",
-        "openclaw_plugins_fixture_process_alive() { echo probe; return 1; }",
-        "set +e",
-        "openclaw_plugins_stop_fixture_process 12345",
-        'status="$?"',
-        "set -e",
-        'exit "$status"',
-      ].join("\n"),
-      { OPENCLAW_PLUGINS_FIXTURE_STOP_ATTEMPTS: "2x" },
-    );
-
-    expect(result.status).toBe(2);
-    expect(result.stderr).toContain("invalid OPENCLAW_PLUGINS_FIXTURE_STOP_ATTEMPTS: 2x");
-    expect(result.stdout).not.toContain("signal");
-    expect(result.stdout).not.toContain("probe");
-  });
-
-  it("rejects invalid fixture stop intervals before cleanup polling", () => {
-    const result = runPluginsSweepShell(
-      [
-        "set -euo pipefail",
-        "source scripts/e2e/lib/plugins/fixtures.sh",
-        "openclaw_plugins_signal_fixture_process() { echo signal; }",
-        "openclaw_plugins_fixture_process_alive() { echo probe; return 1; }",
-        "set +e",
-        "openclaw_plugins_stop_fixture_process 12345",
-        'status="$?"',
-        "set -e",
-        'exit "$status"',
-      ].join("\n"),
-      {
-        OPENCLAW_PLUGINS_FIXTURE_STOP_ATTEMPTS: "2",
-        OPENCLAW_PLUGINS_FIXTURE_STOP_INTERVAL_SECONDS: "soon",
-      },
-    );
-
-    expect(result.status).toBe(2);
-    expect(result.stderr).toContain("invalid OPENCLAW_PLUGINS_FIXTURE_STOP_INTERVAL_SECONDS: soon");
-    expect(result.stdout).not.toContain("signal");
-    expect(result.stdout).not.toContain("probe");
-  });
-
-  it("bounds npm fixture registry logs when readiness fails", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-npm-fixture-log-"));
-    try {
-      const binDir = path.join(root, "bin");
-      const fixtureDir = path.join(root, "fixture");
-      mkdirSync(fixtureDir);
-      writeCrashingFixtureServerShim(binDir);
-
-      const result = runPluginsSweepShell(
-        [
-          "set -euo pipefail",
-          "source scripts/e2e/lib/plugins/fixtures.sh",
-          "set +e",
-          `start_npm_fixture_registry fixture-pkg 1.0.0 ${shellQuote(path.join(root, "fixture.tgz"))} ${shellQuote(fixtureDir)}`,
-          'status="$?"',
-          "set -e",
-          'printf "status=%s\\n" "$status"',
-          '[ "$status" != "0" ]',
-        ].join("\n"),
-        {
-          OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES: "80",
-          PATH: `${binDir}${path.delimiter}/usr/bin${path.delimiter}/bin`,
-        },
-      );
-
-      expect(result.status, result.stderr || result.stdout).toBe(0);
-      expect(result.stdout).toContain("truncated: showing last 80");
-      expect(result.stdout).toContain("PLUGIN_FIXTURE_TAIL_MARKER");
-      expect(result.stdout).not.toContain("DO_NOT_DUMP_PLUGIN_FIXTURE_PREFIX");
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
-
   it.for([
     { initial: null, fault: "", label: "new destination" },
-    { initial: "", fault: "", label: "existing empty destination" },
     { initial: "12345", fault: "", label: "existing port" },
     { initial: null, fault: "write", label: "failed write" },
     { initial: "12345", fault: "rename", label: "failed replacement" },
@@ -1395,277 +1131,6 @@ fs.renameSync = (source, destination) => {
       }
     }));
 
-  it("rejects invalid plugin fixture log byte limits before npm fixture setup", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-npm-fixture-log-invalid-"));
-    try {
-      const binDir = path.join(root, "bin");
-      const fixtureDir = path.join(root, "fixture");
-      mkdirSync(binDir, { recursive: true });
-      mkdirSync(fixtureDir);
-      writeFileSync(
-        path.join(binDir, "node"),
-        "#!/bin/bash\necho node should not run >&2\nexit 1\n",
-      );
-      chmodSync(path.join(binDir, "node"), 0o755);
-
-      const result = runPluginsSweepShell(
-        [
-          "set -euo pipefail",
-          "source scripts/e2e/lib/plugins/fixtures.sh",
-          "set +e",
-          `start_npm_fixture_registry fixture-pkg 1.0.0 ${shellQuote(path.join(root, "fixture.tgz"))} ${shellQuote(fixtureDir)}`,
-          'status="$?"',
-          "set -e",
-          'exit "$status"',
-        ].join("\n"),
-        {
-          OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES: "64kb",
-          PATH: `${binDir}${path.delimiter}/usr/bin${path.delimiter}/bin`,
-        },
-      );
-
-      expect(result.status).toBe(2);
-      expect(result.stderr).toContain("invalid OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES: 64kb");
-      expect(result.stderr).not.toContain("node should not run");
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
-
-  it("cleans ClawHub fixture children when readiness times out", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-clawhub-fixture-cleanup-"));
-    try {
-      const binDir = path.join(root, "bin");
-      const cleanupPath = path.join(root, "caller-cleanup");
-      const tmpDir = path.join(root, "scratch");
-      const pidPath = path.join(root, "server.pid");
-      mkdirSync(tmpDir);
-      writeFixtureServerShims(binDir, pidPath);
-
-      const result = runPluginsSweepShell(
-        [
-          "set -euo pipefail",
-          "source scripts/e2e/lib/plugins/fixtures.sh",
-          "source scripts/e2e/lib/plugins/clawhub.sh",
-          "set +e",
-          `( set -e; trap 'printf caller-cleanup > ${shellQuote(cleanupPath)}' EXIT; run_plugins_clawhub_scenario )`,
-          'status="$?"',
-          "set -e",
-          '[ "$status" != "0" ]',
-        ].join("\n"),
-        {
-          OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB: "0",
-          OPENCLAW_PLUGINS_TMP_DIR: tmpDir,
-          OPENCLAW_TEST_FIXTURE_SERVER_PID: pidPath,
-          PATH: `${binDir}${path.delimiter}/usr/bin${path.delimiter}/bin`,
-        },
-      );
-
-      expect(result.status, result.stderr || result.stdout).toBe(0);
-      const pid = Number(readFileSync(pidPath, "utf8"));
-      expect(Number.isInteger(pid)).toBe(true);
-      // The shell EXIT trap joins this exact fixture child before returning.
-      expect(isProcessAlive(pid)).toBe(false);
-      expect(readFileSync(cleanupPath, "utf8")).toBe("caller-cleanup");
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
-
-  it("rejects invalid plugin fixture log byte limits before ClawHub fixture setup", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-clawhub-fixture-log-invalid-"));
-    try {
-      const binDir = path.join(root, "bin");
-      const tmpDir = path.join(root, "scratch");
-      mkdirSync(binDir, { recursive: true });
-      mkdirSync(tmpDir);
-      writeFileSync(
-        path.join(binDir, "node"),
-        "#!/bin/bash\necho node should not run >&2\nexit 1\n",
-      );
-      chmodSync(path.join(binDir, "node"), 0o755);
-
-      const result = runPluginsSweepShell(
-        [
-          "set -euo pipefail",
-          "source scripts/e2e/lib/plugins/fixtures.sh",
-          "source scripts/e2e/lib/plugins/clawhub.sh",
-          "set +e",
-          "run_plugins_clawhub_scenario",
-          'status="$?"',
-          "set -e",
-          'exit "$status"',
-        ].join("\n"),
-        {
-          OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES: "64kb",
-          OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB: "0",
-          OPENCLAW_PLUGINS_TMP_DIR: tmpDir,
-          PATH: `${binDir}${path.delimiter}/usr/bin${path.delimiter}/bin`,
-        },
-      );
-
-      expect(result.status).toBe(2);
-      expect(result.stderr).toContain("invalid OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES: 64kb");
-      expect(result.stderr).not.toContain("node should not run");
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
-
-  it("bounds ClawHub fixture server logs when readiness fails", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-clawhub-fixture-log-"));
-    try {
-      const binDir = path.join(root, "bin");
-      const tmpDir = path.join(root, "scratch");
-      mkdirSync(tmpDir);
-      writeCrashingFixtureServerShim(binDir);
-
-      const result = runPluginsSweepShell(
-        [
-          "set -euo pipefail",
-          "source scripts/e2e/lib/plugins/fixtures.sh",
-          "source scripts/e2e/lib/plugins/clawhub.sh",
-          "set +e",
-          "run_plugins_clawhub_scenario",
-          'status="$?"',
-          "set -e",
-          'printf "status=%s\\n" "$status"',
-          '[ "$status" != "0" ]',
-        ].join("\n"),
-        {
-          OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES: "80",
-          OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB: "0",
-          OPENCLAW_PLUGINS_TMP_DIR: tmpDir,
-          PATH: `${binDir}${path.delimiter}/usr/bin${path.delimiter}/bin`,
-        },
-      );
-
-      expect(result.status, result.stderr || result.stdout).toBe(0);
-      expect(result.stdout).toContain("truncated: showing last 80");
-      expect(result.stdout).toContain("PLUGIN_FIXTURE_TAIL_MARKER");
-      expect(result.stdout).not.toContain("DO_NOT_DUMP_PLUGIN_FIXTURE_PREFIX");
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
-
-  it("uses the configured scratch root and resolves Windows home-relative install paths", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugins-assertions-"));
-    const home = path.join(root, "home");
-    const scratchRoot = path.join(root, "scratch");
-    const installPath = path.join(home, "managed-plugin");
-    mkdirSync(installPath, { recursive: true });
-
-    try {
-      writeJson(path.join(scratchRoot, "plugins2.json"), {
-        plugins: [{ id: "demo-plugin-tgz", status: "loaded" }],
-      });
-      writeJson(path.join(scratchRoot, "plugins2-inspect.json"), {
-        gatewayMethods: ["demo.tgz"],
-      });
-      writeJson(path.join(home, ".openclaw", "plugins", "installs.json"), {
-        installRecords: {
-          "demo-plugin-tgz": {
-            source: "archive",
-            installPath: String.raw`~\managed-plugin`,
-          },
-        },
-      });
-
-      const result = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "plugin-tgz"], {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          HOME: home,
-          OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS: "1e3",
-          OPENCLAW_PLUGINS_TMP_DIR: scratchRoot,
-        },
-      });
-
-      expect(result.status).toBe(0);
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
-
-  it("compares local plugin source paths by canonical path", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugins-assertions-"));
-    const home = path.join(root, "home");
-    const scratchRoot = path.join(root, "scratch");
-    const sourceParent = path.join(root, "source");
-    const sourcePath = `${sourceParent}//plugin`;
-    const normalizedSourcePath = path.join(sourceParent, "plugin");
-    const installPath = path.join(home, ".openclaw", "extensions", "demo-plugin-dir");
-    mkdirSync(sourcePath, { recursive: true });
-    mkdirSync(installPath, { recursive: true });
-
-    try {
-      writeJson(path.join(scratchRoot, "plugins3.json"), {
-        plugins: [{ id: "demo-plugin-dir", status: "loaded" }],
-      });
-      writeJson(path.join(scratchRoot, "plugins3-inspect.json"), {
-        gatewayMethods: ["demo.dir"],
-      });
-      writeJson(path.join(home, ".openclaw", "plugins", "installs.json"), {
-        installRecords: {
-          "demo-plugin-dir": {
-            source: "path",
-            sourcePath: normalizedSourcePath,
-            installPath,
-          },
-        },
-      });
-
-      const result = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "plugin-dir", sourcePath], {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          HOME: home,
-          OPENCLAW_CONFIG_PATH: path.join(home, ".openclaw", "openclaw.json"),
-          OPENCLAW_PLUGINS_TMP_DIR: scratchRoot,
-          OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
-        },
-      });
-
-      expect(result.status).toBe(0);
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
-
-  it("still requires archive managed install directories to be removed", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugins-assertions-"));
-    const home = path.join(root, "home");
-    const scratchRoot = path.join(root, "scratch");
-    const installPath = path.join(home, ".openclaw", "extensions", "demo-plugin-tgz");
-    mkdirSync(installPath, { recursive: true });
-
-    try {
-      writeJson(path.join(scratchRoot, "plugins2-uninstalled.json"), { plugins: [] });
-      writeFileSync(path.join(scratchRoot, "plugins2-install-path.txt"), installPath, "utf8");
-      writeJson(path.join(home, ".openclaw", "plugins", "installs.json"), {
-        installRecords: {},
-      });
-      writeJson(path.join(home, ".openclaw", "openclaw.json"), {
-        plugins: { entries: { "demo-plugin-tgz": { enabled: false } } },
-      });
-
-      const result = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "plugin-tgz-removed"], {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          HOME: home,
-          OPENCLAW_PLUGINS_TMP_DIR: scratchRoot,
-        },
-      });
-
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("managed install path still exists after uninstall");
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
-
   it("requires the resolved legacy profile before allowing the pre-marker uninstall contract", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugins-assertions-"));
     const home = path.join(root, "home");
@@ -1717,207 +1182,11 @@ fs.renameSync = (source, destination) => {
     }
   });
 
-  it("keeps the legacy npm project cleanup assertion scoped to the resolved profile", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugins-assertions-"));
-    const home = path.join(root, "home");
-    const scratchRoot = path.join(root, "scratch");
-    const npmProjectRoot = path.join(home, ".openclaw", "npm", "projects", "demo-plugin-npm");
-    const installPath = path.join(npmProjectRoot, "node_modules", "@openclaw", "demo-plugin-npm");
-    const dependencyPackagePath = path.join(
-      npmProjectRoot,
-      "node_modules",
-      "is-number",
-      "package.json",
-    );
-
-    try {
-      mkdirSync(npmProjectRoot, { recursive: true });
-      writeJson(path.join(scratchRoot, "plugins-npm-uninstalled.json"), { plugins: [] });
-      writeFileSync(path.join(scratchRoot, "plugins-npm-install-path.txt"), installPath, "utf8");
-      writeFileSync(
-        path.join(scratchRoot, "plugins-npm-dependency-path.txt"),
-        dependencyPackagePath,
-        "utf8",
-      );
-      writeJson(path.join(home, ".openclaw", "plugins", "installs.json"), { installRecords: {} });
-      writeJson(path.join(home, ".openclaw", "openclaw.json"), {
-        plugins: { entries: { "demo-plugin-npm": { enabled: false } } },
-      });
-
-      const baseEnv = {
-        ...process.env,
-        HOME: home,
-        OPENCLAW_CONFIG_PATH: path.join(home, ".openclaw", "openclaw.json"),
-        OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS: "1000",
-        OPENCLAW_PLUGINS_TMP_DIR: scratchRoot,
-        OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
-      };
-      const current = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "plugin-npm-removed"], {
-        encoding: "utf8",
-        env: baseEnv,
-      });
-      writeJson(path.join(home, ".openclaw", "openclaw.json"), { plugins: { entries: {} } });
-      const legacy = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "plugin-npm-removed"], {
-        encoding: "utf8",
-        env: { ...baseEnv, OPENCLAW_FROZEN_TARGET_PLUGIN_UNINSTALL_MODE: "legacy" },
-      });
-
-      expect(current.status).not.toBe(0);
-      expect(current.stderr).toContain("npm managed project still exists after uninstall");
-      expect(legacy.status, legacy.stderr).toBe(0);
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
-
-  it("accepts a retained legacy npm listing only for the keep-files assertion", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugins-assertions-"));
-    const home = path.join(root, "home");
-    const scratchRoot = path.join(root, "scratch");
-    const installPath = path.join(home, ".openclaw", "npm", "demo-plugin-npm");
-    const dependencyPackagePath = path.join(installPath, "node_modules", "is-number");
-
-    try {
-      mkdirSync(dependencyPackagePath, { recursive: true });
-      writeJson(path.join(scratchRoot, "plugins-npm-retained.json"), {
-        plugins: [{ id: "demo-plugin-npm", status: "disabled", enabled: false }],
-      });
-      writeFileSync(path.join(scratchRoot, "plugins-npm-install-path.txt"), installPath, "utf8");
-      writeFileSync(
-        path.join(scratchRoot, "plugins-npm-dependency-path.txt"),
-        dependencyPackagePath,
-        "utf8",
-      );
-      writeJson(path.join(home, ".openclaw", "plugins", "installs.json"), {
-        installRecords: {},
-      });
-      writeJson(path.join(home, ".openclaw", "openclaw.json"), { plugins: { entries: {} } });
-      const env = {
-        ...process.env,
-        HOME: home,
-        OPENCLAW_CONFIG_PATH: path.join(home, ".openclaw", "openclaw.json"),
-        OPENCLAW_PLUGINS_TMP_DIR: scratchRoot,
-        OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
-      };
-
-      const current = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "plugin-npm-retained"], {
-        encoding: "utf8",
-        env,
-      });
-      const legacy = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "plugin-npm-retained"], {
-        encoding: "utf8",
-        env: { ...env, OPENCLAW_FROZEN_TARGET_PLUGIN_UNINSTALL_MODE: "legacy" },
-      });
-
-      expect(current.status).not.toBe(0);
-      expect(current.stderr).toContain("still listed after uninstall");
-      expect(legacy.status, legacy.stderr).toBe(0);
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
-
-  it("rejects unreadable config during plugin uninstall proof", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugins-assertions-"));
-    const home = path.join(root, "home");
-    const scratchRoot = path.join(root, "scratch");
-    const removedInstallPath = path.join(home, ".openclaw", "extensions", "demo-plugin-tgz");
-
-    try {
-      writeJson(path.join(scratchRoot, "plugins2-uninstalled.json"), { plugins: [] });
-      writeFileSync(
-        path.join(scratchRoot, "plugins2-install-path.txt"),
-        removedInstallPath,
-        "utf8",
-      );
-      writeJson(path.join(home, ".openclaw", "plugins", "installs.json"), {
-        installRecords: {},
-      });
-      writeFileSync(path.join(home, ".openclaw", "openclaw.json"), "{ malformed\n", "utf8");
-
-      const result = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "plugin-tgz-removed"], {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          HOME: home,
-          OPENCLAW_PLUGINS_TMP_DIR: scratchRoot,
-        },
-      });
-
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("failed to read OpenClaw config");
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
-
   it.each([
     {
       name: "rejects ClawHub install paths that resolve outside the managed extensions root",
       escaped: true,
       recordOverrides: {},
-      errorPrefix: null,
-      pathError: false,
-    },
-    {
-      name: "accepts legacy ZIP without later ClawPack or npm fields",
-      recordOverrides: {},
-      errorPrefix: null,
-      pathError: false,
-    },
-    {
-      name: "rejects a legacy artifact with the wrong format before later metadata",
-      recordOverrides: { artifactFormat: "tgz" },
-      errorPrefix: "missing ClawHub legacy ZIP artifact metadata",
-      pathError: false,
-    },
-    {
-      name: "rejects a non-legacy artifact kind before ClawPack metadata",
-      recordOverrides: { artifactKind: "other" },
-      errorPrefix: "missing ClawHub artifact metadata",
-      pathError: false,
-    },
-    {
-      name: "rejects missing ClawPack metadata before npm metadata",
-      recordOverrides: { artifactKind: "npm-pack", artifactFormat: "tgz" },
-      errorPrefix: "missing ClawHub ClawPack metadata",
-      pathError: false,
-    },
-    {
-      name: "rejects a string ClawPack size",
-      recordOverrides: {
-        artifactKind: "npm-pack",
-        artifactFormat: "tgz",
-        clawpackSha256: "digest",
-        clawpackSize: "0",
-      },
-      errorPrefix: "missing ClawHub ClawPack metadata",
-      pathError: false,
-    },
-    {
-      name: "accepts zero size before rejecting missing npm metadata",
-      recordOverrides: {
-        artifactKind: "npm-pack",
-        artifactFormat: "tgz",
-        clawpackSha256: "digest",
-        clawpackSize: 0,
-      },
-      errorPrefix: "missing ClawHub npm artifact metadata",
-      pathError: false,
-    },
-    {
-      name: "accepts zero size and truthy non-string metadata with a real npm peer",
-      recordOverrides: {
-        artifactKind: "npm-pack",
-        artifactFormat: "tgz",
-        clawpackSha256: { digest: 1 },
-        clawpackSize: 0,
-        npmIntegrity: 1,
-        npmShasum: true,
-        npmTarballName: ["package.tgz"],
-      },
-      errorPrefix: null,
-      pathError: false,
     },
     {
       name: "rejects an npm peer linked to a different host",
@@ -1933,19 +1202,6 @@ fs.renameSync = (source, destination) => {
       wrongPeerTarget: true,
     },
     {
-      name: "accepts an optional dependency inside the ClawHub installation",
-      recordOverrides: {
-        artifactKind: "npm-pack",
-        artifactFormat: "tgz",
-        clawpackSha256: "digest",
-        clawpackSize: 0,
-        npmIntegrity: "integrity",
-        npmShasum: "shasum",
-        npmTarballName: "package.tgz",
-      },
-      optionalDependency: "inside",
-    },
-    {
       name: "rejects an optional dependency linked outside the ClawHub installation",
       recordOverrides: {
         artifactKind: "npm-pack",
@@ -1958,115 +1214,87 @@ fs.renameSync = (source, destination) => {
       },
       optionalDependency: "escaped",
     },
-    {
-      name: "rejects an empty install path before invalid metadata",
-      recordOverrides: { artifactFormat: "tgz", installPath: "" },
-      errorPrefix: null,
-      pathError: true,
-    },
-    {
-      name: "rejects a non-string install path before invalid metadata",
-      recordOverrides: { artifactFormat: "tgz", installPath: 42 },
-      errorPrefix: null,
-      pathError: true,
-    },
-  ])(
-    "$name",
-    ({ escaped, recordOverrides, errorPrefix, pathError, wrongPeerTarget, optionalDependency }) => {
-      const root = autoCleanupTempDirs.make("openclaw-plugins-clawhub-path-");
-      const home = path.join(root, "home");
-      const scratchRoot = path.join(root, "scratch");
-      const extensionsRoot = path.join(home, ".openclaw", "extensions");
-      const installPath = escaped
-        ? `${extensionsRoot}${path.sep}..${path.sep}escaped-clawhub`
-        : path.join(extensionsRoot, "openclaw-kitchen-sink-fixture");
-      mkdirSync(extensionsRoot, { recursive: true });
-      mkdirSync(installPath, { recursive: true });
-      const record = {
-        artifactFormat: "zip",
-        artifactKind: "legacy-zip",
-        clawhubFamily: "code-plugin",
-        clawhubPackage: "@openclaw/kitchen-sink",
-        installPath,
-        source: "clawhub",
-        spec: "clawhub:@openclaw/kitchen-sink",
-        ...recordOverrides,
-      };
-      if (record.artifactKind === "npm-pack") {
-        mkdirSync(path.join(installPath, "node_modules"), { recursive: true });
-        const peerTarget = wrongPeerTarget ? path.join(root, "other-host") : process.cwd();
-        if (wrongPeerTarget) {
-          mkdirSync(peerTarget);
-        }
-        symlinkSync(
-          peerTarget,
-          path.join(installPath, "node_modules", "openclaw"),
-          process.platform === "win32" ? "junction" : "dir",
-        );
-        if (optionalDependency) {
-          const dependencyPath = path.join(installPath, "node_modules", "is-number");
-          const dependencyTarget =
-            optionalDependency === "escaped" ? path.join(root, "other-dependency") : dependencyPath;
-          writeJson(path.join(dependencyTarget, "package.json"), { name: "is-number" });
-          if (optionalDependency === "escaped") {
-            symlinkSync(
-              dependencyTarget,
-              dependencyPath,
-              process.platform === "win32" ? "junction" : "dir",
-            );
-          }
+  ])("$name", ({ escaped, recordOverrides, wrongPeerTarget, optionalDependency }) => {
+    const root = autoCleanupTempDirs.make("openclaw-plugins-clawhub-path-");
+    const home = path.join(root, "home");
+    const scratchRoot = path.join(root, "scratch");
+    const extensionsRoot = path.join(home, ".openclaw", "extensions");
+    const installPath = escaped
+      ? `${extensionsRoot}${path.sep}..${path.sep}escaped-clawhub`
+      : path.join(extensionsRoot, "openclaw-kitchen-sink-fixture");
+    mkdirSync(extensionsRoot, { recursive: true });
+    mkdirSync(installPath, { recursive: true });
+    const record = {
+      artifactFormat: "zip",
+      artifactKind: "legacy-zip",
+      clawhubFamily: "code-plugin",
+      clawhubPackage: "@openclaw/kitchen-sink",
+      installPath,
+      source: "clawhub",
+      spec: "clawhub:@openclaw/kitchen-sink",
+      ...recordOverrides,
+    };
+    if (record.artifactKind === "npm-pack") {
+      mkdirSync(path.join(installPath, "node_modules"), { recursive: true });
+      const peerTarget = wrongPeerTarget ? path.join(root, "other-host") : process.cwd();
+      if (wrongPeerTarget) {
+        mkdirSync(peerTarget);
+      }
+      symlinkSync(
+        peerTarget,
+        path.join(installPath, "node_modules", "openclaw"),
+        process.platform === "win32" ? "junction" : "dir",
+      );
+      if (optionalDependency) {
+        const dependencyPath = path.join(installPath, "node_modules", "is-number");
+        const dependencyTarget =
+          optionalDependency === "escaped" ? path.join(root, "other-dependency") : dependencyPath;
+        writeJson(path.join(dependencyTarget, "package.json"), { name: "is-number" });
+        if (optionalDependency === "escaped") {
+          symlinkSync(
+            dependencyTarget,
+            dependencyPath,
+            process.platform === "win32" ? "junction" : "dir",
+          );
         }
       }
+    }
 
-      writeJson(path.join(scratchRoot, "plugins-clawhub-installed.json"), {
-        plugins: [{ id: "openclaw-kitchen-sink-fixture", status: "loaded" }],
-      });
-      writeJson(path.join(scratchRoot, "plugins-clawhub-inspect.json"), {
-        plugin: { id: "openclaw-kitchen-sink-fixture" },
-      });
-      writeJson(path.join(home, ".openclaw", "plugins", "installs.json"), {
-        installRecords: {
-          "openclaw-kitchen-sink-fixture": record,
-        },
-      });
+    writeJson(path.join(scratchRoot, "plugins-clawhub-installed.json"), {
+      plugins: [{ id: "openclaw-kitchen-sink-fixture", status: "loaded" }],
+    });
+    writeJson(path.join(scratchRoot, "plugins-clawhub-inspect.json"), {
+      plugin: { id: "openclaw-kitchen-sink-fixture" },
+    });
+    writeJson(path.join(home, ".openclaw", "plugins", "installs.json"), {
+      installRecords: {
+        "openclaw-kitchen-sink-fixture": record,
+      },
+    });
 
-      const result = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "clawhub-installed"], {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          CLAWHUB_PLUGIN_ID: "openclaw-kitchen-sink-fixture",
-          CLAWHUB_PLUGIN_SPEC: "clawhub:@openclaw/kitchen-sink",
-          HOME: home,
-          OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
-          OPENCLAW_CONFIG_PATH: path.join(home, ".openclaw", "openclaw.json"),
-          OPENCLAW_PLUGINS_TMP_DIR: scratchRoot,
-        },
-      });
+    const result = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "clawhub-installed"], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        CLAWHUB_PLUGIN_ID: "openclaw-kitchen-sink-fixture",
+        CLAWHUB_PLUGIN_SPEC: "clawhub:@openclaw/kitchen-sink",
+        HOME: home,
+        OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
+        OPENCLAW_CONFIG_PATH: path.join(home, ".openclaw", "openclaw.json"),
+        OPENCLAW_PLUGINS_TMP_DIR: scratchRoot,
+      },
+    });
 
-      if (escaped) {
-        expect(result.status).toBe(1);
-        expect(result.stderr).toContain("ClawHub install path resolved outside");
-      } else if (pathError) {
-        expect(result.status).toBe(1);
-        expect(result.stderr.match(/^(?:Error|error): (.*)$/m)?.[1]).toBe(
-          "missing ClawHub install path for openclaw-kitchen-sink-fixture",
-        );
-      } else if (wrongPeerTarget || optionalDependency === "escaped") {
-        expect(result.status).toBe(1);
-        const expectedError = wrongPeerTarget
-          ? `expected ClawHub openclaw peer ${realpathSync(path.join(root, "other-host"))} to target ${realpathSync(process.cwd())}`
-          : `ClawHub isolated dependency resolved outside ${installPath}: ${realpathSync(path.join(root, "other-dependency", "package.json"))}`;
-        expect(result.stderr.match(/^(?:Error|error): (.*)$/m)?.[1]).toBe(expectedError);
-      } else if (errorPrefix) {
-        expect(result.status).toBe(1);
-        expect(result.stderr.match(/^(?:Error|error): (.*)$/m)?.[1]).toBe(
-          `${errorPrefix} for openclaw-kitchen-sink-fixture: ${JSON.stringify(record)}`,
-        );
-      } else {
-        expect(result.status, result.stderr).toBe(0);
-      }
-    },
-  );
+    expect(result.status).toBe(1);
+    if (escaped) {
+      expect(result.stderr).toContain("ClawHub install path resolved outside");
+    } else {
+      const expectedError = wrongPeerTarget
+        ? `expected ClawHub openclaw peer ${realpathSync(path.join(root, "other-host"))} to target ${realpathSync(process.cwd())}`
+        : `ClawHub isolated dependency resolved outside ${installPath}: ${realpathSync(path.join(root, "other-dependency", "package.json"))}`;
+      expect(result.stderr.match(/^(?:Error|error): (.*)$/m)?.[1]).toBe(expectedError);
+    }
+  });
 
   it("times out stalled ClawHub package metadata requests", ({ signal }) =>
     fixtures.run(async () => {

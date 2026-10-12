@@ -16,15 +16,11 @@ export function registerSlackInteractionEvents(params: {
   }
 
   // Bolt routes both modal lifecycles through view constraints; there is no viewClosed API.
-  for (const [interactionType, contextPrefix] of [
-    ["view_submission", "slack:interaction:view"],
-    ["view_closed", "slack:interaction:view-closed"],
-  ] as const) {
+  for (const interactionType of ["view_submission", "view_closed"] as const) {
     registerModalLifecycleHandler({
       ctx,
       trackEvent,
       interactionType,
-      contextPrefix,
     });
   }
 }

@@ -1,8 +1,25 @@
-import { guard } from "lit/directives/guard.js";
 import type { coalesceAgentRunFrames } from "../chat-agent-run-grouping.ts";
+import type { ActivityGroup, MessageGroup } from "./chat-message-group-view.tsx";
+import type { StreamGroup, WorkGroupSummary } from "./chat-message-stream-view.tsx";
 import type { ChatThreadState } from "./chat-thread-interactions.ts";
+import { transcriptArraysEqual } from "./chat-transcript-memo.ts";
 
 type ChatRenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
+
+export type NativeTranscriptView =
+  | ({ kind: "group" } & Parameters<typeof MessageGroup>[0])
+  | ({ kind: "activity" } & Parameters<typeof ActivityGroup>[0])
+  | ({ kind: "stream" } & Parameters<typeof StreamGroup>[0])
+  | ({ kind: "work" } & Parameters<typeof WorkGroupSummary>[0]);
+
+/** The keyed virtual row owns the dependency memo and its rendered content. */
+export class GuardedTranscriptItem {
+  constructor(
+    readonly dependencies: readonly unknown[],
+    readonly native: NativeTranscriptView | undefined,
+    readonly legacy?: () => unknown,
+  ) {}
+}
 
 function itemDependencies(item: ChatRenderItem): readonly unknown[] {
   if (item.kind === "stream-run") {
@@ -33,12 +50,8 @@ export function trackTranscriptRenderDependencies(
   dependencies: unknown[],
 ): void {
   const previous = state.transcriptRenderDependencies;
-  if (
-    previous.length !== dependencies.length ||
-    dependencies.some((value, index) => !Object.is(previous[index], value))
-  ) {
+  if (!transcriptArraysEqual(dependencies, previous)) {
     state.transcriptRenderDependencies = dependencies;
-    state.transcriptRenderContext = {};
   }
 }
 
@@ -46,11 +59,17 @@ export function guardChatRenderItems(
   state: ChatThreadState,
   // Reply sources and live status can change without replacing the row itself.
   presentationDependencies: (item: ChatRenderItem) => readonly unknown[],
-  render: (item: ChatRenderItem) => unknown,
+  nativeFor: (item: ChatRenderItem) => NativeTranscriptView | undefined,
+  legacyFor?: (item: ChatRenderItem) => GuardedTranscriptItem["legacy"],
 ) {
   return (item: ChatRenderItem) =>
-    guard(
-      [...itemDependencies(item), state.transcriptRenderContext, ...presentationDependencies(item)],
-      () => render(item),
+    new GuardedTranscriptItem(
+      [
+        ...itemDependencies(item),
+        state.transcriptRenderDependencies,
+        ...presentationDependencies(item),
+      ],
+      nativeFor(item),
+      legacyFor?.(item),
     );
 }

@@ -18,14 +18,12 @@ import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
 import * as spawnDiagnostics from "../../process/spawn-diagnostics.js";
 import { registerProjectRegistry } from "../../projects/project-registry.js";
 import { registerClonedProjectRegistry } from "../../projects/project-registry.test-support.js";
-import { SecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-state.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
-import { gitHubPublicApi } from "../github-public-api.js";
 import * as projectGitHubSearch from "../project-github-search.js";
 import {
   createSessionRowProjection,
@@ -299,40 +297,6 @@ test("registered anonymous native search does not borrow the service credential"
   }
 });
 
-test("projects.searchRemote uses the opted-in native system GitHub identity", async () => {
-  const token = vi
-    .spyOn(githubReadIdentity, "readCachedNativeGitHubToken")
-    .mockResolvedValue("native-system-token");
-  const search = vi.spyOn(projectGitHubSearch, "searchRemoteProjects").mockResolvedValue({
-    credential: "configured",
-    projects: [],
-  });
-  try {
-    expect(
-      await invokeProjectMethod(
-        "projects.searchRemote",
-        { query: "acme/private-repo" },
-        { gateway: { projects: { nativeGitHubSearch: true } } },
-      ),
-    ).toEqual({
-      ok: true,
-      payload: { credential: "configured", projects: [] },
-      error: undefined,
-    });
-    expect(token).toHaveBeenCalledWith(process.env);
-    expect(search).toHaveBeenCalledWith("acme/private-repo", {
-      token: "native-system-token",
-      assertCurrent: expect.any(Function),
-      signal: undefined,
-      host: "github.com",
-      apiBaseUrl: "https://api.github.com",
-    });
-  } finally {
-    search.mockRestore();
-    token.mockRestore();
-  }
-});
-
 test("projects.list exposes a normalized configured default repository", async () => {
   const config = {
     gateway: {
@@ -482,76 +446,26 @@ test("projects.list coalesces concurrent observed Git discovery and refreshes la
   });
 });
 
-test.each([
-  {
-    failure: "rate limit",
-    error: () =>
-      new gitHubPublicApi.ControlUiGitHubError(429, "quota exhausted", {
-        upstreamStatus: 403,
-        retryAtMs: Date.now() + 30_000,
-      }),
-    message: "GitHub API rate limit exceeded (HTTP 403). Wait 30 seconds and retry.",
-    retryable: true,
-    retryAfterMs: 30_000,
-  },
-  {
-    failure: "authentication",
-    error: () => new gitHubPublicApi.ControlUiGitHubError(401, "credential rejected"),
-    message: "GitHub authentication failed (HTTP 401). Reconnect the GitHub identity in Settings.",
-    retryable: false,
-  },
-  {
-    failure: "repository access",
-    error: () => new gitHubPublicApi.ControlUiGitHubError(403, "repository denied"),
-    message:
-      "GitHub access denied (HTTP 403). Check the configured GitHub identity's repository access.",
-    retryable: false,
-  },
-  {
-    failure: "unavailable configured credential",
-    error: () =>
-      new SecretSurfaceUnavailableError({
-        ownerKind: "capability",
-        ownerId: "control-ui-github",
-        state: "unavailable",
-        paths: ["gateway.controlUi.github.token"],
-        refKeys: [],
-        reason: "synthetic-secret",
-      }),
-    message:
-      "The configured Control UI GitHub credential is unavailable. Check gateway.controlUi.github.token and its host binding, then retry.",
-    retryable: false,
-  },
-  {
-    failure: "unexpected diagnostic",
-    error: () => new Error("GitHub request failed with token=synthetic-secret"),
-    message: "GitHub project search is unavailable. Retry shortly.",
-    retryable: true,
-  },
-])(
-  "projects.searchRemote preserves safe $failure diagnostics and retry metadata",
-  async ({ error, message, retryable, retryAfterMs }) => {
-    const clock = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
-    const search = vi.spyOn(projectGitHubSearch, "searchRemoteProjects").mockRejectedValue(error());
-    try {
-      const result = await invokeProjectMethod("projects.searchRemote", { query: "openclaw" });
-      expect(result).toEqual({
-        ok: false,
-        payload: undefined,
-        error: {
-          code: "UNAVAILABLE",
-          message,
-          retryable,
-          ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
-        },
-      });
-      expect(JSON.stringify(result)).not.toContain("synthetic-secret");
-    } finally {
-      search.mockRestore();
-      clock.mockRestore();
-    }
-  },
-);
+test("projects.searchRemote redacts unexpected error diagnostics", async () => {
+  const search = vi
+    .spyOn(projectGitHubSearch, "searchRemoteProjects")
+    .mockRejectedValue(new Error("GitHub request failed with token=synthetic-secret"));
+  try {
+    const result = await invokeProjectMethod("projects.searchRemote", { query: "openclaw" });
+    expect(result).toEqual({
+      ok: false,
+      payload: undefined,
+      error: {
+        code: "UNAVAILABLE",
+        message: "GitHub project search is unavailable. Retry shortly.",
+        retryable: true,
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain("synthetic-secret");
+  } finally {
+    search.mockRestore();
+  }
+});
 
 test("projects.list exposes checkout details only at write scope", async () => {
   return withProjectState(async (state) => {

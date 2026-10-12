@@ -45,7 +45,7 @@ export type GatewayServerMutableState = {
   tailscaleCleanup: (() => Promise<void>) | null;
   readonly postReadySidecars: GatewaySidecarStopOwner;
   readonly gatewayLifetimeSidecars: GatewaySidecarStopOwner;
-  skillsChangeUnsub: () => Promise<void>;
+  skillsChangeUnsub: (options?: { exitAfterClose?: boolean }) => Promise<void>;
   channelHealthMonitor: ChannelHealthMonitor | null;
   configReloader: GatewayConfigReloaderHandle;
   reconcileAuditPolicy: ((config: OpenClawConfig) => void) | null;

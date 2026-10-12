@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   getBundledChannelPlugin,
@@ -69,11 +70,7 @@ function isChannelDoctorBlockedByConfig(channelId: string, cfg: OpenClawConfig):
   if (cfg.plugins?.entries?.[normalizedChannelId]?.enabled === false) {
     return true;
   }
-  const channelEntry = (cfg.channels as Record<string, unknown> | undefined)?.[normalizedChannelId];
-  return (
-    Boolean(channelEntry && typeof channelEntry === "object" && !Array.isArray(channelEntry)) &&
-    (channelEntry as { enabled?: unknown }).enabled === false
-  );
+  return asOptionalRecord(cfg.channels?.[normalizedChannelId])?.enabled === false;
 }
 
 function safelyResolveChannelPlugin<T>(id: string, resolve: (id: string) => T): T | undefined {

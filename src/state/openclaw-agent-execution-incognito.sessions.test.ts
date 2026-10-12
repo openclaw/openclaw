@@ -36,9 +36,11 @@ import { readAgentDatabaseDeletionSnapshot } from "./agent-deletion-journal.read
 import { getOpenClawAgentDatabaseIfOpen } from "./openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import type { IncognitoAgentDatabaseExecution } from "./openclaw-agent-execution-incognito.js";
+import { registerIncognitoSessionMutationTests } from "./openclaw-agent-execution-incognito.mutations.test-support.js";
+import { useIncognitoActorProbe } from "./openclaw-agent-execution-incognito.test-support.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
-import { runOpenClawAgentWorkerWrite } from "./openclaw-agent-write-admission.js";
 
+const probe = useIncognitoActorProbe();
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const references = new Set<IncognitoAgentDatabaseExecution>();
 const authority: IncognitoSessionAuthority = { assertCurrent() {} };
@@ -187,11 +189,9 @@ it("grants only its transaction preimage and publishes detached facts before its
       expect(() => actor.sessions.read(authority, { sessionKey })).toThrow(
         "Incognito authority callbacks cannot call their actor",
       );
-      expect(() =>
-        actor.run(authority, (scope) =>
-          scope.execute({ type: "database.incognito.memory", input: undefined }),
-        ),
-      ).toThrow("Incognito authority callbacks cannot call their actor");
+      expect(() => actor.sessions.withSharedState(async () => undefined)).toThrow(
+        "Incognito authority callbacks cannot call their actor",
+      );
       expect(facts.sharing?.entry?.sessionId).toBe(stage === "commit" ? "publication" : undefined);
     },
   };
@@ -326,13 +326,7 @@ it("serializes reads, creation, publication, and queued revocation in the actor 
   const borrower = await capture();
   assert(borrower);
   const sessionKey = key("fifo");
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  const held = actor.run(authority, async (scope) => {
-    entered.resolve();
-    await release.promise;
-    await scope.execute({ type: "database.incognito.memory", input: undefined });
-  });
+  const { entered, release, held } = probe.hold(actor, authority);
   await entered.promise;
   let allowed = true;
   const source: IncognitoSessionAuthority = {
@@ -661,7 +655,7 @@ it("rechecks a cross-agent completion lineage using committed actor facts inside
 
 it("composes entry reads, currency, candidates and admission without caller-thread SQL", async () => {
   expect(
-    resolveSessionEntryCandidateTargetForRuntime({
+    await resolveSessionEntryCandidateTargetForRuntime({
       cfg: {},
       agentId: "main",
       candidateKeys: [],
@@ -850,48 +844,6 @@ it.each([
   },
 );
 
-it("rejects an ambient store-root change while the actor listing waits for FIFO custody", async () => {
-  const originalRoot = process.env.OPENCLAW_STATE_DIR;
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  const started = createDeferredCore();
-  const replacementRoot = tempDirs.make("incognito-listing-replacement-root-");
-  process.env.OPENCLAW_STATE_DIR = env.OPENCLAW_STATE_DIR;
-  const held = runOpenClawAgentWorkerWrite(
-    { target: actor.identity, assertCurrent: () => actor.assertReadable() },
-    async () => {
-      entered.resolve();
-      await release.promise;
-    },
-  );
-  try {
-    await entered.promise;
-    const listing = withIncognitoSessionActor(actor, () => {
-      const result = loadCombinedSessionStoreForGatewayCoreAsync({
-        agents: { entries: { main: {} } },
-      });
-      started.resolve();
-      return result;
-    });
-    const rejected = expect(listing).rejects.toThrow(
-      "Session stores changed while preparing the listing",
-    );
-    await started.promise;
-    process.env.OPENCLAW_STATE_DIR = replacementRoot;
-    release.resolve();
-    await held;
-    await rejected;
-  } finally {
-    release.resolve();
-    await held;
-    if (originalRoot === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = originalRoot;
-    }
-  }
-});
-
 it.each(["default", "explicit", "durable-only"] as const)(
   "keeps %s combined discovery within its selected physical root",
   async (mode) => {
@@ -951,3 +903,5 @@ it.each(["default", "explicit", "durable-only"] as const)(
     }
   },
 );
+
+registerIncognitoSessionMutationTests(() => ({ actor, env, authority, key, entry }));

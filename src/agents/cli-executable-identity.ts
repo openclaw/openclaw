@@ -361,13 +361,15 @@ async function resolvePackageTreeArtifact(params: {
   };
 }
 
-function allowsSelfContainedExecutable(
+function resolveSelfContainedArtifact(
   filePath: string,
   resolvedCommandPath: string,
   policy: CliBackendRuntimeArtifactPolicy | undefined,
-): boolean {
+):
+  | Extract<CliExecutableIdentity["runtimeArtifact"], { kind: "self-contained-executable" }>
+  | undefined {
   if (!policy) {
-    return false;
+    return undefined;
   }
   const basenames = new Set(
     [filePath, resolvedCommandPath].map((candidate) => {
@@ -375,11 +377,11 @@ function allowsSelfContainedExecutable(
       return process.platform === "win32" ? basename.toLowerCase() : basename;
     }),
   );
-  return (
-    policy.nativeExecutableNames?.some((name) =>
-      basenames.has(process.platform === "win32" ? name.toLowerCase() : name),
-    ) === true
-  );
+  return policy.nativeExecutableNames?.some((name) =>
+    basenames.has(process.platform === "win32" ? name.toLowerCase() : name),
+  ) === true
+    ? { kind: "self-contained-executable" }
+    : undefined;
 }
 
 async function resolvePosixIdentity(params: {
@@ -409,13 +411,11 @@ async function resolvePosixIdentity(params: {
         entrypointPath: packageEntrypoint.path,
         policy: params.runtimeArtifact,
       })
-    : allowsSelfContainedExecutable(
-          commandFile.identity.path,
-          params.resolvedPath,
-          params.runtimeArtifact,
-        )
-      ? ({ kind: "self-contained-executable" } as const)
-      : undefined;
+    : resolveSelfContainedArtifact(
+        commandFile.identity.path,
+        params.resolvedPath,
+        params.runtimeArtifact,
+      );
   if (!runtimeArtifact) {
     return undefined;
   }
@@ -528,13 +528,11 @@ async function resolveWindowsIdentity(params: {
         entrypointPath: commandEntrypoint.path,
         policy: params.runtimeArtifact,
       })
-    : allowsSelfContainedExecutable(
-          invocationFile.identity.path,
-          params.resolvedPath,
-          params.runtimeArtifact,
-        )
-      ? ({ kind: "self-contained-executable" } as const)
-      : undefined;
+    : resolveSelfContainedArtifact(
+        invocationFile.identity.path,
+        params.resolvedPath,
+        params.runtimeArtifact,
+      );
   if (!runtimeArtifact) {
     return undefined;
   }
@@ -576,18 +574,13 @@ export async function resolveCliExecutableIdentity(params: {
   if (!resolvedPath) {
     return undefined;
   }
-  return process.platform === "win32"
-    ? await resolveWindowsIdentity({
-        command,
-        resolvedPath,
-        env,
-        ...(params.runtimeArtifact ? { runtimeArtifact: params.runtimeArtifact } : {}),
-      })
-    : await resolvePosixIdentity({
-        command,
-        resolvedPath,
-        ...(params.cwd ? { cwd: params.cwd } : {}),
-        env,
-        ...(params.runtimeArtifact ? { runtimeArtifact: params.runtimeArtifact } : {}),
-      });
+  const windows = process.platform === "win32";
+  const resolveIdentity = windows ? resolveWindowsIdentity : resolvePosixIdentity;
+  return await resolveIdentity({
+    command,
+    resolvedPath,
+    ...(!windows && params.cwd ? { cwd: params.cwd } : {}),
+    env,
+    ...(params.runtimeArtifact ? { runtimeArtifact: params.runtimeArtifact } : {}),
+  });
 }

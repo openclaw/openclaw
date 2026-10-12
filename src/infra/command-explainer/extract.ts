@@ -77,11 +77,7 @@ type SpanBase = {
 
 const ROOT_SPAN_BASE: SpanBase = {};
 
-type CommandTopologyBucket = {
-  context: CommandContext;
-  parentCommandId?: string;
-  commands: RecordedCommandStep[];
-};
+type CommandTopologyBucket = [RecordedCommandStep, ...RecordedCommandStep[]];
 
 type OperatorSource = {
   context: CommandContext;
@@ -121,15 +117,10 @@ function advancePosition(
   let column = position.column;
   for (let index = 0; index < text.length; index += 1) {
     const ch = text[index];
-    if (ch === "\r") {
-      if (text[index + 1] === "\n") {
+    if (ch === "\r" || ch === "\n") {
+      if (ch === "\r" && text[index + 1] === "\n") {
         index += 1;
       }
-      row += 1;
-      column = 0;
-      continue;
-    }
-    if (ch === "\n") {
       row += 1;
       column = 0;
       continue;
@@ -867,21 +858,14 @@ function commandTopologyBuckets(commands: RecordedCommandStep[]): CommandTopolog
     const key = `${command.context}\0${command.parentCommandId ?? ""}`;
     const bucket = buckets.get(key);
     if (bucket) {
-      bucket.commands.push(command);
-      continue;
+      bucket.push(command);
+    } else {
+      buckets.set(key, [command]);
     }
-    const newBucket: CommandTopologyBucket = {
-      context: command.context,
-      commands: [command],
-    };
-    if (command.parentCommandId) {
-      newBucket.parentCommandId = command.parentCommandId;
-    }
-    buckets.set(key, newBucket);
   }
 
   for (const bucket of buckets.values()) {
-    bucket.commands.sort((left, right) => left.span.startIndex - right.span.startIndex);
+    bucket.sort((left, right) => left.span.startIndex - right.span.startIndex);
   }
   return Array.from(buckets.values());
 }
@@ -944,15 +928,16 @@ function resolveOperators(
   const operators: CommandOperator[] = [];
 
   for (const bucket of commandTopologyBuckets(commands)) {
+    const context = bucket[0].context;
+    const parentCommandId = bucket[0].parentCommandId || undefined;
     const bucketOperatorSource = operatorSources.find(
-      (entry) =>
-        entry.context === bucket.context && entry.parentCommandId === bucket.parentCommandId,
+      (entry) => entry.context === context && entry.parentCommandId === parentCommandId,
     );
     const bucketRanges = bucketOperatorSource
-      ? commandSourceRanges(bucketOperatorSource.source, bucket.commands)
+      ? commandSourceRanges(bucketOperatorSource.source, bucket)
       : null;
-    for (const [index, fromCommand] of bucket.commands.entries()) {
-      const toCommand = bucket.commands[index + 1];
+    for (const [index, fromCommand] of bucket.entries()) {
+      const toCommand = bucket[index + 1];
       if (!toCommand) {
         break;
       }
@@ -991,8 +976,8 @@ function resolveOperators(
         fromCommandId: fromCommand.id,
         toCommandId: toCommand.id,
       };
-      if (bucket.parentCommandId) {
-        topologyOperator.parentCommandId = bucket.parentCommandId;
+      if (parentCommandId) {
+        topologyOperator.parentCommandId = parentCommandId;
       }
       operators.push(topologyOperator);
     }

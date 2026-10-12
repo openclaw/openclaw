@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "Worker inference on an externally managed paired worker host"
 title: "Worker-local inference"
 read_when:
@@ -186,6 +187,22 @@ with the node definition, but leave `baseUrl`, `apiKey`, and secret `headers`
 only in the node configuration. A model already present in the Gateway's catalog
 does not need this additional metadata entry.
 
+### Make the dedicated worker mandatory
+
+To require this worker for OpenClaw turns, add
+`requiredProfile: "dedicated-native"` alongside `cloudWorkers.profiles` in the
+example above. See [Required worker profile](/gateway/config-cloud-workers#required-worker-profile)
+for admission, permissions, empty workspaces, and existing-session behavior.
+The configured agent model remains the default.
+
+Provision the paired node and native registry before admitting chats. Enrollment
+can begin before the required profile is usable, but chats remain blocked while
+it is missing, unavailable, or preparing. Do not copy provider credentials to the
+Gateway to work around a placement error. Retry and Stop use the retained session
+and placement; initial-message recovery never falls back to Gateway execution.
+
+Leave `requiredProfile` unset for the optional, administrator-selected flow below.
+
 ### Create and dispatch with worker proxy authentication
 
 Use an authenticated operator CLI/API connection and the configured default
@@ -285,8 +302,17 @@ and your platform's node-service replacement procedure.
 
 Before downgrading either service to a build without this feature:
 
-1. Stop new submissions, finish or stop active turns, and reclaim every native
-   placement while the compatible Gateway and node are still running. Use
+1. Stop new submissions and resolve pending required-placement first messages in
+   every browser tab before replacing the Control UI. Confirm each message's
+   outcome in its session history; finish or explicitly retire its pending
+   recovery on the current build. If the outcome is unresolved, keep the current
+   build and save the message text and attachments separately. Do not blindly
+   resend an unconfirmed message. Older Control UI builds reject the required
+   placement recovery marker and cannot restore that pending input; removing the
+   configuration setting does not migrate browser recovery records.
+
+   Finish or stop active turns, and reclaim every native placement while the
+   compatible Gateway and node are still running. Use
    **Stop cloud worker…** or the existing RPC:
 
    ```bash
@@ -298,7 +324,7 @@ Before downgrading either service to a build without this feature:
    An offline device or pending teardown is not confirmed release; reconnect and
    resolve cleanup before continuing. Do not force-destroy merely to downgrade.
 
-2. Remove the native profiles from `cloudWorkers.profiles` and any defaults that
+2. Remove `cloudWorkers.requiredProfile` if set, then remove the native profiles from `cloudWorkers.profiles` and any defaults that
    reference them. Removing a profile does not change an active environment's
    recorded inference choice; reclaim it first. Retire worker-only model entries
    and auth environment through your platform lifecycle if they are no longer

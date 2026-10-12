@@ -1,10 +1,10 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { resolveSessionAuthSelection } from "../../agents/auth-profiles/session-override.js";
 import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { clearCommandLane, enqueueCommandInLane } from "../../process/command-queue.js";
-import { resolveAdmittedRunSessionFile } from "./agent-runner-core.js";
 import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
 import { prepareReplyRunAdmission } from "./get-reply-run-admission.js";
 import type { PreparedReplyRunContext } from "./get-reply-run-context.js";
@@ -272,7 +272,8 @@ describe("prepared reply transcript identity", () => {
           ...incoming,
           run: {
             ...incoming.run,
-            sessionFile: resolveAdmittedRunSessionFile(incoming.run)!,
+            sessionFile:
+              normalizeOptionalString(incoming.run.sessionKey) ?? incoming.run.sessionFile,
           },
         };
         expect(resolveFollowupRunToolAuthorityFingerprint(incoming)).toBe(

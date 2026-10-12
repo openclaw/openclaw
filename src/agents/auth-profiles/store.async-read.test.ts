@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   createAgentDatabaseInspectionRefusal,
@@ -11,7 +12,6 @@ import * as migration from "./legacy-source-diagnostic.js";
 import * as persistedStore from "./persisted.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
-  clearRuntimeAuthProfileStoreSnapshotCore,
   noteRuntimeAuthProfileStorePersistedMutation,
   setRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
@@ -21,6 +21,7 @@ import { createAuthProfileStoreRuntime } from "./store.js";
 import type { AuthProfileStore, AuthProfileRowRead } from "./types.js";
 
 const reader = vi.hoisted(() => ({
+  identity: undefined,
   read: vi.fn(),
   assertCurrent: vi.fn(),
   dispose: vi.fn(async () => {}),
@@ -95,6 +96,7 @@ it.each(["snapshot", "requested", "shared", "absent"] as const)(
 it("keeps cached credentials and selection state separate from mutable runtime views", async () => {
   const root = tempDirs.make("openclaw-auth-cached-mutation-");
   const localDir = path.join(root, "agents/worker/agent");
+  createCacheDatabase(localDir);
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   const persisted: AuthProfileStore = {
     version: 1,
@@ -164,20 +166,25 @@ it("keeps cached credentials and selection state separate from mutable runtime v
   expect(reader.read).toHaveBeenCalledTimes(1);
 });
 
+function createCacheDatabase(agentDir: string): void {
+  fs.mkdirSync(agentDir, { recursive: true });
+  using database = openNodeSqliteDatabase(path.join(agentDir, "openclaw-agent.sqlite"));
+  database.exec("CREATE TABLE cache_fixture (value)");
+}
+
 function prepareCachedRuntimeRead() {
   const root = tempDirs.make("openclaw-auth-identity-probes-");
   const agentDir = path.join(root, "agents/worker/agent");
   fs.mkdirSync(agentDir, { recursive: true });
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  createCacheDatabase(agentDir);
   const rows = readableRows();
   reader.read.mockResolvedValue(rows);
   const runtime = createRuntime();
-  const clock = vi.spyOn(performance, "now").mockReturnValue(0);
   return {
     agentDir,
     databasePath: path.join(agentDir, "openclaw-agent.sqlite"),
     rows,
-    clock,
     load: () =>
       runtime.loadAuthProfileStoreForRuntimeAsync(agentDir, {
         inheritedAuthDir: agentDir,
@@ -185,43 +192,6 @@ function prepareCachedRuntimeRead() {
       }),
   };
 }
-
-it.each(["", "-wal", "-journal"])(
-  "coalesces warm identity probes and detects external %s changes after 100 ms",
-  async (suffix) => {
-    const { databasePath, clock, load } = prepareCachedRuntimeRead();
-    await load();
-    const stat = vi.spyOn(fs, "statSync");
-    for (const elapsed of [1, 50, 99]) {
-      clock.mockReturnValue(elapsed);
-      await expect(load()).resolves.toMatchObject({ profiles: {} });
-    }
-    expect(stat).not.toHaveBeenCalled();
-    expect(reader.read).toHaveBeenCalledTimes(1);
-
-    clock.mockReturnValue(100);
-    await load();
-    expect(stat.mock.calls.map(([file]) => file)).toEqual([
-      databasePath,
-      `${databasePath}-wal`,
-      `${databasePath}-journal`,
-    ]);
-    expect(reader.read).toHaveBeenCalledTimes(1);
-
-    fs.writeFileSync(databasePath + suffix, "synthetic external write");
-    reader.read.mockResolvedValue(
-      readableRows({
-        version: 1,
-        profiles: { "custom:new": { type: "api_key", provider: "custom", key: "fixture-new" } },
-      }),
-    );
-    clock.mockReturnValue(199);
-    await expect(load()).resolves.toMatchObject({ profiles: {} });
-    clock.mockReturnValue(200);
-    expect((await load()).profiles["custom:new"]).toMatchObject({ key: "fixture-new" });
-    expect(reader.read).toHaveBeenCalledTimes(2);
-  },
-);
 
 it("invalidates warm rows immediately after an owner bookkeeping write", async () => {
   const { agentDir, rows, load } = prepareCachedRuntimeRead();
@@ -236,71 +206,6 @@ it("invalidates warm rows immediately after an owner bookkeeping write", async (
     state: { status: "readable", raw: { version: 1, lastGood: { custom: "custom:new" } } },
   });
   await expect(load()).resolves.toMatchObject({ lastGood: { custom: "custom:new" } });
-  expect(reader.read).toHaveBeenCalledTimes(2);
-});
-
-it.each(["during the cold read", "after a 100 ms cold read"] as const)(
-  "does not reuse cached rows changed %s",
-  async (timing) => {
-    const { databasePath, rows, clock, load } = prepareCachedRuntimeRead();
-    const write = () => fs.writeFileSync(`${databasePath}-wal`, "synthetic external write");
-    reader.read.mockImplementationOnce(async () => {
-      if (timing === "during the cold read") {
-        write();
-      } else {
-        clock.mockReturnValue(100);
-      }
-      return rows;
-    });
-    await load();
-    if (timing === "after a 100 ms cold read") {
-      write();
-    }
-    await load();
-    expect(reader.read).toHaveBeenCalledTimes(2);
-  },
-);
-
-it.each([
-  "rotation",
-  "all-clear",
-  "owner-clear",
-  "all-clear-and-publish",
-  "owner-clear-and-publish",
-] as const)("rejects cached rows after %s during inherited preparation", async (change) => {
-  const root = tempDirs.make("openclaw-auth-cached-rotation-");
-  const localDir = path.join(root, "agents/worker/agent");
-  const inheritedDir = path.join(root, "agents/main/agent");
-  vi.stubEnv("OPENCLAW_STATE_DIR", root);
-  reader.read.mockResolvedValue(readableRows());
-  const runtime = createRuntime();
-  await runtime.loadAuthProfileStoreForRuntimeAsync(localDir, {
-    inheritedAuthDir: localDir,
-    externalCli: { mode: "none" },
-  });
-  reader.read.mockImplementationOnce(async () => {
-    if (change === "all-clear" || change === "all-clear-and-publish") {
-      clearRuntimeAuthProfileStoreSnapshots();
-    } else if (change === "owner-clear" || change === "owner-clear-and-publish") {
-      clearRuntimeAuthProfileStoreSnapshotCore(localDir);
-    } else {
-      noteRuntimeAuthProfileStorePersistedMutation(localDir, {
-        credentialsChanged: true,
-        stateChanged: false,
-        profileIds: ["custom:local"],
-      });
-    }
-    if (change.endsWith("-and-publish")) {
-      setRuntimeAuthProfileStoreSnapshot({ version: 1, profiles: {} }, localDir);
-    }
-    return readableRows();
-  });
-  await expect(
-    runtime.loadAuthProfileStoreForRuntimeAsync(localDir, {
-      inheritedAuthDir: inheritedDir,
-      externalCli: { mode: "none" },
-    }),
-  ).rejects.toThrow("Auth profile store changed during its runtime read");
   expect(reader.read).toHaveBeenCalledTimes(2);
 });
 

@@ -14,6 +14,7 @@ import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { resolveSessionStorePathCore } from "../config/sessions.js";
 import { loadExactSessionEntry } from "../config/sessions/session-accessor.js";
+import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -344,7 +345,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
   const activeAsks = new Map<string, SessionCompanionActiveAsk>();
   const admissions: Array<{ connId: string; admittedAt: number }> = [];
 
-  const currentSessionId = (sessionKey: string, agentId: string): string | undefined =>
+  const currentSessionId = (sessionKey: string, agentId: string) =>
     contextReader.currentSessionId({ agentId, sessionKey });
 
   const prepareThread = async (
@@ -359,11 +360,12 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       sessionKey,
       agentId,
     );
+    const existingSessionId = existing ? await currentSessionId(sessionKey, agentId) : undefined;
     if (signal.aborted) {
       throw new Error("session companion preparation was cancelled");
     }
     assertSourceCurrent?.();
-    if (existing && currentSessionId(sessionKey, agentId) === existing.context.sessionId) {
+    if (existing && existingSessionId === existing.context.sessionId) {
       return existing;
     }
     if (existing) {
@@ -384,12 +386,6 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       throw new SessionCompanionAskError(
         "context-unavailable",
         "The selected session history could not be loaded.",
-      );
-    }
-    if (currentSessionId(sessionKey, agentId) !== result.context.sessionId) {
-      throw new SessionCompanionAskError(
-        "context-unavailable",
-        "The selected session changed before its history was ready.",
       );
     }
     const thread: SessionCompanionThread = {
@@ -419,6 +415,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     const sessionKey = request.sessionKey.trim();
     const agentId = request.agentId.trim();
     const question = request.question.trim();
+    const incognitoSource = captureIncognitoSessionSource({ sessionKey, agentId });
     if (!sessionKey || !agentId || !question || params.isDisposed() || request.signal?.aborted) {
       throw new SessionCompanionAskError("unavailable", "Side chat is unavailable.");
     }
@@ -520,13 +517,6 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       }
       thread.busy = true;
       thread.lastUsedAt = admittedAt;
-      if (currentSessionId(sessionKey, agentId) !== thread.context.sessionId) {
-        params.threads.delete(threadKey);
-        throw new SessionCompanionAskError(
-          "context-unavailable",
-          "The selected session changed before Side chat could answer.",
-        );
-      }
       const currentSnapshot = await params.sessionObserver.getCompanionSnapshotAsync(
         sessionKey,
         agentId,
@@ -534,12 +524,6 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       controller.signal.throwIfAborted();
       assertSourceCurrent?.();
       request.assertInputCurrent?.();
-      if (currentSessionId(sessionKey, agentId) !== thread.context.sessionId) {
-        throw new SessionCompanionAskError(
-          "context-unavailable",
-          "The selected session changed before Side chat could answer.",
-        );
-      }
       const cfg = params.getConfig();
       const utilityModelRef = resolveUtilityModelRef({ cfg, agentId });
       if (!utilityModelRef) {
@@ -572,9 +556,17 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
           request.assertInputCurrent?.();
         },
       });
+      const executionSessionId = await currentSessionId(sessionKey, agentId);
       controller.signal.throwIfAborted();
       assertSourceCurrent?.();
       request.assertInputCurrent?.();
+      if (executionSessionId !== thread.context.sessionId) {
+        discardOwnedThread();
+        throw new SessionCompanionAskError(
+          "context-unavailable",
+          "The selected session changed before Side chat could answer.",
+        );
+      }
       const rawAnswer = await run({
         cfg,
         agentId,
@@ -589,14 +581,12 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
         ...(request.assertInputCurrent ? { assertInputCurrent: request.assertInputCurrent } : {}),
         signal: controller.signal,
       });
+      const replySessionId = await currentSessionId(sessionKey, agentId);
       if (activeAsk.cancellation || params.isDisposed()) {
         throw new Error("session companion ask was cancelled");
       }
       assertSourceCurrent?.();
-      if (
-        params.threads.get(threadKey) !== thread ||
-        currentSessionId(sessionKey, agentId) !== thread.context.sessionId
-      ) {
+      if (params.threads.get(threadKey) !== thread || replySessionId !== thread.context.sessionId) {
         discardOwnedThread();
         throw new SessionCompanionAskError(
           "context-unavailable",
@@ -615,8 +605,9 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       thread.lastUsedAt = ts;
       return { answer, ts };
     };
+    const execution = execute();
     try {
-      return await Promise.race([execute(), aborted.promise]);
+      return await Promise.race([execution, aborted.promise]);
     } catch (error) {
       if (
         error instanceof SessionCompanionAskError ||
@@ -641,6 +632,10 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
             : "Side chat could not answer right now.",
       );
     } finally {
+      // Actor source authority must outlive accepted writes to the separate durable run.
+      if (incognitoSource) {
+        await execution.catch(() => undefined);
+      }
       clearTimeout(timeout);
       controller.signal.removeEventListener("abort", onAbort);
       requestSignal?.removeEventListener("abort", abortRequest);

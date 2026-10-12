@@ -33,9 +33,10 @@ type NativeWorkspaceFixtureParams = {
   failFixture: (details: string) => never;
 };
 
-function canonicalWorkspacePath(workspaceDir: string, filePath: string): string {
+export function canonicalWorkspacePath(workspaceDir: string, filePath: string): string {
   const resolvedPath = path.resolve(workspaceDir, filePath);
   try {
+    // Native patch paths resolve platform aliases after the target leaf is removed.
     return path.join(realpathSync.native(path.dirname(resolvedPath)), path.basename(resolvedPath));
   } catch {
     return resolvedPath;
@@ -83,7 +84,7 @@ function matchesNativeWorkspaceArguments(params: {
   );
 }
 
-async function readOptionalUtf8(filePath: string) {
+export async function readOptionalUtf8(filePath: string) {
   return fs.readFile(filePath, "utf8").catch((error: unknown) => {
     if (isRecord(error) && error.code === "ENOENT") {
       return undefined;

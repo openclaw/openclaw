@@ -94,11 +94,10 @@ describe("Client.deployCommands", () => {
         name: "one",
         options: [
           {
-            type: 3,
+            type: 7,
             name: "value",
             description: "Value",
             required: false,
-            autocomplete: false,
             channel_types: [1, 0],
           },
         ],
@@ -117,7 +116,7 @@ describe("Client.deployCommands", () => {
           {
             description: "Value",
             name: "value",
-            type: 3,
+            type: 7,
             description_localized: "Value",
             channel_types: [0, 1],
           },

@@ -423,6 +423,25 @@ async function resolveSecretInputWithEnvFallback(params: {
     };
   }
 
+  const associateFailure = (error: unknown, reason: RuntimeWebProviderFailure["reason"]) => {
+    associateWebProviderResolutionError({
+      kind: params.kind,
+      config: params.sourceConfig,
+      error,
+      forceColdRefKeys: params.forceColdRefKeys,
+      unavailableProviders: [
+        {
+          providerId: params.providerId,
+          path: params.path,
+          ref,
+          refKey: secretRefKey(ref),
+          reason,
+          contractDigest: params.contractDigest,
+        },
+      ],
+    });
+  };
+
   let resolvedFromRef: string | undefined;
   let unresolvedRefReason: SecretResolutionResult<SecretResolutionSource>["unresolvedRefReason"];
 
@@ -439,22 +458,7 @@ async function resolveSecretInputWithEnvFallback(params: {
       const resolvedValue = resolved.get(secretRefKey(ref));
       if (!isExpectedResolvedSecretValue(resolvedValue, "string")) {
         const error = new Error(`${params.path} resolved to a non-string or empty value.`);
-        associateWebProviderResolutionError({
-          kind: params.kind,
-          config: params.sourceConfig,
-          error,
-          forceColdRefKeys: params.forceColdRefKeys,
-          unavailableProviders: [
-            {
-              providerId: params.providerId,
-              path: params.path,
-              ref,
-              refKey: secretRefKey(ref),
-              reason: "resolved secret value was invalid",
-              contractDigest: params.contractDigest,
-            },
-          ],
-        });
+        associateFailure(error, "resolved secret value was invalid");
         throw error;
       }
       resolvedFromRef = normalizeSecretInput(resolvedValue);
@@ -464,22 +468,7 @@ async function resolveSecretInputWithEnvFallback(params: {
         // Invalid provider config or resolved values are structural failures. They must fail
         // activation before publishing an owner degradation that could imply retryability.
         if (reason) {
-          associateWebProviderResolutionError({
-            kind: params.kind,
-            config: params.sourceConfig,
-            error,
-            forceColdRefKeys: params.forceColdRefKeys,
-            unavailableProviders: [
-              {
-                providerId: params.providerId,
-                path: params.path,
-                ref,
-                refKey: secretRefKey(ref),
-                reason,
-                contractDigest: params.contractDigest,
-              },
-            ],
-          });
+          associateFailure(error, reason);
         }
         throw error;
       }
@@ -578,11 +567,6 @@ export async function resolveRuntimeWebTools(params: {
   const degradedOwners: DegradedSecretOwner[] = [];
   const secretOwners: SecretOwnerRefState[] = [];
   const providerFailuresByRefKey: RuntimeWebProviderFailureByRefKey = new Map();
-  const finish = (metadata: RuntimeWebToolsMetadata) => ({
-    metadata,
-    degradedOwners,
-    secretOwners,
-  });
   const env = { ...process.env, ...params.context.env };
 
   const sourceTools = isRecord(params.sourceConfig.tools) ? params.sourceConfig.tools : undefined;
@@ -601,27 +585,15 @@ export async function resolveRuntimeWebTools(params: {
   const hasPluginWebFetchConfig = hasPluginScopedWebToolConfig(params.sourceConfig, "webFetch");
   const search = isRecord(sourceWeb?.search) ? sourceWeb.search : undefined;
   const fetch = isRecord(sourceWeb?.fetch) ? (sourceWeb.fetch as FetchConfig) : undefined;
+  const webTools: RuntimeWebToolsMetadata = {
+    search: { providerSource: "none", diagnostics: [] },
+    fetch: { providerSource: "none", diagnostics: [] },
+    diagnostics,
+  };
+  const result = { metadata: webTools, degradedOwners, secretOwners };
   if (!search && !fetch && !hasPluginWebSearchConfig && !hasPluginWebFetchConfig) {
-    return finish({
-      search: {
-        providerSource: "none",
-        diagnostics: [],
-      },
-      fetch: {
-        providerSource: "none",
-        diagnostics: [],
-      },
-      diagnostics,
-    });
+    return result;
   }
-  const searchMetadata: RuntimeWebSearchMetadata = {
-    providerSource: "none",
-    diagnostics: [],
-  };
-  const fetchMetadata: RuntimeWebFetchMetadata = {
-    providerSource: "none",
-    diagnostics: [],
-  };
   for (const kind of ["search", "fetch"] as const) {
     const toolConfig = kind === "search" ? search : fetch;
     const rawProvider = normalizeLowercaseStringOrEmpty(toolConfig?.provider);
@@ -658,7 +630,7 @@ export async function resolveRuntimeWebTools(params: {
     if (!discoverProviders) {
       continue;
     }
-    const metadata = kind === "search" ? searchMetadata : fetchMetadata;
+    const metadata = webTools[kind];
     const isSearch = kind === "search";
     let configuredBundledPluginId = configuredBundledPluginIdHint;
     const resolveManifestOwner = async () => {
@@ -789,10 +761,6 @@ export async function resolveRuntimeWebTools(params: {
     }
   }
 
-  return finish({
-    search: searchMetadata,
-    fetch: fetchMetadata,
-    diagnostics,
-  });
+  return result;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -25,14 +25,8 @@ function modelRequestOverridesPath(entry: MediaUnderstandingModelConfig, path: s
   }
   const segments = tokenizeConcreteConfigPath(path).tokens;
   const field = segments[4];
-  if (field === "auth") {
-    return request.auth !== undefined;
-  }
-  if (field === "tls") {
-    return request.tls !== undefined;
-  }
-  if (field === "proxy") {
-    return request.proxy !== undefined;
+  if (field === "auth" || field === "tls" || field === "proxy") {
+    return request[field] !== undefined;
   }
   const headerKey = segments[5];
   const headerName =

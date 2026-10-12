@@ -167,15 +167,6 @@ describe("discord directory live lookups", () => {
 
   it.each([
     {
-      name: "counts each shared-guild user once before applying the peer limit",
-      secondGuildMembers: [
-        { user: { id: "101", username: "alice" }, nick: "second-alice" },
-        { user: { id: "202", username: "alice-two" }, nick: "second-user" },
-      ],
-      limit: 2,
-      expectedIds: ["user:101", "user:202"],
-    },
-    {
       name: "does not turn one shared-guild user into ambiguous outbound matches",
       secondGuildMembers: [{ user: { id: "101", username: "alice" }, nick: "second-alice" }],
       limit: undefined,

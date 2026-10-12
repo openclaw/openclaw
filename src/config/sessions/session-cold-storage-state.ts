@@ -6,8 +6,23 @@ import {
   prepareSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
+import { readSessionActorTransactionState } from "./session-actor-transaction.js";
+import { readTranscriptContextFacts } from "./session-transcript-context-facts.js";
 
 export type SessionColdArchive = Selectable<DB["session_transcript_cold_archives"]>;
+
+export const sessionColdArchiveMetadataColumns = [
+  "session_id",
+  "generation",
+  "archive_name",
+  "archive_sha256",
+  "event_count",
+  "raw_bytes",
+  "archive_bytes",
+  "last_seq",
+  "archived_at",
+  "storage",
+] as const;
 
 function createColdTranscriptQueries(db: DatabaseSync) {
   const kysely = getNodeSqliteKysely<DB>(db);
@@ -17,18 +32,7 @@ function createColdTranscriptQueries(db: DatabaseSync) {
       (parameter) =>
         kysely
           .selectFrom("session_transcript_cold_archives")
-          .select([
-            "session_id",
-            "generation",
-            "archive_name",
-            "archive_sha256",
-            "event_count",
-            "raw_bytes",
-            "archive_bytes",
-            "last_seq",
-            "archived_at",
-            "storage",
-          ])
+          .select(sessionColdArchiveMetadataColumns)
           .where(
             "session_id",
             "=",
@@ -54,6 +58,10 @@ export function readSessionColdTranscript(
   db: DatabaseSync,
   sessionId: string,
 ): Omit<SessionColdArchive, "archive_blob"> | undefined {
+  const actor = readSessionActorTransactionState({ db }, { sessionId });
+  if (actor) {
+    return actor.transcript.coldArchive && { ...actor.transcript.coldArchive };
+  }
   return getColdTranscriptQueries(db).metadata(sessionId).rows[0];
 }
 
@@ -68,7 +76,18 @@ export class SessionTranscriptColdError extends Error {
 }
 
 export function assertSessionTranscriptHot(db: DatabaseSync, sessionId: string): void {
-  if (getColdTranscriptQueries(db).marker(sessionId).rows.length > 0) {
+  const actor = readSessionActorTransactionState({ db }, { sessionId });
+  if (actor) {
+    if (actor.transcript.coldArchive) {
+      throw new SessionTranscriptColdError(sessionId);
+    }
+    return;
+  }
+  const context = readTranscriptContextFacts({ db }, sessionId);
+  if (context?.cold === false) {
+    return;
+  }
+  if (context?.cold || getColdTranscriptQueries(db).marker(sessionId).rows.length > 0) {
     throw new SessionTranscriptColdError(sessionId);
   }
 }

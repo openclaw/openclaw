@@ -114,7 +114,7 @@ describe("collectInstallPolicyHealthLines", () => {
     });
 
     expect(lines.join("\n")).toContain("security.installPolicy.exec is not configured");
-    expect(lines.join("\n")).toContain("will fail closed");
+    expect(lines.join("\n")).toContain("will be blocked");
   });
 
   it("keeps static validation errors on one terminal line", async () => {

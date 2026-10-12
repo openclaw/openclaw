@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeTempDir, cleanupTempDirs } from "../../../test/helpers/temp-dir.js";
+import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawAgentDatabasesAsync,
@@ -16,11 +17,12 @@ import {
   listSessionEntriesCore,
   loadSessionEntry,
   replaceSessionEntrySync,
-  replaceTranscriptEventsSync,
 } from "./session-accessor.js";
 import { readSessionCreationSnapshotInDatabase } from "./session-accessor.sqlite-creation-read.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { readTranscriptStorageRows } from "./session-accessor.sqlite-read.js";
+import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
+import { seedCanonicalSessionValidation } from "./session-canonical-validation.js";
 
 const tempDirs: string[] = [];
 afterEach(async () => {
@@ -186,17 +188,17 @@ describe("session creation snapshot", () => {
         { sessionId: "sibling", updatedAt: 1, label: "taken" },
       );
       listSessionEntriesCore(scope);
-      const db = openOpenClawAgentDatabase(scope).db;
+      const database = openOpenClawAgentDatabase(scope);
+      const { db } = database;
+      runSqliteImmediateTransactionSync(db, () => seedCanonicalSessionValidation(database));
       if (kind === "nul") {
-        db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
-          JSON.stringify(entry) + "\0trailing",
-          scope.sessionKey,
-        );
+        db.prepare(
+          "UPDATE session_nodes SET entry_json = ?, entry_valid = 0 WHERE session_key = ?",
+        ).run(JSON.stringify(entry) + "\0trailing", scope.sessionKey);
       } else {
-        db.prepare("UPDATE session_nodes SET updated_at = ? WHERE session_key = ?").run(
-          2,
-          scope.sessionKey,
-        );
+        db.prepare(
+          "UPDATE session_nodes SET updated_at = ?, entry_valid = 0 WHERE session_key = ?",
+        ).run(2, scope.sessionKey);
       }
       const expected = listSessionEntriesCore(scope).find(
         (row) => row.sessionKey === scope.sessionKey,
@@ -240,9 +242,10 @@ describe("session creation snapshot", () => {
       if (!changed && value.includes("snapshot-target-marker")) {
         changed = true;
         const update = external.prepare(
-          "UPDATE session_nodes SET entry_json = ? WHERE session_key = ?",
+          "UPDATE session_nodes SET entry_json = ?, entry_valid = 0 WHERE session_key = ?",
         );
         external.exec("BEGIN");
+        seedCanonicalSessionValidation({ agentId: "main", db: external });
         expect(
           external
             .prepare(

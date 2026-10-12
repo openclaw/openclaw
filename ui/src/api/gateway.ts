@@ -1,3 +1,4 @@
+import { etc } from "@noble/ed25519";
 import {
   ConnectErrorDetailCodes,
   formatConnectErrorMessage,
@@ -125,9 +126,7 @@ async function deriveLegacyV4RecoveryScope(material: string | undefined): Promis
   }
   try {
     const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(material));
-    return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join(
-      "",
-    );
+    return etc.bytesToHex(new Uint8Array(digest));
   } catch {
     return "";
   }

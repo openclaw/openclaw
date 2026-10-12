@@ -4,7 +4,6 @@ import {
   type TaskSuggestion,
   type TaskSuggestionsAcceptResult,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import {
   abandonTaskSuggestionAcceptance,
   cancelTaskSuggestionAcceptance,
@@ -74,10 +73,7 @@ async function rollbackSuggestedTaskSession(params: {
         );
       },
     });
-    return (
-      deletionConfirmed &&
-      !loadGatewaySessionEntryReadOnly(params.key, { agentId: params.agentId }).entry
-    );
+    return deletionConfirmed;
   } catch {
     return false;
   }

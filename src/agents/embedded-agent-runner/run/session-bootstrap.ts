@@ -18,9 +18,13 @@ import {
 import { applySessionEntryOperation } from "../../../config/sessions/session-accessor.sqlite-entry.js";
 import type { SessionTranscriptRuntimeScope } from "../../../config/sessions/session-accessor.types.js";
 import { assertSessionEntryCohortScope } from "../../../config/sessions/session-entry-cohort-scope.js";
+import { prepareSessionEntryPresenceRead } from "../../../config/sessions/session-entry-presence-read.js";
 import { readSessionEntryInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
+import {
+  sessionEntryCommitGuardOptions,
+  type SessionSourceAssertion,
+} from "../../../config/sessions/session-source-authority.js";
 import { resolvePersistedSessionStoreOwnerForTarget } from "../../../config/sessions/session-store-owner.js";
-import { prepareSessionEntryPresenceRead } from "../../../config/sessions/session-transcript-worker-runtime.js";
 import {
   SessionTranscriptWriterClaimReboundError,
   type InitialSessionTranscriptWriter,
@@ -187,7 +191,7 @@ export function isNoRealConversationCompactionNoop(params: {
 export async function resetNoRealConversationTokenSnapshot(params: {
   sessionTarget: SessionTranscriptRuntimeTarget | undefined;
   sessionPersistence?: RunEmbeddedAgentParams["sessionPersistence"];
-  assertActive: () => void;
+  assertActive: SessionSourceAssertion;
 }): Promise<void> {
   if (!params.sessionTarget || params.sessionPersistence === "detached") {
     return;
@@ -210,7 +214,7 @@ export async function resetNoRealConversationTokenSnapshot(params: {
       {
         skipMaintenance: true,
         takeCacheOwnership: true,
-        assertCommitAllowed: params.assertActive,
+        ...sessionEntryCommitGuardOptions(params.assertActive),
       },
     );
     params.assertActive();
@@ -381,6 +385,7 @@ export async function prepareInitialSessionWriter(params: {
   // attempting to acquire an admission that their enclosing mutation excludes.
   await assertAbsent();
   const admission = await beginSessionWorkAdmission({
+    agentId: ownerTarget.agentId,
     scope: presence.storePath,
     identities: [ownerTarget.sessionKey, presence.sessionKey, ownerTarget.sessionId],
     signal,
@@ -520,6 +525,7 @@ export async function claimAgentSessionWriter(params: RunEmbeddedAgentParams): P
   | {
       expectedLifecycleRevision: string | undefined;
       expectedWriterRunId: string;
+      entry: InternalSessionEntry;
     }
   | undefined
 > {
@@ -596,5 +602,6 @@ export async function claimAgentSessionWriter(params: RunEmbeddedAgentParams): P
   return {
     expectedLifecycleRevision,
     expectedWriterRunId: params.runId,
+    entry: claimed,
   };
 }

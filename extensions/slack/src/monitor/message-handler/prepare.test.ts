@@ -2306,7 +2306,7 @@ function routingFixture(dmScope: "main" | "per-channel-peer" = "main") {
 }
 
 describe("thread-level session keys", () => {
-  it("keeps mentioned MPIM roots flat and routes follow-ups by their parent thread", () => {
+  it("keeps mentioned MPIM roots flat and routes follow-ups by their parent thread", async () => {
     const { route } = routingFixture();
     const message = {
       channel: "G123",
@@ -2314,8 +2314,8 @@ describe("thread-level session keys", () => {
       text: "<@B1> send a subagent",
     } satisfies Partial<SlackMessageEvent>;
     const options = { chatType: "group" } as const;
-    const root = route(message, { ...options, seedTopLevelRoomThread: true });
-    const followUp = route(
+    const root = await route(message, { ...options, seedTopLevelRoomThread: true });
+    const followUp = await route(
       {
         ...message,
         ts: "1770408540.000000",
@@ -2333,14 +2333,14 @@ describe("thread-level session keys", () => {
     expect(followUp.threadContext.messageThreadId).toBe("1770408530.000000");
   });
 
-  it("partitions enterprise main DM sessions by account and workspace", () => {
+  it("partitions enterprise main DM sessions by account and workspace", async () => {
     const { direct } = routingFixture();
     const scope = (teamId: string): SlackEventScope => ({
       teamId,
       client: {} as SlackEventScope["client"],
     });
-    const first = direct({}, scope("T111"));
-    const second = direct({}, scope("T222"));
+    const first = await direct({}, scope("T111"));
+    const second = await direct({}, scope("T222"));
     expect(first.sessionKey).toBe("agent:main:main:account:default:team:t111");
     expect(first.route.mainSessionKey).toBe(first.sessionKey);
     expect(second.sessionKey).toBe("agent:main:main:account:default:team:t222");
@@ -2349,7 +2349,7 @@ describe("thread-level session keys", () => {
 
   it.each(["thread", "base"])(
     "routes DM replies through explicit %s conversation bindings",
-    (scope) => {
+    async (scope) => {
       const binding: SessionBindingRecord = {
         bindingId: "test-slack-dm-thread-binding",
         targetSessionKey: "agent:review:acp:session-slack-dm",
@@ -2385,7 +2385,7 @@ describe("thread-level session keys", () => {
         const { ctx, direct } = routingFixture("per-channel-peer");
         const cfg: OpenClawConfig = ctx.cfg;
         cfg.agents = { ownership: "explicit", entries: { main: {}, review: {} } };
-        const result = direct({
+        const result = await direct({
           ts: "1770408540.000000",
           thread_ts: "1770408530.000000",
           parent_user_id: "B1",

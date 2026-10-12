@@ -3,46 +3,35 @@ export const SESSION_DRAG_MIME = "application/x-openclaw-session-key";
 const SIDEBAR_SECTION_DRAG_MIME = "application/x-openclaw-session-group";
 const SIDEBAR_ROUTE_DRAG_MIME = "application/x-openclaw-sidebar-route";
 
-export function writeSessionDragData(dataTransfer: DataTransfer, sessionKey: string): void {
-  dataTransfer.setData(SESSION_DRAG_MIME, sessionKey);
-  dataTransfer.setData("text/plain", sessionKey);
-  // Sidebar sessions can move between groups or copy into a chat split pane.
-  dataTransfer.effectAllowed = "copyMove";
+function createDragHandlers(mime: string, copyMove = false) {
+  return {
+    write: (dataTransfer: DataTransfer, value: string): void => {
+      dataTransfer.setData(mime, value);
+      if (copyMove) {
+        // Sidebar sessions can move between groups or copy into a chat split pane.
+        dataTransfer.setData("text/plain", value);
+      }
+      dataTransfer.effectAllowed = copyMove ? "copyMove" : "move";
+    },
+    read: (dataTransfer: DataTransfer | null): string | null => {
+      return dataTransfer?.getData(mime).trim() || null;
+    },
+    active: (dataTransfer: DataTransfer | null): boolean => {
+      return Array.from(dataTransfer?.types ?? []).includes(mime);
+    },
+  };
 }
 
-export function readSessionDragData(dataTransfer: DataTransfer | null): string | null {
-  const sessionKey = dataTransfer?.getData(SESSION_DRAG_MIME).trim();
-  return sessionKey || null;
-}
+const sessionDrag = createDragHandlers(SESSION_DRAG_MIME, true);
+const sectionDrag = createDragHandlers(SIDEBAR_SECTION_DRAG_MIME);
+const routeDrag = createDragHandlers(SIDEBAR_ROUTE_DRAG_MIME);
 
-export function sessionDragActive(dataTransfer: DataTransfer | null): boolean {
-  return Array.from(dataTransfer?.types ?? []).includes(SESSION_DRAG_MIME);
-}
-
-export function writeSidebarSectionDragData(dataTransfer: DataTransfer, sectionId: string): void {
-  dataTransfer.setData(SIDEBAR_SECTION_DRAG_MIME, sectionId);
-  dataTransfer.effectAllowed = "move";
-}
-
-export function readSidebarSectionDragData(dataTransfer: DataTransfer | null): string | null {
-  const sectionId = dataTransfer?.getData(SIDEBAR_SECTION_DRAG_MIME).trim();
-  return sectionId || null;
-}
-
-export function sidebarSectionDragActive(dataTransfer: DataTransfer | null): boolean {
-  return Array.from(dataTransfer?.types ?? []).includes(SIDEBAR_SECTION_DRAG_MIME);
-}
-
-export function writeSidebarRouteDragData(dataTransfer: DataTransfer, route: string): void {
-  dataTransfer.setData(SIDEBAR_ROUTE_DRAG_MIME, route);
-  dataTransfer.effectAllowed = "move";
-}
-
-export function readSidebarRouteDragData(dataTransfer: DataTransfer | null): string | null {
-  const route = dataTransfer?.getData(SIDEBAR_ROUTE_DRAG_MIME).trim();
-  return route || null;
-}
-
-export function sidebarRouteDragActive(dataTransfer: DataTransfer | null): boolean {
-  return Array.from(dataTransfer?.types ?? []).includes(SIDEBAR_ROUTE_DRAG_MIME);
-}
+export const writeSessionDragData = sessionDrag.write;
+export const readSessionDragData = sessionDrag.read;
+export const sessionDragActive = sessionDrag.active;
+export const writeSidebarSectionDragData = sectionDrag.write;
+export const readSidebarSectionDragData = sectionDrag.read;
+export const sidebarSectionDragActive = sectionDrag.active;
+export const writeSidebarRouteDragData = routeDrag.write;
+export const readSidebarRouteDragData = routeDrag.read;
+export const sidebarRouteDragActive = routeDrag.active;

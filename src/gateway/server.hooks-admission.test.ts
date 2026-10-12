@@ -643,7 +643,7 @@ describe("gateway hook admission", () => {
       expect(gatewayFailureBody.runId).not.toBe(conflictBody.runId);
 
       const admitted = await request();
-      expect(admitted.status).toBe(200);
+      expect(admitted.status, await admitted.clone().text()).toBe(200);
       expect(cronIsolatedRun).toHaveBeenCalledTimes(3);
     });
   });

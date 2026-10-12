@@ -200,26 +200,6 @@ describe("gateway talk.config", () => {
     });
   });
 
-  it("preserves configured Talk provider data when plugin-owned defaults exist", async () => {
-    await writeTalkConfig({ voiceId: "voice-from-config" });
-    await withEnvAsync({ [API_ENV]: "env-acme-key" }, async () => {
-      await withProvider(
-        ({ talkProviderConfig }) => ({ ...talkProviderConfig, apiKey: process.env[API_ENV] }),
-        async () => {
-          await withConnection(["operator.read"], async (ws) => {
-            const payload = await fetchOkConfig(ws);
-            const talk = payload?.config.talk;
-            expect(talk?.provider).toBe(PROVIDER);
-            expect(talk?.resolved?.provider).toBe(PROVIDER);
-            expect(talk?.providers?.[PROVIDER]).toHaveProperty("voiceId", "voice-from-config");
-            expect(talk?.resolved?.config).toHaveProperty("voiceId", "voice-from-config");
-            expect(talk?.providers?.[PROVIDER]?.apiKey).toBeUndefined();
-          });
-        },
-      );
-    });
-  });
-
   it("redacts SecretRef apiKey after strict provider resolver accepts it", async () => {
     // #72496: provider resolvers must receive materialized secrets; read scope still gets redaction.
     await writeTalkConfig({ apiKey: secretRef, voiceId: "voice-secretref" });

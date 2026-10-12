@@ -308,9 +308,7 @@ function handleLifecycleFallbackEvent(host: ToolStreamHost, payload: AgentEventP
   const active =
     resolveModelLabel(data.activeProvider, data.activeModel) ??
     resolveModelLabel(data.toProvider, data.toModel);
-  const previous =
-    resolveModelLabel(data.previousActiveProvider, data.previousActiveModel) ??
-    toTrimmedString(data.previousActiveModel);
+  const previous = resolveModelLabel(data.previousActiveProvider, data.previousActiveModel);
   if (!selected || !active) {
     return;
   }
@@ -397,12 +395,9 @@ export function handleStreamStatus(host: ToolStreamHost, payload: AgentEventPayl
       return true;
     }
     handleLifecycleCompactionEvent(host, payload);
-    handleLifecycleFallbackEvent(host, payload);
-    return true;
+  } else if (payload.stream !== "fallback") {
+    return false;
   }
-  if (payload.stream === "fallback") {
-    handleLifecycleFallbackEvent(host, payload);
-    return true;
-  }
-  return false;
+  handleLifecycleFallbackEvent(host, payload);
+  return true;
 }

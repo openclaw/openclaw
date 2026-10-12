@@ -164,20 +164,7 @@ const sessionStoreMocks = vi.hoisted(() => ({
   entriesBySessionKey: new Map<string, Record<string, unknown>>(),
   loadSessionEntry: vi.fn((..._args: unknown[]) => sessionStoreMocks.currentEntry),
   loadSessionStoreEntry: vi.fn((..._args: unknown[]) => sessionStoreMocks.currentEntry),
-  loadSessionStore: vi.fn(() => ({})),
-  readSessionEntry: vi.fn(() => sessionStoreMocks.currentEntry),
   resolveSessionStorePathCore: vi.fn(() => "/tmp/mock-sessions.json"),
-  resolveSessionStoreEntry: vi.fn(
-    (params: {
-      store: Record<string, Record<string, unknown>>;
-      sessionKey: string;
-    }): { existing: Record<string, unknown> | undefined } => ({
-      existing:
-        params.store[params.sessionKey] ??
-        sessionStoreMocks.entriesBySessionKey.get(params.sessionKey) ??
-        sessionStoreMocks.currentEntry,
-    }),
-  ),
   updateSessionStoreEntry: vi.fn(
     async (params: {
       update: (entry: Record<string, unknown>) => Promise<Record<string, unknown> | null>;
@@ -392,6 +379,10 @@ vi.mock("../../config/sessions/paths.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/sessions/paths.js")>()),
   resolveSessionStorePathCore: sessionStoreMocks.resolveSessionStorePathCore,
 }));
+// mock-isolation: Dispatch fixtures own storage through the patch adapter without starting actors.
+vi.mock("../../config/sessions/session-actor-scope.js", () => ({
+  withSessionActor: async () => undefined,
+}));
 vi.mock("../../config/sessions/session-entry-read-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/sessions/session-entry-read-runtime.js")>()),
   readSessionEntryReadOnlyInWorker: async (
@@ -409,7 +400,7 @@ vi.mock("../../config/sessions/session-entry-read-runtime.js", async (importOrig
 vi.mock("../../config/sessions/session-accessor.sqlite-entry.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../config/sessions/session-accessor.sqlite-entry.js")>();
-  const { reduceSessionEntryPatch } =
+  const { projectSessionEntryPatch } =
     await import("../../config/sessions/session-entry-patch-operation.js");
   return {
     ...actual,
@@ -418,9 +409,17 @@ vi.mock("../../config/sessions/session-accessor.sqlite-entry.js", async (importO
     ) => {
       let wrote = false;
       const result = await sessionStoreMocks.updateSessionEntry(scope, (entry) => {
-        const patch = reduceSessionEntryPatch(operation, { sessionId: "", updatedAt: 0, ...entry });
-        wrote = patch !== null;
-        return patch;
+        const currentEntry = { sessionId: "", updatedAt: 0, ...entry };
+        const next = projectSessionEntryPatch({
+          existing: currentEntry,
+          writeBase: currentEntry,
+          sessionKey: scope.sessionKey,
+          operation,
+          replaceEntry: options?.replaceEntry,
+          preserveActivity: options?.preserveActivity,
+        });
+        wrote = next !== undefined;
+        return next ? { ...next } : null;
       });
       const entry = result ? { sessionId: "", updatedAt: 0, ...result } : null;
       if (wrote && entry) {

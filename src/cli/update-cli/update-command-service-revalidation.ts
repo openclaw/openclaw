@@ -27,6 +27,7 @@ import { formatCliCommand } from "../command-format.js";
 import { UpdatePreMutationError } from "./shared.js";
 import type {
   ManagedGatewayUpdateVerdict,
+  ManagedGatewayServiceObservation,
   PreManagedServiceStop,
 } from "./update-command-service-context-types.js";
 import {
@@ -39,7 +40,7 @@ import {
 } from "./update-command-service-plan.js";
 
 function matchesStoppedService(
-  before: Pick<PreManagedServiceStop, "serviceEnv" | "serviceUpdateVerdict" | "serviceManagerUid">,
+  before: ManagedGatewayServiceObservation,
   state: GatewayServiceState,
   inspection: ManagedGatewayUpdateVerdict,
   allowIncompleteInspection = false,
@@ -229,10 +230,7 @@ export async function assertManagedGatewayArtifactPublication(params: {
 export async function revalidateManagedGatewayServiceAfterUpdate(params: {
   state: GatewayServiceState;
   root: string;
-  preManagedServiceStop?: Pick<
-    PreManagedServiceStop,
-    "serviceEnv" | "serviceUpdateVerdict" | "serviceManagerUid"
-  >;
+  preManagedServiceStop?: ManagedGatewayServiceObservation;
   allowInstallRootChange?: boolean;
   /** Restoration still rejects observed identity drift when a native probe fails. */
   allowIncompleteInspection?: boolean;

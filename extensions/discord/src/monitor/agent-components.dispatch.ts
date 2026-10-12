@@ -80,11 +80,7 @@ export async function dispatchDiscordComponentEvent(params: {
   const sessionKey = params.routeOverrides?.sessionKey ?? route.sessionKey;
   const agentId = params.routeOverrides?.agentId ?? route.agentId;
   const accountId = params.routeOverrides?.accountId ?? route.accountId;
-  const fromLabel = buildDiscordComponentConversationLabel({
-    interactionCtx,
-    interaction,
-    channelCtx,
-  });
+  const fromLabel = buildDiscordComponentConversationLabel(params);
   const chatType = interactionCtx.isDirectMessage
     ? "direct"
     : interactionCtx.isGroupDm

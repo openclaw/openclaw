@@ -15,7 +15,6 @@ import { runSummaryWork } from "./summary-work.js";
 import { summarizeTranscripts, type TranscriptsSummary } from "./summary.js";
 
 const MODEL_SUMMARY_INPUT_MAX_CHARS = 48_000;
-const MODEL_SUMMARY_MAX_TOKENS = 1_500;
 const MODEL_SUMMARY_TIMEOUT_MS = 20_000;
 
 function boundedText(limit: number) {
@@ -162,7 +161,7 @@ export async function summarizeTranscriptsWithModel(params: {
             abortSignal: signal,
             assertCurrent: params.assertCurrent,
             outputTextPolicy: "strict-visible",
-            streamParams: { maxTokens: MODEL_SUMMARY_MAX_TOKENS },
+            answerTokenBudget: 1_500,
           }),
         );
         if (signal.aborted) {

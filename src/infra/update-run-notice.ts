@@ -9,6 +9,13 @@ const UPDATE_RUN_HEADLINES = new Map<UpdateRunRecord["status"], string>([
   ["running", "⬆️ OpenClaw is updating."],
 ]);
 
+const SKIPPED_UPDATE_RUN_HEADLINES = new Map<string | null, string>([
+  ["already-current", "✅ OpenClaw is already up to date."],
+  ["still-starting", "⏳ OpenClaw is installed and still starting."],
+  ["gateway-readiness-unverified", "⚠️ OpenClaw is installed, but we couldn't confirm it's ready."],
+  ["managed-service-handoff-already-running", "⬆️ OpenClaw is already updating."],
+]);
+
 /** Chat shows the outcome; the update views keep diagnostics and recovery instructions. */
 export function renderUpdateRunSummary(
   run: Pick<UpdateRunRecord, "status" | "reason">,
@@ -17,15 +24,7 @@ export function renderUpdateRunSummary(
   const headline =
     run.status !== "skipped"
       ? UPDATE_RUN_HEADLINES.get(run.status)
-      : run.reason === "already-current"
-        ? "✅ OpenClaw is already up to date."
-        : run.reason === "still-starting"
-          ? "⏳ OpenClaw is installed and still starting."
-          : run.reason === "gateway-readiness-unverified"
-            ? "⚠️ OpenClaw is installed, but we couldn't confirm it's ready."
-            : run.reason === "managed-service-handoff-already-running"
-              ? "⬆️ OpenClaw is already updating."
-              : "ℹ️ OpenClaw wasn't updated.";
+      : (SKIPPED_UPDATE_RUN_HEADLINES.get(run.reason) ?? "ℹ️ OpenClaw wasn't updated.");
   const nextStep = options.manualCommand
     ? `Open Settings → Updates in the Control UI for details. To continue, run \`${options.manualCommand}\` in your terminal.`
     : "For details, open Settings → Updates in the Control UI or run `openclaw update status` in your terminal.";

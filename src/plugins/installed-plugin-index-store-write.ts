@@ -18,10 +18,12 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { readOpenClawStateLease } from "../state/openclaw-state-lease-store.js";
+import type { OpenClawStateLeaseIdentity } from "../state/openclaw-state-lease.types.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
@@ -89,7 +91,7 @@ type PreparedPluginCandidate = {
   ambiguous: boolean;
 };
 
-export type PreparedInstalledPluginIndexRefresh = Omit<
+type PreparedInstalledPluginIndexRefresh = Omit<
   RefreshInstalledPluginIndexParams,
   "now" | "candidates" | "discovery"
 > &
@@ -112,6 +114,25 @@ export type InstalledPluginIndexWriteReceipt = {
     databasePath: string;
     before: InstalledPluginIndexRow | null;
     after: InstalledPluginIndexRow;
+  };
+};
+
+export type InstalledPluginIndexWriteOperations = {
+  "plugins.metadata.index.write": {
+    input: { identity: OpenClawStateLeaseIdentity; index: InstalledPluginIndex };
+    output: InstalledPluginIndexWriteReceipt;
+  };
+  "plugins.metadata.index.restore": {
+    input: {
+      identity: OpenClawStateLeaseIdentity;
+      index: InstalledPluginIndex | null;
+      expectedRevision: number;
+    };
+    output: boolean;
+  };
+  "plugins.metadata.index.refresh": {
+    input: { identity: OpenClawStateLeaseIdentity; prepared: PreparedInstalledPluginIndexRefresh };
+    output: InstalledPluginIndexWriteReceipt & { index: InstalledPluginIndex };
   };
 };
 
@@ -238,7 +259,7 @@ function writePersistedInstalledPluginIndexRow(
   database.prepare(compiled.sql).run(...bind());
 }
 
-function writePersistedInstalledPluginIndexToSqlite(
+export function writePersistedInstalledPluginIndexToSqlite(
   index: InstalledPluginIndex,
   options: InstalledPluginIndexStoreOptions & { database?: OpenClawStateDatabase },
   lease: InstalledPluginIndexWriteLease,
@@ -340,13 +361,22 @@ export async function writePersistedInstalledPluginIndex(
   options: InstalledPluginIndexStoreOptions = {},
 ): Promise<string> {
   assertWritableInstalledPluginIndexStoreOptions(options);
+  const prepared = structuredClone(index);
+  const captured = {
+    ...options,
+    env: cloneEnvWithPlatformSemantics(options.env ?? process.env),
+    filePath: resolveInstalledPluginIndexStorePath(options),
+  };
   return await withPluginLifecycleLease(
-    resolveInstalledPluginIndexStateDatabaseOptions(options),
+    resolveInstalledPluginIndexStateDatabaseOptions(captured),
     async (lease) => {
-      const filePath = resolveInstalledPluginIndexStorePath(options);
-      writePersistedInstalledPluginIndexToSqlite(index, options, lease);
-      clearPersistedInstalledPluginIndexCaches();
-      return filePath;
+      await runInstalledPluginIndexWrite(captured, lease, (scope, identity) =>
+        scope.execute({
+          type: "plugins.metadata.index.write",
+          input: { identity, index: prepared },
+        }),
+      );
+      return captured.filePath;
     },
   );
 }
@@ -356,7 +386,7 @@ export async function restorePersistedInstalledPluginIndexIfCurrent(
   index: InstalledPluginIndex | null,
   expectedRevision: number,
   options: InstalledPluginIndexStoreOptions & {
-    lease: InstalledPluginIndexWriteLease;
+    lease: PluginLifecycleLeaseContext;
   },
 ): Promise<boolean> {
   const { lease, ...storeOptions } = options;
@@ -364,35 +394,87 @@ export async function restorePersistedInstalledPluginIndexIfCurrent(
   if (!existsSync(resolveInstalledPluginIndexStorePath(storeOptions))) {
     return false;
   }
-  const restored = runOpenClawStateWriteTransaction(({ db }) => {
-    lease.assertOwnedInTransaction(db);
-    const before = readInstalledPluginIndexRow(db) ?? null;
-    const currentRow = parseInstalledPluginIndexRow(before ?? undefined);
-    const currentRevision = currentRow ? currentRow.revision : null;
-    if (currentRevision !== expectedRevision) {
-      return false;
-    }
-    if (index) {
-      writePersistedInstalledPluginIndexRow(
-        db,
-        preparePersistedInstalledPluginIndex(index),
-        resolveNextInstalledPluginIndexRevision(currentRevision),
-      );
-    } else {
-      const { compiled, bind } = compileSqliteQueryBindings<void>(() =>
-        getNodeSqliteKysely<InstalledPluginIndexDatabase>(db)
-          .deleteFrom("config_machine_state")
-          .where("state_key", "=", INSTALLED_PLUGIN_INDEX_STATE_KEY),
-      );
-      // sqlite-allow-raw: Compiled SQL preserves native deletion in the leased transaction.
-      db.prepare(compiled.sql).run(...bind());
-    }
-    return true;
-  }, resolveInstalledPluginIndexStateDatabaseOptions(storeOptions));
-  // A mismatched revision means another process committed, which also makes
-  // this process's cached metadata stale.
-  clearPersistedInstalledPluginIndexCaches();
-  return restored;
+  const prepared = index && structuredClone(index);
+  return runInstalledPluginIndexWrite(storeOptions, lease, (scope, identity) =>
+    scope.execute({
+      type: "plugins.metadata.index.restore",
+      input: { identity, index: prepared, expectedRevision },
+    }),
+  );
+}
+
+export function restorePersistedInstalledPluginIndexInDatabase(
+  index: InstalledPluginIndex | null,
+  expectedRevision: number,
+  database: OpenClawStateDatabase,
+  lease: InstalledPluginIndexWriteLease,
+): boolean {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      lease.assertOwnedInTransaction(db);
+      const before = readInstalledPluginIndexRow(db) ?? null;
+      const currentRow = parseInstalledPluginIndexRow(before ?? undefined);
+      const currentRevision = currentRow ? currentRow.revision : null;
+      if (currentRevision !== expectedRevision) {
+        lease.assertOwnedInTransaction(db, "commit");
+        return false;
+      }
+      if (index) {
+        writePersistedInstalledPluginIndexRow(
+          db,
+          preparePersistedInstalledPluginIndex(index),
+          resolveNextInstalledPluginIndexRevision(currentRevision),
+        );
+      } else {
+        const { compiled, bind } = compileSqliteQueryBindings<void>(() =>
+          getNodeSqliteKysely<InstalledPluginIndexDatabase>(db)
+            .deleteFrom("config_machine_state")
+            .where("state_key", "=", INSTALLED_PLUGIN_INDEX_STATE_KEY),
+        );
+        // sqlite-allow-raw: Compiled SQL preserves native deletion in the leased transaction.
+        db.prepare(compiled.sql).run(...bind());
+      }
+      lease.assertOwnedInTransaction(db, "commit");
+      return true;
+    },
+    { database },
+  );
+}
+
+async function runInstalledPluginIndexWrite<T>(
+  options: InstalledPluginIndexStoreOptions,
+  lease: PluginLifecycleLeaseContext,
+  operation: (
+    scope: Pick<SqliteWorkerStore<InstalledPluginIndexWriteOperations>, "execute">,
+    identity: OpenClawStateLeaseIdentity,
+  ) => Promise<T>,
+  assertCurrent?: () => void,
+  onAcknowledged?: (result: T) => void,
+): Promise<T> {
+  const context = captureOpenClawStateWorkerContext(
+    resolveInstalledPluginIndexStateDatabaseOptions(options),
+  );
+  const assertAuthority = () => {
+    lease.assertCurrent();
+    assertCurrent?.();
+  };
+  assertAuthority();
+  const { runWithOpenClawStateLeaseWorker } =
+    await import("../state/openclaw-state-lease-worker-operation.js");
+  const result = await runWithOpenClawStateLeaseWorker(lease.stateLease, context, operation, {
+    assertCurrent: () => lease.assertCurrent(),
+    beforeTransaction: assertAuthority,
+    beforeCommit: assertAuthority,
+  });
+  // Preserve the committed outcome for compensation before refusing a late caller.
+  try {
+    onAcknowledged?.(result);
+  } finally {
+    // A refused late caller or mismatched rollback still leaves an acknowledged database result.
+    clearPersistedInstalledPluginIndexCaches();
+  }
+  assertAuthority();
+  return result;
 }
 
 function hasCompletePolicyRefreshProjection(
@@ -521,11 +603,23 @@ export async function refreshPersistedInstalledPluginIndex(
       lease?: PluginLifecycleLeaseContext;
     },
 ): Promise<InstalledPluginIndex> {
-  const { lease: callerLease, now } = params;
+  return (await refreshPersistedInstalledPluginIndexWithReceipt(params)).index;
+}
+
+export async function refreshPersistedInstalledPluginIndexWithReceipt(
+  params: RefreshInstalledPluginIndexParams &
+    InstalledPluginIndexStoreOptions & {
+      lease?: PluginLifecycleLeaseContext;
+      assertCurrent?: () => void;
+      onAcknowledged?: (receipt: InstalledPluginIndexWriteReceipt) => void;
+    },
+): Promise<InstalledPluginIndexWriteReceipt & { index: InstalledPluginIndex }> {
+  const { lease: callerLease, now, assertCurrent, onAcknowledged } = params;
   assertWritableInstalledPluginIndexStoreOptions(params);
   const databaseOptions = resolveInstalledPluginIndexStateDatabaseOptions(params);
   const env = cloneEnvWithPlatformSemantics(databaseOptions.env ?? params.env ?? process.env);
   const options = { ...databaseOptions, env };
+  const storeOptions = { env, filePath: resolveInstalledPluginIndexStorePath(params) };
   // Doctor also passes host-only services; symbol-backed candidate ownership needs explicit transport.
   const prepareCandidates = (candidates: PluginCandidate[]): PreparedPluginCandidate[] =>
     candidates.map((candidate) => ({
@@ -555,20 +649,15 @@ export async function refreshPersistedInstalledPluginIndex(
     ...(now ? { nowMs: now().getTime() } : {}),
   });
   const refresh = async (lease: PluginLifecycleLeaseContext) => {
-    lease.assertCurrent();
-    const context = captureOpenClawStateWorkerContext(options);
-    const { runWithOpenClawStateLeaseWorker } =
-      await import("../state/openclaw-state-lease-worker-operation.js");
-    const index = await runWithOpenClawStateLeaseWorker(
-      lease.stateLease,
-      context,
+    const receipt = await runInstalledPluginIndexWrite(
+      storeOptions,
+      lease,
       (scope, identity) =>
         scope.execute({ type: "plugins.metadata.index.refresh", input: { identity, prepared } }),
-      { assertCurrent: () => lease.assertCurrent() },
+      assertCurrent,
+      onAcknowledged,
     );
-    lease.assertCurrent();
-    clearPersistedInstalledPluginIndexCaches();
-    return index;
+    return receipt;
   };
   return callerLease ? refresh(callerLease) : withPluginLifecycleLease(options, refresh);
 }

@@ -6,8 +6,8 @@ import { prepareSessionLifecycleDrain } from "../server-methods/sessions-lifecyc
 import { createGatewayRequestContext } from "../server-request-context.js";
 import { makeContextParams } from "../server-request-context.test-support.js";
 import { registerWorkerInferenceSessionControl } from "./inference-control-internal.js";
+import { createWorkerInferenceServiceStub } from "./inference-control.test-helpers.js";
 import { REQUEST } from "./inference.test-support.js";
-import type { WorkerEnvironmentServiceContract } from "./service-contract.js";
 
 describe("worker inference lifecycle caller", () => {
   it.for(["start", "start-drain-release", "refusal", "after-start"] as const)(
@@ -32,41 +32,7 @@ describe("worker inference lifecycle caller", () => {
             throw startFailure;
           }
         });
-        const unexpected = (): never => {
-          throw new Error("Unexpected worker service operation during drain acquisition");
-        };
-        const workerService = {
-          getDedicatedNodeLeaseSignal: unexpected,
-          captureSessionAttachment: unexpected,
-          getSessionAttachment: unexpected,
-          findSessionAttachment: unexpected,
-          getSessionAttachmentStatus: unexpected,
-          assertSessionAttachment: unexpected,
-          touchSessionAttachment: unexpected,
-          execSessionAttachment: unexpected,
-          createSessionAttachment: unexpected,
-          destroySessionAttachment: unexpected,
-          openNodePortal: unexpected,
-          list: unexpected,
-          readPreparedPoolSummary: unexpected,
-          readReadyWorkerTarget: unexpected,
-          get: () => undefined,
-          inventoryVersion: unexpected,
-          readMachineShape: unexpected,
-          machineShapeVersion: unexpected,
-          supportsExecutionMode: unexpected,
-          readProviderDisplayId: unexpected,
-          listMachineOptions: unexpected,
-          listOperatingSystems: unexpected,
-          prepare: unexpected,
-          create: unexpected,
-          destroy: unexpected,
-          destroyUnattached: unexpected,
-          observeDesktop: unexpected,
-          launchDesktopApp: unexpected,
-          startTunnel: unexpected,
-          stopTunnel: unexpected,
-        } satisfies WorkerEnvironmentServiceContract;
+        const workerService = createWorkerInferenceServiceStub();
         registerWorkerInferenceSessionControl(workerService, {
           hasSession: () => true,
           reserveSessionDrain: () => ({

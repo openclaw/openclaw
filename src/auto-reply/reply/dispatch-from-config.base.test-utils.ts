@@ -58,8 +58,7 @@ import {
   messageAuditEvents,
   globalBeforeAll0,
   describe0BeforeEach0,
-} from "./dispatch-from-config.test-harness.js";
-import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
+} from "./dispatch-from-config.test-support.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
@@ -161,64 +160,6 @@ describe("dispatchReplyFromConfig", () => {
       ),
     );
     expect(replyResolver.mock.calls[0]?.[3]).toBeUndefined();
-  });
-
-  it("keeps a raw three-argument resolver on one prepared generation across replacement", async () => {
-    setNoAbort();
-    const cfg = emptyConfig;
-    let receivedPreparedRuntime: unknown;
-    let replacementPreparedRuntime: unknown;
-    const preparedRegistry = createTestRegistry([]);
-    const preparedRuntimeModule = await import("../../agents/prepared-model-runtime.js");
-    const preparedRuntime = Object.freeze({
-      agentId: "main",
-      agentDir: "/tmp/prepared-agent",
-      workspaceDir: "/tmp/prepared-workspace",
-      config: cfg,
-      modelCatalog: { entries: [], routeVariants: [] },
-      inboundPluginRegistry: preparedRegistry,
-      pluginGeneration: {} as never,
-    });
-    const preparedLookup = vi
-      .spyOn(preparedRuntimeModule, "loadPublishedGatewayReplyDispatchRuntime")
-      .mockResolvedValueOnce(preparedRuntime)
-      .mockResolvedValue(
-        Object.freeze({
-          ...preparedRuntime,
-          workspaceDir: "/tmp/replacement-workspace",
-        }),
-      );
-    const replyResolver = vi.fn(
-      async (_ctx: MsgContext, _opts?: GetReplyOptions, configOverride?: OpenClawConfig) => {
-        expect(configOverride).toBeUndefined();
-        receivedPreparedRuntime = getPreparedReplyDispatchRuntime();
-        replacementPreparedRuntime = await preparedLookup({ agentId: "main" });
-        expect(getPreparedReplyDispatchRuntime()).toBe(receivedPreparedRuntime);
-        return { text: "hi" } satisfies ReplyPayload;
-      },
-    );
-    try {
-      await dispatchReplyFromConfig({
-        ctx: buildTestCtx({
-          SessionKey: "agent:main:main",
-          MessageSid: "prepared",
-        }),
-        cfg,
-        dispatcher: createDispatcher(),
-        replyResolver,
-      });
-      expect(preparedLookup).toHaveBeenCalledTimes(2);
-      expect(preparedLookup).toHaveBeenNthCalledWith(1, {
-        agentId: "main",
-        demand: "interactive",
-      });
-      expect(preparedLookup).toHaveBeenNthCalledWith(2, { agentId: "main" });
-      expect(runtimePluginMocks.loadAgentRuntimePluginRegistryHandle).not.toHaveBeenCalled();
-      expect(receivedPreparedRuntime).toBe(preparedRuntime);
-      expect(replacementPreparedRuntime).not.toBe(preparedRuntime);
-    } finally {
-      preparedLookup.mockRestore();
-    }
   });
 
   it("drops a durable source duplicate before before_dispatch hooks", async () => {
@@ -585,6 +526,87 @@ describe("dispatchReplyFromConfig", () => {
       config: emptyConfig,
       beforeMessageWrite: expect.any(Function),
     });
+  });
+
+  it.each([
+    ["telegram", "command-account", "command-chat"],
+    ["telegram", "other-account", "command-chat"],
+    ["telegram", "command-account", "other-chat"],
+    ["discord", "command-account", "command-chat"],
+    ["slack", "command-account", "command-chat"],
+  ] as const)(
+    "records a delivered %s command exchange for account %s and conversation %s",
+    async (channel, accountId, conversationId) => {
+      setNoAbort();
+      const dispatcher = createReplyDispatcher({ deliver: vi.fn() });
+      dispatcher.appendBeforeDeliver?.((payload) => ({
+        ...payload,
+        text: "Thinking level set to low.",
+      }));
+      transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
+      await dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Body: "/think low",
+          BodyForCommands: "/think low",
+          Provider: channel,
+          Surface: channel,
+          OriginatingChannel: channel,
+          SessionKey: "agent:main:main",
+          MessageSid: "command-message",
+          AccountId: accountId,
+          OriginatingTo: conversationId,
+          From: conversationId,
+          To: conversationId,
+        }),
+        cfg: emptyConfig,
+        dispatcher,
+        replyResolver: async () => ({ text: "Before delivery transform" }),
+      });
+      await settleReplyDispatcher({ dispatcher });
+      expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: "Thinking level set to low.",
+          command: {
+            text: "/think low",
+            idempotencyKey: `command-input:["${channel}","${accountId}","${conversationId}","command-message"]`,
+          },
+        }),
+      );
+    },
+  );
+
+  it("records the stop command next to the delivered fast-abort notice", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValue({ handled: true, aborted: true });
+    const dispatcher = createReplyDispatcher({ deliver: vi.fn() });
+    transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Body: "/stop",
+        BodyForCommands: "/stop",
+        Provider: "telegram",
+        Surface: "telegram",
+        OriginatingChannel: "telegram",
+        SessionKey: "agent:main:main",
+        MessageSid: "stop-message",
+        AccountId: "stop-account",
+        OriginatingTo: "stop-chat",
+        From: "stop-chat",
+        To: "stop-chat",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: vi.fn(),
+    });
+    await settleReplyDispatcher({ dispatcher });
+    expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "⚙️ Agent was aborted.",
+        command: {
+          text: "/stop",
+          idempotencyKey: 'command-input:["telegram","stop-account","stop-chat","stop-message"]',
+        },
+      }),
+    );
   });
 
   it("mirrors reset acknowledgements into the canonically prepared Slack session", async () => {

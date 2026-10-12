@@ -14,11 +14,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
-import {
-  openClawStateDatabaseCache,
-  requireOpenClawStateDatabaseIdentity,
-} from "./openclaw-state-db-cache.js";
-import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
+import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
 export type AgentDatabaseAdmissionRefusal = {
@@ -109,16 +105,6 @@ function sameKnownState(left: string, right: string): boolean {
 }
 
 /** Capture existing pending decisions; a later commit must never revoke their successors. */
-export function captureAgentDatabasePreparationDeletion(
-  agentId: string,
-  database: Pick<OpenClawStateDatabase, "db" | "path">,
-): () => void {
-  return captureAgentDatabasePreparationDeletionForIdentity(agentId, {
-    identityKey: requireOpenClawStateDatabaseIdentity(database).key,
-    databasePath: database.path,
-  });
-}
-
 export function captureAgentDatabasePreparationDeletionForIdentity(
   agentId: string,
   { identityKey, databasePath }: { identityKey: string; databasePath: string },

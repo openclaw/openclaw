@@ -7,14 +7,17 @@ import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
 import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import type { SessionTranscriptManualTrimResult } from "./session-accessor.types.js";
-import { prepareSessionColdSourceGuard } from "./session-cold-storage-source-guard.worker.js";
+import {
+  prepareSessionColdSourceGuard,
+  type SessionColdSourceMatches,
+} from "./session-cold-storage-source-guard.worker.js";
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worker.js";
 import { selectManualCompactTranscriptLines } from "./session-manual-compact-selection.js";
 import { applyManualCompactInTransaction } from "./session-manual-compact.kernel.js";
 import type {
   SessionSourcePredicate,
-  SessionSourcePredicateFacts,
+  SessionSourceValidation,
 } from "./session-source-authority.js";
 
 export type ManualCompactInput = {
@@ -25,19 +28,38 @@ export type ManualCompactInput = {
   sources: SessionSourcePredicate[];
 };
 
+export type ManualCompactValidation = {
+  kind: "session-manual-compact-validated";
+  sourceValidation: SessionSourceValidation;
+  sourceMatches: SessionColdSourceMatches;
+};
+
 export type ManualCompactCommitted = {
   kind: "session-manual-compact";
   result: SessionTranscriptManualTrimResult;
   projectionNeedsReconcile: boolean;
   publication?: SessionEntryReplacementPublication;
-  refusedSource?: { index: number; facts: SessionSourcePredicateFacts };
 };
 
 export function compactManualTranscript(
   input: ManualCompactInput,
   context: AgentWorkerOperationContext,
 ) {
-  using source = prepareSessionColdSourceGuard(context.options, input.sources);
+  const sourceMatches = input.sources.flatMap((source, index) =>
+    source.conversationAlternatives
+      ? [
+          {
+            index,
+            matches: new Int32Array(
+              new SharedArrayBuffer(
+                (source.conversationAlternatives.length + 1) * Int32Array.BYTES_PER_ELEMENT,
+              ),
+            ),
+          },
+        ]
+      : [],
+  );
+  using source = prepareSessionColdSourceGuard(context.options, input.sources, sourceMatches);
   const database = context.open();
   const rows = readTranscriptEventRows(database, input.scope.sessionId);
   const entries =
@@ -55,13 +77,18 @@ export function compactManualTranscript(
     "Manual compaction",
     (current) => {
       assertSessionTranscriptHot(current.db, input.scope.sessionId);
+      context.admit("transaction", {
+        kind: "session-manual-compact-validated",
+        sourceValidation: source.read(current),
+        // The admission port preserves shared cells; serialized command inputs would copy them.
+        sourceMatches,
+      } satisfies ManualCompactValidation);
       const candidate: ManualCompactCommitted = {
         kind: "session-manual-compact",
         result: selected.result,
         projectionNeedsReconcile: false,
-        refusedSource: source.read(current),
       };
-      if (!candidate.refusedSource && selected.result.compacted) {
+      if (selected.result.compacted) {
         const identity = applyManualCompactInTransaction(
           current,
           input.scope,

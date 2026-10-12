@@ -269,6 +269,35 @@ it("does not discover registry-only retired stores outside captured roots", asyn
   });
 });
 
+it.each(["main", "research"])(
+  "retains %s mutation facts across agent roster publications",
+  async (agentId) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const storePath = resolveOpenClawAgentSqlitePath({ agentId, env: state.env });
+      const cfg = { agents: { entries: { [agentId]: {} } } };
+      const target = { agentId, sessionKey: `agent:${agentId}:roster-sharing` };
+      replaceSessionEntrySync(
+        { ...target, storePath },
+        { sessionId: "unaffected", lifecycleRevision: "first", updatedAt: 1 },
+      );
+      setRuntimeConfigSnapshot(cfg);
+      const prepared = await prepareSessionMutationFacts({ cfg, ...target });
+      try {
+        const added = { agents: { entries: { [agentId]: {}, other: {} } } };
+        for (const current of [added, cfg]) {
+          setRuntimeConfigSnapshot(current);
+          expect(prepared.readCurrent(current).target.entry.sessionId).toBe("unaffected");
+        }
+        const removed = { ...cfg, agents: { entries: { other: {} } } };
+        setRuntimeConfigSnapshot(removed);
+        expect(() => prepared.readCurrent(removed)).toThrow(unavailableMessage);
+      } finally {
+        prepared.release();
+      }
+    });
+  },
+);
+
 it("retains missing incognito identity across first birth and rollback", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { entries: { main: {} } } };

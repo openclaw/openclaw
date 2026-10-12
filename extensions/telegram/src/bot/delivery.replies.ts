@@ -101,13 +101,7 @@ type TextReplyParams = {
 };
 
 function resolveVoiceFallbackText(reply: ReplyPayload): string | undefined {
-  if (reply.text?.trim()) {
-    return reply.text;
-  }
-  if (reply.spokenText?.trim()) {
-    return reply.spokenText;
-  }
-  return undefined;
+  return [reply.text, reply.spokenText].find((text) => text?.trim());
 }
 
 function createReplyDeliverer(

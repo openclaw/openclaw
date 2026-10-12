@@ -37,7 +37,6 @@ import {
 } from "./refresh-state.js";
 import { isIgnoredSkillsWatchPath, isSkillDiscoveryFileWatchPath } from "./refresh-watch-path.js";
 import {
-  clearWorkspaceWatchTargets,
   disposeWorkspacePathWatchState,
   evictWorkspaceWatchStates,
   nextSkillsWatchGeneration,
@@ -48,6 +47,7 @@ import {
   pathWatchers,
   publishRecoveredCoverage,
   publishSkillsWatchChanges,
+  releaseSkillsWatchers,
   setWorkspaceWatchTargets,
   settleWorkspaceWatchTargetsPlan,
   unsubscribeWorkspaceFromPath,
@@ -329,6 +329,10 @@ function createSkillsPathWatcher(
         return;
       }
       const { mode, pollIntervalMs, reportHealth } = skillsObservationTransport(target.path);
+      // Watch entries use the admitted scope's root-relative spelling, including
+      // its ancestors. Keep exclusion math in that namespace for this lifetime.
+      const targetRelative = path.relative(authority.rootDir, target.path);
+      const targetPrefix = targetRelative ? targetRelative + path.sep : "";
       subscription = watch(authority, {
         scopes: [scope],
         mode,
@@ -338,11 +342,8 @@ function createSkillsPathWatcher(
           if (plannedScope?.kind === "entry" && entry.path === plannedScope.path) {
             entryDirectoryObserved = entry.kind === "directory";
           }
-          const absolute = path.resolve(authority.rootDir, entry.path);
-          // Ancestors belong to observation plumbing. An explicitly admitted
-          // source under .cache (or another ignored parent) still needs coverage.
-          const inside = isPathInside(target.path, absolute);
-          const ignored = inside && isIgnoredSkillsWatchPath(path.relative(target.path, absolute));
+          const inside = entry.path === targetRelative || entry.path.startsWith(targetPrefix);
+          const ignored = inside && isIgnoredSkillsWatchPath(entry.path.slice(targetPrefix.length));
           if (inside && !ignored && scannedKinds) {
             if (
               !scannedKinds.has(entry.path) &&
@@ -724,15 +725,9 @@ export async function closeSkillsWatchers(resetState = false): Promise<void> {
   if (resetState) {
     resetSkillsRefreshStateForTest();
   }
-  const active = Array.from(pathWatchers.values());
   nativeWatchCapacityFailed = false;
-  pathWatchers.clear();
-  clearWorkspaceWatchTargets();
+  releaseSkillsWatchers("close");
   clearSkillRootRecordsCache();
-  workspaceWatchOwners.clear();
-  workspaceWatchTargetCache.clear();
-  workspaceWatchLastEnsuredAt.clear();
-  active.forEach((state) => void state.close());
   const results = await Promise.allSettled([
     ...replacingWatchers,
     ...retiringWatchers,
@@ -743,4 +738,13 @@ export async function closeSkillsWatchers(resetState = false): Promise<void> {
     throw new AggregateError(errors, "Skills watcher shutdown failed");
   }
   watchersClosing = false;
+}
+
+/** Fence observation without native retirement for a process-owning Gateway stop. */
+export async function detachSkillsWatchers(): Promise<void> {
+  watchersClosing = true;
+  nativeWatchCapacityFailed = false;
+  releaseSkillsWatchers("detach");
+  clearSkillRootRecordsCache();
+  await closeRemoteSkillsWatchers();
 }

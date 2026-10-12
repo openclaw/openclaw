@@ -1,12 +1,18 @@
 import fs from "node:fs";
+import path from "node:path";
 import type { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as backoff from "../infra/backoff.js";
 import { formatErrorMessageWithCode } from "../infra/errors.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
-import { closeOpenClawAgentDatabasesAsync } from "./openclaw-agent-db.js";
-import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-contract.js";
+import { resolveSqliteBrokerWorkerCount } from "../infra/worker-pool-sizing.js";
+import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
+import {
+  closeOpenClawAgentDatabaseByPathAsync,
+  closeOpenClawAgentDatabasesAsync,
+} from "./openclaw-agent-db.js";
+import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db.js";
 
@@ -304,4 +310,90 @@ it("surfaces the native cleanup cause while the close still fails, then recovers
   ).toMatchObject({ entries: [] });
   expect(recovered.capturePreparedGenerationClaim()).toBeDefined();
   await recovered.release();
+});
+
+it("keeps another agent's admitted database usable after a deleted agent refuses preparation", async () => {
+  const options = {
+    agentId: "main",
+    env: { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-deletion-refusal-")) },
+  };
+  const retained = captureOpenClawAgentDatabaseExecution(options);
+  const victimOptions = { agentId: "removed", env: options.env };
+  const initial = captureOpenClawAgentDatabaseExecution(victimOptions);
+  const peers = Array.from({ length: resolveSqliteBrokerWorkerCount() - 1 }, (_, index) =>
+    captureOpenClawAgentDatabaseExecution({ agentId: `peer-${index}`, env: options.env }),
+  );
+  await retained.prepare(source);
+  for (const peer of peers) {
+    await peer.prepare(source);
+  }
+  await initial.prepare(source);
+  await initial.release();
+  await closeOpenClawAgentDatabaseByPathAsync(initial.path, victimOptions.agentId);
+  beginAgentDeletionJournal(
+    {
+      agentId: victimOptions.agentId,
+      operationId: "deletion-refusal-fixture",
+      deleteFiles: true,
+      agentDir: path.dirname(initial.path),
+      workspaceDir: path.join(options.env.OPENCLAW_STATE_DIR, "removed-workspace"),
+      sessionsDir: path.join(options.env.OPENCLAW_STATE_DIR, "removed-sessions"),
+    },
+    { env: options.env },
+  );
+  const refused = captureOpenClawAgentDatabaseExecution(victimOptions);
+  let survivors: Promise<PromiseSettledResult<unknown>[]> | undefined;
+  const refusingSource: AgentDatabaseRequestExecutionSource = {
+    ...source,
+    createAdmission(binding) {
+      return source.createAdmission({
+        ...binding,
+        authorize(request) {
+          if (
+            !survivors &&
+            request.stage === "prepare" &&
+            request.facts &&
+            typeof request.facts === "object" &&
+            "kind" in request.facts &&
+            request.facts.kind === "shared-owner"
+          ) {
+            survivors = Promise.allSettled(
+              [retained, ...peers].map((survivor) =>
+                survivor.runExisting(source, (scope) =>
+                  scope.execute({ type: "session.entry.read", input: { sessionKeys: [] } }),
+                ),
+              ),
+            );
+          }
+          binding.authorize(request);
+        },
+      });
+    },
+  };
+  try {
+    await expect(refused.prepare(refusingSource)).rejects.toThrow("agent removed is deleted");
+    expect(survivors).toBeDefined();
+    const results = await survivors;
+    for (const survivor of [retained, ...peers]) {
+      survivor.assertCurrent();
+    }
+    expect(results).toEqual(
+      [retained, ...peers].map(() => ({
+        status: "fulfilled",
+        value: expect.objectContaining({ kind: "session-exact-entries", entries: [] }),
+      })),
+    );
+    const repeated = captureOpenClawAgentDatabaseExecution(victimOptions);
+    try {
+      await expect(repeated.prepare(source)).rejects.toThrow("agent removed is deleted");
+    } finally {
+      await repeated.release();
+    }
+  } finally {
+    await Promise.allSettled([
+      retained.release(),
+      refused.release(),
+      ...peers.map((peer) => peer.release()),
+    ]);
+  }
 });

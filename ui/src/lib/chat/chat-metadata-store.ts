@@ -162,6 +162,9 @@ function preparePublication(entry: ChatMetadataEntry): ChatMetadataPublication {
             : {
                 commands: result.commands,
                 ...(result.revision ? { revision: result.revision } : {}),
+                ...(result.requiredWorkerInferenceProfileId !== undefined
+                  ? { requiredWorkerInferenceProfileId: result.requiredWorkerInferenceProfileId }
+                  : {}),
               };
       if (!metadata) {
         if (isCurrent()) {
@@ -197,6 +200,17 @@ function beginChatMetadataRequest(
   entry: ChatMetadataEntry,
   revalidation: boolean,
 ): Promise<ChatMetadataResult> {
+  const current = entry.queuedRequest ?? entry.activeRequest;
+  if (
+    current?.publication.isCurrent() &&
+    !current.controller.signal.aborted &&
+    (!revalidation || current.revalidation || current === entry.queuedRequest)
+  ) {
+    if (revalidation) {
+      current.revalidation = true;
+    }
+    return current.promise;
+  }
   const publication = preparePublication(entry);
   const queued = entry.queuedRequest;
   if (queued) {
@@ -321,10 +335,6 @@ export function loadChatMetadata(
   if (entry.result && !entry.invalidated) {
     return Promise.resolve(entry.result);
   }
-  const request = entry.queuedRequest ?? entry.activeRequest;
-  if (request?.publication.isCurrent() && !request.controller.signal.aborted) {
-    return request.promise;
-  }
   return beginChatMetadataRequest(client, entry, false);
 }
 
@@ -332,17 +342,7 @@ export function revalidateChatMetadata(
   client: GatewayBrowserClient,
   scope: ChatMetadataParams,
 ): Promise<ChatMetadataResult> {
-  const entry = metadataEntryFor(client, scope);
-  const request = entry.queuedRequest ?? entry.activeRequest;
-  if (
-    request?.publication.isCurrent() &&
-    !request.controller.signal.aborted &&
-    (request.revalidation || request === entry.queuedRequest)
-  ) {
-    request.revalidation = true;
-    return request.promise;
-  }
-  return beginChatMetadataRequest(client, entry, true);
+  return beginChatMetadataRequest(client, metadataEntryFor(client, scope), true);
 }
 
 export function beginChatMetadataPublication(

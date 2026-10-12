@@ -29,6 +29,7 @@ import {
   withStateDatabaseSchemaMaintenance,
 } from "../infra/state-database-maintenance.js";
 import { isArtifactPreservingStateRead } from "./artifact-preserving-state-reads.js";
+import { getStateSchemaVersionAdmission } from "./openclaw-state-db-admission.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
   observeOpenClawDatabaseMaintenanceResource,
@@ -314,7 +315,9 @@ function openOpenClawStateDatabaseWithBusyTimeout(
       stateDbCache.touchStateDatabase(cached);
     } else if (!existingSchema && deferredStateDatabases.has(cached.db)) {
       reconcileOpenClawStateSchemaPublication(options);
-      if (readSqliteUserVersion(cached.db) === OPENCLAW_STATE_SCHEMA_VERSION) {
+      if (
+        getStateSchemaVersionAdmission(cached.db)?.userVersion === OPENCLAW_STATE_SCHEMA_VERSION
+      ) {
         deferredStateDatabases.delete(cached.db);
       }
     }
@@ -367,7 +370,11 @@ function openOpenClawStateDatabaseWithBusyTimeout(
   }
   const database = stateDbCache.publishOpenClawStateDatabase(unpublished, env);
   try {
-    if (!existingSchema && readSqliteUserVersion(database.db) < OPENCLAW_STATE_SCHEMA_VERSION) {
+    if (
+      !existingSchema &&
+      (getStateSchemaVersionAdmission(database.db)?.userVersion ??
+        readSqliteUserVersion(database.db)) < OPENCLAW_STATE_SCHEMA_VERSION
+    ) {
       deferredStateDatabases.add(database.db);
       reconcileOpenClawStateSchemaPublication(options);
     }
@@ -397,7 +404,8 @@ export function reconcileOpenClawStateSchemaPublication(
   }
   const pending = withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
     if (
-      readSqliteUserVersion(db) >= OPENCLAW_STATE_SCHEMA_VERSION ||
+      (getStateSchemaVersionAdmission(db)?.userVersion ?? readSqliteUserVersion(db)) >=
+        OPENCLAW_STATE_SCHEMA_VERSION ||
       readStateSchemaContentVersion(db) < OPENCLAW_STATE_SCHEMA_VERSION
     ) {
       return undefined;
@@ -479,7 +487,7 @@ export function runOpenClawStateWriteTransaction<T>(
   options: OpenClawStateDatabaseOptions = {},
   transactionOptions: Pick<
     SqliteTransactionOptions,
-    "busyTimeoutMs" | "operationLabel" | "slowTransactionHoldMs"
+    "beginLockFailureReporting" | "busyTimeoutMs" | "operationLabel" | "slowTransactionHoldMs"
   > = {},
 ): T {
   if (

@@ -330,6 +330,40 @@ export async function runChatSendPreAdmission(
     sessionRoutingChanged,
   } = session;
 
+  const resolveClaim = (currentEntry: typeof entry, warn: (message: string) => void) =>
+    resolveDurableChatClaim({
+      canonicalSessionKey: sessionKey,
+      cfg,
+      clientRunId,
+      entry: currentEntry,
+      persistedSessionKey: legacyKey ?? sessionKey,
+      reloadEntry: () => loadSessionEntry(sessionLoadKey, sessionLoadOptions).entry,
+      storePath,
+      recoveryRuntime: context.recoveryRuntime,
+      warn,
+    });
+  const warnRecovery = (message: string) =>
+    context.logGateway.warn(`failed to retry durable chat recovery ${clientRunId}: ${message}`);
+  const consumeNewDispatchDecision = () => {
+    // Cached/in-flight retries stay bound to their original target. Gate only a new dispatch.
+    if (sessionRoutingChanged(cfg)) {
+      respondChatSessionRoutingChanged(respond);
+      return false;
+    }
+    const archivedSessionError = resolveSessionWorkStartError(sessionKey, entry, {
+      allowPendingWorkspace: true,
+      providerReviewAcknowledgment: request.providerReviewAcknowledgment,
+      runId: clientRunId,
+    });
+    if (archivedSessionError) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, archivedSessionError));
+      return false;
+    }
+    return true;
+  };
+  const requiresReconciliation = entry && isMainSessionRecoveryReconciliationCandidate(entry);
+  let preparedClaim: ReturnType<typeof resolveClaim> | undefined;
+  let initialDecisionCompleted = false;
   let retryChecked = false;
   const consumeInitialDecision = () => {
     const sendPolicy = resolveSendPolicy({
@@ -351,37 +385,46 @@ export async function runChatSendPreAdmission(
       try {
         const handled = respondChatSendRetry(params);
         retryChecked = true;
-        return !handled;
+        if (handled) {
+          return false;
+        }
       } catch (error) {
         if (!isSessionTranscriptProjectionUnavailableError(error)) {
           throw error;
         }
         // Missing comparison facts are prepared below, then consumed with fresh authority.
       }
+      if (retryChecked && !requiresReconciliation) {
+        preparedClaim = resolveClaim(entry, warnRecovery);
+        if (preparedClaim instanceof Promise) {
+          // Reader settlement may reject after recovery starts; retain its accepted work.
+          void preparedClaim.catch(() => {});
+        } else if (preparedClaim.kind === "continue") {
+          initialDecisionCompleted = true;
+          return consumeNewDispatchDecision();
+        }
+      }
     }
     return true;
   };
   // Stop owns its current-authority checks and typed cancellation errors below.
-  if (
-    !(stopCommand
-      ? consumeInitialDecision()
-      : await consumeChatSendCurrent(params, consumeInitialDecision))
-  ) {
-    return false;
+  try {
+    if (
+      !(stopCommand
+        ? consumeInitialDecision()
+        : await consumeChatSendCurrent(params, consumeInitialDecision))
+    ) {
+      return false;
+    }
+  } catch (error) {
+    if (preparedClaim instanceof Promise) {
+      await Promise.allSettled([preparedClaim]);
+    }
+    throw error;
   }
-
-  const resolveClaim = (currentEntry: typeof entry, warn: (message: string) => void) =>
-    resolveDurableChatClaim({
-      canonicalSessionKey: sessionKey,
-      cfg,
-      clientRunId,
-      entry: currentEntry,
-      persistedSessionKey: legacyKey ?? sessionKey,
-      reloadEntry: () => loadSessionEntry(sessionLoadKey, sessionLoadOptions).entry,
-      storePath,
-      recoveryRuntime: context.recoveryRuntime,
-      warn,
-    });
+  if (initialDecisionCompleted) {
+    return true;
+  }
 
   if (request.goalOperation) {
     const prepared = await prepareGoalChatSendRetry(params);
@@ -522,7 +565,7 @@ export async function runChatSendPreAdmission(
   // Same-ID retries must enter durable recovery after reconciliation, before admission
   // can mistake the restored claim for an already dispatched turn.
   let durableEntry = entry;
-  if (entry && isMainSessionRecoveryReconciliationCandidate(entry)) {
+  if (requiresReconciliation) {
     const { reconcileOrphanedGatewaySessionRecovery } =
       await import("../session-recovery-service.js");
     try {
@@ -592,9 +635,7 @@ export async function runChatSendPreAdmission(
     params.assertCurrent?.();
   }
 
-  const durableClaim = await resolveClaim(durableEntry, (message) =>
-    context.logGateway.warn(`failed to retry durable chat recovery ${clientRunId}: ${message}`),
-  );
+  const durableClaim = await (preparedClaim ?? resolveClaim(durableEntry, warnRecovery));
   const retrySession = {
     ...session,
     entry:
@@ -671,20 +712,6 @@ export async function runChatSendPreAdmission(
       return false;
     }
 
-    // Cached/in-flight retries stay bound to their original target. Gate only a new dispatch.
-    if (sessionRoutingChanged(cfg)) {
-      respondChatSessionRoutingChanged(respond);
-      return false;
-    }
-    const archivedSessionError = resolveSessionWorkStartError(sessionKey, entry, {
-      allowPendingWorkspace: true,
-      providerReviewAcknowledgment: request.providerReviewAcknowledgment,
-      runId: clientRunId,
-    });
-    if (archivedSessionError) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, archivedSessionError));
-      return false;
-    }
-    return true;
+    return consumeNewDispatchDecision();
   });
 }

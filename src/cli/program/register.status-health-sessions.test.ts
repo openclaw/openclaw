@@ -1,3 +1,4 @@
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ExpectedCliError } from "../failure-output.js";
@@ -10,8 +11,7 @@ const mocks = vi.hoisted(() => ({
   sessionsCleanupCommand: vi.fn(),
   sessionsTailCommand: vi.fn(),
   sessionsCompactCommand: vi.fn(),
-  sessionsArchiveCommand: vi.fn(),
-  sessionsDeleteCommand: vi.fn(),
+  sessionsLifecycleCommand: vi.fn(),
   exportTrajectoryCommand: vi.fn(),
   ownerLoaded: vi.fn(),
   setVerbose: vi.fn(),
@@ -32,11 +32,11 @@ vi.mock("../../commands/sessions-compact.js", () => {
   mocks.ownerLoaded();
   return { sessionsCompactCommand: mocks.sessionsCompactCommand };
 });
-vi.mock("../../commands/sessions-lifecycle.js", () => {
+vi.mock("../../commands/sessions-lifecycle.js", async (importOriginal) => {
   mocks.ownerLoaded();
   return {
-    sessionsArchiveCommand: mocks.sessionsArchiveCommand,
-    sessionsDeleteCommand: mocks.sessionsDeleteCommand,
+    ...(await importOriginal<typeof import("../../commands/sessions-lifecycle.js")>()),
+    sessionsLifecycleCommand: mocks.sessionsLifecycleCommand,
   };
 });
 vi.mock("../../commands/export-trajectory.js", () => {
@@ -113,7 +113,7 @@ describe("registerStatusHealthSessionsCommands", () => {
     ],
     [
       `sessions --store /tmp/other.sqlite archive ${key}`,
-      mocks.sessionsArchiveCommand,
+      mocks.sessionsLifecycleCommand,
       "`sessions archive` does not support the parent `sessions` option --store; the gateway resolves target stores from each key and --agent.",
     ],
     [
@@ -123,7 +123,7 @@ describe("registerStatusHealthSessionsCommands", () => {
     ],
     [
       `sessions delete ${key} --timeout 0 --json`,
-      mocks.sessionsDeleteCommand,
+      mocks.sessionsLifecycleCommand,
       "--timeout must be a positive integer (milliseconds).",
     ],
     [
@@ -248,26 +248,34 @@ describe("registerStatusHealthSessionsCommands", () => {
     await run(
       `sessions --agent work --json archive ${key} agent:work:scratch --dry-run --url ws://gateway.test --token test-token --password test-password --timeout 45000`,
     );
-    expectOptions(mocks.sessionsArchiveCommand, {
-      keys: [key, "agent:work:scratch"],
-      agent: "work",
-      dryRun: true,
-      url: "ws://gateway.test",
-      token: "test-token",
-      password: "test-password",
-      timeout: "45000",
-      json: true,
-    });
+    expect(mocks.sessionsLifecycleCommand).toHaveBeenCalledExactlyOnceWith(
+      "archive",
+      expect.objectContaining({
+        keys: [key, "agent:work:scratch"],
+        agent: "work",
+        dryRun: true,
+        url: "ws://gateway.test",
+        token: "test-token",
+        password: "test-password",
+        timeout: "45000",
+        json: true,
+      }),
+      mocks.runtime,
+    );
   });
   it("forwards delete keys with leaf scope and confirmation", async () => {
     await run(`sessions --agent main delete ${key} agent:work:scratch --agent work --yes --json`);
-    expectOptions(mocks.sessionsDeleteCommand, {
-      keys: [key, "agent:work:scratch"],
-      agent: "work",
-      dryRun: false,
-      yes: true,
-      json: true,
-    });
+    expect(mocks.sessionsLifecycleCommand).toHaveBeenCalledExactlyOnceWith(
+      "delete",
+      expect.objectContaining({
+        keys: [key, "agent:work:scratch"],
+        agent: "work",
+        dryRun: false,
+        yes: true,
+        json: true,
+      }),
+      mocks.runtime,
+    );
   });
   it("documents retained delete archives and local memory cleanup", () => {
     const sessions = program().commands.find((command) => command.name() === "sessions");

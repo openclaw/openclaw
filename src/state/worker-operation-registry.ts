@@ -19,6 +19,14 @@ export type WorkerWriteOperationContext = WorkerOperationContext & {
       "busyTimeoutMs" | "operationLabel" | "slowTransactionHoldMs"
     >,
   ) => T;
+  writeAdmitted: <T>(
+    operation: (database: OpenClawStateDatabase) => T,
+    options?: Parameters<WorkerWriteOperationContext["write"]>[1] & {
+      receipt?: "result";
+      /** Preserve worker-process ownership checks for native-default callers. */
+      transactionEnvironment?: "process";
+    },
+  ) => T;
 };
 
 export type WorkerOperationHandlers<Context = WorkerOperationContext> = Record<

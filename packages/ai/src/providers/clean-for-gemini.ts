@@ -1,7 +1,18 @@
 import { parseLocalSchemaRefPointer } from "@openclaw/normalization-core/json-schema";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TSchema } from "typebox";
-import { evaluateSchemaWalk, type SchemaWalk } from "./schema-walk.js";
+import {
+  evaluateSchemaWalk,
+  walkSchemaArray,
+  walkSchemaValue,
+  type SchemaWalk,
+} from "./schema-walk.js";
+import {
+  MAX_TOOL_SCHEMA_DEPTH,
+  inheritToolSchemaTruncation,
+  reportToolSchemaTruncation,
+  truncateToolSchemaDepth,
+} from "./tool-schema-depth.js";
 
 // Keywords that Cloud Code Assist API rejects (not compliant with their JSON Schema subset)
 export const GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
@@ -215,44 +226,22 @@ function sanitizeRequiredFields(schema: Record<string, unknown>): Record<string,
   return schema;
 }
 
-function* cleanSchemaArray(
-  schemas: unknown[],
-  defs: SchemaDefs | undefined,
-  refStack: Set<string> | undefined,
-  ancestors: Set<object>,
-  result: unknown[],
-): SchemaWalk {
-  result.length = schemas.length;
-  for (let index = 0; index < result.length; index += 1) {
-    if (index in schemas) {
-      result[index] = yield cleanSchemaForGeminiWithDefs(schemas[index], defs, refStack, ancestors);
-    }
-  }
-  return result;
-}
-
 function* cleanSchemaForGeminiWithDefs(
   schema: unknown,
   defs: SchemaDefs | undefined,
   refStack: Set<string> | undefined,
   ancestors: Set<object>,
+  budget: { truncated: boolean },
+  depth = 0,
 ): SchemaWalk {
-  if (!schema || typeof schema !== "object") {
-    return schema;
+  if (depth > MAX_TOOL_SCHEMA_DEPTH) {
+    budget.truncated = true;
+    return {};
   }
-  if (ancestors.has(schema)) {
-    throw new TypeError("Tool schema contains a circular reference.");
-  }
-  ancestors.add(schema);
-  try {
-    if (Array.isArray(schema)) {
-      const result: unknown[] = [];
-      yield cleanSchemaArray(schema, defs, refStack, ancestors, result);
-      return result;
-    }
-
-    const obj = schema as Record<string, unknown>;
+  return yield walkSchemaValue(schema, ancestors, function* (obj) {
     const nextDefs = extendSchemaDefs(defs, obj);
+    const visit = (value: unknown) =>
+      cleanSchemaForGeminiWithDefs(value, nextDefs, refStack, ancestors, budget, depth + 1);
 
     const refValue = typeof obj.$ref === "string" ? obj.$ref : undefined;
     if (refValue) {
@@ -271,6 +260,8 @@ function* cleanSchemaForGeminiWithDefs(
           nextDefs,
           nextRefStack,
           new Set<object>(),
+          budget,
+          depth + 1,
         );
         if (!cleaned || typeof cleaned !== "object" || Array.isArray(cleaned)) {
           return cleaned;
@@ -287,7 +278,7 @@ function* cleanSchemaForGeminiWithDefs(
       const variants = obj[key];
       if (Array.isArray(variants)) {
         const cleaned: unknown[] = [];
-        yield cleanSchemaArray(variants, nextDefs, refStack, ancestors, cleaned);
+        yield walkSchemaArray(variants, visit, cleaned);
         unions[key] = cleaned;
       }
     }
@@ -339,7 +330,7 @@ function* cleanSchemaForGeminiWithDefs(
         if (value && typeof value === "object" && !Array.isArray(value)) {
           const entries = Object.entries(value as Record<string, unknown>);
           for (const entry of entries) {
-            entry[1] = yield cleanSchemaForGeminiWithDefs(entry[1], nextDefs, refStack, ancestors);
+            entry[1] = yield visit(entry[1]);
           }
           cleaned[key] = Object.fromEntries(entries);
         } else {
@@ -347,11 +338,9 @@ function* cleanSchemaForGeminiWithDefs(
           cleaned[key] = {};
         }
       } else if ((key === "items" || key === "allOf") && Array.isArray(value)) {
-        const result: unknown[] = [];
-        yield cleanSchemaArray(value, nextDefs, refStack, ancestors, result);
-        cleaned[key] = result;
+        cleaned[key] = yield walkSchemaArray(value, visit);
       } else if (key === "items" && value && typeof value === "object") {
-        cleaned[key] = yield cleanSchemaForGeminiWithDefs(value, nextDefs, refStack, ancestors);
+        cleaned[key] = yield visit(value);
       } else if ((key === "anyOf" || key === "oneOf") && Array.isArray(value)) {
         cleaned[key] = unions[key];
       } else {
@@ -369,9 +358,7 @@ function* cleanSchemaForGeminiWithDefs(
     }
 
     return sanitizeRequiredFields(cleaned);
-  } finally {
-    ancestors.delete(schema);
-  }
+  });
 }
 
 /**
@@ -397,8 +384,14 @@ function flattenUnionFallback(
   return copySchemaMeta(obj, merged);
 }
 
-export function cleanSchemaForGemini(schema: unknown): TSchema {
-  return evaluateSchemaWalk(
-    cleanSchemaForGeminiWithDefs(schema, undefined, undefined, new Set<object>()),
+export function cleanSchemaForGemini(schema: unknown, toolName?: string): TSchema {
+  const budget = { truncated: false };
+  const boundedSchema = truncateToolSchemaDepth(schema, toolName);
+  const normalized = evaluateSchemaWalk(
+    cleanSchemaForGeminiWithDefs(boundedSchema, undefined, undefined, new Set<object>(), budget),
   ) as TSchema;
+  if (budget.truncated) {
+    reportToolSchemaTruncation(schema, toolName);
+  }
+  return inheritToolSchemaTruncation(boundedSchema, normalized, budget.truncated);
 }

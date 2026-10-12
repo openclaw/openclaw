@@ -1,12 +1,7 @@
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateReadWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
-import {
-  SessionWorktreeSourceChangedError,
-  SessionWorktreeLifecycleError,
-  WorktreeRemovalContentionError,
-  WorktreeRemovalLockError,
-} from "./errors.js";
+import { registryAuthorityChanged } from "./errors.js";
 import type { WorktreeRegistryListOptions } from "./registry-read.kernel.js";
 import {
   captureWorktreeRegistryAuthority,
@@ -26,47 +21,6 @@ import type {
 } from "./types.js";
 
 type RowGuardKind = WorktreeRegistryPredicate["kind"] | "lifecycle" | "publication";
-
-function registryAuthorityChanged(kind: RowGuardKind): Error {
-  switch (kind) {
-    case "publication":
-      return new SessionWorktreeSourceChangedError("GitHub publication worktree authority changed");
-    case "snapshot-retirement":
-      return new Error("Worktree snapshot retirement identity changed");
-    case "exact-snapshot":
-      return new Error(
-        "Exact-state recovery owner or lifecycle changed; source and snapshot preserved",
-      );
-    case "exact-owner":
-      return new Error("Worktree exact-state owner or lifecycle changed; checkout preserved");
-    case "activity":
-      return new WorktreeRemovalLockError("busy", "worktree activity changed during cleanup");
-    case "session-owner":
-      return new SessionWorktreeLifecycleError(
-        "Session worktree ownership changed; retry cleanup.",
-        "owner-mismatch",
-      );
-    case "source-record":
-      return new SessionWorktreeSourceChangedError(
-        "Accepted managed source changed during preparation",
-      );
-    case "source-owner":
-      return new SessionWorktreeSourceChangedError(
-        "Spawn parent managed worktree changed; retry from its current session",
-      );
-    case "projection":
-      return new Error("Managed projection owner changed during settlement");
-    case "record":
-      return new Error(
-        "Worktree registry changed during recovery; remaining source and original snapshot preserved",
-      );
-    default:
-      return new WorktreeRemovalContentionError(
-        "busy",
-        "Worktree owner or binding changed; checkout preserved",
-      );
-  }
-}
 
 function predicateFields(kind: RowGuardKind): readonly WorktreeRegistryField[] {
   switch (kind) {

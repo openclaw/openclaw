@@ -22,6 +22,115 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
 }));
 
 describe("diagnostics-prometheus service", () => {
+  it("distinguishes long runs through one hour without changing shorter-duration histograms", () => {
+    const metrics = createMetricsHarness();
+    try {
+      for (const durationMs of [30_000, 120_000, 900_000, 1_800_000, 3_600_000, 3_600_001]) {
+        const run = { runId: "long-run", provider: "test", model: "test-model", durationMs };
+        metrics.record({ ...run, type: "run.completed", outcome: "completed" });
+        metrics.record({
+          ...run,
+          type: "harness.run.completed",
+          harnessId: "test",
+          outcome: "completed",
+        });
+        metrics.record({
+          ...run,
+          type: "model.call.completed",
+          callId: "test-call",
+          observationUnit: "turn",
+        });
+        metrics.record({
+          type: "message.dispatch.completed",
+          source: "test",
+          durationMs,
+          outcome: "completed",
+        });
+        metrics.record({ type: "webhook.processed", channel: "telegram", durationMs });
+      }
+      const rendered = metrics.render();
+      for (const name of ["run", "harness_run", "model_call", "message_dispatch"]) {
+        const buckets = rendered
+          .split("\n")
+          .filter((line) => line.startsWith(`openclaw_${name}_duration_seconds_bucket{`))
+          .map((line) => [line.match(/le="([^"]+)"/)?.[1], Number(line.split(" ").at(-1))]);
+        expect(buckets).toEqual([
+          ...["0.005", "0.01", "0.025", "0.05", "0.1", "0.25", "0.5", "1", "2.5", "5", "10"].map(
+            (bound) => [bound, 0],
+          ),
+          ["30", 1],
+          ["60", 1],
+          ["120", 2],
+          ["300", 2],
+          ["600", 2],
+          ["900", 3],
+          ["1800", 4],
+          ["3600", 5],
+          ["+Inf", 6],
+        ]);
+      }
+      expect(rendered).toContain(
+        'openclaw_webhook_duration_seconds_bucket{channel="telegram",le="600",webhook="unknown"} 2\n',
+      );
+      expect(rendered).not.toMatch(
+        /openclaw_webhook_duration_seconds_bucket\{[^}]*le="(?:900|1800|3600)"/,
+      );
+    } finally {
+      metrics.stop();
+    }
+  });
+
+  it("preserves escaped histogram labels and fresh values across scrapes and restarts", () => {
+    const metrics = createMetricsHarness();
+    const event = {
+      type: "gateway.rpc" as const,
+      method: 'test."\\\n😀',
+      phase: "handler" as const,
+      outcome: "returned" as const,
+      durationMs: 5,
+      admissionMs: 0,
+    };
+    const name = "openclaw_gateway_rpc_handler_seconds";
+    const label = String.raw`method="test.\"\\\n😀"`;
+    metrics.record(event);
+    const first = metrics.render();
+    expect(first).toContain(`${name}_bucket{le="0.005",${label}} 1\n`);
+    expect(first).toContain(`${name}_bucket{le="+Inf",${label}} 1\n`);
+    expect(metrics.render()).toBe(first);
+
+    metrics.record({ ...event, durationMs: 10 });
+    const updated = metrics.render();
+    expect(updated).toContain(`${name}_bucket{le="0.005",${label}} 1\n`);
+    expect(updated).toContain(`${name}_bucket{le="0.01",${label}} 2\n`);
+    expect(updated).toContain(`${name}_bucket{le="+Inf",${label}} 2\n`);
+    expect(updated).toContain(`${name}_sum{${label}} 0.015\n`);
+    expect(updated).toContain(`${name}_count{${label}} 2\n`);
+
+    metrics.stop();
+    expect(metrics.render()).toBe("");
+    metrics.start();
+    metrics.record(event);
+    expect(metrics.render()).toBe(first);
+    metrics.stop();
+  });
+
+  it("counts HTTP cancellations by source without accepting public events", () => {
+    const metrics = createMetricsHarness();
+    for (const source of ["client", "client", "shutdown"] as const) {
+      metrics.record(
+        { type: "gateway.http.cancelled", source },
+        { trusted: false, internal: true },
+      );
+    }
+    metrics.record({ type: "gateway.http.cancelled", source: "client" }, untrusted);
+
+    const rendered = metrics.render();
+    expect(rendered).toContain("# TYPE openclaw_gateway_http_cancelled_total counter");
+    expect(rendered).toContain('openclaw_gateway_http_cancelled_total{source="client"} 2\n');
+    expect(rendered).toContain('openclaw_gateway_http_cancelled_total{source="shutdown"} 1\n');
+    metrics.stop();
+  });
+
   it("exports bounded byte histograms, including late frames and negative heap changes", () => {
     const metrics = createMetricsHarness();
     const base = { type: "gateway.rpc" as const, method: "sessions.history" };

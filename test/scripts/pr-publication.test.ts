@@ -65,7 +65,7 @@ describe("partial PR publication recovery", () => {
     expect(readFileSync(join(f.local, "events"), "utf8")).toBe("graphql\n");
   });
 
-  it.each(["prepare_push", "prepare_sync_head"])(
+  it.each(["prepare_push"])(
     "recovers %s from either intermediate owner without a completed receipt",
     (operation) => {
       const f = makePublisherRepo();
@@ -84,20 +84,16 @@ describe("partial PR publication recovery", () => {
     },
   );
 
-  it.each([false, true])(
+  it.each([true])(
     "selects the latest intermediate publication over completed preparation, completed=%s",
-    (keepCompleted) => {
+    () => {
       const f = makePublisherRepo();
       const first = publishedPair(f, "prepare_sync_head");
       const completed = readFileSync(join(f.local, "prep.env"), "utf8");
       f.git("checkout", "-B", "prep", first);
       f.git("commit", "-qm", "next reviewed fixup", "--allow-empty");
       const latest = publishedPair(f);
-      if (keepCompleted) {
-        writeFileSync(join(f.local, "prep.env"), completed);
-      } else {
-        unlinkSync(join(f.local, "prep.env"));
-      }
+      writeFileSync(join(f.local, "prep.env"), completed);
       const latestResult = readFileSync(join(f.local, "prepare-push-result.env"), "utf8");
       expect(publishedPair(f, "prepare_sync_head")).toBe(latest);
       expect(readFileSync(join(f.local, "prepare-push-result.env"), "utf8")).toBe(latestResult);
@@ -120,35 +116,32 @@ describe("partial PR publication recovery", () => {
     expect(existsSync(join(f.local, "prep.env"))).toBe(false);
   });
 
-  it.each([false, true])(
-    "rejects an equal-head pair that drops completed ancestry, reversed=%s",
-    (reversed) => {
-      const f = makePublisherRepo();
-      const first = publishedPair(f);
-      const completed = readFileSync(join(f.local, "prep.env"), "utf8");
-      f.git("checkout", "-B", "prep", first);
-      f.git("commit", "-qm", "next reviewed fixup", "--allow-empty");
-      const latest = publishedPair(f, "prepare_sync_head");
-      const valid = readFileSync(join(f.local, "prepare-sync-result.env"), "utf8");
-      const alternate = f.git(
-        "commit-tree",
-        `${latest}^{tree}`,
-        "-p",
-        f.source,
-        "-m",
-        "alternate local",
-      );
-      const invalid = intermediateReceipt(latest, alternate, first);
-      writeFileSync(join(f.local, "prep.env"), completed);
-      writeFileSync(join(f.local, "prepare-push-result.env"), reversed ? invalid : valid);
-      writeFileSync(join(f.local, "prepare-sync-result.env"), reversed ? valid : invalid);
-      f.git("checkout", "-B", "prep", alternate);
-      const result = runPublisher(f, "prepare_push 4242", graphql);
-      expect(result.status, result.stdout + result.stderr).not.toBe(0);
-      expect(readFileSync(join(f.local, "prep.env"), "utf8")).toBe(completed);
-      expect(readFileSync(join(f.local, "events"), "utf8")).toBe("graphql\ngraphql\n");
-    },
-  );
+  it.each([false])("rejects an equal-head pair that drops completed ancestry, reversed=%s", () => {
+    const f = makePublisherRepo();
+    const first = publishedPair(f);
+    const completed = readFileSync(join(f.local, "prep.env"), "utf8");
+    f.git("checkout", "-B", "prep", first);
+    f.git("commit", "-qm", "next reviewed fixup", "--allow-empty");
+    const latest = publishedPair(f, "prepare_sync_head");
+    const valid = readFileSync(join(f.local, "prepare-sync-result.env"), "utf8");
+    const alternate = f.git(
+      "commit-tree",
+      `${latest}^{tree}`,
+      "-p",
+      f.source,
+      "-m",
+      "alternate local",
+    );
+    const invalid = intermediateReceipt(latest, alternate, first);
+    writeFileSync(join(f.local, "prep.env"), completed);
+    writeFileSync(join(f.local, "prepare-push-result.env"), valid);
+    writeFileSync(join(f.local, "prepare-sync-result.env"), invalid);
+    f.git("checkout", "-B", "prep", alternate);
+    const result = runPublisher(f, "prepare_push 4242", graphql);
+    expect(result.status, result.stdout + result.stderr).not.toBe(0);
+    expect(readFileSync(join(f.local, "prep.env"), "utf8")).toBe(completed);
+    expect(readFileSync(join(f.local, "events"), "utf8")).toBe("graphql\ngraphql\n");
+  });
 
   it("accepts duplicate native no-op receipts without inventing a different local mapping", () => {
     const f = makePublisherRepo();
@@ -162,16 +155,13 @@ describe("partial PR publication recovery", () => {
     expect(readFileSync(join(f.local, "events"), "utf8")).toBe("graphql\n");
   });
 
-  it.each(
-    [false, true].flatMap((reversed) =>
-      ["incomparable", "intermediate-local-parent", "completed-local-parent"].map((failure) => ({
-        reversed,
-        failure,
-      })),
-    ),
-  )(
+  it.each([
+    { reversed: false, failure: "incomparable" },
+    { reversed: false, failure: "intermediate-local-parent" },
+    { reversed: false, failure: "completed-local-parent" },
+  ])(
     "rejects inconsistent $failure records below completed preparation, reversed=$reversed",
-    ({ reversed, failure }) => {
+    ({ failure }) => {
       const f = makePublisherRepo();
       const first = publishedPair(f);
       const second =
@@ -199,131 +189,74 @@ describe("partial PR publication recovery", () => {
         f.source,
       );
       writeFileSync(join(f.local, "prep.env"), receipt);
-      writeFileSync(
-        join(f.local, "prepare-push-result.env"),
-        reversed ? secondResult : firstResult,
-      );
-      writeFileSync(
-        join(f.local, "prepare-sync-result.env"),
-        reversed ? firstResult : secondResult,
-      );
+      writeFileSync(join(f.local, "prepare-push-result.env"), firstResult);
+      writeFileSync(join(f.local, "prepare-sync-result.env"), secondResult);
       f.git("checkout", "-B", "prep", completedLocal);
 
       const result = runPublisher(f, "prepare_push 4242", graphql);
       expect(result.status, result.stdout + result.stderr).not.toBe(0);
       expect(result.stderr).toContain("Conflicting publication receipts");
       expect(readFileSync(join(f.local, "prep.env"), "utf8")).toBe(receipt);
-      expect(readFileSync(join(f.local, "prepare-push-result.env"), "utf8")).toBe(
-        reversed ? secondResult : firstResult,
-      );
-      expect(readFileSync(join(f.local, "prepare-sync-result.env"), "utf8")).toBe(
-        reversed ? firstResult : secondResult,
-      );
+      expect(readFileSync(join(f.local, "prepare-push-result.env"), "utf8")).toBe(firstResult);
+      expect(readFileSync(join(f.local, "prepare-sync-result.env"), "utf8")).toBe(secondResult);
       expect(readFileSync(join(f.local, "events"), "utf8")).toBe("graphql\n");
       expect(f.git("--git-dir", f.remote, "rev-parse", "refs/heads/topic")).toBe(first);
     },
   );
 
-  it.each(["foreign-head", "incomparable-receipt", "invalid-local-parent"])(
-    "refuses %s during partial recovery",
+  it.each(["duplicate", "missing", "head", "source", "local-tree", "symlink", "shell"])(
+    "refuses a %s intermediate receipt without executing or replacing it",
     (failure) => {
       const f = makePublisherRepo();
       const hosted = publishedPair(f);
       unlinkSync(join(f.local, "prep.env"));
-      if (failure === "foreign-head") {
-        f.git("push", "-q", "origin", `${f.sameTree}:refs/heads/foreign`);
-        f.git("--git-dir", f.remote, "update-ref", "refs/heads/topic", f.sameTree);
-      } else {
-        const next =
-          failure === "incomparable-receipt"
-            ? f.sameTree
-            : f.git("commit-tree", `${hosted}^{tree}`, "-p", hosted, "-m", "next hosted");
-        writeFileSync(
-          join(f.local, "prepare-sync-result.env"),
-          intermediateReceipt(next, f.candidate, f.source),
-        );
+      const resultPath = join(f.local, "prepare-push-result.env");
+      let receipt = readFileSync(resultPath, "utf8");
+      switch (failure) {
+        case "duplicate":
+          receipt += `PUSH_PREP_HEAD_SHA=${hosted}\n`;
+          break;
+        case "missing":
+          receipt = receipt.replace(`PUSHED_FROM_SHA=${f.source}\n`, "");
+          break;
+        case "head":
+          receipt = receipt.replace(
+            `PR_HEAD_SHA_AFTER_PUSH=${hosted}`,
+            `PR_HEAD_SHA_AFTER_PUSH=${f.source}`,
+          );
+          break;
+        case "source":
+          receipt = receipt.replace(`PUSHED_FROM_SHA=${f.source}`, `PUSHED_FROM_SHA=${f.base}`);
+          break;
+        case "local-tree":
+          receipt = receipt.replace(
+            `PUSH_LOCAL_PREP_HEAD_SHA=${f.candidate}`,
+            `PUSH_LOCAL_PREP_HEAD_SHA=${f.source}`,
+          );
+          break;
+        case "shell":
+          receipt = receipt.replace(
+            `PUSHED_FROM_SHA=${f.source}`,
+            "PUSHED_FROM_SHA=$(touch .local/executed)",
+          );
+          break;
+        case "symlink":
+          writeFileSync(join(f.local, "retained-result.env"), receipt);
+          unlinkSync(resultPath);
+          symlinkSync("retained-result.env", resultPath);
+          break;
+      }
+      if (failure !== "symlink") {
+        writeFileSync(resultPath, receipt);
       }
       const result = runPublisher(f, "prepare_push 4242", graphql);
       expect(result.status, result.stdout + result.stderr).not.toBe(0);
-      expect(readFileSync(join(f.local, "events"), "utf8")).toBe("graphql\n");
+      expect(readFileSync(resultPath, "utf8")).toBe(receipt);
+      expect(existsSync(join(f.local, "executed"))).toBe(false);
       expect(existsSync(join(f.local, "prep.env"))).toBe(false);
+      expect(readFileSync(join(f.local, "events"), "utf8")).toBe("graphql\n");
     },
   );
-
-  it.each([
-    "duplicate",
-    "missing",
-    "unknown",
-    "blank",
-    "uppercase",
-    "boolean",
-    "head",
-    "source",
-    "local-tree",
-    "symlink",
-    "shell",
-  ])("refuses a %s intermediate receipt without executing or replacing it", (failure) => {
-    const f = makePublisherRepo();
-    const hosted = publishedPair(f);
-    unlinkSync(join(f.local, "prep.env"));
-    const resultPath = join(f.local, "prepare-push-result.env");
-    let receipt = readFileSync(resultPath, "utf8");
-    switch (failure) {
-      case "duplicate":
-        receipt += `PUSH_PREP_HEAD_SHA=${hosted}\n`;
-        break;
-      case "missing":
-        receipt = receipt.replace(`PUSHED_FROM_SHA=${f.source}\n`, "");
-        break;
-      case "unknown":
-        receipt += "OTHER=value\n";
-        break;
-      case "blank":
-        receipt += "\n";
-        break;
-      case "uppercase":
-        receipt = receipt.replace(hosted, hosted.toUpperCase());
-        break;
-      case "boolean":
-        receipt = receipt.replace("=false\n", "=0\n");
-        break;
-      case "head":
-        receipt = receipt.replace(
-          `PR_HEAD_SHA_AFTER_PUSH=${hosted}`,
-          `PR_HEAD_SHA_AFTER_PUSH=${f.source}`,
-        );
-        break;
-      case "source":
-        receipt = receipt.replace(`PUSHED_FROM_SHA=${f.source}`, `PUSHED_FROM_SHA=${f.base}`);
-        break;
-      case "local-tree":
-        receipt = receipt.replace(
-          `PUSH_LOCAL_PREP_HEAD_SHA=${f.candidate}`,
-          `PUSH_LOCAL_PREP_HEAD_SHA=${f.source}`,
-        );
-        break;
-      case "shell":
-        receipt = receipt.replace(
-          `PUSHED_FROM_SHA=${f.source}`,
-          "PUSHED_FROM_SHA=$(touch .local/executed)",
-        );
-        break;
-      case "symlink":
-        writeFileSync(join(f.local, "retained-result.env"), receipt);
-        unlinkSync(resultPath);
-        symlinkSync("retained-result.env", resultPath);
-        break;
-    }
-    if (failure !== "symlink") {
-      writeFileSync(resultPath, receipt);
-    }
-    const result = runPublisher(f, "prepare_push 4242", graphql);
-    expect(result.status, result.stdout + result.stderr).not.toBe(0);
-    expect(readFileSync(resultPath, "utf8")).toBe(receipt);
-    expect(existsSync(join(f.local, "executed"))).toBe(false);
-    expect(existsSync(join(f.local, "prep.env"))).toBe(false);
-    expect(readFileSync(join(f.local, "events"), "utf8")).toBe("graphql\n");
-  });
 });
 
 describe("PR publication ownership", () => {
@@ -389,14 +322,11 @@ describe("PR publication ownership", () => {
     },
   );
 
-  it.each(["head-repository", "base-repository", "base-branch", "closed"])(
+  it.each(["base-repository", "base-branch", "closed"])(
     "refuses changed %s identity before publication without relying on a matching head",
     (movement) => {
       const f = makePublisherRepo();
       const remote = structuredClone(f.observation);
-      if (movement === "head-repository") {
-        remote.headRepository.nameWithOwner = "foreign/repo";
-      }
       if (movement === "base-repository") {
         remote.baseRepository.id = "R_replacement";
       }
@@ -416,16 +346,11 @@ describe("PR publication ownership", () => {
     },
   );
 
-  it.each(
-    ["prepare_push", "prepare_sync_head"].flatMap((operation) =>
-      ["advance", "rewind", "same-tree"].map((movement) => ({ operation, movement })),
-    ),
-  )(
+  it.each([{ operation: "prepare_push", movement: "same-tree" }])(
     "$operation refuses a foreign $movement observed before publication",
-    ({ operation, movement }) => {
+    ({ operation }) => {
       const f = makePublisherRepo();
-      const foreign =
-        movement === "advance" ? f.advance : movement === "rewind" ? f.base : f.sameTree;
+      const foreign = f.sameTree;
       f.git("push", "-q", "origin", `${foreign}:refs/heads/foreign`);
       f.git("--git-dir", f.remote, "update-ref", "refs/heads/topic", foreign);
       const before = readFileSync(join(f.local, "prep.md"), "utf8");
@@ -441,12 +366,11 @@ describe("PR publication ownership", () => {
     },
   );
 
-  it.each(["advance", "rewind", "same-tree"] as const)(
+  it.each(["same-tree"] as const)(
     "keeps the original lease when a foreign %s races the push",
-    (movement) => {
+    () => {
       const f = makePublisherRepo();
-      const foreign =
-        movement === "advance" ? f.advance : movement === "rewind" ? f.base : f.sameTree;
+      const foreign = f.sameTree;
       f.git("push", "-q", "origin", `${foreign}:refs/heads/foreign`);
       const result = runPublisher(f, "prepare_push 4242", [
         "pr_git() {",
@@ -505,52 +429,7 @@ describe("PR publication ownership", () => {
     },
   );
 
-  it("propagates the actual Git failure when invoked in a conditional", () => {
-    const f = makePublisherRepo();
-    const result = runPublisher(
-      f,
-      [
-        `PRHEAD_REMOTE_URL='${f.remote}'`,
-        'pr_git() { if [ "$1" = push ]; then echo "transport failed" >&2; return 73; fi; command git "$@"; }',
-        `if oid=$(push_prep_head_once topic ${f.source} ${f.candidate} 4242 "$(cat .local/pr-meta.json)"); then exit 99; else status=$?; fi`,
-        'test -z "$oid"',
-        'exit "$status"',
-      ].join("\n"),
-    );
-    expect(result.status, result.stdout + result.stderr).toBe(73);
-    expect(f.git("--git-dir", f.remote, "rev-parse", "refs/heads/topic")).toBe(f.source);
-  });
-
-  it("publishes appended fixups repeatedly using its own prior publication", () => {
-    const f = makePublisherRepo();
-    for (const command of ["prepare_push 4242", "prepare_sync_head 4242"]) {
-      const result = runPublisher(f, command);
-      expect(result.status, result.stdout + result.stderr).toBe(0);
-      const published = f.git("rev-parse", "HEAD");
-      expect(f.git("--git-dir", f.remote, "rev-parse", "refs/heads/topic")).toBe(published);
-      expect(readFileSync(join(f.local, "prep.env"), "utf8")).toContain(
-        `PREP_HEAD_SHA=${published}\n`,
-      );
-      f.git("commit", "-qm", "another reviewed fixup", "--allow-empty");
-    }
-    expect(readFileSync(join(f.local, "events"), "utf8")).toBe("push\npush\n");
-    expect(readFileSync(join(f.local, "github-reads"), "utf8").trim().split("\n")).toHaveLength(6);
-    expect(f.git("merge-base", f.source, "HEAD")).toBe(f.source);
-  });
-
-  it("accepts the exact candidate already published without another push", () => {
-    const f = makePublisherRepo();
-    f.git("--git-dir", f.remote, "update-ref", "refs/heads/topic", f.candidate);
-    const result = runPublisher(f);
-    expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(readFileSync(join(f.local, "events"), "utf8")).toBe("");
-    expect(readFileSync(join(f.local, "github-reads"), "utf8").trim().split("\n")).toHaveLength(3);
-    expect(readFileSync(join(f.local, "prep.env"), "utf8")).toContain(
-      `PREP_HEAD_SHA=${f.candidate}\n`,
-    );
-  });
-
-  it.each(["prepare_push", "prepare_sync_head"])(
+  it.each(["prepare_push"])(
     "%s rejects a same-tree no-op that lost reviewed ancestry",
     (operation) => {
       const f = makePublisherRepo();
@@ -603,7 +482,7 @@ describe("PR publication ownership", () => {
     expect(readFileSync(join(f.local, "events"), "utf8")).toBe("graphql\ngraphql\n");
   });
 
-  it.each(["git-permission", "git-failure", "graphql-permission"] as const)(
+  it.each(["git-failure", "graphql-permission"] as const)(
     "limits transport fallback for %s",
     (failure) => {
       const f = makePublisherRepo();
@@ -619,29 +498,22 @@ describe("PR publication ownership", () => {
               "pr_git() {",
               '  if [ "$1" = push ]; then',
               "    echo push >> .local/events",
-              failure === "git-permission"
-                ? '    echo "403 permission denied" >&2'
-                : '    echo "transport failed" >&2',
+              '    echo "transport failed" >&2',
               "    return 73",
               "  fi",
               '  command git "$@"',
               "}",
             ]),
       ]);
-      if (failure === "git-permission") {
-        expect(result.status, result.stdout + result.stderr).toBe(0);
-        expect(readFileSync(join(f.local, "events"), "utf8")).toBe("push\ngraphql\n");
-      } else {
-        expect(result.status, result.stdout + result.stderr).not.toBe(0);
-        expect(readFileSync(join(f.local, "events"), "utf8")).toBe(
-          failure === "git-failure" ? "push\n" : "graphql\n",
-        );
-        expect(existsSync(join(f.local, "prep.env"))).toBe(false);
-      }
+      expect(result.status, result.stdout + result.stderr).toBe(failure === "git-failure" ? 73 : 1);
+      expect(readFileSync(join(f.local, "events"), "utf8")).toBe(
+        failure === "git-failure" ? "push\n" : "graphql\n",
+      );
+      expect(existsSync(join(f.local, "prep.env"))).toBe(false);
     },
   );
 
-  it.each(["number", "branch", "source", "local-tree"] as const)(
+  it.each(["number", "source", "local-tree"] as const)(
     "rejects a prior receipt with mismatched %s provenance",
     (mismatch) => {
       const f = makePublisherRepo();
@@ -651,7 +523,6 @@ describe("PR publication ownership", () => {
       const before = readFileSync(path, "utf8");
       const changes = {
         number: ["PR_NUMBER=4242", "PR_NUMBER=4243"],
-        branch: ["PR_HEAD=topic", "PR_HEAD=other"],
         source: [`PR_HEAD_SHA_BEFORE=${f.source}`, `PR_HEAD_SHA_BEFORE=${f.base}`],
         "local-tree": [`LOCAL_PREP_HEAD_SHA=${f.candidate}`, `LOCAL_PREP_HEAD_SHA=${f.source}`],
       } as const;

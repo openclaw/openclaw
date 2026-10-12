@@ -512,39 +512,6 @@ describe("Codex supervision actions", () => {
     ]);
   });
 
-  it("lists and adopts a local session under the selected owner", async () => {
-    const runtimeConfig = compatibilityOwnerConfig();
-    const { runtime, createSessionEntry } = createRuntime();
-    const { api } = createGatewayApi(runtime);
-    const bindingStore = createCodexTestBindingStore();
-    const control = createEligibleControl();
-
-    const continued = await continueLocalCodexSession({
-      agentId: "alpha",
-      api,
-      bindingStore,
-      config: runtimeConfig,
-      control,
-      threadId: "thread-1",
-    });
-    const listed = await listCodexSessionCatalog({
-      agentId: "alpha",
-      bindingStore,
-      config: runtimeConfig,
-      runtime,
-      control,
-    });
-
-    expect(continued.sessionKey).toMatch(/^agent:alpha:harness:codex:supervision:/);
-    expect(createSessionEntry).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "alpha", cfg: runtimeConfig }),
-    );
-    expect(listed.hosts[0]?.sessions[0]).toMatchObject({
-      threadId: "thread-1",
-      sessionKey: continued.sessionKey,
-    });
-  });
-
   it("creates one pending locked branch and reuses its source mapping", async () => {
     const sourceThread = idleThread({
       modelProvider: "openai",

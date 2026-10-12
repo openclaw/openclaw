@@ -16,19 +16,19 @@ export async function recoverWorkspaceReplacement(workspaceDir: string): Promise
   const parent = path.dirname(workspaceDir);
   const workspaceName = path.basename(workspaceDir);
   await fsp.mkdir(parent, { recursive: true, mode: 0o700 });
-  const entries = await fsp.readdir(parent, { withFileTypes: true });
+  const entries = (await fsp.readdir(parent, { withFileTypes: true })).filter((entry) =>
+    entry.isDirectory(),
+  );
   const stagingPrefix = `.${workspaceName}.workspace-transfer-`;
   const staging = entries.filter((entry) => entry.name.startsWith(stagingPrefix));
   const backups = entries.filter((entry) => entry.name.startsWith(`${workspaceName}.previous-`));
   for (const entry of staging) {
-    if (entry.isDirectory() && !entry.isSymbolicLink()) {
-      await removeTransferArtifact(path.join(parent, entry.name));
-    }
+    await removeTransferArtifact(path.join(parent, entry.name));
   }
   const workspaceExists = await fsp
     .lstat(workspaceDir)
     .then((stats) => {
-      if (stats.isSymbolicLink() || !stats.isDirectory()) {
+      if (!stats.isDirectory()) {
         throw new Error("workspace transfer target is not an owned directory");
       }
       return true;
@@ -39,12 +39,7 @@ export async function recoverWorkspaceReplacement(workspaceDir: string): Promise
       }
       throw error;
     });
-  const validBackups: string[] = [];
-  for (const entry of backups) {
-    if (entry.isDirectory() && !entry.isSymbolicLink()) {
-      validBackups.push(path.join(parent, entry.name));
-    }
-  }
+  const validBackups = backups.map((entry) => path.join(parent, entry.name));
   if (!workspaceExists) {
     if (validBackups.length > 1) {
       throw new Error("workspace transfer recovery found multiple prior workspaces");
@@ -59,11 +54,17 @@ export async function recoverWorkspaceReplacement(workspaceDir: string): Promise
   );
 }
 
-export async function replaceWorkspace(workspaceDir: string, staging: string): Promise<void> {
-  const backup = `${workspaceDir}.previous-${process.pid}-${randomUUID()}`;
+export async function replaceNodeWorkerDirectory(
+  destination: string,
+  staging: string,
+  kind: "workspace" | "bundle",
+  signal?: AbortSignal,
+): Promise<void> {
+  const backup = `${destination}.previous-${process.pid}-${randomUUID()}`;
   let movedOld = false;
+  signal?.throwIfAborted();
   try {
-    await fsp.rename(workspaceDir, backup);
+    await fsp.rename(destination, backup);
     movedOld = true;
   } catch (error) {
     if (extractErrorCode(error) !== "ENOENT") {
@@ -71,11 +72,15 @@ export async function replaceWorkspace(workspaceDir: string, staging: string): P
     }
   }
   try {
-    await fsp.rename(staging, workspaceDir);
+    // Cancellation after the first rename uses the same rollback as a failed publication.
+    signal?.throwIfAborted();
+    await fsp.rename(staging, destination);
   } catch (error) {
-    if (movedOld) {
+    if (movedOld && kind === "bundle") {
+      await fsp.rename(backup, destination).catch(() => undefined);
+    } else if (movedOld) {
       try {
-        await fsp.rename(backup, workspaceDir);
+        await fsp.rename(backup, destination);
       } catch (rollbackError) {
         const recoveryError = new Error(`workspace transfer rollback failed; recover ${backup}`, {
           cause: error,
@@ -89,7 +94,11 @@ export async function replaceWorkspace(workspaceDir: string, staging: string): P
     throw error;
   }
   if (movedOld) {
-    // The second rename is the commit point. Cleanup failure is recovered on the next transfer.
-    await removeTransferArtifact(backup).catch(() => undefined);
+    // The second rename is the commit point; cleanup failure cannot roll back the new directory.
+    await (
+      kind === "workspace"
+        ? removeTransferArtifact(backup)
+        : fsp.rm(backup, { recursive: true, force: true })
+    ).catch(() => undefined);
   }
 }

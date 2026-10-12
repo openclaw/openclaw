@@ -6,9 +6,13 @@ import {
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { SessionsReclaimParams } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
+import { getRuntimeConfig } from "../../config/io.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
+import { findCanonicalStoreMatch } from "../session-utils-store-selection.js";
+import * as sessionStoreWorker from "../session-utils-store-worker.js";
+import * as sessionStore from "../session-utils-store.js";
 import { bindDeviceWorkerAvailability } from "../worker-environments/device-provider.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
 import type { GatewayRequestContext, RespondFn, SessionMutationAuthorization } from "./types.js";
@@ -24,6 +28,33 @@ export function getDispatchTestMocks() {
 }
 
 beforeEach(() => {
+  const readFixtureEntry: typeof sessionStore.loadGatewaySessionEntryReadOnly = (
+    key,
+    opts,
+    cfg = getRuntimeConfig(),
+  ) => {
+    const target = dispatchTestMocks.resolveTarget({
+      cfg,
+      key,
+      ...opts,
+      exactRead: true,
+      readOnly: true,
+    });
+    const match = findCanonicalStoreMatch(target.store, target.storeKeys);
+    return {
+      ...target,
+      cfg,
+      entry: match?.entry,
+      legacyKey: match?.key !== target.canonicalKey ? match?.key : undefined,
+    };
+  };
+  vi.spyOn(sessionStore, "loadGatewaySessionEntryReadOnly").mockImplementation(readFixtureEntry);
+  vi.spyOn(sessionStoreWorker, "loadGatewaySessionEntryReadOnlyInWorker").mockImplementation(
+    async (params) => {
+      params.assertActive?.();
+      return readFixtureEntry(params.key, params, params.cfg);
+    },
+  );
   vi.spyOn(managedWorktrees, "findLiveByOwner").mockImplementation(async (...args) =>
     dispatchTestMocks.findLiveByOwner(...args),
   );

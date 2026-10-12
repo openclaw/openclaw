@@ -65,6 +65,16 @@ function choiceMenu(
   return { args: [defineCommandArgument(name, description, { choices })], argsMenu: "auto" };
 }
 
+function freeformArgs(
+  name: string,
+  description: string,
+  options: Pick<BuiltinCommandArgumentOptions, "required"> = {},
+): Pick<BuiltinCommandOptions, "args"> {
+  return {
+    args: [defineCommandArgument(name, description, { ...options, captureRemaining: true })],
+  };
+}
+
 /** Defines a built-in command with its aliases and argument parsing defaults. */
 function defineBuiltinCommand(
   key: string,
@@ -157,26 +167,14 @@ export function buildBuiltinChatCommands(
       "Create or update this session's dashboard.",
       "tools",
       "standard",
-      {
-        args: [
-          defineCommandArgument("request", "Dashboard requirements", {
-            captureRemaining: true,
-          }),
-        ],
-      },
+      freeformArgs("request", "Dashboard requirements"),
     ),
     defineBuiltinCommand(
       "learn",
       "Draft a reusable skill from recent work or named sources.",
       "tools",
       "standard",
-      {
-        args: [
-          defineCommandArgument("request", "Sources and requirements for the skill draft", {
-            captureRemaining: true,
-          }),
-        ],
-      },
+      freeformArgs("request", "Sources and requirements for the skill draft"),
     ),
     defineBuiltinCommand(
       "loop",
@@ -185,12 +183,7 @@ export function buildBuiltinChatCommands(
       "standard",
       {
         modelIndependent: (args) => !args || args.toLowerCase() === "help",
-        args: [
-          defineCommandArgument("spec", "[interval] prompt, or status/stop", {
-            required: false,
-            captureRemaining: true,
-          }),
-        ],
+        ...freeformArgs("spec", "[interval] prompt, or status/stop", { required: false }),
       },
     ),
     defineBuiltinCommand("status", "Show current status.", "status", "essential", {
@@ -227,11 +220,7 @@ export function buildBuiltinChatCommands(
       "standard",
       {
         modelIndependent: "always",
-        args: [
-          defineCommandArgument("note", "Optional note for Codex feedback upload", {
-            captureRemaining: true,
-          }),
-        ],
+        ...freeformArgs("note", "Optional note for Codex feedback upload"),
       },
     ),
     defineBuiltinCommand("login", "Connect a model provider.", "management", "standard", {
@@ -428,7 +417,7 @@ export function buildBuiltinChatCommands(
       {
         modelIndependent: "no-args",
         textAliases: ["/steer", "/tell"],
-        args: [defineCommandArgument("message", "Steering message", { captureRemaining: true })],
+        ...freeformArgs("message", "Steering message"),
       },
     ),
     definePathCommand(
@@ -494,19 +483,15 @@ export function buildBuiltinChatCommands(
     }),
     defineBuiltinCommand("name", "Name or rename the current session.", "session", "standard", {
       modelIndependent: "always",
-      args: [
-        defineCommandArgument("title", "New session name (omit to see a suggestion)", {
-          captureRemaining: true,
-        }),
-      ],
+      ...freeformArgs("title", "New session name (omit to see a suggestion)"),
     }),
-    defineBuiltinCommand("compact", "Compact the session context.", "session", "essential", {
-      args: [
-        defineCommandArgument("instructions", "Extra compaction instructions", {
-          captureRemaining: true,
-        }),
-      ],
-    }),
+    defineBuiltinCommand(
+      "compact",
+      "Compact the session context.",
+      "session",
+      "essential",
+      freeformArgs("instructions", "Extra compaction instructions"),
+    ),
     defineBuiltinCommand("think", "Set thinking level.", "options", "essential", {
       modelIndependent: "always",
       textAliases: ["/think", "/thinking", "/t"],
@@ -607,7 +592,7 @@ export function buildBuiltinChatCommands(
     defineBuiltinCommand("bash", "Run host shell commands (host-only).", "tools", "power", {
       modelIndependent: "always",
       nativeName: false,
-      args: [defineCommandArgument("command", "Shell command", { captureRemaining: true })],
+      ...freeformArgs("command", "Shell command"),
     }),
   ];
 }

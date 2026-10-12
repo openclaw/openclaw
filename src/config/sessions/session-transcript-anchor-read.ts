@@ -16,6 +16,7 @@ import {
   type IncognitoSessionHistoryBinding,
 } from "./session-incognito-history-read.js";
 import {
+  prepareSessionTranscriptAnchorMessageReader,
   readSessionTranscriptAnchorFactsInDatabase,
   type SessionTranscriptAnchorSelection,
 } from "./session-transcript-anchor-read.kernel.js";
@@ -25,8 +26,12 @@ import {
   withSessionTranscriptReadSource,
   type SessionTranscriptWorkerReadSource,
 } from "./session-transcript-read-source.js";
+import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
-import { getOwnedSessionTranscriptReader } from "./transcript-write-context.js";
+import {
+  getOwnedSessionTranscriptReader,
+  readOwnedSessionTranscriptEntry,
+} from "./transcript-write-context.js";
 
 type AnchorScope = SessionTranscriptReadScope & { sessionKey: string };
 
@@ -62,7 +67,10 @@ export async function readSessionTranscriptAnchorsAsync(
     authority.assertCurrent();
     return facts;
   }
-  const selected = selection.afterSeq === undefined && getOwnedSessionTranscriptReader(scope);
+  const selected =
+    selection.afterSeq === undefined &&
+    selection.includeMessagesForRunId === undefined &&
+    getOwnedSessionTranscriptReader(scope);
   if (selected) {
     return selected.withRead(
       {
@@ -92,15 +100,21 @@ export async function readSessionTranscriptAnchorsAsync(
   const request = {
     entryIds: [...selection.entryIds],
     afterSeq: selection.afterSeq,
+    includeMessagesForRunId: selection.includeMessagesForRunId,
     includeSession: selection.includeSession,
     includeHeader: selection.includeHeader,
     includeWatermark: selection.includeWatermark,
+    includeMessagePresence: selection.includeMessagePresence,
+    includeMetadata: selection.includeMetadata,
     contextValidation: selection.contextValidation && structuredClone(selection.contextValidation),
     contextAuthority: selection.contextAuthority && structuredClone(selection.contextAuthority),
     replayValidation: selection.replayValidation && { ...selection.replayValidation },
   };
   const empty: SessionTranscriptAnchorFacts = {
     anchors: [],
+    ...(request.includeMetadata
+      ? { metadata: { present: false, observedAt: null, updatedAt: null } }
+      : {}),
     ...(request.replayValidation?.allowInitial ? { replayValidated: "initial" } : {}),
   };
   signal?.throwIfAborted();
@@ -108,15 +122,27 @@ export async function readSessionTranscriptAnchorsAsync(
     captured,
     () => {
       const resolved = resolveSqliteTranscriptScope(captured);
-      const database = getOpenClawAgentDatabaseIfOpen(toDatabaseOptions(resolved));
-      // Process-held transcripts must never be reopened by a durable reader.
-      const facts = database
-        ? readOpenClawAgentDatabase(database, (reader) =>
-            readSessionTranscriptAnchorFactsInDatabase(reader, resolved, request),
-          ).value
-        : empty;
-      consume(facts);
-      return facts;
+      const options = toDatabaseOptions(resolved);
+      const database = getOpenClawAgentDatabaseIfOpen(options);
+      const read = (
+        readMessage?: Parameters<typeof readSessionTranscriptAnchorFactsInDatabase>[3],
+      ) => {
+        signal?.throwIfAborted();
+        if (getOpenClawAgentDatabaseIfOpen(options) !== database) {
+          throw new Error("Transcript anchors changed their captured native database owner");
+        }
+        // Process-held transcripts must never be reopened by a durable reader.
+        const facts = database
+          ? readOpenClawAgentDatabase(database, (reader) =>
+              readSessionTranscriptAnchorFactsInDatabase(reader, resolved, request, readMessage),
+            ).value
+          : empty;
+        consume(facts);
+        return facts;
+      };
+      return !database || request.includeMessagesForRunId === undefined
+        ? read()
+        : prepareSessionTranscriptAnchorMessageReader(request).then(read);
     },
     async (source) => {
       if (!source.expectedIdentity) {
@@ -135,6 +161,8 @@ export async function readSessionTranscriptAnchorsAsync(
       );
     },
     signal,
+    // Callback acceptance retains writer admission through reader failure and cleanup.
+    onRead ? targetDiscoveryLane : undefined,
   );
 }
 
@@ -170,6 +198,7 @@ export async function readSessionTranscriptAnchorsFromSource(
         resolved: { ...resolved, sessionKey: resolved.sessionKey ?? source.scope.sessionKey },
         selection,
         expectedIdentity,
+        preparedEntry: onRead ? readOwnedSessionTranscriptEntry(source.scope) : undefined,
       },
       signal,
     );

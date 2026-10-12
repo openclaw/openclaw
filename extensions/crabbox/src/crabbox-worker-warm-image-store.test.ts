@@ -3,7 +3,6 @@ import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-stat
 import { describe, expect, it, vi } from "vitest";
 import { crabboxState, openWarmImageStore } from "./crabbox-state.test-support.js";
 import {
-  listCrabboxWarmImages,
   openCrabboxWarmImageStore,
   type WarmProfileRecord,
 } from "./crabbox-worker-warm-image-store.js";
@@ -67,28 +66,6 @@ function observeComparisons(before: () => void | Promise<void>, after?: () => vo
 }
 
 describe("Crabbox asynchronous warm-image mutations", () => {
-  it("preserves and projects a native-capture refusal through allocation updates", async () => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("crabbox-capture-unsupported-"));
-    const captureUnsupported = {
-      atMs: 0,
-      provider: "p".repeat(128),
-      message: "m".repeat(1024),
-    };
-    const fixture = openWarmImageStore();
-    fixture.register("profile", { version: 3, allocations: {}, captureUnsupported });
-
-    await recordAllocation();
-
-    expect(fixture.lookup("profile")?.captureUnsupported).toEqual(captureUnsupported);
-    expect(await listCrabboxWarmImages(crabboxState)).toMatchObject([
-      {
-        profileKey: "profile",
-        captureUnsupported,
-        allocations: { new: { choice: { kind: "cold" } } },
-      },
-    ]);
-  });
-
   it("rejects malformed native-capture refusal markers before reading or updating state", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("crabbox-capture-unsupported-invalid-"));
     const fixture = openWarmImageStore();

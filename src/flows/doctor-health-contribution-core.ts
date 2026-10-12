@@ -106,19 +106,16 @@ export async function runCoreContributionHealth(
 
 function formatHealthFindings(findings: readonly HealthFinding[]): string {
   return findings
-    .map((finding) => {
-      const lines = [`- ${finding.message}`];
-      if (finding.path) {
-        lines.push(`  path: ${finding.path}`);
-      }
-      if (finding.requirement) {
-        lines.push(`  issue: ${finding.requirement}`);
-      }
-      if (finding.fixHint) {
-        lines.push(`  fix: ${finding.fixHint}`);
-      }
-      return lines.join("\n");
-    })
+    .map((finding) =>
+      [
+        `- ${finding.message}`,
+        finding.path && `  path: ${finding.path}`,
+        finding.requirement && `  issue: ${finding.requirement}`,
+        finding.fixHint && `  fix: ${finding.fixHint}`,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    )
     .join("\n");
 }
 

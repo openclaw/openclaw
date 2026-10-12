@@ -106,6 +106,11 @@ export const cliCleanupRetirementEntrypoints = {
     sourceWorkerName: "runtime-cleanup",
     distWorkerPath: "legacy-finalizer/src/cli/runtime-cleanup.js",
   },
+  skills: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../skills/runtime/refresh",
+    distWorkerPath: "legacy-finalizer/src/skills/runtime/refresh.js",
+  },
   database: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../state/openclaw-state-db-cache",
@@ -116,6 +121,19 @@ export const cliCleanupRetirementEntrypoints = {
     sourceWorkerName: "../infra/worker-native-lifecycle",
     distWorkerPath: "legacy-finalizer/src/infra/worker-native-lifecycle.js",
   },
+} as const;
+
+// Compile the cleanup graph at collection, before the Windows ownership deadline starts.
+export const windowsProcessOwnershipEntrypoint = {
+  currentModuleUrl: import.meta.url,
+  sourceWorkerName: "runtime-cleanup-scope.windows.test-support",
+  distWorkerPath: "cli/runtime-cleanup-scope.windows.test-support.js",
+} as const;
+
+export const windowsProcessJobRetentionEntrypoint = {
+  currentModuleUrl: import.meta.url,
+  sourceWorkerName: "../process/supervisor/service-child-windows-job-native",
+  distWorkerPath: "process/supervisor/service-child-windows-job-native.js",
 } as const;
 
 // Failure reporting and exit finalization must share their compiled error classes.

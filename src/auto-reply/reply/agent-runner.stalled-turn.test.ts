@@ -356,6 +356,7 @@ describe("runReplyAgent stalled turn continuation", () => {
       originatingChannel: "webchat",
       logGateway: context.logGateway,
       deliver: createChatSendLateReplyFinalizer({
+        terminalEntry: undefined,
         accountId: undefined,
         context,
         session: {

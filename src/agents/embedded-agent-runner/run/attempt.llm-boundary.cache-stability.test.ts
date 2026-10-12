@@ -7,6 +7,7 @@ import {
   captureAnthropicRequest,
   registerParityHostLifecycle,
 } from "../../../../packages/ai/src/provider-transport-parity.test-support.js";
+import { createOpenAIResponsesTransportStreamFn } from "../../../../packages/ai/src/transports/openai-responses-client.js";
 import { resolveResponsesContinuationRequest } from "../../../../packages/ai/src/transports/openai-responses-continuation.js";
 import { makeUserMessage } from "../../../../test/helpers/user-message.js";
 import { loadTranscriptEvents } from "../../../config/sessions/session-accessor.js";
@@ -38,12 +39,13 @@ import { SessionManager } from "../../sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import {
   clearEmbeddedSessionPromptStates,
-  getEmbeddedSessionPromptState,
+  persistSessionSystemPrompt,
+  retainEmbeddedSessionPromptState,
   prepareSessionSystemPrompt,
 } from "../session-prompt-state.js";
 import {
   installRuntimeContextMessageForPrompt,
-  installModelPromptTransform,
+  installModelPromptProjection,
   normalizeMessagesForLlmBoundary,
 } from "./attempt-llm-boundary.js";
 import { createUserTranscriptContextRegistry } from "./attempt-user-transcript-context-registry.js";
@@ -106,13 +108,17 @@ function toolRound(round: number, api: "openai-completions" | "openai-responses"
     },
   ];
 }
-async function capture(api: "openai-completions" | "openai-responses", messages: AgentMessage[]) {
+async function capture(
+  api: "openai-completions" | "openai-responses",
+  messages: AgentMessage[],
+  boundaryOptions: NonNullable<Parameters<typeof normalizeMessagesForLlmBoundary>[1]> = options,
+) {
   let captured: Record<string, unknown> | undefined;
   const context = {
     systemPrompt: "Stable system prompt",
     messages: convertToLlm(
       relocateCurrentRuntimeContextCarrierToTail(
-        normalizeMessagesForLlmBoundary(messages, options),
+        normalizeMessagesForLlmBoundary(messages, boundaryOptions),
       ),
     ),
   };
@@ -140,81 +146,95 @@ describe("prompt-cache boundary regressions", () => {
   });
   afterEach(() => env.restore());
 
-  describe("Claude in-history prompt updates", () => {
+  describe("in-history prompt updates", () => {
     registerParityHostLifecycle();
 
-    it("keeps the first request's system and messages as an exact prefix after a stable section changes", async () => {
-      const sessionId = "claude-prefix-update";
-      const transcript: AgentMessage[] = [];
-      const state = getEmbeddedSessionPromptState(sessionId);
-      const requests: Awaited<ReturnType<typeof captureAnthropicRequest>>[] = [];
-      try {
-        for (const [index, workspace] of ["Old instructions.", "Updated instructions."].entries()) {
-          const projection = prepareSessionSystemPrompt({
-            state,
-            routeKey: "anthropic/claude-opus-5/anthropic-messages",
-            systemPrompt: `## Workspace\n${workspace}${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
-            entries: [],
-          });
-          projection.commit();
-          transcript.push(user(`Turn ${index + 1}`, TS + index * 60000));
-          if (projection.update) {
-            transcript.push(projection.update);
+    it.each(["anthropic-messages", "openai-responses"] as const)(
+      "%s preserves the request prefix across fresh attempts and refreshed prompt sections",
+      async (api) => {
+        const sessionId = `prompt-update-${api}`;
+        const manager = SessionManager.inMemory();
+        const requests: Record<string, unknown>[] = [];
+        try {
+          for (let turn = 0; turn < 3; turn++) {
+            using lease = retainEmbeddedSessionPromptState(sessionId);
+            const projection = prepareSessionSystemPrompt({
+              state: lease.state,
+              routeKey: api,
+              systemPrompt: `## Skills\nSkill ${turn}\n## Project Context\nMemory ${turn}${SYSTEM_PROMPT_CACHE_BOUNDARY}## Temporal Context\nDay ${turn}`,
+              entries: manager.getBranch(),
+            });
+            manager.appendMessage(user(`Turn ${turn}`, TS + turn * 60000));
+            if (projection.update) {
+              manager.appendMessage(projection.update);
+            }
+            const context = {
+              systemPrompt: projection.systemPrompt,
+              messages: convertToLlm(
+                normalizeMessagesForLlmBoundary(manager.buildSessionContext().messages, {
+                  inHistorySystemUpdates: true,
+                  includeTimestamp: false,
+                }),
+              ),
+            };
+            if (api === "anthropic-messages") {
+              const request = await captureAnthropicRequest("transport", {
+                model: { id: "claude-opus-5" },
+                cacheRetention: "none",
+                context,
+              });
+              requests.push(request.payload);
+            } else {
+              const result = await createOpenAIResponsesTransportStreamFn()(
+                { ...model, api, reasoning: true },
+                context,
+                {
+                  apiKey: "fixture-transport-value",
+                  onPayload(payload) {
+                    requests.push(payload as Record<string, unknown>);
+                    throw new Error("stop after payload capture");
+                  },
+                },
+              );
+              expect((await result.result()).stopReason).toBe("error");
+            }
+            projection.commit();
+            await persistSessionSystemPrompt(lease.state, (customType, data) =>
+              manager.appendCustomEntry(customType, data),
+            );
+            manager.appendMessage({
+              ...answer,
+              api,
+              provider: api === "anthropic-messages" ? "anthropic" : "openai",
+              model: api === "anthropic-messages" ? "claude-opus-5" : model.id,
+            });
           }
-          transcript.push(
-            expectDefined(
-              buildRuntimeContextCustomMessage(`Facts ${index + 1}`, undefined, true),
-              "runtime carrier",
-            ),
-          );
-          requests.push(
-            await captureAnthropicRequest("transport", {
-              model: { id: "claude-opus-5" },
-              cacheRetention: "none",
-              context: {
-                systemPrompt: projection.systemPrompt,
-                messages: convertToLlm(
-                  normalizeMessagesForLlmBoundary(transcript, {
-                    inHistorySystemUpdates: true,
-                    includeTimestamp: false,
-                  }),
-                ),
-              },
-            }),
-          );
-          transcript.push({
-            ...answer,
-            api: "anthropic-messages",
-            provider: "anthropic",
-            model: "claude-opus-5",
-          });
+          const first = expectDefined(requests[0], "first request");
+          const promptKey = api === "anthropic-messages" ? "system" : "instructions";
+          const historyKey = api === "anthropic-messages" ? "messages" : "input";
+          expect(first[promptKey]).toBeDefined();
+          for (let turn = 1; turn < requests.length; turn++) {
+            const previous = requests[turn - 1]!;
+            const next = requests[turn]!;
+            expect(next[promptKey]).toEqual(first[promptKey]);
+            const before = previous[historyKey];
+            const after = next[historyKey];
+            if (!Array.isArray(before) || !Array.isArray(after)) {
+              throw new Error("Expected request message arrays");
+            }
+            expect(after.slice(0, before.length)).toEqual(before);
+            expect(after.at(-1)).toMatchObject({
+              role: api === "anthropic-messages" ? "system" : "developer",
+            });
+            for (const section of ["Skill", "Memory", "Day"]) {
+              expect(JSON.stringify(after.at(-1))).toContain(`${section} ${turn}`);
+            }
+          }
+        } finally {
+          clearEmbeddedSessionPromptStates([sessionId]);
         }
-        const first = expectDefined(requests[0], "first request").payload;
-        const second = expectDefined(requests[1], "second request").payload;
-        expect(second.system).toEqual(first.system);
-        const before = first.messages;
-        const after = second.messages;
-        if (!Array.isArray(before) || !Array.isArray(after)) {
-          throw new Error("Expected request message arrays");
-        }
-        expect(after.slice(0, before.length)).toEqual(before);
-        expect(after.slice(-3)).toMatchObject([
-          { role: "user" },
-          {
-            role: "system",
-            content: [
-              {
-                type: "text",
-                text: expect.stringContaining("## Workspace\nUpdated instructions."),
-              },
-            ],
-          },
-          { role: "system", clear_at: "next_user_message" },
-        ]);
-      } finally {
-        clearEmbeddedSessionPromptStates([sessionId]);
-      }
-    });
+      },
+    );
   });
 
   it("rejects unknown session projection versions before submitting history", () => {
@@ -306,6 +326,31 @@ describe("prompt-cache boundary regressions", () => {
     ]);
   });
 
+  it.each([
+    ["openai-completions", false],
+    ["openai-completions", true],
+    ["openai-responses", false],
+    ["openai-responses", true],
+  ] as const)(
+    "preserves inbound metadata across consecutive %s requests (append-only context=%s)",
+    async (api, appendOnlyRuntimeContext) => {
+      const metadata = 'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"channel":"test"}\n```\n\n';
+      const active = [user(`${metadata}Check the deployment.`), ...toolRound(1, api)];
+      const boundaryOptions = { ...options, appendOnlyRuntimeContext };
+      const previous = await capture(api, active, boundaryOptions);
+      const next = await capture(
+        api,
+        [...active, answer, user("Next request", TS + 60000)],
+        boundaryOptions,
+      );
+      const field = api === "openai-completions" ? "messages" : "input";
+      const before = previous[field] as unknown[];
+      const after = next[field] as unknown[];
+      expect(JSON.stringify(before)).toContain("openclaw:ctx");
+      expect(JSON.stringify(after.slice(0, before.length))).toBe(JSON.stringify(before));
+    },
+  );
+
   it("preserves the full-history provider prefix through a completed tool loop on the next user turn", async () => {
     const active = [
       carrier("sender=Bob"),
@@ -360,7 +405,7 @@ describe("prompt-cache boundary regressions", () => {
     }
     messages.push(answer, user("next request", TS + 60000));
     const next = await capture("openai-responses", messages);
-    expect(JSON.stringify(next.input)).not.toContain("saved preference");
+    expect(JSON.stringify(next.input)).toContain("saved preference");
     expect(JSON.stringify(next.input)).not.toContain("sender=Bob");
     expect(
       resolveResponsesContinuationRequest(
@@ -444,8 +489,8 @@ function createSession() {
 }
 const originalUser = (): UserMessage => ({ role: "user", content: "original", timestamp: 1 });
 const steeringUser = (): UserMessage => ({ role: "user", content: "steering", timestamp: 1 });
-const installPrompt = (session: Parameters<typeof installModelPromptTransform>[0]["session"]) =>
-  installModelPromptTransform({
+const installPrompt = (session: Parameters<typeof installModelPromptProjection>[0]["session"]) =>
+  installModelPromptProjection({
     session,
     transcriptPrompt: "original",
     prependContext: "before",
@@ -513,6 +558,7 @@ describe("active prompt steering context", () => {
     const requests: string[] = [];
     const agent = new Agent({
       initialState: { model: testModel, messages: manager.buildSessionContext().messages },
+      convertToLlm: (messages) => convertToLlm(normalizeMessagesForLlmBoundary(messages)),
       streamFn: (activeModel, context) => {
         requests.push(JSON.stringify(context.messages));
         return createAssistantResultStream(
@@ -563,8 +609,13 @@ describe("active prompt steering context", () => {
         ...(mode === "rewritten key" ? { persistedUserIdempotencyKey: "before-hook-key" } : {}),
       });
       session.agent.state.messages.push(original);
+      await session.agent.transformContext(session.messages);
+      const capturedPrompt = session.messages.at(-1);
+      if (capturedPrompt?.role !== "user") {
+        throw new Error("Expected the captured source user prompt");
+      }
       const persisted = manager.appendMessageWithTranscriptAnchor({
-        ...original,
+        ...capturedPrompt,
         ...(mode === "keyless" ? {} : { idempotencyKey: "canonical-key" }),
       });
       contexts.record(original, persisted.message);
@@ -576,7 +627,9 @@ describe("active prompt steering context", () => {
       session.agent.state.messages = manager.buildSessionContext().messages;
       await session.agent.continue();
       const retry = session.messages;
-      const projected = await session.agent.transformContext(retry);
+      const projected = normalizeMessagesForLlmBoundary(
+        await session.agent.transformContext(retry),
+      );
       cleanup();
       cleanupPrompt();
       expect(persisted.message).not.toBe(original);
@@ -584,34 +637,6 @@ describe("active prompt steering context", () => {
       expect(projected.at(-2)).toMatchObject({ content: "before\n\noriginal" });
       expect(projected.at(-1)).toBe(steering.message);
       expect(session.messages).not.toContain(message);
-    },
-  );
-
-  it.each([false, true])(
-    "selects a carrierless keyless prompt from rehydrated history (same-time steering=%s)",
-    async (ambiguous) => {
-      const original = originalUser();
-      const manager = SessionManager.inMemory();
-      const session = createSession();
-      const cleanup = installPrompt(session);
-      await session.agent.transformContext([original]);
-      const persisted = manager.appendMessageWithTranscriptAnchor(original);
-      if (ambiguous) {
-        manager.appendMessage(steeringUser());
-      }
-      manager.appendCompaction("Earlier context was summarized.", persisted.entryId, 100);
-      const restored = SessionManager.fromEntries(manager.getPersistedEntries());
-      const canonical = restored.buildSessionContext().messages;
-      expect(canonical).not.toContain(original);
-      const projected = await session.agent.transformContext(canonical);
-      cleanup();
-      if (ambiguous) {
-        expect(projected).toEqual(canonical);
-      } else {
-        expect(projected.at(-1)).toMatchObject({
-          content: "before\n\noriginal",
-        });
-      }
     },
   );
 
@@ -637,7 +662,7 @@ describe("active prompt steering context", () => {
     expect(projected.at(-1)).toBe(kept.message);
   });
 
-  it("preserves the active prompt prefix through steering and retires it on cleanup", () => {
+  it("preserves user metadata through steering and runtime-context cleanup", () => {
     const session = createSession();
     const message = runtimeContext();
     const cleanup = installRuntimeContextMessageForPrompt({ session, message });
@@ -667,7 +692,7 @@ describe("active prompt steering context", () => {
     });
     expect(session.messages).not.toContain(message);
     expect(project()[0]).toMatchObject({
-      content: expect.not.stringContaining("Conversation info:"),
+      content: expect.stringContaining("Conversation info:"),
     });
     session.agent.state.messages.unshift(message);
     expect(project()).not.toContain(message);

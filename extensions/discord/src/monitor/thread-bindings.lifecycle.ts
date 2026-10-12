@@ -28,6 +28,8 @@ import {
 } from "./thread-bindings.session-shared.js";
 import {
   BINDINGS_BY_THREAD_ID,
+  ensureBindingsLoaded,
+  ensureBindingsLoadedAsync,
   MANAGERS_BY_ACCOUNT_ID,
   getThreadBindingToken,
   refreshUnboundThreadWebhookIdentity,
@@ -46,8 +48,6 @@ export type AcpThreadBindingReconciliationResult = {
   staleSessionKeys: string[];
 };
 
-type AcpThreadBindingHealthStatus = "healthy" | "stale" | "uncertain";
-
 type AcpThreadBindingHealthProbe = (params: {
   cfg: OpenClawConfig;
   accountId: string;
@@ -55,7 +55,7 @@ type AcpThreadBindingHealthProbe = (params: {
   binding: ThreadBindingRecord;
   session: AcpSessionStoreEntry;
 }) => Promise<{
-  status: AcpThreadBindingHealthStatus;
+  status: "healthy" | "stale" | "uncertain";
   reason?: string;
 }>;
 
@@ -66,13 +66,27 @@ export function listThreadBindingsForAccount(accountId?: string): ThreadBindingR
   return getThreadBindingManager(accountId)?.listBindings() ?? [];
 }
 
+/** @deprecated Use listThreadBindingsBySessionKeyAsync; removed in the next Plugin SDK major. */
 export function listThreadBindingsBySessionKey(params: {
   targetSessionKey: string;
   accountId?: string;
   targetKind?: ThreadBindingTargetKind;
 }): ThreadBindingRecord[] {
-  const ids = resolveBindingIdsForTargetSession(params);
-  return ids
+  ensureBindingsLoaded();
+  return listLoadedThreadBindingsBySessionKey(params);
+}
+
+export async function listThreadBindingsBySessionKeyAsync(
+  params: Parameters<typeof listThreadBindingsBySessionKey>[0],
+): Promise<ThreadBindingRecord[]> {
+  await ensureBindingsLoadedAsync();
+  return listLoadedThreadBindingsBySessionKey(params);
+}
+
+function listLoadedThreadBindingsBySessionKey(
+  params: Parameters<typeof listThreadBindingsBySessionKey>[0],
+): ThreadBindingRecord[] {
+  return resolveBindingIdsForTargetSession(params)
     .map((bindingKey) => BINDINGS_BY_THREAD_ID.get(bindingKey))
     .filter((entry): entry is ThreadBindingRecord => Boolean(entry));
 }
@@ -153,7 +167,7 @@ export async function autoBindSpawnedDiscordSubagent(params: {
   });
 }
 
-/** @deprecated Public SDK compatibility; bundled callers use the awaited variant. */
+/** @deprecated Use unbindThreadBindingsBySessionKeyAsync; removed in the next Plugin SDK major. */
 export function unbindThreadBindingsBySessionKey(params: {
   targetSessionKey: string;
   accountId?: string;
@@ -162,6 +176,7 @@ export function unbindThreadBindingsBySessionKey(params: {
   sendFarewell?: boolean;
   farewellText?: string;
 }): ThreadBindingRecord[] {
+  ensureBindingsLoaded();
   const ids = resolveBindingIdsForTargetSession(params);
   const removed: ThreadBindingRecord[] = [];
   for (const bindingKey of ids) {
@@ -267,16 +282,12 @@ async function reconcileAcpThreadBindings(
       prepared.assertCurrent();
     }
     const session = prepared ? prepared.session : readAcpSessionEntry(input);
-    if (!session) {
-      staleBindings.push(binding);
-      continue;
-    }
     // Session store read failures are transient; never auto-unbind on uncertain reads.
-    if (session.storeReadFailed) {
+    if (session?.storeReadFailed) {
       continue;
     }
 
-    if (!session.acp) {
+    if (!session?.acp) {
       staleBindings.push(binding);
       continue;
     }

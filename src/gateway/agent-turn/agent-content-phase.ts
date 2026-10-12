@@ -12,8 +12,6 @@ import {
   loadVoiceWakeRoutingConfig,
   resolveVoiceWakeRouteByTrigger,
 } from "../../infra/voicewake-routing.js";
-import type { MediaFact } from "../../media/media-facts.js";
-import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { classifySessionKeyShape, isAcpSessionKey } from "../../routing/session-key.js";
 import {
   annotateInterSessionPromptText,
@@ -30,8 +28,6 @@ import {
   logAttachmentFailure,
   parseMessageWithAttachments,
   type ChatAttachment,
-  type ChatImageContent,
-  type OffloadedRef,
 } from "../chat-attachments.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
@@ -74,13 +70,15 @@ export async function prepareAgentContentPhase(params: {
   assertAdmissionCurrent?: () => void;
 }) {
   const transcriptInputText = params.request.message.trim();
-  let message = params.isRawModelRun
-    ? transcriptInputText
-    : annotateInterSessionPromptText(transcriptInputText, params.inputProvenance);
-  let images: ChatImageContent[] = [];
-  let imageOrder: PromptImageOrderEntry[] = [];
-  let media: MediaFact[] = [];
-  let offloadedRefs: OffloadedRef[] = [];
+  let content: Awaited<ReturnType<typeof parseMessageWithAttachments>> = {
+    message: params.isRawModelRun
+      ? transcriptInputText
+      : annotateInterSessionPromptText(transcriptInputText, params.inputProvenance),
+    images: [],
+    imageOrder: [],
+    media: [],
+    offloadedRefs: [],
+  };
   let supportsInlineImages: boolean | undefined;
   let agentId = params.agentId;
   let requestedSessionKey = params.requestedSessionKey;
@@ -222,18 +220,14 @@ export async function prepareAgentContentPhase(params: {
   if (params.normalizedAttachments.length > 0) {
     params.assertAdmissionCurrent?.();
     try {
-      const parsed = await parseMessageWithAttachments(message, params.normalizedAttachments, {
+      content = await parseMessageWithAttachments(content.message, params.normalizedAttachments, {
         maxBytes: resolveChatAttachmentMaxBytes(params.cfg),
         log: params.context.logGateway,
         supportsInlineImages,
         acceptNonImage: false,
         assertCurrent: params.assertAdmissionCurrent,
       });
-      message = parsed.message.trim();
-      images = parsed.images;
-      imageOrder = parsed.imageOrder;
-      media = parsed.media;
-      offloadedRefs = parsed.offloadedRefs;
+      content.message = content.message.trim();
     } catch (err) {
       if (err instanceof AgentRequestReservationEndedError) {
         throw err;
@@ -259,11 +253,7 @@ export async function prepareAgentContentPhase(params: {
     agentId,
     requestedSessionKey,
     effectiveTranscriptInputText: transcriptInputText,
-    message,
-    images,
-    imageOrder,
-    media,
-    offloadedRefs,
+    ...content,
     replyTo,
     recipientChannel,
     recipientAccountId,

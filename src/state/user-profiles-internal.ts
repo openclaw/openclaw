@@ -305,7 +305,7 @@ export function formatUserProfileAvatarEtag(sha256: string, mime: UserProfileAva
 
 const profileRoleColumns = new WeakMap<SqliteSchemaFacts, boolean>();
 
-function hasProfileRoleColumn(schema: SqliteSchemaFacts | undefined) {
+export function hasProfileRoleColumn(schema: SqliteSchemaFacts | undefined) {
   const sql = schema?.tableSql.get("user_profiles");
   if (!schema || !sql) {
     return undefined;

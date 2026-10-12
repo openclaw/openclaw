@@ -8,7 +8,12 @@ import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { isMainThread } from "node:worker_threads";
 import { readPositiveIntEnv } from "../env-limits.mjs";
-import { inspectCronBackups, readDatabase } from "./observations.mjs";
+import {
+  findInstalledPackageRoot,
+  inspectCronBackups,
+  readDatabase,
+  recordProcessExitSnapshot,
+} from "./observations.mjs";
 
 const fixtureName = "cron-owner-fixture.json";
 const prefix = "owner-proof-";
@@ -94,22 +99,21 @@ function snapshot(fixture) {
 
 function installedProcessIdentity(entrypoint) {
   const file = fs.realpathSync(entrypoint);
-  for (let root = path.dirname(file), depth = 0; depth < 4; root = path.dirname(root), depth++) {
+  const root = findInstalledPackageRoot(path.dirname(file), 4);
+  if (root) {
     const manifestPath = path.join(root, "package.json");
-    if (fs.existsSync(manifestPath) && readJson(manifestPath).name === "openclaw") {
-      const manifest = fs.readFileSync(manifestPath);
-      const build = fs.readFileSync(path.join(root, "dist/build-info.json"));
-      const info = JSON.parse(build);
-      assert.equal(info.version, JSON.parse(manifest).version);
-      return {
-        version: info.version,
-        commit: info.commit,
-        manifestSha256: hash(manifest),
-        buildInfoSha256: hash(build),
-        entrypoint: path.relative(root, file),
-        entrypointSha256: hash(fs.readFileSync(file)),
-      };
-    }
+    const manifest = fs.readFileSync(manifestPath);
+    const build = fs.readFileSync(path.join(root, "dist/build-info.json"));
+    const info = JSON.parse(build);
+    assert.equal(info.version, JSON.parse(manifest).version);
+    return {
+      version: info.version,
+      commit: info.commit,
+      manifestSha256: hash(manifest),
+      buildInfoSha256: hash(build),
+      entrypoint: path.relative(root, file),
+      entrypointSha256: hash(fs.readFileSync(file)),
+    };
   }
   throw new Error("Observed CLI is outside an OpenClaw package");
 }
@@ -145,15 +149,7 @@ function observeProcess() {
     receipt.observationError = String(error);
   }
   const file = path.join(artifacts, `cron-owner-${role}-${process.pid}.json`);
-  writeJson(file, receipt);
-  process.once("exit", (exitCode) => {
-    try {
-      receipt.after = snapshot(fixture);
-    } catch (error) {
-      receipt.observationError = String(error);
-    }
-    writeJson(file, { ...receipt, exitCode });
-  });
+  recordProcessExitSnapshot(file, receipt, () => snapshot(fixture));
 }
 
 function gateway(artifacts, name, method, params) {
@@ -667,19 +663,14 @@ function assertRuntime(p) {
   assert.deepEqual(
     receipts.map((row) => Object.assign({}, row)),
     [
-      {
-        job_id: `${prefix}explicit`,
-        agent_id: "research",
-        status: "ok",
-        request_run_id: runs.find((run) => run.jobId === `${prefix}explicit`).runId,
-      },
-      {
-        job_id: `${prefix}historical`,
-        agent_id: "ops",
-        status: "ok",
-        request_run_id: runs.find((run) => run.jobId === `${prefix}historical`).runId,
-      },
-    ],
+      ["explicit", "research"],
+      ["historical", "ops"],
+    ].map(([name, agentId]) => ({
+      job_id: `${prefix}${name}`,
+      agent_id: agentId,
+      status: "ok",
+      request_run_id: runs.find((run) => run.jobId === `${prefix}${name}`).runId,
+    })),
   );
   const proofPath = path.join(p.artifacts, "cron-owner-proof.json");
   const proof = {

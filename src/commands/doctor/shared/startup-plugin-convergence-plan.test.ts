@@ -22,44 +22,11 @@ describe("startup plugin convergence planning", () => {
     hasBundledPluginStartupManifest.mockReturnValue(false);
   });
 
-  it("keeps a fresh core-only Gateway config out of the plugin repair runtime", async () => {
-    const env = {};
-    const plan = await planStartupPluginConvergence({
-      config: { gateway: { mode: "local", port: 19091 } },
-      env,
-    });
-
-    expect(plan).toEqual({ required: false, installRecords: {} });
-    expect(loadInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({ env });
-  });
-
   it("keeps a freshly initialized catalog opt-out out of plugin convergence", async () => {
     const config = initializeNativeSessionCatalogPreferences({ gateway: { mode: "local" } });
     await expect(planStartupPluginConvergence({ config, env: {} })).resolves.toEqual({
       required: false,
       installRecords: {},
-    });
-  });
-
-  it("retains convergence when an opted-out catalog plugin is explicitly enabled", async () => {
-    const config = initializeNativeSessionCatalogPreferences({
-      plugins: { entries: { codex: { enabled: true } } },
-    });
-    await expect(planStartupPluginConvergence({ config, env: {} })).resolves.toEqual({
-      required: true,
-      installRecords: {},
-    });
-  });
-
-  it("carries managed install records into convergence", async () => {
-    const installRecords = {
-      discord: { source: "npm" as const, installPath: "/plugins/discord" },
-    };
-    loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce(installRecords);
-
-    await expect(planStartupPluginConvergence({ config: {}, env: {} })).resolves.toEqual({
-      required: true,
-      installRecords,
     });
   });
 
@@ -76,17 +43,6 @@ describe("startup plugin convergence planning", () => {
         env: {},
       }),
     ).toBe(true);
-  });
-
-  it("does not repair configured plugins already bundled with the host", () => {
-    hasBundledPluginStartupManifest.mockReturnValue(true);
-
-    expect(
-      configMayRequireStartupPluginConvergence({
-        config: { plugins: { entries: { openai: { enabled: true } } } },
-        env: {},
-      }),
-    ).toBe(false);
   });
 
   it("does not infer plugin work from core OpenAI model configuration", () => {

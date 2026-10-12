@@ -1,41 +1,47 @@
-import type { Worker } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { vi } from "vitest";
-import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
-import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
-import * as workerCpu from "../../infra/worker-cpu.js";
+import { expect, vi } from "vitest";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import * as heartbeatOwner from "../../state/openclaw-state-lease-heartbeat.js";
+import { releaseOpenClawStateLeaseInTransaction } from "../../state/openclaw-state-lease-store.js";
 import { WORKTREE_MUTATION_LEASE_SCOPE } from "./capacity-contract.js";
 
 /** Checkout custody outlives allocation; revoke the exact retained checkout owner. */
 export function captureWorktreeMutationHeartbeat(): (worktreeId: string) => Promise<void> {
-  const heartbeatUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.stateLeaseHeartbeat);
-  const createWorker = workerCpu.createCpuTrackedWorker;
-  const heartbeats = new Map<string, Worker>();
-  vi.spyOn(workerCpu, "createCpuTrackedWorker").mockImplementation((...args) => {
-    const worker = createWorker(...args);
-    const data: unknown = args[1]?.workerData;
-    if (
-      String(args[0]) === heartbeatUrl.href &&
-      isRecord(data) &&
-      isRecord(data.identity) &&
-      data.identity.scope === WORKTREE_MUTATION_LEASE_SCOPE &&
-      typeof data.identity.key === "string"
-    ) {
-      const id = data.identity.key;
-      heartbeats.set(id, worker);
-      worker.once("exit", () => {
-        if (heartbeats.get(id) === worker) {
-          heartbeats.delete(id);
-        }
-      });
+  const start = heartbeatOwner.startOpenClawStateLeaseHeartbeat;
+  const heartbeats = new Map<
+    string,
+    {
+      params: Parameters<typeof start>[0];
+      heartbeat: ReturnType<typeof start>;
+      lost: Promise<void>;
     }
-    return worker;
+  >();
+  vi.spyOn(heartbeatOwner, "startOpenClawStateLeaseHeartbeat").mockImplementation((params) => {
+    const lost = createDeferredCore();
+    const heartbeat = start({
+      ...params,
+      onLost(error) {
+        params.onLost(error);
+        lost.resolve();
+      },
+    });
+    if (params.identity.scope === WORKTREE_MUTATION_LEASE_SCOPE) {
+      heartbeats.set(params.identity.key, { params, heartbeat, lost: lost.promise });
+    }
+    return heartbeat;
   });
   return async (worktreeId) => {
-    const heartbeat = heartbeats.get(worktreeId);
-    if (!heartbeat) {
+    const retained = heartbeats.get(worktreeId);
+    if (!retained) {
       throw new Error(`Worktree mutation heartbeat is not live: ${worktreeId}`);
     }
-    await heartbeat.terminate();
+    runOpenClawStateWriteTransaction(
+      ({ db }) => releaseOpenClawStateLeaseInTransaction(db, retained.params.identity),
+      { path: retained.params.path },
+    );
+    await expect(retained.heartbeat.verify()).rejects.toMatchObject({
+      code: "OPENCLAW_STATE_LEASE_LOST",
+    });
+    await retained.lost;
   };
 }

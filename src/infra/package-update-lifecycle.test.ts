@@ -670,7 +670,7 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
       failedStep: { name: "npm-package-lifecycle", exitCode: 1 },
       recovery: { serviceRestartSafe: true, version: "1.0.0" },
     });
-    expect(result.failedStep?.stderrTail).toContain("lock generation changed");
+    expect(result.failedStep?.stderrTail).toContain("package lifecycle ownership is uncertain");
     expect(lifecycleCalls).toEqual(["npm-package-preinstall"]);
     expectNoActivation(fixture);
     expect(await fs.readFile(path.join(stage.packageRoot, lockName), "utf8")).toBe(

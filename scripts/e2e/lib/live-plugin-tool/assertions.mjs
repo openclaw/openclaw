@@ -87,6 +87,19 @@ function extractTranscriptToolCalls(message) {
   if (message.role !== "assistant") {
     return calls;
   }
+  const appendCall = (call, functionRecord) => {
+    const tool = readNonEmptyString(call.name) ?? readNonEmptyString(functionRecord?.name);
+    if (tool) {
+      calls.push({
+        id:
+          readNonEmptyString(call.id) ??
+          readNonEmptyString(call.toolCallId) ??
+          readNonEmptyString(call.toolUseId),
+        tool,
+        input: call.arguments ?? call.input ?? functionRecord?.arguments,
+      });
+    }
+  };
   const content = message.content;
   if (Array.isArray(content)) {
     for (const block of content) {
@@ -97,18 +110,7 @@ function extractTranscriptToolCalls(message) {
       if (type !== "tool_use" && type !== "toolcall" && type !== "tool_call") {
         continue;
       }
-      const tool = readNonEmptyString(block.name);
-      if (!tool) {
-        continue;
-      }
-      calls.push({
-        id:
-          readNonEmptyString(block.id) ??
-          readNonEmptyString(block.toolCallId) ??
-          readNonEmptyString(block.toolUseId),
-        tool,
-        input: block.arguments ?? block.input,
-      });
+      appendCall(block);
     }
   }
 
@@ -119,19 +121,7 @@ function extractTranscriptToolCalls(message) {
     if (!isRecord(call)) {
       continue;
     }
-    const functionRecord = isRecord(call.function) ? call.function : undefined;
-    const tool = readNonEmptyString(call.name) ?? readNonEmptyString(functionRecord?.name);
-    if (!tool) {
-      continue;
-    }
-    calls.push({
-      id:
-        readNonEmptyString(call.id) ??
-        readNonEmptyString(call.toolCallId) ??
-        readNonEmptyString(call.toolUseId),
-      tool,
-      input: call.arguments ?? call.input ?? functionRecord?.arguments,
-    });
+    appendCall(call, isRecord(call.function) ? call.function : undefined);
   }
   return calls;
 }

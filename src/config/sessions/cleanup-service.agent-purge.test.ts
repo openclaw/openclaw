@@ -9,11 +9,11 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { purgeAgentSessionStoreEntries } from "./cleanup-service.js";
 import {
-  appendTranscriptEventSync,
   loadSessionEntry,
   loadTranscriptEventsSync,
   replaceSessionEntry,
 } from "./session-accessor.js";
+import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
 describe("purgeAgentSessionStoreEntries", () => {
@@ -79,13 +79,21 @@ describe("purgeAgentSessionStoreEntries", () => {
       fs.writeFileSync(storePath, "not a sqlite database");
       const cfg = { session: { store: storePath } } satisfies OpenClawConfig;
       const warn = vi.spyOn(getLogger(), "warn").mockImplementation(() => {});
+      const onFailure = vi.fn();
 
-      await expect(purgeAgentSessionStoreEntries(cfg, "ops")).resolves.toBe(true);
+      await expect(purgeAgentSessionStoreEntries(cfg, "ops", { onFailure })).resolves.toBe(true);
+
+      expect(onFailure).toHaveBeenCalledWith({
+        path: storePath,
+        reason: expect.stringMatching(/purge session entries:.*not a database/i),
+      });
 
       expect(warn).toHaveBeenCalledWith("session store purge failed during agent deletion", {
         agentId: "ops",
         error: expect.any(Error),
         storePath,
+        path: storePath,
+        reason: expect.stringMatching(/purge session entries:.*not a database/i),
       });
     });
   });

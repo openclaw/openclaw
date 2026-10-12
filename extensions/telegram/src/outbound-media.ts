@@ -1,7 +1,7 @@
 import { InputFile } from "grammy";
 import type { Message } from "grammy/types";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
-import { extensionForMime, type MediaKind } from "openclaw/plugin-sdk/media-mime";
+import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { isGifMedia, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -34,28 +34,6 @@ export type TelegramOutboundMediaSender = {
   send: (effectiveParams: Record<string, unknown>) => Promise<Message>;
 };
 
-function resolveTelegramOutboundMediaFilename(params: {
-  fileName?: string;
-  contentType?: string;
-  kind?: MediaKind;
-  isGif: boolean;
-}): string {
-  if (params.fileName) {
-    return params.fileName;
-  }
-  if (params.isGif) {
-    return "animation.gif";
-  }
-
-  // Telegram receives only the multipart filename, so preserve the detected
-  // MIME extension instead of labeling every anonymous upload as another format.
-  const basename =
-    params.kind === "image" || params.kind === "video" || params.kind === "audio"
-      ? params.kind
-      : "file";
-  return `${basename}${extensionForMime(params.contentType) ?? DEFAULT_MEDIA_EXTENSIONS[basename]}`;
-}
-
 export function prepareTelegramOutboundMedia(params: {
   media: TelegramLoadedMedia;
   text?: string;
@@ -76,12 +54,13 @@ export function prepareTelegramOutboundMedia(params: {
     throw new Error("Telegram video notes require video media.");
   }
   const isVideoNote = deliveryKind === "video" && params.asVideoNote === true;
-  const fileName = resolveTelegramOutboundMediaFilename({
-    fileName: params.media.fileName,
-    contentType: params.media.contentType,
-    kind,
-    isGif,
-  });
+  const basename = kind === "image" || kind === "video" || kind === "audio" ? kind : "file";
+  // Telegram receives only the multipart filename; retain the detected MIME extension.
+  const fileName =
+    params.media.fileName ||
+    (isGif
+      ? "animation.gif"
+      : `${basename}${extensionForMime(params.media.contentType) ?? DEFAULT_MEDIA_EXTENSIONS[basename]}`);
   const text = params.text;
   const trimmedText = text?.trim();
   const renderedCaption =

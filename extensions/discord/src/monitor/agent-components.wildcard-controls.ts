@@ -42,83 +42,76 @@ const SELECT_CONTROLS = [
   { type: ComponentType.ChannelSelect, kind: "channel" },
 ] satisfies SelectControlSpec[];
 
-class DiscordComponentSelectControl extends BaseMessageInteractiveComponent {
-  override customIdParser = parseDiscordComponentCustomIdForInteraction;
-  readonly type: ComponentType;
-  readonly customId: string;
+function createDiscordComponentSelectControl(
+  spec: SelectControlSpec,
+  ctx: AgentComponentContext,
+  handlers: DiscordComponentControlHandlers,
+): BaseMessageInteractiveComponent {
+  return new (class extends BaseMessageInteractiveComponent {
+    override customIdParser = parseDiscordComponentCustomIdForInteraction;
+    readonly type = spec.type;
+    readonly customId = `__openclaw_discord_component_${spec.kind}_select_wildcard__`;
 
-  constructor(
-    private spec: SelectControlSpec,
-    private ctx: AgentComponentContext,
-    private handlers: DiscordComponentControlHandlers,
-  ) {
-    super();
-    this.type = spec.type;
-    this.customId = `__openclaw_discord_component_${spec.kind}_select_wildcard__`;
-  }
+    serialize(): unknown {
+      return this.type === ComponentType.StringSelect
+        ? { type: this.type, custom_id: this.customId, options: [] }
+        : { type: this.type, custom_id: this.customId };
+    }
 
-  serialize(): unknown {
-    return this.type === ComponentType.StringSelect
-      ? { type: this.type, custom_id: this.customId, options: [] }
-      : { type: this.type, custom_id: this.customId };
-  }
-
-  override async run(
-    interaction: AgentComponentMessageInteraction,
-    data: ComponentData,
-  ): Promise<void> {
-    await this.handlers.handleComponentEvent({
-      ctx: this.ctx,
-      interaction,
-      data,
-      componentLabel: this.spec.kind === "string" ? "select menu" : `${this.spec.kind} select`,
-      label:
-        this.spec.kind === "string"
-          ? "discord component select"
-          : `discord component ${this.spec.kind} select`,
-      values: interaction.values ?? [],
-    });
-  }
-}
-
-class DiscordComponentButton extends Button {
-  override label = "component";
-  override customId = "__openclaw_discord_component_button_wildcard__";
-  override customIdParser = parseDiscordComponentCustomIdForInteraction;
-
-  constructor(
-    private ctx: AgentComponentContext,
-    private handlers: DiscordComponentControlHandlers,
-  ) {
-    super();
-  }
-
-  override async run(interaction: ButtonInteraction, data: ComponentData): Promise<void> {
-    const parsed = parseDiscordComponentData(data, resolveInteractionCustomId(interaction));
-    if (parsed?.modalId) {
-      await this.handlers.handleModalTrigger({
-        ctx: this.ctx,
+    override async run(
+      interaction: AgentComponentMessageInteraction,
+      data: ComponentData,
+    ): Promise<void> {
+      await handlers.handleComponentEvent({
+        ctx,
         interaction,
         data,
-        label: "discord component modal",
+        componentLabel: spec.kind === "string" ? "select menu" : `${spec.kind} select`,
+        label:
+          spec.kind === "string"
+            ? "discord component select"
+            : `discord component ${spec.kind} select`,
+        values: interaction.values ?? [],
       });
-      return;
     }
-    await this.handlers.handleComponentEvent({
-      ctx: this.ctx,
-      interaction,
-      data,
-      componentLabel: "button",
-      label: "discord component button",
-    });
-  }
+  })();
+}
+
+function createDiscordComponentButton(
+  ctx: AgentComponentContext,
+  handlers: DiscordComponentControlHandlers,
+): Button {
+  return new (class extends Button {
+    override label = "component";
+    override customId = "__openclaw_discord_component_button_wildcard__";
+    override customIdParser = parseDiscordComponentCustomIdForInteraction;
+
+    override async run(interaction: ButtonInteraction, data: ComponentData): Promise<void> {
+      const parsed = parseDiscordComponentData(data, resolveInteractionCustomId(interaction));
+      if (parsed?.modalId) {
+        await handlers.handleModalTrigger({
+          ctx,
+          interaction,
+          data,
+          label: "discord component modal",
+        });
+        return;
+      }
+      await handlers.handleComponentEvent({
+        ctx,
+        interaction,
+        data,
+        componentLabel: "button",
+        label: "discord component button",
+      });
+    }
+  })();
 }
 
 export const discordComponentControlFactories = [
-  (ctx: AgentComponentContext, handlers: DiscordComponentControlHandlers) =>
-    new DiscordComponentButton(ctx, handlers),
+  createDiscordComponentButton,
   ...SELECT_CONTROLS.map(
     (spec) => (ctx: AgentComponentContext, handlers: DiscordComponentControlHandlers) =>
-      new DiscordComponentSelectControl(spec, ctx, handlers),
+      createDiscordComponentSelectControl(spec, ctx, handlers),
   ),
 ];

@@ -58,13 +58,7 @@ const INTERPRETER_LIKE_SAFE_BINS = new Set([
   "zsh",
 ]);
 
-const INTERPRETER_LIKE_PATTERNS = [
-  /^python\d+(?:\.\d+)?$/,
-  /^ruby\d+(?:\.\d+)?$/,
-  /^perl\d+(?:\.\d+)?$/,
-  /^php\d+(?:\.\d+)?$/,
-  /^node\d+(?:\.\d+)?$/,
-];
+const VERSIONED_INTERPRETER_PATTERN = /^(?:python|ruby|perl|php|node)\d+(?:\.\d+)?$/;
 
 /** Returns true for safeBins that can interpret scripts or execute broad embedded programs. */
 export function isInterpreterLikeSafeBin(raw: string): boolean {
@@ -75,7 +69,7 @@ export function isInterpreterLikeSafeBin(raw: string): boolean {
   if (INTERPRETER_LIKE_SAFE_BINS.has(normalized)) {
     return true;
   }
-  return INTERPRETER_LIKE_PATTERNS.some((pattern) => pattern.test(normalized));
+  return VERSIONED_INTERPRETER_PATTERN.test(normalized);
 }
 
 export function listInterpreterLikeSafeBins(entries: Iterable<string>): string[] {

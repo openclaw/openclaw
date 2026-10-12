@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.types.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
 import { createSessionMcpRuntimeManagerInstall } from "./agent-bundle-mcp-manager-install.js";
@@ -83,31 +84,22 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
       }
       const priorDisposal = store.disposalInFlight;
       const priorSessionWork = store.runtimeWorkChains.get(params.sessionId);
-      const input: PreparedAcquisitionParams = { ...params, requester };
-      let publication = store.configReload;
+      const publication = store.configReload;
       let acquired: T | undefined;
       try {
-        // Reserve every possible partition before yielding, including requester
-        // keys a crossed publication may add. Teardown drains this entire admission.
         return await lifecycle.runExclusiveOnRuntimeKeys(runtimeKeys, async () => {
           await Promise.all([priorDisposal, priorSessionWork].filter((work) => work !== undefined));
-          for (;;) {
-            store.scheduler.signal.throwIfAborted();
-            const next = store.configReload;
-            // A publication can cross queued admission before a producer starts.
-            if (next && next !== publication) {
-              Object.assign(input, { cfg: next.cfg, manifestRegistry: next.manifestRegistry });
-            }
-            publication = next;
-            const previous = acquired;
-            acquired = await acquire(input);
-            // Keep one hidden lease until its successor owns unchanged transports.
-            previous?.releaseLease();
-            store.scheduler.signal.throwIfAborted();
-            if (!store.configReload || store.configReload === publication) {
-              return acquired;
-            }
-          }
+          store.scheduler.signal.throwIfAborted();
+          const reload = store.configReload;
+          acquired = await acquire({
+            ...params,
+            requester,
+            ...(reload && reload !== publication
+              ? { cfg: reload.cfg, manifestRegistry: reload.manifestRegistry }
+              : {}),
+          });
+          store.scheduler.signal.throwIfAborted();
+          return acquired;
         });
       } catch (error) {
         acquired?.releaseLease();
@@ -416,5 +408,38 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
       advertisedScopedCatalogs: store.advertisedScopedCatalogBySessionId.size,
     }),
   });
-  return Object.assign(manager, { setScheduler: lifecycle.setScheduler });
+  return Object.assign(manager, {
+    setScheduler: lifecycle.setScheduler,
+    listSessionIdsForAgent(agentId: string) {
+      return [
+        ...new Set([
+          ...[...store.sessionIdBySessionKey].flatMap(([key, sessionId]) =>
+            parseAgentSessionKey(key)?.agentId === agentId &&
+            !lifecycle.runtimeKeysForSessionId(sessionId).some((runtimeKey) => {
+              const runtime = store.runtimesBySessionId.get(runtimeKey);
+              const currentAgent = runtime && sessionMcpRuntimeOwners.get(runtime)?.agentId;
+              return currentAgent !== undefined && currentAgent !== agentId;
+            })
+              ? [sessionId]
+              : [],
+          ),
+          ...[...store.runtimesBySessionId.values()].flatMap((runtime) =>
+            sessionMcpRuntimeOwners.get(runtime)?.agentId === agentId ? [runtime.sessionId] : [],
+          ),
+          ...[...store.pendingDisposals].flatMap(([sessionId, receipt]) =>
+            receipt.agentId === agentId ? [sessionId] : [],
+          ),
+        ]),
+      ];
+    },
+    retireSessionForAgentDeletion(sessionId: string, agentId: string, assertCurrent: () => void) {
+      return lifecycle.disposeManagedRuntimes(sessionId, {
+        agentDeletion: {
+          agentId,
+          assertCurrent,
+          deferRetirement: () => manager.deferRetirement(sessionId, { retainAcrossReuse: true }),
+        },
+      });
+    },
+  });
 }

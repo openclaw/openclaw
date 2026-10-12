@@ -7,7 +7,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSourceObserver } from "../../scripts/watch-node-observation.mts";
 import {
   createSourceTargetDiscovery,
-  excludeSourceTarget,
   sourceTargetPaths,
   type SourceTargetGroup,
 } from "../../scripts/watch-node-source-targets.mts";
@@ -245,40 +244,6 @@ describe("developer source discovery", () => {
     expect([...expectDefined(current[0], "rediscovered observation").files.keys()]).toEqual([
       path.join(source, "child.ts"),
     ]);
-  });
-
-  it("follows an intermediate package alias, groups shared targets, and filters lexically", async () => {
-    const cwd = temp.make("source-repo-");
-    const outside = temp.make("source-target-");
-    await fs.mkdir(path.join(cwd, "packages"));
-    await fs.mkdir(path.join(outside, "foo", "src"), { recursive: true });
-    await directoryLink(path.join(outside, "foo"), path.join(cwd, "packages", "foo"));
-    await directoryLink(path.join(outside, "foo"), path.join(cwd, "packages", "bar"));
-    const discovery = createSourceTargetDiscovery(
-      cwd,
-      ["packages/foo/src", "packages/bar/src"],
-      ignored,
-    );
-    const groups = await discovery.discover(signal());
-    expect(groups).toHaveLength(2);
-    expect(expectDefined(groups[0], "admitted observation").scopes).toEqual([
-      { path: "packages", kind: "tree", depth: 128 },
-    ]);
-    expect(mapped(groups, path.join(outside, "foo", "src", "main.ts"))).toEqual([
-      path.join(cwd, "packages", "bar", "src", "main.ts"),
-      path.join(cwd, "packages", "foo", "src", "main.ts"),
-    ]);
-    const external = groups.find((group) => group.authority.rootReal === outside)!;
-    expect(
-      excludeSourceTarget(
-        external,
-        { path: path.join("foo", "src", "skip.test.ts"), kind: "file" },
-        ignored,
-      ),
-    ).toBe(true);
-    expect(
-      excludeSourceTarget(external, { path: path.join("foo", "other.ts"), kind: "file" }, ignored),
-    ).toBe(true);
   });
 
   it("rebuilds link addition, retarget, removal, and dangling destination creation with pinned Roots", async () => {

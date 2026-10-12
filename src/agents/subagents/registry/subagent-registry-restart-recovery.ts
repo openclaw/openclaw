@@ -7,11 +7,11 @@ import {
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { isSessionWorkAdmissionActive } from "../../../sessions/session-lifecycle-admission.js";
+import { isQuietSubagentRestartContinuation } from "./subagent-recovery-state.js";
 import {
   getSubagentRunsForRequesterSession,
   getSubagentRunsForChildSession,
 } from "./subagent-registry-memory.js";
-import { getLatestSubagentRunForChild } from "./subagent-registry-queries.js";
 import {
   isRestartRecoveryLifecycleCurrent,
   ownsSubagentSessionExecution,
@@ -22,7 +22,12 @@ import type {
   RestartRecoveryResult,
 } from "./subagent-registry-restart-recovery-types.js";
 import type { SubagentSessionEffects } from "./subagent-registry.types.js";
-import { isRequesterSettleWakeForRun } from "./subagent-requester-settle-identity.js";
+import {
+  hasRequesterCompletionCohort,
+  isRequesterCompletionCohortCurrent,
+  isRequesterSettleWakeForRun,
+} from "./subagent-requester-settle-identity.js";
+import { latestSubagentRun } from "./subagent-run-generation.js";
 import { resolveCompletionFromSessionEntry } from "./subagent-session-reconciliation.js";
 
 export async function recoverInterruptedSubagentRow(
@@ -98,7 +103,7 @@ export async function recoverInterruptedSubagentRow(
     const lifecycleRunId = sessionEntry?.lifecycleRunId;
     const sessionAgentId = session?.agentId;
     const target = { sessionKey: childSessionKey, sessionId };
-    // A yielded requester can itself be a subagent. Its incoming frozen batch,
+    // A requester can itself be a subagent. Its incoming continuation batch,
     // not the requester's outgoing parent notice, owns this exact saved attempt.
     // This only defers orphan settlement; the wake still owns replay admission,
     // failure/cancellation, and removal of the continuation obligation.
@@ -113,22 +118,16 @@ export async function recoverInterruptedSubagentRow(
         return false;
       }
       const children = new Map(
-        [...getSubagentRunsForRequesterSession(childSessionKey)]
-          .filter(
-            (child) =>
-              getLatestSubagentRunForChild(
-                getSubagentRunsForChildSession(child.childSessionKey, child.childAgentId),
-                child,
-              ) === child,
-          )
-          .map((child) => [child.runId, child]),
+        [...getSubagentRunsForRequesterSession(childSessionKey)].map((child) => [
+          child.runId,
+          child,
+        ]),
       );
       return [...children.values()].some((child) => {
         const wake = child.requesterSettleWake;
         return (
           wake?.status === "dispatching" &&
-          wake.requesterYieldBatch === true &&
-          wake.rearmGeneration !== undefined &&
+          (hasRequesterCompletionCohort(child) || isQuietSubagentRestartContinuation(child)) &&
           isRequesterSettleWakeForRun({
             entry: child,
             runId,
@@ -139,9 +138,18 @@ export async function recoverInterruptedSubagentRow(
           wake.batchRunIds?.every((id) => {
             const member = children.get(id);
             return (
-              member?.expectsCompletionMessage === true &&
+              member !== undefined &&
+              isRequesterCompletionCohortCurrent(
+                member,
+                (key, matches, agentId) =>
+                  latestSubagentRun(getSubagentRunsForChildSession(key, agentId), matches) ?? null,
+              ) &&
+              (member.expectsCompletionMessage === true ||
+                isQuietSubagentRestartContinuation(member)) &&
               !member.collect &&
               member.completionRequesterSessionId === sessionId &&
+              (member.completionTarget !== "parent" ||
+                member.completionRequesterLifecycleRevision === lifecycleRevision) &&
               member.requesterStorePath === physicalStorePath &&
               member.requesterAgentId === sessionAgentId &&
               !member.suppressCompletionDelivery &&

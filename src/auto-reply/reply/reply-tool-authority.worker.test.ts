@@ -1,4 +1,3 @@
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   createOperationalRunInstanceRef,
@@ -8,7 +7,10 @@ import { acceptCompactionSuccessor } from "../../agents/embedded-agent-runner/co
 import { withPreparedEmbeddedRunToolAuthority } from "../../agents/harness/tool-authority.runtime.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { loadSessionEntryForAdmission } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
-import { projectionLane } from "../../config/sessions/session-transcript-worker-resources.js";
+import {
+  projectionLane,
+  targetDiscoveryLane,
+} from "../../config/sessions/session-transcript-worker-resources.js";
 import * as sessionReaders from "../../gateway/session-utils-store-worker.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
@@ -92,7 +94,7 @@ it("prepares embedded tool authority without caller-thread SQL and refuses a clo
 });
 
 it.each(["main", "policy", "borrowed"] as const)(
-  "retains the %s-agent source while rereading foreign sandbox policy before steering",
+  "retains the %s-agent source while rereading changed sandbox policy before steering",
   async (policyAgent) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const policyAgentId = policyAgent === "borrowed" ? "main" : policyAgent;
@@ -102,7 +104,7 @@ it.each(["main", "policy", "borrowed"] as const)(
         { agentId: policyAgentId, sessionKey: classificationKey },
         { sessionId: "policy", updatedAt: 1, sandboxMode: "off" },
       );
-      // Settle setup maintenance before retaining the readers used across the foreign commit.
+      // Settle setup maintenance before retaining the readers used across the policy change.
       await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
       const run = createQueueTestRun({ prompt: "authority" });
       Object.assign(run.run, {
@@ -135,11 +137,10 @@ it.each(["main", "policy", "borrowed"] as const)(
           sessionKey: executionKey,
           sessionId: run.run.sessionId,
         });
-        const runRequest = projectionLane.pool.run.bind(projectionLane.pool);
         let initialEntries = 0;
-        const initialReads = vi
-          .spyOn(projectionLane.pool, "run")
-          .mockImplementation(async (...args) => {
+        const initialReads = [projectionLane, targetDiscoveryLane].map(({ pool }) => {
+          const runRequest = pool.run.bind(pool);
+          return vi.spyOn(pool, "run").mockImplementation(async (...args) => {
             const reply = await runRequest(...args);
             if (
               reply.ok &&
@@ -152,25 +153,21 @@ it.each(["main", "policy", "borrowed"] as const)(
             }
             return reply;
           });
+        });
         try {
           await operation.bindToolAuthoritySnapshotAsync(snapshot);
-          expect(initialEntries).toBe(1);
+          // The borrowed admission read already warmed the entry facts.
+          expect(initialEntries).toBe(policyAgent === "borrowed" ? 0 : 1);
         } finally {
-          initialReads.mockRestore();
+          for (const read of initialReads) {
+            read.mockRestore();
+          }
         }
         const admitted = await operation.bindToolAuthorityRouteAsync(run.run);
-        const foreign = new DatabaseSync(
-          resolveOpenClawAgentSqlitePath({ agentId: policyAgentId, env: state.env }),
+        await upsertSessionEntryCore(
+          { agentId: policyAgentId, sessionKey: classificationKey, env: state.env },
+          { sandboxMode: undefined },
         );
-        try {
-          foreign
-            .prepare(
-              "UPDATE session_nodes SET entry_json = json_remove(entry_json, '$.sandboxMode') WHERE session_key = ?",
-            )
-            .run(classificationKey);
-        } finally {
-          foreign.close();
-        }
         const calls = observeMainThreadSql();
         try {
           discovery.mockClear();

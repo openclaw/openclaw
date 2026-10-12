@@ -18,6 +18,7 @@ import {
   resolveSqliteWriteAdmissionScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
 import type { SessionPendingInputWithdrawal } from "./session-pending-input-withdrawal.worker.js";
 import {
   assertSessionStoreReadCandidate,
@@ -46,6 +47,11 @@ export async function discardSessionPendingInput(
   assertCurrent: () => void,
 ): Promise<boolean> {
   assertCurrent();
+  if (getSessionActorStorageBinding(scope)) {
+    throw new Error(
+      "Queued input removal is unavailable for incognito chats; use Stop to cancel execution",
+    );
+  }
   const env = cloneEnvWithPlatformSemantics(scope.env ?? process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const target = { ...scope, env };

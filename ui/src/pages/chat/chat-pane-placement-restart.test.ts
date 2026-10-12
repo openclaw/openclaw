@@ -6,6 +6,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { createModalDialogTestFixture } from "../../test-helpers/modal-dialog.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import {
   createTestChatPane,
   createGatewayBrowserClientFixture,
@@ -96,12 +97,16 @@ describe("chat pane placement restart", () => {
         );
         if (target === "cloud") {
           document.body.querySelector<HTMLButtonElement>('[data-value="cloud:aws"]')?.click();
+          flush();
           document.body.querySelector<HTMLButtonElement>('[data-value="os:windows/wsl2"]')?.click();
+          flush();
           document.body.querySelector<HTMLButtonElement>('[data-value="machine:fast"]')?.click();
+          flush();
         } else {
           const local = document.body.querySelector<HTMLButtonElement>('[data-value="gateway"]');
           expect(local?.textContent).toContain("Gateway · local");
           local?.click();
+          flush();
         }
         const restartButton = [...document.body.querySelectorAll<HTMLButtonElement>("button")].find(
           (button) => button.textContent?.trim() === "Restart session",

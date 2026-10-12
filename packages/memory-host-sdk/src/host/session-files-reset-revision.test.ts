@@ -14,10 +14,10 @@ import {
   persistSessionTranscriptTurn,
   readActiveTranscriptEntryAnchor,
   readTranscriptStatsSync,
-  replaceTranscriptEventsSync,
   resetSessionEntryLifecycle,
   upsertSessionEntryCore,
 } from "../../../../src/config/sessions/session-accessor.js";
+import { replaceTranscriptEventsSync } from "../../../../src/config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { runWithSessionTranscriptReadFence } from "../../../../src/config/sessions/session-transcript-read-fence.js";
 import { WorkerTaskPool } from "../../../../src/infra/worker-task-pool.js";
 import { registerSecretValueForRedaction } from "../../../../src/logging/secret-redaction-registry.js";
