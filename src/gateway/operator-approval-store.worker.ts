@@ -1,5 +1,4 @@
 import { execApprovalsPublication } from "../infra/exec-approvals-publication.js";
-import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
@@ -7,17 +6,17 @@ import {
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import type { WorkerOperationContext } from "../state/worker-operation-registry.js";
-import * as grants from "./operator-approval-standing-grants.js";
 import type { CronStandingGrantRecord } from "./operator-approval-standing-grants.types.js";
-import * as store from "./operator-approval-store.kernel.js";
+import * as grants from "./operator-approval-standing-grants.worker.js";
+import * as store from "./operator-approval-store.kernel.worker.js";
 import {
   operatorApprovalPublication,
   operatorStandingGrantPublication,
 } from "./operator-approval-store.publication.js";
 import { getOperatorApprovalResolutionKey } from "./operator-approval-store.rows.js";
-import * as transitions from "./operator-approval-store.transitions.js";
+import * as transitions from "./operator-approval-store.transitions.worker.js";
 
-export type OperatorApprovalCommitReceipt = {
+type OperatorApprovalCommitReceipt = {
   type?: "operatorApprovals.resolve";
   resolutionKey?: string;
   grantUse?: CronStandingGrantRecord;
@@ -25,12 +24,7 @@ export type OperatorApprovalCommitReceipt = {
   standingGrantFacts?: ReturnType<typeof operatorStandingGrantPublication.bound>;
   execFacts?: ReturnType<typeof execApprovalsPublication.bound>;
 };
-type Context = Pick<WorkerOperationContext, "open" | "stateOptions"> & {
-  native?: {
-    assertCurrent: () => void;
-    onCommitted: (receipt: OperatorApprovalCommitReceipt) => void;
-  };
-};
+type Context = Pick<WorkerOperationContext, "open" | "stateOptions">;
 type Input<Handler extends (input: never) => unknown> = Omit<
   NonNullable<Parameters<Handler>[0]>,
   "databaseOptions"
@@ -43,12 +37,8 @@ function transact<Payload, Result>(
   receiptOf?: (result: Result) => OperatorApprovalCommitReceipt | undefined,
 ): Result {
   const options = { ...context.stateOptions(), database: context.open() };
-  const assertCurrent = (stage: "transaction" | "commit") =>
-    context.native
-      ? context.native.assertCurrent()
-      : requestSqliteWorkerOperationAdmission({ stage, facts: undefined });
   return runOpenClawStateWriteTransaction((database) => {
-    assertCurrent("transaction");
+    requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
     const approval = operatorApprovalPublication.capture(database.db, () =>
       operatorStandingGrantPublication.capture(database.db, () =>
         execApprovalsPublication.capture(database.db, () =>
@@ -65,21 +55,14 @@ function transact<Payload, Result>(
       standingGrantFacts: operatorStandingGrantPublication.bound(standing.receipt),
       execFacts: execApprovalsPublication.bound(exec.receipt),
     };
-    if (!context.native) {
-      const changed =
-        approval.receipt.facts.size + standing.receipt.facts.size + exec.receipt.facts.size > 0;
-      deferSqliteWorkerCommitReceipt(
-        database.db,
-        receipt,
-        changed || receipt.resolutionKey || receipt.grantUse ? "commit" : "settlement",
-      );
-    } else {
-      const publish = context.native.onCommitted;
-      if (!deferSqlitePostCommitPublication(database.db, () => publish(receipt))) {
-        throw new Error("Operator approval commit receipt requires a transaction owner");
-      }
-    }
-    assertCurrent("commit");
+    const changed =
+      approval.receipt.facts.size + standing.receipt.facts.size + exec.receipt.facts.size > 0;
+    deferSqliteWorkerCommitReceipt(
+      database.db,
+      receipt,
+      changed || receipt.resolutionKey || receipt.grantUse ? "commit" : "settlement",
+    );
+    requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
     return result;
   }, options);
 }

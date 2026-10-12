@@ -39,13 +39,13 @@ import {
   type PersistWorkerRecordResult,
 } from "./session-manager-persistence-entry.js";
 import { SessionManagerActorCommittedError } from "./session-manager-persistence-error.js";
+import { readCommittedSessionManagerReload } from "./session-manager-reload.js";
 import { SessionManagerSuffixPersistence } from "./session-manager-suffix-persistence.js";
 import type {
   AppendPersistenceOptions,
   SessionEntry,
   SessionMessageEntry,
 } from "./session-manager-types.js";
-import type { PreparedSessionTranscriptReload } from "./session-manager-view-types.js";
 
 export class SessionManagerAppend extends SessionManagerSuffixPersistence {
   #lastMessageAppend:
@@ -167,7 +167,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
           if (!this.hasNewerPublishedTranscriptView(committed.committedVersion)) {
             assertNavigation();
           }
-          return this.adoptWorkerCommittedEntry(canonical, committed, admittedUserId);
+          return await this.adoptWorkerCommittedEntry(canonical, committed, admittedUserId);
         } catch (cause) {
           if (committed.result?.appended === false) {
             // A replay refusal has no newly committed transcript row to recover.
@@ -299,20 +299,30 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
       });
       persistenceResult = this.persistRecord(canonicalEntry, retryOptions, preparedMessage);
     }
-    return this.adoptPersistedEntry(canonicalEntry, persistenceResult, admittedUserId);
+    return this.adoptPersistedEntry(canonicalEntry, persistenceResult, admittedUserId, (append) => {
+      if (append) {
+        this.reloadPersistedTranscriptAfterAppend(
+          append.expectedMutationAt,
+          append.expectedEntryId,
+          append.admittedUserId,
+        );
+      } else {
+        this.reloadPersistedTranscriptSync();
+      }
+    });
   }
 
-  protected adoptWorkerCommittedEntry<T extends SessionEntry>(
+  protected async adoptWorkerCommittedEntry<T extends SessionEntry>(
     entry: T,
     committed: PersistWorkerRecordResult,
     admittedUserId?: string,
-  ): {
+  ): Promise<{
     entry: T;
     anchor?: TranscriptEntryAnchor;
     lifecycleRevision?: string;
     appended: boolean;
     viewWasSuperseded?: true;
-  } {
+  }> {
     if (committed.viewFailure instanceof SessionManagerActorCommittedError) {
       throw committed.viewFailure;
     }
@@ -346,23 +356,38 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
     if (committed.viewFailure) {
       throw committed.viewFailure;
     }
+    const needsReload =
+      committed.result?.adoptedMessageId ||
+      committed.result?.reloadAfterAppend ||
+      (committed.result?.effectiveParentId !== undefined &&
+        committed.result.effectiveParentId !== entry.parentId);
+    const reload =
+      committed.reload ??
+      (needsReload && this.persistenceTarget
+        ? await readCommittedSessionManagerReload(this.persistenceTarget, this.boundedContextLimits)
+        : undefined);
     this.transcriptVersion = committed.committedVersion;
     this.transcriptMutationAt = committed.committedVersion.updatedAt;
-    return this.adoptPersistedEntry(entry, committed.result, admittedUserId, committed.reload);
+    return this.adoptPersistedEntry(entry, committed.result, admittedUserId, (append) => {
+      if (!reload) {
+        throw new Error("Committed session append did not supply its transcript reload");
+      }
+      this.adoptPreparedTranscriptReload(reload, append);
+    });
   }
 
   protected adoptPersistedEntry<T extends SessionEntry>(
     canonicalEntry: T,
     persistenceResult: PersistRecordResult,
-    admittedUserId?: string,
-    preparedReload?: PreparedSessionTranscriptReload,
+    admittedUserId: string | undefined,
+    reload: (append?: {
+      expectedMutationAt: number | null;
+      expectedEntryId: string;
+      admittedUserId: string;
+    }) => void,
   ): { entry: T; anchor?: TranscriptEntryAnchor; lifecycleRevision?: string; appended: boolean } {
     if (persistenceResult?.adoptedMessageId) {
-      if (preparedReload) {
-        this.adoptPreparedTranscriptReload(preparedReload);
-      } else {
-        this.reloadPersistedTranscriptSync();
-      }
+      reload();
       // Context-excluded users have no payload in byId. The exact SQLite replay
       // anchors their identity; physical ancestry still closes older turns.
       // Final Talk speech records history without consuming the consult's keyed input.
@@ -384,23 +409,13 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
         if (this.transcriptMutationAt === undefined) {
           throw new Error("Session transcript append mutation fence was not returned");
         }
-        if (preparedReload) {
-          this.adoptPreparedTranscriptReload(preparedReload, {
-            expectedMutationAt: this.transcriptMutationAt,
-            expectedEntryId: canonicalEntry.id,
-            admittedUserId,
-          });
-        } else {
-          this.reloadPersistedTranscriptAfterAppend(
-            this.transcriptMutationAt,
-            canonicalEntry.id,
-            admittedUserId,
-          );
-        }
-      } else if (preparedReload) {
-        this.adoptPreparedTranscriptReload(preparedReload);
+        reload({
+          expectedMutationAt: this.transcriptMutationAt,
+          expectedEntryId: canonicalEntry.id,
+          admittedUserId,
+        });
       } else {
-        this.reloadPersistedTranscriptSync();
+        reload();
       }
     } else if (
       this.boundedContextIncomplete &&

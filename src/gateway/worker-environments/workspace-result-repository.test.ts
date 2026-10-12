@@ -318,7 +318,7 @@ describe("repository workspace result ownership", () => {
   );
 
   it.each(["worker-turn", "remote-exec"] as const)(
-    "keeps %s editor staging SQL constant across publication blobs and unchanged saves untouched",
+    "keeps %s editor staging SQL off the caller thread across publication blobs and unchanged saves untouched",
     async (executionMode) => {
       const f = await fixture(executionMode);
       const context = createGatewayRequestContext(makeContextParams());
@@ -395,7 +395,7 @@ describe("repository workspace result ownership", () => {
       }
       expect(stageCosts).toHaveLength(2);
       expect(stageCosts[0]!.callbacks).toBeGreaterThan(0);
-      expect(stageCosts[0]!.statements).toBeGreaterThan(0);
+      expect(stageCosts[0]!.statements).toBe(0);
       expect(stageCosts[1]).toEqual(stageCosts[0]);
       const accepted = await f.store.get(f.repository.workspaceId);
       await expect(

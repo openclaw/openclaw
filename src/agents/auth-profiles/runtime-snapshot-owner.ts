@@ -24,10 +24,6 @@ import {
   loadPersistedAuthProfileStoreAtDatabasePath,
   mergeAuthProfileStores,
 } from "./persisted.js";
-import {
-  getRuntimeExternalCliProfileIds,
-  setRuntimeExternalCliProfileIds,
-} from "./runtime-external-profile-references.js";
 import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 import type {
   AuthProfileCredential,
@@ -44,7 +40,6 @@ export function stripRuntimeExternalProfileMetadata(store: AuthProfileStore): Au
   const stripped = { ...store };
   delete stripped.runtimeExternalProfileIds;
   delete stripped.runtimeExternalProfileIdsAuthoritative;
-  setRuntimeExternalCliProfileIds(stripped, []);
   return stripped;
 }
 
@@ -186,12 +181,6 @@ export function replaceRuntimeAuthProfileStoreCredentials(
         ? [...external].toSorted()
         : undefined,
   };
-  setRuntimeExternalCliProfileIds(
-    next,
-    getRuntimeExternalCliProfileIds(store).filter(
-      (id) => !changed.includes(id) || external.has(id),
-    ),
-  );
   return next;
 }
 
@@ -365,7 +354,6 @@ export function runtimeAuthMetadataState(store: RuntimeAuthProfileStore) {
     runtimePersistedProfileIds: store.runtimePersistedProfileIds,
     runtimeExternalProfileIds: store.runtimeExternalProfileIds,
     runtimeExternalProfileIdsAuthoritative: store.runtimeExternalProfileIdsAuthoritative,
-    runtimeExternalCliProfileIds: store.runtimeExternalCliProfileIds,
     runtimeLocalProfileIds: store.runtimeLocalProfileIds,
     runtimeLocalOrderProviderIds: store.runtimeLocalOrderProviderIds,
     availability: Object.fromEntries(
@@ -435,10 +423,6 @@ export function pruneAuthProfileStoreReferences(
   if (store.runtimePersistedProfileIds?.length === 0) {
     store.runtimePersistedProfileIds = undefined;
   }
-  setRuntimeExternalCliProfileIds(
-    store,
-    getRuntimeExternalCliProfileIds(store).filter((profileId) => keptProfileIds.has(profileId)),
-  );
   if (
     store.runtimeExternalProfileIds?.length === 0 &&
     store.runtimeExternalProfileIdsAuthoritative !== true

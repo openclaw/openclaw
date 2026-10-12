@@ -15,7 +15,7 @@ import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispa
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 
 it.each(["runtime", "legacy"] as const)(
-  "routes %s approval expiry through its worker or released native guard contract",
+  "routes %s approval expiry through its worker with the request guard",
   async (entrypoint) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await insertOperatorApproval({
@@ -89,7 +89,7 @@ it.each(["runtime", "legacy"] as const)(
               ),
       );
       expect(result).toMatchObject({ outcome: "found", record: { status: "expired" } });
-      expect(nativeMutation).toBe(entrypoint === "legacy");
+      expect(nativeMutation).toBe(false);
     });
   },
 );

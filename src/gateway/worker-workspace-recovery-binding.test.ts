@@ -330,7 +330,7 @@ async function createRecoveryFixture(workspacePath: string, options: { archived?
   };
   vi.spyOn(tunnelManager, "start").mockResolvedValue(handle);
   const runtime = createGatewayWorkerPlacementRuntime({
-    initialPlacements: placements.list(),
+    initialPlacements: await placements.listAsync(),
     scheduler: createTestGatewayScheduler(),
     placements,
     environments,
@@ -508,7 +508,7 @@ describe("registered worker workspace recovery target binding", () => {
           const journal = await placements.loadWorkspaceReconciliation(owner);
           expect(journal?.appliedManifestRef).toBeDefined();
           // Model a replacement owner after restart while this process waits on its writer.
-          placements.clearLocalTurnClaimsAfterRestart();
+          await placements.clearLocalTurnClaimsAfterRestartAsync();
           await placements.claimTurn({
             ...REQUEST,
             claimId: "replacement-claim",
@@ -571,7 +571,7 @@ describe("registered worker workspace recovery target binding", () => {
           const pending = await placements.listPendingWorkspaceResultsAsync();
           expect(pending).toHaveLength(1);
           expect(pending[0]!.workspaceAcceptedAtMs).not.toBeNull();
-          placements.clearLocalTurnClaimsAfterRestart();
+          await placements.clearLocalTurnClaimsAfterRestartAsync();
           await placements.claimTurn({
             ...REQUEST,
             claimId: "replacement-claim",

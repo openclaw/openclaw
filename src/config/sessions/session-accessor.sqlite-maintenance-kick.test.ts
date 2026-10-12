@@ -2,6 +2,10 @@ import path from "node:path";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import {
+  isSessionEntryDataSql,
+  observeHostDataSql,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as logging from "../../logging/logger.js";
 import {
@@ -17,11 +21,13 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
+import * as databaseMaintenance from "../../state/openclaw-state-db-async-lifecycle.js";
 import { loadSessionEntry } from "./session-accessor.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { importSqliteSessionRowsBatch } from "./session-accessor.sqlite-import.js";
 import * as ageFacts from "./session-accessor.sqlite-maintenance-age.js";
 import { kickSessionEntryMaintenanceAfterWrite } from "./session-accessor.sqlite-maintenance-kick.js";
+import * as maintenanceKick from "./session-accessor.sqlite-maintenance-kick.js";
 import * as reclamationRun from "./session-accessor.sqlite-reclamation-run.js";
 import {
   resolveMaintenanceConfigFromInput,
@@ -30,21 +36,49 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const sessionKey = "agent:main:age-kick";
+const maintenanceScopes: ReturnType<typeof createOpenClawDatabaseMaintenanceScope>[] = [];
 
 afterEach(async () => {
   await agentDatabase.closeOpenClawAgentDatabasesAsync();
+  for (const maintenance of maintenanceScopes.splice(0)) {
+    await maintenance.close();
+  }
   closeOpenClawAgentDatabasesForTest();
   resetGatewayWorkAdmission();
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
-function createStore(pruneAfterMs = 1_000, key = sessionKey) {
-  // Keep the fake clock in this process without replacing admission or commit ownership.
+function createStore(pruneAfterMs = 1_000, key = sessionKey, { workerMaintenance = false } = {}) {
+  // Policy tests keep the fake clock in the native maintenance owner's process.
+  const maintenance = workerMaintenance
+    ? undefined
+    : createOpenClawDatabaseMaintenanceScope({
+        schemaMaintenance: true,
+        assertOwnerCurrent() {},
+        assertDatabaseAccess() {},
+      });
+  if (maintenance) {
+    maintenanceScopes.push(maintenance);
+    const kick = maintenanceKick.kickSessionEntryMaintenanceAfterWrite;
+    vi.spyOn(maintenanceKick, "kickSessionEntryMaintenanceAfterWrite").mockImplementation(
+      (request) => maintenance.run(() => kick(request)),
+    );
+    const captureResource = databaseMaintenance.captureOpenClawDatabaseMaintenanceResource;
+    vi.spyOn(databaseMaintenance, "captureOpenClawDatabaseMaintenanceResource").mockImplementation(
+      (resource, scope) => {
+        const captured = captureResource(resource, scope);
+        // Keep the scheduling owner and its callbacks on the same fake-clock execution path.
+        return scope === maintenance
+          ? { ...captured, runWorker: <T>(operation: () => Promise<T>) => captured.run(operation) }
+          : captured;
+      },
+    );
+  }
   const runReclamation = reclamationRun.runSqliteSessionReclamation;
   const archived = createDeferred();
   vi.spyOn(reclamationRun, "runSqliteSessionReclamation").mockImplementation((params) => {
-    const result = runReclamation({ ...params, forceInProcess: true });
+    const result = runReclamation(params);
     // Observe publication without consuming the fault probes' original rejections.
     void result.then(
       (value) => {
@@ -96,8 +130,8 @@ function observeNextPeriodicMaintenance(delayMs = ageFacts.SESSION_ENTRY_MAINTEN
     withinTest(scheduled.promise, signal).finally(() => observer.mockRestore());
 }
 
-it("joins an accepted maintenance timer while Doctor drainage waits on other work", async () => {
-  const { request } = createStore();
+it("joins automatic worker maintenance while Doctor drainage waits on other work", async () => {
+  const { request } = createStore(1_000, sessionKey, { workerMaintenance: true });
   const maintenance = createOpenClawDatabaseMaintenanceScope({
     schemaMaintenance: true,
     assertOwnerCurrent() {},
@@ -105,6 +139,8 @@ it("joins an accepted maintenance timer while Doctor drainage waits on other wor
   });
   const blocked = createDeferred();
   void maintenance.track(blocked.promise);
+  const warn = vi.spyOn(logging.getChildLogger({ subsystem: "session-sqlite" }), "warn");
+  const observation = observeHostDataSql();
   maintenance.run(() => kickSessionEntryMaintenanceAfterWrite(request));
   const closing = maintenance.close();
   try {
@@ -112,9 +148,12 @@ it("joins an accepted maintenance timer while Doctor drainage waits on other wor
     blocked.resolve();
     await expect(closing).resolves.toBeUndefined();
     expect(reclamationRun.runSqliteSessionReclamation).toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+    expect(observation.queries.filter(isSessionEntryDataSql)).toEqual([]);
   } finally {
     blocked.resolve();
     await Promise.allSettled([closing]);
+    observation.restore();
   }
 });
 

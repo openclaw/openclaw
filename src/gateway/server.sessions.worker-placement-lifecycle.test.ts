@@ -486,8 +486,8 @@ test("sessions.reset rechecks lifecycle ownership after draining before placemen
     sessionKey,
     storePath,
   });
-  const retireSessionPlacement = vi.fn((retirement: WorkerSessionPlacementRetirement) =>
-    placementStore.retireSessionPlacement(retirement),
+  const retireSessionPlacementAsync = vi.fn((retirement: WorkerSessionPlacementRetirement) =>
+    placementStore.retireSessionPlacementAsync(retirement),
   );
   const { performGatewaySessionReset } = await import("./session-reset-service.js");
 
@@ -500,7 +500,7 @@ test("sessions.reset rechecks lifecycle ownership after draining before placemen
         workerPlacementContext: {
           workerSessionPlacementService: {
             getMany: (sessionIds: readonly string[]) => placementStore.getMany(sessionIds),
-            retireSessionPlacement,
+            retireSessionPlacementAsync,
           },
         },
         assertCurrent: () => {
@@ -511,7 +511,7 @@ test("sessions.reset rechecks lifecycle ownership after draining before placemen
       }),
     ).rejects.toThrow("stale lifecycle after drain");
     expect(events).toEqual(["admission:interrupt", "claim:released"]);
-    expect(retireSessionPlacement).not.toHaveBeenCalled();
+    expect(retireSessionPlacementAsync).not.toHaveBeenCalled();
     expect(placementStore.get(sessionId)).toMatchObject({ state: "local", turnClaim: null });
     expect(loadSessionEntry(sessionKey).entry?.sessionId).toBe(sessionId);
     expect(sessionHookMocks.triggerInternalHook).not.toHaveBeenCalled();
@@ -724,7 +724,7 @@ test.each(["worker-turn", "remote-exec"] as const)(
     });
     const { placementStore } = await loadGatewayWorkerEnvironmentStartupState();
     const release = vi.fn();
-    const harness = createHarness(openOpenClawStateDatabase(), placementStore, {
+    const harness = await createHarness(openOpenClawStateDatabase(), placementStore, {
       reconcileChanged: false,
       reconcileCommitsManifest: false,
       afterReconcile: () => {
@@ -792,7 +792,7 @@ test.each(["worker-turn", "remote-exec"] as const)(
       entries: { [REQUEST.sessionKey]: sessionStoreEntry(REQUEST.sessionId) },
     });
     const { placementStore } = await loadGatewayWorkerEnvironmentStartupState();
-    const harness = createHarness(openOpenClawStateDatabase(), placementStore, {
+    const harness = await createHarness(openOpenClawStateDatabase(), placementStore, {
       reconcileCommitsManifest: false,
       reconcileCommitsManifestOnApply: true,
       verifyFailurePhase: "after-apply",
@@ -835,7 +835,7 @@ test("sessions.delete retains reclaimed placement when runtime cleanup fails bef
     entries: { [REQUEST.sessionKey]: sessionStoreEntry(REQUEST.sessionId) },
   });
   const { placementStore } = await loadGatewayWorkerEnvironmentStartupState();
-  const harness = createHarness(openOpenClawStateDatabase(), placementStore, {
+  const harness = await createHarness(openOpenClawStateDatabase(), placementStore, {
     reconcileChanged: false,
     reconcileCommitsManifest: false,
   });

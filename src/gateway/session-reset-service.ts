@@ -104,6 +104,7 @@ import { withGatewaySessionEntryReadOnly } from "./session-utils-read-lifetime.j
 import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
 import type { SessionWorkerPlacementContext } from "./session-worker-placement-context.js";
 import {
+  readSessionWorkerPlacementAsync,
   resolveSessionWorkerPlacementMutationError,
   retireSessionWorkerPlacementBeforeMutation,
 } from "./worker-environments/session-placement-lifecycle.js";
@@ -500,15 +501,6 @@ async function performPreparedGatewaySessionReset({
     }
     return undefined;
   };
-  const initialPlacementError = resolveSessionWorkerPlacementMutationError({
-    action: "reset",
-    context: workerPlacementContext,
-    key: params.key,
-    sessionId: normalizeOptionalString(initialResetEntry?.sessionId),
-  });
-  if (initialPlacementError) {
-    return invalidSessionRequest(initialPlacementError.message);
-  }
   const resetLifecycleIdentities = [
     resetTarget.target.canonicalKey,
     params.key,
@@ -542,6 +534,10 @@ async function performPreparedGatewaySessionReset({
       assertReadAuthorized();
       const { entry: currentEntry, canonicalKey: currentCanonicalKey } =
         await loadResetSession(assertReadAuthorized);
+      await readSessionWorkerPlacementAsync({
+        context: workerPlacementContext,
+        sessionId: normalizeOptionalString(currentEntry?.sessionId),
+      });
       // Check the locked generation before interrupting any work; a replaced
       // foreign row must not be reset or have its admitted run cancelled.
       resetPreparationError =

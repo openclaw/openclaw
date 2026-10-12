@@ -256,7 +256,7 @@ it.each([false, true])(
 );
 
 it.each([false, true])(
-  "retains rollback authority without a same-database grant reread (binding: %s)",
+  "retains rollback authority until acknowledged worker deletion (binding: %s)",
   async (withBinding) => {
     await withNativeBindingFixture("agentsapi", async (fixture) => {
       if (!withBinding) {
@@ -264,6 +264,7 @@ it.each([false, true])(
       }
       const entry = fixture.readEntry();
       assert(entry);
+      let refuse = true;
       let grantDatabasePath: string | undefined;
       let agentGrants = 0;
       let authorityReads = 0;
@@ -284,6 +285,15 @@ it.each([false, true])(
               agentGrants++;
             }
             try {
+              const facts = isRecord(request.facts) ? request.facts.publication : undefined;
+              if (
+                refuse &&
+                request.stage === "commit" &&
+                isRecord(facts) &&
+                facts.kind === "session-native-binding"
+              ) {
+                throw new Error("injected initializer delete failure");
+              }
               callback(request, grant);
             } finally {
               grantDatabasePath = previous;
@@ -314,6 +324,13 @@ it.each([false, true])(
         expect(fixture.readEntry()).toEqual(entry);
         expect(fixture.readBinding()).toBeDefined();
         revoked = false;
+        await expect(initializer.rollback(() => fixture.remove())).rejects.toThrow(
+          "injected initializer delete failure",
+        );
+        expect(() => initializer.handle.assertCurrent()).not.toThrow();
+        expect(fixture.readEntry()).toEqual(entry);
+        expect(fixture.readBinding()).toBeDefined();
+        refuse = false;
         const sql = observeHostDataSql();
         try {
           await expect(initializer.rollback(() => fixture.remove())).resolves.toMatchObject({

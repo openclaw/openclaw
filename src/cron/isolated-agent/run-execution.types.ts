@@ -37,6 +37,7 @@ export type CronRunExecutionParams = Pick<
   | "commandBody"
   | "inputProvenance"
   | "persistSessionEntry"
+  | "preRunSessionPersisted"
 > &
   Pick<
     RunCronAgentTurnParams,

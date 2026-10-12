@@ -412,13 +412,12 @@ export type AgentHarnessSessionDeletionParams = {
 
 export type AgentHarnessSessionDeletionMutation = {
   /**
-   * Synchronously remove only the prepared owner's state at the session commit edge.
-   * @deprecated Opaque transaction callbacks retain the legacy synchronous adapter.
-   * Use createNativeSessionBindingLifecycleV2 for stored bindings or
-   * createNativeSessionCommitFinalizer for commit-only effects.
+   * @deprecated Opaque callbacks run after durable session commit. Use
+   * createNativeSessionBindingLifecycleV2 for stored bindings or
+   * createNativeSessionCommitFinalizer for cleanup.
    */
   commit: () => void;
-  /** Restore only that removal when the authoritative session transaction rolls back. */
+  /** @deprecated Opaque callbacks no longer run before commit, so their rollback is unused. */
   rollback: () => void;
 };
 

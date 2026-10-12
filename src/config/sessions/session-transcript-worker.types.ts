@@ -8,7 +8,7 @@ import type { BoardReadOperations } from "../../boards/sqlite-board-operations.j
 import type { PreparedSessionHistoryReadTarget } from "../../gateway/session-history-read.types.js";
 import type {
   SessionRowTranscriptFields,
-  SessionRowTranscriptReadParams,
+  SessionRowBackfillWorkerInput,
 } from "../../gateway/session-row-transcript-backfill.types.js";
 import type { SessionPreviewItem, SessionTitleFields } from "../../gateway/session-utils.types.js";
 import type { SessionMemoryTranscript } from "../../hooks/bundled/session-memory/capture.types.js";
@@ -52,6 +52,7 @@ import type {
 import type {
   LatestTranscriptAssistantText,
   TranscriptEvent,
+  SessionTranscriptStats,
   SessionTranscriptRawDeltaResult,
   SessionTranscriptVisibleMessageDeltaResult,
 } from "./session-accessor.sqlite-contract.js";
@@ -75,7 +76,8 @@ import type {
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
 import type {
   SessionEntryCurrentFacts,
-  SessionEntryCurrentSource,
+  SessionEntryCurrentWorkerInput,
+  SessionEntryCurrentWorkerResult,
 } from "./session-entry-current.types.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import type {
@@ -168,6 +170,7 @@ import type {
   SessionTranscriptAnchorsWorkerInput,
   SessionModelContextWorkerInput,
   SessionTranscriptWatermarkWorkerInput,
+  SessionTranscriptStatsWorkerInput,
   SessionTranscriptMessagePresenceWorkerInput,
   SessionTranscriptDeltaWorkerInput,
   SessionTranscriptLatestAssistantWorkerInput,
@@ -225,23 +228,6 @@ type SessionActivitySummarySourceWorkerInput = SessionActivitySummaryBatchInput 
   kind: "session-activity-summary-source";
   database: { agentId: string; path: string };
   admission?: UserTurnTranscriptAdmissionReceipt;
-};
-
-type SessionRowBackfillWorkerInput = {
-  kind: "session-row-backfill";
-  database: { agentId: string; path: string };
-  params: SessionRowTranscriptReadParams;
-};
-
-type SessionEntryCurrentWorkerInput = Omit<SessionEntryReadWorkerInput, "kind"> & {
-  kind: "session-entry-current";
-  source?: SessionEntryCurrentSource;
-};
-
-type SessionEntryCurrentWorkerResult = {
-  kind: "session-entry-current";
-  entry: SessionEntryCurrentFacts | undefined;
-  source?: CapturedSessionEntryReadSource & { databaseIdentity: string };
 };
 
 export type SessionDiagnosticTextWorkerInput = {
@@ -339,6 +325,7 @@ export type SessionHistoryWorkerInput =
   | SessionPreviewWorkerInput
   | SessionTitleFieldsWorkerInput
   | SessionTranscriptWatermarkWorkerInput
+  | SessionTranscriptStatsWorkerInput
   | SessionTranscriptMessagePresenceWorkerInput
   | SessionTranscriptDeltaWorkerInput
   | SessionTranscriptLatestAssistantWorkerInput
@@ -467,6 +454,7 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
     "session-preview": { kind: "session-preview"; items: SessionPreviewItem[] };
     "session-title-fields": { kind: "session-title-fields"; fields: SessionTitleFields };
     "transcript-watermark": { kind: "transcript-watermark"; watermark: SessionTranscriptWatermark };
+    "transcript-stats": { kind: "transcript-stats"; stats: SessionTranscriptStats };
     "transcript-message-presence": { kind: "transcript-message-presence"; present: boolean };
     "transcript-anchors": { kind: "transcript-anchors"; facts: SessionTranscriptAnchorFacts };
     "session-activity-summary-source": {
@@ -665,6 +653,7 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
       SessionTranscriptWatermarkWorkerInput,
       SessionTranscriptWatermark
     >;
+    readStats: SessionHistoryReader<SessionTranscriptStatsWorkerInput, SessionTranscriptStats>;
     readActivitySummarySource: SessionHistoryReader<
       SessionActivitySummarySourceWorkerInput,
       SessionActivitySummaryBatchResult

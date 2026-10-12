@@ -119,6 +119,13 @@ export type SessionTranscriptMessagePresenceWorkerInput = Omit<
   kind: "transcript-message-presence";
 };
 
+export type SessionTranscriptStatsWorkerInput = Omit<
+  SessionTranscriptWatermarkWorkerInput,
+  "kind"
+> & {
+  kind: "transcript-stats";
+};
+
 export type SessionTranscriptDeltaWorkerInput = Omit<
   SessionTranscriptWatermarkWorkerInput,
   "kind"

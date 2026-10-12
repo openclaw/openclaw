@@ -19,11 +19,11 @@ import {
 } from "../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
 import * as mentionStore from "./mention-inbox-store.js";
+import type { MentionStoreSource } from "./mention-inbox-store.js";
 import {
   readMentionStoreSnapshot,
   writeMentionStoreChanges,
-  type MentionStoreSource,
-} from "./mention-inbox-store.js";
+} from "./mention-inbox-store.worker.js";
 import * as mentionWorker from "./mention-inbox-worker.js";
 import {
   SESSION_KEY,

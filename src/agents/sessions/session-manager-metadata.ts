@@ -83,7 +83,7 @@ export class SessionManagerMetadata extends SessionManagerEntries {
             : rebound;
         }
         assertNavigation();
-        this.adoptWorkerCommittedEntry(canonical, committed, admittedUserId);
+        await this.adoptWorkerCommittedEntry(canonical, committed, admittedUserId);
       } catch (cause) {
         failure = { cause };
       }

@@ -190,7 +190,7 @@ describe("prepared environment ownership", () => {
     await reopenStores();
     expect(environments.get("prepared-1")?.preparation?.consumedAtMs).toBe(1_000);
     expect(await placements.bindPreparedEnvironment(second)).toBeUndefined();
-    expect(placements.get(second.sessionId)?.state).toBe("requested");
+    expect((await placements.getAsync(second.sessionId))?.state).toBe("requested");
   });
 
   it.each(["claim-first", "expire-first"] as const)(

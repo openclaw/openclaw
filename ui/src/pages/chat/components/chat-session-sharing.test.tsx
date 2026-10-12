@@ -1,9 +1,10 @@
-import { render } from "lit";
+import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { renderChatSessionSharing, type ChatSessionSharingProps } from "./chat-session-sharing.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { ChatSessionSharing, type ChatSessionSharingProps } from "./chat-session-sharing.solid.tsx";
 
 function renderSharing(props: Partial<ChatSessionSharingProps>) {
-  return renderChatSessionSharing({
+  return {
     session: {
       key: "agent:main:main",
       kind: "direct",
@@ -16,7 +17,7 @@ function renderSharing(props: Partial<ChatSessionSharingProps>) {
     onVisibilityChange: vi.fn(),
     onMemberChange: vi.fn(),
     ...props,
-  });
+  } satisfies ChatSessionSharingProps;
 }
 
 function sharingSession(overrides: Partial<NonNullable<ChatSessionSharingProps["session"]>>) {
@@ -37,10 +38,29 @@ afterEach(() => {
   container = undefined;
 });
 
-function mount(template: ReturnType<typeof renderChatSessionSharing>) {
+const updates = new WeakMap<HTMLElement, (props: ChatSessionSharingProps) => void>();
+
+function render(props: ChatSessionSharingProps, root: HTMLElement) {
+  const update = updates.get(root);
+  if (update) {
+    update(props);
+    flush();
+    return;
+  }
+  mountSolid(
+    () => {
+      const [current, setCurrent] = createSignal(props);
+      updates.set(root, setCurrent);
+      return <ChatSessionSharing {...current()} />;
+    },
+    { container: root },
+  );
+}
+
+function mount(props: ChatSessionSharingProps) {
   container = document.createElement("div");
   document.body.append(container);
-  render(template, container);
+  render(props, container);
   return container;
 }
 

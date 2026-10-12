@@ -12,7 +12,7 @@ import { saveCronJobsStore } from "../cron/store.js";
 import { cronStoreKey } from "../cron/store/key.js";
 import { loadCronRows, loadedCronStoreFromRows } from "../cron/store/row-codec.js";
 import { runInitialConfigWriteHealth } from "../flows/doctor-health-contribution-runners.config.js";
-import { mintCronStandingGrantLocked } from "../gateway/operator-approval-standing-grants.js";
+import { mintCronStandingGrantLocked } from "../gateway/operator-approval-standing-grants.worker.js";
 import * as sqliteSnapshot from "../infra/sqlite-snapshot.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import {

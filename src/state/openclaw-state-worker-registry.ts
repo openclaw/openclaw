@@ -38,7 +38,7 @@ const loaders = {
   projects: () =>
     import("../projects/project-registry.worker.js").then((m) => m.projectRegistryOperations),
   operatorApprovals: () =>
-    import("../gateway/operator-approval-store.operations.js").then(
+    import("../gateway/operator-approval-store.worker.js").then(
       (m) => m.operatorApprovalOperations,
     ),
   execApprovals: () =>

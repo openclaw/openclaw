@@ -3,7 +3,7 @@
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { AgentActivityItem } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
-import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { createTestTranscript, renderChatInto } from "./chat-view.test-helpers.ts";
@@ -110,6 +110,7 @@ it("renders current operation copy through the real transcript and retains compl
   vi.advanceTimersByTime(999);
   expect(labels()).toEqual(["Inspect the first file"]);
   vi.advanceTimersByTime(1);
+  flush();
   expect(labels()).toEqual(["Inspect the next file…"]);
 });
 

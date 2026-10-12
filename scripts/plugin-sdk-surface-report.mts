@@ -191,8 +191,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "security-runtime": 1,
   // +2: approved released upstream-link writes retained during worker migration.
   "session-catalog": 2,
-  // +1: readTranscriptStatsSync remains while plugins adopt readTranscriptStatsAsync.
-  "session-store-runtime": 8,
+  // +2: released synchronous transcript event/stat reads during the worker cutover.
+  "session-store-runtime": 9,
   // +2: shipped Slack and Discord setup helpers retained through their package migration window.
   "setup-runtime": 2,
   "reply-history": 6,
@@ -242,10 +242,10 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +7: approved async session, command-menu, model-override, TTS-path, and list replacements.
       // +1: preview adapters strip only normalization-owned response decoration.
       // +1: shared stale-read cache replaces board, preview, search, and credential cache policies.
-      // +2: approved readTranscriptStatsAsync and PreparedAgentRunStart replacements;
-      // the released synchronous stats reader and onAgentRunStart callback remain compatible.
+      // +2: approved async transcript event/stat read replacements.
+      // +1: approved PreparedAgentRunStart contract.
       // +1: deprecated createSessionHeaderLink retained from shipped 2026.10.1.
-      3699,
+      3700,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -270,9 +270,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +7: the same session, command-menu, model-override, TTS-path, and list replacements.
       // +1: stripReplyPayloadResponsePrefix preserves durable text while assembling previews.
       // +1: the same bounded stale-read cache factory on collection-runtime.
-      // +1: readTranscriptStatsAsync replaces the retained synchronous stats reader.
+      // +2: the same transcript read replacement pairs.
       // +1: the same deprecated createSessionHeaderLink.
-      2159,
+      2160,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -285,9 +285,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +3: released synchronous skill-command list helpers during async migration.
       // +15: retained synchronous auth, model, and TTS compatibility exports.
       // +7: retained synchronous session, command-menu, model-override, TTS-path, and list exports.
-      // +1: readTranscriptStatsSync remains until the next Plugin SDK major.
+      // +2: retained synchronous transcript event/stat reads until the next SDK major.
       // +1: createSessionHeaderLink from shipped 2026.10.1 until plugin-sdk-session-header-link expires.
-      185,
+      186,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

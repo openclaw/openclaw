@@ -84,6 +84,7 @@ export type NodeWorkerSupervisorTransport = {
     timeoutMs?: number;
     signal?: AbortSignal;
     idempotencyKey?: string;
+    authorizeDispatch?: () => Promise<boolean>;
     isDispatchAuthorized: () => boolean;
     onDispatchReady?: (invokeId: string) => void;
   }): Promise<NodeInvokeResult>;
@@ -236,6 +237,31 @@ async function invokeNodeRegistryCore(
     params: invokeParams,
     turnSource,
   });
+  const authorizeDispatch = params.authorizeDispatch;
+  if (authorizeDispatch) {
+    let authorized: boolean | typeof ABSOLUTE_DEADLINE_EXPIRED;
+    try {
+      authorized = await awaitWithinDeadline(
+        () => racePromiseWithAbortSignal(authorizeDispatch(), params.signal),
+        deadlineAtMs,
+        () => performance.now(),
+      );
+    } catch (error) {
+      if (params.signal?.aborted) {
+        return nodeInvokeError("ABORTED", "node invoke cancelled");
+      }
+      throw error;
+    }
+    if (authorized === ABSOLUTE_DEADLINE_EXPIRED) {
+      return nodeInvokeError("TIMEOUT", "node invoke timed out");
+    }
+    if (!authorized) {
+      return nodeInvokeError(
+        "APPROVAL_AUTHORITY_CLOSED",
+        "runtime authority closed before node dispatch",
+      );
+    }
+  }
   const dispatchNode = node;
   const dispatched = await runWithSessionSourceScope(
     params.isDispatchAuthorized,
@@ -443,34 +469,34 @@ export function registerNodeRegistryPrivateRuntime(
         if (!NODE_WORKER_PRIVATE_COMMANDS.includes(params.command)) {
           return nodeInvokeError("INVALID_REQUEST", "private node command is not allowed");
         }
+        const isNodeCurrent = () =>
+          isNodeWorkerSupervisorProofCurrent(
+            context.getNode(params.node.nodeId),
+            state.runnerInventoryByConn,
+            params.node,
+            {
+              environmentSession:
+                params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND ||
+                params.command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
+              preparedWorkspace: params.command === NODE_WORKER_WORKSPACE_PREPARE_COMMAND,
+              capturedExecPolicy: params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+              workspaceQuiescence:
+                params.command === NODE_WORKER_WORKSPACE_EXEC_COMMAND &&
+                isRecord(params.params) &&
+                (params.params.quiescence !== undefined ||
+                  params.params.nativeProcessOwner === true),
+              statusWait:
+                params.command === NODE_WORKER_SUPERVISOR_STATUS_COMMAND &&
+                typeof params.params === "object" &&
+                params.params !== null &&
+                "waitMs" in params.params,
+            },
+          );
         const isProofCurrent = Object.assign(
-          () =>
-            params.isDispatchAuthorized() &&
-            isNodeWorkerSupervisorProofCurrent(
-              context.getNode(params.node.nodeId),
-              state.runnerInventoryByConn,
-              params.node,
-              {
-                environmentSession:
-                  params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND ||
-                  params.command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
-                preparedWorkspace: params.command === NODE_WORKER_WORKSPACE_PREPARE_COMMAND,
-                capturedExecPolicy: params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
-                workspaceQuiescence:
-                  params.command === NODE_WORKER_WORKSPACE_EXEC_COMMAND &&
-                  isRecord(params.params) &&
-                  (params.params.quiescence !== undefined ||
-                    params.params.nativeProcessOwner === true),
-                statusWait:
-                  params.command === NODE_WORKER_SUPERVISOR_STATUS_COMMAND &&
-                  typeof params.params === "object" &&
-                  params.params !== null &&
-                  "waitMs" in params.params,
-              },
-            ),
+          () => params.isDispatchAuthorized() && isNodeCurrent(),
           params.isDispatchAuthorized,
         );
-        if (!isProofCurrent()) {
+        if (!isNodeCurrent()) {
           return nodeInvokeError(
             "PRIVATE_DIALECT_UNAVAILABLE",
             "node worker supervisor dialect is unavailable",
@@ -487,6 +513,7 @@ export function registerNodeRegistryPrivateRuntime(
             ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
             ...(params.signal ? { signal: params.signal } : {}),
             ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
+            ...(params.authorizeDispatch ? { authorizeDispatch: params.authorizeDispatch } : {}),
             isDispatchAuthorized: isProofCurrent,
             ...(params.onDispatchReady ? { onDispatchReady: params.onDispatchReady } : {}),
           },

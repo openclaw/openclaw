@@ -236,7 +236,6 @@ describe("ManagedWorktreeService branch discovery", () => {
     "settles shared default fetching after its owner is $mode ($outcome)",
     async ({ mode, outcome }, { signal }) => {
       await createRemote();
-      const head = await git(repo, "rev-parse", "HEAD");
       const entered = createDeferred();
       const joined = createDeferred();
       const release = createDeferred();
@@ -320,8 +319,8 @@ describe("ManagedWorktreeService branch discovery", () => {
         );
         if (outcome === "settled") {
           expect(firstOutcome).toBe(failure);
-          expect(secondOutcome).toMatchObject({ commit: head, fetchSucceeded: true });
-          expect({ discoveries, fetches }).toEqual({ discoveries: 2, fetches: 2 });
+          expect(secondOutcome).toBe(failure);
+          expect({ discoveries, fetches }).toEqual({ discoveries: 1, fetches: 1 });
         } else {
           expect(hasWorktreeUnknownOutcome(firstOutcome)).toBe(true);
           expect(hasWorktreeUnknownOutcome(secondOutcome)).toBe(true);

@@ -53,6 +53,7 @@ async function createState(jobs: CronJob[]) {
     scheduler: createTestGatewayScheduler(),
     storePath: store.storePath,
     cronEnabled: true,
+    defaultAgentId: "main",
     log: logger,
     nowMs: () => NOW,
     enqueueSystemEvent: vi.fn(),
@@ -63,8 +64,8 @@ async function createState(jobs: CronJob[]) {
   return { state, storePath: store.storePath };
 }
 
-async function runTimer(cronJob: CronJob) {
-  const { state } = await createState([cronJob]);
+async function runTimer(cronJobs: CronJob | CronJob[]) {
+  const { state, storePath } = await createState(Array.isArray(cronJobs) ? cronJobs : [cronJobs]);
   sqliteTransactionLabels.length = 0;
   const maintenance = vi.spyOn(scheduleMaintenance, "recomputeUnownedCronSchedules");
   try {
@@ -74,7 +75,9 @@ async function runTimer(cronJob: CronJob) {
     );
     return {
       jobs: state.store?.jobs ?? [],
+      persistedJobs: (await loadCronJobsStoreWithConfigJobsReadOnly(storePath)).store.jobs,
       maintenanceCount: maintenance.mock.calls.length,
+      runCount: vi.mocked(state.deps.runIsolatedAgentJob).mock.calls.length,
     };
   } finally {
     maintenance.mockRestore();
@@ -86,6 +89,43 @@ async function runTimer(cronJob: CronJob) {
 }
 
 describe("cron timer maintenance admission", () => {
+  it("persists the completed schedule without a post-run maintenance sweep", async () => {
+    const result = await runTimer(job("due", { state: { nextRunAtMs: NOW } }));
+
+    expect(result.runCount).toBe(1);
+    expect(result.maintenanceCount).toBe(0);
+    expect(result.persistedJobs).toEqual([
+      expect.objectContaining({
+        id: "due",
+        state: expect.objectContaining({ lastRunStatus: "ok", nextRunAtMs: NOW + 60_000 }),
+      }),
+    ]);
+  });
+
+  it("repairs an unrelated stale schedule after a completed run", async () => {
+    const result = await runTimer([
+      job("due", { state: { nextRunAtMs: NOW } }),
+      job("stale-sibling", {
+        schedule: CRON_SCHEDULE,
+        state: { nextRunAtMs: NOW + 7 * 24 * 60 * 60_000 + 30_000 },
+        payload: { kind: "systemEvent", text: "repair stale future slot" },
+      }),
+    ]);
+
+    expect(result.runCount).toBe(1);
+    expect(result.maintenanceCount).toBe(1);
+    expect(result.persistedJobs).toEqual([
+      expect.objectContaining({
+        id: "due",
+        state: expect.objectContaining({ lastRunStatus: "ok", nextRunAtMs: NOW + 60_000 }),
+      }),
+      expect.objectContaining({
+        id: "stale-sibling",
+        state: expect.objectContaining({ nextRunAtMs: NOW + 60_000 }),
+      }),
+    ]);
+  });
+
   it("skips a write sweep for an active due schedule", async () => {
     const result = await runTimer(
       job("active", { state: { nextRunAtMs: NOW - 60_000, runningAtMs: NOW } }),

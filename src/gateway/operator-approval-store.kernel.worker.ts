@@ -27,16 +27,18 @@ import {
   isValidTimestamp,
   stringifyPresentation,
   normalizeExecutionIdentityBinding,
-  hasApprovalLocatorNamespaceConflict,
-  selectOperatorApprovalRow,
-  selectOperatorApprovalRowByLocator,
   decodeOperatorApprovalRow,
-  denyCorruptPendingRow,
   inputMatchesExistingRow,
-  expirePendingRow,
   decodeOperatorApprovalHistoryCursor,
   encodeOperatorApprovalHistoryCursor,
 } from "./operator-approval-store.rows.js";
+import {
+  selectOperatorApprovalRow,
+  selectOperatorApprovalRowByLocator,
+  hasApprovalLocatorNamespaceConflict,
+  denyCorruptPendingRow,
+  expirePendingRow,
+} from "./operator-approval-store.rows.worker.js";
 import type {
   NewOperatorApproval,
   OperatorApprovalKind,

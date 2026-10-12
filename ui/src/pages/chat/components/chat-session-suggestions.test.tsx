@@ -1,9 +1,9 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionSuggestion } from "../../../../../packages/gateway-protocol/src/index.js";
-import { renderChatSessionSuggestions } from "./chat-session-suggestions.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { ChatSessionSuggestions } from "./chat-session-suggestions.solid.tsx";
 
 const suggestion: SessionSuggestion = {
   id: "suggestion-1",
@@ -26,16 +26,20 @@ function mount(role: "owner" | "viewer", row = suggestion, canResolve = true, ar
   const onResolve = vi.fn();
   container = document.createElement("div");
   document.body.append(container);
-  render(
-    renderChatSessionSuggestions({
-      suggestions: [row],
-      role,
-      busyIds: new Set(),
-      archived,
-      canResolve,
-      onResolve,
-    }),
-    container,
+  mountSolid(
+    () => (
+      <ChatSessionSuggestions
+        {...{
+          suggestions: [row],
+          role,
+          busyIds: new Set(),
+          archived,
+          canResolve,
+          onResolve,
+        }}
+      />
+    ),
+    { container },
   );
   return { container, onResolve };
 }
@@ -45,16 +49,20 @@ describe("chat session suggestions", () => {
     const onResolve = vi.fn();
     container = document.createElement("div");
     document.body.append(container);
-    render(
-      renderChatSessionSuggestions({
-        suggestions: [suggestion],
-        role: "member",
-        busyIds: new Set(),
-        archived: false,
-        canResolve: true,
-        onResolve,
-      }),
-      container,
+    mountSolid(
+      () => (
+        <ChatSessionSuggestions
+          {...{
+            suggestions: [suggestion],
+            role: "member",
+            busyIds: new Set(),
+            archived: false,
+            canResolve: true,
+            onResolve,
+          }}
+        />
+      ),
+      { container },
     );
     expect(container.querySelector("button")).toBeNull();
     expect(container.textContent).toContain("Pending");
