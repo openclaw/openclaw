@@ -8,6 +8,7 @@ import { finished } from "node:stream/promises";
 import { stripPluginModelCatalogCredentials } from "../agents/plugin-model-catalog-repair.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
+import { repairCanonicalSqliteIndexes } from "../infra/sqlite-index-schema.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { createPrivateSqliteTempDirectory } from "../infra/sqlite-private-directory.js";
 import {
@@ -641,11 +642,16 @@ export async function restoreGitBackupDirectory(params: {
     database.exec(`PRAGMA user_version = ${manifest.userVersion};`);
     // Redacted and operational projection tables are absent from Git. Recreate
     // their canonical empty schemas before enforcing database ownership.
-    database.exec(
+    const ownerSchema =
       restoreIdentity.role === "global"
         ? getOpenClawStateRuntimeSchema({ includeVersionLazyAdditiveTables: false })
-        : getOpenClawAgentMigrationSchema(manifest.userVersion),
-    );
+        : getOpenClawAgentMigrationSchema(manifest.userVersion);
+    database.exec(ownerSchema);
+    if (restoreIdentity.role === "agent") {
+      // Index definitions can improve without a schema-version bump. Normalize
+      // derived indexes only in private staging; rows and version markers stay intact.
+      repairCanonicalSqliteIndexes(database, stagedPath, ownerSchema);
+    }
     validateRestoredOwner(database, stagedPath, restoreIdentity, manifest.userVersion);
     const tables: GitBackupTableResult[] = [];
     for (const [table, expected] of Object.entries(manifest.tables)) {

@@ -363,7 +363,9 @@ schema, and declared table files. Extra files are ignored and never become
 database content. Missing or non-regular declared artifacts still fail, as do
 invalid database identities, table hashes, row counts, or SQLite integrity.
 Agent restores validate the recorded supported schema version and preserve it;
-they do not migrate historical data during verification. Newer unsupported
+they do not migrate historical data during verification.
+Agent index definitions are rebuilt canonically in private staging when needed;
+this does not change table data or the recorded schema version. Newer unsupported
 versions and mismatched ownership/version markers still fail. Run `openclaw
 doctor --fix` when adopting an older restored database for the current runtime.
 

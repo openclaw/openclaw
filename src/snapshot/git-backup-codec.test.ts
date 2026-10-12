@@ -24,6 +24,13 @@ it("restores a supported historical agent schema without migrating its data or a
       // Build the complete historical representation through its canonical owner,
       // rather than relabeling a current schema with an older PRAGMA.
       ensureOpenClawAgentSchema(source, "main", sourcePath, version);
+      // Deployed schema-24 backups used this older index order (2026.10.2).
+      source.exec(`
+        DROP INDEX idx_agent_trajectory_runtime_run;
+        CREATE INDEX idx_agent_trajectory_runtime_run
+          ON trajectory_runtime_events(session_id, run_id, seq)
+          WHERE run_id IS NOT NULL;
+      `);
       source.exec("CREATE TABLE compatibility_probe (value INTEGER, bytes BLOB) STRICT");
       source
         .prepare("INSERT INTO compatibility_probe VALUES (?, ?)")
