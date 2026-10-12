@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
 import type { PublicSessionCardFacts } from "./control-ui-public-session-card-facts.js";
+import { publicMessageText } from "./control-ui-public-session-render.js";
 import type { PublicSessionShareLocator } from "./control-ui-public-session-token.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
@@ -19,6 +20,46 @@ type PublicSessionShareReadResult = {
   olderOffset?: number;
   cardFacts?: PublicSessionCardFacts;
 };
+
+const PUBLIC_SESSION_MAX_BYTES = 1024 * 1024;
+const PUBLIC_SESSION_MAX_MESSAGES = 100;
+
+async function readPublicSessionOpening(
+  scope: Parameters<typeof readSessionMessagesPageWithStatsAsync>[0],
+) {
+  let remainingBytes = PUBLIC_SESSION_MAX_BYTES;
+  let history = await readSessionMessagesPageWithStatsAsync(scope, {
+    offset: 0,
+    beforeSeq: 2,
+    maxMessages: 1,
+    maxBytes: remainingBytes,
+    allowResetArchiveFallback: false,
+  });
+  let omittedOversized = history.omittedOversized;
+  for (let position = 0; position < PUBLIC_SESSION_MAX_MESSAGES; position++) {
+    if (position > 0) {
+      history = await readSessionMessagesPageWithStatsAsync(scope, {
+        offset: 0,
+        beforeSeq: position + 2,
+        maxMessages: 1,
+        maxBytes: remainingBytes,
+        allowResetArchiveFallback: false,
+      });
+      omittedOversized ||= history.omittedOversized;
+    }
+    const message = history.messages[0];
+    if (publicMessageText(message)?.role === "user") {
+      return { ...history, messages: [message], olderOffset: undefined, omittedOversized };
+    }
+    if (message !== undefined) {
+      remainingBytes -= Buffer.byteLength(JSON.stringify(message));
+    }
+    if (position + 1 >= history.totalMessages || remainingBytes < 1024) {
+      break;
+    }
+  }
+  return { ...history, messages: [], olderOffset: undefined, omittedOversized };
+}
 
 function readAuthorizedTarget(
   cfg: OpenClawConfig,
@@ -106,21 +147,16 @@ export async function readPublicSessionShare(
     storePath: initial.source.path,
     sessionEntry: initial.target.entry,
   };
-  let history = await readSessionMessagesPageWithStatsAsync(scope, {
-    offset: options.offset ?? 0,
-    maxMessages: 100,
-    maxBytes: 1024 * 1024,
-    allowResetArchiveFallback: false,
-  });
-  if (options.card && history.olderOffset !== undefined) {
-    // The opening request is in the oldest bounded page, not the latest turn.
-    history = await readSessionMessagesPageWithStatsAsync(scope, {
-      offset: Math.max(0, history.totalMessages - 100),
-      maxMessages: 100,
-      maxBytes: 1024 * 1024,
-      allowResetArchiveFallback: false,
-    });
-  }
+  // Read forward source positions for cards: a newest-first byte bound within
+  // the oldest page can otherwise hide the opening behind a later oversized row.
+  const history = options.card
+    ? await readPublicSessionOpening(scope)
+    : await readSessionMessagesPageWithStatsAsync(scope, {
+        offset: options.offset ?? 0,
+        maxMessages: PUBLIC_SESSION_MAX_MESSAGES,
+        maxBytes: PUBLIC_SESSION_MAX_BYTES,
+        allowResetArchiveFallback: false,
+      });
   const resolveCardFacts = options.card
     ? (await import("./control-ui-public-session-card-facts.js")).resolvePublicSessionCardFacts
     : undefined;

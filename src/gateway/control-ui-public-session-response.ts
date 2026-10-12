@@ -54,29 +54,33 @@ export async function servePublicSessionRepresentation(params: {
     );
     return true;
   }
-  return withReadySessionRows(
+  const unavailableStatus = await withReadySessionRows(
     projection,
     () => [{ key: locator.sessionKey, agentId: locator.agentId }],
-    async () => {
+    () => {
       const representation = result.value;
       if (!representation || !isPublicSessionShareActive(config, locator, projection)) {
-        await unavailable(404);
-      } else if (!representation.isCurrent()) {
-        await unavailable(503);
-      } else {
-        const { body, etag } = representation;
-        res.setHeader("ETag", etag);
-        if (req.headers["if-none-match"] === etag) {
-          res.statusCode = 304;
-          res.end();
-        } else {
-          res.statusCode = 200;
-          res.setHeader("Content-Type", "text/html; charset=utf-8");
-          res.setHeader("Content-Length", Buffer.byteLength(body));
-          res.end(body);
-        }
+        return 404 as const;
       }
-      return true as const;
+      if (!representation.isCurrent()) {
+        return 503 as const;
+      }
+      const { body, etag } = representation;
+      res.setHeader("ETag", etag);
+      if (req.headers["if-none-match"] === etag) {
+        res.statusCode = 304;
+        res.end();
+      } else {
+        res.statusCode = 200;
+        res.setHeader("Content-Type", "text/html; charset=utf-8");
+        res.setHeader("Content-Length", Buffer.byteLength(body));
+        res.end(body);
+      }
+      return undefined;
     },
   );
+  if (unavailableStatus !== undefined) {
+    await unavailable(unavailableStatus);
+  }
+  return true;
 }

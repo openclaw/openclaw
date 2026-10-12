@@ -61,7 +61,10 @@ async function withPublicTestState(run: () => Promise<void>) {
   });
 }
 
-async function seed(messages: string[], target = locator) {
+async function seed(
+  messages: Array<string | { role: string; content: string; provenance?: { kind: string } }>,
+  target = locator,
+) {
   await upsertSessionEntryCore(target, {
     sessionId: target.sessionId,
     updatedAt: 1,
@@ -74,7 +77,7 @@ async function seed(messages: string[], target = locator) {
       type: "message",
       id: `message-${index}`,
       parentId: index ? `message-${index - 1}` : null,
-      message: { role: "user", content },
+      message: typeof content === "string" ? { role: "user", content } : content,
     })),
   ]);
   projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
@@ -133,6 +136,36 @@ describe("anonymous published session reader", () => {
       const oldest = await readPublicSessionShare(cfg, locator, { offset: 2 });
       expect(oldest?.messages).toMatchObject([{ content: "Oldest" }]);
       expect(oldest?.olderOffset).toBeUndefined();
+      const preview = await readPublicSessionShare(cfg, locator, { card: true });
+      expect(preview?.messages).toMatchObject([{ content: "Oldest" }]);
+      expect(preview?.totalMessages).toBe(3);
+    });
+  });
+
+  it("finds the first public user request after private and assistant prelude in a long history", async () => {
+    await withPublicTestState(async () => {
+      await seed([
+        { role: "system", content: "Private system prelude" },
+        { role: "user", content: "Private runtime input", provenance: { kind: "internal" } },
+        { role: "assistant", content: "Ready to help" },
+        "Opening public request",
+        ...Array.from({ length: 205 }, (_, index) => `Later request ${index}`),
+      ]);
+      const preview = await readPublicSessionShare(cfg, locator, { card: true });
+      expect(preview?.messages).toMatchObject([{ content: "Opening public request" }]);
+      expect(preview?.totalMessages).toBe(209);
+    });
+  });
+
+  it("keeps opening discovery inside the first hundred source positions", async () => {
+    await withPublicTestState(async () => {
+      await seed([
+        ...Array.from({ length: 100 }, () => ({ role: "assistant", content: "Prelude" })),
+        "Later request outside the opening window",
+      ]);
+      const preview = await readPublicSessionShare(cfg, locator, { card: true });
+      expect(preview?.messages).toEqual([]);
+      expect(preview?.totalMessages).toBe(101);
     });
   });
 

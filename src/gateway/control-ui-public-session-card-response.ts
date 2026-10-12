@@ -65,26 +65,29 @@ export async function servePublicSessionCardRepresentation(params: {
     await card.fallback();
     return true;
   }
-  return withReadySessionRows(
+  const served = await withReadySessionRows(
     projection,
     () => [{ key: locator.sessionKey, agentId: locator.agentId }],
-    async () => {
+    () => {
       const representation = result.value;
       if (
         !representation ||
         !representation.isCurrent() ||
         !isPublicSessionShareActive(config, locator, projection)
       ) {
-        await card.fallback();
-      } else {
-        const body = Buffer.from(representation.body, "base64");
-        res.statusCode = 200;
-        res.setHeader("Cache-Control", "public, max-age=300");
-        res.setHeader("Content-Type", "image/png");
-        res.setHeader("Content-Length", body.byteLength);
-        res.end(body);
+        return false;
       }
+      const body = Buffer.from(representation.body, "base64");
+      res.statusCode = 200;
+      res.setHeader("Cache-Control", "public, max-age=300");
+      res.setHeader("Content-Type", "image/png");
+      res.setHeader("Content-Length", body.byteLength);
+      res.end(body);
       return true as const;
     },
   );
+  if (!served) {
+    await card.fallback();
+  }
+  return true;
 }
