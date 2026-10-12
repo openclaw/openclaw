@@ -500,6 +500,7 @@ export function createAgentHarnessHostCapabilities(params: {
       return buildActiveNodeContextText(requesterProfileId);
     },
     bindToolSurface,
+    /** @deprecated Await createToolSurfaceAsync for worker-backed tool construction. */
     createToolSurface: (options, bindingOptions) => {
       warnPluginSdkDeprecation({
         family: "agent-harness-host",

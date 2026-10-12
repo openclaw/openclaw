@@ -8,19 +8,50 @@ import {
   readFileSync,
   readdirSync,
   renameSync,
+  rmSync,
   symlinkSync,
   writeFileSync,
   writeSync,
 } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
+import { cleanupTempDirs, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { assertFixtureProcessGroupStopped } from "./exited-descendant-reaper.test-support.js";
 import { createMainRefreshFixture } from "./pr-main-refresh.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const setupSnapshots = useAutoCleanupTempDirTracker(afterAll);
+const restoredRoots = new Set<string>();
+afterEach(() => cleanupTempDirs(restoredRoots));
 const describePosix = process.platform === "win32" ? describe.skip : describe;
-const fixture = () => createMainRefreshFixture(tempDirs.make("openclaw-pr-main-refresh-"));
+let completedSetup:
+  | {
+      fixture: ReturnType<typeof createMainRefreshFixture>;
+      snapshot: string;
+      env: NodeJS.ProcessEnv;
+    }
+  | undefined;
+
+function fixture() {
+  if (!completedSetup) {
+    const f = createMainRefreshFixture(tempDirs.make("openclaw-pr-main-refresh-"));
+    const snapshot = setupSnapshots.make("openclaw-pr-main-refresh-setup-");
+    copyTreeCloseOnExec(f.root, snapshot);
+    completedSetup = { fixture: f, snapshot, env: { ...f.env } };
+    return f;
+  }
+  const { fixture: f, snapshot, env } = completedSetup;
+  // Restore the original root so Git worktree links and private handoff paths remain valid.
+  rmSync(f.root, { recursive: true, force: true });
+  copyTreeCloseOnExec(snapshot, f.root);
+  restoredRoots.add(f.root);
+  for (const key of Object.keys(f.env)) {
+    delete f.env[key];
+  }
+  Object.assign(f.env, env);
+  return f;
+}
 
 function recoverFixtureLock(f: ReturnType<typeof fixture>, oid: string) {
   const pgid = Number(/^pgid=(\d+)$/m.exec(f.git(f.canonical, "cat-file", "blob", oid))?.[1]);

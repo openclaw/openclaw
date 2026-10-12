@@ -6,7 +6,7 @@ import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { clearGatewayAgentCliShim } from "../infra/openclaw-cli-shim.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
-import { captureRemoteModelCatalogStartupSnapshot } from "../model-catalog/remote-overlay.js";
+import { prepareRemoteModelCatalogStartupSnapshot } from "../model-catalog/remote-overlay.js";
 import {
   LegacyPluginSdkResourceHost,
   bindLegacyPluginSdkResourceHost,
@@ -134,8 +134,8 @@ async function createGatewayKernelWithSdkHost(
     throw new Error("Gateway boot ID must contain 1 to 96 characters");
   }
   const bootId = suppliedBootId ?? randomUUID();
-  // Capture before bootstrap yields or creates workers; later downloads publish through adoption.
-  captureRemoteModelCatalogStartupSnapshot();
+  // Publish before bootstrap creates catalog consumers; later downloads use explicit adoption.
+  await prepareRemoteModelCatalogStartupSnapshot();
   // Retain cancellation before bootstrap owns resources or an update replaces its chunk.
   const { cancelPreparedModelRuntimeRefresh } = await import("../agents/prepared-model-runtime.js");
   ensureOpenClawCliOnPath();

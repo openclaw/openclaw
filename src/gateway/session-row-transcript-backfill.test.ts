@@ -20,7 +20,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { backfillSessionRowTranscriptFields } from "./session-row-transcript-backfill.js";
-import { readSessionRowTranscriptFields } from "./session-row-transcript-backfill.kernel.js";
+import { readSessionRowTranscriptFields } from "./session-row-transcript-backfill.worker.js";
 
 const generateConversationLabelWithFallback = vi.hoisted(() => vi.fn());
 vi.mock("../auto-reply/reply/conversation-label-generator.js", () => ({

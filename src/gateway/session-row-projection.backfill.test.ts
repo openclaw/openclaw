@@ -87,6 +87,7 @@ async function withStreamingProjection(
 it("refreshes streaming previews without rematerializing unchanged rows", async () => {
   await withStreamingProjection(async ({ projection, query, append, release }) => {
     const reads: string[] = [];
+    const backfill = vi.spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields");
     const readDatabases = history.withSessionHistoryWorkerDatabases;
     vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
       (targets, consume, lane) =>
@@ -126,13 +127,13 @@ it("refreshes streaming previews without rematerializing unchanged rows", async 
     await vi.advanceTimersByTimeAsync(1_000);
     expect(projection.materializedCount - before).toBe(0);
     expect(reads).toEqual([]);
-    const backfilled = observeSessionRowBackfill([query.key], projection);
-    release();
-    vi.useRealTimers();
-    await backfilled;
     expect(projection.snapshot(query, { includeLastMessage: true }).row).toMatchObject({
       lastMessagePreview: "Update 11",
     });
+    release();
+    vi.useRealTimers();
+    await nextTurn();
+    expect(backfill.mock.calls.filter(([params]) => params.sessionKey === query.key)).toEqual([]);
   });
 });
 

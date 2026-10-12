@@ -11,6 +11,7 @@ import {
   encodeSessionTranscriptWorkerError,
   encodeSessionTranscriptRequestError,
 } from "./session-history-worker-errors.js";
+import { withSessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts-scope.js";
 import {
   withHistoryDatabase,
   pruneClosedHistoryDatabaseScopes,
@@ -357,7 +358,7 @@ serveOwnedWorkerTasks(
       }
       if (request.kind === "session-row-backfill") {
         const { readSessionRowTranscriptFields } =
-          await import("../../gateway/session-row-transcript-backfill.kernel.js");
+          await import("../../gateway/session-row-transcript-backfill.worker.js");
         return {
           kind: "session-row-backfill" as const,
           fields: readSessionRowTranscriptFields(request.params),
@@ -655,7 +656,7 @@ serveOwnedWorkerTasks(
                 ? `history.${request.request.params.query.kind}`
                 : `history.${request.request.kind}`
               : request.kind,
-            readRequest,
+            () => withSessionTranscriptProjectionReceipt(request.projectionReceipt, readRequest),
             request.validation,
           )
         : { ok: true, value: await readRequest() };

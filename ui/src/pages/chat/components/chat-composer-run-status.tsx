@@ -7,7 +7,6 @@ import type { ChatSubagentWait } from "../chat-subagent-wait.ts";
 
 type ComposerRunStatusProps = {
   waitingSubagents: ChatSubagentWait | null;
-  working: boolean;
   onOpenSubagents: ((focus?: boolean) => void) | undefined;
 };
 
@@ -18,7 +17,7 @@ function ComposerRunStatusContent(props: ComposerRunStatusProps) {
   const label = () => {
     const current = wait();
     if (!current) {
-      return t("common.working");
+      return "";
     }
     if (current.runningCount > 0) {
       return t(
@@ -33,15 +32,9 @@ function ComposerRunStatusContent(props: ComposerRunStatusProps) {
         : t("chat.waitingOnSubagents");
   };
   return (
-    <Show when={wait() || props.working}>
+    <Show when={wait()}>
       <div
-        class={[
-          "agent-chat__composer-run-status",
-          {
-            "agent-chat__composer-run-status--waiting": Boolean(wait()),
-            "agent-chat__composer-run-status--working": !wait(),
-          },
-        ]}
+        class="agent-chat__composer-run-status agent-chat__composer-run-status--waiting"
         role="status"
         aria-live="off"
       >
@@ -85,7 +78,6 @@ export const ComposerRunStatus = defineSolidBridge<ComposerRunStatusProps>(
   {
     properties: {
       waitingSubagents: { default: null, attribute: false },
-      working: { default: false, attribute: false },
       onOpenSubagents: { default: undefined, attribute: false },
     },
     connected: (host) => {

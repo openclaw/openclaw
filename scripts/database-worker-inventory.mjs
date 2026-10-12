@@ -20,6 +20,10 @@ const primitives = new Map([
 ]);
 const excluded =
   /(?:^|\/)(?:__tests__|__fixtures__|test|tests|test-utils|test-helpers|test-support|test-fixtures|test-harness|fixtures|e2e)(?:\/|$)|(?:^|[/.-])(?:test|spec|e2e|test-support|test-helpers|test-fixtures|test-harness|test-runtime)(?:[.-])/;
+const testSuites = new Set([
+  // Imports Vitest; only server.auth.default-token.test.ts imports this suite.
+  "src/gateway/server.auth.default-token.suite.ts",
+]);
 const reviewed = new Map([
   [
     "src/agents/github-oauth-records.native.ts",
@@ -146,15 +150,6 @@ const reviewed = new Map([
     },
   ],
   [
-    "src/gateway/operator-approval-store.boot.ts",
-    {
-      tier: "T2",
-      priority: 99,
-      evidence:
-        "Only server-aux-handlers.ts calls orphan closure and terminal pruning during Gateway boot admission; ordinary approval operations use the worker.",
-    },
-  ],
-  [
     "src/gateway/worker-environments/store.ts",
     { priority: 7, evidence: "Environment access listing and prepared-pool maintenance" },
   ],
@@ -268,6 +263,75 @@ const reviewed = new Map([
 
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
+  [
+    "src/flows/doctor-tool-schema-projection.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["collectAgentRuntimeToolSchemaFindings"],
+        evidence:
+          "Only doctor-tool-schema-runtime.ts invokes this projection through collectRuntimeToolSchemaFindings, wired exclusively into doctor-core-checks.ts by doctor-tool-schema-check.ts. Its synchronous tool construction runs under withPluginRuntimeGenerationRegistryScope during the Doctor one-shot.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-participants.native.ts",
+    [
+      {
+        tier: "W",
+        operations: ["recordSessionParticipantFromWorker"],
+        evidence:
+          "Only session-sharing-store.worker.ts invokes this worker entry. The separate native participant entry resolves aliases from the resident Gateway catalog.",
+      },
+    ],
+  ],
+  [
+    "src/gateway/channel-operator-authority.ts",
+    [
+      {
+        tier: "T3",
+        operations: [
+          "resolveChannelOperatorAdminAuthority",
+          "resolveUpdateChannelOperatorAdminIdentityAuthority",
+        ],
+        evidence:
+          "Native identity capture is private to resolveChannelOperatorAdminAuthority and resolveUpdateChannelOperatorAdminIdentityAuthority; command-auth.ts passes those only to the CLI/updater captureCommandOwnerIdentity path used by update-requester-authority.ts. Gateway ingress awaits prepareChannelOperatorAdmin instead. Returned currency checks preserve update execution authority.",
+      },
+    ],
+  ],
+  [
+    "src/state/user-profiles-owner-migration.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["repairMergedGatewayOwnerProfile"],
+        evidence:
+          "Doctor repair-sequencing.ts invokes merged-owner repair; preview-warnings.ts invokes the same entry with shouldRepair false. No Gateway caller.",
+      },
+    ],
+  ],
+  [
+    "src/state/user-channel-identities.ts",
+    [
+      {
+        tier: "W",
+        operations: ["linkUserChannelIdentity", "unlinkUserChannelIdentity"],
+        evidence:
+          "Only user-channel-identities.worker.ts executes channel link/unlink mutations; Gateway callers await the registered worker operations.",
+      },
+    ],
+  ],
+  [
+    "src/state/user-profiles-tailscale-migration.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["migrateLegacyTailscaleProfileIdentities"],
+        evidence:
+          "Only commands/doctor/repair-sequencing.ts invokes the legacy Tailscale identity repair.",
+      },
+    ],
+  ],
   [
     "src/state/openclaw-quarantine-store.ts",
     [
@@ -831,15 +895,18 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: [
           "ensureSkillLibrarySchema",
+          "resolveSkillLibraryActor",
           "requireSelectedSkillLibraryUpload",
+          "selectSkillLibraryOwner",
           "selectSkillLibraryEntries",
+          "selectSkillLibraryEntries.readOwners",
           "selectSkillLibraryRevision",
           "selectSkillLibraryRevisionMetadata",
           "assertSkillLibraryNameAvailable",
           "recordSkillLibraryEvent",
         ],
         evidence:
-          "Library row, revision, upload, and mutation kernels run only through the shared-state reader/writer; the SDK metadata batch remains in selection-read.kernel.ts",
+          "Library actor, owner, row, revision, upload, and mutation kernels run only through the shared-state reader/writer (read.kernel.ts, service.kernel.ts, import.kernel.ts, and store.worker.ts); readOwners is private to the worker list projection. The SDK metadata batch remains in selection-read.kernel.ts.",
       },
     ],
   ],
@@ -1169,17 +1236,6 @@ const reviewedOperations = new Map([
         operations: ["embedSessionColdArchivesInSnapshot"],
         evidence:
           "infra/backup-sqlite-snapshot.ts:292 via backup-create.ts:320,332,352; snapshot/openclaw-snapshot-copy.ts:72 via local-repository.ts:148 and git-backup.ts:310. Roots are commands/backup.ts:52, backup-sqlite.ts:80, backup-git.ts:131, Doctor/update backup and developer reliability scripts; SQL targets a temporary snapshot.",
-      },
-    ],
-  ],
-  [
-    "src/gateway/config-revision-token.ts",
-    [
-      {
-        tier: "T2",
-        operations: ["loadOrCreateConfigRevisionKey", "loadGatewayConfigRevisionKey"],
-        evidence:
-          "Gateway construction at server-kernel-request-runtime.ts:48; local-request-context.ts:107 also initializes it via agents/agent-command-local.ts:61 for standalone commands/boot. Existing Gateway scopes return before local allocation at local-request-context.ts:237. Request hashing captures the key and performs no SQL.",
       },
     ],
   ],
@@ -1675,9 +1731,19 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T2",
-        operations: ["terminalizeBoundDeliveryQueueEntry", "pruneOrdinaryDeliveryReceipts"],
+        operations: [
+          "terminalizeBoundDeliveryQueueEntry",
+          "pruneOrdinaryDeliveryReceipts",
+          "pruneDeliveryQueueTombstones",
+        ],
         evidence:
-          "Native migration: src/infra/outbound/delivery-queue-migration.ts:308; schema backfill: src/state/openclaw-state-db-delivery-queue-backfill.ts:93. Other terminalization/pruning callers are delivery-queue.worker.ts:117,316,387,457 and session-delivery-queue.worker.ts:264.",
+          "Native migration: src/infra/outbound/delivery-queue-migration.ts:308; schema backfill: src/state/openclaw-state-db-delivery-queue-backfill.ts:93. Bounded pruning also serves native namespace migration through delivery-queue-sqlite.kernel.ts:192. Other terminalization/pruning callers are delivery-queue.worker.ts:117,316,387,457 and session-delivery-queue.worker.ts:264.",
+      },
+      {
+        tier: "W",
+        operations: ["pruneDeliveryQueueTombstoneAges"],
+        evidence:
+          "Sole runtime caller: src/infra/delivery-queue.worker.ts:480 → delivery-queue-sqlite.kernel.ts:409.",
       },
     ],
   ],
@@ -2142,9 +2208,9 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T3",
-        operations: ["repairOpenClawAgentDatabasePathAliases"],
+        operations: ["repairOpenClawAgentDatabasePaths"],
         evidence:
-          "src/commands/doctor-agent-database-paths.ts:24 under Doctor repair; registered health runner src/flows/doctor-health-contribution-runners.state.ts:122.",
+          "Only noteDoctorAgentDatabasePathHealth calls the repair, within its Doctor transaction. Entry: runStateIntegrityHealth in src/flows/doctor-health-contribution-runners.state.ts.",
       },
     ],
   ],
@@ -2321,6 +2387,11 @@ const reviewedOperations = new Map([
   ],
 ]);
 const workerModules = new Set([
+  "src/claws/provenance-runtime-read.kernel.ts", // Only openclaw-state-worker-runtime.ts reads consent rows; host imports are types.
+  "src/state/user-profiles.worker.ts", // Registered profile operations; Gateway submits commands through user-profile-operations.ts.
+  "src/state/user-profile-writes.worker.ts", // Shared-state profile mutation implementation; loaded by the profile worker only.
+  "src/state/user-profile-read.worker.ts", // Shared-state read registry owns catalog identity and channel identity reads.
+  "src/state/user-profile-catalog-identity.read.ts", // Only readUserProfileReadCommand in user-profile-read.worker.ts executes this reader.
   "src/gateway/github-personal-publication-store.worker.ts", // Shared-state publication request, mutation, and read workers only.
   "src/gateway/github-publication-store.worker.ts", // Shared-state publication request, mutation, and read workers only.
   "src/state/user-github-connections.worker.ts", // openclaw-state-worker-registry installs its operation table; host imports are type-only.
@@ -2329,6 +2400,7 @@ const workerModules = new Set([
   "src/state/user-background.store.ts", // Background read/write workers; preference validation and profile merge/link/GitHub-sync also run in shared-state workers.
   "src/gateway/worker-environments/local-workspace-store.kernel.ts", // Projection read/write workers and worktree retirement worker only.
   "src/skills/library/import.kernel.ts", // Upload commands execute only in the shared-state writer.
+  "src/skills/library/read.kernel.ts", // Only openclaw-state-read-operation-registry.ts imports this worker operation table.
   "src/skills/library/service.kernel.ts", // Library catalog and revision reads use the shared-state read registry.
   "src/skills/workshop/changes.kernel.ts", // changes.worker.ts owns append/list SQL through the shared-state registry.
   "src/skills/workshop/skill-usage.kernel.ts", // changes.worker.ts owns recordSkillUsageInDatabase; host imports are type-only.
@@ -2720,7 +2792,12 @@ export function inventory(root = defaultRoot, ref = "", staged = false) {
   }
   const sourceFiles = result.stdout
     .split("\0")
-    .filter((file) => /\.(?:ts|tsx|js|mjs|mts|cts|cjs)$/.test(file) && !excluded.test(file));
+    .filter(
+      (file) =>
+        /\.(?:ts|tsx|js|mjs|mts|cts|cjs)$/.test(file) &&
+        !excluded.test(file) &&
+        !testSuites.has(file),
+    );
   const texts = snapshot
     ? loadRatchetSources(root, sourceFiles, ref)
     : new Map(sourceFiles.map((file) => [file, fs.readFileSync(path.join(root, file), "utf8")]));
@@ -2767,7 +2844,7 @@ export function inventory(root = defaultRoot, ref = "", staged = false) {
         ) {
           classification.tier = "T1-compat";
           classification.evidence =
-            "Deprecated SDK compatibility only; no bundled value references outside reviewed compatibility boundaries. Remove at the next Plugin SDK major.";
+            "Deprecated SDK compatibility only; no bundled value references outside reviewed compatibility boundaries. Remove in a later release after stable deprecation.";
         }
         const nonRuntimeTier = compatibility.nonRuntimeOperations.get(file)?.get(call.operation);
         if (

@@ -8,6 +8,7 @@ import {
   buildApprovalResolutionRef,
   isApprovalResolutionRef,
 } from "../infra/approval-resolution-ref.js";
+import { getOpenClawStateFeatureSchemaSql } from "../state/openclaw-state-feature-schema.js";
 import type {
   NewOperatorApproval,
   OperatorApprovalDecision,
@@ -55,18 +56,9 @@ export function parseOperatorApprovalKind(value: string): OperatorApprovalKind |
   return value === "exec" || value === "plugin" || value === "system-agent" ? value : null;
 }
 
-export const OPERATOR_APPROVAL_EXECUTION_IDENTITY_SCHEMA_SQL = `
-CREATE TABLE IF NOT EXISTS operator_approval_execution_identities (
-  approval_id TEXT NOT NULL PRIMARY KEY
-    REFERENCES operator_approvals(approval_id) ON DELETE CASCADE,
-  source_context_id TEXT NOT NULL CHECK (
-    length(source_context_id) BETWEEN 1 AND 256 AND source_context_id = trim(source_context_id)
-  ),
-  source_execution_id TEXT NOT NULL CHECK (
-    length(source_execution_id) BETWEEN 1 AND 256 AND source_execution_id = trim(source_execution_id)
-  )
-) STRICT;
-`;
+export const OPERATOR_APPROVAL_EXECUTION_IDENTITY_SCHEMA_SQL = getOpenClawStateFeatureSchemaSql(
+  "operator_approval_execution_identities",
+);
 
 export function normalizeExecutionIdentityBinding(input: NewOperatorApproval) {
   const binding = input.executionIdentityToken;

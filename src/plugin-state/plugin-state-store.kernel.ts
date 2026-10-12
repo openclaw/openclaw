@@ -9,6 +9,7 @@ import {
   iterateSqliteQuerySync,
   prepareSqliteQuerySync,
 } from "../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { coerceRequiredSqliteNumber, normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { createPluginStateError, parseStoredJson } from "./plugin-state-error.js";
@@ -84,6 +85,20 @@ export function getPluginStateKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<PluginStateStoreDatabase>(db);
 }
 
+export function assertPluginStateKey(
+  db: DatabaseSync,
+  key: string,
+  operation: PluginStateStoreOperation,
+): void {
+  if (isPostgresSqlConnection(db) && key.includes("\0")) {
+    throw createPluginStateError({
+      code: "PLUGIN_STATE_INVALID_INPUT",
+      operation,
+      message: "PostgreSQL plugin state keys cannot contain NUL characters.",
+    });
+  }
+}
+
 export function bindPluginStateEntry(params: {
   pluginId: string;
   namespace: string;
@@ -126,6 +141,7 @@ const pluginStateUpsertQuery = createSqliteQueryCache((db) =>
 );
 
 export function upsertPluginStateEntry(db: DatabaseSync, row: PluginStateRow): void {
+  assertPluginStateKey(db, row.entry_key, "register");
   const result = pluginStateUpsertQuery(db)(row);
   for (const current of result.rows) {
     pluginStatePublication.stagePostimage(db, current);
@@ -136,7 +152,6 @@ const pluginStateInsertIfAbsentQuery = createSqliteQueryCache((db) =>
   prepareSqliteQuerySync<PluginStateRow, PluginStateRow>(db, (parameter) =>
     getPluginStateKysely(db)
       .insertInto("plugin_state_entries")
-      .orIgnore()
       .values({
         plugin_id: parameter((value) => value.plugin_id),
         namespace: parameter((value) => value.namespace),
@@ -145,11 +160,15 @@ const pluginStateInsertIfAbsentQuery = createSqliteQueryCache((db) =>
         created_at: parameter((value) => value.created_at),
         expires_at: parameter((value) => value.expires_at),
       })
+      .onConflict((conflict) =>
+        conflict.columns(["plugin_id", "namespace", "entry_key"]).doNothing(),
+      )
       .returningAll(),
   ),
 );
 
 export function insertPluginStateEntryIfAbsent(db: DatabaseSync, row: PluginStateRow): boolean {
+  assertPluginStateKey(db, row.entry_key, "register");
   const result = pluginStateInsertIfAbsentQuery(db)(row);
   for (const current of result.rows) {
     pluginStatePublication.stagePostimage(db, current);
@@ -175,6 +194,7 @@ const pluginStateEntryExistsQuery = createSqliteQueryCache((db) =>
 );
 
 export function hasPluginStateEntry(db: DatabaseSync, params: PluginStateEntryLookup): boolean {
+  assertPluginStateKey(db, params.key, "lookup");
   return pluginStateEntryExistsQuery(db)(params).rows.length !== 0;
 }
 
@@ -199,6 +219,7 @@ export function selectPluginStateEntry(
   db: DatabaseSync,
   params: PluginStateEntryLookup,
 ): PluginStateReadRow | undefined {
+  assertPluginStateKey(db, params.key, "lookup");
   return pluginStateEntryQuery(db)(params).rows[0];
 }
 
@@ -231,6 +252,8 @@ export function selectPluginStateEntriesInKeyRange(
     now: number;
   },
 ): PluginStateReadRow[] {
+  assertPluginStateKey(db, params.keyStartInclusive, "entries");
+  assertPluginStateKey(db, params.keyEndExclusive, "entries");
   return executeSqliteQuerySync(
     db,
     getPluginStateKysely(db)
@@ -257,6 +280,7 @@ export function deletePluginStateEntryRow(
   db: DatabaseSync,
   params: { pluginId: string; namespace: string; key: string; now?: number },
 ) {
+  assertPluginStateKey(db, params.key, "delete");
   const result = executeSqliteQuerySync(
     db,
     getPluginStateKysely(db)

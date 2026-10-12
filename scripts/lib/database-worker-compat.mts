@@ -6,6 +6,9 @@ import { createNativeTypeScriptProject } from "./native-typescript.mts";
 // Each entry is a reviewed, released compatibility boundary, not a whole-file exemption.
 // Kernels may join this list only after their bundled callers have moved to workers.
 const reviewed = new Map<string, readonly string[]>([
+  ["src/agents/agent-tools.ts", ["createOpenClawCodingToolsInternal", "createOpenClawCodingTools"]],
+  ["src/agents/openclaw-tools.ts", ["createOpenClawTools"]],
+  ["src/state/user-profile-list.native.ts", ["hasMultipleSessionSharingIdentitiesNative"]],
   [
     "src/plugin-sdk/sqlite-runtime-legacy.ts",
     [
@@ -22,6 +25,10 @@ const reviewed = new Map<string, readonly string[]>([
   ],
   ["src/sessions/session-upstream-links.ts", ["deleteSessionUpstreamLink"]],
   ["src/sessions/stored-model-overrides.ts", ["resolveStoredModelOverride"]],
+  [
+    "src/gateway/session-catalog-identity.ts",
+    ["createSessionCatalogSourceActorProjector", "createSessionCatalogGitHubLinker"],
+  ],
   [
     "src/plugin-sdk/memory-core-host-engine-sessions.ts",
     ["loadArchivedSessions", "loadMemorySessionMetadata", "resolveMemorySessionTargets"],
@@ -83,6 +90,26 @@ const reviewed = new Map<string, readonly string[]>([
   ],
 ]);
 
+// Mixed SDK receivers retain only these deprecated members, never their live factories.
+const reviewedMembers = new Map<string, readonly string[]>([
+  [
+    "src/agents/harness/host-capability.ts",
+    ["createAgentHarnessHostCapabilities.createToolSurface"],
+  ],
+  [
+    "src/gateway/model-account-connect.ts",
+    [
+      "createModelAccountConnectService.listLinks",
+      "createModelAccountConnectService.link",
+      "createModelAccountConnectService.unlink",
+      "createModelAccountConnectService.list",
+      "createModelAccountConnectService.select",
+      "createModelAccountConnectService.status",
+      "createModelAccountConnectService.cancel",
+    ],
+  ],
+]);
+
 // These are candidates, not exemptions: every value reference must resolve to
 // another proven candidate or an inventory-reviewed worker/maintenance entry.
 const nonRuntimeCandidates = new Map<string, readonly string[]>([
@@ -91,10 +118,114 @@ const nonRuntimeCandidates = new Map<string, readonly string[]>([
     "src/state/github-publication-session-lifecycles.ts",
     ["insertGitHubPublicationSessionLifecycle"],
   ],
+  ["src/state/user-github-connections.kernel.ts", ["listUserGitHubConnectionsInDatabase"]],
+  ["src/state/user-profile-mutation.ts", ["runUserProfileWriteTransaction"]],
+  ["src/gateway/channel-operator-authority.ts", ["resolveChannelOperatorIdentityFacts"]],
+  [
+    "src/state/user-profile-identity.read.ts",
+    [
+      "selectHasMultipleSessionSharingIdentities",
+      "selectUserProfileIdentityInDatabase",
+      "selectUserProfileDisplaysInDatabase",
+      "readUserProfileSnapshotCommand",
+      "readUserProfileIdForEmail",
+    ],
+  ],
+  [
+    "src/state/user-profiles-internal.ts",
+    [
+      "selectUserProfileEmails",
+      "selectProfileDisplayEntries",
+      "selectResolvedUserProfile",
+      "selectResolvedUserProfileById",
+      "selectResolvedUserProfileMetadataById",
+      "requireResolvedUserProfileMetadataById",
+      "requireResolvedUserProfileById",
+      "selectProfileAvatarMetadata",
+      "inspectProfileAvatarInDatabase",
+      "readUserProfileAvatarCommand",
+    ],
+  ],
+  [
+    "src/state/user-profile-list.native.ts",
+    ["getUserProfileDisplaysNative", "readUserProfileAliasesNative"],
+  ],
+  [
+    "src/state/user-channel-identities.ts",
+    ["resolveUserChannelIdentityInDatabase", "resolveUserChannelIdentity"],
+  ],
+  [
+    "src/state/user-profiles-schema.ts",
+    ["ensureUserProfilesSchema", "ensureUserProfileRoleSchema"],
+  ],
+  [
+    "src/state/user-profiles.ts",
+    [
+      "ensureProfileForEmailWithInitialName",
+      "ensureProfileForEmail",
+      "ensureGatewayOwnerProfile",
+      "ensureProfileForTailscaleIdentity",
+    ],
+  ],
+  [
+    "src/state/user-profile-list.ts",
+    ["stageUserProfileCatalogChange", "publishUserProfilesChange"],
+  ],
+  [
+    "src/state/user-profile-github-identity.ts",
+    [
+      "selectStoredGitHubIdentities",
+      "selectProfileAccessEntries",
+      "selectUserProfileGitHubIdentities",
+      "resolveCachedGitHubIdentityInDatabase",
+      "readUserProfileGitHubCommand",
+    ],
+  ],
+]);
+
+// These one-shot owners retain the identity callback only in their returned CLI authority.
+const nonRuntimeMemberForwards = new Map([
+  [
+    "src/gateway/channel-operator-authority.ts",
+    [
+      {
+        caller: "resolveChannelOperatorAdminAuthority",
+        member: "resolveChannelOperatorIdentityFacts.isCurrent",
+        receiver: "captureLinkedOperatorAdmin",
+        argument: 2,
+      },
+      {
+        caller: "resolveUpdateChannelOperatorAdminIdentityAuthority",
+        member: "resolveChannelOperatorIdentityFacts.isCurrent",
+        receiver: "captureLinkedOperatorAdminIdentity",
+        argument: 2,
+      },
+    ],
+  ],
 ]);
 
 // These exact declarations consume their inline callbacks synchronously.
 const synchronousScopes = new Map<string, ReadonlyMap<string, number>>([
+  [
+    "src/config/sessions/session-accessor.sqlite-participants.native.ts",
+    new Map([["recordSessionParticipantWithAliasRead", 2]]),
+  ],
+  [
+    "src/state/openclaw-state-db-readonly.ts",
+    new Map([["withExistingOpenClawStateDatabaseReadOnly", 0]]),
+  ],
+  ["src/state/openclaw-state-db.ts", new Map([["runOpenClawStateWriteTransaction", 0]])],
+  ["src/state/user-profile-mutation.ts", new Map([["runUserProfileWriteTransaction", 0]])],
+  ["src/state/user-profiles-internal.ts", new Map([["readResolvedUserProfile", 1]])],
+  ["src/infra/sqlite-transaction.ts", new Map([["runSqliteDeferredTransactionSync", 1]])],
+  [
+    "src/plugins/runtime/generation-state.ts",
+    new Map([["withPluginRuntimeGenerationRegistryScope", 1]]),
+  ],
+  [
+    "src/agents/harness/host-capability.ts",
+    new Map([["createAgentHarnessHostCapabilities.withToolConstructionScope", 0]]),
+  ],
   ["src/infra/state-database-maintenance.ts", new Map([["withStateDatabaseSchemaMaintenance", 1]])],
   [
     "src/state/openclaw-state-db-maintenance.ts",
@@ -142,7 +273,11 @@ export function inspectDatabaseWorkerBoundaries(
   const nonRuntimeOperations = new Map<string, Map<string, NonRuntimeTier>>();
   const nonRuntimeCallLocations = new Map<string, Set<string>>();
   const violations: string[] = [];
-  if (![...reviewed.keys(), ...nonRuntimeCandidates.keys()].some((file) => sourceTexts.has(file))) {
+  if (
+    ![...reviewed.keys(), ...reviewedMembers.keys(), ...nonRuntimeCandidates.keys()].some((file) =>
+      sourceTexts.has(file),
+    )
+  ) {
     return { operations, callLocations, nonRuntimeOperations, nonRuntimeCallLocations, violations };
   }
   const config = ".openclaw-database-worker-compat.tsconfig.json";
@@ -186,76 +321,6 @@ export function inspectDatabaseWorkerBoundaries(
       symbol && symbol.flags & SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol;
     return target && (forwarded.get(target) ?? target);
   };
-  const isInlineInvocation = (node: ts.Node): boolean => {
-    const call = node.parent;
-    if (!ts.isCallExpression(call)) {
-      return false;
-    }
-    if (call.expression === node) {
-      return true;
-    }
-    const symbol = resolveSymbol(checker.getSymbolAtLocation(call.expression));
-    const declaration = symbol?.valueDeclaration?.resolve();
-    if (!declaration || !ts.isFunctionDeclaration(declaration) || !declaration.name) {
-      return false;
-    }
-    const file = path
-      .relative(root, declaration.getSourceFile().fileName)
-      .split(path.sep)
-      .join("/");
-    const argument = synchronousScopes.get(file)?.get(declaration.name.text);
-    return argument !== undefined && call.arguments[argument] === node;
-  };
-  const registered = new Map<Symbol, BoundaryOperation>();
-  const declarations = new Map<ts.Node, BoundaryOperation>();
-  const declarationNames = new Set<ts.Node>();
-  const families = new Map<BoundaryOperation, Set<BoundaryOperation>>();
-  const names = new Set([...reviewed.values(), ...nonRuntimeCandidates.values()].flat());
-  const sources = [...sourceTexts.keys()].map((file) => {
-    const source = program.getSourceFile(path.resolve(root, file));
-    if (!source) {
-      throw new Error(`Compatibility scan did not load ${file}`);
-    }
-    for (const name of [...(reviewed.get(file) ?? []), ...(nonRuntimeCandidates.get(file) ?? [])]) {
-      const node = source.statements.find(
-        (statement): statement is ts.FunctionDeclaration | ts.ClassDeclaration =>
-          (ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) &&
-          statement.name?.text === name &&
-          (ts.isClassDeclaration(statement) || Boolean(statement.body)),
-      );
-      if (!node?.name) {
-        continue;
-      }
-      const symbol = resolveSymbol(checker.getSymbolAtLocation(node.name));
-      if (!symbol) {
-        throw new Error(`Compatibility scan could not resolve ${file}:${name}`);
-      }
-      const candidate = nonRuntimeCandidates.get(file)?.includes(name) ?? false;
-      const valid =
-        candidate || checker.getJsDocTagsOfSymbol(symbol).some((tag) => tag.name === "deprecated");
-      if (!valid) {
-        violations.push(`${file}:${name}: reviewed compatibility operation must be @deprecated`);
-      }
-      const operation: BoundaryOperation = {
-        file,
-        name,
-        valid,
-        reviewed: true,
-        candidate,
-        nonRuntimeValid: true,
-        entries: new Set(),
-        node,
-      };
-      registered.set(symbol, operation);
-      declarations.set(node, operation);
-      declarationNames.add(node.name);
-    }
-    return { file, source };
-  });
-  // Follow named kernels from the reviewed boundaries. A symbol reference from
-  // outside this closure (or an escaped callback) will make that kernel live.
-  // A returned receiver exists only through its factory. Keep its methods in
-  // the same reachability family; a live factory or escaped member retires it.
   const operationName = (node: ts.Node) => {
     const parts: string[] = [];
     for (let parent: ts.Node | undefined = node; parent; parent = parent.parent) {
@@ -278,6 +343,104 @@ export function inspectDatabaseWorkerBoundaries(
     }
     return parts.join(".");
   };
+  const isInlineInvocation = (node: ts.Node): boolean => {
+    const call = node.parent;
+    if (!ts.isCallExpression(call)) {
+      return false;
+    }
+    if (call.expression === node) {
+      return true;
+    }
+    const symbol = resolveSymbol(checker.getSymbolAtLocation(call.expression));
+    const declaration = symbol?.valueDeclaration?.resolve();
+    const callable =
+      declaration && ts.isVariableDeclaration(declaration) ? declaration.initializer : declaration;
+    if (!callable || !(ts.isFunctionDeclaration(callable) || ts.isArrowFunction(callable))) {
+      return false;
+    }
+    const file = path.relative(root, callable.getSourceFile().fileName).split(path.sep).join("/");
+    const argument = synchronousScopes.get(file)?.get(operationName(callable));
+    return argument !== undefined && call.arguments[argument] === node;
+  };
+  const registered = new Map<Symbol, BoundaryOperation>();
+  const declarations = new Map<ts.Node, BoundaryOperation>();
+  const declarationNames = new Set<ts.Node>();
+  const families = new Map<BoundaryOperation, Set<BoundaryOperation>>();
+  const names = new Set(
+    [...reviewed.values(), ...reviewedMembers.values(), ...nonRuntimeCandidates.values()]
+      .flat()
+      .map((name) => name.split(".").at(-1)!),
+  );
+  const boundaryName = (node: BoundaryOperation["node"]) =>
+    ts.isArrowFunction(node) && ts.isPropertyAssignment(node.parent)
+      ? node.parent.name
+      : "name" in node
+        ? node.name
+        : undefined;
+  const sources = [...sourceTexts.keys()].map((file) => {
+    const source = program.getSourceFile(path.resolve(root, file));
+    if (!source) {
+      throw new Error(`Compatibility scan did not load ${file}`);
+    }
+    for (const name of [
+      ...(reviewed.get(file) ?? []),
+      ...(nonRuntimeCandidates.get(file) ?? []),
+      ...(reviewedMembers.get(file) ?? []),
+    ]) {
+      let node: BoundaryOperation["node"] | undefined = source.statements.find(
+        (statement): statement is ts.FunctionDeclaration | ts.ClassDeclaration =>
+          (ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) &&
+          statement.name?.text === name &&
+          (ts.isClassDeclaration(statement) || Boolean(statement.body)),
+      );
+      const member = reviewedMembers.get(file)?.includes(name);
+      if (member) {
+        const findMember = (child: ts.Node) => {
+          if (
+            (ts.isMethodDeclaration(child) ||
+              (ts.isArrowFunction(child) && ts.isPropertyAssignment(child.parent))) &&
+            operationName(child) === name
+          ) {
+            node = child;
+          }
+          child.forEachChild(findMember);
+        };
+        source.forEachChild(findMember);
+      }
+      const nameNode = node && boundaryName(node);
+      if (!node || !nameNode) {
+        continue;
+      }
+      const symbol = resolveSymbol(checker.getSymbolAtLocation(nameNode));
+      if (!symbol) {
+        throw new Error(`Compatibility scan could not resolve ${file}:${name}`);
+      }
+      const candidate = nonRuntimeCandidates.get(file)?.includes(name) ?? false;
+      const valid =
+        candidate || checker.getJsDocTagsOfSymbol(symbol).some((tag) => tag.name === "deprecated");
+      if (!valid) {
+        violations.push(`${file}:${name}: reviewed compatibility operation must be @deprecated`);
+      }
+      const operation: BoundaryOperation = {
+        file,
+        name,
+        valid,
+        reviewed: true,
+        candidate,
+        nonRuntimeValid: true,
+        entries: new Set(),
+        node,
+      };
+      registered.set(symbol, operation);
+      declarations.set(node, operation);
+      declarationNames.add(nameNode);
+    }
+    return { file, source };
+  });
+  // Follow named kernels from the reviewed boundaries. A symbol reference from
+  // outside this closure (or an escaped callback) will make that kernel live.
+  // A returned receiver exists only through its factory. Keep its methods in
+  // the same reachability family; a live factory or escaped member retires it.
   const addMember = (owner: BoundaryOperation, node: BoundaryOperation["node"]) => {
     let member = declarations.get(node);
     if (!member) {
@@ -432,11 +595,24 @@ export function inspectDatabaseWorkerBoundaries(
       if (primitives.has(symbol.name)) {
         continue;
       }
-      const node = symbol.valueDeclaration?.resolve();
+      const declaration = symbol.valueDeclaration?.resolve();
+      const node =
+        declaration &&
+        ts.isVariableDeclaration(declaration) &&
+        declaration.initializer &&
+        (ts.isArrowFunction(declaration.initializer) ||
+          ts.isFunctionExpression(declaration.initializer))
+          ? declaration.initializer
+          : declaration;
       if (
         !node ||
-        !(ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node)) ||
-        !node.name ||
+        !(
+          ts.isFunctionDeclaration(node) ||
+          ts.isClassDeclaration(node) ||
+          ts.isArrowFunction(node) ||
+          ts.isFunctionExpression(node)
+        ) ||
+        (!(ts.isArrowFunction(node) || ts.isFunctionExpression(node)) && !node.name) ||
         (ts.isFunctionDeclaration(node) && !node.body)
       ) {
         continue;
@@ -461,8 +637,16 @@ export function inspectDatabaseWorkerBoundaries(
       };
       registered.set(symbol, operation);
       declarations.set(node, operation);
-      declarationNames.add(node.name);
-      names.add(node.name.text);
+      const nameNode =
+        declaration && ts.isVariableDeclaration(declaration)
+          ? declaration.name
+          : "name" in node
+            ? node.name
+            : undefined;
+      if (nameNode && ts.isIdentifier(nameNode)) {
+        declarationNames.add(nameNode);
+        names.add(nameNode.text);
+      }
       pending.push(operation);
     }
   }
@@ -603,6 +787,16 @@ export function inspectDatabaseWorkerBoundaries(
     if (known) {
       return known;
     }
+    if (ts.isAwaitExpression(expression) || ts.isParenthesizedExpression(expression)) {
+      return accessSymbol(expression.expression);
+    }
+    if (
+      ts.isCallExpression(expression) &&
+      expression.expression.kind === ts.SyntaxKind.ImportKeyword &&
+      expression.arguments[0]
+    ) {
+      return resolveSymbol(checker.getSymbolAtLocation(expression.arguments[0]));
+    }
     if (ts.isPropertyAccessExpression(expression)) {
       const base = accessSymbol(expression.expression);
       if (base && base.flags & SymbolFlags.Module) {
@@ -610,6 +804,23 @@ export function inspectDatabaseWorkerBoundaries(
       }
     }
     return undefined;
+  };
+  const selectsImportMember = (call: ts.CallExpression): boolean => {
+    let expression: ts.Expression = call;
+    while (
+      (ts.isAwaitExpression(expression.parent) ||
+        ts.isParenthesizedExpression(expression.parent)) &&
+      expression.parent.expression === expression
+    ) {
+      expression = expression.parent;
+    }
+    return (
+      (ts.isPropertyAccessExpression(expression.parent) &&
+        expression.parent.expression === expression) ||
+      (ts.isElementAccessExpression(expression.parent) &&
+        expression.parent.expression === expression &&
+        ts.isStringLiteral(expression.parent.argumentExpression))
+    );
   };
   for (const { file, source } of sources) {
     const references: ts.Node[] = [];
@@ -632,7 +843,8 @@ export function inspectDatabaseWorkerBoundaries(
           (ts.isStringLiteral(node) &&
             ts.isCallExpression(node.parent) &&
             node.parent.expression.kind === ts.SyntaxKind.ImportKeyword &&
-            !handledImports.has(node.parent))) &&
+            !handledImports.has(node.parent) &&
+            !selectsImportMember(node.parent))) &&
         !declarationNames.has(node) &&
         !declarations.has(node.parent) &&
         !(ts.isBindingElement(node.parent) && node.parent.name === node) &&
@@ -686,7 +898,9 @@ export function inspectDatabaseWorkerBoundaries(
           ts.isMethodDeclaration(parent) ||
           ts.isFunctionDeclaration(parent) ||
           ((ts.isArrowFunction(parent) || ts.isFunctionExpression(parent)) &&
-            !isInlineInvocation(parent))
+            !isInlineInvocation(parent) &&
+            // Reviewed worker-only modules retain their callbacks in the worker realm.
+            classifyEntry(file, "") !== "W")
         ) {
           unprovenCallback = ts.isArrowFunction(parent) || ts.isFunctionExpression(parent);
           break;
@@ -709,7 +923,7 @@ export function inspectDatabaseWorkerBoundaries(
           callerEdges.set(owner, calls);
         } else {
           let nonRuntime = false;
-          if ((!callee.reviewed || callee.candidate) && directCall && !unprovenCallback) {
+          if (!unprovenCallback) {
             const enclosingNames: string[] = [];
             for (let parent: ts.Node | undefined = node.parent; parent; parent = parent.parent) {
               if (
@@ -722,8 +936,35 @@ export function inspectDatabaseWorkerBoundaries(
             }
             const name = enclosingNames.join(".");
             const tier = classifyEntry(file, name);
-            nonRuntime = tier !== undefined || isNonRuntime(file, name);
-            if (tier) {
+            const consumer = expression.parent;
+            const receiver =
+              ts.isCallExpression(consumer) &&
+              resolveSymbol(
+                checker.getSymbolAtLocation(consumer.expression),
+              )?.valueDeclaration?.resolve();
+            const reviewedForward =
+              tier === "T3" &&
+              ts.isCallExpression(consumer) &&
+              receiver &&
+              ts.isFunctionDeclaration(receiver) &&
+              path.relative(root, receiver.getSourceFile().fileName).split(path.sep).join("/") ===
+                file &&
+              nonRuntimeMemberForwards
+                .get(file)
+                ?.some(
+                  (forward) =>
+                    forward.caller === name &&
+                    callee.file === file &&
+                    forward.member === callee.name &&
+                    forward.receiver === operationName(receiver) &&
+                    consumer.arguments[forward.argument] === expression,
+                );
+            nonRuntime = Boolean(
+              (directCall || reviewedForward) &&
+              (tier !== undefined ||
+                ((!callee.reviewed || callee.candidate) && isNonRuntime(file, name))),
+            );
+            if (nonRuntime && tier) {
               callee.entries.add(tier);
             } else {
               callee.nonRuntimeValid = false;

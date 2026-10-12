@@ -267,7 +267,7 @@ suite.define(() => {
           ancestorSessions: [],
         });
         await activePane.locator(".chat-working-indicator").waitFor();
-        await activePane.locator(".agent-chat__composer-run-status--working").waitFor();
+        expect(await activePane.locator(".agent-chat__composer-run-status").count()).toBe(0);
         expect(await waitLine.count()).toBe(0);
         expect(await panel.isVisible()).toBe(true);
         await activePane.getByRole("button", { name: "Close Subagents", exact: true }).click();

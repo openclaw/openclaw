@@ -24,6 +24,7 @@ import { canonicalSessionValidationQuery } from "./session-canonical-key.js";
 import { sessionColdArchiveMetadataColumns } from "./session-cold-storage-state.js";
 import { normalizeSessionContextEntryBoundaries } from "./session-entry-navigation.js";
 import { sessionEntrySnapshotColumnsForKeys } from "./session-entry-snapshots.js";
+import { projectSessionTranscriptFacts } from "./session-transcript-projection-facts.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
 import { transcriptEventModelNavigationSql } from "./transcript-payload.js";
 import {
@@ -414,6 +415,7 @@ export function hydrateSessionActorState(
 /** Derives disclosure only from the actor's owned postimage, without touching SQLite. */
 export function projectSessionActorHotState(state: SessionActorStoredState): SessionActorHotState {
   const hot = structuredClone(state.hot);
+  hot.transcript.projection = projectSessionTranscriptFacts(state);
   hot.hasBoard = state.hasBoard;
   hot.dependencySessionIds = [
     ...new Set([

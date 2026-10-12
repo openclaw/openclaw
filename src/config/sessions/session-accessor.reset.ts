@@ -293,27 +293,32 @@ export async function commitReplySessionInitialization(params: {
       ...params,
       storePath,
     });
-  const store = await measureDiagnosticsTimelineSpan("reply.session.commit.fresh_read", () =>
-    loadReplySessionInitializationEntriesAsync({ ...params, storePath }, database, source),
-  );
-  const resolved = resolveSessionEntryFromStore({ store, sessionKey: params.sessionKey });
-  const currentEntry = resolved.existing ? { ...resolved.existing } : undefined;
-  const revision = createReplySessionInitializationRevision(currentEntry);
-  if (revision !== params.expectedRevision) {
-    return createStaleReplySessionInitializationResult(currentEntry);
-  }
-
-  const readEntry = (sessionKey: string) => {
-    const entry = resolveSessionEntryFromStore({ store, sessionKey }).existing;
-    return entry ? { ...entry } : undefined;
-  };
-  const sessionEntry = params.prepareSessionEntry
-    ? await params.prepareSessionEntry({
+  const sessionKey = normalizeStoreSessionKey(params.sessionKey);
+  const needsPreparationSnapshot = Boolean(params.prepareSessionEntry || params.bindCreation);
+  let store: Record<string, SessionEntry> = {};
+  let currentEntry: SessionEntry | undefined;
+  let sessionEntry = params.sessionEntry;
+  if (needsPreparationSnapshot) {
+    // Parent-fork preparation can append transcripts; creation binds live authority.
+    // Both need their snapshot before lifecycle planning starts.
+    store = await measureDiagnosticsTimelineSpan("reply.session.commit.fresh_read", () =>
+      loadReplySessionInitializationEntriesAsync({ ...params, storePath }, database, source),
+    );
+    currentEntry = store[sessionKey] ? { ...store[sessionKey] } : undefined;
+    if (createReplySessionInitializationRevision(currentEntry) !== params.expectedRevision) {
+      return createStaleReplySessionInitializationResult(currentEntry);
+    }
+    if (params.prepareSessionEntry) {
+      sessionEntry = await params.prepareSessionEntry({
         ...(currentEntry ? { currentEntry } : {}),
-        readEntry,
-        sessionEntry: params.sessionEntry,
-      })
-    : params.sessionEntry;
+        readEntry: (key) => {
+          const entry = resolveSessionEntryFromStore({ store, sessionKey: key }).existing;
+          return entry ? { ...entry } : undefined;
+        },
+        sessionEntry,
+      });
+    }
+  }
   let staleCommit: SessionEntry | null | undefined;
   let committedSessionEntry = sessionEntry;
   let beforeEntryMutationDone = false;
@@ -327,10 +332,26 @@ export async function commitReplySessionInitialization(params: {
   let preparedUpserts: ReturnType<typeof resolveReplySessionInitializationUpserts> | undefined;
   const upserts: SessionEntryLifecycleUpsert[] = [
     {
-      sessionKey: resolved.normalizedKey,
+      sessionKey,
+      ...(!needsPreparationSnapshot ? { relatedSessionKeys: params.relatedSessionKeys ?? [] } : {}),
       ...(params.routeContext !== undefined ? { routeContext: params.routeContext } : {}),
       ...(params.resetBoundary ? { resetBoundary: params.resetBoundary } : {}),
-      buildEntry: async ({ currentEntry: commitEntry }) => {
+      buildEntry: async ({ currentEntry: commitEntry, readEntry }) => {
+        if (!needsPreparationSnapshot) {
+          for (const key of [
+            sessionKey,
+            ...(params.relatedSessionKeys ?? []),
+            commitEntry?.parentSessionKey,
+          ]) {
+            if (!key) {
+              continue;
+            }
+            const entry = readEntry(key);
+            if (entry) {
+              store[normalizeStoreSessionKey(key)] = entry;
+            }
+          }
+        }
         preparedUpserts = resolveReplySessionInitializationUpserts(descriptor, commitEntry);
         if (preparedUpserts.kind === "stale") {
           staleCommit = preparedUpserts.currentEntry ? { ...preparedUpserts.currentEntry } : null;
@@ -377,7 +398,7 @@ export async function commitReplySessionInitialization(params: {
         await withSessionEntryCreationPublication(
           {
             agentId: params.agentId,
-            sessionKey: resolved.normalizedKey,
+            sessionKey,
             file: {
               path: database.path,
               agentId: captured.agentId,
@@ -411,25 +432,25 @@ export async function commitReplySessionInitialization(params: {
         error.operationLabel === "session maintenance"
       ) &&
       (!(error instanceof SessionEntryLifecycleUpsertConflictError) ||
-        error.sessionKey !== resolved.normalizedKey)
+        error.sessionKey !== sessionKey)
     ) {
       throw error;
     }
     const current = await loadReplySessionInitializationEntriesAsync(
       {
         agentId: params.agentId,
-        sessionKey: resolved.normalizedKey,
+        sessionKey,
         storePath,
       },
       database,
       source?.key.startsWith("file:") ? source : undefined,
     );
-    return createStaleReplySessionInitializationResult(current[resolved.normalizedKey]);
+    return createStaleReplySessionInitializationResult(current[sessionKey]);
   }
   if (staleCommit !== undefined) {
     return createStaleReplySessionInitializationResult(staleCommit ?? undefined);
   }
-  store[resolved.normalizedKey] = committedSessionEntry;
+  store[sessionKey] = committedSessionEntry;
   if (params.retiredEntry) {
     store[params.retiredEntry.key] = params.retiredEntry.entry;
   }

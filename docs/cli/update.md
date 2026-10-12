@@ -784,6 +784,12 @@ retired, and registered custom agent stores and names every incompatible store
 before changing the installation or stopping the Gateway. State newer than the
 updater can read retains a single install-compatible-build or restore-backup refusal.
 
+During candidate validation, Doctor leaves bookkeeping-only version, wizard, and
+migration stamps out of the copied config so older updaters do not mistake them
+for required config repairs. Webhook completion without endpoint changes is
+recorded in the rehearsal state. Real config migrations still run; normal config
+writes after activation record the candidate's version and migration metadata.
+
 If database schema preflight cannot inspect the configured paths because the
 config is invalid, its refusal lists the config file and invalid fields. Run
 `openclaw doctor --fix` to repair retired or unrecognized fields, correct any

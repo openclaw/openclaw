@@ -10,6 +10,7 @@ import type {
   SessionRowTranscriptFields,
   SessionRowTranscriptReadParams,
 } from "./session-row-transcript-backfill.types.js";
+import { SESSION_ROW_TRANSCRIPT_PREVIEW_MAX_BYTES } from "./session-row-transcript-preview.js";
 import { sqliteMessageEventWithSeq } from "./session-transcript-entry-message.js";
 
 /** The retained history worker reads bounded preview and terminal fallback facts. */
@@ -26,7 +27,7 @@ export function readSessionRowTranscriptFields(
       : undefined;
     const tail = readSessionTranscriptBoundedMessageTailPage(transcriptScope, {
       maxMessages: 20,
-      maxBytes: 64 * 1024,
+      maxBytes: SESSION_ROW_TRANSCRIPT_PREVIEW_MAX_BYTES,
       offset: 0,
       readOnly: true,
     });

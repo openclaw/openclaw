@@ -6,7 +6,7 @@ import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import type { WidgetPresenter } from "../plugins/plugin-registration.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import * as userProfileList from "../state/user-profile-list.js";
+import * as userProfileList from "../state/user-profile-list.native.js";
 import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { createCodeModeTools } from "./code-mode.js";
@@ -120,7 +120,7 @@ describe("openclaw-tools progress_card gating", () => {
     "gates personal instructions on multiple people (%s) without general filesystem access",
     (multipleProfiles) => {
       const identityCount = vi
-        .spyOn(userProfileList, "hasMultipleSessionSharingIdentities")
+        .spyOn(userProfileList, "hasMultipleSessionSharingIdentitiesNative")
         .mockReturnValue(multipleProfiles);
       const tools = createOpenClawCodingTools({
         sessionKey: "agent:main:dashboard:project",

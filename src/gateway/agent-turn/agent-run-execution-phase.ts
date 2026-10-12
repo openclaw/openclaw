@@ -312,6 +312,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
             task: message,
             gatewayContextResolver: params.context.resolveGatewayContext,
             assertCurrent: assertDispatchCurrent,
+            acpSession: params,
           });
         }
         if (

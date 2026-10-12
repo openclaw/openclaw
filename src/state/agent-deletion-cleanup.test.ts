@@ -115,63 +115,47 @@ function expectPublishedArchive(databasePath: string, sessionId: string, content
 }
 
 describe("agent deletion database cleanup authority", () => {
-  it.each([true])(
-    "purges through the live deletion owner without host SQLite (warm survivor: %s)",
-    async (survivor) => {
-      const f = fixture();
-      const target = survivor
-        ? { agentId: "kept", path: path.join(f.root, "shared.sqlite") }
-        : f.target;
-      const survivingDatabase = survivor
-        ? openOpenClawAgentDatabase({ ...f.options, ...target })
-        : undefined;
-      const scope = { ...f.options, storePath: target.path, sessionKey: "agent:worker:main" };
-      if (survivor) {
-        replaceSessionEntrySync(scope, { sessionId: "before", updatedAt: 1 });
-      }
-      appendTranscriptEventSync(
-        { ...scope, sessionId: "before" },
-        { type: "proof", data: "retirement archive proof" },
-      );
-      if (!survivor) {
-        await closeOpenClawAgentDatabaseByPathAsync(target.path, target.agentId);
-      }
-      const cfg = {
-        agents: { entries: { worker: {}, kept: {} } },
-        session: { store: target.path, maintenance: { mode: "warn" as const } },
-      };
-      await f.withDeletion(async (deletion) => {
-        const sql = observeHostDataSql();
-        try {
-          await deletion.runDatabaseCleanup(target, () =>
-            purgeDeletedAgentSessionEntries({
-              cfg,
-              agentId: "worker",
-              storeAgentId: target.agentId,
-              storePath: target.path,
-              env: f.options.env,
-            }),
-          );
-          expect(
-            sql.queries.filter((query) =>
-              /\b(?:agent_deletion_journal|state_leases|session_nodes|session_windows|transcript_events|session_transcript_archives)\b/i.test(
-                query,
-              ),
+  it("purges through the live deletion owner without host SQLite with a warm survivor", async () => {
+    const f = fixture();
+    const target = { agentId: "kept", path: path.join(f.root, "shared.sqlite") };
+    const survivingDatabase = openOpenClawAgentDatabase({ ...f.options, ...target });
+    const scope = { ...f.options, storePath: target.path, sessionKey: "agent:worker:main" };
+    replaceSessionEntrySync(scope, { sessionId: "before", updatedAt: 1 });
+    appendTranscriptEventSync(
+      { ...scope, sessionId: "before" },
+      { type: "proof", data: "retirement archive proof" },
+    );
+    const cfg = {
+      agents: { entries: { worker: {}, kept: {} } },
+      session: { store: target.path, maintenance: { mode: "warn" as const } },
+    };
+    await f.withDeletion(async (deletion) => {
+      const sql = observeHostDataSql();
+      try {
+        await deletion.runDatabaseCleanup(target, () =>
+          purgeDeletedAgentSessionEntries({
+            cfg,
+            agentId: "worker",
+            storeAgentId: target.agentId,
+            storePath: target.path,
+            env: f.options.env,
+          }),
+        );
+        expect(
+          sql.queries.filter((query) =>
+            /\b(?:agent_deletion_journal|state_leases|session_nodes|session_windows|transcript_events|session_transcript_archives)\b/i.test(
+              query,
             ),
-          ).toEqual([]);
-        } finally {
-          sql.restore();
-        }
-      });
-      expect(loadSessionEntryReadOnly(scope)).toBeUndefined();
-      expectPublishedArchive(target.path, "before", "retirement archive proof");
-      if (survivingDatabase) {
-        expect(survivingDatabase.db.isOpen).toBe(true);
-      } else {
-        expect(getOpenClawAgentDatabaseIfOpen(f.options)).toBeUndefined();
+          ),
+        ).toEqual([]);
+      } finally {
+        sql.restore();
       }
-    },
-  );
+    });
+    expect(loadSessionEntryReadOnly(scope)).toBeUndefined();
+    expectPublishedArchive(target.path, "before", "retirement archive proof");
+    expect(survivingDatabase.db.isOpen).toBe(true);
+  });
 
   it("retains an accepted archive export when journal takeover refuses its publication receipt", async () => {
     const f = fixture();
@@ -936,42 +920,33 @@ describe("agent deletion database cleanup authority", () => {
     },
   );
 
-  it.each([true])(
-    "retains failed cleanup close ownership (operation also failed: %s)",
-    async (failRun) => {
-      const f = fixture();
-      await f.withDeletion(async (deletion) => {
-        let retained: ReturnType<typeof openOpenClawAgentDatabase> | undefined;
-        const closeError = new Error("held native close");
-        const runError = new Error("cleanup operation failed");
-        const running = deletion.runDatabaseCleanup(f.target, async () => {
-          retained = openOpenClawAgentDatabase(f.options);
-          vi.spyOn(retained.db, "close").mockImplementationOnce(() => {
-            throw closeError;
-          });
-          if (failRun) {
-            throw runError;
-          }
+  it("retains close ownership when cleanup and close both fail", async () => {
+    const f = fixture();
+    await f.withDeletion(async (deletion) => {
+      let retained: ReturnType<typeof openOpenClawAgentDatabase> | undefined;
+      const closeError = new Error("held native close");
+      const runError = new Error("cleanup operation failed");
+      const running = deletion.runDatabaseCleanup(f.target, async () => {
+        retained = openOpenClawAgentDatabase(f.options);
+        vi.spyOn(retained.db, "close").mockImplementationOnce(() => {
+          throw closeError;
         });
-        if (failRun) {
-          await expect(running).rejects.toMatchObject({ errors: [runError, closeError] });
-        } else {
-          await expect(running).rejects.toBe(closeError);
-        }
-        expect(retained?.db.isOpen).toBe(true);
-        expect(() => openOpenClawAgentDatabase(f.options)).toThrow("active deletion cleanup");
-        expect(() => assertNoOpenClawAgentDatabaseLeases("worker", { env: f.options.env })).toThrow(
-          "database is still open",
-        );
-        expect(closeOpenClawAgentDatabaseByPath(f.target.path, "worker")).toBe(true);
-        await deletion.runDatabaseCleanup(f.target, async () => f.write("retried"));
-        expect(f.read()).toBe("retried");
-        expect(() =>
-          assertNoOpenClawAgentDatabaseLeases("worker", { env: f.options.env }),
-        ).not.toThrow();
+        throw runError;
       });
-    },
-  );
+      await expect(running).rejects.toMatchObject({ errors: [runError, closeError] });
+      expect(retained?.db.isOpen).toBe(true);
+      expect(() => openOpenClawAgentDatabase(f.options)).toThrow("active deletion cleanup");
+      expect(() => assertNoOpenClawAgentDatabaseLeases("worker", { env: f.options.env })).toThrow(
+        "database is still open",
+      );
+      expect(closeOpenClawAgentDatabaseByPath(f.target.path, "worker")).toBe(true);
+      await deletion.runDatabaseCleanup(f.target, async () => f.write("retried"));
+      expect(f.read()).toBe("retried");
+      expect(() =>
+        assertNoOpenClawAgentDatabaseLeases("worker", { env: f.options.env }),
+      ).not.toThrow();
+    });
+  });
 
   it("never exempts a foreign deletion journal's overlapping path", async () => {
     const f = fixture();

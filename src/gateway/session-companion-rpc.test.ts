@@ -94,6 +94,9 @@ describe("session companion RPC", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await captureRuntimeConfigAsyncReader()();
       const client = { ...roleClient("view", "companion-policy"), connId: "policy-connection" };
+      using _ = {
+        [Symbol.dispose]: (await profileReader.prepareUserProfileCatalog()).release,
+      };
       const cfg = rolePolicyConfig();
       cfg.agents = {
         entries: { main: {} },
@@ -309,6 +312,9 @@ describe("session companion RPC", () => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         await captureRuntimeConfigAsyncReader()();
         const owner = ensureProfileForEmail("owner@example.test");
+        using _ = {
+          [Symbol.dispose]: (await profileReader.prepareUserProfileCatalog()).release,
+        };
         const sessionKey = "agent:main:owner-private";
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey },

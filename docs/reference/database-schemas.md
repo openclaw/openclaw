@@ -11,6 +11,11 @@ title: "Database schemas"
 
 OpenClaw stores control-plane state in the shared state database and agent data in one SQLite database per agent. Schema migrations run forward when a database opens. Older OpenClaw builds refuse databases written by a newer schema.
 
+PostgreSQL shared-state generation requires PostgreSQL 16+, preserves lazy feature
+fragments, and keeps engine schema versions in lockstep. See
+[shared-state schema generation](/reference/database-schemas/storage-changes#shared-state-postgresql-schema-generation)
+for catalog equivalence and the explicit v22 pending-promotion exceptions.
+
 The Gateway process is the single owner of every OpenClaw database and its state.
 Its workers and native handles share that ownership. Committed write receipts
 invalidate in-process row caches before their next use; a cache without complete
@@ -104,6 +109,14 @@ reusable after the snapshot ends. Autocommit caches use the owning writer's rece
 Closing a connection clears its prepared statements and row caches. Final close
 also retires physical-database admission, keeping only the host's identity descriptor
 until explicit retirement can safely close it without releasing sibling POSIX locks.
+
+Canonical auth reads pass a compact projection of the live owner's schema facts
+(user version and the two auth table classifications) to the isolated child. The
+child reads current credential rows and closes its native reader before transferring
+them, without repeating schema admission on each request. It retains neither schema
+catalogs nor open handles between requests. Cold, snapshot, and artifact-preserving
+reads still admit their own database; owner DDL invalidates the next projection,
+and a replacement physical file cannot borrow the previous file's facts.
 
 Worker dispatch carries snapshots prepared by the admission owner when it publishes
 facts or writer custody. Unchanged requests reuse the registry revision without

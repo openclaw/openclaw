@@ -258,6 +258,9 @@ together. The personal order survives reloads. A temporarily unavailable plugin
 keeps its saved position for when it returns. Home, Inbox, and the account controls
 stay fixed at the bottom; unpinning a destination does not remove it from Pages.
 
+When you reload a conversation, saved pin labels remain visible while the selected
+chat loads. Pins outside the loaded session list refresh in the background afterward.
+
 To reorder a rail shortcut without dragging, right-click it, touch and hold it for
 half a second, or focus it and
 press Shift+F10 or the Context Menu key. Choose **Move up**, **Move down**, or

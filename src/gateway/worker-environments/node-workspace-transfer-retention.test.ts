@@ -13,6 +13,7 @@ import { createStagedInputOwnershipFixture } from "../../media/staged-inputs.tes
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
 import { captureGitHubPublicationWorkspaceSnapshot } from "../github-publication-git-transport.js";
 import { createNodeWorkerWorkspaceActions } from "./node-worker-workspace-actions.js";
+import { createNodeWorkerWorkspaceFallback } from "./node-worker-workspace-fallback.js";
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import {
   startNodeWorkspaceTransferTestServer,
@@ -382,6 +383,8 @@ it("restores node reconciliation after Gateway bootstrap changes without replaci
   await requireGit(localPath, ["init", "--quiet"]);
   await requireGit(localPath, ["config", "user.name", "Workspace Test"]);
   await requireGit(localPath, ["config", "user.email", "workspace@example.invalid"]);
+  const sourceOrigin = "git://127.0.0.1:19418/origin.git";
+  await requireGit(localPath, ["remote", "add", "origin", sourceOrigin]);
   await requireGit(localPath, ["add", "."]);
   await requireGit(localPath, ["commit", "--quiet", "-m", "base before dispatch"]);
   const baseCommit = (await requireGit(localPath, ["rev-parse", "HEAD"])).trim();
@@ -432,12 +435,24 @@ it("restores node reconciliation after Gateway bootstrap changes without replaci
         ),
     });
   try {
-    const synced = await createActions().syncWorkspace({
+    const actions = createActions();
+    const synced = await actions.syncWorkspace({
       source: { kind: "local", path: localPath },
       sessionId,
       generation: ownerEpoch,
     });
     const remote = synced.remoteWorkspaceDir;
+    expect((await requireGit(remote, ["remote", "get-url", "origin"])).trim()).toBe(sourceOrigin);
+    expect((await requireGit(remote, ["config", "--get", "remote.origin.fetch"])).trim()).toBe(
+      "+refs/heads/*:refs/remotes/origin/*",
+    );
+    const nodeOrigin = "git://127.0.0.1:19418/node-owned.git";
+    await requireGit(remote, ["remote", "set-url", "origin", nodeOrigin]);
+    await createNodeWorkerWorkspaceFallback(actions.runWorkspaceCommand).finalizeSync(
+      { localPath, sessionId, generation: ownerEpoch },
+      synced,
+    );
+    expect((await requireGit(remote, ["remote", "get-url", "origin"])).trim()).toBe(nodeOrigin);
     for (const name of ["SOUL.md", "USER.md", "IDENTITY.md"]) {
       await fs.writeFile(path.join(localPath, name), `local bootstrap ${name}\n`);
     }

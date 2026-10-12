@@ -46,6 +46,7 @@ export function createSessionActorCommittedOutcome<
   before: SessionActorHotState;
   after: SessionActorHotState;
   payloads?: ReadonlyMap<number, { event: unknown; serializedBytes: number }>;
+  transcriptAuthority?: SessionActorReceipt["transcript"]["authorityReceipts"];
   applied: {
     value: Value;
     pendingInputMutationReceipt?: PendingInputMutationReceipt;
@@ -83,6 +84,7 @@ export function createSessionActorCommittedOutcome<
         appendedMessages:
           turn?.result.appendedMessages ?? (appended && "messageId" in appended ? [appended] : []),
         appendedEvents: collectAppendedEvents(before, after, params.payloads),
+        authorityReceipts: params.transcriptAuthority,
         append,
         projectionNeedsReconcile:
           Boolean(turn?.projectionNeedsReconcile) ||

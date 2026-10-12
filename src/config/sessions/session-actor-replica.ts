@@ -34,6 +34,7 @@ import type { SessionEntrySnapshotField } from "./session-entry-snapshot-values.
 import { deriveSessionPredicateColumns } from "./session-predicate-columns.js";
 import type { SessionRowDatabaseFacts } from "./session-row-facts.types.js";
 import type { SessionTranscriptAnchorSelection } from "./session-transcript-anchor-read.kernel.js";
+import type { SessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts.types.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
 
 export type SessionActorEntryFacts = Pick<
@@ -352,6 +353,37 @@ function touch(cell: ReplicaCell): void {
     discard(candidate);
     forgetUnused(candidate);
   }
+}
+
+/** The receiving worker checks this receipt against its admitted database once. */
+export function readSessionActorProjectionReceipt(
+  params: Pick<SessionTranscriptProjectionReceipt, "path" | "sessionId"> & { sessionKey?: string },
+): SessionTranscriptProjectionReceipt | undefined {
+  for (const cell of pool.cells.values()) {
+    const { database, sessionKey } = cell.target;
+    const snapshot = cell.snapshot;
+    if (
+      database.kind !== "file" ||
+      database.nativeLocation !== params.path ||
+      (params.sessionKey !== undefined && sessionKey !== params.sessionKey) ||
+      snapshot?.entry?.sessionId !== params.sessionId ||
+      !snapshot.transcript.projection
+    ) {
+      continue;
+    }
+    touch(cell);
+    return {
+      path: database.nativeLocation,
+      sessionId: params.sessionId,
+      writeToken: snapshot.writeToken,
+      writeScopes: [
+        ...collectSessionEntryLookupKeys(sessionKey),
+        ...snapshot.dependencySessionIds.map(sqliteSessionIdWriteScope),
+      ],
+      facts: snapshot.transcript.projection,
+    };
+  }
+  return undefined;
 }
 
 function readCurrentEntryCell(target: FileTarget) {

@@ -123,6 +123,7 @@ const webkitTestFiles = [
   "src/components/web-awesome.test.ts",
   "src/components/web-awesome-theme.browser.test.ts",
   "src/components/menu-surface.browser.test.ts",
+  "src/components/session-progress-hovercard.browser.test.ts",
   "src/components/modal-dialog.test.ts",
   "src/components/tooltip.test.ts",
   "src/components/tooltip.browser.test.ts",

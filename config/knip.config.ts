@@ -183,6 +183,8 @@ const repositoryScriptEntries = [
   "scripts/fixtures/packed-plugin-sdk-type-smoke.ts!",
   // Generates the native browser page scripts from their UI source modules.
   "scripts/generate-browser-inspect-script-swift.mts!",
+  // db:postgres:gen and db:postgres:check invoke the canonical schema generator by path.
+  "scripts/generate-postgres-schema.mts!",
   // The diagnostics guide invokes the sustained Gateway heap rig by path.
   "scripts/gateway-heap-rig.mjs!",
   // The diagnostics guide invokes this offline snapshot comparison CLI by path.

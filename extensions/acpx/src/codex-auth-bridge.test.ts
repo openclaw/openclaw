@@ -140,7 +140,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
 
   it.each([
     { agent: "codex", packageName: "codex-acp", version: "2.1.1" },
-    { agent: "claude", packageName: "claude-agent-acp", version: "0.85.1" },
+    { agent: "claude", packageName: "claude-agent-acp", version: "0.86.0" },
   ] as const)(
     "launches $agent after its captured adapter is removed",
     async ({ agent, packageName, version }) => {

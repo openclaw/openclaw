@@ -931,6 +931,7 @@ describe("createGatewayKernel", () => {
         "config.auth.secrets-activate",
         "agents.github-profile-cleanup",
         "plugins.bootstrap-imports",
+        "cron.store-path",
         "plugins.bootstrap",
         "gateway.kernel-state",
         "node-desktop.runtime-import",

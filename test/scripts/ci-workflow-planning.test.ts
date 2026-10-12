@@ -11363,20 +11363,16 @@ describe("ci workflow guards", () => {
         runner: "ubuntu-24.04",
         timeout_minutes: 20,
       });
-      if (releaseGate) {
-        expect(row.shard_name).toBe("manual-inventory");
-      } else {
-        for (const field of ["shard_name", "git_commits", "requires_dist"]) {
-          expect(row).not.toHaveProperty(field);
-        }
-        for (const field of [
-          "requires_bun",
-          "requires_go",
-          "requires_ripgrep",
-          "requires_sandbox_image",
-        ]) {
-          expect(row[field]).not.toBe(false);
-        }
+      for (const field of ["shard_name", "git_commits", "requires_dist"]) {
+        expect(row).not.toHaveProperty(field);
+      }
+      for (const field of [
+        "requires_bun",
+        "requires_go",
+        "requires_ripgrep",
+        "requires_sandbox_image",
+      ]) {
+        expect(row[field]).not.toBe(false);
       }
       for (const field of ["groups", "configs", "includePatterns"]) {
         expect(row).not.toHaveProperty(field);
