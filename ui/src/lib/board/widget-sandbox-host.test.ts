@@ -1,6 +1,32 @@
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { WIDGET_HTML_MAX_UTF8_BYTES } from "../../../../packages/gateway-protocol/src/schema/canvas.ts";
 import type { BoardWidget } from "./types.ts";
 import { BoardWidgetSandboxHost } from "./widget-sandbox-host.ts";
+
+async function listenOnLoopback(server: Server): Promise<string> {
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  const address = server.address() as AddressInfo;
+  return `http://127.0.0.1:${address.port}`;
+}
+
+async function closeServer(server: Server): Promise<void> {
+  if (!server.listening) {
+    return;
+  }
+  const closed = new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+  server.closeAllConnections();
+  await closed;
+}
 
 const SANDBOX_URL = "https://sandbox.example/mcp-app-sandbox";
 
@@ -935,5 +961,57 @@ describe("BoardWidgetSandboxHost", () => {
     expect(onReadyTimeout).toHaveBeenCalledTimes(2);
     expect(reloadSpy).toHaveBeenCalledOnce();
     expect(onLoadFailed).not.toHaveBeenCalled();
+  });
+
+  it("rejects Gateway widget HTML that advertises more than the protocol byte cap", async () => {
+    let socketClosed = false;
+    let requestCount = 0;
+    const advertised = WIDGET_HTML_MAX_UTF8_BYTES + 1;
+    const server = createServer((request, response) => {
+      requestCount += 1;
+      request.socket.once("close", () => {
+        socketClosed = true;
+      });
+      // Advertise oversize Content-Length and leave the body open so cancel is
+      // visible as a closed TCP socket instead of a full download.
+      response.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "content-length": String(advertised),
+      });
+      response.write("<!doctype html><p>partial</p>");
+    });
+    const origin = await listenOnLoopback(server);
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    const onError = vi.fn();
+    const onLoadFailed = vi.fn();
+    const onLoaded = vi.fn();
+    const host = new BoardWidgetSandboxHost(
+      hostOptions(frame, {
+        onError,
+        onLoadFailed,
+        onLoaded,
+        sourceOrigin: origin,
+        resolveFrameUrl: () => "/widget",
+      }),
+    );
+    notifyProxyReady(host, frame);
+    try {
+      await vi.waitFor(() => expect(onError).toHaveBeenCalledOnce());
+      expect(onLoaded).not.toHaveBeenCalled();
+      expect(onLoadFailed).not.toHaveBeenCalled();
+      expect(onError.mock.calls[0]?.[0]).toMatchObject({
+        kind: "rejected",
+        message: "widget HTML exceeds 10 MiB; regenerate a smaller widget",
+      });
+      expect(requestCount).toBe(1);
+      await vi.waitFor(() => expect(socketClosed).toBe(true), { timeout: 2_000 });
+      console.log(
+        `[board widget html cap proof] transport=node:http+fetch cap_bytes=${WIDGET_HTML_MAX_UTF8_BYTES} advertised=${advertised} rejected=true socket_closed=true`,
+      );
+    } finally {
+      host.dispose();
+      await closeServer(server);
+    }
   });
 });
