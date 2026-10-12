@@ -9,9 +9,9 @@ import {
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
   listSessionEntriesCore,
-  loadSessionEntry,
   loadTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
+import { readSessionEntryInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import {
   scanSessionTranscriptTree,
   type SessionTranscriptTree,
@@ -142,7 +142,7 @@ export async function readBtwTranscriptMessages(params: {
         : [];
     const suppliedEntry =
       marker && params.sessionKey && !completeTarget
-        ? loadSessionEntry({
+        ? await readSessionEntryInWorker({
             agentId: marker.agentId,
             sessionKey: params.sessionKey,
             storePath: marker.storePath,

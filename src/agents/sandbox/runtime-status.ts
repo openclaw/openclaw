@@ -13,10 +13,7 @@ import {
   resolveSessionStorePathWithContext,
 } from "../../config/sessions/paths.js";
 import { loadSessionEntryReadOnlyResultInScope } from "../../config/sessions/session-accessor.sqlite-entry.js";
-import {
-  loadExactSessionEntryCandidatesReadOnlyBatch,
-  resolveSessionEntry,
-} from "../../config/sessions/session-accessor.sqlite-exact-read.js";
+import { resolveSessionEntry } from "../../config/sessions/session-accessor.sqlite-exact-read.js";
 import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope-helpers.js";
 import { assertSessionEntryCohortScope } from "../../config/sessions/session-entry-cohort-scope.js";
 import { captureNativeSessionEntryCurrentRead } from "../../config/sessions/session-entry-current-runtime.js";
@@ -30,6 +27,7 @@ import {
   isNativeSessionEntryRead,
 } from "../../config/sessions/session-entry-read-request.js";
 import {
+  readSessionEntriesFromStoreInWorker,
   withSessionEntryReadOnlyInWorker,
   withSessionEntriesFromStoreInWorker,
   withSessionEntriesFromStoresInWorker,
@@ -394,7 +392,7 @@ export function withSandboxRuntimeStatusesInWorker<T>(
 }
 
 /** Classifies durable canonical keys without admitting the same store once per session. */
-export function resolveSandboxRuntimeStatusesForPersistedSessions(
+export async function resolveSandboxRuntimeStatusesForPersistedSessions(
   requests: readonly {
     cfg: OpenClawConfig;
     agentId: string;
@@ -402,26 +400,27 @@ export function resolveSandboxRuntimeStatusesForPersistedSessions(
     env: NodeJS.ProcessEnv;
   }[],
 ) {
-  const results = loadExactSessionEntryCandidatesReadOnlyBatch(
-    requests.map((params) => ({
-      agentId: params.agentId,
-      env: params.env,
-      storePath: resolveSessionStorePathCore(params.cfg.session?.store, {
-        agentId: params.agentId,
-        env: params.env,
-      }),
-      projection: "list" as const,
-      sessionKeys: params.sessionKeys.map((sessionKey) =>
-        canonicalizeMainSessionAlias({ ...params, sessionKey }),
-      ),
-    })),
+  const results = await Promise.all(
+    requests.map((params) =>
+      params.sessionKeys.length === 0
+        ? { entries: [] }
+        : readSessionEntriesFromStoreInWorker({
+            agentId: params.agentId,
+            env: params.env,
+            storePath: resolveSessionStorePathCore(params.cfg.session?.store, {
+              agentId: params.agentId,
+              env: params.env,
+            }),
+            projection: "list" as const,
+            sessionKeys: params.sessionKeys.map((sessionKey) =>
+              canonicalizeMainSessionAlias({ ...params, sessionKey }),
+            ),
+          }),
+    ),
   );
   return requests.map((params, index) => {
     const result = expectDefined(results[index], "sandbox session read result");
-    if (!result.ok) {
-      throw result.error;
-    }
-    const byKey = new Map(result.value.map(({ sessionKey, entry }) => [sessionKey, entry]));
+    const byKey = new Map(result.entries.map(({ sessionKey, entry }) => [sessionKey, entry]));
     // Retained or removed entries still need the configured mode classification.
     return params.sessionKeys.map((sessionKey) => {
       const classification = resolveSandboxClassification({ ...params, sessionKey });

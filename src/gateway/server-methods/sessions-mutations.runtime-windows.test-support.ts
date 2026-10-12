@@ -111,7 +111,6 @@ export function registerSessionRuntimeWindowTests(harness: {
           ["main", { entries: snapshot.entries, routeVariants: snapshot.routeVariants }],
         ]),
         lightweightListRow: true,
-        skipTranscriptUsageFallback: true,
       });
       expect(row).toMatchObject({
         contextWindow: "64k",

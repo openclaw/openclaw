@@ -96,7 +96,7 @@ describe("worker placement move destination owner", () => {
                 path: "/gateway/workspace",
               }),
             },
-            resolveGatewaySessionStoreTargetWithStore: () => ({
+            resolveGatewaySessionStoreTargetInWorker: async () => ({
               agentId: "main",
               canonicalKey: SESSION_KEY,
               storePath: "/gateway/session.sqlite",

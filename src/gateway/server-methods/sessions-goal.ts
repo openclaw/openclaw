@@ -34,6 +34,7 @@ import { captureSessionMutationRouting } from "../session-sharing-preparation.js
 import { prepareSessionSharingSource } from "../session-sharing-source.js";
 import {
   resolveSessionMutationAuthorization,
+  resolveSessionSharingTargetAsync,
   resolveSessionSharingTarget,
   SessionMutationAuthorizationChangedError,
 } from "../session-sharing.js";
@@ -52,7 +53,7 @@ async function handleSessionGoalMutation(
   try {
     const authorization = options.sessionMutationAuthorization
       ? { authorization: options.sessionMutationAuthorization, error: null }
-      : resolveSessionMutationAuthorization({
+      : await resolveSessionMutationAuthorization({
           client,
           method,
           requestParams: request,
@@ -68,7 +69,7 @@ async function handleSessionGoalMutation(
       respond(false, undefined, requestedAgent.error);
       return;
     }
-    const target = resolveSessionSharingTarget({
+    const target = await resolveSessionSharingTargetAsync({
       cfg,
       sessionKey: request.sessionKey,
       agentId: requestedAgent.agentId,
@@ -96,7 +97,9 @@ async function handleSessionGoalMutation(
       ? captureSessionActorMutationFacts(memory, target.storeKey, false)
       : binding && captureIncognitoSessionMutationFacts(binding, target.storeKey, false);
     const assertRouting = captureSessionMutationRouting(cfg, sessionChanged, [request]);
-    const assertTarget = (current: ReturnType<typeof resolveSessionSharingTarget>) => {
+    const assertTarget = (
+      current: Awaited<ReturnType<typeof resolveSessionSharingTargetAsync>>,
+    ) => {
       // Reset can keep the same session ID. Fence the lifecycle and resolved store as well.
       if (
         !current ||

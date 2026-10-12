@@ -37,7 +37,11 @@ const agentWaitHandler: GatewayRequestHandlers["agent.wait"] = async ({
       return true;
     }
     const target = run?.sessionKey
-      ? resolveSessionSharingTarget({ cfg, sessionKey: run.sessionKey, agentId: run.agentId })
+      ? resolveSessionSharingTarget({
+          cfg,
+          sessionKey: run.sessionKey,
+          agentId: run.agentId,
+        })
       : null;
     const visibilityFilter = createSessionListEntryFilter({ client: gatewayClient, cfg });
     if (

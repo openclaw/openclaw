@@ -476,7 +476,7 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
           throw new Error("session changed before sharing mutation");
         }
         if (changed) {
-          access.currentStored();
+          access.current();
           emitSessionsChanged(context, {
             reason: "sharing",
             sessionKey: current.canonicalKey,
@@ -484,7 +484,7 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
           });
         }
       });
-      const { target: published } = access.currentStored();
+      const { target: published } = access.current();
       const currentGrant = resolveSessionPublicShare(published.entry);
       if (currentGrant?.id !== publicShareGrant?.id) {
         throw new Error("session publication changed before sharing response");
@@ -516,7 +516,7 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
       const managed = access.target;
       const visibility = params.visibility;
       const assertVisibilityCurrent = () => {
-        const { target } = access.currentStored();
+        const { target } = access.current();
         if (resolveSessionVisibility(target.entry) !== visibility) {
           throw new Error("session visibility changed before sharing response");
         }

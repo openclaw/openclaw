@@ -49,7 +49,7 @@ import {
   hasUserPinnedModelSelection,
 } from "../config/sessions/model-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readRecentSessionUsageFromTranscript } from "../gateway/session-transcript-usage.js";
+import type { SessionTranscriptUsageSnapshot } from "../gateway/session-transcript-derived-readers.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import type {
@@ -62,7 +62,6 @@ import {
   summarizeDecisionReason,
 } from "../media-understanding/runner.entries.js";
 import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
-import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { formatFastModeStatusValue } from "../shared/fast-mode.js";
 import { resolveStatusTtsSnapshot } from "../tts/status-config.js";
 import type { PreparedTtsPreferences } from "../tts/tts-preferences.js";
@@ -108,7 +107,6 @@ type StatusArgs = {
   sessionKey?: string;
   parentSessionKey?: string;
   sessionScope?: SessionScope;
-  sessionStorePath?: string;
   sessionStartedAt?: number;
   groupActivation?: "mention" | "always";
   resolvedThink?: ThinkLevel;
@@ -129,7 +127,7 @@ type StatusArgs = {
   subagentsLine?: string;
   pluginHealthLine?: string;
   channelFeatureLine?: string;
-  includeTranscriptUsage?: boolean;
+  transcriptUsage?: SessionTranscriptUsageSnapshot | null;
   now?: number;
 };
 
@@ -253,61 +251,35 @@ const formatQueueDetails = (queue?: QueueStatus) => {
   return detailParts.length ? ` (${detailParts.join(" · ")})` : "";
 };
 
-const readUsageFromSessionLog = (
-  sessionId?: string,
-  sessionEntry?: SessionEntry,
-  agentId?: string,
-  sessionKey?: string,
-  storePath?: string,
-) => {
-  if (!sessionId) {
+const resolveTranscriptUsage = (snapshot?: SessionTranscriptUsageSnapshot | null) => {
+  if (!snapshot) {
     return undefined;
   }
-  try {
-    const resolvedAgentId =
-      agentId ?? (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined);
-    const snapshot = readRecentSessionUsageFromTranscript(
-      {
-        agentId: resolvedAgentId,
-        sessionEntry,
-        sessionId,
-        sessionKey,
-        storePath,
-      },
-      256 * 1024,
-    );
-    if (!snapshot) {
-      return undefined;
-    }
-
-    const input = snapshot.inputTokens ?? 0;
-    const output = snapshot.outputTokens ?? 0;
-    const cacheRead = snapshot.cacheRead;
-    const cacheWrite = snapshot.cacheWrite;
-    const promptTokens = snapshot.totalTokens ?? input + (cacheRead ?? 0) + (cacheWrite ?? 0);
-    const total = promptTokens + output;
-    if (promptTokens === 0 && total === 0) {
-      return undefined;
-    }
-    const model = snapshot.modelProvider
-      ? snapshot.model
-        ? `${snapshot.modelProvider}/${snapshot.model}`
-        : snapshot.modelProvider
-      : snapshot.model;
-
-    return {
-      input,
-      output,
-      cacheRead,
-      cacheWrite,
-      promptTokens,
-      total,
-      totalTokensFresh: snapshot.totalTokensFresh === true,
-      model,
-    };
-  } catch {
+  const input = snapshot.inputTokens ?? 0;
+  const output = snapshot.outputTokens ?? 0;
+  const cacheRead = snapshot.cacheRead;
+  const cacheWrite = snapshot.cacheWrite;
+  const promptTokens = snapshot.totalTokens ?? input + (cacheRead ?? 0) + (cacheWrite ?? 0);
+  const total = promptTokens + output;
+  if (promptTokens === 0 && total === 0) {
     return undefined;
   }
+  const model = snapshot.modelProvider
+    ? snapshot.model
+      ? `${snapshot.modelProvider}/${snapshot.model}`
+      : snapshot.modelProvider
+    : snapshot.model;
+
+  return {
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    promptTokens,
+    total,
+    totalTokensFresh: snapshot.totalTokensFresh === true,
+    model,
+  };
 };
 
 const formatTokensPairValue = (input?: number | null, output?: number | null) => {
@@ -568,14 +540,8 @@ export function buildStatusMessageParts(args: StatusArgs) {
 
   // Explicitly stale session/cache usage can still hydrate Tokens/Cache lines
   // but must not become Context.
-  if (args.includeTranscriptUsage) {
-    const logUsage = readUsageFromSessionLog(
-      entry?.sessionId,
-      entry,
-      args.agentId,
-      args.sessionKey,
-      args.sessionStorePath,
-    );
+  if (args.transcriptUsage) {
+    const logUsage = resolveTranscriptUsage(args.transcriptUsage);
     if (logUsage) {
       const candidate = logUsage.totalTokensFresh
         ? logUsage.promptTokens || logUsage.total

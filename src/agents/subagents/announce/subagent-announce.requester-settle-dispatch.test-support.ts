@@ -22,7 +22,10 @@ export function useRequesterSettleDispatchFixture() {
   beforeEach(() => {
     const requesterCurrent = vi
       .spyOn(deliveryRuntime, "captureRequesterSessionEntryCurrent")
-      .mockReturnValue(() => ({ sessionId: "requester-session" }));
+      .mockResolvedValue({
+        readCurrent: () => ({ sessionId: "requester-session" }),
+        release() {},
+      });
     restoreRequesterCurrent = () => requesterCurrent.mockRestore();
     vi.spyOn(announceOutput, "readChildCompletionFindings").mockImplementation((children) =>
       readChildCompletionFindings(children, (runId) =>

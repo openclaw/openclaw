@@ -1,5 +1,4 @@
 import { acknowledgeReplySessionTransition } from "../../../auto-reply/reply/reply-run-registry.state.js";
-import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { captureSessionEntrySourceAssertion } from "../../../config/sessions/session-entry-source-authority.js";
 import { captureIncognitoSessionSource } from "../../../config/sessions/session-incognito-binding.js";
 import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
@@ -154,7 +153,7 @@ export async function compactEmbeddedRunForRecovery(
     sessionId: activeSession.id,
     sessionKey: input.resolvedSessionKey,
     agentId: input.sessionAgentId,
-    sessionTarget: buildContextEngineCompactionSessionTarget({
+    sessionTarget: await buildContextEngineCompactionSessionTarget({
       agentId: input.sessionAgentId,
       config: runParams.config,
       sessionFile: activeSession.file,
@@ -319,27 +318,21 @@ export function createEmbeddedRunCompactionRuntime(input: {
     ) {
       throw new SessionTranscriptWriterClaimReboundError();
     }
-    const entry =
-      target?.sessionKey && target.storePath
-        ? incognito
-          ? "kind" in incognito
-            ? undefined
-            : incognito.actor.sessions.readSharing(target.sessionKey)?.entry
-          : loadSessionEntry({
-              agentId: target.agentId,
-              sessionKey: target.sessionKey,
-              storePath: target.storePath,
-              readConsistency: "latest",
-            })
-        : undefined;
-    if (
-      !writerFence ||
-      writerFence.expectedWriterRunId !== runId ||
-      entry?.sessionId !== sessionId ||
-      entry.lifecycleRevision !== writerFence.expectedLifecycleRevision ||
-      entry.activeWriterRunId !== writerFence.expectedWriterRunId
-    ) {
+    if (!writerFence || writerFence.expectedWriterRunId !== runId) {
       throw new SessionTranscriptWriterClaimReboundError();
+    }
+    if (incognito) {
+      const entry =
+        target?.sessionKey && target.storePath && !("kind" in incognito)
+          ? incognito.actor.sessions.readSharing(target.sessionKey)?.entry
+          : undefined;
+      if (
+        entry?.sessionId !== sessionId ||
+        entry.lifecycleRevision !== writerFence.expectedLifecycleRevision ||
+        entry.activeWriterRunId !== writerFence.expectedWriterRunId
+      ) {
+        throw new SessionTranscriptWriterClaimReboundError();
+      }
     }
   };
   const assertRecoveryActive = () => assertRecoveryTarget(sessionPromptState.sessionTarget);

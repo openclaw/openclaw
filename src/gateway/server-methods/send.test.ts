@@ -190,13 +190,10 @@ vi.mock("../../config/sessions/restart-recovery-receipt.js", () => ({
   completeRestartRecoveryTerminalDelivery: mocks.completeRestartRecoveryTerminalDelivery,
 }));
 
-vi.mock("../session-utils.js", async () => {
-  const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
-  return {
-    ...actual,
-    loadSessionEntry: mocks.loadSessionEntry,
-  };
-});
+vi.mock("../session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: async (params: { key: string }) =>
+    mocks.loadSessionEntry(params.key),
+}));
 
 const {
   invokeGatewayMessageMethod,

@@ -6,7 +6,8 @@ import {
   type ErrorShape,
   type SessionsCreateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { loadSessionEntry, patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import {
@@ -303,7 +304,7 @@ export async function prepareSessionWorkspaceForRun(params: {
         ? await (
             await import("../../config/sessions/session-entry-read-runtime.js")
           ).readSessionEntryReadOnlyInWorker(target, assertRunOwnership)
-        : loadSessionEntry(target);
+        : await readSessionEntryReadOnlyInWorker(target, assertRunOwnership);
       if (
         !saved ||
         saved.sessionId !== entry.sessionId ||

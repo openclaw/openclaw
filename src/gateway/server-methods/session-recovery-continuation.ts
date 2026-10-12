@@ -2,10 +2,8 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
 import type { SessionOperatorScope } from "../../shared/session-method-scopes-base.js";
 import type { SessionRecoveryContinuationOutcome } from "../session-recovery-service.js";
-import {
-  resolveSessionMutationAuthorization,
-  SessionMutationAuthorizationChangedError,
-} from "../session-sharing.js";
+import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
+import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { handleTrustedInternalChatSend } from "./chat-send-handler.js";
 import { withSessionMutationCommitGuard } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -29,7 +27,7 @@ export async function launchSessionRecoveryContinuation(params: {
 }): Promise<SessionRecoveryContinuationOutcome> {
   let outcome: SessionRecoveryContinuationOutcome | undefined;
   try {
-    const destination = resolveSessionMutationAuthorization({
+    const destination = await resolveSessionMutationAuthorizationAsync({
       client: params.client,
       context: params.context,
       method: "chat.send",

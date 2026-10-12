@@ -622,7 +622,7 @@ it("reports typed contention without replaying or denying an already applied Sto
     code: "ERR_SQLITE_ERROR",
     errcode: 5,
   });
-  vi.spyOn(sessionUtils, "loadSessionEntry").mockImplementation(() => {
+  vi.spyOn(sessionUtils, "loadGatewaySessionEntryReadOnlyInWorker").mockImplementation(async () => {
     throw failure;
   });
   const sessionKey = "agent:main:main";

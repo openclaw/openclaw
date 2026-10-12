@@ -1,13 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../../agents/auth-profiles/runtime-snapshots.js";
 import { registerAgentHarness } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   getActivePluginRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolveSessionWorkerPlacementPatchError } from "../server-methods/sessions-shared.js";
 import {
   projectWorkerPlacementAgentRuntime,
@@ -15,6 +18,7 @@ import {
   resolveWorkerPlacementCapabilities,
   resolveWorkerPlacementExecutionMode,
   resolveWorkerPlacementSessionRuntime,
+  resolveWorkerPlacementSessionRuntimeAsync,
   resolveWorkerPlacementSessionRuntimeCapabilities,
 } from "./placement-session-runtime.js";
 
@@ -137,6 +141,38 @@ describe("worker placement runtime capabilities", () => {
         sessionKey: "agent:main:placement-runtime",
       }),
     ).toBe(expected);
+  });
+
+  it("reads inherited runtime selection off-thread and observes a committed parent update", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const parent = { agentId: "main", sessionKey: "agent:main:parent-runtime" };
+      await upsertSessionEntryCore(parent, {
+        sessionId: "parent-runtime",
+        updatedAt: 1,
+        providerOverride: "openai",
+        modelOverride: "gpt-5.6-sol",
+      });
+      const input = {
+        cfg: {},
+        agentId: "main",
+        sessionKey: "agent:main:child-runtime",
+        entry: { sessionId: "child-runtime", updatedAt: 1, parentSessionKey: parent.sessionKey },
+      };
+      const observed = observeHostDataSql();
+      try {
+        expect(await resolveWorkerPlacementSessionRuntimeAsync(input)).toBe("codex");
+        expect(observed.queries).toEqual([]);
+      } finally {
+        observed.restore();
+      }
+      await upsertSessionEntryCore(parent, {
+        sessionId: "parent-runtime",
+        updatedAt: 2,
+        providerOverride: "anthropic",
+        modelOverride: "claude-test",
+      });
+      expect(await resolveWorkerPlacementSessionRuntimeAsync(input)).toBe("openclaw");
+    });
   });
 
   it("does not let a persisted runtime override bypass required worker inference", () => {

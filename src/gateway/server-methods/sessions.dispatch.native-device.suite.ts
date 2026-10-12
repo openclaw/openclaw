@@ -14,7 +14,7 @@ import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-c
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
 import { handleGatewayRequest } from "../server-methods.js";
-import { resolveGatewaySessionStoreTargetWithStore } from "../session-utils-store-lookup.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
 import { createDeviceWorkerRuntime } from "../worker-environments/device-provider.js";
 import type { WorkerPlacementDispatchService } from "../worker-environments/placement-dispatch.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
@@ -98,7 +98,7 @@ export function registerNativeDeviceDispatchTests({
           },
         );
         getDispatchTestMocks().resolveTarget.mockImplementation(
-          resolveGatewaySessionStoreTargetWithStore,
+          resolveGatewaySessionStoreTargetInWorker,
         );
         // Exercise RPC admission and the real profile/provider lifecycle; workspace sync
         // and placement activation remain the existing dispatch fixture boundary.

@@ -398,7 +398,7 @@ function registerOwnedEmbeddedRun(runId: string, sessionId: string) {
 
 it("rechecks RPC sharing authorization after the control runtime import", async () => {
   config.session = { scope: "global" };
-  const target = prepareTalkSessionTarget(config, "main");
+  const target = await prepareTalkSessionTarget(config, "main");
   const scope = { agentId: "voice", sessionKey: "global", storePath: target.storePath };
   await replaceSessionEntry(scope, {
     sessionId: "acl-session",
@@ -456,7 +456,7 @@ it.each([
   "voice binding replaced",
 ] as const)("fences %s Gateway registration while control preparation waits", async (change) => {
   config.session = { scope: "global" };
-  const target = prepareTalkSessionTarget(config, "main");
+  const target = await prepareTalkSessionTarget(config, "main");
   const runId = "captured-run";
   const voiceScope = { agentId: target.agentId, sessionKey: target.sessionKey };
   const voiceSessionId = await createOrResumeClientVoiceSession({
@@ -565,7 +565,7 @@ it("preserves status and cancellation for an owned queued chat.send reply", asyn
   const runTarget = resolveOwnedActiveTalkRunTarget({
     context,
     clientConnId: client.connId,
-    sessionTarget: prepareTalkSessionTarget(config, "main"),
+    sessionTarget: await prepareTalkSessionTarget(config, "main"),
     scope: { kind: "session" },
   });
   const resolvedSessionId = "materialized-reply-session";
@@ -581,7 +581,7 @@ it("preserves status and cancellation for an owned queued chat.send reply", asyn
   const voiceTarget = resolveOwnedActiveTalkRunTarget({
     context,
     clientConnId: client.connId,
-    sessionTarget: prepareTalkSessionTarget(config, "main"),
+    sessionTarget: await prepareTalkSessionTarget(config, "main"),
     scope: { kind: "voice-session", voiceSessionId },
   });
   try {
@@ -810,7 +810,7 @@ describe.each(["browser", "relay"] as const)("native %s Talk consultation", (tra
   ])("uses the created $name session in the provider callback", async ({ scope, canonicalKey }) => {
     config.session = { mainKey: "home", scope };
     config.talk = { ...config.talk, realtime: { instructions: "Keep native answers brief." } };
-    const target = prepareTalkSessionTarget(config, "main");
+    const target = await prepareTalkSessionTarget(config, "main");
     const method = transport === "browser" ? "talk.client.create" : "talk.session.create";
     const respond = await dispatch(method, {
       sessionKey: "main",

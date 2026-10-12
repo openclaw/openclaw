@@ -15,12 +15,12 @@ import { buildSessionCatalogImportKey } from "../session-create-key.js";
 import { createGatewaySession } from "../session-create-service.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
+import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
 import {
   hasSessionReadAccessChanged,
   isSessionVisibilityAllowed,
 } from "../session-sharing-policy.js";
 import { readProjectedSessionMutationTarget } from "../session-sharing-target-read.js";
-import { resolveSessionMutationAuthorization } from "../session-sharing.js";
 import { readAuthorizedSessionCatalog } from "./session-catalog-read.js";
 import {
   isPublishedCatalogVisible,
@@ -103,7 +103,7 @@ export async function importAuthorizedSessionCatalog(params: {
   const key = buildSessionCatalogImportKey(agentId, locator);
   // Import creates or reuses an ordinary keyed session, sharing sessions.create's
   // durable target authorization and creation-commit handoff.
-  const destination = resolveSessionMutationAuthorization({
+  const destination = await resolveSessionMutationAuthorizationAsync({
     client,
     context,
     method: "sessions.create",

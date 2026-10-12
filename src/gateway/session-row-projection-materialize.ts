@@ -338,7 +338,6 @@ export function readResidentSessionRow(
     // Incognito rows are transient exact reads and never enter the resident backfill queue.
     includeDerivedTitles: Boolean(source),
     includeLastMessage: Boolean(source),
-    skipTranscriptUsageFallback: true,
     includeSwarmChildren: true,
     childLinks: source || prepared ? undefined : params.links,
   });

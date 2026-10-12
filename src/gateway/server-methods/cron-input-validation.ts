@@ -33,7 +33,7 @@ import {
   isAgentHarnessSessionKey,
 } from "../../sessions/agent-harness-session-key.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
-import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import type { CronCallerScope } from "./cron-caller-scope.js";
 import type { GatewayClient } from "./types.js";
 
@@ -124,7 +124,7 @@ export async function assertValidCronUpdatePatch(params: {
     "sessionTarget" in params.patch ||
     "sessionKey" in params.patch
   ) {
-    assertCronDoesNotTargetAgentHarness(nextJob);
+    await assertCronDoesNotTargetAgentHarness(nextJob, params.cfg);
   }
   // Clearing a concrete channel (channel: null) while keeping a bare announce `to`
   // intentionally falls back to "last" in multi-channel configs. Use the same
@@ -179,11 +179,14 @@ export async function assertValidCronUpdatePatch(params: {
   return nextJob;
 }
 
-export function assertCronDoesNotTargetAgentHarness(input: {
-  agentId?: string | null;
-  sessionTarget?: string | null;
-  sessionKey?: string | null;
-}): void {
+export async function assertCronDoesNotTargetAgentHarness(
+  input: {
+    agentId?: string | null;
+    sessionTarget?: string | null;
+    sessionKey?: string | null;
+  },
+  cfg: OpenClawConfig,
+): Promise<void> {
   const targetSessionKey =
     resolveCronSessionTargetSessionKey(input.sessionTarget) ??
     (input.sessionTarget === "current" ? input.sessionKey?.trim() : undefined);
@@ -191,10 +194,11 @@ export function assertCronDoesNotTargetAgentHarness(input: {
     return;
   }
 
-  const loaded = loadGatewaySessionEntryReadOnly(
-    targetSessionKey,
-    input.agentId?.trim() ? { agentId: input.agentId.trim() } : {},
-  );
+  const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
+    cfg,
+    key: targetSessionKey,
+    agentId: input.agentId?.trim() || undefined,
+  });
   const reservedKey =
     isAgentHarnessSessionKey(targetSessionKey) || isAgentHarnessSessionKey(loaded.canonicalKey);
   if (loaded.entry?.modelSelectionLocked === true) {
@@ -217,10 +221,11 @@ export function assertCronDoesNotTargetAgentHarness(input: {
   throw new Error(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
 }
 
-export function captureCronCreatorSession(
+export async function captureCronCreatorSession(
   job: CronJobCreate,
   callerScope: CronCallerScope | undefined,
   client: GatewayClient | null,
+  cfg: OpenClawConfig,
 ) {
   const hasConversationResult =
     job.sessionTarget !== "main" &&
@@ -230,7 +235,9 @@ export function captureCronCreatorSession(
   const sessionKey =
     callerScope?.sessionKey ?? (hasConversationResult ? job.sessionKey : undefined);
   const agentId = callerScope?.agentId ?? job.agentId;
-  const loaded = sessionKey ? loadGatewaySessionEntryReadOnly(sessionKey, { agentId }) : undefined;
+  const loaded = sessionKey
+    ? await loadGatewaySessionEntryReadOnlyInWorker({ cfg, key: sessionKey, agentId })
+    : undefined;
   const creatorSession = loaded?.entry;
   const sourceConversation =
     hasConversationResult && loaded && creatorSession?.sessionId
@@ -246,27 +253,12 @@ export function captureCronCreatorSession(
     : resolveOperatorSessionCreation(client).actor;
   const actorId = normalizeOptionalString(actor?.id);
   const createdActor = actor ? { ...actor, ...(actorId ? { id: actorId } : {}) } : undefined;
-  const selectionIdentity = JSON.stringify(creatorSession?.skillLibrarySelections);
   return {
     ...(sourceConversation ? { sourceConversation } : {}),
     ...(createdActor ? { createdActor } : {}),
     ...(callerScope && creatorSession?.skillLibrarySelections
       ? { skillLibrarySelections: creatorSession.skillLibrarySelections }
       : {}),
-    assertCurrent: () => {
-      if (creatorSession && sessionKey) {
-        const latest = loadGatewaySessionEntryReadOnly(sessionKey, { agentId }).entry;
-        if (
-          latest?.sessionId !== creatorSession.sessionId ||
-          latest.lifecycleRevision !== creatorSession.lifecycleRevision ||
-          JSON.stringify(latest.skillLibrarySelections) !== selectionIdentity
-        ) {
-          throw new Error(
-            "Creator session changed before scheduling; retry from the current turn.",
-          );
-        }
-      }
-    },
   };
 }
 

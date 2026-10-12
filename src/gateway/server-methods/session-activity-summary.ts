@@ -76,14 +76,16 @@ export const sessionActivitySummaryHandlers: GatewayRequestHandlers = {
           respond(false, undefined, error);
           return;
         }
-        targets.push({ key: target.canonicalKey, agentId: target.agentId });
+        targets.push({ key: target.canonicalKey, agentId: target.agentId, entry: target.entry });
       }
       respond(true, {
         sessions: targets.map((target) => ({
           key: target.key,
           agentId: target.agentId,
           activitySummary: {
-            ...(target.unavailable ? { state: "unavailable" as const } : service.ensure(target)),
+            ...(target.unavailable
+              ? { state: "unavailable" as const }
+              : service.ensure(target, target.entry)),
             canEnsure: true,
           },
         })),

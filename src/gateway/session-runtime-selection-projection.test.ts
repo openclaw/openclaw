@@ -91,7 +91,6 @@ describe("session runtime selection ownership projection", () => {
             storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
             modelCatalog: catalog,
             lightweightListRow: true,
-            skipTranscriptUsageFallback: true,
           });
           expect(row.runtimeSelectionLocked).toBe(locked);
           expect(row.modelSelectionLocked).toBe(modelLocked ? true : undefined);

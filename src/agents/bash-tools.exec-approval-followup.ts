@@ -11,7 +11,7 @@ import {
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sleepWithAbort } from "@openclaw/retry";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import { getGatewayRecoveryRuntime } from "../gateway/server-recovery-runtime-context.js";
 import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
@@ -133,14 +133,14 @@ function shouldSuppressExecDeniedFollowup(sessionKey: string | undefined): boole
  * or `/reset` (#59349). Failure to resolve is treated as "not rebound" so a
  * real result is never suppressed by accident.
  */
-function isExecApprovalFollowupDirectDeliveryStale(params: {
+async function isExecApprovalFollowupDirectDeliveryStale(params: {
   agentId: string | undefined;
   sessionKey: string | undefined;
   expectedSessionId: string | undefined;
   sessionStore: string | undefined;
   source: ReturnType<typeof captureIncognitoSessionSource>;
   assertSessionCurrent?: () => void;
-}): boolean {
+}): Promise<boolean> {
   const sessionKey = normalizeOptionalString(params.sessionKey);
   const expectedSessionId = normalizeOptionalString(params.expectedSessionId);
   if (!sessionKey || !expectedSessionId) {
@@ -163,12 +163,14 @@ function isExecApprovalFollowupDirectDeliveryStale(params: {
       agentId: params.agentId ?? resolveAgentIdFromSessionKey(sessionKey),
     });
     const resolvedSessionId = normalizeOptionalString(
-      loadSessionEntryReadOnly({
-        agentId: params.agentId,
-        storePath,
-        sessionKey,
-        clone: false,
-      })?.sessionId,
+      (
+        await readSessionEntryReadOnlyInWorker({
+          agentId: params.agentId,
+          storePath,
+          sessionKey,
+          clone: false,
+        })
+      )?.sessionId,
     );
     return isExecApprovalFollowupSessionRebound({ expectedSessionId, resolvedSessionId });
   } catch (err) {
@@ -524,7 +526,7 @@ export async function sendExecApprovalFollowup(
   }
 
   if (
-    isExecApprovalFollowupDirectDeliveryStale({
+    await isExecApprovalFollowupDirectDeliveryStale({
       agentId: params.agentId,
       sessionKey,
       expectedSessionId: params.expectedSessionId,

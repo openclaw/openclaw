@@ -86,7 +86,10 @@ import {
 } from "./session-sharing-target-read.js";
 import { prepareSessionSharingWorkerGrant } from "./session-sharing-worker-grant.js";
 import { resolveGatewaySessionStoreTarget } from "./session-utils-store-lookup.js";
-import { prepareTalkSessionTarget, assertTalkSessionStorageTarget } from "./talk/session-target.js";
+import {
+  prepareTalkSessionTargetForEffect,
+  assertTalkSessionStorageTarget,
+} from "./talk/session-target.js";
 import type { PreparedTalkSessionTarget } from "./talk/session-target.types.js";
 
 export { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
@@ -104,14 +107,17 @@ export {
   allowedSessionVisibilities,
   authorizeIncognitoSessionTarget,
   authorizeResolvedSessionMutation,
+  authorizeResolvedSessionMutationAsync,
   authorizeSessionSharingTarget,
   canAccessIncognitoSession,
   canManageSessionSharing,
   isGatewayAdmin,
   isResolvedIncognitoSession,
+  isResolvedIncognitoSessionAsync,
   isSessionVisibilityAllowed,
   resolveSessionSharingRole,
   resolveSessionSharingTarget,
+  resolveSessionSharingTargetAsync,
   resolveSessionVisibility,
 } from "./session-sharing-policy.js";
 
@@ -251,7 +257,9 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
       assertTalkSessionStorageTarget(getCfg(), talkInput.target);
       talkSessionTarget = talkInput.target;
     } else {
-      talkSessionTarget = talkInput && prepareTalkSessionTarget(getCfg(), talkInput.sessionKey);
+      talkSessionTarget =
+        params.preparedTalkSessionTarget ??
+        (talkInput && prepareTalkSessionTargetForEffect(getCfg(), talkInput.sessionKey));
     }
   } catch (error) {
     return {

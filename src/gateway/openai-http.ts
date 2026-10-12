@@ -580,7 +580,7 @@ export async function handleOpenAiHttpRequest(
   let sessionKey: string;
   let messageChannel: string;
   try {
-    ({ agentId, sessionKey, messageChannel } = resolveGatewayRequestContext({
+    ({ agentId, sessionKey, messageChannel } = await resolveGatewayRequestContext({
       req,
       model,
       user,
@@ -606,7 +606,7 @@ export async function handleOpenAiHttpRequest(
     });
     return true;
   }
-  const sessionAuth = authorizeOpenAiCompatibleHttpSession({
+  const sessionAuth = await authorizeOpenAiCompatibleHttpSession({
     agentId,
     sessionKey,
     requestAuth: handled.requestAuth,

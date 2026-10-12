@@ -85,7 +85,7 @@ test.each(["delete", "archive", "recover"] as const)(
               path: "/fixture/worktree",
             }),
           },
-          resolveGatewaySessionStoreTargetWithStore: () => ({
+          resolveGatewaySessionStoreTargetInWorker: async () => ({
             storePath,
             canonicalKey: sessionKey,
             storeKeys: [sessionKey],

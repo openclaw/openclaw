@@ -8,14 +8,14 @@ import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-ins
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import { mergeWorkspaceSetupState } from "../agents/workspace-state-store.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
-import type { OpenClawConfig } from "../config/config.js";
+import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import type { GatewayClient } from "../gateway/client.js";
 import {
   connectTestGatewayClient,
   ensurePairedTestGatewayClientIdentity,
 } from "../gateway/gateway-cli-backend.live-helpers.js";
 import { readSessionMessagesAsync } from "../gateway/session-transcript-readers.js";
-import { loadGatewaySessionEntryReadOnly } from "../gateway/session-utils.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../gateway/session-utils-store-worker.js";
 import { listKnownProviderAuthEnvVarNamesCore } from "../secrets/provider-env-vars.js";
 
 const enabled = isLiveTestEnabled() && process.env.OPENCLAW_LIVE_SESSION_EVENT_WAKE === "1";
@@ -24,7 +24,10 @@ const TURN_TIMEOUT_MS = 180_000;
 const MODEL = "openai/gpt-5.6-luna";
 
 async function readMessages(sessionKey: string): Promise<unknown[]> {
-  const { storePath, entry } = loadGatewaySessionEntryReadOnly(sessionKey);
+  const { storePath, entry } = await loadGatewaySessionEntryReadOnlyInWorker({
+    cfg: getRuntimeConfig(),
+    key: sessionKey,
+  });
   if (!entry?.sessionId) {
     return [];
   }
@@ -203,7 +206,14 @@ describeLive("session event wake through a live Gateway", () => {
           ].join("\n"),
         );
         expect(response.status).toBe("ok");
-        expect(loadGatewaySessionEntryReadOnly(sessionKey).entry).toMatchObject({
+        expect(
+          (
+            await loadGatewaySessionEntryReadOnlyInWorker({
+              cfg: getRuntimeConfig(),
+              key: sessionKey,
+            })
+          ).entry,
+        ).toMatchObject({
           createdVia: "operator",
           delivery: { kind: "internal" },
         });

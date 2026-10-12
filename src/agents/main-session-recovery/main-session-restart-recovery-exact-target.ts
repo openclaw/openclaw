@@ -4,7 +4,10 @@ import {
   isMainRestartRecoveryCandidate,
 } from "../../config/sessions/restart-recovery-state.js";
 import { loadExactSessionEntry } from "../../config/sessions/session-accessor.js";
-import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import {
+  readSessionEntriesFromStoreInWorker,
+  readSessionEntryReadOnlyInWorker,
+} from "../../config/sessions/session-entry-read-runtime.js";
 import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { ExpectedRestartRecoveryTarget } from "./main-session-restart-recovery-shared.js";
@@ -81,12 +84,12 @@ export async function loadExpectedRestartRecoveryTarget(
     readConsistency: "latest" as const,
   };
   const source = captureIncognitoSessionSource(target);
-  const exact = source ? undefined : loadExactSessionEntry(target);
+  const exact = source
+    ? undefined
+    : await readSessionEntriesFromStoreInWorker({ ...target, sessionKeys: [target.sessionKey] });
   const entry = source
     ? await readSessionEntryReadOnlyInWorker(target)
-    : exact?.sessionKey === target.sessionKey
-      ? exact.entry
-      : undefined;
+    : exact?.entries.find(({ sessionKey }) => sessionKey === target.sessionKey)?.entry;
   return matchesExpectedRecoveryTarget(entry, target, hasMainSessionRecoveryClaim(entry))
     ? entry
     : undefined;

@@ -78,10 +78,7 @@ import {
   resolveGatewaySessionKind,
   resolveGatewaySessionGoal,
 } from "./session-utils-display.js";
-import {
-  buildSessionListRowMetadataContext,
-  resolveTranscriptUsageFallbacks,
-} from "./session-utils-projection.js";
+import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import { parseGroupKey } from "./session-utils-store.js";
 import type { GatewaySessionRow, SessionListModelCatalog } from "./session-utils.types.js";
 import { projectWorkerPlacementAgentRuntime } from "./worker-environments/placement-session-runtime.js";
@@ -111,7 +108,6 @@ export function readSessionRowInputs(params: {
   rowContext?: SessionListRowContext;
   configuredAgentIds?: ReadonlySet<string>;
   agentId: string;
-  skipTranscriptUsageFallback?: boolean;
   lightweightListRow?: boolean;
   includeSwarmChildren?: boolean;
 }) {
@@ -137,24 +133,6 @@ export function readSessionRowInputs(params: {
       lightweightListRow: lightweight,
     });
   const freshSessionTotalTokens = resolveFreshSessionTotalTokens(entry);
-  const usageByFallbackModel =
-    params.skipTranscriptUsageFallback !== true
-      ? resolveTranscriptUsageFallbacks({
-          cfg,
-          key,
-          entry,
-          storePath,
-          freshTotalTokens: freshSessionTotalTokens,
-          fallbackModelRefs: [
-            undefined,
-            ...(rowContext.subagentRunsByChildSessionKey.get(key) ?? []).map((run) => run.model),
-          ],
-          allowPluginNormalization: !lightweight,
-          rowContext,
-          agentId,
-          storeAgentId: params.storeAgentId,
-        })
-      : undefined;
   const { provider, model } = selectedModel;
   // Display aliases do not change the selected route's catalog or runtime policy.
   const activeModel = resolveGatewaySessionActiveModel({
@@ -278,7 +256,6 @@ export function readSessionRowInputs(params: {
           key,
           subagentRunsByChildSessionKey: rowContext.subagentRunsByChildSessionKey,
         }),
-      usageByFallbackModel,
       freshSessionTotalTokens,
       estimatedCostUsd: lightweight
         ? asNonNegativeFiniteNumber(entry?.estimatedCostUsd)
@@ -638,9 +615,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
       userProfileIdentityById: input.userProfileIdentityById,
       identityProjection: input.identityProjection,
       configuredAgentIds: input.configuredAgentIds,
-      lightweight: input.lightweight,
       freshSessionTotalTokens: input.freshSessionTotalTokens,
-      usageByFallbackModel: input.usageByFallbackModel,
       estimatedCostUsd: input.estimatedCostUsd,
       subagentRunInputs: input.subagentRunInputs,
       lastMessagePreview: input.lastMessagePreview,
@@ -662,7 +637,7 @@ export function presentSessionRow(
   row.snapshotAt = now;
   const subagentRuns =
     options.subagentRuns ?? buildSubagentRunReadIndexFromRuns({ ...source.subagentRunInputs, now });
-  const { subagentRun, subagentOwner, fields } = projectGatewaySessionRunState({
+  const { subagentOwner, fields } = projectGatewaySessionRunState({
     key: row.key,
     entry,
     now,
@@ -673,12 +648,8 @@ export function presentSessionRow(
     },
   });
   Object.assign(row, fields);
-  const usage = source.usageByFallbackModel?.get(subagentRun?.model);
-  row.totalTokens = freshSessionTotalTokens ?? asNonNegativeFiniteNumber(usage?.totalTokens);
-  row.totalTokensFresh =
-    freshSessionTotalTokens !== undefined ||
-    (typeof row.totalTokens === "number" && row.totalTokens > 0) ||
-    usage?.totalTokensFresh === true;
+  row.totalTokens = freshSessionTotalTokens;
+  row.totalTokensFresh = freshSessionTotalTokens !== undefined;
   row.agentStatus = resolveActiveSessionAgentStatus(entry?.agentStatus, now);
   row.spawnedBy = row.controlOwnerSessionKey = subagentOwner || entry?.spawnedBy;
   row.goal = resolveGatewaySessionGoal(entry, now, {
@@ -686,9 +657,7 @@ export function presentSessionRow(
     totalTokensFresh: row.totalTokensFresh,
     totalTokensVersion: row.totalTokensFresh ? SESSION_TOTAL_TOKENS_VERSION : undefined,
   });
-  row.estimatedCostUsd =
-    source.estimatedCostUsd ??
-    asNonNegativeFiniteNumber(source.lightweight ? undefined : usage?.estimatedCostUsd);
+  row.estimatedCostUsd = source.estimatedCostUsd;
   const children = source.childLinks?.flatMap(({ key, entry: childEntry }) => {
     if (options.excludedChildKeys?.has(key)) {
       return [];

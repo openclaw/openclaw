@@ -15,7 +15,7 @@ import { resolveSwarmConfig } from "../../agents/subagents/swarm/swarm-config.js
 import { validateStructuredOutputSchema } from "../../agents/subagents/swarm/swarm-output-schema.js";
 import { getSwarmRunExecutionLane } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { resolveSessionStorePathCore } from "../../config/sessions.js";
-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { CommandLaneConfiguration } from "../../process/lanes.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
@@ -33,13 +33,15 @@ import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { resolveExpectedExistingSessionConstraint } from "../server-methods/agent-expected-session.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { resolveGatewaySessionStoreTargetWithStore } from "../session-utils-store-lookup.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
 import { readGatewayDedupeEntry, resolveAgentDedupeKeys } from "./agent-dedupe.js";
 import type { AgentTurnContext, AgentTurnIo, AgentTurnPrincipal } from "./types.js";
 
-export type AgentRequestPreflight = NonNullable<ReturnType<typeof prepareAgentRequestPreflight>>;
+export type AgentRequestPreflight = NonNullable<
+  Awaited<ReturnType<typeof prepareAgentRequestPreflight>>
+>;
 
-export function prepareAgentRequestPreflight(params: {
+export async function prepareAgentRequestPreflight(params: {
   request: AgentRunRequest;
   context: AgentTurnContext;
   client: AgentTurnPrincipal | null;
@@ -82,13 +84,15 @@ export function prepareAgentRequestPreflight(params: {
   // freshly restarted gateway whose in-memory registry has not reloaded yet.
   const persistedCollectorSession =
     !collectorSession && requestSessionKey && isSubagentSessionKey(requestSessionKey)
-      ? loadSessionEntry({
-          ...(selectedAgentId ? { agentId: selectedAgentId } : {}),
-          storePath: resolveSessionStorePathCore(cfg.session?.store, {
-            agentId: selectedAgentId,
-          }),
-          sessionKey: requestSessionKey,
-        })?.swarmCollector === true
+      ? (
+          await readSessionEntryReadOnlyInWorker({
+            ...(selectedAgentId ? { agentId: selectedAgentId } : {}),
+            storePath: resolveSessionStorePathCore(cfg.session?.store, {
+              agentId: selectedAgentId,
+            }),
+            sessionKey: requestSessionKey,
+          })
+        )?.swarmCollector === true
       : false;
   if (
     collectorSession ||
@@ -197,13 +201,10 @@ export function prepareAgentRequestPreflight(params: {
     const sourceAgentId = parseAgentSessionKey(sourceSessionKey)?.agentId;
     const sourceTarget =
       sourceSessionKey && sourceAgentId
-        ? resolveGatewaySessionStoreTargetWithStore({
+        ? await resolveGatewaySessionStoreTargetInWorker({
             cfg,
             key: sourceSessionKey,
             agentId: sourceAgentId,
-            readOnly: true,
-            exactRead: true,
-            clone: false,
             projection: "full",
           })
         : undefined;

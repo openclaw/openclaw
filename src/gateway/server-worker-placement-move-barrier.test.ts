@@ -47,7 +47,7 @@ import {
 } from "./server-worker-placement-move-barrier.js";
 import {
   resolveCanonicalSessionEntryFromStoreKeys,
-  resolveGatewaySessionStoreTargetWithStore,
+  resolveGatewaySessionStoreTargetInWorker,
 } from "./session-utils.js";
 import {
   createWorkerPlacementMoveService,
@@ -186,7 +186,7 @@ describe("worker placement move destination", () => {
               {
                 managedWorktrees: { findLiveByOwner: async () => undefined },
                 resolveCanonicalSessionEntryFromStoreKeys,
-                resolveGatewaySessionStoreTargetWithStore,
+                resolveGatewaySessionStoreTargetInWorker,
               },
               async () => commit().placement,
             );
@@ -207,7 +207,7 @@ describe("worker placement move destination", () => {
               loadSessionRuntime: async () => ({
                 managedWorktrees: { findLiveByOwner: async () => undefined },
                 resolveCanonicalSessionEntryFromStoreKeys,
-                resolveGatewaySessionStoreTargetWithStore,
+                resolveGatewaySessionStoreTargetInWorker,
               }),
             })({
               sessionId,
@@ -256,7 +256,7 @@ describe("worker placement move destination", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionId = "session-move-source";
       const sessionKey = "agent:main:move-source";
-      const target = resolveGatewaySessionStoreTargetWithStore({ cfg: {}, key: sessionKey });
+      const target = await resolveGatewaySessionStoreTargetInWorker({ cfg: {}, key: sessionKey });
       const releaseWriter = createDeferred();
       const claimsReleased = createDeferred();
       const order: string[] = [];
@@ -278,7 +278,7 @@ describe("worker placement move destination", () => {
         loadSessionRuntime: async () => ({
           managedWorktrees: { findLiveByOwner: async () => undefined },
           resolveCanonicalSessionEntryFromStoreKeys,
-          resolveGatewaySessionStoreTargetWithStore,
+          resolveGatewaySessionStoreTargetInWorker,
         }),
         revokeSessionAuthority: () => {},
       });
@@ -333,11 +333,10 @@ describe("worker placement move destination", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionId = "session-move-source";
       const sessionKey = "agent:main:move-source";
-      const target = resolveGatewaySessionStoreTargetWithStore({
+      const target = await resolveGatewaySessionStoreTargetInWorker({
         cfg: {},
         key: sessionKey,
         agentId: "main",
-        clone: false,
       });
       const identities = [sessionKey, target.canonicalKey, ...target.storeKeys, sessionId];
       const observed: string[] = [];
@@ -364,7 +363,7 @@ describe("worker placement move destination", () => {
         loadSessionRuntime: async () => ({
           managedWorktrees: { findLiveByOwner: async () => undefined },
           resolveCanonicalSessionEntryFromStoreKeys,
-          resolveGatewaySessionStoreTargetWithStore,
+          resolveGatewaySessionStoreTargetInWorker,
         }),
         revokeSessionAuthority,
         persistAbandonedPartial,
@@ -482,15 +481,14 @@ describe("worker placement move destination", () => {
     "$sourceDisposition move interruption preserves its settlement contract",
     async ({ sourceDisposition, settlesImmediately }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        vi.useFakeTimers();
         const sessionId = "session-move-source";
         const sessionKey = "agent:main:move-source";
-        const target = resolveGatewaySessionStoreTargetWithStore({
+        const target = await resolveGatewaySessionStoreTargetInWorker({
           cfg: {},
           key: sessionKey,
           agentId: "main",
-          clone: false,
         });
+        vi.useFakeTimers();
         const identities = [sessionKey, target.canonicalKey, ...target.storeKeys, sessionId];
         const onInterrupt = vi.fn();
         const admission = await beginSessionWorkAdmission({

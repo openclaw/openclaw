@@ -227,6 +227,7 @@ export function retainHarnessSource(
 /** Host-only original source; an explicit undefined operator identifies System work. */
 export type AgentHarnessCompactionSourceAuthority = Readonly<{
   assertActive: SessionSourceAssertion;
+  prepareDispatch?: () => Promise<void>;
   operatorAuthority: AdmittedRunOperatorAuthority | undefined;
 }>;
 

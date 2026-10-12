@@ -15,8 +15,8 @@ import type {
   GatewayRequestHandlers,
 } from "../../server-methods/types.js";
 import { defineValidatedGatewayHandler } from "../../server-methods/validation.js";
+import { resolveSessionMutationAuthorizationAsync } from "../../session-sharing-authorization-async.js";
 import { captureSessionMutationRouting } from "../../session-sharing-preparation.js";
-import { resolveSessionMutationAuthorization } from "../../session-sharing.js";
 import { formatForLog } from "../../ws-log.js";
 import { assertTalkSessionStorageTarget } from "../session-target.js";
 import {
@@ -29,14 +29,17 @@ import {
 const voiceRequestError = (error: unknown) =>
   errorShapeFromError(ErrorCodes.UNAVAILABLE, error, { message: formatForLog(error) });
 
-function resolveVoiceCaller(options: GatewayRequestHandlerOptions, target: TalkVoiceGetParams) {
+async function resolveVoiceCaller(
+  options: GatewayRequestHandlerOptions,
+  target: TalkVoiceGetParams,
+) {
   const { client, context } = options;
   const connId = client?.connId;
   if (!client || !connId) {
     throw new Error("Voice selection requires a connected client");
   }
-  const authorizeSession = (agentId: string, sessionKey: string) => {
-    const authorization = resolveSessionMutationAuthorization({
+  const authorizeSession = async (agentId: string, sessionKey: string) => {
+    const authorization = await resolveSessionMutationAuthorizationAsync({
       client,
       context,
       method: "talk.voice.set",
@@ -82,7 +85,7 @@ function resolveVoiceCaller(options: GatewayRequestHandlerOptions, target: TalkV
     ) {
       throw new Error("The agent may only select the voice of its own call");
     }
-    const authorization = authorizeSession(managed.agentId, managed.sessionKey);
+    const authorization = await authorizeSession(managed.agentId, managed.sessionKey);
     return {
       kind: "managed" as const,
       managed,
@@ -129,7 +132,7 @@ function resolveVoiceCaller(options: GatewayRequestHandlerOptions, target: TalkV
   }
   // Resolve the server-owned call before capturing session participation authority.
   assertTalkSessionStorageTarget(context.getRuntimeConfig(), session.sessionTarget);
-  const authorization = authorizeSession(
+  const authorization = await authorizeSession(
     session.sessionTarget.agentId,
     session.sessionTarget.canonicalKey,
   );
@@ -158,7 +161,7 @@ export const talkVoiceHandlers: GatewayRequestHandlers = {
     validateTalkVoiceGetParams,
     async (options) => {
       const { params, respond } = options;
-      const caller = resolveVoiceCaller(options, params);
+      const caller = await resolveVoiceCaller(options, params);
       caller.assertCurrent();
       const selection =
         caller.kind === "managed" ? caller.managed.read() : readTalkVoiceSelection(caller.session);
@@ -171,7 +174,7 @@ export const talkVoiceHandlers: GatewayRequestHandlers = {
     validateTalkVoiceSetParams,
     async (options) => {
       const { params, respond, context } = options;
-      const caller = resolveVoiceCaller(options, params);
+      const caller = await resolveVoiceCaller(options, params);
       const result = await (caller.kind === "managed"
         ? caller.managed.changeVoice(params.voice, {
             assertCurrent: caller.assertCurrent,

@@ -236,7 +236,7 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   if (args.error) {
     return { text: args.error };
   }
-  const sessionTarget = resolveExportCommandSessionTarget(params);
+  const sessionTarget = await resolveExportCommandSessionTarget(params);
   if ("text" in sessionTarget) {
     return sessionTarget;
   }

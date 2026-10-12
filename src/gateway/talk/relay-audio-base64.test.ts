@@ -92,7 +92,7 @@ describe("Talk relay audio base64", () => {
       providerConfig: {},
       instructions: "brief",
       tools: [],
-      sessionTarget: prepareTalkSessionTarget({}, "agent:main:main"),
+      sessionTarget: await prepareTalkSessionTarget({}, "agent:main:main"),
     });
     realtime.set(session.relaySessionId, "conn");
     await Promise.resolve();

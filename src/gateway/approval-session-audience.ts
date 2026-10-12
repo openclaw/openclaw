@@ -8,7 +8,7 @@ import {
   prepareOptionalSubagentSessionListReadCache,
 } from "../agents/subagents/registry/subagent-registry-state.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import {
   captureIncognitoSessionSource,
   captureIncognitoSessionTopology,
@@ -21,14 +21,14 @@ import { OPERATOR_APPROVAL_MAX_AUDIENCE_SESSION_KEYS } from "./operator-approval
 import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
 
 /** Resolves the source session and its operator-visible ancestor audience. */
-function resolveApprovalSessionAudience(
+async function resolveApprovalSessionAudience(
   cfg: OpenClawConfig,
   persisted: boolean,
   source: string,
   sourceAgentId?: string | null,
   binding?: ReturnType<typeof captureIncognitoSessionSource>,
   topology?: ReturnType<typeof captureIncognitoSessionTopology>,
-): string[] {
+): Promise<string[]> {
   const canonicalize = (sessionKey: string | null | undefined, relativeToSessionKey?: string) => {
     const raw = sessionKey?.trim();
     if (!raw) {
@@ -95,7 +95,7 @@ function resolveApprovalSessionAudience(
           : topology?.entries
               .find((candidate) => candidate.agentId === target.agentId)
               ?.facts.readSharing(sessionKey)?.entry
-        : loadSessionEntryReadOnly({
+        : await readSessionEntryReadOnlyInWorker({
             ...target,
             clone: false,
             hydrateSkillPromptRefs: false,
@@ -155,7 +155,7 @@ export async function resolveApprovalSessionAudienceWithFallback(
     binding.assertCurrent();
   }
   try {
-    return resolveApprovalSessionAudience(
+    return await resolveApprovalSessionAudience(
       getRuntimeConfig(),
       persisted,
       sourceSessionKey,

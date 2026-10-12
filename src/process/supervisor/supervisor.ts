@@ -254,6 +254,12 @@ export function createProcessSupervisor(): ProcessSupervisor & {
     if (owner.terminationReason) {
       return settleConstructionResult(owner.terminationReason);
     }
+    if (input.prepareSpawn) {
+      await input.prepareSpawn();
+      if (owner.terminationReason) {
+        return settleConstructionResult(owner.terminationReason);
+      }
+    }
     input.assertCurrent?.();
     input.beforeSpawn?.();
 

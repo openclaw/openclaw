@@ -83,7 +83,7 @@ it("prepares private CLI history and refuses an unattributed append at execution
         credential: { type: "token", provider: "test-cli", token: "synthetic-account" },
       });
       assert(writer);
-      writer.assertReadable();
+      await writer.assertReadable();
       await runWithCliHistoryWriter(writer, async () => {
         const manager = await SessionManager.openAsync(target);
         await manager.appendMessageAsync(makeUserMessage("Private CLI context", 1));
@@ -104,7 +104,7 @@ it("prepares private CLI history and refuses an unattributed append at execution
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
           },
         });
-        writer.assertReadable();
+        await writer.assertReadable();
         expect(await hasCliSessionTranscript({ sessionTarget: target })).toBe(true);
         expect(await loadCliSessionHistoryMessages({ sessionTarget: target })).toMatchObject([
           { role: "user", content: "Private CLI context" },
@@ -114,7 +114,7 @@ it("prepares private CLI history and refuses an unattributed append at execution
       });
       const manager = await SessionManager.openAsync(target);
       await manager.appendMessageAsync(makeUserMessage("Different writer", 3));
-      expect(() => writer.assertReadable()).toThrow("CLI history authority changed");
+      await expect(writer.assertReadable()).rejects.toThrow("CLI history authority changed");
     });
   } finally {
     admission.close();

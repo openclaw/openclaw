@@ -114,7 +114,7 @@ async function scenario(
                   path: worktreePath,
                 },
         },
-        resolveGatewaySessionStoreTargetWithStore: () => target,
+        resolveGatewaySessionStoreTargetInWorker: async () => target,
         resolveCanonicalSessionEntryFromStoreKeys: () => entry,
       }) as never,
     cancelSessionWork: async (request) => {
@@ -204,7 +204,7 @@ async function scenario(
                   path: worktreePath,
                 }),
               },
-              resolveGatewaySessionStoreTargetWithStore: () => target,
+              resolveGatewaySessionStoreTargetInWorker: async () => target,
               resolveCanonicalSessionEntryFromStoreKeys: () => entry,
             }) as never,
         )
@@ -572,7 +572,7 @@ it("an idempotent failed-cleanup result does not cancel work already on the loca
     loadSessionRuntime: async () =>
       ({
         managedWorktrees: { findLiveByOwner: async () => undefined },
-        resolveGatewaySessionStoreTargetWithStore: () => target,
+        resolveGatewaySessionStoreTargetInWorker: async () => target,
         resolveCanonicalSessionEntryFromStoreKeys: () => entry,
       }) as never,
     cancelSessionWork: cancel,
@@ -645,7 +645,7 @@ it.each(["missing", "local"] as const)(
     }
     const sessionRuntime = {
       managedWorktrees: { findLiveByOwner: async () => undefined },
-      resolveGatewaySessionStoreTargetWithStore: () => target,
+      resolveGatewaySessionStoreTargetInWorker: async () => target,
       resolveCanonicalSessionEntryFromStoreKeys: () => entry,
     };
     const context = createWorkerStopChatContext();

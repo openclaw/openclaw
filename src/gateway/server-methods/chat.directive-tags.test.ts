@@ -269,6 +269,8 @@ vi.mock("../session-utils.js", async () => {
   return {
     ...original,
     loadSessionEntry: loadFixtureSessionEntry,
+    loadGatewaySessionEntryReadOnlyInWorker: async (params: { key: string; agentId?: string }) =>
+      loadFixtureSessionEntry(params.key, { agentId: params.agentId }),
     loadGatewaySessionEntryReadOnly: loadFixtureSessionEntry,
   };
 });

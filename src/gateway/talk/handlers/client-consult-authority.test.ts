@@ -169,7 +169,7 @@ describe("voice consult registration authority", () => {
               instructions: "brief",
               tools: [],
               controlSource: "transcript",
-              sessionTarget: prepareTalkSessionTarget(config, scope.sessionKey),
+              sessionTarget: await prepareTalkSessionTarget(config, scope.sessionKey),
             })
           : undefined;
       const relay = created ? relaySessions.get(created.relaySessionId)! : undefined;
@@ -277,7 +277,7 @@ describe("voice consult registration authority", () => {
         instructions: "brief",
         tools: [],
         controlSource: "transcript",
-        sessionTarget: prepareTalkSessionTarget({}, scope.sessionKey),
+        sessionTarget: await prepareTalkSessionTarget({}, scope.sessionKey),
       });
       const relay = relaySessions.get(created.relaySessionId)!;
       const runId = "queued-consult";

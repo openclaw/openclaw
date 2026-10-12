@@ -12,7 +12,7 @@ import {
   resolveEffectiveChatHistoryMaxChars,
 } from "../chat-display-projection.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnlyInWorker, loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import {
   resolveGlobalAwareNodeChatDeliveryKeys,
@@ -53,7 +53,12 @@ export const chatHandlers: GatewayRequestHandlers = {
       storePath,
       entry,
       canonicalKey: sessionKey,
-    } = loadSessionEntry(rawSessionKey, sessionLoadOptions, cfg);
+    } = await loadGatewaySessionEntryReadOnlyInWorker({
+      excludeInternalEffects: true,
+      cfg,
+      key: rawSessionKey,
+      ...sessionLoadOptions,
+    });
     const sessionId = entry?.sessionId;
     if (!sessionId || !storePath) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "session not found"));

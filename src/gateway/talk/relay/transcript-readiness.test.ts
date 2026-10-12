@@ -53,14 +53,14 @@ describe("native relay transcript readiness", () => {
     await state.cleanup();
   });
 
-  function createHarness() {
+  async function createHarness() {
     const cfg = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
     let request: RealtimeVoiceBridgeCreateRequest | undefined;
     const session = createTalkRealtimeRelaySession({
       cfg,
       context: controlContext(),
       connId,
-      sessionTarget: prepareTalkSessionTarget(cfg, "agent:main:main"),
+      sessionTarget: await prepareTalkSessionTarget(cfg, "agent:main:main"),
       controlSource: "delegation",
       provider: {
         id: "relay-confirmation",
@@ -90,14 +90,14 @@ describe("native relay transcript readiness", () => {
   }
 
   it("delegates without waiting for a future spoken confirmation", async () => {
-    const h = createHarness();
+    const h = await createHarness();
     h.request.onTranscript?.("user", "Create the", false);
     expect(await h.run({ prompt: "Create the requested note" })).toEqual({ text: "Read result." });
     expect(mocks.run).toHaveBeenCalledOnce();
   });
 
   it("drains already admitted transcript work before delegating", async () => {
-    const h = createHarness();
+    const h = await createHarness();
     const entered = createDeferredCore();
     const release = createDeferredCore();
     h.relay.voiceTranscriptQueue.enqueue(() => {
@@ -113,7 +113,7 @@ describe("native relay transcript readiness", () => {
   });
 
   it("cancels a held transcript drain without dispatching", async () => {
-    const h = createHarness();
+    const h = await createHarness();
     const release = createDeferredCore();
     h.relay.voiceTranscriptQueue.enqueue(() => release.promise);
     const controller = new AbortController();

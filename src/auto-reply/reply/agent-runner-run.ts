@@ -286,8 +286,9 @@ export async function runReplyAgent(
   }
 
   const toolResultOptions = {
-    sessionKey,
-    storePath,
+    getVerboseLevel: () =>
+      (sessionKey ? activeSessionStore?.[sessionKey]?.verboseLevel : undefined) ??
+      activeSessionEntry?.verboseLevel,
     resolvedVerboseLevel,
     verboseLevelOverride: followupRun.run.verboseLevelOverride,
   };
@@ -440,7 +441,7 @@ export async function runReplyAgent(
       scheduleFollowupDrain(queueKey, queuedRunFollowupTurn);
     }
     releaseAdmissionTicket();
-    const queuedBehindActiveRun = isRunActive?.() === true;
+    const queuedBehindActiveRun = (await isRunActive?.()) === true;
     await touchActiveSessionEntry();
     if (queuedBehindActiveRun) {
       await typingSignals.signalToolStart();

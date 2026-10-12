@@ -157,7 +157,7 @@ export function resolveDurableChatClaim(params: {
   clientRunId: string;
   entry?: SessionEntry;
   persistedSessionKey: string;
-  reloadEntry: () => SessionEntry | undefined;
+  reloadEntry: () => SessionEntry | undefined | Promise<SessionEntry | undefined>;
   storePath: string;
   recoveryRuntime?: GatewayRecoveryRuntime;
   warn: (message: string) => void;
@@ -197,7 +197,7 @@ export function resolveDurableChatClaim(params: {
     } catch (error) {
       params.warn(String(error));
     }
-    const current = params.reloadEntry();
+    const current = await params.reloadEntry();
     if (
       isAdoptedRestartRecoveryClaim(current, params.clientRunId) &&
       current.abortedLastRun === true

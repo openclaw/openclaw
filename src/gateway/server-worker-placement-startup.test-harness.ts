@@ -80,7 +80,14 @@ vi.mock("./session-utils.js", async (importOriginal) => {
   return {
     ...actual,
     resolveCanonicalSessionEntryFromStoreKeys: moveDestinationMocks.resolveCanonicalSession,
-    resolveGatewaySessionStoreTargetWithStore: moveDestinationMocks.resolveGatewaySessionTarget,
+  };
+});
+
+vi.mock("./session-utils-store-worker.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./session-utils-store-worker.js")>();
+  return {
+    ...actual,
+    resolveGatewaySessionStoreTargetInWorker: moveDestinationMocks.resolveGatewaySessionTarget,
   };
 });
 

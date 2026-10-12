@@ -1,10 +1,13 @@
 import { readSessionTranscriptActivePathEntryRelation } from "../../config/sessions/session-accessor.js";
-import type { loadSessionEntry } from "../session-utils.js";
+import type { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils.js";
 
 export const ACTIVE_LEAF_CHANGED_ERROR_REASON = "active-leaf-changed";
 
 export function assertExpectedLeafActive(
-  session: Pick<ReturnType<typeof loadSessionEntry>, "canonicalKey" | "entry" | "storePath">,
+  session: Pick<
+    Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>>,
+    "canonicalKey" | "entry" | "storePath"
+  >,
   agentId: string,
   expectedLeafEntryId: string | null,
   requestedSessionId: string | undefined,

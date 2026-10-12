@@ -27,10 +27,9 @@ vi.mock("../../media/store.js", async () => {
   return { ...actual, deleteMediaBuffer: mocks.deleteMediaBuffer };
 });
 
-vi.mock("../session-utils.js", async () => {
-  const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
-  return { ...actual, loadSessionEntry: mocks.loadSessionEntry };
-});
+vi.mock("../session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: mocks.loadSessionEntry,
+}));
 
 vi.mock("../../config/sessions/session-accessor.js", async () => {
   const actual = await vi.importActual<typeof import("../../config/sessions/session-accessor.js")>(

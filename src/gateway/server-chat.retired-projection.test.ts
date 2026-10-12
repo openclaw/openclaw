@@ -13,6 +13,7 @@ import {
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
 } from "./server-chat.js";
+import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 
 const sessionFixture = vi.hoisted(() => ({ updatedAt: 50 }));
 
@@ -20,21 +21,6 @@ vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => ({}) }));
 vi.mock("../infra/heartbeat-visibility.js", () => ({
   resolveHeartbeatVisibility: () => ({ showOk: false, showAlerts: true, useIndicator: true }),
 }));
-vi.mock("./session-utils.js", async () => {
-  const { resolveSessionStoreIdentity } = await import("./session-store-key.js");
-  return {
-    loadGatewaySessionEntryReadOnly: (sessionKey: string, options?: { agentId?: string }) => {
-      const cfg = { agents: { entries: { main: {}, delivery: {} } } };
-      const identity = resolveSessionStoreIdentity({ cfg, sessionKey, agentId: options?.agentId });
-      return {
-        cfg,
-        ...identity,
-        store: {},
-        entry: { sessionId: "session", verboseLevel: "off", updatedAt: sessionFixture.updatedAt },
-      };
-    },
-  };
-});
 
 describe("retired execution event projection", () => {
   beforeEach(() => {
@@ -49,7 +35,20 @@ describe("retired execution event projection", () => {
     const chatRunState = createChatRunState();
     const sessionMessageSubscribers = createSessionMessageSubscriberRegistry();
     sessionMessageSubscribers.subscribe("selected", "agent:delivery:late");
+    const projection = createSessionRowProjectionFixture({
+      cfg: { agents: { entries: { main: {}, delivery: {} } } },
+      agentId: "delivery",
+      store: {
+        global: { sessionId: "session", verboseLevel: "off", updatedAt: sessionFixture.updatedAt },
+        "agent:delivery:late": {
+          sessionId: "session",
+          verboseLevel: "off",
+          updatedAt: sessionFixture.updatedAt,
+        },
+      },
+    });
     const handler = createAgentEventHandler({
+      getSessionRowProjection: () => projection,
       broadcast,
       broadcastToConnIds,
       nodeHasSessionSubscribers: () => true,
@@ -76,6 +75,7 @@ describe("retired execution event projection", () => {
         await unsubscribe();
       } finally {
         await handler.dispose();
+        projection.dispose();
       }
     }
     return { broadcast, broadcastToConnIds, nodeSendToSession };

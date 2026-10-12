@@ -217,10 +217,12 @@ describe("outbound session persistence", () => {
           cfg: {},
           channel: "reef",
           route,
-          assertCommitAllowed: () => {
-            if (!allowed) {
-              throw refusal;
-            }
+          workerGuard: {
+            assertMutationAllowed: () => {
+              if (!allowed) {
+                throw refusal;
+              }
+            },
           },
         },
         prepared,

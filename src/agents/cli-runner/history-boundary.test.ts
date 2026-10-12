@@ -408,7 +408,7 @@ describe("CLI transcript account boundary", () => {
       throw new Error("Missing admitted history writer");
     }
     const before = f.manager().getEntries();
-    expect(() => writer.assertReadable()).toThrow();
+    await expect(writer.assertReadable()).rejects.toThrow();
     expect(() =>
       runWithCliHistoryWriter(writer, () =>
         f.manager().appendMessage({
@@ -629,12 +629,12 @@ describe("CLI transcript account boundary", () => {
         if (!writer) {
           throw new Error("Missing admitted history writer");
         }
-        writer.assertReadable();
+        await writer.assertReadable();
         await f.withRun(replacementRunId, async (replacement) => {
           await claimAgentSessionWriter(replacement);
-          expect
-            .soft(() => writer?.assertReadable())
-            .toThrow(
+          await expect
+            .soft(writer.assertReadable())
+            .rejects.toThrow(
               replacementRunId === params.runId
                 ? "admitted run authority is no longer active"
                 : "CLI history authority changed",

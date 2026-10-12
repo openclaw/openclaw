@@ -1331,11 +1331,15 @@ describe("agent event handler", () => {
   });
 
   it("uses newer session verbose state for in-flight tool events", async () => {
+    lineageProjection = createSessionRowProjectionFixture({
+      cfg: {},
+      agentId: "main",
+      store: { "session-1": { sessionId: "session-1", verboseLevel: "on", updatedAt: 1_500 } },
+    });
     const h = createHarness({
       now: 1_000,
       resolveSessionKeyForRun: () => "session-1",
     });
-    mockSessionEntry({ sessionId: "session-1", verboseLevel: "on", updatedAt: 1_500 });
 
     registerAgentRunContext("run-tool-toggle", {
       sessionKey: "session-1",

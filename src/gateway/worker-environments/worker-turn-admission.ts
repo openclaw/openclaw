@@ -9,7 +9,6 @@ import { withSessionPlacementForcedTerminalSettlement } from "../../agents/sessi
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { assertRequiredWorkerLocalExecution } from "../../config/required-worker-profile.js";
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { getSessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
 import { assertSessionEntryCohortScope } from "../../config/sessions/session-entry-cohort-scope.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
@@ -191,7 +190,7 @@ export async function waitForInitialWorkerPlacement(params: {
     ? memory.actor.snapshot(memory.authority)?.entry
     : binding
       ? binding.actor.sessions.readSharing(target.sessionKey)?.entry
-      : loadSessionEntryReadOnly(target);
+      : await readSessionEntryReadOnlyInWorker(target, params.assertRunCurrent);
   const refuseSession = (): never => {
     throw createAbortError("Session changed while waiting for worker setup");
   };

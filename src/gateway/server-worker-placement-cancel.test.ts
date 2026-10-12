@@ -204,7 +204,7 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
                 path: root,
               }),
             },
-            resolveGatewaySessionStoreTargetWithStore: () => sessionTarget,
+            resolveGatewaySessionStoreTargetInWorker: async () => sessionTarget,
             resolveCanonicalSessionEntryFromStoreKeys: () => entry,
           }) as never,
         cancelSessionWork: (request) => cancelGatewayWorkerSessionWork(context, request),

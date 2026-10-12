@@ -288,7 +288,7 @@ describe("worker Gateway move recovery", () => {
         placements,
         loadSessionRuntime: async () => ({
           managedWorktrees: { findLiveByOwner: async () => undefined },
-          resolveGatewaySessionStoreTargetWithStore: () => target,
+          resolveGatewaySessionStoreTargetInWorker: async () => target,
           resolveCanonicalSessionEntryFromStoreKeys: () => entry,
         }),
         cancelSessionWork: async ({ assertCurrent }) => assertCurrent(),

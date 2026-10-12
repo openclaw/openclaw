@@ -69,6 +69,7 @@ export async function resolveGatewaySessionStoreTargetInWorker(params: {
   env?: NodeJS.ProcessEnv;
   assertActive?: () => void;
   projection?: SessionEntryReadScope["projection"];
+  preserveQualifiedAddress?: boolean;
 }): Promise<GatewaySessionStoreTargetWithStore> {
   const prepared = await prepareGatewaySessionStoreReadInWorker(params);
   params.assertActive?.();
@@ -85,6 +86,7 @@ async function prepareGatewaySessionStoreReadInWorker(
     cfg: params.cfg,
     sessionKey: params.key,
     agentId: params.agentId,
+    preserveQualifiedAddress: params.preserveQualifiedAddress,
   });
   // Ephemeral databases belong to the process and cannot be opened by a worker.
   if (isIncognitoSessionKey(canonicalKey)) {
@@ -135,6 +137,7 @@ async function prepareGatewaySessionStoreReadInWorker(
       env: inventory.env,
       targetDiscoveryCache,
       projection: params.projection,
+      preserveQualifiedAddress: params.preserveQualifiedAddress,
     };
     const prepareReads = async <T>(reads: readonly GatewaySessionStoreRead[], select: () => T) => {
       assertCurrent();

@@ -80,7 +80,7 @@ async function cancellationLoadFixture(
         lastActiveAt: 1,
       }),
     },
-    resolveGatewaySessionStoreTargetWithStore: () => target,
+    resolveGatewaySessionStoreTargetInWorker: async () => target,
     resolveCanonicalSessionEntryFromStoreKeys: () => entry,
   };
   lookup.value = { ...target, cfg: {}, entry, legacyKey: undefined };

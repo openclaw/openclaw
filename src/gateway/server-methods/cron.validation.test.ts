@@ -997,7 +997,6 @@ describe("cron method validation", () => {
   });
 
   registerCronCreatorSessionTests({
-    createCronContext,
     invokeCron,
     loadGatewaySessionEntry,
     resolveCronDeliveryPreview,

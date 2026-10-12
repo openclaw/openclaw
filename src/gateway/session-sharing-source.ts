@@ -55,7 +55,7 @@ import type {
   SessionMutationTarget,
   resolveTalkSessionTargetInput,
 } from "./session-sharing-target-input.js";
-import { prepareTalkSessionTarget, assertTalkSessionStorageTarget } from "./talk/session-target.js";
+import { assertTalkSessionStorageTarget } from "./talk/session-target.js";
 import type { PreparedTalkSessionTarget } from "./talk/session-target.types.js";
 
 /** Hold the existing reader only until the prepared writer operation settles. */
@@ -597,26 +597,12 @@ export function captureSessionSharingTalkAuthority({
     if (!input || !target) {
       return undefined;
     }
-    let current: PreparedTalkSessionTarget;
     try {
-      if (input.kind === "relay") {
-        if (!input.isCurrent()) {
-          throw sessionMutationTargetChanged(request.method, target.sessionKey);
-        }
-        assertTalkSessionStorageTarget(cfg, target);
-        current = target;
-      } else {
-        current = prepareTalkSessionTarget(cfg, input.sessionKey);
+      if (input.kind === "relay" && !input.isCurrent()) {
+        throw sessionMutationTargetChanged(request.method, target.sessionKey);
       }
+      assertTalkSessionStorageTarget(cfg, target);
     } catch {
-      throw sessionMutationTargetChanged(request.method, target.sessionKey);
-    }
-    if (
-      current.agentId !== target.agentId ||
-      current.sessionKey !== target.sessionKey ||
-      current.canonicalKey !== target.canonicalKey ||
-      current.storePath !== target.storePath
-    ) {
       throw sessionMutationTargetChanged(request.method, target.sessionKey);
     }
     const error =
@@ -624,12 +610,12 @@ export function captureSessionSharingTalkAuthority({
       authorizeGatewaySessionCreation({
         cfg: request.context.getCommittedRuntimeConfig?.() ?? cfg,
         client: request.client,
-        agentId: current.agentId,
+        agentId: target.agentId,
       });
     if (error) {
       throw new SessionMutationAuthorizationChangedError(error);
     }
-    return current;
+    return target;
   };
 }
 

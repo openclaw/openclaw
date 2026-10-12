@@ -40,11 +40,17 @@ export type MentionInbox = {
     input: UsersMentionableParams,
     publish: (result: Result<UsersMentionableResult, ErrorShape>) => undefined,
   ) => Promise<void>;
+  /** @deprecated Await validateRecipientsAsync. Removed in the next Plugin SDK major. */
   validateRecipients: (
     client: GatewayClient | null,
     input: UsersMentionableParams,
     profileIds: readonly string[],
   ) => Result<readonly string[], ErrorShape>;
+  validateRecipientsAsync: (
+    client: GatewayClient | null,
+    input: UsersMentionableParams,
+    profileIds: readonly string[],
+  ) => Promise<Result<readonly string[], ErrorShape>>;
   /** @deprecated Await listAsync and publish its current result. Removed in the next Plugin SDK major. */
   list: (client: GatewayClient | null) => Result<MentionsListResult, ErrorShape>;
   /** @deprecated Await dismissAsync and publish its current result. Removed in the next Plugin SDK major. */

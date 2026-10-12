@@ -41,7 +41,7 @@ const activeRelaySessions = new Map<string, string>();
 usePersistentRelayTestState(activeRelaySessions);
 
 describe("relay consult registration authority", () => {
-  const createRegistrationFixture = () => {
+  const createRegistrationFixture = async () => {
     const context = createGatewayRequestContext(makeContextParams());
     context.getRuntimeConfig = () => ({});
     const created = createTalkRealtimeRelaySession({
@@ -53,7 +53,7 @@ describe("relay consult registration authority", () => {
       instructions: "brief",
       tools: [],
       controlSource: "transcript",
-      sessionTarget: prepareTalkSessionTarget({}, "agent:main:main"),
+      sessionTarget: await prepareTalkSessionTarget({}, "agent:main:main"),
     });
     activeRelaySessions.set(created.relaySessionId, "registration-owner");
     const relay = relaySessions.get(created.relaySessionId)!;
@@ -76,7 +76,7 @@ describe("relay consult registration authority", () => {
   it.for(["release", "failure"] as const)(
     "preserves a newer registration with identical IDs after old %s",
     async (phase, { signal }) => {
-      const { relay, target, chat } = createRegistrationFixture();
+      const { relay, target, chat } = await createRegistrationFixture();
       const callId = adoptRelayProviderToolCallId(relay, "registration-call")!;
       const held = createDeferred();
       const resume = createDeferred();
@@ -141,7 +141,7 @@ describe("relay consult registration authority", () => {
   it.for(["none", "live", "detached"] as const)(
     "settles published cleanup before a replaced registration returns (successor=%s)",
     async (successor, { signal }) => {
-      const { relay, target, chat } = createRegistrationFixture();
+      const { relay, target, chat } = await createRegistrationFixture();
       const callId = adoptRelayProviderToolCallId(relay, "publication-call")!;
       const held = createDeferred();
       const resume = createDeferred();
@@ -214,7 +214,7 @@ describe("relay consult registration authority", () => {
   );
 
   it.each(["call-1", "call-2"])("retains a shared run when %s clears first", async (first) => {
-    const { relay, target, chat } = createRegistrationFixture();
+    const { relay, target, chat } = await createRegistrationFixture();
     const second = first === "call-1" ? "call-2" : "call-1";
     try {
       for (const callId of ["call-1", "call-2"]) {
@@ -236,7 +236,7 @@ describe("relay consult registration authority", () => {
   it.each(["standalone", "call"])(
     "retains shared voice ownership when the %s registration releases first",
     async (first) => {
-      const { relay, target, chat } = createRegistrationFixture();
+      const { relay, target, chat } = await createRegistrationFixture();
       const standalone = await registerTalkRealtimeRelayAgentRun(target);
       const call = await registerTalkRealtimeRelayAgentRun({ ...target, callId: "shared-call" });
       try {
@@ -257,7 +257,7 @@ describe("relay consult registration authority", () => {
   it.for(["creation", "registration", "failure", "aborted", "cleanup"] as const)(
     "preserves chat controller ownership across the %s wait",
     async (phase, { signal }) => {
-      const { relay, target, chat } = createRegistrationFixture();
+      const { relay, target, chat } = await createRegistrationFixture();
       const callId = adoptRelayProviderToolCallId(relay, "controller-call")!;
       const held = createDeferred();
       const resume = createDeferred();
@@ -365,7 +365,7 @@ describe("relay consult registration authority", () => {
   it.for(["provider", "close", "close-without-controller"] as const)(
     "keeps a later controller alive after settled registration (%s)",
     async (operation) => {
-      const { relay, target, chat } = createRegistrationFixture();
+      const { relay, target, chat } = await createRegistrationFixture();
       if (operation === "close-without-controller") {
         chat.cleanup();
       }
@@ -427,7 +427,7 @@ describe("relay consult registration authority", () => {
       instructions: "brief",
       tools: [],
       controlSource: "transcript",
-      sessionTarget: prepareTalkSessionTarget(config, "agent:fresh:main"),
+      sessionTarget: await prepareTalkSessionTarget(config, "agent:fresh:main"),
     });
     activeRelaySessions.set(created.relaySessionId, "conn-known-failure");
     const relay = relaySessions.get(created.relaySessionId)!;
@@ -485,7 +485,7 @@ describe("relay consult registration authority", () => {
       instructions: "brief",
       tools: [],
       controlSource: "transcript",
-      sessionTarget: prepareTalkSessionTarget({}, "agent:main:main"),
+      sessionTarget: await prepareTalkSessionTarget({}, "agent:main:main"),
     });
     activeRelaySessions.set(created.relaySessionId, "conn-replaced-source");
     const relay = relaySessions.get(created.relaySessionId)!;
@@ -531,7 +531,7 @@ describe("relay consult registration authority", () => {
             instructions: "brief",
             tools: [],
             controlSource: "transcript",
-            sessionTarget: prepareTalkSessionTarget({}, "agent:main:main"),
+            sessionTarget: await prepareTalkSessionTarget({}, "agent:main:main"),
           });
           activeRelaySessions.set(created.relaySessionId, "conn-source");
           const relay = relaySessions.get(created.relaySessionId)!;
@@ -627,7 +627,7 @@ describe("relay consult registration authority", () => {
         instructions: "brief",
         tools: [],
         controlSource: "transcript",
-        sessionTarget: prepareTalkSessionTarget({}, "main"),
+        sessionTarget: await prepareTalkSessionTarget({}, "main"),
       });
       const voiceSessionId = session.relaySessionId;
       activeRelaySessions.set(voiceSessionId, "conn-1");

@@ -42,8 +42,8 @@ vi.mock("./auth.js", () => ({
   authorizeHttpGatewayConnect: authMock,
 }));
 
-vi.mock("./session-utils.js", () => ({
-  loadSessionEntry: loadSessionEntryMock,
+vi.mock("./session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: loadSessionEntryMock,
 }));
 
 vi.mock("../agents/subagents/registry/subagent-control.js", () => ({

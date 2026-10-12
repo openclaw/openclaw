@@ -46,27 +46,31 @@ const sessionEntryState = vi.hoisted(() => ({
   loadCalls: [] as Array<{ sessionKey: string; opts?: { agentId?: string } }>,
 }));
 
+function loadAbortSessionFixture(sessionKey: string, opts?: { agentId?: string }) {
+  sessionEntryState.loadCalls.push({ sessionKey, opts });
+  return {
+    cfg: sessionEntryState.cfg,
+    agentId: opts?.agentId ?? "main",
+    storePath: sessionEntryState.storePath,
+    entry: sessionEntryState.hasEntry
+      ? {
+          sessionId: sessionEntryState.sessionId,
+          lifecycleRevision: sessionEntryState.lifecycleRevision,
+          sessionFile: sessionEntryState.transcriptPath,
+        }
+      : undefined,
+    canonicalKey: sessionEntryState.canonicalKey,
+  };
+}
+
 vi.mock("../session-utils.js", async () => {
   const original =
     await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
   return {
     ...original,
-    loadSessionEntry: (sessionKey: string, opts?: { agentId?: string }) => {
-      sessionEntryState.loadCalls.push({ sessionKey, opts });
-      return {
-        cfg: sessionEntryState.cfg,
-        agentId: opts?.agentId ?? "main",
-        storePath: sessionEntryState.storePath,
-        entry: sessionEntryState.hasEntry
-          ? {
-              sessionId: sessionEntryState.sessionId,
-              lifecycleRevision: sessionEntryState.lifecycleRevision,
-              sessionFile: sessionEntryState.transcriptPath,
-            }
-          : undefined,
-        canonicalKey: sessionEntryState.canonicalKey,
-      };
-    },
+    loadSessionEntry: loadAbortSessionFixture,
+    loadGatewaySessionEntryReadOnlyInWorker: async (params: { key: string; agentId?: string }) =>
+      loadAbortSessionFixture(params.key, { agentId: params.agentId }),
   };
 });
 

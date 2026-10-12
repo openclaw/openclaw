@@ -162,12 +162,12 @@ export async function resolveAgentRunSessionTarget(
     !legacyMarker;
   const configuredStoreResolution = shouldResolveConfiguredStoreRow
     ? agentId
-      ? resolveStoredSessionKeyForSessionId({
+      ? await resolveStoredSessionKeyForSessionId({
           cfg: config,
           sessionId,
           agentId,
         })
-      : resolveExistingSessionKeyForRequest({ cfg: config, sessionId })
+      : await resolveExistingSessionKeyForRequest({ cfg: config, sessionId })
     : undefined;
   const fixedAgentId =
     (hasCompleteTypedTarget || trustExplicitAlternateStoreAgent ? targetAgentId : undefined) ??

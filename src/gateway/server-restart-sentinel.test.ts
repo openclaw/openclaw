@@ -494,6 +494,11 @@ vi.mock("./server-restart-update-run.js", async () => {
 
 // mock-isolation: These producer tests use supplied rows; worker authority has its own boundary suite.
 vi.mock("./session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: async (params: {
+    key: string;
+    agentId?: string;
+    env?: NodeJS.ProcessEnv;
+  }) => mocks.loadSessionEntry(params.key, { agentId: params.agentId, env: params.env }),
   resolveGatewaySessionStoreTargetInWorker: mocks.resolveSessionTarget,
 }));
 

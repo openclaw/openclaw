@@ -1,6 +1,7 @@
 import { readSessionTranscriptBoundedMessageTailPageFromProjection } from "../config/sessions/session-accessor.sqlite-active-events-read.js";
 import {
   isSessionTranscriptProjectionUnavailableError,
+  readRecentSessionTranscriptMessageEvents,
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.sqlite-active-events.js";
 import { withCurrentProjectionSnapshot } from "../config/sessions/session-accessor.sqlite-active-projection.js";
@@ -33,6 +34,7 @@ import {
   createIncognitoSessionHistoryReader,
   type IncognitoSessionHistoryReader,
 } from "./session-history-snapshot.js";
+import { aggregateSessionTranscriptUsage } from "./session-transcript-derived-readers.js";
 import { createSessionActorTranscriptReader } from "./session-transcript-memory-reader.js";
 import { createSessionTranscriptReader } from "./session-transcript-read-kernel.js";
 import {
@@ -297,6 +299,39 @@ export const readRecentSessionMessagesWithStatsAsync = createHistoryPageReader(
   (read, target, options) => read({ kind: "recent-page", params: { target, options } }),
   (reader, scope, options) => reader.readRecentSessionMessagesWithStatsAsync(scope, options),
 );
+
+const readRecentSessionUsage = createHistoryPageReader(
+  async (target, maxBytes: number) =>
+    aggregateSessionTranscriptUsage(
+      readRecentSessionTranscriptMessageEvents(target, {
+        maxBytes,
+        maxLines: 1000,
+        maxMessages: 1000,
+      }).events.map(({ event }) => (event.type === "message" ? event.message : undefined)),
+    ),
+  async (read, target, maxBytes) => read({ kind: "recent-usage", params: { target, maxBytes } }),
+  async (reader, target, maxBytes) =>
+    aggregateSessionTranscriptUsage(
+      (
+        await reader.readRecentSessionMessagesWithStatsAsync(target, {
+          maxBytes,
+          maxLines: 1000,
+          maxMessages: 1000,
+        })
+      ).messages,
+    ),
+);
+
+/** Prepare bounded usage in the history owner before rendering a status response. */
+export async function readRecentSessionUsageFromTranscriptAsync(
+  scope: SessionTranscriptReadScope,
+  maxBytes: number,
+) {
+  return readRecentSessionUsage(
+    scope,
+    Math.max(1024, Math.floor(Number.isFinite(maxBytes) ? maxBytes : 8 * 1024 * 1024)),
+  );
+}
 
 export const readSessionMessagesPageWithStatsAsync = createHistoryPageReader(
   sessionTranscriptReader.readSessionMessagesPageWithStatsAsync,

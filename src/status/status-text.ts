@@ -29,7 +29,7 @@ import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
 import { normalizeThinkLevel } from "../auto-reply/thinking.shared.js";
 import { toAgentModelListLike } from "../config/model-input.js";
-import type { SessionEntry } from "../config/sessions.js";
+import { resolveFreshSessionTotalTokens, type SessionEntry } from "../config/sessions.js";
 import { resolveSessionLifecycleTimestampsAsync } from "../config/sessions/lifecycle-read.js";
 import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -577,12 +577,39 @@ export async function buildStatusReplyParts(
               ? "active-or-bundled"
               : "active",
         });
-  const lifecycleTimestamps = await resolveSessionLifecycleTimestampsAsync({
-    entry: sessionEntry,
-    agentId: statusAgentId,
-    sessionKey,
-    storePath,
-  });
+  const hasCommittedUsage =
+    resolveFreshSessionTotalTokens(sessionEntry) !== undefined &&
+    [
+      sessionEntry?.inputTokens,
+      sessionEntry?.outputTokens,
+      sessionEntry?.cacheRead,
+      sessionEntry?.cacheWrite,
+    ].every((value) => typeof value === "number") &&
+    Boolean(sessionEntry?.model || activeModel);
+  const [lifecycleTimestamps, transcriptUsage] = await Promise.all([
+    resolveSessionLifecycleTimestampsAsync({
+      entry: sessionEntry,
+      agentId: statusAgentId,
+      sessionKey,
+      storePath,
+    }),
+    params.includeTranscriptUsage !== false && !hasCommittedUsage && sessionEntry?.sessionId
+      ? import("../gateway/session-transcript-usage.js")
+          .then(({ readRecentSessionUsageFromTranscriptAsync }) =>
+            readRecentSessionUsageFromTranscriptAsync(
+              {
+                agentId: statusAgentId,
+                sessionEntry,
+                sessionId: sessionEntry.sessionId,
+                sessionKey,
+                storePath,
+              },
+              256 * 1024,
+            ),
+          )
+          .catch(() => null)
+      : undefined,
+  ]);
   return buildStatusMessageParts({
     config: cfg,
     preparedTtsPreferences: params.preparedTtsPreferences ?? (await prepareTtsPreferences()),
@@ -611,7 +638,6 @@ export async function buildStatusReplyParts(
     sessionKey,
     parentSessionKey,
     sessionScope,
-    sessionStorePath: storePath,
     sessionStartedAt: lifecycleTimestamps.sessionStartedAt,
     groupActivation,
     resolvedThink: effectiveThinkLevel,
@@ -637,6 +663,6 @@ export async function buildStatusReplyParts(
     pluginHealthLine,
     channelFeatureLine,
     mediaDecisions: params.mediaDecisions,
-    includeTranscriptUsage: params.includeTranscriptUsage ?? true,
+    transcriptUsage,
   });
 }

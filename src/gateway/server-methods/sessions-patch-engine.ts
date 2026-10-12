@@ -97,7 +97,7 @@ export async function executeSessionPatchMutations(params: {
   const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   const callerIsAdmin = client === null || callerScopes.includes(ADMIN_SCOPE);
   const pluginOwnerId = client?.internal?.pluginRuntimeOwnerId;
-  const discovery = discoverSessionPatchTargets(cfg, params.targets);
+  const discovery = await discoverSessionPatchTargets(cfg, params.targets);
   if (!discovery.ok) {
     return discovery;
   }

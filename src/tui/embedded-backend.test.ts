@@ -296,13 +296,19 @@ vi.mock("../gateway/server-methods/chat-history-pages.js", () => ({
   readChatHistoryPage: (params: unknown) => readChatHistoryPageMock(params),
 }));
 
+vi.mock("../gateway/session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: async ({
+    key,
+    agentId,
+  }: {
+    key: string;
+    agentId?: string;
+  }) => loadSessionEntryMock(key, agentId ? { agentId } : undefined),
+}));
+
 vi.mock("../gateway/session-utils.js", () => ({
   getSessionDefaults: () => getSessionDefaultsMock(),
   listAgentsForGateway: () => [],
-  loadSessionEntry: (sessionKey: string, opts?: { agentId?: string }) =>
-    loadSessionEntryMock(sessionKey, opts),
-  loadGatewaySessionEntryReadOnly: (sessionKey: string, opts?: { agentId?: string }) =>
-    loadSessionEntryMock(sessionKey, opts),
   resolveCanonicalGatewaySessionStoreKey: ({ key }: { key: string }) => ({
     primaryKey: key,
     target: { storeKeys: [key] },
@@ -1246,10 +1252,10 @@ describe("EmbeddedTuiBackend", () => {
       } finally {
         await backend.stop();
       }
-      expect(loadSessionEntryMock).toHaveBeenCalledWith(input.sessionKey, {
-        ...(input.agentId ? { agentId: input.agentId } : {}),
-        includeStoreChildEntries: true,
-      });
+      expect(loadSessionEntryMock).toHaveBeenCalledWith(
+        input.sessionKey,
+        input.agentId ? { agentId: input.agentId } : undefined,
+      );
       expect(readChatHistoryPageMock).toHaveBeenCalledWith(
         expect.objectContaining({ canonicalKey: "global", sessionAgentId: owner, entry }),
       );
@@ -1282,7 +1288,6 @@ describe("EmbeddedTuiBackend", () => {
           entry,
           storePath: "/tmp/private.sqlite",
           lightweightListRow: true,
-          skipTranscriptUsageFallback: true,
         }),
       );
       expect(sessionProjection.present).not.toHaveBeenCalled();

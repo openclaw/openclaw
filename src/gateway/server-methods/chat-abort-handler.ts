@@ -11,16 +11,8 @@ import { isIncognitoSessionKey, normalizeAgentId } from "../../routing/session-k
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { resolveStateContentionPresentation } from "../../sessions/session-run-error-presentation.js";
 import { captureWorkerInferenceForSession, createChatAbortOps } from "../chat-abort-ops.js";
-import {
-  abortChatRunById,
-  isChatAbortControllerEntryAbortable,
-  type ChatAbortControllerEntry,
-} from "../chat-abort.js";
-import {
-  abortQueuedChatTurnById,
-  isQueuedChatTurnForSession,
-  type QueuedChatTurnEntry,
-} from "../chat-queued-turns.js";
+import { abortChatRunById, isChatAbortControllerEntryAbortable } from "../chat-abort.js";
+import { abortQueuedChatTurnById, isQueuedChatTurnForSession } from "../chat-queued-turns.js";
 import { chatRunBelongsToAgent } from "../chat-run-owner.js";
 import { formatStopRequest } from "../control-plane-audit.js";
 import { pendingChatSendDedupeKey, type DedupeEntry } from "../server-shared.js";
@@ -28,15 +20,20 @@ import {
   resolveRequestedSessionAgentId,
   tryResolveSessionCompatibilityOwnerAgentId,
 } from "../session-request-agent.js";
-import { loadSessionEntry, resolveSessionStoreKey } from "../session-utils.js";
+import {
+  loadGatewaySessionEntryReadOnlyInWorker,
+  resolveSessionStoreKey,
+} from "../session-utils.js";
 import { getWorkerInferenceSessionControl } from "../worker-environments/inference-control-internal.js";
 import {
   canRequesterAbortChatRun,
   canRequesterAbortPreRegisteredRun,
+  captureAbortTargetIdentity,
   readPreRegisteredAgentDedupePayloadForSession,
   resolveChatAbortRequester,
   writePreRegisteredAgentAbort,
   writePreRegisteredChatAbort,
+  type ChatAbortTarget,
 } from "./chat-abort-authorization.js";
 import { abortControlledSubagents, descendantAbortError } from "./chat-abort-descendants.js";
 import { abortChatRunsForSessionKeyWithPartials } from "./chat-abort-runtime.js";
@@ -59,24 +56,6 @@ type ChatAbortLifecycle = {
   onDescendantsCancelled?: () => void;
   cascadeDescendants?: true;
 };
-
-type ChatAbortTarget = Pick<
-  ChatAbortControllerEntry | QueuedChatTurnEntry,
-  "sessionKey" | "sessionId" | "agentId" | "ownerConnId" | "ownerDeviceId"
->;
-
-function captureAbortTargetIdentity<T extends ChatAbortTarget>(
-  entries: ReadonlyMap<string, T>,
-  runId: string,
-  entry: T,
-) {
-  const { sessionKey, sessionId, agentId } = entry;
-  return () =>
-    entries.get(runId) === entry &&
-    entry.sessionKey === sessionKey &&
-    entry.sessionId === sessionId &&
-    entry.agentId === agentId;
-}
 
 export async function handleChatAbortRequestWithLifecycle(
   options: GatewayRequestHandlerOptions,
@@ -183,11 +162,19 @@ export async function handleChatAbortRequestWithLifecycle(
   const requiredSessionId = narrow ? admittedTarget?.sessionId : undefined;
   const ops = createChatAbortOps(context);
 
-  const abortSession: Result<ReturnType<typeof loadSessionEntry>, unknown> = (() => {
+  const abortSession: Result<
+    Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>>,
+    unknown
+  > = await (async () => {
     try {
       return {
         ok: true,
-        value: loadSessionEntry(canonicalAbortSessionKey, { agentId: abortAgentId }),
+        value: await loadGatewaySessionEntryReadOnlyInWorker({
+          excludeInternalEffects: true,
+          cfg: abortCfg,
+          key: canonicalAbortSessionKey,
+          agentId: abortAgentId,
+        }),
       };
     } catch (error) {
       return { ok: false, error };

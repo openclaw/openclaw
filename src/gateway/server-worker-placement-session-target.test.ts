@@ -23,7 +23,7 @@ import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-cloc
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
 import { resolveWorkerPlacementSessionTarget } from "./server-worker-placement-session-target.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
-import { resolveGatewaySessionStoreTargetWithStore } from "./session-utils-store-lookup.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 import { resolveCanonicalSessionEntryFromStoreKeys } from "./session-utils-store.js";
 import {
   REQUEST,
@@ -75,7 +75,7 @@ test("prepares an actor workspace and guards exact placement metadata without ho
           errorMessage: "placement source changed",
           sessionRuntime: {
             managedWorktrees,
-            resolveGatewaySessionStoreTargetWithStore,
+            resolveGatewaySessionStoreTargetInWorker,
             resolveCanonicalSessionEntryFromStoreKeys,
           },
         });
@@ -321,7 +321,7 @@ test("rejects stale repository selection and refreshes the accepted checkpoint a
       },
     );
     const sessionRuntime = {
-      resolveGatewaySessionStoreTargetWithStore,
+      resolveGatewaySessionStoreTargetInWorker,
       resolveCanonicalSessionEntryFromStoreKeys,
       managedWorktrees: { findLiveByOwner: async () => undefined },
     };
@@ -465,7 +465,7 @@ test("resolves consecutive placement workspaces without decoding unrelated sessi
       for (const sessionKey of keys) {
         const resolved = await resolveWorkerPlacementSessionTarget({
           sessionRuntime: {
-            resolveGatewaySessionStoreTargetWithStore,
+            resolveGatewaySessionStoreTargetInWorker,
             resolveCanonicalSessionEntryFromStoreKeys,
             managedWorktrees: {
               findLiveByOwner: async (_kind, ownerId) => ({

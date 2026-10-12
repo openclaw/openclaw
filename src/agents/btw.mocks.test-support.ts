@@ -346,8 +346,11 @@ vi.mock("../logging/diagnostic.js", () => ({
 vi.mock("../config/sessions/session-accessor.js", () => ({
   findTranscriptEvent: vi.fn(async () => undefined),
   listSessionEntriesCore: (...args: unknown[]) => listSessionEntriesCoreMock(...args),
-  loadSessionEntry: (...args: unknown[]) => loadSessionEntryMock(...args),
   loadTranscriptEvents: (...args: unknown[]) => loadTranscriptEventsMock(...args),
+}));
+
+vi.mock("../config/sessions/session-entry-read-runtime.js", () => ({
+  readSessionEntryInWorker: async (...args: unknown[]) => loadSessionEntryMock(...args),
 }));
 
 export {

@@ -279,7 +279,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, normalized.error));
         return;
       }
-      const eligible = context.mentionInbox?.validateRecipients(
+      const eligible = await context.mentionInbox?.validateRecipientsAsync(
         client,
         {
           agentId: explicitlyRequestedAgent.agentId,

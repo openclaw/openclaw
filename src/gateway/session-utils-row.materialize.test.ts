@@ -7,10 +7,6 @@ import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-re
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
 import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../config/sessions/activity-summary.js";
-import {
-  appendTranscriptMessageSync,
-  replaceSessionEntry,
-} from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -19,7 +15,6 @@ import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { projectSessionActivitySummary } from "./session-activity-summary-state.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import {
-  buildGatewaySessionRow,
   materializeSessionRow,
   presentSessionRow,
   readSessionRowInputs,
@@ -67,11 +62,6 @@ const GOLDEN_HASHES: Record<string, string | readonly [string, string, string]> 
     "aca8beaa411b0a3e189561814db7cb5654862ce22cd8a8e4f1da2f84e4836409",
   "observer digest older than run start":
     "36b676f9aae3e00611fbac03ba7785ad399e1c69dbe759613b5d399e8511b9a6",
-  "retention changes control owner and transcript fallback cost": [
-    "28ac6cb9f2484f9cae484e69933f552b7afea1a04b4fa2b1e1b76ff3b01061b4",
-    "28ac6cb9f2484f9cae484e69933f552b7afea1a04b4fa2b1e1b76ff3b01061b4",
-    "708bc5184e4b8f011b96e3dd2f64c3ba39982f3610a2430b36a01823f1033473",
-  ],
   "single-row snapshot without an explicit swarm context":
     "251869ca15900f633ab059427f4f2672bf56bb78d1510dbed8466e383b582d78",
   "swarm summary retains collector completion and children":
@@ -80,7 +70,6 @@ const GOLDEN_HASHES: Record<string, string | readonly [string, string, string]> 
 
 const PARENT = "agent:main:dashboard:parent";
 const LIVE = "agent:main:subagent:live";
-const RETAINED = "agent:main:subagent:retained";
 const LIVE_RUN = "materialize-golden-live";
 const BASE_ENTRY = { sessionId: "golden-session", updatedAt: START, createdAt: START - 1_000 };
 const GOAL = {
@@ -104,7 +93,6 @@ type RowFixture = {
   acpMeta?: SessionEntry["acp"];
   store?: Record<string, SessionEntry>;
   runs?: SubagentRunRecord[];
-  transcript?: boolean;
   omitRowContext?: boolean;
   expectedIsDock?: boolean;
   decoration?: "current" | "stale";
@@ -174,25 +162,6 @@ function fixtures(): RowFixture[] {
     accumulatedRuntimeMs: 500,
     model: "row-fixture/older",
   });
-  const retainedRuns = [
-    createSubagentRunRecord({
-      runId: "golden-older-unended",
-      childSessionKey: RETAINED,
-      requesterSessionKey: "agent:main:parent-a",
-      createdAt: START,
-      startedAt: START,
-      model: "row-fixture/older",
-    }),
-    createSubagentRunRecord({
-      runId: "golden-newer-ended",
-      childSessionKey: RETAINED,
-      requesterSessionKey: "agent:main:parent-b",
-      createdAt: START + 10_000,
-      startedAt: START + 10_000,
-      endedAt: START + 20_000,
-      model: "row-fixture/newer",
-    }),
-  ];
   const activityEntry: SessionEntry = {
     ...BASE_ENTRY,
     activitySummary: {
@@ -352,13 +321,6 @@ function fixtures(): RowFixture[] {
       entry: activityEntry,
       decoration: "stale",
     },
-    {
-      name: "retention changes control owner and transcript fallback cost",
-      key: RETAINED,
-      entry: { ...BASE_ENTRY, sessionId: "retained-session" },
-      runs: retainedRuns,
-      transcript: true,
-    },
   ];
 }
 
@@ -444,25 +406,6 @@ test("preserves complete base rows across time and caller presentation fixtures"
     const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
     for (const fixture of fixtures()) {
       const originalEntry = structuredClone(fixture.entry);
-      if (fixture.transcript && fixture.entry) {
-        const scope = {
-          agentId: "main",
-          storePath,
-          sessionKey: fixture.key,
-          sessionId: fixture.entry.sessionId,
-        };
-        await replaceSessionEntry(scope, fixture.entry);
-        appendTranscriptMessageSync(scope, {
-          message: { role: "user", content: "Verify the retained run fixture" },
-        });
-        appendTranscriptMessageSync(scope, {
-          message: {
-            role: "assistant",
-            content: "The fixture is complete.",
-            usage: { input: 100, output: 20 },
-          },
-        });
-      }
       const rowContext = buildSessionListRowMetadataContext({ now: TIMES[0], sessionKeys: [] });
       const subagentRunInputs = {
         runs: new Map((fixture.runs ?? []).map((run) => [run.runId, run])),
@@ -491,10 +434,7 @@ test("preserves complete base rows across time and caller presentation fixtures"
         now: TIMES[0],
         rowContext: fixture.omitRowContext ? undefined : rowContext,
         includeSwarmChildren: true,
-        skipTranscriptUsageFallback: !fixture.transcript,
-        lightweightListRow: !fixture.transcript,
-        includeDerivedTitles: fixture.transcript,
-        includeLastMessage: fixture.transcript,
+        lightweightListRow: true,
       };
       const { inputs, presentation } = readSessionRowInputs(rowParams);
       const clock = vi.spyOn(Date, "now").mockImplementation(() => {
@@ -561,24 +501,6 @@ test("preserves complete base rows across time and caller presentation fixtures"
         const expectedHash = typeof hashes === "string" ? hashes : hashes?.[index];
         expect(actualHash, `${fixture.name} at ${TIMES[index]}\n${json}`).toBe(expectedHash);
       });
-      if (fixture.transcript) {
-        const lightweight = buildGatewaySessionRow({ ...rowParams, lightweightListRow: true });
-        expect(lightweight).toMatchObject({
-          snapshotAt: TIMES[0],
-          updatedAt: fixture.entry?.updatedAt,
-        });
-        expect(lightweight.totalTokens).toBe(rows[0]?.totalTokens);
-        expect(lightweight.totalTokens).toBeGreaterThan(0);
-        expect(lightweight.estimatedCostUsd).toBe(fixture.entry?.estimatedCostUsd);
-      }
-      if (fixture.key === RETAINED) {
-        expect(rows.map((row) => row.controlOwnerSessionKey)).toEqual([
-          "agent:main:parent-a",
-          "agent:main:parent-a",
-          "agent:main:parent-b",
-        ]);
-        expect(rows[0]?.estimatedCostUsd).not.toEqual(rows[2]?.estimatedCostUsd);
-      }
       expect(fixture.entry).toStrictEqual(originalEntry);
     }
   });

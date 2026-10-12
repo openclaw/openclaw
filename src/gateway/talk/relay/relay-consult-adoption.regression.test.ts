@@ -66,7 +66,7 @@ describe("Talk relay keyed consult adoption", () => {
       cfg,
       context: controlContext(),
       connId,
-      sessionTarget: prepareTalkSessionTarget(cfg, sessionKey),
+      sessionTarget: await prepareTalkSessionTarget(cfg, sessionKey),
       controlSource: "delegation",
       provider: {
         id: "relay-adoption-provider",
