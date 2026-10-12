@@ -13,7 +13,6 @@ import { isStaleChunkImportError } from "../../app/stale-chunk-reload.ts";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { LoadingState } from "../../components/solid/loading-state.tsx";
 import { registerLoginEnglish } from "../../i18n/locales/en-login.ts";
-import { resolveEmbedSandbox } from "../../lib/chat/tool-display.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -81,7 +80,12 @@ function PluginPageContent(props: PluginPageProps, host: HTMLElement) {
     ) {
       mode = "loading";
     }
+    const frame = lifecycle.frameView;
+    if (mode === "frame" && frame?.status !== "ready") {
+      mode = frame?.status === "error" ? "unavailable" : "pending";
+    }
     return {
+      frame,
       info,
       key,
       mode,
@@ -89,6 +93,10 @@ function PluginPageContent(props: PluginPageProps, host: HTMLElement) {
       generation: lifecycle.pluginFrameGeneration,
     };
   });
+  const readyFrame = () => {
+    const frame = view().frame;
+    return frame?.status === "ready" ? frame : undefined;
+  };
   const readyView = () => {
     const state = view().state;
     return state.status === "ready" ? state.view : undefined;
@@ -150,19 +158,24 @@ function PluginPageContent(props: PluginPageProps, host: HTMLElement) {
         <ShellLayoutBoundary traits={{ pluginEmbed: true }}>
           <section class="plugin-tab-embed">
             <Show when={view().generation} keyed>
-              {(_generation) => {
-                onCleanup(() => lifecycle.syncPluginThemeFrame(null));
-                return (
-                  <iframe
-                    class="plugin-tab-embed__frame"
-                    src={view().info?.path}
-                    title={view().info?.label}
-                    sandbox={resolveEmbedSandbox(context.config.current.embedSandboxMode)}
-                    ref={(frame) => lifecycle.syncPluginThemeFrame(frame)}
-                    onLoad={lifecycle.handlePluginThemeLoad}
-                  />
-                );
-              }}
+              {(_generation) => (
+                <Show when={readyFrame()?.identity} keyed>
+                  {(_identity) => {
+                    onCleanup(() => lifecycle.syncPluginThemeFrame(null));
+                    return (
+                      <iframe
+                        class="plugin-tab-embed__frame"
+                        src={readyFrame()?.src}
+                        srcdoc={readyFrame()?.srcdoc}
+                        title={view().info?.label}
+                        sandbox={readyFrame()?.sandbox}
+                        ref={(frame) => lifecycle.syncPluginThemeFrame(frame)}
+                        onLoad={lifecycle.handlePluginThemeLoad}
+                      />
+                    );
+                  }}
+                </Show>
+              )}
             </Show>
           </section>
         </ShellLayoutBoundary>

@@ -91,6 +91,11 @@ function createExternalPluginPage(
   refresh: ApplicationConfigCapability["refresh"],
   requiresGatewayAuth = true,
   path = "/plugins/external/panel",
+  options: {
+    sessionActions?: string[];
+    client?: GatewayBrowserClient;
+    contextTokens?: number;
+  } = {},
 ) {
   const hello: GatewayHelloOk = {
     type: "hello-ok",
@@ -103,10 +108,11 @@ function createExternalPluginPage(
         label: "External panel",
         path,
         ...(requiresGatewayAuth ? { requiresGatewayAuth: true } : {}),
+        ...(options.sessionActions ? { sessionActions: options.sessionActions } : {}),
       },
     ],
   };
-  const snapshot = createSnapshot(hello);
+  const snapshot = createSnapshot(hello, options.client);
   const listeners = new Set<() => void>();
   const context = {
     gateway: {
@@ -118,6 +124,15 @@ function createExternalPluginPage(
       },
     },
     config: { current: externalPluginConfig([]), refresh },
+    ...(options.contextTokens === undefined
+      ? {}
+      : {
+          sessions: {
+            state: {
+              result: { sessions: [{ key: "main", contextTokens: options.contextTokens }] },
+            },
+          },
+        }),
   } as unknown as ApplicationContext;
   return {
     ...mountPage(context, { pluginId: "external-plugin", tabId: "panel" }),
@@ -127,6 +142,26 @@ function createExternalPluginPage(
       flush();
     },
   };
+}
+
+function mockPluginUiDocuments() {
+  return vi.spyOn(globalThis, "fetch").mockImplementation(
+    async () =>
+      new Response("<!doctype html><html><head></head><body>Plugin panel</body></html>", {
+        headers: { "Content-Type": "text/html" },
+      }),
+  );
+}
+
+function pluginUiBridgeNonce(frame: HTMLIFrameElement | null) {
+  return frame?.srcdoc.match(/data-openclaw-plugin-ui-nonce="([^"]+)"/u)?.[1];
+}
+
+function nextPortMessage(port: MessagePort): Promise<unknown> {
+  return new Promise((resolve) => {
+    port.addEventListener("message", (event) => resolve(event.data), { once: true });
+    port.start();
+  });
 }
 
 function createHungRenewal() {
@@ -353,17 +388,188 @@ describe("PluginPage", () => {
     expect(maxActiveRefreshes()).toBe(1);
   });
 
-  it("refreshes the frame grant after gateway reconnect", async () => {
+  it.each([false, true])(
+    "refreshes the frame grant after gateway reconnect (bridge: %s)",
+    async (bridgeEnabled) => {
+      const fetchPluginDocument = bridgeEnabled ? mockPluginUiDocuments() : null;
+      const refresh = vi.fn(async () => externalPluginConfig());
+      const fixture = createExternalPluginPage(refresh, true, "/plugins/external/panel", {
+        sessionActions: bridgeEnabled ? ["list-sessions"] : [],
+      });
+      await waitForSolid(() => expect(fixture.page.querySelector("iframe")).not.toBeNull());
+      const initialFrame = fixture.page.querySelector("iframe");
+      const initialWindow = initialFrame?.contentWindow;
+      const initialNonce = pluginUiBridgeNonce(initialFrame);
+      fixture.snapshot.phase = "stopped";
+      fixture.notify();
+      expect(fixture.page.querySelector("iframe")).toBeNull();
+      fixture.snapshot.phase = "connected";
+      fixture.notify();
+      await waitForSolid(() => expect(fixture.page.querySelector("iframe")).not.toBeNull());
+      expect(refresh).toHaveBeenCalledTimes(2);
+      const reconnectedFrame = fixture.page.querySelector("iframe");
+      expect(reconnectedFrame).not.toBe(initialFrame);
+      expect(reconnectedFrame?.contentWindow).not.toBe(initialWindow);
+      if (bridgeEnabled) {
+        expect(initialNonce).toMatch(/^[0-9a-f-]{36}$/u);
+        expect(pluginUiBridgeNonce(reconnectedFrame)).toMatch(/^[0-9a-f-]{36}$/u);
+        expect(pluginUiBridgeNonce(reconnectedFrame)).not.toBe(initialNonce);
+        expect(fetchPluginDocument).toHaveBeenCalledTimes(2);
+      }
+    },
+  );
+
+  it("keeps action-capable plugin-auth panels on their direct iframe path", async () => {
+    vi.stubGlobal("isSecureContext", false);
+    const fetchPluginDocument = vi.spyOn(globalThis, "fetch");
     const refresh = vi.fn(async () => externalPluginConfig());
-    const fixture = createExternalPluginPage(refresh);
+    const { page } = createExternalPluginPage(refresh, false, "/plugins/external/panel", {
+      sessionActions: ["list-sessions"],
+    });
+    await settle();
+    const frame = page.querySelector("iframe");
+    expect(frame?.getAttribute("src")).toBe("/plugins/external/panel");
+    expect(refresh).not.toHaveBeenCalled();
+    expect(fetchPluginDocument).not.toHaveBeenCalled();
+    expect(frame?.srcdoc).toBe("");
+    expect(pluginUiBridgeNonce(frame)).toBeUndefined();
+  });
+
+  it("remounts an action frame and rotates its nonce when its path or sandbox changes", async () => {
+    const fetchPluginDocument = mockPluginUiDocuments();
+    const fixture = createExternalPluginPage(
+      vi.fn(async () => externalPluginConfig()),
+      true,
+      "/plugins/external/panel",
+      { sessionActions: ["list-sessions"] },
+    );
     await waitForSolid(() => expect(fixture.page.querySelector("iframe")).not.toBeNull());
-    fixture.snapshot.phase = "stopped";
+    const initialFrame = fixture.page.querySelector("iframe")!;
+    const initialWindow = initialFrame.contentWindow;
+    const initialNonce = pluginUiBridgeNonce(initialFrame);
+    expect(initialNonce).toMatch(/^[0-9a-f-]{36}$/u);
+    expect(initialFrame.getAttribute("src")).toBeNull();
+    expect(fetchPluginDocument).toHaveBeenCalledWith(
+      "/plugins/external/panel",
+      expect.objectContaining({ credentials: "include", redirect: "error" }),
+    );
+    const initialDocument = new DOMParser().parseFromString(initialFrame.srcdoc, "text/html");
+    expect(
+      initialDocument.head.querySelector("script[data-openclaw-plugin-ui-nonce]"),
+    ).not.toBeNull();
+    expect(initialDocument.body.textContent).toBe("Plugin panel");
+
+    fixture.snapshot.hello!.controlUiTabs![0]!.path = "/plugins/external/replacement";
     fixture.notify();
-    expect(fixture.page.querySelector("iframe")).toBeNull();
-    fixture.snapshot.phase = "connected";
+    await waitForSolid(() => {
+      expect(fixture.page.querySelector("iframe")).not.toBeNull();
+      expect(fixture.page.querySelector("iframe")).not.toBe(initialFrame);
+    });
+    const pathFrame = fixture.page.querySelector("iframe")!;
+    const pathWindow = pathFrame.contentWindow;
+    const pathNonce = pluginUiBridgeNonce(pathFrame);
+    expect(pathWindow).not.toBe(initialWindow);
+    expect(pathNonce).toMatch(/^[0-9a-f-]{36}$/u);
+    expect(pathNonce).not.toBe(initialNonce);
+    expect(pathFrame.srcdoc).toContain(
+      `<base href="${new URL("/plugins/external/replacement", window.location.href).href}">`,
+    );
+    expect(fetchPluginDocument).toHaveBeenCalledWith(
+      "/plugins/external/replacement",
+      expect.objectContaining({ credentials: "include", redirect: "error" }),
+    );
+
+    fixture.context.config.current.embedSandboxMode = "trusted";
     fixture.notify();
-    await waitForSolid(() => expect(fixture.page.querySelector("iframe")).not.toBeNull());
-    expect(refresh).toHaveBeenCalledTimes(2);
+    await waitForSolid(() => {
+      expect(fixture.page.querySelector("iframe")).not.toBeNull();
+      expect(fixture.page.querySelector("iframe")).not.toBe(pathFrame);
+    });
+    const sandboxFrame = fixture.page.querySelector("iframe")!;
+    expect(sandboxFrame.contentWindow).not.toBe(pathWindow);
+    expect(sandboxFrame.getAttribute("sandbox")).toBe("allow-scripts allow-same-origin");
+    expect(pluginUiBridgeNonce(sandboxFrame)).toMatch(/^[0-9a-f-]{36}$/u);
+    expect(pluginUiBridgeNonce(sandboxFrame)).not.toBe(pathNonce);
+    expect(fetchPluginDocument).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not mount an action bridge when the registered route redirects", async () => {
+    const fetchPluginDocument = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValue(new TypeError("redirect mode is set to error"));
+    const { page } = createExternalPluginPage(
+      vi.fn(async () => externalPluginConfig()),
+      true,
+      "/plugins/external/panel",
+      { sessionActions: ["list-sessions"] },
+    );
+    await waitForSolid(() => expect(page.textContent).toContain("Plugin panel unavailable"));
+    expect(fetchPluginDocument).toHaveBeenCalledWith(
+      "/plugins/external/panel",
+      expect.objectContaining({ redirect: "error" }),
+    );
+    expect(page.querySelector("iframe")).toBeNull();
+  });
+
+  it("connects external plugin actions with the trusted gateway session context", async () => {
+    mockPluginUiDocuments();
+    const request = vi.fn().mockResolvedValue({ sessions: ["main"] });
+    const { page } = createExternalPluginPage(
+      vi.fn(async () => externalPluginConfig()),
+      true,
+      "/plugins/external/panel",
+      {
+        sessionActions: ["list-sessions"],
+        client: { request } as unknown as GatewayBrowserClient,
+        contextTokens: 64_000,
+      },
+    );
+    await waitForSolid(() => expect(page.querySelector("iframe")).not.toBeNull());
+    const frame = page.querySelector("iframe")!;
+    const action = new MessageChannel();
+    const documentProof = new MessageChannel();
+    cleanups.push(() => {
+      action.port1.close();
+      action.port2.close();
+      documentProof.port1.close();
+      documentProof.port2.close();
+    });
+    const connected = nextPortMessage(action.port2);
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: frame.contentWindow,
+        data: { v: 1, type: "openclaw.pluginUi.ready", nonce: pluginUiBridgeNonce(frame) },
+        ports: [action.port1, documentProof.port1],
+      }),
+    );
+    expect(await connected).toEqual({
+      v: 1,
+      type: "openclaw.pluginUi.connect",
+      capabilities: { sessionActions: ["list-sessions"] },
+      context: { sessionKey: "main", revision: 1, contextTokens: 64_000 },
+    });
+    const response = nextPortMessage(action.port2);
+    // oxlint-disable-next-line unicorn/require-post-message-target-origin -- MessagePort has no targetOrigin.
+    action.port2.postMessage({
+      v: 1,
+      type: "openclaw.pluginUi.sessionAction",
+      id: "list",
+      actionId: "list-sessions",
+      contextRevision: 1,
+    });
+    expect(await response).toEqual({
+      v: 1,
+      type: "openclaw.pluginUi.response",
+      id: "list",
+      ok: true,
+      result: { sessions: ["main"] },
+      contextRevision: 1,
+    });
+    expect(request).toHaveBeenCalledExactlyOnceWith("plugins.sessionAction", {
+      pluginId: "external-plugin",
+      actionId: "list-sessions",
+      sessionKey: "main",
+    });
   });
 
   it("refuses external plugin auth outside a secure browser context", async () => {

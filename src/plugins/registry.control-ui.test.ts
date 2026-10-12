@@ -110,12 +110,13 @@ describe("plugin registry Control UI descriptors", () => {
       group: "control" as const,
       order: 5,
       requiredScopes: ["operator.read"],
+      sessionActions: ["save", "save", "preview"],
     } satisfies PluginControlUiDescriptor;
     register(descriptor, createPluginRecord({ id: "workboard", origin: "bundled" }));
     expect(registry.registry.controlUiDescriptors).toEqual([
       expect.objectContaining({
         pluginId: "workboard",
-        descriptor: expect.objectContaining(descriptor),
+        descriptor: expect.objectContaining({ ...descriptor, sessionActions: ["save", "preview"] }),
       }),
     ]);
   });
@@ -164,6 +165,32 @@ describe("plugin registry Control UI descriptors", () => {
         }),
       }),
     ]);
+  });
+
+  it("rejects tab bridge capabilities on non-tab descriptors", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({ id: "bad-bridge", name: "Bad Bridge" }),
+      register(api) {
+        api.registerControlUiDescriptor({
+          surface: "session",
+          id: "panel",
+          label: "Panel",
+          sessionActions: ["save"],
+        });
+      },
+    });
+
+    expect(registry.registry.controlUiDescriptors).toEqual([]);
+    expect(registry.registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        pluginId: "bad-bridge",
+        message: expect.stringContaining("valid optional fields"),
+      }),
+    );
   });
 
   it("rejects protocol-relative tab paths that would iframe external content", () => {

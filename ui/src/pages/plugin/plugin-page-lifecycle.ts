@@ -15,9 +15,12 @@ import {
   scheduleStaleChunkReload,
 } from "../../app/stale-chunk-reload.ts";
 import { uiDevGatewayResourceUrl } from "../../dev-gateway.ts";
+import { resolveEmbedSandbox } from "../../lib/chat/tool-display.ts";
 import { postWidgetTheme, registerWidgetThemeFrame } from "../../lib/widget-theme.ts";
 import type { LogbookProps } from "./logbook-view.tsx";
 import { openPluginFrameSession } from "./plugin-frame-session-navigation.ts";
+import type { PluginUiBridgeController } from "./plugin-ui-bridge.ts";
+import { PluginUiFrameController, type PluginUiFrameView } from "./plugin-ui-document.ts";
 import { pluginTabKey } from "./route.ts";
 
 /**
@@ -87,7 +90,7 @@ export class PluginPageLifecycle {
     readonly props: PluginPageProps,
     readonly context: ApplicationContext,
     private readonly host: HTMLElement,
-    private readonly notify: () => void,
+    private readonly onChange: () => void,
   ) {
     document.addEventListener("visibilitychange", this.handleVisibilityChange);
     window.addEventListener("message", this.handlePluginSessionOpen);
@@ -107,6 +110,8 @@ export class PluginPageLifecycle {
   private externalAuthRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   private externalAuthExpiryTimer: ReturnType<typeof setTimeout> | null = null;
   private externalAuthRefreshedAt = 0;
+  private readonly pluginUiFrame = new PluginUiFrameController(() => this.notify());
+  private readonly pluginUiBridge: PluginUiBridgeController = this.pluginUiFrame.bridge;
   private pluginThemeFrame: HTMLIFrameElement | null = null;
   private releasePluginTheme: (() => void) | null = null;
   private readonly handleVisibilityChange = () => {
@@ -118,7 +123,7 @@ export class PluginPageLifecycle {
       // until the parent refreshes its route-bound cookie on resume.
       this.externalAuthReadyKey = null;
       this.externalAuthRefreshedAt = 0;
-      this.pluginFrameGeneration = {};
+      this.retirePluginFrame();
       this.requestExternalTabAuthRestart(this.externalAuthTargetKey);
       this.notify();
       return;
@@ -137,6 +142,72 @@ export class PluginPageLifecycle {
 
   tabKey(): string {
     return pluginTabKey({ pluginId: this.props.pluginId ?? "", id: this.props.tabId ?? "" });
+  }
+
+  frameView: PluginUiFrameView | null = null;
+
+  private notify() {
+    if (this.disposed) {
+      return;
+    }
+    const info = this.tabInfo();
+    const key = this.tabKey();
+    const authenticated =
+      info?.requiresGatewayAuth !== true ||
+      (this.externalAuthReadyKey !== null &&
+        this.externalAuthReadyKey === this.externalAuthTargetKey);
+    if (
+      !info?.path ||
+      key in BUNDLED_TAB_VIEWS ||
+      !authenticated ||
+      this.context.plugins?.registrations("pages").some((entry) => entry.key === key)
+    ) {
+      this.pluginUiFrame.clear();
+      this.frameView = null;
+    } else {
+      this.frameView = this.pluginUiFrame.resolve({
+        pluginId: info.pluginId,
+        tabId: info.id,
+        path: info.path,
+        sandbox: resolveEmbedSandbox(this.context.config.current.embedSandboxMode),
+        bridgeEnabled: info.requiresGatewayAuth === true && (info.sessionActions?.length ?? 0) > 0,
+      });
+    }
+    this.syncPluginUiBridge();
+    this.onChange();
+  }
+
+  private syncPluginUiBridge() {
+    const info = this.tabInfo();
+    const frame = this.pluginThemeFrame;
+    const sessionActions = info?.sessionActions ?? [];
+    if (
+      !frame ||
+      !info ||
+      !this.pluginUiFrame.bridgeNonce ||
+      sessionActions.length === 0 ||
+      this.frameView?.status !== "ready"
+    ) {
+      this.pluginUiBridge.clear();
+      return;
+    }
+    const { context } = this;
+    const sessionKey = context.gateway.snapshot.sessionKey;
+    const sessions = context.sessions?.state.result;
+    const contextTokens =
+      sessions?.sessions.find((session) => session.key === sessionKey)?.contextTokens ??
+      sessions?.defaults?.contextTokens;
+    this.pluginUiBridge.sync({
+      frame,
+      key: this.tabKey(),
+      nonce: this.pluginUiFrame.bridgeNonce,
+      pluginId: info.pluginId,
+      client: context.gateway.snapshot.client,
+      connected: context.gateway.snapshot.phase === "connected",
+      sessionKey,
+      ...(typeof contextTokens === "number" && contextTokens > 0 ? { contextTokens } : {}),
+      sessionActions,
+    });
   }
 
   private loadBundledView(key: string): Promise<BundledPluginTabView> {
@@ -209,6 +280,7 @@ export class PluginPageLifecycle {
     this.releasePluginTheme?.();
     this.pluginThemeFrame = frame;
     this.releasePluginTheme = frame ? registerWidgetThemeFrame(frame, "*") : null;
+    this.syncPluginUiBridge();
   }
 
   readonly handlePluginThemeLoad = (event: Event) => {
@@ -220,6 +292,25 @@ export class PluginPageLifecycle {
   };
 
   private readonly handlePluginSessionOpen = (event: MessageEvent<unknown>) => {
+    if (this.pluginUiFrame.bridgeNonce) {
+      // WindowProxy survives navigation. Prove the original document is still
+      // active before accepting its existing, unmodified navigation message.
+      if (
+        event.source !== this.pluginThemeFrame?.contentWindow ||
+        !event.data ||
+        typeof event.data !== "object" ||
+        !("type" in event.data) ||
+        event.data.type !== "openclaw-plugin-session-open"
+      ) {
+        return;
+      }
+      this.pluginUiBridge.verifyDocument(() => this.openPluginSession(event, true));
+      return;
+    }
+    this.openPluginSession(event, false);
+  };
+
+  private openPluginSession(event: MessageEvent<unknown>, documentVerified: boolean) {
     const context = this.context;
     const descriptor = this.tabInfo();
     if (
@@ -242,8 +333,9 @@ export class PluginPageLifecycle {
         this.externalAuthReadyKey !== null &&
         this.externalAuthReadyKey === this.externalAuthTargetKey,
       authenticatedAt: this.externalAuthRefreshedAt,
+      documentVerified,
     });
-  };
+  }
 
   externalTabAuthKey(
     info: GatewayControlUiPluginTab | undefined,
@@ -468,7 +560,7 @@ export class PluginPageLifecycle {
       // abandon any hung refresh, and obtain a fresh grant before remounting.
       this.externalAuthReadyKey = null;
       this.externalAuthRefreshedAt = 0;
-      this.pluginFrameGeneration = {};
+      this.retirePluginFrame();
       this.clearExternalTabAuthTimers();
       this.requestExternalTabAuthRestart(targetKey);
       this.notify();
@@ -493,8 +585,14 @@ export class PluginPageLifecycle {
     this.externalAuthExpiryTimer = null;
   }
 
-  private clearExternalTabAuth() {
+  private retirePluginFrame() {
     this.pluginFrameGeneration = {};
+    // Retiring the document also revokes its bridge and aborts pending HTML loads.
+    this.pluginUiFrame.clear();
+  }
+
+  private clearExternalTabAuth() {
+    this.retirePluginFrame();
     this.clearExternalTabAuthTimers();
     if (this.externalAuthRefreshWatchdog) {
       clearTimeout(this.externalAuthRefreshWatchdog);
@@ -511,7 +609,7 @@ export class PluginPageLifecycle {
   }
 
   private resetExternalTabAuthForGatewayChange(targetKey: string, connected: boolean) {
-    this.pluginFrameGeneration = {};
+    this.retirePluginFrame();
     this.clearExternalTabAuthTimers();
     this.externalAuthReadyKey = null;
     this.externalAuthUnavailableKey = null;

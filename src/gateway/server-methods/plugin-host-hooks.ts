@@ -24,8 +24,12 @@ import {
 } from "../control-ui-plugin-tabs.js";
 import { authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import { WRITE_SCOPE } from "../operator-scopes.js";
+import { readPreparedGatewayModelMetadata } from "../server-model-catalog-view.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { withReadySessionRows, type SessionRowReadView } from "../session-row-prepared-read.js";
+import { requireSessionRowProjection } from "../session-row-projection-access.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
+import { getSessionDefaults } from "../session-utils-model.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
@@ -87,99 +91,152 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
       const pluginId = normalizeOptionalString(params.pluginId);
       const actionId = normalizeOptionalString(params.actionId);
       const rawSessionKey = normalizeOptionalString(params.sessionKey);
-      const sessionOwner = rawSessionKey
-        ? resolveRequestedSessionAgentId(
-            context.getRuntimeConfig(),
-            rawSessionKey,
-            normalizeOptionalString(params.agentId),
-          )
-        : undefined;
-      if (sessionOwner && !sessionOwner.ok) {
-        respond(false, undefined, sessionOwner.error);
-        return;
-      }
-      const sessionKey =
-        rawSessionKey && sessionOwner?.ok
-          ? resolveStoredSessionKeyForAgentStore({
-              cfg: context.getRuntimeConfig(),
-              agentId: sessionOwner.agentId,
-              sessionKey: rawSessionKey,
-            })
-          : undefined;
       if (!pluginId || !actionId) {
         reject("plugins.sessionAction pluginId and actionId must be non-empty");
         return;
       }
-      const registry = getPluginRegistryForContext();
-      const pluginLoaded = Boolean(
-        registry?.plugins.some((plugin) => plugin.id === pluginId && plugin.status === "loaded"),
-      );
-      const registration = (registry?.sessionActions ?? []).find(
-        (entry) => entry.pluginId === pluginId && entry.action.id === actionId,
-      );
-      if (!registration || !pluginLoaded) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            `unknown plugin session action: ${pluginId}/${actionId}`,
-          ),
-        );
-        return;
-      }
-      const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
-      const requiredScopes =
-        registration.action.requiredScopes && registration.action.requiredScopes.length > 0
-          ? registration.action.requiredScopes
-          : [WRITE_SCOPE];
-      // Recheck the selected registration after async router admission, using the same
-      // scope implications so the two authorization gates cannot diverge.
-      const missingScope = requiredScopes.find(
-        (scope) => !authorizeOperatorScopesForRequiredScope(scope, scopes).allowed,
-      );
-      if (missingScope) {
-        respond(false, undefined, missingScopeErrorShape({ missingScope, requiredScopes }));
-        return;
-      }
       try {
-        if (params.payload !== undefined && !isPluginJsonValue(params.payload)) {
-          reject("plugin session action payload must be JSON-compatible");
+        const projection = rawSessionKey ? requireSessionRowProjection(context) : undefined;
+        const dispatch = (read?: SessionRowReadView) => {
+          const cfg = read?.state.cfg ?? context.getRuntimeConfig();
+          const sessionOwner = rawSessionKey
+            ? resolveRequestedSessionAgentId(
+                cfg,
+                rawSessionKey,
+                normalizeOptionalString(params.agentId),
+              )
+            : undefined;
+          if (sessionOwner && !sessionOwner.ok) {
+            respond(false, undefined, sessionOwner.error);
+            return undefined;
+          }
+          const sessionKey =
+            rawSessionKey && sessionOwner?.ok
+              ? resolveStoredSessionKeyForAgentStore({
+                  cfg,
+                  agentId: sessionOwner.agentId,
+                  sessionKey: rawSessionKey,
+                })
+              : undefined;
+          const registry = getPluginRegistryForContext();
+          const pluginLoaded = Boolean(
+            registry?.plugins.some(
+              (plugin) => plugin.id === pluginId && plugin.status === "loaded",
+            ),
+          );
+          const registration = (registry?.sessionActions ?? []).find(
+            (entry) => entry.pluginId === pluginId && entry.action.id === actionId,
+          );
+          if (!registration || !pluginLoaded) {
+            respond(
+              false,
+              undefined,
+              errorShape(
+                ErrorCodes.UNAVAILABLE,
+                `unknown plugin session action: ${pluginId}/${actionId}`,
+              ),
+            );
+            return undefined;
+          }
+          const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
+          const requiredScopes =
+            registration.action.requiredScopes && registration.action.requiredScopes.length > 0
+              ? registration.action.requiredScopes
+              : [WRITE_SCOPE];
+          // Recheck the selected registration after async router admission and session
+          // preparation, using the same scope implications as the router gate.
+          const missingScope = requiredScopes.find(
+            (scope) => !authorizeOperatorScopesForRequiredScope(scope, scopes).allowed,
+          );
+          if (missingScope) {
+            respond(false, undefined, missingScopeErrorShape({ missingScope, requiredScopes }));
+            return undefined;
+          }
+          if (params.payload !== undefined && !isPluginJsonValue(params.payload)) {
+            reject("plugin session action payload must be JSON-compatible");
+            return undefined;
+          }
+          if (registration.action.schema !== undefined) {
+            if (
+              typeof registration.action.schema !== "boolean" &&
+              !isRecord(registration.action.schema)
+            ) {
+              reject("plugin session action schema must be an object or boolean");
+              return undefined;
+            }
+            // Schemas are plugin-provided data; validate their shape before passing
+            // them into the shared schema evaluator so malformed plugins fail cleanly.
+            const validation = validateJsonSchemaValue({
+              schema: registration.action.schema as JsonSchemaValue,
+              cacheKey: `plugin-session-action:${pluginId}:${actionId}`,
+              value: params.payload,
+            });
+            if (!validation.ok) {
+              reject(
+                `plugin session action payload does not match schema: ${validation.errors.map((error) => error.text).join("; ")}`,
+              );
+              return undefined;
+            }
+          }
+          let contextTokens: number | undefined;
+          if (read && sessionKey && sessionOwner?.ok) {
+            const row = read.describe({ key: sessionKey, agentId: sessionOwner.agentId });
+            if (row) {
+              contextTokens = row.materialized.row.contextTokens;
+            } else {
+              const modelCatalog = projection?.state.modelCatalog;
+              const preparedCatalog = Array.isArray(modelCatalog)
+                ? undefined
+                : modelCatalog?.get(sessionOwner.agentId);
+              contextTokens =
+                getSessionDefaults(
+                  cfg,
+                  Array.isArray(modelCatalog) ? modelCatalog : preparedCatalog?.entries,
+                  {
+                    agentId: sessionOwner.agentId,
+                    allowPluginNormalization: false,
+                    providerPolicySource: preparedCatalog?.pluginRegistry,
+                    metadataSnapshot: readPreparedGatewayModelMetadata(cfg, preparedCatalog),
+                  },
+                ).contextTokens ?? undefined;
+            }
+          }
+          // Start dispatch while prepared facts and authorization are current. The
+          // read consumer stays synchronous; only the returned handler result is awaited.
+          return {
+            result: registration.action.handler({
+              pluginId,
+              actionId,
+              ...(sessionKey ? { sessionKey } : {}),
+              ...(sessionOwner?.ok ? { agentId: sessionOwner.agentId } : {}),
+              ...(contextTokens !== undefined ? { contextTokens } : {}),
+              ...(params.payload !== undefined ? { payload: params.payload } : {}),
+              client: {
+                ...(client?.connId ? { connId: client.connId } : {}),
+                scopes: [...scopes],
+              },
+            }),
+          };
+        };
+        const dispatched =
+          projection && rawSessionKey
+            ? await withReadySessionRows(
+                projection,
+                (cfg) => {
+                  const owner = resolveRequestedSessionAgentId(
+                    cfg,
+                    rawSessionKey,
+                    normalizeOptionalString(params.agentId),
+                  );
+                  return owner.ok ? [{ key: rawSessionKey, agentId: owner.agentId }] : [];
+                },
+                dispatch,
+              )
+            : dispatch();
+        if (!dispatched) {
           return;
         }
-        if (registration.action.schema !== undefined) {
-          if (
-            typeof registration.action.schema !== "boolean" &&
-            !isRecord(registration.action.schema)
-          ) {
-            reject("plugin session action schema must be an object or boolean");
-            return;
-          }
-          // Schemas are plugin-provided data; validate their shape before passing
-          // them into the shared schema evaluator so malformed plugins fail cleanly.
-          const validation = validateJsonSchemaValue({
-            schema: registration.action.schema as JsonSchemaValue,
-            cacheKey: `plugin-session-action:${pluginId}:${actionId}`,
-            value: params.payload,
-          });
-          if (!validation.ok) {
-            reject(
-              `plugin session action payload does not match schema: ${validation.errors.map((error) => error.text).join("; ")}`,
-            );
-            return;
-          }
-        }
-        const result = await registration.action.handler({
-          pluginId,
-          actionId,
-          ...(sessionKey ? { sessionKey } : {}),
-          ...(sessionOwner?.ok ? { agentId: sessionOwner.agentId } : {}),
-          ...(params.payload !== undefined ? { payload: params.payload } : {}),
-          client: {
-            ...(client?.connId ? { connId: client.connId } : {}),
-            scopes: [...scopes],
-          },
-        });
+        const result = await dispatched.result;
         if (result !== undefined && !isRecord(result)) {
           reject("plugin session action result must be an object");
           return;
