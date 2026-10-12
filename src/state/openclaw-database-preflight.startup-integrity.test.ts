@@ -6,6 +6,7 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as integrity from "../infra/sqlite-integrity.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { readAgentDatabaseAdmissionRefusal } from "./agent-database-admission.js";
+import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -165,4 +166,32 @@ it("isolates a corrupt foreign secondary before reporting its integrity failure"
   } finally {
     writer.close();
   }
+});
+
+it("directs a corrupt required agent to offline recovery without changing its database", async () => {
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-startup-corrupt-guidance-") };
+  const agentPath = openOpenClawAgentDatabase({ agentId: "main", env }).path;
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
+  const damaged = fs.readFileSync(agentPath);
+  damaged.write("XXXXXXXXX", 0);
+  fs.writeFileSync(agentPath, damaged);
+  await withAgentDatabaseStartupAdmission(
+    async () => {
+      const failure = await assertOpenClawDatabasesReady({
+        env,
+        operation: "gateway-startup",
+        config: {
+          agents: { entries: { main: {} }, defaults: { systemAgent: { agentId: "main" } } },
+        },
+      }).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(Error);
+      expect(String(failure)).toContain(
+        "openclaw doctor --session-sqlite recover --session-sqlite-agent main",
+      );
+      expect(String(failure)).toContain(".corrupt-");
+    },
+    { deferInspections: false },
+  );
+  expect(fs.readFileSync(agentPath)).toEqual(damaged);
 });

@@ -1,6 +1,3 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { Command } from "commander";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { CONFIG_AUDIT_STORE_LABEL } from "../../config/io.audit.js";
@@ -32,6 +29,7 @@ import {
   gatewayRunReadFailures,
   type RuntimeDotEnvLoadResult,
 } from "./run-config.test-support.js";
+import { registerGatewayStartupMaintenanceTests } from "./run-startup-maintenance.test-support.js";
 import { installGatewayRunRuntimeHooks } from "./runtime-hooks.js";
 
 const startGatewayServer = vi.fn(async (_port: number, _opts?: unknown) => ({
@@ -1366,67 +1364,14 @@ describe("gateway run option collisions", () => {
     },
   );
 
-  it("retains the actual legacy-session refusal without triage on restart", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-legacy-refusal-"));
-    const storePath = path.join(root, "sessions.json");
-    const original = '{"main":{"sessionId":"legacy","updatedAt":1}}';
-    await fs.writeFile(storePath, original);
-    try {
-      const { assertSessionStoreMigrationComplete } =
-        await import("../../config/sessions/startup-migration.js");
-      let refusal: unknown;
-      try {
-        assertSessionStoreMigrationComplete({ cfg: {}, targets: [{ storePath }] });
-      } catch (error) {
-        refusal = error;
-      }
-      expect(refusal).toBeInstanceOf(Error);
-      const message = (refusal as Error).message;
-      expect(message).toBe(
-        `Legacy session store requires migration: ${storePath}. Run "openclaw doctor --fix" against the same state/config before starting OpenClaw.`,
-      );
-      const failure = refusal;
-      runGatewayLoop.mockImplementationOnce(async (params: GatewayLoopParams) => {
-        await params.beginBoot?.(1000);
-        await params.onRestartStartupFailure?.(failure, new AbortController().signal);
-        throw failure;
-      });
-      await withEnvAsync({ CODEX_THREAD_ID: undefined }, async () => {
-        await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
-          "__exit__:78",
-        );
-      });
-      expect(triageAfterFailure).not.toHaveBeenCalled();
-      expect(parkCurrentLaunchAgentForMaintenance).toHaveBeenCalledOnce();
-      expect(runtimeErrors.join("\n")).toContain(message);
-      expect(await fs.readFile(storePath, "utf8")).toBe(original);
-    } finally {
-      await fs.rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("exits 78 when the only startup blocker is legacy workspace setup state", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-workspace-refusal-"));
-    const source = path.join(workspaceDir, "openclaw-workspace-state.json");
-    const original = JSON.stringify({ version: 1, setupCompletedAt: new Date().toISOString() });
-    await fs.writeFile(source, original);
-    try {
-      const { assertWorkspaceStateMigrationReady } =
-        await import("../../agents/workspace-legacy-state.js");
-      startGatewayServer.mockImplementationOnce(async () => {
-        assertWorkspaceStateMigrationReady({ workspaceDirs: [workspaceDir] });
-        throw new Error("Legacy workspace setup state was unexpectedly accepted");
-      });
-      await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
-        "__exit__:78",
-      );
-      expect(parkCurrentLaunchAgentForMaintenance).toHaveBeenCalledOnce();
-      expect(triageAfterFailure).not.toHaveBeenCalled();
-      expect(runtimeErrors.join("\n")).toMatch(/gateway stop.*doctor --fix.*gateway start/s);
-      expect(await fs.readFile(source, "utf8")).toBe(original);
-    } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
-    }
+  registerGatewayStartupMaintenanceTests({
+    configState,
+    runGatewayCli,
+    runGatewayLoop,
+    startGatewayServer,
+    runtimeErrors,
+    triageAfterFailure,
+    parkCurrentLaunchAgentForMaintenance,
   });
 
   it("skips failure bundles but exits nonzero for unconfirmed gateway lock conflicts", async () => {

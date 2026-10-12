@@ -43,6 +43,7 @@ import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
 import { VERSION } from "../version.js";
+import { formatAgentDatabaseCorruptionRepairHint } from "./agent-database-recovery-guidance.js";
 import { formatErrorMessage } from "./errors.js";
 import {
   executeSqliteQuerySync,
@@ -427,6 +428,7 @@ export async function migrateLegacyMediaPersistence(
   const env = params.env ?? process.env;
   const changes: string[] = [];
   const warnings: string[] = [];
+  const notices: string[] = [];
   let recoverableWarningCount = 0;
   const refusedAgentDatabasePaths: string[] = [];
   const recoveredAgentDatabasePaths = new Set<string>();
@@ -533,7 +535,11 @@ export async function migrateLegacyMediaPersistence(
           refusedArchiveDirectories.add(
             resolveSqliteTranscriptArchiveDirectory({ agentId: entry.agentId, path: pathname }),
           );
+          const repairHint = formatAgentDatabaseCorruptionRepairHint(entry.agentId, error);
           warnings.push(`Skipped agent database migration for ${pathname}: ${String(error)}`);
+          if (repairHint) {
+            notices.push(repairHint);
+          }
         }
       }
 
@@ -591,6 +597,7 @@ export async function migrateLegacyMediaPersistence(
   return {
     changes,
     warnings,
+    ...(notices.length > 0 ? { notices } : {}),
     ...(recoveredAgentDatabasePaths.size > 0
       ? { recoveredAgentDatabasePaths: [...recoveredAgentDatabasePaths] }
       : {}),

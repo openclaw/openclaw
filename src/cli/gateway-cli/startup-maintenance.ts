@@ -1,11 +1,14 @@
 import { isStartupConfigRefusal } from "../../commands/doctor-startup-migration-refusal.js";
 import { isInvalidConfigError } from "../../config/io.invalid-config.js";
 import { isGatewayEffectiveConfigConflictError } from "../../gateway/server-runtime-config.js";
+import { formatAgentDatabaseCorruptionRepairHint } from "../../infra/agent-database-recovery-guidance.js";
+import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { findStartupMaintenanceRequiredError } from "../../infra/startup-maintenance-required.js";
 import { isTailscaleRouteOwnershipConflictError } from "../../infra/tailscale-route-ownership-error.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
+import { AgentDatabaseAdmissionError } from "../../state/agent-database-admission.js";
 import { OpenClawDatabaseSchemaPreflightError } from "../../state/openclaw-database-preflight.messages.js";
 import { formatCliCommand } from "../command-format.js";
 
@@ -20,19 +23,38 @@ export function resolveGatewayStartupFailureExitCode(err: unknown): number {
     : 1;
 }
 
+function findAgentDatabaseCorruptionRepairHints(error: unknown): string[] {
+  return collectNestedErrorCandidates(error).flatMap((candidate) => {
+    if (!(candidate instanceof AgentDatabaseAdmissionError)) {
+      return [];
+    }
+    const hint = formatAgentDatabaseCorruptionRepairHint(
+      candidate.refusal.agentId,
+      candidate.cause,
+    );
+    return hint ? [hint] : [];
+  });
+}
+
 export function resolveGatewayStartupMaintenanceReason(error: unknown) {
-  return findStartupMaintenanceRequiredError(error)?.reason;
+  return (
+    findStartupMaintenanceRequiredError(error)?.reason ??
+    (findAgentDatabaseCorruptionRepairHints(error).length > 0
+      ? "offline agent database recovery"
+      : undefined)
+  );
 }
 
 export async function handleGatewayStartupMaintenance(error: unknown): Promise<boolean> {
   const maintenance = findStartupMaintenanceRequiredError(error);
-  if (!maintenance) {
+  const corruptionRepairHints = findAgentDatabaseCorruptionRepairHints(error);
+  if (!maintenance && corruptionRepairHints.length === 0) {
     return false;
   }
-  const reason = maintenance.reason;
-  let refusal = maintenance;
+  const reason = maintenance?.reason ?? "offline agent database recovery";
+  let refusal: unknown = maintenance ?? error;
   if (
-    maintenance.kind === "newer-schema" &&
+    maintenance?.kind === "newer-schema" &&
     !(maintenance instanceof OpenClawDatabaseSchemaPreflightError)
   ) {
     // Config reads can refuse shared state before bootstrap reaches schema preflight.
@@ -51,7 +73,9 @@ export async function handleGatewayStartupMaintenance(error: unknown): Promise<b
   const guidance =
     reason === "a newer OpenClaw build"
       ? `${stop} restore your pre-update backup created with ${formatCliCommand("openclaw backup create")}, then start it again with ${formatCliCommand("openclaw gateway start")}. See https://docs.openclaw.ai/install/updating#rollback.`
-      : `${stop} run ${formatCliCommand("openclaw doctor --fix")}, then start it again with ${formatCliCommand("openclaw gateway start")}.`;
+      : corruptionRepairHints.length > 0
+        ? `${[...new Set(corruptionRepairHints)].join("\n")} Start the service again with ${formatCliCommand("openclaw gateway start")}.`
+        : `${stop} run ${formatCliCommand("openclaw doctor --fix")}, then start it again with ${formatCliCommand("openclaw gateway start")}.`;
   let parked = false;
   try {
     // launchd ignores exit 78 under KeepAlive. Park without opening the database,
