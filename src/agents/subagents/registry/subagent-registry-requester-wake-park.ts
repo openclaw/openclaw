@@ -73,7 +73,7 @@ export async function settleOrParkRequesterWake(
     if (failures >= REQUESTER_SETTLE_WAKE_PARK_AFTER_FAILURES && !episode.parked) {
       episode.parked = true;
       context.options.warn("requester settle wake parked", {
-        signature: REQUESTER_SETTLE_OWNER_CHANGED_MESSAGE,
+        rejection: REQUESTER_SETTLE_OWNER_CHANGED_MESSAGE,
         failures,
         probeIntervalMs: REQUESTER_SETTLE_WAKE_PARKED_PROBE_INTERVAL_MS,
         runIds: members.map((member) => maskLifecycleIdentifier(member.runId, "run")),

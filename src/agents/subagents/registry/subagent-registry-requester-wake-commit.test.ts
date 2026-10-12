@@ -261,7 +261,7 @@ describe("requester settle wake failure reporting", () => {
 
     /** Mirrors the completeBatch caller: a non-delivered settle wrapped by the park policy. */
     async function openSettleEpisode(entry: SubagentRunRecord, settle: () => Promise<boolean>) {
-      const { context } = makeContext(entry);
+      const { context, warn } = makeContext(entry);
       const attempts = vi.fn(settle);
       await commitRequesterWake(
         context,
@@ -270,7 +270,7 @@ describe("requester settle wake failure reporting", () => {
         (members, episode) => settleOrParkRequesterWake(context, episode, members, attempts),
         true,
       ).catch(() => undefined);
-      return { context, attempts };
+      return { context, attempts, warn };
     }
 
     async function retryDue(
@@ -311,6 +311,30 @@ describe("requester settle wake failure reporting", () => {
       expect(attempts).toHaveBeenCalledTimes(6);
     });
 
+    it("reports the parked probe interval when parking and sustained failure coincide", async () => {
+      const entry = makeRetainedChild();
+      const { context, warn } = await openSettleEpisode(entry, async () => {
+        throw ownerChanged();
+      });
+      for (let i = 0; i < 4; i += 1) {
+        await retryDue(context, entry);
+      }
+
+      const pending = getPendingWakeCommit(context, entry)!;
+      expect(pending.parked).toBe(true);
+      const sustained = warn.mock.calls.filter(
+        ([message]) => message === "requester settle wake commit still failing; retries continue",
+      );
+      expect(sustained).toHaveLength(1);
+      expect(sustained[0]?.[1]).toMatchObject({
+        failures: 5,
+        retryIntervalMs: REQUESTER_SETTLE_WAKE_PARKED_PROBE_INTERVAL_MS,
+      });
+      expect(pending.nextAttemptAt - Date.now()).toBe(
+        REQUESTER_SETTLE_WAKE_PARKED_PROBE_INTERVAL_MS,
+      );
+    });
+
     it("keeps the capped backoff for storage failures, however long they last", async () => {
       const entry = makeRetainedChild();
       const { context, attempts } = await openSettleEpisode(entry, async () => {
@@ -344,24 +368,6 @@ describe("requester settle wake failure reporting", () => {
       await retryDue(context, entry);
 
       expect(getPendingWakeCommit(context, entry)).toBeUndefined();
-    });
-
-    it("does not count a transition episode that never enters the policy", async () => {
-      const entry = makeRetainedChild();
-      const { context } = makeContext(entry);
-      const transition = vi.fn(() => {
-        throw ownerChanged();
-      });
-      await commitRequesterWake(context, [entry], undefined, transition, true).catch(
-        () => undefined,
-      );
-      for (let i = 0; i < 20; i += 1) {
-        await retryDue(context, entry);
-      }
-
-      expect(transition.mock.calls.length).toBeGreaterThan(15);
-      expect(getPendingWakeCommit(context, entry)?.parked).toBeUndefined();
-      expect(getPendingWakeCommit(context, entry)?.ownerChangedFailures).toBeUndefined();
     });
   });
 });

@@ -475,7 +475,7 @@ describe("requester settle wake park (#154252)", () => {
     }
     expect(parkWarns()).toHaveLength(1);
     expect(parkWarns()[0]?.meta).toMatchObject({
-      signature: "subagent completion owner changed before settlement",
+      rejection: "subagent completion owner changed before settlement",
       failures: PARK_AFTER,
       probeIntervalMs: PARK_PROBE_MS,
     });

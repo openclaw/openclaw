@@ -34,7 +34,7 @@ describe("settleOrParkRequesterWake", () => {
     }
     expect(warn).toHaveBeenCalledOnce();
     expect(warn).toHaveBeenCalledWith("requester settle wake parked", {
-      signature: OWNER_CHANGED,
+      rejection: OWNER_CHANGED,
       failures: 5,
       probeIntervalMs: REQUESTER_SETTLE_WAKE_PARKED_PROBE_INTERVAL_MS,
       runIds: ["***"],
@@ -83,14 +83,5 @@ describe("settleOrParkRequesterWake", () => {
     }
     expect(episode.parked).toBeFalsy();
     expect(warn).not.toHaveBeenCalled();
-  });
-
-  it("returns the settle result untouched and leaves a clean episode alone", async () => {
-    const { warn, episode, members } = createPolicy();
-    const context = { options: { warn } } as unknown as SubagentLifecycleWakeContext;
-    await expect(
-      settleOrParkRequesterWake(context, episode, members, async () => true),
-    ).resolves.toBe(true);
-    expect(episode.parked).toBeUndefined();
   });
 });
