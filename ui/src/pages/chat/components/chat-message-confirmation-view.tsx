@@ -94,10 +94,6 @@ function placeConfirmedActionPopover(trigger: HTMLElement, popover: HTMLElement)
   popover.dataset.placement = placeBelow ? "below" : "above";
 }
 
-export function renderSolidRewindButton(onRewind: () => void) {
-  return <RewindButton onRewind={onRewind} />;
-}
-
 export function RewindButton(props: { onRewind: () => void }) {
   const label = () => t("chat.messages.rewind");
   return (

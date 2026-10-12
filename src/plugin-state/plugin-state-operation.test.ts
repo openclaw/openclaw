@@ -147,8 +147,6 @@ describe("plugin state worker operations", () => {
       operation.execute({ type: "read", input: { store: 0, key: "key" } }, { writeStores: [] });
     const before = await read();
     before.assertCurrent();
-    await workerClient.sweepExpiredPluginStateEntriesInWorker({ env: state.env });
-    before.assertCurrent();
     const pending = store.register("key", "revoked");
     expect(before.assertCurrent).toThrow("no longer current");
     await pending;

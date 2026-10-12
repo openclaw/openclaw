@@ -62,7 +62,7 @@ suite.define(() => {
               localStorage.setItem(
                 key,
                 JSON.stringify({
-                  sidebarEntries: [
+                  railShortcuts: [
                     "route:cron",
                     "session:agent:main:release-plan",
                     "plugin:reports/reports",

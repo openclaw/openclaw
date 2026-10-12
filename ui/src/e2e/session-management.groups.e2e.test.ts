@@ -169,7 +169,7 @@ suite.define(() => {
       const stored = JSON.parse(localStorage.getItem(key) ?? "{}");
       localStorage.setItem(
         key,
-        JSON.stringify({ ...stored, sidebarEntries: ["session:agent:main:release"] }),
+        JSON.stringify({ ...stored, railShortcuts: ["session:agent:main:release"] }),
       );
     }, controlUiBundledSettingsStorageKey(suite.server.baseUrl));
     const gateway = await installMockGateway(page, {

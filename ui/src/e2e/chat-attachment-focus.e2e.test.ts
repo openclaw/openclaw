@@ -62,13 +62,13 @@ suite.define(() => {
               });
             }
             const focus = await page.evaluate(() => document.activeElement?.getAttribute("value"));
+            expect(focus).toBe(kind);
             const pending = page.waitForEvent("filechooser");
             await page.keyboard.press("Enter");
             const chooser = await pending;
             expect(await chooser.element().getAttribute("class")).toBe(
               "agent-chat__" + kind + "-input",
             );
-            expect(focus).toBe(kind);
             expect(chooser.isMultiple()).toBe(true);
             expect(await chooser.element().getAttribute("capture")).toBeNull();
             // Boundary cancellation, not certification of a native OS dialog.

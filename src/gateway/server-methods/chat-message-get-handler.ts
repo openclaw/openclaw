@@ -11,7 +11,7 @@ import {
 } from "../chat-display-projection.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import { projectOperatorModelRead } from "../operator-model-presentation.js";
-import { MAX_PAYLOAD_BYTES } from "../server-constants.js";
+import { MAX_PAYLOAD_BYTES } from "../payload-limits.js";
 import { withReadySessionRows } from "../session-row-prepared-read.js";
 import { resolveSessionModelRef } from "../session-utils.js";
 import { readChatHistoryMessageById } from "./chat-history-pages.js";

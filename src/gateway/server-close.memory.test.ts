@@ -65,7 +65,7 @@ async function createFixture(label: string) {
       },
     },
   };
-  const registry = await createGatewayMemoryCloseRegistryFactory(config);
+  const registry = createGatewayMemoryCloseRegistryFactory(config);
   return { state, config, registry };
 }
 
