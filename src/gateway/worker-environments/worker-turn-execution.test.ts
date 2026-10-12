@@ -41,6 +41,7 @@ import {
 import { roundTripWorkerLaunchDescriptor } from "../../worker/launch-descriptor.test-support.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
 import { WorkerRunnerCapacityError, type WorkerTunnelHandle } from "./tunnel-contract.js";
+import { registerWorkerTurnFallbackTests } from "./worker-turn-execution.fallback.suite.js";
 import { registerWorkerTurnInferenceTests } from "./worker-turn-execution.inference.suite.js";
 import {
   acknowledgeCompletedWorkerTurn,
@@ -876,6 +877,7 @@ describe("worker turn execution", () => {
   );
 
   registerWorkerTurnInferenceTests();
+  registerWorkerTurnFallbackTests();
 
   it.each([
     [WORKER_LAUNCH_V2_PROTOCOL_FEATURE],

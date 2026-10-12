@@ -14,6 +14,7 @@ import { withSessionTranscriptWriteAssertion } from "../../config/sessions/trans
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
+import { applyWorkerModelFallbackRelaunch } from "./worker-relaunch-base.js";
 import type { prepareWorkerTurnMedia } from "./worker-turn-media.js";
 import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
 
@@ -158,7 +159,9 @@ export async function gateWorkerTurnInput({
   });
 }
 
-export async function readWorkerTurnInputContext(params: WorkerTurnInputParams) {
+export async function readWorkerTurnInputContext(
+  params: WorkerTurnInputParams & { admissionPersistedBeforeLaunch?: boolean },
+) {
   const { turn, transcriptTarget, modelRef, assertCurrent } = params;
   const recorder = turn.userTurnTranscriptRecorder;
   const receipt = recorder?.getAdmissionReceipt();
@@ -191,10 +194,28 @@ export async function readWorkerTurnInputContext(params: WorkerTurnInputParams) 
     leaf.message.role === "user"
       ? contextMessages.slice(0, -1)
       : contextMessages;
+  let baseLeafId = admission?.entryId ?? manager.getLeafId();
+  // Only an admission that predates this launch marks a fallback relaunch: the
+  // failed candidate may have committed past that admission, so the launch base
+  // must follow the durable leaf instead of the fenced admission prefix.
+  if (params.admissionPersistedBeforeLaunch === true && admission) {
+    const relaunch = await applyWorkerModelFallbackRelaunch({
+      transcriptTarget,
+      admissionEntryId: admission.entryId,
+      runId: turn.runId,
+      ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
+    });
+    if (relaunch.kind === "stopped") {
+      throw relaunch.refusal;
+    }
+    if (relaunch.baseLeafId) {
+      baseLeafId = relaunch.baseLeafId;
+    }
+  }
   return {
     manager,
     history,
     userMessageAlreadyPersisted,
-    baseLeafId: admission?.entryId ?? manager.getLeafId(),
+    baseLeafId,
   };
 }
