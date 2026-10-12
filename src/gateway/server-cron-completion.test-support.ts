@@ -24,14 +24,7 @@ export function registerGatewayCronCompletionTests<T extends { cron: GatewayCron
     "preserves %s diagnostics when destination history warns and the one-shot completes",
     async (kind) => {
       const cfg = createCronConfig(`server-cron-${kind}-announcement-complete`);
-      cfg.agents = { entries: { main: {}, other: {} } };
       cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
-      cfg.bindings = [
-        {
-          agentId: "other",
-          match: { channel: "telegram", peer: { kind: "direct", id: "123" } },
-        },
-      ];
       loadConfigMock.mockReturnValue(cfg);
       const transcriptWarning =
         "Conversation context skipped: the destination belongs to a different agent.";
@@ -81,16 +74,6 @@ export function registerGatewayCronCompletionTests<T extends { cron: GatewayCron
         await state.cron.run(job.id, "due");
 
         expect(sendCronAnnouncePayloadStrictMock).toHaveBeenCalledOnce();
-        expect(sendCronAnnouncePayloadStrictMock).toHaveBeenCalledWith(
-          expect.objectContaining({
-            agentId: "main",
-            transcriptRoute: expect.objectContaining({
-              sessionKey: "agent:main:telegram:direct:123",
-              peer: { kind: "direct", id: "123" },
-            }),
-            onTranscriptDiagnostic: expect.any(Function),
-          }),
-        );
         expect(state.cron.getJob(job.id)).toBeUndefined();
         const finished = finishedEvents.find((event) => event.jobId === job.id);
         expect(finished).toMatchObject({

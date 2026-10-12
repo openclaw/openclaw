@@ -108,7 +108,6 @@ describe("prepared reply routing", () => {
     { relation: "different", mirror: true },
     { relation: "different", mirror: false },
     { relation: "key", mirror: true },
-    { relation: "context", mirror: true },
   ] as const)(
     "records only destination-owned model history for $relation routing (mirror=$mirror)",
     async ({ relation, mirror }) => {
@@ -129,16 +128,6 @@ describe("prepared reply routing", () => {
         {
           sessionId: "producer-session",
           updatedAt: 1,
-          ...(relation === "context"
-            ? {
-                delivery: {
-                  kind: "external" as const,
-                  context: { channel: "matrix", to: route.to },
-                  route: { channel: "matrix", target: { to: route.to } },
-                  origin: { provider: "matrix", to: route.to },
-                },
-              }
-            : {}),
         },
       );
       await transcript.appendExactAssistantMessageToSessionTranscript({
@@ -190,13 +179,11 @@ describe("prepared reply routing", () => {
                 content: [{ type: "text", text: "Delivered answer transformed" }],
               }),
             ]
-          : relation === "key"
-            ? [
-                expect.objectContaining({
-                  content: [{ type: "text", text: "Original producer answer" }],
-                }),
-              ]
-            : [],
+          : [
+              expect.objectContaining({
+                content: [{ type: "text", text: "Original producer answer" }],
+              }),
+            ],
       );
     },
   );

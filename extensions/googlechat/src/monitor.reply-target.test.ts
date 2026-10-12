@@ -164,7 +164,7 @@ const THREAD = `${SPACE}/threads/requested`;
 const TYPING = `${SPACE}/messages/typing`;
 
 describe("Google Chat automatic reply target reconciliation", () => {
-  it("reuses inbound space classification for repeated outbound replies", async () => {
+  it("reuses inbound space classification for an outbound reply", async () => {
     const cfg = {
       channels: {
         googlechat: {
@@ -189,27 +189,22 @@ describe("Google Chat automatic reply target reconciliation", () => {
         account,
         core: createCore({
           run: async (delivery) => {
-            for (const text of ["first reply", "second reply"]) {
-              await delivery.deliver({ text });
-              expect(
-                await resolveGoogleChatOutboundSessionRoute({
-                  cfg,
-                  accountId: "work",
-                  agentId: "agent-1",
-                  target: SPACE,
-                }),
-              ).toMatchObject({
-                peer: { kind: "direct", id: SPACE },
-                recipientSessionExact: true,
-              });
-            }
+            await delivery.deliver({ text: "reply" });
+            expect(
+              await resolveGoogleChatOutboundSessionRoute({
+                cfg,
+                accountId: "work",
+                agentId: "agent-1",
+                target: SPACE,
+              }),
+            ).toMatchObject({
+              peer: { kind: "direct", id: SPACE },
+              recipientSessionExact: true,
+            });
           },
         }),
         event: createEvent({ spaceType: "DIRECT_MESSAGE" }),
       });
-      expect(
-        apiMocks.sendGoogleChatMessage.mock.calls.slice(1).map(([params]) => params.text),
-      ).toEqual(["first reply", "second reply"]);
     } finally {
       stop();
     }

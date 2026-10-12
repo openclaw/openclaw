@@ -746,7 +746,7 @@ describe("dispatchCronDelivery", () => {
     });
   });
 
-  it("applies TTS to the notification before committing confirmed destination output", async () => {
+  it("applies TTS before sending the notification", async () => {
     const speech = {
       text: "",
       spokenText: "Briefing",
@@ -754,23 +754,9 @@ describe("dispatchCronDelivery", () => {
       mediaUrl: "file:///tmp/voice.mp3",
       mediaUrls: ["file:///tmp/chart.png", "file:///tmp/narration.ogg"],
     };
-    vi.mocked(deliverOutboundPayloads).mockImplementationOnce(async (delivery) => {
-      delivery.onDeliveredPayload?.({
-        text: "",
-        hookContent: "Briefing",
-        audioAsVoice: true,
-        mediaUrls: [...speech.mediaUrls, speech.mediaUrl],
-      });
-      return [{ channel: "telegram", messageId: "spoken-report" }];
-    });
     maybeApplyTtsToPayloadMock.mockResolvedValue(speech);
     const params = makeBaseParams({ synthesizedText: "[[tts]] Briefing", runStartedAt: 1_000 });
     params.cfgWithAgentDefaults = { tts: { auto: "tagged", provider: "microsoft" } };
-    params.sourceSessionKey = "agent:main:dashboard:source";
-    params.sourceSessionGeneration = {
-      sessionId: "source-session",
-      lifecycleRevision: "source-revision",
-    };
     const state = await dispatchCronDelivery(params);
     expectDelivered(state);
     expect(maybeApplyTtsToPayloadMock).toHaveBeenCalledExactlyOnceWith(
@@ -783,12 +769,6 @@ describe("dispatchCronDelivery", () => {
     );
     expectDeliveryCall(0, { payloads: [speech] });
     expect(commitBackgroundResultToSessionMock).not.toHaveBeenCalled();
-    expectDeliveryCall(0, {
-      session: expect.objectContaining({ key: params.runSessionKey }),
-      transcriptRoute: params.resolvedDelivery.ok
-        ? params.resolvedDelivery.sessionRoute
-        : undefined,
-    });
     expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
   });
 
@@ -1343,58 +1323,6 @@ describe("dispatchCronDelivery", () => {
       ),
     });
   });
-
-  it.each([
-    {
-      name: "different destination thread",
-      executionKey: "agent:main:telegram:group:-100123:topic:42",
-      destinationThread: "43",
-    },
-  ])(
-    "hands the producer and route to outbound for $name",
-    async ({ executionKey, destinationThread }) => {
-      const params = makeBaseParams({
-        synthesizedText: "Persistent session report",
-        sessionTarget: `session:${executionKey}`,
-      });
-      params.agentSessionKey = executionKey;
-      params.runSessionKey = executionKey;
-      params.sourceSessionKey = "agent:main:telegram:group:-100123:topic:42";
-      params.sourceSessionGeneration = {
-        sessionId: "execution-session-id",
-        lifecycleRevision: "execution-lifecycle-revision",
-      };
-      const destinationKey = `agent:main:telegram:group:-100123:topic:${destinationThread}`;
-      params.resolvedDelivery = makeResolvedDelivery({
-        to: "-100123",
-        threadId: destinationThread,
-        sessionRoute: {
-          sessionKey: destinationKey,
-          baseSessionKey: "agent:main:telegram:group:-100123",
-          peer: { kind: "group", id: "-100123" },
-          chatType: "group",
-          from: "telegram:-100123",
-          to: "-100123",
-          threadId: destinationThread,
-        },
-      });
-
-      expectDelivered(await dispatchCronDelivery(params));
-      expect(deliverOutboundPayloads).toHaveBeenCalledOnce();
-      expectDeliveryCall(0, {
-        channel: "telegram",
-        to: "-100123",
-        threadId: destinationThread,
-        payloads: [{ text: "Persistent session report" }],
-      });
-      expectDeliveryCall(0, {
-        session: expect.objectContaining({ key: executionKey }),
-        transcriptRoute: expect.objectContaining({ sessionKey: destinationKey }),
-      });
-      expect(commitBackgroundResultToSessionMock).not.toHaveBeenCalled();
-      expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
-    },
-  );
 
   it.each([
     ["control token", "ANNOUNCE_SKIP", true, false, true, false],

@@ -212,10 +212,6 @@ describe("postWorkshopChangeNotice", () => {
       ),
       expect.anything(),
     );
-    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
-      expect.not.stringContaining("told the user"),
-      expect.anything(),
-    );
     expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
   });
 

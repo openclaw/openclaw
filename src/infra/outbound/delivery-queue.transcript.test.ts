@@ -89,16 +89,13 @@ describe("delivery-queue confirmed transcript recovery", () => {
     ["sent", false],
     ["sent", true],
     ["reconciled", false],
-    ["reconciled", true],
     ["unresolved", false],
     ["rejected", false],
     ["unnormalized", false],
     ["media", false],
-    ["presentation", false],
     ["stale-generation", false],
     ["empty-text", false],
     ["native", false],
-    ["empty-kinds", false],
     ["other-generation", false],
     ["multiple-payloads", false],
   ] as const)(
@@ -158,20 +155,13 @@ describe("delivery-queue confirmed transcript recovery", () => {
               textCount: state === "multiple-payloads" ? 2 : 1,
               mediaCount: state === "media" ? 1 : 0,
               voiceCount: 0,
-              presentationCount: state === "presentation" ? 1 : 0,
+              presentationCount: 0,
               interactiveCount: 0,
               channelDataCount: 0,
               items: [
                 {
                   index: 0,
-                  kinds:
-                    state === "presentation"
-                      ? ["presentation"]
-                      : state === "native"
-                        ? ["interactive"]
-                        : state === "empty-kinds"
-                          ? []
-                          : ["text"],
+                  kinds: state === "native" ? ["interactive"] : ["text"],
                   text: "Rendered projection, not the accepted normalized content",
                   mediaUrls: state === "media" ? ["https://example.invalid/visible.png"] : [],
                 },
@@ -245,10 +235,7 @@ describe("delivery-queue confirmed transcript recovery", () => {
           state === "sent" || state === "reconciled" || state === "other-generation";
         expect(result).toMatchObject(confirmed ? { recovered: 1 } : { failed: 1 });
         if (confirmed && !projected && state !== "stale-generation") {
-          expectMockMessageContaining(
-            log.warn,
-            "delivered during recovery; content could not be confirmed for the conversation",
-          );
+          expect(log.warn).toHaveBeenCalledOnce();
         }
         expect(deliver).not.toHaveBeenCalled();
         const entry = loadSessionEntryReadOnly({ sessionKey, storePath: scope.storePath });

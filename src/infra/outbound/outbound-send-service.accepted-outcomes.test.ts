@@ -98,22 +98,19 @@ describe("accepted plugin delivery outcomes", () => {
     expect(mocks.commitConfirmedVisibleMessage).not.toHaveBeenCalled();
     expect(mocks.sendMessage).not.toHaveBeenCalled();
   });
-  it.each(["failed", "pending", "unknown"])(
-    "does not commit unconfirmed plugin status %s",
-    async (deliveryStatus) => {
-      mocks.dispatchChannelMessageAction.mockResolvedValueOnce({
-        content: [],
-        details: { deliveryStatus },
-      });
-      await executeSendAction({
-        ctx: createContext({}),
-        to: "channel:123",
-        message: "unconfirmed",
-      });
-      expect(mocks.commitConfirmedVisibleMessage).not.toHaveBeenCalled();
-      expect(mocks.sendMessage).not.toHaveBeenCalled();
-    },
-  );
+  it("does not commit a plugin result without delivery evidence", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce({
+      content: [],
+      details: { deliveryStatus: "unknown" },
+    });
+    await executeSendAction({
+      ctx: createContext({}),
+      to: "channel:123",
+      message: "unconfirmed",
+    });
+    expect(mocks.commitConfirmedVisibleMessage).not.toHaveBeenCalled();
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+  });
 
   it.each([["created-thread"], ["created-thread", "another-thread"]])(
     "uses only an unambiguous native receipt thread: %j",

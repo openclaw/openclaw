@@ -776,8 +776,6 @@
 ["extensions/googlechat/src/monitor.test.ts","./monitor-routing.js","49402009400208235b1a8106bcf8deea5f7595029f36164181500f85d92333b6",1]
 ["extensions/googlechat/src/monitor.webhook-routing.test.ts","./auth.js","763e18405b629fc825821254567149e3a7321dbfa4ba42ad962430371637bc7f",1]
 ["extensions/googlechat/src/setup.test.ts","./channel.runtime.js","05be3ff350a2c6513ad971c316e385359141a0341b24fc904fd7be3daeecff3e",1]
-["extensions/googlechat/src/targets.outbound-session.test.ts","./auth.js","dd0b81589036e271fbfff7c83a5bf220235bad4a3abdef34cbbafe5daed2cd8f",1]
-["extensions/googlechat/src/targets.outbound-session.test.ts","openclaw/plugin-sdk/ssrf-runtime","f4468e09d98ffebbdd49e69e54c6feb26f950b34f36c47d7b386ac5e81e8ae42",1]
 ["extensions/googlechat/src/targets.test.ts","openclaw/plugin-sdk/ssrf-runtime","051335dc17ab015051a4bdb42ad08a45f24aeb9719d5278252ca5229678972c0",1]
 ["extensions/imessage/src/actions.runtime.test.ts","./cli-output.js","7fa29c8ae17a9529a2f6ac86447672ce722b8627f8c41c7673db4d6a528555ac",1]
 ["extensions/imessage/src/actions.runtime.test.ts","./client.js","601c27ea77ed5e51ade6db3e1c0beb061e5ce025493167338b4b68b8d500e90c",1]

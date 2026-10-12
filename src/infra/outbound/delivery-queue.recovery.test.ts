@@ -297,11 +297,8 @@ describe("delivery-queue recovery", () => {
       markerSpy?.mockRestore();
     }
   }
-  const createConversationRecoveryFixture = (
-    operationId: string,
-    delivery: Partial<Parameters<typeof enqueueDeliveryOnce>[0]> = {},
-    stateDir = tmpDir(),
-  ) => createQueuedConversationRecoveryFixture({ operationId, delivery, stateDir });
+  const createConversationRecoveryFixture = (operationId: string) =>
+    createQueuedConversationRecoveryFixture({ operationId, stateDir: tmpDir() });
   async function createPendingFinalRecoveryFixture(
     deliveryId: string,
     options: { withWriterAuthority?: boolean } = {},

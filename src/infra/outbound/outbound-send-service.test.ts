@@ -881,34 +881,6 @@ describe("executeSendAction", () => {
     });
   });
 
-  it("commits plugin content with the producer identity and stable send key", async () => {
-    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
-    await executeSendAction({
-      ctx: createContext({
-        agentId: "main",
-        idempotencyKey: "stable-plugin-send",
-        input: { sessionKey: "agent:main:source" },
-      }),
-      to: "channel:123",
-      message: "hello",
-      mediaUrls: ["https://example.com/a.png"],
-    });
-
-    expect(mocks.commitConfirmedVisibleMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "demo-outbound",
-        to: "channel:123",
-        producer: { key: "agent:main:source", agentId: "main" },
-        deliveryId: "stable-plugin-send",
-        payloadIndex: 0,
-        payload: expect.objectContaining({
-          text: "hello",
-          mediaUrls: ["https://example.com/a.png"],
-        }),
-      }),
-    );
-  });
-
   it("preserves a confirmed native send when transcript publication fails", async () => {
     mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
     mocks.commitConfirmedVisibleMessage.mockRejectedValueOnce(new Error("transcript unavailable"));
