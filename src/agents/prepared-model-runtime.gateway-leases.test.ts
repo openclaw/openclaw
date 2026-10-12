@@ -214,7 +214,7 @@ describe("prepared model runtime Gateway leases", () => {
     const inventory = resolvePreparedModelRuntimeOwnerBySnapshot(configured)?.catalogInventory;
     expect(inventory, "configured published catalog").toBeTruthy();
     (inventory!.runtimeModels as Map<string, readonly Model[]>).set("zai", [discovered]);
-    expect(configured.readPublishedModels?.().get("zai")).toContainEqual(
+    expect(configured.readPublishedModels?.()?.get("zai")).toContainEqual(
       expect.objectContaining({ id: "glm-5.3-flash", provider: "zai" }),
     );
 
