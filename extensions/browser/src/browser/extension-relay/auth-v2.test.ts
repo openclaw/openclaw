@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { parseStrictJsonObject } from "../../../chrome-extension/modules/strict-json.js";
 import {
   createRelayProof,
   relayKeyIdFromHex,
@@ -9,6 +10,7 @@ import {
   BrowserRelayAuthV2Authority,
   getBrowserRelayAuthV2Authority,
   invalidateBrowserRelayAuthV2Authority,
+  parseExtensionRelayResource,
   parseRelayAuthHello,
   parseRelayAuthResponse,
 } from "./auth-v2.js";
@@ -57,6 +59,26 @@ describe("browser relay auth v2 proofs", () => {
     expect(clientProof).toBe("Rl8TStMYlPLxJPDYwSe__mtEjgMf1C4TM-ZN6sUipZ4");
     expect(createRelayProof(KEY, "accept", VECTOR_FIELDS, clientProof)).toBe(
       "1R5MpHs6qnAdc0_X6vKBwj91tlRoWfNuGXaNfSD7VnI",
+    );
+  });
+
+  it.each([
+    ["keyId", "EREREREREREREREREREREQ"],
+    ["instanceId", "IiIiIiIiIiIiIiIiIiIiIg"],
+    ["sessionId", "EREREREREREREREREREREQ"],
+    ["clientNonce", "REREREREREREREREREREREREREREREREREREREREREQ"],
+    ["serverNonce", "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM"],
+    ["issuedAtMs", VECTOR_FIELDS.issuedAtMs + 1],
+    ["expiresAtMs", VECTOR_FIELDS.expiresAtMs + 1],
+    ["role", "cdp"],
+    ["transport", "connection"],
+    ["method", "SEQUENCE"],
+    ["resource", "/extension"],
+    ["flow", "cdp"],
+  ] as const)("binds %s", (field, replacement) => {
+    const proof = createRelayProof(KEY, "server", VECTOR_FIELDS);
+    expect(verifyRelayProof(KEY, "server", { ...VECTOR_FIELDS, [field]: replacement }, proof)).toBe(
+      false,
     );
   });
 
@@ -355,5 +377,21 @@ describe("browser relay auth v2 wire validation", () => {
         clientProof: "A".repeat(43),
       }),
     ).not.toBeNull();
+  });
+
+  it("canonicalizes only the exact path and optional profile query", () => {
+    expect(parseExtensionRelayResource("/extension", "/extension")).toBe("/extension");
+    expect(parseExtensionRelayResource("/extension?profile=chrome", "/extension")).toBe(
+      "/extension?profile=chrome",
+    );
+    expect(parseExtensionRelayResource("/extension?x=1", "/extension")).toBeNull();
+    expect(parseExtensionRelayResource("/extension?profile=a&profile=b", "/extension")).toBeNull();
+    expect(parseExtensionRelayResource("/other", "/extension")).toBeNull();
+  });
+
+  it("detects duplicate security fields before JSON parsing", () => {
+    expect(parseStrictJsonObject('{"v":2,"v":1}')).toBeNull();
+    expect(parseStrictJsonObject('{"outer":{"v":2,"v":1}}')).toBeNull();
+    expect(parseStrictJsonObject('{"a":1,"nested":{"a":2}}')).not.toBeNull();
   });
 });

@@ -101,68 +101,148 @@ describe("session navigation intent prefetch", () => {
     expect(await store.read(cacheKey(key))).toBeNull();
   });
 
-  it.each([{ name: "replacement incarnation", patch: { sessionId: "replacement" } }])(
-    "rejects a prefetch when an alias gains $name",
-    async ({ patch }) => {
+  it("keeps unchanged intended history while another session becomes active", async () => {
+    const key = "agent:main:report";
+    const otherKey = "agent:main:active";
+    const queuedKey = "agent:main:queued";
+    const response = createDeferred<ReturnType<typeof historyResult>>();
+    const request = vi.fn(() => response.promise);
+    const unchanged = { ...row(key, NOW - 1), sessionId: `id:${key}` };
+    const other = { ...row(otherKey, NOW), hasActiveRun: true };
+    const queued = row(queuedKey, NOW - 2);
+    const snapshot = prefetchState(request, [unchanged, queued, other], {
+      openSessionKeys: [otherKey],
+    });
+    updatePrefetch(snapshot);
+    intend(key);
+    await advancePrefetch(300);
+    expect(request).toHaveBeenCalledOnce();
+
+    updatePrefetch({
+      ...snapshot,
+      listRevision: 2,
+      rows: [{ ...unchanged }, { ...queued, hasActiveRun: true }, { ...other, updatedAt: NOW + 1 }],
+    });
+    response.resolve(historyResult(key));
+    await settlePromises();
+    expect(readChatSessionSnapshot(cache, snapshotHost, { sessionKey: key })?.messages).toEqual(
+      historyResult(key).messages,
+    );
+    expect(readChatSessionSnapshot(cache, snapshotHost, { sessionKey: queuedKey })).toBeNull();
+    await store.flush();
+    expect((await store.read(cacheKey(key)))?.messages).toEqual(historyResult(key).messages);
+    await advancePrefetch(31_000);
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { name: "replacement incarnation", patch: { sessionId: "replacement" } },
+    { name: "branch reset", patch: { activeLeafEntryId: "new-leaf" } },
+    { name: "updated transcript", patch: { updatedAt: NOW + 1 } },
+    { name: "new activity", patch: { lastActivityAt: NOW + 1 } },
+    { name: "active run custody", patch: { hasActiveRun: true } },
+  ])("rejects a prefetch when an alias gains $name", async ({ patch }) => {
+    const key = "agent:main:main";
+    const response = createDeferred<ReturnType<typeof historyResult>>();
+    const request = vi.fn(() => response.promise);
+    const original = { ...row(key, NOW - 1), sessionId: "original", activeLeafEntryId: "leaf" };
+    const snapshot = prefetchState(request, [original]);
+    updatePrefetch(snapshot);
+    intend(key);
+    await advancePrefetch(300);
+    expect(request).toHaveBeenCalledOnce();
+
+    const changed: GatewaySessionRow = {
+      ...original,
+      key: "global",
+      kind: "global",
+      ...patch,
+    };
+    updatePrefetch({
+      ...snapshot,
+      listRevision: 2,
+      rows: [original, changed],
+    });
+    response.resolve(historyResult(key));
+    await settlePromises();
+    expect(readChatSessionSnapshot(cache, snapshotHost, { sessionKey: key })).toBeNull();
+    await store.flush();
+    expect(await store.read(cacheKey(key))).toBeNull();
+  });
+
+  it.each([
+    { name: "an older alias", aliasActivityAt: NOW - 2, keepOriginal: true },
+    { name: "only an older alias", aliasActivityAt: NOW - 2, keepOriginal: false },
+  ])(
+    "requires the captured history to survive beside $name",
+    async ({ aliasActivityAt, keepOriginal }) => {
       const key = "agent:main:main";
       const response = createDeferred<ReturnType<typeof historyResult>>();
       const request = vi.fn(() => response.promise);
-      const original = { ...row(key, NOW - 1), sessionId: "original", activeLeafEntryId: "leaf" };
+      const original = { ...row(key, NOW - 1), sessionId: `id:${key}` };
       const snapshot = prefetchState(request, [original]);
       updatePrefetch(snapshot);
       intend(key);
       await advancePrefetch(300);
       expect(request).toHaveBeenCalledOnce();
-
-      const changed: GatewaySessionRow = {
-        ...original,
-        key: "global",
-        kind: "global",
-        ...patch,
-      };
       updatePrefetch({
         ...snapshot,
         listRevision: 2,
-        rows: [original, changed],
+        rows: [
+          ...(keepOriginal ? [{ ...original }] : []),
+          { ...row("global", aliasActivityAt), kind: "global", sessionId: original.sessionId },
+        ],
       });
       response.resolve(historyResult(key));
       await settlePromises();
-      expect(readChatSessionSnapshot(cache, snapshotHost, { sessionKey: key })).toBeNull();
+      expect(
+        readChatSessionSnapshot(cache, snapshotHost, { sessionKey: key })?.messages ?? null,
+      ).toEqual(keepOriginal ? historyResult(key).messages : null);
       await store.flush();
-      expect(await store.read(cacheKey(key))).toBeNull();
+      expect((await store.read(cacheKey(key)))?.messages ?? null).toEqual(
+        keepOriginal ? historyResult(key).messages : null,
+      );
     },
   );
 
-  it.each(["client replacement", "session invalidation", "newer pane snapshot"] as const)(
-    "rejects a held prefetch after %s without a roster revision",
-    async (change) => {
-      const key = "agent:main:owned";
-      const response = createDeferred<ReturnType<typeof historyResult>>();
-      const request = vi.fn(() => response.promise);
-      const snapshot = prefetchState(request, [row(key, NOW - 1)]);
+  it.each([
+    "client replacement",
+    "same-client reconnect",
+    "session invalidation",
+    "profile cache clear",
+    "newer pane snapshot",
+  ] as const)("rejects a held prefetch after %s without a roster revision", async (change) => {
+    const key = "agent:main:owned";
+    const response = createDeferred<ReturnType<typeof historyResult>>();
+    const request = vi.fn(() => response.promise);
+    const snapshot = prefetchState(request, [row(key, NOW - 1)]);
+    updatePrefetch(snapshot);
+    intend(key);
+    await advancePrefetch(300);
+    expect(request).toHaveBeenCalledOnce();
+
+    let expected: ChatSessionSnapshot | null = null;
+    if (change === "client replacement") {
+      updatePrefetch({ ...snapshot, client: createTestGatewayClient(request) });
+    } else if (change === "same-client reconnect") {
+      updatePrefetch({ ...snapshot, client: null });
       updatePrefetch(snapshot);
-      intend(key);
-      await advancePrefetch(300);
-      expect(request).toHaveBeenCalledOnce();
+    } else if (change === "session invalidation") {
+      clearChatMessagesFromCache(cache, snapshotHost, { sessionKey: key });
+    } else if (change === "profile cache clear") {
+      await clearStoredChatSnapshots();
+    } else {
+      expected = historySnapshot("Newer pane history");
+      cacheChatSessionSnapshot(cache, snapshotHost, { sessionKey: key }, expected);
+    }
+    response.resolve(historyResult(key));
+    await settlePromises();
+    expect(readChatSessionSnapshot(cache, snapshotHost, { sessionKey: key })).toEqual(expected);
+    await store.flush();
+    expect(await store.read(cacheKey(key))).toEqual(expected);
+  });
 
-      let expected: ChatSessionSnapshot | null = null;
-      if (change === "client replacement") {
-        updatePrefetch({ ...snapshot, client: createTestGatewayClient(request) });
-      } else if (change === "session invalidation") {
-        clearChatMessagesFromCache(cache, snapshotHost, { sessionKey: key });
-      } else {
-        expected = historySnapshot("Newer pane history");
-        cacheChatSessionSnapshot(cache, snapshotHost, { sessionKey: key }, expected);
-      }
-      response.resolve(historyResult(key));
-      await settlePromises();
-      expect(readChatSessionSnapshot(cache, snapshotHost, { sessionKey: key })).toEqual(expected);
-      await store.flush();
-      expect(await store.read(cacheKey(key))).toEqual(expected);
-    },
-  );
-
-  it.each([true])(
+  it.each([false, true])(
     "hydrates persisted history and fences its cursor-reset reread (clear during reread: %s)",
     async (clearDuringReread) => {
       const key = "agent:main:persisted";
@@ -229,35 +309,38 @@ describe("session navigation intent prefetch", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it.each(["active run"])("does not prefetch intent already owned by %s", async (owner) => {
-    const sessionKey = "agent:main:main";
-    const request = historyRequest();
-    if (owner === "fresh snapshot") {
-      store.write(cacheKey(sessionKey), historySnapshot("fresh"));
-      await store.flush();
-    }
-    updatePrefetch(
-      prefetchState(
-        request,
-        [{ ...row(sessionKey, NOW - 1), hasActiveRun: owner === "active run" }],
-        {
-          openSessionKeys:
-            owner === "presented alias"
-              ? ["main"]
-              : owner === "full presented cache"
-                ? Array.from(
-                    { length: MAX_CACHED_CHAT_SESSIONS },
-                    (_, index) => `agent:main:presented-${index}`,
-                  )
-                : ["agent:main:foreground"],
-        },
-      ),
-    );
-    intend(sessionKey);
-    await advancePrefetch(300);
+  it.each(["presented alias", "fresh snapshot", "active run", "full presented cache"])(
+    "does not prefetch intent already owned by %s",
+    async (owner) => {
+      const sessionKey = "agent:main:main";
+      const request = historyRequest();
+      if (owner === "fresh snapshot") {
+        store.write(cacheKey(sessionKey), historySnapshot("fresh"));
+        await store.flush();
+      }
+      updatePrefetch(
+        prefetchState(
+          request,
+          [{ ...row(sessionKey, NOW - 1), hasActiveRun: owner === "active run" }],
+          {
+            openSessionKeys:
+              owner === "presented alias"
+                ? ["main"]
+                : owner === "full presented cache"
+                  ? Array.from(
+                      { length: MAX_CACHED_CHAT_SESSIONS },
+                      (_, index) => `agent:main:presented-${index}`,
+                    )
+                  : ["agent:main:foreground"],
+          },
+        ),
+      );
+      intend(sessionKey);
+      await advancePrefetch(300);
 
-    expect(request).not.toHaveBeenCalled();
-  });
+      expect(request).not.toHaveBeenCalled();
+    },
+  );
 
   it("defers new intent when a presented transcript starts loading mid-cycle", async () => {
     const pending: Array<{
@@ -458,6 +541,19 @@ describe("session navigation intent prefetch", () => {
     expect(request).toHaveBeenCalledTimes(2);
     await advancePrefetch(1);
     expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([warm, intended, warm]);
+  });
+
+  it("keeps the first intent deadline across later list revisions", async () => {
+    const request = historyRequest();
+    const state = prefetchState(request, [row("agent:main:recent", NOW - 1)]);
+    updatePrefetch(state);
+    intend("agent:main:recent");
+    await advancePrefetch(30);
+    updatePrefetch({ ...state, listRevision: 2 });
+    await advancePrefetch(44);
+    expect(request).not.toHaveBeenCalled();
+    await advancePrefetch(1);
+    expect(request.mock.calls.map(sessionKeyFromCall)).toEqual(["agent:main:recent"]);
   });
 
   it("coalesces pointer sweeps into the latest intent", async () => {

@@ -258,7 +258,7 @@ describe("Subagents panel data ownership", () => {
     expect(f.subscriptions.has(row.key)).toBe(false);
   });
 
-  it.each(["parallel-audits"])(
+  it.each([undefined, "parallel-audits"])(
     "loads older running children beyond the first page (%s)",
     async (swarmGroupId) => {
       const finished = Array.from({ length: 20 }, (_, index) => child(`finished-${index}`));
