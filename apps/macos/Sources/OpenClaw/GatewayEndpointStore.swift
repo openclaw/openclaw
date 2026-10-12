@@ -1016,7 +1016,7 @@ extension GatewayEndpointStore {
         return self.normalizeDashboardPath(controlUi?["basePath"] as? String)
     }
 
-    /// Dashboard fragments and Gateway URL userinfo can contain credentials.
+    /// Gateway URL userinfo, queries, and dashboard fragments can contain credentials.
     /// Redact diagnostic output without changing the endpoint used for navigation.
     static func diagnosticURLString(for url: URL) -> String {
         guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
@@ -1024,8 +1024,16 @@ extension GatewayEndpointStore {
         }
         components.user = nil
         components.password = nil
+        components.query = nil
         components.fragment = nil
         return components.url?.absoluteString ?? "<unparseable-url>"
+    }
+
+    static func diagnosticErrorDescription(_ description: String) -> String {
+        description.replacing(/(?i)(?:https?|wss?):\/\/[^\s<>"]+/) { match in
+            guard let url = URL(string: String(match.output)) else { return "<unparseable-url>" }
+            return self.diagnosticURLString(for: url)
+        }
     }
 
     static func dashboardURL(

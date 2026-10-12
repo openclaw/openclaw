@@ -724,9 +724,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             error=\(error.localizedDescription, privacy: .public)
             """)
         let html = DashboardFailurePage.html(
-            title: "Dashboard unavailable",
-            message: error.localizedDescription,
-            detail: "The dashboard window is open, but the web UI could not load from this endpoint.",
+            connectionError: error,
             url: self.currentURL)
         self.webView.loadHTMLString(html, baseURL: nil)
     }
@@ -748,6 +746,12 @@ extension DashboardWindowController {
             self.pendingNativeCommands = []
         }
         self.pendingNativeNavigation = nil
+    }
+
+    func showFailure(_ error: Error, url: URL? = nil, present: Bool = true) {
+        let endpoint = url ?? self.auth.gatewayUrl.flatMap(URL.init(string:)) ?? self.currentURL
+        self.signedOut = nil
+        self.showFailureHTML(DashboardFailurePage.html(connectionError: error, url: endpoint), present: present)
     }
 
     func showFailure(

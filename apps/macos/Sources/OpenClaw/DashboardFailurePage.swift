@@ -53,13 +53,65 @@ enum DashboardFailurePage {
             primaryButton: button)
     }
 
+    static func html(connectionError: Error, url: URL?) -> String {
+        let error = connectionError as NSError
+        let message = if error.domain == NSURLErrorDomain, error.code == NSURLErrorBadServerResponse {
+            String(localized: "The server sent an unexpected response, so OpenClaw couldn’t connect.")
+        } else {
+            String(localized: "OpenClaw couldn’t connect to your gateway.")
+        }
+        let address = url.flatMap { url -> String? in
+            guard ["ws", "wss", "http", "https"].contains(url.scheme?.lowercased() ?? "") else { return nil }
+            return GatewayEndpointStore.diagnosticURLString(for: url)
+        }
+        let introduction = address.map {
+            String(format: String(localized: "The OpenClaw Mac app can’t connect to its gateway at %@."), $0)
+        } ?? String(localized: "The OpenClaw Mac app can’t connect to its gateway.")
+        let prompt = """
+        \(introduction)
+
+        \(String(format: String(localized: "Error: “%@”"),
+                 GatewayEndpointStore.diagnosticErrorDescription(error.localizedDescription)))
+
+        \(String(localized: "Please investigate and get the gateway back online if you can."))
+        """
+        return self.html(
+            title: String(localized: "Gateway connection failed"),
+            message: message,
+            detail: nil,
+            url: nil,
+            helpPrompt: prompt)
+    }
+
     static func html(
-        title: String, message: String, detail: String?, url: URL?, primaryButton: String = "") -> String
+        title: String, message: String, detail: String?, url: URL?, primaryButton: String = "",
+        helpPrompt: String? = nil) -> String
     {
-        let connectionTitle = self.htmlEscape(String(localized: "Connection Settings…"))
+        let connectionTitle = self.htmlEscape(helpPrompt == nil
+            ? String(localized: "Connection Settings…") : String(localized: "Connection settings"))
         let detailHTML = detail.map { "<p class=\"detail\">\(self.htmlEscape($0))</p>" } ?? ""
         let urlHTML = url
             .map { "<code>\(self.htmlEscape(GatewayEndpointStore.diagnosticURLString(for: $0)))</code>" } ?? ""
+        let promptHTML = helpPrompt.map {
+            """
+            <textarea id="help-prompt" readonly spellcheck="false"
+              aria-label="\(self.htmlEscape(String(localized: "Agent help prompt")))">\(self.htmlEscape($0))</textarea>
+            """
+        } ?? ""
+        let copyButton = helpPrompt.map { _ in
+            """
+            <button type="button" class="copy" data-copied="\(self.htmlEscape(String(localized: "Copied")))"
+              onclick="const prompt = document.getElementById('help-prompt');
+                prompt.focus(); prompt.select();
+                let copied = false;
+                try { copied = document.execCommand('copy'); } catch (_) {}
+                if (copied) { this.textContent = this.dataset.copied; this.focus(); }
+                document.getElementById('copy-status').textContent = copied
+                  ? this.dataset.copied : this.dataset.fallback;"
+              data-fallback="\(self.htmlEscape(String(localized: "Press Command-C to copy the selected prompt.")))"
+              >\(self.htmlEscape(String(localized: "Copy prompt")))</button>
+            """
+        } ?? ""
         return """
         <!doctype html>
         <html>
@@ -73,18 +125,21 @@ enum DashboardFailurePage {
           event.preventDefault();
           window.webkit.messageHandlers.openclawWindowDrag.postMessage({type:'window-drag'});
         }">
-          <main>
-            <div class="badge">!</div>
+          <main class="\(helpPrompt == nil ? "" : "gateway-failure")">
+            \(helpPrompt == nil ? "<div class=\"badge\">!</div>" : "")
             <h1>\(self.htmlEscape(title))</h1>
             <p>\(self.htmlEscape(message))</p>
             \(detailHTML)
             \(urlHTML)
+            \(promptHTML)
             <div class="actions">
               \(primaryButton)
               <button type="button" class="\(primaryButton.isEmpty ? "" : "settings")"
                 onclick="window.webkit.messageHandlers.openclawDeviceSettings
                   .postMessage({type:'open',panel:'connection'})">\(connectionTitle)</button>
+              \(copyButton)
             </div>
+            \(helpPrompt == nil ? "" : "<p id=\"copy-status\" class=\"detail\" role=\"status\" aria-live=\"polite\"></p>")
           </main>
         </body>
         </html>
@@ -168,6 +223,25 @@ enum DashboardFailurePage {
       gap: 10px;
       margin-top: 24px;
     }
+    .gateway-failure { width: min(760px, calc(100vw - 72px)); }
+    .gateway-failure .actions { justify-content: flex-end; }
+    .gateway-failure .detail:empty { display: none; }
+    textarea {
+      display: block;
+      width: 100%;
+      min-height: 190px;
+      margin-top: 24px;
+      padding: 16px;
+      border: 1px solid rgba(255,255,255,.1);
+      border-radius: 10px;
+      background: rgba(0,0,0,.26);
+      color: inherit;
+      resize: vertical;
+      font: 14px/1.65 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    }
+    textarea:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 3px; }
+    button.copy { background: #eeedf0; color: #1c1d21; }
+    button.copy:hover { background: #fff; }
     button {
       appearance: none;
       min-height: 40px;
@@ -208,6 +282,9 @@ enum DashboardFailurePage {
       .badge { background: rgba(0,0,0,.06); }
       p { color: rgba(0,0,0,.68); }
       .detail { color: rgba(0,0,0,.54); }
+      textarea { background: rgba(0,0,0,.035); border-color: rgba(0,0,0,.1); }
+      button.copy { background: #292a2e; color: #fff; }
+      button.copy:hover { background: #111214; }
       code {
         background: rgba(0,0,0,.05);
         border-color: rgba(0,0,0,.08);

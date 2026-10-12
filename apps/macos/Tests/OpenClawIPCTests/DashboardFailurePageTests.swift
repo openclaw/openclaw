@@ -4,6 +4,31 @@ import Testing
 @testable import OpenClaw
 
 struct DashboardFailurePageTests {
+    @Test(arguments: ["ws", "wss", "https", "WSS", "HTTPS"])
+    func `connection repair prompt redacts credentials in both the address and error`(scheme: String) throws {
+        let endpoint = try #require(URL(string:
+            "\(scheme)://synthetic-user':synthetic-password'@gateway.example:8447/control?token=synthetic-query'#synthetic-fragment'"))
+        let error = NSError(domain: NSURLErrorDomain, code: NSURLErrorBadServerResponse, userInfo: [
+            NSLocalizedDescriptionKey: "connect to gateway @ \(endpoint.absoluteString): bad server response",
+        ])
+        let html = DashboardFailurePage.html(connectionError: error, url: endpoint)
+        #expect(html.lowercased().contains("\(scheme.lowercased())://gateway.example:8447/control"))
+        #expect(html.contains("bad server response"))
+        let containsCredential = ["synthetic-user", "synthetic-password", "synthetic-query", "synthetic-fragment"]
+            .contains { html.contains($0) }
+        #expect(!containsCredential)
+    }
+
+    @Test func `connection repair prompt escapes error text without ending the text field`() throws {
+        let error = NSError(domain: "Fixture", code: 1, userInfo: [
+            NSLocalizedDescriptionKey: "Failed </textarea><script>alert('fixture')</script> & offline",
+        ])
+        let html = DashboardFailurePage.html(connectionError: error, url: URL(string: "about:blank"))
+        #expect(html.contains("Failed &lt;/textarea&gt;&lt;script&gt;alert(&#39;fixture&#39;)&lt;/script&gt; &amp; offline"))
+        #expect(!html.contains("<script>"))
+        #expect(!html.contains("about:blank"))
+    }
+
     @Test(arguments: [false, true])
     func `signed out page escapes profile metadata and offers renewal`(signingIn: Bool) {
         let now = Date(timeIntervalSince1970: 10000)
