@@ -2847,12 +2847,33 @@ export function createVitestCacheWarmGroups(
   }
   return [
     ...[...coreShards, ...additionalShards].flatMap((shard) =>
-      shard.configs.map((config) => ({
-        configs: [config],
-        ...(shard.env ? { env: shard.env } : {}),
-        ...(shard.includePatterns ? { includePatterns: shard.includePatterns } : {}),
-        shard_name: `cache-warm:${shard.shardName}:${config}`,
-      })),
+      shard.configs.flatMap((config) => {
+        const group = {
+          configs: [config],
+          ...(shard.env ? { env: shard.env } : {}),
+          ...(shard.includePatterns ? { includePatterns: shard.includePatterns } : {}),
+          shard_name: `cache-warm:${shard.shardName}:${config}`,
+        };
+        if (config !== "test/vitest/vitest.gateway-methods.config.ts") {
+          return [group];
+        }
+        const files = listNodeTestConfigFiles(config);
+        if (!files?.length) {
+          throw new Error("Gateway methods cache seed files are missing");
+        }
+        // The full non-isolated Bun collection exceeds 8 GiB even with earlier GC.
+        // Release its module graph between bounded collections, not just test files.
+        const batches = [];
+        const maxFiles = 32;
+        for (let offset = 0; offset < files.length; offset += maxFiles) {
+          batches.push({
+            ...group,
+            includePatterns: files.slice(offset, offset + maxFiles),
+            shard_name: `${group.shard_name}:part-${batches.length + 1}`,
+          });
+        }
+        return batches;
+      }),
     ),
     uiGroup,
   ];
