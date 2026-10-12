@@ -45,7 +45,7 @@ export function createChatMetadataModelList(params: {
   ): Promise<PreparedModels> => {
     const key = JSON.stringify([
       request.agentId,
-      request.params,
+      { ...request.params, sessionKey: Boolean(request.params.sessionKey) },
       request.includeManualSelection,
       request.readScope?.sessionEntry,
     ]);
