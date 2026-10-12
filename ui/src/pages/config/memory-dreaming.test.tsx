@@ -5,16 +5,28 @@ import { describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { updatePickers } from "../../test-helpers/select-picker.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
-import { DreamingSettings, renderDreamingSettings } from "./memory-dreaming.tsx";
+import { MemoryDreamingControls } from "./memory-dreaming.tsx";
+
+function dreamingConfig(dreaming: Record<string, unknown> | null) {
+  return {
+    agents: { defaults: { userTimezone: "Asia/Singapore" } },
+    plugins: { entries: { "memory-core": { config: { dreaming } } } },
+  };
+}
 
 function renderInto(
   dreaming: Record<string, unknown> | null,
   onPatch: (path: readonly string[], value: unknown) => void = vi.fn(),
   disabled = false,
 ): HTMLElement {
-  const { container } = mountSolid(() =>
-    renderDreamingSettings({ dreaming, timezoneDefault: "Asia/Singapore", disabled, onPatch }),
-  );
+  const { container } = mountSolid(() => (
+    <MemoryDreamingControls
+      config={dreamingConfig(dreaming)}
+      support="supported"
+      disabled={disabled}
+      onPatch={onPatch}
+    />
+  ));
   flush();
   return container;
 }
@@ -63,7 +75,7 @@ function selectedSegment(container: HTMLElement): string | null {
   );
 }
 
-describe("renderDreamingSettings", () => {
+describe("MemoryDreamingControls", () => {
   it("defaults phases on unless explicitly disabled", () => {
     const states = toggleStates(
       renderInto({ enabled: true, phases: { deep: { enabled: false } } }),
@@ -137,9 +149,9 @@ describe("renderDreamingSettings", () => {
 it("keeps the edited field mounted when the owner publishes updated config", () => {
   const [dreaming, setDreaming] = createSignal<Record<string, unknown>>({ frequency: "0 3 * * *" });
   const view = mountSolid(() => (
-    <DreamingSettings
-      dreaming={dreaming()}
-      timezoneDefault="Asia/Singapore"
+    <MemoryDreamingControls
+      config={dreamingConfig(dreaming())}
+      support="supported"
       disabled={false}
       onPatch={(_, value) => setDreaming({ frequency: value })}
     />

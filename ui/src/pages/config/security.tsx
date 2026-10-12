@@ -125,7 +125,3 @@ export function Security(props: SecurityViewProps) {
     </section>
   );
 }
-
-export function renderSecurity(props: SecurityViewProps) {
-  return <Security {...props} />;
-}

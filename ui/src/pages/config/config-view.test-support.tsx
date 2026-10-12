@@ -12,7 +12,8 @@ import {
   createSolidApplicationContextProvider,
 } from "../../test-helpers/solid-application-context.tsx";
 import { flush } from "../../test-helpers/solid-settle.ts";
-import { Config, createConfigViewState, type ConfigProps } from "./view.tsx";
+import { createConfigViewState } from "./view-state.ts";
+import { Config, type ConfigProps } from "./view.tsx";
 
 const views = new WeakMap<HTMLElement, (props: ConfigProps) => void>();
 
