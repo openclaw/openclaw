@@ -2,6 +2,7 @@
 cli-root-options.mjs
 config/ci-test-timings.json
 node-compile-cache.mjs
+gateway-prewarm.mjs
 worker-heap-flag.mjs
 node-runtime-env.mjs
 node-sqlite.mjs
@@ -699,6 +700,7 @@ src/config/utility-model-separation-migration.ts
 src/config/validation-channel-rules.ts
 src/config/validation-core.ts
 src/config/validation-issues.ts
+src/config/validation-model-params.ts
 src/config/validation-plugin-config.ts
 src/config/validation-plugin-registry.ts
 src/config/validation-plugin-rules.ts

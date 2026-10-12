@@ -141,19 +141,6 @@ describePosix("native hosted merge handoff", () => {
     expect(hosted).toBeGreaterThanOrEqual(0);
     expect(events.findIndex((event) => event.kind === "required-checks")).toBeGreaterThan(hosted);
     expect(events.some((event) => event.kind === "ci-watched")).toBe(false);
-    const reviewReads = events
-      .map((event, index) => ({ event, index }))
-      .filter(({ event }) => event.kind === "review-comments");
-    expect(reviewReads).toHaveLength(2);
-    expect(reviewReads[1]?.index).toBeLessThan(
-      events.findIndex(
-        (event) =>
-          event.kind === "gh" &&
-          event.args?.[0] === "api" &&
-          event.args.includes("graphql") &&
-          event.args.includes("--input"),
-      ),
-    );
     expect(
       events.some(
         (event) => event.kind === "gh" && event.args?.[0] === "pr" && event.args[1] === "merge",

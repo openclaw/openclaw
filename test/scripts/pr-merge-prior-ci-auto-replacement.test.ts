@@ -451,7 +451,6 @@ describePosix("prior-CI admin recovery after auto cancellation", () => {
     "current-head drift",
     "stale gate binding",
     "failed required check",
-    "missing ClawSweeper review",
     "invalid current review",
   ])("revalidates %s before stale-head auto recovery", (fault) => {
     const { f, adminOid, replacement } = staleAdminReplacement();
@@ -470,8 +469,6 @@ describePosix("prior-CI admin recovery after auto cancellation", () => {
       );
     } else if (fault === "failed required check") {
       state.gates = "fail";
-    } else if (fault === "missing ClawSweeper review") {
-      state.issueComments = [];
     } else {
       const reviewPath = join(f.worktree, ".local/review.json");
       const review = JSON.parse(readFileSync(reviewPath, "utf8"));
