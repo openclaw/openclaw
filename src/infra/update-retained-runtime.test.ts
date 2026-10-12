@@ -608,7 +608,7 @@ it.each(["npm", "pnpm", "pnpm-workspace", "git", "git-linked", "git-modules"] as
   },
 );
 
-it.each(["npm", "npm-linked", "pnpm11"] as const)(
+it.each(["npm", "npm-linked", "npm-unresolved", "pnpm11"] as const)(
   "keeps the retained %s runtime inside its install's dependency owner",
   async (layout) => {
     const base = await fs.realpath(tempDirs.make("retained-dependency-owner-"));
@@ -663,28 +663,37 @@ it.each(["npm", "npm-linked", "pnpm11"] as const)(
     await withRetainedUpdateRuntime(moduleUrl.href, async (retain) => {
       await retain({
         mutationRoots: [globalRoot],
-        installTarget: {
-          manager: npm ? "npm" : "pnpm",
-          command: npm ? "npm" : "pnpm",
-          globalRoot,
-          packageRoot: root,
-        },
+        // Without an install target the enclosing module directory is the only
+        // known owner of hoisted dependencies.
+        ...(layout === "npm-unresolved"
+          ? {}
+          : {
+              installTarget: {
+                manager: npm ? ("npm" as const) : ("pnpm" as const),
+                command: npm ? "npm" : "pnpm",
+                globalRoot,
+                packageRoot: root,
+              },
+            }),
         timeoutMs: 30_000,
         assertCurrent() {},
       });
       const retainedUrl = captureRuntimeWorkerSource(moduleUrl).moduleUrl;
       const retainedRoot = path.resolve(path.dirname(fileURLToPath(retainedUrl)), "..");
       const retainedAmbient = path.resolve(retainedRoot, path.relative(root, ambientModules));
-      await expect(
-        stat(path.resolve(retainedRoot, path.relative(root, globalSibling))),
-      ).rejects.toMatchObject({ code: "ENOENT" });
+      const retainedSibling = stat(path.resolve(retainedRoot, path.relative(root, globalSibling)));
+      if (layout === "npm-unresolved") {
+        await expect(retainedSibling).resolves.toBeDefined();
+      } else {
+        await expect(retainedSibling).rejects.toMatchObject({ code: "ENOENT" });
+      }
       await rename(globalRoot, `${globalRoot}.previous`);
       await mkdir(globalRoot);
       await rm(`${globalRoot}.previous`, { recursive: true });
       await rm(path.join(base, "linked"), { recursive: true, force: true });
       expect((await import(retainedUrl.href)).value).toBe("hoisted survived");
-      if (layout === "npm-linked") {
-        // A linked checkout resolves its peers from its own location, as Node does.
+      if (layout === "npm-linked" || layout === "npm-unresolved") {
+        // These owners resolve their peers from their own locations, as Node does.
         return;
       }
       await expect(stat(path.join(retainedAmbient, "ambient-peer"))).rejects.toMatchObject({

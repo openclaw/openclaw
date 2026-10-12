@@ -7,7 +7,7 @@ import { root as openRoot } from "./fs-safe.js";
 import { tryReadJson } from "./json-files.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
 import { isPackageUpdateRecoveryArtifactName } from "./package-update-backup-paths.js";
-import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
+import { hasNodeErrorCode, isPathInside, isPathStrictlyInside } from "./path-guards.js";
 import { ignoreMissingUpdateCandidateFile } from "./update-candidate-files.js";
 import type { UpdateCandidatePluginCodeLink } from "./update-candidate-plugin-code-links.js";
 import { copyUpdateCandidatePluginFiles } from "./update-candidate-plugin-file.js";
@@ -462,12 +462,17 @@ async function prepareUpdateCandidatePluginTreesWithHashing(
     await discoverHoistedDependencies(retainedHostRoot);
   }
   // A locator can itself name a package inside a pnpm store or hoisted tree.
-  // Selected host entries are not locators: their owner is the host, whose
-  // manifest discovery above reaches the dependency owners it actually uses.
+  // Within a known installation, selected host entries are not locators: their
+  // owner is the host, whose manifest discovery above reaches the dependency
+  // owners it actually uses instead of the whole shared module directory.
+  const installationBoundsHost =
+    retainedHostRoot !== undefined &&
+    params.retainedDependencyRoot !== undefined &&
+    isPathStrictlyInside(params.retainedDependencyRoot, retainedHostRoot);
   for (const source of params.roots.keys()) {
     if (
       source.split(path.sep).includes("node_modules") &&
-      !(retainedHostRoot && isPathInside(retainedHostRoot, source))
+      !(installationBoundsHost && isPathInside(retainedHostRoot, source))
     ) {
       addRoot(await dependencyOwner(source));
     }
