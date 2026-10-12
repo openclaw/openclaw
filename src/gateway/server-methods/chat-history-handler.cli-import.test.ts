@@ -538,7 +538,7 @@ describe("CLI-imported history pages", () => {
       "chat.history",
       2,
       "Private native history",
-      async ({ read, importedIds }) => {
+      async ({ read, importedIds, scope }) => {
         const newest = await read({ limit: 2 });
         expect(newest.messages.map(readChatHistoryMessageId)).toEqual(importedIds);
         expect(newest).toMatchObject({ totalMessages: 4, hasMore: true, nextOffset: 2 });
@@ -546,6 +546,28 @@ describe("CLI-imported history pages", () => {
         expect(older).toMatchObject({ hasMore: false, totalMessages: 4 });
         expect(JSON.stringify(older.messages)).toContain("Local question");
         expect(JSON.stringify(older.messages)).toContain("Local answer");
+        await appendTranscriptMessage(scope, {
+          message: {
+            role: "user",
+            content: "[cron:private-job Private automation] Private automation input",
+            timestamp: Date.parse("2026-09-01T10:00:00Z") + 10,
+            provenance: {
+              kind: "internal_system",
+              sourceSessionKey: "agent:main:cron:private-job:run:private-run",
+              sourceTool: "cron",
+              sourcePromptPrefix: "[cron:private-job Private automation]",
+              jobId: "private-job",
+              runId: "private-run",
+            },
+          },
+        });
+        const forwarded = await read({ limit: 1 });
+        expect(forwarded.messages).toContainEqual(
+          expect.objectContaining({
+            content: "Private automation input",
+            senderSession: expect.objectContaining({ label: "Automation" }),
+          }),
+        );
       },
       true,
     );

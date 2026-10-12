@@ -182,11 +182,27 @@ it("applies native history eligibility to actual empty, message, and marker-only
         tokensBefore: 100,
         firstKeptEntryId: null,
       };
+      const cronInput = {
+        ...message,
+        message: {
+          role: "user",
+          content: "[cron:job-cli native CLI override] Run the bounded task.",
+          provenance: {
+            kind: "internal_system",
+            sourceSessionKey: "agent:main:cron:job-cli:run:cli-eligibility",
+            sourceTool: "cron",
+            sourcePromptPrefix: "[cron:job-cli native CLI override]",
+            jobId: "job-cli",
+            runId: "cli-eligibility",
+          },
+        },
+      };
       try {
         for (const cell of [
           { provider: "claude-cli", events: [message], imported: true },
           { provider: "anthropic", events: [message], imported: true },
           { provider: "openai", events: [message], imported: false },
+          { provider: "openai", events: [cronInput], imported: false },
           { provider: "openai", events: [marker], imported: false },
           { provider: "openai", events: [], imported: true },
         ]) {

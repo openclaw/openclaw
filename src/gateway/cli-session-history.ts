@@ -107,6 +107,8 @@ export async function prepareCliSessionHistoryReader(
       offset: params.offset,
       readOnly: true,
       deferProfileDisplay: true,
+      // The history worker prepares current cron labels after selecting the page.
+      resolveCronJobName: () => undefined,
     });
     if (tail.rawMessages.length) {
       return undefined;
