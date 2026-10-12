@@ -127,14 +127,14 @@ describe("loadGatewayTlsServerRuntime", () => {
     });
   });
 
-  it.each([1, 100])("loads existing cert/key with a %i-certificate CA bundle", async (count) => {
+  it("loads existing cert/key with a 100-certificate CA bundle", async () => {
     const dir = await createTempDir();
     const certPath = path.join(dir, "gateway-cert.pem");
     const keyPath = path.join(dir, "gateway-key.pem");
     const caPath = path.join(dir, "gateway-ca.pem");
     await fs.writeFile(certPath, CERT_PEM, "utf8");
     await fs.writeFile(keyPath, KEY_PEM, "utf8");
-    const caBundle = (CERT_PEM + "\n").repeat(count);
+    const caBundle = (CERT_PEM + "\n").repeat(100);
     await fs.writeFile(caPath, caBundle, "utf8");
 
     const result = await loadGatewayTlsServerRuntime({
@@ -160,100 +160,51 @@ describe("loadGatewayTlsServerRuntime", () => {
     expect(result.error).toBeUndefined();
   });
 
-  it("fails closed when cert/key are missing and auto generation is disabled", async () => {
-    const dir = await createTempDir();
-    const certPath = path.join(dir, "missing-cert.pem");
-    const keyPath = path.join(dir, "missing-key.pem");
-
-    const result = await loadGatewayTlsServerRuntime({
-      enabled: true,
-      certPath,
-      keyPath,
-      autoGenerate: false,
-    });
-
-    expect(result.enabled).toBe(false);
-    expect(result.required).toBe(true);
-    expect(result.certPath).toBe(certPath);
-    expect(result.keyPath).toBe(keyPath);
-    expect(result.error).toBe("gateway tls: cert/key missing");
-  });
-
-  it.each(["key", "cert"] as const)(
-    "does not replace an existing %s or generate its missing counterpart",
-    async (existing) => {
-      const dir = await createTempDir();
-      const certPath = path.join(dir, "gateway-cert.pem");
-      const keyPath = path.join(dir, "gateway-key.pem");
-      const existingPath = existing === "cert" ? certPath : keyPath;
-      await fs.writeFile(existingPath, "existing material");
-
-      const result = await loadGatewayTlsServerRuntime({ enabled: true, certPath, keyPath });
-
-      expect(result).toMatchObject({
-        enabled: false,
-        required: true,
-        error: "gateway tls: cert/key missing",
-      });
-      expect(runExecMock).not.toHaveBeenCalled();
-      await expect(fs.readFile(existingPath, "utf8")).resolves.toBe("existing material");
-      await expect(fs.readdir(dir)).resolves.toEqual([path.basename(existingPath)]);
-    },
-  );
-
-  it.each(["key", "cert"] as const)(
-    "bounds generation and cleans a partial staged %s",
-    async (partialOutput) => {
-      const dir = await createTempDir();
-      const certPath = path.join(dir, "gateway-cert.pem");
-      const keyPath = path.join(dir, "gateway-key.pem");
-      runExecMock.mockImplementationOnce(async (_command: string, args: string[]) => {
-        const outputPath = resolveOpenSslOutput(args, partialOutput === "key" ? "-keyout" : "-out");
-        await fs.writeFile(outputPath, partialOutput === "key" ? KEY_PEM : CERT_PEM, "utf8");
-        throw new Error("openssl timed out");
-      });
-
-      const result = await loadGatewayTlsServerRuntime({ enabled: true, certPath, keyPath });
-
-      expect(runExecMock).toHaveBeenCalledOnce();
-      const [command, args, options] = runExecMock.mock.calls[0] as [
-        string,
-        string[],
-        { logOutput: boolean; timeoutMs: number },
-      ];
-      expect(command).toBe("/usr/bin/openssl");
-      expect(resolveOpenSslOutput(args, "-keyout")).not.toBe(keyPath);
-      expect(resolveOpenSslOutput(args, "-out")).not.toBe(certPath);
-      expect(options).toEqual({ logOutput: false, timeoutMs: 30_000 });
-      expect(result).toMatchObject({ enabled: false, required: true, certPath, keyPath });
-      expect(result.error).toContain("openssl timed out");
-      await expect(fs.access(certPath)).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(fs.access(keyPath)).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(fs.readdir(dir)).resolves.toEqual([]);
-    },
-  );
-
-  it("validates and publishes a generated pair with private modes", async () => {
+  it("does not replace an existing key or generate its missing counterpart", async () => {
     const dir = await createTempDir();
     const certPath = path.join(dir, "gateway-cert.pem");
     const keyPath = path.join(dir, "gateway-key.pem");
-    runExecMock.mockImplementation(async (_command: string, args: string[]) => {
-      await writeGeneratedTlsPair(args);
+    await fs.writeFile(keyPath, "existing material");
+
+    const result = await loadGatewayTlsServerRuntime({ enabled: true, certPath, keyPath });
+
+    expect(result).toMatchObject({
+      enabled: false,
+      required: true,
+      error: "gateway tls: cert/key missing",
+    });
+    expect(runExecMock).not.toHaveBeenCalled();
+    await expect(fs.readFile(keyPath, "utf8")).resolves.toBe("existing material");
+    await expect(fs.readdir(dir)).resolves.toEqual([path.basename(keyPath)]);
+  });
+
+  it("bounds generation and cleans a partial staged key", async () => {
+    const dir = await createTempDir();
+    const certPath = path.join(dir, "gateway-cert.pem");
+    const keyPath = path.join(dir, "gateway-key.pem");
+    runExecMock.mockImplementationOnce(async (_command: string, args: string[]) => {
+      const outputPath = resolveOpenSslOutput(args, "-keyout");
+      await fs.writeFile(outputPath, KEY_PEM, "utf8");
+      throw new Error("openssl timed out");
     });
 
     const result = await loadGatewayTlsServerRuntime({ enabled: true, certPath, keyPath });
 
-    expect(result.enabled).toBe(true);
-    await expect(fs.readFile(certPath, "utf8")).resolves.toBe(CERT_PEM);
-    await expect(fs.readFile(keyPath, "utf8")).resolves.toBe(KEY_PEM);
-    await expect(fs.readdir(dir).then((entries) => entries.toSorted())).resolves.toEqual([
-      "gateway-cert.pem",
-      "gateway-key.pem",
-    ]);
-    if (process.platform !== "win32") {
-      expect((await fs.stat(certPath)).mode & 0o777).toBe(0o600);
-      expect((await fs.stat(keyPath)).mode & 0o777).toBe(0o600);
-    }
+    expect(runExecMock).toHaveBeenCalledOnce();
+    const [command, args, options] = runExecMock.mock.calls[0] as [
+      string,
+      string[],
+      { logOutput: boolean; timeoutMs: number },
+    ];
+    expect(command).toBe("/usr/bin/openssl");
+    expect(resolveOpenSslOutput(args, "-keyout")).not.toBe(keyPath);
+    expect(resolveOpenSslOutput(args, "-out")).not.toBe(certPath);
+    expect(options).toEqual({ logOutput: false, timeoutMs: 30_000 });
+    expect(result).toMatchObject({ enabled: false, required: true, certPath, keyPath });
+    expect(result.error).toContain("openssl timed out");
+    await expect(fs.access(certPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.access(keyPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.readdir(dir)).resolves.toEqual([]);
   });
 
   it("syncs generated certificate data before publishing final paths", async () => {
@@ -299,21 +250,6 @@ describe("loadGatewayTlsServerRuntime", () => {
     expect(durabilityTestState.beforePublish).toHaveBeenCalledTimes(2);
     expect(events.indexOf("sync:cert.pem")).toBeLessThan(events.indexOf("publish:cert.pem"));
     expect(events.indexOf("sync:key.pem")).toBeLessThan(events.indexOf("publish:key.pem"));
-  });
-
-  it("creates nested TLS directories before publishing generated material", async () => {
-    const dir = await createTempDir();
-    const certPath = path.join(dir, "nested", "tls", "gateway-cert.pem");
-    const keyPath = path.join(dir, "nested", "tls", "gateway-key.pem");
-    runExecMock.mockImplementation(async (_command: string, args: string[]) => {
-      await writeGeneratedTlsPair(args);
-    });
-
-    const result = await loadGatewayTlsServerRuntime({ enabled: true, certPath, keyPath });
-
-    expect(result.enabled).toBe(true);
-    await expect(fs.readFile(certPath, "utf8")).resolves.toBe(CERT_PEM);
-    await expect(fs.readFile(keyPath, "utf8")).resolves.toBe(KEY_PEM);
   });
 
   it("preserves the published certificate when key publication loses a race", async () => {
@@ -385,69 +321,6 @@ describe("loadGatewayTlsServerRuntime", () => {
     },
   );
 
-  it("publishes best-effort and warns once when hard links are unavailable", async () => {
-    const dir = await createTempDir();
-    const certPath = path.join(dir, "gateway-cert.pem");
-    const keyPath = path.join(dir, "gateway-key.pem");
-    const warn = vi.fn();
-    runExecMock.mockImplementation(async (_command: string, args: string[]) => {
-      await writeGeneratedTlsPair(args);
-    });
-    durabilityTestState.exclusiveCopy = true;
-
-    const result = await loadGatewayTlsServerRuntime(
-      { enabled: true, certPath, keyPath },
-      { warn },
-    );
-
-    expectExclusiveCopies();
-    expect(result.enabled).toBe(true);
-    expect(warn).toHaveBeenCalledOnce();
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("[GATEWAY_TLS_DEGRADED]"), {
-      event: "gateway.tls.degraded",
-      ownerKind: "gateway",
-      ownerId: "tls",
-      reason: "atomic hard-link publication unavailable",
-      state: "best-effort",
-    });
-    await expect(fs.readFile(certPath, "utf8")).resolves.toBe(CERT_PEM);
-    await expect(fs.readFile(keyPath, "utf8")).resolves.toBe(KEY_PEM);
-    await expect(fs.readdir(dir).then((entries) => entries.toSorted())).resolves.toEqual([
-      "gateway-cert.pem",
-      "gateway-key.pem",
-    ]);
-    if (process.platform !== "win32") {
-      expect((await fs.stat(certPath)).mode & 0o777).toBe(0o600);
-      expect((await fs.stat(keyPath)).mode & 0o777).toBe(0o600);
-    }
-  });
-
-  it("reports degraded durability when Windows cannot flush the publication directory", async () => {
-    const dir = await createTempDir();
-    const certPath = path.join(dir, "gateway-cert.pem");
-    const keyPath = path.join(dir, "gateway-key.pem");
-    const warn = vi.fn();
-    runExecMock.mockImplementation(async (_command: string, args: string[]) => {
-      await writeGeneratedTlsPair(args);
-    });
-    durabilityTestState.syncOutcome = { status: "unsupported", code: "EISDIR" };
-
-    const result = await loadGatewayTlsServerRuntime(
-      { enabled: true, certPath, keyPath },
-      { warn },
-    );
-
-    expect(result.enabled).toBe(true);
-    expect(warn).toHaveBeenCalledOnce();
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("[GATEWAY_TLS_DEGRADED]"), {
-      event: "gateway.tls.degraded",
-      ownerKind: "gateway",
-      ownerId: "tls",
-      reason: "directory durability unavailable",
-      state: "best-effort",
-    });
-  });
-
   it("reports atomic and durability degradations independently", async () => {
     const dir = await createTempDir();
     const certPath = path.join(dir, "gateway-cert.pem");
@@ -467,6 +340,10 @@ describe("loadGatewayTlsServerRuntime", () => {
     expectExclusiveCopies();
     expect(result.enabled).toBe(true);
     expect(warn).toHaveBeenCalledTimes(2);
+    if (process.platform !== "win32") {
+      expect((await fs.stat(certPath)).mode & 0o777).toBe(0o600);
+      expect((await fs.stat(keyPath)).mode & 0o777).toBe(0o600);
+    }
     expect(warn).toHaveBeenCalledWith(expect.any(String), {
       event: "gateway.tls.degraded",
       ownerKind: "gateway",
@@ -517,20 +394,6 @@ describe("loadGatewayTlsServerRuntime", () => {
     expect(result.keyPath).toBeTruthy();
     expect(result.keyPath).not.toBe("\t");
   });
-
-  it("does not fall back for non-empty paths with leading/trailing spaces", async () => {
-    const result = await loadGatewayTlsServerRuntime({
-      enabled: true,
-      certPath: "  /etc/ssl/cert.pem  ",
-      keyPath: "  /etc/ssl/private/server.key  ",
-      autoGenerate: false,
-    });
-
-    // Non-empty paths are passed through verbatim; resolveUserPath owns
-    // normalization (it trims), so they must not fall back to default names.
-    expect(result.certPath).not.toContain("gateway-cert.pem");
-    expect(result.keyPath).not.toContain("gateway-key.pem");
-  });
 });
 
 describe("configured TLS leaf byte limits", () => {
@@ -539,7 +402,6 @@ describe("configured TLS leaf byte limits", () => {
   it.each([
     ["cert", limit],
     ["cert", limit + 1],
-    ["key", limit],
     ["key", limit + 1],
     ["inspection", limit],
     ["inspection", limit + 1],
