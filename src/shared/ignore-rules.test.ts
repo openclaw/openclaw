@@ -51,6 +51,25 @@ describe("addIgnoreRules", () => {
     expect(ig.ignores("unrelated-file")).toBe(false);
   });
 
+  it.each([
+    "[drafts]",
+    "#drafts",
+    "!drafts",
+    ...(process.platform === "win32" ? [] : ["draft?", "draft*", "draft\\notes"]),
+  ])("treats nested ignore directory %s as a literal path", (name) => {
+    const nestedDir = path.join(tempDir, name);
+    fs.mkdirSync(nestedDir);
+    fs.writeFileSync(path.join(nestedDir, ".gitignore"), "SKILL.md\n!keep/SKILL.md\n");
+
+    const ig = addIgnoreRules(nestedDir, tempDir);
+
+    expect(ig.ignores(`${name}/SKILL.md`)).toBe(true);
+    expect(ig.ignores(`${name}/nested/SKILL.md`)).toBe(true);
+    expect(ig.ignores(`${name}/keep/SKILL.md`)).toBe(false);
+    expect(ig.ignores("drafts/SKILL.md")).toBe(false);
+    expect(ig.ignores("d/SKILL.md")).toBe(false);
+  });
+
   it("fails closed before an under-cap file can amplify into too many rules", () => {
     fs.writeFileSync(path.join(tempDir, ".gitignore"), "a\n".repeat(20_001), "utf-8");
 
