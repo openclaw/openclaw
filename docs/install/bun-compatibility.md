@@ -32,8 +32,9 @@ The Linux Tauri app leaves existing Gateway services unchanged on startup and
 updates. Switching to its current bundled Bun requires **Use bundled runtime…**;
 see [explicit runtime selection](/platforms/linux#adopt-the-bundled-runtime).
 macOS Tauri keeps its existing runtime behavior, separate from the native macOS
-app. Windows Tauri retains its existing runtime until a signed fork Windows build
-is available; an unsigned dry-run is not shippable.
+app. Windows Tauri uses the same shared runtime owner when its pin includes a signed
+Windows fork build. Without that entry, local setup reports the missing runtime
+and remote connections remain available; an unsigned dry-run is not shippable.
 
 OpenClaw.app bundles a pinned [OpenClaw Bun fork](https://github.com/openclaw/bun),
 the full matching OpenClaw package, and a signed SQLite library that meets the

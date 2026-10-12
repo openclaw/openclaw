@@ -6475,6 +6475,8 @@ it("serializes Linux manifests with stable activation and reuses completed Linux
           },
           build_linux: { result: build },
           sign_linux: { result: signing },
+          build_windows: { result: build },
+          sign_desktop: { result: signing },
         },
       }),
     ).toBe(expected);
@@ -6898,15 +6900,60 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
       /\$\{RUNNER_TEMP\}\/bin\/(?:cargo-tauri|minisign)/u,
     );
   }
+  const windowsSigner = linux.jobs.sign_windows;
+  expect(windowsSigner.environment).toBe("release-signing");
+  expect(windowsSigner.permissions).toEqual({ contents: "read", "id-token": "write" });
+  expect(JSON.stringify(windowsSigner)).not.toContain("actions/checkout");
+  const azureSigning = windowsSigner.steps.find(
+    (step: WorkflowStep) => step.name === "Sign Windows installer",
+  );
+  expect(azureSigning.uses).toBe(
+    "azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82",
+  );
+  for (const [enabled, result, expected] of [
+    ["true", "success", true],
+    ["true", "failure", false],
+    ["false", "success", false],
+  ]) {
+    expect(
+      runInNewContext(windowsSigner.if.replace(/^\$\{\{|\}\}$/gu, ""), {
+        vars: { OPENCLAW_RELEASE_WINDOWS_SIGNED: enabled },
+        needs: { build_windows: { result } },
+      }),
+    ).toBe(expected);
+  }
+  for (const [enabled, signed, expected] of [
+    ["true", "failure", false],
+    ["true", "skipped", false],
+    ["true", "success", true],
+    ["false", "skipped", true],
+  ]) {
+    expect(
+      runInNewContext(linux.jobs.sign_desktop.if.replace(/^\$\{\{|\}\}$/gu, ""), {
+        always: () => true,
+        vars: { OPENCLAW_RELEASE_WINDOWS_SIGNED: enabled },
+        needs: {
+          validate_release: { outputs: { desktop_test_bundles: "false" } },
+          build_windows: { result: "success" },
+          sign_windows: { result: signed },
+        },
+      }),
+    ).toBe(expected);
+  }
   const desktopSigningJob = linux.jobs.sign_desktop;
   const desktopSigningSteps = desktopSigningJob.steps as WorkflowStep[];
-  expect(desktopSigningJob.needs).toEqual(["validate_release", "build_macos", "build_windows"]);
+  expect(desktopSigningJob.needs).toEqual([
+    "validate_release",
+    "build_macos",
+    "build_windows",
+    "sign_windows",
+  ]);
   expect(desktopSigningJob.permissions).toEqual({});
   expect(
     desktopSigningSteps
       .map(({ uses }) => uses)
       .filter((uses): uses is string => uses !== undefined),
-  ).toEqual([DOWNLOAD_ARTIFACT_V8, DOWNLOAD_ARTIFACT_V8, UPLOAD_ARTIFACT_V7]);
+  ).toEqual([DOWNLOAD_ARTIFACT_V8, DOWNLOAD_ARTIFACT_V8, DOWNLOAD_ARTIFACT_V8, UPLOAD_ARTIFACT_V7]);
   expect(desktopSigningSteps.some((step) => step["working-directory"] !== undefined)).toBe(false);
   const desktopSigningBodies = desktopSigningSteps.map(({ run }) => run ?? "").join("\n");
   expect(desktopSigningBodies).not.toMatch(
@@ -6927,6 +6974,22 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
     "artifact-ids": "${{ needs.build_windows.outputs.unsigned_updater_artifact_id }}",
     path: "dist/signing-input/windows",
   });
+  for (const enabled of ["true", "false"]) {
+    const downloads = desktopSigningSteps.filter((step) =>
+      step.name?.endsWith("Windows updater installer"),
+    );
+    const selected = downloads.filter((step) =>
+      runInNewContext((step.if ?? "").replace(/^\$\{\{|\}\}$/gu, ""), {
+        vars: { OPENCLAW_RELEASE_WINDOWS_SIGNED: enabled },
+      }),
+    );
+    expect(selected).toHaveLength(1);
+    expect(selected[0]?.with?.["artifact-ids"]).toBe(
+      enabled === "true"
+        ? "${{ needs.sign_windows.outputs.signed_installer_artifact_id }}"
+        : "${{ needs.build_windows.outputs.unsigned_updater_artifact_id }}",
+    );
+  }
   const signDesktop = expectDefined(
     desktopSigningSteps.find(({ name }) => name === "Sign finalized desktop updater bundles"),
     "desktop updater signing step",
@@ -7552,6 +7615,7 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
       root: string,
       step: WorkflowStep,
       tools: ReturnType<typeof writeSigningToolFixtures>,
+      desktop = true,
     ) =>
       spawnSync("bash", ["-c", step.run ?? ""], {
         cwd: root,
@@ -7560,6 +7624,7 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
           ...process.env,
           PATH: tools.path,
           RELEASE_TAG: "v2026.8.2",
+          DESKTOP_TEST_BUNDLES: String(desktop),
           RUNNER_TEMP: root,
           TAG_SHA: "a".repeat(40),
           MINISIGN_BINARY_SHA256: tools.minisignBinarySha256,
@@ -7673,6 +7738,29 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
     );
     expect(existsSync(path.join(desktopSigningRoot, ".release-tooling"))).toBe(false);
     expect(existsSync(path.join(desktopSigningRoot, "apps"))).toBe(false);
+
+    const windowsSigningRoot = tempDirs.make("openclaw-windows-signing-job-");
+    const windowsOnlyInput = path.join(
+      windowsSigningRoot,
+      "dist/signing-input/windows/OpenClaw-2026.8.2-windows-x86_64.exe",
+    );
+    mkdirSync(path.dirname(windowsOnlyInput), { recursive: true });
+    writeFileSync(windowsOnlyInput, "finalized-windows-only-bytes");
+    const windowsSigningTools = writeSigningToolFixtures(windowsSigningRoot);
+    const windowsSigned = runSigning(windowsSigningRoot, signDesktop, windowsSigningTools, false);
+    expect(windowsSigned.status, `${windowsSigned.stdout}${windowsSigned.stderr}`).toBe(0);
+    expect(
+      readFileSync(
+        path.join(
+          windowsSigningRoot,
+          "dist/desktop-test/windows/release/OpenClaw-2026.8.2-windows-x86_64.exe",
+        ),
+        "utf8",
+      ),
+    ).toBe("finalized-windows-only-bytes");
+    expect(readFileSync(windowsSigningTools.minisignLog, "utf8")).toBe(
+      "OpenClaw-2026.8.2-windows-x86_64.exe\n",
+    );
   }
   const linuxBuildBodies = linuxBuildSteps.map(({ run }) => run ?? "").join("\n");
   for (const helper of [
