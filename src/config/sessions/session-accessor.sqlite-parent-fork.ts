@@ -242,10 +242,14 @@ export function resolveParentForkSourceTranscript(
     }),
     tree.nodes,
   );
-  const branchEntries =
+  let branchEntries =
     forkFrom === "last-completed"
-      ? visibleBranchEntries.slice(0, findLastCompletedAssistantIndex(visibleBranchEntries) + 1)
+      ? visibleBranchEntries.slice(0, findLastCompletedForkIndex(visibleBranchEntries) + 1)
       : visibleBranchEntries;
+  if (forkFrom === "last-completed" && !hasAssistantHistory(branchEntries)) {
+    // The child writer keeps no history without an assistant; size the same empty prefix.
+    branchEntries = [];
+  }
   const pathEntryIds = new Set(
     branchEntries.flatMap((entry) =>
       isRecord(entry) && typeof entry.id === "string" ? [entry.id] : [],
@@ -281,13 +285,27 @@ export function resolveParentForkSourceTranscript(
   };
 }
 
-function findLastCompletedAssistantIndex(entries: readonly TranscriptEvent[]): number {
+function findLastCompletedForkIndex(entries: readonly TranscriptEvent[]): number {
   return entries.findLastIndex((entry) => {
+    // Keep the reset's context boundary even when its first turn is still active.
+    if (isRecord(entry) && entry.type === "reset") {
+      return true;
+    }
     const message = isRecord(entry) && isRecord(entry.message) ? entry.message : undefined;
     // Tool-use assistant messages are mid-turn checkpoints. Any other persisted
     // assistant message is a stable boundary, including legacy rows without a reason.
     return message?.role === "assistant" && message.stopReason !== "toolUse";
   });
+}
+
+function hasAssistantHistory(entries: readonly TranscriptEvent[]): boolean {
+  return entries.some(
+    (entry) =>
+      isRecord(entry) &&
+      entry.type === "message" &&
+      isRecord(entry.message) &&
+      entry.message.role === "assistant",
+  );
 }
 
 function generateEntryId(existingIds: Set<string>): string {
@@ -309,14 +327,7 @@ export function buildForkedChildTranscriptEvents(params: {
   targetSessionId: string;
 }): TranscriptEvent[] {
   const keepHistory =
-    params.source.preserveLeafControl ||
-    params.source.branchEntries.some(
-      (entry) =>
-        isRecord(entry) &&
-        entry.type === "message" &&
-        isRecord(entry.message) &&
-        entry.message.role === "assistant",
-    );
+    params.source.preserveLeafControl || hasAssistantHistory(params.source.branchEntries);
   const header = {
     ...createSessionTranscriptHeader({
       cwd: params.source.cwd,
