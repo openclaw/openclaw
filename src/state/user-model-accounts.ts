@@ -182,7 +182,7 @@ export function registerUserModelAuthProfileSecrets(credential: AuthProfileCrede
   }
 }
 
-export function encodeUserModelAuthProfile(profile: UserModelAuthProfile): string {
+function encodeUserModelAuthProfile(profile: UserModelAuthProfile): string {
   return JSON.stringify(profileSchema.parse({ version: 1, ...profile }));
 }
 

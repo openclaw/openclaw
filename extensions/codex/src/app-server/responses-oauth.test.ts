@@ -147,7 +147,9 @@ it("uses only the personal owner's retained capability after preparation", async
     profileId,
     credential: credential(),
     readCurrentCredential: () => {
-      if (!current) throw new Error("revoked personal authority");
+      if (!current) {
+        throw new Error("revoked personal authority");
+      }
       return credential();
     },
   });
