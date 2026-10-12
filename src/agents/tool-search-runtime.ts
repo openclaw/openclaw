@@ -14,6 +14,10 @@ import { setMcpCodeModeGuestResultFromAgentResult } from "./mcp-content.js";
 import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import {
+  attachInternalToolResultContentSource,
+  copyInternalToolResultState,
+} from "./runtime/internal-hooks.js";
+import {
   captureToolOutputSelection,
   readToolOutputSchemaVariants,
   type ToolOutputSelection,
@@ -569,11 +573,13 @@ export function formatToolSearchControlResult<T>(
   } = {},
 ): AgentToolResult<T> {
   const serialized = serializeToolSearchControlResult(payload, options.compact);
-  const { text } = renderToolSearchControlText(
-    serialized,
-    runtime?.hasNetworkContent(options.parentToolCallId) ?? false,
-  );
+  const networkContent = runtime?.hasNetworkContent(options.parentToolCallId) ?? false;
+  const { text } = renderToolSearchControlText(serialized, networkContent);
   const result = textResult(text, payload);
+  if (networkContent) {
+    // The control tool has no static source; finalization reads this per-call fact.
+    attachInternalToolResultContentSource(result, "network");
+  }
   if (options.images?.length) {
     result.content.push(...options.images);
   }
@@ -581,7 +587,7 @@ export function formatToolSearchControlResult<T>(
     options.terminalBatchStatus !== "waiting" &&
     runtime?.takeTerminalTargetBatch(options.parentToolCallId) === true;
   // A failed guest cannot revoke an already completed tool's explicit terminal outcome.
-  return terminal ? { ...result, terminate: true } : result;
+  return terminal ? copyInternalToolResultState(result, { ...result, terminate: true }) : result;
 }
 
 /** Keep dynamic failures rejected without exposing network-controlled error text. */

@@ -176,7 +176,7 @@ describe("prepared Gateway plugin borrowing", () => {
           config,
           env,
         });
-        const initial = bootstrap.prepareGatewayPluginLoad({
+        const initial = await bootstrap.prepareGatewayPluginLoad({
           pluginMetadataSnapshot: metadataSnapshot,
           pluginLookUpTable: loadPluginLookUpTable({
             config,
@@ -507,7 +507,7 @@ describe("published Gateway plugin services", () => {
         const logs = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
         const log = { ...createSubsystemLogger("gateway/plugins"), ...logs };
         const initialMetadata = await resolveConfigWidePluginMetadataSnapshotAsync({ config, env });
-        const initial = bootstrap.prepareGatewayPluginLoad({
+        const initial = await bootstrap.prepareGatewayPluginLoad({
           pluginMetadataSnapshot: initialMetadata,
           pluginLookUpTable: loadPluginLookUpTable({
             config,

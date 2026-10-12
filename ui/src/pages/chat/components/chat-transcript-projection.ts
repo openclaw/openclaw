@@ -295,6 +295,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     onOpenSidebar: props.onOpenSidebar,
     sessionKey: props.sessionKey,
     boardProvider: props.boardProvider,
+    widgetLayout: props.widgetLayout,
     agentId: assistantAgentId,
     runActive: props.runActive,
     asyncQuestions,

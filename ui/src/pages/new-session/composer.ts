@@ -32,25 +32,25 @@ import {
   renderAttachmentReadStatus,
 } from "../chat/components/chat-attachments.ts";
 import { adjustTextareaHeight, paneDomId } from "../chat/components/chat-composer-dom.ts";
-import type { HumanMentionMenuHost } from "../chat/components/chat-composer-mention-menu.ts";
+import type { HumanMentionMenuHost } from "../chat/components/chat-composer-mention-menu.tsx";
 import "../../components/tooltip.ts";
 import { resolveComposerMenus } from "../chat/components/chat-composer-menus.ts";
-import type { ChatComposerCapabilityMenuProps } from "../chat/components/chat-composer-plus-menu.ts";
-import { renderSelectedHumanMentions } from "../chat/components/chat-composer-selected-mentions.ts";
+import type { ChatComposerCapabilityMenuProps } from "../chat/components/chat-composer-plus-menu.tsx";
+import { renderSelectedHumanMentions } from "../chat/components/chat-composer-selected-mentions.tsx";
 import {
   handleSkillMenuKeydown,
   renderSkillMenu,
   resetSkillMenuState,
   updateSkillMenu,
   type SkillMenuHost,
-} from "../chat/components/chat-composer-skill-menu.ts";
+} from "../chat/components/chat-composer-skill-menu.tsx";
 import {
   handleSlashMenuKeydown,
   renderSlashMenu,
   resetSlashMenuState,
   type SlashMenuHost,
   updateSlashMenu,
-} from "../chat/components/chat-composer-slash-menu.ts";
+} from "../chat/components/chat-composer-slash-menu.tsx";
 import type { SidebarContent } from "../chat/components/chat-sidebar-content-types.ts";
 import type { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import {

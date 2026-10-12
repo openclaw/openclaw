@@ -172,18 +172,14 @@ function SparklineContent(props: SparklineProps) {
   );
 }
 
-export const SparklineTile = defineSolidBridge<SparklineProps>(
-  "openclaw-sparkline",
-  SparklineContent,
-  {
-    properties: {
-      label: { default: "" },
-      sub: { default: "" },
-      samples: { default: [], attribute: false },
-      format: { default: String, attribute: false },
-      floorMax: { default: 0, attribute: false },
-      stackColors: { default: [], attribute: false },
-      autorange: { default: false },
-    },
+defineSolidBridge<SparklineProps>("openclaw-sparkline", SparklineContent, {
+  properties: {
+    label: { default: "" },
+    sub: { default: "" },
+    samples: { default: [], attribute: false },
+    format: { default: String, attribute: false },
+    floorMax: { default: 0, attribute: false },
+    stackColors: { default: [], attribute: false },
+    autorange: { default: false },
   },
-);
+});

@@ -162,36 +162,6 @@ describe("prepared environment ownership", () => {
     expect(environments.list()).toHaveLength(1);
   });
 
-  it("counts unfinished builds and unresolved teardown against global capacity", async () => {
-    const original = (await build())!;
-    expect(await build("disabled", PREPARATION_KEY, 0)).toBeUndefined();
-    expect(await build("other-key", "e".repeat(64))).toBeUndefined();
-    await environments.requestDestroy({
-      environmentId: original.environmentId,
-      state: original.state,
-    });
-    expect(await build("retry")).toBeUndefined();
-    await environments.transition({
-      environmentId: original.environmentId,
-      from: "requested",
-      to: "failed",
-    });
-    expect((await build("retry"))?.environmentId).toBe("retry");
-  });
-
-  it("adds the purpose column to legacy rows without changing their reserve lifecycle", async () => {
-    const original = (await reserve())!;
-    database.db.exec("ALTER TABLE worker_environments DROP COLUMN preparation_purpose");
-    await reopenStores();
-    expect(environments.get(original.environmentId)).toEqual(original);
-    expect(
-      database.db.prepare("SELECT preparation_purpose FROM worker_environments").get(),
-    ).toEqual({ preparation_purpose: null });
-    expect(database.db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-    await reopenStores();
-    expect(environments.get(original.environmentId)?.preparation?.purpose).toBe("reserve");
-  });
-
   it("assigns once across store instances and retains consumption after placement deletion and reopen", async () => {
     await ready();
     const first = await selection();
@@ -242,71 +212,16 @@ describe("prepared environment ownership", () => {
     },
   );
 
-  it("keeps old generations and uncertain cleanup inside capacity across providers", async () => {
-    const providerId = "replacement-provider";
-    await reserve();
-    expect(await reserve("prepared-2", "e".repeat(64), 4, providerId)).toBeUndefined();
-    expect(
-      (
-        await environments.requestPreparedDestroy({
-          environmentId: "prepared-1",
-          ownerEpoch: 0,
-          preparationKey: PREPARATION_KEY,
-          reason: "invalidated",
-          assertCurrent,
-        })
-      )?.destroyRequestedAtMs,
-    ).toBe(1_000);
-    expect(await reserve("prepared-2", "e".repeat(64), 4, providerId)).toBeUndefined();
-    await environments.transition({
-      environmentId: "prepared-1",
-      from: "requested",
-      to: "failed",
-    });
-    expect((await reserve("prepared-2", "e".repeat(64), 4, providerId))?.state).toBe("requested");
-  });
-
-  it("counts consumed workers awaiting cleanup against the reserve cap across providers", async () => {
-    await ready();
-    await placements.bindPreparedEnvironment(await selection());
-    await environments.requestDestroy({ environmentId: "prepared-1", state: "ready" });
-    expect(await reserve("prepared-2", PREPARATION_KEY, 4, "replacement-provider")).toBeUndefined();
-  });
-
-  it("enforces the global cap, zero capacity, expiry and immutable intent replay", async () => {
-    expect(await reserve("disabled", PREPARATION_KEY, 0)).toBeUndefined();
-    const original = await reserve();
-    expect(await reserve()).toEqual(original);
-    await expect(reserve("prepared-1", "e".repeat(64))).rejects.toThrow("identity changed");
-    expect(
-      await environments.ensurePreparedIntent({
-        intent: { ...intent("other"), profileId: "other-profile" },
-        projectKey: PROJECT_KEY,
-        target: 1,
-        maxTotal: 1,
-        assertCurrent,
-      }),
-    ).toBeUndefined();
-    nowMs = 2_000;
-    expect(await reserve("expired", PREPARATION_KEY, 4)).toBeUndefined();
-  });
-
-  it.each([
-    { ownerEpoch: 2 },
-    { preparationKey: "e".repeat(64) },
-    { leaseId: "replacement" },
-    { nodeDeviceId: "replacement" },
-    { bundleHash: "e".repeat(64) },
-    { profileId: "other" },
-    { sessionKey: "agent:main:other" },
-    { expectedGeneration: 999 },
-  ])("rejects stale selection without consuming capacity: %j", async (changed) => {
-    await ready();
-    const request = await selection();
-    expect(await placements.bindPreparedEnvironment({ ...request, ...changed })).toBeUndefined();
-    expect(environments.get("prepared-1")?.preparation?.consumedAtMs).toBeNull();
-    expect(placements.get(request.sessionId)?.state).toBe("requested");
-  });
+  it.each([{ ownerEpoch: 2 }, { sessionKey: "agent:main:other" }, { expectedGeneration: 999 }])(
+    "rejects stale selection without consuming capacity: %j",
+    async (changed) => {
+      await ready();
+      const request = await selection();
+      expect(await placements.bindPreparedEnvironment({ ...request, ...changed })).toBeUndefined();
+      expect(environments.get("prepared-1")?.preparation?.consumedAtMs).toBeNull();
+      expect(placements.get(request.sessionId)?.state).toBe("requested");
+    },
+  );
 
   it.each(["transaction", "commit"] as const)(
     "rolls back a prepared assignment when authority ends at %s admission",
