@@ -185,6 +185,7 @@ function readDatabase(file: string) {
 
 it.each([
   "package",
+  "exited-writer",
   "git",
   "git-edited",
   "verification",
@@ -211,6 +212,7 @@ it.each([
     const migratedVersions = scenario === "schema-neutral-write" ? [15, 21] : [18, 23];
     const initialFailure =
       scenario === "package" ||
+      scenario === "exited-writer" ||
       gitInstall ||
       scenario === "verification" ||
       scenario === "serving" ||
@@ -544,6 +546,24 @@ it.each([
           ...swapFixture.params,
           beforeActivate: params.beforeActivate,
           onTransaction: async (transaction) => {
+            if (scenario === "exited-writer") {
+              // A writer that exited just before capture leaves a WAL family with no
+              // holder. Copying it while open keeps both sidecars and visible rows.
+              const residue = path.join(base, "exited-writer");
+              await fs.mkdir(residue);
+              {
+                using writer = new DatabaseSync(agent);
+                writer.exec(
+                  "PRAGMA journal_mode=WAL; INSERT INTO payload(rowid,value) VALUES(1000,'transient'); DELETE FROM payload WHERE rowid=1000;",
+                );
+                for (const suffix of ["", "-wal", "-shm"]) {
+                  await fs.copyFile(`${agent}${suffix}`, path.join(residue, suffix || "db"));
+                }
+              }
+              for (const suffix of ["", "-wal", "-shm"]) {
+                await fs.copyFile(path.join(residue, suffix || "db"), `${agent}${suffix}`);
+              }
+            }
             await params.onTransaction?.(transaction);
             retainedSnapshotDirectory = `${transaction.backupRoot}.databases`;
             if (scenario === "intervening") {
@@ -713,6 +733,12 @@ it.each([
           assert(databaseBackup, "Git update must capture pre-migration databases");
           retainedSnapshotDirectory = databaseBackup.directory;
         }
+        if (scenario === "exited-writer") {
+          // Capture under maintenance custody must not rebuild the source WAL index.
+          const captured = execution.result.steps.find((step) => step.name === "database snapshot");
+          expect(captured?.warnings ?? []).toEqual([]);
+          expect(databaseBackup?.sourceGenerations[agent]).toEqual(expect.any(String));
+        }
         if (restores && initialFailure) {
           expect(databaseBackup?.migration).toMatchObject({
             name: "openclaw doctor",
@@ -740,6 +766,7 @@ it.each([
           outsideWrite
             ? "state-migrated-no-rollback"
             : scenario === "package" ||
+                scenario === "exited-writer" ||
                 gitInstall ||
                 scenario === "serving" ||
                 scenario === "config-refused"
@@ -853,9 +880,10 @@ it.each([
           }
           expect(execution.databaseBackup).toBeUndefined();
           const captured = execution.result.steps.find((step) => step.name === "database snapshot");
-          const capturedText = [...(captured?.warnings ?? []), ...(captured?.diagnostics ?? [])].join(
-            "\n",
-          );
+          const capturedText = [
+            ...(captured?.warnings ?? []),
+            ...(captured?.diagnostics ?? []),
+          ].join("\n");
           expect(captured?.warnings).toEqual([
             expect.stringContaining("Automatic database restoration is disabled"),
           ]);

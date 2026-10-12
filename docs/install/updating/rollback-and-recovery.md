@@ -170,13 +170,17 @@ databases and reports `state-migrated-no-rollback` with the snapshot location an
 Doctor recovery guidance. Without Doctor write evidence, rollback requires the
 last verified database generations to remain unchanged.
 Snapshot capture first settles local SQLite writers under maintenance ownership,
-so later writer shutdown is not mistaken for intervening writes. The installed
+so later writer shutdown is not mistaken for intervening writes. Under that
+ownership, capture copies each database file family privately instead of opening
+the source, so WAL files left by an exited writer are not mistaken for a change
+during capture. The installed
 updater owns this ordering; staging a newer candidate cannot change an
 already-running older updater.
 On Windows, an eligible capture first runs the same native SQLite exclusion check
 used by rollback. This settles any retained WAL before recording write fingerprints,
 so later check cleanup is not mistaken for another writer. If another connection
-prevents exclusion, snapshots remain available for manual recovery.
+prevents exclusion, snapshots remain available for manual recovery until verified
+successful activation.
 Snapshots taken while a Gateway may still be writing are available for
 manual recovery only until verified successful activation, even if it exits later.
 Migrated files are kept as

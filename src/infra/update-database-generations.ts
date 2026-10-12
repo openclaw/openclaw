@@ -108,7 +108,10 @@ export function readUpdateDatabaseGenerations(paths: readonly string[]): UpdateD
         throw new Error(`SQLite WAL commit publication could not be verified: ${pathname}`);
       }
       // Checkpoints preserve iChange and the last committed frame checksum,
-      // including TRUNCATE, which resets frame count and salts.
+      // including TRUNCATE, which resets frame count and salts. Rebuilding the
+      // WAL index does not: the first native open of a family with no holder
+      // recovers -shm and resets iChange. Callers that must compare generations
+      // across a capture acquire sources without opening them natively.
       // A reversed write leaving identical bytes and write evidence is
       // indistinguishable from no write; restoring loses no later data.
       return [

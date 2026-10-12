@@ -14,7 +14,6 @@ export function registerUpdateStatusWarningTests(readConsoleOutput: () => string
     "shows every recorded warning and recovery path in the human %s",
     async (surface) => {
       const run = createUpdateRun({ trigger: "cli" });
-      const snapshotDirectory = `/fixture/${"long-installation-prefix/".repeat(16)}.openclaw.package-backup-test.databases`;
       const diagnostic = "Databases snapshotted; retain recovery artifacts.";
       recordUpdateRunStep(run.runId, {
         step: "diagnostic:database snapshot",
@@ -25,11 +24,11 @@ export function registerUpdateStatusWarningTests(readConsoleOutput: () => string
         {
           step: "warning:database snapshot",
           detail:
-            "Database changed during capture; its snapshot requires manual recovery: /fixture/agents/analyst/agent/openclaw-agent.sqlite",
+            "Database changed during capture; automatic restoration is unavailable for it: /fixture/agents/analyst/agent/openclaw-agent.sqlite",
         },
         {
           step: "warning:database snapshot:3",
-          detail: `Automatic database restoration is disabled because a source database changed or its write generation could not be captured. Snapshots remain available at ${snapshotDirectory}; later writes must be preserved.`,
+          detail: `Automatic database restoration is disabled because a source database changed or its write generation could not be captured. Verified successful activation removes these snapshots; they are retained with the update's recovery artifacts only when activation does not succeed.`,
         },
         {
           step: "warning:local-package-overrides",

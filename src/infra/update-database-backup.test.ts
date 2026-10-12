@@ -742,7 +742,7 @@ it("names the database and its backup warning when no stable generation was reco
   const capture = owner.createUpdateDatabaseBackup;
   const producerWarnings = [
     `Database write generation unavailable for ${f.shared}: SQLITE_BUSY: database is locked`,
-    `Database changed during capture; its snapshot requires manual recovery: ${f.shared}`,
+    `Database changed during capture; automatic restoration is unavailable for it: ${f.shared}`,
   ];
   vi.spyOn(owner, "createUpdateDatabaseBackup").mockImplementationOnce(async (params) => {
     const captured = await capture(params);

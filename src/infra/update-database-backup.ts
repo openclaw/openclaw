@@ -336,7 +336,7 @@ export async function createUpdateDatabaseBackupInProcess(
         sourceGenerations[sourcePath] = after;
       } else {
         warnings.push(
-          `Database changed during capture; its snapshot requires manual recovery: ${sourcePath}`,
+          `Database changed during capture; automatic restoration is unavailable for it: ${sourcePath}`,
         );
       }
     }
