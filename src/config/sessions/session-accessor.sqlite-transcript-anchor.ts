@@ -38,6 +38,38 @@ export type TranscriptSourceAuthority = Pick<
   "permissionMode" | "lifecycleRevision"
 >;
 
+/** Read one active identity using the caller's existing admitted snapshot. */
+export function readActiveTranscriptEntryIdentityInSnapshot(
+  projection: CurrentTranscriptProjection,
+  entryId: string,
+) {
+  const db = getSessionKysely(projection.database.db);
+  return executeSqliteQueryTakeFirstSync(
+    projection.database.db,
+    db
+      .selectFrom("transcript_event_identities as identity")
+      .innerJoin("session_transcript_active_events as active", (join) =>
+        join
+          .onRef("active.session_id", "=", "identity.session_id")
+          .onRef("active.event_seq", "=", "identity.seq"),
+      )
+      .select(["identity.seq", "identity.parent_id as parentId"])
+      .where("identity.session_id", "=", projection.resolved.sessionId)
+      .where("identity.event_id", "=", entryId)
+      .limit(1),
+  );
+}
+
+export function readActivePathEntryRelationFromProjection(
+  projection: CurrentTranscriptProjection,
+  entryId: string | null,
+): "exact" | "ancestor" | "off-path" {
+  if (projection.state.leafEventId === entryId || entryId === null) {
+    return projection.state.leafEventId === entryId ? "exact" : "off-path";
+  }
+  return readActiveTranscriptEntryIdentityInSnapshot(projection, entryId) ? "ancestor" : "off-path";
+}
+
 /** The caller owns admission; anchor and source authority share the current statement snapshot. */
 export function assertSessionTranscriptContextAnchorInDatabase(
   database: Pick<OpenClawAgentDatabase, "db" | "path">,

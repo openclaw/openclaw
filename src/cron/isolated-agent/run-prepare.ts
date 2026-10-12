@@ -54,6 +54,7 @@ import {
   createCronRunContinuationSession,
   createPersistCronSessionEntry,
   setCronSessionRuntimeModel,
+  setCronSessionAgentHarnessId,
   type CronSessionRowWriter,
 } from "./run-session-state.js";
 import { resolveCronRunTimeoutOverrideMs } from "./run-timeout.js";
@@ -547,9 +548,15 @@ export async function prepareCronRunContext(params: {
       }
 
       setCronSessionRuntimeModel({ entry: cronSession.sessionEntry, provider, model });
+      setCronSessionAgentHarnessId({
+        entry: cronSession.sessionEntry,
+        agentHarnessId: effectiveAgentRuntime,
+      });
       cronSession.sessionEntry.systemSent = true;
+      let preRunSessionPersisted = false;
       try {
         await persistSessionEntry();
+        preRunSessionPersisted = true;
       } catch (err) {
         if (err instanceof CronSessionLifecycleClaimError) {
           throw err;
@@ -652,6 +659,7 @@ export async function prepareCronRunContext(params: {
           cronSession,
           sessionWorkAdmission,
           persistSessionEntry,
+          preRunSessionPersisted,
           runContinuationSession,
           withRunSession,
           agentPayload,

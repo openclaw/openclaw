@@ -6,6 +6,7 @@ import {
   CronRunReceiptRevisionError,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
+import { needsCronTimerMaintenance } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
 import { clearManualCronJobActive, maybeNotifyManualIsolatedSetupTimeout } from "./ops-shared.js";
 import { finalizeCronRuntimeRows, type CronFinalizationReceipt } from "./run-finalization.js";
@@ -195,19 +196,26 @@ export async function finalizeCompletedCronRunOutcomes(
       publishCronRuntimeRows(state);
       try {
         const requestOutcome = finalizedOutcomes.find((outcome) => outcome.request);
-        await recomputeUnownedCronSchedules(state, {
-          ...(opts?.repairFutureCronNextRunAtMs === false
-            ? { repairFutureCronNextRunAtMs: false }
-            : {}),
-          ...(requestOutcome
-            ? {
-                recomputeExpired: true,
-                ...(requestOutcome.request?.preserveCadence
-                  ? { preserveExpiredPacedNextRunJobId: requestOutcome.jobId }
-                  : {}),
-              }
-            : {}),
-        });
+        const nowMs = state.deps.nowMs();
+        if (
+          requestOutcome ||
+          state.store?.jobs.some((job) => needsCronTimerMaintenance(job, nowMs))
+        ) {
+          await recomputeUnownedCronSchedules(state, {
+            nowMs,
+            ...(opts?.repairFutureCronNextRunAtMs === false
+              ? { repairFutureCronNextRunAtMs: false }
+              : {}),
+            ...(requestOutcome
+              ? {
+                  recomputeExpired: true,
+                  ...(requestOutcome.request?.preserveCadence
+                    ? { preserveExpiredPacedNextRunJobId: requestOutcome.jobId }
+                    : {}),
+                }
+              : {}),
+          });
+        }
       } catch (error) {
         state.deps.log.warn(
           { err: String(error) },

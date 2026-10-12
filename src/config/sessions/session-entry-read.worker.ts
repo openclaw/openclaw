@@ -69,6 +69,7 @@ import type {
 import type { SessionRowDatabaseFacts } from "./session-row-facts.types.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import type { SessionStoreProjectionWorkerInput } from "./session-store-projection.types.js";
+import { readSessionEntryTranscriptFacts } from "./session-transcript-anchor-read.kernel.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import {
   MAX_SESSION_ROW_FACTS_KEYS,
@@ -293,6 +294,7 @@ export function readExactSessionEntriesWithLifecycle(
       request.projection === "exact") &&
     !request.manualCompact &&
     !request.replyInitializationSessionKey &&
+    !request.transcript &&
     request.sessionKeys.length <= MAX_SESSION_ROW_FACTS_KEYS
   ) {
     const result = readDatabase(
@@ -335,7 +337,10 @@ export function readExactSessionEntriesWithLifecycle(
     }
     return { kind: "session-exact-entries", entries: [], lifecycleTimestamps: {} };
   }
-  if (request.projection === "exact" || request.projection === "worktree") {
+  if (
+    (request.projection === "exact" || request.projection === "worktree") &&
+    !request.transcript
+  ) {
     // Logical accessors validate only their candidates; unrelated rows are not listing admission.
     let source: SessionExactEntriesWorkerResult["source"];
     const read = readDatabase(
@@ -615,6 +620,7 @@ export function readExactSessionEntriesWithLifecycle(
                   : {}),
                 kind: "session-exact-entries" as const,
                 entries: selected.value,
+                ...readSessionEntryTranscriptFacts(database, request, selected.value),
                 ...(request.projection === "lifecycle"
                   ? { pendingArchives: hasPendingSessionTranscriptArchives(database) }
                   : {}),
