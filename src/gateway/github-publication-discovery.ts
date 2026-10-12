@@ -48,7 +48,7 @@ export function startGitHubPublicationDiscovery(params: {
   const refresh = (key: string, retireCredentials = false) => {
     const previous = sessions.peek(key);
     if (!previous || scheduler.signal.aborted) {
-      return;
+      return undefined;
     }
     const current = {
       ...previous,

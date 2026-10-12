@@ -5964,8 +5964,11 @@ credentials until asynchronous preparation finishes, so an expired token cannot
 authorize a worker launch. The upstream session monitor likewise skips its
 watched-link query when no catalog can check upstream activity.
 
-Publication readers capture the physical store before yielding, recheck session identity after the
-read, and refresh worktree facts after identity or repository preparation. Those
+Automatic health refresh warms its cache once, then skips collection while no
+clients are connected. Health requests still refresh stale snapshots on demand.
+
+Publication readers capture the physical store before yielding, recheck session
+identity after the read, and refresh worktree facts after identity or repository preparation. Those
 facts select inputs and retain the worktree owner's mutation generation through
 publication effects. Synchronous guards still check current session, credential,
 and placement authority; worktree identity checks use the prepared generation.
