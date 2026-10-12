@@ -37,7 +37,9 @@ export function resolveCiCheckFamilyScope(changedPaths: readonly string[]): CiCh
     (file) =>
       file === "openclaw.mjs" ||
       file === "test/openclaw-launcher.e2e.test.ts" ||
-      /^src\/plugins\/plugin-module-generation(?:\.|-)/u.test(file),
+      /^src\/plugins\/plugin-module-generation(?:\.|-)/u.test(file) ||
+      // The Bun updater preloads its later imports instead of using module hooks.
+      /^src\/infra\/update-retained-(?:imports|runtime)(?:\.|-)/u.test(file),
   );
   // Configuration and shared fixtures can change scanner inputs or arbitrary
   // consumers; path ownership alone cannot establish their import closure.

@@ -241,6 +241,19 @@ type PostSwapImport = {
   relative: string;
 };
 
+// Computed post-swap imports that neither bridges nor the preload list can name,
+// keyed by owner. Each must stay unreachable after a package install's replacement.
+const COMPUTED_POST_SWAP_IMPORTS: ReadonlyMap<string, string> = new Map([
+  [
+    "src/cli/update-cli/update-command-node-runtime-resolution.ts",
+    "runs in the package runtime preflight, before replacement",
+  ],
+  [
+    "src/cli/update-cli/update-command-runtime.ts",
+    "loads source-checkout tooling; package installs never reach it",
+  ],
+]);
+
 /**
  * Visit each literal dist import the updater can evaluate after package
  * replacement. Bridges and the preload list share this scan, so every chunk the
@@ -250,6 +263,7 @@ function forEachPostSwapImport(
   distDir: string,
   parser: ReturnType<typeof createNativeTypeScriptParser>,
   onImport: (entry: PostSwapImport) => void,
+  onComputedImport?: (entry: { file: string; owner: string }) => void,
 ) {
   for (const file of moduleFiles(distDir)) {
     const source = fs.readFileSync(file, "utf8");
@@ -265,22 +279,19 @@ function forEachPostSwapImport(
       if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
         const owner = ownerAt(source, node.getStart());
         const specifier = node.arguments[0];
-        // Literal dist imports only: computed package assets retain their
-        // package owner's installation contract.
-        if (
-          owner &&
-          POST_SWAP_OWNER.test(owner) &&
-          isPostSwapImport(owner, node) &&
-          specifier &&
-          ts.isStringLiteralLikeNode(specifier) &&
-          specifier.text.startsWith(".")
-        ) {
-          const target = path.resolve(path.dirname(file), specifier.text);
-          const relative = portable(path.relative(distDir, target));
-          if (relative.startsWith("../")) {
-            throw new Error(`Post-swap import escapes dist: ${relative}`);
+        // Package imports follow their package's installation contract; literal
+        // dist imports are bridged or preloaded.
+        if (owner && POST_SWAP_OWNER.test(owner) && isPostSwapImport(owner, node) && specifier) {
+          if (!ts.isStringLiteralLikeNode(specifier)) {
+            onComputedImport?.({ file, owner });
+          } else if (specifier.text.startsWith(".")) {
+            const target = path.resolve(path.dirname(file), specifier.text);
+            const relative = portable(path.relative(distDir, target));
+            if (relative.startsWith("../")) {
+              throw new Error(`Post-swap import escapes dist: ${relative}`);
+            }
+            onImport({ file, node, owner, target, relative });
           }
-          onImport({ file, node, owner, target, relative });
         }
       }
       node.forEachChild(visit);
@@ -289,7 +300,11 @@ function forEachPostSwapImport(
   }
 }
 
-/** List the dist chunks an updater without module hooks (Bun) preloads before replacement. */
+/**
+ * List the dist chunks an updater without module hooks (Bun) preloads before
+ * replacement. A computed post-swap import fails the build unless it is a
+ * reviewed exemption, because neither the preload list nor a bridge can name it.
+ */
 export function listPostSwapImportChunks(packageDir: string): string[] {
   const resolved = path.resolve(packageDir);
   if (!fs.existsSync(path.join(resolved, "dist"))) {
@@ -297,8 +312,17 @@ export function listPostSwapImportChunks(packageDir: string): string[] {
   }
   using parser = createNativeTypeScriptParser({ cwd: resolved });
   const chunks = new Set<string>();
-  forEachPostSwapImport(path.join(resolved, "dist"), parser, ({ relative }) =>
-    chunks.add(relative),
+  forEachPostSwapImport(
+    path.join(resolved, "dist"),
+    parser,
+    ({ relative }) => chunks.add(relative),
+    ({ file, owner }) => {
+      if (!COMPUTED_POST_SWAP_IMPORTS.has(owner)) {
+        throw new Error(
+          `Post-swap import in ${owner} (${portable(path.relative(resolved, file))}) has a computed specifier the updater preload cannot cover; import a literal dist path or load it before package replacement`,
+        );
+      }
+    },
   );
   return [...chunks].toSorted();
 }

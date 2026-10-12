@@ -116,6 +116,11 @@ const cases: ScopeCase[] = [
     expected: { madgeImportCycles: true, kyselyGuardrails: false },
   },
   { paths: ["test/openclaw-launcher.e2e.test.ts"], expected: { fastTasks: ["bun-launcher"] } },
+  { paths: ["src/infra/update-retained-imports.ts"], expected: { fastTasks: ["bun-launcher"] } },
+  {
+    paths: ["src/infra/update-retained-runtime.ts"],
+    expected: { fastTasks: ["bun-launcher"] },
+  },
 ];
 
 describe("narrow PR check families", () => {

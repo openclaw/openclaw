@@ -1313,6 +1313,39 @@ describe("previous release update compatibility", () => {
     expect(recordUpdateCompatibilityRelease({ packageDir: root, integrity }).chunks).toEqual([]);
   });
 
+  it("fails the build on computed post-swap imports outside the reviewed exemptions", () => {
+    const { root } = recordImportedFixture(
+      'Promise.all([import("@clack/prompts"), import("./service-abcdefgh.js")])',
+      {
+        "service-abcdefgh.js":
+          "//#region src/cli/update-cli/runner.ts\nexport function runner() { return 1; }",
+      },
+    );
+    // Package imports keep their package's installation contract, as with bridges.
+    expect(listPostSwapImportChunks(root)).toEqual(["service-abcdefgh.js"]);
+    write(
+      root,
+      "dist/command.js",
+      [
+        "//#region src/cli/update-cli/update-command-service-command.ts",
+        "export async function restart(name) { return import(`./${name}.js`); }",
+      ].join("\n"),
+    );
+    expect(() => listPostSwapImportChunks(root)).toThrow(
+      "Post-swap import in src/cli/update-cli/update-command-service-command.ts (dist/command.js) has a computed specifier",
+    );
+    // A reviewed exemption names its owner and why it never runs after replacement.
+    write(
+      root,
+      "dist/command.js",
+      [
+        "//#region src/cli/update-cli/update-command-runtime.ts",
+        "export async function restart(root) { return import(root); }",
+      ].join("\n"),
+    );
+    expect(listPostSwapImportChunks(root)).toEqual([]);
+  });
+
   it.each([
     "generated",
     "historical",
