@@ -52,10 +52,10 @@ certificate as an older proof. Existing rows are not backfilled or reinterpreted
 The companion row is pruned with its launch under the same retention policy; the
 schema version is unchanged.
 
-Matching numeric versions are necessary but not sufficient. A release can add a lazy or startup-repairable table, column, index, or trigger without advancing `user_version`, so two databases at the same version can still have different shapes. OpenClaw validates the canonical table definitions, constraints, indexes, triggers, virtual tables, and table options owned by the running release.
+Matching numeric versions are necessary but not sufficient. A release can add a lazy or startup-repairable table, column, index, or trigger without advancing `user_version`, so two databases at the same version can still have different shapes. OpenClaw validates the required table definitions, constraints, indexes, triggers, virtual tables, and table options owned by the running release.
 
 The per-agent companion table `session_reactions` stores message reaction rows
-at the same schema version. The canonical database-open additive schema installs it on
+at the same schema version. The shared database-open additive schema installs it on
 existing databases without changing `user_version`; older readers ignore the
 table. Rows bind the session key, transcript session ID, persisted message event
 ID, emoji, and reacting identity without changing transcript bytes. Deleting the
@@ -104,10 +104,10 @@ Session label lookups use a nonunique partial index on
 `session_nodes(label, session_key)` for non-null labels, without changing agent
 schema 20. The existing writable schema owner installs and repairs the index;
 read-only startup accepts its absence until that owner opens the database. A
-present but noncanonical definition still fails strict offline validation;
-Gateway startup admits canonical index repairs to the same writable schema owner
+present but different definition still fails strict offline validation;
+Gateway startup admits required-index repairs to the same writable schema owner
 before readiness and logs the rebuilt indexes and elapsed time. Missing tables
-and incompatible column definitions remain refusals. Canonical
+and incompatible column definitions remain refusals. Stored
 session JSON, label uniqueness checks, and retention remain unchanged. Older
 same-version readers can ignore the extra index, so binary rollback leaves it
 intact. The accepted design is recorded in the
@@ -115,11 +115,11 @@ intact. The accepted design is recorded in the
 
 ACP resume lookups use two nonunique expression indexes on the existing
 `acp_sessions.identity_json` agent and ACPX session IDs. The shared-state worker
-selects only matching identities, and canonical session reads retain requester,
+selects only matching identities, and stored-session reads retain requester,
 backend, and lifecycle checks. Duplicate IDs retain session-key ordering; stale
 lifecycles do not authorize resume. Unresolved aliases and internal sessions stay
-ineligible, as in the canonical session listing. The writable schema owner installs the indexes
-on existing databases without changing the schema version or canonical rows.
+ineligible, as in the stored-session listing. The writable schema owner installs the indexes
+on existing databases without changing the schema version or stored rows.
 Construction scans ACP metadata once and uses temporary disk; subsequent metadata
 writes maintain both indexes. Older same-version readers ignore the extra indexes,
 so downgrade and binary rollback preserve rows and indexes. No new cache,
@@ -130,7 +130,7 @@ schema 17 or agent schema 21: task requester sessions, worker placements by
 environment, and session entries whose validity is not yet confirmed. The task
 requester index remains in the physical schema after the Tasks runtime removal.
 Stored rows, retention, and ownership checks are unchanged. Read-only admission
-accepts missing indexes; the canonical writable schema owner installs or repairs them. Initial construction
+accepts missing indexes; the shared writable schema owner installs or repairs them. Initial construction
 uses time and temporary disk proportional to the affected tables, and subsequent
 writes maintain the added indexes. Older same-version readers can ignore them,
 so binary rollback preserves both rows and indexes. See the
@@ -139,7 +139,7 @@ so binary rollback preserves both rows and indexes. See the
 Failed-delivery health counts use the shared-state delivery queue's existing
 `idx_delivery_queue_failed` index with columns `(status, queue_name, failed_at, id)`.
 This replaces the queue-first definition at the same schema version. Queue rows
-remain canonical; the nonunique index is derived. The canonical writable schema
+remain the source of truth; the nonunique index is derived. The shared writable schema
 owner atomically rebuilds a mismatched definition during admission, including its
 integrity checks. No per-request repair or extra index is added. The rebuild uses
 startup I/O and temporary disk proportional to retained queue history, including
@@ -153,9 +153,9 @@ no schema-version bump is required.
 Meeting caption retry lookups use a nonunique partial index on
 `meeting_transcript_utterances(session_id, session_started_at, utterance_id)`
 where `utterance_id IS NOT NULL`, without a schema-version bump. The transcript
-store owns the canonical caption rows; the index is derived and preserves
+store owns the stored caption rows; the index is derived and preserves
 same-ID revisions, exact-content retry matching, and append order. Read-only
-admission accepts a missing index; the shared-state canonical-index owner
+admission accepts a missing index; the shared-state required-index owner
 installs or repairs it on writable open, and the feature's first-use schema
 includes it. The schema fast path detects missing or drifted indexes before
 admitting the handle. Construction on existing databases scans the table and
@@ -168,7 +168,7 @@ caption rows and the index intact.
 Logbook's plugin-local database keeps schema version 1 while replacing the unused
 batch-day index with a nonunique partial index on `batches(start_ms, id)` where
 `status = 'pending'`. The existing worker-owned schema open installs the index on
-populated databases before dropping the retired index. Batch rows remain canonical;
+populated databases before dropping the retired index. Batch rows remain the source of truth;
 the index is derived, and retention and recovery are unchanged. Initial construction
 scans batch history once and stores only pending entries. Older same-version builds
 can read and write the database safely, leaving the new index intact and recreating
@@ -186,14 +186,14 @@ rebuild it on downgrade or rollback. Rows and constraints are unchanged; see the
 Trajectory retention replaces the existing `idx_agent_trajectory_runtime_run`
 definition with a full covering index on `(session_id, run_id, created_at,
 octet_length(event_json))`, including null run IDs. Agent schema 24 is unchanged.
-The canonical index owner rebuilds same-name drift on writable admission; initial
+The required-index owner rebuilds same-name drift on writable admission; initial
 construction reads trajectory history and uses temporary disk for its probe and
 replacement. Writes maintain the expression index. Older same-version writable
 owners can restore their prior definition on downgrade or rollback without
 changing event rows; strict read-only admission can require that repair first.
 During the v17 upgrade, Doctor normalizes legacy memory metadata and validates the
 legacy schema before creating target-schema objects. Missing required tables or
-triggers remain refusals. Canonical indexes are repaired after the remaining data
+triggers remain refusals. Required indexes are repaired after the remaining data
 migrations, with target-schema validation in the same transaction. A refusal rolls
 back the migration and leaves the database unavailable to runtime until repaired.
 See the [storage design](/reference/database-schemas/storage-changes#trajectory-retention-covering-index).
@@ -235,7 +235,7 @@ lineage completion.
 Notification ownership uses bare nullable `TEXT` columns at the same schema
 version: `session_watch_cursors.watcher_store_path`,
 `subagent_runs.requester_store_path`, and `subagent_runs.controller_store_path`.
-Their writers ensure them idempotently on first use; reads do not install them.
+Their writers add them on first use if they are missing; reads do not install them.
 Older readers ignore the columns. NULL remains unknown, so Gateway notification
 delivery does not assign historical records to a current parent by key alone.
 
@@ -253,7 +253,7 @@ rebuilding it from known fields.
 
 Cron standing-grant definition generations use three bare nullable projections on
 `cron_jobs`: `grant_definition_revision`, `grant_definition_generation`, and
-`grant_definition_updated_at`. The canonical job remains `job_json`. Current
+`grant_definition_updated_at`. The saved job remains `job_json`. Current
 writers update the projections atomically with it, advance the generation for a
 substantive definition change (including edit-and-restore), and preserve the
 generation across disable and re-enable.
@@ -268,7 +268,7 @@ generation retroactively. A job recreation advances past retained companion
 generations, including when an older writer deleted the job row.
 
 An older writer does not maintain these projections. Its edits make the
-projection stale, so a current reader fails closed after re-upgrade. While the
+projection stale, so a current reader rejects it after re-upgrade. While the
 older build is running it cannot enforce generation binding, and changes that
 preserve every observable job value and timestamp cannot be reconstructed later.
 No backfill or schema-version bump is required. The accepted design and rollback
@@ -276,9 +276,9 @@ contract are recorded in [#142153](https://github.com/openclaw/openclaw/pull/142
 
 Retained ACP imports use the same-version additive-column exception for the bare
 nullable `session_nodes.legacy_acp_migration_json TEXT` column. Legacy session
-import ensures it on first use and records exact source-component provenance;
-ordinary session edits preserve it, and canonical-key repairs carry it with the
-session. Canonical ACP initialization or closure consumes those components in
+import adds it if missing on first use and records exact source-component provenance;
+ordinary session edits preserve it, and key-normalization repairs carry it with the
+session. Normal ACP initialization or closure consumes those components in
 the existing shared-state migration ledger, atomically with the ACP mutation.
 A later Doctor retry reads that completion fact instead of treating an absent
 ACP row as permission to restore legacy metadata. Missing provenance remains
@@ -298,16 +298,16 @@ the schema migration; changing the cold-storage age setting afterward needs no
 Gateway restart. These are separate operations: live configuration reload does
 not authorize an active schema migration.
 
-Agent schemas 21–24 require the canonical-validation pending table and its node,
+Agent schemas 21–24 require the session-validation pending table and its node,
 window, and main-key invalidation triggers. Schema 25 removes those triggers and
-the `entry_valid` reset triggers: canonical writers validate their final serialized
+the `entry_valid` reset triggers: session writers validate their final serialized
 inputs before SQL, while offline import and repair explicitly queue admission
 work. This needs a version bump because older schema inspectors require the
 retired triggers. Migration preserves payloads, seeds all existing nodes, and
-clears the old canonical receipt before publishing the new version. Admission
+clears the old session-validation receipt before publishing the new version. Admission
 still rejects invalid imported rows. Reopening with older code is refused;
 rollback uses the verified pre-migration backup and matching build. See
-[canonical writer validation](/reference/database-schemas/agent-schema-history#canonical-writer-validation).
+[session writer validation](/reference/database-schemas/agent-schema-history#canonical-writer-validation).
 
 Agent schema 22 introduced exact transcript FTS row ownership with a nullable
 completeness count and lazy backfill. Schema 23 accepts that deployed shape as
@@ -325,7 +325,7 @@ for conversion, runtime requirements, and recovery.
 
 Agent schema 19 records collected input consumption in the nullable
 `session_pending_inputs.consumed_event_id TEXT` column. Doctor and the feature's
-first-use ensure add it when needed; the schema version stays 19. The column
+first-use initialization add it when needed; the schema version stays 19. The column
 shipped in 2026.8.2 ([#133457](https://github.com/openclaw/openclaw/pull/133457)),
 so the supported beta upgrade runs Doctor from 2026.8.2 or newer. Intermediate builds that
 already validate the optional pending-input table may reject the added column
@@ -382,7 +382,7 @@ Reopening preserves purpose, consumption, demand, and cleanup ownership.
 
 The placement-move table uses this same-version rule for its bare nullable
 `abandon_source INTEGER`, `target_machine_class TEXT`, and `target_os TEXT`
-columns. The feature ensures these columns only on first move use; database
+columns. The feature adds these columns if missing only on first move use; database
 startup does not add them, and the schema version remains unchanged.
 `target_machine_class` and `target_os` retain explicit profile-target overrides;
 `NULL` means no override. For `abandon_source`, `NULL` means ordinary
@@ -392,7 +392,7 @@ reconciliation. Older readers ignore the added columns and can reopen the same
 database safely; they do not implement the newer operating-system override.
 
 Conversation associations use the same rule for the nullable bare
-`route_context_json TEXT` column. The database-open repair ensures the column
+`route_context_json TEXT` column. The database-open repair adds the column if missing
 for updated binaries. Older readers ignore it and can reopen and update the
 same database safely; their association update invalidates context captured by
 a newer writer so it cannot be replayed after re-upgrade.
@@ -409,7 +409,7 @@ snapshot bytes remain opaque retained data; desired presentation is not proof
 that a platform edit was delivered or that work completed.
 
 Reopening does not restore the removed Tasks presenter from cached snapshots;
-a snapshot never grants execution or delivery authority. Canonical session repair
+a snapshot never grants execution or delivery authority. Stored-session repair
 carries snapshots with their receipt identities. The existing session delivery
 cleanup removes matching snapshot keys with their receipts, with no new expiry
 policy, cleanup loop, or completion owner.
@@ -420,7 +420,7 @@ changing agent schema 18. Database open installs the column and a non-unique
 partial index of unclassified rows. `1` includes an entry in bounded context
 acquisition, `0` excludes display-only activity, and `NULL` means the projection
 still needs reconciliation. Bootstrap control markers remain eligible; history
-counts, positions, and cursors do not change. Raw transcript JSON stays canonical.
+counts, positions, and cursors do not change. Raw transcript JSON stays the source of truth.
 
 Older same-version writers can append or rebuild without supplying eligibility.
 The existing transcript reconciler detects their `NULL` rows even when its
@@ -444,13 +444,13 @@ before downgrading, and explicitly relink affected profiles after upgrading.
 The version number does not certify preservation of multi-account relationships.
 
 User profiles use the same rule for the nullable bare `user_profiles.role TEXT`
-column in state schema 9. Operator-role assignment lazily ensures the column on
+column in state schema 9. Operator-role assignment adds the column if missing on
 first use. Older readers ignore the column and can reopen the same database
 safely.
 
 Web Push subscription ownership uses the same rule for nullable bare
 `web_push_subscriptions.device_id TEXT`, `user_profile_id TEXT`, and
-`preferences_json TEXT` columns. Web Push lazily ensures all three columns on
+`preferences_json TEXT` columns. Web Push adds all three columns if missing on
 first use. Existing rows remain unbound and test-only until the browser
 reconnects; older readers ignore the columns and continue reading or updating
 the endpoint and key fields safely.
@@ -551,7 +551,7 @@ package update, the early Doctor runs schema repair on private database copies
 while the old driver can still roll back its package installation. It reports
 success only after the private Doctor and its children settle successfully;
 live agent databases remain unchanged. Known pending agent databases without a
-registered canonical backup owner still refuse during this rollback window.
+registered backup owner still refuse during this rollback window.
 
 After the shipped driver commits the package and enters its fresh post-core
 phase, the current updater delegates Doctor under its executor and maintenance
@@ -581,7 +581,7 @@ Same-schema repairs and ordinary Doctor runs remain available.
 
 ### Profile-owned skill library
 
-[Personal and team skills](/tools/skills#personal-skills-on-a-shared-gateway) use four first-use tables in the shared state database without changing its schema version: `skill_library_entries`, `skill_library_revisions`, `skill_library_events`, and `skill_library_uploads`. Ordinary workspace skills and unused-library discovery do not create these tables. Ownership, sharing, the current revision pointer, portable file manifests, and publication events are canonical SQLite data. Session selections remain in the existing per-agent session store; inherited cron selections remain in the existing private job record.
+[Personal and team skills](/tools/skills#personal-skills-on-a-shared-gateway) use four first-use tables in the shared state database without changing its schema version: `skill_library_entries`, `skill_library_revisions`, `skill_library_events`, and `skill_library_uploads`. Ordinary workspace skills and unused-library discovery do not create these tables. Ownership, sharing, the current revision pointer, portable file manifests, and publication events are stored SQLite data. Session selections remain in the existing per-agent session store; inherited cron selections remain in the existing private job record.
 
 Complete skill bundles are product artifacts under `<state-dir>/skill-library/<skill-id>/revisions/<revision-hash>/`. Publication writes and verifies an immutable bundle before committing its current pointer and event in one synchronous database transaction. Concurrent edits require the expected revision. A crash before that commit can leave an unreferenced complete bundle, but not a pointer to partially written content. Sharing and transfer change metadata without moving revision files.
 

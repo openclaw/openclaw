@@ -12,7 +12,7 @@ it does not claim that append eviction or the consumer cutover is implemented.
 It adds no configuration option and changes no schema, persisted bytes,
 retention, session identity, or permissions.
 
-The canonical transcript belongs to SQLite and its existing storage owners.
+The stored transcript belongs to SQLite and its existing storage owners.
 An active `SessionManager` should retain current context and bounded navigation
 facts. Acquiring older history for an operation must not install complete
 history into the live manager. See [session state on disk](/reference/session-management-compaction/store)
@@ -94,7 +94,7 @@ transaction across provider, plugin, or other asynchronous work. A later page
 rejects a changed version; append-tolerant continuation requires separate proof
 from the existing read-fence contract, not invented historical snapshot storage.
 
-`prepareRewrite({ replacements, expectedVersion }, signal)` uses canonical
+`prepareRewrite({ replacements, expectedVersion }, signal)` uses stored
 source rows and anchors in the existing worker, returning a preparation handle,
 source-to-destination mapping, and byte/count deltas. It does not clone a live
 manager. `commitRewrite(handle, signal)` rechecks writer authority and source
@@ -149,7 +149,7 @@ stored-content cap to make a memory assertion pass.
 | Tool-result truncation                          | Build the existing plan from versioned current context, preserving trailing-result policy. Reconcile prompt projections against the committed replacement context.                                                    |
 | Suffix cleanup                                  | Resolve the complete predicate boundary through bounded reverse acquisition. Preserve custom/opaque bytes and parent remapping; an incomplete window cannot establish a no-op.                                        |
 | Tree navigation and summaries                   | Acquire omitted target/common-ancestor facts without installing complete history. Summarize only the required abandoned path, commit leaf/summary/labels, and publish bounded context.                                |
-| Forking                                         | Copy the canonical selected path in the storage owner; return committed destination identity and bounded context.                                                                                                     |
+| Forking                                         | Use the storage owner to copy the selected path; return committed destination identity and bounded context.                                                                                                           |
 | Rewrite preparation                             | Replace resident `byId` source assumptions and cloned detached managers with worker-owned source anchors and preparation handles. Preserve pending-input relocation, compaction identity, and side-append topology.   |
 | Setup, settlement, guards, and accounting       | Consume admitted current-context snapshots or named latest-marker/boundary facts; do not scan history or maintain independent caches.                                                                                 |
 | `ReadonlySessionManager` extension readers      | Introduce an awaited, versioned history capability. Keep identity/current-context facts synchronous; migrate bundled readers and hook preparation together.                                                           |
@@ -173,7 +173,7 @@ Do not silently redefine it as a partial window or keep an internal twin without
 a verified public contract and removal boundary.
 
 Production incognito continues to use its exact process-owned database until
-the existing canonical worker migration activates. Never open another
+the existing shared-worker migration activates. Never open another
 `:memory:` database to satisfy a read. Capture the current owner and reject its
 closure/replacement. This design does not activate that migration or change
 incognito expiry, restart loss, or retention.
@@ -186,7 +186,7 @@ cloned-manager preparation path; retain compatibility only where the shipped
 SDK audit requires it. This private slice does not complete arbitrary tree or
 extension history access and must not claim a universal memory bound.
 
-Freeze published canonical payloads and use replacement objects for sanitation,
+Freeze published stored payloads and use replacement objects for sanitation,
 redaction, and explicit rewrites. Eviction only drops references: it does not
 edit a published prompt prefix, remove stored events, or change existing stable
 prompt refresh rules. Compaction keeps its explicit context-replacement role.

@@ -50,9 +50,9 @@ retain their two-case limit. Each case owns its commands and temporary roots;
 cleanup joins its process tree and callback work before removing those inputs.
 Outer suites and the remaining checkout contract cases stay sequential.
 
-Once admitted, canonical Linux CI permits up to 96 concurrent Node test jobs.
-The manifest separately enforces total-job budgets: 70 Node rows for canonical
-pushes and 130 for canonical PRs, including precise and plugin plans. GitHub
+Once admitted, upstream Linux CI permits up to 96 concurrent Node test jobs.
+The manifest separately enforces total-job budgets: 70 Node rows for upstream
+pushes and 130 for upstream PRs, including precise and plugin plans. GitHub
 also caps one job's combined outputs at 1 MiB measured in UTF-16, so preflight
 has 524,288 characters for every matrix together. Node rows list each
 striped test file explicitly. The manifest projects the fields consumed by
@@ -63,7 +63,7 @@ test selections. Targets without that capability retain their original flat
 fields or projected legacy `groups` JSON. Workflow tests keep the complete
 generated output under half of the cap. The smaller
 fast/check lanes remain capped at 12; Windows is capped at two
-and Android at four for canonical Blacksmith push and PR first attempts, including forks; the GitHub override, retries, manual dispatches, schedules, and noncanonical repositories retain two. Compact whole-config batches run
+and Android at four for upstream Blacksmith push and PR first attempts, including forks; the GitHub override, retries, manual dispatches, schedules, and other repositories retain two. Compact whole-config batches run
 with a 120-minute batch timeout, while include-pattern groups share the same
 bounded job budget.
 

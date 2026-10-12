@@ -34,14 +34,14 @@ backup and its matching build, not just reinstalling the older package.
 | 15      | Board and session-sharing tables                                                                                                                                                                                                                       | `v2026.8.1`  |
 | 16      | Legacy top-level transcript media fields retired                                                                                                                                                                                                       | `v2026.8.1`  |
 | 17      | Tenant-free per-agent lease table retired after the last writer and routing arm were removed ([#121113](https://github.com/openclaw/openclaw/pull/121113), [#121615](https://github.com/openclaw/openclaw/pull/121615))                                | `v2026.8.1`  |
-| 18      | Canonical participant identity namespaces and explicit unknown historical input times in the existing session-owned aggregate ([#130661](https://github.com/openclaw/openclaw/issues/130661))                                                          | `v2026.8.1`  |
+| 18      | Normalized participant identity namespaces and explicit unknown historical input times in the existing session-owned aggregate ([#130661](https://github.com/openclaw/openclaw/issues/130661))                                                         | `v2026.8.1`  |
 | 19      | Source-qualified immutable session creators; historical ambiguity remains unknown                                                                                                                                                                      | `v2026.8.1`  |
 | 20      | Authoritative cold transcript archives with exact restoration metadata and self-contained backup payloads                                                                                                                                              | `v2026.9.5`  |
-| 21      | Incremental canonical-session validation with transactional node, window, and main-key invalidation                                                                                                                                                    | `v2026.9.5`  |
+| 21      | Incremental stored-session validation with transactional node, window, and main-key invalidation                                                                                                                                                       | `v2026.9.5`  |
 | 22      | Exact transcript FTS row ownership for session-local deletion and reconciliation ([#153834](https://github.com/openclaw/openclaw/pull/153834))                                                                                                         | `v2026.9.6`  |
 | 23      | Selective transcript compression, binary memory embeddings, and stable memory full-text index identities                                                                                                                                               | `v2026.9.6`  |
-| 24      | Canonical session hot facts separated from keyed diff, skills, and system-prompt snapshots                                                                                                                                                             | `v2026.9.7`  |
-| 25      | Canonical writers validate their own rows; offline import and repair explicitly queue admission work instead of per-write invalidation triggers                                                                                                        | `Unreleased` |
+| 24      | Stored session hot facts separated from keyed diff, skills, and system-prompt snapshots                                                                                                                                                                | `v2026.9.7`  |
+| 25      | Session writers validate their own rows; offline import and repair explicitly queue admission work instead of per-write invalidation triggers                                                                                                          | `Unreleased` |
 | 26      | Portable query columns for session maintenance, transcript navigation discriminators, and context-engine outbox state                                                                                                                                  | `Unreleased` |
 
 Schema 1 first appeared in `v2026.5.30-beta.1` and was also written by the
@@ -95,17 +95,19 @@ requirements for older update drivers. First-upgrade cost scales with retained
 rows in each agent database and the number of databases on a host; implementation
 proof records both measurements.
 
-### Canonical writer validation
+<a id="canonical-writer-validation" />
+
+### Session writer validation
 
 Agent schema **25** retires the three `entry_valid` reset triggers and the nine
-node, window, and main-key canonical-validation triggers. The canonical session
+node, window, and main-key session-validation triggers. The session
 writer validates its serialized row before persisting it and writes the final
 validity value directly. Ordinary writes leave no pending validation marker and
 need no post-write row reread or validity update.
 
 `session_canonical_validation_pending` remains a derived admission queue.
 Offline imports, Doctor repairs, and main-key policy changes explicitly queue
-affected keys and revoke the canonical receipt. Gateway startup applies policy
+affected keys and revoke the session-validation receipt. Gateway startup applies policy
 changes before readiness; external imports and repairs require exclusive
 maintenance custody while the Gateway is stopped. Other processes cannot write
 session tables alongside the Gateway. Live-authority checks remain with the
@@ -118,12 +120,12 @@ history in the repair backup. Older media migrations use the same historical
 schema owner as the database upgrader.
 
 The migration checks the previous schema before retiring its triggers, seeds
-every existing node, and clears the persisted canonical receipt in the same
+every existing node, and clears the persisted session-validation receipt in the same
 transaction as both version markers. Admission then validates imported rows,
 including rows whose old pending table was empty. Invalid rows still require
 Doctor repair. Failed publication rolls back the trigger retirement, pending
 work, receipt change, and schema markers together. The migration preserves
-canonical session and transcript payloads; retention, permissions, and durability
+stored session and transcript payloads; retention, permissions, and durability
 are unchanged.
 
 Schema 24 and older builds refuse schema 25. Binary rollback requires restoring
@@ -136,7 +138,7 @@ the existing [schema migration handoff](/reference/database-schemas/versioning#s
 Agent schema **24** keeps exact hot session facts in `session_nodes.entry_json`
 and moves `sessionDiffBaseline`, `skillsSnapshot`, and `systemPromptReport` into
 `session_entry_snapshots`, keyed by session key and field. Existing indexed
-columns remain query projections; they do not replace canonical values such as
+columns remain query projections; they do not replace stored values such as
 the distinct `interrupted` status. Full entry consumers select hot facts and
 requested snapshot columns in one SQLite statement. List and resident projection
 readers select only hot facts. Public full-entry reads retain their existing shape.
@@ -206,7 +208,7 @@ to schema 23. Schema 22's lazy `(session_id, fts_rowid)` map can be empty or
 incomplete, so the new `(id, session_id, message_id)` map is populated from
 existing FTS content. The migration retires `fts_row_count` after retaining its
 unknown or incomplete state as `needs_rebuild`. Clean mappings remain clean;
-existing rebuild claims, cursors, active-path rows, and canonical-validation
+existing rebuild claims, cursors, active-path rows, and session-validation
 pending rows are preserved. The unpublished compressed schema-22 draft is not
 a supported predecessor.
 
@@ -270,26 +272,28 @@ The existing [older-updater contract](/reference/database-schemas/versioning#sch
 applies, including private rehearsal and verified backup coverage for supported
 2026.9.2 package updates.
 
-### Incremental canonical-session validation
+<a id="incremental-canonical-session-validation" />
+
+### Incremental stored-session validation
 
 The [accepted storage design](https://github.com/openclaw/openclaw/issues/149323)
 owns this projection's invalidation, certification, migration and rollback contract.
 
 Agent schema **21** adds `session_canonical_validation_pending`, a derived set
-of session keys requiring canonical validation. Required triggers mark node
+of session keys requiring session validation. Required triggers mark node
 identity, JSON, validity and lineage changes, changes to retained-window
 associations, and main-key policy changes. Node deletion and renaming clean up
 the old key without depending on foreign-key enforcement. The table stores no
 permission grants or copied session payloads.
 
-The existing canonical validator certifies final rows before their markers are
+The existing session validator certifies final rows before their markers are
 removed in the same transaction. Rollback restores the data and pending work
 together. A connection opened before migration still fires the new triggers;
 its older validity flag cannot clear the pending marker. Read-only inspection
 does not create or repair the projection, and missing or drifted required
 definitions do not count as a clean database.
 
-The physical database owner requires a full canonical proof on first admission;
+The physical database owner requires a full session-validation proof on first admission;
 an imported empty pending table is not sufficient. The existing mutation worker
 seeds all keys and validates bounded batches before publishing that proof.
 Ordinary connection close and eviction preserve it, while physical replacement,
@@ -307,7 +311,7 @@ and remains bound to the physical file, main-key policy, and readiness. It canno
 admit an unrelated pooled read or replace strict validation when that proof is
 missing, transactional, changed, or revoked.
 
-Gateway startup reuses valid canonical receipts for the same physical generation;
+Gateway startup reuses valid session-validation receipts for the same physical generation;
 they do not replace integrity checks. Stores needing fresh proof are certified up
 to two at a time, using the same disk-work bound as database preflight. Two
 execution workers serve separate
@@ -391,11 +395,11 @@ Agent schema **19** and shared-state schema **14** add a source discriminator to
 
 Historical human creators stamped directly by `operator` or `run` creation become `profile`; channel creation becomes `channel`. Origin-losing cron, inherited spawn or Talk, legacy `createdBy`, and missing-source history remain `unknown`. The migration preserves IDs, attribution, creation times, content, and existing sandbox restrictions. A UUID, profile lookup, participant, current route, or required sandbox never supplies missing creator authority. Recovery from incomplete physical projections also produces unknown human attribution.
 
-Before upgrading, stop the Gateway and all other writers, then [create and verify a WAL-aware backup](/cli/backup). Run `openclaw doctor --fix` with the new build. The agent migration retains the stopped-writer maintenance gate and runs after the schema-18 participant migration, without rebuilding already migrated participant rows. Canonical data and both schema markers commit in the owning database transaction. Shared-state and agent databases are separate transactions; if one fails, keep writers stopped and rerun Doctor before starting the Gateway.
+Before upgrading, stop the Gateway and all other writers, then [create and verify a WAL-aware backup](/cli/backup). Run `openclaw doctor --fix` with the new build. The agent migration retains the stopped-writer maintenance gate and runs after the schema-18 participant migration, without rebuilding already migrated participant rows. Stored data and both schema markers commit in the owning database transaction. Shared-state and agent databases are separate transactions; if one fails, keep writers stopped and rerun Doctor before starting the Gateway.
 
 Older builds refuse the new versions. For rollback, stop all writers and restore the verified pre-upgrade backups with their matching older build. Do not decrement either schema marker: an older writer cannot maintain the creator-source contract. Unknown historical provenance is irrecoverable from the stored ID alone. Administrators retain sharing management access; assigning responsibility does not restore an implicit creator grant.
 
-Required sandbox resources keep their existing keys for proven profile creators. Channel and unknown creators instead use canonical-session isolation, with no new persisted principal field. Their old ambiguous resources are left untouched by migration, not automatically adopted or copied; operators must recover needed files explicitly before ordinary retention or cleanup. See [sandbox scope and recovery](/gateway/sandboxing#modes-scope-and-backend).
+Required sandbox resources keep their existing keys for proven profile creators. Channel and unknown creators instead use isolation by resolved session identity, with no new persisted principal field. Their old ambiguous resources are left untouched by migration, not automatically adopted or copied; operators must recover needed files explicitly before ordinary retention or cleanup. See [sandbox scope and recovery](/gateway/sandboxing#modes-scope-and-backend).
 
 ### Participant identity migration
 

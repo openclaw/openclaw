@@ -51,7 +51,7 @@ A runnable version lives in the repository at `examples/ai-chat`.
   strict-tool defaults, and diagnostics logging are `AiTransportHost` ports
   configured with `configureAiTransportHost`. The library defaults are inert;
   OpenClaw installs its real implementations in its stream facade.
-- **One event-stream identity.** `@openclaw/ai/event-stream` is the canonical
+- **One event-stream identity.** `@openclaw/ai/event-stream` is the shared
   `EventStream` constructor shared by OpenClaw core, agent-core, and external
   consumers.
 - **`internal/*` subpaths are not API.** They exist for the OpenClaw

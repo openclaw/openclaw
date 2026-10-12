@@ -291,7 +291,7 @@ The cleanup direction is:
 - keep heavy and optional capabilities outside the default core install
 - make plugin packages own their runtime dependency graph
 - avoid runtime package-manager repair during Gateway startup
-- preserve deterministic installs without causing all-platform native package
+- preserve repeatable installs without causing all-platform native package
   materialization
 - keep install scripts disabled in package acceptance and measurement paths
 - catch nested dependency trees and native optional dependency explosions before

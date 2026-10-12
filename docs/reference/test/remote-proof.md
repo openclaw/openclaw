@@ -82,7 +82,7 @@ conflicting with required tracked source stops the run before upload.
 The command binds the bundle digest and raw source tree. Before running the payload,
 the receiver applies deletions and restores file bytes, symlink target bytes, and
 Git executable modes, then verifies the filesystem directly. Git text filters do not
-normalize this snapshot. Missing, stale, or mismatched bundles fail closed.
+normalize this snapshot. Missing, stale, or mismatched bundles are rejected.
 Producer-declared deletions must also be absent, even when the remote index has lost
 them. Deletions use the same privacy policy as source selection; unknown ignored
 runtime data is preserved. Unexpected nonignored receiver files stop the run instead
@@ -104,7 +104,7 @@ tests. Use a newly warmed lease dedicated to that untrusted source; never reuse
 a trusted or previously hydrated lease. Launch an installed trusted Crabbox
 binary from a clean trusted `main` checkout and fetch only the remote PR with
 `--fresh-pr`; never execute the untrusted checkout's wrapper or config locally.
-Unset `CRABBOX_AWS_INSTANCE_PROFILE` and fail closed unless resolved
+Unset `CRABBOX_AWS_INSTANCE_PROFILE` and refuse to run unless resolved
 `aws.instanceProfile` is empty. Before any install/test, use trusted
 absolute-path tools to require an IMDSv2 token, prove the IAM credentials
 endpoint returns 404, and verify remote `git rev-parse HEAD` equals the full
@@ -397,7 +397,7 @@ absent; recovery does not probe its potentially recycled PID. Same-boot recovery
 still checks PID absence. Missing host provenance and legacy domain mismatches
 remain protected unless explicitly qualified below.
 Idle mirrors retain their separate exclusive-lock recovery contract. Directory
-ownership records include the canonical path, inode, birthtime, and macOS volume
+ownership records include the resolved filesystem path, inode, birthtime, and macOS volume
 UUID, so APFS device-number changes across reboots do not invalidate that identity.
 Legacy device/inode records accept a macOS device-only change only when the
 directory predates its receipt and the existing path and ownership checks pass.

@@ -84,7 +84,7 @@ The retrieval boundary is narrower than general session search:
 - only the same agent's recognized private conversations are eligible
 - the conversation being answered is excluded
 - groups and channels are excluded as sources and destinations
-- unknown conversation kinds fail closed
+- unknown conversation kinds block recall
 - sandboxed recall cannot use the special cross-conversation authorization
 
 The setting does not change `tools.sessions.visibility`, session keys,
@@ -129,7 +129,7 @@ When `provider` is unset, legacy `provider: "auto"` is present, or
 `provider: "none"` intentionally selects FTS-only mode, memory recall can still
 use lexical FTS ranking when embeddings are unavailable.
 
-Explicit non-local providers fail closed. If you set `memory.search.provider` to
+Explicit non-local providers do not fall back to FTS-only recall. If you set `memory.search.provider` to
 a concrete remote-backed provider such as Bedrock, DeepInfra, Gemini, GitHub
 Copilot, LM Studio, Mistral, Ollama, OpenAI, Voyage, or an OpenAI-compatible
 custom provider, and that provider is unavailable at runtime, `memory_search`
@@ -480,10 +480,10 @@ file entries are indexed exactly. Entries with the same resolved directory share
 scans skip subdirectories that their patterns can prove irrelevant. Complex patterns retain
 conservative traversal. The builtin engine skips symlinks. When a configured root is a
 symlink, `openclaw memory status` names the skipped root in text and JSON output and recommends
-configuring its canonical absolute directory instead.
+configuring its resolved absolute directory instead.
 
 For shared notes, keep each workspace's `memory/` directory local and add the shared directory's
-canonical path to `extraPaths`. This setting indexes notes; it does not authorize legacy host-event
+resolved filesystem path to `extraPaths`. This setting indexes notes; it does not authorize legacy host-event
 migration through a symlink.
 
 If `openclaw doctor --fix` reports an unsafe Memory Core host-event source, check the named path and

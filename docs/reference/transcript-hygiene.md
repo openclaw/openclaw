@@ -169,7 +169,7 @@ result is moved only when exactly one unresolved occurrence can own it; ambiguou
 extras are dropped and missing occurrences receive synthetic error results.
 
 Synthetic missing results tell the model that the outcome is unknown: retry only
-read-only or idempotent operations, and verify current state before repeating an
+read-only operations or operations safe to repeat, and verify current state before repeating an
 operation that may have had side effects. Responses-family transports retain
 their `aborted` placeholder. Neither placeholder proves that the tool did not run.
 
@@ -235,15 +235,15 @@ inter-session user turns that only have provenance metadata.
 - Preserve replayable OpenAI Responses reasoning item payloads, including
   encrypted empty-summary items, so manual/WebSocket replay keeps required
   `rs_*` state paired with assistant output items.
-- Node turns canonicalize fresh reasoning signatures before returning the
+- Node turns normalize fresh reasoning signatures before returning the
   completed assistant message, so live continuation and transcript storage use
   the same signature bytes. Encrypted reasoning bytes, executable tool arguments,
   and previously approved history remain unchanged.
 - Native ChatGPT Codex Responses follows Codex wire parity by replaying
   prior Responses reasoning/message/function payloads without prior item
   IDs while preserving session `prompt_cache_key`.
-- OpenAI Responses-family replay preserves canonical `call_*|fc_*`
-  same-model reasoning pairs, but deterministically normalizes malformed or
+- OpenAI Responses-family replay preserves valid `call_*|fc_*`
+  same-model reasoning pairs, but uses fixed rules to normalize malformed or
   overlong `call_id`/function-call item ids before pi-ai payload conversion.
 - Tool result pairing repair may move real matched outputs and synthesize
   Codex-style `aborted` outputs for missing tool calls.

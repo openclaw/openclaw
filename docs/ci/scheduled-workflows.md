@@ -39,7 +39,7 @@ for the tier table and owner boundaries.
 ## Hourly main CI
 
 The complete `main` validation tier runs directly from `ci.yml` at minute 23 of each hour.
-GitHub's scheduled event selects the canonical main revision; manual dispatch
+GitHub's scheduled event selects the upstream main revision; manual dispatch
 inputs cannot claim scheduled-run policy. The schedule selects the complete
 `main` tier, including Android, without filtering to the last commit. Node,
 native platforms, docs, QA Smoke, browser process proofs, and the published-updater
@@ -48,7 +48,7 @@ inventory, including tooling and PR-exempt files, within its 77-row main-tier ca
 
 The existing Plugin Prerelease workflow owns the complete extension runtime
 inventory separately, at minute 37 each hour. Scheduled runs pin the scheduled
-canonical `main` SHA and select only their extension matrix and required summary.
+upstream `main` SHA and select only their extension matrix and required summary.
 Manifest-only bundled plugins and tests directly under `extensions/` use its
 existing file-shard execution path;
 package-backed plugins retain their existing batch owners.
@@ -261,7 +261,7 @@ Manual dispatch normally benchmarks the workflow ref. Set `target_ref` to benchm
 
 The workflow installs OCM from a pinned release and Kova from `openclaw/Kova` at the pinned `kova_ref` input, then runs three lanes:
 
-- `mock-provider`: Kova diagnostic scenarios against a local-build runtime with deterministic fake OpenAI-compatible auth.
+- `mock-provider`: Kova diagnostic scenarios against a local-build runtime with fixed fake OpenAI-compatible auth.
 - `mock-deep-profile`: CPU/heap/trace profiling for startup, gateway, and agent-turn hotspots. Runs on schedule, or on dispatch with `deep_profile=true`.
 - `live-openai-candidate`: a real OpenAI `openai/gpt-5.6-luna` agent turn. Selected on schedule, or on dispatch with `live_openai_candidate=true`. Candidates ineligible for live credentials are skipped. For a selected, eligible lane, missing `OPENAI_API_KEY` fails the lane rather than skipping it.
 
@@ -438,7 +438,7 @@ QA Lab has dedicated CI lanes outside the main smart-scoped workflow. Agentic pa
 - Release Matrix catalog validation runs on a 16-vCPU Blacksmith runner with a 90-minute job budget. Changes to that timeout, runner size, or concurrency require a matching workflow guard and exact-candidate release proof.
 - `QA Profile Evidence` balances taxonomy category groups across eight isolated jobs, keeps non-isolating live channels on one shard, then asks QA Lab to merge their validated evidence into one attested `qa-evidence.json`. A timed-out or missing shard always fails aggregation; `allow_failures` applies only when every shard completed and produced valid evidence. Direct `Maturity scorecard` dispatches default `allow_failures` on so incomplete evidence can still render a diagnostic docs artifact. A terminal result gate runs after optional generated-PR publication and fails the run when any scenario failed or remained blocked; reusable release calls remain strict by default.
 
-Scheduled, manual, and release Matrix checks use the deterministic mock provider so the live transport contract is isolated from model latency and normal provider-plugin startup. Telegram release checks use the same deterministic model boundary. The live transport gateway disables memory search because QA parity covers memory behavior separately; provider connectivity is covered by the separate live model, native provider, and Docker provider suites.
+Scheduled, manual, and release Matrix checks use the fixed-response mock provider so the live transport contract is isolated from model latency and normal provider-plugin startup. Telegram release checks use the same fixed-response model setup. The live transport gateway disables memory search because QA parity covers memory behavior separately; provider connectivity is covered by the separate live model, native provider, and Docker provider suites.
 
 `OpenClaw Release Checks` also runs the release-critical QA Lab lanes before release approval; its QA parity gate runs the candidate and baseline packs as parallel lane jobs, then downloads both artifacts into a small report job for the final parity comparison.
 
@@ -606,7 +606,7 @@ site renderer or cross-page link validation.
 
 ### Docs Agent
 
-The `Docs Agent` workflow keeps existing docs aligned with recently landed changes. It has no pure schedule. An opted-in full main-push CI run can admit automatic writes; hourly main-tier CI cannot. With `OPENCLAW_CI_ON_PUSH` unset, use explicit non-bot Docs Agent dispatch to run it. A read-only job verifies the canonical CI workflow, exact completed run attempt, current main SHA, successful aggregate, and successful revision-confirmation step before the write-capable job is admitted. That producer step is absent/skipped for main-tier runs, security-only pushes, failed full CI, and manual validation of another target or reduced scope. Ordinary bot pushes remain excluded.
+The `Docs Agent` workflow keeps existing docs aligned with recently landed changes. It has no pure schedule. An opted-in full main-push CI run can admit automatic writes; hourly main-tier CI cannot. With `OPENCLAW_CI_ON_PUSH` unset, use explicit non-bot Docs Agent dispatch to run it. A read-only job verifies the upstream CI workflow, exact completed run attempt, current main SHA, successful aggregate, and successful revision-confirmation step before the write-capable job is admitted. That producer step is absent/skipped for main-tier runs, security-only pushes, failed full CI, and manual validation of another target or reduced scope. Ordinary bot pushes remain excluded.
 
 Only the admitted write job occupies the non-canceling docs concurrency slot, so a skipped push cannot displace pending eligible automatic or manual work. Workflow-run invocations recheck main freshness and inspect exact-attempt job evidence for up to 100 recent runs. A queued or active write job, or a recent attempt that actually ran the agent, counts toward the one-hour cadence. Canceled and skipped workflows, denied verification, and completed writer gates that skipped the agent do not count. When admitted, the agent reviews from the source SHA of the previous successful write job whose agent step succeeded to current `main`.
 

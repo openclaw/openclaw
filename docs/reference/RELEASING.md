@@ -135,7 +135,7 @@ New candidate qualification records three separate identities:
   main revision or protected publication tag. P may differ from C/Q; C/Q does not
   need to be an ancestor of P. Trust in P does not replace qualification of C.
 
-The canonical SHA-pinned helper first asks P to record the reviewed operator
+The standard SHA-pinned helper first asks P to record the reviewed operator
 attestation, complete normalized inputs, and data-only frozen Q coverage in an
 immutable admission artifact. Only then does that same helper dispatch Full
 Release Validation from an immutable `release-ci/*` ref at Q. A publication
