@@ -4,8 +4,8 @@ import { undo } from "@codemirror/commands";
 import { EditorView } from "@codemirror/view";
 import { expectDefined } from "@openclaw/normalization-core";
 import { html, nothing, render, type LitElement } from "lit";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import "./components/chat-detail-panel.tsx";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionWorkspaceGetResult } from "../../api/types.ts";
 import { loadSettings } from "../../app/settings.ts";
@@ -16,6 +16,7 @@ import {
   renderPanelFixture,
 } from "../../test-helpers/chat-pane-embedded-panels.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { stubResizeObserver } from "../../test-helpers/scroll-observers.test-support.ts";
 import { resolveChatAgentId } from "./chat-agent-id.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import { createSidebarFullMessageLoader } from "./chat-pane-sidebar-layout.ts";
@@ -58,6 +59,8 @@ import {
   setSidebarOpen,
   type SidebarLayout,
 } from "./sidebar-layout.ts";
+
+beforeEach(stubResizeObserver);
 
 function createReviewFixture() {
   const fixture = createUnboundReviewFixture();

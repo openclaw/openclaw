@@ -1,16 +1,18 @@
 import { onTestFinished, vi } from "vitest";
 
+class FixtureObserver {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+
+export function stubResizeObserver(): void {
+  vi.stubGlobal("ResizeObserver", FixtureObserver);
+  onTestFinished(() => vi.unstubAllGlobals());
+}
+
 /** Non-layout rendering fixtures only; geometry tests own their delivery clock. */
 export function stubScrollObservers(): void {
-  for (const name of ["ResizeObserver", "IntersectionObserver"] as const) {
-    vi.stubGlobal(
-      name,
-      class {
-        observe() {}
-        unobserve() {}
-        disconnect() {}
-      },
-    );
-  }
-  onTestFinished(() => vi.unstubAllGlobals());
+  stubResizeObserver();
+  vi.stubGlobal("IntersectionObserver", FixtureObserver);
 }
