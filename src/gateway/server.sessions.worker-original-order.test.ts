@@ -465,7 +465,7 @@ test("preserves ordered fallback through inventory rehydration, workspace sync, 
     {
       context: {
         workerSessionPlacementService: {
-          getManyAsync: (sessionIds: readonly string[]) => placements.getManyAsync(sessionIds),
+          ...placements,
           retireSessionPlacementAsync: async (
             retirement: Parameters<typeof placements.retireSessionPlacementAsync>[0],
           ) => {

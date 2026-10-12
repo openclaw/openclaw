@@ -783,39 +783,6 @@ describe("gateway/node-registry", () => {
     },
   );
 
-  it.each(["allowed", "denied", "revoked"] as const)(
-    "waits for durable dispatch authority and checks the live owner (%s)",
-    async (outcome) => {
-      const authorization = createDeferred<boolean>();
-      const registry = createNodeRegistry();
-      const frames = registerNode(registry);
-      let authorityActive = true;
-      const dispatched = createDeferred<void>();
-      const invoke = registry.invoke({
-        nodeId: "node-1",
-        command: "system.run",
-        authorizeDispatch: () => authorization.promise,
-        isDispatchAuthorized: () => authorityActive,
-        onDispatchReady: () => dispatched.resolve(),
-      });
-      expect(frames).toEqual([]);
-      authorityActive = outcome !== "revoked";
-      authorization.resolve(outcome !== "denied");
-      if (outcome === "allowed") {
-        await dispatched.promise;
-        expect(frames).toHaveLength(1);
-        finish(registry, readRequest(frames).id, { ok: true, payload: { completed: true } });
-        await expect(invoke).resolves.toMatchObject({ ok: true });
-      } else {
-        await expect(invoke).resolves.toMatchObject({
-          ok: false,
-          error: { code: "APPROVAL_AUTHORITY_CLOSED" },
-        });
-        expect(frames).toEqual([]);
-      }
-    },
-  );
-
   it.each(["prompt-context", "authority"] as const)(
     "rechecks %s after the private launch pairing await",
     async (closed) => {

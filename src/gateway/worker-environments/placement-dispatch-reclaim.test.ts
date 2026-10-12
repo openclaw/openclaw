@@ -824,15 +824,17 @@ describe("worker placement dispatch reclaim", () => {
       },
     });
     const active = await harness.service.dispatch(REQUEST);
-    const stop = prepareSessionWorkerPlacementStop({
-      ...REQUEST,
-      action: "delete",
-      context: {
-        workerSessionPlacementService: placementStore,
-        workerPlacementDispatchService: harness.service,
-        workerEnvironmentService: harness.environments,
-      },
-    }).stop();
+    const stop = (
+      await prepareSessionWorkerPlacementStop({
+        ...REQUEST,
+        action: "delete",
+        context: {
+          workerSessionPlacementService: placementStore,
+          workerPlacementDispatchService: harness.service,
+          workerEnvironmentService: harness.environments,
+        },
+      })
+    ).stop();
     const rejected = expect(stop).rejects.toThrow("cloud worker placement identity changed");
     await entered.promise;
     try {

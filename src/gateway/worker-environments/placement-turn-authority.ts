@@ -2,14 +2,16 @@ import type { DatabaseSync } from "node:sqlite";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
-import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
-import { notifyListeners, registerListener } from "../../shared/listeners.js";
-import {
-  registerOpenClawStateDatabaseLifecycleListener,
-  requireOpenClawStateDatabaseIdentity,
-} from "../../state/openclaw-state-db-cache.js";
+import { registerListener } from "../../shared/listeners.js";
+import { requireOpenClawStateDatabaseIdentity } from "../../state/openclaw-state-db-cache.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import {
+  closePlacementAuthorityOwner as closeOwner,
+  notifyPlacementClaimRevoked as notifyRevoked,
+  placementAuthorityOwnerFor as ownerFor,
+  placementAuthorityOwners as owners,
+} from "./placement-authority-owner.js";
 import {
   affectsPlacementObservation,
   applyPlacementReadPublication,
@@ -48,85 +50,6 @@ import {
 import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
 
 export type { PlacementTurnClaimAuthority } from "./placement-turn-authority.types.js";
-
-function notifyRevoked(claim: RetainedClaim): void {
-  if (!claim.revoked) {
-    return;
-  }
-  const listeners = [...claim.listeners];
-  claim.listeners.clear();
-  notifyListeners(listeners, undefined);
-}
-
-function closeOwner(owner: PlacementAuthorityOwner): void {
-  owner.active = false;
-  owner.pending.clear();
-  owner.published.clear();
-  owner.tools.clear();
-  owner.workspaceResults.clear();
-  const claims = Array.from(owner.claims.values()).flatMap((retained) => Array.from(retained));
-  for (const claim of claims) {
-    claim.revoked = true;
-  }
-  for (const claim of claims) {
-    notifyRevoked(claim);
-  }
-  owner.claims.clear();
-  owner.placements.clear();
-  owner.observations.clear();
-  owner.placementReaders.clear();
-  owner.projections.clear();
-  owner.preservation = undefined;
-}
-
-const owners = resolveGlobalSingleton(
-  Symbol.for("openclaw.placementTurnAuthorities"),
-  () => new Map<string, PlacementAuthorityOwner>(),
-  (registered) => {
-    for (const owner of registered.values()) {
-      closeOwner(owner);
-    }
-    registered.clear();
-  },
-);
-
-function ownerFor(identity: DatabasePathIdentity): PlacementAuthorityOwner {
-  const existing = owners.get(identity.key);
-  if (existing?.active) {
-    return existing;
-  }
-  const owner: PlacementAuthorityOwner = {
-    identity,
-    active: true,
-    claims: new Map(),
-    placements: new Map(),
-    observations: new Map(),
-    placementReaders: new Map(),
-    pending: new Set(),
-    sequence: 0,
-    published: new Map(),
-    tools: new Map(),
-    workspaceResults: new Map(),
-    projections: new Map(),
-  };
-  owners.set(identity.key, owner);
-  return owner;
-}
-
-registerOpenClawStateDatabaseLifecycleListener((event) => {
-  if (event.kind === "opened") {
-    return;
-  }
-  for (const [key, owner] of owners) {
-    if (
-      key === event.identity?.key ||
-      owner.identity.canonicalPath === (event.identity?.canonicalPath ?? event.path)
-    ) {
-      closeOwner(owner);
-      owners.delete(key);
-    }
-  }
-});
 
 function allows(change: ClaimChange, claim: WorkerSessionTurnClaim): boolean {
   return (
