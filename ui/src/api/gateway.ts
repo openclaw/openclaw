@@ -143,7 +143,6 @@ export class GatewayBrowserClient {
   private maxInboundSilenceMs: number | null = null;
   private tickWatchTimer: ReturnType<typeof setInterval> | null = null;
   private pendingDeviceTokenRetry = false;
-  private pendingCredentialFreeRetry = false;
   private deviceTokenRetryBudgetUsed = false;
   private readonly remoteIngress = isRemoteControlUiIngress();
   private nativeAuthAbort: AbortController | null = null;
@@ -303,7 +302,6 @@ export class GatewayBrowserClient {
     this.cancelScopeUpgrade();
     this.scopeUpgradeBinding = null;
     this.pendingDeviceTokenRetry = false;
-    this.pendingCredentialFreeRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
   }
 
@@ -377,7 +375,6 @@ export class GatewayBrowserClient {
     if (this.pendingDeviceTokenRetry && plan.selectedAuth.authDeviceToken) {
       this.pendingDeviceTokenRetry = false;
     }
-    this.pendingCredentialFreeRetry = false;
     return plan;
   }
 
@@ -391,16 +388,18 @@ export class GatewayBrowserClient {
     this.maxPayloadBytes = hello.policy?.maxPayload;
     this.startTickWatch(hello);
     this.pendingDeviceTokenRetry = false;
-    this.pendingCredentialFreeRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
     this.opts.bootstrapToken = undefined;
     this.opts.bootstrapProfile = undefined;
-    this.scopeUpgradeBinding = plan.deviceIdentity && {
-      clientId: plan.params.client.id,
-      deviceId: plan.deviceIdentity.deviceId,
-      role: plan.params.role ?? CONTROL_UI_OPERATOR_ROLE,
-    };
-    if (hello?.auth?.deviceToken && plan.deviceIdentity) {
+    this.scopeUpgradeBinding =
+      !this.remoteIngress && plan.deviceIdentity
+        ? {
+            clientId: plan.params.client.id,
+            deviceId: plan.deviceIdentity.deviceId,
+            role: plan.params.role ?? CONTROL_UI_OPERATOR_ROLE,
+          }
+        : null;
+    if (!this.remoteIngress && hello?.auth?.deviceToken && plan.deviceIdentity) {
       const role = hello.auth.role ?? plan.params.role ?? CONTROL_UI_OPERATOR_ROLE;
       const scopes =
         role === plan.params.role && hello.auth.deviceToken === plan.selectedAuth.storedToken
@@ -420,10 +419,12 @@ export class GatewayBrowserClient {
   private async resolveRecoveryScope(hello: GatewayHelloOk, plan: ConnectPlan) {
     const serverScope = hello.auth?.recoveryScope;
     const legacyScope = await deriveLegacyV4RecoveryScope(
-      hello.auth?.deviceToken ??
-        plan.selectedAuth.authDeviceToken ??
-        plan.selectedAuth.resolvedDeviceToken ??
-        plan.selectedAuth.authToken,
+      this.remoteIngress
+        ? undefined
+        : (hello.auth?.deviceToken ??
+            plan.selectedAuth.authDeviceToken ??
+            plan.selectedAuth.resolvedDeviceToken ??
+            plan.selectedAuth.authToken),
     );
     const migrateRecoveryScope =
       serverScope && hello.auth?.recoveryMigrationAllowed === true && legacyScope
@@ -523,10 +524,6 @@ export class GatewayBrowserClient {
         gatewayUrl: this.opts.url,
         role: plan.params.role ?? CONTROL_UI_OPERATOR_ROLE,
       });
-      if (this.remoteIngress && !this.deviceTokenRetryBudgetUsed) {
-        this.pendingCredentialFreeRetry = true;
-        this.deviceTokenRetryBudgetUsed = true;
-      }
     }
     const startupRetryAfterMs = resolveGatewayStartupRetryAfterMs(err);
     if (startupRetryAfterMs !== null) {
@@ -580,6 +577,9 @@ export class GatewayBrowserClient {
     role: string;
     deviceId: string;
   }): GatewayConnectAuthSelection {
+    if (this.remoteIngress) {
+      return {};
+    }
     const storedEntry = loadDeviceAuthToken({
       deviceId: params.deviceId,
       gatewayUrl: this.opts.url,
@@ -597,8 +597,7 @@ export class GatewayBrowserClient {
       token: this.opts.token,
       bootstrapToken: this.opts.bootstrapToken,
       password: this.opts.password,
-      storedToken:
-        storedTokenCanRead && !this.pendingCredentialFreeRetry ? storedEntry?.token : undefined,
+      storedToken: storedTokenCanRead ? storedEntry?.token : undefined,
       storedScopes: storedEntry?.scopes,
       pendingDeviceTokenRetry: this.pendingDeviceTokenRetry,
       trustedDeviceTokenRetry: isTrustedRetryEndpoint(this.opts.url),
@@ -675,13 +674,12 @@ export class GatewayBrowserClient {
     const connectErrorCode = resolveGatewayErrorDetailCode(connectError);
     // This decision drives both scheduling and the store's reconnect rendering.
     const retry =
-      this.pendingCredentialFreeRetry ||
-      (connectErrorCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH
+      connectErrorCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH
         ? this.pendingDeviceTokenRetry
         : !shouldPauseGatewayReconnect({
             details: connectError?.details,
             protocolMismatchIsTerminal: true,
-          }));
+          });
     return { retry, notify: true, pendingError: error };
   }
 

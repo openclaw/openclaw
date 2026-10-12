@@ -5,6 +5,7 @@ import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../components/login-gate.ts";
 import { i18n } from "../i18n/index.ts";
+import { storeDeviceAuthToken } from "../lib/nodes/index.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import "./app-host.ts";
 import type { OpenClawApp } from "./app-root.ts";
@@ -34,12 +35,12 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function createWarmSurface(warm = true) {
+function createWarmSurface(warm = true, authMethod = "token") {
   if (warm) {
     const scope = gatewayCredentialScope(loadSettings().gatewayUrl);
     const record: BootRecord = {
       version: 2,
-      authMethod: "token",
+      authMethod,
       credential: "9d17676d",
       savedAt: Date.now(),
       scope,
@@ -78,7 +79,27 @@ describe("warm boot app root", () => {
       token: "synthetic-native-token",
     };
     try {
-      const { snapshot, container, draw } = createWarmSurface(false);
+      localStorage.setItem(
+        "openclaw-device-identity-v1",
+        JSON.stringify({
+          version: 1,
+          deviceId: "previous-visitor",
+          publicKey: "AA",
+          privateKey: "AA",
+          createdAtMs: 1,
+        }),
+      );
+      storeDeviceAuthToken({
+        deviceId: "previous-visitor",
+        role: "operator",
+        gatewayUrl: `ws://${window.location.host}`,
+        token: "test-token",
+        scopes: ["operator.admin", "operator.read"],
+      });
+      const { snapshot, container, draw } = createWarmSurface(true, "device-token");
+      expect(runtime!.warmBoot).toBe(false);
+      expect(runtime!.context.gateway.hasStoredDeviceToken?.()).toBe(false);
+      expect(runtime!.context.gateway.forgetDeviceToken?.()).toBe(false);
       expect(runtime!.context.gateway.connection.gatewayUrl).toBe(`ws://${window.location.host}`);
       expect(runtime!.context.gateway.connection.token).toBe("");
       expect(runtime!.context.gateway.connection.bootstrapToken).toBe("");

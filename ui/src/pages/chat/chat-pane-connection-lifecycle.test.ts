@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://chat-pane-connection-lifecycle.test/"} */
+import { GATEWAY_OWNER_PROFILE_ID } from "../../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -261,11 +262,38 @@ describe("chat pane connection lifecycle", () => {
   });
 
   it.each([
-    { surface: "direct", remoteIngress: false },
-    { surface: "ingress", remoteIngress: true },
+    { surface: "direct", remoteIngress: false, profileId: undefined, full: false, questions: 1 },
+    {
+      surface: "unresolved ingress",
+      remoteIngress: true,
+      profileId: undefined,
+      full: false,
+      questions: 0,
+    },
+    {
+      surface: "owner ingress",
+      remoteIngress: true,
+      profileId: GATEWAY_OWNER_PROFILE_ID,
+      full: false,
+      questions: 0,
+    },
+    {
+      surface: "full owner ingress",
+      remoteIngress: true,
+      profileId: GATEWAY_OWNER_PROFILE_ID,
+      full: true,
+      questions: 1,
+    },
+    {
+      surface: "person ingress",
+      remoteIngress: true,
+      profileId: "verified-person",
+      full: false,
+      questions: 1,
+    },
   ])(
     "refreshes the transcript before secondary hydration after a $surface reconnect",
-    async ({ remoteIngress }) => {
+    async ({ remoteIngress, profileId, full, questions }) => {
       if (remoteIngress) {
         document.documentElement.setAttribute("data-openclaw-remote-ingress", "true");
       }
@@ -289,10 +317,15 @@ describe("chat pane connection lifecycle", () => {
         callback(0);
         return 1;
       });
-      const hello = sessionMutationGatewayHello(["operator.read", "operator.write"]);
+      const hello = sessionMutationGatewayHello(
+        full ? ["operator.admin"] : ["operator.read", "operator.write"],
+      );
       const snapshot = {
         ...pane.context.gateway.snapshot,
         client,
+        selfUser: profileId
+          ? { id: profileId, identity: { type: "profile" as const, id: profileId } }
+          : undefined,
         hello: {
           ...hello,
           features: { methods: [...(hello.features?.methods ?? []), "question.list"] },
@@ -324,7 +357,7 @@ describe("chat pane connection lifecycle", () => {
       await expect(chatHistoryRequests(state).subscriptionReady).resolves.toBe(true);
       expect(request.mock.calls.filter(([method]) => method === "chat.startup")).toHaveLength(1);
       expect(request.mock.calls.filter(([method]) => method === "question.list")).toHaveLength(
-        remoteIngress ? 0 : 1,
+        questions,
       );
       expect(request).toHaveBeenCalledWith(
         "chat.startup",
