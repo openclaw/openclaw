@@ -1,12 +1,24 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { WebSocket } from "ws";
-import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
+import { captureNodePairingGeneration } from "../infra/device-pairing-node-state.js";
 import { approveNodePairing, requestNodePairing } from "../infra/device-pairing-node.js";
-import { getPairedDevice, withPairedDeviceRecords } from "../infra/device-pairing.js";
+import {
+  getPairedDevice,
+  updatePairedDevicePresence,
+  withPairedDeviceRecords,
+} from "../infra/device-pairing.js";
 import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
+import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import type { GatewayClient } from "./client.js";
 import { pairDeviceIdentity } from "./device-authz.test-helpers.js";
+import * as nodeInvokeReadiness from "./node-invoke-readiness.js";
+import * as requestAuthorization from "./server-methods/request-authorization.js";
 import { connectGatewayClient } from "./test-helpers.e2e.js";
 import { installGatewayTestHooks, rpcReq } from "./test-helpers.js";
 import { installConnectedControlUiServerSuite } from "./test-with-server.js";
@@ -186,7 +198,125 @@ test("delivers node commands and node requests across an unrelated missed pairin
   expect(pairingHook.afterResolve).toBeUndefined();
 });
 
-test.each(["token revoke", "token rotate", "unpair"] as const)(
+test("delivers node commands and node requests during an unrelated pending pairing write", async ({
+  signal,
+}) => {
+  const nodeA = await connectPairedNode("publication-pending-node-a");
+  const nodeB = await connectPairedNode("publication-pending-node-b");
+  const generation = await captureNodePairingGeneration(nodeB.nodeId);
+  if (!generation) {
+    throw new Error("expected unrelated paired node generation");
+  }
+
+  for (const path of ["node-registry-private", "request-authorization"] as const) {
+    const entered = createDeferred();
+    const release = createDeferred();
+    const dispatchSettled = createDeferred();
+    const authorized =
+      createDeferred<
+        Awaited<ReturnType<typeof requestAuthorization.authorizeGatewayRequestPreDispatch>>
+      >();
+    const originalInvoke = nodeInvokeReadiness.invokeNodeWithReadinessRetry;
+    const invoke = vi
+      .spyOn(nodeInvokeReadiness, "invokeNodeWithReadinessRetry")
+      .mockImplementationOnce(async (...args) => {
+        try {
+          return await originalInvoke(...args);
+        } finally {
+          dispatchSettled.resolve();
+        }
+      });
+    const originalAuthorize = requestAuthorization.authorizeGatewayRequestPreDispatch;
+    const authorize = vi
+      .spyOn(requestAuthorization, "authorizeGatewayRequestPreDispatch")
+      .mockImplementation(async (...args) => {
+        const result = await originalAuthorize(...args);
+        if (
+          args[0].method === "node.event" &&
+          args[0].client?.connect.device?.id === nodeA.nodeId
+        ) {
+          authorized.resolve(result);
+        }
+        return result;
+      });
+    const original = stateWorker.runOpenClawStateWorkerOperation;
+    const writer = vi
+      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+      .mockImplementationOnce(async (...args) => {
+        entered.resolve();
+        await release.promise;
+        return original(...args);
+      });
+    let mutation: Promise<boolean> | undefined;
+    afterNextResolution(nodeA.nodeId, path, async () => {
+      mutation = updatePairedDevicePresence(
+        nodeB.nodeId,
+        { lastSeenAtMs: path === "node-registry-private" ? 2 : 3, lastSeenReason: path },
+        generation,
+      );
+      await awaitGateBeforeSettlement(entered.promise, mutation, "pairing mutation was not held");
+    });
+    try {
+      if (path === "node-registry-private") {
+        const invoked = invokeCanvasSnapshot(nodeA.nodeId, "publication-unrelated-pending-write");
+        const frame = await withinTest(
+          Promise.race([
+            nodeA.invokeFrame,
+            dispatchSettled.promise.then(() => undefined),
+            invoked.then(() => undefined),
+          ]),
+          signal,
+        );
+        // Receiving the frame before releasing the writer proves delivery during the mutation.
+        expect.soft(nodeA.received).toHaveLength(1);
+        const answered = frame
+          ? nodeA.client.request("node.invoke.result", {
+              id: frame.id,
+              nodeId: frame.nodeId,
+              ok: true,
+              payloadJSON: JSON.stringify({ snapshot: "synthetic" }),
+            })
+          : undefined;
+        if (frame) {
+          expect(frame).toMatchObject({ nodeId: nodeA.nodeId, command: "canvas.snapshot" });
+        }
+        release.resolve();
+        await withinTest(Promise.resolve(answered), signal);
+        const result = await withinTest(invoked, signal);
+        expect.soft(result.ok, result.error?.message).toBe(true);
+      } else {
+        const requested = nodeA.client.request("node.event", unsupportedEvent);
+        const authorization = await withinTest(
+          awaitGateBeforeSettlement(
+            authorized.promise,
+            requested,
+            "node request settled before authorization",
+          ),
+          signal,
+        );
+        expect.soft(authorization.error).toBeNull();
+        // The handler performs another pairing lookup, which legitimately waits for this lock.
+        release.resolve();
+        await expect.soft(withinTest(requested, signal)).resolves.toEqual({
+          ok: true,
+          event: unsupportedEvent.event,
+          handled: false,
+          reason: "unsupported_event",
+        });
+      }
+      expect(pairingHook.afterResolve).toBeUndefined();
+    } finally {
+      release.resolve();
+      await Promise.allSettled(mutation ? [mutation] : []);
+      writer.mockRestore();
+      invoke.mockRestore();
+      authorize.mockRestore();
+    }
+    expect(await mutation).toBe(true);
+  }
+});
+
+test.each(["token revoke", "token rotate", "unpair", "node reapproval"] as const)(
   "refuses a node whose pairing changes during dispatch preparation: %s",
   async (change) => {
     const node = await connectPairedNode(`publication-${change.replaceAll(" ", "-")}`);
@@ -203,18 +333,37 @@ test.each(["token revoke", "token rotate", "unpair"] as const)(
         invoked,
         "invoke settled before pairing lookup",
       );
-      const changed =
-        change === "unpair"
-          ? await rpcReq(ws, "device.pair.remove", { deviceId: node.nodeId })
-          : await rpcReq(
-              ws,
-              change === "token revoke" ? "device.token.revoke" : "device.token.rotate",
-              {
-                deviceId: node.nodeId,
-                role: "node",
-              },
-            );
-      expect(changed.ok, changed.error?.message).toBe(true);
+      if (change === "node reapproval") {
+        const previous = await captureNodePairingGeneration(node.nodeId);
+        expect(previous).not.toBeNull();
+        const pending = await requestNodePairing({
+          nodeId: node.nodeId,
+          platform: "macos",
+          deviceFamily: "Mac",
+          commands: ["canvas.snapshot"],
+          permissions: { accessibility: true },
+        });
+        const changed = await rpcReq(ws, "node.pair.approve", {
+          requestId: pending.request.requestId,
+        });
+        expect(changed.ok, changed.error?.message).toBe(true);
+        const current = await captureNodePairingGeneration(node.nodeId);
+        expect(current).not.toBeNull();
+        expect(current?.key).not.toBe(previous?.key);
+      } else {
+        const changed =
+          change === "unpair"
+            ? await rpcReq(ws, "device.pair.remove", { deviceId: node.nodeId })
+            : await rpcReq(
+                ws,
+                change === "token revoke" ? "device.token.revoke" : "device.token.rotate",
+                {
+                  deviceId: node.nodeId,
+                  role: "node",
+                },
+              );
+        expect(changed.ok, changed.error?.message).toBe(true);
+      }
     } finally {
       release.resolve();
     }
@@ -222,9 +371,19 @@ test.each(["token revoke", "token rotate", "unpair"] as const)(
     expect(result.ok).toBe(false);
     expect(result.error?.message).toBe("node pairing changed while invocation was active");
     expect(node.received).toEqual([]);
-    await expect(node.client.request("node.event", unsupportedEvent)).rejects.toThrow(
-      /device removed|not connected|pairing changed/,
-    );
+    if (change === "node reapproval") {
+      // Reapproval refreshes the live session, while the old prepared invoke remains refused.
+      await expect(node.client.request("node.event", unsupportedEvent)).resolves.toEqual({
+        ok: true,
+        event: unsupportedEvent.event,
+        handled: false,
+        reason: "unsupported_event",
+      });
+    } else {
+      await expect(node.client.request("node.event", unsupportedEvent)).rejects.toThrow(
+        /device removed|not connected|pairing changed/,
+      );
+    }
     expect(node.received).toEqual([]);
   },
 );
