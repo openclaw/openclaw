@@ -1,4 +1,5 @@
-import { copyFileSync, renameSync } from "node:fs";
+import { copyFileSync, mkdirSync, renameSync } from "node:fs";
+import path from "node:path";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
@@ -185,4 +186,94 @@ it("rolls receipt migration back with schema publication failure", () => {
   } finally {
     after.close();
   }
+});
+
+it("opens databases with early cron tables before creating cron indexes", () => {
+  const stateDir = tempDirs.make("early-cron-migration-");
+  const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+  mkdirSync(path.dirname(databasePath), { recursive: true });
+  const db = new DatabaseSync(databasePath);
+  const jobJson = JSON.stringify({
+    id: "legacy-job",
+    name: "Legacy job",
+    enabled: true,
+    deleteAfterRun: true,
+    createdAtMs: 123,
+    updatedAtMs: 456,
+    agentId: "agent-a",
+    sessionKey: "agent:agent-a:main",
+    schedule: { kind: "every", everyMs: 3_600_000, anchorMs: 0 },
+    payload: { kind: "agentTurn", message: "hello", model: "anthropic/claude-sonnet-4-6" },
+    delivery: {
+      mode: "announce",
+      channel: "telegram",
+      to: "chat-1",
+      accountId: "acct-1",
+      bestEffort: true,
+      failureDestination: { to: "https://example.invalid/hook" },
+    },
+    failureAlert: { mode: "announce", channel: "discord", to: "ops", after: 2 },
+  });
+  const projectedJobJson = JSON.stringify({ delivery: { threadId: 1008013 } });
+  db.exec(`
+    CREATE TABLE cron_jobs (
+      store_key TEXT NOT NULL,
+      job_id TEXT NOT NULL,
+      name TEXT NOT NULL DEFAULT '',
+      schedule_kind TEXT NOT NULL DEFAULT 'manual',
+      payload_kind TEXT NOT NULL DEFAULT 'message',
+      delivery_thread_id TEXT,
+      job_json TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (store_key, job_id)
+    );
+  `);
+  db.prepare(
+    `INSERT INTO cron_jobs (store_key, job_id, job_json, updated_at)
+       VALUES (?, ?, ?, ?)`,
+  ).run(path.join(stateDir, "cron", "jobs.json"), "legacy-job", jobJson, 456);
+  db.prepare(
+    `INSERT INTO cron_jobs (
+       store_key, job_id, name, schedule_kind, payload_kind, delivery_thread_id, job_json, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    path.join(stateDir, "cron", "jobs.json"),
+    "already-projected-job",
+    "Already projected",
+    "every",
+    "agentTurn",
+    null,
+    projectedJobJson,
+    456,
+  );
+  db.close();
+
+  const database = openOpenClawStateDatabase({
+    env: { OPENCLAW_STATE_DIR: stateDir },
+  });
+
+  expect(
+    database.db
+      .prepare(
+        `SELECT name, enabled, payload_kind, agent_id, job_json
+           FROM cron_jobs
+          WHERE job_id = ?`,
+      )
+      .get("legacy-job"),
+  ).toEqual({
+    enabled: 1,
+    agent_id: "agent-a",
+    name: "Legacy job",
+    payload_kind: "agentTurn",
+    job_json: jobJson,
+  });
+  expect(
+    database.db
+      .prepare(
+        `SELECT json_extract(job_json, '$.delivery.threadId') AS delivery_thread_id
+           FROM cron_jobs
+          WHERE job_id = ?`,
+      )
+      .get("already-projected-job"),
+  ).toEqual({ delivery_thread_id: 1008013 });
 });
