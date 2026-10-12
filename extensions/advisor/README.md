@@ -1,17 +1,17 @@
-# Progress Review (plugin)
+# Advisor (plugin)
 
 Experimental and off by default. Every few turns, or after enough minutes of
-agent run time, a reviewer model reads a conversation's recent agent work. When
+agent run time, an advisor model reads a conversation's recent agent work. When
 it finds avoidable work, such as drifting beyond the request or repeated tool
 calls, the agent receives one short correction on its next turn.
 
-Enable it in **Settings → Agents & Tools → Labs → Progress review**, or:
+Enable it in **Settings → Agents & Tools → Labs → Advisor**, or:
 
 ```json
 {
   "plugins": {
     "entries": {
-      "progress-review": {
+      "advisor": {
         "enabled": true,
         "config": { "everyTurns": 10, "everyMinutes": 20 }
       }
@@ -27,7 +27,7 @@ for that model only:
 {
   "plugins": {
     "entries": {
-      "progress-review": {
+      "advisor": {
         "config": { "model": "openai/gpt-6.1-sol" },
         "subagent": { "allowModelOverride": true, "allowedModels": ["openai/gpt-6.1-sol"] }
       }
@@ -36,4 +36,4 @@ for that model only:
 }
 ```
 
-Docs: https://docs.openclaw.ai/concepts/experimental-features#progress-review
+Docs: https://docs.openclaw.ai/concepts/experimental-features#advisor

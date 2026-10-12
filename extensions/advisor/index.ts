@@ -1,5 +1,5 @@
 import { definePluginEntry, type PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
-import { createProgressReviewController, type ProgressReviewSchedule } from "./src/controller.js";
+import { createAdvisorController, type AdvisorSchedule } from "./src/controller.js";
 import {
   buildReviewMessage,
   DELIVERY_PREFIX,
@@ -8,13 +8,13 @@ import {
   REVIEW_TIMEOUT_MS,
 } from "./src/review.js";
 
-const DEFAULT_SCHEDULE: ProgressReviewSchedule = { everyTurns: 10, everyMinutes: 20 };
+const DEFAULT_SCHEDULE: AdvisorSchedule = { everyTurns: 10, everyMinutes: 20 };
 const ADVICE_TTL_MS = 24 * 60 * 60 * 1000;
 // Heartbeat, cron, memory-flush and overflow runs are not user-directed work.
 const REVIEWED_TRIGGERS = new Set([undefined, "user", "manual"]);
 
-function resolveSchedule(config: Record<string, unknown> | undefined): ProgressReviewSchedule {
-  const read = (key: keyof ProgressReviewSchedule) => {
+function resolveSchedule(config: Record<string, unknown> | undefined): AdvisorSchedule {
+  const read = (key: keyof AdvisorSchedule) => {
     const value = config?.[key];
     return typeof value === "number" ? value : DEFAULT_SCHEDULE[key];
   };
@@ -22,8 +22,8 @@ function resolveSchedule(config: Record<string, unknown> | undefined): ProgressR
 }
 
 export default definePluginEntry({
-  id: "progress-review",
-  name: "Progress Review",
+  id: "advisor",
+  name: "Advisor",
   description:
     "Experimental: periodically reviews a conversation's recent agent work and gives the agent one short correction on its next turn.",
   register(api) {
@@ -32,14 +32,14 @@ export default definePluginEntry({
     const model = typeof api.pluginConfig?.model === "string" ? api.pluginConfig.model : undefined;
     if (schedule.everyTurns === 0 && schedule.everyMinutes === 0) {
       api.logger.warn(
-        "progress-review: both everyTurns and everyMinutes are 0, so no reviews will run. Set either to a positive value.",
+        "advisor: both everyTurns and everyMinutes are 0, so no reviews will run. Set either to a positive value.",
       );
       return;
     }
     // Reviews must not inherit the finished turn's authority, which closes with the turn.
     // The service scheduler runs them under the plugin's own lifetime instead.
     let scheduler: PluginServiceSchedulerV1 | undefined;
-    const controller = createProgressReviewController({
+    const controller = createAdvisorController({
       schedule,
       logger: api.logger,
       runInBackground: (sessionKey, run) => {
@@ -65,7 +65,7 @@ export default definePluginEntry({
           sessionKey,
           agentId,
           text: `${DELIVERY_PREFIX}\n\n${finding}`,
-          idempotencyKey: `progress-review:${reviewId}`,
+          idempotencyKey: `advisor:${reviewId}`,
           ttlMs: ADVICE_TTL_MS,
         });
         return result.enqueued;
@@ -74,7 +74,7 @@ export default definePluginEntry({
 
     api.registerService({
       apiVersion: 2,
-      id: "progress-review",
+      id: "advisor",
       start: (ctx) => {
         scheduler = ctx.scheduler;
       },
@@ -97,8 +97,8 @@ export default definePluginEntry({
     });
 
     api.registerRuntimeLifecycle({
-      id: "progress-review",
-      description: "Cancels in-flight progress reviews when sessions or the plugin go away.",
+      id: "advisor",
+      description: "Cancels in-flight advisor reviews when sessions or the plugin go away.",
       cleanup: ({ sessionKey }) => controller.forget(sessionKey),
       dispose: () => controller.forget(),
     });

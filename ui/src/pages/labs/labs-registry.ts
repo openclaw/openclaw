@@ -88,9 +88,9 @@ export const LAB_FEATURES = (
     },
     {
       ...BOOLEAN_GATE,
-      id: "progressReview",
-      docsUrl: "https://docs.openclaw.ai/concepts/experimental-features#progress-review",
-      configPath: ["plugins", "entries", "progress-review", "enabled"],
+      id: "advisor",
+      docsUrl: "https://docs.openclaw.ai/concepts/experimental-features#advisor",
+      configPath: ["plugins", "entries", "advisor", "enabled"],
     },
     {
       ...BOOLEAN_GATE,

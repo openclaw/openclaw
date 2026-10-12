@@ -1,8 +1,8 @@
 {
-  "name": "@openclaw/progress-review",
+  "name": "@openclaw/advisor",
   "version": "2026.9.9",
   "private": true,
-  "description": "OpenClaw experimental periodic progress review",
+  "description": "OpenClaw experimental periodic agent advisor",
   "type": "module",
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

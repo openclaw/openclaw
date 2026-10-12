@@ -1,8 +1,8 @@
 ---
 summary: "Experimental: periodically reviews a conversation's recent agent work and gives the agent one short correction on its next turn."
 read_when:
-  - You are installing, configuring, or auditing the progress-review plugin
-title: "Progress Review plugin reference"
+  - You are installing, configuring, or auditing the advisor plugin
+title: "Advisor plugin reference"
 ---
 
 <!-- Generated file. Do not edit by hand.
@@ -14,7 +14,7 @@ Experimental: periodically reviews a conversation's recent agent work and gives 
 
 ## Distribution
 
-- Package: `@openclaw/progress-review`
+- Package: `@openclaw/advisor`
 - Install route: included in OpenClaw
 
 ## Surface

@@ -174,8 +174,8 @@ describe("LabsPage", () => {
     expect(runtimeConfig.patch).not.toHaveBeenCalled();
     expect(page.textContent).toContain("Host Desktop");
     expect(page.textContent).toContain("Cloud Worker Desktop");
-    expect(page.textContent).toContain("Progress review");
-    expect(labToggle(page, "Progress review").checked).toBe(false);
+    expect(page.textContent).toContain("Advisor");
+    expect(labToggle(page, "Advisor").checked).toBe(false);
     expect(page.querySelector('input[aria-label="Review every N turns"]')).toBeNull();
     expect(page.querySelector("openclaw-select-picker")).toBeNull();
     expect(codeModeToggle(page).checked).toBe(true);
@@ -355,32 +355,29 @@ describe("LabsPage", () => {
     });
   });
 
-  it.each([true, false])(
-    "sets Progress review to %s without changing its settings",
-    async (enabled) => {
-      const settings = { everyTurns: 7, everyMinutes: 15 };
-      const sourceConfig = {
-        plugins: { entries: { "progress-review": { enabled: !enabled, config: settings } } },
-      };
-      const { page, runtimeConfig } = await mountPage(sourceConfig);
-      const toggle = labToggle(page, "Progress review");
-      toggle.checked = enabled;
-      toggle.dispatchEvent(new Event("change", { bubbles: true }));
+  it.each([true, false])("sets Advisor to %s without changing its settings", async (enabled) => {
+    const settings = { everyTurns: 7, everyMinutes: 15 };
+    const sourceConfig = {
+      plugins: { entries: { advisor: { enabled: !enabled, config: settings } } },
+    };
+    const { page, runtimeConfig } = await mountPage(sourceConfig);
+    const toggle = labToggle(page, "Advisor");
+    toggle.checked = enabled;
+    toggle.dispatchEvent(new Event("change", { bubbles: true }));
 
-      await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
-      const patch = runtimeConfig.patch.mock.calls[0]?.[0].raw;
-      expect(patch).toEqual({
-        plugins: { entries: { "progress-review": { enabled: enabled ? true : null } } },
-      });
-      expect(applyMergePatch(sourceConfig, patch)).toEqual({
-        plugins: {
-          entries: {
-            "progress-review": { ...(enabled ? { enabled: true } : {}), config: settings },
-          },
+    await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+    const patch = runtimeConfig.patch.mock.calls[0]?.[0].raw;
+    expect(patch).toEqual({
+      plugins: { entries: { advisor: { enabled: enabled ? true : null } } },
+    });
+    expect(applyMergePatch(sourceConfig, patch)).toEqual({
+      plugins: {
+        entries: {
+          advisor: { ...(enabled ? { enabled: true } : {}), config: settings },
         },
-      });
-    },
-  );
+      },
+    });
+  });
 
   it.each([
     { label: "Review every N turns", key: "everyTurns", value: 0, defaultValue: "10" },
@@ -388,7 +385,7 @@ describe("LabsPage", () => {
   ])("saves only $key and retains the other plugin settings", async (testCase) => {
     const sibling = testCase.key === "everyTurns" ? { everyMinutes: 35 } : { everyTurns: 8 };
     const sourceConfig = {
-      plugins: { entries: { "progress-review": { enabled: true, config: sibling } } },
+      plugins: { entries: { advisor: { enabled: true, config: sibling } } },
     };
     const { page, runtimeConfig } = await mountPage(sourceConfig);
     const input = page.querySelector<HTMLInputElement>(`input[aria-label="${testCase.label}"]`)!;
@@ -400,12 +397,12 @@ describe("LabsPage", () => {
     await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
     const patch = runtimeConfig.patch.mock.calls[0]?.[0].raw;
     expect(patch).toEqual({
-      plugins: { entries: { "progress-review": { config: { [testCase.key]: testCase.value } } } },
+      plugins: { entries: { advisor: { config: { [testCase.key]: testCase.value } } } },
     });
     expect(applyMergePatch(sourceConfig, patch)).toEqual({
       plugins: {
         entries: {
-          "progress-review": {
+          advisor: {
             enabled: true,
             config: { ...sibling, [testCase.key]: testCase.value },
           },
@@ -426,7 +423,7 @@ describe("LabsPage", () => {
     const sourceConfig = {
       plugins: {
         entries: {
-          "progress-review": {
+          advisor: {
             enabled: true,
             config: { everyTurns: 7, everyMinutes: 15, model: "test/previous" },
             subagent: { allowModelOverride: true, allowedModels: ["test/previous"] },
@@ -436,11 +433,11 @@ describe("LabsPage", () => {
     };
     const { page, runtimeConfig } = await mountPage(sourceConfig);
     await updatePickers(page);
-    const picker = labRow(page, "Reviewer model").querySelector<SelectPicker>(
+    const picker = labRow(page, "Advisor model").querySelector<SelectPicker>(
       "openclaw-select-picker",
     )!;
     expect(picker.querySelector('[role="option"]')?.textContent).toContain("Agent's model");
-    expect(labRow(page, "Reviewer model").classList.contains("settings-row--nested")).toBe(true);
+    expect(labRow(page, "Advisor model").classList.contains("settings-row--nested")).toBe(true);
     expect(labRow(page, "Code Mode executor").classList.contains("settings-row--nested")).toBe(
       true,
     );
@@ -449,14 +446,12 @@ describe("LabsPage", () => {
     await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
     const request = runtimeConfig.patch.mock.calls[0]![0];
     // Replacing an existing trust list must name it; the Gateway rejects silent array shrinks.
-    expect(request.replacePaths).toEqual([
-      "plugins.entries.progress-review.subagent.allowedModels",
-    ]);
+    expect(request.replacePaths).toEqual(["plugins.entries.advisor.subagent.allowedModels"]);
     const patch = request.raw;
     expect(patch).toEqual({
       plugins: {
         entries: {
-          "progress-review": {
+          advisor: {
             config: { model: testCase.model },
             subagent: testCase.subagent,
           },
@@ -466,7 +461,7 @@ describe("LabsPage", () => {
     expect(applyMergePatch(sourceConfig, patch)).toEqual({
       plugins: {
         entries: {
-          "progress-review": {
+          advisor: {
             enabled: true,
             config: {
               everyTurns: 7,
@@ -487,7 +482,7 @@ describe("LabsPage", () => {
     { label: "Review every N minutes", value: "1441" },
   ])("rejects $value for $label without saving", async ({ label, value }) => {
     const { page, runtimeConfig } = await mountPage({
-      plugins: { entries: { "progress-review": { enabled: true } } },
+      plugins: { entries: { advisor: { enabled: true } } },
     });
     const input = page.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!;
     input.value = value;
@@ -499,9 +494,9 @@ describe("LabsPage", () => {
     expect(runtimeConfig.patch).not.toHaveBeenCalled();
   });
 
-  it("shows Progress review setting save failures", async () => {
+  it("shows Advisor setting save failures", async () => {
     const { page, runtimeConfig } = await mountPage({
-      plugins: { entries: { "progress-review": { enabled: true } } },
+      plugins: { entries: { advisor: { enabled: true } } },
     });
     runtimeConfig.state.lastError = "Could not save review interval";
     runtimeConfig.patch.mockResolvedValueOnce(false);

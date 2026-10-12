@@ -1,15 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { buildReviewEvidence, type ReviewEvidence } from "./evidence.js";
 
-export type ProgressReviewSchedule = {
+export type AdvisorSchedule = {
   /** Completed agent turns between reviews; 0 turns this trigger off. */
   everyTurns: number;
   /** Minutes of accumulated agent run time between reviews; 0 turns this trigger off. */
   everyMinutes: number;
 };
 
-type ProgressReviewDeps = {
-  schedule: ProgressReviewSchedule;
+type AdvisorDeps = {
+  schedule: AdvisorSchedule;
   /** Resolves to the finding, or null when the reviewer found nothing to correct. */
   review: (input: {
     agentId: string;
@@ -37,7 +37,7 @@ type SessionState = {
 
 const MAX_TRACKED_SESSIONS = 1000;
 
-export function createProgressReviewController(deps: ProgressReviewDeps) {
+export function createAdvisorController(deps: AdvisorDeps) {
   const sessions = new Map<string, SessionState>();
   const everyMs = deps.schedule.everyMinutes * 60_000;
 
@@ -89,15 +89,15 @@ export function createProgressReviewController(deps: ProgressReviewDeps) {
       }
       resetInterval(state);
       if (!finding) {
-        deps.logger.info(`progress-review: no correction for session ${sessionKey}`);
+        deps.logger.info(`advisor: no correction for session ${sessionKey}`);
         return;
       }
       state.previousAdvice = finding;
       const queued = await deps.deliver({ agentId, sessionKey, finding, reviewId: randomUUID() });
       deps.logger.info(
         queued
-          ? `progress-review: queued a correction for the next turn of session ${sessionKey}`
-          : `progress-review: the host did not queue the correction for session ${sessionKey}`,
+          ? `advisor: queued a correction for the next turn of session ${sessionKey}`
+          : `advisor: the host did not queue the correction for session ${sessionKey}`,
       );
     } catch (error) {
       if (controller.signal.aborted) {
@@ -106,7 +106,7 @@ export function createProgressReviewController(deps: ProgressReviewDeps) {
       // A failed review waits a full interval: persistent provider errors must not cost a call per turn.
       resetInterval(state);
       deps.logger.warn(
-        `progress-review: review failed for session ${sessionKey}: ${error instanceof Error ? error.message : String(error)}`,
+        `advisor: review failed for session ${sessionKey}: ${error instanceof Error ? error.message : String(error)}`,
       );
     } finally {
       if (state.inFlight === controller) {

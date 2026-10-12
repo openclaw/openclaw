@@ -85,7 +85,7 @@ function setup(pluginConfig: Record<string, unknown>) {
   // Every settled review logs exactly once.
   const warn = vi.fn(() => finished.notify());
   const api = createTestPluginApi({
-    id: "progress-review",
+    id: "advisor",
     pluginConfig,
     logger: { info: vi.fn(() => finished.notify()), warn, error: vi.fn(), debug: vi.fn() },
     runtime: { subagent: { complete } } as unknown as OpenClawPluginApi["runtime"],
@@ -138,7 +138,7 @@ function setup(pluginConfig: Record<string, unknown>) {
   };
 }
 
-describe("progress-review", () => {
+describe("advisor", () => {
   it("reviews after the configured turns, outside the turn, and queues one correction", async () => {
     const run = setup({ everyTurns: 2, everyMinutes: 0 });
     await run.startService();
@@ -147,7 +147,7 @@ describe("progress-review", () => {
     // The turn's own hook never calls the model; the service scheduler does.
     expect(run.complete).not.toHaveBeenCalled();
     const review = await run.dispatchReview();
-    // Without a configured reviewer model the host uses the agent's own model.
+    // Without a configured advisor model the host uses the agent's own model.
     expect(run.complete.mock.calls[0]?.[0]).not.toHaveProperty("model");
     const evidence = JSON.parse(review.message);
     expect(evidence.requests[0].text).toContain("Fix the typo");
@@ -172,7 +172,7 @@ describe("progress-review", () => {
     expect(JSON.parse(next.message).previousAdvice).toContain("Stop editing CI");
   });
 
-  it("triggers on accumulated run minutes, uses the configured reviewer model, and stays silent on NO_CHANGE", async () => {
+  it("triggers on accumulated run minutes, uses the configured advisor model, and stays silent on NO_CHANGE", async () => {
     const run = setup({ everyTurns: 0, everyMinutes: 1, model: "example/reviewer" });
     await run.startService();
     run.endTurn({}, 40_000);

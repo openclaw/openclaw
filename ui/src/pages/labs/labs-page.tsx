@@ -100,7 +100,7 @@ function LabsPageContent() {
     () => ({
       snapshot: gatewayView.read().snapshot,
       agentId: agentSelection.read().state.selectedId,
-      enabled: progressReviewPlugin()?.enabled === true,
+      enabled: advisorPlugin()?.enabled === true,
     }),
     ({ snapshot, agentId, enabled }) => {
       if (!enabled || snapshot.phase !== "connected" || !snapshot.client || !agentId) {
@@ -248,34 +248,34 @@ function LabsPageContent() {
           : null;
     return executor === "quickjs" ? "quickjs" : "node";
   }
-  function progressReviewPlugin() {
+  function advisorPlugin() {
     const plugins = editableConfig()?.plugins;
     const entries = isRecord(plugins) ? plugins.entries : undefined;
-    const plugin = isRecord(entries) ? entries["progress-review"] : undefined;
+    const plugin = isRecord(entries) ? entries["advisor"] : undefined;
     return isRecord(plugin) ? plugin : undefined;
   }
-  function progressReviewModel() {
+  function advisorModel() {
     const current = currentPending();
-    if (current?.featureId === "progressReviewModel" && typeof current.value === "string") {
+    if (current?.featureId === "advisorModel" && typeof current.value === "string") {
       return current.value;
     }
-    const settings = progressReviewPlugin()?.config;
+    const settings = advisorPlugin()?.config;
     return isRecord(settings) && typeof settings.model === "string" ? settings.model : "";
   }
-  function setProgressReviewModel(model: string) {
-    const subagent = progressReviewPlugin()?.subagent;
+  function setAdvisorModel(model: string) {
+    const subagent = advisorPlugin()?.subagent;
     // The Gateway refuses to shrink an existing array unless the patch names it.
     const replacePaths =
       isRecord(subagent) && Array.isArray(subagent.allowedModels)
-        ? ["plugins.entries.progress-review.subagent.allowedModels"]
+        ? ["plugins.entries.advisor.subagent.allowedModels"]
         : undefined;
     void updateSetting(
-      "progressReviewModel",
+      "advisorModel",
       model,
       {
         plugins: {
           entries: {
-            "progress-review": {
+            advisor: {
               config: { model: model || null },
               subagent: model ? { allowModelOverride: true, allowedModels: [model] } : null,
             },
@@ -285,26 +285,26 @@ function LabsPageContent() {
       replacePaths,
     );
   }
-  function progressReviewValue(key: "everyTurns" | "everyMinutes", defaultValue: number) {
+  function advisorValue(key: "everyTurns" | "everyMinutes", defaultValue: number) {
     const current = currentPending();
     if (current?.featureId === key && typeof current.value === "number") {
       return current.value;
     }
-    const settings = progressReviewPlugin()?.config;
+    const settings = advisorPlugin()?.config;
     return isRecord(settings) && typeof settings[key] === "number" ? settings[key] : defaultValue;
   }
-  function setProgressReviewInterval(key: "everyTurns" | "everyMinutes", raw: string, max: number) {
+  function setAdvisorInterval(key: "everyTurns" | "everyMinutes", raw: string, max: number) {
     const value = Number(raw);
     if (raw.trim() === "" || !Number.isInteger(value) || value < 0 || value > max) {
-      saveError = t("labsPage.progressReview.invalidValue", {
-        label: t(`labsPage.progressReview.${key}`),
+      saveError = t("labsPage.advisor.invalidValue", {
+        label: t(`labsPage.advisor.${key}`),
         max: String(max),
       });
       publish();
       return;
     }
     void updateSetting(key, value, {
-      plugins: { entries: { "progress-review": { config: { [key]: value } } } },
+      plugins: { entries: { advisor: { config: { [key]: value } } } },
     });
   }
   function FeatureRow(props: { feature: LabFeature }) {
@@ -400,28 +400,28 @@ function LabsPageContent() {
             }
           />
         ) : null}
-        {props.feature.id === "progressReview" && checked() ? (
+        {props.feature.id === "advisor" && checked() ? (
           <>
             <SettingsRow
               nested
-              title={t("labsPage.progressReview.model")}
-              description={t("labsPage.progressReview.modelDescription")}
+              title={t("labsPage.advisor.model")}
+              description={t("labsPage.advisor.modelDescription")}
               control={
                 <ModelPicker
-                  label={t("labsPage.progressReview.model")}
+                  label={t("labsPage.advisor.model")}
                   preserveOrder
-                  value={progressReviewModel()}
+                  value={advisorModel()}
                   options={[
-                    { value: "", label: t("labsPage.progressReview.agentModel") },
+                    { value: "", label: t("labsPage.advisor.agentModel") },
                     ...reviewerModels(),
                   ]}
                   custom={{
-                    label: t("labsPage.progressReview.customModel"),
-                    placeholder: t("labsPage.progressReview.customModelPlaceholder"),
+                    label: t("labsPage.advisor.customModel"),
+                    placeholder: t("labsPage.advisor.customModelPlaceholder"),
                     commit: "change",
                   }}
                   disabled={!canToggle()}
-                  onChange={setProgressReviewModel}
+                  onChange={setAdvisorModel}
                 />
               }
             />
@@ -436,8 +436,8 @@ function LabsPageContent() {
               {(setting) => (
                 <SettingsRow
                   nested
-                  title={t(`labsPage.progressReview.${setting.key}`)}
-                  description={t("labsPage.progressReview.triggerHelp")}
+                  title={t(`labsPage.advisor.${setting.key}`)}
+                  description={t("labsPage.advisor.triggerHelp")}
                   control={
                     <input
                       class="settings-input"
@@ -445,15 +445,11 @@ function LabsPageContent() {
                       min="0"
                       max={setting.max}
                       step="1"
-                      aria-label={t(`labsPage.progressReview.${setting.key}`)}
-                      value={progressReviewValue(setting.key, setting.defaultValue)}
+                      aria-label={t(`labsPage.advisor.${setting.key}`)}
+                      value={advisorValue(setting.key, setting.defaultValue)}
                       disabled={!canToggle()}
                       onChange={(event) =>
-                        setProgressReviewInterval(
-                          setting.key,
-                          event.currentTarget.value,
-                          setting.max,
-                        )
+                        setAdvisorInterval(setting.key, event.currentTarget.value, setting.max)
                       }
                     />
                   }

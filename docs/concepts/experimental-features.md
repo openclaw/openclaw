@@ -27,7 +27,7 @@ Custom plugin UI flag below controls user-installed native browser code only.
 | Cloud workers    | `cloudWorkers.desktop`                                                  | You want to watch or control desktop-capable cloud worker environments from the Control UI                                        | [Cloud Worker Desktop](/gateway/cloud-workers#desktop-interactive)                     |
 | Custom plugin UI | `gateway.controlUi.experimental.customPlugins`                          | You want trusted user-installed plugins to add native Control UI views or replace built-in views                                  | [Feature plugins](/plugins/feature-plugins#enable-custom-plugin-ui)                    |
 | Host Desktop     | `desktop.host.enabled`                                                  | You want to watch or control the Gateway host through its VNC or Screen Sharing server                                            | [Desktop](/gateway/configuration-reference#desktop)                                    |
-| Progress review  | `plugins.entries.progress-review.enabled`                               | You want a reviewer model to periodically check a conversation's agent work and give the agent one short correction               | [Progress review](#progress-review)                                                    |
+| Advisor          | `plugins.entries.advisor.enabled`                                       | You want an advisor model to periodically check a conversation's agent work and give the agent one short correction               | [Advisor](#advisor)                                                                    |
 | Speech bubbles   | `gateway.controlUi.experimental.chatBubbles`                            | You want to try conversation bubbles and compact activity; Home defaults on while the lab is enabled                              | [Chat](/web/control-ui/chat)                                                           |
 | Tool Search      | `tools.toolSearch.enabled`                                              | You want to control the global Tool Search default, which is enabled                                                              | [Tool Search](/tools/tool-search)                                                      |
 
@@ -37,7 +37,7 @@ Open **Settings → Labs** to manage experiments that have a
 Control UI switch. Enabling or disabling a lab patches the canonical Gateway
 config immediately without restarting the Gateway.
 
-Labs includes Speech bubbles, Decision assistance, Progress review, Code Mode, Tool Search for all models, Custom
+Labs includes Speech bubbles, Decision assistance, Advisor, Code Mode, Tool Search for all models, Custom
 plugin UI, Host Desktop, and Cloud Worker Desktop. Under the default reload mode, custom
 plugin views and desktop availability update in connected Control UI pages.
 Code Mode and Tool Search changes take effect for future agent runs.
@@ -227,27 +227,27 @@ remain unknown, not zero. DEBUG-off avoids the extra definition serialization.
 No conversation, tool payloads, full schemas, or credentials are logged by this
 record; existing logging and trace-correlation controls apply.
 
-## Progress review
+## Advisor
 
-Progress review is an experimental bundled plugin that is off by default. Every
-few turns, or after enough minutes of agent run time, a reviewer model reads the
+Advisor is an experimental bundled plugin that is off by default. Every
+few turns, or after enough minutes of agent run time, an advisor model reads the
 conversation's recent agent work and looks for the most costly avoidable problem:
 work drifting beyond what you asked, an earlier correction being ignored,
 repeated or stalled tool calls, or claims that the tool results do not support.
 When it finds one, the agent receives one short correction as hidden context on
 its next turn. When it finds nothing, nothing happens.
 
-Turn it on in **Settings → Agents & Tools → Labs → Progress review**, or in
+Turn it on in **Settings → Agents & Tools → Labs → Advisor**, or in
 config:
 
 ```json5
 {
   plugins: {
     entries: {
-      "progress-review": {
+      advisor: {
         enabled: true,
         config: { everyTurns: 10, everyMinutes: 20, model: "openai/gpt-6.1-sol" },
-        // Lets the background reviewer use only this model.
+        // Lets the background advisor use only this model.
         subagent: { allowModelOverride: true, allowedModels: ["openai/gpt-6.1-sol"] },
       },
     },
@@ -279,7 +279,7 @@ Behavior and limits:
   and the next review waits a full interval.
 - The correction arrives on the conversation's next turn and expires after
   24 hours. It is labeled as advice that the agent must check before acting.
-- Each review is one extra model call with the reviewer model (the agent's own
+- Each review is one extra model call with the advisor model (the agent's own
   model unless you choose one) and the agent's credentials. It sends a bounded excerpt of the conversation to that provider:
   recent user requests, assistant replies, and tool calls with short result
   previews.

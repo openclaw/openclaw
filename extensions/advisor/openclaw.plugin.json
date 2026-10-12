@@ -1,9 +1,9 @@
 {
-  "id": "progress-review",
+  "id": "advisor",
   "categories": [
     "agent-orchestration"
   ],
-  "name": "Progress Review",
+  "name": "Advisor",
   "description": "Experimental: periodically reviews a conversation's recent agent work and gives the agent one short correction on its next turn.",
   "activation": {
     "onStartup": true
@@ -41,9 +41,9 @@
       "help": "Review after this many minutes of accumulated agent run time in a conversation. 0 turns this trigger off."
     },
     "model": {
-      "label": "Reviewer model",
+      "label": "Advisor model",
       "placeholder": "openai/gpt-6.1-sol",
-      "help": "Optional provider/model for reviews. Empty uses the agent's model. Requires plugins.entries.progress-review.subagent.allowModelOverride (Labs sets it, limited to this model)."
+      "help": "Optional provider/model for reviews. Empty uses the agent's model. Requires plugins.entries.advisor.subagent.allowModelOverride (Labs sets it, limited to this model)."
     }
   },
   "version": "2026.9.9"
