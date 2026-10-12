@@ -335,6 +335,31 @@ export async function readPlacementProjection(
   );
 }
 
+/** Local claim writes change only placement; the owner retains the other projection facts. */
+export function projectLocalPlacementTurnClaim(
+  identity: DatabasePathIdentity,
+  placement: WorkerSessionPlacementRecord,
+): WorkerSessionPlacementReadResult["projection"] | undefined {
+  const owner = owners.get(identity.key);
+  if (
+    !owner?.active ||
+    placement.state !== "local" ||
+    hasPendingPublication(owner, placement.sessionId)
+  ) {
+    return undefined;
+  }
+  const retained = owner.projections.get(placement.sessionId);
+  if (!retained) {
+    return undefined;
+  }
+  const projection = structuredClone(retained.projection);
+  projection.placements = new Map(projection.placements).set(
+    placement.sessionId,
+    structuredClone(placement),
+  );
+  return projection;
+}
+
 export async function preparePlacementPreservationRead(
   pathname: string,
   read: () => Promise<WorkerSessionPlacementRecord[]>,

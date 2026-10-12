@@ -11,6 +11,7 @@ import { preparePlacementProjectionPublication } from "./placement-read-publicat
 import { isCurrentPlacementTurnClaim, type WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerSessionPlacementState } from "./placement-state.js";
 import {
+  projectLocalPlacementTurnClaim,
   stagePlacementTurnClaimWorkerPublication,
   stagePlacementWorkspaceResultWorkerPublication,
 } from "./placement-turn-authority.js";
@@ -160,6 +161,17 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
             throw new Error("Placement claim commit has no receipt");
           }
           prepared = facts;
+          if (
+            facts.placement &&
+            (command.type === "placementTurns.claim" ||
+              command.type === "placementTurns.release" ||
+              command.type === "placementTurns.releaseIfOwned")
+          ) {
+            facts.projection ??= projectLocalPlacementTurnClaim(
+              context.admission.identity,
+              facts.placement,
+            );
+          }
           if (facts.projection) {
             projectionPublication = preparePlacementProjectionPublication(
               context.admission.identity,
