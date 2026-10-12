@@ -81,6 +81,17 @@ async function fixture(version = "0.66.0") {
   };
 }
 
+async function warnScenario(candidateVersion: string) {
+  const root = tempDirs.make("crabbox-warn-");
+  const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
+  const candidate = path.join(root, "operator-crabbox");
+  await fs.writeFile(candidate, candidateVersion);
+  const binary = resolveManagedCrabboxBinaryPath(env);
+  await fs.mkdir(path.dirname(binary), { recursive: true });
+  await fs.writeFile(binary, CRABBOX_MIN_VERSION);
+  return { candidate, binary, env };
+}
+
 describe("managed Crabbox", () => {
   it("probes the executable in the caller's supplied environment and working directory", async () => {
     const root = tempDirs.make("crabbox-probe-env-");
@@ -571,6 +582,36 @@ describe("managed Crabbox", () => {
       }
     },
   );
+
+  it.each([
+    ["0.66.0", "outdated"],
+    ["not-a-version", "indeterminate"],
+  ])(
+    "warns once and names the rejected configured binary (%s)",
+    async (candidateVersion, status) => {
+      const { candidate, binary, env } = await warnScenario(candidateVersion);
+      const warn = vi.fn();
+
+      await expect(
+        ensureManagedCrabboxBinary({ binary: candidate, env, runCommand, warn }),
+      ).resolves.toEqual({ binary, version: CRABBOX_MIN_VERSION });
+
+      expect(warn).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(candidate));
+      const message = warn.mock.calls[0]![0] as string;
+      expect(message).toContain(status);
+      expect(message).toContain(binary);
+    },
+  );
+
+  it("stays silent when the configured binary is supported", async () => {
+    const { candidate, env } = await warnScenario("999.0.0");
+    const warn = vi.fn();
+
+    await expect(
+      ensureManagedCrabboxBinary({ binary: candidate, env, runCommand, warn }),
+    ).resolves.toEqual({ binary: candidate, version: "999.0.0" });
+    expect(warn).not.toHaveBeenCalled();
+  });
 });
 
 describe("Crabbox version admission", () => {
