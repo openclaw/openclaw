@@ -79,6 +79,7 @@ vi.mock("../../routing/session-key.js", () => ({
 }));
 vi.mock("../agent-scope.js", () => ({ resolveSessionAgentId: () => "logical" }));
 vi.mock("../bootstrap-mode.js", () => ({ isHeartbeatLifecycleRunKind: vi.fn() }));
+// mock-isolation: Transcript admission controls persistence directly; unrelated agent-end effects stay inert.
 vi.mock("../harness/agent-end-side-effects.js", () => ({
   awaitAgentEndSideEffects: vi.fn(),
   runAgentEndSideEffectsAsync: vi.fn(),
