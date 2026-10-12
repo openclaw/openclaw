@@ -7,7 +7,8 @@ import {
 import { resolveChatThinkingSelectState } from "../../../lib/chat/thinking.ts";
 import "../../../styles/base.css";
 import "../../../styles/chat/composer.css";
-import { renderChatEffortPicker } from "./chat-effort-picker.ts";
+import { solidTemplate } from "./chat-composer-controls.ts";
+import { ChatEffortPicker } from "./chat-effort-picker.tsx";
 
 let host: HTMLDivElement | undefined;
 
@@ -30,7 +31,7 @@ async function fixture(
   const onThinkingSelect = vi.fn(async () => undefined);
   const onFastModeSelect = vi.fn(async () => undefined);
   render(
-    renderChatEffortPicker({
+    solidTemplate(ChatEffortPicker, {
       disabled: false,
       thinkingDisabled: false,
       sessionKey: "effort-preview",

@@ -139,13 +139,6 @@ type MessageActionOptions = MessageReactionOptions & {
   onReply?: (target: MessageReplyTarget) => void;
 };
 
-export function renderSolidMessageActionButtons(
-  details: MessageActionDetails | null | undefined,
-  options: MessageActionOptions,
-) {
-  return <MessageActions details={details} options={options} />;
-}
-
 export function MessageActions(props: {
   details: MessageActionDetails | null | undefined;
   options: MessageActionOptions;
@@ -173,13 +166,6 @@ export function MessageActions(props: {
       </Show>
     </>
   );
-}
-
-export function renderSolidReplyButton(
-  target: MessageReplyTarget,
-  onReply: (target: MessageReplyTarget) => void,
-) {
-  return <ReplyButton target={target} onReply={onReply} />;
 }
 
 export function ReplyButton(props: {

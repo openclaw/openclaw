@@ -608,10 +608,6 @@ site renderer or cross-page link validation.
 
 The `Docs Agent` workflow keeps existing docs aligned with recently landed changes. It has no pure schedule. An opted-in full main-push CI run can admit automatic writes; hourly main-tier CI cannot. With `OPENCLAW_CI_ON_PUSH` unset, use explicit non-bot Docs Agent dispatch to run it. A read-only job verifies the upstream CI workflow, exact completed run attempt, current main SHA, successful aggregate, and successful revision-confirmation step before the write-capable job is admitted. That producer step is absent/skipped for main-tier runs, security-only pushes, failed full CI, and manual validation of another target or reduced scope. Ordinary bot pushes remain excluded.
 
-Only CI completions whose source branch is `main` trigger the workflow. Other
-branches were already ineligible for docs updates and do not create skipped
-Docs Agent runs. The job-level branch and full-validation checks remain in place.
-
 Only the admitted write job occupies the non-canceling docs concurrency slot, so a skipped push cannot displace pending eligible automatic or manual work. Workflow-run invocations recheck main freshness and inspect exact-attempt job evidence for up to 100 recent runs. A queued or active write job, or a recent attempt that actually ran the agent, counts toward the one-hour cadence. Canceled and skipped workflows, denied verification, and completed writer gates that skipped the agent do not count. When admitted, the agent reviews from the source SHA of the previous successful write job whose agent step succeeded to current `main`.
 
 Failed agent attempts can throttle another attempt within the hour, but do not advance the review base. If history evidence cannot be read, the gate fails before running the agent.
@@ -642,8 +638,6 @@ for the weekly burst separately from PR and main admission.
 ## ClawSweeper activity forwarding
 
 `.github/workflows/clawsweeper-dispatch.yml` is the target-side bridge from OpenClaw repository activity into ClawSweeper. It does not check out or execute untrusted pull request code. The workflow creates a GitHub App token from `CLAWSWEEPER_APP_PRIVATE_KEY`, then dispatches compact `repository_dispatch` payloads to `openclaw/clawsweeper`.
-
-The same workflow file also runs Barnacle's `auto-response` job. GitHub creates one run per subscribing workflow before job `if:` admission, and ClawSweeper's own comments and labels arrive as ordinary events, so one shared listener starts one run per event instead of two. The `auto-response` job keeps Barnacle's original event set (issue opened/edited/labeled, comment created, pull request opened/edited/synchronize/reopened/labeled/unlabeled), credentials, trusted base checkout, and its own per-item concurrency group. The file path stays fixed because ClawSweeper's direct queue intake verifies the OIDC `workflow_ref` of `clawsweeper-dispatch.yml`.
 
 Dispatch API calls retry rate-limit failures for up to five attempts with quadratic backoff. Other API errors stop immediately, and exhausted retries preserve the final API exit code. Dispatch callers warn and continue on failure rather than reporting a successful dispatch.
 
