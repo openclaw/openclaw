@@ -19,17 +19,14 @@ export type SessionGoalOperation = SessionGoalOperationIdentity &
 
 export type SessionGoalOperationResult = Omit<SessionsGoalMutationResult, "replayed">;
 
-export const SESSION_GOAL_OPERATION_ERROR_CODES = [
-  "expired",
-  "operation-conflict",
-  "session-rebound",
-  "goal-rebound",
-  "capacity",
-  "receipt-invalid",
-  "invalid",
-] as const;
-
-export type SessionGoalOperationErrorCode = (typeof SESSION_GOAL_OPERATION_ERROR_CODES)[number];
+export type SessionGoalOperationErrorCode =
+  | "expired"
+  | "operation-conflict"
+  | "session-rebound"
+  | "goal-rebound"
+  | "capacity"
+  | "receipt-invalid"
+  | "invalid";
 
 export class SessionGoalOperationError extends Error {
   readonly code: SessionGoalOperationErrorCode;

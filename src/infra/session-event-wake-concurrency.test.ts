@@ -473,7 +473,14 @@ describe("session event wake target concurrency", () => {
     try {
       await vi.advanceTimersByTimeAsync(1);
       expect(oldWakeSignals).toHaveLength(4);
-      expect(oldWakeSignals.every((signal) => signal.aborted)).toBe(true);
+      expect(oldWakeSignals.every((signal) => signal.aborted)).toBe(false);
+      expect(newHandler).not.toHaveBeenCalled();
+      expect(getActiveGatewayRootWorkCount()).toBe(4);
+
+      for (const finishWake of finishOldWakeByAgent.values()) {
+        finishWake();
+      }
+      await vi.advanceTimersByTimeAsync(0);
       expect(newHandler.mock.calls.map(([request]) => request.agentId)).toEqual([
         "target-0",
         "target-4",
@@ -504,12 +511,12 @@ describe("session event wake target concurrency", () => {
       }
     }
 
-    expect(newHandler).toHaveBeenCalledTimes(8);
+    expect(newHandler).toHaveBeenCalledTimes(5);
     expect(peakActiveWakeCount).toBe(4);
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 
-  it("aborts the disposed generation without letting its stale disposer abort a replacement", async () => {
+  it("joins disposed work without letting its stale disposer abort a replacement", async () => {
     vi.useFakeTimers();
     const oldWakeFinished = createDeferred();
     const newWakeFinished = createDeferred();
@@ -532,6 +539,9 @@ describe("session event wake target concurrency", () => {
     disposeOld();
     await vi.advanceTimersByTimeAsync(0);
     expect(oldSignal?.aborted).toBe(true);
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
+    oldWakeFinished.resolve();
+    await vi.advanceTimersByTimeAsync(0);
     expect(getActiveGatewayRootWorkCount()).toBe(0);
 
     const newHandler = vi.fn(async (_request: WakeRequest, signal: AbortSignal) => {
@@ -541,6 +551,7 @@ describe("session event wake target concurrency", () => {
     });
     const disposeNew = setRuntimeSessionEventWakeHandler(newHandler);
     currentHandlerDisposer = disposeNew;
+    requestCronWake({ reason: "new-handler", sessionKey: "agent:main:main" });
     await vi.advanceTimersByTimeAsync(250);
     expect(newHandler).toHaveBeenCalledOnce();
     expect(newSignal?.aborted).toBe(false);

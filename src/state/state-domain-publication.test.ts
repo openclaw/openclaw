@@ -158,3 +158,26 @@ it("distinguishes a proven rollback from missing accepted commit evidence", () =
   begin().finish(true);
   expect(changes.map((change) => change.kind)).toEqual(["pending", "unknown", "settled"]);
 });
+
+it("invalidates installed facts when their publisher throws before completed settlement", () => {
+  const { db, publication, transaction, write, begin } = fixture();
+  const captured = transaction(() =>
+    publication.capture(db, () => write({ id: "grant", version: 1 })),
+  );
+  const changes: StateDomainChange<Row>[] = [];
+  cleanup.push(publication.subscribeFacts((change) => changes.push(change)));
+  const pending = begin();
+  const failure = new Error("publication failed");
+  expect(() =>
+    pending.committed(captured.receipt, () => {
+      throw failure;
+    }),
+  ).toThrow(failure);
+  pending.finish(true);
+  expect(changes.map((change) => change.kind)).toEqual([
+    "pending",
+    "committed",
+    "unknown",
+    "settled",
+  ]);
+});

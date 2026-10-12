@@ -608,7 +608,6 @@ it.each(["before", "after"])(
       acknowledgements,
       cancellations,
       killSpy,
-      acknowledgeRetirement,
     } = await createRelay("darwin");
     completeRoot();
     await adapter.wait();
@@ -635,23 +634,20 @@ it.each(["before", "after"])(
       closeControl();
       await nextTurn();
     }
-    acknowledgeRetirement();
-    expect(killSpy).toHaveBeenCalledExactlyOnceWith("SIGKILL");
-    expect(cancellations).toHaveLength(0);
-    await vi.advanceTimersByTimeAsync(100);
-    expect(finished).not.toHaveBeenCalled();
-    expect(extinct).not.toHaveBeenCalled();
-    const probesBeforeExit = groupProbe.mock.calls.length;
     groupProbe.mockImplementation(() => {
       throw Object.assign(new Error("synthetic absent group"), { code: "ESRCH" });
     });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(killSpy).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+    expect(cancellations).toHaveLength(0);
+    expect(finished).not.toHaveBeenCalled();
+    expect(extinct).not.toHaveBeenCalled();
     exitRelay();
     await expect(closing).resolves.toMatchObject({
       reason: "forced-relay-exit",
       signalRequested: "SIGKILL",
       exit: { code: 0, signal: null },
     });
-    expect(groupProbe.mock.calls).toHaveLength(probesBeforeExit + 1);
     expect(groupProbe.mock.calls.every(([, signal]) => signal === 0)).toBe(true);
     expect(cancellations).toHaveLength(0);
   },

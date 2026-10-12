@@ -1,6 +1,5 @@
 import type { ChildProcess } from "node:child_process";
-import type { Readable, Writable } from "node:stream";
-import type { Options } from "execa";
+import type { Options, Result } from "execa";
 
 type NativeInput = Extract<Options["stdin"], string | number>;
 type NativeOutput = Extract<Options["stdout"], string | number> | { file: string };
@@ -35,42 +34,11 @@ export type CommandSpawnOptions = Pick<
   stdio?: "pipe" | "ignore" | "inherit" | readonly [NativeInput, NativeOutput, NativeOutput];
 };
 
-type OutputStream = "stdout" | "stderr";
-type Option<OptionsType, Key extends PropertyKey> = Key extends keyof OptionsType
-  ? OptionsType[Key]
-  : undefined;
-type DefaultOption<Value, Default> = Value extends undefined ? Default : Value;
-type StdioOutput<Stdio, Stream extends OutputStream> = Stdio extends readonly unknown[]
-  ? Stdio[Stream extends "stdout" ? 1 : 2]
-  : Stdio;
-type EncodedOutput<Encoding> = Encoding extends "buffer" ? Uint8Array : string;
-type CapturedOutput<Destination, Output> = Destination extends
-  | "ignore"
-  | "inherit"
-  | number
-  | Readable
-  | Writable
-  ? undefined
-  : Output;
-type BufferedOutput<BufferOption, Stream extends OutputStream, Output> = BufferOption extends false
-  ? undefined
-  : BufferOption extends Record<Stream, false>
-    ? undefined
-    : Output;
-
-type CommandOutput<OptionsType extends Options, Stream extends OutputStream> = BufferedOutput<
-  Option<OptionsType, "buffer">,
-  Stream,
-  CapturedOutput<
-    DefaultOption<Option<OptionsType, Stream>, StdioOutput<Option<OptionsType, "stdio">, Stream>>,
-    EncodedOutput<Option<OptionsType, "encoding">>
-  >
->;
-
 /** The result fields consumed by OpenClaw's command callers, independent of execa helpers. */
-type CommandResult<OptionsType extends Options = Options> = {
-  stdout: CommandOutput<OptionsType, "stdout">;
-  stderr: CommandOutput<OptionsType, "stderr">;
+type CommandResult<OptionsType extends Options = Options> = Pick<
+  Result<OptionsType>,
+  "stdout" | "stderr"
+> & {
   exitCode?: number;
   signal?: NodeJS.Signals;
   failed: boolean;

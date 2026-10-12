@@ -69,29 +69,23 @@ async function createFixture(
   const root = tempDirs.make("mcp-relay-retirement-");
   const preload = path.join(root, "retain-relay.mjs");
   const heldPath = path.join(root, "held-anchor");
-  const releasePath = path.join(root, "release-anchor");
   await fs.writeFile(
     preload,
     hold === "relay" || hold === "blocked-relay"
-      ? // The real relay calls exit only after reaping its real anchor. Hold that last step.
+      ? // Keep the real relay alive only after its anchor and native pipes have settled.
         hold === "blocked-relay"
-        ? "process.exit = () => { while (true) {} };"
-        : "process.exit = () => { setInterval(() => {}, 1000); };"
+        ? "process.once('beforeExit', () => { while (true) {} });"
+        : "process.once('beforeExit', () => { setInterval(() => {}, 1000); });"
       : `import cp from "node:child_process";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 ${fixtureReceiptClientSource(receipts.endpoint)}
 if (process.argv.some(arg => arg.includes("service-child-group-anchor"))) {
-  const exit = process.exit;
-  process.on("SIGTERM", () => {});
-  process.exit = () => {
-    process.kill(0, "SIGTERM");
+  process.once("beforeExit", () => {
     fs.writeFileSync(${JSON.stringify(heldPath)}, String(process.pid));
     sendReceipt(${JSON.stringify(heldPath)}, "held-exit");
-    setInterval(() => {
-      if (fs.existsSync(${JSON.stringify(releasePath)})) exit(0);
-    }, 10);
-  };
+    void awaitRelease(${JSON.stringify(heldPath)}, "release");
+  });
 } else {
   const spawn = cp.spawn;
   cp.spawn = (command, args, options) => {
@@ -131,7 +125,7 @@ if (process.argv.some(arg => arg.includes("service-child-group-anchor"))) {
     clients.push(client);
     return client;
   };
-  return { createClient, heldPath, releasePath };
+  return { createClient, heldPath, release: () => receipts.release(heldPath, "release") };
 }
 
 describe.skipIf(process.platform === "win32")("MCP retained relay cleanup", () => {
@@ -205,7 +199,7 @@ describe.skipIf(process.platform === "win32")("MCP retained relay cleanup", () =
   it("escalates and reaps an anchor whose group persists after its closing receipt", async ({
     signal,
   }) => {
-    const { createClient, heldPath, releasePath } = await createFixture("anchor");
+    const { createClient, heldPath, release } = await createFixture("anchor");
     const client = createClient();
     await client.request("ping", {}, { timeoutMs: 10_000 });
     if (!fixture.relay) {
@@ -252,13 +246,13 @@ describe.skipIf(process.platform === "win32")("MCP retained relay cleanup", () =
       expect(client.cleanupResult?.durationMs).toBeLessThan(GRACEFUL_CANCEL_TIMEOUT_MS);
       expect(() => process.kill(-anchorPid, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
     } finally {
-      await fs.writeFile(releasePath, "release");
+      release();
       await exited;
     }
   });
 
   it("releases the reaper after the hard deadline without turning late exit into success", async () => {
-    const { createClient, releasePath } = await createFixture("anchor-kill-fails");
+    const { createClient, heldPath, release } = await createFixture("anchor-kill-fails");
     const client = createClient();
     await client.request("ping", {}, { timeoutMs: 10_000 });
     const relay = fixture.relay;
@@ -266,6 +260,8 @@ describe.skipIf(process.platform === "win32")("MCP retained relay cleanup", () =
       throw new Error("expected the real relay");
     }
     const exited = once(relay, "exit");
+    const stoppingAt = performance.now();
+    let anchorPid = 0;
     try {
       await expect(client.stop()).rejects.toMatchObject({
         cause: expect.objectContaining({
@@ -275,15 +271,20 @@ describe.skipIf(process.platform === "win32")("MCP retained relay cleanup", () =
           }),
         }),
       });
+      expect(performance.now() - stoppingAt).toBeGreaterThanOrEqual(GRACEFUL_CANCEL_TIMEOUT_MS);
+      anchorPid = Number(await fs.readFile(heldPath, "utf8"));
+      expect(anchorPid).toBeGreaterThan(0);
+      expect(() => process.kill(-anchorPid, 0)).not.toThrow();
       expect(relay.connected).toBe(false);
       expect(client.cleanupResult).toBeUndefined();
     } finally {
       if (relay.connected) {
         relay.disconnect();
       }
-      await fs.writeFile(releasePath, "release");
+      release();
       await exited;
     }
+    expect(() => process.kill(-anchorPid, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
     await expect(client.stop()).rejects.toThrow("cleanup could not be confirmed");
   });
 });

@@ -158,18 +158,6 @@ export async function createRelayFixture(
     start,
     cancellations,
     acknowledgements,
-    acknowledgeRetirement: () => {
-      const request = stub.sendMock.mock.calls.at(-1)?.[0];
-      if (!isRecord(request) || request.type !== "cancel") {
-        throw new Error("Expected the relay retirement request");
-      }
-      stub.child.emit("message", {
-        type: "retirement",
-        generation,
-        sequence: request.sequence,
-        anchorExited: true,
-      });
-    },
     emit,
     completeRoot,
     endOutput,

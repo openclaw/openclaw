@@ -40,9 +40,10 @@ import {
   encodeOpenClawStateWorkerError,
   hydrateOpenClawStateWorkerError,
   retainOpenClawStateWorkerErrorPayload,
+  type OpenClawStateWorkerErrorPayload,
 } from "./openclaw-state-worker-error.js";
 
-function remoteError(payload: unknown): Error {
+function remoteError(payload: OpenClawStateWorkerErrorPayload | undefined): Error {
   const retained = new Error("remote error");
   retainOpenClawStateWorkerErrorPayload(retained, payload);
   return retained;
@@ -265,7 +266,7 @@ describe("shared-state worker error transport", () => {
     expect(decoded.errors[3]).toBe(decoded);
   });
 
-  it("uses the validated wire root when retaining an unopened error graph", () => {
+  it("uses the wire root when retaining an unopened error graph", () => {
     const retained = remoteError({
       version: 1,
       root: 1,
@@ -543,72 +544,5 @@ describe("shared-state worker error transport", () => {
       ],
     });
     expect(hydrateOpenClawStateWorkerError(retained)).toBe(retained);
-  });
-
-  const validNode = {
-    type: "maintenance",
-    kind: "audit-events-v2",
-    name: "StartupMaintenanceRequiredError",
-    message: "migration required",
-  };
-  it.each([
-    undefined,
-    { version: 2, root: 0, nodes: [validNode] },
-    { version: 1, root: 1, nodes: [validNode] },
-    { version: 1, root: 0, nodes: [] },
-    ...[
-      { ...validNode, type: "CustomError" },
-      { ...validNode, kind: "unknown-migration" },
-      { ...validNode, cause: { ref: 1 } },
-      { ...validNode, cause: { value: {} } },
-      ...[
-        { ...transcriptRefusals[1], code: "unknown-refusal" },
-        { ...transcriptRefusals[1], sessionKeyHash: "raw-session-key" },
-        { ...transcriptRefusals[1], actualSessionIdHash: undefined },
-      ].map((refusal) => ({
-        type: "session-transcript-writer-claim-rebound",
-        name: "SessionTranscriptWriterClaimReboundError",
-        message: "invalid refusal",
-        refusal,
-      })),
-      {
-        type: "session-transcript-writer-claim-rebound",
-        name: "SessionTranscriptWriterClaimReboundError",
-        message: "conflicting causes",
-        refusal: transcriptRefusals[0],
-        cause: { value: "must not overwrite the refusal" },
-      },
-      { ...validNode, code: {} },
-      { ...validNode, nativeOpen: false },
-      { ...validNode, errcode: -1 },
-      { ...validNode, errcode: 0.5 },
-      { ...validNode, errcode: 2 ** 31 },
-      { type: "state-owner-contention", name: "Error", message: "invalid", databasePath: 1 },
-      {
-        type: "state-lease",
-        leaseCode: "OPENCLAW_STATE_LEASE_LOST",
-        code: "OPENCLAW_STATE_LEASE_HELD",
-        name: "OpenClawStateLeaseError",
-        message: "mismatched lease classification",
-      },
-      { ...validNode, stack: "not transported" },
-      { type: "aggregate", name: "AggregateError", message: "missing edges" },
-      {
-        type: "agent-media-migration",
-        name: "Error",
-        message: "invalid version",
-        pathname: "/fixture/agent.sqlite",
-        schemaVersion: -1,
-      },
-    ].map((node) => ({ version: 1, root: 0, nodes: [node] })),
-    {
-      version: 1,
-      root: 0,
-      nodes: [{ type: "error", name: "Error", message: "unrelated" }, validNode],
-    },
-  ])("rejects malformed or noncanonical payload %#", (payload) => {
-    const retained = remoteError(payload);
-    expect(hydrateOpenClawStateWorkerError(retained)).toBe(retained);
-    expect(hydrateOpenClawStateWorkerError(retained, { includeOrdinary: true })).toBe(retained);
   });
 });

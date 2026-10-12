@@ -11,9 +11,10 @@ import {
   encodeOpenClawStateWorkerError,
   hydrateOpenClawStateWorkerError,
   retainOpenClawStateWorkerErrorPayload,
+  type OpenClawStateWorkerErrorPayload,
 } from "./openclaw-state-worker-error.js";
 
-type InspectionError = NativeErrorResponse & { stateError?: unknown };
+type InspectionError = NativeErrorResponse & { stateError?: OpenClawStateWorkerErrorPayload };
 
 /** Private IPC between the bundled inspection child and its scheduler. */
 export type AgentSchemaInspectionResponse =

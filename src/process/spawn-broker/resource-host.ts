@@ -44,10 +44,6 @@ type Claim = {
       completion: Deferred;
     }
   >;
-  buffered: Map<
-    number,
-    { response: Extract<BrokerResourceResponse, { type: "resource-owner" }>; size: number }
-  >;
   pending?: { requestId: number; completion: Deferred };
 };
 
@@ -100,7 +96,6 @@ export class BrokerResourceClaims {
       lastSequence: 0,
       ownerSequence: 0,
       ownerMessages: new Map(),
-      buffered: new Map(),
     };
     void claim.attached.promise.catch(() => {});
     this.claims.set(captured.id, claim);
@@ -259,40 +254,12 @@ export class BrokerResourceClaims {
       }
       return;
     } else if (response.type === "resource-owner") {
-      if (!Number.isSafeInteger(response.sequence) || response.sequence <= 0) {
-        this.failClaim(claim, new SpawnBrokerError("Invalid native resource owner sequence"));
+      // Both transports carry every owner event in order; only their duplicate copies can lag.
+      if (response.sequence <= claim.lastSequence) {
         return;
       }
-      if (response.sequence <= claim.lastSequence || claim.buffered.has(response.sequence)) {
-        return;
-      }
-      if (response.sequence !== claim.lastSequence + 1) {
-        const size = serialize(response).length;
-        if (
-          this.bufferedBytes + size > MAX_PENDING_BYTES ||
-          this.bufferedMessages >= MAX_PENDING_MESSAGES
-        ) {
-          this.failClaim(claim, new SpawnBrokerError("Native resource receive capacity exceeded"));
-          return;
-        }
-        claim.buffered.set(response.sequence, { response, size });
-        this.bufferedBytes += size;
-        this.bufferedMessages++;
-        return;
-      }
-      // The missing next frame can drain a full reorder buffer without reserving another slot.
       claim.lastSequence = response.sequence;
       claim.inContext(() => claim.callbacks.message(response));
-      for (;;) {
-        const next = claim.buffered.get(claim.lastSequence + 1);
-        if (!next) {
-          break;
-        }
-        claim.buffered.delete(++claim.lastSequence);
-        this.bufferedBytes -= next.size;
-        this.bufferedMessages--;
-        claim.inContext(() => claim.callbacks.message(next.response));
-      }
       return;
     } else if (response.type === "resource-closed") {
       if (claim.closed) {
@@ -365,12 +332,6 @@ export class BrokerResourceClaims {
     }
   }
 
-  private failClaim(claim: Claim, error: Error): void {
-    if (this.rejectClaim(claim, error)) {
-      claim.inContext(() => claim.callbacks.failed(error));
-    }
-  }
-
   private rejectClaim(claim: Claim, error: Error): boolean {
     if (claim.failure || claim.closed) {
       return false;
@@ -382,16 +343,7 @@ export class BrokerResourceClaims {
       pending.completion.reject(error);
     }
     claim.pending = undefined;
-    this.clearBuffered(claim);
     return true;
-  }
-
-  private clearBuffered(claim: Claim): void {
-    for (const value of claim.buffered.values()) {
-      this.bufferedBytes -= value.size;
-    }
-    this.bufferedMessages -= claim.buffered.size;
-    claim.buffered.clear();
   }
 
   private clearOwnerMessages(claim: Claim, error: Error): void {
@@ -404,7 +356,6 @@ export class BrokerResourceClaims {
   }
 
   private remove(claim: Claim, error?: Error): void {
-    this.clearBuffered(claim);
     this.clearOwnerMessages(
       claim,
       error ??

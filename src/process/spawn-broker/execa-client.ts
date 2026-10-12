@@ -5,32 +5,8 @@ import {
   type BrokerExecaOptions,
   type BrokerOutputOption,
 } from "./execa-protocol.js";
+import type { CommandSpawnOptions } from "./execa-types.js";
 import type { SpawnBrokerHost } from "./host.js";
-
-const SERIALIZABLE_OPTIONS = new Set([
-  "buffer",
-  "cancelSignal",
-  "cwd",
-  "detached",
-  "encoding",
-  "env",
-  "extendEnv",
-  "forceKillAfterDelay",
-  "input",
-  "killDescendants",
-  "killSignal",
-  "maxBuffer",
-  "reject",
-  "shell",
-  "stderr",
-  "stdin",
-  "stdio",
-  "stdout",
-  "stripFinalNewline",
-  "timeout",
-  "windowsHide",
-  "windowsVerbatimArguments",
-]);
 
 function isOutputOption(value: unknown): value is BrokerOutputOption | undefined {
   return (
@@ -47,7 +23,7 @@ function isOutputOption(value: unknown): value is BrokerOutputOption | undefined
 }
 
 /** Unsupported native descriptors and independent-lifetime commands remain explicit local paths. */
-export function brokerExecaOptions(options: Options): BrokerExecaOptions | undefined {
+export function brokerExecaOptions(options: CommandSpawnOptions): BrokerExecaOptions | undefined {
   if (options.ipc || options.cleanup === false || typeof options.stdin === "number") {
     return undefined;
   }
@@ -67,11 +43,6 @@ export function brokerExecaOptions(options: Options): BrokerExecaOptions | undef
   ) {
     return undefined;
   }
-  for (const key of Object.keys(options)) {
-    if (!SERIALIZABLE_OPTIONS.has(key)) {
-      throw new TypeError(`Unsupported spawn broker execa option: ${key}`);
-    }
-  }
   if (
     (options.cwd !== undefined && typeof options.cwd !== "string") ||
     (options.input !== undefined &&
@@ -86,14 +57,6 @@ export function brokerExecaOptions(options: Options): BrokerExecaOptions | undef
     (options.shell !== undefined && options.shell !== false)
   ) {
     throw new TypeError("Unsupported spawn broker execa stream or invocation options");
-  }
-  if (
-    options.stdio !== undefined &&
-    typeof options.stdio === "string" &&
-    options.stdio !== "pipe" &&
-    options.stdio !== "ignore"
-  ) {
-    throw new TypeError("Unsupported spawn broker execa stdio");
   }
   if (
     Array.isArray(options.stdio) &&

@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import type { Duplex, Readable } from "node:stream";
-import { setTimeout as delay } from "node:timers/promises";
 import { toErrorObject } from "../../infra/errors.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { sleep } from "../../utils/sleep.js";
 import { joinProcessCompletionAndOutput } from "../decoded-output.js";
 import { pipeProcessOutput } from "../pipe-output.js";
 import {
@@ -372,7 +372,7 @@ export async function createServiceChildRelayAdapter(
       }
       // After the budget expires, the deadline owner's I/O poll can still deliver queued exit.
       await Promise.race([
-        ...(remainingMs > 0 ? [delay(Math.min(100, remainingMs))] : []),
+        ...(remainingMs > 0 ? [sleep(Math.min(100, remainingMs))] : []),
         ...(!childExited ? [relayExit.promise] : []),
         cleanup.completion.promise,
       ]);
@@ -468,7 +468,7 @@ export async function createServiceChildRelayAdapter(
       (line) => {
         try {
           const message = readServiceChildMessage(JSON.parse(line));
-          if (!("sequence" in message) || message.type === "retirement") {
+          if (!("sequence" in message)) {
             throw new Error("invalid anchor message");
           }
           handleAnchorMessage(message);
@@ -518,7 +518,7 @@ export async function createServiceChildRelayAdapter(
       return;
     }
     if (useWindowsJobAnchor) {
-      if (!("sequence" in message) || message.type === "retirement") {
+      if (!("sequence" in message)) {
         loseIdentity("invalid anchor message");
         return;
       }
@@ -529,9 +529,9 @@ export async function createServiceChildRelayAdapter(
       return;
     }
     if (message.type === "relay-error") {
-      loseIdentity(message.error);
-    } else if (message.type === "retirement") {
-      retirement.receive(message);
+      if (!retirement.recordSignalError(new Error(message.error))) {
+        loseIdentity(message.error);
+      }
     }
   });
   child.once("error", (error) => {

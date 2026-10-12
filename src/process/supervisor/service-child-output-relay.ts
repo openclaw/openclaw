@@ -17,6 +17,7 @@ export function createOutputRelay(
   let active = false;
   let ended = false;
   let failed = false;
+  let unsubscribe: (() => void) | undefined;
   const fail = (error: Error) => {
     failed = true;
     onStreamFailure?.(error);
@@ -64,7 +65,7 @@ export function createOutputRelay(
   };
   if (stream) {
     if (!piped && !consumer) {
-      onDecodedOutput(stream, push, push);
+      unsubscribe = onDecodedOutput(stream, push, push);
     }
     stream.once("end", end);
     // Only end proves EOF. Keep raw failures connected through final cleanup,
@@ -95,6 +96,7 @@ export function createOutputRelay(
     consume: consumer?.consume,
     drain: () => (consumer ? consumer.drain() : activate(false)),
     clear: () => {
+      unsubscribe?.();
       consumer?.close();
       listeners.clear();
       rawListeners.clear();

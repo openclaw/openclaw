@@ -4,6 +4,7 @@ import {
   encodeOpenClawStateWorkerError,
   hydrateOpenClawStateWorkerError,
   retainOpenClawStateWorkerErrorPayload,
+  type OpenClawStateWorkerErrorPayload,
 } from "../state/openclaw-state-worker-error.js";
 import { SqliteSnapshotCleanupError } from "./sqlite-readonly-location-cleanup.js";
 import type {
@@ -300,7 +301,8 @@ export function createSqliteReadOnlyNativeResourceConnection(callbacks: {
     },
     decodeCloseError(payload: unknown) {
       const remote = new Error("SQLite snapshot staging failed");
-      retainOpenClawStateWorkerErrorPayload(remote, payload);
+      // SAFETY: The SQLite resource worker encodes this private close-error payload.
+      retainOpenClawStateWorkerErrorPayload(remote, payload as OpenClawStateWorkerErrorPayload);
       const error = hydrateOpenClawStateWorkerError(remote, { includeOrdinary: true });
       return error instanceof AggregateError
         ? error

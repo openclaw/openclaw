@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { BigIntStats } from "node:fs";
 import { setEnvironmentData, threadId } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
 import {
   readDatabaseIdentityBirthtime,
@@ -59,91 +58,9 @@ export type SqliteDatabaseAdmissionExchange = (
   create?: boolean,
 ) => SqliteDatabaseAdmissions;
 
-function readAdmissionFact(value: unknown): AdmissionFact | undefined {
-  if (
-    !isRecord(value) ||
-    typeof value.revision !== "number" ||
-    typeof value.schemaDependent !== "boolean" ||
-    typeof value.publication !== "string" ||
-    !(value.current instanceof SharedArrayBuffer) ||
-    value.current.byteLength !== Int32Array.BYTES_PER_ELEMENT
-  ) {
-    return undefined;
-  }
-  return {
-    value: value.value,
-    revision: value.revision,
-    schemaDependent: value.schemaDependent,
-    publication: value.publication,
-    current: value.current,
-  };
-}
-
-function readInheritedAdmission(value: unknown): Admission | undefined {
-  if (
-    !isRecord(value) ||
-    typeof value.identity !== "string" ||
-    typeof value.location !== "string" ||
-    typeof value.descriptor !== "number" ||
-    typeof value.descriptorOwner !== "number" ||
-    typeof value.generationId !== "string" ||
-    !(value.generation instanceof SharedArrayBuffer) ||
-    value.generation.byteLength !==
-      SQLITE_DATABASE_GENERATION_LENGTH * Int32Array.BYTES_PER_ELEMENT ||
-    (value.hostRevision !== undefined &&
-      (typeof value.hostRevision !== "number" || !Number.isInteger(value.hostRevision))) ||
-    !(value.facts instanceof Map)
-  ) {
-    return undefined;
-  }
-  if (!(value.writeScopes instanceof Map)) {
-    return undefined;
-  }
-  const writeScopes = new Map<string, SharedArrayBuffer>();
-  for (const [key, revision] of value.writeScopes) {
-    if (
-      typeof key !== "string" ||
-      !(revision instanceof SharedArrayBuffer) ||
-      revision.byteLength !== Int32Array.BYTES_PER_ELEMENT
-    ) {
-      return undefined;
-    }
-    writeScopes.set(key, revision);
-  }
-  const facts = new Map<string, AdmissionFact>();
-  for (const [key, entry] of value.facts) {
-    const fact = readAdmissionFact(entry);
-    if (typeof key !== "string" || !fact) {
-      return undefined;
-    }
-    facts.set(key, fact);
-  }
-  return {
-    identity: value.identity,
-    location: value.location,
-    descriptor: value.descriptor,
-    descriptorOwner: value.descriptorOwner,
-    generationId: value.generationId,
-    generation: value.generation,
-    ...(value.hostRevision !== undefined ? { hostRevision: value.hostRevision } : {}),
-    writeScopes,
-    facts,
-  };
-}
-
 export function readSqliteDatabaseAdmissions(value: unknown): SqliteDatabaseAdmissions | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const admissions: SqliteDatabaseAdmissions = [];
-  for (const entry of value) {
-    const record = readInheritedAdmission(entry);
-    if (!record) {
-      return undefined;
-    }
-    admissions.push(record);
-  }
-  return admissions;
+  // SAFETY: These facts come only from this process's paired worker and bootstrap transports.
+  return Array.isArray(value) ? (value as SqliteDatabaseAdmissions) : undefined;
 }
 
 export function isSqliteDatabaseAdmissionRetired(record: Admission): boolean {

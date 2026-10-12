@@ -53,6 +53,30 @@ export function createStateDomainPublication<T>(codec: {
   keyOf(value: T): string;
   isValue(value: unknown): value is T;
 }) {
+  const publication = createKeyedStateDomainPublication<T>({
+    domain: codec.domain,
+    isFact: (key, fact) =>
+      fact.kind === "absent" ||
+      (fact.kind === "postimage" && codec.isValue(fact.value) && codec.keyOf(fact.value) === key),
+  });
+  return {
+    ...publication,
+    stagePostimages(db: DatabaseSync, values: readonly T[]) {
+      publication.stagePostimages(
+        db,
+        values.map((value) => [codec.keyOf(value), value]),
+      );
+    },
+  };
+}
+
+/** Domains with compound keys keep their key policy outside the shared receipt lifecycle. */
+export function createKeyedStateDomainPublication<T>(codec: {
+  domain: string;
+  isFact(this: void, key: string, fact: SqliteCommittedFact<unknown>): boolean;
+  invalidReceiptMessage?: string;
+  installFailureMessage?: string;
+}) {
   type Receipt = SqliteCommitReceipt<T>;
   type Facts = Map<string, SqliteCommittedFact<T>>;
   const state = resolveGlobalSingleton(
@@ -75,7 +99,10 @@ export function createStateDomainPublication<T>(codec: {
     }
     return source;
   };
-  const receiptFor = (db: DatabaseSync, facts: Facts): Receipt =>
+  const receiptFor = (
+    db: DatabaseSync,
+    facts: ReadonlyMap<string, SqliteCommittedFact<T>>,
+  ): Receipt =>
     createSqliteCommitReceipt({
       source: sourceFor(db),
       domain: codec.domain,
@@ -86,7 +113,10 @@ export function createStateDomainPublication<T>(codec: {
     const errors: unknown[] = [];
     notifyListeners(state.facts, change, (error) => errors.push(error));
     if (errors.length) {
-      throw new AggregateError(errors, "State domain fact installation failed");
+      throw new AggregateError(
+        errors,
+        codec.installFailureMessage ?? "State domain fact installation failed",
+      );
     }
   };
   const publication = (receipt: Receipt) => {
@@ -134,7 +164,7 @@ export function createStateDomainPublication<T>(codec: {
       publishSqliteCommittedState(next);
     }
   };
-  const readReceipt = (value: unknown): Receipt => {
+  const readReceipt = (value: unknown, isFact = codec.isFact): Receipt => {
     if (
       !isRecord(value) ||
       !isRecord(value.source) ||
@@ -146,27 +176,21 @@ export function createStateDomainPublication<T>(codec: {
         domain: codec.domain,
         keys: [...value.facts.keys()],
       }) ||
-      ![...value.facts].every(
-        ([key, fact]) =>
-          typeof key === "string" &&
-          (fact.kind === "absent" ||
-            (fact.kind === "postimage" &&
-              codec.isValue(fact.value) &&
-              codec.keyOf(fact.value) === key)),
-      )
+      ![...value.facts].every(([key, fact]) => typeof key === "string" && isFact(key, fact))
     ) {
-      throw new Error("State domain commit receipt is invalid");
+      throw new Error(codec.invalidReceiptMessage ?? "State domain commit receipt is invalid");
     }
     // SAFETY: The envelope, domain, keys, and every postimage were validated above.
     return value as Receipt;
   };
   return {
-    stagePostimages(db: DatabaseSync, values: readonly T[]) {
+    receipt: receiptFor,
+    stagePostimages(db: DatabaseSync, entries: readonly (readonly [string, T])[]) {
       stage(
         db,
         new Map(
-          values.map((value) => [
-            codec.keyOf(value),
+          entries.map(([key, value]) => [
+            key,
             { kind: "postimage", value: structuredClone(value) },
           ]),
         ),
@@ -192,7 +216,7 @@ export function createStateDomainPublication<T>(codec: {
       registerListener(state.facts, listener),
     subscribe: (listener: (change: StateDomainChange<T>) => void) =>
       registerListener(state.observers, listener),
-    begin(owner: { identity: string | symbol; assertCurrent(): void }) {
+    begin(owner: { identity: string | symbol; assertCurrent(): void }, isFact = codec.isFact) {
       const operationId = randomUUID();
       const superseded = new Set<string>();
       let installing = false;
@@ -218,7 +242,7 @@ export function createStateDomainPublication<T>(codec: {
         throw error;
       }
       return {
-        committed(value: unknown) {
+        committed(value: unknown, publish?: () => void) {
           try {
             owner.assertCurrent();
             if (finished) {
@@ -227,7 +251,7 @@ export function createStateDomainPublication<T>(codec: {
             if (isRecord(value) && value.kind === "unknown" && value.identity === owner.identity) {
               install({ kind: "unknown", identity: owner.identity });
             } else {
-              const receipt = readReceipt(value);
+              const receipt = readReceipt(value, isFact);
               if (receipt.source.identity !== owner.identity) {
                 throw new Error("State domain commit receipt changed owner");
               }
@@ -258,6 +282,7 @@ export function createStateDomainPublication<T>(codec: {
               }
             }
             received = true;
+            publish?.();
           } catch (error) {
             install({ kind: "unknown", identity: owner.identity });
             throw error;
