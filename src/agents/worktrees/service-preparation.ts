@@ -1,12 +1,9 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate as yieldTurn } from "node:timers/promises";
 import { resolveStateDir } from "../../config/paths.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
-import { createCommandError } from "../../process/command-error.js";
-import { runCommandWithTimeout } from "../../process/exec.js";
 import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease-error.js";
 import { createCrustaceanSlug } from "../session-slug.js";
 import {
@@ -594,61 +591,6 @@ export async function removeFailedWorktree(
     return commandError("git branch -D", deletedBranch);
   }
   return undefined;
-}
-
-export async function runSetupScript(
-  repoRoot: string,
-  worktreePath: string,
-  params: CreateManagedWorktreeParams & WorktreeAllocationGuard,
-): Promise<void> {
-  const setupScript = path.join(repoRoot, ".openclaw", "worktree-setup.sh");
-  const stat = await fs.stat(setupScript).catch(() => undefined);
-  if (!stat?.isFile() || (stat.mode & 0o111) === 0) {
-    return;
-  }
-  const timeoutMs = 120_000;
-  params.onProgress?.("setup");
-  // Checkout may outlive its caller. Revalidate before starting repository code,
-  // then retain process ownership through cancellation and rollback.
-  const runInCallerContext = AsyncLocalStorage.snapshot();
-  const cancellation = new AbortController();
-  const signal = params.signal
-    ? AbortSignal.any([params.signal, cancellation.signal])
-    : cancellation.signal;
-  let pending: ReturnType<typeof runCommandWithTimeout> | undefined;
-  let result: Awaited<ReturnType<typeof runCommandWithTimeout>>;
-  try {
-    const operation = await withWorktreeSource(params, (current) => {
-      current.signal?.throwIfAborted();
-      current.commitGuard?.();
-      // Spawn is synchronous; its continuation keeps the caller's original context.
-      pending = runInCallerContext(() =>
-        runCommandWithTimeout([setupScript], {
-          timeoutMs,
-          cwd: worktreePath,
-          signal,
-          killProcessTree: true,
-          env: {
-            OPENCLAW_SOURCE_TREE_PATH: repoRoot,
-            OPENCLAW_WORKTREE_PATH: worktreePath,
-          },
-        }),
-      );
-      void pending.catch(() => undefined);
-      return { completion: pending };
-    });
-    result = await operation.completion;
-  } catch (error) {
-    if (pending) {
-      cancellation.abort(error);
-      await pending.catch(() => undefined);
-    }
-    throw error;
-  }
-  params.signal?.throwIfAborted();
-  if (result.code !== 0) {
-    throw createCommandError("worktree setup", result, { timeoutMs });
-  }
 }
 
 export async function createOwnedWorktree<T>(

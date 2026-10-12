@@ -7,6 +7,7 @@ import type {
   SqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
+import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { projectSessionActorAuthority } from "./session-actor-command.js";
 import type {
   SessionActorAuthority,
@@ -43,7 +44,7 @@ export type SessionActorTransport = {
       grant: () => boolean,
     ) => void,
   ): Promise<T>;
-  /** Follow-up work may borrow other owners only after releasing the command FIFO. */
+  /** Read-only committed evidence; follow-up work runs after releasing the command FIFO. */
   afterCommitted?<Value extends SessionActorPhaseResults[SessionActorPhase]>(
     outcome: Extract<SessionActorOutcome<Value>, { kind: "committed" }>,
   ): Promise<{ value: Value } | void>;
@@ -108,12 +109,7 @@ export function createSqliteSessionActorExecutor(
       params.replica.invalidate();
       return false;
     }
-    const current = params.replica.read();
-    return (
-      current !== undefined &&
-      current.writeToken === snapshot.writeToken &&
-      isDeepStrictEqual(current.version, snapshot.version)
-    );
+    return params.replica.read() === snapshot;
   };
   const authorize = (
     authority: SessionActorAuthority,
@@ -148,8 +144,8 @@ export function createSqliteSessionActorExecutor(
           throw new Error("Session actor admission belongs to another target");
         }
         // SAFETY: The private MessagePort already detached this snapshot from the paired kernel.
-        const snapshot = facts.snapshot as SessionActorAuthorityFacts;
-        authority.authorize(request.stage, structuredClone(snapshot), facts.publication);
+        const snapshot = freezeJsonSnapshot(facts.snapshot as SessionActorAuthorityFacts);
+        authority.authorize(request.stage, snapshot, facts.publication);
         observe?.(native, request.stage, snapshot, facts.final === true);
       } else if (
         actorAdmissionSeen &&
@@ -175,10 +171,9 @@ export function createSqliteSessionActorExecutor(
         try {
           snapshot = await scope.execute({ type: "session.actor.read", input: { target } });
           generation?.assertCurrent();
-          if (!pending.install(snapshot)) {
-            // A committed receipt can supersede the read while its reply is in flight.
-            snapshot = params.replica.read();
-          }
+          pending.install(snapshot);
+          // Disclose the immutable installed revision, including a superseding receipt.
+          snapshot = params.replica.read();
         } finally {
           pending.cancel();
         }
@@ -229,7 +224,7 @@ export function createSqliteSessionActorExecutor(
         return unknown(error);
       }
       const failure = { ...errorFacts(error), ...(origin ? { origin } : {}) };
-      committed = {
+      committed = freezeJsonSnapshot({
         ...committed,
         failure: committed.failure
           ? {
@@ -237,7 +232,7 @@ export function createSqliteSessionActorExecutor(
               message: `${committed.failure.message}; ${failure.message}`,
             }
           : failure,
-      };
+      });
       return committed;
     };
     let outcome: Outcome;
@@ -293,15 +288,15 @@ export function createSqliteSessionActorExecutor(
                 )
               ) {
                 // SAFETY: The paired native receipt owns the result type; the checks above match its command and postimage.
-                committed = structuredClone(evidence) as Extract<Outcome, { kind: "committed" }>;
+                committed = freezeJsonSnapshot(evidence) as Extract<Outcome, { kind: "committed" }>;
                 if (!reply.ok) {
                   preserveFailure(reply.error, "response");
                 } else if (reply.value.kind === "committed" && reply.value.failure) {
-                  committed = { ...committed, failure: structuredClone(reply.value.failure) };
+                  committed = freezeJsonSnapshot({ ...committed, failure: reply.value.failure });
                 }
                 result = committed;
                 try {
-                  observer?.committed(structuredClone(committed));
+                  observer?.committed(committed);
                 } catch (error) {
                   result = preserveFailure(error);
                 }
@@ -347,7 +342,7 @@ export function createSqliteSessionActorExecutor(
             if (result.kind === "stale-version") {
               try {
                 authority.assertCurrent();
-                authority.authorize("commit", structuredClone(result.postimage));
+                authority.authorize("commit", freezeJsonSnapshot(result.postimage));
                 authority.assertCurrent();
                 params.assertAccepted();
               } catch (error) {
@@ -408,7 +403,7 @@ export function createSqliteSessionActorExecutor(
     }
     if (outcome.kind === "committed" && params.transport.afterCommitted) {
       try {
-        const prepared = await params.transport.afterCommitted(structuredClone(outcome));
+        const prepared = await params.transport.afterCommitted(outcome);
         if (prepared) {
           committed = { ...outcome, value: prepared.value };
           outcome = committed;

@@ -159,6 +159,14 @@ export function readModelPromptProjection(message: unknown): string | undefined 
 }
 
 export function projectRecordedModelPrompt(
+  message: PersistedUserTurnMessage,
+  transcript?: AgentMessage,
+): PersistedUserTurnMessage;
+export function projectRecordedModelPrompt(
+  message: AgentMessage,
+  transcript?: AgentMessage,
+): AgentMessage;
+export function projectRecordedModelPrompt(
   message: AgentMessage,
   transcript?: AgentMessage,
 ): AgentMessage {

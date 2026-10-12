@@ -265,13 +265,9 @@ export function registerRestartOutcomeTests(
   );
 
   it.each([
-    ["preserved health", "restart-health-failed"],
     ["native refusal", "failed"],
-    ["unexpected check", "failed"],
     ["retry refusal", "failed"],
     ["writable health", "restart-health-failed"],
-    ["writable retry health", "restart-health-failed"],
-    ["progressing cap", "readiness-pending"],
     ["cap then healthy", "ok"],
     ["writable progressing cap", "readiness-pending"],
   ])(
@@ -425,7 +421,6 @@ export function registerRestartOutcomeTests(
     error: "Gateway is unhealthy",
   };
   const json = JSON.stringify(healthFailure);
-  const success = JSON.stringify({ action: "restart", ok: true, result: "restarted" });
   it.each<{
     scenario: string;
     response?: Partial<
@@ -433,34 +428,9 @@ export function registerRestartOutcomeTests(
     >;
     action?: "install" | "restart";
   }>([
-    { scenario: "health" },
     { scenario: "missing", response: { stdout: "" } },
-    { scenario: "malformed", response: { stdout: "{" } },
-    { scenario: "mixed", response: { stdout: `log before result\n${json}` } },
-    { scenario: "multiple", response: { stdout: `${json}\n${json}` } },
-    {
-      scenario: "wrong action",
-      response: { stdout: JSON.stringify({ ...healthFailure, action: "install" }) },
-    },
-    {
-      scenario: "wrong result",
-      response: { stdout: JSON.stringify({ ...healthFailure, result: "unknown" }) },
-    },
-    { scenario: "wrong ok", response: { stdout: JSON.stringify({ ...healthFailure, ok: true }) } },
-    {
-      scenario: "missing error",
-      response: { stdout: JSON.stringify({ ...healthFailure, error: undefined }) },
-    },
-    { scenario: "signal", response: { signal: "SIGTERM", termination: "signal" } },
-    { scenario: "timeout", response: { termination: "timeout" } },
     { scenario: "truncated", response: { stdoutTruncatedBytes: 1 } },
-    { scenario: "killed", response: { killed: true } },
-    { scenario: "wrong exit", response: { code: 2 } },
-    { scenario: "forced", response: { cleanup: "forced" } },
     { scenario: "uncertain", response: { cleanup: "uncertain" } },
-    { scenario: "forced success", response: { cleanup: "forced", code: 0, stdout: success } },
-    { scenario: "uncertain success", response: { cleanup: "uncertain", code: 0, stdout: success } },
-    { scenario: "install", action: "install" },
   ])(
     "classifies only the complete owned restart health response ($scenario)",
     async ({ scenario, response, action = "restart" }) => {

@@ -229,7 +229,7 @@ export async function withSessionSharingTarget<T>(
       env: retainedSelection.env,
       preparedSource: retainedSelection.source,
       includeMembership: true,
-      readOptions: { snapshotFields: [], lifecycleSessionKey: undefined },
+      readOptions: { snapshotFields: [] },
       consume: (target, membership, assertCurrent) =>
         read(target, membership, assertCurrent, [], retainedSelection),
     });

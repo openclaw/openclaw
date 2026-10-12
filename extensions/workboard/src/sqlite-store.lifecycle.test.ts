@@ -16,7 +16,7 @@ vi.mock(import("openclaw/plugin-sdk/sqlite-runtime"), async (importOriginal) => 
   openSqliteWorkerStore,
 }));
 
-import { createWorkboardSqliteStores } from "./sqlite-store.js";
+import { createWorkboardSqliteStores } from "./test/database-config.js";
 
 const workerModuleUrl = new URL("./sqlite-store.worker.ts", import.meta.url);
 

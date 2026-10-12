@@ -138,7 +138,8 @@ content and recorded GitHub effects remain intact.
 Deprecated publication methods retain their TypeScript signatures to make the
 migration discoverable, but fail explicitly at invocation. Actual legacy use emits
 one warning per plugin and the `github-publication` family per Gateway process,
-through the shared SDK warning helper. Unknown direct SDK consumers share one
+through the shared SDK warning helper. The warning states that the method no
+longer performs publication work and names its replacement. Unknown direct SDK consumers share one
 bounded family warning. These methods will be **removed in the next Plugin SDK
 major**. Personal OAuth compatibility methods described above retain their existing
 completion behavior. No schema, stored-data, retention, or update migration is required.
@@ -264,6 +265,17 @@ readers and current-owner checks. The service exposes `listBySessionAsync`,
 `resolveByConversationAsync`, and `touchAsync`. An async failure never selects a
 synchronous fallback. External adapters remain responsible for their own
 storage, currentness, and committed publication.
+
+For channel route ownership, replace `resolveConversationRouteOwner` and
+`prepareConversationRouteOwners` with `prepareConversationRouteOwnersAsync`.
+Await its `inspectBindings(refs)` callback during preparation, then return one
+synchronous resolver per input. The callback returns a reader for the prepared
+binding facts; invoke that reader inside the resolver so committed binding
+changes invalidate ownership before an external effect. Do not retain the
+preparation callback after returning. The Gateway releases the facts after
+selection or delivery. Discord, Matrix, Slack, and Telegram use this contract for all bundled
+route ownership reads; deprecated synchronous hooks remain for external plugins
+until the next Plugin SDK major and warn when called.
 
 The original synchronous keyed stores, opaque `update`/`deleteIf` callbacks,
 binding managers, and adapter registrations remain compatibility APIs. They
@@ -524,6 +536,14 @@ change, retention change, or update migration is introduced.
 
 ## Prepare session catalog identities
 
+Await `readSessionTranscriptCatalogTitleAsync({ agentId, sessionKey, storePath, entry })`
+from `openclaw/plugin-sdk/session-transcript-runtime` when deriving a catalog title.
+It preserves metadata precedence and reads the bounded first-message fallback through
+the history worker. `readSessionTranscriptCatalogPage` also uses that worker while
+retaining raw event coordinates for pagination. The synchronous
+`readSessionTranscriptCatalogTitle` remains supported in the current Plugin SDK major,
+warns once per plugin, and will be removed in the next Plugin SDK major.
+
 Use `await prepareSessionCatalogSourceActorProjector({ pluginId, sourceDomain, actors })`
 from `openclaw/plugin-sdk/session-transcript-runtime` before projecting a source catalog page.
 The returned synchronous projector reads only the prepared profile and verified GitHub facts.
@@ -600,6 +620,30 @@ at their existing effect boundary.
 The synchronous `listSessionEntries` API is deprecated until the next Plugin SDK
 major. Its existing arguments and complete-entry behavior remain available for
 compatibility, with a one-time deprecation warning on legacy use.
+
+## Await transcript statistics
+
+Use `await readTranscriptStatsAsync(scope)` from
+`openclaw/plugin-sdk/session-store-runtime` for one transcript, or
+`await readTranscriptStatsBatchReadOnlyAsync(scopes)` from
+`openclaw/plugin-sdk/memory-core-host-engine-sessions` for a batch. Durable reads
+run through the existing session worker. Batch results retain input order and
+duplicate IDs, return zero counts for missing transcripts in existing stores,
+and return `null` for unavailable stores without creating them.
+
+`readTranscriptStatsSync` and `readTranscriptStatsBatchReadOnlySync` retain their
+released signatures until the next Plugin SDK major. Legacy calls on the main
+thread emit a shared session-store deprecation warning; kernels already running
+inside database workers can keep their synchronous reads without a warning.
+
+Use `await statSessionEntry(path, options)` from
+`openclaw/plugin-sdk/memory-core-host-engine-sessions` to read transcript file
+metadata through the worker. `statSessionEntrySync` remains available until the
+next Plugin SDK major; passing already prepared transcript statistics to it
+only projects those values and does not query SQLite. `buildSessionEntry`
+also reads durable snapshots in the worker when an `onTranscriptMessage`
+observer is supplied, then invokes the observer on the caller with the original
+messages and timestamps.
 
 ## Prepare session entry changes
 

@@ -1,16 +1,12 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
-import { isIncognitoSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import {
-  resolveExplicitIncognitoAgentSqliteTarget,
-  resolveIncognitoOpenClawAgentSqlitePath,
-} from "../../state/openclaw-agent-db.paths.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import { resolveExplicitIncognitoAgentSqliteTarget } from "../../state/openclaw-agent-db.paths.js";
 import type {
   SessionActor,
   SessionActorTarget,
   SessionActorStorage,
 } from "./session-actor-contract.js";
-import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import type { SessionActorStorageAuthority } from "./session-actor-storage-contract.js";
 
 /** A caller-selected memory owner; resolving a binding never acquires another backend. */
@@ -82,36 +78,4 @@ export function getSessionActorStorageBinding(
     throw new Error("Session storage binding requires a memory actor");
   }
   return binding;
-}
-
-/** Capture an existing sibling owner once; this never creates state while reading. */
-export function captureSessionActorStorageOwner(scope: BindingScope) {
-  const selected = scope.sessionActor ?? currentBinding.getStore();
-  if (!selected) {
-    return undefined;
-  }
-  const agentId =
-    scope.agentId ??
-    (scope.sessionKey ? resolveAgentIdFromSessionKey(scope.sessionKey) : selected.agentId);
-  const root = path.resolve(selected.path, "../../../..");
-  const explicit = resolveExplicitIncognitoAgentSqliteTarget(scope.storePath, { agentId });
-  if (explicit && path.resolve(explicit.path, "../../../..") !== root) {
-    throw new Error("Session storage owner belongs to another state root");
-  }
-  const owner = memorySessionActorOwners
-    .list()
-    .find(
-      (candidate) =>
-        candidate.agentId === agentId && path.resolve(candidate.path, "../../../..") === root,
-    );
-  return {
-    owner,
-    binding: selected,
-    authority: selected.authority,
-    agentId,
-    path:
-      owner?.path ??
-      (agentId === selected.agentId ? selected.path : undefined) ??
-      resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: { OPENCLAW_STATE_DIR: root } }),
-  };
 }

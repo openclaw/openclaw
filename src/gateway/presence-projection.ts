@@ -1,8 +1,5 @@
 import { readCommittedIncognitoSessionSharing } from "../config/sessions/session-accessor.sqlite-incognito-sharing.js";
-import {
-  captureSessionActorStorageOwner,
-  getSessionActorStorageBinding,
-} from "../config/sessions/session-actor-storage-binding.js";
+import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import { captureIncognitoSessionTopology } from "../config/sessions/session-incognito-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SystemPresence } from "../infra/system-presence.js";
@@ -24,7 +21,6 @@ export function createPresenceRecipientProjection(params: {
 }): (client: GatewayClient | null) => SystemPresence[] {
   const keys = [...new Set(params.presence.flatMap((row) => row.watchedSessions ?? []))];
   const memory = getSessionActorStorageBinding({});
-  const memoryOwners = new Map<string, ReturnType<typeof captureSessionActorStorageOwner>>();
   const topology = memory ? undefined : captureIncognitoSessionTopology();
   const views = new Map<string, SystemPresence[]>();
   let routingConfig: OpenClawConfig | undefined;
@@ -35,13 +31,13 @@ export function createPresenceRecipientProjection(params: {
     if (isIncognitoSessionKey(key)) {
       if (memory) {
         memory.actor.assertReadable();
-        if (!memoryOwners.has(agentId)) {
-          memoryOwners.set(
-            agentId,
-            captureSessionActorStorageOwner({ agentId, sessionActor: memory }),
-          );
-        }
-        const entry = memoryOwners.get(agentId)?.owner?.readSession(key, memory.authority)?.entry;
+        const entry =
+          agentId === memory.agentId
+            ? memory.actor.storage.readCurrent(
+                { type: "session.entry.read", input: { sessionKey: key } },
+                memory.authority,
+              )
+            : undefined;
         return entry ? { canonicalKey: key, entry } : undefined;
       }
       if (topology) {

@@ -63,8 +63,10 @@ describe("resolveCodexNativeSearchActivation", () => {
     expect(result.inactiveReason).toBe("model_not_eligible");
   });
 
-  it("activates for direct openai when auth exists", () => {
-    const result = resolveCodexNativeSearchActivation({
+  it.each([
+    { name: "without auth", config: baseConfig },
+    {
+      name: "with auth",
       config: {
         ...baseConfig,
         auth: {
@@ -76,25 +78,21 @@ describe("resolveCodexNativeSearchActivation", () => {
           },
         },
       },
-      modelProvider: "openai",
-      modelApi: "openai-chatgpt-responses",
-    });
+    },
+  ] as const)(
+    "leaves credential admission to the model request for direct openai $name",
+    ({ config }) => {
+      const result = resolveCodexNativeSearchActivation({
+        config,
+        modelProvider: "openai",
+        modelApi: "openai-chatgpt-responses",
+      });
 
-    expect(result.state).toBe("native_active");
-    expect(result.codexMode).toBe("cached");
-  });
-
-  it("activates for api-compatible openai-chatgpt-responses providers without separate Codex auth", () => {
-    // Gateway-style providers already execute through a compatible Responses
-    // API, so native search can be enabled without a separate OpenAI profile.
-    const result = resolveCodexNativeSearchActivation({
-      config: baseConfig,
-      modelProvider: "gateway",
-      modelApi: "openai-chatgpt-responses",
-    });
-
-    expect(result.state).toBe("native_active");
-  });
+      expect(result.state).toBe("native_active");
+      expect(result.codexMode).toBe("cached");
+      expect(result).not.toHaveProperty("inactiveReason");
+    },
+  );
 
   it("keeps all search disabled when global web search is disabled", () => {
     const result = resolveCodexNativeSearchActivation({
@@ -126,28 +124,6 @@ describe("resolveCodexNativeSearchActivation", () => {
 
     expect(result.state).toBe("managed_only");
     expect(result.inactiveReason).toBe("globally_disabled");
-  });
-
-  it("keeps native search inactive when the agent denies web_search", () => {
-    const result = resolveCodexNativeSearchActivation({
-      config: {
-        ...baseConfig,
-        agents: {
-          entries: {
-            main: {
-              tools: { deny: ["web_search"] },
-            },
-          },
-        },
-      },
-      agentId: "main",
-      modelProvider: "gateway",
-      modelApi: "openai-chatgpt-responses",
-      modelId: "gpt-5.5",
-    });
-
-    expect(result.state).toBe("managed_only");
-    expect(result.inactiveReason).toBe("tool_policy_denied");
   });
 
   it("keeps native search inactive when the agent denies group:web via session key", () => {

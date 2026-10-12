@@ -8,7 +8,7 @@ const MAX_ENTRIES = 128;
 const MAX_BYTES = 16 * 1024 * 1024;
 
 export type PublicSessionRepresentation = {
-  readonly body: string;
+  readonly body: string | Buffer;
   readonly etag: string;
   isCurrent(): boolean;
 };
@@ -92,7 +92,7 @@ export function createPublicSessionRepresentationCache() {
       }
       return {
         isCurrent,
-        complete(body: string): PublicSessionRepresentation | undefined {
+        complete(body: string | Buffer): PublicSessionRepresentation | undefined {
           if (!isCurrent()) {
             return undefined;
           }

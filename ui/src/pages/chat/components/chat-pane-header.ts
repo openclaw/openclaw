@@ -33,6 +33,7 @@ import {
   areUiSessionKeysEquivalent,
   resolveUiSessionNavigationParentKey,
 } from "../../../lib/sessions/session-key.ts";
+import { presentedContent, type PresentationValue } from "../../../lit/presentation-binding.ts";
 import type { ChatPageHost } from "../chat-state-host.ts";
 import {
   ensureSidebarConversation,
@@ -61,6 +62,7 @@ type ChatPaneParentSession = {
 
 type ChatPaneHeaderProps = {
   paneId: string;
+  presented: PresentationValue;
   narrow: boolean;
   mergedChrome: boolean;
   navDrawerOpen?: boolean;
@@ -399,10 +401,13 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
       </div>
       <div class="chat-pane__header-trailing">
         ${props.detailsControl ?? nothing}
-        <openclaw-chat-pane-versions-menu
-          style="display: contents"
-          .menu=${props}
-        ></openclaw-chat-pane-versions-menu>
+        ${presentedContent(
+          props.presented,
+          html`<openclaw-chat-pane-versions-menu
+            style="display: contents"
+            .menu=${props}
+          ></openclaw-chat-pane-versions-menu>`,
+        )}
         <div class="chat-pane__actions">
           ${props.narrow ? nothing : runningSubagents} ${props.runAction ?? nothing}
           ${props.sharingControl ?? nothing} ${renderChatPaneLayoutMenu(props)}

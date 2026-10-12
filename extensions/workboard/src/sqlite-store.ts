@@ -5,8 +5,10 @@ import {
   openSqliteWorkerStore,
   readSqliteDatabaseWriteTokenForPath,
   runSqliteWorkerStoreOperation,
+  runSqliteWorkerStoreWrite,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import { resolveWorkboardDatabaseInput } from "./database-config.js";
 import type { WorkboardPersistence, WorkboardWriteAuthority } from "./persistence-types.js";
 import type {
   WorkboardSqliteOperations,
@@ -22,17 +24,22 @@ type WorkboardSqliteStores = WorkboardPersistence & {
 };
 
 export function createWorkboardSqliteStores(options: {
+  config?: Parameters<typeof resolveWorkboardDatabaseInput>[0];
   dbPath?: string;
   workerModuleUrl: URL;
 }): WorkboardSqliteStores {
   const databasePath = path.resolve(
     options.dbPath ?? path.join(resolveStateDir(), "plugins", "workboard", "workboard.sqlite"),
   );
-  const worker = openSqliteWorkerStore<WorkboardSqliteWorkerOperations>({
-    moduleUrl: options.workerModuleUrl,
-    databasePath,
-    input: undefined,
-  });
+  const postgres = options.config?.database?.engine === "postgres";
+  const selectedDatabase = resolveWorkboardDatabaseInput(options.config ?? {});
+  const worker = selectedDatabase.then((input) =>
+    openSqliteWorkerStore<WorkboardSqliteWorkerOperations>({
+      moduleUrl: options.workerModuleUrl,
+      databasePath,
+      input,
+    }),
+  );
   let ownedConnection: number | undefined;
   let brokerClosed = false;
   let brokerCleanup = false;
@@ -103,6 +110,25 @@ export function createWorkboardSqliteStores(options: {
   ): Promise<WorkboardSqliteOperations[K]["output"]> {
     const authority = writes ? writeAuthority.getStore() : undefined;
     const store = await worker;
+    if (writes && postgres) {
+      const result = unwrapWorkboardSqliteResult(
+        await runSqliteWorkerStoreWrite(
+          store,
+          (scope) => scope.execute({ type, input }),
+          () => {
+            if (authority && !authority.active) {
+              throw new Error("Workboard mutation authority has settled.");
+            }
+            authority?.assertCurrent?.();
+          },
+          [databasePath],
+        ),
+      );
+      if (authority && result !== false && result !== "conflict" && result !== "owner_busy") {
+        authority.assertCurrent = undefined;
+      }
+      return result;
+    }
     if (!authority) {
       return unwrapWorkboardSqliteResult(await store.execute({ type, input }));
     }

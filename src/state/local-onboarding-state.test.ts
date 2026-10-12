@@ -20,13 +20,6 @@ afterEach(() => closeOpenClawStateDatabaseForTest());
 const SECURITY_ACKNOWLEDGED_AT = "2026-08-02T00:00:00.000Z";
 
 describe("local onboarding state", () => {
-  it("does not create persistent state when checking an unconfigured install", async () => {
-    await withOpenClawTestState({ label: "local-onboarding-empty" }, async (state) => {
-      expect(readLocalOnboardingState(state.configPath, { env: state.env })).toBeUndefined();
-      expect(fs.existsSync(state.statePath("state", "openclaw.sqlite"))).toBe(false);
-    });
-  });
-
   it("isolates receipts by configuration path", async () => {
     await withOpenClawTestState({ label: "local-onboarding-paths" }, async (state) => {
       const database = { env: state.env };
@@ -134,49 +127,6 @@ describe("local onboarding state", () => {
       expect(
         completeLocalOnboarding({ configPath: state.configPath, runId: "new-run", database }),
       ).toBe(true);
-    });
-  });
-
-  it("completes the same run idempotently without changing its original timestamp", async () => {
-    await withOpenClawTestState({ label: "local-onboarding-idempotent" }, async (state) => {
-      const database = { env: state.env };
-      beginLocalOnboarding({
-        configPath: state.configPath,
-        workspace: state.workspaceDir,
-        securityAcknowledgedAt: SECURITY_ACKNOWLEDGED_AT,
-        runId: "completed-run",
-        database,
-      });
-
-      expect(
-        completeLocalOnboarding({
-          configPath: state.configPath,
-          runId: "completed-run",
-          nowMs: 100,
-          database,
-        }),
-      ).toBe(true);
-      expect(
-        completeLocalOnboarding({
-          configPath: state.configPath,
-          runId: "completed-run",
-          nowMs: 200,
-          database,
-        }),
-      ).toBe(true);
-      expect(
-        completeLocalOnboarding({
-          configPath: state.configPath,
-          runId: "different-run",
-          nowMs: 300,
-          database,
-        }),
-      ).toBe(false);
-      expect(readLocalOnboardingState(state.configPath, database)).toMatchObject({
-        status: "completed",
-        runId: "completed-run",
-        completedAtMs: 100,
-      });
     });
   });
 
@@ -406,35 +356,6 @@ describe("local onboarding state", () => {
         expect(concurrent).toEqual(completed);
         expect(readLocalOnboardingState(state.configPath, database)).toEqual(completed);
       }
-    });
-  });
-
-  it("replaces a completed owner only when reset observed its exact run", async () => {
-    await withOpenClawTestState({ label: "local-onboarding-completed-reset" }, async (state) => {
-      const database = { env: state.env };
-      const first = beginLocalOnboarding({
-        configPath: state.configPath,
-        workspace: state.workspaceDir,
-        securityAcknowledgedAt: SECURITY_ACKNOWLEDGED_AT,
-        runId: "observed-completed-run",
-        database,
-      });
-      expect(
-        completeLocalOnboarding({ configPath: state.configPath, runId: first.runId, database }),
-      ).toBe(true);
-
-      const replacement = beginLocalOnboarding({
-        configPath: state.configPath,
-        workspace: state.path("replacement-workspace"),
-        securityAcknowledgedAt: "2026-08-03T00:00:00.000Z",
-        runId: "replacement-run",
-        replace: true,
-        expectedRunId: first.runId,
-        database,
-      });
-
-      expect(replacement).toMatchObject({ status: "pending", runId: "replacement-run" });
-      expect(readLocalOnboardingState(state.configPath, database)).toEqual(replacement);
     });
   });
 

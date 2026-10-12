@@ -370,6 +370,8 @@ describe("conversation registry", () => {
 
     await writeRoute("channel:alpha", "guild-alpha", 100);
     await writeRoute("channel:beta", "guild-beta", 200);
+    await writeRoute("channel:alpha", "guild-alpha", 300);
+    await writeRoute("channel:beta", "guild-beta", 400);
 
     expect(
       (await listConversations(scope, { channel: "discord" }))
@@ -386,7 +388,7 @@ describe("conversation registry", () => {
       database.db,
       getSessionKysely(database.db)
         .updateTable("session_conversations")
-        .set({ last_seen_at: 300 })
+        .set({ last_seen_at: 500 })
         .where("session_id", "=", "shared-session")
         .where("role", "=", "related"),
     );

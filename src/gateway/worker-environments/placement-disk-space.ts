@@ -18,6 +18,7 @@ const MIB = 1024 * 1024;
 const GIB = 1024 * MIB;
 const DISK_SPACE_PROBE_CONCURRENCY = 8;
 const DISK_SPACE_PROBE_TIMEOUT_MS = 30_000;
+const IDLE_DISK_SPACE_REFRESH_MS = 15 * 60_000;
 
 const REMOTE_DISK_SPACE_PROBE_JS = String.raw`
 const fs = require("node:fs");
@@ -34,6 +35,7 @@ type ActivePlacement = Extract<WorkerSessionPlacementRecord, { state: "active" }
 
 type DiskSpaceObservation = ActivePlacement & {
   snapshot: SessionPlacementDiskSpace;
+  runnerVersion: number;
 };
 
 function hasExactBinding(
@@ -105,7 +107,7 @@ function parseDiskSpaceProbe(stdout: string, observedAtMs: number): SessionPlace
 export function createWorkerPlacementDiskSpaceMonitor(params: {
   placements: Pick<WorkerSessionPlacementStore, "get" | "readChangeSnapshot" | "readProjection">;
   environments: Pick<WorkerEnvironmentService, "startTunnel">;
-  runnerAvailability: Pick<WorkerPlacementRunnerAvailabilityReader, "read">;
+  runnerAvailability: Pick<WorkerPlacementRunnerAvailabilityReader, "read" | "version">;
   warn: (message: string) => void;
   now?: () => number;
 }) {
@@ -130,6 +132,17 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
     if (params.runnerAvailability.read(placement)?.status === "offline") {
       return;
     }
+    const runnerVersion = params.runnerAvailability.version();
+    const previousObservation = observations.get(placement.sessionId);
+    if (
+      previousObservation &&
+      hasExactBinding(previousObservation, placement) &&
+      previousObservation.updatedAtMs === placement.updatedAtMs &&
+      previousObservation.runnerVersion === runnerVersion &&
+      now() - previousObservation.snapshot.observedAtMs < IDLE_DISK_SPACE_REFRESH_MS
+    ) {
+      return;
+    }
     const tunnel = await params.environments.startTunnel({
       environmentId: placement.environmentId,
       ownerEpoch: placement.activeOwnerEpoch,
@@ -147,7 +160,7 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
       Math.max(0, Math.min(Number.MAX_SAFE_INTEGER, Math.floor(now()))),
     );
     const current = params.placements.get(placement.sessionId);
-    const candidate = { ...placement, snapshot } satisfies DiskSpaceObservation;
+    const candidate = { ...placement, snapshot, runnerVersion } satisfies DiskSpaceObservation;
     // Tunnel work can outlive an owner. Accept the sample only for the exact active generation.
     if (!hasExactBinding(candidate, current)) {
       return;

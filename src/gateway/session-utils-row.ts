@@ -59,6 +59,7 @@ import { isSessionPermissionChangePending } from "./session-permission-change.js
 import { projectSessionProviderReview } from "./session-provider-review-projection.js";
 import { readSessionRowModelFacts } from "./session-row-model-facts.js";
 import { buildSessionSwarmSummary } from "./session-swarm-summary.js";
+import type { SessionTranscriptUsageSnapshot } from "./session-transcript-derived-readers.js";
 import { readSessionTitleFieldsFromTranscript as readScopedSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
 import type {
   GatewaySessionModelSource,
@@ -112,6 +113,7 @@ export function readSessionRowInputs(params: {
   configuredAgentIds?: ReadonlySet<string>;
   agentId: string;
   skipTranscriptUsageFallback?: boolean;
+  transcriptUsage?: SessionTranscriptUsageSnapshot | null;
   lightweightListRow?: boolean;
   includeSwarmChildren?: boolean;
 }) {
@@ -153,6 +155,7 @@ export function readSessionRowInputs(params: {
           rowContext,
           agentId,
           storeAgentId: params.storeAgentId,
+          transcriptUsage: params.transcriptUsage,
         })
       : undefined;
   const { provider, model } = selectedModel;
@@ -343,7 +346,7 @@ export function resolveGatewaySessionActiveModel(params: {
           selectedModel: selectedModel.model,
           sessionEntry: params.entry,
           config: params.cfg,
-          terminalModel: params.terminalModel,
+          terminalModel: params.terminalModel ?? null,
           sessionScope: {
             agentId: params.storeAgentId ?? params.agentId,
             sessionKey: params.sessionKey,

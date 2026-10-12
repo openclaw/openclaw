@@ -114,6 +114,7 @@ type RecoveryOptions = {
   log: RecoveryLogger;
   stateDir?: string;
   shouldContinue?: () => boolean;
+  onPending?: () => void;
 };
 
 type EntryRecoveryOptions = RecoveryOptions & {
@@ -1253,6 +1254,9 @@ export async function drainPendingDeliveriesCore(
     const matchingEntries = (await loadUnfinishedDeliveries(opts.stateDir, stateContext)).filter(
       (entry) => entry.settlement || opts.selectEntry(entry, now).match,
     );
+    if (matchingEntries.length > 0) {
+      opts.onPending?.();
+    }
     await recoveryCoordinator.scan({
       entries: matchingEntries,
       loadEntry: (id) => loadUnfinishedDelivery(id, opts.stateDir, stateContext),
@@ -1297,6 +1301,7 @@ export async function recoverPendingDeliveries(
   if (pending.length === 0) {
     return createEmptyDeliveryRecoverySummary();
   }
+  opts.onPending?.();
 
   opts.log.info(`Found ${pending.length} pending delivery entries — starting recovery`);
 

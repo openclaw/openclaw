@@ -21,12 +21,46 @@ import { withSqliteReaderOwner } from "../infra/sqlite-reader-lifecycle.js";
 import * as logging from "../logging/logger.js";
 import {
   runOpenClawAgentWorkerWrite,
+  runOpenClawAgentPathWriteAdmission,
   runOpenClawAgentWriteAdmission,
   runOpenClawAgentWriteAdmissions,
 } from "./openclaw-agent-write-admission.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
+
+it.each(["write", "replace", "remove"] as const)(
+  "revalidates the captured file after an awaited %s",
+  async (change) => {
+    const root = tempDirs.make("openclaw-write-identity-");
+    const pathname = path.join(root, "agent.sqlite");
+    fs.writeFileSync(pathname, "original");
+    await runOpenClawAgentPathWriteAdmission(pathname, async (_identity, assertCurrent) => {
+      await Promise.resolve();
+      if (change === "write") {
+        fs.writeFileSync(pathname, "updated");
+        expect(assertCurrent).not.toThrow();
+      } else if (change === "replace") {
+        const replacement = path.join(root, "replacement.sqlite");
+        fs.writeFileSync(replacement, "replacement");
+        fs.renameSync(replacement, pathname);
+        expect(assertCurrent).toThrow("database target changed");
+      } else {
+        fs.unlinkSync(pathname);
+        expect(assertCurrent).toThrow();
+      }
+    });
+  },
+);
+
+it("keeps a missing reservation current when its database is created", async () => {
+  const pathname = path.join(tempDirs.make("openclaw-write-create-"), "agent.sqlite");
+  await runOpenClawAgentPathWriteAdmission(pathname, async (_identity, assertCurrent) => {
+    await Promise.resolve();
+    fs.writeFileSync(pathname, "created");
+    expect(assertCurrent).not.toThrow();
+  });
+});
 
 it.each([
   { count: 773, outcome: "ok" },

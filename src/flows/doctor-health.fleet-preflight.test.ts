@@ -1,8 +1,10 @@
 import "./doctor-health.test-support.js";
 import { execFile, fork, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
+import * as processIdentity from "@openclaw/proc-safe/identity";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
 import { parseUpdateRecoveryBackupManifest } from "../commands/backup-verify-manifest.js";
@@ -21,7 +23,7 @@ import { resetAutoMigrateLegacyStateDirForTest } from "../infra/state-migrations
 import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
 import { inspectUpdateRecoveryBackups } from "../infra/update-recovery-backup-status.js";
 import { captureUpdateRecoveryBaseline } from "../infra/update-recovery-baseline-capture.js";
-import { readUpdateRunDriver } from "../infra/update-run-driver.js";
+import { inspectUpdateRunDriver, readUpdateRunDriver } from "../infra/update-run-driver.js";
 import { createUpdateRun, listUpdateRuns } from "../infra/update-run-ledger.js";
 import { listAgentDatabaseAdmissionRefusals } from "../state/agent-database-admission.js";
 import {
@@ -46,10 +48,15 @@ vi.mock("node:child_process", async (importOriginal) => {
   );
   return { ...actual, execFile: execFileSpy, fork: vi.fn(actual.fork), spawn: vi.fn(actual.spawn) };
 });
+vi.mock("@openclaw/proc-safe/identity", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@openclaw/proc-safe/identity")>();
+  return { ...actual, readProcessAncestry: vi.fn(actual.readProcessAncestry) };
+});
 
 const { mocks } = await import("./doctor-health.test-support.js");
 
 beforeEach(() => {
+  vi.mocked(processIdentity.readProcessAncestry).mockReset();
   vi.mocked(execFile).mockReset();
   mocks.packageRoot.mockReturnValue(undefined);
   mocks.runContributions.mockReset();
@@ -236,6 +243,18 @@ it("reuses the admitted original capture and refuses changed evidence before Doc
         expect(captured.bytes.toString("utf8")).toBe(original);
         const store = resolveUpdateCaptureRoot(state.stateDir);
         const originalEntries = fs.readdirSync(store).toSorted();
+        const { readProcessAncestry: readAncestry } = await vi.importActual<
+          typeof import("@openclaw/proc-safe/identity")
+        >("@openclaw/proc-safe/identity");
+        vi.mocked(processIdentity.readProcessAncestry).mockImplementation((pid, options) => {
+          const observed = readAncestry(pid, { ...options, throughPid: process.pid });
+          if (!observed || options?.throughPid === process.pid) {
+            return observed;
+          }
+          // Only the higher supervisor's visibility is denied. The real driver,
+          // executor, maintenance owner and retained capture stay authoritative.
+          return { ...observed, complete: false, stoppedBy: "unreadable-parent" };
+        });
         for (const [port, inheritedRunId] of [
           [19112, undefined],
           [19113, run.runId],
@@ -323,8 +342,52 @@ it("reuses the admitted original capture and refuses changed evidence before Doc
           ),
           runtime.log.mock.calls.flat().join("\n"),
         ).toHaveLength(2);
+
+        const foreign = spawn(process.execPath, ["-e", "process.stdin.resume()"], {
+          stdio: ["pipe", "ignore", "ignore"],
+        });
+        const closed = once(foreign, "close");
+        const repair = vi.spyOn(configFlow, "loadAndMaybeMigrateDoctorConfig");
+        const current = fs.readFileSync(state.configPath);
+        try {
+          await once(foreign, "spawn");
+          const foreignDriver = readUpdateRunDriver(foreign.pid);
+          if (!foreignDriver) {
+            throw new Error("The foreign updater fixture requires its actual live identity");
+          }
+          expect(inspectUpdateRunDriver(foreignDriver)).toBe("alive");
+          createUpdateRun(
+            { trigger: "cli", origin: { driver: foreignDriver } },
+            { env: state.env },
+          );
+          await expect(
+            runDoctorHealthFlow(
+              runtime,
+              { repair: true, nonInteractive: true },
+              {
+                inputHash: hashConfigRaw(current.toString("utf8")),
+                assertCurrent: fence.assertCurrent,
+                originalRecoveryCapture: { runId: run.runId, installRoot, ref: baseline.ref },
+              },
+            ),
+          ).rejects.toMatchObject({
+            name: "DoctorMaintenanceRefusalError",
+            refusal: { kind: "data-at-risk", reason: "unreadable-state" },
+            cause: { message: expect.stringContaining(`driver PID ${foreignDriver.pid}`) },
+          });
+          expect(repair).not.toHaveBeenCalled();
+          expect(mocks.runContributions).toHaveBeenCalledTimes(2);
+          expect(fs.readFileSync(state.configPath)).toEqual(current);
+          expect(fs.readFileSync(captured.manifestPath)).toEqual(captured.manifestBytes);
+          expect(fs.readFileSync(captured.payloadPath, "utf8")).toBe(original);
+        } finally {
+          repair.mockRestore();
+          foreign.stdin.end();
+          await closed;
+        }
       });
     } finally {
+      vi.mocked(processIdentity.readProcessAncestry).mockReset();
       vi.unstubAllEnvs();
     }
   });

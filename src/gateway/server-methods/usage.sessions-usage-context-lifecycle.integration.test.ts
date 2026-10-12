@@ -258,7 +258,16 @@ it.for([
         ]);
         return;
       }
-      const [ok, payload] = expectDefined(respond.mock.calls[0], "usage response");
+      const [ok, payload, error] = expectDefined(respond.mock.calls[0], "usage response");
+      if (change === "revocation after context read") {
+        expect(ok).toBe(false);
+        expect(payload).toBeUndefined();
+        expect(error).toMatchObject({
+          code: "UNAVAILABLE",
+          message: expect.stringContaining("Refresh the usage view"),
+        });
+        return;
+      }
       expect(ok).toBe(true);
       const result = payload as SessionsUsageResult;
       expect(result.sessions).toHaveLength(1);

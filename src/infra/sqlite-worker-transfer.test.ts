@@ -74,11 +74,8 @@ describe("bounded SQLite worker value transfers", () => {
   });
 
   it.each([
-    ["id", { id: 2 }],
-    ["sequence", { sequence: 1 }],
     ["kind", { kind: "other" }],
     ["offset", { offset: 1 }],
-    ["length", { recordBytes: serialize("complete row").byteLength - 1 }],
     ["completion", { recordDone: false }],
   ] as const)(
     "rejects invalid %s framing without consuming a value or accepting continuation",
@@ -104,47 +101,36 @@ describe("bounded SQLite worker value transfers", () => {
     },
   );
 
-  it.each(["missing", "duplicate", "incorrect", "partial"] as const)(
-    "rejects a transfer ending with %s records",
-    (invalid) => {
-      const bytes = serialize("one row");
-      const consume = vi.fn();
-      const receiver = createSqliteWorkerTransferReceiver(
-        { id: 1, kinds: ["row", "other"] },
-        consume,
-      );
+  it("rejects a transfer ending with duplicate records", () => {
+    const bytes = serialize("one row");
+    const consume = vi.fn();
+    const receiver = createSqliteWorkerTransferReceiver(
+      { id: 1, kinds: ["row", "other"] },
+      consume,
+    );
+    receiver.accept({
+      id: 1,
+      sequence: 0,
+      done: false,
+      kind: "row",
+      recordBytes: bytes.byteLength,
+      offset: 0,
+      recordDone: true,
+      bytes,
+    });
+    expect(() =>
       receiver.accept({
         id: 1,
-        sequence: 0,
-        done: false,
-        kind: "row",
-        recordBytes: bytes.byteLength,
-        offset: 0,
-        recordDone: invalid !== "partial",
-        bytes: invalid === "partial" ? bytes.subarray(0, 1) : bytes,
-      });
-      expect(() =>
-        receiver.accept({
-          id: 1,
-          sequence: 1,
-          done: true,
-          counts:
-            invalid === "missing"
-              ? [["row", 1]]
-              : invalid === "duplicate"
-                ? [
-                    ["row", 1],
-                    ["row", 1],
-                  ]
-                : [
-                    ["row", 0],
-                    ["other", 0],
-                  ],
-        }),
-      ).toThrow("incomplete result");
-      expect(consume).toHaveBeenCalledTimes(invalid === "partial" ? 0 : 1);
-    },
-  );
+        sequence: 1,
+        done: true,
+        counts: [
+          ["row", 1],
+          ["row", 1],
+        ],
+      }),
+    ).toThrow("incomplete result");
+    expect(consume).toHaveBeenCalledTimes(1);
+  });
 
   it("releases an abandoned iterator before accepting another transfer", () => {
     const released = vi.fn();

@@ -17,12 +17,13 @@ import {
 import { closeOpenClawAgentDatabasesAsync } from "../../../../src/state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../../../../src/state/openclaw-state-db.js";
 import { cleanupSessionStateForTest } from "../../../../src/test-utils/session-state-cleanup.js";
+import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import { makeUserMessage } from "../../../../test/helpers/user-message.js";
 import {
   buildSessionEntry,
   listSessionTranscriptCorpusEntriesForAgent,
   parseCanonicalSessionSyncTargetFromPath,
-  statSessionEntrySync,
+  statSessionEntry,
   type SessionFileEntry,
 } from "./session-files.js";
 
@@ -171,22 +172,35 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       ]),
     );
 
-    const liveEntry = requireSessionEntry(
-      await buildSessionEntry(sessionKey, {
+    const messages: unknown[] = [];
+    const sql = observeHostDataSql();
+    let liveEntry: SessionFileEntry;
+    let liveState: Awaited<ReturnType<typeof statSessionEntry>>;
+    try {
+      liveEntry = requireSessionEntry(
+        await buildSessionEntry(sessionKey, {
+          agentId: "main",
+          sessionId,
+          sessionKey,
+          storePath,
+          updatedAtMs: updatedAt,
+          onTranscriptMessage: (message) => messages.push(message),
+        }),
+      );
+      liveState = await statSessionEntry(sessionKey, {
         agentId: "main",
         sessionId,
         sessionKey,
         storePath,
         updatedAtMs: updatedAt,
-      }),
-    );
-    const liveState = statSessionEntrySync(sessionKey, {
-      agentId: "main",
-      sessionId,
-      sessionKey,
-      storePath,
-      updatedAtMs: updatedAt,
-    });
+      });
+      expect(sql.queries).toEqual([]);
+    } finally {
+      sql.restore();
+    }
+    expect(messages).toEqual([
+      expect.objectContaining({ role: "user", content: "Live SQLite transcript text" }),
+    ]);
     const archiveEntry = requireSessionEntry(await buildSessionEntry(archivePath));
 
     expect(liveEntry.path).toBe("sessions/main/sqlite-live.jsonl");
@@ -202,6 +216,21 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       "sessions/main/sqlite-live.jsonl.deleted.2026-06-25T12-01-00.000Z",
     );
     expect(archiveEntry.content).toBe("User: Archived JSONL transcript text");
+    await persistSessionTranscriptTurn(
+      { agentId: "main", sessionId, sessionKey, storePath },
+      {
+        messages: [{ message: makeUserMessage("A newer transcript message", updatedAt + 1) }],
+        touchSessionEntry: true,
+        updateMode: "none",
+      },
+    );
+    const updatedState = await statSessionEntry(sessionKey, {
+      agentId: "main",
+      sessionId,
+      sessionKey,
+      storePath,
+    });
+    expect(updatedState?.size).toBeGreaterThan(liveEntry.size);
   });
 
   it("omits symlinked archive artifacts from the session corpus", async () => {

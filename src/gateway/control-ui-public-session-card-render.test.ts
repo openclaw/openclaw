@@ -1,11 +1,25 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { DOMParser } from "linkedom";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
-  renderPublicSessionCardSvg,
+  renderPublicSessionCardPng,
   type PublicSessionCard,
 } from "./control-ui-public-session-card-render.js";
 import { createPublicSessionCardRenderer } from "./control-ui-public-session-card.js";
+
+const rasterizerInput = vi.hoisted(() => vi.fn<(svg: string) => void>());
+
+// Inspect the production rasterizer input; the worker PNG test loads its own real module.
+vi.mock("@resvg/resvg-js", () => ({
+  Resvg: class {
+    constructor(svg: string) {
+      rasterizerInput(svg);
+    }
+    render() {
+      return { asPng: () => Buffer.alloc(0) };
+    }
+  },
+}));
 
 const CARD: PublicSessionCard = {
   title: "A clearer public session preview",
@@ -16,8 +30,15 @@ const CARD: PublicSessionCard = {
   host: "example.test",
 };
 
+function renderSvg(card: PublicSessionCard): string {
+  rasterizerInput.mockClear();
+  renderPublicSessionCardPng(card);
+  expect(rasterizerInput).toHaveBeenCalledOnce();
+  return rasterizerInput.mock.calls[0]![0];
+}
+
 function parse(card: PublicSessionCard) {
-  return new DOMParser().parseFromString(renderPublicSessionCardSvg(card), "image/svg+xml");
+  return new DOMParser().parseFromString(renderSvg(card), "image/svg+xml");
 }
 
 describe("public session preview card", () => {
@@ -75,7 +96,7 @@ describe("public session preview card", () => {
       const document = parse({ ...card, repoSlug: injection, worktree });
       expect(document.querySelector("script, image, foreignObject, a")).toBeNull();
       expect(document.documentElement.textContent).toContain(injection);
-      expect(renderPublicSessionCardSvg({ ...card, worktree })).toContain("&lt;script");
+      expect(renderSvg({ ...card, worktree })).toContain("&lt;script");
     }
   });
 

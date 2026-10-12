@@ -1,4 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { DuplicateAgentError } from "../agents/agent-create-error.js";
 import { AuthProfileStoreUnreadableError } from "../agents/auth-profiles/store-unreadable-error.js";
 import { McpOAuthStoreCorruptionError } from "../agents/mcp-oauth-store-error.js";
@@ -9,10 +8,7 @@ import {
   WorktreeRemovalContentionError,
   WorktreeRemovalLockError,
 } from "../agents/worktrees/errors.js";
-import {
-  SESSION_GOAL_OPERATION_ERROR_CODES,
-  SessionGoalOperationError,
-} from "../config/sessions/goals-operations.types.js";
+import { SessionGoalOperationError } from "../config/sessions/goals-operations.types.js";
 import { SessionCanonicalKeyMigrationRequiredError } from "../config/sessions/session-canonical-key-error.js";
 import {
   SessionEntryLifecycleUpsertConflictError,
@@ -35,25 +31,16 @@ import {
   OpenClawStateOwnershipMetadataError,
 } from "../infra/sqlite-lifecycle-errors.js";
 import { SqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
-import {
-  isStartupMaintenanceKind,
-  StartupMaintenanceRequiredError,
-} from "../infra/startup-maintenance-required.js";
+import { StartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import { PluginBlobStoreError } from "../plugin-state/plugin-blob-store.types.js";
 import { PluginStateStoreError } from "../plugin-state/plugin-state-error.js";
-import {
-  SecretStoreValidationError,
-  isSecretStoreValidationCode,
-} from "../secrets/store/secret-store-validation-error.js";
+import { SecretStoreValidationError } from "../secrets/store/secret-store-validation-error.js";
 import { ModelSelectionLockedError } from "../sessions/model-selection-error.js";
 import { SkillUploadRequestError } from "../skills/lifecycle/upload-store-error.js";
-import { SkillLibraryError, type SkillLibraryErrorCode } from "../skills/skill-library-error.js";
+import { SkillLibraryError } from "../skills/skill-library-error.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
-import {
-  isOpenClawStateLeaseErrorCode,
-  OpenClawStateLeaseError,
-} from "./openclaw-state-lease-error.js";
+import { OpenClawStateLeaseError } from "./openclaw-state-lease-error.js";
 import { SessionMetadataUnavailableError } from "./session-metadata-unavailable-error.js";
 
 const MESSAGE_ONLY_ERRORS = {
@@ -79,7 +66,75 @@ function isMessageOnlyErrorIdentity(node: { type?: unknown }): node is MessageOn
   return typeof node.type === "string" && Object.hasOwn(MESSAGE_ONLY_ERRORS, node.type);
 }
 
-type ErrorIdentity = NonNullable<ReturnType<typeof parseIdentity>>;
+type ErrorFields<Type extends string, Source, Keys extends keyof Source> = { type: Type } & Pick<
+  Source,
+  Keys
+>;
+
+export type ErrorIdentity =
+  | MessageOnlyErrorIdentity
+  | { type: "error" | "aggregate" | "mcp-oauth-corruption" | "session-worktree-owner-mismatch" }
+  | ErrorFields<"auth-profile-store-unreadable", AuthProfileStoreUnreadableError, "databasePath">
+  | ErrorFields<
+      "worktree-removal-contention",
+      WorktreeRemovalContentionError,
+      "kind" | "blockedByRun"
+    >
+  | ErrorFields<"worktree-removal-lock", WorktreeRemovalLockError, "kind">
+  | (ErrorFields<"plugin-state", PluginStateStoreError, "operation" | "path" | "owner"> & {
+      stateCode: PluginStateStoreError["code"];
+    })
+  | { type: "skill-library"; libraryCode: SkillLibraryError["code"]; currentRevision?: string }
+  | { type: "secret-store-validation"; secretCode: SecretStoreValidationError["code"] }
+  | ErrorFields<
+      "worker-session-already-attached",
+      WorkerSessionAlreadyAttachedError,
+      "sessionId" | "environmentId"
+    >
+  | (ErrorFields<"plugin-blob", PluginBlobStoreError, "operation" | "path"> & {
+      blobCode: PluginBlobStoreError["code"];
+    })
+  | ErrorFields<
+      "workspace-alias-repointed",
+      WorkspaceAliasRepointedError,
+      "aliasPath" | "storedWorkspacePath" | "currentWorkspacePath"
+    >
+  | { type: "session-goal-operation"; goalCode: SessionGoalOperationError["code"] }
+  | ErrorFields<
+      "session-lifecycle-upsert-conflict",
+      SessionEntryLifecycleUpsertConflictError,
+      "sessionKey"
+    >
+  | {
+      type: "session-transcript-writer-claim-rebound";
+      refusal?: NonNullable<ReturnType<typeof parseTranscriptAppendRefusal>>;
+    }
+  | ErrorFields<"session-mutation-conflict", SqliteSessionMutationConflictError, "operationLabel">
+  | ErrorFields<
+      "session-transcript-mutation-conflict",
+      SqliteTranscriptMutationConflictError,
+      "sessionId"
+    >
+  | ErrorFields<"session-metadata", SessionMetadataUnavailableError, "reason" | "missingTables">
+  | ErrorFields<"state-owner-contention", GatewayStateOwnerContentionError, "databasePath">
+  | { type: "state-lease"; leaseCode: OpenClawStateLeaseError["code"] }
+  | ErrorFields<"ownership-metadata", OpenClawStateOwnershipMetadataError, "databasePath">
+  | ErrorFields<
+      "external-ownership",
+      OpenClawStateExternalOwnershipError,
+      "databasePath" | "managerId"
+    >
+  | ErrorFields<
+      "state-migration",
+      OpenClawStateDatabaseSchemaMigrationRequiredError,
+      "kind" | "pathname"
+    >
+  | ErrorFields<
+      "agent-media-migration",
+      OpenClawAgentDatabaseMediaMigrationRequiredError,
+      "pathname" | "schemaVersion"
+    >
+  | ErrorFields<"maintenance", StartupMaintenanceRequiredError, "kind">;
 
 export function identifyError(error: Error): ErrorIdentity {
   if (error instanceof AuthProfileStoreUnreadableError) {
@@ -92,7 +147,14 @@ export function identifyError(error: Error): ErrorIdentity {
     return {
       type: "worktree-removal-contention",
       kind: error.kind,
-      ...(error.blockedByRun ? { blockedByRun: error.blockedByRun } : {}),
+      ...(error.blockedByRun
+        ? {
+            blockedByRun: {
+              worktreeId: error.blockedByRun.worktreeId,
+              pid: error.blockedByRun.pid,
+            },
+          }
+        : {}),
     };
   }
   if (error instanceof WorktreeRemovalLockError) {
@@ -104,7 +166,7 @@ export function identifyError(error: Error): ErrorIdentity {
       stateCode: error.code,
       operation: error.operation,
       path: error.path,
-      owner: error.owner,
+      owner: { pid: error.owner.pid, threadId: error.owner.threadId, version: error.owner.version },
     };
   }
   if (error instanceof SkillLibraryError) {
@@ -210,246 +272,6 @@ export function identifyError(error: Error): ErrorIdentity {
     return { type: "maintenance", kind: error.kind };
   }
   return { type: error instanceof AggregateError ? "aggregate" : "error" };
-}
-
-function isBlobCode(value: unknown): value is PluginBlobStoreError["code"] {
-  return (
-    value === "PLUGIN_BLOB_OPEN_FAILED" ||
-    value === "PLUGIN_BLOB_WRITE_FAILED" ||
-    value === "PLUGIN_BLOB_READ_FAILED" ||
-    value === "PLUGIN_BLOB_CORRUPT" ||
-    value === "PLUGIN_BLOB_LIMIT_EXCEEDED" ||
-    value === "PLUGIN_BLOB_INVALID_INPUT"
-  );
-}
-
-function isBlobOperation(value: unknown): value is PluginBlobStoreError["operation"] {
-  return (
-    value === "open" ||
-    value === "register" ||
-    value === "lookup" ||
-    value === "delete" ||
-    value === "entries" ||
-    value === "clear" ||
-    value === "sweep"
-  );
-}
-
-function isSkillLibraryCode(value: unknown): value is SkillLibraryErrorCode {
-  return (
-    value === "IDENTITY_REQUIRED" ||
-    value === "FORBIDDEN" ||
-    value === "NOT_FOUND" ||
-    value === "CONFLICT" ||
-    value === "NAME_CONFLICT" ||
-    value === "INVALID_BUNDLE" ||
-    value === "POLICY_BLOCKED" ||
-    value === "AUTHORITY_EXPIRED" ||
-    value === "LIMIT"
-  );
-}
-
-export function parseIdentity(node: Record<string, unknown>) {
-  if (isMessageOnlyErrorIdentity(node)) {
-    return { type: node.type };
-  }
-  switch (node.type) {
-    case "session-worktree-owner-mismatch":
-      return { type: node.type };
-    case "worktree-removal-contention": {
-      if (node.kind !== "busy" && node.kind !== "finalized") {
-        return undefined;
-      }
-      if (node.blockedByRun === undefined) {
-        const kind: WorktreeRemovalContentionError["kind"] = node.kind;
-        return { type: node.type, kind };
-      }
-      const blocked = node.blockedByRun;
-      if (
-        !isRecord(blocked) ||
-        typeof blocked.worktreeId !== "string" ||
-        typeof blocked.pid !== "number" ||
-        !Number.isSafeInteger(blocked.pid) ||
-        blocked.pid <= 0
-      ) {
-        return undefined;
-      }
-      const kind: WorktreeRemovalContentionError["kind"] = node.kind;
-      return {
-        type: node.type,
-        kind,
-        blockedByRun: { worktreeId: blocked.worktreeId, pid: blocked.pid },
-      };
-    }
-    case "worktree-removal-lock": {
-      if (node.kind !== "busy" && node.kind !== "foreign-lock") {
-        return undefined;
-      }
-      const kind: WorktreeRemovalLockError["kind"] = node.kind;
-      return { type: node.type, kind };
-    }
-    case "plugin-state": {
-      const codes: readonly PluginStateStoreError["code"][] = [
-        "PLUGIN_STATE_SQLITE_UNAVAILABLE",
-        "PLUGIN_STATE_OPEN_FAILED",
-        "PLUGIN_STATE_WRITE_FAILED",
-        "PLUGIN_STATE_READ_FAILED",
-        "PLUGIN_STATE_CORRUPT",
-        "PLUGIN_STATE_LIMIT_EXCEEDED",
-        "PLUGIN_STATE_INVALID_INPUT",
-      ];
-      const operations: readonly PluginStateStoreError["operation"][] = [
-        "load-sqlite",
-        "open",
-        "ensure-schema",
-        "register",
-        "lookup",
-        "consume",
-        "delete",
-        "entries",
-        "count",
-        "clear",
-        "sweep",
-        "probe",
-        "close",
-      ];
-      const stateCode = codes.find((code) => code === node.stateCode && code === node.code);
-      const operation = operations.find((candidate) => candidate === node.operation);
-      const owner = node.owner;
-      return stateCode &&
-        operation &&
-        isRecord(owner) &&
-        typeof owner.pid === "number" &&
-        typeof owner.threadId === "number" &&
-        typeof owner.version === "string" &&
-        (node.path === undefined || typeof node.path === "string")
-        ? {
-            type: node.type,
-            stateCode,
-            operation,
-            owner: { pid: owner.pid, threadId: owner.threadId, version: owner.version },
-            ...(typeof node.path === "string" ? { path: node.path } : {}),
-          }
-        : undefined;
-    }
-    case "skill-library":
-      return isSkillLibraryCode(node.libraryCode) &&
-        node.code === node.libraryCode &&
-        (node.currentRevision === undefined || typeof node.currentRevision === "string")
-        ? {
-            type: node.type,
-            libraryCode: node.libraryCode,
-            ...(typeof node.currentRevision === "string"
-              ? { currentRevision: node.currentRevision }
-              : {}),
-          }
-        : undefined;
-    case "secret-store-validation":
-      return isSecretStoreValidationCode(node.secretCode) && node.code === node.secretCode
-        ? { type: node.type, secretCode: node.secretCode }
-        : undefined;
-    case "worker-session-already-attached":
-      return typeof node.sessionId === "string" && typeof node.environmentId === "string"
-        ? { type: node.type, sessionId: node.sessionId, environmentId: node.environmentId }
-        : undefined;
-    case "workspace-alias-repointed":
-      return typeof node.aliasPath === "string" &&
-        typeof node.storedWorkspacePath === "string" &&
-        typeof node.currentWorkspacePath === "string"
-        ? {
-            type: node.type,
-            aliasPath: node.aliasPath,
-            storedWorkspacePath: node.storedWorkspacePath,
-            currentWorkspacePath: node.currentWorkspacePath,
-          }
-        : undefined;
-    case "error":
-    case "aggregate":
-    case "mcp-oauth-corruption":
-      return { type: node.type };
-    case "session-transcript-writer-claim-rebound": {
-      const refusal = parseTranscriptAppendRefusal(node.refusal);
-      return node.refusal === undefined || refusal
-        ? { type: node.type, ...(refusal ? { refusal } : {}) }
-        : undefined;
-    }
-    case "session-goal-operation": {
-      const goalCode = SESSION_GOAL_OPERATION_ERROR_CODES.find((code) => code === node.goalCode);
-      return goalCode && node.code === goalCode ? { type: node.type, goalCode } : undefined;
-    }
-    case "session-lifecycle-upsert-conflict":
-      return typeof node.sessionKey === "string"
-        ? { type: node.type, sessionKey: node.sessionKey }
-        : undefined;
-    case "session-mutation-conflict":
-      return typeof node.operationLabel === "string"
-        ? { type: node.type, operationLabel: node.operationLabel }
-        : undefined;
-    case "session-transcript-mutation-conflict":
-      return typeof node.sessionId === "string"
-        ? { type: node.type, sessionId: node.sessionId }
-        : undefined;
-    case "session-metadata": {
-      if (
-        (node.reason !== "schema-missing" && node.reason !== "table-missing") ||
-        !Array.isArray(node.missingTables) ||
-        !node.missingTables.every((table: unknown) => typeof table === "string")
-      ) {
-        return undefined;
-      }
-      const reason: SessionMetadataUnavailableError["reason"] = node.reason;
-      return { type: node.type, reason, missingTables: [...node.missingTables] };
-    }
-    case "auth-profile-store-unreadable":
-    case "state-owner-contention":
-    case "ownership-metadata":
-      return typeof node.databasePath === "string"
-        ? { type: node.type, databasePath: node.databasePath }
-        : undefined;
-    case "external-ownership":
-      return typeof node.databasePath === "string" && typeof node.managerId === "string"
-        ? { type: node.type, databasePath: node.databasePath, managerId: node.managerId }
-        : undefined;
-    case "plugin-blob":
-      return isBlobCode(node.blobCode) &&
-        node.code === node.blobCode &&
-        isBlobOperation(node.operation) &&
-        (node.path === undefined || typeof node.path === "string")
-        ? {
-            type: node.type,
-            blobCode: node.blobCode,
-            operation: node.operation,
-            ...(typeof node.path === "string" ? { path: node.path } : {}),
-          }
-        : undefined;
-    case "state-lease":
-      return isOpenClawStateLeaseErrorCode(node.leaseCode) && node.code === node.leaseCode
-        ? { type: node.type, leaseCode: node.leaseCode }
-        : undefined;
-    case "maintenance":
-      return isStartupMaintenanceKind(node.kind) ? { type: node.type, kind: node.kind } : undefined;
-    case "state-migration": {
-      if (
-        (node.kind !== "audit-events-v2" &&
-          node.kind !== "legacy-cron-run-logs" &&
-          node.kind !== "legacy-workshop-review-index") ||
-        typeof node.pathname !== "string"
-      ) {
-        return undefined;
-      }
-      const kind: OpenClawStateDatabaseSchemaMigrationRequiredError["kind"] = node.kind;
-      return { type: node.type, kind, pathname: node.pathname };
-    }
-    case "agent-media-migration":
-      return typeof node.pathname === "string" &&
-        typeof node.schemaVersion === "number" &&
-        Number.isSafeInteger(node.schemaVersion) &&
-        node.schemaVersion >= 0
-        ? { type: node.type, pathname: node.pathname, schemaVersion: node.schemaVersion }
-        : undefined;
-    default:
-      return undefined;
-  }
 }
 
 function unreachableErrorNode(node: never): never {

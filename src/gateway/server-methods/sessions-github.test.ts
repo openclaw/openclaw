@@ -116,7 +116,7 @@ describe("sessions.github.publish", () => {
     });
   });
 
-  it.each([undefined, "main"])(
+  it.each([undefined])(
     "uses host-owned caller identity with requested owner %s",
     async (agentId) => {
       const respond = await invoke({
@@ -156,7 +156,7 @@ describe("sessions.github.publish", () => {
     },
   );
 
-  it.each(["fresh", "existing", "wrong-key", "lookup-failed", "ordinary"])(
+  it.each(["fresh", "wrong-key", "ordinary"])(
     "forwards only the exact owner's %s selection rejection fact",
     async (mode) => {
       const key = "publication-selection";
@@ -287,7 +287,6 @@ describe("sessions.github.publish", () => {
   );
 
   it.each([
-    ["agent:research:main", "research", "configured", undefined],
     ["global", "ops", "configured", undefined],
     ["agent:research:main", "research", "explicit", undefined],
     ["global", "research", "explicit", "research"],

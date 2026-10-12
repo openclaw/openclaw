@@ -6,21 +6,112 @@ import { createNativeTypeScriptProject } from "./native-typescript.mts";
 // Each entry is a reviewed, released compatibility boundary, not a whole-file exemption.
 // Kernels may join this list only after their bundled callers have moved to workers.
 const reviewed = new Map<string, readonly string[]>([
-  ["src/plugin-sdk/sqlite-runtime-legacy.ts", ["executeSqliteQueryTakeFirstSyncLegacy"]],
+  [
+    "src/plugin-sdk/sqlite-runtime-legacy.ts",
+    [
+      "openOpenClawAgentDatabaseLegacy",
+      "borrowOpenClawAgentDatabaseLegacy",
+      "withOpenClawAgentDatabaseAsyncLegacy",
+      "withOpenClawAgentDatabaseRuntimeLegacy",
+      "withOpenClawAgentDatabaseWriteLegacy",
+      "runOpenClawAgentWriteAdmissionLegacy",
+      "executeSqliteQueryTakeFirstSyncLegacy",
+      "iterateSqliteQuerySyncLegacy",
+      "prepareSqliteQuerySyncLegacy",
+      "runSqliteImmediateTransactionLegacy",
+    ],
+  ],
   ["src/sessions/session-upstream-links.ts", ["deleteSessionUpstreamLink"]],
+  ["src/sessions/stored-model-overrides.ts", ["resolveStoredModelOverride"]],
+  [
+    "src/plugin-sdk/memory-core-host-engine-sessions.ts",
+    [
+      "loadArchivedSessions",
+      "loadMemorySessionMetadata",
+      "loadMemorySessionMetadataBatch",
+      "resolveMemorySessionTargets",
+    ],
+  ],
+  [
+    "src/plugin-sdk/codex-session-transcript-runtime.ts",
+    [
+      "validateCodexSessionTranscriptReadAdmission",
+      "validateCodexSessionTranscriptContextVersion",
+      "withCodexSessionTranscriptMirrorWriteLock",
+    ],
+  ],
+  ["src/plugin-sdk/session-transcript-runtime.ts", ["withSessionTranscriptWriteLock"]],
+  ["src/plugin-sdk/provider-selection-runtime.ts", ["resolveConfiguredCapabilityProvider"]],
+  ["src/pairing/pairing-store.ts", ["readChannelAllowFromStoreSync"]],
+  ["src/media-generation/runtime-shared.ts", ["resolveCapabilityModelCandidates"]],
+  ["src/talk/provider-resolver.ts", ["resolveConfiguredRealtimeVoiceProvider"]],
+  ["src/auto-reply/commands-registry.ts", ["resolveCommandArgMenu"]],
+  [
+    "src/channels/direct-dm-access.ts",
+    ["resolveInboundDirectDmAccessWithRuntime", "createPreCryptoDirectDmAuthorizer"],
+  ],
+  ["src/channels/direct-dm.ts", ["dispatchInboundDirectDmWithRuntime"]],
+  ["src/channels/session-envelope.ts", ["resolveInboundSessionEnvelopeContext"]],
+  [
+    "src/channels/inbound-event/envelope.ts",
+    [
+      "createInboundEnvelopeBuilder",
+      "resolveInboundRouteEnvelopeBuilder",
+      "resolveInboundRouteEnvelopeBuilderWithRuntime",
+    ],
+  ],
+  ["src/security/dm-policy-shared.ts", ["resolveDmGroupAccessWithLists"]],
+  [
+    "src/infra/outbound/account-scoped-conversation-bindings.ts",
+    ["createAccountScopedConversationBindingManager"],
+  ],
+  [
+    "extensions/imessage/src/conversation-bindings.ts",
+    ["createIMessageConversationBindingManager"],
+  ],
+  ["extensions/matrix/auth-presence.ts", ["hasAnyMatrixAuth"]],
+  [
+    "src/agents/harness/native-session/binding-lifecycle.ts",
+    ["createNativeSessionBindingLifecycle"],
+  ],
+  [
+    "src/agents/harness/native-session/binding-generation.ts",
+    [
+      "resolveNativeSessionBinding",
+      "reclaimNativeSessionGeneration",
+      "captureNativeSessionGenerationAuthority",
+    ],
+  ],
+  [
+    "src/agents/harness/native-session/binding-generation-authority.ts",
+    ["resolveNativeSessionBindingWithAuthority"],
+  ],
 ]);
 
-type CompatibilityOperation = { file: string; name: string; valid: boolean };
+type CompatibilityOperation = {
+  file: string;
+  name: string;
+  valid: boolean;
+  reviewed: boolean;
+  node: ts.FunctionDeclaration;
+};
 
 /** Classify only deprecated operations with no bundled runtime callers or escaped references. */
 export function inspectDatabaseWorkerCompatibility(
   root: string,
   sourceTexts: ReadonlyMap<string, string>,
-): { operations: Map<string, Set<string>>; violations: string[] } {
+  isNonRuntime: (file: string, operation: string) => boolean = (file) =>
+    /\.worker\.[cm]?[jt]s$/.test(file),
+): {
+  operations: Map<string, Set<string>>;
+  callLocations: Map<string, Set<string>>;
+  violations: string[];
+} {
   const operations = new Map<string, Set<string>>();
+  const callLocations = new Map<string, Set<string>>();
   const violations: string[] = [];
   if (![...reviewed.keys()].some((file) => sourceTexts.has(file))) {
-    return { operations, violations };
+    return { operations, callLocations, violations };
   }
   const config = ".openclaw-database-worker-compat.tsconfig.json";
   const files = Object.fromEntries(sourceTexts);
@@ -89,12 +180,88 @@ export function inspectDatabaseWorkerCompatibility(
       if (!valid) {
         violations.push(`${file}:${name}: reviewed compatibility operation must be @deprecated`);
       }
-      const operation = { file, name, valid };
+      const operation = { file, name, valid, reviewed: true, node };
       registered.set(symbol, operation);
       declarations.set(node, operation);
     }
     return { file, source };
   });
+  // Follow named kernels from the reviewed boundaries. A symbol reference from
+  // outside this closure (or an escaped callback) will make that kernel live.
+  // Returned methods are deliberately not candidates: their receiver escapes
+  // require a stronger proof than a direct function's declaration identity.
+  const primitives = new Set([
+    "executeSqliteQuerySync",
+    "executeSqliteQueryTakeFirstSync",
+    "runOpenClawStateWriteTransaction",
+    "runOpenClawAgentWriteTransaction",
+    "withOpenClawAgentDatabaseReadOnly",
+  ]);
+  const examined = new Set<Symbol>();
+  let pending = [...registered.values()];
+  while (pending.length > 0) {
+    const references: ts.Node[] = [];
+    const visit = (node: ts.Node) => {
+      if (ts.isTypeNode(node)) {
+        return;
+      }
+      if (ts.isCallExpression(node)) {
+        references.push(node.expression);
+      }
+      node.forEachChild(visit);
+    };
+    for (const operation of pending) {
+      operation.node.body?.forEachChild(visit);
+    }
+    pending = [];
+    const symbols = checker.getSymbolAtLocation(references);
+    for (const raw of symbols) {
+      const symbol = resolveSymbol(raw);
+      if (!symbol || examined.has(symbol) || registered.has(symbol)) {
+        continue;
+      }
+      examined.add(symbol);
+      if (primitives.has(symbol.name)) {
+        continue;
+      }
+      const node = symbol.valueDeclaration?.resolve();
+      if (!node || !ts.isFunctionDeclaration(node) || !node.name || !node.body) {
+        continue;
+      }
+      const file = path.relative(root, node.getSourceFile().fileName).split(path.sep).join("/");
+      if (!sourceTexts.has(file)) {
+        continue;
+      }
+      const parents: string[] = [node.name.text];
+      for (let parent = node.parent; parent; parent = parent.parent) {
+        if (
+          (ts.isFunctionDeclaration(parent) ||
+            ts.isFunctionExpression(parent) ||
+            ts.isMethodDeclaration(parent)) &&
+          parent.name &&
+          ts.isIdentifier(parent.name)
+        ) {
+          parents.unshift(parent.name.text);
+        } else if (
+          (ts.isVariableDeclaration(parent) || ts.isPropertyAssignment(parent)) &&
+          parent.initializer &&
+          (ts.isArrowFunction(parent.initializer) || ts.isFunctionExpression(parent.initializer)) &&
+          ts.isIdentifier(parent.name)
+        ) {
+          parents.unshift(parent.name.text);
+        }
+      }
+      const name = parents.join(".");
+      if (isNonRuntime(file, name)) {
+        continue;
+      }
+      const operation = { file, name, valid: true, reviewed: false, node };
+      registered.set(symbol, operation);
+      declarations.set(node, operation);
+      names.add(node.name.text);
+      pending.push(operation);
+    }
+  }
   const aliases: [string, string][] = [];
   const namespaces: (ts.Identifier | ts.StringLiteral)[] = [];
   const bindings: ts.VariableDeclaration[] = [];
@@ -272,22 +439,57 @@ export function inspectDatabaseWorkerCompatibility(
         continue;
       }
       let owner: CompatibilityOperation | undefined;
+      let unprovenCallback = false;
       for (let parent: ts.Node | undefined = node.parent; parent; parent = parent.parent) {
         owner = declarations.get(parent);
         if (owner) {
           break;
         }
+        if (
+          ts.isMethodDeclaration(parent) ||
+          ts.isFunctionDeclaration(parent) ||
+          ((ts.isArrowFunction(parent) || ts.isFunctionExpression(parent)) &&
+            !(ts.isCallExpression(parent.parent) && parent.parent.expression === parent))
+        ) {
+          unprovenCallback = ts.isArrowFunction(parent) || ts.isFunctionExpression(parent);
+          break;
+        }
       }
       for (const callee of callees) {
-        if (owner) {
+        const expression =
+          ts.isPropertyAccessExpression(node.parent) || ts.isElementAccessExpression(node.parent)
+            ? node.parent
+            : node;
+        const directCall =
+          ts.isCallExpression(expression.parent) && expression.parent.expression === expression;
+        if (owner && directCall) {
           const outgoing = edges.get(owner) ?? new Set<CompatibilityOperation>();
           outgoing.add(callee);
           edges.set(owner, outgoing);
         } else {
+          let nonRuntime = false;
+          if (!callee.reviewed && directCall && !unprovenCallback) {
+            const enclosingNames: string[] = [];
+            for (let parent: ts.Node | undefined = node.parent; parent; parent = parent.parent) {
+              if (
+                (ts.isFunctionDeclaration(parent) || ts.isMethodDeclaration(parent)) &&
+                parent.name &&
+                ts.isIdentifier(parent.name)
+              ) {
+                enclosingNames.unshift(parent.name.text);
+              }
+            }
+            nonRuntime = isNonRuntime(file, enclosingNames.join("."));
+          }
+          if (nonRuntime) {
+            continue;
+          }
           const { line, character } = source.getLineAndCharacterOfPosition(node.getStart());
-          violations.push(
-            `${file}:${line + 1}:${character + 1}: bundled runtime reference to deprecated synchronous SQLite API ${callee.file}:${callee.name}`,
-          );
+          if (callee.reviewed) {
+            violations.push(
+              `${file}:${line + 1}:${character + 1}: bundled runtime reference to deprecated synchronous SQLite API ${callee.file}:${callee.name}`,
+            );
+          }
           callee.valid = false;
         }
       }
@@ -309,11 +511,40 @@ export function inspectDatabaseWorkerCompatibility(
     }
   }
   for (const operation of registered.values()) {
+    if (
+      operation.reviewed &&
+      !operation.valid &&
+      !violations.some((violation) => violation.includes(`${operation.file}:${operation.name}`))
+    ) {
+      violations.push(
+        `${operation.file}:${operation.name}: reviewed compatibility operation is reachable through a live or escaped kernel`,
+      );
+    }
     if (operation.valid) {
       const selected = operations.get(operation.file) ?? new Set<string>();
       selected.add(operation.name);
       operations.set(operation.file, selected);
+      const locations = callLocations.get(operation.file) ?? new Set<string>();
+      const source = operation.node.getSourceFile();
+      const visit = (node: ts.Node) => {
+        if (ts.isFunctionLikeDeclaration(node) && node !== operation.node) {
+          // Only an actual IIFE keeps the caller's execution scope. Callback
+          // arguments and returned functions may escape, even inside a legacy API.
+          if (!(ts.isCallExpression(node.parent) && node.parent.expression === node)) {
+            return;
+          }
+        }
+        if (ts.isCallExpression(node)) {
+          const { line, character } = source.getLineAndCharacterOfPosition(
+            node.expression.getStart(),
+          );
+          locations.add(`${line + 1}:${character + 1}`);
+        }
+        node.forEachChild(visit);
+      };
+      visit(operation.node);
+      callLocations.set(operation.file, locations);
     }
   }
-  return { operations, violations: [...new Set(violations)].toSorted() };
+  return { operations, callLocations, violations: [...new Set(violations)].toSorted() };
 }

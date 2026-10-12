@@ -6,6 +6,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { createNativeSessionCommitFinalizer } from "../../agents/harness/native-session/deletion-participant.js";
 import {
   ensureSessionGroupCatalog,
   readSessionGroupCatalog,
@@ -35,6 +36,7 @@ import {
   createSessionEntryWithTranscript,
   prepareSessionEntryMutationDatabases,
 } from "./session-accessor.entry-mutation.js";
+import { withSqliteSessionDeletions } from "./session-accessor.sqlite-deletion.js";
 import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication.js";
 import {
   assertSessionEntryCreationPublication,
@@ -567,6 +569,76 @@ it("adopts admitted Signal history and collaboration without host SQL, preservin
     });
     expect(commands).toContain("session.entries.replace");
     expect(commands).not.toContain("session.archives.preparePublication");
+  });
+});
+
+it("creates with prepared native finalizers in the worker and settles them after commit", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const sessionKey = "agent:main:signal:group:TypedNative";
+    const alias = sessionKey.toLowerCase();
+    const original = {
+      sessionId: "typed-native-alias",
+      updatedAt: 1,
+      agentHarnessId: "typed-owner",
+    };
+    writeSessionEntry(database, alias, original);
+    ensureTranscriptHeader(
+      database,
+      { agentId: "main", sessionKey: alias, sessionId: original.sessionId },
+      "/workspace",
+    );
+    const finalized = vi.fn(() => {
+      expect(database.db.isTransaction).toBe(false);
+    });
+    const rollback = vi.fn();
+    const registry = createEmptyPluginRegistry();
+    registry.agentHarnesses.push({
+      pluginId: "core",
+      source: "runtime",
+      harness: {
+        id: "typed-owner",
+        label: "Typed native fixture",
+        supports: () => ({ supported: true }),
+        runAttempt: async () => {
+          throw new Error("unused");
+        },
+        withSessionDeletion: async (_params, run) =>
+          run(createNativeSessionCommitFinalizer({ commit: finalized, rollback })),
+      },
+    });
+    markPluginRegistryActive(registry);
+    const sql = observeHostDataSql();
+    try {
+      const result = await withPluginRuntimeRegistryScope(registry, () =>
+        withSqliteSessionDeletions(
+          resolveSqliteScope({ agentId: "main", storePath: database.path, sessionKey: alias }),
+          [{ sessionKey: alias, entry: original }],
+          () =>
+            createSessionEntryWithTranscript(
+              { agentId: "main", storePath: database.path, sessionKey },
+              ({ existingEntry }) => ({ ok: true, entry: existingEntry! }),
+              {
+                afterCommitted: async () => {
+                  expect(finalized).toHaveBeenCalledTimes(1);
+                },
+              },
+            ),
+        ),
+      );
+      expect(result.ok).toBe(true);
+      expect(sql.queries).toEqual([]);
+      expect(finalized).toHaveBeenCalledTimes(1);
+      expect(rollback).not.toHaveBeenCalled();
+    } finally {
+      sql.restore();
+      markPluginRegistryRetired(registry);
+    }
+    expect(readExactSessionEntryRow(database, alias)).toBeUndefined();
+    expect(readExactSessionEntryRow(database, sessionKey)?.entry.sessionId).toBe(
+      original.sessionId,
+    );
+    expect(readTranscriptStorageRows(database, original.sessionId)).toHaveLength(1);
   });
 });
 

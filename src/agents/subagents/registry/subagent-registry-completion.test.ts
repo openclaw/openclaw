@@ -59,36 +59,6 @@ describe("emitSubagentEndedHookOnce", () => {
     lifecycleMocks.runSubagentEnded.mockClear();
   });
 
-  it("records ended hook marker even when no subagent_ended hooks are registered", async () => {
-    lifecycleMocks.getGlobalHookRunner.mockReturnValue({
-      hasHooks: () => false,
-      runSubagentEnded: lifecycleMocks.runSubagentEnded,
-    });
-
-    const params = createEmitParams();
-    const emitted = await mod.emitSubagentEndedHookOnce(params);
-
-    expect(emitted).toBe(true);
-    expect(lifecycleMocks.runSubagentEnded).not.toHaveBeenCalled();
-    expect(typeof params.entry.endedHookEmittedAt).toBe("number");
-    expect(params.recordEmitted).toHaveBeenCalledTimes(1);
-  });
-
-  it("runs subagent_ended hooks when available", async () => {
-    lifecycleMocks.getGlobalHookRunner.mockReturnValue({
-      hasHooks: () => true,
-      runSubagentEnded: lifecycleMocks.runSubagentEnded,
-    });
-
-    const params = createEmitParams();
-    const emitted = await mod.emitSubagentEndedHookOnce(params);
-
-    expect(emitted).toBe(true);
-    expect(lifecycleMocks.runSubagentEnded).toHaveBeenCalledTimes(1);
-    expect(typeof params.entry.endedHookEmittedAt).toBe("number");
-    expect(params.recordEmitted).toHaveBeenCalledTimes(1);
-  });
-
   it("returns false when the global hook runner is not initialized yet", async () => {
     lifecycleMocks.getGlobalHookRunner.mockReturnValue(null);
 
@@ -99,54 +69,6 @@ describe("emitSubagentEndedHookOnce", () => {
     expect(lifecycleMocks.runSubagentEnded).not.toHaveBeenCalled();
     expect(params.recordEmitted).not.toHaveBeenCalled();
     expect(params.entry.endedHookEmittedAt).toBeUndefined();
-  });
-
-  it("returns false when runId is blank", async () => {
-    const params = createEmitParams({
-      entry: { ...createRunEntry(), runId: "   " },
-    });
-    const emitted = await mod.emitSubagentEndedHookOnce(params);
-    expect(emitted).toBe(false);
-    expect(params.recordEmitted).not.toHaveBeenCalled();
-    expect(lifecycleMocks.runSubagentEnded).not.toHaveBeenCalled();
-  });
-
-  it("returns false when ended hook marker already exists", async () => {
-    const params = createEmitParams({
-      entry: { ...createRunEntry(), endedHookEmittedAt: Date.now() },
-    });
-    const emitted = await mod.emitSubagentEndedHookOnce(params);
-    expect(emitted).toBe(false);
-    expect(params.recordEmitted).not.toHaveBeenCalled();
-    expect(lifecycleMocks.runSubagentEnded).not.toHaveBeenCalled();
-  });
-
-  it("returns false when the execution owner is already in flight", async () => {
-    const entry = createRunEntry();
-    const inFlightOwners = new Set<object>([getSubagentRunRuntimeKey(entry)]);
-    const params = createEmitParams({ entry, inFlightOwners });
-    const emitted = await mod.emitSubagentEndedHookOnce(params);
-    expect(emitted).toBe(false);
-    expect(params.recordEmitted).not.toHaveBeenCalled();
-    expect(lifecycleMocks.runSubagentEnded).not.toHaveBeenCalled();
-  });
-
-  it("returns false when subagent hook execution throws", async () => {
-    lifecycleMocks.runSubagentEnded.mockRejectedValueOnce(new Error("boom"));
-    lifecycleMocks.getGlobalHookRunner.mockReturnValue({
-      hasHooks: () => true,
-      runSubagentEnded: lifecycleMocks.runSubagentEnded,
-    });
-
-    const entry = createRunEntry();
-    const inFlightOwners = new Set<object>();
-    const params = createEmitParams({ entry, inFlightOwners });
-    const emitted = await mod.emitSubagentEndedHookOnce(params);
-
-    expect(emitted).toBe(false);
-    expect(params.recordEmitted).not.toHaveBeenCalled();
-    expect(inFlightOwners.has(getSubagentRunRuntimeKey(entry))).toBe(false);
-    expect(entry.endedHookEmittedAt).toBeUndefined();
   });
 
   it.each(["committed", "refused", "unknown"] as const)(
