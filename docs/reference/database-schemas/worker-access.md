@@ -33,6 +33,11 @@ patch into the current child, preserving in-process updates made during backend
 preparation. A parent reset to an unrestored cold transcript may require a retry;
 it does not overwrite a newer child row.
 
+Session initialization retains its synchronous current-row guard immediately
+before external policy injection. Lifecycle custody alone does not observe a
+revoked child row. Retire this guard when initialization has complete revocation
+receipt coverage and the next Plugin SDK major removes raw synchronous writers.
+
 Bundled accepted-input completion writes use the async pending-input owner. The
 deprecated synchronous recorder SDK retains native completion until the next
 Plugin SDK major. Public receipt

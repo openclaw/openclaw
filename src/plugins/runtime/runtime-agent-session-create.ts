@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import {
   deleteSessionEntryLifecycle,
+  loadSessionEntryReadOnly,
   patchSessionEntryCore as patchAccessorSessionEntry,
   rollbackAgentHarnessSessionEntryLifecycle,
   rollbackPluginOwnedSessionEntryLifecycle,
@@ -178,14 +179,16 @@ export async function createRuntimeSessionEntry(
                 sessionKey: captured.key,
                 storePath: captured.storePath,
               });
-              if (!selected) {
-                // Durable creation holds the lifecycle owner; its worker validates the expected row.
-                return;
-              }
-              const current =
-                "kind" in selected
+              // This synchronous guard also runs immediately before external policy injection.
+              const current = selected
+                ? "kind" in selected
                   ? undefined
-                  : selected.actor.sessions.readSharing(captured.key)?.entry;
+                  : selected.actor.sessions.readSharing(captured.key)?.entry
+                : loadSessionEntryReadOnly({
+                    sessionKey: captured.key,
+                    storePath: captured.storePath,
+                    readConsistency: "latest",
+                  });
               const matches =
                 selected && !("kind" in selected)
                   ? selected.actor.sessions.readInitializationFingerprint(captured.key) ===
