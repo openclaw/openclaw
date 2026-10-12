@@ -1,16 +1,21 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import {
   cloneEnvWithPlatformSemantics,
   createConfigRuntimeEnv,
 } from "../config/config-env-vars.js";
 import { createConfigIO } from "../config/io.factory.js";
 import { resolveStateDir } from "../config/paths.js";
-import { resolveCronJobsStorePathFromConfig } from "../cron/store/paths.js";
+import { resolveSelectedCronJobsStorePath } from "../cron/store/paths.js";
 import { listRetiredCronStateFiles } from "../infra/state-migrations.retired-cron-files.js";
 import { listRetiredDeliveryQueueFiles } from "../infra/state-migrations.retired-delivery-files.js";
 import { assertNoRetiredStateFiles } from "../infra/state-migrations.retired-files.js";
 import { assertNoRetiredRuntimeStateFiles } from "../infra/state-migrations.retired-runtime-files.js";
 import { resolveLegacyInstalledPluginIndexStorePath } from "../plugins/installed-plugin-index-store-path.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
+import { readConfigMachineStateRowInDatabase } from "../state/config-machine-state.js";
+import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
+import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
 import {
   assertNoRetiredOAuthSidecarsBeforeConfigRecovery,
   listReferencedLegacyOAuthSidecarPaths,
@@ -47,9 +52,20 @@ export async function assertDoctorStateMigrationSupported(env: NodeJS.ProcessEnv
       ...listReferencedLegacyOAuthSidecarPaths(env, cfg),
       ...listReferencedLegacyOAuthSidecarPaths(createConfigRuntimeEnv(cfg, env), cfg),
     ]);
+    // Inspect the known catalog damage that Doctor repairs after admission.
+    const cronStore =
+      readNonBlankString(asOptionalRecord(cfg.cron)?.store) ??
+      withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
+        ({ db }) => {
+          const row = readConfigMachineStateRowInDatabase(db, "cron.store");
+          return row ? readNonBlankString(JSON.parse(row.value_json)) : undefined;
+        },
+        { env },
+        openDoctorStateSchemaReadAdmission,
+      );
     assertNoRetiredStateFiles(
       "Cron state",
-      await listRetiredCronStateFiles(resolveCronJobsStorePathFromConfig(cfg, env)),
+      await listRetiredCronStateFiles(resolveSelectedCronJobsStorePath(cronStore, env)),
     );
   });
 }
