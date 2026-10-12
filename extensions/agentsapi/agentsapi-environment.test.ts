@@ -781,7 +781,7 @@ describe("Agents API attempt environment selection", () => {
           kind: "failed",
           error: expect.objectContaining({
             message:
-              "Workspace attachment 2 could not be prepared; check that every attachment is available to the registered attachment provider before retrying",
+              "Workspace attachment 2 could not be prepared; ensure every attachment is available to the registered attachment provider before retrying",
           }),
         },
       });
