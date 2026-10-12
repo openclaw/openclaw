@@ -30,7 +30,7 @@ describe("Responses terminal body disposal", () => {
     "returns terminal immediately and cancels trailing bytes on %s",
     async (end) => {
       const deadline = new AbortController();
-      vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
+      const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
       const cancelled = createDeferred();
       const caller = new AbortController();
       let source: ReadableStreamDefaultController<Uint8Array> | undefined;
@@ -55,13 +55,13 @@ describe("Responses terminal body disposal", () => {
       const { stream } = await createResponsesStreamWithRecovery({
         client,
         model,
-        request: { model: "fixture", stream: true, input: "fixture" },
+        request: { model: "fixture", stream: true, input: [{ role: "user", content: "fixture" }] },
         requestOptions: { signal: caller.signal },
       });
       const output = createOpenAIResponsesAssistantOutput(model);
       await processResponsesStream(stream, output, { push() {} }, model);
       expect(output.stopReason).toBe("stop");
-      expect(AbortSignal.timeout).toHaveBeenCalledWith(250);
+      expect(timeout).toHaveBeenCalledWith(250);
       if (end === "byte bound") {
         if (!source) {
           throw new Error("missing fixture source");

@@ -125,7 +125,11 @@ describe("managed provider response capture", () => {
                   baseURL: localModel.baseUrl,
                   fetch: async () => response,
                 }),
-                request: { model: model.id, stream: true, input: "fixture" },
+                request: {
+                  model: model.id,
+                  stream: true,
+                  input: [{ role: "user", content: "fixture" }],
+                },
                 requestOptions: { signal: controller.signal },
                 model: localModel,
               });

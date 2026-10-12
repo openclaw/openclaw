@@ -66,7 +66,11 @@ describe("Responses trailing HTTP body", () => {
             settled = createDeferredCore();
             const { stream } = await createResponsesStreamWithRecovery({
               client,
-              request: { model: model.id, stream: true, input: "fixture" },
+              request: {
+                model: model.id,
+                stream: true,
+                input: [{ role: "user", content: "fixture" }],
+              },
               requestOptions: undefined,
               model: localModel,
             });
