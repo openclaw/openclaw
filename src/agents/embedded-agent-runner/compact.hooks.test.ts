@@ -21,14 +21,8 @@ import { delegateCompactionToRuntime } from "../../context-engine/delegate.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { getModelProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
-import {
-  requireActivePluginRegistry,
-  withPluginRegistrationContext,
-} from "../../plugins/runtime.js";
 import type { CommandQueueEnqueueOptions } from "../../process/command-queue.types.js";
 import { createProcessSessionFixture } from "../bash-process-registry.test-helpers.js";
-import { getRegisteredAgentHarness, registerAgentHarness } from "../harness/registry.js";
-import type { AgentHarness } from "../harness/types.js";
 import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import { getModelProviderLocalServiceReconciler } from "../provider-local-service-reconcile.js";
 import { createSessionMaintenanceOwner } from "../session-maintenance/coordinator.js";
@@ -86,7 +80,6 @@ import {
   resolveSessionAgentIdMock,
   runCliAgentMock,
   selectAgentHarnessForPreparedModelProvidersMock,
-  selectAgentHarnessMock,
   resetCompactSessionStateMocks,
   sessionAutomaticCompactionMock,
   sessionMessages,
@@ -94,6 +87,10 @@ import {
   sessionManualCompactionMock,
   triggerInternalHookMock,
 } from "./compact.hooks.harness.js";
+import {
+  registerCodexByteCompactionHarness,
+  registerCodexHostByteModelTests,
+} from "./compact.hooks.host-byte-model.test-support.js";
 import {
   registerDirectProviderRefreshTests,
   registerQueuedProviderRefreshTest,
@@ -2104,37 +2101,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
 
   it("keeps authorized host byte compaction successful when secondary Codex sync fails", async () => {
     const order: string[] = [];
-    const registry = requireActivePluginRegistry();
-    const harness: AgentHarness = {
-      id: "codex",
-      label: "Codex",
-      supports: () => ({ supported: true }),
-      runAttempt: async () => {
-        throw new Error("not used");
-      },
-    };
-    withPluginRegistrationContext(registry, "codex", () => {
-      registerAgentHarness(harness, {
-        nativeCompaction: vi.fn(async () => ({ ok: true, compacted: true })),
-      });
-    });
-    const registeredHarness = expectDefined(
-      getRegisteredAgentHarness("codex")?.harness,
-      "registered Codex harness",
-    );
-    const acquirePreparedRuntime = expectDefined(
-      acquireAgentRunPreparedModelRuntimeMock.getMockImplementation(),
-      "prepared runtime acquisition",
-    );
-    acquireAgentRunPreparedModelRuntimeMock.mockImplementationOnce(async (input) => {
-      const lease = await acquirePreparedRuntime(input);
-      return {
-        ...lease,
-        snapshot: { ...lease.snapshot, pluginRegistry: registry },
-      };
-    });
-    selectAgentHarnessMock.mockReturnValue(registeredHarness);
-    selectAgentHarnessForPreparedModelProvidersMock.mockReturnValue(registeredHarness);
+    registerCodexByteCompactionHarness();
     resolveContextEngineMock.mockResolvedValue({
       info: { id: "legacy", name: "Legacy", version: "1.0.0" },
       compact: (params: Parameters<NonNullable<ContextEngine["compact"]>>[0]) =>
@@ -2199,6 +2166,12 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       expect.objectContaining({ agentHarnessId: "codex" }),
       expectedNativeCompactionOptions("after_context_engine"),
     );
+  });
+
+  registerCodexHostByteModelTests({
+    compact: () => compactEmbeddedAgentSession,
+    wrappedArgs: wrappedCompactionArgs,
+    workspaceDir: () => TEST_WORKSPACE_DIR,
   });
 
   it("keeps cross-route direct fallback available through queued legacy compaction", async () => {

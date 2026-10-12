@@ -211,7 +211,10 @@ the guard.
 Retained history remains available on disk and may continue growing; this is not
 a storage-retention limit. For Codex
 app-server sessions, the same threshold caps native rollout transcripts and
-oversized native threads restart fresh.
+oversized native threads restart fresh. For an unlocked Codex conversation,
+the host mirror summary honors `agents.defaults.compaction.model`; its model
+and credentials are separate from normal chat and subsequent native compaction.
+Model-locked conversations keep their creating model for every history read.
 
 <Warning>
 The byte guard applies to the active SQLite transcript history. Legacy JSONL

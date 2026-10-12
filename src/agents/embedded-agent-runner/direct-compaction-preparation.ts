@@ -92,6 +92,7 @@ export async function prepareDirectCompactionAttempt(
     modelId,
   } = resolveCompactionRuntimeSelection({
     ...params,
+    hostTranscriptBytePreflight: params.transcriptBytePreflightAuthority === true,
     modelId: params.model,
     boundHarnessRuntime: params.agentHarnessId,
     preparedRuntimePlan: params.runtimePlan,

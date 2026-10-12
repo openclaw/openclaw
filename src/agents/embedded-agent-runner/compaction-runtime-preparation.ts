@@ -36,6 +36,7 @@ import {
 export function projectCodexHostTranscriptBytePreflightConfig(
   config: OpenClawConfig | undefined,
   active: boolean,
+  preserveModel = false,
 ): OpenClawConfig | undefined {
   const compaction = config?.agents?.defaults?.compaction;
   if (
@@ -45,7 +46,11 @@ export function projectCodexHostTranscriptBytePreflightConfig(
   ) {
     return config;
   }
-  const { model: _model, provider: _provider, ...projectedCompaction } = compaction;
+  const { model, provider: _provider, ...nativeCompaction } = compaction;
+  const projectedCompaction = {
+    ...nativeCompaction,
+    ...(preserveModel && model !== undefined ? { model } : {}),
+  };
   return {
     ...config,
     agents: {
@@ -62,6 +67,7 @@ export function resolveCompactionRuntimeSelection(params: {
   modelId?: string | null;
   authProfileId?: string | null;
   modelSelectionLocked?: boolean;
+  hostTranscriptBytePreflight?: boolean;
   sandboxSessionKey?: string | null;
   sandboxAgentId?: string;
   sessionKey?: string | null;
@@ -99,7 +105,15 @@ export function resolveCompactionRuntimeSelection(params: {
     !isDefaultAgentRuntimeId(policy.runtime)
       ? policy.runtime
       : undefined;
-  const boundHarnessRuntime = normalizeOptionalAgentRuntimeId(params.boundHarnessRuntime);
+  // A host-authorized mirror summary is separate from the native conversation.
+  // A model lock still forbids sending its history to another model.
+  const useSummaryModelRuntime =
+    params.hostTranscriptBytePreflight === true &&
+    params.modelSelectionLocked !== true &&
+    Boolean(params.config?.agents?.defaults?.compaction?.model?.trim());
+  const boundHarnessRuntime = useSummaryModelRuntime
+    ? undefined
+    : normalizeOptionalAgentRuntimeId(params.boundHarnessRuntime);
   const selectedHarnessRuntime =
     params.selectedHarnessRuntime ??
     resolveCompactionHarnessRuntime({

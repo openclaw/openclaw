@@ -21,6 +21,7 @@ import {
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import { runWithAsyncWorkResources } from "../../shared/async-work-resources.js";
 import { resolveUserPath } from "../../utils.js";
+import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { isRecoverableNativeHarnessBindingFailure } from "../harness/compaction-recovery.js";
 import { maybeCompactAgentHarnessSession } from "../harness/compaction.js";
@@ -139,10 +140,6 @@ export async function compactEmbeddedAgentSession(
       ...input,
       ...(signals.length > 0 ? { abortSignal: AbortSignal.any(signals) } : {}),
     };
-    const projectedConfig = projectCodexHostTranscriptBytePreflightConfig(
-      params.config,
-      Boolean(host.transcriptBytePreflightHarness),
-    );
     const contextEngineAgentId =
       normalizeOptionalString(params.contextEngineAgentId) ??
       normalizeOptionalString(params.agentId);
@@ -171,7 +168,11 @@ export async function compactEmbeddedAgentSession(
       };
       const resolvedParams = {
         ...params,
-        config: projectedConfig,
+        config: projectCodexHostTranscriptBytePreflightConfig(
+          params.config,
+          Boolean(host.transcriptBytePreflightHarness),
+          (entry?.modelSelectionLocked ?? params.modelSelectionLocked) !== true,
+        ),
         sessionEntry: entry ? projectPublicSessionEntry(entry) : undefined,
         agentHarnessId: resolveSessionPinnedHarnessId(entry) ?? params.agentHarnessId,
         modelSelectionLocked: entry?.modelSelectionLocked ?? params.modelSelectionLocked,
@@ -297,7 +298,17 @@ async function compactEmbeddedAgentSessionImpl(
       preparedRuntimePlan: inputParams.runtimePlan,
       selectedHarnessRuntime: resolveSessionPinnedHarnessId(inputParams.sessionEntry),
     };
-    const runtimeSelection = resolveCompactionRuntimeSelection(requestedSelection);
+    const nativeCodexSelection =
+      Boolean(host.transcriptBytePreflightHarness) ||
+      normalizeOptionalAgentRuntimeId(requestedSelection.boundHarnessRuntime) === "codex" ||
+      requestedSelection.selectedHarnessRuntime === "codex";
+    const runtimeSelection = resolveCompactionRuntimeSelection({
+      ...requestedSelection,
+      config: projectCodexHostTranscriptBytePreflightConfig(
+        inputParams.config,
+        nativeCodexSelection,
+      ),
+    });
     // Native control operations reuse the backend's existing authenticated session.
     // Run them before generic model preparation so subscription-only CLI sessions do
     // not incorrectly require an OpenClaw model API credential.
@@ -331,10 +342,7 @@ async function compactEmbeddedAgentSessionImpl(
           deriveRuntimePluginSelections: ({ config, metadataSnapshot }) => {
             const selected = resolveCompactionRuntimeSelection({
               ...requestedSelection,
-              config: projectCodexHostTranscriptBytePreflightConfig(
-                config,
-                Boolean(host.transcriptBytePreflightHarness),
-              ),
+              config: projectCodexHostTranscriptBytePreflightConfig(config, nativeCodexSelection),
               manifestPlugins: metadataSnapshot,
               allowPluginNormalization: false,
             });
@@ -359,6 +367,7 @@ async function compactEmbeddedAgentSessionImpl(
       config: projectCodexHostTranscriptBytePreflightConfig(
         lease.snapshot.config,
         Boolean(host.transcriptBytePreflightHarness),
+        inputParams.modelSelectionLocked !== true,
       ),
       agentDir: lease.snapshot.agentDir,
     };
@@ -395,6 +404,7 @@ async function compactEmbeddedAgentSessionImpl(
         attemptNativeHarnessCompaction: selectedNativeHarnessCompaction,
       } = resolveCompactionRuntimeSelection({
         ...params,
+        config: projectCodexHostTranscriptBytePreflightConfig(params.config, nativeCodexSelection),
         modelId: params.model,
         boundHarnessRuntime: params.agentHarnessId,
         preparedRuntimePlan: params.runtimePlan,
@@ -537,10 +547,17 @@ async function compactEmbeddedAgentSessionImpl(
         sessionTarget: projectQueuedCompactionSessionTarget(preparedParams),
         ...buildEmbeddedCompactionRuntimeContext({
           ...preparedParams,
+          config: projectCodexHostTranscriptBytePreflightConfig(
+            preparedParams.config,
+            Boolean(transcriptBytePreflightAuthority),
+          ),
           agentDir,
           modelId: preparedParams.model,
           harnessRuntime: preparedHarnessRuntime,
         }),
+        // The delegate resolves the summary model under the private byte claim;
+        // native synchronization above retains the conversation's model and auth.
+        config: preparedParams.config,
         ...resolveContextEngineCapabilities({
           config: preparedParams.config,
           sessionKey: contextEngineSessionKey ?? preparedParams.sessionKey,

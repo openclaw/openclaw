@@ -549,6 +549,31 @@ describe("collectCodexRouteWarnings", () => {
     ]);
   });
 
+  it.each([
+    { limit: "20mb", preserved: true },
+    { limit: 0, preserved: false },
+    { limit: undefined, preserved: false },
+  ])(
+    "preserves the shared Codex host summary model only with an active byte guard ($limit)",
+    ({ limit, preserved }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.5",
+            compaction: { model: "deepseek/deepseek-flash", maxActiveTranscriptBytes: limit },
+          },
+        },
+      };
+      const warnings = collectCodexRouteWarnings(cfg);
+      const result = maybeRepairCodexRoutes(cfg);
+      expect(result.cfg.agents?.defaults?.compaction?.model).toBe(
+        preserved ? "deepseek/deepseek-flash" : undefined,
+      );
+      expect(warnings.some((warning) => warning.includes("compaction.model"))).toBe(!preserved);
+      expect(cfg.agents?.defaults?.compaction?.model).toBe("deepseek/deepseek-flash");
+    },
+  );
+
   it("does not broaden runtime policy from kept compaction-only refs", () => {
     const result = maybeRepairCodexRoutes({
       models: {

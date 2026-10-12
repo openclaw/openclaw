@@ -1,6 +1,7 @@
 import { asOptionalRecord as asMutableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString as normalizeString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { resolveMaxActiveTranscriptBytes } from "../../../context-engine/transcript-byte-limit.js";
 import { dedupeByKey } from "../../../shared/dedupe-by-key.js";
 import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 import {
@@ -59,7 +60,13 @@ function collectUnsupportedCodexCompactionOverridesForAgent(
   }
   return COMPACTION_OVERRIDE_KEYS.map((key) => readCompactionSlot(params, key)).flatMap(
     ({ key, path, value }) =>
-      typeof value === "string" && value.trim() ? [{ path, key, value: value.trim() }] : [],
+      key === "model" &&
+      path === "agents.defaults.compaction.model" &&
+      resolveMaxActiveTranscriptBytes(params.cfg) !== undefined
+        ? []
+        : typeof value === "string" && value.trim()
+          ? [{ path, key, value: value.trim() }]
+          : [],
   );
 }
 
@@ -165,6 +172,11 @@ export function getSharedDefaultCompactionOverrideConsumers(
     agent: defaults,
     env: params.env,
   });
+  if (normalizeString(defaultCompaction.provider) !== LOSSLESS_CONTEXT_ENGINE_ID) {
+    consumers.model = Boolean(
+      hasDefaultModel && resolveMaxActiveTranscriptBytes(params.cfg) !== undefined,
+    );
+  }
   if (!defaultUsesCodexCompaction) {
     return { model: Boolean(hasDefaultModel), provider: Boolean(hasDefaultProvider) };
   }

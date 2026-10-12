@@ -18,7 +18,11 @@ is set to a positive value, OpenClaw checks that mirror before ordinary and
 heartbeat turns. When the byte guard trips, OpenClaw attempts semantic
 compaction through its selected host context engine before admitting the turn.
 This host compaction does not itself replace or rewrite Codex's
-native thread.
+native thread. For unlocked conversations, this summary honors
+`agents.defaults.compaction.model` and prepares that model's own runtime and
+credentials. The following native synchronization retains the conversation's
+model and authentication. Model-locked histories cannot move to a different
+summary model.
 
 If the context engine declines host compaction or leaves history oversized,
 OpenClaw continues with a bounded projection of recent whole turns. The native
