@@ -324,7 +324,6 @@ export async function createCreatorTransportTools(params: {
         sessionId: SESSION_ID,
         agentHarnessId: "openclaw",
       },
-      () => getAdmittedRunDelegatedAuthority(admitted) !== undefined,
       async () => getGatewayToolCallerIdentity(),
     ),
     "embedded Gateway caller",
