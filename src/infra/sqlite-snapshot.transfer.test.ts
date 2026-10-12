@@ -97,6 +97,7 @@ function mockExclusiveCopyTransfer() {
       return {
         method: "exclusive-copy",
         identity: await target.stat(),
+        exactIdentity: await target.stat({ bigint: true }),
         directorySync: await syncDirectory(path.dirname(options.targetPath)),
       };
     } finally {
@@ -219,7 +220,7 @@ describe("owned SQLite snapshot transfer", () => {
     const original = await fs.readFile(sourcePath);
     await publishVerifiedSqliteFile({
       sourcePath,
-      sourceIdentity: await fs.stat(sourcePath),
+      sourceIdentity: await fs.stat(sourcePath, { bigint: true }),
       targetPath,
       expectedContent: {
         sha256: createHash("sha256").update(original).digest("hex"),

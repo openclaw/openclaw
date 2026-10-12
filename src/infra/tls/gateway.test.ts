@@ -90,7 +90,11 @@ async function copyTlsPublication(params: PublishParams) {
     await target.chmod(0o600);
     await target.writeFile(await fs.readFile(params.sourcePath));
     await target.sync();
-    return { method: "exclusive-copy" as const, identity: await target.stat() };
+    return {
+      method: "exclusive-copy" as const,
+      identity: await target.stat(),
+      exactIdentity: await target.stat({ bigint: true }),
+    };
   } finally {
     await target.close();
   }

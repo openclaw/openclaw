@@ -35,8 +35,8 @@ import type { UpdateDatabaseGenerations } from "./update-database-generations.js
 
 async function existingFile(file: string) {
   try {
-    const info = await fs.lstat(file);
-    if (!info.isFile() || info.nlink !== 1) {
+    const info = await fs.lstat(file, { bigint: true });
+    if (!info.isFile() || info.nlink !== 1n) {
       throw new Error(`Database recovery requires a regular, unaliased file: ${file}`);
     }
     return info;
@@ -244,7 +244,7 @@ export async function restoreUpdateDatabaseBackup(params: {
         // The shared source contains the actual current history, not its baseline size.
         for (const entry of sources) {
           assertOwned();
-          const sourceIdentity = await fs.lstat(entry.snapshotPath);
+          const sourceIdentity = await fs.lstat(entry.snapshotPath, { bigint: true });
           assertOwned();
           outputs.push(
             await prepareVerifiedSqliteFile({

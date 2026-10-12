@@ -1249,7 +1249,7 @@ export async function cleanupGlobalRenameDirs(params: {
     }
     const target = path.join(root, entry);
     try {
-      const stat = await fs.lstat(target);
+      const stat = await fs.lstat(target, { bigint: true });
       if (!stat.isDirectory()) {
         continue;
       }
@@ -1262,7 +1262,7 @@ export async function cleanupGlobalRenameDirs(params: {
       if (Date.now() >= inspectionDeadline) {
         break;
       }
-      const current = await fs.lstat(target);
+      const current = await fs.lstat(target, { bigint: true });
       if (!current.isDirectory() || !sameFileIdentity(stat, current)) {
         continue;
       }

@@ -81,7 +81,7 @@ try {
   await publishFileExclusive({
     sourcePath: source.realPath,
     targetPath: await packageFs.resolve(relativePath),
-    expectedSourceIdentity: source.stat,
+    expectedSourceIdentity: source.exactIdentity,
     strategy: "rename-noreplace",
   });
   process.stdout.write("moved");

@@ -388,7 +388,7 @@ export function preparePluginModule(params: PluginModuleBoundaryParams) {
     throw new Error(`Unable to open ${params.surfaceLabel}`, { cause: opened.error });
   }
   fs.closeSync(opened.fd);
-  if (!sameFileIdentity(opened.stat, fs.statSync(opened.path))) {
+  if (!sameFileIdentity(opened.exactIdentity, fs.statSync(opened.path, { bigint: true }))) {
     throw new Error(`${params.surfaceLabel} changed after validation`);
   }
   const root = bindPluginCacheRoot(params.boundaryRoot, opened.rootRealPath);

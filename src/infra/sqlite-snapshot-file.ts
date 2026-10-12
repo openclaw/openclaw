@@ -1,7 +1,7 @@
 import fsSync, { type BigIntStats, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
+import { sameFileIdentity, type FileIdentityStat } from "@openclaw/fs-safe/advanced";
 import { hashFileDescriptorSync, sameFileMutationFingerprint } from "./file-descriptor.js";
 
 export type SqliteFileContent = {
@@ -28,10 +28,10 @@ export function assertExpectedContent(
 
 export function assertPublishedFileIdentitySync(
   filePath: string,
-  expectedIdentity: Stats,
+  expectedIdentity: BigIntStats,
   expectedContent: SqliteFileContent,
 ): void {
-  const currentIdentity = fsSync.lstatSync(filePath);
+  const currentIdentity = fsSync.lstatSync(filePath, { bigint: true });
   if (!currentIdentity.isFile() || !sameFileStatFingerprint(expectedIdentity, currentIdentity)) {
     throw new Error(`SQLite snapshot file changed: ${filePath}`);
   }
@@ -50,11 +50,10 @@ export function assertPublishedFileIdentitySync(
 export function assertOpenFileIdentitySync(
   fileDescriptor: number,
   filePath: string,
-  expectedIdentity: Stats | BigIntStats,
+  expectedIdentity: FileIdentityStat,
 ): void {
-  const options = { bigint: typeof expectedIdentity.ino === "bigint" };
-  const openedIdentity = fsSync.fstatSync(fileDescriptor, options);
-  const currentIdentity = fsSync.lstatSync(filePath, options);
+  const openedIdentity = fsSync.fstatSync(fileDescriptor, { bigint: true });
+  const currentIdentity = fsSync.lstatSync(filePath, { bigint: true });
   if (
     !openedIdentity.isFile() ||
     !currentIdentity.isFile() ||
@@ -67,7 +66,7 @@ export function assertOpenFileIdentitySync(
 
 export function hashPublishedFileSync(
   filePath: string,
-  expectedIdentity: Stats | BigIntStats,
+  expectedIdentity: FileIdentityStat,
 ): SqliteFileContent {
   const fileDescriptor = fsSync.openSync(filePath, "r");
   try {
@@ -91,23 +90,26 @@ export function hashPublishedFileSync(
 
 export function removePublishedTargetIfOwned(
   filePath: string,
-  expectedIdentity: Stats | BigIntStats,
-  requireFingerprint = false,
+  expectedIdentity: FileIdentityStat,
+  expectedFingerprint?: Stats | BigIntStats,
 ): boolean {
-  let currentIdentity: Stats | BigIntStats;
+  let currentIdentity: BigIntStats;
+  let currentFingerprint: Stats | BigIntStats;
   try {
-    currentIdentity = fsSync.lstatSync(filePath, {
-      bigint: typeof expectedIdentity.ino === "bigint",
-    });
+    currentIdentity = fsSync.lstatSync(filePath, { bigint: true });
+    currentFingerprint =
+      expectedFingerprint && typeof expectedFingerprint.size === "number"
+        ? fsSync.lstatSync(filePath)
+        : currentIdentity;
   } catch {
     return false;
   }
   const fingerprintMatches =
-    !requireFingerprint ||
-    (expectedIdentity.size === currentIdentity.size &&
-      expectedIdentity.mtimeMs === currentIdentity.mtimeMs &&
-      expectedIdentity.ctimeMs === currentIdentity.ctimeMs &&
-      expectedIdentity.birthtimeMs === currentIdentity.birthtimeMs);
+    !expectedFingerprint ||
+    (expectedFingerprint.size === currentFingerprint.size &&
+      expectedFingerprint.mtimeMs === currentFingerprint.mtimeMs &&
+      expectedFingerprint.ctimeMs === currentFingerprint.ctimeMs &&
+      expectedFingerprint.birthtimeMs === currentFingerprint.birthtimeMs);
   // Unknown Windows identity can admit a read, but cannot authorize deletion.
   const unknownIdentity =
     process.platform === "win32" &&
@@ -143,9 +145,9 @@ export function sameFileStatFingerprint(
 
 export async function removePublicationStagingDirectory(
   stagingDir: string,
-  expectedIdentity: Stats,
+  expectedIdentity: FileIdentityStat,
 ): Promise<void> {
-  const currentIdentity = await fs.lstat(stagingDir).catch(() => undefined);
+  const currentIdentity = await fs.lstat(stagingDir, { bigint: true }).catch(() => undefined);
   if (!currentIdentity) {
     return;
   }

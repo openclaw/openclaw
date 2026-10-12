@@ -132,9 +132,9 @@ async function readMemoryHostEventExportOwnership(
     (parsed.fileDev === undefined) !== (parsed.fileIno === undefined) ||
     (parsed.fileDev !== undefined &&
       (typeof parsed.fileDev !== "string" ||
-        !/^\d+$/u.test(parsed.fileDev) ||
+        !/^-?\d+$/u.test(parsed.fileDev) ||
         typeof parsed.fileIno !== "string" ||
-        !/^\d+$/u.test(parsed.fileIno)))
+        !/^-?\d+$/u.test(parsed.fileIno)))
   ) {
     return { kind: "foreign" };
   }
@@ -158,10 +158,7 @@ async function readMemoryHostEventExportOwnership(
     return { kind: "orphan", ownerContent: content };
   }
   let exportContent: string | undefined;
-  const exportIdentity: FileIdentityStat = {
-    dev: openedExport.stat.dev,
-    ino: openedExport.stat.ino,
-  };
+  const exportIdentity = openedExport.exactIdentity;
   const identityOwned =
     storedIdentity !== undefined && sameFileIdentity(storedIdentity, exportIdentity);
   {

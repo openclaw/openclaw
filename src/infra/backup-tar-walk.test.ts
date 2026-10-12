@@ -41,6 +41,57 @@ async function collectArchive(
   }
 }
 
+it("archives a source whose exact file ID exceeds Number precision", async () => {
+  const source = path.join(tempDirs.make("backup-exact-identity-"), "payload.txt");
+  const payload = "exact file identity";
+  await fs.writeFile(source, payload);
+  const ino = (1n << 63n) + 1n;
+  const lstat = fs.lstat;
+  vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+    const observed = await lstat(...args);
+    if (args[0] === source) {
+      Object.defineProperty(observed, "ino", {
+        value: typeof observed.ino === "bigint" ? ino : Number(ino),
+      });
+    }
+    return observed;
+  });
+  const open = fs.open;
+  vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+    const handle = await open(...args);
+    if (args[0] === source) {
+      const stat = handle.stat.bind(handle);
+      vi.spyOn(handle, "stat").mockImplementation(async (options) => {
+        const observed = await stat(options);
+        Object.defineProperty(observed, "ino", {
+          value: typeof observed.ino === "bigint" ? ino : Number(ino),
+        });
+        return observed;
+      });
+    }
+    return handle;
+  });
+  const chunks: Buffer[] = [];
+  await collectArchive(source, chunks);
+  const entries: Array<{ path: string; body: string }> = [];
+  const parser = new tar.Parser({
+    onReadEntry(entry) {
+      const body: Buffer[] = [];
+      entry.on("data", (chunk: Buffer) => body.push(chunk));
+      entry.on("end", () =>
+        entries.push({ path: entry.path, body: Buffer.concat(body).toString() }),
+      );
+    },
+  });
+  const done = new Promise<void>((resolve, reject) => {
+    parser.on("end", resolve);
+    parser.on("error", reject);
+  });
+  parser.end(Buffer.concat(chunks));
+  await done;
+  expect(entries).toEqual([{ path: "payload", body: payload }]);
+});
+
 it.each([
   { encoding: "header", target: String.raw`C:\external\workspace` },
   { encoding: "PAX", target: "C:\\external\\" + "workspace".repeat(15) },

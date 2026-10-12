@@ -93,7 +93,7 @@ export async function retireStandaloneGitWrapper(params: {
 
     let stat;
     try {
-      stat = await fs.lstat(wrapperPath);
+      stat = await fs.lstat(wrapperPath, { bigint: true });
     } catch (error) {
       if (hasNodeErrorCode(error, "ENOENT")) {
         continue;
@@ -103,8 +103,8 @@ export async function retireStandaloneGitWrapper(params: {
     if (
       !stat.isFile() ||
       stat.isSymbolicLink() ||
-      stat.size > 4096 ||
-      (platform !== "win32" && (stat.mode & 0o111) === 0)
+      stat.size > 4096n ||
+      (platform !== "win32" && (stat.mode & 0o111n) === 0n)
     ) {
       continue;
     }
@@ -140,11 +140,11 @@ export async function retireStandaloneGitWrapper(params: {
       );
       // Filesystem and pkg reads can outlive this wrapper or the update's authority.
       const currentFile = await readRegularFile({ filePath: wrapperPath, maxBytes: 4096 });
-      const current = await fs.lstat(wrapperPath);
+      const current = await fs.lstat(wrapperPath, { bigint: true });
       if (
         !current.isFile() ||
-        !sameFileIdentity(stat, currentFile.stat) ||
-        !sameFileIdentity(currentFile.stat, current) ||
+        !sameFileIdentity(stat, currentFile.exactIdentity) ||
+        !sameFileIdentity(currentFile.exactIdentity, current) ||
         currentFile.buffer.toString("utf8") !== contents
       ) {
         throw new Error("The installer wrapper changed before retirement.");

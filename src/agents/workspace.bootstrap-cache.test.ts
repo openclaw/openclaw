@@ -119,10 +119,14 @@ describe("workspace bootstrap file caching", () => {
     expect(editedStat.mtimeMs).toBe(originalStat.mtimeMs);
 
     const originalFstatSync = fsSync.fstatSync;
-    const fstatSync = vi.spyOn(fsSync, "fstatSync").mockImplementationOnce((fd) => {
-      const stat = originalFstatSync(fd);
+    const fstatSync = vi.spyOn(fsSync, "fstatSync").mockImplementationOnce((fd, options) => {
+      const stat = originalFstatSync(fd, options);
       // Filesystems may coalesce rapid ctime updates; isolate the identity contract.
-      stat.ctimeMs = originalStat.ctimeMs + 1;
+      if ("ctimeNs" in stat) {
+        stat.ctimeNs = BigInt(Math.trunc(originalStat.ctimeMs + 1)) * 1_000_000n;
+      } else {
+        stat.ctimeMs = originalStat.ctimeMs + 1;
+      }
       return stat;
     });
     try {
