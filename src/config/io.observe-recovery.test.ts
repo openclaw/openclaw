@@ -19,10 +19,10 @@ import {
   patchConfigHealthEntryToStore,
 } from "./io.health-state.js";
 import { createConfigIO } from "./io.js";
+import { promoteConfigSnapshotToLastKnownGoodCore } from "./io.observe-promotion.js";
 import {
   maybeRecoverSuspiciousConfigRead,
   maybeRecoverSuspiciousConfigReadSync,
-  promoteConfigSnapshotToLastKnownGoodCore,
   recoverConfigFromLastKnownGoodCore,
 } from "./io.observe-recovery.js";
 import {
