@@ -182,6 +182,7 @@ export function inspectDatabaseWorkerCompatibility(
         binding.name.elements.some(
           (element) =>
             !ts.isBindingElement(element) ||
+            !element.name ||
             !ts.isIdentifier(element.name) ||
             element.dotDotDotToken ||
             (element.propertyName && ts.isComputedPropertyName(element.propertyName)),
@@ -190,7 +191,7 @@ export function inspectDatabaseWorkerCompatibility(
         continue;
       }
       for (const element of binding.name.elements) {
-        if (!ts.isBindingElement(element) || !ts.isIdentifier(element.name)) {
+        if (!ts.isBindingElement(element) || !element.name || !ts.isIdentifier(element.name)) {
           continue;
         }
         const key =
