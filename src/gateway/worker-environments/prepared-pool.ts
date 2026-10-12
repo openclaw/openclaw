@@ -1,17 +1,7 @@
-import {
-  readWorkerProjectPreparation,
-  type WorkerProviderPreparedIntent,
-} from "./preparation-identity.js";
-import {
-  configuredPoolPolicy,
-  poolPolicy,
-  retirePoolRecord,
-  runPreparedPoolPass,
-  demandAt,
-  snapshotSettings,
-  DEFAULT_MAX_TOTAL,
-  type PoolOptions,
-} from "./prepared-pool-pass.js";
+import { readWorkerProjectPreparation } from "./preparation-identity.js";
+import type { WorkerProviderPreparedIntent } from "./preparation-identity.js";
+import * as pool from "./prepared-pool-admission.js";
+import { runPreparedPoolPass } from "./prepared-pool-pass.js";
 import {
   createPreparedPoolPresence,
   matchingPreparedPoolPresenceDemand,
@@ -20,14 +10,13 @@ import { readWorkerProjectSnapshot } from "./project-preparation.js";
 import type { WorkerEnvironmentRecord as Environment } from "./store.js";
 import { boundedWorkerError } from "./worker-error.js";
 /** Environment rows own inventory; placement activation and explicit builds establish demand. */
-export function createPreparedWorkerPool(options: PoolOptions) {
+export function createPreparedWorkerPool(options: pool.PoolOptions) {
   const { store, signal, now } = options;
   let inFlight: Promise<void> | undefined;
   let requested = false;
   let presenceInFlight: Promise<void> | undefined;
   let presenceAdmitted = false;
   const preparations = new Map<string, AbortController>();
-  const current = () => signal.throwIfAborted();
   const presence = createPreparedPoolPresence({ ...options, schedule: () => schedule() });
   const runPass = () =>
     runPreparedPoolPass(options, presence, preparations, () => presenceAdmitted);
@@ -53,7 +42,7 @@ export function createPreparedWorkerPool(options: PoolOptions) {
     }
     await store.ready();
     await presence.ready();
-    current();
+    signal.throwIfAborted();
     // Repository admission has one owner and one in-flight operation, but cannot
     // hold inventory cleanup or independently authorized project refill hostage.
     const admission = (presenceInFlight ??= (async () => {
@@ -77,7 +66,7 @@ export function createPreparedWorkerPool(options: PoolOptions) {
     }
   };
   const noteDemand = async (environmentId: string) => {
-    current();
+    signal.throwIfAborted();
     const record = store.get(environmentId);
     const preparation = record && readWorkerProjectPreparation(record.profileSnapshot.project);
     if (record?.state !== "attached" || !record.leaseId || !preparation) {
@@ -89,17 +78,14 @@ export function createPreparedWorkerPool(options: PoolOptions) {
     }
     const provider = options.resolveProvider(record.providerId);
     await provider?.notePreparedDemand?.(
-      { leaseId: record.leaseId, profile: snapshotSettings(record) },
-      {
-        preparationKey: preparation.key,
-        demandAtMs,
-      },
+      { leaseId: record.leaseId, profile: pool.snapshotSettings(record) },
+      { preparationKey: preparation.key, demandAtMs },
     );
   };
   const candidates = (intent: WorkerProviderPreparedIntent) =>
     intent.preparationKey
       ? store.list().filter((record) => {
-          const limits = poolPolicy(options, record);
+          const limits = pool.poolPolicy(options, record.profileId, record.providerId);
           const presenceDemand = presence.current();
           return (
             limits.target > 0 &&
@@ -138,7 +124,7 @@ export function createPreparedWorkerPool(options: PoolOptions) {
     });
   };
   const canPruneDemand = (record: Environment, nowMs: number): boolean => {
-    const demandAtMs = demandAt(record);
+    const demandAtMs = pool.demandAt(record);
     if (demandAtMs === undefined || !readWorkerProjectPreparation(record.profileSnapshot.project)) {
       return true;
     }
@@ -151,7 +137,7 @@ export function createPreparedWorkerPool(options: PoolOptions) {
     try {
       const timeout = options
         .resolveProvider(record.providerId)
-        ?.resolvePreparedIdleTimeoutMs?.(snapshotSettings(record));
+        ?.resolvePreparedIdleTimeoutMs?.(pool.snapshotSettings(record));
       return (
         timeout !== undefined &&
         Number.isSafeInteger(timeout) &&
@@ -166,7 +152,7 @@ export function createPreparedWorkerPool(options: PoolOptions) {
     await store.ready();
     const record = store.get(environmentId);
     const controller = preparations.get(environmentId);
-    if (record?.preparation && (await retirePoolRecord(options, record, "invalidated"))) {
+    if (record?.preparation && (await pool.retirePoolRecord(options, record, "invalidated"))) {
       // The durable cancellation fences readiness; the lifecycle retains provider
       // custody until its aborted operation and physical cleanup actually settle.
       controller?.abort();
@@ -180,10 +166,10 @@ export function createPreparedWorkerPool(options: PoolOptions) {
     canPruneDemand,
     cancelPreparation,
     summary: () => ({
-      maxTotal: options.getConfig().cloudWorkers?.preparedPool?.maxTotal ?? DEFAULT_MAX_TOTAL,
+      maxTotal: options.getConfig().cloudWorkers?.preparedPool?.maxTotal ?? pool.DEFAULT_MAX_TOTAL,
       reservedEnvironmentIds: store.preparedReservationEnvironmentIds(),
     }),
-    target: (profileId: string) => configuredPoolPolicy(options, profileId).target,
+    target: (profileId: string) => pool.poolPolicy(options, profileId).target,
     setHumanPresence: presence.set,
   };
 }
