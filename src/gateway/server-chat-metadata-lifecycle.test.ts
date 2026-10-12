@@ -8,6 +8,10 @@ import type { RuntimeAuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { PreparedModelRuntimeSnapshot } from "../agents/prepared-model-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { publishSessionCostUsageUpdated } from "../infra/session-cost-usage-events.js";
+import * as metadataState from "../plugins/current-plugin-metadata-state.js";
+import * as manifestMetadata from "../plugins/manifest-contract-eligibility.js";
+import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import {
   bumpSkillsSnapshotVersion,
   getSkillsSnapshotVersion,
@@ -193,6 +197,52 @@ it("retires model choices at its config commit before pending metadata settles",
   broadcast.mockClear();
   publishOperatorRoleConfigChange(ownedContext);
   expect(broadcast).not.toHaveBeenCalled();
+});
+
+it("compares model selection at config commit without rediscovering Gateway metadata", async () => {
+  const metadata = createPluginMetadataSnapshotFixture();
+  const snapshot = vi
+    .spyOn(metadataState, "getGatewayPluginMetadataSnapshot")
+    .mockReturnValue(metadata);
+  const coldLoad = vi
+    .spyOn(manifestMetadata, "loadManifestMetadataSnapshot")
+    .mockImplementation(() => {
+      throw new Error("config publication must use the Gateway metadata generation");
+    });
+  const broadcast = vi.fn();
+  let committedConfig: OpenClawConfig = {
+    agents: { defaults: { model: "fixture/first", modelPolicy: { allow: ["fixture/first"] } } },
+  };
+  const ownedContext = {
+    ...context,
+    broadcast,
+    getCommittedRuntimeConfig: () => committedConfig,
+  };
+  const { lifecycle: pendingLifecycle, sidecarOwner } = createLifecycle();
+  try {
+    const lifecycle = await pendingLifecycle;
+    await lifecycle.attachContext(ownedContext, sidecarOwner.publish);
+    committedConfig = {
+      ...committedConfig,
+      auth: { profiles: { account: { provider: "fixture", mode: "api_key" } } },
+    };
+    withPluginCache(createPluginCache(), () => publishOperatorRoleConfigChange(ownedContext));
+    expect(broadcast).not.toHaveBeenCalled();
+    committedConfig = {
+      agents: { defaults: { model: "fixture/second", modelPolicy: { allow: ["fixture/second"] } } },
+    };
+    withPluginCache(createPluginCache(), () => publishOperatorRoleConfigChange(ownedContext));
+    expect(broadcast).toHaveBeenCalledExactlyOnceWith(
+      "chat.metadata.changed",
+      { modelSelectionChanged: true, commandsChanged: false },
+      { dropIfSlow: true },
+    );
+    expect(coldLoad).not.toHaveBeenCalled();
+  } finally {
+    await sidecarOwner.stop();
+    coldLoad.mockRestore();
+    snapshot.mockRestore();
+  }
 });
 
 async function createRealMetadataLifecycle(
