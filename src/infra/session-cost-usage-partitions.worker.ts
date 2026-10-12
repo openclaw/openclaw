@@ -4,6 +4,7 @@ import { expressionBuilder } from "kysely";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
 import { chunkItems } from "../utils/chunk-items.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import type { SessionCostUsageRollupSnapshot } from "./session-cost-usage-cache.kernel.js";
 import {
   USAGE_COST_PARTITION_SCOPE,
   usageCostPartitionKey,
@@ -100,6 +101,58 @@ export function readSessionCostUsagePartitionsInDatabase(
       ? [{ date: row.key.slice(filePath.length + 1), valueJson: row.value_json, blob: row.blob }]
       : [],
   );
+}
+
+export function readSessionCostUsageRollupWithPartitionsInDatabase(
+  db: DatabaseSync,
+  snapshot: SessionCostUsageRollupSnapshot,
+): { blob: Uint8Array | null; partitions: UsageCostPartition[] } | undefined {
+  assertUsagePartitionWorker();
+  const expression = expressionBuilder<CacheDatabase, "cache_entries">();
+  const valueJson =
+    typeof snapshot.valueJson === "string"
+      ? snapshot.valueJson
+      : expression.cast<string>(expression.val(snapshot.valueJson), "text");
+  const rows = executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<CacheDatabase>(db)
+      .selectFrom("cache_entries")
+      .select(["scope", "key", "value_json", "blob"])
+      .where((eb) =>
+        eb.or([
+          eb.and([
+            eb("scope", "=", USAGE_COST_ROLLUP_SCOPE),
+            eb("key", "=", snapshot.key),
+            eb("updated_at", "=", snapshot.updatedAt),
+            eb("value_json", "=", valueJson),
+          ]),
+          eb.and([
+            eb("scope", "=", USAGE_COST_PARTITION_SCOPE),
+            eb("key", ">=", `${snapshot.key}\0`),
+            eb("key", "<", `${snapshot.key}\u0001`),
+          ]),
+        ]),
+      )
+      .orderBy("key", "asc"),
+  ).rows;
+  const body = rows.find((row) => row.scope === USAGE_COST_ROLLUP_SCOPE);
+  if (!body) {
+    return undefined;
+  }
+  return {
+    blob: body.blob,
+    partitions: rows.flatMap((row) =>
+      row.scope === USAGE_COST_PARTITION_SCOPE && row.value_json !== null && row.blob !== null
+        ? [
+            {
+              date: row.key.slice(snapshot.key.length + 1),
+              valueJson: row.value_json,
+              blob: row.blob,
+            },
+          ]
+        : [],
+    ),
+  };
 }
 
 export function pruneSessionCostUsagePartitionsInDatabase(
