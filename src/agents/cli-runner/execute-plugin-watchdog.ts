@@ -32,6 +32,7 @@ export function createCliPluginWatchdog(
     activeToolCount: () => number;
     backgroundTaskCount: () => number;
     compactionActive: () => boolean;
+    awaitingContinuation: () => boolean;
     hasObservedActivity: () => boolean;
     hasReplayUnsafeActivity: () => boolean;
     onNoOutputTimeout: (error: FailoverError) => void;
@@ -101,7 +102,15 @@ export function createCliPluginWatchdog(
         return;
       }
     }
-    if (noOutputTimeoutMs !== undefined && nowMs >= noOutputDeadlineMs) {
+    if (
+      noOutputTimeoutMs !== undefined &&
+      nowMs >= noOutputDeadlineMs &&
+      params.awaitingContinuation()
+    ) {
+      // The answer is complete and the CLI is waiting for its own background work to
+      // report back. Quiet is expected there, so only the overall deadline bounds it.
+      noOutputDeadlineMs = nowMs + noOutputTimeoutMs;
+    } else if (noOutputTimeoutMs !== undefined && nowMs >= noOutputDeadlineMs) {
       const quietDurationMs = nowMs - lastOutputAtMs;
       const askUserDeadline = params.getActiveAskUserDeadline?.();
       const decision = noOutputPolicy.resolveCliNoOutputTimeoutDecision({
@@ -163,5 +172,7 @@ export function createCliPluginWatchdog(
     },
     reset,
     dispose,
+    overallDeadlineAtMs: () =>
+      overallActiveRemainingMs === undefined ? undefined : lastTickAtMs + overallActiveRemainingMs,
   };
 }
