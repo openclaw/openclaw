@@ -76,6 +76,15 @@ function descriptorJson(descriptor: PackageActivationDescriptor): string {
 
 /** An existing operation is never bootstrapped, migrated, or repaired on open. */
 export function openPackageActivationJournal(anchor: string) {
+  return openJournal(anchor, false);
+}
+
+/** Non-authorizing inspection; this handle can only close a verified publication. */
+export function openPackageActivationSettlementJournal(anchor: string) {
+  return openJournal(anchor, true);
+}
+
+function openJournal(anchor: string, settlementOnly: boolean) {
   assertPackageActivationLayout(anchor);
   const journalPath = resolvePackageActivationJournalPath(anchor);
   const parent = path.dirname(anchor);
@@ -125,6 +134,7 @@ export function openPackageActivationJournal(anchor: string) {
   const decode = (
     row: ActivationRow | undefined,
     completedInstallKey?: string,
+    allowSettlementInspection = settlementOnly,
   ): PackageActivationRecord => {
     if (
       !row ||
@@ -187,7 +197,16 @@ export function openPackageActivationJournal(anchor: string) {
     };
     // Closed history conveys no authority over today's package, helper, or
     // lease store. Only unfinished recovery needs its original identities.
-    if (!matchesInstallation(descriptor) && !isPackageActivationComplete(anchor, record)) {
+    if (
+      !matchesInstallation(descriptor) &&
+      !isPackageActivationComplete(anchor, record) &&
+      !(
+        allowSettlementInspection &&
+        record.phase === "publishing" &&
+        record.intent?.kind === "publish" &&
+        record.publications.length === 0
+      )
+    ) {
       throw new Error("Package publication journal does not match its installation");
     }
     return record;
@@ -262,6 +281,16 @@ export function openPackageActivationJournal(anchor: string) {
     publications = expected.publications,
     descriptor = expected.descriptor,
   ): PackageActivationRecord => {
+    if (
+      settlementOnly &&
+      (phase !== "superseded" ||
+        intent?.kind !== "publication-settled-external-change" ||
+        !intent.settled ||
+        !isDeepStrictEqual(descriptor, expected.descriptor) ||
+        !isDeepStrictEqual(publications, expected.publications))
+    ) {
+      throw new Error("Settlement inspection cannot authorize package publication or restoration.");
+    }
     const descriptorJsonValue = descriptorJson(descriptor);
     const intentJson = JSON.stringify(intentSchema.parse(intent));
     PackageActivationPhaseSchema.parse(phase);
@@ -375,7 +404,7 @@ export function openPackageActivationJournal(anchor: string) {
       assertCurrent();
     },
     readForAdmission(installKey: string) {
-      return withDatabase(false, (db) => decode(readRow(db), installKey));
+      return withDatabase(false, (db) => decode(readRow(db), installKey, false));
     },
     recordPreviousCopy(
       expected: PackageActivationRecord,

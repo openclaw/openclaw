@@ -145,7 +145,7 @@ function SystemMeasurements(props: { row: SystemsInventoryRow; controller: Syste
   );
 }
 
-export type SystemsPageProps = { routeData?: SystemsRouteData; presented: boolean };
+type SystemsPageProps = { routeData?: SystemsRouteData; presented: boolean };
 type SystemsPageElement = SolidBridgeElement<SystemsPageProps>;
 
 function SystemsPageContent(props: SystemsPageProps, host: SystemsPageElement) {
@@ -565,16 +565,12 @@ function SystemsWorkspace(props: { controller: SystemsController; presented: boo
   );
 }
 
-export const SystemsPage = defineSolidBridge<SystemsPageProps>(
-  "openclaw-systems-page",
-  SystemsPageContent,
-  {
-    properties: {
-      routeData: { default: undefined, attribute: false },
-      presented: { default: true, type: Boolean },
-    },
+defineSolidBridge<SystemsPageProps>("openclaw-systems-page", SystemsPageContent, {
+  properties: {
+    routeData: { default: undefined, attribute: false },
+    presented: { default: true, type: Boolean },
   },
-);
+});
 
 declare global {
   interface HTMLElementTagNameMap {

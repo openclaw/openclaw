@@ -30,6 +30,7 @@ import {
   runWithDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
 import { isGatewaySuspendControlAvailable } from "../../../infra/gateway-suspend-coordinator.js";
+import { runWithMainThreadTask } from "../../../infra/main-thread-stall.js";
 import { rawDataByteLength } from "../../../infra/ws.js";
 import { logRejectedLargePayload } from "../../../logging/diagnostic-payload.js";
 import {
@@ -521,7 +522,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     void params.connectionWork
       .track(() =>
         runWithDiagnosticTraceContext(createDiagnosticTraceContext(), () =>
-          handleIncomingMessage(data, admission),
+          runWithMainThreadTask("gateway:ws:frame", () => handleIncomingMessage(data, admission)),
         ),
       )
       .catch((error: unknown) => {

@@ -23,22 +23,6 @@ function reactorsLabel(reaction: MessageReactionSummary, userId: string | null |
 }
 
 type ReactionGroup = Parameters<typeof messageReactionOptions>[0];
-export function renderSolidGroupMessageReactions(
-  group: ReactionGroup,
-  actionDetails: { reactionMessageId?: string } | null | undefined,
-  isStreaming: boolean,
-  options: MessageReactionOptions,
-) {
-  return (
-    <GroupMessageReactions
-      group={group}
-      actionDetails={actionDetails}
-      isStreaming={isStreaming}
-      options={options}
-    />
-  );
-}
-
 export function GroupMessageReactions(props: {
   group: ReactionGroup;
   actionDetails: { reactionMessageId?: string } | null | undefined;

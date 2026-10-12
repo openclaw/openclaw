@@ -149,7 +149,7 @@ describe("GitHub preview warming", () => {
     observer().intersect(links);
     await vi.advanceTimersByTimeAsync(200);
     expect(prefetch).toHaveBeenCalledTimes(1);
-    // Bind the external provider after Lit connects the template's root.
+    // Keep the external provider bound while the parent refreshes.
     await show();
     const scan = vi.spyOn(container.firstElementChild!, "querySelectorAll");
     await show();

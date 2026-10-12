@@ -4,9 +4,9 @@ import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion
 import { solidTemplate } from "../pages/chat/components/chat-composer-controls.ts";
 import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import { renderComposerLibraryMenuSolid } from "../pages/chat/components/chat-composer-library-menu.tsx";
-import { renderChatComposerPlusMenu } from "../pages/chat/components/chat-composer-plus-menu.tsx";
+import { renderComposerMenuOption } from "../pages/chat/components/chat-composer-menu.tsx";
 import "../pages/chat/components/browser-tab-card.tsx";
-import { renderComposerMenuOption } from "./composer-menu.ts";
+import { renderChatComposerPlusMenu } from "../pages/chat/components/chat-composer-plus-menu.tsx";
 import "../test-helpers/load-styles.ts";
 import "./menu-surface.ts";
 import "./resizable-divider.ts";
@@ -455,7 +455,7 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
       document.body.append(host);
       const renderOption = (active: boolean) => {
         render(
-          renderComposerMenuOption({
+          solidTemplate(renderComposerMenuOption, {
             id: "hover-command",
             active,
             select: () => {},

@@ -153,11 +153,7 @@ function NativeChromeSetupContent(props: Props, host: HTMLElement) {
   );
 }
 
-export const NativeChromeSetup = defineSolidBridge<Props>(
-  "openclaw-native-chrome-setup",
-  NativeChromeSetupContent,
-  {
-    properties: { autoInspect: { default: false, attribute: "auto-inspect" } },
-    disconnected: (host) => resetOnDisconnect.get(host)?.(),
-  },
-);
+defineSolidBridge<Props>("openclaw-native-chrome-setup", NativeChromeSetupContent, {
+  properties: { autoInspect: { default: false, attribute: "auto-inspect" } },
+  disconnected: (host) => resetOnDisconnect.get(host)?.(),
+});

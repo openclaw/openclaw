@@ -7,7 +7,7 @@ import {
 import { AgentDeletionAuthorityRollbackError } from "../../agents/agent-lifecycle-registry.js";
 import {
   clearActiveEmbeddedRun,
-  isEmbeddedAgentRunInProgress,
+  resolveEmbeddedAgentRunProgressState,
   setActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
@@ -96,8 +96,8 @@ export function registerAgentDeleteDrainRecoveryTests(harness: AgentDeleteRecove
           ]),
         );
         expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledOnce();
-        expect(isEmbeddedAgentRunInProgress(sessionId)).toBe(false);
-        expect(isEmbeddedAgentRunInProgress("other-session")).toBe(true);
+        expect(resolveEmbeddedAgentRunProgressState(sessionId)).toBeUndefined();
+        expect(resolveEmbeddedAgentRunProgressState("other-session")).toBeDefined();
         mocks.loadConfigReturn = { agents: { entries: { main: {} } } };
         mocks.findAgentEntryIndex.mockReturnValue(-1);
         mocks.readAgentDeletionJournal.mockReturnValue(deletionJournal({ cleanupCompleted: true }));
