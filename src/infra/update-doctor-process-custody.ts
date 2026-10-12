@@ -178,9 +178,10 @@ export async function retainUpdateDoctorProcesses(
       }
       return {
         spawned(identity: CommandProcessIdentity) {
-          retained.spawned(identity);
+          // Publish the owned PID before binding so a failed bind cannot leave anonymous custody.
           slot.identity = identity;
           writeReceipt(file, receipt);
+          retained.spawned(identity);
         },
         settled() {
           retained.settled();
