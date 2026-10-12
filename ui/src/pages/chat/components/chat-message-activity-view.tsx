@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, Show } from "solid-js";
 import { type ToolCallGroup, groupToolCalls } from "../../../../../src/chat/tool-call-grouping.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MessageGroup as MessageGroupData, ToolCard } from "../../../lib/chat/chat-types.ts";
@@ -44,53 +44,34 @@ function descendantCards(group: ToolCallGroup<ToolCard>) {
   return cards;
 }
 
+function renderActivityOperation(
+  group: ToolCallGroup<ToolCard>,
+  options: NativeMessageGroupOptions,
+  contexts: ToolContexts,
+): unknown {
+  const context = contexts.get(group.card)!;
+  const expanded = options.isToolExpanded?.(context.disclosureId) ?? false;
+  return renderToolCard(group.card, {
+    ...options,
+    messageKey: context.messageKey,
+    expanded,
+    onToggleExpanded: () => options.onToggleToolExpanded?.(context.disclosureId, expanded),
+    activityCards: [group.card, ...descendantCards(group)],
+    // The card bridge owns this deferred range; nested Solid roots can be retired while it parks.
+    children: group.children.length
+      ? expanded
+        ? group.children.map((child) => renderActivityOperation(child, options, contexts))
+        : []
+      : undefined,
+  });
+}
+
 function ActivityOperation(props: {
   group: ToolCallGroup<ToolCard>;
   options: NativeMessageGroupOptions;
   contexts: ToolContexts;
 }) {
-  const context = () => props.contexts.get(props.group.card)!;
-  const expanded = () => props.options.isToolExpanded?.(context().disclosureId) ?? false;
-  return (
-    <LitContent
-      value={renderToolCard(props.group.card, {
-        ...props.options,
-        messageKey: context().messageKey,
-        expanded: expanded(),
-        onToggleExpanded: () =>
-          props.options.onToggleToolExpanded?.(context().disclosureId, expanded()),
-        activityCards: [props.group.card, ...descendantCards(props.group)],
-        children: props.group.children.length
-          ? solidContent(ActivityOperationChildren, {
-              groups: props.group.children,
-              options: props.options,
-              contexts: props.contexts,
-              expanded: expanded(),
-            })
-          : undefined,
-      })}
-    />
-  );
-}
-
-function ActivityOperationChildren(props: {
-  groups: ToolCallGroup<ToolCard>[];
-  options: NativeMessageGroupOptions;
-  contexts: ToolContexts;
-  expanded: boolean;
-}) {
-  return (
-    <Show when={props.expanded}>
-      <For
-        each={props.groups}
-        keyed={(group) => group.card.callId ?? props.contexts.get(group.card)!.disclosureId}
-      >
-        {(group) => (
-          <ActivityOperation group={group()} options={props.options} contexts={props.contexts} />
-        )}
-      </For>
-    </Show>
-  );
+  return <LitContent value={renderActivityOperation(props.group, props.options, props.contexts)} />;
 }
 
 function prepareActivityGroup(

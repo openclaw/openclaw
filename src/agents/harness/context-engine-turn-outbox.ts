@@ -86,6 +86,25 @@ export type ContextEngineTurnOutboxStore = Readonly<{
   hasPending(filter: ContextEngineTurnOutboxFilter & { sessionId?: string }): Promise<boolean>;
 }>;
 
+/** The durable context-engine turn outbox of one agent database, executed in its worker. */
+export type ContextEngineTurnOutboxWorkerStore = ContextEngineTurnOutboxStore &
+  Readonly<{
+    [
+      Type in
+        | "prepareRun"
+        | "enqueueIntent"
+        | "acceptIntent"
+        | "publishClosedTurn"
+        | "discardIntent"
+    ]: (
+      input: ContextEngineTurnOutboxWorkerOperations[Type]["input"],
+    ) => Promise<
+      ContextEngineTurnOutboxWorkerOperations[Type]["output"] extends undefined
+        ? void
+        : ContextEngineTurnOutboxWorkerOperations[Type]["output"]
+    >;
+  }>;
+
 export async function drainContextEngineTurnOutbox(params: {
   store: ContextEngineTurnOutboxStore;
   engine: ContextEngine;

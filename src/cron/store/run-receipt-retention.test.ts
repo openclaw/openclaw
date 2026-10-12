@@ -11,14 +11,12 @@ import { setupCronServiceSuite } from "../service.test-harness.js";
 import type { CronServiceDeps } from "../service/state.js";
 import { loadCronStore } from "../store.js";
 import { cronStoreKey } from "./key.js";
-import {
-  finishCronRunReceiptAsync,
-  finishCronRunReceiptInDatabase,
-  prepareCronRunReceiptClaim,
-} from "./run-receipt-store.js";
+import { finishCronRunReceiptInDatabase } from "./run-receipt-store.js";
 import {
   claimCronRunReceiptInDatabaseForTest,
   inspectActiveCronRunReceipt,
+  finishCronRunReceiptAsync,
+  prepareCronRunReceiptClaim,
 } from "./run-receipt-store.test-support.js";
 import { prepareCronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
 
