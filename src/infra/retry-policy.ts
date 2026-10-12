@@ -36,24 +36,22 @@ function getChannelApiRetryAfterMs(err: unknown): number | undefined {
   if (!err || typeof err !== "object") {
     return undefined;
   }
-  const candidate =
-    // Telegram-style clients may expose retry_after on the root error, response,
-    // or nested error object; keep all shapes aligned so rate-limit sleeps match.
-    "parameters" in err && err.parameters && typeof err.parameters === "object"
-      ? (err.parameters as { retry_after?: unknown }).retry_after
-      : "response" in err &&
-          err.response &&
-          typeof err.response === "object" &&
-          "parameters" in err.response
-        ? (
-            err.response as {
-              parameters?: { retry_after?: unknown };
-            }
-          ).parameters?.retry_after
-        : "error" in err && err.error && typeof err.error === "object" && "parameters" in err.error
-          ? (err.error as { parameters?: { retry_after?: unknown } }).parameters?.retry_after
-          : undefined;
-  return typeof candidate === "number" && Number.isFinite(candidate) ? candidate * 1000 : undefined;
+  // Keep root/response/error precedence, but incomplete wrappers must not hide a valid hint.
+  for (const key of [undefined, "response", "error"]) {
+    const container: unknown = key === undefined ? err : Reflect.get(err, key);
+    if (!container || typeof container !== "object" || !("parameters" in container)) {
+      continue;
+    }
+    const parameters = container.parameters;
+    if (!parameters || typeof parameters !== "object" || !("retry_after" in parameters)) {
+      continue;
+    }
+    const candidate = parameters.retry_after;
+    if (typeof candidate === "number" && Number.isFinite(candidate)) {
+      return candidate * 1000;
+    }
+  }
+  return undefined;
 }
 
 export function createChannelApiRetryRunner(params: {
