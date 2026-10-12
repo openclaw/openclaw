@@ -2,7 +2,6 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveAgentIdentity } from "../agents/identity.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProjectedAgentRunProgressState } from "../infra/agent-run-registry.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import type { ControlUiSessionPullRequest } from "./control-ui-contract.js";
 import type { PublicSessionCard } from "./control-ui-public-session-card-render.js";
 import { resolveProjectedControlUiSessionPrTarget } from "./control-ui-session-pr-read.js";
@@ -24,7 +23,7 @@ const PR_STATES = {
 } as const;
 
 function cardText(value: string | undefined, limit: number): string | undefined {
-  const text = value && truncateUtf16Safe(redactToolPayloadText(value), limit).trim();
+  const text = value && truncateUtf16Safe(value, limit).trim();
   return text || undefined;
 }
 

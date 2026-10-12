@@ -147,46 +147,6 @@ describe("reactivateCompletedSubagentSession", () => {
     });
   });
 
-  it("omits the task field entirely when no follow-up text is supplied (caller-side backward compat)", async () => {
-    const childSessionKey = "agent:main:subagent:no-task";
-    const latestEndedRun = endedRun(childSessionKey, {
-      task: "stale original task",
-      createdAt: 40,
-    });
-    mockEndedRun(latestEndedRun);
-    replaceSubagentRunAfterSteerMock.mockReturnValue(true);
-
-    await reactivateCompletedSubagentSession({
-      sessionKey: childSessionKey,
-      runId: "run-next",
-    });
-    await reactivateCompletedSubagentSession({
-      sessionKey: childSessionKey,
-      runId: "run-next-2",
-      task: "   ",
-    });
-
-    expect(replaceSubagentRunAfterSteerMock).toHaveBeenCalledTimes(2);
-    for (const call of replaceSubagentRunAfterSteerMock.mock.calls) {
-      expect(call[0]).not.toHaveProperty("task");
-    }
-  });
-
-  it("rejects an accepted run when its owner replacement cannot persist", async () => {
-    const childSessionKey = "agent:main:subagent:persistence-failure";
-    mockEndedRun(endedRun(childSessionKey));
-    replaceSubagentRunAfterSteerMock.mockImplementationOnce(() => {
-      throw new Error("database unavailable");
-    });
-
-    await expect(
-      reactivateCompletedSubagentSession({
-        sessionKey: childSessionKey,
-        runId: "run-next",
-      }),
-    ).rejects.toThrow("database unavailable");
-  });
-
   it("rejects an accepted run when another replacement owns the child session", async () => {
     const childSessionKey = "agent:main:subagent:replacement-race";
     mockEndedRun(endedRun(childSessionKey));

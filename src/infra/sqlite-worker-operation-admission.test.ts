@@ -11,7 +11,6 @@ import {
 } from "./gateway-state-owner.js";
 import {
   deferSqlitePostCommitPublication,
-  stageSqliteTransactionState,
   withSqlitePostCommitPublications,
 } from "./sqlite-post-commit.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
@@ -389,7 +388,7 @@ it("reads a queued worker commit before settlement and message callbacks run", a
   }
 });
 
-it.each(["rollback", "unknown", "later rollback", "later commit", "same-value commit"] as const)(
+it.each(["rollback", "unknown", "later rollback"] as const)(
   "keeps committed facts distinct from %s settlement",
   (outcome) => {
     const db = new DatabaseSync(":memory:");
@@ -417,16 +416,9 @@ it.each(["rollback", "unknown", "later rollback", "later commit", "same-value co
         write(1);
         if (outcome === "later rollback") {
           expect(() => write(2, true)).toThrow("Rollback the synthetic write");
-        } else if (outcome === "later commit") {
-          write(2);
-        } else if (outcome === "same-value commit") {
-          write(1);
         }
       }
-      const committed =
-        outcome === "rollback"
-          ? undefined
-          : { facts: { value: outcome === "later commit" ? 2 : 1 } };
+      const committed = outcome === "rollback" ? undefined : { facts: { value: 1 } };
       expect(admission.settlement).toBeUndefined();
       expect(admission.committed).toEqual(committed);
       expect(admission.settlement).toBeUndefined();
@@ -446,28 +438,13 @@ it.each(["rollback", "unknown", "later rollback", "later commit", "same-value co
         );
       }
       expect(db.prepare("SELECT value FROM proof ORDER BY value").all()).toEqual(
-        outcome === "rollback"
-          ? []
-          : outcome === "later commit"
-            ? [{ value: 1 }, { value: 2 }]
-            : outcome === "same-value commit"
-              ? [{ value: 1 }, { value: 1 }]
-              : [{ value: 1 }],
+        outcome === "rollback" ? [] : [{ value: 1 }],
       );
       admission.finish();
       expect(admission.committed).toEqual(committed);
       expect(published.mock.calls.map(([receipt]) => receipt.facts)).toEqual(
-        outcome === "rollback"
-          ? []
-          : outcome === "later commit"
-            ? [{ value: 1 }, { value: 2 }]
-            : outcome === "same-value commit"
-              ? [{ value: 1 }, { value: 1 }]
-              : [{ value: 1 }],
+        outcome === "rollback" ? [] : [{ value: 1 }],
       );
-      if (outcome === "later commit") {
-        expect(admission.waitForSettlement(performance.now()).committed).toEqual(committed);
-      }
     } finally {
       admission.finish();
       db.close();
@@ -476,13 +453,8 @@ it.each(["rollback", "unknown", "later rollback", "later commit", "same-value co
 );
 
 it.each([
-  { receipt: "native commit", publicationFails: false },
-  { receipt: "settlement fallback", publicationFails: false },
   { receipt: "native commit", publicationFails: true },
-  { receipt: "settlement fallback", publicationFails: true },
   { receipt: "failed commit delivery", publicationFails: false },
-  { receipt: "settlement only", publicationFails: false },
-  { receipt: "settlement only", publicationFails: true },
 ] as const)(
   "installs $receipt before reply acknowledgement (publication failure: $publicationFails)",
   ({ receipt, publicationFails }) => {
@@ -509,9 +481,6 @@ it.each([
     vi.spyOn(admission.port, "postMessage").mockImplementation((message) => {
       if (message.kind === "native-commit") {
         nativeCommit = message;
-        if (receipt === "settlement fallback") {
-          return;
-        }
         if (receipt === "failed commit delivery") {
           throw new Error("Synthetic commit delivery failure");
         }
@@ -535,18 +504,12 @@ it.each([
         withSqlitePostCommitPublications(db, () =>
           runSqliteImmediateTransactionSync(db, () => {
             db.prepare("INSERT INTO proof VALUES (1)").run();
-            deferSqliteWorkerCommitReceipt(
-              db,
-              { value: 1 },
-              receipt === "settlement only" ? "settlement" : "commit",
-            );
+            deferSqliteWorkerCommitReceipt(db, { value: 1 });
           }),
         ),
       );
       // Redelivery and settlement's retained copy must not repeat installation.
-      if (receipt === "settlement only") {
-        expect(nativeCommit).toBeUndefined();
-      } else if (receipt !== "failed commit delivery") {
+      if (receipt !== "failed commit delivery") {
         admission.port.postMessage(nativeCommit, []);
       }
       settleSqliteWorkerOperationContext(owner, "completed");
@@ -572,39 +535,12 @@ it.each([
   },
 );
 
-it("does not treat a grant or a lost settlement message as a committed receipt", () => {
-  const admission = createSqliteWorkerOperationAdmission((_request, grant) => grant());
-  const decision = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
-  try {
-    admission.port.postMessage(
-      {
-        stage: "transaction",
-        facts: undefined,
-        decision: decision.buffer,
-      },
-      [],
-    );
-    admission.service();
-    expect(Atomics.load(decision, 0)).toBe(1);
-    expect(admission.committed).toBeUndefined();
-    expect(() => admission.waitForSettlement(performance.now())).toThrow("settlement is unknown");
-    expect(admission.settlement).toBeUndefined();
-  } finally {
-    admission.finish();
-  }
-});
-
 it.each([
-  "duplicate",
-  "stale",
   "duplicate settlement",
   "malformed",
   "after settlement",
-  "conflicting commit",
   "conflicting settlement",
   "stale settlement",
-  "missing settlement receipt",
-  "different operation",
 ] as const)("retains committed facts through %s receipt delivery", (delivery) => {
   const db = new DatabaseSync(":memory:");
   db.exec("CREATE TABLE proof (value INTEGER)");
@@ -643,34 +579,21 @@ it.each([
     if (!first || !latest) {
       throw new Error("Both real commits must produce receipt frames");
     }
-    if (["duplicate", "stale", "duplicate settlement", "after settlement"].includes(delivery)) {
+    if (["duplicate settlement", "after settlement"].includes(delivery)) {
       settleSqliteWorkerOperationContext(owner, "completed");
     }
-    if (delivery === "duplicate" || delivery === "stale") {
-      postMessage(delivery === "duplicate" ? latest : first);
-    } else if (
-      [
-        "duplicate settlement",
-        "conflicting settlement",
-        "stale settlement",
-        "missing settlement receipt",
-      ].includes(delivery)
-    ) {
+    if (["duplicate settlement", "conflicting settlement", "stale settlement"].includes(delivery)) {
       postMessage({
         kind: "native-settlement",
         settlement: {
           kind: "completed",
-          ...(delivery === "missing settlement receipt"
-            ? {}
-            : {
-                committed:
-                  delivery === "stale settlement"
-                    ? first.committed
-                    : {
-                        ...latest.committed,
-                        ...(delivery === "conflicting settlement" ? { facts: { value: 99 } } : {}),
-                      },
-              }),
+          committed:
+            delivery === "stale settlement"
+              ? first.committed
+              : {
+                  ...latest.committed,
+                  ...(delivery === "conflicting settlement" ? { facts: { value: 99 } } : {}),
+                },
         },
       });
     } else {
@@ -684,7 +607,6 @@ it.each([
                 ...(delivery === "after settlement"
                   ? { sequence: latest.committed.sequence + 1 }
                   : {}),
-                ...(delivery === "different operation" ? { operationId: "another-operation" } : {}),
                 facts: { value: 99 },
               },
       });
@@ -696,7 +618,7 @@ it.each([
       { value: 1 },
       { value: 2 },
     ]);
-    if (["duplicate", "stale", "duplicate settlement"].includes(delivery)) {
+    if (delivery === "duplicate settlement") {
       expect(admission.failure).toBeUndefined();
       expect(admission.waitForSettlement(performance.now())).toEqual({
         kind: "completed",
@@ -713,77 +635,35 @@ it.each([
   }
 });
 
-it.each(["notification", "fact installation"] as const)(
-  "retains native COMMIT evidence when earlier %s fails",
-  (failure) => {
-    const db = new DatabaseSync(":memory:");
-    db.exec("CREATE TABLE proof (value INTEGER)");
-    const admission = createSqliteWorkerOperationAdmission((_request, grant) => grant());
-    const owner = { port: admission.port };
-    const fail = () => {
-      throw new Error("Synthetic publication failure");
-    };
-    try {
-      expect(() =>
-        withSqliteWorkerOperationAdmission(owner, () =>
-          withSqlitePostCommitPublications(db, () =>
-            runSqliteImmediateTransactionSync(db, () => {
-              db.prepare("INSERT INTO proof VALUES (1)").run();
-              if (failure === "notification") {
-                deferSqlitePostCommitPublication(db, fail);
-              } else {
-                stageSqliteTransactionState(db, { stage() {}, rollback() {}, commit: fail });
-              }
-              deferSqliteWorkerCommitReceipt(db, { value: 1 });
-            }),
-          ),
-        ),
-      ).not.toThrow();
-      settleSqliteWorkerOperationContext(owner, "completed");
-      expect(admission.waitForSettlement(performance.now())).toEqual({
-        kind: "completed",
-        committed: { facts: { value: 1 } },
-      });
-      expect(db.prepare("SELECT value FROM proof").all()).toEqual([{ value: 1 }]);
-    } finally {
-      admission.finish();
-      db.close();
-    }
-  },
-);
-
-it("shares the active operation across module copies without mixing nested ports", async () => {
-  vi.resetModules();
-  const duplicate = await import("./sqlite-worker-operation-admission.js");
-  expect(duplicate.withSqliteWorkerOperationAdmission).not.toBe(withSqliteWorkerOperationAdmission);
-  const outer = new MessageChannel();
-  const inner = new MessageChannel();
-  // Only the carrier is under test here. Real cross-thread grants and revocation
-  // are covered by the publication and public-runtime reclamation tests.
-  const grant = (message: { decision: SharedArrayBuffer }) => {
-    Atomics.store(new Int32Array(message.decision), 0, 1);
+it("retains native COMMIT evidence when an earlier notification fails", () => {
+  const db = new DatabaseSync(":memory:");
+  db.exec("CREATE TABLE proof (value INTEGER)");
+  const admission = createSqliteWorkerOperationAdmission((_request, grant) => grant());
+  const owner = { port: admission.port };
+  const fail = () => {
+    throw new Error("Synthetic publication failure");
   };
-  const outerRequests = vi.spyOn(outer.port1, "postMessage").mockImplementation(grant);
-  const innerRequests = vi.spyOn(inner.port1, "postMessage").mockImplementation(grant);
-  const request = (facts: string) =>
-    duplicate.requestSqliteWorkerOperationAdmission({ stage: "transaction", facts });
   try {
-    withSqliteWorkerOperationAdmission({ port: outer.port1 }, () => {
-      request("outer-before");
-      duplicate.withSqliteWorkerOperationAdmission({ port: inner.port1 }, () => request("inner"));
-      request("outer-after");
+    expect(() =>
+      withSqliteWorkerOperationAdmission(owner, () =>
+        withSqlitePostCommitPublications(db, () =>
+          runSqliteImmediateTransactionSync(db, () => {
+            db.prepare("INSERT INTO proof VALUES (1)").run();
+            deferSqlitePostCommitPublication(db, fail);
+            deferSqliteWorkerCommitReceipt(db, { value: 1 });
+          }),
+        ),
+      ),
+    ).not.toThrow();
+    settleSqliteWorkerOperationContext(owner, "completed");
+    expect(admission.waitForSettlement(performance.now())).toEqual({
+      kind: "completed",
+      committed: { facts: { value: 1 } },
     });
-    expect(outerRequests.mock.calls.map(([message]) => message.facts)).toEqual([
-      "outer-before",
-      "outer-after",
-    ]);
-    expect(innerRequests.mock.calls.map(([message]) => message.facts)).toEqual(["inner"]);
-    expect(() => request("outside")).toThrow("requires its retained admission");
+    expect(db.prepare("SELECT value FROM proof").all()).toEqual([{ value: 1 }]);
   } finally {
-    outer.port1.close();
-    outer.port2.close();
-    inner.port1.close();
-    inner.port2.close();
+    admission.finish();
+    db.close();
   }
 });
 

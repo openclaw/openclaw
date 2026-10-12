@@ -1,6 +1,8 @@
 import type { ProgressCard } from "../../packages/gateway-protocol/src/index.js";
 import type { ProgressCardWrite } from "./progress-card-values.js";
 
+/** An empty card retains its revision so a delayed dismissal cannot erase new work. */
+export type SessionActorMemoryProgressCard = Omit<ProgressCard, "sessionKey">;
 export type SessionActorProgressCardReads = {
   "progressCard.get": {
     input: { sessionKey: string };
@@ -17,3 +19,9 @@ export type SessionActorProgressCardWrites = {
     output: boolean;
   };
 };
+export type SessionActorProgressCardCommand = {
+  [Key in keyof SessionActorProgressCardWrites]: {
+    type: Key;
+    input: SessionActorProgressCardWrites[Key]["input"];
+  };
+}[keyof SessionActorProgressCardWrites];

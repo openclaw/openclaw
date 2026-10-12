@@ -86,6 +86,32 @@ function ensureReplicaSubscription(): void {
   pool.unsubscribe = sessionChanges.subscribeFacts((change) => {
     // Receipt installation reorders the LRU map, so visit the original cells once.
     const cellsBeforePublication = [...pool.cells.values()];
+    const publishedKey =
+      !("all" in change) && !change.factsInvalidated ? change.sessionKey : undefined;
+    const created = publishedKey ? readPreparedSessionEntryChange(change, publishedKey) : undefined;
+    if (publishedKey && created?.fullEntry && typeof created.source.identity === "string") {
+      const target: FileTarget = {
+        sessionKey: publishedKey,
+        database: {
+          kind: "file",
+          physicalIdentity: created.source.identity,
+          birthtime: created.source.birthtime,
+          nativeLocation: created.source.canonicalPath ?? created.source.filename,
+        },
+      };
+      if (
+        !pool.cells.has(targetKey(target)) &&
+        created.source.writeToken ===
+          readSqliteDatabaseWriteTokenForPath(target.database.nativeLocation)
+      ) {
+        // Creation already owns the complete entry; its first reader need not fetch it again.
+        retainSessionActorEntryFacts(
+          target,
+          { entry: created.fullEntry, snapshots: "full", projection: created.projection },
+          created.source.incarnation,
+        );
+      }
+    }
     for (const cell of cellsBeforePublication) {
       const { database, sessionKey } = cell.target;
       if (
@@ -301,6 +327,12 @@ export function readSessionActorEntryFacts(
     members: state.members,
     participants: state.participants,
     snapshots,
+    projection: cell.snapshot
+      ? {
+          hasBoard: cell.snapshot.hasBoard,
+          activitySummaryWatermark: cell.snapshot.transcript.watermark,
+        }
+      : cell.entry?.projection,
     dependencySessionIds: state.dependencySessionIds,
     writeToken: state.writeToken,
     predicateColumns: cell.predicateColumns,
@@ -491,7 +523,7 @@ export function createSessionActorReplica(
       throw new Error("Session actor replica is closed");
     }
     owned.pending += 1;
-    invalidate();
+    owned.reservation += 1;
     const selected = owned.reservation;
     const expectedGeneration = generation();
     let settled = false;
@@ -523,7 +555,8 @@ export function createSessionActorReplica(
         return undefined;
       }
       if (!accepts(owned.snapshot, owned.generation, token)) {
-        invalidate();
+        discard(owned);
+        forgetUnused(owned);
         return undefined;
       }
       touch(owned);
@@ -542,12 +575,13 @@ export function createSessionActorReplica(
     },
     beginCommand() {
       const previous = owned.snapshot;
+      const previousGeneration = owned.generation;
       const settle = begin();
       return {
         settle<Value>(outcome: SessionActorOutcome<Value>): boolean {
           return settle((expectedGeneration) => {
             if (outcome.kind === "rolled-back") {
-              return previous !== undefined && install(previous, expectedGeneration);
+              return previous !== undefined && install(previous, previousGeneration);
             }
             if (outcome.kind === "unknown") {
               discard(owned);

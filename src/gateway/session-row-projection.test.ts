@@ -1,6 +1,7 @@
 import { performance } from "node:perf_hooks";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
 import { notifyPreparedModelRuntimePublication } from "../agents/prepared-model-runtime.publication-events.js";
@@ -15,7 +16,9 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   requestContext,
@@ -228,6 +231,70 @@ it("reprocesses activity-summary policy when config changes during materializati
         expect(projection.snapshot(target).row?.activitySummary?.state).toBe("stale");
       }
     } finally {
+      projection.dispose();
+    }
+  });
+});
+
+it("retains config changes published while topology discovery is pending", async ({ signal }) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const oldStore = state.statePath("old", "sessions.json");
+    const newStore = state.statePath("new", "sessions.json");
+    const oldKey = "agent:main:old-topology";
+    const newKey = "agent:work:new-topology";
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: oldKey, storePath: oldStore },
+      { sessionId: "old-topology", updatedAt: 1 },
+    );
+    replaceSessionEntrySync(
+      { agentId: "work", sessionKey: newKey, storePath: newStore },
+      { sessionId: "new-topology", updatedAt: 1 },
+    );
+    let cfg = { agents: { entries: { main: {} } }, session: { store: oldStore } };
+    setRuntimeConfigSnapshot(cfg);
+    const projection = await createSessionRowProjection({ cfg, getConfig: () => cfg });
+    const captured = createDeferredCore();
+    const release = createDeferredCore();
+    let reading: Promise<void> | undefined;
+    try {
+      await projection.ensureMaterialized();
+      const read = stateReads.executeExistingOpenClawStateRead;
+      let held = false;
+      vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockImplementation(
+        async (...args) => {
+          const reply = await read(...args);
+          if (args[1].type === "agentDatabaseDeletion.snapshot" && !held) {
+            held = true;
+            captured.resolve();
+            await release.promise;
+          }
+          return reply;
+        },
+      );
+      sessionChanges.emit({ all: true, scope: "config" });
+      reading = projection.ensureMaterialized();
+      await withinTest(
+        awaitGateBeforeSettlement(captured.promise, reading, "Topology discovery was not held"),
+        signal,
+      );
+      const latestConfig = {
+        agents: { entries: { main: {}, work: {} } },
+        session: { store: newStore },
+      };
+      cfg = latestConfig;
+      setRuntimeConfigSnapshot(cfg);
+      release.resolve();
+      await withinTest(reading, signal);
+
+      expect(projection.state.cfg).toEqual(latestConfig);
+      expect(
+        projection.snapshot({ agentId: "work", key: newKey, storePath: newStore }).row,
+      ).toMatchObject({
+        sessionId: "new-topology",
+      });
+    } finally {
+      release.resolve();
+      await Promise.allSettled(reading ? [reading] : []);
       projection.dispose();
     }
   });

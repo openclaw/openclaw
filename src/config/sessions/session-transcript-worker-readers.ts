@@ -160,6 +160,11 @@ export function createSessionHistoryWorkerReaders(
       "lifecycle artifact plan",
       (value) => value,
     ),
+    readTranscriptStatsBatch: reader(
+      "transcript-stats-batch",
+      "transcript statistics",
+      (value) => value.stats,
+    ),
     readTranscriptInstances: reader(
       "session-transcript-instances",
       "transcript instances",
@@ -277,6 +282,7 @@ export function createSessionHistoryWorkerReaders(
       "a transcript watermark",
       (value) => value.watermark,
     ),
+    readStats: reader("transcript-stats", "transcript statistics", (value) => value.stats),
     readActivitySummarySource: reader(
       "session-activity-summary-source",
       "an Activity recap source",
@@ -293,7 +299,8 @@ export function createSessionHistoryWorkerReaders(
         if (
           typeof value === "boolean" ||
           Array.isArray(value) ||
-          (value.kind !== "active-accounting" &&
+          (value.kind !== "history-event-page" &&
+            value.kind !== "active-accounting" &&
             value.kind !== "bounded-tail" &&
             value.kind !== "recent-text" &&
             value.kind !== "reactions" &&

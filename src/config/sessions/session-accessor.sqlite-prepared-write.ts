@@ -63,7 +63,7 @@ export async function runPreparedSqliteSessionWrite<T>(
         assertHeld();
         return await write.commit(assertHeld);
       };
-      // Opaque native mutations stay on their original writer and ALS owner.
+      // Incognito stays with its process-local owner; durable companions settle in the worker.
       return scheduling === "worker" &&
         (!hasPreparedNativeSessionDeletion() ||
           captureNativeSessionWorkerDeletion(write.deletedEntries))

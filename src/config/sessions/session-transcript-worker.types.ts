@@ -8,7 +8,7 @@ import type { BoardReadOperations } from "../../boards/sqlite-board-operations.j
 import type { PreparedSessionHistoryReadTarget } from "../../gateway/session-history-read.types.js";
 import type {
   SessionRowTranscriptFields,
-  SessionRowTranscriptReadParams,
+  SessionRowBackfillWorkerInput,
 } from "../../gateway/session-row-transcript-backfill.types.js";
 import type { SessionPreviewItem, SessionTitleFields } from "../../gateway/session-utils.types.js";
 import type { SessionMemoryTranscript } from "../../hooks/bundled/session-memory/capture.types.js";
@@ -52,6 +52,7 @@ import type {
 import type {
   LatestTranscriptAssistantText,
   TranscriptEvent,
+  SessionTranscriptStats,
   SessionTranscriptRawDeltaResult,
   SessionTranscriptVisibleMessageDeltaResult,
 } from "./session-accessor.sqlite-contract.js";
@@ -73,10 +74,7 @@ import type {
   SessionTranscriptReadScope,
 } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
-import type {
-  SessionEntryCurrentFacts,
-  SessionEntryCurrentSource,
-} from "./session-entry-current.types.js";
+import type { SessionEntryCurrentFacts } from "./session-entry-current.types.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import type {
   SessionEntryListWorkerInput,
@@ -158,6 +156,8 @@ import type {
   SessionSqliteTargetWorkerInput,
   SessionResetRecallWorkerInput,
   SessionEntryWorkerInput,
+  SessionEntryCurrentWorkerInput,
+  SessionEntryCurrentWorkerResult,
   BoardSnapshotWorkerInput,
   BoardWidgetDocumentWorkerInput,
   SessionHistoricalEvictionCandidatesWorkerInput,
@@ -168,6 +168,7 @@ import type {
   SessionTranscriptAnchorsWorkerInput,
   SessionModelContextWorkerInput,
   SessionTranscriptWatermarkWorkerInput,
+  SessionTranscriptStatsWorkerInput,
   SessionTranscriptMessagePresenceWorkerInput,
   SessionTranscriptDeltaWorkerInput,
   SessionTranscriptLatestAssistantWorkerInput,
@@ -225,23 +226,6 @@ type SessionActivitySummarySourceWorkerInput = SessionActivitySummaryBatchInput 
   kind: "session-activity-summary-source";
   database: { agentId: string; path: string };
   admission?: UserTurnTranscriptAdmissionReceipt;
-};
-
-type SessionRowBackfillWorkerInput = {
-  kind: "session-row-backfill";
-  database: { agentId: string; path: string };
-  params: SessionRowTranscriptReadParams;
-};
-
-export type SessionEntryCurrentWorkerInput = Omit<SessionEntryReadWorkerInput, "kind"> & {
-  kind: "session-entry-current";
-  source?: SessionEntryCurrentSource;
-};
-
-export type SessionEntryCurrentWorkerResult = {
-  kind: "session-entry-current";
-  entry: SessionEntryCurrentFacts | undefined;
-  source?: CapturedSessionEntryReadSource & { databaseIdentity: string };
 };
 
 export type SessionDiagnosticTextWorkerInput = {
@@ -339,6 +323,7 @@ export type SessionHistoryWorkerInput =
   | SessionPreviewWorkerInput
   | SessionTitleFieldsWorkerInput
   | SessionTranscriptWatermarkWorkerInput
+  | SessionTranscriptStatsWorkerInput
   | SessionTranscriptMessagePresenceWorkerInput
   | SessionTranscriptDeltaWorkerInput
   | SessionTranscriptLatestAssistantWorkerInput
@@ -467,6 +452,7 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
     "session-preview": { kind: "session-preview"; items: SessionPreviewItem[] };
     "session-title-fields": { kind: "session-title-fields"; fields: SessionTitleFields };
     "transcript-watermark": { kind: "transcript-watermark"; watermark: SessionTranscriptWatermark };
+    "transcript-stats": { kind: "transcript-stats"; stats: SessionTranscriptStats };
     "transcript-message-presence": { kind: "transcript-message-presence"; present: boolean };
     "transcript-anchors": { kind: "transcript-anchors"; facts: SessionTranscriptAnchorFacts };
     "session-activity-summary-source": {
@@ -532,10 +518,16 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
     "session-reset-recall": {
       cutoff: import("../../../packages/memory-host-sdk/src/host/session-reset-recall.js").SessionResetRecallCutoff;
     };
-    "session-entry": {
-      entry: SessionFileEntry | null;
-      resetRecallCutoff: ReturnType<typeof readSessionEntryResetRecallCutoff>;
-    };
+    "session-entry":
+      | {
+          entry: SessionFileEntry | null;
+          resetRecallCutoff: ReturnType<typeof readSessionEntryResetRecallCutoff>;
+        }
+      | {
+          snapshot: ReturnType<
+            typeof import("./session-accessor.sqlite-read.js").readTranscriptExportSnapshotReadOnlySync
+          >;
+        };
   };
 
 export type SessionTranscriptWorkerError =
@@ -659,6 +651,7 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
       SessionTranscriptWatermarkWorkerInput,
       SessionTranscriptWatermark
     >;
+    readStats: SessionHistoryReader<SessionTranscriptStatsWorkerInput, SessionTranscriptStats>;
     readActivitySummarySource: SessionHistoryReader<
       SessionActivitySummarySourceWorkerInput,
       SessionActivitySummaryBatchResult

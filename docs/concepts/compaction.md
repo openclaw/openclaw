@@ -20,6 +20,13 @@ Built-in compaction summarizes the older history in one model request, whatever 
 
 The full conversation history stays on disk. Compaction only changes what the model sees on the next turn.
 
+For direct OpenAI API-key sessions, the `/responses/compact` endpoint can return
+a canonical window of retained messages followed by an encrypted checkpoint.
+OpenClaw preserves that entire window, including retained assistant messages,
+for the next request and after a restart. The provider chooses which messages
+remain; it does not have to retain every original user message. See
+[OpenAI server-side compaction](/providers/openai/advanced).
+
 Built-in summarization receives text, not image pixels. Omitted images and other non-text input receive markers such as `[image data omitted from summary input]`, without claiming that a model processed the data. The first eight affected messages receive at most two fixed markers each; further omissions receive one aggregate statement. These additions, including newly retained role labels and separators, total at most 847 UTF-8 bytes per summarizer request and count toward token estimates. Existing text is not capped by this omission budget. Custom compaction providers still receive the original message content.
 
 <Note>
@@ -308,16 +315,14 @@ same oversized window.
 
 A returned window keeps recent user messages verbatim, and on xAI the system
 prompt too (the public OpenAI endpoint receives it as `instructions` instead).
-If [transcript redaction](/gateway/config-observability) would change any of that content,
-OpenClaw skips the endpoint before calling it and uses client-side compaction.
-The skip, a discarded endpoint result, and an endpoint failure are each logged
-as a warning with the reason.
+Transcript preparation does not secret-mask that content. A discarded endpoint
+result or an endpoint failure is logged as a warning with the reason.
 
 If the pending input alone fills the model's context window, recovery asks for a
 smaller message or a larger-context model without repeatedly compacting history.
 Later messages retain their normal recovery budget.
 
-If an older version or transcript redaction removes the complete window needed for replay, OpenClaw asks you to run `/compact`. That command rebuilds context from the saved conversation through client-side compaction. It does not guess the missing provider context or delete the transcript.
+If an older version left the complete window needed for replay unavailable, OpenClaw asks you to run `/compact`. That command rebuilds context from the saved conversation through client-side compaction. It does not guess the missing provider context or delete the transcript.
 
 Direct Anthropic API-key requests on models that Anthropic documents for threshold compaction ask the API to compact inside an ordinary request once input reaches the threshold, and OpenClaw replays the returned summary on later requests. `params.anthropicServerCompaction: false` disables it for a model. If Anthropic returns an empty summary, OpenClaw keeps sending the existing history and its client-side compaction remains the fallback. See [Anthropic server-side compaction](/providers/anthropic#advanced-configuration).
 

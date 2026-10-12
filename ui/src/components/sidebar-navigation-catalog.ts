@@ -10,7 +10,6 @@ export class SidebarNavigationCatalog implements ReactiveController {
   private client?: ApplicationContext["gateway"]["snapshot"]["client"];
   private agentId?: string | null;
   private pages?: ReturnType<ApplicationContext["sessions"]["observeList"]>;
-  private generation = 0;
 
   constructor(
     private readonly host: ReactiveControllerHost & {
@@ -47,12 +46,8 @@ export class SidebarNavigationCatalog implements ReactiveController {
       this.agentId = agentId;
     }
     if (source && this.host.navigationView === "pages" && !this.pages) {
-      const generation = this.generation;
       const query = dashboardSessionListQuery(agentId);
       this.pages = source.observeList(query, (snapshot) => {
-        if (generation !== this.generation || source !== this.source || agentId !== this.agentId) {
-          return;
-        }
         this.dashboards = snapshot;
         this.host.requestUpdate();
       });
@@ -78,7 +73,6 @@ export class SidebarNavigationCatalog implements ReactiveController {
   }
 
   private dispose(): void {
-    this.generation += 1;
     this.pages?.dispose();
     this.pages = undefined;
     this.source = undefined;

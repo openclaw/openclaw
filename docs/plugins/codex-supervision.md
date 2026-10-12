@@ -628,7 +628,9 @@ and accepts 1 through 1,000 rows per endpoint. It does not cap loaded rows.
 Without raw-transcript permission, list results omit transcript-derived names,
 previews, and detailed endpoint errors.
 `codex_session_read` requires `allowRawTranscripts`. `include_turns: true`
-additionally asks Codex for turns.
+additionally asks Codex for turns. Permitted session metadata and transcript
+content preserve tool arguments and results without secret masking. Endpoint
+configuration credentials remain masked.
 
 `codex_session_send` and `codex_session_interrupt` require
 `allowWriteControls`. Send accepts `mode: "auto" | "start" | "steer"`, but

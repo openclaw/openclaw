@@ -28,7 +28,8 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
-import { requireNodeSqlite } from "./node-sqlite.js";
+import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
+import { admitSqliteSchema } from "./sqlite-schema-facts.js";
 
 export const PREVIOUS_VERSION = 16;
 
@@ -67,8 +68,7 @@ export function createLegacyDatabaseFixture(params: {
     : openOpenClawAgentDatabase(options).path;
   closeOpenClawAgentDatabasesForTest();
   fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-  const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(databasePath);
+  const database = openNodeSqliteDatabase(databasePath);
   try {
     if (legacy) {
       seedOpenClawAgentSchemaV21(database, agentId);
@@ -86,6 +86,9 @@ export function createLegacyDatabaseFixture(params: {
         "UPDATE schema_meta SET schema_version = ?, app_version = ? WHERE meta_key = 'primary'",
       )
       .run(schemaVersion, "legacy-test");
+    if (!legacy) {
+      admitSqliteSchema(database);
+    }
     for (const [sessionId, events] of Object.entries(params.eventsBySession)) {
       const sessionKey = `agent:${agentId}:${sessionId}`;
       const firstTimestamp = Number(events[0]?.timestamp ?? 1);

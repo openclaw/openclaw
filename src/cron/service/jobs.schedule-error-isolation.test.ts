@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import type { CronJob } from "../types.js";
-import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
+import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.test-support.js";
 import {
   createCronServiceState,
   type CronServiceState,

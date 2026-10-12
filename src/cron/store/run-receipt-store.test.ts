@@ -378,9 +378,6 @@ describe("cron run receipt store", () => {
         }
       } finally {
         admission.close();
-        if (state.timer) {
-          state.timer.cancel();
-        }
         await finishCronRunReceiptAsync({
           handle: receipt,
           status: "ok",

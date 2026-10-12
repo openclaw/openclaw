@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   createOperationalRunInstanceRef,
   getAdmittedRunDelegatedAuthority,
@@ -8,7 +9,9 @@ import {
 import { hasActiveCronJobs } from "../../cron/active-jobs.js";
 import { CronService, type CronEvent } from "../../cron/service.js";
 import { setupCronServiceSuite } from "../../cron/service.test-harness.js";
+import * as cronServiceState from "../../cron/service/state.js";
 import type { CronServiceDeps } from "../../cron/service/state.js";
+import { onTimer } from "../../cron/service/timer.test-support.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -38,6 +41,7 @@ describe("cron self-removal", () => {
       const clock = createGatewaySchedulerClock(Date.now());
       const scheduler = createTestGatewayScheduler(clock.clock);
       const events: CronEvent[] = [];
+      const finished = createDeferred<CronEvent>();
       let abortedAfterRemoval: boolean | undefined;
       let activeAfterRemoval: boolean | undefined;
       const runJob = async ({
@@ -112,6 +116,14 @@ describe("cron self-removal", () => {
           admission.close();
         }
       };
+      let ownedState: ReturnType<typeof cronServiceState.createCronServiceState> | undefined;
+      const createState = cronServiceState.createCronServiceState;
+      const captureState = vi.spyOn(cronServiceState, "createCronServiceState");
+      captureState.mockImplementationOnce((deps) => {
+        captureState.mockRestore();
+        ownedState = createState(deps);
+        return ownedState;
+      });
       const cron = new CronService({
         scheduler,
         storePath,
@@ -120,7 +132,12 @@ describe("cron self-removal", () => {
         log: logger,
         enqueueSystemEvent: vi.fn(),
         requestHeartbeat: vi.fn(),
-        onEvent: (event) => events.push(event),
+        onEvent: (event) => {
+          events.push(event);
+          if (event.action === "finished") {
+            finished.resolve(event);
+          }
+        },
         runIsolatedAgentJob: runJob,
         runScriptJob: runJob,
       });
@@ -145,21 +162,21 @@ describe("cron self-removal", () => {
           await cron.run(job.id, "force");
         } else {
           await cron.start();
-          await clock.advanceBy(1_000);
+          clock.setTime(clock.clock.now() + 1_000);
+          await onTimer(expectDefined(ownedState, "constructed cron state"));
         }
-        await vi.waitFor(() => {
-          expect(events.filter((event) => event.action === "finished")).toEqual([
-            expect.objectContaining({
-              jobId: job.id,
-              status: "ok",
-              completionStatus: "succeeded",
-              summary: "final reply after self-cleanup",
-            }),
-          ]);
-          expect(abortedAfterRemoval).toBe(false);
-          expect(activeAfterRemoval).toBe(true);
-          expect(hasActiveCronJobs()).toBe(false);
-        });
+        await finished.promise;
+        expect(events.filter((event) => event.action === "finished")).toEqual([
+          expect.objectContaining({
+            jobId: job.id,
+            status: "ok",
+            completionStatus: "succeeded",
+            summary: "final reply after self-cleanup",
+          }),
+        ]);
+        expect(abortedAfterRemoval).toBe(false);
+        expect(activeAfterRemoval).toBe(true);
+        expect(hasActiveCronJobs()).toBe(false);
         expect(await cron.readJob(job.id)).toBeUndefined();
       } finally {
         cron.stop();

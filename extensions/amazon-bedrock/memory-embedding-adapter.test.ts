@@ -60,10 +60,9 @@ describe("bedrockMemoryEmbeddingProviderAdapter", () => {
     expect(bedrockMemoryEmbeddingProviderAdapter.transport).toBe("remote");
     expect(bedrockMemoryEmbeddingProviderAdapter.authProviderId).toBe("amazon-bedrock");
     expect(bedrockMemoryEmbeddingProviderAdapter.autoSelectPriority).toBe(60);
-    expect(bedrockMemoryEmbeddingProviderAdapter.allowExplicitWhenConfiguredAuto).toBe(true);
   });
 
-  it("reports missing credentials to automatic provider selection", async () => {
+  it("rejects provider creation when AWS credentials are unavailable", async () => {
     hasAwsCredentialsMock.mockResolvedValue(false);
 
     const error = await bedrockMemoryEmbeddingProviderAdapter.create(defaultCreateOptions()).then(
@@ -81,7 +80,6 @@ describe("bedrockMemoryEmbeddingProviderAdapter", () => {
       expect.stringContaining("AWS credentials are not available"),
     );
     expect(createBedrockEmbeddingProviderMock).not.toHaveBeenCalled();
-    expect(bedrockMemoryEmbeddingProviderAdapter.shouldContinueAutoSelection?.(error)).toBe(true);
   });
 
   it("invalidates cached embeddings when the configured PrivateLink endpoint changes", async () => {

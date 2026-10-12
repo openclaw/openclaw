@@ -1,5 +1,6 @@
 import {
   getSessionActorStorageBinding,
+  captureSessionActorStorageOwner,
   runWithSessionActorStorage,
   type SessionActorStorageBinding,
 } from "../config/sessions/session-actor-storage-binding.js";
@@ -97,27 +98,28 @@ export function captureAgentHarnessCompletionCustody(
         }
       };
       try {
-        if (selected.agentId !== scope.requesterAgentId) {
-          return undefined;
-        }
         let memory: SessionActorStorageBinding | undefined =
           selected.actor.target.sessionKey === scope.requesterSessionKey ? selected : undefined;
         if (!memory) {
-          if (
-            !selected.actor.storage.readCurrent(
-              { type: "session.entry.read", input: { sessionKey: scope.requesterSessionKey } },
-              selected.authority,
-            )
-          ) {
+          const captured = captureSessionActorStorageOwner({
+            sessionKey: scope.requesterSessionKey,
+            agentId: scope.requesterAgentId,
+          });
+          if (!captured?.owner) {
             return undefined;
           }
-          const actor = await selected.actor.storage.acquire(scope.requesterSessionKey, {
-            assertCurrent: () => selected.authority.assertCurrent(),
-            assertReadable: () => selected.authority.assertCurrent(),
+          const actor = await captured.owner.acquireExisting(scope.requesterSessionKey, {
+            assertCurrent: () => captured.authority.assertCurrent(),
+            assertReadable: () => captured.authority.assertCurrent(),
           });
+          if (!actor) {
+            return undefined;
+          }
           memory = acquired = {
-            ...selected,
             actor,
+            authority: captured.authority,
+            agentId: captured.agentId,
+            path: captured.path,
           };
         }
         const requester = memory;

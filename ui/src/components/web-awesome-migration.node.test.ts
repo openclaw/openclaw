@@ -57,7 +57,6 @@ describe("shared control ownership", () => {
       "components/command-palette-view.ts",
       "components/multi-select.ts",
       "components/select-picker.ts",
-      "components/session-group-defaults-dialog.ts",
       "pages/chat/components/chat-composer-menu.ts",
       "pages/chat/components/chat-model-account-control.ts",
       "pages/chat/components/chat-model-picker-options.ts",

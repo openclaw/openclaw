@@ -466,9 +466,13 @@ describe("gateway WebSocket chat abort ownership", () => {
     },
   );
 
-  test.for([false, true])(
-    "keeps a signal-only lifecycle terminal as the only chat terminal (restart=%s)",
-    async (restart, { signal }) => {
+  test.for([
+    { restart: false, runtimeTerminal: true },
+    { restart: true, runtimeTerminal: true },
+    { restart: false, runtimeTerminal: false },
+  ])(
+    "retains signal-only interruption (restart=$restart, runtime terminal=$runtimeTerminal)",
+    async ({ restart, runtimeTerminal }, { signal }) => {
       const sessionDirectory = temporaryDirectories.make("openclaw-chat-lifecycle-interrupt-");
       const storePath = path.join(sessionDirectory, "sessions.json");
       testState.sessionStorePath = storePath;
@@ -478,10 +482,9 @@ describe("gateway WebSocket chat abort ownership", () => {
       const dispatchEntered = createDeferred<AbortSignal>();
       const dispatchRelease = createDeferred();
       const dispatchRejected = createDeferred();
-      const reason = restart
-        ? createAgentRunRestartAbortError()
-        : new Error("Session work admission interrupted");
-      const runId = `real-websocket-signal-only-lifecycle-terminal-${restart}`;
+      const reason = restart ? createAgentRunRestartAbortError() : createAgentRunDirectAbortError();
+      const runId = `real-websocket-signal-only-lifecycle-terminal-${restart}-${runtimeTerminal}`;
+      const terminalState = runtimeTerminal ? "aborted" : "error";
       const terminalStates = trackChatTerminalStates(socket, runId);
       let interruption: Promise<boolean> | undefined;
 
@@ -532,10 +535,11 @@ describe("gateway WebSocket chat abort ownership", () => {
             frame.type === "event" &&
             frame.event === "chat" &&
             frame.payload?.runId === runId &&
-            frame.payload?.state === "aborted",
+            frame.payload?.state === terminalState,
           2_000,
         );
-        expect(
+        const published =
+          runtimeTerminal &&
           emitAgentEventIfCurrent({
             runId,
             stream: "lifecycle",
@@ -549,21 +553,34 @@ describe("gateway WebSocket chat abort ownership", () => {
               aborted: true,
               stopReason: restart ? "restart" : "aborted",
             },
-          }),
-        ).toBe(true);
-        await expect(abortedFrame).resolves.toMatchObject({
-          payload: { runId, state: "aborted" },
-        });
+          });
+        expect(published).toBe(runtimeTerminal);
+        if (runtimeTerminal) {
+          await abortedFrame;
+        }
 
         dispatchRelease.resolve();
         await withinTest(dispatchRejected.promise, signal);
         await expect(interruption).resolves.toBe(true);
+        await expect(abortedFrame).resolves.toMatchObject({
+          payload: { runId, state: terminalState },
+        });
+        if (!runtimeTerminal) {
+          const settled = await rpcReq(socket, "agent.wait", { runId, timeoutMs: 1_000 });
+          expect(settled.ok).toBe(true);
+          expect(settled.payload).toMatchObject({
+            runId,
+            status: "error",
+            stopReason: "aborted",
+            endedAt: expect.any(Number),
+          });
+        }
 
         // The history RPC response follows every previously emitted chat
         // event on this socket, so it exposes any contradictory late terminal.
         const barrier = await rpcReq(socket, "chat.history", { sessionKey: "main" });
         expect(barrier.ok).toBe(true);
-        expect(terminalStates).toEqual(["aborted"]);
+        expect(terminalStates).toEqual([terminalState]);
       } finally {
         dispatchRelease.resolve();
         await interruption?.catch(() => undefined);

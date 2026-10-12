@@ -152,6 +152,9 @@ Committed auth writes, unclassified database writes, and runtime snapshot reload
 invalidate those rows immediately. Writes certified as session-only preserve
 the same immutable rows without reading or freezing them again. Each request
 retains its own live read authority; cache reuse cannot revive a revoked reader.
+An auth read prepared before an agent database exists stays empty if the first
+session creates that database. A later read observes the new file; replacement
+of an already captured file still invalidates its read.
 Scoped overlays, migration refusals,
 and personal-account selection still run on each request. Isolated agent scopes
 and private database snapshots do not share this cache. Gateway cache misses reuse

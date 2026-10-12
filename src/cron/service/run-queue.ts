@@ -18,7 +18,6 @@ import {
   listLocallyOwnedCronRunReceiptIds,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
-import { createCronScheduledRunId } from "../store/run-request-id.js";
 import { ownsStreamSource } from "../stream-schedule.js";
 import type { CronJob } from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
@@ -115,68 +114,21 @@ function watchCronRunCancellation(state: CronServiceState, pending: CronLaunchCo
   }
 }
 
-export async function commitCronRunRequests(
+/** Adopt committed worker requests without taking ownership of queue order or capacity. */
+export function adoptCronRunRequests(
   state: CronServiceState,
-  jobs: readonly CronJob[],
+  accepted: CronQueuedRun[],
   options: RunOptions,
-): Promise<RequestedCronRun[]> {
-  if (state.stopped || jobs.length === 0) {
-    return [];
-  }
-  const source = captureCronServiceMutationSource(state);
-  const nowMs = state.deps.nowMs();
-  const generation = state.lifecycleGeneration;
-  const manual = options.source === "manual" || options.source === "event";
-  const candidates = await skipCronJobsWithoutOwners(state, [...jobs], nowMs, {
-    source,
-    ...(isImmediateCronRunMode(options.mode) ? { scheduleMode: "preserve" as const } : {}),
-    ...(manual ? { manualRun: options } : {}),
-  });
-  source.assertCurrent();
-  options.commitGuard?.();
-  const requests = candidates.map((job) => {
-    const receiptId = manual
-      ? (options.runId ?? `cron-request.${randomUUID()}`)
-      : createCronScheduledRunId(source.storeKey, job.id, job.state.nextRunAtMs!);
-    return {
-      receiptId,
-      jobId: job.id,
-      configRevision: resolveCronJobConfigRevision(job),
-      mode: options.onExit
-        ? ("on-exit" as const)
-        : manual
-          ? options.mode === "force"
-            ? ("force" as const)
-            : ("if-enabled" as const)
-          : ("scheduled" as const),
-      scheduledSlotMs: manual ? undefined : job.state.nextRunAtMs,
-      onExitSchedule: options.onExit?.schedule,
-      preserveSchedule: isImmediateCronRunMode(options.mode),
-      scheduleOwnershipAtMs: options.scheduleOwnershipAtMs ?? nowMs,
-      requestRunId: manual ? (options.runId ?? receiptId) : undefined,
-    };
-  });
-  const markCommitted = manual ? captureCronMutationCommit("cron.run") : undefined;
-  const result = await runOpenClawStateWorkerOperation(source.context, (scope) => {
-    source.assertCurrent();
-    options.commitGuard?.();
-    return scope.execute({
-      type: "cron.requestRuns",
-      input: {
-        storeKey: source.storeKey,
-        nowMs,
-        defaultAgentId: resolveCurrentDefaultAgentId(state),
-        requests,
-      },
-    });
-  });
+  context = captureOpenClawStateWorkerContext(),
+  generation = state.lifecycleGeneration,
+): RequestedCronRun[] {
   const batch = { notified: false };
-  const accepted = result.accepted.map((entry) => {
+  return accepted.map((entry) => {
     const launch: CronLaunchContext = {
       receipt: entry.runReceipt,
-      context: source.context,
+      context,
       options: Object.assign({}, options, {
-        scheduleOwnershipAtMs: options.scheduleOwnershipAtMs ?? nowMs,
+        scheduleOwnershipAtMs: options.scheduleOwnershipAtMs ?? entry.runReceipt.startedAtMs,
       }),
       generation,
       batch,
@@ -193,6 +145,64 @@ export async function commitCronRunRequests(
       activation: launch.activation.promise,
     });
   });
+}
+
+export async function commitCronRunRequests(
+  state: CronServiceState,
+  jobs: readonly CronJob[],
+  options: ManualRunOptions & { mode?: CronRunMode; source: "manual" },
+): Promise<RequestedCronRun[]> {
+  if (state.stopped || jobs.length === 0) {
+    return [];
+  }
+  const source = captureCronServiceMutationSource(state);
+  const nowMs = state.deps.nowMs();
+  const generation = state.lifecycleGeneration;
+  const candidates = await skipCronJobsWithoutOwners(state, [...jobs], nowMs, {
+    source,
+    ...(isImmediateCronRunMode(options.mode) ? { scheduleMode: "preserve" as const } : {}),
+    manualRun: options,
+  });
+  source.assertCurrent();
+  options.commitGuard?.();
+  const requests = candidates.map((job) => {
+    const receiptId = options.runId ?? `cron-request.${randomUUID()}`;
+    return {
+      receiptId,
+      jobId: job.id,
+      configRevision: resolveCronJobConfigRevision(job),
+      mode: options.onExit
+        ? ("on-exit" as const)
+        : options.mode === "force"
+          ? ("force" as const)
+          : ("if-enabled" as const),
+      onExitSchedule: options.onExit?.schedule,
+      preserveSchedule: isImmediateCronRunMode(options.mode),
+      scheduleOwnershipAtMs: options.scheduleOwnershipAtMs ?? nowMs,
+      requestRunId: options.runId ?? receiptId,
+    };
+  });
+  const markCommitted = captureCronMutationCommit("cron.run");
+  const result = await runOpenClawStateWorkerOperation(source.context, (scope) => {
+    source.assertCurrent();
+    options.commitGuard?.();
+    return scope.execute({
+      type: "cron.requestRuns",
+      input: {
+        storeKey: source.storeKey,
+        nowMs,
+        defaultAgentId: resolveCurrentDefaultAgentId(state),
+        requests,
+      },
+    });
+  });
+  const accepted = adoptCronRunRequests(
+    state,
+    result.accepted,
+    options,
+    source.context,
+    generation,
+  );
   if (accepted.length > 0) {
     markCommitted?.();
     noteCronJobsStoreCommit(source.storeKey);
@@ -203,16 +213,6 @@ export async function commitCronRunRequests(
     options.onExit?.onReserved();
   }
   return accepted;
-}
-
-export async function requestCronRuns(
-  state: CronServiceState,
-  jobs: readonly CronJob[],
-  options: RunOptions = {},
-): Promise<RequestedCronRun[]> {
-  const requested = await locked(state, () => commitCronRunRequests(state, jobs, options));
-  await drainCronRunQueue(state);
-  return requested;
 }
 
 async function publishSkipped(state: CronServiceState, skipped: CronSkippedRequest) {

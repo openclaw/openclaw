@@ -46,7 +46,7 @@ export async function createOperatorApprovalsGatewayClient(
     token: bootstrap.auth.token,
     password: bootstrap.auth.password,
     ...(sendsApprovalRuntimeToken
-      ? { approvalRuntimeToken: getOperatorApprovalRuntimeToken() }
+      ? { approvalRuntimeToken: await getOperatorApprovalRuntimeToken() }
       : {}),
     preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs,
     tlsFingerprint: bootstrap.tlsFingerprint,

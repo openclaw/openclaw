@@ -10,15 +10,14 @@ import {
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.js";
 import { readSessionTranscriptBoundedMessageTailPageFromProjection } from "../config/sessions/session-accessor.sqlite-active-events-read.js";
-import { readActivePathEntryRelationFromProjection } from "../config/sessions/session-accessor.sqlite-active-events.js";
 import { withCurrentProjectionSnapshot } from "../config/sessions/session-accessor.sqlite-active-projection.js";
 import {
   prepareSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { readActivePathEntryRelationFromProjection } from "../config/sessions/session-accessor.sqlite-transcript-anchor.js";
 import { resolveSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import { startSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import {
   extractAssistantPhaseText,
@@ -129,9 +128,7 @@ export async function readActivitySummarySource(
             ? (extractAssistantPhaseText(message) ??
               extractAssistantTextForPhase(message, { phase: "commentary" }))
             : extractTextFromChatContent(message.content);
-        const cleaned = redactToolPayloadText(text ?? "")
-          .replace(/\s+/gu, " ")
-          .trim();
+        const cleaned = (text ?? "").replace(/\s+/gu, " ").trim();
         if (!cleaned) {
           return [];
         }

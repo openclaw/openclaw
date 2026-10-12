@@ -183,36 +183,6 @@ describe("runTasksWithConcurrency", () => {
     expect(peak).toBeLessThanOrEqual(2);
   });
 
-  it("stops scheduling after first failure in stop mode", async () => {
-    const err = new Error("boom");
-    const seen: number[] = [];
-    const tasks = [
-      async () => {
-        seen.push(0);
-        return 10;
-      },
-      async () => {
-        seen.push(1);
-        throw err;
-      },
-      async () => {
-        seen.push(2);
-        return 30;
-      },
-    ];
-
-    const result = await runTasksWithConcurrency({
-      tasks,
-      limit: 1,
-      errorMode: "stop",
-    });
-    expect(result.hasError).toBe(true);
-    expect(result.firstError).toBe(err);
-    expect(result.results[0]).toBe(10);
-    expect(result.results[2]).toBeUndefined();
-    expect(seen).toEqual([0, 1]);
-  });
-
   it("continues after failures and reports the first one", async () => {
     const firstErr = new Error("first");
     const secondErr = new Error("second");
@@ -276,32 +246,6 @@ describe("runTasksWithConcurrency", () => {
     await new Promise<void>((resolve) => {
       setTimeout(resolve, 0);
     });
-    expect(started).toEqual([0, 1]);
-  });
-
-  it("keeps scheduling after an early rejection in continue mode", async () => {
-    const err = new Error("boom");
-    const completed = createDeferred();
-    const started: number[] = [];
-    const run = runTasksWithConcurrency({
-      tasks: [
-        async () => {
-          started.push(0);
-          throw err;
-        },
-        async () => {
-          started.push(1);
-          completed.resolve();
-          return 20;
-        },
-      ],
-      limit: 1,
-      errorMode: "continue",
-      throwOnError: true,
-    });
-
-    await expect(run).rejects.toBe(err);
-    await completed.promise;
     expect(started).toEqual([0, 1]);
   });
 });

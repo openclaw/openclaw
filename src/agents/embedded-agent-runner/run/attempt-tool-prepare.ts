@@ -24,6 +24,8 @@ import type { CodeModeSkill } from "../../code-mode-skills.js";
 import { loadPairedComputerUseAvailabilityForSurface } from "../../computer-use-node-capabilities.js";
 import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
 import { projectConversationToolNames } from "../../conversation-tool-policy-pipeline.js";
+import { gateBoundTool } from "../../harness/host-bound-tool.js";
+import { isWorkspaceTool } from "../../harness/host-capability-workspace.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../../harness/tool-surface-bridge.js";
 import {
   isLocalModelLeanEnabled,
@@ -47,6 +49,7 @@ import type {
   CronCreatorToolAllowlistEntry,
   CronToolsAllowCaptureRef,
 } from "../../tools/cron-tool.js";
+import { captureAgentWorkspaceReadiness } from "../../workspace-readiness.js";
 import { log } from "../logger.js";
 import { createAttemptNestedToolActivityState } from "./attempt-nested-tool-activity.js";
 import type { EmbeddedAttemptSetup } from "./attempt-setup.js";
@@ -82,6 +85,29 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor;
 }) {
   const { attempt } = params;
+  const workspaceReadiness = captureAgentWorkspaceReadiness(attempt.sessionKey);
+  const captureBaseline = attempt.awaitSessionDiffBaseline;
+  const assertBaselineSource = captureBaseline
+    ? resolveAdmittedRunActiveAssertion(
+        attempt.admittedRunContext,
+        params.runAbortController.signal,
+      )
+    : undefined;
+  const awaitSessionDiffBaseline = captureBaseline
+    ? async () => {
+        try {
+          if (!assertBaselineSource) {
+            throw new Error("session attribution requires active admitted run authority");
+          }
+          assertBaselineSource();
+          await captureBaseline();
+          assertBaselineSource();
+        } catch (error) {
+          params.runAbortController.abort(error);
+          throw error;
+        }
+      }
+    : undefined;
   const completionCheck = attempt.completionCheck;
   const requireExplicitMessageTarget =
     attempt.requireExplicitMessageTarget ?? isSubagentSessionKey(attempt.sessionKey);
@@ -278,6 +304,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       [];
     if (shouldConstructTools) {
       const codingToolOptions: OpenClawCodingToolsOptions = {
+        awaitSessionDiffBaseline,
         agentId: params.setup.sessionAgentId,
         ...buildConversationContext(),
         exec: {
@@ -367,6 +394,10 @@ export async function prepareEmbeddedAttemptToolBase(params: {
           : undefined,
         onYield: params.onYield,
       };
+      const assertActive = resolveAdmittedRunActiveAssertion(
+        attempt.admittedRunContext,
+        abortSignal,
+      );
       const allTools = await createOpenClawCodingToolsInternalAsync(
         codingToolOptions,
         params.skillReadResources,
@@ -374,14 +405,23 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         undefined,
         {
           reader: getReplyOperationSessionReader(attempt.replyOperation),
-          assertCurrent: resolveAdmittedRunActiveAssertion(attempt.admittedRunContext, abortSignal),
+          assertCurrent: assertActive,
         },
       );
-      // The built-in harness retains its existing authoritative wrappers.
-      // Only plugin harnesses receive and require the projected host capability.
-      const boundTools = attempt.hostCapabilities
-        ? attempt.hostCapabilities.bindToolSurface(allTools)
-        : allTools;
+      // Built-in tools retain their own authority wrappers; both harness paths share readiness.
+      let boundTools = allTools;
+      if (attempt.hostCapabilities) {
+        boundTools = attempt.hostCapabilities.bindToolSurface(allTools);
+      } else if (workspaceReadiness) {
+        if (!assertActive) {
+          throw new Error("Workspace tools require active run authority");
+        }
+        boundTools = allTools.map((tool) =>
+          isWorkspaceTool(tool)
+            ? gateBoundTool(tool, assertActive, () => {}, workspaceReadiness)
+            : tool,
+        );
+      }
       params.markCoreToolStage("attempt:create-openclaw-coding-tools");
       constructedToolsRaw = applyEmbeddedAttemptToolsAllow(boundTools, effectiveToolsAllow, {
         toolMeta: (tool) => getPluginToolMeta(tool),
@@ -421,6 +461,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     const toolsRaw = await constructTools(params.setup.sessionPermissionPolicy, toolAbortSignal);
     return {
       toolHookContext: {
+        awaitSessionDiffBaseline,
         agentId: params.setup.sessionAgentId,
         config: attempt.config,
         cwd: params.setup.effectiveCwd,

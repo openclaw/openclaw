@@ -122,7 +122,14 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
         : null,
     supportsAction: ({ action }) => action === "send",
     extractToolSend: ({ args }) => extractToolSend(args, "sendMessage"),
-    handleAction: async ({ action, params, cfg, accountId, assertDirectAdapterHandoff }) => {
+    handleAction: async ({
+      action,
+      params,
+      cfg,
+      accountId,
+      sessionKey,
+      assertDirectAdapterHandoff,
+    }) => {
       if (action !== "send") {
         throw new Error(`X does not support ${action}.`);
       }
@@ -133,6 +140,7 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
         text: readStringParam(params, "message", { required: true }),
         mediaUrl: readStringParam(params, "media"),
         assertDirectAdapterHandoff,
+        sessionKey,
       });
       return jsonResult({ ok: true, messageId: result.messageId });
     },

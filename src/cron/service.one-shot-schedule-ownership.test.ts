@@ -8,12 +8,16 @@ import {
 } from "../test-utils/gateway-scheduler-clock.js";
 import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
 import { CronService } from "./service.js";
-import { setupCronServiceSuite } from "./service.test-harness.js";
+import {
+  createCronServiceWithStateForTest,
+  setupCronServiceSuite,
+} from "./service.test-harness.js";
 import type { CronEvent, CronServiceDeps } from "./service/state.js";
 import {
   DEFAULT_STARTUP_DEFERRED_MISSED_AGENT_JOB_DELAY_MS,
   MIN_REFIRE_GAP_MS,
 } from "./service/timer-execution-timeout.js";
+import { onTimer } from "./service/timer.test-support.js";
 import { loadCronStore, saveCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
 import type { CronJob } from "./types.js";
@@ -39,7 +43,7 @@ function createCron(params: {
   runCommandJob?: CronServiceDeps["runCommandJob"];
   onEvent?: (event: CronEvent) => void;
 }) {
-  return new CronService({
+  return createCronServiceWithStateForTest({
     scheduler: createTestGatewayScheduler(clock.clock),
     storePath,
     cronEnabled: true,
@@ -119,12 +123,13 @@ async function addOneShot(params: {
   });
 }
 
-async function expectFutureOneShot(params: {
+async function expectOneShotState(params: {
   cron: CronService;
   jobId: string;
   atMs: number;
   status: IsolatedOutcome["status"];
   enabled?: boolean;
+  nextRunAtMs: number | undefined;
 }) {
   const expected = {
     id: params.jobId,
@@ -141,7 +146,7 @@ async function expectFutureOneShot(params: {
   ]) {
     const job = jobs.find((entry) => entry.id === params.jobId);
     expect(job).toMatchObject(expected);
-    expect(job?.state.nextRunAtMs).toBe(params.enabled === false ? undefined : params.atMs);
+    expect(job?.state.nextRunAtMs).toBe(params.nextRunAtMs);
     expect(job?.state.runningAtMs).toBeUndefined();
   }
   const history = readCronRunHistoryPageForTests({
@@ -167,7 +172,7 @@ describe("cron one-shot schedule ownership", () => {
       const release = createDeferred<{ status: "ok"; summary: string }>();
       const finished = createDeferred();
       const events: CronEvent[] = [];
-      const cron = createCron({
+      const { cron } = createCron({
         runIsolatedAgentJob: vi.fn(async () => {
           started.resolve();
           return await release.promise;
@@ -311,7 +316,7 @@ describe("cron one-shot schedule ownership", () => {
           }
         },
       };
-      let cron = createCron(options);
+      let { cron } = createCron(options);
 
       let releaseBlockers: (() => Promise<void>) | undefined;
 
@@ -338,24 +343,27 @@ describe("cron one-shot schedule ownership", () => {
         await withinTest(finished.promise, signal);
         await cron.status();
 
-        await expectFutureOneShot({
+        await expectOneShotState({
           cron,
           jobId: job.id,
           atMs,
           status: "ok",
           enabled,
+          nextRunAtMs: enabled ? atMs : undefined,
         });
         if (!enabled) {
           cron.stop();
-          cron = createCron(options);
+          const { cron: restarted, state } = createCron(options);
+          cron = restarted;
           cron.pauseScheduling();
           await cron.start();
-          await expectFutureOneShot({
+          await expectOneShotState({
             cron,
             jobId: job.id,
             atMs,
             status: "ok",
             enabled,
+            nextRunAtMs: enabled ? atMs : undefined,
           });
           if (editSchedule) {
             await cron.update(job.id, { schedule: { kind: "every", everyMs: 60_000 } });
@@ -369,6 +377,7 @@ describe("cron one-shot schedule ownership", () => {
           expect(resumed.state.nextRunAtMs).toBe(editSchedule ? undefined : atMs);
           cron.resumeScheduling();
           await clock.advanceBy(MIN_REFIRE_GAP_MS);
+          await onTimer(state);
           if (!editSchedule) {
             await withinTest(removed.promise, signal);
           }
@@ -417,7 +426,7 @@ describe("cron one-shot schedule ownership", () => {
           }
         },
       };
-      let cron = createCron(options);
+      let { cron } = createCron(options);
       let releaseBlockers: (() => Promise<void>) | undefined;
 
       try {
@@ -451,15 +460,19 @@ describe("cron one-shot schedule ownership", () => {
         releasePayload.resolve();
         await withinTest(finished.promise, signal);
         expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
-        await expectFutureOneShot({
+        await expectOneShotState({
           cron,
           jobId: job.id,
           atMs,
           status: "ok",
+          // Worker maintenance observes terminal receipts immediately; only an
+          // unchanged borrowed occurrence survives completion and restart.
+          nextRunAtMs: editSchedule ? undefined : atMs,
         });
 
         cron.stop();
-        cron = createCron(options);
+        const { cron: restarted, state } = createCron(options);
+        cron = restarted;
         await cron.start();
         if (editSchedule) {
           expect(cron.getJob(job.id)?.state.nextRunAtMs).toBeUndefined();
@@ -469,6 +482,7 @@ describe("cron one-shot schedule ownership", () => {
         await clock.advanceBy(
           DEFAULT_STARTUP_DEFERRED_MISSED_AGENT_JOB_DELAY_MS + MIN_REFIRE_GAP_MS,
         );
+        await onTimer(state);
         if (!editSchedule) {
           await withinTest(scheduledOccurrenceConsumed.promise, signal);
         }

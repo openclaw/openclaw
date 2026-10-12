@@ -10,6 +10,28 @@ title: "Managed worktrees"
 
 Managed worktrees give an agent task its own git branch and checkout without placing temporary directories inside the source repository. OpenClaw records them in the shared state database and snapshots their tracked and non-ignored untracked contents before ordinary removal. [Capacity eviction](#capacity-and-eviction) can purge unsaved data when a snapshot cannot be made.
 
+When a new chat starts a managed worktree, OpenClaw can begin the first model
+turn while the checkout finishes. It first prepares the project instructions,
+workspace skills, and other prompt files from the selected Git commit in the
+final worktree directory. The initial prompt therefore uses the same paths and
+contents as a completed checkout. Workspace tools, including PDF analysis,
+local message attachments, and generation tools reading local references, wait for checkout and the session's
+initial diff baseline. Tools that do not use the workspace can run immediately,
+including generation with inline or remote references. Completion also waits
+for preparation, and a preparation failure ends the turn with a retryable error.
+
+Repositories with setup scripts, included files, unsupported checkout transforms,
+or project configuration that needs additional files finish preparation before
+the first turn starts. Active bootstrap hooks, including `bootstrap-extra-files`,
+also retain complete preparation so configured instructions remain available.
+Sandboxed projections require a fully published worktree before startup, as do
+required remote-worker placements. Codex configurations without native tool-hook
+admission and plugins that read workspace files while constructing tools wait for
+preparation before starting their model turn. An explicitly
+requested worktree name or existing session title can name the checkout.
+Otherwise, allocation chooses a short generated name while display-title
+generation runs in the background.
+
 Pull-request statistics may refresh Git's cached file timestamps in a managed
 checkout; they do not stage content or change commits. Statistics for user-managed
 checkouts keep their index unchanged.
@@ -363,7 +385,7 @@ If **New session** reports `git worktree add failed`, read the termination reaso
 
 `timed out after 300 seconds` means a worktree checkout reached its five-minute limit. Other Git commands report `timed out after 120 seconds` at their two-minute limit. Check repository access and available disk space on the Gateway host. A signal or nonzero exit status alone does not establish a timeout; use any accompanying `fatal:` or `error:` detail to investigate. An output-limit error means the command exceeded its output capture limit.
 
-If allocation ownership is lost while fetching objects before checkout files are written, OpenClaw reacquires cleanup custody and removes its unchanged, unprepared checkout and branch so the same session can retry. Changed or materialized checkouts remain preserved. Before another creation attempt after a cleanup failure, inspect `git -C <repo-root> worktree list` and `git -C <repo-root> branch --list 'openclaw/*'` for partial state. A failed creation does not guarantee that its checkout and branch were removed. Do not delete a checkout or branch without checking whether it contains work you need.
+If allocation ownership is lost during creation, cleanup is best effort. Without cleanup authority, OpenClaw preserves the checkout and branch; manual cleanup or another worktree name may be required. Before another creation attempt after a cleanup failure, inspect `git -C <repo-root> worktree list` and `git -C <repo-root> branch --list 'openclaw/*'` for partial state. A failed creation does not guarantee that its checkout and branch were removed. Do not delete a checkout or branch without checking whether it contains work you need.
 
 If a checkout's `.git` link points to missing administrative files, OpenClaw preserves its files and refuses to reuse it. Restore the original repository metadata before using `git worktree repair` from that repository. A different clone with the same remote URL does not recover the missing index or unpushed history; do not replace the link or rebuild the index without verifying the original metadata.
 

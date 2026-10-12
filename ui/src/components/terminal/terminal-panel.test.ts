@@ -24,7 +24,7 @@ import {
 } from "./terminal-panel.test-support.ts";
 import { TerminalPanelController, type OpenClawTerminalPanel } from "./terminal-panel.ts";
 const tabStripStyles = readFileSync(
-  path.resolve(import.meta.dirname, "../panel-tab-strip-solid.css"),
+  path.resolve(import.meta.dirname, "../panel-tab-strip.css"),
   "utf8",
 );
 

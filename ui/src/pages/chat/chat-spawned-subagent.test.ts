@@ -10,7 +10,7 @@ import {
   resolveSpawnedSubagent,
   spawnedSubagentsRenderKey,
 } from "./chat-spawned-subagent.ts";
-import { selectActivityHeadline } from "./components/chat-activity-headline.ts";
+import { selectActivityHeadline } from "./components/chat-activity-headline-selection.ts";
 import { renderActivityGroup } from "./components/chat-message-group.ts";
 import {
   createAssistantMessage,

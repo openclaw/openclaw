@@ -1545,6 +1545,9 @@ CREATE TABLE IF NOT EXISTS delivery_queue_entries (
   recovery_state TEXT,
   platform_send_started_at INTEGER,
   entry_json TEXT NOT NULL,
+  retention_id_prefix TEXT,
+  retention_max_age_ms INTEGER,
+  retention_max_entries INTEGER,
   enqueued_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   failed_at INTEGER,
@@ -1564,6 +1567,11 @@ CREATE INDEX IF NOT EXISTS idx_delivery_queue_session
 CREATE INDEX IF NOT EXISTS idx_delivery_queue_target
   ON delivery_queue_entries(queue_name, status, channel, target, enqueued_at, id)
   WHERE channel IS NOT NULL AND target IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_delivery_queue_bounded_retention
+  ON delivery_queue_entries(queue_name, retention_id_prefix, enqueued_at DESC, id DESC)
+  WHERE status IN ('completed', 'failed') AND recovery_state = 'completed_bounded'
+    AND retention_id_prefix IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS task_runs (
   task_id TEXT NOT NULL PRIMARY KEY,
@@ -1715,8 +1723,15 @@ CREATE TABLE IF NOT EXISTS meeting_transcript_sessions (
   provider_id TEXT NOT NULL,
   title TEXT,
   source_json TEXT NOT NULL,
+  source_account_id TEXT,
+  source_guild_id TEXT,
+  source_channel_id TEXT,
+  source_meeting_url TEXT,
+  source_thread_ts TEXT,
+  source_file_id TEXT,
   stopped_at TEXT,
   metadata_json TEXT,
+  metadata_agent_id TEXT,
   export_manifest_json TEXT NOT NULL DEFAULT '{}',
   export_pending_json TEXT NOT NULL DEFAULT '[]',
   next_utterance_seq INTEGER NOT NULL DEFAULT 0 CHECK (next_utterance_seq >= 0),
@@ -1736,6 +1751,17 @@ CREATE INDEX IF NOT EXISTS idx_meeting_transcript_sessions_slug
 
 CREATE INDEX IF NOT EXISTS idx_meeting_transcript_sessions_export_key
   ON meeting_transcript_sessions(export_key);
+
+CREATE INDEX IF NOT EXISTS idx_meeting_transcript_sessions_source
+  ON meeting_transcript_sessions(provider_id, source_account_id, source_guild_id,
+    source_channel_id, source_meeting_url, source_thread_ts, source_file_id,
+    stopped_at DESC, started_at DESC, session_id);
+
+CREATE INDEX IF NOT EXISTS idx_meeting_transcript_sessions_account
+  ON meeting_transcript_sessions(source_account_id);
+
+CREATE INDEX IF NOT EXISTS idx_meeting_transcript_sessions_agent
+  ON meeting_transcript_sessions(metadata_agent_id);
 
 CREATE TABLE IF NOT EXISTS meeting_transcript_utterances (
   session_id TEXT NOT NULL,
@@ -1764,6 +1790,7 @@ CREATE TABLE IF NOT EXISTS meeting_transcript_summaries (
   session_started_at TEXT NOT NULL,
   generated_at TEXT,
   summary_json TEXT,
+  overview TEXT,
   markdown TEXT,
   utterance_count INTEGER NOT NULL CHECK (utterance_count >= 0),
   PRIMARY KEY (session_id, session_started_at),

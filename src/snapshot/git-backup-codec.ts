@@ -642,7 +642,7 @@ export async function restoreGitBackupDirectory(params: {
     applyPrivateModeSync(stagedPath, 0o600);
     const artifact = await hashSnapshotArtifact(stagingDirectory);
     await publishVerifiedSqliteFile({
-      sourceIdentity: artifact.stat,
+      sourceIdentity: artifact.identity,
       sourcePath: stagedPath,
       targetPath,
       expectedContent: artifact,

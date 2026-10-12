@@ -14,7 +14,6 @@ import {
   publishSessionEntryCacheInvalidation,
   trackSessionEntryCacheWrite,
 } from "./session-accessor.sqlite-entry-cache.js";
-import { readSessionEntryInstanceId } from "./session-accessor.sqlite-entry-identity.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import { readIncognitoSessionEntryCurrent } from "./session-accessor.sqlite-incognito-sharing.js";
 import { hasSqliteSessionOwnerColumns } from "./session-accessor.sqlite-owner-projection.js";
@@ -61,6 +60,7 @@ export function replaceSessionOwnerInTransaction(
   sessionKey: string,
   owner: SessionOwnerAssignment | undefined,
   postimages?: SessionEntryWritePostimages,
+  expectedSessionId?: string,
 ): boolean {
   if (!hasSqliteSessionOwnerColumns(database.db)) {
     if (!owner?.actor.id) {
@@ -73,27 +73,30 @@ export function replaceSessionOwnerInTransaction(
   let updated: { current_session_id: string; lifecycle_revision: string | null } | undefined;
   const writeGeneration = trackSessionEntryCacheWrite(database, () =>
     withSqliteDatabaseWriteScope(database.db, [sessionKey], () => {
+      const query = getSessionKysely(database.db)
+        .updateTable("session_nodes")
+        .set({
+          owner_actor_type: owner?.actor.type ?? null,
+          owner_actor_id: owner?.actor.id ?? null,
+          owner_assigned_by_type: owner?.assignedBy?.type ?? null,
+          owner_assigned_by_id: owner?.assignedBy?.id ?? null,
+          owner_assigned_at: owner?.assignedAt ?? null,
+        })
+        .where("session_key", "=", sessionKey)
+        .returning((eb) => [
+          "current_session_id",
+          eb
+            .fn<string | null>("json_extract", [
+              eb.ref("entry_json"),
+              eb.val("$.lifecycleRevision"),
+            ])
+            .as("lifecycle_revision"),
+        ]);
       updated = executeSqliteQuerySync(
         database.db,
-        getSessionKysely(database.db)
-          .updateTable("session_nodes")
-          .set({
-            owner_actor_type: owner?.actor.type ?? null,
-            owner_actor_id: owner?.actor.id ?? null,
-            owner_assigned_by_type: owner?.assignedBy?.type ?? null,
-            owner_assigned_by_id: owner?.assignedBy?.id ?? null,
-            owner_assigned_at: owner?.assignedAt ?? null,
-          })
-          .where("session_key", "=", sessionKey)
-          .returning((eb) => [
-            "current_session_id",
-            eb
-              .fn<string | null>("json_extract", [
-                eb.ref("entry_json"),
-                eb.val("$.lifecycleRevision"),
-              ])
-              .as("lifecycle_revision"),
-          ]),
+        expectedSessionId === undefined
+          ? query
+          : query.where("current_session_id", "=", expectedSessionId),
       ).rows[0];
     }),
   );
@@ -139,9 +142,8 @@ export function assignSessionOwner(
       params.assertCurrent?.();
       if (
         params.expectedSessionId !== undefined &&
-        (isIncognitoOpenClawAgentSqlitePath(database.path, options)
-          ? readIncognitoSessionEntryCurrent(database.db, resolved.sessionKey)?.sessionId
-          : readSessionEntryInstanceId(database, resolved.sessionKey)) !== params.expectedSessionId
+        params.expectedEntry &&
+        params.expectedEntry.sessionId !== params.expectedSessionId
       ) {
         throw new Error("session changed before owner assignment");
       }
@@ -156,7 +158,17 @@ export function assignSessionOwner(
       ) {
         throw new Error("session ownership changed before owner assignment");
       }
-      return replaceSessionOwnerInTransaction(database, resolved.sessionKey, owner);
+      const replaced = replaceSessionOwnerInTransaction(
+        database,
+        resolved.sessionKey,
+        owner,
+        undefined,
+        params.expectedSessionId,
+      );
+      if (!replaced && params.expectedSessionId !== undefined) {
+        throw new Error("session changed before owner assignment");
+      }
+      return replaced;
     },
     options,
     { operationLabel: "sessions.assign-owner" },

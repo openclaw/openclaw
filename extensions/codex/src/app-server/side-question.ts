@@ -14,7 +14,7 @@ import {
   loadCodexBundleMcpApprovalConfig,
   resolveCodexMcpToolOverridesForAgent,
 } from "openclaw/plugin-sdk/codex-mcp-projection";
-import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
+import { loadExecApprovalsReadOnlyAsync } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { registerNativeHookRelayForBundledRuntime } from "openclaw/plugin-sdk/native-hook-relay-runtime";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
@@ -94,6 +94,7 @@ import {
   readCodexSupportedReasoningEfforts,
   resolveCodexAppServerReasoningEffort,
 } from "./reasoning-effort.js";
+import { isMissingCodexParentThreadError } from "./rpc-error.js";
 import { runCodexCleanupStep } from "./run-attempt-lifecycle.js";
 import type { CodexRunAttemptOptions } from "./run-attempt-types.js";
 import {
@@ -189,7 +190,10 @@ export async function runCodexAppServerSideQuestion(
     execOverrides: params.sessionEntry.permissionMode
       ? { mode: CODEX_SESSION_PERMISSION_EXEC_MODES[params.sessionEntry.permissionMode] }
       : undefined,
-    approvals: params.sessionEntry.permissionMode === "full" ? undefined : loadExecApprovals(),
+    approvals:
+      params.sessionEntry.permissionMode === "full"
+        ? undefined
+        : await loadExecApprovalsReadOnlyAsync(),
     config: params.cfg,
     agentId: sessionAgentId,
   });
@@ -333,8 +337,8 @@ export async function runCodexAppServerSideQuestion(
     // Existing synchronous process startup admission.
     assertCurrent: () => {
       authority.assertLegacyCurrent();
-      nativeExecutionPolicy.assertCurrent();
     },
+    assertCurrentAsync: nativeExecutionPolicy.assertCurrent,
     startOptions: appServer.start,
     timeoutMs: appServer.requestTimeoutMs,
     authRequirement: preparedRuntimeAuth.plan.modelRoute?.authRequirement,
@@ -467,7 +471,7 @@ export async function runCodexAppServerSideQuestion(
     );
     return {
       toolBridge: createCodexDynamicToolBridge({
-        assertCurrent: nativeExecutionPolicy.assertCurrent,
+        assertCurrentAsync: nativeExecutionPolicy.assertCurrent,
         tools: exposedTools,
         signal: runAbortController.signal,
         loading: resolveCodexDynamicToolsLoading(pluginConfig),
@@ -653,8 +657,8 @@ export async function runCodexAppServerSideQuestion(
         runBeforeToolCall: sideRunParams.hostCapabilities.runBeforeToolCall,
         assertActive: () => {
           authority.assertLegacyCurrent();
-          nativeExecutionPolicy.assertCurrent();
         },
+        assertActiveAsync: nativeExecutionPolicy.assertCurrent,
         onPreToolUseFailure: (failure) => {
           if (!nativePreToolUseFailures.active && nativeToolLifecycleProjector) {
             nativeToolLifecycleProjector.recordPreToolUseFailure(
@@ -1017,14 +1021,6 @@ async function forkCodexSideThread(
     }
     throw error;
   }
-}
-
-function isMissingCodexParentThreadError(error: unknown): boolean {
-  const message = formatErrorMessage(error);
-  return (
-    message.includes("no rollout found for thread id") ||
-    message.includes("includeTurns is unavailable before first user message")
-  );
 }
 
 function formatCodexErrorMessage(params: JsonObject, rateLimits: JsonValue | undefined): Error {

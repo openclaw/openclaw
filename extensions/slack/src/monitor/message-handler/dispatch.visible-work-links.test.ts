@@ -138,7 +138,7 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
         progressText: "Reviewing changes",
       });
       for (const sessions of sessionBatches) {
-        params.replyOptions?.onVisibleWorkSessions?.(sessions);
+        await params.replyOptions?.onVisibleWorkSessions?.(sessions);
       }
       const dispatcher = createReplyDispatcher({
         deliver: params.delivery.deliver,

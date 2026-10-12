@@ -1,13 +1,7 @@
 import Foundation
+import OpenClawKit
 
 extension ProcessInfo {
-    /// SwiftPM loads test bundles into these helpers, so bundle inspection alone
-    /// cannot identify every test process. Keep current and legacy runner names.
-    private static let swiftPMTestHelperNames: Set<String> = [
-        "swiftpm-testing-helper",
-        "swiftpm-xctest-helper",
-    ]
-
     var isPreview: Bool {
         guard let raw = getenv("XCODE_RUNNING_FOR_PREVIEWS") else { return false }
         return String(cString: raw) == "1"
@@ -46,46 +40,7 @@ extension ProcessInfo {
             isAppBundle: isAppBundle)
     }
 
-    static func resolveIsRunningTests(
-        environment: [String: String],
-        processName: String,
-        arguments: [String],
-        bundleURLs: [URL]) -> Bool
-    {
-        if bundleURLs.contains(where: { $0.pathExtension == "xctest" }) { return true }
-        if self.swiftPMTestHelperNames.contains(processName) { return true }
-        if let executable = arguments.first.map({ URL(fileURLWithPath: $0).lastPathComponent }),
-           self.swiftPMTestHelperNames.contains(executable)
-        {
-            return true
-        }
-        return environment["XCTestConfigurationFilePath"] != nil
-            || environment["XCTestBundlePath"] != nil
-            || environment["XCTestSessionIdentifier"] != nil
-    }
-
-    private static let runningTests: Bool = {
-        let process = ProcessInfo.processInfo
-        let environment = process.environment
-        let processName = process.processName
-        let arguments = process.arguments
-        // Runner identity is process-stable; avoid touching transient bundles when it is known.
-        if ProcessInfo.resolveIsRunningTests(
-            environment: environment,
-            processName: processName,
-            arguments: arguments,
-            bundleURLs: [])
-        {
-            return true
-        }
-        return ProcessInfo.resolveIsRunningTests(
-            environment: environment,
-            processName: processName,
-            arguments: arguments,
-            bundleURLs: Bundle.allBundles.map(\.bundleURL) + [Bundle.main.bundleURL])
-    }()
-
     var isRunningTests: Bool {
-        Self.runningTests
+        OpenClawProcessInfo.isRunningTests
     }
 }

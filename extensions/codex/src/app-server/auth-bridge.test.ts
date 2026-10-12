@@ -330,7 +330,7 @@ function expectApiKeyLogin(
   apiKey: string,
   readAccount = false,
 ): void {
-  const options = { assertCurrent: undefined };
+  const options = expect.anything();
   const login = ["account/login/start", { type: "apiKey", apiKey }, options];
   if (readAccount) {
     expect(request).toHaveBeenNthCalledWith(1, "account/read", { refreshToken: false }, options);
@@ -350,7 +350,7 @@ function expectTokenLogin(
   const call = [
     "account/login/start",
     { type: "chatgptAuthTokens", accessToken, chatgptAccountId, chatgptPlanType },
-    { assertCurrent: undefined },
+    expect.anything(),
   ];
   if (count === undefined) {
     expect(request).toHaveBeenCalledWith(...call);
@@ -937,15 +937,16 @@ describe("Codex auth bridge", () => {
   it("does not record native login auth after post-response lifecycle retirement", async ({
     agentDir,
   }) => {
+    let current = true;
     const harness = createClientHarness({
       onWrite: (line, send) => {
         const message = JSON.parse(line) as { id?: string | number };
         if (message.id !== undefined) {
           send({ id: message.id, result: { type: "chatgptAuthTokens" } });
+          current = false;
         }
       },
     });
-    let checks = 0;
     try {
       persistProfile(
         agentDir,
@@ -961,8 +962,7 @@ describe("Codex auth bridge", () => {
           client: harness.client,
           ...profileParams(agentDir),
           assertCurrent: () => {
-            checks += 1;
-            if (checks > 2) {
+            if (!current) {
               throw new Error("login owner retired");
             }
           },
@@ -1399,6 +1399,9 @@ describe("Codex auth bridge", () => {
       ...profileParams(agentDir, authProfileStore),
       authHandoff: authHandoff(credential.access, "account-b"),
     });
+    const incompatibleRejection = expect(incompatibleWaiter).rejects.toThrow(
+      "ChatGPT workspace changed during Codex token refresh",
+    );
     await started.promise;
 
     refresh.resolve({
@@ -1418,9 +1421,7 @@ describe("Codex auth bridge", () => {
       chatgptAccountId: "account-a",
       chatgptPlanType: null,
     });
-    await expect(incompatibleWaiter).rejects.toThrow(
-      "ChatGPT workspace changed during Codex token refresh",
-    );
+    await incompatibleRejection;
     expect(oauth.refresh).toHaveBeenCalledTimes(1);
   });
 
@@ -1604,7 +1605,7 @@ describe("Codex auth bridge", () => {
     expect(request).toHaveBeenCalledWith(
       "account/read",
       { refreshToken: false },
-      { assertCurrent: undefined },
+      expect.anything(),
     );
   });
 

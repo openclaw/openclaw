@@ -389,10 +389,9 @@ function startPendingMaintenance(databasePath: string, owner: SessionEntryMainte
       retireMaintenanceOwner(databasePath, owner);
       return;
     }
-    // Detach turn context, but keep Doctor/temporary-command database custody
-    // so background borrowing cannot move handles outside their cleanup scope.
+    // Keep command cleanup custody while automatic work uses the runtime worker path.
     const run = () => runPendingMaintenance(databasePath, owner);
-    await (owner.maintenanceResource ? owner.maintenanceResource.run(run) : run());
+    await (owner.maintenanceResource ? owner.maintenanceResource.runWorker(run) : run());
   });
 }
 

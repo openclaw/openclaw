@@ -27,13 +27,17 @@ import type {
 } from "../../state/openclaw-agent-execution-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
+import type { captureNativeSessionWorkerDeletion } from "./session-accessor.sqlite-deletion.js";
 import {
   retainSessionEntryWorkerPublication,
   type SessionEntryReplacementPublication,
   type SessionTranscriptInitializationPublication,
 } from "./session-accessor.sqlite-entry-cache.js";
 import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
-import type { SessionEntryReplacementCommitted } from "./session-accessor.sqlite-replacement-types.js";
+import type {
+  SessionEntryReplacementCandidate,
+  SessionEntryReplacementCommitted,
+} from "./session-accessor.sqlite-replacement-types.js";
 import type { SessionEntryCommitContext } from "./session-accessor.types.js";
 import { withSessionEntryWriterReads } from "./session-entry-read-facts.js";
 import { decodeSessionTranscriptWorkerReadError } from "./session-history-worker-errors.js";
@@ -566,7 +570,7 @@ export async function runSessionEntryWorkerMutation<T>(
   );
 }
 
-export function commitSessionEntryReplacementsInWorker(
+export async function commitSessionEntryReplacementsInWorker(
   options: ReplacementDatabaseOptions,
   databaseIdentity: string,
   input: AgentDatabaseOperations["session.entries.replace"]["input"],
@@ -577,13 +581,52 @@ export function commitSessionEntryReplacementsInWorker(
     onLifecycleCommitted?: (pendingArchiveRecovery: boolean) => void;
   },
   retainedExecution?: OpenClawAgentDatabaseExecution,
+  nativeDeletion?: ReturnType<typeof captureNativeSessionWorkerDeletion>,
 ): Promise<SessionEntryReplacementCommitted> {
+  if (nativeDeletion) {
+    const { runSessionNativeBindingWorkerOperation } = await import("./session-native-binding.js");
+    return runSessionNativeBindingWorkerOperation<
+      SessionEntryReplacementCandidate,
+      SessionEntryReplacementCommitted
+    >({
+      database: options,
+      databaseIdentity,
+      agentId: lifecycle.identityAgentId,
+      retainedExecution,
+      assertCurrent,
+      captured: nativeDeletion,
+      entries: nativeDeletion.participants.map(({ sessionKey, entry }) => ({ sessionKey, entry })),
+      candidateKind: "session-entry-replacements",
+      execute: (worker, nativeBindings) =>
+        worker.execute({ type: "session.entries.replace", input: { ...input, nativeBindings } }),
+      async onCommitted(candidate, published, identity, context) {
+        try {
+          lifecycle.onLifecycleCommitted?.(candidate.result.pendingArchiveRecovery);
+        } finally {
+          if (published) {
+            publishCommittedSessionIdentity(
+              lifecycle.identityAgentId,
+              identity,
+              published.previous,
+              published.current,
+              published.prepared,
+            );
+          }
+        }
+        await lifecycle.afterCommitted?.(context);
+        return candidate.result;
+      },
+    });
+  }
   return runSessionEntryWorkerMutation<SessionEntryReplacementCommitted>(
     options,
     databaseIdentity,
     assertCurrent,
     async (worker) => {
       const value = await worker.execute({ type: "session.entries.replace", input });
+      if ("kind" in value) {
+        throw new Error("Session replacement returned an unexpected native binding receipt");
+      }
       return {
         kind: "committed",
         value,

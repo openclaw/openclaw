@@ -9,6 +9,7 @@ import { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gat
 import { getScopedChannelsCommandSecretTargets } from "../../cli/command-secret-targets.js";
 import { resolveMessageSecretScope } from "../../cli/message-secret-scope.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import * as messageActionTurnCapability from "../../gateway/message-action-turn-capability.js";
 import type { MessageActionAuthorization } from "../../gateway/message-action-turn-capability.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
@@ -27,8 +28,10 @@ import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { getPreparedMessageToolCatalog } from "../../plugins/prepared-message-tool-catalog.js";
 import { withChannelReadAuthority } from "../../shared/channel-read-authority.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
+import { runWithAgentToolSourceExecutionScope } from "../agent-tool-source-execution-guard.js";
 import * as embeddedMessageDelivery from "../embedded-agent-message-delivery.js";
 import { createSandboxBridgeReadFile } from "../sandbox-media-paths.js";
+import { captureAgentWorkspaceReadiness } from "../workspace-readiness.js";
 import { type AnyAgentTool, jsonResult, readToolStringParam } from "./common.js";
 import { captureGatewayToolCallerAssertion } from "./gateway-caller-context.js";
 import {
@@ -104,6 +107,9 @@ function* createMessageToolSteps(
   AnyAgentTool,
   Awaited<ReturnType<typeof resolveMessageToolDiscoveryAsync>>
 > {
+  const workspaceReadiness = captureAgentWorkspaceReadiness(
+    options?.runSessionKey ?? options?.agentSessionKey,
+  );
   const loadConfigForTool = options?.getRuntimeConfig ?? getRuntimeConfig;
   const getScopedSecretTargetsForTool =
     options?.getScopedChannelsCommandSecretTargets ?? getScopedChannelsCommandSecretTargets;
@@ -131,10 +137,7 @@ function* createMessageToolSteps(
   const resolvedAgentId =
     options?.agentId ??
     (options?.agentSessionKey
-      ? resolveSessionAgentId({
-          sessionKey: options.agentSessionKey,
-          config: options?.config,
-        })
+      ? resolveSessionAgentId({ sessionKey: options.agentSessionKey, config: options.config })
       : undefined);
   const pollEchoSessionKey =
     rawPollEchoSessionKey && resolvedAgentId && sourceReplySinkDeliveryMode === "message_tool_only"
@@ -189,10 +192,7 @@ function* createMessageToolSteps(
   const actions = discovered?.actions;
   const baseSchema = options?.sourceReplyOnly
     ? SOURCE_REPLY_ONLY_MESSAGE_SCHEMA
-    : discovered
-      ? discovered.schema
-      : MessageToolSchema;
-  const schema = addSourceReplyFinalControl(baseSchema);
+    : (discovered?.schema ?? MessageToolSchema);
   const description = options?.sourceReplyOnly
     ? "Send a message to the current source conversation. Supports actions: send."
     : buildMessageToolDescription(actions) +
@@ -220,7 +220,7 @@ function* createMessageToolSteps(
     name: "message",
     displaySummary: "Send and manage messages across configured channels.",
     description,
-    parameters: schema,
+    parameters: addSourceReplyFinalControl(baseSchema),
     prepareBeforeToolCallParams: explicitTargetGuard?.prepareBeforeToolCallParams,
     finalizeBeforeToolCallParams: explicitTargetGuard?.finalizeBeforeToolCallParams,
     execute: async (toolCallId, args, signal) => {
@@ -271,15 +271,20 @@ function* createMessageToolSteps(
         decisions.recordTurnCapabilityInactive();
         throw new Error("message action turn capability is no longer active");
       }
-      const assertActionCurrent = () => {
-        assertCaller();
-        turnAuthority.assertCurrent();
-        const scheduled = messageActionAuthorization.scheduled;
-        ((scheduledRead ?? scheduledWrite)
-          ? (scheduled?.assertSourceCurrent ?? scheduled?.assertCurrent)
-          : scheduled?.assertCurrent)?.();
-        assertDashboardReadCurrent?.();
-      };
+      const scheduled = messageActionAuthorization.scheduled;
+      const assertActionCurrent = composeSessionSourceAssertion(
+        [
+          assertCaller,
+          (scheduledRead ?? scheduledWrite)
+            ? (scheduled?.assertSourceCurrent ?? scheduled?.assertCurrent)
+            : scheduled?.assertCurrent,
+        ],
+        (assertSources) => {
+          turnAuthority.assertCurrent();
+          assertSources();
+          assertDashboardReadCurrent?.();
+        },
+      );
       assertActionCurrent();
       if (options?.sourceReplyOnly) {
         decisions.runBoundary(() =>
@@ -354,12 +359,14 @@ function* createMessageToolSteps(
         const emoji = readToolStringParam(params, "emoji", { required: true });
         const remove = readBooleanParam(params, "remove") === true;
         const dryRun = readBooleanParam(params, "dryRun") === true;
-        const result = await currentPromptReaction({
-          emoji,
-          remove,
-          dryRun,
-          assertCurrent: assertActionCurrent,
-        });
+        const result = await runWithAgentToolSourceExecutionScope(assertActionCurrent, () =>
+          currentPromptReaction({
+            emoji,
+            remove,
+            dryRun,
+            assertCurrent: assertActionCurrent,
+          }),
+        );
         assertActionCurrent();
         const sourceReplyDelivered =
           requestedSourceReplyFinal === true && result.changed && !remove && !dryRun;
@@ -559,55 +566,58 @@ function* createMessageToolSteps(
         async () => {
           let result: MessageActionResult;
           try {
-            result = await groupThread.run(() =>
-              runMessageActionForTool({
-                cfg,
-                action,
-                params: actionParams,
-                actionOrigin: "message-tool",
-                defaultAccountId: accountId ?? undefined,
-                ...messageActionTurnCapability.selectMessageActionRequesterIdentity(
-                  trustedTurnContext,
-                ),
-                messageActionAuthorization,
-                assertDirectAdapterHandoff: assertActionCurrent,
-                onPlatformSendDispatch: messageActionAuthorization.scheduled
-                  ? async () => assertActionCurrent()
-                  : undefined,
-                skipQueue: Boolean(messageActionAuthorization.scheduled),
-                senderIsOwner: options?.senderIsOwner,
-                conversationReadOrigin: options?.conversationReadOrigin,
-                workspaceDir: options?.workspaceDir,
-                broadcastAccountPlan,
-                gateway,
-                toolContext,
-                sessionKey: options?.agentSessionKey,
-                sourceReplySessionKey: options?.runSessionKey,
-                sessionId: options?.sessionId,
-                runId: deliveryRunId,
-                executionIdentityToken,
-                agentId: resolvedAgentId,
-                workspaceMediaAccess: sandboxWorkspaceMediaAccess,
-                sandboxRoot: options?.sandboxRoot,
-                sandboxContainerWorkdir: options?.sandboxContainerWorkdir,
-                sourceReplyDeliveryMode: sourceReplySinkDeliveryMode,
-                sourceReplyTranscriptOnly: options?.inputProvenance?.kind === "inter_session",
-                // Only an admitted channel source can arm terminal restart reconciliation.
-                // Source-less scheduled and ambient sends remain ordinary message actions.
-                sourceReplyFinal: hasExactSourceTurn
-                  ? (requestedSourceReplyFinal ?? true)
-                  : undefined,
-                sourceReplyToolCallId: hasExactSourceTurn ? toolCallId : undefined,
-                onActionDenied: (error, channel, receiptDiscriminator) =>
-                  decisions.recordTypedDenial(
-                    error,
-                    resolveTrustedDecisionChannel(channel, preparedMessageToolCatalog),
-                    receiptDiscriminator,
+            result = await runWithAgentToolSourceExecutionScope(assertActionCurrent, () =>
+              groupThread.run(() =>
+                runMessageActionForTool({
+                  cfg,
+                  action,
+                  params: actionParams,
+                  actionOrigin: "message-tool",
+                  defaultAccountId: accountId ?? undefined,
+                  ...messageActionTurnCapability.selectMessageActionRequesterIdentity(
+                    trustedTurnContext,
                   ),
-                inboundEventKind: options?.inboundEventKind,
-                inboundAudio: options?.hasCurrentInboundAudio?.() ?? options?.currentInboundAudio,
-                abortSignal: signal,
-              }),
+                  messageActionAuthorization,
+                  assertDirectAdapterHandoff: assertActionCurrent,
+                  onPlatformSendDispatch: messageActionAuthorization.scheduled
+                    ? async () => assertActionCurrent()
+                    : undefined,
+                  skipQueue: Boolean(messageActionAuthorization.scheduled),
+                  senderIsOwner: options?.senderIsOwner,
+                  conversationReadOrigin: options?.conversationReadOrigin,
+                  workspaceDir: options?.workspaceDir,
+                  workspaceReadiness,
+                  broadcastAccountPlan,
+                  gateway,
+                  toolContext,
+                  sessionKey: options?.agentSessionKey,
+                  sourceReplySessionKey: options?.runSessionKey,
+                  sessionId: options?.sessionId,
+                  runId: deliveryRunId,
+                  executionIdentityToken,
+                  agentId: resolvedAgentId,
+                  workspaceMediaAccess: sandboxWorkspaceMediaAccess,
+                  sandboxRoot: options?.sandboxRoot,
+                  sandboxContainerWorkdir: options?.sandboxContainerWorkdir,
+                  sourceReplyDeliveryMode: sourceReplySinkDeliveryMode,
+                  sourceReplyTranscriptOnly: options?.inputProvenance?.kind === "inter_session",
+                  // Only an admitted channel source can arm terminal restart reconciliation.
+                  // Source-less scheduled and ambient sends remain ordinary message actions.
+                  sourceReplyFinal: hasExactSourceTurn
+                    ? (requestedSourceReplyFinal ?? true)
+                    : undefined,
+                  sourceReplyToolCallId: hasExactSourceTurn ? toolCallId : undefined,
+                  onActionDenied: (error, channel, receiptDiscriminator) =>
+                    decisions.recordTypedDenial(
+                      error,
+                      resolveTrustedDecisionChannel(channel, preparedMessageToolCatalog),
+                      receiptDiscriminator,
+                    ),
+                  inboundEventKind: options?.inboundEventKind,
+                  inboundAudio: options?.hasCurrentInboundAudio?.() ?? options?.currentInboundAudio,
+                  abortSignal: signal,
+                }),
+              ),
             );
           } catch (error) {
             const partialResult = projectScheduledMessageActionPartialResult({

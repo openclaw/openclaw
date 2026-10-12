@@ -250,7 +250,7 @@ describe("host-owned current admission annotation", () => {
           });
           const persisted = expectDefined(await recorder.persistApproved(), "promoted input");
           const original = structuredClone(persisted.admission);
-          const consumptions = listSessionPendingInputReceipts(f.target, {
+          const consumptions = await listSessionPendingInputReceipts(f.target, {
             runIds: accepted.items.map((input) => input.runId),
           });
           expect(consumptions).toEqual(
@@ -288,7 +288,7 @@ describe("host-owned current admission annotation", () => {
             accepted.items.map((input) => input.message),
           );
           expect(
-            listSessionPendingInputReceipts(f.target, {
+            await listSessionPendingInputReceipts(f.target, {
               runIds: accepted.items.map((input) => input.runId),
             }),
           ).toEqual(consumptions);
@@ -706,14 +706,16 @@ describe("host-owned current admission annotation", () => {
     );
   });
 
-  it("never restores upstream text removed by storage redaction", async () => {
+  it("preserves admitted upstream text independently of diagnostic redaction patterns", async () => {
     await withAdmission(
       async (f) => {
         const before = await loadTranscriptEvents(f.target);
-        await expect(f.annotate(nativeAnnotation("prompt", "private-value"))).rejects.toThrow(
-          "redacted",
-        );
-        expect(await loadTranscriptEvents(f.target)).toEqual(before);
+        await f.annotate(nativeAnnotation("prompt", "private-value"));
+        expect(f.recorder.getPersistedMessage?.()).toMatchObject({
+          content: "prompt",
+          __openclaw: { upstreamUserText: "private-value" },
+        });
+        expect(await loadTranscriptEvents(f.target)).toHaveLength(before.length);
       },
       { config: { logging: { redactPatterns: ["private-value"] } } },
     );

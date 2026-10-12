@@ -4,7 +4,6 @@ import {
   resolveWorkerPoolSize,
   SESSION_TRANSCRIPT_FOREGROUND_WORKERS,
 } from "../../infra/worker-pool-sizing.js";
-import type { SensitiveTextRedactionSnapshot } from "../../logging/redact.js";
 import type { readSessionTranscriptModelContext } from "./session-accessor.sqlite-model-context.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
 import type { SessionContextMessagesWorkerInput } from "./session-history-read.types.js";
@@ -108,8 +107,38 @@ export async function readSessionTranscriptContextMessagesInWorker(
 export async function prepareSessionEntryInWorker(
   absPath: string,
   options: SessionEntryWorkerInput["options"],
-  redaction: SensitiveTextRedactionSnapshot,
 ) {
+  const result = await readSessionEntryInWorker({
+    kind: "session-entry",
+    absPath,
+    options,
+  });
+  if (!("entry" in result)) {
+    throw new Error("Session transcript worker returned a snapshot instead of an export");
+  }
+  return result;
+}
+
+export async function readSessionEntrySnapshotInWorker(
+  absPath: string,
+  options: SessionEntryWorkerInput["options"],
+  includeOriginalMessages: boolean,
+) {
+  const result = await readSessionEntryInWorker({
+    kind: "session-entry",
+    mode: "snapshot",
+    includeOriginalMessages,
+    absPath,
+    options,
+  });
+  if (!("snapshot" in result)) {
+    throw new Error("Session transcript worker returned an export instead of a snapshot");
+  }
+  return result.snapshot;
+}
+
+async function readSessionEntryInWorker(input: SessionEntryWorkerInput) {
+  const { absPath, options } = input;
   const receipt = resolveSessionTranscriptReadFence(options);
   const result = unwrapSessionTranscriptWorkerReply<"session-entry" | "session-reset-recall">(
     await runWithSqliteDatabaseAdmissionTurn(
@@ -117,10 +146,7 @@ export async function prepareSessionEntryInWorker(
       () =>
         sessionEntries.run(
           {
-            kind: "session-entry",
-            absPath,
-            options,
-            redaction,
+            ...input,
             ...(receipt ? { admission: { ...receipt } } : {}),
           },
           {
@@ -130,13 +156,12 @@ export async function prepareSessionEntryInWorker(
                 options.agentId.length +
                 options.sessionId.length +
                 options.storePath.length +
-                (options.sessionKey?.length ?? 0) +
-                redaction.registeredSecretValues.reduce((bytes, value) => bytes + value.length, 0)),
+                (options.sessionKey?.length ?? 0)),
           },
         ),
     ),
   );
-  if (!("entry" in result)) {
+  if (!("entry" in result) && !("snapshot" in result)) {
     throw new Error("Session transcript worker returned reset metadata instead of an export");
   }
   return result;

@@ -664,7 +664,7 @@ describe("worker turn launcher terminal results", () => {
       "workspace-transfer-failed: gateway TLS fingerprint mismatch",
     );
     const recoveryEntered = vi.fn((_mode?: "results-only") => {});
-    const harness = createHarness(launcherDatabase, placements, {
+    const harness = await createHarness(launcherDatabase, placements, {
       workspacePath: root,
       workspaceOperations,
     });

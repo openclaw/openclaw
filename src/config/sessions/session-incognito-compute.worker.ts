@@ -225,6 +225,19 @@ export function createIncognitoComputeWorker(
         return projection.execute(inner);
       };
       try {
+        // Bounded reads own only buffers; cleanup cannot publish a session mutation.
+        if (command.type === "session.compute.source.close") {
+          const held = sources.get(command.input.sourceId);
+          if (held) {
+            sourceFor(command.input);
+            if (held.projection || held.claimId !== undefined) {
+              throw new Error("Projection cleanup requires its write-capable source release");
+            }
+            held.source.clear();
+            sources.delete(command.input.sourceId);
+          }
+          return { value: undefined, keys };
+        }
         // Exact source cleanup remains possible after its session was deleted.
         if (command.type === "session.compute.source.release") {
           const held = sources.get(command.input.sourceId);

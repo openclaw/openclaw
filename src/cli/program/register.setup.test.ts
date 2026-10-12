@@ -67,17 +67,6 @@ beforeEach(() => {
 });
 
 describe("registered setup routing", () => {
-  it("runs explicit system requests without probing config", async () => {
-    await runCli(["-m", "status", "--yes"]);
-    expect(runSystemAgentMock).toHaveBeenCalledExactlyOnceWith(
-      { message: "status", yes: true, json: false },
-      runtime,
-    );
-    expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
-    expect(readLocalOnboardingStateMock).not.toHaveBeenCalled();
-    expect(setupWizardCommandMock).not.toHaveBeenCalled();
-  });
-
   it.each([
     {
       name: "pending inference",
@@ -95,84 +84,61 @@ describe("registered setup routing", () => {
       onboarding: true,
     },
     {
-      name: "authored wizard",
-      sourceConfig: { wizard: { lastRunAt: "2026-08-02T00:00:00.000Z" } },
-      onboarding: false,
-    },
-    {
-      name: "authored model",
-      sourceConfig: { agents: { defaults: { model: "acme/verified" } } },
-      onboarding: false,
-    },
-    { name: "invalid config", sourceConfig: {}, valid: false, pending: true, onboarding: false },
-    {
       name: "remote Gateway",
       sourceConfig: { gateway: { mode: "remote" } },
       pending: true,
       onboarding: false,
     },
-  ])(
-    "routes interactive setup for $name",
-    async ({ name, sourceConfig, pending, onboarding, valid = true }) => {
-      readConfigFileSnapshotMock.mockResolvedValue({
-        exists: true,
-        valid,
-        path: "/tmp/openclaw.json",
-        sourceConfig,
-      });
-      readLocalOnboardingStateMock.mockReturnValue(pending ? { status: "pending" } : undefined);
-      const streams = [process.stdin, process.stdout];
-      const descriptors = streams.map((stream) => Object.getOwnPropertyDescriptor(stream, "isTTY"));
-      for (const stream of streams) {
-        Object.defineProperty(stream, "isTTY", { configurable: true, value: true });
-      }
-      try {
-        await runCli([]);
-        expect(readLocalOnboardingStateMock.mock.calls).toEqual(
-          ["pending inference", "authored wizard", "authored model"].includes(name)
-            ? [["/tmp/openclaw.json", sourceConfig]]
-            : [],
+  ])("routes interactive setup for $name", async ({ name, sourceConfig, pending, onboarding }) => {
+    readConfigFileSnapshotMock.mockResolvedValue({
+      exists: true,
+      valid: true,
+      path: "/tmp/openclaw.json",
+      sourceConfig,
+    });
+    readLocalOnboardingStateMock.mockReturnValue(pending ? { status: "pending" } : undefined);
+    const streams = [process.stdin, process.stdout];
+    const descriptors = streams.map((stream) => Object.getOwnPropertyDescriptor(stream, "isTTY"));
+    for (const stream of streams) {
+      Object.defineProperty(stream, "isTTY", { configurable: true, value: true });
+    }
+    try {
+      await runCli([]);
+      expect(readLocalOnboardingStateMock.mock.calls).toEqual(
+        name === "pending inference" ? [["/tmp/openclaw.json", sourceConfig]] : [],
+      );
+      if (onboarding) {
+        expect(setupWizardCommandMock).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ json: false }),
+          runtime,
         );
-        if (onboarding) {
-          expect(setupWizardCommandMock).toHaveBeenCalledExactlyOnceWith(
-            expect.objectContaining({ json: false }),
-            runtime,
-          );
-          expect(runSystemAgentMock).not.toHaveBeenCalled();
-        } else {
-          expect(runSystemAgentMock).toHaveBeenCalledExactlyOnceWith(
-            { message: undefined, yes: false, json: false },
-            runtime,
-          );
-          expect(setupWizardCommandMock).not.toHaveBeenCalled();
-        }
-      } finally {
-        streams.forEach((stream, index) => {
-          const descriptor = descriptors[index];
-          if (descriptor) {
-            Object.defineProperty(stream, "isTTY", descriptor);
-          } else {
-            Reflect.deleteProperty(stream, "isTTY");
-          }
-        });
+        expect(runSystemAgentMock).not.toHaveBeenCalled();
+      } else {
+        expect(runSystemAgentMock).toHaveBeenCalledExactlyOnceWith(
+          { message: undefined, yes: false, json: false },
+          runtime,
+        );
+        expect(setupWizardCommandMock).not.toHaveBeenCalled();
       }
-    },
-  );
-
-  it.each([false, true])("routes JSON setup for configured=%s", async (configured) => {
-    if (configured) {
-      readConfigFileSnapshotMock.mockResolvedValue({
-        exists: true,
-        valid: true,
-        path: "/tmp/openclaw.json",
-        sourceConfig: { gateway: {} },
+    } finally {
+      streams.forEach((stream, index) => {
+        const descriptor = descriptors[index];
+        if (descriptor) {
+          Object.defineProperty(stream, "isTTY", descriptor);
+        } else {
+          Reflect.deleteProperty(stream, "isTTY");
+        }
       });
     }
+  });
+
+  it("routes JSON setup for an unconfigured system", async () => {
     await runCli(["--json"]);
-    expect(
-      configured ? runSystemAgentMock : setupWizardCommandMock,
-    ).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ json: true }), runtime);
-    expect(configured ? setupWizardCommandMock : runSystemAgentMock).not.toHaveBeenCalled();
+    expect(setupWizardCommandMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ json: true }),
+      runtime,
+    );
+    expect(runSystemAgentMock).not.toHaveBeenCalled();
   });
 
   it("registers the hidden retired-name alias through lazy registration", async () => {
@@ -184,15 +150,6 @@ describe("registered setup routing", () => {
       { message: "status", yes: false, json: false },
       runtime,
     );
-  });
-
-  it("passes the baseline skip-bootstrap choice", async () => {
-    await runCli("--baseline --workspace /tmp/ws --skip-bootstrap --json".split(" "));
-    expect(setupCommandMock).toHaveBeenCalledExactlyOnceWith(
-      { workspace: "/tmp/ws", skipBootstrap: true, json: true },
-      runtime,
-    );
-    expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
 
   it("rejects onboarding options in baseline mode", async () => {

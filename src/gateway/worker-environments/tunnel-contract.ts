@@ -1,3 +1,4 @@
+import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE } from "../../infra/node-commands.js";
 import type { SpawnResult } from "../../process/exec.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
@@ -226,6 +227,7 @@ export type WorkerWorkspaceQuiescence = {
 };
 
 type WorkerTurnLaunchRequest = {
+  assertCurrent?: SessionSourceAssertion;
   plan: WorkerLaunchPlan;
   turnClaim: WorkerSessionTurnClaim;
   timeoutMs?: number;

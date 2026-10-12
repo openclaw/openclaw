@@ -55,6 +55,10 @@ export async function withCodexPluginCommandContext<T>(
     { ...scope, config: ctx.config },
     appServer.start,
   );
+  const { assertCurrentAsync } = {
+    assertCurrentAsync: scope.assertCurrentAsync,
+    ...auth.clientOptions,
+  };
   const preparedAuth =
     "preparedAuth" in auth.clientOptions ? auth.clientOptions.preparedAuth : undefined;
   const usesNativeAuth = scope.authProfileId === null || appServer.start.homeScope === "user";
@@ -122,6 +126,7 @@ export async function withCodexPluginCommandContext<T>(
           (await deps.codexPluginsManagementIo?.readConfig()) ?? {},
         );
         const currentAuthBinding = await readAuthBinding();
+        await assertCurrentAsync?.();
         // Reads can outlive cancellation; never publish after the request scope ends.
         assertCurrent();
         if (

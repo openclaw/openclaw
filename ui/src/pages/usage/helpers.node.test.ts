@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { extractQueryTerms, filterSessionsByQuery, parseToolSummary } from "./helpers.ts";
+import { extractQueryTerms, filterSessionsByQuery } from "../../../../src/shared/usage-query.js";
+import { parseToolSummary } from "./helpers.ts";
 
 describe("usage-helpers", () => {
   it("tokenizes query terms including quoted strings", () => {

@@ -107,7 +107,12 @@ export async function prepareManagedHandoffLeaseDatabase(
   if (existingIdentity) {
     assertManagedUpdateLeaseDatabaseIdentity(existingIdentity);
   }
-  return createManagedHandoffLeaseDatabase(databasePath, existingIdentity, lockRoot);
+  // Canonicalize unbound admissions before original acquisition reenters its writer.
+  // Keep earned pins exact and leave unsafe database leaves for no-follow recovery.
+  const canonicalPath = existingIdentity
+    ? databasePath
+    : path.join(lockRoot.rootReal, path.basename(databasePath));
+  return createManagedHandoffLeaseDatabase(canonicalPath, existingIdentity, lockRoot);
 }
 
 /** Bootstrap owned storage and capture the identity used by later no-repair operations. */

@@ -11,12 +11,11 @@ import {
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { projectCronRunHistoryPage } from "../run-history.js";
 import { saveCronStore } from "../store.js";
-import type { CronJob, CronStoreFile } from "../types.js";
+import type { CronJob, CronJobPatch } from "../types.js";
 import { readCronRunRecords } from "./read-only.js";
 import type { CronRunQueueOperations, CronRunRequestContext } from "./run-queue.types.js";
 import type { CronRunReceiptHandle } from "./run-receipt.types.js";
 import { createCronScheduledRunId } from "./run-request-id.js";
-import { prepareCronStoreChanges } from "./save.kernel.js";
 
 const now = 1_800_000_000_000;
 let fixture: OpenClawTestState;
@@ -101,19 +100,24 @@ async function store(label: string, jobs: CronJob[]) {
         type: "cron.cancelRequests",
         input: { storeKey, receiptIds, nowMs: now + 2, reason: "synthetic cancellation", status },
       }),
-    edit: async (mutate: (next: CronStoreFile) => void) => {
-      const previous = await read();
-      const next = structuredClone(previous);
-      mutate(next);
-      return executeOpenClawStateWorker(context, {
+    update: (id: string, patch: CronJobPatch) =>
+      executeOpenClawStateWorker(context, {
         type: "cron.mutateJobs",
         input: {
           storeKey,
-          changes: prepareCronStoreChanges(previous, next),
+          jobMutation: { kind: "update", id, patch, options: { captured: false } },
           snapshot: { nowMs: now + 1 },
         },
-      });
-    },
+      }),
+    remove: (id: string) =>
+      executeOpenClawStateWorker(context, {
+        type: "cron.mutateJobs",
+        input: {
+          storeKey,
+          jobMutation: { kind: "remove", ids: [id] },
+          snapshot: { nowMs: now + 1 },
+        },
+      }),
   };
 }
 
@@ -166,9 +170,9 @@ it("returns durable receipt handles across queued edits and records disabled req
   const request = scheduled(queue.storeKey, original);
   const claimed = (await queue.request([request])).accepted[0]!;
   expect(await queue.readReceipt(claimed.runReceipt)).toEqual(claimed.runReceipt);
-  await queue.edit((next) => {
-    next.jobs[0]!.payload = { kind: "command", argv: ["echo", "new payload"] };
-    next.jobs[0]!.agentId = "edited-agent";
+  await queue.update(original.id, {
+    payload: { kind: "command", argv: ["echo", "new payload"] },
+    agentId: "edited-agent",
   });
   const activated = (await queue.drain()).launches[0]!;
   expect(activated.job.payload).toEqual({
@@ -196,9 +200,7 @@ it("returns durable receipt handles across queued edits and records disabled req
     configRevision: resolveCronJobConfigRevision(cancelJob),
   };
   await cancelled.request([manual]);
-  await cancelled.edit((next) => {
-    next.jobs[0]!.enabled = false;
-  });
+  await cancelled.update(cancelJob.id, { enabled: false });
   const drained = await cancelled.drain([manual]);
   expect(drained.launches).toEqual([]);
   expect(drained.skipped.map((entry) => entry.runReceipt.receiptId)).toEqual([manual.receiptId]);
@@ -261,9 +263,7 @@ it("launches explicit force on a disabled job and retains a consumed exit event 
     configRevision: resolveCronJobConfigRevision(onExit),
   };
   expect((await exit.request([event])).accepted[0]?.job.enabled).toBe(false);
-  await exit.edit((next) => {
-    next.jobs[0]!.enabled = true;
-  });
+  await exit.update(onExit.id, { enabled: true });
   const result = await exit.drain([event]);
   expect(result.skipped).toEqual([]);
   expect(result.launches.map((entry) => entry.job.id)).toEqual(["exit"]);
@@ -376,16 +376,12 @@ it("cancels a removed queued job and rejects a plan made before its definition c
   const queue = await store("removed", [current]);
   const request = scheduled(queue.storeKey, current);
   await queue.request([request]);
-  await queue.edit((next) => {
-    next.jobs = [];
-  });
+  await queue.remove(current.id);
   expect((await queue.drain([request])).skipped[0]?.runReceipt.receiptId).toBe(request.receiptId);
   expect((await queue.drain()).launches).toEqual([]);
   const changed = job("changed");
   const stale = await store("stale-plan", [changed]);
-  await stale.edit((next) => {
-    next.jobs[0]!.enabled = false;
-  });
+  await stale.update(changed.id, { enabled: false });
   expect((await stale.request([scheduled(stale.storeKey, changed)])).rejected).toEqual([
     {
       jobId: changed.id,

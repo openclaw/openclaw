@@ -24,7 +24,7 @@ it("releases prompt payloads while completed attempts' review callbacks remain r
   class PromptPayload extends Set<string> {}
   let sequence = 0;
   const createRetainedReview = (release: boolean) => {
-    const owner = createEmbeddedAttemptSessionResources(undefined, new AbortController().signal);
+    const owner = createEmbeddedAttemptSessionResources(new AbortController().signal);
     const lease = retainEmbeddedSessionPromptState(`retained-review-${sequence++}`);
     lease.state.removedRuntimeContextKeys = new PromptPayload(["runtime-context"]);
     owner.resources.promptStateLease = lease;

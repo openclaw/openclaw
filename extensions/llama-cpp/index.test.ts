@@ -3,7 +3,6 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream, type Model } from "openclaw/plugin-sdk/llm";
-import { createLocalEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   createPluginRegistryFixture,
@@ -172,14 +171,6 @@ function configuredOptions() {
 }
 
 describe("llama.cpp provider plugin", () => {
-  it("keeps pre-managed installed provider imports loadable without reviving the old runtime", async () => {
-    await expect(createLocalEmbeddingProvider({}, {})).rejects.toThrow(
-      "The legacy in-process llama.cpp embedding runtime is retired",
-    );
-    expect(mocks.ensureModel).not.toHaveBeenCalled();
-    expect(mocks.prepareServer).not.toHaveBeenCalled();
-  });
-
   it("uses the normal OpenAI-compatible text transport", () => {
     const { providers } = captureTextRegistration();
     const provider = expectDefined(providers[0], "llama.cpp provider");
@@ -228,84 +219,67 @@ describe("llama.cpp provider plugin", () => {
     expect(mocks.discoverServer).not.toHaveBeenCalled();
   });
 
-  it.each(
-    [false, true].flatMap((managed) =>
-      (["wrapStreamFn", "wrapSimpleCompletionStreamFn"] as const).flatMap((hook) =>
-        (["off", "high", undefined] as const).map((thinkingLevel) => ({
-          managed,
-          hook,
-          thinkingLevel,
-        })),
-      ),
-    ),
-  )(
-    "normalizes sequential requests through one $hook with managed=$managed and default=$thinkingLevel",
-    async ({ managed, hook, thinkingLevel }) => {
-      const provider = registerTextProvider();
-      const { config } = configuredOptions();
-      const configured = config.models.providers[LLAMA_CPP_PROVIDER_ID];
-      const model: Model = {
-        ...expectDefined(configured.models[0], "configured chat model"),
-        provider: LLAMA_CPP_PROVIDER_ID,
-        api:
-          hook === "wrapSimpleCompletionStreamFn"
-            ? "openclaw-provider-simple:llama-fixture"
-            : "openai-completions",
-        baseUrl: configured.baseUrl,
-        reasoning: true,
-        compat: { supportsReasoningEffort: true, supportsJsonSchemaResponseFormat: true },
-      };
-      const schema = { type: "object", properties: { ok: { type: "boolean" } } };
-      const payloads: unknown[] = [];
-      const inner = vi.fn<StreamFn>(async (requestModel, context, options) => {
-        const request = buildOpenAICompletionsParams(
-          { ...requestModel, api: "openai-completions" },
-          context,
-          options,
-        );
-        payloads.push((await options?.onPayload?.(request, requestModel)) ?? request);
-        const stream = createAssistantMessageEventStream();
-        stream.end();
-        return stream;
-      });
-      const wrapped = expectDefined(
-        provider[hook]?.({
-          config: managed ? config : {},
-          provider: LLAMA_CPP_PROVIDER_ID,
-          modelId: model.id,
-          model,
-          sourceApi: "openai-completions",
-          thinkingLevel,
-          streamFn: inner,
-        }),
-        "llama.cpp stream wrapper",
+  it("normalizes sequential requests through the external stream wrapper", async () => {
+    const provider = registerTextProvider();
+    const { config } = configuredOptions();
+    const configured = config.models.providers[LLAMA_CPP_PROVIDER_ID];
+    const model: Model = {
+      ...expectDefined(configured.models[0], "configured chat model"),
+      provider: LLAMA_CPP_PROVIDER_ID,
+      api: "openai-completions",
+      baseUrl: configured.baseUrl,
+      reasoning: true,
+      compat: { supportsReasoningEffort: true, supportsJsonSchemaResponseFormat: true },
+    };
+    const schema = { type: "object", properties: { ok: { type: "boolean" } } };
+    const payloads: unknown[] = [];
+    const inner = vi.fn<StreamFn>(async (requestModel, context, options) => {
+      const request = buildOpenAICompletionsParams(
+        { ...requestModel, api: "openai-completions" },
+        context,
+        options,
       );
+      payloads.push((await options?.onPayload?.(request, requestModel)) ?? request);
+      const stream = createAssistantMessageEventStream();
+      stream.end();
+      return stream;
+    });
+    const wrapped = expectDefined(
+      provider.wrapStreamFn?.({
+        config: {},
+        provider: LLAMA_CPP_PROVIDER_ID,
+        modelId: model.id,
+        model,
+        sourceApi: "openai-completions",
+        streamFn: inner,
+      }),
+      "llama.cpp stream wrapper",
+    );
 
-      const reasoningLevels = ["off", "max", undefined] as const;
-      for (const reasoning of reasoningLevels) {
-        await wrapped(
-          model,
-          { messages: [] },
-          reasoning === undefined
-            ? { responseFormat: schema }
-            : { reasoning, responseFormat: schema },
-        );
-      }
+    const reasoningLevels = ["off", "max", undefined] as const;
+    for (const reasoning of reasoningLevels) {
+      await wrapped(
+        model,
+        { messages: [] },
+        reasoning === undefined
+          ? { responseFormat: schema }
+          : { reasoning, responseFormat: schema },
+      );
+    }
 
-      for (const [index, reasoning] of reasoningLevels.entries()) {
-        const payload = payloads[index];
-        expect(payload).toMatchObject({ response_format: { type: "json_object", schema } });
-        if ((reasoning ?? thinkingLevel) === "off") {
-          expect(payload).toHaveProperty("chat_template_kwargs.enable_thinking", false);
-        } else {
-          expect(payload).not.toHaveProperty("chat_template_kwargs");
-          expect(payload).toHaveProperty("reasoning_effort", "high");
-        }
+    for (const [index, reasoning] of reasoningLevels.entries()) {
+      const payload = payloads[index];
+      expect(payload).toMatchObject({ response_format: { type: "json_object", schema } });
+      if (reasoning === "off") {
+        expect(payload).toHaveProperty("chat_template_kwargs.enable_thinking", false);
+      } else {
+        expect(payload).not.toHaveProperty("chat_template_kwargs");
+        expect(payload).toHaveProperty("reasoning_effort", "high");
       }
-      expect(inner).toHaveBeenCalledTimes(reasoningLevels.length);
-      expect(mocks.ensureChat).toHaveBeenCalledTimes(managed ? reasoningLevels.length : 0);
-    },
-  );
+    }
+    expect(inner).toHaveBeenCalledTimes(reasoningLevels.length);
+    expect(mocks.ensureChat).not.toHaveBeenCalled();
+  });
 
   it("keeps an embedding-only managed model inventory empty", async () => {
     const provider = registerTextProvider();

@@ -48,6 +48,8 @@ afterEach(() => {
 type DecodeObservation = {
   operation: string;
   parsedRollups: number;
+  parsedCheckpoints: number;
+  parsedBucketBodies: number;
   threadId: number;
 };
 
@@ -60,23 +62,30 @@ const { parentPort, threadId } = require("node:worker_threads");
 if (parentPort) {
   let operation;
   let parsedRollups = 0;
+  let parsedCheckpoints = 0;
+  let parsedBucketBodies = 0;
   parentPort.on("message", (message) => {
     if (message.responseId !== undefined) return;
     operation = message.input?.kind === "usage-cost" ? message.input.operation.kind : undefined;
     parsedRollups = 0;
+    parsedCheckpoints = 0;
+    parsedBucketBodies = 0;
   });
   const parse = JSON.parse;
   JSON.parse = function(text, ...args) {
-    const rollup = operation && typeof text === "string" && text.includes('"buckets"') &&
-      text.includes('"untimestamped"');
-    if (rollup) parsedRollups++;
-    return Reflect.apply(parse, this, [text, ...args]);
+    const value = Reflect.apply(parse, this, [text, ...args]);
+    if (operation && value && typeof value === "object" && value.buckets && value.untimestamped) {
+      parsedRollups++;
+      if (Object.keys(value.buckets).length === 0) parsedCheckpoints++;
+      else parsedBucketBodies++;
+    }
+    return value;
   };
   const post = parentPort.postMessage;
   parentPort.postMessage = function(message, ...args) {
     if (operation && (message.status === "ok" || message.status === "failed")) {
       fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({
-        operation, parsedRollups, threadId,
+        operation, parsedRollups, parsedCheckpoints, parsedBucketBodies, threadId,
       }) + "\\n");
       operation = undefined;
     }
@@ -117,7 +126,7 @@ function appendSessionUsage(
   });
 }
 
-it("refreshes registered usage.cost without decoding unchanged fresh rollups", async () => {
+it("refreshes registered usage.cost without decoding unchanged date partitions", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const preload = state.path("observe-usage-decode.cjs");
     const observations = await observeUsageDecoding(preload, state.path("usage-decode.jsonl"));
@@ -170,12 +179,21 @@ it("refreshes registered usage.cost without decoding unchanged fresh rollups", a
       const records = await observations();
       const refreshes = records.filter((record) => record.operation === "refresh");
       expect(refreshes).toHaveLength(2);
+      // The changed transcript reads its checkpoint and date partition; the other three stay cold.
       expect(refreshes[1]).toMatchObject({
         threadId: refreshes[0]!.threadId,
-        parsedRollups: 1,
+        parsedRollups: 2,
+        parsedCheckpoints: 1,
+        parsedBucketBodies: 1,
       });
       expect(
-        records.some((record) => record.operation === "summary" && record.parsedRollups === 4),
+        records.some(
+          (record) =>
+            record.operation === "summary" &&
+            record.parsedRollups === 4 &&
+            record.parsedCheckpoints === 4 &&
+            record.parsedBucketBodies === 0,
+        ),
       ).toBe(true);
     });
   });

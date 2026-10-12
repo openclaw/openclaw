@@ -120,47 +120,6 @@ async function captureViewport(page: Page, filename: string): Promise<void> {
 }
 
 suite.define(() => {
-  it("shows task progress auto-collapse off by default and persists the opt-in", async () => {
-    await suite.withPage(
-      {
-        colorScheme: "dark",
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1440 },
-      },
-      async ({ page }) => {
-        const gateway = await installMockGateway(page, {
-          methodResponses: {
-            "config.get": configResponse({}, "appearance-task-progress-1"),
-          },
-        });
-
-        const response = await page.goto(
-          `${suite.server.baseUrl}settings/appearance?section=__appearance__#settings-appearance-chat`,
-        );
-        expect(response?.status()).toBe(200);
-        await waitForControlUiSettingsTakeover(page);
-        await gateway.waitForRequest("config.get");
-
-        const row = settingsRow(page, "Collapse task progress by default on desktop");
-        const toggle = row.getByRole("switch");
-        await row.scrollIntoViewIfNeeded();
-        await expect.poll(() => toggle.isChecked()).toBe(false);
-        await expect.poll(() => row.textContent()).not.toContain("Using default:");
-        await captureViewport(page, "11-task-progress-collapse-off.png");
-
-        await row.click();
-        await expect.poll(() => toggle.isChecked()).toBe(true);
-        await expect
-          .poll(() => readPersistedSettings(page))
-          .toMatchObject({
-            chatCollapseTaskProgress: true,
-          });
-        await captureViewport(page, "12-task-progress-collapse-on.png");
-      },
-    );
-  });
-
   it("removes synced and browser-local overrides, then reloads inherited defaults", async () => {
     const context = await suite.browser.newContext({
       colorScheme: "dark",

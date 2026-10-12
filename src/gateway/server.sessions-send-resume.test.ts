@@ -223,7 +223,9 @@ it.each([
     expect(result.details).toMatchObject({ status: "error", error });
     proof.expectUnadopted();
     expect(await listSessionPendingInputs(proof.scope)).toEqual({ items: [], total: 0 });
-    expect(listSessionPendingInputReceipts(proof.scope, { runIds: [proof.runId] })).toEqual([]);
+    expect(await listSessionPendingInputReceipts(proof.scope, { runIds: [proof.runId] })).toEqual(
+      [],
+    );
     expect(agentCommandMock).not.toHaveBeenCalled();
     expect(announce).not.toHaveBeenCalled();
   } finally {
@@ -315,17 +317,17 @@ it.for([
         error: expect.stringContaining("Pending input ownership ended"),
       });
       proof.expectUnadopted();
-      expect(listSessionPendingInputReceipts(proof.scope, { runIds: [proof.runId] })).toEqual([
-        { runId: proof.runId, state: "pending" },
-      ]);
+      expect(await listSessionPendingInputReceipts(proof.scope, { runIds: [proof.runId] })).toEqual(
+        [{ runId: proof.runId, state: "pending" }],
+      );
     } else {
       expect(await listSessionPendingInputs(proof.scope)).toMatchObject({
         total: 1,
         items: [{ runId: proof.runId, state: "cancelled" }],
       });
-      expect(listSessionPendingInputReceipts(proof.scope, { runIds: [proof.runId] })).toEqual([
-        { runId: proof.runId, state: "pending", cancelled: true },
-      ]);
+      expect(await listSessionPendingInputReceipts(proof.scope, { runIds: [proof.runId] })).toEqual(
+        [{ runId: proof.runId, state: "pending", cancelled: true }],
+      );
     }
     expect(agentCommandMock).not.toHaveBeenCalled();
     expect(announce).not.toHaveBeenCalled();
@@ -413,7 +415,7 @@ it("fences a cancelled successor after adoption before queued input consumption"
       total: 1,
       items: [{ runId: proof.runId, state: "interrupted" }],
     });
-    expect(listSessionPendingInputReceipts(proof.scope, { runIds: [proof.runId] })).toEqual([
+    expect(await listSessionPendingInputReceipts(proof.scope, { runIds: [proof.runId] })).toEqual([
       { runId: proof.runId, state: "pending" },
     ]);
     expect(agentCommandMock).not.toHaveBeenCalled();
