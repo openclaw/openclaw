@@ -1,8 +1,9 @@
 import type { JSX } from "@solidjs/web";
-import { Show, createSignal, onCleanup, onSettled } from "solid-js";
+import { Show, createEffect, createSignal, onCleanup, untrack, useContext } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { requestVideoPoster } from "../../../lib/media/video-poster.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { SolidContentPresentation } from "../../../lit/solid-content.tsx";
 import { observeChatAttachmentViewport } from "./chat-attachment-viewport.ts";
 
 export type VideoPreviewProps = {
@@ -22,6 +23,7 @@ export function MessageVideoPreview(props: VideoPreviewProps): JSX.Element {
 }
 
 function VideoPreviewContent(props: VideoPreviewProps): JSX.Element {
+  const presented = useContext(SolidContentPresentation);
   const [posterUrl, setPosterUrl] = createSignal<string>();
   const [failed, setFailed] = createSignal(false);
   let controller: AbortController | undefined;
@@ -38,7 +40,7 @@ function VideoPreviewContent(props: VideoPreviewProps): JSX.Element {
     currentPoster = undefined;
   };
   const requestPoster = () => {
-    if (disposed || !visible || controller || failed()) {
+    if (disposed || !presented() || !visible || controller || failed()) {
       return;
     }
     const request = new AbortController();
@@ -50,7 +52,13 @@ function VideoPreviewContent(props: VideoPreviewProps): JSX.Element {
       height: 225,
       signal: request.signal,
     }).then((blob) => {
-      if (disposed || request !== controller || request.signal.aborted || !visible) {
+      if (
+        disposed ||
+        !presented() ||
+        request !== controller ||
+        request.signal.aborted ||
+        !visible
+      ) {
         return;
       }
       if (blob) {
@@ -61,23 +69,34 @@ function VideoPreviewContent(props: VideoPreviewProps): JSX.Element {
       }
     });
   };
-  onSettled(() =>
-    observeChatAttachmentViewport(
-      element,
-      () => {
-        visible = true;
-        requestPoster();
-      },
-      () => {
-        visible = false;
-        release();
-        setPosterUrl(undefined);
-      },
-    ),
-  );
+  createEffect(presented, (active) => {
+    setPosterUrl(undefined);
+    if (!active) {
+      return undefined;
+    }
+    // Observer setup can admit synchronously; only presentation drives this effect.
+    const stopObserving = untrack(() =>
+      observeChatAttachmentViewport(
+        element,
+        () => {
+          visible = true;
+          requestPoster();
+        },
+        () => {
+          visible = false;
+          release();
+          setPosterUrl(undefined);
+        },
+      ),
+    );
+    return () => {
+      stopObserving();
+      visible = false;
+      release();
+    };
+  });
   onCleanup(() => {
     disposed = true;
-    release();
   });
   return (
     <div

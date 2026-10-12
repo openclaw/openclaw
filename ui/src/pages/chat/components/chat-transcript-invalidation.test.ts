@@ -301,6 +301,7 @@ describe("chat transcript invalidation", () => {
           props.transcriptVisible = false;
           await renderPreview();
         }
+        flush();
         expect(container.querySelector(".chat-video-preview img")).toBeNull();
         expect(revokeObjectURL).toHaveBeenCalledWith("blob:transcript-poster");
         visible = true;

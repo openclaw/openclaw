@@ -35,7 +35,19 @@ import type {
 import { readSessionEntryGenerationInDatabase } from "./session-accessor.sqlite-entry-read.js";
 import { loadSessionEntryReadOnlyResultInScope } from "./session-accessor.sqlite-entry.js";
 import { readCommittedIncognitoSessionSharing } from "./session-accessor.sqlite-incognito-sharing.js";
-import type { SessionDeliveryGeneration } from "./session-delivery-generation.types.js";
+import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
+import {
+  SessionDeliveryGenerationRevokedError,
+  SessionDeliveryGenerationUnavailableError,
+  isSessionDeliveryGenerationRevokedError,
+  isSessionDeliveryGenerationUnavailableError,
+} from "./session-delivery-generation-errors.js";
+import { prepareMemorySessionGeneration } from "./session-delivery-generation-memory.js";
+import type {
+  SessionDeliveryGeneration,
+  SessionGenerationEntry,
+  SessionGenerationFacts,
+} from "./session-delivery-generation.types.js";
 import { withSessionEntriesFromStoresInWorker } from "./session-entry-read-runtime.js";
 import { captureSessionEntrySourceAssertion } from "./session-entry-source-authority.js";
 import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
@@ -45,39 +57,7 @@ import {
 } from "./session-source-authority.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
 
-class SessionDeliveryGenerationRevokedError extends Error {
-  readonly code = "SESSION_DELIVERY_GENERATION_REVOKED";
-  constructor() {
-    super("The original session generation no longer accepts this delivery.");
-    this.name = "SessionDeliveryGenerationRevokedError";
-  }
-}
-
-class SessionDeliveryGenerationUnavailableError extends Error {
-  readonly code = "SESSION_DELIVERY_GENERATION_UNAVAILABLE";
-  constructor(options?: ErrorOptions) {
-    super(
-      "Session delivery generation is unavailable; retry after session storage is ready.",
-      options,
-    );
-    this.name = "SessionDeliveryGenerationUnavailableError";
-  }
-}
-
-export const isSessionDeliveryGenerationRevokedError = (error: unknown) =>
-  isRecord(error) && error.code === "SESSION_DELIVERY_GENERATION_REVOKED";
-const isSessionDeliveryGenerationUnavailableError = (error: unknown) =>
-  isRecord(error) && error.code === "SESSION_DELIVERY_GENERATION_UNAVAILABLE";
-
-type SessionGenerationEntry = Pick<
-  SessionSharingEntry,
-  "sessionId" | "lifecycleRevision" | "permissionMode" | "toolOverrides"
->;
-
-type SessionGenerationFacts = Omit<SessionDeliveryGeneration, "sessionId"> & {
-  sessionId: string | null;
-  env?: NodeJS.ProcessEnv;
-};
+export { isSessionDeliveryGenerationRevokedError } from "./session-delivery-generation-errors.js";
 
 function isSessionGenerationFacts(value: unknown): value is SessionGenerationFacts {
   return (
@@ -116,6 +96,10 @@ async function prepareSessionGenerationLease(
 }> {
   if (!isSessionGenerationFacts(input)) {
     throw new SessionDeliveryGenerationUnavailableError();
+  }
+  const memory = getSessionActorStorageBinding(input);
+  if (memory) {
+    return prepareMemorySessionGeneration(memory, input, onRevoked);
   }
   const generation = { ...input };
   const binding = captureIncognitoSessionBinding(generation);
