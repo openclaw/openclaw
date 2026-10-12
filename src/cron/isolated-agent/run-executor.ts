@@ -74,11 +74,7 @@ import {
   syncCronSessionLiveSelection,
 } from "./run-session-state.js";
 import { resolveThinkingSelection } from "./run.runtime.js";
-import type {
-  CronCompletedPromptRun,
-  CronExecutionResult,
-  CronRunnerStartedInfo,
-} from "./run.types.js";
+import type { CronCompletedPromptRun, CronExecutionResult } from "./run.types.js";
 import { isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 type CronEmbeddedRuntime = typeof import("./run-embedded.runtime.js");
@@ -229,10 +225,6 @@ function createCronPromptExecutor(
       executionIdentity: params.executionIdentity,
     });
     params.onPromptAdmission(cronAdmission);
-    const onExecutionStarted = async (info?: CronRunnerStartedInfo) => {
-      params.onExecutionStarted?.(info);
-      await params.executionIdentity?.onExecutionStarted?.();
-    };
     // Record the cron source fact at its producer for the run's lifetime so
     // exec-approval creation and standing-grant use never infer job identity
     // from session keys or run ids. Cleared when the run settles. A job whose
@@ -315,7 +307,7 @@ function createCronPromptExecutor(
         canReusePreparedSession = false;
         params.lifecycle.beginAttempt();
         const notifyExecutionStarted = (info?: { lifecycleGeneration?: string }) =>
-          onExecutionStarted({
+          params.onExecutionStarted?.({
             ...info,
             ...(runOptions.isFallbackRetry ? { isFallback: true } : {}),
             provider: providerOverride,

@@ -29,7 +29,7 @@ import { createExecutionIdentityAdmissionToken } from "./execution-identity-admi
 import {
   bindExecutionOwnerLifecycleMetadata,
   ensureExecutionOwnerLifecycleBindingSchema,
-} from "./execution-owner-lifecycle-binding-store.js";
+} from "./execution-owner-lifecycle-binding.test-support.js";
 import {
   configureMessageActionDecisionSink,
   recordMessageActionDecision,
