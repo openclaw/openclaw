@@ -6,7 +6,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createDataTransferStub } from "../test-helpers/drag-data.ts";
 import {
-  panelTabStripStyles,
   renderPanelTabStrip,
   type PanelTabStripTab,
   type PanelTabStripParams,
@@ -170,10 +169,6 @@ afterEach(async () => {
 });
 
 describe("renderPanelTabStrip", () => {
-  it("keeps the new-tab control from shrinking when the strip overflows", () => {
-    expect(panelTabStripStyles.cssText).toMatch(/\.tabstrip-new\s*\{[^}]*flex:\s*none/u);
-  });
-
   it("renders an unslotted new button without an empty tab group", async () => {
     const onNew = vi.fn();
     const container = await renderStrip({ onNew });
@@ -225,6 +220,39 @@ describe("renderPanelTabStrip", () => {
     await bridge.updateComplete;
     expect(contentRef).toHaveBeenLastCalledWith(undefined);
     expect(contentRef.mock.contexts.at(-1)).toBe(renderHost);
+  });
+
+  it("retains icon content when tab projections and callbacks change", async () => {
+    const iconRef = vi.fn();
+    const icon = (label: string) => html`<span ${ref(iconRef)}>${label}</span>`;
+    const firstIcon = icon("First icon");
+    const tabs = [
+      { ...TAB, icon: firstIcon },
+      { ...TAB, id: "tab-2", domId: "test-tab-2" },
+    ];
+    const container = await renderStrip({ tabs });
+    const iconElement = container.querySelector(".tabstrip-tab__icon span span");
+    expect(iconRef).toHaveBeenCalledExactlyOnceWith(iconElement);
+
+    const onSelect = vi.fn();
+    await renderStrip({
+      tabs: tabs.map((tab) => ({ ...tab })),
+      activeId: "tab-2",
+      onSelect,
+      container,
+    });
+    expect(container.querySelector(".tabstrip-tab__icon span span")).toBe(iconElement);
+    expect(iconRef).toHaveBeenCalledOnce();
+    requestTabSelection(container, TAB.id);
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith(TAB.id);
+
+    await renderStrip({
+      tabs: [{ ...TAB, icon: icon("Updated icon") }, tabs[1]!],
+      container,
+    });
+    expect(container.querySelector(".tabstrip-tab__icon span span")).toBe(iconElement);
+    expect(iconElement?.textContent).toBe("Updated icon");
+    expect(iconRef).toHaveBeenCalledOnce();
   });
 
   it.each([

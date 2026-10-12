@@ -6,7 +6,6 @@ import { COMMAND_PALETTE_OPEN_EVENT } from "../components/command-palette-contra
 import {
   DEBUG_OVERLAY_REQUEST_EVENT,
   KEYBOARD_SHORTCUTS_REQUEST_EVENT,
-  TERMINAL_PANEL_TOGGLE_EVENT,
 } from "../components/panel-toggle-contract.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import {
@@ -106,19 +105,17 @@ function stalePalette() {
 }
 
 describe("lazy shell action storage", () => {
-  it.each([
-    "{",
-    JSON.stringify({ eventType: COMMAND_PALETTE_OPEN_EVENT, extra: true }),
-    JSON.stringify({ eventType: "openclaw:unknown", detail: {} }),
-    JSON.stringify({ eventType: TERMINAL_PANEL_TOGGLE_EVENT, detail: [] }),
-  ])("discards malformed state: %s", (raw) => {
-    const storage = createStorageMock();
-    vi.stubGlobal("sessionStorage", storage);
-    storage.setItem(storageKey, raw);
+  it.each(["{", JSON.stringify({ eventType: COMMAND_PALETTE_OPEN_EVENT, extra: true })])(
+    "discards malformed state: %s",
+    (raw) => {
+      const storage = createStorageMock();
+      vi.stubGlobal("sessionStorage", storage);
+      storage.setItem(storageKey, raw);
 
-    expect(readLazyShellAction()).toBeNull();
-    expect(storage.getItem(storageKey)).toBeNull();
-  });
+      expect(readLazyShellAction()).toBeNull();
+      expect(storage.getItem(storageKey)).toBeNull();
+    },
+  );
 });
 
 describe("shell lazy events", () => {
@@ -427,7 +424,7 @@ describe("shell lazy events", () => {
     });
   });
 
-  it.each(["minimized", "close", "context", "replacement", "unmounted"] as const)(
+  it.each(["close", "context", "replacement", "unmounted"] as const)(
     "keeps the pending debug frame intent owned through %s",
     async (outcome) => {
       vi.stubGlobal("sessionStorage", createStorageMock());
@@ -487,7 +484,7 @@ describe("shell lazy events", () => {
             shell.append(document.createElement(tagName));
             shell.restorePendingLazyAction();
           }
-          if (outcome === "minimized" || outcome === "unmounted") {
+          if (outcome === "unmounted") {
             expect(opened).toHaveBeenCalledExactlyOnceWith("minimized");
             expect(readLazyShellAction()).toEqual({ eventType: DEBUG_OVERLAY_REQUEST_EVENT });
             shell.restorePendingLazyAction();

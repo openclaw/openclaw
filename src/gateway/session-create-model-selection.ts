@@ -241,7 +241,7 @@ export async function prepareSessionCreateDefaultAccount(params: {
     return selected;
   }
   const model = selected.selection;
-  const linked = resolveUserLinkedAuthProfile({
+  const linked = await resolveUserLinkedAuthProfile({
     cfg: resolveModelProviderAuthConfig({
       config: params.cfg,
       provider: model.provider,
@@ -315,6 +315,7 @@ export async function resolveSessionForkMaxTokens(params: {
             sessionKey: params.sessionKey,
             sessionEntry: params.entry,
           }),
+          allowApiFallback: false,
         }).entry
       : undefined;
   const childContextWindow = resolveModelContextWindowProfile({
@@ -327,8 +328,7 @@ export async function resolveSessionForkMaxTokens(params: {
     model: childModel.model,
     modelContextTokens: childCatalogEntry?.contextTokens,
     modelContextWindow: childContextWindow.contextTokens,
-    allowAsyncLoad: false,
-    allowUnscopedModelLookup: false,
+    allowCacheLookup: false,
   });
   return childContextWindow.contextTokens
     ? Math.min(

@@ -61,7 +61,7 @@ import {
   probeDiscordStatusAccount,
 } from "./channel.loaders.js";
 import { openDiscordCommandDeployHashStore } from "./command-deploy-store.js";
-import { inspectDiscordConversationRouteOwner } from "./conversation-route-owner.js";
+import { prepareDiscordConversationRouteOwnersAsync } from "./conversation-route-owner.js";
 import { shouldSuppressLocalDiscordExecApprovalPrompt } from "./exec-approvals.js";
 import {
   resolveDiscordGroupRequireMention,
@@ -186,7 +186,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe, 
       messaging: {
         directTargetStyle: discordPluginBase.messaging?.directTargetStyle,
         inferTargetChatType: discordPluginBase.messaging?.inferTargetChatType,
-        resolveConversationRouteOwner: inspectDiscordConversationRouteOwner,
+        prepareConversationRouteOwnersAsync: prepareDiscordConversationRouteOwnersAsync,
         targetPrefixes: ["discord"],
         targetIdComparison: "lowercase",
         normalizeTarget: normalizeDiscordMessagingTarget,

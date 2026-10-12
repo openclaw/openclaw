@@ -5,7 +5,10 @@ import {
   hydrateOpenClawStateWorkerError,
   retainOpenClawStateWorkerErrorPayload,
 } from "../../state/openclaw-state-worker-error.js";
-import { emptyOutboundDeliveryQueueAdmission } from "../delivery-queue-cache.js";
+import {
+  emptyOutboundDeliveryQueueAdmission,
+  notifyOutboundDeliveryEnqueued,
+} from "../delivery-queue-cache.js";
 import type { InitialDeliveryProducerClaim } from "../delivery-queue-sqlite-claim.kernel.js";
 import {
   captureDeliveryQueueStateContext,
@@ -16,7 +19,10 @@ import { executeDeliveryQueueOperation } from "../delivery-queue-worker-store.js
 import type { DeliveryQueueWorkerOperations } from "../delivery-queue.worker-contract.js";
 import { generateSecureUuid } from "../secure-random.js";
 import { getOrLoadSqliteDatabaseAdmissionForPath } from "../sqlite-database-admission.js";
-import { createSqliteWorkerOperationAdmission } from "../sqlite-worker-operation-admission.js";
+import {
+  createSqliteWorkerOperationAdmission,
+  observeSqliteWorkerCommittedFacts,
+} from "../sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "../sqlite-worker-operation-settlement.js";
 import { OutboundDeliveryError, PlatformMessageNotDispatchedError } from "./deliver-types.js";
 import { failPendingDelivery } from "./delivery-queue-ack.js";
@@ -63,8 +69,7 @@ export async function findDeliveryIntentOwner(
   stateDir?: string,
   context?: DeliveryQueueStateContext,
 ) {
-  const [owner] = await findDeliveryIntentOwners([id], stateDir, context);
-  return owner ?? null;
+  return (await findDeliveryIntentOwners([id], stateDir, context))[0] ?? null;
 }
 
 /** Resolve one ordered batch without reopening the store for each intent. */
@@ -128,15 +133,14 @@ function createQueuedDelivery(
 /** Keep uncertain publication with recovery even when the broker returns a cleanup error. */
 async function enqueueQueuedDelivery(
   input: DeliveryQueueWorkerOperations["deliveryQueue.enqueue"]["input"],
-  stateDir: string | undefined,
-  context: DeliveryQueueStateContext | undefined,
+  context: DeliveryQueueStateContext,
 ) {
   let settlement: Promise<SqliteWorkerOperationSettlement> | undefined;
   let result: DeliveryQueueWorkerOperations["deliveryQueue.enqueue"]["output"];
   try {
     result = await executeDeliveryQueueOperation(
       context,
-      stateDir,
+      context.stateDir,
       {
         type: "deliveryQueue.enqueue",
         input,
@@ -144,13 +148,14 @@ async function enqueueQueuedDelivery(
       {
         createAdmission: (retained) => {
           settlement = retained.settled;
-          return {
-            nativeLocations: [],
-            // This operation observes native settlement; it grants no additional authority.
-            admission: createSqliteWorkerOperationAdmission(() => {
-              throw new Error("Delivery enqueue does not request host transaction admission");
-            }),
-          };
+          // This operation observes native settlement; it grants no additional authority.
+          const admission = createSqliteWorkerOperationAdmission(() => {
+            throw new Error("Delivery enqueue does not request host transaction admission");
+          });
+          observeSqliteWorkerCommittedFacts(admission, () =>
+            notifyOutboundDeliveryEnqueued(context.stateDir),
+          );
+          return { nativeLocations: [], admission };
         },
       },
     );
@@ -203,7 +208,6 @@ export async function enqueueDelivery(
   );
   const result = await enqueueQueuedDelivery(
     { kind: "random", entryJson: JSON.stringify(entry), mediaStageId },
-    stateDir,
     captured,
   );
   if (result === "existing") {
@@ -228,7 +232,6 @@ export async function enqueueDeliveryOnce(
   const entry = createQueuedDelivery(params, normalizedId, true);
   const result = await enqueueQueuedDelivery(
     { kind: "stable", entryJson: JSON.stringify(entry), mediaStageId },
-    stateDir,
     captured,
   );
   return { id: normalizedId, created: result === "created" };
@@ -256,7 +259,6 @@ export async function enqueuePreparedDeliveryOnce(
       preparationJson: JSON.stringify(preparation),
       mediaStageId,
     },
-    stateDir,
     captured,
   );
   if (result !== "moved") {

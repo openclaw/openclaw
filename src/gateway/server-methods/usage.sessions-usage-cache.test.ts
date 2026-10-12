@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { publishSessionCostUsageUpdated } from "../../infra/session-cost-usage-events.js";
 import { createEmptyCostUsageTotals } from "../../infra/session-cost-usage-totals.js";
 import type { SessionsUsageResult } from "../../shared/usage-types.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { linkEmail, setDisplayName } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -142,6 +143,7 @@ describe("sessions.usage result cache and owner attribution", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const firstProfile = ensureProfileForEmail("first@example.com");
       const secondProfile = ensureProfileForEmail("second@example.com");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const roleConfig: OpenClawConfig = {
         ...config,
         gateway: {
@@ -372,6 +374,7 @@ describe("usage creator attribution", () => {
       const ada = ensureProfileForEmail("ada@example.test");
       const bob = ensureProfileForEmail("bob@example.test");
       setDisplayName(ada.id, "Ada");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const query = fixture(
         {
           "agent:main:ada": {
@@ -430,6 +433,7 @@ describe("usage creator attribution", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const ada = ensureProfileForEmail("ada@example.test");
       const former = ensureProfileForEmail("former@example.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const query = fixture(
         {
           "agent:main:ada": {
@@ -497,6 +501,7 @@ describe("usage creator attribution", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const ada = ensureProfileForEmail("ada@example.test");
       const bob = ensureProfileForEmail("bob@example.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const query = fixture(
         {
           "agent:main:ada": {

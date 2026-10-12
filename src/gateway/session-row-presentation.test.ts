@@ -49,10 +49,12 @@ it("projects send policy and recipient restrictions, clearing them when the curr
     const clients = ["write", "view", "suggest", "restricted"].map((role) => {
       const profile = ensureProfileForEmail(`${role}@send-presentation.test`);
       setUserProfileRole(profile.id, role);
-      const client = sharingPolicyClient({ user: profile.id });
-      prepareGatewayRecipientProfile(client);
-      return client;
+      return sharingPolicyClient({ user: profile.id });
     });
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    for (const client of clients) {
+      prepareGatewayRecipientProfile(client);
+    }
     const creatorId = clients[0]!.authenticatedUserProfile!.profileId;
     const keys = ["host", "sandbox", "entry-blocked", "policy-blocked"];
     for (const key of keys) {
@@ -286,12 +288,14 @@ it.each(["running", "queued", "capacity-wait"] as const)(
 );
 
 it("presents current recipient roles without SQLite while rejecting source overrides and excluded children", async () => {
-  using _ = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+  using clock = vi.spyOn(Date, "now");
+  clock.mockReturnValue(1_800_000_000_000);
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const owner = ensureProfileForEmail("owner@presentation.test");
     const member = ensureProfileForEmail("member@presentation.test");
     const viewer = ensureProfileForEmail("viewer@presentation.test");
     setUserProfileRole(viewer.id, "none");
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     const clients = [owner, member, viewer].map((profile) => {
       const client = Object.assign(sharingPolicyClient({ user: profile.id }), {
         connId: profile.id,

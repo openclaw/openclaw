@@ -7,6 +7,7 @@ import {
   type CommandArgs,
 } from "openclaw/plugin-sdk/command-auth-native";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { recordDeliveredCommandExchange } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   Button,
@@ -50,6 +51,7 @@ import {
   resolveDiscordModelPickerPreferenceScope,
   resolveDiscordModelPickerRoute,
 } from "./native-command-model-picker-ui.js";
+import { formatDiscordCommandComponents } from "./native-command-reply.js";
 import type {
   DiscordCommandArgContext,
   SafeDiscordInteractionCall,
@@ -223,14 +225,14 @@ async function handleDiscordModelPickerInteraction(
     accountId: ctx.accountId,
     threadBindings: ctx.threadBindings,
   });
-  const sessionEntry = createDiscordModelPickerSessionReader({ cfg, route }, "latest")();
+  const sessionEntry = await createDiscordModelPickerSessionReader({ cfg, route }, "latest")();
   const pickerData = await loadDiscordModelPickerData(cfg, route.agentId, { sessionEntry });
   const tokenModel = parsed.modelToken
     ? resolveDiscordModelPickerModelRefByToken(pickerData, parsed.modelToken)
     : null;
   const parsedProvider = parsed.provider ?? splitDiscordModelRef(tokenModel ?? "")?.provider;
-  const modelContext = { cfg, route, data: pickerData };
-  const currentModelRef = resolveDiscordModelPickerCurrentModel(modelContext);
+  const modelContext = { cfg, route, data: pickerData, sessionEntry };
+  const currentModelRef = await resolveDiscordModelPickerCurrentModel(modelContext);
   const currentModel = splitDiscordModelRef(currentModelRef);
   const browseProvider =
     parsedProvider ?? currentModel?.provider ?? pickerData.resolvedDefault.provider;
@@ -252,10 +254,36 @@ async function handleDiscordModelPickerInteraction(
     allowedModelRefs,
     limit: 5,
   });
-  const updatePicker = async (payload: MessagePayload) =>
-    await params.safeInteractionCall("model picker update", () => interaction.editReply(payload));
-  const showNotice = async (message: string) =>
-    await updatePicker(buildDiscordModelPickerNoticePayload(message));
+  const recordReply = async (commandText: string, replyText: string, replyId: string) =>
+    await recordDeliveredCommandExchange({
+      config: cfg,
+      agentId: route.agentId,
+      sessionKey: route.sessionKey,
+      expectedSessionId: sessionEntry?.sessionId,
+      commandText,
+      commandId: `discord:${ctx.accountId}:${route.sessionKey}:${interaction.id}`,
+      replyId,
+      replyText,
+    });
+  const updatePicker = async (payload: MessagePayload, capture = true) => {
+    const delivered = await params.safeInteractionCall("model picker update", () =>
+      interaction.editReply(payload),
+    );
+    if (delivered !== null && capture) {
+      await recordReply(
+        `/${parsed.command}`,
+        typeof payload === "string"
+          ? payload
+          : [payload.content, formatDiscordCommandComponents(payload.components ?? [])]
+              .filter(Boolean)
+              .join("\n"),
+        "picker-update",
+      );
+    }
+    return delivered;
+  };
+  const showNotice = async (message: string, capture = true) =>
+    await updatePicker(buildDiscordModelPickerNoticePayload(message), capture);
   const renderContext = {
     command: parsed.command,
     userId: parsed.userId,
@@ -452,7 +480,7 @@ async function handleDiscordModelPickerInteraction(
     );
     const modelOnlyHost = !supportsDiscordModelPickerRuntimeChoices();
     const supportsModelOnlySelection = () => {
-      const currentEntry = createDiscordModelPickerSessionReader({ cfg, route }, "latest")();
+      const currentEntry = sessionEntry;
       const override = currentEntry?.agentRuntimeOverride?.trim();
       // The old command owner cannot validate native pins against a different model.
       // Preserve those pins; model-only compatibility never invents a runtime choice.
@@ -509,17 +537,13 @@ async function handleDiscordModelPickerInteraction(
       return;
     }
 
-    const updateResult = await showNotice(`Applying model change to ${resolvedModelRef}...`);
+    const updateResult = await showNotice(`Applying model change to ${resolvedModelRef}...`, false);
     if (updateResult === null) {
       return;
     }
 
     if (pickerData.isCurrent?.() === false) {
       await showNotice("That model picker expired. Reopen /model to try again.");
-      return;
-    }
-    if (modelOnlyHost && !supportsModelOnlySelection()) {
-      await showNotice(legacyRuntimeNotice);
       return;
     }
     const applyResult = await applyDiscordModelPickerSelection({
@@ -533,24 +557,28 @@ async function handleDiscordModelPickerInteraction(
       selectedRuntime,
       preferenceScope,
       settleMs: ctx.postApplySettleMs ?? 250,
-      resolveCurrentModel: (currentRoute) =>
-        resolveDiscordModelPickerCurrentModel({
-          ...modelContext,
-          route: currentRoute,
-        }),
-      resolveCurrentRuntime: (currentRoute) =>
-        resolveDiscordModelPickerCurrentRuntime({
+      resolveCurrentSelection: async (currentRoute) => {
+        const currentEntry = await createDiscordModelPickerSessionReader({
           cfg,
           route: currentRoute,
-        }),
+        })();
+        const currentContext = { ...modelContext, route: currentRoute, sessionEntry: currentEntry };
+        return {
+          modelRef: await resolveDiscordModelPickerCurrentModel(currentContext),
+          runtime: resolveDiscordModelPickerCurrentRuntime(currentContext),
+        };
+      },
     });
 
-    await params.safeInteractionCall("model picker follow-up", () =>
+    const delivered = await params.safeInteractionCall("model picker follow-up", () =>
       interaction.followUp({
         ...buildDiscordModelPickerNoticePayload(applyResult.noticeMessage),
         ephemeral: true,
       }),
     );
+    if (delivered !== null) {
+      await recordReply(selectionCommand.prompt, applyResult.noticeMessage, "selection");
+    }
     return;
   }
 

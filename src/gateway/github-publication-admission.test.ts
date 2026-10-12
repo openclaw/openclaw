@@ -2,13 +2,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { updateUserGitHubConnection } from "../state/user-github-connections.test-support.js";
-import { readPersonalGitHubPublication } from "./github-personal-publication-store.js";
 import {
   callPersonalPublicationRpc,
   createPersonalPublicationFixture,
   personalPublicationAccount,
 } from "./github-personal-publication.test-support.js";
-import { readGitHubPublicationRequest } from "./github-publication-store.js";
+import { readPersonalGitHubPublicationAsync } from "./github-publication-store-async.js";
+import { readGitHubPublicationRequest } from "./github-publication-store.worker.js";
 import {
   SESSION_ID,
   SESSION_KEY,
@@ -16,6 +16,7 @@ import {
   createTestGitHubPublicationCoordinator,
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
+  persistClaimPublicationWorkspace,
   root,
 } from "./github-publication.test-support.js";
 import {
@@ -34,6 +35,9 @@ const rejection = (idempotencyKey: string) => ({
 });
 
 async function sharedAdmission(surface: "local" | "deferred" | "claim") {
+  if (surface !== "local") {
+    await persistClaimPublicationWorkspace();
+  }
   const database = openOpenClawStateDatabase();
   const db = database.db;
   const placements = createWorkerSessionPlacementStore({ database });
@@ -66,14 +70,14 @@ async function sharedAdmission(surface: "local" | "deferred" | "claim") {
     read: () => readGitHubPublicationRequest(db, { sessionId, idempotencyKey: key }),
     request: (expected = obsolete) =>
       claim
-        ? coordinator.requestForClaim({
+        ? coordinator.requestForClaimV2({
             claim,
             sessionKey,
             agentId: "main",
             idempotencyKey: key,
             expectedPublisher: expected,
           })
-        : coordinator.requestForSession({
+        : coordinator.requestForSessionV2({
             sessionKey,
             agentId: "main",
             idempotencyKey: key,
@@ -114,7 +118,7 @@ describe("GitHub publication selection admission", () => {
         }),
     );
     const coordinator = createTestGitHubPublicationCoordinator({ placements });
-    const pending = coordinator.requestForClaim({
+    const pending = coordinator.requestForClaimV2({
       claim,
       sessionKey: REQUEST.sessionKey,
       agentId: REQUEST.agentId,
@@ -133,6 +137,7 @@ describe("GitHub publication selection admission", () => {
   });
 
   it("rejects reuse of a worker publication idempotency key by a later turn", async () => {
+    await persistClaimPublicationWorkspace();
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const placements = createWorkerSessionPlacementStore({ database });
     seedAttachedPlacementEnvironment(database, {
@@ -153,7 +158,7 @@ describe("GitHub publication selection admission", () => {
       owner: { kind: "worker", environmentId: "environment-idempotency", ownerEpoch: 2 },
     });
     const coordinator = createTestGitHubPublicationCoordinator({ placements });
-    await coordinator.requestForClaim({
+    await coordinator.requestForClaimV2({
       claim: firstClaim,
       sessionKey: REQUEST.sessionKey,
       agentId: REQUEST.agentId,
@@ -170,29 +175,13 @@ describe("GitHub publication selection admission", () => {
     });
 
     await expect(
-      coordinator.requestForClaim({
+      coordinator.requestForClaimV2({
         claim: secondClaim,
         sessionKey: REQUEST.sessionKey,
         agentId: REQUEST.agentId,
         idempotencyKey: "reused-worker-call",
       }),
     ).rejects.toThrow("idempotency key was reused");
-  });
-
-  it("rejects publisher revocation during the final worktree read before claim admission", async () => {
-    const fixture = await sharedAdmission("claim");
-    const identity = await mocks.prepareIdentity();
-    const findWorktree = mocks.findWorktree.getMockImplementation()!;
-    mocks.prepareIdentity.mockImplementationOnce(async () => {
-      mocks.findWorktree.mockImplementationOnce((...args) => {
-        mocks.matchesIdentity.mockReturnValue(false);
-        return findWorktree(...args);
-      });
-      return identity;
-    });
-    await expect(fixture.request(publisher)).rejects.toThrow("GitHub publication identity changed");
-    expect(fixture.read()).toBeUndefined();
-    expect(commands).toEqual([]);
   });
 
   it.each([
@@ -284,7 +273,7 @@ describe("GitHub publication selection admission", () => {
     },
   );
 
-  it.each(["deferred", "claim"] as const)(
+  it.each(["claim"] as const)(
     "observes a same-key %s admission committed while identity preparation awaits",
     async (surface) => {
       const fixture = await sharedAdmission(surface);
@@ -382,7 +371,7 @@ describe("GitHub publication selection admission", () => {
     const response = await callPersonalPublicationRpc(fixture, "sessions.github.publish", request);
     expect(response[0]).toBe(false);
     expect(
-      readPersonalGitHubPublication(fixture.owner, {
+      await readPersonalGitHubPublicationAsync(fixture.owner, {
         sessionId: SESSION_ID,
         idempotencyKey: key,
       }),
@@ -406,13 +395,13 @@ describe("GitHub publication selection admission", () => {
     });
     expect(response[0]).toBe(false);
     expect(response[2]).not.toHaveProperty("details");
-    const row = readPersonalGitHubPublication(fixture.owner, {
+    const row = await readPersonalGitHubPublicationAsync(fixture.owner, {
       sessionId: SESSION_ID,
       idempotencyKey: key,
     });
     expect(row).toMatchObject({ status: "requested", execution_id: null });
     expect(
-      fixture.coordinator.personalStatus(
+      await fixture.coordinator.personalStatusAsync(
         fixture.action,
         fixture.action,
         row!.request_id,

@@ -27,7 +27,6 @@ import {
   clearPluginStateStoreForTests,
   seedPluginStateEntriesForTests,
 } from "./plugin-state-store.test-helpers.js";
-import { sweepExpiredPluginStateEntriesInWorker } from "./plugin-state-worker-client.js";
 import { executePluginStateCommand } from "./plugin-state.worker.js";
 
 type PluginStateChange = Parameters<Parameters<typeof pluginStatePublication.subscribe>[0]>[0];
@@ -55,6 +54,76 @@ function observe() {
 }
 
 describe("plugin state committed facts", () => {
+  it("reuses namespace lists until a committed write changes their rows", async () => {
+    await withOpenClawTestState(
+      { label: "plugin-state-namespace-read-receipts" },
+      async ({ env }) => {
+        const options = { namespace: "receipts", maxEntries: 10, env };
+        const store = createPluginStateKeyedStore<{ count: number }>("receipt-test", options);
+        const native = createPluginStateSyncKeyedStore<{ count: number }>("receipt-test", options);
+        const sibling = createPluginStateSyncKeyedStore("receipt-test", {
+          ...options,
+          namespace: "sibling",
+        });
+        await store.register("first", { count: 1 });
+        const dispatch = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
+        const initial = await store.entries();
+        expect(initial).toMatchObject([{ key: "first", value: { count: 1 } }]);
+        expect(dispatch).toHaveBeenCalledOnce();
+        initial[0]!.value.count = 99;
+        dispatch.mockClear();
+        sibling.register("other", true);
+        expect(await store.entries()).toMatchObject([{ key: "first", value: { count: 1 } }]);
+        expect(dispatch).not.toHaveBeenCalled();
+
+        native.register("second", { count: 2 });
+        expect(await store.entries()).toMatchObject([
+          { key: "first", value: { count: 1 } },
+          { key: "second", value: { count: 2 } },
+        ]);
+        expect(dispatch).toHaveBeenCalledOnce();
+        await store.delete("first");
+        expect(await store.entries()).toMatchObject([{ key: "second", value: { count: 2 } }]);
+        native.clear();
+        expect(await store.entries()).toEqual([]);
+        dispatch.mockClear();
+        expect(await store.entries()).toEqual([]);
+        expect(dispatch).not.toHaveBeenCalled();
+        await store.register("renewed", { count: 3 });
+        expect(await store.entries()).toMatchObject([{ key: "renewed", value: { count: 3 } }]);
+      },
+    );
+  });
+
+  it("expires cached namespace rows and reloads after an uncertain publication", async () => {
+    await withOpenClawTestState({ label: "plugin-state-namespace-expiry" }, async ({ env }) => {
+      let now = Date.now();
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+      const options = { namespace: "receipts", maxEntries: 10, env };
+      const native = createPluginStateSyncKeyedStore("receipt-test", options);
+      const store = createPluginStateKeyedStore("receipt-test", options);
+      native.register("expiring", true, { ttlMs: 10_000 });
+      native.register("permanent", true);
+      expect((await store.entries()).map((entry) => entry.key)).toEqual(["expiring", "permanent"]);
+      const dispatch = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
+      now += 10_000;
+      expect((await store.entries()).map((entry) => entry.key)).toEqual(["permanent"]);
+      expect(dispatch).not.toHaveBeenCalled();
+      const stopFault = pluginStatePublication.subscribeFacts((change) => {
+        if (change.kind === "committed") {
+          throw new Error("fact sink unavailable");
+        }
+      });
+      try {
+        native.clear();
+      } finally {
+        stopFault();
+      }
+      expect(await store.entries()).toEqual([]);
+      expect(dispatch).toHaveBeenCalledOnce();
+    });
+  });
+
   it("serves warm keyed reads from committed receipts across worker and native writes", async () => {
     await withOpenClawTestState({ label: "plugin-state-keyed-read-receipts" }, async ({ env }) => {
       const options = { namespace: "receipts", maxEntries: 10, env };
@@ -170,8 +239,8 @@ describe("plugin state committed facts", () => {
     );
   });
 
-  it("delivers empty sweep receipts at settlement and changed sweeps immediately", async () => {
-    await withOpenClawTestState({ label: "plugin-state-empty-sweep-delivery" }, async ({ env }) => {
+  it("delivers empty deletion receipts at settlement and changed deletions immediately", async () => {
+    await withOpenClawTestState({ label: "plugin-state-delete-receipts" }, async ({ env }) => {
       const database = openOpenClawStateDatabase({ env });
       for (const changed of [false, true]) {
         if (changed) {
@@ -204,13 +273,16 @@ describe("plugin state committed facts", () => {
         try {
           const result = admission.withSqliteWorkerOperationAdmission(owner, () =>
             executePluginStateCommand(
-              { type: "pluginState.sweep", input: undefined },
+              {
+                type: "pluginState.delete",
+                input: { pluginId: "receipt-test", namespace: "receipts", key: "expired" },
+              },
               { path: database.path, env },
               () => database,
               true,
             ),
           );
-          expect(result).toEqual({ ok: true, value: Number(changed) });
+          expect(result).toEqual({ ok: true, value: changed });
           expect(
             database.db.prepare("SELECT count(*) AS count FROM plugin_state_entries").get(),
           ).toEqual({ count: 0 });
@@ -424,7 +496,7 @@ describe("plugin state committed facts", () => {
     });
   });
 
-  it("installs whole worker receipts before atomic operation replies, including sweep", async () => {
+  it("installs whole worker receipts before atomic operation replies and write-time expiry", async () => {
     await withOpenClawTestState({ label: "plugin-state-worker-facts" }, async ({ env }) => {
       const store = createPluginStateKeyedStore("receipt-test", {
         namespace: "receipts",
@@ -454,9 +526,8 @@ describe("plugin state committed facts", () => {
             expiresAt: 1,
           },
         ]);
-        expect(await sweepExpiredPluginStateEntriesInWorker({ env })).toBe(1);
-        expect(seen.fact("expired")).toEqual({ kind: "absent" });
         await store.register("a", true);
+        expect(seen.fact("expired")).toEqual({ kind: "absent" });
         await store.register("b", true);
         await store.clear();
         const clear = seen.changes.findLast((change) => change.kind === "committed");

@@ -154,10 +154,13 @@ extension OpenClawChatViewModel {
         if let phase,
            phase == "start" || phase == "end" || phase == "error"
         {
-            self.handleLifecycleSessionChange(change, phase: phase)
-            return nil
+            return self.handleLifecycleSessionChange(change, phase: phase)
         }
 
+        if change.reason == "subagent-status", self.sidebarData == nil {
+            let context = self.currentSessionSnapshot()
+            return Task { await self.fetchSessions(limit: 50, sessionSnapshot: context) }
+        }
         self.applySessionChangeProjection(change, ownedSwarmActivityNote: ownedSwarmActivityNote)
         // Group-catalog mutations from any client arrive as reason "groups"
         // (mirrors web ui/src/lib/sessions); bump the revision so views keyed
@@ -207,7 +210,7 @@ extension OpenClawChatViewModel {
 
     private func handleLifecycleSessionChange(
         _ change: OpenClawChatSessionsChangedEvent,
-        phase: String)
+        phase: String) -> Task<Void, Never>?
     {
         let eventSessionKey = change.sessionKey ?? change.session?.key
         let changesCurrentSession = eventSessionKey.map {
@@ -255,9 +258,13 @@ extension OpenClawChatViewModel {
             mergedSnapshot = false
         }
 
-        if !mergedSnapshot {
-            self.refreshSessions(limit: 50)
+        // Without the shared sidebar owner, a merged child snapshot does not refresh
+        // its ancestors. Reload canonical rows to clear omitted helper flags too.
+        if !mergedSnapshot || self.sidebarData == nil {
+            let context = self.currentSessionSnapshot()
+            return Task { await self.fetchSessions(limit: 50, sessionSnapshot: context) }
         }
+        return nil
     }
 
     private func mergeLifecycleSessionSnapshot(

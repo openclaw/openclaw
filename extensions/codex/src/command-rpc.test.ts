@@ -207,6 +207,7 @@ describe("Codex command RPC helpers", () => {
     const startOptions = { transport: "stdio" as const, command: "codex", args: [], headers: {} };
     await expect(prepareCodexControlSessionAuth(options, startOptions)).resolves.toEqual({
       authProfileId: "openai:selected",
+      source: undefined,
       clientOptions: { authProfileId: "openai:selected" },
     });
     await expect(
@@ -256,6 +257,8 @@ describe("Codex command RPC helpers", () => {
       {
         authProfileId: undefined,
         assertCurrent: expect.any(Function),
+        assertCurrentAsync: expect.any(Function),
+        source: expect.any(Function),
       },
     );
   });
@@ -313,6 +316,8 @@ describe("Codex command RPC helpers", () => {
       expect(onResponse).toHaveBeenCalledWith(expect.anything(), harness.client, {
         authProfileId: "openai:ready",
         assertCurrent: expect.any(Function),
+        assertCurrentAsync: expect.any(Function),
+        source: expect.any(Function),
       });
     },
   );

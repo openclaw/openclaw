@@ -51,28 +51,12 @@ public actor GatewayNodeSession {
     private static let pluginSurfaceRefreshTimeoutMs = 8000.0
 
     private static let staleRouteInvokeMessage = "UNAVAILABLE: node route changed before dispatch"
-    private enum ComputerInvokeReceiptState {
-        case inFlight(Task<BridgeInvokeResponse, Never>)
-        case completed(BridgeInvokeResponse)
-
-        var isCompleted: Bool {
-            if case .completed = self {
-                return true
-            }
-            return false
-        }
-    }
-
     private struct ComputerInvokeReceipt {
         let id: UUID
         let fingerprint: String
-        var state: ComputerInvokeReceiptState
+        let task: Task<BridgeInvokeResponse, Never>
+        var completed = false
         var operationSettled: Bool
-    }
-
-    private struct ConnectOptionsKey: Equatable {
-        let normalizedInputs: String
-        let deviceAuthGatewayIDBytes: [UInt8]?
     }
 
     private struct ComputerInvokeReceiptKey: Hashable {
@@ -99,7 +83,6 @@ public actor GatewayNodeSession {
     private var channel: GatewayChannelActor?
     private var activeURL: URL?
     private var activeCredentials: GatewayNodeSessionCredentials?
-    private var activeConnectOptionsKey: ConnectOptionsKey?
     private var activeSessionIdentity: ObjectIdentifier?
     private var channelGeneration: UInt64 = 0
     private var admissionGeneration: UInt64 = 0
@@ -120,7 +103,6 @@ public actor GatewayNodeSession {
     private var onRouteInvalidated: (@Sendable () async -> Void)?
     private var hasEverConnected = false
     private var hasNotifiedConnected = false
-    private var snapshotReceived = false
     private var workerHello: (protocolVersion: Int, capabilities: [String])?
     private var serverMethods: Set<String>?
     private var serverCapabilities: Set<GatewayServerCapability>?
@@ -128,7 +110,6 @@ public actor GatewayNodeSession {
     var reactionAccess: GatewayReactionAccessFacts?
     private var attachmentLimits: GatewayAttachmentLimits?
     private var mainSessionKey: String?
-    private var snapshotWaiters: [UUID: CheckedContinuation<Bool, Never>] = [:]
     // `computer.act` is not safe to repeat after a response is lost. Keep recent
     // in-flight/results on the long-lived node session so a channel reconnect can
     // replay the receipt without posting input twice. App restart intentionally
@@ -152,10 +133,8 @@ public actor GatewayNodeSession {
 
     private struct PluginSurfaceRefresh {
         let id: UUID
-        let channelGeneration: UInt64
-        let admissionGeneration: UInt64
         let task: Task<String?, Never>
-        var waiterIDs: Set<UUID>
+        var waiters: Int
     }
 
     /// Surface tokens belong to the shared session. A second rotation can invalidate
@@ -167,51 +146,6 @@ public actor GatewayNodeSession {
     }
 
     public init() {}
-
-    private func connectOptionsKey(_ options: GatewayConnectOptions) -> ConnectOptionsKey {
-        func sorted(_ values: [String]) -> String {
-            values.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
-                .sorted()
-                .joined(separator: ",")
-        }
-        let role = options.role.trimmingCharacters(in: .whitespacesAndNewlines)
-        let scopes = sorted(options.scopes)
-        let caps = sorted(options.caps)
-        let commands = sorted(options.commands)
-        let pathEnv = options.pathEnv?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let clientId = options.clientId.trimmingCharacters(in: .whitespacesAndNewlines)
-        let clientMode = options.clientMode.trimmingCharacters(in: .whitespacesAndNewlines)
-        let clientDisplayName = (options.clientDisplayName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let deviceIdentityProfile = options.deviceIdentityProfile.rawValue
-        let includeDeviceIdentity = options.includeDeviceIdentity ? "1" : "0"
-        let allowStoredDeviceAuth = options.allowStoredDeviceAuth ? "1" : "0"
-        let permissions = options.permissions
-            .map { key, value in
-                let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
-                return "\(trimmed)=\(value ? "1" : "0")"
-            }
-            .sorted()
-            .joined(separator: ",")
-
-        let normalizedInputs = [
-            role,
-            scopes,
-            caps,
-            commands,
-            pathEnv,
-            clientId,
-            clientMode,
-            clientDisplayName,
-            deviceIdentityProfile,
-            includeDeviceIdentity,
-            allowStoredDeviceAuth,
-            permissions,
-        ].joined(separator: "|")
-        return ConnectOptionsKey(
-            normalizedInputs: normalizedInputs,
-            deviceAuthGatewayIDBytes: options.deviceAuthGatewayID.map { Array($0.utf8) })
-    }
 
     public func connect(
         url: URL,
@@ -226,12 +160,14 @@ public actor GatewayNodeSession {
         onInvokeCancel: (@Sendable (String) async -> Void)? = nil,
         onRouteInvalidated: (@Sendable () async -> Void)? = nil) async throws
     {
-        let nextOptionsKey = self.connectOptionsKey(connectOptions)
         let nextSessionIdentity = sessionBox.map { ObjectIdentifier($0.session) }
         let nextTLSRouteMetadataProvider = sessionBox?.session as? GatewayTLSRouteMetadataProviding
+        // Gateway owners are opaque byte identities, not Unicode-normalized strings.
+        let ownerChanged = self.connectOptions?.deviceAuthGatewayID.map { Array($0.utf8) } !=
+            connectOptions.deviceAuthGatewayID.map { Array($0.utf8) }
         let shouldReconnect = self.activeURL != url ||
             self.activeCredentials != credentials ||
-            self.activeConnectOptionsKey != nextOptionsKey ||
+            self.connectOptions != connectOptions || ownerChanged ||
             self.activeSessionIdentity != nextSessionIdentity ||
             self.channel == nil
 
@@ -255,6 +191,12 @@ public actor GatewayNodeSession {
                 bootstrapToken: credentials.bootstrapToken,
                 password: credentials.password,
                 session: sessionBox,
+                connectSnapshotAdmissionHandler: { [weak self] snapshot, socketGeneration in
+                    await self?.admitSnapshot(
+                        snapshot,
+                        channelGeneration: channelGeneration,
+                        socketGeneration: socketGeneration)
+                },
                 pushHandler: { [weak self] push, socketGeneration in
                     await self?.handlePush(
                         push,
@@ -275,7 +217,6 @@ public actor GatewayNodeSession {
             self.channel = channel
             self.activeURL = url
             self.activeCredentials = credentials
-            self.activeConnectOptionsKey = nextOptionsKey
             self.activeSessionIdentity = nextSessionIdentity
             self.activeTLSRouteMetadataProvider = nextTLSRouteMetadataProvider
         } else {
@@ -301,11 +242,6 @@ public actor GatewayNodeSession {
         // admission, so a drained snapshot waiter must not report a stale connect.
         let expectedAdmissionGeneration = self.admissionGeneration
         try await channel.connect()
-        guard self.channelGeneration == channelGeneration,
-              self.admissionGeneration == expectedAdmissionGeneration,
-              self.channel === channel
-        else { throw CancellationError() }
-        _ = await self.waitForSnapshot(timeoutMs: 500)
         guard self.channelGeneration == channelGeneration,
               self.admissionGeneration == expectedAdmissionGeneration,
               self.channel === channel
@@ -355,7 +291,6 @@ public actor GatewayNodeSession {
     private func clearActiveRoute() {
         self.activeURL = nil
         self.activeCredentials = nil
-        self.activeConnectOptionsKey = nil
         self.activeSessionIdentity = nil
         self.activeTLSRouteMetadataProvider = nil
         self.connectOptions = nil
@@ -510,19 +445,12 @@ public actor GatewayNodeSession {
         }
         let channelGeneration = self.channelGeneration
         let admissionGeneration = self.admissionGeneration
-        let waiterID = UUID()
         let refresh: PluginSurfaceRefresh
-        if var activeRefresh = self.pluginSurfaceRefreshes[trimmedSurface],
-           activeRefresh.channelGeneration == channelGeneration,
-           activeRefresh.admissionGeneration == admissionGeneration
-        {
-            activeRefresh.waiterIDs.insert(waiterID)
+        if var activeRefresh = self.pluginSurfaceRefreshes[trimmedSurface] {
+            activeRefresh.waiters += 1
             self.pluginSurfaceRefreshes[trimmedSurface] = activeRefresh
             refresh = activeRefresh
         } else {
-            // A reconnect retires the old channel owner. Do not leave its
-            // deadline-free request alive after installing the new generation.
-            self.pluginSurfaceRefreshes.removeValue(forKey: trimmedSurface)?.task.cancel()
             let id = UUID()
             let task = Task<String?, Never> { [weak self] in
                 guard let self else { return nil }
@@ -536,27 +464,15 @@ public actor GatewayNodeSession {
             }
             refresh = PluginSurfaceRefresh(
                 id: id,
-                channelGeneration: channelGeneration,
-                admissionGeneration: admissionGeneration,
                 task: task,
-                waiterIDs: [waiterID])
+                waiters: 1)
             self.pluginSurfaceRefreshes[trimmedSurface] = refresh
         }
 
-        let value = await withTaskCancellationHandler {
-            await self.awaitPluginSurfaceRefresh(refresh.task, timeoutMs: timeoutMs)
-        } onCancel: {
-            Task {
-                await self.releasePluginSurfaceRefreshWaiter(
-                    surface: trimmedSurface,
-                    refreshID: refresh.id,
-                    waiterID: waiterID)
-            }
-        }
+        let value = await self.awaitPluginSurfaceRefresh(refresh.task, timeoutMs: timeoutMs)
         self.releasePluginSurfaceRefreshWaiter(
             surface: trimmedSurface,
-            refreshID: refresh.id,
-            waiterID: waiterID)
+            refreshID: refresh.id)
         return value
     }
 
@@ -572,10 +488,10 @@ public actor GatewayNodeSession {
             operation: { await task.value })
     }
 
-    private func releasePluginSurfaceRefreshWaiter(surface: String, refreshID: UUID, waiterID: UUID) {
+    private func releasePluginSurfaceRefreshWaiter(surface: String, refreshID: UUID) {
         guard var refresh = self.pluginSurfaceRefreshes[surface], refresh.id == refreshID else { return }
-        guard refresh.waiterIDs.remove(waiterID) != nil else { return }
-        if refresh.waiterIDs.isEmpty {
+        refresh.waiters -= 1
+        if refresh.waiters == 0 {
             // The request itself has no deadline because callers may select different
             // timeouts. The last waiter cancels locally; observedUrl makes any retry
             // reuse an on-wire predecessor's rotation instead of invalidating it.
@@ -716,10 +632,6 @@ public actor GatewayNodeSession {
     public func waitForCurrentMainSessionKey(
         ifCurrentRoute expectedRoute: GatewayNodeSessionRoute) async -> String?
     {
-        guard self.isCurrentRoute(expectedRoute), self.channel != nil else { return nil }
-        if !self.snapshotReceived {
-            guard await self.waitForSnapshot() else { return nil }
-        }
         guard self.isCurrentRoute(expectedRoute), self.channel != nil else { return nil }
         return self.mainSessionKey
     }
@@ -863,6 +775,26 @@ public actor GatewayNodeSession {
 // MARK: - Inbound events and invokes
 
 extension GatewayNodeSession {
+    private func admitSnapshot(
+        _ snapshot: HelloOk,
+        channelGeneration: UInt64,
+        socketGeneration: UInt64)
+    {
+        guard self.channelGeneration == channelGeneration,
+              self.socketGenerationState.admit(socketGeneration)
+        else { return }
+        self.pluginSurfaceUrls = self.normalizePluginSurfaceUrls(snapshot.pluginsurfaceurls)
+        let capabilities = snapshot.features["capabilities"]?.arrayValue?.compactMap(\.stringValue) ?? []
+        self.workerHello = (snapshot._protocol, capabilities)
+        self.serverMethods = snapshot.advertisedServerMethods()
+        self.serverCapabilities = Set(
+            GatewayServerCapability.allCases.filter { snapshot.supportsServerCapability($0) })
+        self.operatorScopes = snapshot.advertisedOperatorScopes()
+        self.reactionAccess = GatewayReactionAccessFacts(hello: snapshot)
+        self.attachmentLimits = snapshot.advertisedAttachmentLimits()
+        self.mainSessionKey = snapshot.snapshot.sessiondefaults?["mainSessionKey"]?.stringValue?.trimmedNonEmpty
+    }
+
     private func handlePush(
         _ push: GatewayPush,
         channelGeneration: UInt64,
@@ -872,28 +804,9 @@ extension GatewayNodeSession {
               self.socketGenerationState.admit(socketGeneration)
         else { return }
         switch push {
-        case let .snapshot(ok):
-            let admissionGeneration = self.admissionGeneration
-            self.pluginSurfaceUrls = self.normalizePluginSurfaceUrls(ok.pluginsurfaceurls)
-            // Decoded arrays wrap their elements; a raw string cast silently disables worker features.
-            let capabilities = ok.features["capabilities"]?.arrayValue?.compactMap(\.stringValue) ?? []
-            self.workerHello = (ok._protocol, capabilities)
-            self.serverMethods = ok.advertisedServerMethods()
-            self.serverCapabilities = Set(
-                GatewayServerCapability.allCases.filter { ok.supportsServerCapability($0) })
-            self.operatorScopes = ok.advertisedOperatorScopes()
-            self.reactionAccess = GatewayReactionAccessFacts(hello: ok)
-            self.attachmentLimits = ok.advertisedAttachmentLimits()
-            let snapshotMainSessionKey = ok.snapshot.sessiondefaults?["mainSessionKey"]?.value as? String
-            self.mainSessionKey = snapshotMainSessionKey?.trimmedNonEmpty
-            if self.hasEverConnected {
-                self.broadcastServerEvent(
-                    EventFrame(type: "event", event: "seqGap", payload: nil, seq: nil, stateversion: nil))
-            }
-            self.hasEverConnected = true
-            self.markSnapshotReceived()
+        case .snapshot:
             await self.notifyConnectedIfNeeded(
-                admissionGeneration: admissionGeneration)
+                admissionGeneration: self.admissionGeneration)
         case let .event(evt):
             guard let channel else { return }
             await self.handleEvent(
@@ -908,8 +821,11 @@ extension GatewayNodeSession {
     }
 
     private func resetConnectionState() {
+        for refresh in self.pluginSurfaceRefreshes.values {
+            refresh.task.cancel()
+        }
+        self.pluginSurfaceRefreshes.removeAll()
         self.hasNotifiedConnected = false
-        self.snapshotReceived = false
         self.workerHello = nil
         self.serverMethods = nil
         self.serverCapabilities = nil
@@ -917,7 +833,6 @@ extension GatewayNodeSession {
         self.reactionAccess = nil
         self.attachmentLimits = nil
         self.mainSessionKey = nil
-        self.drainSnapshotWaiters(returning: false)
     }
 
     private func handleChannelDisconnected(
@@ -956,43 +871,6 @@ extension GatewayNodeSession {
             })
     }
 
-    private func markSnapshotReceived() {
-        self.snapshotReceived = true
-        self.drainSnapshotWaiters(returning: true)
-    }
-
-    private func waitForSnapshot(timeoutMs: Int? = nil) async -> Bool {
-        if self.snapshotReceived {
-            return true
-        }
-        let waiterID = UUID()
-        return await withCheckedContinuation { cont in
-            self.snapshotWaiters[waiterID] = cont
-            if let timeoutMs {
-                Task { [weak self] in
-                    guard let self else { return }
-                    try? await Task.sleep(nanoseconds: UInt64(max(0, timeoutMs)) * 1_000_000)
-                    await self.timeoutSnapshotWaiter(id: waiterID)
-                }
-            }
-        }
-    }
-
-    private func timeoutSnapshotWaiter(id: UUID) {
-        guard !self.snapshotReceived,
-              let waiter = self.snapshotWaiters.removeValue(forKey: id)
-        else { return }
-        waiter.resume(returning: false)
-    }
-
-    private func drainSnapshotWaiters(returning value: Bool) {
-        let waiters = self.snapshotWaiters.values
-        self.snapshotWaiters.removeAll()
-        for waiter in waiters {
-            waiter.resume(returning: value)
-        }
-    }
-
     private func notifyConnectedIfNeeded(admissionGeneration: UInt64) async {
         guard admissionGeneration == self.admissionGeneration else { return }
         if self.hasNotifiedConnected {
@@ -1005,6 +883,11 @@ extension GatewayNodeSession {
             return
         }
         self.hasNotifiedConnected = true
+        if self.hasEverConnected {
+            self.broadcastServerEvent(
+                EventFrame(type: "event", event: "seqGap", payload: nil, seq: nil, stateversion: nil))
+        }
+        self.hasEverConnected = true
         guard let onConnected = self.onConnected else { return }
         let lifecycleCallback = self.enqueueLifecycleCallback(final: onConnected)
         // A lifecycle callback may deliberately disconnect or replace its route.
@@ -1257,6 +1140,10 @@ extension GatewayNodeSession {
 
     // periphery:ignore - package tests inject gateway pushes without a live socket.
     func _test_handlePush(_ push: GatewayPush, socketGeneration: UInt64) async {
+        if case let .snapshot(snapshot) = push {
+            self.admitSnapshot(
+                snapshot, channelGeneration: self.channelGeneration, socketGeneration: socketGeneration)
+        }
         await self.handlePush(
             push,
             channelGeneration: self.channelGeneration,
@@ -1281,26 +1168,6 @@ extension GatewayNodeSession {
     // periphery:ignore - package tests verify event stream filtering without a live gateway.
     func _test_broadcastServerEvent(_ event: EventFrame) {
         self.broadcastServerEvent(event)
-    }
-
-    // periphery:ignore - package tests reproduce a stale timeout across route reset.
-    func _test_waitForSnapshot(timeoutMs: Int) async -> Bool {
-        await self.waitForSnapshot(timeoutMs: timeoutMs)
-    }
-
-    // periphery:ignore - package tests complete snapshot waits without a live socket.
-    func _test_markSnapshotReceived() {
-        self.markSnapshotReceived()
-    }
-
-    // periphery:ignore - package tests reproduce route replacement snapshot state.
-    func _test_resetConnectionState() {
-        self.resetConnectionState()
-    }
-
-    // periphery:ignore - package tests wait until a snapshot continuation is registered.
-    func _test_snapshotWaiterCount() -> Int {
-        self.snapshotWaiters.count
     }
 
     #endif
@@ -1360,10 +1227,7 @@ extension GatewayNodeSession {
                 waiter.resume()
             }
             #endif
-            let response = switch receipt.state {
-            case let .inFlight(task): await task.value
-            case let .completed(response): response
-            }
+            let response = await receipt.task.value
             self.discardRetryableComputerInvokeReceipt(
                 key: receiptKey,
                 receiptID: receipt.id,
@@ -1409,7 +1273,7 @@ extension GatewayNodeSession {
         self.computerInvokeReceipts[receiptKey] = ComputerInvokeReceipt(
             id: receiptID,
             fingerprint: fingerprint,
-            state: .inFlight(task),
+            task: task,
             operationSettled: false)
         self.computerInvokeReceiptOrder.append(receiptKey)
         let response = await task.value
@@ -1422,7 +1286,7 @@ extension GatewayNodeSession {
         } else if self.computerInvokeReceipts[receiptKey]?.id == receiptID,
                   self.computerInvokeReceipts[receiptKey]?.fingerprint == fingerprint
         {
-            self.computerInvokeReceipts[receiptKey]?.state = .completed(response)
+            self.computerInvokeReceipts[receiptKey]?.completed = true
         }
         return Self.rebindInvokeResponse(response, requestId: request.id)
     }
@@ -1553,7 +1417,7 @@ extension GatewayNodeSession {
         while self.computerInvokeReceipts.count >= Self.computerInvokeReceiptLimit {
             guard let completedIndex = computerInvokeReceiptOrder.firstIndex(where: { key in
                 guard let receipt = self.computerInvokeReceipts[key] else { return false }
-                return receipt.state.isCompleted && receipt.operationSettled
+                return receipt.completed && receipt.operationSettled
             }) else { return false }
             let evictedKey = self.computerInvokeReceiptOrder.remove(at: completedIndex)
             let evictedReceipt = self.computerInvokeReceipts.removeValue(forKey: evictedKey)

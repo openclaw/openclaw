@@ -12,7 +12,6 @@ import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-s
 import { getFreePort } from "../../../src/test-utils/ports.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 
 declare global {
   interface Window {
@@ -135,8 +134,6 @@ suite.define(() => {
             .getByRole("button", { name: `Switch to 127.0.0.1:${port}`, exact: true })
             .click();
 
-          // Native catalog sessions have no current-viewer owner.
-          await selectAllSidebarSessions(page);
           const row = page.locator(
             '[data-session-section="catalog:codex"] .sidebar-recent-session',
             {

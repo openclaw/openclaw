@@ -12,7 +12,11 @@ import {
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
 import { loadMemorySourceFileState } from "./manager-source-state.js";
-import { resolvePersistedMemoryVectorIndexState } from "./manager-vector-rebuild-state.js";
+import {
+  resolveMemoryVectorIndexState,
+  resolvePersistedMemoryVectorIndexState,
+  VECTOR_REBUILD_META_KEY,
+} from "./manager-vector-rebuild-state.js";
 
 export const MEMORY_INDEX_META_KEY = "memory_index_meta_v1";
 
@@ -22,6 +26,9 @@ export type MemoryDatabaseFacts = {
   revision: number;
   hasIndexedChunks: boolean;
   hasSemanticChunks: boolean;
+  invalidatedSources: MemorySource[];
+  hasVectorTable: boolean;
+  vectorState: ReturnType<typeof resolveMemoryVectorIndexState>;
 };
 
 /** One bounded snapshot; retained text and embeddings never cross this boundary. */
@@ -30,6 +37,7 @@ export function readMemoryDatabaseFacts(db: DatabaseSync): MemoryDatabaseFacts {
     memory_index_meta: { key: string; value: string };
     memory_index_state: { id: number; revision: number };
     memory_index_chunks: { model: string };
+    memory_index_sources: { source: string; hash: string };
   }>(db);
   const row = executeSqliteQueryTakeFirstSync(
     db,
@@ -42,6 +50,22 @@ export function readMemoryDatabaseFacts(db: DatabaseSync): MemoryDatabaseFacts {
           .select("value")
           .where("key", "=", MEMORY_INDEX_META_KEY)
           .as("serialized"),
+        eb
+          .selectFrom("memory_index_meta")
+          .select("value")
+          .where("key", "=", VECTOR_REBUILD_META_KEY)
+          .as("vectorMarker"),
+        ...(["memory", "sessions"] as const).map((source) =>
+          eb
+            .exists(
+              eb
+                .selectFrom("memory_index_sources")
+                .select("source")
+                .where("source", "=", source)
+                .where("hash", "=", ""),
+            )
+            .as(source),
+        ),
         eb.exists(eb.selectFrom("memory_index_chunks").select("model")).as("hasIndexedChunks"),
         eb
           .exists(
@@ -54,11 +78,21 @@ export function readMemoryDatabaseFacts(db: DatabaseSync): MemoryDatabaseFacts {
   if (!row || !Number.isSafeInteger(row.revision)) {
     throw new Error("Memory index revision is missing or invalid");
   }
+  const metadata = parseMemoryIndexMetadata(row.serialized);
+  const hasVectorTable = tableExists(db, MEMORY_INDEX_VECTOR_TABLE);
   return {
-    ...parseMemoryIndexMetadata(row.serialized),
+    ...metadata,
     revision: row.revision,
     hasIndexedChunks: Boolean(row.hasIndexedChunks),
     hasSemanticChunks: Boolean(row.hasSemanticChunks),
+    invalidatedSources: (["memory", "sessions"] as const).filter((source) => row[source]),
+    hasVectorTable,
+    vectorState: resolveMemoryVectorIndexState({
+      marker: row.vectorMarker,
+      hasVectorTable,
+      metaVectorDims: metadata.meta?.vectorDims,
+      hasSemanticChunks: Boolean(row.hasSemanticChunks),
+    }),
   };
 }
 

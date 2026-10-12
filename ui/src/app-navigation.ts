@@ -56,11 +56,8 @@ export type SidebarZoneEntry =
   | { type: "session"; key: string }
   | { type: "person"; profileId: string };
 
-// Keep the highest-value operational destinations visible on first use. Users
-// can still replace this route set through the customize menu.
-export const DEFAULT_SIDEBAR_ENTRIES = (
-  ["agents-home", "dashboards", "systems", "cron", "plugins"] as const
-).map((route) => serializeSidebarEntry({ type: "route", route }));
+// The rail starts clean; only user-added shortcuts occupy the pins region.
+export const DEFAULT_SIDEBAR_ENTRIES: string[] = [];
 
 /**
  * Parse the compact persisted representation used by browser and synced prefs.
@@ -139,16 +136,6 @@ export function normalizeSidebarEntries(value: unknown): string[] | null {
     }
   }
   return normalized;
-}
-
-export function sidebarMoreRoutes(entries: readonly string[]): SidebarNavRoute[] {
-  const visibleRoutes = new Set(
-    entries.flatMap((entry) => {
-      const parsed = parseSidebarEntry(entry);
-      return parsed?.type === "route" ? [parsed.route] : [];
-    }),
-  );
-  return SIDEBAR_NAV_ROUTES.filter((routeId) => !visibleRoutes.has(routeId));
 }
 
 type SettingsNavigationGroup = {

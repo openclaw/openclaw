@@ -135,6 +135,31 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     return { record, desktop: record.desktop, leaseId: record.leaseId };
   };
 
+  const desktopTransport = (record: WorkerEnvironmentRecord, leaseId: string) => {
+    if (record.sshEndpoint) {
+      if (!tunnels) {
+        throw serviceError("invalid_state", "Worker SSH desktop runtime is unavailable");
+      }
+      return {
+        kind: "ssh" as const,
+        runtime: tunnels.desktop,
+        request: {
+          environmentId: record.environmentId,
+          ownerEpoch: record.ownerEpoch,
+          ssh: record.sshEndpoint,
+          resolveIdentity: identityResolverFor(record, providerFor(record.providerId), leaseId),
+        },
+      };
+    }
+    if (record.nodeDeviceId) {
+      if (!nodeDesktop) {
+        throw serviceError("invalid_state", "Worker node desktop runtime is unavailable");
+      }
+      return { kind: "node" as const, runtime: nodeDesktop };
+    }
+    throw serviceError("invalid_state", "Worker environment has no desktop transport");
+  };
+
   const project = (record: WorkerEnvironmentRecord) => {
     const cleanupError = options.getCleanupError(record);
     const desktopAvailable =
@@ -417,32 +442,18 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       const canResize =
         options.resolveProvider(record.providerId)?.allowsDesktopResize === true &&
         desktop.allowsResize !== false;
-      if (record.sshEndpoint) {
-        if (!tunnels) {
-          throw serviceError("invalid_state", "Worker SSH desktop runtime is unavailable");
-        }
+      const transport = desktopTransport(record, leaseId);
+      if (transport.kind === "ssh") {
         return {
           canResize,
           ownerEpoch: record.ownerEpoch,
-          startup: tunnels.desktop.acquire({
-            environmentId: record.environmentId,
-            ownerEpoch: record.ownerEpoch,
-            ssh: record.sshEndpoint,
-            desktop,
-            resolveIdentity: identityResolverFor(record, providerFor(record.providerId), leaseId),
-          }),
+          startup: transport.runtime.acquire({ ...transport.request, desktop }),
         };
       }
-      if (record.nodeDeviceId) {
-        if (!nodeDesktop) {
-          throw serviceError("invalid_state", "Worker node desktop runtime is unavailable");
-        }
-        return {
-          canResize,
-          nodeStartup: nodeDesktop.observe({ record, control: request.control, requester }),
-        };
-      }
-      throw serviceError("invalid_state", "Worker environment has no desktop transport");
+      return {
+        canResize,
+        nodeStartup: transport.runtime.observe({ record, control: request.control, requester }),
+      };
     });
     const { canResize } = prepared;
     if (prepared.nodeStartup) {
@@ -498,32 +509,14 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
 
     const { startup, launchEpoch } = await withLock(request.environmentId, async () => {
       const { app, record, leaseId } = requireLaunchable();
-      if (record.sshEndpoint) {
-        if (!tunnels) {
-          throw serviceError("invalid_state", "Worker SSH desktop runtime is unavailable");
-        }
-        const provider = providerFor(record.providerId);
-        return {
-          launchEpoch: record.ownerEpoch,
-          startup: tunnels.desktop.launchApp({
-            environmentId: record.environmentId,
-            ownerEpoch: record.ownerEpoch,
-            ssh: record.sshEndpoint,
-            app,
-            resolveIdentity: identityResolverFor(record, provider, leaseId),
-          }),
-        };
-      }
-      if (record.nodeDeviceId) {
-        if (!nodeDesktop) {
-          throw serviceError("invalid_state", "Worker node desktop runtime is unavailable");
-        }
-        return {
-          launchEpoch: record.ownerEpoch,
-          startup: nodeDesktop.launchApp({ record, app }),
-        };
-      }
-      throw serviceError("invalid_state", "Worker environment has no desktop transport");
+      const transport = desktopTransport(record, leaseId);
+      return {
+        launchEpoch: record.ownerEpoch,
+        startup:
+          transport.kind === "ssh"
+            ? transport.runtime.launchApp({ ...transport.request, app })
+            : transport.runtime.launchApp({ record, app }),
+      };
     });
     const assertLaunchOwner = async () => {
       const { record } = requireLaunchable();

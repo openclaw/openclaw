@@ -9,6 +9,7 @@ import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
+  holdModuleResponse,
 } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -112,7 +113,7 @@ async function waitForPersistedWarmState(page: Page): Promise<void> {
 }
 
 suite.define(() => {
-  it.each(["matching", "different", "device-token", "trusted-proxy"])(
+  it.each(["matching", "different", "device-token", "trusted-proxy", "legacy-rail"])(
     "reconciles the cached shell, roster, and transcript with a %s profile",
     async (profile) => {
       await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
@@ -226,6 +227,89 @@ suite.define(() => {
           return snapshot.hello;
         });
 
+        if (profile === "legacy-rail") {
+          const records = await page.evaluate(async () => {
+            const open = indexedDB.open("openclaw-chat-snapshots");
+            await new Promise<void>((resolve, reject) => {
+              open.addEventListener("success", () => resolve());
+              open.addEventListener("error", () =>
+                reject(open.error ?? new Error("Snapshot open failed")),
+              );
+            });
+            const database = open.result;
+            const request = database
+              .transaction("sidebarSnapshots")
+              .objectStore("sidebarSnapshots")
+              .getAll();
+            const saved = await new Promise<Array<{ model: { entries: string[] } }>>(
+              (resolve, reject) => {
+                request.addEventListener("success", () => resolve(request.result));
+                request.addEventListener("error", () =>
+                  reject(request.error ?? new Error("Snapshot read failed")),
+                );
+              },
+            );
+            database.close();
+            for (const record of saved) {
+              record.model.entries = ["route:usage", "route:cron"];
+            }
+            return saved;
+          });
+          expect(records.length).toBeGreaterThan(0);
+          const url = page.url();
+          await page.goto("about:blank");
+          const modules = await holdModuleResponse(page, /\/assets\/.*\.js(?:\?|$)/u);
+          await page.goto(url, { waitUntil: "commit" });
+          await modules.request;
+          await page.evaluate(async (saved) => {
+            const deleted = indexedDB.deleteDatabase("openclaw-chat-snapshots");
+            await new Promise<void>((resolve, reject) => {
+              deleted.addEventListener("success", () => resolve());
+              deleted.addEventListener("error", () =>
+                reject(deleted.error ?? new Error("Snapshot deletion failed")),
+              );
+              deleted.addEventListener("blocked", () =>
+                reject(new Error("Old snapshot database remained open")),
+              );
+            });
+            const open = indexedDB.open("openclaw-chat-snapshots", 6);
+            open.addEventListener("upgradeneeded", () => {
+              for (const name of ["snapshots", "snapshotMetadata", "sidebarSnapshots"]) {
+                open.result.createObjectStore(name, { keyPath: "sessionKey" });
+              }
+            });
+            await new Promise<void>((resolve, reject) => {
+              open.addEventListener("success", () => resolve());
+              open.addEventListener("error", () =>
+                reject(open.error ?? new Error("Legacy snapshot open failed")),
+              );
+            });
+            const database = open.result;
+            const transaction = database.transaction("sidebarSnapshots", "readwrite");
+            for (const record of saved) {
+              transaction.objectStore("sidebarSnapshots").put(record);
+            }
+            await new Promise<void>((resolve, reject) => {
+              transaction.addEventListener("complete", () => resolve());
+              transaction.addEventListener("error", () =>
+                reject(transaction.error ?? new Error("Legacy snapshot write failed")),
+              );
+            });
+            database.close();
+          }, records);
+          modules.release();
+          await gateway.waitForRequest("connect");
+          await sidebar.locator("aside.sidebar").waitFor();
+          expect(await sidebar.locator(".sidebar-rail__pin").count()).toBe(0);
+          expect(await sidebar.locator("aside.sidebar").getAttribute("data-snapshot-state")).toBe(
+            "live",
+          );
+          expect(await gateway.getRequests("sessions.list")).toEqual([]);
+          await gateway.resolveDeferred("connect");
+          await transcript.getByText(transcriptText, { exact: true }).waitFor();
+          return;
+        }
+
         let bootstrapRequests = 0;
         if (profile === "trusted-proxy") {
           const documentPath = new URL(page.url()).pathname;
@@ -277,7 +361,7 @@ suite.define(() => {
             ),
           ).toBe("Observatory");
           expect(bootstrapRequests).toBe(0);
-          await sidebar.getByText("Observatory", { exact: true }).waitFor();
+          await sidebar.getByRole("button", { name: /^Observatory ·/u }).waitFor();
         }
         if (profile === "matching") {
           await expectOwnMessageAlignment(page);

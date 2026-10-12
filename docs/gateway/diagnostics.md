@@ -166,7 +166,9 @@ The Gateway also emits an always-on `main-thread stall` warning after a synchron
 callback blocks for more than one second. Each line names the longest-running
 known task segment from scheduled jobs, diagnostic phases, timeline spans, or
 worker message handling, with elapsed and task milliseconds. Time awaiting I/O
-does not count as task execution. Unknown callbacks use `task=unattributed`;
+does not count as task execution. A task label expires when its callback returns
+or its returned promise settles; detached work does not retain a completed startup
+phase's label. Unknown callbacks use `task=unattributed`;
 process suspension can also produce an unattributed delay. Reporting is bounded
 to eight pending stalls, with an omitted count if that limit is exceeded. This
 requires neither an inspector connection nor a sampling profiler.

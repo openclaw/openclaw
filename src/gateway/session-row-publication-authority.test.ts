@@ -87,6 +87,7 @@ it.each(["child and swarm links", "sharing role", "incognito"] as const)(
         bootId: "publication-authority",
         cfg,
       });
+      const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
       // Repeat each identity on a second socket so both visible projections exercise cache hits.
       const peers = [allowed!, restricted!, allowed!, restricted!].map((profile, index) => {
         const send = vi.fn();
@@ -121,7 +122,6 @@ it.each(["child and swarm links", "sharing role", "incognito"] as const)(
         connection.clients.add(client);
         return { send, client };
       });
-      const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
       const detach = connection.attachSessionRowProjection(projection);
       try {
         await projection.ensureMaterialized();

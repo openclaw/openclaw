@@ -242,12 +242,7 @@ function expectSecretSentinelAuth(
   auth: Awaited<ReturnType<typeof resolveAuth>>,
   expected: { value: string; source: string; mode: "api-key" | "oauth" },
 ) {
-  const apiKey = auth.apiKey;
-  expect(apiKey).toBeDefined();
-  if (!apiKey) {
-    throw new Error("expected model auth API key");
-  }
-  expectSecret(apiKey, expected.value);
+  expectSecret(auth.apiKey, expected.value);
   expect(auth.source).toBe(expected.source);
   expect(auth.mode).toBe(expected.mode);
 }
@@ -485,6 +480,7 @@ describe("resolveApiKeyForProviderCore", () => {
     const resolved = await resolveAuth({
       provider: "openai",
       profileId,
+      cfg: {},
       secretSentinels: true,
       store,
       agentDir,
@@ -670,6 +666,7 @@ describe("resolveApiKeyForProviderCore", () => {
     const auth = await resolveAuth({
       provider: "custom-auth",
       profileId: "custom-auth:synthetic",
+      cfg: {},
       store: authStore({
         "custom-auth:synthetic": keyCredential("custom-auth", "synthetic-defer"),
         "custom-auth:real": keyCredential("custom-auth", "sk-real"),

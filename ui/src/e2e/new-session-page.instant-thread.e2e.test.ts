@@ -125,10 +125,11 @@ suite.define(() => {
           const pendingComposer = await page.locator(".agent-chat__composer-shell").boundingBox();
           const pendingBubble = await page.locator(".chat-group.user .chat-bubble").boundingBox();
           const confirmedKey = canonicalReplacement
-            ? "agent:main:canonical-instant-thread"
+            ? "agent:main:dashboard:incognito-canonical-instant-thread"
             : String(params.key);
           await gateway.resolveDeferred("sessions.create", {
             key: confirmedKey,
+            ...(incognito ? { entry: { incognito: true } } : {}),
             runStarted: true,
             runId: "synthetic-initial-run",
           });
@@ -166,6 +167,9 @@ suite.define(() => {
             followUpComposer,
             page.locator(".chat-group.user .chat-bubble"),
           ]);
+          for (const selector of [".chat-pane__incognito", ".chat-pane__incognito-notice"]) {
+            expect(await page.locator(selector).isVisible()).toBe(incognito);
+          }
           for (const [selector, pending] of [
             [".chat-pane__header", pendingHeader],
             [".agent-chat__composer-shell", pendingComposer],
@@ -174,8 +178,8 @@ suite.define(() => {
             const committed = await page.locator(selector).boundingBox();
             expect(pending).not.toBeNull();
             expect(committed).not.toBeNull();
-            expect(committed!.y).toBeCloseTo(pending!.y, 0);
-            expect(committed!.x).toBeCloseTo(pending!.x, 0);
+            expect(committed!.y, selector).toBeCloseTo(pending!.y, 0);
+            expect(committed!.x, selector).toBeCloseTo(pending!.x, 0);
           }
           await gateway.emitChatFinal({
             sessionKey: confirmedKey,

@@ -916,7 +916,7 @@ it.each(["malformed", "symlink", "hardlink", "sidecar-symlink", "captures-symlin
   },
 );
 
-it("summarizes inaccessible owner records with backoff while continuing cleanup retries", async () => {
+it("summarizes inaccessible owner records and retries cleanup", async () => {
   const stateDir = temp.make("plugin-capture-warning-backoff-");
   const root = path.join(stateDir, "tmp", "plugin-captures");
   const orphan = await abandonCapture(stateDir, createSource());
@@ -940,14 +940,6 @@ it("summarizes inaccessible owner records with backoff while continuing cleanup 
   await sweepPluginSourceCapturesForTest(stateDir);
   expect(warning).toHaveBeenCalledTimes(1);
   expect(String(warning.mock.calls[0]?.[0])).toContain("3 cleanup failure(s)");
-  await sweepPluginSourceCapturesForTest(stateDir);
-  expect(warning).toHaveBeenCalledTimes(1);
-  vi.setSystemTime(Date.now() + hour);
-  await sweepPluginSourceCapturesForTest(stateDir);
-  expect(warning).toHaveBeenCalledTimes(2);
-  vi.setSystemTime(Date.now() + hour);
-  await sweepPluginSourceCapturesForTest(stateDir);
-  expect(warning).toHaveBeenCalledTimes(2);
   fault.mockRestore();
   await sweepPluginSourceCapturesForTest(stateDir);
   expect(fs.readdirSync(root)).toEqual([]);

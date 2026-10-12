@@ -4,7 +4,6 @@ import {
   buildHuggingfaceProvider,
   discoverHuggingfaceModels,
   HUGGINGFACE_MODEL_CATALOG,
-  isHuggingfacePolicyLocked,
 } from "./api.js";
 
 function stubAbortSignalTimeout() {
@@ -158,17 +157,5 @@ describe("huggingface models", () => {
     });
 
     expect(timeoutSpy).toHaveBeenCalledWith(expected);
-  });
-
-  describe("isHuggingfacePolicyLocked", () => {
-    it("returns true for :cheapest and :fastest refs", () => {
-      expect(isHuggingfacePolicyLocked("huggingface/deepseek-ai/DeepSeek-R1:cheapest")).toBe(true);
-      expect(isHuggingfacePolicyLocked("huggingface/deepseek-ai/DeepSeek-R1:fastest")).toBe(true);
-    });
-
-    it("returns false for base ref and :provider refs", () => {
-      expect(isHuggingfacePolicyLocked("huggingface/deepseek-ai/DeepSeek-R1")).toBe(false);
-      expect(isHuggingfacePolicyLocked("huggingface/foo:together")).toBe(false);
-    });
   });
 });

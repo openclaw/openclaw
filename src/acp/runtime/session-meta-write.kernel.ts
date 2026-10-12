@@ -1,11 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
-import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import type { SessionRowFacts } from "../../sessions/session-row-changes.js";
 import {
   buildAcpDatabaseSessionKey,
-  getAcpSessionKysely,
+  deleteAcpSessionMetaRows,
   upsertAcpSessionMetaRow,
 } from "./session-meta-keys.js";
 import type { AcpSessionRow } from "./session-meta-read.types.js";
@@ -79,12 +78,7 @@ export function applyAcpSessionMutation(
   ) {
     keys.add(input.currentRowKey);
   }
-  for (const key of keys) {
-    executeSqliteQuerySync(
-      db,
-      getAcpSessionKysely(db).deleteFrom("acp_sessions").where("session_key", "=", key),
-    );
-  }
+  deleteAcpSessionMetaRows(db, [...keys]);
   return {
     kind: "acp",
     sessionId: input.entry?.sessionId,

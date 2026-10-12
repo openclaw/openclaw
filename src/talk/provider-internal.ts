@@ -48,6 +48,9 @@ export type InternalRealtimeVoiceBrowserSessionCreateRequest =
 
 export type InternalRealtimeVoiceProviderApi = {
   isBrowserSessionConfigured: (ctx: RealtimeVoiceProviderConfiguredContext) => boolean;
+  isBrowserSessionConfiguredAsync?: (
+    ctx: RealtimeVoiceProviderConfiguredContext,
+  ) => Promise<boolean>;
   resolveBrowserSessionCapabilities?: (
     ctx: RealtimeVoiceProviderConfiguredContext & {
       /** Effective per-session model after request overrides. */
@@ -55,7 +58,16 @@ export type InternalRealtimeVoiceProviderApi = {
       clientControl?: RealtimeVoiceBrowserSessionCreateRequest["clientControl"];
     },
   ) => InternalRealtimeVoiceProviderCapabilities;
+  resolveBrowserSessionCapabilitiesAsync?: (
+    ctx: RealtimeVoiceProviderConfiguredContext & {
+      model?: string;
+      clientControl?: RealtimeVoiceBrowserSessionCreateRequest["clientControl"];
+    },
+  ) => Promise<InternalRealtimeVoiceProviderCapabilities>;
   isGatewayRelayConfigured?: (ctx: RealtimeVoiceProviderConfiguredContext) => boolean | undefined;
+  isGatewayRelayConfiguredAsync?: (
+    ctx: RealtimeVoiceProviderConfiguredContext,
+  ) => Promise<boolean | undefined>;
   resolveGatewayRelayCapabilities?: (ctx: {
     cfg?: OpenClawConfig;
     providerConfig: RealtimeVoiceProviderConfig;

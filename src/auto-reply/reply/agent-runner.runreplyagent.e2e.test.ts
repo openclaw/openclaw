@@ -55,6 +55,7 @@ import type { TemplateContext } from "../templating.js";
 import { createReplyAgentRestartRecoveryController } from "./agent-runner-execute.js";
 import { registerReasoningFallbackTests } from "./agent-runner.reasoning-fallback.test-support.js";
 import { registerReplyAdmissionCases } from "./agent-runner.runreplyagent.admission.cases.js";
+import { registerReplyCompactionCases } from "./agent-runner.runreplyagent.compaction.cases.js";
 import { registerImmediateFailurePolicyCases } from "./agent-runner.runreplyagent.failure-policy.cases.js";
 import { createReplyAgentSessionFixture } from "./agent-runner.runreplyagent.fixture.test-support.js";
 import { registerFollowupDrainCases } from "./agent-runner.runreplyagent.followup-drain.cases.js";
@@ -269,13 +270,14 @@ vi.mock("../../channels/plugins/index.js", async (importOriginal) => ({
   getChannelPlugin: (channel: unknown) => state.getChannelPluginMock(channel),
 }));
 
+// mock-isolation: Queue admission is controlled here; only logical-turn registration, snapshots, and retirement stay real.
 vi.mock("../../agents/embedded-agent-runner/runs.js", async (importOriginal) => {
-  const { clearActiveEmbeddedRun, setActiveEmbeddedRun } =
+  const { clearActiveEmbeddedRun, setActiveEmbeddedRun, updateActiveEmbeddedRunSnapshot } =
     await importOriginal<typeof import("../../agents/embedded-agent-runner/runs.js")>();
   return {
-    // Queue admission is controlled here; logical-turn registration and retirement stay real.
     clearActiveEmbeddedRun,
     setActiveEmbeddedRun,
+    updateActiveEmbeddedRunSnapshot,
     formatEmbeddedAgentQueueFailureSummary: () => "test queue rejection",
     queueEmbeddedAgentMessageWithOutcomeAsync: async (
       sessionId: string,
@@ -2063,6 +2065,8 @@ describe("runReplyAgent heartbeat followup guard", () => {
     },
   );
 });
+
+registerReplyCompactionCases({ createMinimalRun, makeSessionFixture, tempDirs, state });
 
 describe("runReplyAgent pending final delivery capture", () => {
   it("delivers an authenticated channel reply through the explicitly selected agent", async () => {
@@ -5707,52 +5711,6 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(stored.model).toBe("claude-opus-4-7");
     expect(stored.totalTokens).toBe(42_000);
     expect(stored.totalTokensFresh).toBe(false);
-  });
-
-  it("surfaces overflow fallback when embedded run returns empty payloads", async () => {
-    state.runEmbeddedAgentMock.mockImplementationOnce(async () => ({
-      payloads: [],
-      meta: {
-        durationMs: 1,
-        error: {
-          kind: "context_overflow",
-          message: 'Context overflow: Summarization failed: 400 {"message":"prompt is too long"}',
-        },
-      },
-    }));
-
-    const { run } = createMinimalRun();
-    const res = await run();
-    const payload = Array.isArray(res) ? res[0] : res;
-    if (!payload) {
-      throw new Error("expected payload");
-    }
-    expect(payload.text).toContain("Auto-compaction could not recover this turn");
-    expect(payload.text).toContain("fresh session or using a model with a larger context window");
-    expect(payload.text).toContain("/new");
-  });
-
-  it("surfaces overflow fallback when embedded payload text is whitespace-only", async () => {
-    state.runEmbeddedAgentMock.mockImplementationOnce(async () => ({
-      payloads: [{ text: "   \n\t  ", isError: true }],
-      meta: {
-        durationMs: 1,
-        error: {
-          kind: "context_overflow",
-          message: 'Context overflow: Summarization failed: 400 {"message":"prompt is too long"}',
-        },
-      },
-    }));
-
-    const { run } = createMinimalRun();
-    const res = await run();
-    const payload = Array.isArray(res) ? res[0] : res;
-    if (!payload) {
-      throw new Error("expected payload");
-    }
-    expect(payload.text).toContain("Auto-compaction could not recover this turn");
-    expect(payload.text).toContain("fresh session or using a model with a larger context window");
-    expect(payload.text).toContain("/new");
   });
 
   it("returns friendly message for role ordering errors thrown as exceptions", async () => {

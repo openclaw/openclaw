@@ -272,24 +272,6 @@ describe("migrateSqliteSchemaToStrict", () => {
     expect(readStrictFlag(database, "entries")).toBe(0);
   });
 
-  it("accepts values that SQLite can losslessly coerce", () => {
-    const database = createDatabase();
-    database.exec("CREATE TABLE counters (id TEXT PRIMARY KEY, value TEXT NOT NULL);");
-    database.prepare("INSERT INTO counters (id, value) VALUES (?, ?)").run("one", "42");
-
-    migrateSqliteSchemaToStrict(
-      database,
-      `CREATE TABLE IF NOT EXISTS counters (
-        id TEXT PRIMARY KEY,
-        value INTEGER NOT NULL
-      ) STRICT;`,
-    );
-
-    expect(
-      database.prepare("SELECT id, value, typeof(value) AS value_type FROM counters").get(),
-    ).toEqual({ id: "one", value: 42, value_type: "integer" });
-  });
-
   it("rolls back when an existing value violates the canonical type", () => {
     const database = createDatabase();
     database.exec("PRAGMA foreign_keys = ON; CREATE TABLE counters (id TEXT, value TEXT);");

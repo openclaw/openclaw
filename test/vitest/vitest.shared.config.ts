@@ -544,7 +544,10 @@ export const sharedVitestConfig = {
       ...(process.versions.bun
         ? resolveTestBunSourceArgs(repoRoot)
         : ["--import", resolveTsxImport(repoRoot)]),
-      `--import=${new URL("./vitest.jsdom-preload.mts", import.meta.url).href}`,
+      // Bun's Windows preload resolver requires a filesystem path instead of a file URL.
+      process.versions.bun
+        ? `--preload=${fileURLToPath(new URL("./vitest.jsdom-preload.mts", import.meta.url))}`
+        : `--import=${new URL("./vitest.jsdom-preload.mts", import.meta.url).href}`,
     ],
     runner: nonIsolatedRunnerPath,
     maxWorkers: workerConfig.maxWorkers,

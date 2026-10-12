@@ -67,6 +67,15 @@ export type ConfirmAndStartUpdateParams = {
   updateSchedule: UpdateScheduleState | null;
   existingRun?: UpdateRunRecord;
   onCheckStatus?: () => Promise<boolean>;
+  /** Refreshes source-owned target details before retry confirmation. */
+  prepareRetry?: () => Promise<{
+    updateAvailable: UpdateAvailable | null;
+    updateSchedule: UpdateScheduleState | null;
+  } | null>;
+  /** Reads current application-owned authority immediately before native dispatch. */
+  canStartNativeUpdate?: () => boolean;
+  /** Reconfirm a fresh Gateway target if the native bridge disappears. */
+  prepareGatewayFallback?: ConfirmAndStartUpdateParams["prepareRetry"];
   onReviewUpdate?: () => void;
   onAcknowledge?: () => void;
   /**

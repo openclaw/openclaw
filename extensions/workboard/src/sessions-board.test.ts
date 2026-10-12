@@ -72,7 +72,6 @@ async function createFixture(options: {
   const state: SelectedFacts = {
     scope: "shared-scope",
     revision: "initial",
-    redactionRevision: "initial-policy",
     sessions: options.facts,
   };
   const selectSessionFacts = vi
@@ -842,22 +841,6 @@ describe("Sessions board rules and live facts", () => {
       expect(read.sessions[0]).toMatchObject(known);
       await service.read(BOARD_ID);
       expect(logger.warn).toHaveBeenCalledOnce();
-      state.redactionRevision = "tightened-policy";
-      state.revision = "redaction-changed-with-failure";
-      state.sessions = state.sessions.map((row) =>
-        Object.assign({}, row, { label: "Safe label", derivedTitle: "Safe title" }),
-      );
-      const safe = await service.read(BOARD_ID);
-      expect(JSON.stringify(safe.sessions)).not.toContain(marker);
-      expect(safe.sessions[0]).toMatchObject({
-        columnId: "focus",
-        run: "active",
-        label: "Safe label",
-        derivedTitle: "Safe title",
-        observerDigest: { health: "on-track", revision: 1 },
-        pullRequests: [{ number: 12, state: "open" }],
-      });
-      expect(safe.sessions[0]?.lastMessagePreview).toBeUndefined();
       state.sessions = [facts("known"), facts("new")];
       state.revision = "recovered";
       const recovered = await service.read(BOARD_ID);
@@ -887,49 +870,40 @@ describe("Sessions board rules and live facts", () => {
     });
   });
 
-  it.each([true, false])(
-    "does not let an in-flight read overwrite newer facts (event: %s)",
-    async (event) => {
-      await withService(
-        { facts: [facts("one")] },
-        async ({ service, store, state, emit, selectSessionFacts }) => {
-          await service.read(BOARD_ID);
-          if (event) {
-            emit(facts("one").key);
-          }
-          const admittedRevision = store.sessionsRevision;
-          const entered = Promise.withResolvers<void>();
-          const release = Promise.withResolvers<void>();
-          const source = { ...state };
-          selectSessionFacts.mockImplementationOnce(async () => {
-            entered.resolve();
-            await release.promise;
-            return source;
-          });
-          const pending = service.read(BOARD_ID);
-          await entered.promise;
-          state.sessions = [facts("one", { run: "active" })];
-          state.revision = "active";
-          if (event) {
-            emit(facts("one").key);
-          }
-          const current = await service.read(BOARD_ID);
-          release.resolve();
-          const previous = await pending;
-          expect(previous.revision!.revision).toBe(admittedRevision.revision);
-          expect(current.sessions[0]).toMatchObject({ columnId: "focus" });
-          expect(current.revision!.revision).toBeGreaterThanOrEqual(previous.revision!.revision);
-          expect(await service.read(BOARD_ID)).toBe(current);
-          state.sessions = [{ ...facts("one"), unavailable: "facts backend offline" }];
-          state.revision = "unavailable";
-          if (event) {
-            emit(facts("one").key);
-          }
-          expect((await service.read(BOARD_ID)).sessions[0]).toMatchObject({ columnId: "focus" });
-        },
-      );
-    },
-  );
+  it("does not let an in-flight read overwrite facts after source invalidation", async () => {
+    await withService(
+      { facts: [facts("one")] },
+      async ({ service, store, state, emit, selectSessionFacts }) => {
+        await service.read(BOARD_ID);
+        emit(facts("one").key);
+        const admittedRevision = store.sessionsRevision;
+        const entered = Promise.withResolvers<void>();
+        const release = Promise.withResolvers<void>();
+        const source = { ...state };
+        selectSessionFacts.mockImplementationOnce(async () => {
+          entered.resolve();
+          await release.promise;
+          return source;
+        });
+        const pending = service.read(BOARD_ID);
+        await entered.promise;
+        state.sessions = [facts("one", { run: "active" })];
+        state.revision = "active";
+        emit(facts("one").key);
+        const current = await service.read(BOARD_ID);
+        release.resolve();
+        const previous = await pending;
+        expect(previous.revision!.revision).toBe(admittedRevision.revision);
+        expect(current.sessions[0]).toMatchObject({ columnId: "focus" });
+        expect(current.revision!.revision).toBeGreaterThanOrEqual(previous.revision!.revision);
+        expect(await service.read(BOARD_ID)).toBe(current);
+        state.sessions = [{ ...facts("one"), unavailable: "facts backend offline" }];
+        state.revision = "unavailable";
+        emit(facts("one").key);
+        expect((await service.read(BOARD_ID)).sessions[0]).toMatchObject({ columnId: "focus" });
+      },
+    );
+  });
 
   it("completes during continuous source invalidation without caching a stale revision", async () => {
     await withService(

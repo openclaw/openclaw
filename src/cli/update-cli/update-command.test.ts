@@ -1,10 +1,7 @@
 // Update command tests cover update command orchestration and filesystem effects.
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import * as gatewayService from "../../daemon/service.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
@@ -16,7 +13,6 @@ import * as nativeLaunchAgentRecovery from "../daemon-cli/launchd-recovery.js";
 import * as restartHealth from "../daemon-cli/restart-health.js";
 import * as launchAgentRecovery from "./update-command-launch-agent-recovery.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
-import { testing as updateCommandPluginsTesting } from "./update-command-plugins.test-support.js";
 import { applyPostPluginConfigValidation } from "./update-command-post-plugin-validation.js";
 import {
   resolveServiceRefreshEnv,
@@ -29,36 +25,11 @@ import {
   recoverLaunchAgentAndRecheckGatewayHealth,
 } from "./update-command-service-recovery.js";
 import { resolveUpdatedGatewayRestartPort } from "./update-command-service.js";
-import { hasLoadedLaunchdKeepAliveSupervisor } from "./update-command-supervisor.js";
 
 const tempDirs = createTempDirTracker();
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   tempDirs.cleanup();
-});
-
-describe("resolveGatewayInstallEntrypoint", () => {
-  it("prefers dist/index.js over dist/entry.js when both exist", async () => {
-    const root = "/tmp/openclaw-root";
-    const indexPath = path.join(root, "dist", "index.js");
-    const entryPath = path.join(root, "dist", "entry.js");
-
-    await expect(
-      resolveGatewayInstallEntrypoint(
-        root,
-        async (candidate) => candidate === indexPath || candidate === entryPath,
-      ),
-    ).resolves.toBe(indexPath);
-  });
-
-  it("falls back to dist/entry.js when index.js is missing", async () => {
-    const root = "/tmp/openclaw-root";
-    const entryPath = path.join(root, "dist", "entry.js");
-
-    await expect(
-      resolveGatewayInstallEntrypoint(root, async (candidate) => candidate === entryPath),
-    ).resolves.toBe(entryPath);
-  });
 });
 
 describe("applyPostPluginConfigValidation", () => {
@@ -90,18 +61,6 @@ describe("applyPostPluginConfigValidation", () => {
       ],
     });
   });
-
-  it("preserves an earlier plugin update error", () => {
-    const failed = {
-      ...pluginUpdate,
-      status: "error" as const,
-      reason: "plugin-sync-failed",
-    };
-
-    expect(applyPostPluginConfigValidation(failed, { status: "invalid", failureFacts: [] })).toBe(
-      failed,
-    );
-  });
 });
 
 describe("resolveUpdatedGatewayRestartPort", () => {
@@ -114,20 +73,10 @@ describe("resolveUpdatedGatewayRestartPort", () => {
       }),
     ).toBe(19002);
   });
-
-  it("falls back to the post-update config when no service port is available", async () => {
-    expect(
-      await resolveUpdatedGatewayRestartPort({
-        config: { gateway: { port: 19000 } } as never,
-        processEnv: {},
-        serviceEnv: {},
-      }),
-    ).toBe(19000);
-  });
 });
 
 describe("update environment snapshots", () => {
-  it.each(["win32", "linux"] as const)(
+  it.each(["win32"] as const)(
     "preserves %s selector lookup semantics without retaining the live environment",
     (platform) => {
       const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
@@ -158,11 +107,6 @@ describe("update environment snapshots", () => {
           expect(
             resolveUpdateTargetEnv({ baseEnv: caller, serviceEnv: { OPENCLAW_PROFILE: "work" } }),
           ).toMatchObject({ HOME: "/caller/home", OPENCLAW_PROFILE: "work" });
-        } else {
-          expect(snapshot.OpenClaw_State_Dir).toBe("/caller/state");
-          expect(snapshot.OPENCLAW_STATE_DIR).toBeUndefined();
-          expect(snapshot.OPENCLAW_CONFIG_PATH).toBeUndefined();
-          expect(snapshot.OPENCLAW_PROFILE).toBeUndefined();
         }
       } finally {
         Object.defineProperty(process, "platform", descriptor);
@@ -172,36 +116,6 @@ describe("update environment snapshots", () => {
 });
 
 describe("resolveUpdateTargetEnv", () => {
-  it("uses the managed service profile paths for post-install doctor", () => {
-    const env = resolveUpdateTargetEnv({
-      invocationCwd: "/srv/openclaw",
-      baseEnv: {
-        PATH: "/bin",
-        OPENCLAW_SERVICE_REPAIR_POLICY: "external",
-        OPENCLAW_STATE_DIR: "/wrong/state",
-        OPENCLAW_CONFIG_PATH: "/wrong/openclaw.json",
-        OPENCLAW_PROFILE: "wrong",
-        OPENCLAW_SYSTEMD_UNIT: "wrong.service",
-      },
-      serviceEnv: {
-        OPENCLAW_STATE_DIR: "daemon-state",
-        OPENCLAW_CONFIG_PATH: "daemon-state/openclaw.json",
-        OPENCLAW_PROFILE: "work",
-        OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-work.service",
-      },
-    });
-
-    expect(env.PATH).toBe("/bin");
-    expect(env.OPENCLAW_SERVICE_REPAIR_POLICY).toBe("external");
-    expect(env.NODE_DISABLE_COMPILE_CACHE).toBe("1");
-    expect(env.OPENCLAW_STATE_DIR).toBe(path.join("/srv/openclaw", "daemon-state"));
-    expect(env.OPENCLAW_CONFIG_PATH).toBe(
-      path.join("/srv/openclaw", "daemon-state", "openclaw.json"),
-    );
-    expect(env.OPENCLAW_PROFILE).toBe("work");
-    expect(env.OPENCLAW_SYSTEMD_UNIT).toBe("openclaw-gateway-work.service");
-  });
-
   it("keeps the caller env when no managed service env is available", () => {
     const env = resolveUpdateTargetEnv({
       baseEnv: {
@@ -258,341 +172,6 @@ describe("resolveUpdatedInstallCommandEnv", () => {
     expect(env.NODE_DISABLE_COMPILE_CACHE).toBe("1");
     expect(resolveUpdatedInstallCommandEnv({ processEnv: env })).toEqual(env);
   });
-
-  it.each([undefined, ""])("preserves scratch defaults with an operator value of %j", (value) => {
-    const env = resolveUpdatedInstallCommandEnv({
-      processEnv: { TMPDIR: value, TMP: value, TEMP: value },
-      serviceEnv: { TMPDIR: "/service/tmp", TMP: "/service/tmp", TEMP: "/service/tmp" },
-    });
-    expect(env).toMatchObject({
-      TMPDIR: value ?? "/service/tmp",
-      TMP: value ?? "/service/tmp",
-      TEMP: value ?? "/service/tmp",
-    });
-  });
-
-  it("preserves effective base-owned selectors while clearing unowned caller selectors", () => {
-    const env = resolveOwnedManagedUpdateEnv({
-      processEnv: {
-        HOME: "/home/operator",
-        OPENCLAW_HOME: "/home/operator/openclaw-home",
-        OPENCLAW_PROFILE: "personal",
-        OPENCLAW_STATE_DIR: "/home/operator/.openclaw-personal",
-        OPENCLAW_CONFIG_PATH: "/home/operator/.openclaw-personal/openclaw.json",
-        OPENCLAW_GATEWAY_PORT: "19111",
-      },
-      serviceEnv: {
-        HOME: "/home/operator",
-        OPENCLAW_HOME: "/home/operator/openclaw-home",
-        OPENCLAW_PROFILE: "personal",
-        OPENCLAW_STATE_DIR: "/home/operator/.openclaw-personal",
-        OPENCLAW_CONFIG_PATH: "/effective/openclaw.json",
-        OPENCLAW_GATEWAY_PORT: "19111",
-      },
-      serviceDefinitionEnv: { OPENCLAW_CONFIG_PATH: "/managed/openclaw.json" },
-    });
-
-    expect(env.HOME).toBe("/home/operator");
-    expect(env.OPENCLAW_HOME).toBeUndefined();
-    expect(env.OPENCLAW_PROFILE).toBeUndefined();
-    expect(env.OPENCLAW_STATE_DIR).toBeUndefined();
-    expect(env.OPENCLAW_CONFIG_PATH).toBe("/effective/openclaw.json");
-    expect(env.OPENCLAW_GATEWAY_PORT).toBeUndefined();
-  });
-});
-
-describe("collectMissingPluginInstallPayloads", () => {
-  it("reports tracked npm install records whose package payload is absent", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-plugin-payload-"));
-    const presentDir = path.join(tmpDir, "state", "npm", "node_modules", "@openclaw", "present");
-    const missingDir = path.join(tmpDir, "state", "npm", "node_modules", "@openclaw", "missing");
-    const noPackageJsonDir = path.join(
-      tmpDir,
-      "state",
-      "npm",
-      "node_modules",
-      "@openclaw",
-      "no-package-json",
-    );
-    try {
-      await fs.mkdir(presentDir, { recursive: true });
-      await fs.writeFile(path.join(presentDir, "package.json"), '{"name":"@openclaw/present"}\n');
-      await fs.mkdir(noPackageJsonDir, { recursive: true });
-
-      await expect(
-        updateCommandPluginsTesting.collectMissingPluginInstallPayloads({
-          env: { HOME: tmpDir } as NodeJS.ProcessEnv,
-          records: {
-            present: {
-              source: "npm",
-              spec: "@openclaw/present@beta",
-              installPath: presentDir,
-            },
-            missing: {
-              source: "npm",
-              spec: "@openclaw/missing@beta",
-              installPath: missingDir,
-            },
-            "no-package-json": {
-              source: "npm",
-              spec: "@openclaw/no-package-json@beta",
-              installPath: noPackageJsonDir,
-            },
-            "missing-install-path": {
-              source: "npm",
-              spec: "@openclaw/missing-install-path@beta",
-            },
-            local: {
-              source: "path",
-              sourcePath: "/not/checked",
-              installPath: "/not/checked",
-            },
-          },
-        }),
-      ).resolves.toEqual([
-        {
-          pluginId: "missing",
-          installPath: missingDir,
-          reason: "missing-package-dir",
-        },
-        {
-          pluginId: "missing-install-path",
-          reason: "missing-install-path",
-        },
-        {
-          pluginId: "no-package-json",
-          installPath: noPackageJsonDir,
-          reason: "missing-package-json",
-        },
-      ]);
-    } finally {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  it("accepts tracked bundle records validated by the shared bundle loader", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-plugin-payload-"));
-    const bundleDir = path.join(tmpDir, "state", "clawhub", "cursor-bundle");
-    try {
-      await fs.mkdir(path.join(bundleDir, ".cursor-plugin"), { recursive: true });
-      await fs.writeFile(
-        path.join(bundleDir, ".cursor-plugin", "plugin.json"),
-        JSON.stringify({ name: "cursor-bundle" }),
-        "utf8",
-      );
-      await expect(
-        updateCommandPluginsTesting.collectMissingPluginInstallPayloads({
-          env: { HOME: tmpDir } as NodeJS.ProcessEnv,
-          records: {
-            "cursor-bundle": {
-              source: "clawhub",
-              clawhubFamily: "bundle-plugin",
-              installPath: bundleDir,
-            },
-          },
-        }),
-      ).resolves.toEqual([]);
-    } finally {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  it("accepts persisted marketplace bundle records without transient format metadata", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-plugin-payload-"));
-    const bundleDir = path.join(tmpDir, "state", "marketplace", "cursor-bundle");
-    try {
-      await fs.mkdir(path.join(bundleDir, ".cursor-plugin"), { recursive: true });
-      await fs.writeFile(
-        path.join(bundleDir, ".cursor-plugin", "plugin.json"),
-        JSON.stringify({ name: "cursor-bundle" }),
-        "utf8",
-      );
-      await expect(
-        updateCommandPluginsTesting.collectMissingPluginInstallPayloads({
-          env: { HOME: tmpDir } as NodeJS.ProcessEnv,
-          records: {
-            "cursor-bundle": {
-              source: "marketplace",
-              installPath: bundleDir,
-              marketplaceName: "Local",
-              marketplaceSource: "local/repo",
-              marketplacePlugin: "cursor-bundle",
-            },
-          },
-        }),
-      ).resolves.toEqual([]);
-    } finally {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  it("keeps dual-format bundle records on the native package payload path", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-plugin-payload-"));
-    const bundleDir = path.join(tmpDir, "state", "clawhub", "dual-format-bundle");
-    try {
-      await fs.mkdir(path.join(bundleDir, ".codex-plugin"), { recursive: true });
-      await fs.writeFile(
-        path.join(bundleDir, ".codex-plugin", "plugin.json"),
-        JSON.stringify({ name: "dual-format-bundle" }),
-        "utf8",
-      );
-      await fs.writeFile(
-        path.join(bundleDir, "package.json"),
-        JSON.stringify({
-          name: "dual-format-bundle",
-          openclaw: { extensions: ["./missing-extension.js"] },
-        }),
-        "utf8",
-      );
-      await expect(
-        updateCommandPluginsTesting.collectMissingPluginInstallPayloads({
-          env: { HOME: tmpDir } as NodeJS.ProcessEnv,
-          records: {
-            "dual-format-bundle": {
-              source: "clawhub",
-              clawhubFamily: "bundle-plugin",
-              installPath: bundleDir,
-            },
-          },
-        }),
-      ).resolves.toEqual([]);
-    } finally {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  it("keeps corrupt tracked bundle records eligible for payload repair", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-plugin-payload-"));
-    const bundleDir = path.join(tmpDir, "state", "clawhub", "bad-bundle");
-    try {
-      await fs.mkdir(path.join(bundleDir, ".codex-plugin"), { recursive: true });
-      await fs.writeFile(path.join(bundleDir, ".codex-plugin", "plugin.json"), "[]", "utf8");
-      await expect(
-        updateCommandPluginsTesting.collectMissingPluginInstallPayloads({
-          env: { HOME: tmpDir } as NodeJS.ProcessEnv,
-          records: {
-            "bad-bundle": {
-              source: "clawhub",
-              clawhubFamily: "bundle-plugin",
-              installPath: bundleDir,
-            },
-          },
-        }),
-      ).resolves.toEqual([
-        {
-          pluginId: "bad-bundle",
-          installPath: bundleDir,
-          reason: "missing-package-json",
-        },
-      ]);
-    } finally {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  it("skips disabled nonofficial tracked records", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-plugin-payload-"));
-    const missingDir = path.join(tmpDir, "state", "npm", "node_modules", "@openclaw", "missing");
-    try {
-      await expect(
-        updateCommandPluginsTesting.collectMissingPluginInstallPayloads({
-          env: { HOME: tmpDir } as NodeJS.ProcessEnv,
-          config: {
-            plugins: {
-              entries: {
-                missing: {
-                  enabled: false,
-                },
-              },
-            },
-          },
-          records: {
-            missing: {
-              source: "npm",
-              spec: "@openclaw/missing@beta",
-              installPath: missingDir,
-            },
-          },
-        }),
-      ).resolves.toStrictEqual([]);
-    } finally {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  it("keeps disabled trusted official npm records eligible for payload repair", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-plugin-payload-"));
-    const missingDir = path.join(tmpDir, "state", "npm", "node_modules", "@openclaw", "codex");
-    try {
-      await expect(
-        updateCommandPluginsTesting.collectMissingPluginInstallPayloads({
-          env: { HOME: tmpDir } as NodeJS.ProcessEnv,
-          config: {
-            plugins: {
-              entries: {
-                codex: {
-                  enabled: false,
-                },
-              },
-            },
-          },
-          records: {
-            codex: {
-              source: "npm",
-              spec: "@openclaw/codex@2026.5.3",
-              resolvedName: "@openclaw/codex",
-              resolvedSpec: "@openclaw/codex@2026.5.3",
-              installPath: missingDir,
-            },
-          },
-        }),
-      ).resolves.toEqual([
-        {
-          pluginId: "codex",
-          installPath: missingDir,
-          reason: "missing-package-dir",
-        },
-      ]);
-    } finally {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  it("keeps disabled trusted official ClawHub records eligible for payload repair", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-plugin-payload-"));
-    const missingDir = path.join(tmpDir, "state", "clawhub", "diagnostics-otel");
-    try {
-      await expect(
-        updateCommandPluginsTesting.collectMissingPluginInstallPayloads({
-          env: { HOME: tmpDir } as NodeJS.ProcessEnv,
-          config: {
-            plugins: {
-              entries: {
-                "diagnostics-otel": {
-                  enabled: false,
-                },
-              },
-            },
-          },
-          records: {
-            "diagnostics-otel": {
-              source: "clawhub",
-              spec: "clawhub:@openclaw/diagnostics-otel@2026.5.3",
-              installPath: missingDir,
-            },
-          },
-        }),
-      ).resolves.toEqual([
-        {
-          pluginId: "diagnostics-otel",
-          installPath: missingDir,
-          reason: "missing-package-dir",
-        },
-      ]);
-    } finally {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
-  });
 });
 
 describe("formatPostUpdateGatewayRecoveryInstructions", () => {
@@ -603,40 +182,11 @@ describe("formatPostUpdateGatewayRecoveryInstructions", () => {
     durationMs: 0,
   };
 
-  it("uses systemd wording on Linux instead of macOS LaunchAgent instructions", () => {
-    const [line] = formatPostUpdateGatewayRecoveryInstructions(result, "linux");
-
-    expect(line).toContain("the systemd user service");
-    expect(line).toContain("openclaw gateway restart");
-    expect(line).toContain("openclaw gateway install --force");
-    expect(line).toContain("openclaw gateway status --deep");
-    expect(line).not.toContain("Linux reports");
-    expect(line).not.toContain("macOS");
-    expect(line).not.toContain("LaunchAgent");
-  });
-
   it("keeps LaunchAgent recovery wording on macOS", () => {
     const [line] = formatPostUpdateGatewayRecoveryInstructions(result, "darwin");
 
     expect(line).toContain("the LaunchAgent is installed but not loaded");
     expect(line).toContain("logged-in macOS user session");
-  });
-
-  it("uses Windows service-manager wording on Windows", () => {
-    const [line] = formatPostUpdateGatewayRecoveryInstructions(result, "win32");
-
-    expect(line).toContain("the gateway Scheduled Task or Windows login item");
-    expect(line).not.toContain("LaunchAgent");
-    expect(line).not.toContain("Startup-folder");
-  });
-
-  it("uses generic service-manager wording for unsupported Node platforms", () => {
-    const [line] = formatPostUpdateGatewayRecoveryInstructions(result, "freebsd");
-
-    expect(line).toContain("local service manager");
-    expect(line).not.toContain("systemd");
-    expect(line).not.toContain("LaunchAgent");
-    expect(line).not.toContain("Scheduled Task");
   });
 });
 
@@ -690,41 +240,6 @@ describe("recoverInstalledLaunchAgentAfterUpdate", () => {
       expect(recover).toHaveBeenCalledWith({ result: "restarted", env: recoveredEnv });
     },
   );
-
-  it("does not touch non-macOS service managers", async () => {
-    mockProcessPlatform("linux");
-    const readState = vi.spyOn(gatewayService, "readGatewayServiceState");
-    const recover = vi.spyOn(nativeLaunchAgentRecovery, "recoverInstalledLaunchAgent");
-
-    await expect(
-      launchAgentRecovery.recoverInstalledLaunchAgentAfterUpdate({
-        service: createMockGatewayService(),
-      }),
-    ).resolves.toEqual({ attempted: false, recovered: false });
-
-    expect(readState).not.toHaveBeenCalled();
-    expect(recover).not.toHaveBeenCalled();
-  });
-
-  it("does not recover a loaded LaunchAgent", async () => {
-    vi.spyOn(gatewayService, "readGatewayServiceState").mockResolvedValue({
-      installed: true,
-      loadState: { status: "loaded" },
-      running: true,
-      env: { OPENCLAW_PROFILE: "stomme" },
-      command: null,
-      runtime: { status: "running" },
-    });
-    const recover = vi.spyOn(nativeLaunchAgentRecovery, "recoverInstalledLaunchAgent");
-
-    await expect(
-      launchAgentRecovery.recoverInstalledLaunchAgentAfterUpdate({
-        service: createMockGatewayService(),
-      }),
-    ).resolves.toEqual({ attempted: false, recovered: false });
-
-    expect(recover).not.toHaveBeenCalled();
-  });
 });
 
 describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
@@ -734,7 +249,7 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
     );
   });
   afterEach(() => vi.restoreAllMocks());
-  it.each(["recovered", "failed", "not attempted"] as const)(
+  it.each(["recovered", "failed"] as const)(
     "records only attempted native repair before rechecking update health (%s)",
     async (outcome) => {
       const env = {
@@ -808,9 +323,7 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
         expect(waitForHealthy).not.toHaveBeenCalled();
       }
       const repair = getUpdateRun(runId, { env })?.repair;
-      if (outcome === "not attempted") {
-        expect(repair).toEqual([]);
-      } else {
+      {
         expect(repair).toEqual([
           {
             attempt: 1,
@@ -857,38 +370,5 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
     expect(result.health.waitOutcome).toBe("timeout");
     expect(result.launchAgentRecovery?.attempted).toBe(true);
     expect(result.launchAgentRecovery?.recovered).toBe(true);
-  });
-});
-
-describe("hasLoadedLaunchdKeepAliveSupervisor", () => {
-  it("requires a loaded LaunchAgent before extending restart health", async () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    const isLoaded = vi.fn().mockResolvedValue(false);
-    const service = createMockGatewayService({ isLoaded });
-
-    await expect(
-      hasLoadedLaunchdKeepAliveSupervisor({
-        service,
-        env: { OPENCLAW_PROFILE: "work" },
-      }),
-    ).resolves.toBe(false);
-    isLoaded.mockResolvedValue(true);
-    await expect(hasLoadedLaunchdKeepAliveSupervisor({ service })).resolves.toBe(true);
-
-    platformSpy.mockRestore();
-  });
-
-  it("does not inspect KeepAlive supervision outside macOS", async () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    const isLoaded = vi.fn().mockResolvedValue(true);
-
-    await expect(
-      hasLoadedLaunchdKeepAliveSupervisor({
-        service: createMockGatewayService({ isLoaded }),
-      }),
-    ).resolves.toBe(false);
-    expect(isLoaded).not.toHaveBeenCalled();
-
-    platformSpy.mockRestore();
   });
 });

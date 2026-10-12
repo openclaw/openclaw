@@ -5,12 +5,16 @@ import type {
   PortalListResult,
   PortalSummary,
 } from "@openclaw/gateway-protocol";
+import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { cleanupSolid as cleanup, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 
 const probePortalReachable = vi.hoisted(() =>
   vi.fn<() => Promise<"reachable" | "unreachable" | "blocked">>(),
@@ -18,7 +22,7 @@ const probePortalReachable = vi.hoisted(() =>
 
 vi.mock("./portal-reachability.ts", () => ({ probePortalReachable }));
 
-import "./portals-page.ts";
+import { PortalsPage } from "./portals-page.tsx";
 
 const portal = {
   id: "p3000",
@@ -90,20 +94,24 @@ function createContext(
 }
 
 async function mountPage(context: ApplicationContext, portalId?: string, environmentId?: string) {
-  const page = document.createElement("openclaw-portals-page");
-  const provider = createApplicationContextProvider(context);
-  if (portalId || environmentId) {
-    page.embedded = true;
-    page.requestedPortalId = portalId ?? null;
-    page.requestedEnvironmentId = environmentId ?? null;
-  }
-  provider.append(page);
-  document.body.append(provider);
+  const provider = createSolidApplicationContextProvider(context);
+  const { container } = mountSolid(
+    () =>
+      createComponent(PortalsPage, {
+        embedded: Boolean(portalId || environmentId),
+        requestedPortalId: portalId ?? null,
+        requestedEnvironmentId: environmentId ?? null,
+      }),
+    { wrapper: provider.wrapper },
+  );
+  flush();
+  const page = container.querySelector("openclaw-portals-page")!;
   await page.updateComplete;
   return page;
 }
 
 afterEach(() => {
+  cleanup();
   document.body.replaceChildren();
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -147,7 +155,7 @@ describe("PortalsPage", () => {
         ["operator.read"],
       );
       await mountPage(source.context, undefined, environmentId);
-      await vi.waitFor(() =>
+      await waitForSolid(() =>
         expect(source.request).toHaveBeenCalledWith(
           environmentId ? "environments.status" : "portal.list",
           environmentId ? { environmentId } : {},
@@ -167,7 +175,7 @@ describe("PortalsPage", () => {
           : { portals: [portal] },
       );
       const page = await mountPage(source.context, undefined, environmentId);
-      await vi.waitFor(() => expect(source.request).toHaveBeenCalledTimes(1));
+      await waitForSolid(() => expect(source.request).toHaveBeenCalledTimes(1));
       source.updateSnapshot({ phase: "reconnecting" });
       await page.updateComplete;
       expect(page.textContent).not.toContain("This action requires operator.read access.");
@@ -196,7 +204,7 @@ describe("PortalsPage", () => {
       method === "environments.status" ? environment : { portals: [portal] },
     );
     const page = await mountPage(source.context, undefined, environment.id);
-    await vi.waitFor(() =>
+    await waitForSolid(() =>
       expect(source.request).toHaveBeenCalledWith("environments.status", {
         environmentId: environment.id,
       }),
@@ -217,7 +225,7 @@ describe("PortalsPage", () => {
     page.handleToggleRequest(
       new CustomEvent("openclaw:portal-toggle", { detail: { open: true, portalId: portal.id } }),
     );
-    await vi.waitFor(() =>
+    await waitForSolid(() =>
       expect(page.querySelector("iframe")?.getAttribute("title")).toBe("Seeded app portal preview"),
     );
     expect(page.requestedEnvironmentId).toBeNull();
@@ -237,7 +245,7 @@ describe("PortalsPage", () => {
     const page = await mountPage(source.context, undefined, "old-machine");
     page.requestedEnvironmentId = replacement.id;
     await page.updateComplete;
-    await vi.waitFor(() =>
+    await waitForSolid(() =>
       expect(source.request).toHaveBeenLastCalledWith("environments.status", {
         environmentId: replacement.id,
       }),
@@ -252,7 +260,7 @@ describe("PortalsPage", () => {
     replacement = { ...replacement, status: "error" };
     page.presented = true;
     await page.updateComplete;
-    await vi.waitFor(() => expect(page.textContent).toContain("The machine could not start"));
+    await waitForSolid(() => expect(page.textContent).toContain("The machine could not start"));
     expect(page.querySelector("iframe")).toBeNull();
     page.remove();
     const finalReads = source.request.mock.calls.length;
@@ -270,9 +278,9 @@ describe("PortalsPage", () => {
     const page = await mountPage(source.context, undefined, "old-machine");
     page.requestedEnvironmentId = replacement.id;
     await page.updateComplete;
-    await vi.waitFor(() => expect(source.request).toHaveBeenCalledTimes(2));
+    await waitForSolid(() => expect(source.request).toHaveBeenCalledTimes(2));
     await source.request.mock.results[1]?.value;
-    await vi.waitFor(() => expect(page.textContent).toContain("Starting your machine"));
+    await waitForSolid(() => expect(page.textContent).toContain("Starting your machine"));
 
     retired.reject(new Error("Previous machine failed"));
     await retired.promise.catch(() => undefined);
@@ -291,7 +299,7 @@ describe("PortalsPage", () => {
     const source = createContext(["portal.list", "portal.close"], async () => ({ portals }));
     const page = await mountPage(source.context, selected.id);
 
-    await vi.waitFor(() => {
+    await waitForSolid(() => {
       expect(page.querySelector("iframe")?.getAttribute("title")).toBe(
         "Selected app portal preview",
       );
@@ -302,7 +310,7 @@ describe("PortalsPage", () => {
     portals = [portal];
     source.emitPortals(portals);
 
-    await vi.waitFor(() => {
+    await waitForSolid(() => {
       expect(page.querySelector("iframe")).toBeNull();
       expect(page.textContent).toContain("This portal is no longer available.");
     });
@@ -320,7 +328,7 @@ describe("PortalsPage", () => {
       });
       const page = await mountPage(source.context);
 
-      await vi.waitFor(() => {
+      await waitForSolid(() => {
         expect(page.querySelector(".portals-rail__title")?.textContent).toBe("Seeded app");
       });
       expect(page.querySelector(".portals-rail__item")?.textContent).toContain("Port 3000");
@@ -339,12 +347,55 @@ describe("PortalsPage", () => {
 
       source.emitPortals([{ ...portal, url: "https://event.example.test/untrusted" }]);
 
-      await vi.waitFor(() => {
+      await waitForSolid(() => {
         expect(source.request).toHaveBeenCalledTimes(2);
       });
       expect(source.request).toHaveBeenLastCalledWith("portal.list", {});
       expect(page.querySelector(".portals-rail__title")?.textContent).toBe("Seeded app");
       expect(page.querySelector("iframe")?.getAttribute("src")).toBe(portal.url);
+    },
+  );
+
+  it.each(["solid", "custom element"] as const)(
+    "retains the embedded iframe document through %s presentation changes",
+    async (entry) => {
+      let title = portal.title;
+      const source = createContext(["portal.list"], async () => ({
+        portals: [{ ...portal, title }],
+      }));
+      let page: HTMLElementTagNameMap["openclaw-portals-page"];
+      if (entry === "solid") {
+        page = await mountPage(source.context, portal.id);
+      } else {
+        page = document.createElement("openclaw-portals-page");
+        page.embedded = true;
+        page.requestedPortalId = portal.id;
+        const provider = createApplicationContextProvider(source.context);
+        provider.append(page);
+        mountSolid(() => provider);
+        await page.updateComplete;
+      }
+      await waitForSolid(() => expect(page.querySelector("iframe")).not.toBeNull());
+      const frame = page.querySelector("iframe")!;
+      const writes = vi.spyOn(frame, "setAttribute");
+      const sourceWrites = vi.spyOn(frame, "src", "set");
+
+      page.presented = false;
+      await page.updateComplete;
+      expect(page.querySelector("iframe"), "frame after hiding").toBe(frame);
+      title = "Refreshed app";
+      page.handleToggleRequest(
+        new CustomEvent("openclaw:portal-toggle", { detail: { open: true, portalId: portal.id } }),
+      );
+      page.presented = true;
+      await page.updateComplete;
+      await waitForSolid(() =>
+        expect(page.querySelector("iframe")?.title).toBe("Refreshed app portal preview"),
+      );
+
+      expect(page.querySelector("iframe")).toBe(frame);
+      expect(writes.mock.calls.filter(([name]) => name === "src")).toEqual([]);
+      expect(sourceWrites).not.toHaveBeenCalled();
     },
   );
 
@@ -361,13 +412,13 @@ describe("PortalsPage", () => {
       );
       const page = await mountPage(source.context);
       const closeButton = () => page.querySelector<HTMLButtonElement>(".portals-preview__close")!;
-      await vi.waitFor(() => expect(closeButton()).not.toBeNull());
+      await waitForSolid(() => expect(closeButton()).not.toBeNull());
       closeButton().click();
-      await vi.waitFor(() => expect(closeButton().disabled).toBe(true));
+      await waitForSolid(() => expect(closeButton().disabled).toBe(true));
       source.updateSnapshot({ client: replacement.context.gateway.snapshot.client });
-      await vi.waitFor(() => expect(closeButton()?.disabled).toBe(false));
+      await waitForSolid(() => expect(closeButton()?.disabled).toBe(false));
       closeButton().click();
-      await vi.waitFor(() => expect(closeButton().disabled).toBe(true));
+      await waitForSolid(() => expect(closeButton().disabled).toBe(true));
       try {
         if (outcome === "success") {
           retired.resolve({ closed: true });
@@ -386,7 +437,7 @@ describe("PortalsPage", () => {
         current.resolve({ closed: true });
         await current.promise;
       }
-      await vi.waitFor(() => expect(closeButton().disabled).toBe(false));
+      await waitForSolid(() => expect(closeButton().disabled).toBe(false));
     },
   );
 
@@ -399,7 +450,7 @@ describe("PortalsPage", () => {
     );
     const page = await mountPage(source.context);
 
-    await vi.waitFor(() => {
+    await waitForSolid(() => {
       expect(page.textContent).toContain("This portal requires an operator with write access.");
     });
     expect(page.querySelector("iframe")).toBeNull();
@@ -417,13 +468,13 @@ describe("PortalsPage", () => {
     });
     const page = await mountPage(source.context);
 
-    await vi.waitFor(() => {
+    await waitForSolid(() => {
       expect(page.textContent).toContain("Portal not reachable from this browser");
     });
     expect(page.querySelector("iframe")).toBeNull();
 
     page.querySelector<HTMLButtonElement>(".portals-preview__close")?.click();
-    await vi.waitFor(() => {
+    await waitForSolid(() => {
       expect(source.request).toHaveBeenCalledWith("portal.close", { id: portal.id });
     });
 
@@ -433,7 +484,7 @@ describe("PortalsPage", () => {
     expect(retry).toBeDefined();
     retry?.click();
 
-    await vi.waitFor(() => expect(page.querySelector("iframe")).not.toBeNull());
+    await waitForSolid(() => expect(page.querySelector("iframe")).not.toBeNull());
     expect(probePortalReachable).toHaveBeenCalledTimes(2);
   });
 
@@ -467,7 +518,7 @@ describe("PortalsPage", () => {
       }));
       source.context.gateway.connection.gatewayUrl = gateway;
       const page = await mountPage(source.context);
-      await vi.waitFor(() =>
+      await waitForSolid(() =>
         expect(page.textContent).toContain(
           ingress ? "Remote portal ingress required" : "Open this HTTP portal in a new tab",
         ),
@@ -501,7 +552,7 @@ describe("PortalsPage", () => {
       const source = createContext(["portal.list"], async () => ({ portals: [localPortal] }));
       source.context.gateway.connection.gatewayUrl = gateway;
       const page = await mountPage(source.context);
-      await vi.waitFor(() =>
+      await waitForSolid(() =>
         expect(page.querySelector("iframe")?.getAttribute("src")).toBe(localPortal.url),
       );
       expect(probePortalReachable).toHaveBeenCalledWith(localPortal.url);
@@ -523,16 +574,20 @@ describe("PortalsPage", () => {
       )
       .mockResolvedValueOnce("unreachable");
     const first = createContext(["portal.list"], async () => ({ portals: [portal] }));
-    const provider = createApplicationContextProvider(first.context);
-    const page = document.createElement("openclaw-portals-page");
-    provider.append(page);
-    document.body.append(provider);
+    const provider = createSolidApplicationContextProvider(first.context);
+    const { container } = mountSolid(() => createComponent(PortalsPage, {}), {
+      wrapper: provider.wrapper,
+    });
+    flush();
+    let page = container.querySelector("openclaw-portals-page")!;
     await page.updateComplete;
-    await vi.waitFor(() => expect(probePortalReachable).toHaveBeenCalledTimes(1));
+    await waitForSolid(() => expect(probePortalReachable).toHaveBeenCalledTimes(1));
 
     const second = createContext(["portal.list"], async () => ({ portals: [portal] }));
     provider.setContext(second.context);
-    await vi.waitFor(() =>
+    flush();
+    page = container.querySelector("openclaw-portals-page")!;
+    await waitForSolid(() =>
       expect(page.textContent).toContain("Portal not reachable from this browser"),
     );
     completeOldProbe("reachable");

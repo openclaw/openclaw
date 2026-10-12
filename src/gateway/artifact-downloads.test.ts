@@ -2,6 +2,7 @@ import { ServerResponse } from "node:http";
 import { crc32 } from "node:zlib";
 import { expect, it, vi } from "vitest";
 import { createNoisyPngBuffer, createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { createImageProcessor } from "../media/image-processor.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -218,6 +219,7 @@ it("releases retained sharing facts on unused expiry, eviction, and disconnect",
     using clock = vi.spyOn(Date, "now");
     clock.mockReturnValue(1_000);
     const cfg = {};
+    setRuntimeConfigSnapshot(cfg);
     const sessionKey = "agent:main:grant-lifetime";
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey },

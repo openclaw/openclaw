@@ -1,9 +1,9 @@
+import { communicationEntryBinding } from "../../sessions/communication-admission.js";
 import {
   sessionChanges,
   type SessionRowChange,
   type SessionRowFacts,
 } from "../../sessions/session-row-changes.js";
-import { readSessionTranscriptUpdateVersion } from "../../sessions/transcript-events.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   pendingSessionEntryPublications,
@@ -130,7 +130,6 @@ export function retainSessionEntryWorkerPublication(params: {
   let keys: string[] = [];
   const identityKey = `file:${params.databaseIdentity}`;
   let pending = false;
-  let transcriptVersion: number | undefined;
   const publication = {
     begin(
       sessionKeys: readonly string[],
@@ -143,7 +142,6 @@ export function retainSessionEntryWorkerPublication(params: {
         return;
       }
       keys = [...new Set(sessionKeys)];
-      transcriptVersion = readSessionTranscriptUpdateVersion();
       transcript.begin(transcriptPublication);
       owner.membershipInvalidated = new Set(membershipInvalidatedKeys);
       owner.sharingUnchanged = new Set(sharingUnchangedKeys);
@@ -336,11 +334,9 @@ export function retainSessionEntryWorkerPublication(params: {
         owner,
         databaseIdentity: params.databaseIdentity,
         unknown,
-        transcriptVersion,
       });
       for (const sessionKey of changed) {
         const entry = replacement?.current.get(sessionKey);
-        // A later transcript append retires its display watermark, not committed sharing facts.
         const sharingProjection =
           prepared && readCurrentSessionEntryProjection(owner, replacement, sessionKey);
         const sharingEntry = entry ? projectSessionSharingEntry(entry) : undefined;
@@ -397,11 +393,12 @@ export function retainSessionEntryWorkerPublication(params: {
           if (replacement?.previous.has(sessionKey) && !replacement.current.has(sessionKey)) {
             return { kind: "removed" };
           }
-          const currentProjection = readCurrent(sessionKey)?.projection;
-          return currentProjection
+          const currentEntry = readCurrent(sessionKey);
+          return currentEntry?.projection
             ? {
                 kind: "replacement",
-                membership: currentProjection.membership,
+                membership: currentEntry.projection.membership,
+                communicationBinding: communicationEntryBinding(currentEntry.entry),
                 lifecycleChanged: !generationUnchanged.has(sessionKey),
               }
             : undefined;

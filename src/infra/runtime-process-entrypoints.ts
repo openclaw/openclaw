@@ -12,6 +12,7 @@ function runtimeProcessEntrypoint(modulePath: string) {
 export const SQLITE_READONLY_CHILD_ARG = "--openclaw-sqlite-readonly-child";
 
 export const runtimeProcessEntrypoints = {
+  postgresBridge: runtimeProcessEntrypoint("infra/postgres-sync/bridge.worker"),
   secretEgressProxy: runtimeProcessEntrypoint("secrets/egress-proxy/proxy.worker"),
   codeModeNode: runtimeProcessEntrypoint("agents/code-mode-node.worker"),
   cronReadOnly: runtimeProcessEntrypoint("cron/store/read-only.worker"),
@@ -20,6 +21,7 @@ export const runtimeProcessEntrypoints = {
   spawnBroker: runtimeProcessEntrypoint("process/spawn-broker/worker"),
   cronStreamMatcher: runtimeProcessEntrypoint("gateway/cron-stream-matcher.worker"),
   controlUiFile: runtimeProcessEntrypoint("gateway/control-ui-file.worker"),
+  publicSessionCard: runtimeProcessEntrypoint("gateway/control-ui-public-session-card.worker"),
   nodeBootstrapArtifact: runtimeProcessEntrypoint(
     "gateway/worker-environments/node-bootstrap-artifact.worker",
   ),
@@ -52,9 +54,6 @@ export const runtimeProcessEntrypoints = {
     "config/sessions/session-message-rewrite.worker",
   ),
   sessionDiskBudget: runtimeProcessEntrypoint("config/sessions/disk-budget.worker"),
-  sessionTranscriptStats: runtimeProcessEntrypoint(
-    "config/sessions/session-transcript-stats.worker",
-  ),
   heartbeatOutcomeStore: runtimeProcessEntrypoint("infra/heartbeat-outcome-store.worker"),
   acpParentStreamStore: runtimeProcessEntrypoint(
     "agents/subagents/spawn/acp-parent-stream-store.worker",

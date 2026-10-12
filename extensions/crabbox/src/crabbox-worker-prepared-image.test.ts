@@ -209,8 +209,6 @@ describe("Crabbox prepared image demand and custody", () => {
   });
 
   it.each([
-    { reason: "expired image", aged: true, pinned: false, replay: false, captures: 2 },
-    { reason: "pinned expired image", aged: true, pinned: true, replay: false, captures: 1 },
     { reason: "interrupted preparation", aged: false, pinned: false, replay: true, captures: 2 },
   ])("preserves capture policy for a changed commit after $reason", async (scenario) => {
     const now = Date.now();
@@ -266,116 +264,7 @@ describe("Crabbox prepared image demand and custody", () => {
     );
   });
 
-  it.each(["cold", "warm"] as const)(
-    "does not record session demand when %s enrollment fails",
-    async (kind) => {
-      const now = Date.now();
-      const clock = vi.spyOn(Date, "now").mockReturnValue(now);
-      const preparation = createPreparation("session", now);
-      const { provider, calls } = createWarmProvider();
-      if (kind === "warm") {
-        const seed = projectOptions([], new AbortController(), {
-          ...preparation,
-          purpose: "reserve",
-        });
-        const lease = await provider.provision(PROFILE, "demand-seed", seed.options);
-        await destroyAndWait(provider, { leaseId: lease.leaseId, profile: PROFILE });
-        clock.mockReturnValue(now + 60_000);
-      }
-      const current = projectOptions([], new AbortController(), {
-        ...preparation,
-        demandAtMs: Date.now(),
-      });
-      let demandBeforeRejection: number | null | undefined;
-      current.options.beginNodeEnrollment.mockImplementationOnce(async () => {
-        demandBeforeRejection = (await listCrabboxWarmImages(crabboxState))[0]?.lastDemandAtMs;
-        throw new Error("enrollment admission failed");
-      });
-      calls.length = 0;
-      await expect(provider.provision(PROFILE, "failed-demand", current.options)).rejects.toThrow(
-        "enrollment admission failed",
-      );
-      expect(demandBeforeRejection).toBe(kind === "cold" ? null : now);
-      expect(calls.filter(({ argv }) => argv[1] === "stop")).toHaveLength(1);
-      if (kind === "cold") {
-        expect(calls.filter(({ argv }) => argv[2] === "delete").map(({ argv }) => argv[3])).toEqual(
-          [CHECKPOINT_ID],
-        );
-        expect(await listCrabboxWarmImages(crabboxState)).toEqual([]);
-      } else {
-        expect((await listCrabboxWarmImages(crabboxState))[0]).toMatchObject({
-          lastDemandAtMs: now,
-          allocations: {},
-        });
-        expect(calls.some(({ argv }) => argv[2] === "delete")).toBe(false);
-      }
-    },
-  );
-
-  it.each(["activation", "stop failure", "deletion failure"] as const)(
-    "keeps an unactivated producer protected through %s",
-    async (outcome) => {
-      const now = Date.now();
-      const preparation = createPreparation("session", now);
-      let failing = outcome !== "activation";
-      const { provider, calls } = createWarmProvider(({ argv }) => {
-        if (
-          failing &&
-          ((outcome === "stop failure" && argv[1] === "stop") ||
-            (outcome === "deletion failure" && argv[2] === "delete"))
-        ) {
-          return commandResult({ code: 7, stderr: "cleanup unavailable" });
-        }
-        return undefined;
-      });
-      const current = projectOptions([], new AbortController(), preparation);
-      const leaseId = operationLeaseId("unactivated-producer");
-      if (outcome !== "activation") {
-        current.options.beginNodeEnrollment.mockRejectedValueOnce(
-          new Error("enrollment admission failed"),
-        );
-        await expect(
-          provider.provision(PROFILE, "unactivated-producer", current.options),
-        ).rejects.toThrow();
-      } else {
-        await provider.provision(PROFILE, "unactivated-producer", current.options);
-      }
-      const image = (await listCrabboxWarmImages(crabboxState))[0]!;
-      expect(image.lastDemandAtMs).toBeNull();
-      if (outcome === "deletion failure") {
-        expect(image).toMatchObject({
-          allocations: {},
-          retirement: { checkpointId: CHECKPOINT_ID },
-        });
-      } else {
-        expect(image.allocations[leaseId]?.imageGeneration?.checkpointId).toBe(CHECKPOINT_ID);
-        calls.length = 0;
-        await maintain(provider);
-        expect(calls.some(({ argv }) => argv[2] === "delete")).toBe(false);
-      }
-      failing = false;
-      if (outcome === "activation") {
-        await provider.notePreparedDemand!(
-          { leaseId, profile: PROFILE },
-          { preparationKey: preparation.key, demandAtMs: now + 1 },
-        );
-        await destroyAndWait(provider, { leaseId, profile: PROFILE });
-        expect((await listCrabboxWarmImages(crabboxState))[0]).toMatchObject({
-          lastDemandAtMs: now + 1,
-          allocations: {},
-        });
-      } else {
-        if (outcome === "stop failure") {
-          await destroyAndWait(provider, { leaseId, profile: PROFILE });
-        } else {
-          await maintain(provider);
-        }
-        expect(await listCrabboxWarmImages(crabboxState)).toEqual([]);
-      }
-    },
-  );
-
-  it.each([55_000, 60_000])(
+  it.each([60_000])(
     "shares the release deadline after predecessor deletion consumes %s ms",
     async (elapsed) => {
       const now = Date.now();

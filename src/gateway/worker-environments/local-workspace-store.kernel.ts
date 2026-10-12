@@ -1,10 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { Selectable, Updateable } from "kysely";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
-import { extractSqliteTableSchema } from "../../infra/sqlite-schema-sql.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
+import { getOpenClawStateFeatureSchemaSql } from "../../state/openclaw-state-feature-schema.js";
 import { localWorkspacePublication } from "./local-workspace-publication.js";
 
 const table = "local_workspace_projections";
@@ -73,7 +72,7 @@ export function mutateLocalWorkspaceProjection(
     }
     if (!tableExists(db, table)) {
       // First-use additive admission preserves the existing numeric schema version.
-      db.exec(extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, table)); // sqlite-allow-raw -- Canonical first-use schema admission.
+      db.exec(getOpenClawStateFeatureSchemaSql(table)); // sqlite-allow-raw -- Canonical first-use schema admission.
     }
     const created = executeSqliteQueryTakeFirstSync(
       db,

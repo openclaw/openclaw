@@ -21,7 +21,7 @@ export type GatewayPageBindingOptions = {
   getGateway: () => ApplicationContext["gateway"] | null | undefined;
   onIdentityChange?: (change: GatewayPageChange) => void;
   invalidateRequests?: (change: GatewayPageChange) => void;
-  ensureInitialData?: () => void;
+  ensureInitialData?: (change: GatewayPageChange) => void;
   onSnapshot?: (change: GatewayPageChange) => void;
   onPageActivation?: () => void;
 };
@@ -211,7 +211,7 @@ export class GatewayPageBinding {
     }
     this.options.onSnapshot?.(change);
     if (nextConnected && (binding.initial || change.identityChanged || change.connectionChanged)) {
-      this.options.ensureInitialData?.();
+      this.options.ensureInitialData?.(change);
     }
     this.notify();
   }

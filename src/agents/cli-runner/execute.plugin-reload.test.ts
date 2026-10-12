@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import type { CliBackendConfig, CliBackendExecute } from "../../plugins/cli-backend.types.js";
 import { PluginInstanceDrainTimeoutError } from "../../plugins/plugin-instance-error.js";
 import { PluginInstance } from "../../plugins/plugin-instance.js";
@@ -71,17 +75,17 @@ afterEach(() => {
 });
 
 describe("plugin-owned CLI turns across a plugin hot reload", () => {
-  it("delivers a turn that outlives its backend instance's retirement", async () => {
+  it("delivers a turn that outlives its backend instance's retirement", async ({ signal }) => {
     // A hot reload retires the previous plugin instance while the CLI turn is
     // still running; the finished reply and the turn's cleanup must still go
     // through instead of failing once the bounded call drain expires (#144809).
     vi.useFakeTimers();
     const owner = new PluginInstance("anthropic");
     const finish = createDeferred();
-    let started = false;
+    const started = createDeferred();
     const execute = owner.wrap<CliBackendExecute>(async function* () {
       yield { type: "system", subtype: "init", session_id: "sdk-session" };
-      started = true;
+      started.resolve();
       await finish.promise;
       yield SUCCESS_RESULT;
     });
@@ -104,7 +108,14 @@ describe("plugin-owned CLI turns across a plugin hot reload", () => {
     let disposal: ReturnType<typeof owner.dispose> | undefined;
     let settlement: Promise<void> | undefined;
     try {
-      await vi.waitFor(() => expect(started).toBe(true));
+      await withinTest(
+        awaitGateBeforeSettlement(
+          started.promise,
+          run,
+          "CLI turn settled before its stream started",
+        ),
+        signal,
+      );
 
       disposal = owner.dispose();
       await vi.advanceTimersByTimeAsync(5_001);

@@ -1348,50 +1348,58 @@ describe("previous release update compatibility", () => {
     ]);
   });
 
-  it.each(["exact", "changed delegation", "changed binding", "changed target"])(
-    "traces only the exact shipped 2026.9.8 config alias (%s)",
-    (variant) => {
-      const facade =
-        'export { createConfigIO, readConfigFileSnapshot, readSourceConfigBestEffort } from "./config-abcdefgh.mjs";\n';
-      let alias = fsSync.readFileSync(
-        path.join(MODULE_ROOT, "test/fixtures/update-config-runtime-alias-2026.9.8.txt"),
-        "utf8",
-      );
-      if (variant === "changed delegation") {
-        alias = alias.replace("return runtime[name]", "return undefined");
-      } else if (variant === "changed binding") {
-        alias = alias.replace('select("createConfigIO")', 'select("readConfigFileSnapshot")');
-      } else if (variant === "changed target") {
-        alias = alias.replace('"./io.runtime-BNEtkwm5.mjs"', '"./"');
-      }
-      const record = () =>
-        recordImportedFixture('(await import("./io.runtime.js"))', {
-          "io.runtime.js": alias,
-          "io.runtime-BNEtkwm5.mjs": facade,
-          "config-abcdefgh.mjs": [
-            "//#region src/config/io.ts",
-            "export function createConfigIO() {}",
-            "export function readConfigFileSnapshot() {}",
-            "export function readSourceConfigBestEffort() {}",
-          ].join("\n"),
-        });
-      if (variant !== "exact") {
-        expect(record).toThrow("Cannot trace io.runtime.js export createConfigIO");
-        return;
-      }
-      expect(record().inventory.releases[0]?.chunks).toMatchObject([
-        {
-          path: "io.runtime.js",
-          exports: ["createConfigIO", "readConfigFileSnapshot", "readSourceConfigBestEffort"].map(
-            (exported) => ({
-              exported,
-              origin: { module: "src/config/io.ts", symbol: exported },
-            }),
-          ),
-        },
-      ]);
-    },
-  );
+  it.each(
+    (
+      [
+        ["2026.9.8", "io.runtime-BNEtkwm5.mjs"],
+        ["2026.10.5-beta.1", "io.runtime-t3hrjkTX.mjs"],
+      ] as const
+    ).flatMap(([release, target]) =>
+      ["exact", "changed delegation", "changed binding", "changed target"].map(
+        (variant) => [release, target, variant] as const,
+      ),
+    ),
+  )("traces only the exact shipped %s config alias (%s, %s)", (release, target, variant) => {
+    let alias = fsSync.readFileSync(
+      path.join(MODULE_ROOT, `test/fixtures/update-config-runtime-alias-${release}.txt`),
+      "utf8",
+    );
+    const exportedNames = [...alias.matchAll(/select\("(\w+)"\)/g)].flatMap(
+      (match) => match[1] ?? [],
+    );
+    const sortedNames = exportedNames.toSorted((left, right) =>
+      left < right ? -1 : left > right ? 1 : 0,
+    );
+    if (variant === "changed delegation") {
+      alias = alias.replace("return runtime[name]", "return undefined");
+    } else if (variant === "changed binding") {
+      alias = alias.replace('select("createConfigIO")', 'select("readConfigFileSnapshot")');
+    } else if (variant === "changed target") {
+      alias = alias.replace(`"./${target}"`, '"./"');
+    }
+    const record = () =>
+      recordImportedFixture('(await import("./io.runtime.js"))', {
+        "io.runtime.js": alias,
+        [target]: `export { ${exportedNames.join(", ")} } from "./config-abcdefgh.mjs";\n`,
+        "config-abcdefgh.mjs": [
+          "//#region src/config/io.ts",
+          ...exportedNames.map((name) => `export function ${name}() {}`),
+        ].join("\n"),
+      });
+    if (variant !== "exact") {
+      expect(record).toThrow(`Cannot trace io.runtime.js export ${sortedNames[0]}`);
+      return;
+    }
+    expect(record().inventory.releases[0]?.chunks).toMatchObject([
+      {
+        path: "io.runtime.js",
+        exports: sortedNames.map((exported) => ({
+          exported,
+          origin: { module: "src/config/io.ts", symbol: exported },
+        })),
+      },
+    ]);
+  });
 
   it("records literal dist imports alongside computed package assets", () => {
     const { inventory } = recordImportedFixture(

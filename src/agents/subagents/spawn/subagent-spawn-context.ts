@@ -71,7 +71,6 @@ export async function prepareSubagentSessionContext(params: {
       parentStoreKeys: parentTarget.storeKeys,
       sessionKey: childTarget.canonicalKey,
       sessionStoreKeys: childTarget.storeKeys,
-      fallbackEntry: { sessionId: "", updatedAt: Date.now() },
       agentId: params.requesterAgentId,
     });
     if (forkedResult.status === "missing-parent") {

@@ -20,6 +20,7 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
+import { createWorkerWorkspaceConflictTranscriptHandlers } from "../worker-workspace-conflict-transcript.js";
 import type { PreparedWorkerComputer } from "./computer-transport.js";
 import type {
   WorkerSessionPlacementRecord,
@@ -209,13 +210,11 @@ export async function reconcileWorkspaceAfterTurn(params: {
             journal: journal.adapter,
             stagedResult: {
               ref: stagedResultRef,
-              record: (ref) =>
+              record: (ref, workspaceId) =>
                 params.placements.recordStagedWorkspaceResult(
                   params.turnClaim,
                   ref,
-                  params.workspace.kind === "repository"
-                    ? params.workspace.repository.workspaceId
-                    : undefined,
+                  workspaceId,
                   assertWorkspaceResultCurrent,
                 ),
             },
@@ -304,6 +303,9 @@ export async function reconcileWorkspaceAfterTurn(params: {
       }
     });
   } catch (error) {
+    await createWorkerWorkspaceConflictTranscriptHandlers(transcriptTarget, assertResultCurrent)
+      .reportFailure(workspaceError(error))
+      .catch(() => undefined);
     throw new WorkerWorkspaceReconciliationError(
       `Cloud worker finished, but its workspace result could not be reconciled: ${workspaceError(error)}`,
       { cause: error },

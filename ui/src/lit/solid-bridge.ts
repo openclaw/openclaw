@@ -1,12 +1,9 @@
 import { insert, render, spread } from "@solidjs/web";
-import { nothing, render as renderLit } from "lit";
 import {
   createComponent,
-  createEffect,
   createRenderEffect,
   createRoot,
   createSignal,
-  flush,
   onCleanup,
   runWithOwner,
   untrack,
@@ -16,6 +13,7 @@ import { shellLayoutOwnerForHost } from "../app/shell-layout-owner.ts";
 import { ShellLayoutProvider } from "../app/shell-layout-traits-solid.tsx";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
 import type { JSX } from "../types/solid-elements.d.ts";
+import { mountLitContent } from "./solid-content.tsx";
 
 type Property<T> = {
   default: T;
@@ -32,6 +30,8 @@ export type SolidBridgeElement<Props, Methods = object> = HTMLElement &
 
 type Spec<Props, Methods> = {
   properties: { [Key in keyof Props]-?: Property<Props[Key]> };
+  connected?: (host: SolidBridgeElement<Props, Methods>) => void;
+  disconnected?: (host: SolidBridgeElement<Props, Methods>) => void;
   propertyChanged?: (host: SolidBridgeElement<Props, Methods>, key: keyof Props) => void;
   methods?: {
     [Key in keyof Methods]: Methods[Key] extends (...args: infer Args) => infer Result
@@ -69,7 +69,7 @@ export function defineSolidBridge<Props extends object, Methods extends object =
     static observedAttributes = [...attributes.keys()];
     #values = new Map(properties.map(([key, property]) => [key, property.default]));
     #upgraded = new Map<string, unknown>();
-    #notify?: () => void;
+    #publish = new Map<string, () => void>();
     #dispose?: () => void;
     #unsubscribe?: () => void;
     #application?: ApplicationContext;
@@ -130,8 +130,10 @@ export function defineSolidBridge<Props extends object, Methods extends object =
           throw new TypeError(`Cannot reflect non-primitive bridge property ${key}`);
         }
       }
-      this.#notify?.();
-      void this.#commit();
+      this.#publish.get(key)?.();
+      if (!this.#solidOwned) {
+        void this.#commit();
+      }
     }
 
     attributeChangedCallback(name: string, _old: string | null, value: string | null) {
@@ -160,6 +162,7 @@ export function defineSolidBridge<Props extends object, Methods extends object =
     }
 
     connectedCallback() {
+      spec.connected?.(this.#host);
       if (this.#solidOwned) {
         return;
       }
@@ -189,6 +192,7 @@ export function defineSolidBridge<Props extends object, Methods extends object =
     }
 
     disconnectedCallback() {
+      spec.disconnected?.(this.#host);
       if (!this.#solidOwned) {
         // Reparenting within a turn keeps the root (and the live sidebar) intact.
         queueMicrotask(() => {
@@ -211,9 +215,6 @@ export function defineSolidBridge<Props extends object, Methods extends object =
             runWithOwner(null, () => this.#mount());
           }
         }
-        // Queued during Lit's property commit, before its updateComplete reactions.
-        // Never flush reentrantly from a Solid render/effect callback.
-        flush();
         return true;
       }));
     }
@@ -234,9 +235,6 @@ export function defineSolidBridge<Props extends object, Methods extends object =
       this.#mountedApplication = this.#application;
       const layout = !this.#solidOwned ? shellLayoutOwnerForHost(this) : undefined;
       const view = () => {
-        // Solid-owned hosts publish property updates while their parent renders.
-        const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-        this.#notify = () => setRevision((value) => value + 1);
         const props = {
           ...defaults,
           get children() {
@@ -244,14 +242,21 @@ export function defineSolidBridge<Props extends object, Methods extends object =
           },
         };
         for (const [key] of properties) {
+          // Wrap callable values so Solid treats callbacks as data, not computations.
+          const [value, setValue] = createSignal(
+            { value: this.#values.get(key) },
+            { ownedWrite: true, equals: (left, right) => Object.is(left.value, right.value) },
+          );
+          this.#publish.set(key, () => setValue({ value: this.#values.get(key) }));
           Object.defineProperty(props, key, {
             get: () => {
-              revision();
+              value();
               return this.#values.get(key);
             },
           });
         }
-        const renderContent = () => content(props, this.#host);
+        // Provider child memos must not subscribe to component setup reads.
+        const renderContent = () => createComponent(() => content(props, this.#host), {});
         const contentView = () =>
           layout
             ? createComponent(ShellLayoutProvider, {
@@ -280,7 +285,7 @@ export function defineSolidBridge<Props extends object, Methods extends object =
     }
 
     #disposeRoot() {
-      this.#notify = undefined;
+      this.#publish.clear();
       this.#unsubscribe?.();
       this.#unsubscribe = undefined;
       const outlet = this.#start?.parentNode;
@@ -337,16 +342,14 @@ export function LitContent(props: {
   if (className) {
     host.className = className;
   }
-  let part: ReturnType<typeof renderLit> | undefined;
-  createEffect(
+  const mount = mountLitContent(undefined, host, { host });
+  // Commit Lit descendants before post-render observers inspect the host.
+  createRenderEffect(
     () => props.render(),
     (template) => {
-      part = renderLit(template, host, { host });
+      mount.update(template);
     },
   );
-  onCleanup(() => {
-    part?.setConnected(false);
-    renderLit(nothing, host);
-  });
+  onCleanup(mount.dispose);
   return host;
 }

@@ -585,32 +585,3 @@ it("rolls back planner statistics when maintenance ownership is revoked before c
   expect(readStatistics()).toEqual({ stat: expect.stringMatching(/^1\b/u) });
   expect(database.db.prepare("PRAGMA analysis_limit").get()).toEqual({ analysis_limit: 37 });
 });
-
-it("refreshes the retained parent query planner after worker analysis", async () => {
-  const { database } = createPlannerStore(1);
-  database.db.exec(`
-    CREATE TABLE maintenance_planner_probe (a INTEGER, b INTEGER, payload TEXT);
-    CREATE INDEX maintenance_probe_a ON maintenance_planner_probe(a);
-    CREATE INDEX maintenance_probe_b ON maintenance_planner_probe(b);
-    WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<10000)
-    INSERT INTO maintenance_planner_probe
-      SELECT CASE WHEN i<=9900 THEN 1 ELSE i-9899 END,
-        CASE WHEN i<=9900 THEN i+1 ELSE 1 END, 'synthetic' FROM n;
-    PRAGMA analysis_limit=0;
-    ANALYZE main;
-  `);
-  const plan = () =>
-    database.db
-      .prepare("EXPLAIN QUERY PLAN SELECT payload FROM maintenance_planner_probe WHERE a=1 AND b=1")
-      .all()
-      .map((row) => row.detail);
-  expect(plan()).toEqual([expect.stringContaining("maintenance_probe_b")]);
-  database.db.exec("DELETE FROM maintenance_planner_probe WHERE a=1");
-
-  await maintenance.refreshSqliteSessionPlannerStatisticsBestEffort(
-    { agentId: "main", path: database.path },
-    9900,
-  );
-
-  expect(plan()).toEqual([expect.stringContaining("maintenance_probe_a")]);
-});

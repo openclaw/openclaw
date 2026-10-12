@@ -20,6 +20,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import {
+  getSessionEntryAsync,
   listSessionEntries,
   normalizeSessionDeliveryState,
   upsertSessionEntry,
@@ -111,7 +112,7 @@ const {
   getChatSpy,
   getLoadConfigMock,
   getOnHandler,
-  listSkillCommandsForAgents,
+  prepareSkillCommandsForAgents,
   onSpy,
   getReadChannelAllowFromStoreMock,
   replySpy,
@@ -1172,7 +1173,7 @@ describe("createTelegramBot", () => {
   );
 
   it("allows callback_query in groups when group policy authorizes the sender", async () => {
-    listSkillCommandsForAgents.mockImplementationOnce(({ agentIds }) => {
+    prepareSkillCommandsForAgents.mockImplementationOnce(async ({ agentIds }) => {
       if (agentIds?.length !== 1 || agentIds[0] !== "main") {
         throw new Error("pagination queried commands for the wrong agent");
       }
@@ -1202,7 +1203,7 @@ describe("createTelegramBot", () => {
       }),
     );
 
-    expect(listSkillCommandsForAgents).toHaveBeenCalledOnce();
+    expect(prepareSkillCommandsForAgents).toHaveBeenCalledOnce();
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
     expect(editMessageTextSpy).toHaveBeenCalledWith(
       -100999,
@@ -1716,7 +1717,7 @@ describe("createTelegramBot", () => {
       }),
     );
 
-    expect(listSkillCommandsForAgents).not.toHaveBeenCalled();
+    expect(prepareSkillCommandsForAgents).not.toHaveBeenCalled();
     expect(editMessageTextSpy).not.toHaveBeenCalled();
   });
 
@@ -1731,6 +1732,9 @@ describe("createTelegramBot", () => {
   });
 
   it("keeps hot-reloaded model pins on the next assembled turn", async () => {
+    using _ = vi
+      .spyOn(telegramBotDepsForTest, "getSessionEntryAsync")
+      .mockImplementation(getSessionEntryAsync);
     const storePath = createTelegramTestStorePath("model-fresh-cfg");
     const debounceMs = 4321;
     const startupConfig = makeModelPickerConfig(storePath, {

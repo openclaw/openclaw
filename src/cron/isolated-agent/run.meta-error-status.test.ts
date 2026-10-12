@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { expectObjectFields } from "../../test-utils/mock-call-assertions.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
@@ -247,7 +248,7 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
       deliveryPayloads: [mediaPayload],
     });
     const result = await runTurn();
-    expectDispatch({ spawnOnlyHandoff: false, deliveryPayloadHasStructuredContent: true });
+    expectDispatch({ spawnOnlyHandoff: false });
     expectObjectFields(result, { status: "ok", deliveryError: error });
   });
 
@@ -313,9 +314,11 @@ describe("delivered report outcome", () => {
       },
     });
 
+    const cfg = {};
+    setRuntimeConfigSnapshot(cfg);
     const result = await runCronIsolatedAgentTurn({
       deliveryAttemptFence: null,
-      cfg: {},
+      cfg,
       deps: {} as never,
       job: {
         id: "delivered-report",

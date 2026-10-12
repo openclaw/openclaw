@@ -435,7 +435,17 @@ is disabled. Idle conversation eviction does not interrupt that work.
 The existing unknown-outcome audit diagnostic remains; cancellation and a
 command with no confirmed live owner retain their failure handling.
 
-Stopping an active Codex run interrupts its turn. With the OpenClaw sandbox
+Stopping an active Codex run interrupts its turn. After a parent yields to native
+children, Stop waits for its admitted descendants to reach real terminal events
+and finish completion settlement. A child that completes successfully during
+Stop keeps its result. Stop does not cancel a sibling run or a replacement
+session generation.
+Session-wide Stop preserves the caller's request ownership, protected-run, and
+side-run restrictions. Native descendants retain host-captured request custody
+after their foreground parent finishes; restored observations without that
+custody cannot acquire cancellation authority from session or run IDs alone.
+
+With the OpenClaw sandbox
 exec-server, cleanup stops the concrete processes admitted by that turn and
 preserves independent background work in the same reused thread. Each process
 retains its original source until settlement, including after foreground

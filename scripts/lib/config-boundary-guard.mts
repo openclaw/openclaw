@@ -13,6 +13,8 @@ const COMPAT_CONFIG_API_FILES = new Set([
   "src/config/mutate.ts",
   "src/memory-host-sdk/runtime-core.ts",
   "src/plugin-sdk/memory-core-host-runtime-core.ts",
+  // Released cold getter stays synchronous; migrate to readRuntimeConfig after async preparation.
+  "src/plugin-sdk/runtime-config-legacy.ts",
   "src/plugins/compat/registry.ts",
   "src/plugins/registry.runtime-config.test.ts",
   "src/plugins/registry.ts",
@@ -37,6 +39,12 @@ const PROCESS_BOUNDARY_DIRECT_CONFIG_LOAD_FILES = new Set([
   // snapshot, so it cannot express a pinned run; the file-scoped loader is the
   // point. Ambient resolution in the same command does use `getRuntimeConfig()`.
   "src/commands/agent-exec-input.ts",
+  // Offline CLI custody defers config loading until the domain has admitted the operation.
+  "src/cli/local-state-owner.ts",
+  // Doctor's one-shot maintenance runner resolves this synchronous config helper under its lock.
+  "src/commands/doctor-session-sqlite-targets.ts",
+  // One-shot migration plan/apply/import contexts retain their immediate object contract.
+  "src/commands/migrate/context.ts",
 ]);
 
 const BROAD_CONFIG_RUNTIME_COMPAT_FILES = new Set([

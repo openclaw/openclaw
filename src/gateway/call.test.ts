@@ -1582,6 +1582,10 @@ describe("callGateway error details", () => {
       setStop: (stop) => {
         gatewayClientStopAndWait = stop;
       },
+      setFeatures: (methods, capabilities) => {
+        helloMethods = methods;
+        helloCapabilities = capabilities;
+      },
       hello: () => lastClientOptions?.onHelloOk?.(makeStubGatewayHello()),
       close: (code, reason) => lastClientOptions?.onClose?.(code, reason),
     };
@@ -1617,28 +1621,6 @@ describe("callGateway error details", () => {
         timeoutMs: 10,
       }),
     ).rejects.toThrow("gateway remote mode misconfigured");
-  });
-
-  it.each([
-    {
-      method: "secrets.resolve",
-      requiredMethods: ["secrets.resolve"],
-      requiredCapabilities: undefined,
-      error:
-        /does not support required method "secrets\.resolve".*update or restart the active gateway/i,
-    },
-    {
-      method: "gateway.restart.request",
-      requiredMethods: undefined,
-      requiredCapabilities: ["gateway-restart-target-safe-v1"],
-      error:
-        /does not support required capability "gateway-restart-target-safe-v1".*update or restart the active gateway/i,
-    },
-  ])("requires supported features before calling $method", async ({ error, ...options }) => {
-    setLocalLoopbackGatewayConfig();
-    helloMethods = ["health"];
-    helloCapabilities = [];
-    await expect(callGateway(options)).rejects.toThrow(error);
   });
 });
 

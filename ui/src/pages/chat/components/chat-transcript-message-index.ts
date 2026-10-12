@@ -181,6 +181,7 @@ export function projectTranscriptChain(
     sessionKey: string;
     runWorking: boolean;
     searchActive: boolean;
+    bubbleMode?: boolean;
     session?: Pick<GatewaySessionRow, "key" | "lastRunId" | "status" | "runtimeMs">;
   },
 ): TranscriptChain {
@@ -190,6 +191,7 @@ export function projectTranscriptChain(
     options.sessionKey,
     options.runWorking,
     options.searchActive,
+    options.bubbleMode,
     session?.key,
     session?.lastRunId,
     session?.status,

@@ -13,9 +13,10 @@ import type { SessionEntry } from "../config/sessions.js";
 import * as entryCache from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import { sessionChanges } from "../sessions/session-row-changes.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
+import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import * as projectionWork from "./session-projection-work.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
@@ -53,16 +54,22 @@ describe("session list resolver cache", () => {
       );
       let insideRow = false;
       let rowReads = 0;
+      const observedEntries: typeof entries = {};
+      // Getters preserve property-read accounting while keeping config snapshots cloneable.
+      for (const id of Object.keys(entries)) {
+        Object.defineProperty(observedEntries, id, {
+          enumerable: true,
+          get() {
+            if (insideRow) {
+              rowReads++;
+            }
+            return entries[id];
+          },
+        });
+      }
       const cfg: OpenClawConfig = {
         agents: {
-          entries: new Proxy(entries, {
-            get(target, key, receiver) {
-              if (insideRow && typeof key === "string" && Object.hasOwn(target, key)) {
-                rowReads++;
-              }
-              return Reflect.get(target, key, receiver);
-            },
-          }),
+          entries: observedEntries,
           defaults: { model: { primary: "example/roster-model" }, thinkingDefault: "off" },
         },
       };
@@ -119,7 +126,7 @@ describe("session list resolver cache", () => {
                       identity: { name: "Refreshed owner" },
                       fastModeDefault: true,
                     };
-                    sessionChanges.emit({ all: true, scope: "config" });
+                    setRuntimeConfigSnapshot(cfg);
                     identityDuringPause = resolveAgentIdentity(cfg, ownerId)?.name;
                     resolve();
                   });
@@ -278,7 +285,7 @@ describe("session list resolver cache", () => {
           },
         ]),
       );
-      const store = Object.fromEntries(
+      const store: Record<string, SessionEntry> = Object.fromEntries(
         Array.from({ length: 80 }, (_, index) => {
           const agentId = index % 2 ? "research" : "main";
           return [
@@ -294,8 +301,10 @@ describe("session list resolver cache", () => {
         }),
       );
       writeResidentEntries(store);
+      const acpSessionKeys = new Set<string>();
       for (const [index, [sessionKey, entry]] of Object.entries(store).entries()) {
         if (index % 8 < 2) {
+          acpSessionKeys.add(sessionKey);
           seedCanonicalAcpSessionMeta({
             sessionKey,
             sessionId: entry.sessionId,
@@ -343,21 +352,38 @@ describe("session list resolver cache", () => {
           expect(catalogRows).toHaveLength(40);
           for (const row of catalogRows) {
             expect(row.contextTokens).toBe(
-              revision *
-                (row.model === "Model-Hit" ? 2 : 1) *
-                (row.agentId === "main" ? 10_000 : 20_000),
+              acpSessionKeys.has(row.key)
+                ? undefined
+                : revision *
+                    (row.model === "Model-Hit" ? 2 : 1) *
+                    (row.agentId === "main" ? 10_000 : 20_000),
             );
             expect(row).not.toHaveProperty("catalogEntry");
           }
           // Acquisition shares both hits and misses; defaults retain their separate lookup.
           expect(catalogSpy.mock.calls.length).toBeLessThanOrEqual(10);
           const inputs = vi.spyOn(rowProjection, "readSessionRowInputs");
+          catalogSpy.mockClear();
+          let warmCatalogReads: number;
           try {
             await listProjectedSessions({ projection, opts: { limit: 80 } });
             expect(inputs).not.toHaveBeenCalled();
+            warmCatalogReads = catalogSpy.mock.calls.length;
           } finally {
             inputs.mockRestore();
           }
+          catalogSpy.mockClear();
+          const updatedKey = "agent:main:dashboard:catalog-2";
+          for (let update = 0; update < 4; update++) {
+            store[updatedKey] = { ...store[updatedKey]!, label: `Metadata update ${update}` };
+            writeResidentEntries({ [updatedKey]: store[updatedKey]! }, 1);
+            const updated = await listProjectedSessions({ projection, opts: { limit: 80 } });
+            expect(updated.sessions.find((row) => row.key === updatedKey)).toMatchObject({
+              label: `Metadata update ${update}`,
+              contextTokens: revision * 20_000,
+            });
+          }
+          expect(catalogSpy.mock.calls.length).toBeLessThanOrEqual(warmCatalogReads * 4);
           catalogSpy.mockClear();
           const key = "agent:main:dashboard:catalog-0";
           const patch = projectSessionPatchResult({
@@ -474,6 +500,7 @@ describe("session list resolver cache", () => {
       const storePath = path.join(stateDir, "sessions.json");
       const store: Record<string, SessionEntry> = {};
       const ownerId = scenario.owned ? ensureProfileForEmail("owner@example.com").id : undefined;
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       for (let index = 0; index < scenario.count; index += 1) {
         const sessionId = `title-batch-${index}`;
         const sessionKey = `agent:main:${sessionId}`;
@@ -517,13 +544,11 @@ describe("session list resolver cache", () => {
               hasAvatar: false,
               updatedAt: 1,
             },
-            preparedSessionProfile: {
-              profileId: ownerId,
-              aliases: new Set([ownerId]),
-              role: null,
-            },
           }
         : undefined;
+      if (client) {
+        prepareGatewayRecipientProfile(client);
+      }
       try {
         projection = createSessionRowProjectionFixture({ cfg, storePath, store });
         titleSpy.mockClear();

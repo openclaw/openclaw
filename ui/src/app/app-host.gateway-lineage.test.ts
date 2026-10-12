@@ -26,7 +26,7 @@ import { admitQueuedMessageForSession } from "../pages/chat/chat-outbox-admissio
 import { chatOutboxOwner } from "../pages/chat/chat-outbox-owner.ts";
 import { createTestChatPane } from "../pages/chat/chat-pane.test-support.ts";
 import { handleSendChat } from "../pages/chat/chat-send-submit.ts";
-import { renderChatComposer } from "../pages/chat/components/chat-composer.ts";
+import { renderChatComposer } from "../pages/chat/components/chat-composer.tsx";
 import { listStoredChatOutboxes } from "../pages/chat/composer-persistence.ts";
 import {
   activeQueuedMessageEdit,

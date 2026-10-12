@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, onTestFinished, test, vi } from "vitest";
 import { captureMethodCall } from "../../test/helpers/capture-method-call.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { managedWorktrees, ManagedWorktreeService } from "../agents/worktrees/service.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { isSessionLifecycleMutationActive } from "../sessions/session-lifecycle-admission.js";
@@ -15,9 +16,9 @@ import { setupGatewaySessionsWorktreeTestHarness } from "./test/server-sessions.
 
 const { createArchiveWorktreeFixture } = setupGatewaySessionsWorktreeTestHarness();
 
-test.each([false, true])(
+test.for([false, true])(
   "inbound restore releases unrelated session writes while allocation waits (checkout already restored=%s)",
-  async (alreadyRestored) => {
+  async (alreadyRestored, { signal }) => {
     const fixture = await createArchiveWorktreeFixture();
     const { key, sessionId, storePath, worktree, workspace } = fixture;
     const peer = await directSessionReq<{ key: string }>("sessions.create", { agentId: "main" });
@@ -98,35 +99,32 @@ test.each([false, true])(
     let admission: ReturnType<typeof coordinator.ensureDispatchReplyOperation> | undefined;
     let independent: ReturnType<typeof directSessionReq> | undefined;
     let admissionDone = false;
-    let independentDone = false;
-    let blockedIndependent: Error | undefined;
     try {
-      await Promise.race([entered.promise, allocation]);
+      await withinTest(
+        awaitGateBeforeSettlement(entered.promise, allocation, "allocation lease was not acquired"),
+        signal,
+      );
       admission = coordinator.ensureDispatchReplyOperation("pre_dispatch").then((result) => {
         admissionDone = true;
         return result;
       });
       if (alreadyRestored) {
-        await expect(admission).resolves.toEqual({ status: "ready" });
+        await expect(withinTest(admission, signal)).resolves.toEqual({ status: "ready" });
         expect(restore).not.toHaveBeenCalled();
       } else {
-        await Promise.race([restoreEntered.promise, admission]);
+        await withinTest(
+          awaitGateBeforeSettlement(restoreEntered.promise, admission, "restore was not attempted"),
+          signal,
+        );
         expect(restore).toHaveBeenCalledOnce();
         expect(isSessionLifecycleMutationActive(storePath, [key, sessionId])).toBe(true);
       }
       independent = directSessionReq("sessions.patch", {
         key: peerKey,
         label: "Independent inbound peer",
-      }).then((result) => {
-        independentDone = true;
-        return result;
       });
-      // Release the real allocation lease even when the pre-fix writer blocks this assertion.
-      await vi
-        .waitFor(() => expect(independentDone).toBe(true))
-        .catch((error: unknown) => {
-          blockedIndependent = error instanceof Error ? error : new Error(String(error));
-        });
+      // Test cancellation reaches finally even if the writer blocks behind the allocation lease.
+      expect(await withinTest(independent, signal)).toMatchObject({ ok: true });
       if (!alreadyRestored) {
         expect(admissionDone).toBe(false);
         expect(isSessionLifecycleMutationActive(storePath, [key, sessionId])).toBe(true);
@@ -144,7 +142,6 @@ test.each([false, true])(
     }
     await allocation;
     await expect(admission).resolves.toEqual({ status: "ready" });
-    expect(await independent).toMatchObject({ ok: true });
     expect(loadSessionEntry({ storePath, sessionKey: peerKey })?.label).toBe(
       "Independent inbound peer",
     );
@@ -153,8 +150,5 @@ test.each([false, true])(
       "inbound restore preserves work\n",
     );
     await expect(loadSeededTranscriptEvents(fixture.transcriptScope)).resolves.toEqual(transcript);
-    if (blockedIndependent) {
-      throw blockedIndependent;
-    }
   },
 );

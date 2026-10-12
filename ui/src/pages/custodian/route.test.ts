@@ -51,6 +51,9 @@ describe("custodian route", () => {
     const provider = createApplicationContextProvider(createContext());
     document.body.append(provider);
 
+    render(renderCustodianRoute(undefined), provider);
+    expect(provider.querySelector("openclaw-custodian-page")).toBeNull();
+
     render(renderCustodianRoute({ onboarding: false, intent: null }), provider);
     const normalPage = provider.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
       "openclaw-custodian-page",

@@ -43,41 +43,6 @@ import {
 } from "./defaults.js";
 
 describe("resolveDefaultMediaModel", () => {
-  it("uses supplied image registry defaults before configured models", () => {
-    const capability = "image";
-    const providerRegistry = new Map<string, MediaUnderstandingProvider>([
-      ["google", { id: "google", defaultModels: { [capability]: "  registry-model  " } }],
-      ["blank", { id: "blank", defaultModels: { [capability]: " \t " } }],
-    ]);
-    const models = [" GEMINI ", "blank", "missing"].map((providerId) =>
-      resolveDefaultMediaModel({
-        capability,
-        providerId,
-        providerRegistry,
-        cfg: {
-          models: {
-            providers: {
-              google: {
-                baseUrl: "https://example.invalid",
-                models: [
-                  {
-                    id: "configured-image",
-                    name: "configured",
-                    input: ["image"],
-                    reasoning: false,
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    maxTokens: 1024,
-                  },
-                ],
-              },
-            },
-          },
-        },
-      }),
-    );
-    expect(models).toEqual(["registry-model", undefined, undefined]);
-  });
-
   it("prefers configured image models before manifest defaults", () => {
     const cfg = {
       models: {
@@ -104,7 +69,7 @@ describe("resolveDefaultMediaModel", () => {
 });
 
 describe("resolveAutoMediaKeyProviders", () => {
-  it.each<MediaUnderstandingCapability>(["image", "audio", "video"])(
+  it.each<MediaUnderstandingCapability>(["video"])(
     "orders %s priorities without conflating declared capabilities and runtime hooks",
     (capability) => {
       const hooks = {

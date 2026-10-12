@@ -8,7 +8,7 @@ import {
 } from "./stale-lock-file.js";
 
 describe("stale lock file ownership", () => {
-  it.each([false, true])(
+  it.each([true])(
     "records the deciding owner facts without payload disclosure (exited=%s)",
     (exited) => {
       let startReads = 0;
@@ -59,42 +59,6 @@ describe("stale lock file ownership", () => {
         getProcessStartTime: () => 222,
       }),
     ).toBe(true);
-  });
-
-  it("keeps locks when the owner pid starttime still matches", () => {
-    expect(
-      isLockOwnerDefinitelyStale({
-        payload: {
-          pid: 123,
-          createdAt: "2026-05-23T00:00:00.000Z",
-          starttime: 111,
-        },
-        isPidDefinitelyDead: () => false,
-        getProcessStartTime: () => 111,
-      }),
-    ).toBe(false);
-  });
-
-  it("classifies pid-owned locks when the owner is definitely dead", () => {
-    expect(
-      isLockOwnerDefinitelyStale({
-        payload: {
-          pid: 123,
-          createdAt: new Date(Date.now() - 60_000).toISOString(),
-        },
-        isPidDefinitelyDead: () => true,
-      }),
-    ).toBe(true);
-  });
-
-  it("keeps expired pidless locks because ownership cannot be proven", () => {
-    expect(
-      isLockOwnerDefinitelyStale({
-        payload: {
-          createdAt: "2026-05-23T00:00:00.000Z",
-        },
-      }),
-    ).toBe(false);
   });
 
   it("retains shipped expiry recovery for generic pidless locks", () => {

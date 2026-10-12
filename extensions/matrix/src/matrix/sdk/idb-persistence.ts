@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { indexedDB as fakeIndexedDB } from "fake-indexeddb";
+import { IDBFactory, indexedDB as fakeIndexedDB } from "fake-indexeddb";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { withFileLock } from "openclaw/plugin-sdk/file-lock";
 import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -102,6 +102,14 @@ function parseSnapshotPayload(data: string): IdbDatabaseSnapshot[] | null {
   return parsed;
 }
 
+export async function validateMatrixIdbSnapshotJson(data: string): Promise<void> {
+  const snapshot = parseSnapshotPayload(data);
+  if (!snapshot) {
+    throw new Error("Malformed IndexedDB snapshot payload");
+  }
+  await preflightIndexedDatabases(snapshot);
+}
+
 function idbReq<T>(req: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
     req.addEventListener("success", () => resolve(req.result), { once: true });
@@ -157,8 +165,22 @@ async function dumpIndexedDatabases(databasePrefix?: string): Promise<IdbDatabas
   return snapshot;
 }
 
-async function restoreIndexedDatabases(snapshot: IdbDatabaseSnapshot[]): Promise<void> {
-  const idb = fakeIndexedDB;
+async function clearAccountIndexedDatabases(databasePrefix?: string): Promise<void> {
+  if (!databasePrefix) {
+    return;
+  }
+  const names = await fakeIndexedDB.databases();
+  for (const { name } of names) {
+    if (name?.startsWith(`${databasePrefix}::`)) {
+      await idbReq(fakeIndexedDB.deleteDatabase(name));
+    }
+  }
+}
+
+async function restoreIndexedDatabases(
+  snapshot: IdbDatabaseSnapshot[],
+  idb: IDBFactory,
+): Promise<void> {
   for (const dbSnap of snapshot) {
     const request = idb.open(dbSnap.name, dbSnap.version);
     request.addEventListener("upgradeneeded", () => {
@@ -187,22 +209,31 @@ async function restoreIndexedDatabases(snapshot: IdbDatabaseSnapshot[]): Promise
           continue;
         }
         const tx = db.transaction(storeSnap.name, "readwrite");
-        const store = tx.objectStore(storeSnap.name);
-        for (const rec of storeSnap.records) {
-          if (storeSnap.keyPath !== null) {
-            store.put(rec.value);
-          } else {
-            store.put(rec.value, rec.key);
-          }
-        }
         await new Promise<void>((resolve, reject) => {
+          let enqueueError: Error | undefined;
           tx.addEventListener("complete", () => resolve(), { once: true });
-          // Failed requests abort the transaction instead of emitting complete.
           tx.addEventListener(
             "abort",
-            () => reject(toErrorObject(tx.error, "IndexedDB restore transaction aborted")),
+            () =>
+              reject(
+                enqueueError ?? toErrorObject(tx.error, "IndexedDB restore transaction aborted"),
+              ),
             { once: true },
           );
+          try {
+            const store = tx.objectStore(storeSnap.name);
+            for (const rec of storeSnap.records) {
+              if (storeSnap.keyPath !== null) {
+                store.put(rec.value);
+              } else {
+                store.put(rec.value, rec.key);
+              }
+            }
+          } catch (err) {
+            // A synchronous put failure must also settle earlier queued writes.
+            enqueueError = toErrorObject(err, "IndexedDB restore enqueue failed");
+            tx.abort();
+          }
         });
       }
     } finally {
@@ -211,24 +242,49 @@ async function restoreIndexedDatabases(snapshot: IdbDatabaseSnapshot[]): Promise
   }
 }
 
-function resolveDefaultIdbSnapshotPath(): string {
+export function resolveDefaultIdbSnapshotPath(): string {
   const stateDir =
     process.env.OPENCLAW_STATE_DIR || path.join(process.env.HOME || "/tmp", ".openclaw");
   return path.join(stateDir, "matrix", "crypto-idb-snapshot.json");
 }
 
-async function readCanonicalSnapshotJson(
+async function preflightIndexedDatabases(
+  snapshot: IdbDatabaseSnapshot[],
+  databasePrefix?: string,
+): Promise<void> {
+  const names = new Set<string>();
+  for (const { name } of snapshot) {
+    if (names.has(name) || (databasePrefix && !name.startsWith(`${databasePrefix}::`))) {
+      throw new Error("Malformed IndexedDB snapshot database names");
+    }
+    names.add(name);
+  }
+  // Use the same replay as startup without changing any live account databases.
+  // JSON shape validation cannot prove IndexedDB key, schema, or index constraints.
+  await restoreIndexedDatabases(snapshot, new IDBFactory());
+}
+
+async function readCanonicalSnapshot(
   snapshotPath: string,
   stateRuntime: MatrixSnapshotStateRuntime,
-): Promise<string | null> {
+): Promise<IdbDatabaseSnapshot[] | null> {
   throwIfLegacySnapshotNeedsDoctor(snapshotPath);
-  return await readMatrixIdbSnapshotJson(path.dirname(snapshotPath), stateRuntime);
+  const snapshotJson = await readMatrixIdbSnapshotJson(path.dirname(snapshotPath), stateRuntime);
+  if (snapshotJson === null) {
+    return null;
+  }
+  const snapshot = parseSnapshotPayload(snapshotJson);
+  if (!snapshot) {
+    throw new Error("Malformed IndexedDB snapshot payload");
+  }
+  return snapshot;
 }
 
 // Production callers pass MatrixStoragePaths.idbSnapshotPath; explicit paths only isolate tests.
 export async function restoreIdbFromDisk(
   snapshotPath?: string,
   stateRuntime?: MatrixSnapshotStateRuntime,
+  databasePrefix?: string,
 ): Promise<boolean> {
   const resolvedPath = snapshotPath ?? resolveDefaultIdbSnapshotPath();
   let callbackStarted = false;
@@ -237,18 +293,14 @@ export async function restoreIdbFromDisk(
     // withFileLock is acquire-or-throw; it never skips the callback on contention.
     return await withFileLock(resolvedPath, MATRIX_IDB_SNAPSHOT_LOCK_OPTIONS, async () => {
       callbackStarted = true;
-      const storedSnapshotJson = await readCanonicalSnapshotJson(
-        resolvedPath,
-        snapshotStateRuntime,
-      );
-      if (!storedSnapshotJson) {
+      const snapshot = await readCanonicalSnapshot(resolvedPath, snapshotStateRuntime);
+      if (snapshot === null) {
+        await clearAccountIndexedDatabases(databasePrefix);
         return false;
       }
-      const snapshot = parseSnapshotPayload(storedSnapshotJson);
-      if (!snapshot) {
-        return false;
-      }
-      await restoreIndexedDatabases(snapshot);
+      await preflightIndexedDatabases(snapshot, databasePrefix);
+      await clearAccountIndexedDatabases(databasePrefix);
+      await restoreIndexedDatabases(snapshot, fakeIndexedDB);
       LogService.info(
         "IdbPersistence",
         `Restored ${snapshot.length} IndexedDB database(s) from Matrix SQLite state`,
@@ -263,7 +315,7 @@ export async function restoreIdbFromDisk(
       throwLegacySnapshotMigrationRequired();
     }
     LogService.warn("IdbPersistence", "Failed to restore IndexedDB snapshot from SQLite:", err);
-    return false;
+    throw err;
   }
 }
 
@@ -287,7 +339,7 @@ export async function persistIdbToDisk(params?: {
       async () => {
         callbackStarted = true;
         const storageRootDir = path.dirname(snapshotPath);
-        await readCanonicalSnapshotJson(snapshotPath, stateRuntime);
+        await readCanonicalSnapshot(snapshotPath, stateRuntime);
         const snapshot = await dumpIndexedDatabases(params?.databasePrefix);
         if (params?.abortSignal?.aborted || snapshot.length === 0) {
           return 0;

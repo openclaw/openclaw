@@ -22,8 +22,8 @@ Learning happens in three places:
 - **Unused-skill cleanup** archives learned skills unused for 30 days. See
   [Unused-skill cleanup](/tools/skill-workshop#unused-skill-cleanup).
 
-Every change applies immediately, is announced in the conversation, and can be
-undone. See [Undo](/tools/skill-workshop#undo).
+Every change applies immediately and can be undone. Background review changes
+appear in the Control UI chat. See [Undo](/tools/skill-workshop#undo).
 
 ## When a review runs
 
@@ -92,21 +92,25 @@ commands, paths, or ids. When nothing durable was learned, it changes nothing.
 
 ## What you see
 
-If the review changed a skill, one line is posted to the conversation that
-triggered it and mirrored into the session transcript:
+When a review changes a skill, the Control UI chat shows a **Learned** row: one
+chip per changed skill, each opening that skill in the Skill Workshop, and an
+**Undo** button. Nothing appears when nothing changed.
+
+Channel messages are off by default. Set
+`skills.workshop.autonomous.channelNotices: true` to post the notice to the
+conversation that triggered the review instead. That session's Control UI
+chat then shows the channel message as plain text, not the **Learned** row:
 
 ```text
 💾 Learned: updated `deploy-staging` (tightened the rollback step). Say "undo" to revert this skill change.
 ```
 
-Channel-less Control UI sessions show it as a **Learned** row instead: one chip
-per changed skill, each opening that skill in the Skill Workshop, and an
-**Undo** button. Nothing is posted when nothing changed. Slack conversations get
-no notice; the change still appears in the Skill Workshop, where you can undo it.
+Slack never gets a channel message; its sessions still get the Control UI row.
 
-To undo everything the review changed, press **Undo** on the notice (a button
-on channels that render buttons, a copyable `/learn undo <id>` command on
-plain-text ones) or on the Control UI card. You can also reply "undo" and the
+To undo everything the review changed, press **Undo** on the Control UI row or
+channel notice. Channels that do not render buttons show a copyable
+`/learn undo <id>` command; the id comes from the channel notice. You can also
+say "undo" in the conversation, whether channel notices are on or off, and the
 agent restores the previous version. See
 [Skill Workshop undo](/tools/skill-workshop#undo).
 

@@ -39,6 +39,7 @@ afterEach(() => resetConfigRuntimeState());
 
 test("prepares an actor workspace and guards exact placement metadata without host session SQL", async () => {
   await withStateDirEnv("actor-placement-source-", async () => {
+    setRuntimeConfigSnapshot({});
     const identity = {
       agentId: "main",
       sessionKey: "agent:main:dashboard:incognito-placement-source",
@@ -229,11 +230,11 @@ test.each([
         resolveProvider: (id) => (id === provider.id ? provider : undefined),
         prepareInstallation: unexpected,
         bootstrapWorker: unexpected,
-        executeInference: unexpected,
         placementStore: createWorkerSessionPlacementGate(placements),
       });
       try {
         const runtime = createGatewayWorkerPlacementRuntime({
+          initialPlacements: await placements.listAsync(),
           scheduler,
           placements,
           environments,

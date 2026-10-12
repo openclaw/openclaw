@@ -1,7 +1,6 @@
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { PluginHookInboundClaimEvent } from "openclaw/plugin-sdk/plugin-entry";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
-import { composeSessionEntryCommitGuards } from "openclaw/plugin-sdk/session-binding-runtime";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   closeCodexStartupClientBestEffort,
@@ -109,7 +108,7 @@ async function runBoundTurn(params: {
       assertCodexBindingMayBeReplaced(binding, "running a conversation-bound Codex thread");
       let threadId = binding.threadId;
       const requestedWorkspaceDir = binding.cwd || params.data.workspaceDir;
-      const reviewerModelProvider = resolveModelBackedReviewerPolicyProvider({
+      const reviewerModelProvider = await resolveModelBackedReviewerPolicyProvider({
         authProfileId: binding.authProfileId,
         modelProvider: binding.modelProvider,
         ...agentLookup,
@@ -118,6 +117,7 @@ async function runBoundTurn(params: {
         runtime,
         workspaceDir,
         assertCurrent,
+        source,
         incognito: sourceIncognito,
       } = await resolveConversationAppServerRuntime({
         pluginConfig: params.pluginConfig,
@@ -141,7 +141,7 @@ async function runBoundTurn(params: {
       let useStickyNetworkProfile = permissionProfile !== undefined && !networkProxyBindingChanged;
       assertNativeConversationApprovalPolicySupported(runtime);
       const modelSelection = binding.model
-        ? resolveCodexAppServerRequestModelSelection({
+        ? await resolveCodexAppServerRequestModelSelection({
             model: binding.model,
             modelProvider: binding.modelProvider,
             authProfileId: binding.authProfileId,
@@ -152,12 +152,13 @@ async function runBoundTurn(params: {
         runtime,
         workspaceDir,
         assertCurrent,
+        source,
         incognito,
         ...modelSelection,
       };
 
       const clientOptions = {
-        assertCurrent,
+        assertCurrentAsync: assertCurrent,
         startOptions: runtime.start,
         timeoutMs: runtime.requestTimeoutMs,
         authProfileId: binding.authProfileId,
@@ -179,11 +180,15 @@ async function runBoundTurn(params: {
         | undefined;
       let ownsNativeSubscription = false;
       let turnSucceeded = false;
+      const withCurrent = async (write: () => void) => {
+        await assertCurrent();
+        write();
+      };
       const assertResumeInputAllowed = async () => {
         const { thread } = await client.request(
           "thread/read",
           { threadId, includeTurns: false },
-          { timeoutMs: runtime.requestTimeoutMs, assertCurrent },
+          { timeoutMs: runtime.requestTimeoutMs, withCurrent },
         );
         assertCodexThreadAcceptsDirectInput(thread);
       };
@@ -213,12 +218,14 @@ async function runBoundTurn(params: {
             run: async (requestClient, connectionRequestOptions) => {
               const requestOptions = () => {
                 const options = connectionRequestOptions();
-                const check = composeSessionEntryCommitGuards([
-                  options.assertCurrent,
-                  assertCurrent,
-                ]);
-                check();
-                return { ...options, assertCurrent: check };
+                return {
+                  ...options,
+                  withCurrent: async (write: () => void) => {
+                    await assertCurrent();
+                    options.assertCurrent();
+                    write();
+                  },
+                };
               };
               const threadRequest = await buildConversationThreadRequestForClient(
                 requestClient,
@@ -295,7 +302,7 @@ async function runBoundTurn(params: {
             // Keep the old physical owner authoritative until unsubscribe succeeds;
             // failed migration then rolls back only the newly resumed connection.
             await releaseCodexAppServerBindingSubscription(binding, {
-              assertCurrent,
+              withCurrent,
               retainedClientId: client.getInstanceId(),
             });
           }
@@ -304,7 +311,7 @@ async function runBoundTurn(params: {
             clientId: client.getInstanceId(),
             cwd: response.thread.cwd ?? (networkProxyBindingChanged ? workspaceDir : binding.cwd),
             model: response.model ?? modelSelection?.model ?? binding.model,
-            modelProvider: normalizeCodexAppServerBindingModelProvider({
+            modelProvider: await normalizeCodexAppServerBindingModelProvider({
               authProfileId: binding.authProfileId,
               modelProvider:
                 response.modelProvider ?? modelSelection?.modelProvider ?? binding.modelProvider,
@@ -329,7 +336,7 @@ async function runBoundTurn(params: {
                   },
                 }
               : { kind: "patch", threadId: binding.threadId, patch },
-            assertCurrent,
+            source,
           );
           if (!committed) {
             throw new Error(
@@ -345,7 +352,7 @@ async function runBoundTurn(params: {
           const recorded = await params.bindingStore.mutate(
             identity,
             { kind: "patch", threadId, patch: { conversationIncognito: true } },
-            assertCurrent,
+            source,
           );
           if (!recorded) {
             throw new Error(
@@ -382,7 +389,7 @@ async function runBoundTurn(params: {
             personality: CODEX_NATIVE_PERSONALITY_NONE,
             ...(serviceTier ? { serviceTier } : {}),
           },
-          { timeoutMs: runtime.requestTimeoutMs, assertCurrent },
+          { timeoutMs: runtime.requestTimeoutMs, withCurrent },
         );
         activeTurnId = response.turn.id;
         activeTurnCleanup = trackCodexConversationActiveTurn({

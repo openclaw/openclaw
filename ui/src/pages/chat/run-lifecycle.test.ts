@@ -74,7 +74,6 @@ function completeLocalRun(host: ReconcileHost, publishRunStatus = true) {
     runId: "r1",
     sessionKey: "s1",
     clearLocalRun: true,
-    clearChatStream: true,
     armLocalTerminalReconcile: true,
     publishRunStatus,
   });
@@ -413,7 +412,6 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
           runId: "work-run",
           sessionKey,
           clearLocalRun: true,
-          clearChatStream: true,
           publishRunStatus: false,
           armLocalTerminalReconcile: !yielded,
         });

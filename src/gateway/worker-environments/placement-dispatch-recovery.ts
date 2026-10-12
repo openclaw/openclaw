@@ -7,6 +7,7 @@ import {
   isUnavailableEnvironment,
   workerDisappearanceError,
   type WorkerActiveDispatchPlacement,
+  type WorkerDispatchPlacement,
   type WorkerDispatchEnvironmentService,
 } from "./placement-dispatch-failure.js";
 import {
@@ -61,10 +62,13 @@ function activePlacementExecutionError(
   return undefined;
 }
 
-export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
+export function createPlacementRecoveryActions(
+  deps: PlacementRecoveryDeps,
+  initialPlacements: readonly WorkerDispatchPlacement[],
+) {
   const { environments, failure, placements } = deps;
   const interruptedClaims = new Set(
-    placements.list().flatMap((placement) => {
+    initialPlacements.flatMap((placement) => {
       const claim = projectWorkerSessionTurnClaim(placement);
       return claim ? [serializeWorkerSessionTurnClaim(claim)] : [];
     }),
@@ -377,7 +381,10 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
     }
     const candidates = await placements.readRecoveryCandidates();
     if (mode === "startup") {
-      orphanCleanupPending = { rootsBySession: new Map(), completedRoots: new Set() };
+      orphanCleanupPending =
+        initialPlacements.length > 0
+          ? { placements: initialPlacements, rootsBySession: new Map(), completedRoots: new Set() }
+          : undefined;
     }
     for (const { sessionId } of candidates) {
       await admit([sessionId], () => recoverSession(sessionId, mode ?? "restart"));

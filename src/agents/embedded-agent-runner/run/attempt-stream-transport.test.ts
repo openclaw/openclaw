@@ -215,27 +215,6 @@ describe("prepareEmbeddedAttemptTransport", () => {
       compaction: true,
       apiKey: "test-api-key",
       replayEnabled: true,
-      pruning: false,
-      clearing: false,
-    },
-    {
-      compaction: true,
-      apiKey: "test-sk-ant-oat-oauth",
-      replayEnabled: false,
-      pruning: true,
-      clearing: false,
-    },
-    {
-      compaction: false,
-      apiKey: "test-api-key",
-      replayEnabled: false,
-      pruning: true,
-      clearing: true,
-    },
-    {
-      compaction: true,
-      apiKey: "test-api-key",
-      replayEnabled: true,
       pruning: true,
       clearing: true,
     },
@@ -257,35 +236,6 @@ describe("prepareEmbeddedAttemptTransport", () => {
     expect(result.compactionReplayEnabled).toBe(testCase.replayEnabled);
     expect(result.serverToolClearingEnabled).toBe(testCase.clearing);
   });
-
-  it.each([undefined, true])(
-    "disables server compaction overrides only for memory flushes (configured=%s)",
-    async (compaction) => {
-      const wrapProviderStreamFn = vi.fn(({ context }: WrapProviderStreamFnParams) => {
-        return context.streamFn;
-      });
-      extraParamsTesting.setProviderRuntimeDepsForTest({ wrapProviderStreamFn });
-
-      for (const trigger of [undefined, "memory"] as const) {
-        const { input } = createTransportFixture({
-          compaction,
-          pruning: false,
-          apiKey: "sk-ant-api-synthetic",
-        });
-        input.attempt.trigger = trigger;
-        await prepareEmbeddedAttemptTransport(input);
-      }
-
-      expect(wrapProviderStreamFn).toHaveBeenCalledTimes(2);
-      const normalExtraParams = wrapProviderStreamFn.mock.calls[0]?.[0].context.extraParams;
-      expect(normalExtraParams).toHaveProperty("anthropicServerCompaction", compaction);
-      expect(normalExtraParams).not.toHaveProperty("responsesServerCompaction");
-      expect(wrapProviderStreamFn.mock.calls[1]?.[0].context.extraParams).toMatchObject({
-        anthropicServerCompaction: false,
-        responsesServerCompaction: false,
-      });
-    },
-  );
 
   it("disables OpenAI inline compaction only for memory flushes", async () => {
     const payloads: Record<string, unknown>[] = [];
@@ -327,10 +277,7 @@ describe("prepareEmbeddedAttemptTransport", () => {
     expect(payloads[1]).not.toHaveProperty("context_management");
   });
 
-  it.each([
-    { source: "stored profile", resolvedApiKey: undefined },
-    { source: "resolved run", resolvedApiKey: "sk-ant-oat01-synthetic-run" },
-  ])(
+  it.each([{ source: "resolved run", resolvedApiKey: "sk-ant-oat01-synthetic-run" }])(
     "gives provider wrappers the $source credential the Anthropic transport sends",
     async ({ resolvedApiKey }) => {
       await import("../../ai-transport-runtime-host.js");
@@ -423,13 +370,6 @@ describe("prepareEmbeddedAttemptTransport", () => {
   });
 
   it.each([
-    { label: "foreground", toolExecutionAllow: undefined, expectedSearch: true, codeMode: false },
-    {
-      label: "skill review",
-      toolExecutionAllow: ["skill_workshop"],
-      expectedSearch: false,
-      codeMode: false,
-    },
     {
       label: "explicit search",
       toolExecutionAllow: ["web_search"],

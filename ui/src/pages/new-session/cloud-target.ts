@@ -11,7 +11,6 @@ import { compareCloudProfiles, resolveCloudProfileIcon } from "../../components/
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { registerSessionPlacementEnglish } from "../../i18n/locales/en-session-placement.ts";
-import { readSessionPlacementPolicy } from "../../lib/sessions/session-placement-policy.ts";
 import type { DraftCloudProfile, DraftEnvironment } from "./discovery.ts";
 import {
   cloudMachinesForOs,
@@ -23,16 +22,6 @@ import {
 
 registerNewSessionSetupEnglish();
 registerSessionPlacementEnglish();
-
-/** Read the destination directive through the existing session-writer bootstrap grant. */
-export async function requestSessionPlacement(client: Pick<GatewayBrowserClient, "request">) {
-  const policy = await readSessionPlacementPolicy(client);
-  const required = policy.requiredProfile;
-  return {
-    requiredProfile: required?.id,
-    profiles: readDraftCloudProfiles(required ? [required] : []),
-  };
-}
 
 export async function requestPlaceCatalog(
   client: Pick<GatewayBrowserClient, "request">,

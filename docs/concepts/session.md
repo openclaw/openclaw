@@ -20,10 +20,10 @@ DM channels, with group activity and background work flowing into it — see
 
 Delivered command exchanges from the shared dispatcher are conversation history
 too. OpenClaw appends the user's command and delivered reply as ordinary
-user/assistant messages. Telegram native menus, button selections, and setting
-acknowledgements are also retained; other channels' native direct-send adapters
-are not covered. Later turns and chat history can read these exchanges. Login,
-pairing, and sensitive `/config set` or `/debug set` values are redacted before storage.
+user/assistant messages. Native menus and command acknowledgements on Discord
+and Telegram, Slack argument menus, and Mattermost model pickers are also retained after delivery.
+Later turns and chat history can read these exchanges.
+Login, pairing, and sensitive `/config set` or `/debug set` values are redacted before storage.
 `/new` and `/reset` put their confirmation exchange in the new session; they do not
 rewrite the old session. `/btw` and `/side` stay ephemeral, and message edits or
 deletions do not rewrite earlier transcript rows.
@@ -154,7 +154,7 @@ The `incognito-` segment is reserved for dashboard, subagent, and hidden interna
 
 Incognito does not restrict the agent's normal tools. An explicit request to save information, or any tool-driven file write, can still persist data outside the incognito session store. Your configured model provider still processes the messages you send. Incognito content is excluded from ordinary Gateway output, delivery and response diagnostics, WebSocket event previews, raw-stream, cache-trace, and Anthropic payload logs. Live replies remain available, and OpenClaw still records operational diagnostics and content-free audit metadata such as HMAC references.
 
-On multi-user gateways, incognito threads are visible only to admin-scope connections and never appear through another session's agent session tools or transcript search. This protects them from storage and other gateway-mediated users, not from the gateway owner or process operator, who can always observe live sessions.
+On multi-user gateways, incognito threads are visible only to admin-scope connections and never appear through another session's agent session tools or transcript search. This limits persisted session history and access through other gateway-mediated sessions; it does not make all tool, upload, approval, or configured diagnostic data ephemeral. The gateway owner or process operator can still observe live sessions.
 
 ## Remember across conversations
 

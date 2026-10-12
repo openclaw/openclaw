@@ -4,7 +4,6 @@ import {
   type SessionRowChange,
   type SessionRowFacts,
 } from "../../sessions/session-row-changes.js";
-import { readSessionTranscriptUpdateVersion } from "../../sessions/transcript-events.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -131,7 +130,6 @@ function prepareSessionEntryReplacementChanges(
   owner: PendingSessionEntryPublication,
   replacement: SessionEntryReplacementPublication,
   databaseIdentity: string,
-  transcriptUnchanged: boolean,
 ): PreparedSessionEntryChanges | undefined {
   if (replacement.source?.identity !== databaseIdentity) {
     return undefined;
@@ -151,6 +149,13 @@ function prepareSessionEntryReplacementChanges(
           .filter(([key]) => current(key) && !replacement.unavailableParticipantKeys?.includes(key))
           .map(([key, entry]) => [key, freezeJsonSnapshot(entry)]),
       ),
+    actorPostimages:
+      replacement.actorPostimages &&
+      new Map(
+        [...replacement.actorPostimages]
+          .filter(([key]) => current(key))
+          .map(([key, state]) => [key, freezeJsonSnapshot(state)]),
+      ),
     sharing: new Map(
       [...replacement.current]
         .filter(([key]) => current(key))
@@ -161,9 +166,7 @@ function prepareSessionEntryReplacementChanges(
       new Map(
         [...replacement.projection]
           .filter(
-            ([key, facts]) =>
-              readCurrentSessionEntryProjection(owner, replacement, key) !== undefined &&
-              (facts.activitySummaryWatermark === undefined || transcriptUnchanged),
+            ([key]) => readCurrentSessionEntryProjection(owner, replacement, key) !== undefined,
           )
           .map(([key, facts]) => [key, freezeJsonSnapshot(facts)]),
       ),
@@ -176,19 +179,12 @@ export function prepareSessionEntryPublicationFacts(params: {
   owner: PendingSessionEntryPublication;
   databaseIdentity: string;
   unknown: boolean;
-  transcriptVersion: number | undefined;
 }) {
-  const { replacement, owner, databaseIdentity, unknown, transcriptVersion } = params;
+  const { replacement, owner, databaseIdentity, unknown } = params;
   const current = (key: string) => !owner.superseded.has(key);
-  const transcriptUnchanged = transcriptVersion === readSessionTranscriptUpdateVersion();
   const prepared =
     !unknown && replacement
-      ? prepareSessionEntryReplacementChanges(
-          owner,
-          replacement,
-          databaseIdentity,
-          transcriptUnchanged,
-        )
+      ? prepareSessionEntryReplacementChanges(owner, replacement, databaseIdentity)
       : undefined;
   const currentMetadata = (key: string) => current(key) && replacement !== undefined;
   const readCurrent = (key: string) => {
@@ -215,11 +211,8 @@ export function prepareSessionEntryPublicationFacts(params: {
     return {
       entry,
       fullEntry: prepared?.fullEntries?.get(key),
-      projection:
-        projection?.activitySummaryWatermark === undefined ||
-        transcriptVersion === readSessionTranscriptUpdateVersion()
-          ? projection
-          : undefined,
+      actorPostimage: prepared?.actorPostimages?.get(key),
+      projection,
     };
   };
   return { prepared, currentMetadata, readCurrent };
@@ -507,6 +500,9 @@ export function readPreparedSessionEntryChange(change: object, sessionKey: strin
     source: prepared.source,
     entry,
     fullEntry: record.readCurrent ? current?.fullEntry : prepared.fullEntries?.get(sessionKey),
+    actorPostimage: record.readCurrent
+      ? current?.actorPostimage
+      : prepared.actorPostimages?.get(sessionKey),
     sharing: record.readCurrent
       ? (current?.sharing ?? (current?.entry && projectSessionSharingEntry(current.entry)))
       : (prepared.sharing?.get(sessionKey) ??

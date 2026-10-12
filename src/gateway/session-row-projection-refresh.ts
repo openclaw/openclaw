@@ -202,16 +202,20 @@ export function createSessionRowRefresh(
     }
     // Accepted database facts already own selection metadata, even while display is dirty.
     for (const id of owner.dirty) {
-      const row = owner.rows.get(id);
-      const facts = row?.retainedDatabaseFacts;
-      if (
-        !records.isPreparedSessionRowDatabaseFacts(facts) ||
-        (!records.canRetainSessionRowRuntimeOwnership(facts) && !row?.pendingDatabaseFacts)
-      ) {
+      if (rowNeedsDatabaseRead(id)) {
         return true;
       }
     }
     return false;
+  }
+  // Selection and its read loop must agree on this predicate, or preparation never settles.
+  function rowNeedsDatabaseRead(id: string) {
+    const row = owner.rows.get(id);
+    const facts = row?.retainedDatabaseFacts;
+    return (
+      !records.isPreparedSessionRowDatabaseFacts(facts) ||
+      (!records.canRetainSessionRowRuntimeOwnership(facts) && !row?.pendingDatabaseFacts)
+    );
   }
   function retainExactPreparation() {
     exactPreparations++;
@@ -250,6 +254,7 @@ export function createSessionRowRefresh(
     // Lists share metadata readiness, then only their exact pages build display rows.
     selectionPreparation = owner.runAsOwner(async () => {
       try {
+        const attempted = new Set<string>();
         while (selectionNeedsPreparation()) {
           for (
             let pending = owner.prepareRegistryFacts();
@@ -271,9 +276,7 @@ export function createSessionRowRefresh(
           const selected = new Set<string>();
           const held = new Set<Promise<void>>();
           for (const id of owner.dirty) {
-            if (
-              records.isPreparedSessionRowDatabaseFacts(owner.rows.get(id)?.retainedDatabaseFacts)
-            ) {
+            if (attempted.has(id) || !rowNeedsDatabaseRead(id)) {
               continue;
             }
             const pending = bulkReads.get(id) ?? exactReads.get(id)?.completion.promise;
@@ -282,6 +285,13 @@ export function createSessionRowRefresh(
             } else if (selected.add(id).size === MAX_SESSION_ROW_FACTS_KEYS) {
               break;
             }
+          }
+          // Nothing left to read or await: stop rather than spin in microtasks.
+          if (selected.size === 0 && held.size === 0) {
+            break;
+          }
+          for (const id of selected) {
+            attempted.add(id);
           }
           if (selected.size > 0) {
             const read = createDeferredCore();

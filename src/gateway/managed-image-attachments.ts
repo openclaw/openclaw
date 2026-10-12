@@ -368,15 +368,6 @@ function parseMediaDataUrl(
   };
 }
 
-async function getVariantStats(params: { buffer: Buffer; sizeBytes: number }) {
-  const metadata = await getImageMetadata(params.buffer).catch(() => null);
-  return {
-    width: metadata?.width ?? null,
-    height: metadata?.height ?? null,
-    sizeBytes: Number.isFinite(params.sizeBytes) ? params.sizeBytes : null,
-  };
-}
-
 export async function cleanupManagedOutgoingMediaRecords(params?: {
   stateDir?: string;
   nowMs?: number;
@@ -845,14 +836,17 @@ async function withManagedOutgoingMediaRead<T>(
   );
 }
 
-/** Resolve one transcript-backed media artifact to a short-lived HTTP capability. */
-export async function resolveManagedOutgoingMediaArtifactDownload(params: {
+type ManagedOutgoingMediaArtifactRequest = {
   sessionKey: string;
   agentId?: string;
   defaultAgentId?: string;
   artifactId: string;
   stateDir?: string;
-}): Promise<ManagedOutgoingMediaArtifactDownload | null> {
+};
+
+async function resolveManagedOutgoingMediaArtifactRecord(
+  params: ManagedOutgoingMediaArtifactRequest,
+): Promise<ManagedImageRecord | null> {
   const { artifactId, sessionKey, agentId, defaultAgentId } = params;
   const stateDir = params.stateDir ?? resolveStateDir();
   const parsed = parseManagedOutgoingArtifactId(artifactId);
@@ -876,7 +870,17 @@ export async function resolveManagedOutgoingMediaArtifactDownload(params: {
   if (!kind || (parsed.family === "image") !== (kind === "image")) {
     return null;
   }
-  return await resolveManagedOutgoingMediaArtifactDownloadForRecord(record, stateDir);
+  return record;
+}
+
+/** Resolve one transcript-backed media artifact to a short-lived HTTP capability. */
+export async function resolveManagedOutgoingMediaArtifactDownload(
+  params: ManagedOutgoingMediaArtifactRequest,
+): Promise<ManagedOutgoingMediaArtifactDownload | null> {
+  const record = await resolveManagedOutgoingMediaArtifactRecord(params);
+  return record
+    ? resolveManagedOutgoingMediaArtifactDownloadForRecord(record, params.stateDir)
+    : null;
 }
 
 /** Upgrade legacy managed-image URLs that predate stable artifact ids. */
@@ -917,42 +921,37 @@ async function readManagedImageThumbnailFromFile(
 
 /** Read a local preview through the same transcript ownership and thumbnail cache as HTTP. */
 export async function readManagedOutgoingImageThumbnail(
-  params: Parameters<typeof resolveManagedOutgoingMediaArtifactDownload>[0] & {
+  params: ManagedOutgoingMediaArtifactRequest & {
     maxBytes: number;
     signal: AbortSignal;
   },
 ): Promise<Buffer | null> {
-  const { artifactId, sessionKey, maxBytes, signal } = params;
+  const { maxBytes, signal } = params;
   const stateDir = params.stateDir ?? resolveStateDir();
   signal.throwIfAborted();
-  const download = await resolveManagedOutgoingMediaArtifactDownload({ ...params, stateDir });
-  const parsed = parseManagedOutgoingArtifactId(artifactId);
-  if (!download || download.type !== "image" || !parsed) {
+  const record = await resolveManagedOutgoingMediaArtifactRecord({ ...params, stateDir });
+  signal.throwIfAborted();
+  if (!record || resolveManagedMediaKind(record.original.contentType) !== "image") {
     return null;
   }
-  signal.throwIfAborted();
-  const record = await readManagedImageRecord(parsed.attachmentId, stateDir);
-  signal.throwIfAborted();
-  if (!record || record.sessionKey !== sessionKey) {
-    return null;
-  }
-  const opened = await openLocalFileSafely({ filePath: resolveManagedImageOriginalPath(record) });
-  try {
-    const thumbnail = await readManagedImageThumbnailFromFile(opened, maxBytes);
-    signal.throwIfAborted();
-    return await withManagedOutgoingMediaRead(
-      record,
-      stateDir,
-      async (assertCurrent) => {
+  return await withManagedOutgoingMediaRead(
+    record,
+    stateDir,
+    async (assertCurrent) => {
+      const opened = await openLocalFileSafely({
+        filePath: resolveManagedImageOriginalPath(record),
+      });
+      try {
+        const thumbnail = await readManagedImageThumbnailFromFile(opened, maxBytes);
         assertCurrent();
         signal.throwIfAborted();
         return thumbnail;
-      },
-      () => signal.throwIfAborted(),
-    );
-  } finally {
-    await opened.handle.close();
-  }
+      } finally {
+        await opened.handle.close();
+      }
+    },
+    () => signal.throwIfAborted(),
+  );
 }
 
 export function attachManagedOutgoingMediaToMessage(params: {
@@ -1102,47 +1101,27 @@ export async function createManagedOutgoingMediaBlocks(params: {
         );
         assertManagedMediaByteLimit(savedOriginal.size, mediaKind, label, maxBytes);
 
-        let originalStats: Awaited<ReturnType<typeof getVariantStats>> = {
+        let originalStats: { width: number | null; height: number | null; sizeBytes: number } = {
           width: null,
           height: null,
           sizeBytes: savedOriginal.size,
         };
         if (mediaKind === "image") {
-          let originalBuffer = parsedDataUrl
+          const originalBuffer = parsedDataUrl
             ? parsedDataUrl.buffer
             : (await readLocalFileSafely({ filePath: savedOriginal.path })).buffer;
           assertManagedMediaByteLimit(originalBuffer.byteLength, "image", label, limits.maxBytes);
-          let originalDisplayMetadata: { width: number; height: number } | undefined;
-          for (let resizeAttempt = 0; ; resizeAttempt += 1) {
-            originalStats = await getVariantStats({
-              buffer: originalBuffer,
-              sizeBytes: savedOriginal.size,
-            });
-            const effectiveMetadata =
-              originalStats.width != null && originalStats.height != null
-                ? { width: originalStats.width, height: originalStats.height }
-                : await getImageMetadata(originalBuffer);
-            const metadataLimitError = getManagedImageMetadataLimitError(
-              effectiveMetadata,
-              label,
-              limits,
-            );
-            if (!metadataLimitError) {
-              if (originalDisplayMetadata && effectiveMetadata) {
-                resizeWarning = {
-                  type: "text",
-                  text:
-                    `[Image warning] ${label} exceeded gateway dimension/pixel limits and was resized from ` +
-                    `${originalDisplayMetadata.width}×${originalDisplayMetadata.height} to ` +
-                    `${effectiveMetadata.width}×${effectiveMetadata.height}.`,
-                };
-              }
-              break;
-            }
-            if (!effectiveMetadata || resizeAttempt >= 3) {
+          const metadata = await getImageMetadata(originalBuffer);
+          originalStats = {
+            width: metadata?.width ?? null,
+            height: metadata?.height ?? null,
+            sizeBytes: savedOriginal.size,
+          };
+          const metadataLimitError = getManagedImageMetadataLimitError(metadata, label, limits);
+          if (metadataLimitError) {
+            if (!metadata) {
               throw createManagedImageAttachmentError(metadataLimitError);
             }
-            originalDisplayMetadata ??= effectiveMetadata;
             const resized = await createImageProcessor().encode(originalBuffer, {
               format: "auto",
               limits: {
@@ -1154,6 +1133,11 @@ export async function createManagedOutgoingMediaBlocks(params: {
               transparent: { format: "png", compressionLevel: 9 },
               transparency: "auto",
             });
+            // The encoder owns limit fitting; reject an invalid result instead of re-encoding it.
+            const resizedLimitError = getManagedImageMetadataLimitError(resized, label, limits);
+            if (resizedLimitError) {
+              throw createManagedImageAttachmentError(resizedLimitError);
+            }
             assertManagedMediaByteLimit(resized.data.byteLength, "image", label, limits.maxBytes);
             const replacement = await saveMediaBuffer(
               resized.data,
@@ -1166,7 +1150,17 @@ export async function createManagedOutgoingMediaBlocks(params: {
             savedOriginal = replacement;
             savedOriginalContentType = replacement.contentType ?? resized.mimeType;
             savedOriginalPath = savedOriginal.path;
-            originalBuffer = resized.data;
+            originalStats = {
+              width: resized.width,
+              height: resized.height,
+              sizeBytes: replacement.size,
+            };
+            resizeWarning = {
+              type: "text",
+              text:
+                `[Image warning] ${label} exceeded gateway dimension/pixel limits and was resized from ` +
+                `${metadata.width}×${metadata.height} to ${resized.width}×${resized.height}.`,
+            };
           }
         }
 

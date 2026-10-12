@@ -486,11 +486,9 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
             aria-label={t("activityFeed.searchPlaceholder")}
             value={props.filters.query}
             placeholder={t("activityFeed.searchPlaceholder")}
-            onInput={(event: Event) => {
-              if (event.currentTarget instanceof HTMLInputElement) {
-                props.onFiltersChange({ ...props.filters, query: event.currentTarget.value });
-              }
-            }}
+            onInput={(event) =>
+              props.onFiltersChange({ ...props.filters, query: event.currentTarget.value })
+            }
           />
         </label>
         <SettingsSegmented
@@ -518,11 +516,11 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
         <span role={props.error ? "alert" : "status"} title={props.error ?? undefined}>
           {props.error ?? (props.retrying ? t("common.refreshing") : undefined)}
         </span>
-        {props.error || props.retrying ? (
-          <button class="btn btn--sm" disabled={props.loading} onClick={props.onRetry}>
+        <Show when={Boolean(props.error || props.retrying)}>
+          <button class="btn btn--sm" disabled={props.loading} onClick={() => props.onRetry()}>
             {t("common.retry")}
           </button>
-        ) : undefined}
+        </Show>
       </div>
       <div class="activity-feed__main">
         {props.loading && !props.result ? renderActivityLoading() : undefined}

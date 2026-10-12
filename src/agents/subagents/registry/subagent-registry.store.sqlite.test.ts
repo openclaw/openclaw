@@ -68,18 +68,17 @@ describe("subagent registry sqlite store", () => {
     }
   });
 
-  it("hashes current maintenance rows in one statement without a transaction envelope", () => {
+  it("reads current maintenance rows in one statement without a transaction envelope", () => {
     const run = createRun();
     saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
     const database = openOpenClawStateDatabase();
     using transactionSql = vi.spyOn(database.db, "exec");
     const first = loadSubagentMaintenanceRunsInDatabase(database);
-    expect([...first.runs.keys()]).toEqual([run.runId]);
+    expect([...first.keys()]).toEqual([run.runId]);
     expect(transactionSql).not.toHaveBeenCalled();
     saveSubagentRegistryToSqlite(new Map());
     const next = loadSubagentMaintenanceRunsInDatabase(database);
-    expect(next.runs.size).toBe(0);
-    expect(next.digest).not.toBe(first.digest);
+    expect(next.size).toBe(0);
   });
 
   it("reads unbound old-schema rows and rolls back first-use parent-store columns with registration", async () => {

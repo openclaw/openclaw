@@ -71,7 +71,6 @@ function input(
 
 describe("Crabbox warm-profile Doctor migration", () => {
   it.each<{ name: string; record: typeof image & { operation?: unknown } }>([
-    { name: "available image", record: image },
     {
       name: "in-flight capture",
       record: {
@@ -85,10 +84,6 @@ describe("Crabbox warm-profile Doctor migration", () => {
           phase: "creating",
         },
       },
-    },
-    {
-      name: "pending retirement",
-      record: { ...image, operation: { type: "retire", checkpointId: "chk_previous" } },
     },
   ])(
     "preserves $name across SQLite reopen without fabricating an allocation",

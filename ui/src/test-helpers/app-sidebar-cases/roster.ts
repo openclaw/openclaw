@@ -542,11 +542,11 @@ describe("AppSidebar agent roster", () => {
     await vi.waitFor(() =>
       expect(agentIds(sidebar)).toEqual(agents.agents.map((agent) => agent.id)),
     );
-    expect(sidebar.querySelector(".sidebar-session-toolbar")).toBeNull();
-    expect(sidebar.querySelectorAll(".sidebar-brand__actions .sidebar-session-sort")).toHaveLength(
+    expect(sidebar.querySelectorAll(".sidebar-session-toolbar")).toHaveLength(1);
+    expect(sidebar.querySelectorAll(".sidebar-session-toolbar .sidebar-session-sort")).toHaveLength(
       1,
     );
-    expect(sidebar.querySelector(".sidebar-sessions .sidebar-session-sort")).toBeNull();
+    expect(sidebar.querySelectorAll(".sidebar-session-owner-filter")).toHaveLength(1);
   });
 
   it("remembers collapsed agents after remount and keeps chip mode scoped to one agent", async () => {

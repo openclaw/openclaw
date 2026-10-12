@@ -45,6 +45,7 @@ import type {
   InboundMessageAuditTerminalRecorder,
 } from "./dispatch-from-config.audit.js";
 import {
+  resolveBoundAcpDispatchRuntimeOwner,
   resolveBoundAcpDispatchSessionKey,
   resolveSessionStoreLookup,
 } from "./dispatch-from-config.context.js";
@@ -396,26 +397,6 @@ export async function gatherDispatchRequest(
     fallbackAgentId: ctx.AgentId,
   });
   const sessionAgentCfg = resolveAgentConfig(cfg, sessionAgentId);
-  const assertProgressCurrent = () => {
-    assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-    params.replyOptions?.abortSignal?.throwIfAborted();
-    replyOperationCoordinator.getDispatchAbortSignal()?.throwIfAborted();
-    assertRequestCurrent();
-  };
-  const verboseProgress = createShouldEmitVerboseProgress({
-    agentId: sessionAgentId,
-    sessionKey: acpDispatchSessionKey,
-    storePath: sessionStoreEntry.storePath,
-    initialExplicitLevel: sessionStoreEntry.entry?.verboseLevel,
-    assertCurrent: assertProgressCurrent,
-    fallbackLevel:
-      normalizeVerboseLevel(
-        sessionStoreEntry.entry?.verboseLevel ??
-          sessionAgentCfg?.verboseDefault ??
-          cfg.agents?.defaults?.verboseDefault ??
-          "",
-      ) ?? "off",
-  });
   const replyRoute = resolveEffectiveReplyRoute({ ctx, entry: sessionStoreEntry.entry });
   // Restore route thread context only from the active turn or the thread-scoped session key.
   // Do not read thread ids from the normalised session store here: `origin.threadId` can be
@@ -433,7 +414,7 @@ export async function gatherDispatchRequest(
   // A bound ACP key names an external harness, not a configured model-runtime owner.
   // Keep the source owner for Gateway dispatch while ACP execution uses the bound target below.
   const preparedReplyDispatchAgentId = boundAcpDispatchSessionKey
-    ? resolveSessionAgentId({ sessionKey, config: cfg, fallbackAgentId: ctx.AgentId })
+    ? resolveBoundAcpDispatchRuntimeOwner({ sessionKey, cfg, ctx })
     : sessionAgentId;
   let preparedReplyDispatchRuntime: PreparedReplyDispatchRuntime | undefined;
   let preparedTtsPreferences: PreparedTtsPreferences;
@@ -479,6 +460,26 @@ export async function gatherDispatchRequest(
     sessionWorkerPlacementContext: normalizedParams.sessionWorkerPlacementContext,
   });
   const { getPreDispatchAbortSignal } = replyOperationCoordinator;
+  const assertProgressCurrent = () => {
+    assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+    params.replyOptions?.abortSignal?.throwIfAborted();
+    replyOperationCoordinator.getDispatchAbortSignal()?.throwIfAborted();
+    assertRequestCurrent();
+  };
+  const verboseProgress = await createShouldEmitVerboseProgress({
+    agentId: sessionAgentId,
+    sessionKey: acpDispatchSessionKey,
+    storePath: sessionStoreEntry.storePath,
+    initialExplicitLevel: sessionStoreEntry.entry?.verboseLevel,
+    assertCurrent: assertProgressCurrent,
+    fallbackLevel:
+      normalizeVerboseLevel(
+        sessionStoreEntry.entry?.verboseLevel ??
+          sessionAgentCfg?.verboseDefault ??
+          cfg.agents?.defaults?.verboseDefault ??
+          "",
+      ) ?? "off",
+  });
   const pluginRegistry =
     preparedReplyDispatchRuntime?.inboundPluginRegistry ??
     (await traceReplyPhase("reply.load_runtime_plugin_registry_handle", async () => {

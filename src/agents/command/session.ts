@@ -10,8 +10,10 @@ import {
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
 import { isInternalSessionEffectsKey } from "../../config/sessions/internal-session-key.js";
-import { resolveSessionLifecycleTimestampsAsync } from "../../config/sessions/lifecycle-read.js";
-import { hasTerminalMainSessionTranscriptNewerThanRegistrySync } from "../../config/sessions/lifecycle.js";
+import {
+  hasTerminalMainSessionTranscriptNewerThanRegistryAsync,
+  resolveSessionLifecycleTimestampsAsync,
+} from "../../config/sessions/lifecycle-read.js";
 import {
   canonicalizeMainSessionAlias,
   resolveAgentIdFromSessionKey,
@@ -633,13 +635,14 @@ export async function resolveSession(
   const requestedSessionId = opts.sessionId?.trim() || undefined;
   const terminalMainTranscriptNewerThanRegistry =
     sessionEntry && !requestedSessionId
-      ? hasTerminalMainSessionTranscriptNewerThanRegistrySync({
+      ? await hasTerminalMainSessionTranscriptNewerThanRegistryAsync({
           entry: sessionEntry,
           sessionScope: sessionCfg?.scope,
           sessionKey,
           agentId: sessionAgentId,
           mainKey: sessionCfg?.mainKey,
           storePath,
+          signal: opts.signal,
         })
       : false;
   const lockedModelSelection = isModelSelectionLocked(sessionEntry);

@@ -18,7 +18,7 @@ import {
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir, resolveDefaultAgentId } from "./agent-scope.js";
-import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
+import { ensureAuthProfileStoreAsync } from "./auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { reconcileAuthProfileQuotaBlocks } from "./auth-profiles/usage.js";
 import {
@@ -192,7 +192,7 @@ async function prepareSimpleCompletionModelCore(
   try {
     authStore =
       params.bindAuthOwner || initialModel.provider === "openai"
-        ? ensureAuthProfileStore(params.agentDir, {
+        ? await ensureAuthProfileStoreAsync(params.agentDir, {
             readOnly: true,
             allowKeychainPrompt: false,
             config: params.cfg,

@@ -464,6 +464,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func scheduleFirstRunOnboardingIfNeeded() async {
+        if await OnboardingController.shared.startFirstRunIfFresh() { return }
         let connectionMode = AppStateStore.shared.connectionMode
         let onboardingSeen = AppStateStore.shared.onboardingSeen
         if connectionMode != .unconfigured, onboardingSeen {

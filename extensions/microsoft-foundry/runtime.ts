@@ -9,7 +9,7 @@ import {
   resolveDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
-import { ensureAuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
+import { ensureAuthProfileStoreAsync } from "openclaw/plugin-sdk/provider-auth";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getAccessTokenResultAsync } from "./cli.js";
 import {
@@ -77,7 +77,7 @@ export async function prepareFoundryRuntimeAuth(
     };
   }
   try {
-    const authStore = ensureAuthProfileStore(ctx.agentDir, {
+    const authStore = await ensureAuthProfileStoreAsync(ctx.agentDir, {
       allowKeychainPrompt: false,
     });
     const credential = ctx.profileId ? authStore.profiles[ctx.profileId] : undefined;

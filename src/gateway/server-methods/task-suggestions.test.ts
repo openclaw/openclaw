@@ -4,10 +4,15 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
@@ -32,7 +37,6 @@ import {
 import type { GatewayClient, RespondFn } from "./types.js";
 
 const mocks = vi.hoisted(() => ({ handleChatSend: vi.fn() }));
-const sessionReadState = vi.hoisted(() => ({ mode: "normal" as "normal" | "present" | "throw" }));
 type TaskOperatorRole = "none" | "view" | "suggest" | "restricted";
 const taskRoleConfig = (role: TaskOperatorRole): OpenClawConfig => ({
   gateway: {
@@ -75,6 +79,7 @@ async function createRoleSuggestion(sessionKey: string): Promise<string> {
 }
 
 async function createTaskRoleScenario(role: TaskOperatorRole, ownsSource = false) {
+  setRuntimeConfigSnapshot(taskRoleConfig(role));
   const profile = ensureProfileForEmail(`task-${role}@example.test`);
   const owner = ownsSource ? profile : ensureProfileForEmail(`task-${role}-owner@example.test`);
   await upsertSessionEntryCore(
@@ -94,26 +99,7 @@ async function createTaskRoleScenario(role: TaskOperatorRole, ownsSource = false
 }
 
 vi.mock("./chat-send-handler.js", () => ({ handleChatSend: mocks.handleChatSend }));
-vi.mock("../session-utils-store.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../session-utils-store.js")>();
-  return {
-    ...actual,
-    loadGatewaySessionEntryReadOnly: (
-      ...args: Parameters<typeof actual.loadGatewaySessionEntryReadOnly>
-    ) => {
-      if (sessionReadState.mode === "throw") {
-        throw new Error("session inspection unavailable");
-      }
-      const loaded = actual.loadGatewaySessionEntryReadOnly(...args);
-      return sessionReadState.mode === "present"
-        ? { ...loaded, entry: { sessionId: "surviving-session", updatedAt: 1 } }
-        : loaded;
-    },
-  };
-});
-
 beforeEach(async () => {
-  sessionReadState.mode = "normal";
   await dismissPendingTaskSuggestions();
   mocks.handleChatSend.mockReset();
   mocks.handleChatSend.mockImplementation(async ({ respond }: { respond: RespondFn }) => {
@@ -124,6 +110,7 @@ afterEach(async () => {
   await dismissPendingTaskSuggestions();
   vi.restoreAllMocks();
   closeOpenClawAgentDatabasesForTest();
+  clearRuntimeConfigSnapshot();
 });
 
 describe("task suggestion gateway methods", () => {
@@ -135,6 +122,7 @@ describe("task suggestion gateway methods", () => {
           roleName,
           roleName === "restricted",
         );
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         if (roleName === "none") {
           const ownSessionKey = "agent:main:dashboard:own-task-source";
           await upsertSessionEntryCore(
@@ -544,6 +532,7 @@ describe("task suggestion gateway methods", () => {
 
   it("restores a session-mode suggestion after delivery failure without deleting its source", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: SOURCE_SESSION_KEY },
         { sessionId: "source-session", updatedAt: 1 },
@@ -627,31 +616,23 @@ describe("task suggestion gateway methods", () => {
     expect(listed.response?.[1]).toMatchObject({ suggestions: [{ id: taskId }] });
   });
 
-  it.each([
-    ["delete preserves the worktree", "preserved"],
-    ["session inspection throws", "inspect-throws"],
-  ] as const)("expires a suggestion when rollback is incomplete: %s", async (_name, failure) => {
+  it("expires a suggestion when rollback preserves the worktree", async () => {
     const taskId = await createLocalTaskSuggestion();
     vi.spyOn(sessionCreateHandlers, "sessions.create").mockRejectedValue(
       new Error("initial dispatch failed"),
     );
-    sessionReadState.mode = failure === "inspect-throws" ? "throw" : "normal";
     vi.spyOn(sessionDeleteHandlers, "sessions.delete").mockImplementation(async ({ respond }) => {
       respond(
         true,
         {
           ok: true,
           deleted: true,
-          ...(failure === "preserved"
-            ? {
-                worktreePreserved: {
-                  id: "preserved-worktree",
-                  path: "/preserved-worktree",
-                  branch: "openclaw/preserved-worktree",
-                  reason: "cleanup-failed",
-                },
-              }
-            : {}),
+          worktreePreserved: {
+            id: "preserved-worktree",
+            path: "/preserved-worktree",
+            branch: "openclaw/preserved-worktree",
+            reason: "cleanup-failed",
+          },
         },
         undefined,
       );

@@ -352,7 +352,7 @@ describe("chat pane approval requester identity", () => {
     });
     Object.freeze(approval.request);
     Object.freeze(approval);
-    const container = document.createElement("div");
+    const container = document.body.appendChild(createApplicationContextProvider(context));
     const redraw = vi.fn(() => {
       pane.render();
       render(renderChat(pane.chatProps!), container);
@@ -387,6 +387,10 @@ describe("chat pane approval requester identity", () => {
           },
         });
         await vi.waitFor(() => expect(redraw).toHaveBeenCalled());
+        const approvalElement = container.querySelector<
+          HTMLElement & { updateComplete: Promise<boolean> }
+        >("openclaw-exec-approval-card")!;
+        await approvalElement.updateComplete;
         const card = container.querySelector(".chat-inline-approval .exec-approval-card");
         expect(card?.getAttribute("data-approval-id")).toBe(approval.id);
         expect
@@ -398,6 +402,7 @@ describe("chat pane approval requester identity", () => {
     } finally {
       cancelChatStreamRenderFrame(state);
       render(html``, container);
+      container.remove();
     }
   });
 });

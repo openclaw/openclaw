@@ -27,6 +27,15 @@ export function createPrivateWindowsDirectory(directoryPath: string): void {
 }
 
 export function createPrivateWindowsFile(filePath: string): OwnedFileDescriptorSync {
-  // fs-safe 0.26.0 also needs the prefix when its sibling staging path exceeds MAX_PATH.
-  return createFileSync(path.toNamespacedPath(path.resolve(filePath)), { private: true });
+  const resolved = path.resolve(filePath);
+  // fs-safe 0.26.0 stages in <parent>/.fs-safe-create-<UUID>/file. Keep short
+  // publication paths plain; remove this adapter when fs-safe includes openclaw/fs-safe#924.
+  const stagingLength = path.join(
+    path.dirname(resolved),
+    `.fs-safe-create-${"x".repeat(36)}`,
+    "file",
+  ).length;
+  const target =
+    Math.max(resolved.length, stagingLength) >= 260 ? path.toNamespacedPath(resolved) : resolved;
+  return createFileSync(target, { private: true });
 }

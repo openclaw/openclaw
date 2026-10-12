@@ -11,7 +11,9 @@
 .settings-row__control .btn,
 .settings-section__actions .btn,
 .settings-section__actions .agent-select__trigger,
-.settings-group .data-table-search input {
+.settings-group .data-table-search input,
+input.settings-input,
+select.settings-select:not([multiple]) {
   height: var(--settings-control-height);
   padding-block: 0;
   box-sizing: border-box;
@@ -213,13 +215,6 @@
     content: attr(data-compact-label);
     font-size: var(--control-ui-text-sm);
   }
-}
-
-input.settings-input,
-select.settings-select:not([multiple]) {
-  height: var(--settings-control-height);
-  padding-block: 0;
-  box-sizing: border-box;
 }
 
 .settings-input,

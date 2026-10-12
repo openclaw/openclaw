@@ -1,8 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { TaskStatus } from "@lit/task";
 import type { SkillsLibraryListResult } from "@openclaw/gateway-protocol";
-import { nothing } from "lit";
 import { createComponent, createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
@@ -11,7 +9,6 @@ import type { AgentsListResult } from "../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/context.ts";
 import { createGatewayMetadataObserver } from "../app/gateway-observers.ts";
 import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
-import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
@@ -31,14 +28,12 @@ import {
 } from "./sessions/sessions-page.test-support.ts";
 import { SkillsPage, type SkillsRouteData } from "./skills/skills-page.tsx";
 import { createSkill } from "./skills/view.test-support.ts";
-import type { UsageRefreshPolicy } from "./usage/refresh-policy.ts";
+import type { UsageRouteData } from "./usage/types.ts";
 import {
   cacheSnapshot,
   cleanupUsagePageTest,
   createPage as createUsagePage,
 } from "./usage/usage-page.test-support.ts";
-import type { UsageRouteData } from "./usage/usage-page.tsx";
-import "./debug/debug-page.ts";
 import "./model-providers/model-providers-page.tsx";
 
 // Mirrors the module-private default usage TTL asserted below.
@@ -79,7 +74,7 @@ type TestGatewayController = {
 };
 
 function applyPageGatewaySnapshot(
-  page: TestPage & { gateway: TestGatewayController },
+  page: { gateway: TestGatewayController },
   snapshot: ApplicationGatewaySnapshot,
 ) {
   page.gateway.applySnapshot(snapshot, { initial: false, sourceChanged: false });
@@ -194,15 +189,9 @@ function contextWithMutableGateway(
   };
 }
 
-function createPage(tagName: string, context: ApplicationContext): TestPage {
-  const page = document.createElement(tagName) as TestPage;
-  page.context = context;
-  page.render = () => nothing;
-  return page;
-}
-
 async function replaceContext(
-  page: TestPage,
+  page: Pick<TestPage, "context" | "remove" | "updateComplete">,
+  element: HTMLElement,
   replacementClient: GatewayBrowserClient,
   options: { connected?: boolean; agentsList?: unknown; selectedAgentId?: string | null } = {},
 ): Promise<void> {
@@ -214,7 +203,7 @@ async function replaceContext(
   });
   page.remove();
   page.context = contextWithClient(replacementClient, options);
-  document.body.append(page);
+  document.body.append(element);
   await page.updateComplete;
 }
 
@@ -336,17 +325,14 @@ describe("gateway source replacement across reconnect with a reused client", () 
     const client = { request } as unknown as GatewayBrowserClient;
     const context = contextWithClient(client, { connected: true });
     const staleResult = usageResult("stale");
-    const page = (await createUsagePage(client, false, context)) as TestPage & {
-      routeData: UsageRouteData;
-      usageResult: UsageRouteData["result"];
-    };
+    const page = await createUsagePage(client, false, context);
     page.routeData = usageRouteData(context, staleResult, { ...context.gateway.snapshot });
 
-    document.body.append(page);
+    document.body.append(page.element);
     await page.updateComplete;
-    await waitForFast(() => expect(page.usageResult).toBe(freshResult));
-
-    expect(page.usageResult).not.toBe(staleResult);
+    await waitForFast(() =>
+      expect(page.usageResult?.sessions.map(({ key }) => key)).toEqual(["fresh"]),
+    );
   });
 
   it("retries a usage load interrupted by a same-client disconnect", async () => {
@@ -364,15 +350,10 @@ describe("gateway source replacement across reconnect with a reused client", () 
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const context = contextWithClient(client, { connected: true });
-    const page = (await createUsagePage(client, false, context)) as TestPage & {
-      routeData: UsageRouteData;
-      usageResult: UsageRouteData["result"];
-      gateway: TestGatewayController;
-      refreshPolicy: UsageRefreshPolicy;
-    };
+    const page = await createUsagePage(client, false, context);
     page.routeData = usageRouteData(context, usageResult("cached"));
 
-    document.body.append(page);
+    document.body.append(page.element);
     await page.updateComplete;
     page.refreshPolicy.request("manual");
     await waitForFast(() => expect(usageRequestCount).toBe(1));
@@ -385,11 +366,13 @@ describe("gateway source replacement across reconnect with a reused client", () 
     await waitForFast(() =>
       expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(2),
     );
-    await waitForFast(() => expect(page.usageResult).toBe(freshResult));
+    await waitForFast(() =>
+      expect(page.usageResult?.sessions.map(({ key }) => key)).toEqual(["fresh"]),
+    );
     interrupted.resolve(usageResult("stale"));
     await Promise.resolve();
     await Promise.resolve();
-    expect(page.usageResult).toBe(freshResult);
+    expect(page.usageResult?.sessions.map(({ key }) => key)).toEqual(["fresh"]);
   });
 
   it("gates same-client usage reconnects by payload age and page visibility", async () => {
@@ -407,17 +390,15 @@ describe("gateway source replacement across reconnect with a reused client", () 
     const client = { request } as unknown as GatewayBrowserClient;
     const harness = contextWithMutableGateway(client);
     const result = usageResult();
-    const page = (await createUsagePage(client, false, harness.context)) as TestPage & {
-      routeData: UsageRouteData;
-      readonly usageResult: UsageRouteData["result"];
-      readonly usageLoading: boolean;
-      refreshPolicy: UsageRefreshPolicy;
-    };
+    const page = await createUsagePage(client, false, harness.context);
     page.routeData = usageRouteData(harness.context, result);
 
-    document.body.append(page);
+    document.body.append(page.element);
     await page.updateComplete;
-    expect(page.usageResult).toBe(result);
+    expect(page.usageResult).toMatchObject({
+      totals: result.totals,
+      sessions: result.sessions,
+    });
 
     harness.emitConnected(false);
     harness.emitConnected(true);
@@ -690,32 +671,24 @@ describe("gateway source replacement across reconnect with a reused client", () 
       throw new Error(`Unexpected request: ${method}`);
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    const page = (await createUsagePage(
+    const page = await createUsagePage(
       client,
       false,
       contextWithClient(client, { connected: true }),
-    )) as TestPage & {
-      loadUsage: () => Promise<void>;
-      readonly usageResult: UsageRouteData["result"];
-      readonly usageCostSummary: UsageRouteData["costSummary"];
-      readonly providerUsageSummary: unknown;
-      usageSelectedSessions: string[];
-    };
-    document.body.append(page);
+    );
+    document.body.append(page.element);
     await page.updateComplete;
     await page.loadUsage();
-    expect(page.usageResult).toBe(result);
-    expect(page.usageCostSummary).toMatchObject({
+    expect(page.usageResult).toMatchObject({
       totals: result.totals,
-      daily: result.aggregates.costDaily,
+      sessions: result.sessions,
     });
     expect(page.providerUsageSummary).toBe(providerUsage);
     page.usageSelectedSessions = ["old"];
 
-    await replaceContext(page, client);
+    await replaceContext(page, page.element, client);
 
     expect(page.usageResult).toBeNull();
-    expect(page.usageCostSummary).toBeNull();
     expect(page.providerUsageSummary).toBeNull();
     expect(page.usageSelectedSessions).toEqual([]);
   });
@@ -804,39 +777,5 @@ describe("gateway source replacement across reconnect with a reused client", () 
     expect(mounted.page.textContent).toContain("Replacement agent skill");
     expect(request).toHaveBeenCalledWith("skills.status", { agentId: "fresh" });
     expect(request).not.toHaveBeenCalledWith("skills.status", { agentId: "stale" });
-  });
-
-  it("discards diagnostics from a replaced provider that reuses its client", async () => {
-    const pending = deferred<unknown>();
-    const request = vi.fn(() => pending.promise);
-    const client = { request } as unknown as GatewayBrowserClient;
-    const context = contextWithClient(client, { connected: true });
-    const page = createPage("openclaw-debug-page", context) as TestPage & {
-      debugStatus: unknown;
-      debugHealth: unknown;
-      debugModels: unknown[];
-      debugHeartbeat: unknown;
-      debugLanes: unknown[];
-      debugDiagnosticsError: string | null;
-      diagnosticsTask: { readonly status: TaskStatus };
-    };
-    document.body.append(page);
-    await page.updateComplete;
-
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(4));
-    page.debugDiagnosticsError = "old diagnostics failure";
-    await replaceContext(page, client);
-    pending.resolve({ models: [{ id: "stale" }], stale: true });
-    await pending.promise;
-    await settleLitElement(page);
-
-    expect(request).toHaveBeenCalledTimes(4);
-    expect(page.diagnosticsTask.status).not.toBe(TaskStatus.PENDING);
-    expect(page.debugStatus).toBeNull();
-    expect(page.debugHealth).toBeNull();
-    expect(page.debugModels).toEqual([]);
-    expect(page.debugHeartbeat).toBeNull();
-    expect(page.debugLanes).toEqual([]);
-    expect(page.debugDiagnosticsError).toBeNull();
   });
 });

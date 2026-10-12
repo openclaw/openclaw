@@ -28,6 +28,7 @@ type CodexAppServerClientRequestParams = {
   timeoutMs?: number;
   signal?: AbortSignal;
   assertCurrent?: () => void;
+  assertCurrentAsync?: () => Promise<void>;
   withCurrent?: (write: () => void) => Promise<void>;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
   sessionKey?: string;
@@ -86,10 +87,17 @@ export async function requestCodexAppServerClientJson<T = JsonValue | undefined>
     const options = {
       timeoutMs,
       signal: params.signal,
-      withCurrent: params.withCurrent,
+      withCurrent: async (write: () => void) => {
+        await params.assertCurrentAsync?.();
+        await sandboxGuard.assertCurrent();
+        if (params.withCurrent) {
+          await params.withCurrent(write);
+        } else {
+          write();
+        }
+      },
       assertCurrent: () => {
         params.assertCurrent?.();
-        sandboxGuard.assertCurrent();
       },
       ...(attemptWaiterFinished ? { attemptWaiterFinished } : {}),
     };
@@ -126,6 +134,7 @@ type CodexAppServerJsonClientOptions = Pick<
   isolated?: boolean;
   signal?: AbortSignal;
   assertCurrent?: () => void;
+  assertCurrentAsync?: () => Promise<void>;
   catalogPreview?: true;
   catalogPreviewCache?: CodexCatalogPreviewCache;
   catalogRows?: number;
@@ -154,10 +163,6 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(
   return await withCodexAppServerJsonClient(
     {
       ...params,
-      assertCurrent: () => {
-        params.assertCurrent?.();
-        sandboxGuard.assertCurrent();
-      },
       timeoutMessage: `codex app-server ${params.method} timed out`,
     },
     async (request) =>
@@ -170,6 +175,7 @@ export type CodexAppServerScopedRequest = <T = JsonValue | undefined>(request: {
   requestParams?: unknown;
   /** Rechecks caller-owned authority immediately before each physical write. */
   assertCurrent?: () => void;
+  assertCurrentAsync?: () => Promise<void>;
 }) => Promise<T>;
 
 function createScopeCleanupError(message: string): CodexAppServerScopedRequestRejectedError {
@@ -345,6 +351,7 @@ export async function withCodexAppServerJsonClient<T>(
           config: params.config,
           abandonSignal: timeoutController.signal,
           assertCurrent: params.assertCurrent,
+          assertCurrentAsync: params.assertCurrentAsync,
           ...acquireObservation,
         };
         setPhase("acquire-client");
@@ -400,7 +407,14 @@ export async function withCodexAppServerJsonClient<T>(
               assertCurrent: () => {
                 assertCurrent();
                 request.assertCurrent?.();
-                sandboxGuard.assertCurrent();
+              },
+              withCurrent: async (write: () => void) => {
+                await params.assertCurrentAsync?.();
+                await request.assertCurrentAsync?.();
+                await sandboxGuard.assertCurrent();
+                assertCurrent();
+                request.assertCurrent?.();
+                write();
               },
             };
             setPhase("client-request");

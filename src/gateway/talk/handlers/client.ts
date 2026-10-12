@@ -62,6 +62,9 @@ import {
   rememberLegacyVoiceBinding,
 } from "./client-legacy-voice-bindings.js";
 
+const clientMutationError = (error: unknown) =>
+  errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(error));
+
 export const talkClientHandlers: GatewayRequestHandlers = {
   "talk.client.create": createTalkClient,
   "talk.client.toolCall": defineValidatedGatewayHandler(
@@ -310,66 +313,60 @@ export const talkClientHandlers: GatewayRequestHandlers = {
     "talk.client.transcript",
     validateTalkClientTranscriptParams,
     async ({ params, respond, context, sessionMutationAuthorization }) => {
-      try {
-        const config = context.getRuntimeConfig();
-        const target =
-          sessionMutationAuthorization?.talkSessionTarget ??
-          prepareTalkSessionTarget(config, params.sessionKey);
-        sessionMutationAuthorization?.assertCurrent();
-        await appendClientVoiceTranscript({
-          agentId: target.agentId,
-          sessionKey: target.sessionKey,
-          sessionTarget: { sessionKey: target.canonicalKey, storePath: target.storePath },
-          voiceSessionId: params.voiceSessionId,
-          entryId: params.entryId,
-          role: params.role,
-          text: params.text,
-          ...(params.timestamp !== undefined ? { timestamp: params.timestamp } : {}),
-          config,
-        });
-        respond(true, { ok: true }, undefined);
-      } catch (err) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
-      }
+      const config = context.getRuntimeConfig();
+      const target =
+        sessionMutationAuthorization?.talkSessionTarget ??
+        prepareTalkSessionTarget(config, params.sessionKey);
+      sessionMutationAuthorization?.assertCurrent();
+      await appendClientVoiceTranscript({
+        agentId: target.agentId,
+        sessionKey: target.sessionKey,
+        sessionTarget: { sessionKey: target.canonicalKey, storePath: target.storePath },
+        voiceSessionId: params.voiceSessionId,
+        entryId: params.entryId,
+        role: params.role,
+        text: params.text,
+        ...(params.timestamp !== undefined ? { timestamp: params.timestamp } : {}),
+        config,
+      });
+      respond(true, { ok: true }, undefined);
     },
+    clientMutationError,
   ),
   "talk.client.close": defineValidatedGatewayHandler(
     "talk.client.close",
     validateTalkClientCloseParams,
     async ({ params, respond, context, client, sessionMutationAuthorization }) => {
-      try {
-        if (
-          await closeTalkClientGatewayControlSession({
-            voiceSessionId: params.voiceSessionId,
-            sessionKey: params.sessionKey,
-            connId: normalizeOptionalString(client?.connId),
-          })
-        ) {
-          respond(true, { ok: true }, undefined);
-          return;
-        }
-        const config = context.getRuntimeConfig();
-        const { agentId } =
-          sessionMutationAuthorization?.talkSessionTarget ??
-          prepareTalkSessionTarget(config, params.sessionKey);
-        sessionMutationAuthorization?.assertCurrent();
-        await closeClientVoiceSession({
-          agentId,
-          sessionKey: params.sessionKey,
+      if (
+        await closeTalkClientGatewayControlSession({
           voiceSessionId: params.voiceSessionId,
-          config,
-          expectedOrigin: "client",
-        });
-        const connId = normalizeOptionalString(client?.connId);
-        if (connId) {
-          unregisterTalkVoiceSession(params.voiceSessionId, connId, agentId);
-          forgetLegacyVoiceBinding(connId, params.sessionKey, params.voiceSessionId);
-        }
+          sessionKey: params.sessionKey,
+          connId: normalizeOptionalString(client?.connId),
+        })
+      ) {
         respond(true, { ok: true }, undefined);
-      } catch (err) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
+        return;
       }
+      const config = context.getRuntimeConfig();
+      const { agentId } =
+        sessionMutationAuthorization?.talkSessionTarget ??
+        prepareTalkSessionTarget(config, params.sessionKey);
+      sessionMutationAuthorization?.assertCurrent();
+      await closeClientVoiceSession({
+        agentId,
+        sessionKey: params.sessionKey,
+        voiceSessionId: params.voiceSessionId,
+        config,
+        expectedOrigin: "client",
+      });
+      const connId = normalizeOptionalString(client?.connId);
+      if (connId) {
+        unregisterTalkVoiceSession(params.voiceSessionId, connId, agentId);
+        forgetLegacyVoiceBinding(connId, params.sessionKey, params.voiceSessionId);
+      }
+      respond(true, { ok: true }, undefined);
     },
+    clientMutationError,
   ),
   "talk.client.steer": defineValidatedGatewayHandler(
     "talk.client.steer",
@@ -382,58 +379,55 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       sessionMutationAuthorization,
       hasCurrentClientAuthority,
     }) => {
+      const target =
+        sessionMutationAuthorization?.talkSessionTarget ??
+        prepareTalkSessionTarget(context.getRuntimeConfig(), params.sessionKey);
+      const runTarget = resolveOwnedActiveTalkRunTarget({
+        context,
+        clientConnId: client?.connId,
+        sessionTarget: target,
+        scope: { kind: "session" },
+        assertCurrent: sessionMutationAuthorization?.assertCurrent,
+      });
+      if (runTarget === null) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "talk.client.steer requires an active browser-owned Talk run",
+          ),
+        );
+        return;
+      }
+      const captured = await captureGatewayOperatorRunAuthority({
+        client: client ?? null,
+        context,
+        hasCurrentClientAuthority,
+      });
       try {
-        const target =
-          sessionMutationAuthorization?.talkSessionTarget ??
-          prepareTalkSessionTarget(context.getRuntimeConfig(), params.sessionKey);
-        const runTarget = resolveOwnedActiveTalkRunTarget({
-          context,
-          clientConnId: client?.connId,
-          sessionTarget: target,
-          scope: { kind: "session" },
-          assertCurrent: sessionMutationAuthorization?.assertCurrent,
+        const result = await controlRealtimeVoiceAgentRun({
+          sessionKey: target.canonicalKey,
+          runTarget,
+          getToolAuthorityOverlay: () =>
+            prepareTalkClientControlAuthority({
+              config: context.getRuntimeConfig(),
+              agentRuntime: createPluginRuntime().agent,
+              sessionTarget: target,
+              source: runTarget.toolAuthoritySource,
+              authority: {
+                ...resolveTalkAgentConsultAuthority(client?.connect?.scopes, client),
+                operatorAuthority: captured?.authority,
+              },
+            }),
+          text: params.text,
+          mode: params.mode,
         });
-        if (runTarget === null) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              "talk.client.steer requires an active browser-owned Talk run",
-            ),
-          );
-          return;
-        }
-        const captured = await captureGatewayOperatorRunAuthority({
-          client: client ?? null,
-          context,
-          hasCurrentClientAuthority,
-        });
-        try {
-          const result = await controlRealtimeVoiceAgentRun({
-            sessionKey: target.canonicalKey,
-            runTarget,
-            getToolAuthorityOverlay: () =>
-              prepareTalkClientControlAuthority({
-                config: context.getRuntimeConfig(),
-                agentRuntime: createPluginRuntime().agent,
-                sessionTarget: target,
-                source: runTarget.toolAuthoritySource,
-                authority: {
-                  ...resolveTalkAgentConsultAuthority(client?.connect?.scopes, client),
-                  operatorAuthority: captured?.authority,
-                },
-              }),
-            text: params.text,
-            mode: params.mode,
-          });
-          respond(true, result, undefined);
-        } finally {
-          captured?.release();
-        }
-      } catch (err) {
-        respond(false, undefined, talkRequestError(err));
+        respond(true, result, undefined);
+      } finally {
+        captured?.release();
       }
     },
+    talkRequestError,
   ),
 };

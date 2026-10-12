@@ -9,6 +9,10 @@ import {
   withinTest,
 } from "../../../../test/helpers/promise.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
+import {
   loadSessionEntry,
   readSessionTranscriptMessageEvents,
   replaceSessionEntry,
@@ -53,14 +57,16 @@ import { createTalkClientOfferFixture } from "./client-offer.test-support.js";
 import { talkClientHandlers } from "./client.js";
 
 const voiceMocks = vi.hoisted(() => ({
-  resolveConfiguredRealtimeVoiceProvider: vi.fn(),
+  resolveConfiguredRealtimeVoiceProviderAsync: vi.fn(),
   consultRealtimeVoiceAgent: vi.fn(),
   executionReady: vi.fn<() => Promise<void>>(),
   runEmbeddedAgent: vi.fn<typeof import("../../../agents/embedded-agent.js").runEmbeddedAgent>(),
 }));
 
+// mock-isolation: Keep provider registration and credential state outside handler tests.
 vi.mock("../../../talk/provider-resolver.js", () => ({
-  resolveConfiguredRealtimeVoiceProvider: voiceMocks.resolveConfiguredRealtimeVoiceProvider,
+  resolveConfiguredRealtimeVoiceProviderAsync:
+    voiceMocks.resolveConfiguredRealtimeVoiceProviderAsync,
 }));
 vi.mock("../../../talk/provider-registry.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../talk/provider-registry.js")>()),
@@ -124,7 +130,7 @@ function configureDelegatedBrowserProvider(
         capabilities: { ...fixture.provider.capabilities, handlesAgentConsult: false },
       }
     : fixture.provider;
-  voiceMocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+  voiceMocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
     provider,
     providerConfig: {},
     capabilities: provider.capabilities,
@@ -215,6 +221,7 @@ describe("talk.client.transcript", () => {
       await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-talk-transcript-")),
     );
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    setRuntimeConfigSnapshot({});
     await replaceSessionEntry(
       { agentId: "main", sessionKey },
       { sessionId, updatedAt: Date.now() },
@@ -237,6 +244,7 @@ describe("talk.client.transcript", () => {
     clientVoiceSessionTesting.reset();
     vi.useRealTimers();
     await cleanupSessionStateForTest({ stateDir: tempDir });
+    clearRuntimeConfigSnapshot();
     envSnapshot.restore();
     await fs.rm(tempDir, { recursive: true, force: true });
     expect(remainingRootWork).toBe(0);

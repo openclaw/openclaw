@@ -1,10 +1,16 @@
-import type { Context, Tool } from "@openclaw/llm-core";
-import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import type { Context, StreamOptions, Tool } from "@openclaw/llm-core";
+import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { assert, describe, expect, it } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
+import type { OpenAIResponsesOptions } from "./openai-responses-contracts.js";
 import {
   createResponsesLoopbackServer,
   responsesLoopbackModel,
 } from "./openai-responses-loopback.test-support.js";
+import { supportsResponsesReasoningUpdate } from "./openai-responses-reasoning-update.js";
 
 const numberTool = {
   name: "record_value",
@@ -57,6 +63,83 @@ function responseEvents(first: boolean, responseId = first ? "resp_number" : "re
     },
   ];
 }
+
+it("preserves reasoning controls in concurrent same-session SSE requests", async () => {
+  const manifest: unknown = JSON.parse(
+    readFileSync(
+      new URL("../../../../extensions/openai/openclaw.plugin.json", import.meta.url),
+      "utf8",
+    ),
+  );
+  assert(isRecord(manifest), "Expected the registered OpenAI model catalog");
+  const catalog = normalizeModelCatalog(manifest.modelCatalog, {
+    ownedProviders: new Set(["openai"]),
+  });
+  const reasoningModel = catalog?.providers?.openai?.models.find((entry) =>
+    supportsResponsesReasoningUpdate({ model: entry.id, reasoning: { effort: "low" }, input: [] }),
+  );
+  assert(reasoningModel, "Expected a registered model supporting reasoning controls");
+  const server = await createResponsesLoopbackServer((turn) =>
+    responseEvents(false, `resp_${turn}`),
+  );
+  const accepted = createDeferred();
+  const release = createDeferred();
+  const run = async (
+    messages: Context["messages"],
+    reasoningEffort: "low" | "medium" | "high",
+    onResponse?: StreamOptions["onResponse"],
+  ) => {
+    const options = {
+      apiKey: "synthetic-continuation-key",
+      sessionId: "parallel-reasoning",
+      transport: "sse",
+      reasoningEffort,
+      onResponse,
+    } satisfies OpenAIResponsesOptions;
+    const stream = await createOpenAIResponsesTransportStreamFn()(
+      { ...responsesLoopbackModel, id: reasoningModel.id, reasoning: true },
+      { messages },
+      options,
+    );
+    return stream.result();
+  };
+  let active: ReturnType<typeof run> | undefined;
+  try {
+    const messages: Context["messages"] = [{ role: "user", content: "First.", timestamp: 1 }];
+    messages.push(await run(messages, "low"), { role: "user", content: "Second.", timestamp: 2 });
+    messages.push(await run(messages, "high"), { role: "user", content: "Third.", timestamp: 3 });
+    expect(server.requests[1]?.input).toContainEqual({
+      type: "configuration_update",
+      reasoning: { effort: "high" },
+    });
+    active = run(messages, "medium", async () => {
+      accepted.resolve();
+      await release.promise;
+    });
+    await awaitGateBeforeSettlement(accepted.promise, active, "Expected active HTTP request");
+    const concurrent = await run(messages, "medium");
+    release.resolve();
+    expect((await active).stopReason).toBe("stop");
+    expect(concurrent.stopReason).toBe("stop");
+    expect(server.requests).toHaveLength(4);
+    expect(server.requests[3]).not.toHaveProperty("previous_response_id");
+    expect(server.requests[3]).toMatchObject({ reasoning: { effort: "low" } });
+    expect(server.requests[3]?.input).toEqual(server.requests[2]?.input);
+    expect(server.requests[3]?.input).toEqual([
+      expect.objectContaining({ role: "user" }),
+      expect.objectContaining({ role: "assistant" }),
+      { type: "configuration_update", reasoning: { effort: "high" } },
+      expect.objectContaining({ role: "user" }),
+      expect.objectContaining({ role: "assistant" }),
+      { type: "configuration_update", reasoning: { effort: "medium" } },
+      expect.objectContaining({ role: "user" }),
+    ]);
+  } finally {
+    release.resolve();
+    await active;
+    await server.close();
+  }
+});
 
 it.each([
   ["sse", "none"],

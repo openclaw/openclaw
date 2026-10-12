@@ -621,7 +621,8 @@ openclaw-appearance-background .settings-background-preview .session-background_
   padding-inline: var(--space-2);
 }
 
-.settings-tab-icon__option {
+.settings-tab-icon__option,
+.settings-permission-control .settings-status > span {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
@@ -946,12 +947,6 @@ textarea.settings-input {
 .settings-permission-control .settings-status {
   white-space: normal;
   overflow-wrap: anywhere;
-}
-
-.settings-permission-control .settings-status > span {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
 }
 
 .settings-permission-check {

@@ -835,6 +835,12 @@ describe("attachment sidebar source ownership", () => {
       container.querySelector(".chat-assistant-attachment-card__status-reason")?.textContent,
     ).toBe(reason);
     expect(
+      container
+        .querySelector(".chat-assistant-attachment-card__status-meta")
+        ?.textContent?.replace(/\s+/gu, " ")
+        .trim(),
+    ).toBe(`Not sent · ${reason}`);
+    expect(
       container.querySelector(
         ".chat-assistant-attachment-card__download, .chat-assistant-attachment-card__expand, .chat-assistant-attachment-card__retry",
       ),
