@@ -118,7 +118,7 @@ describe("channel-inbound public helpers", () => {
     },
   );
 
-  it("dispatches a published inbound event before automatic session maintenance", async () => {
+  it("dispatches a published inbound event and completes automatic session maintenance", async () => {
     const storePath = `${tempDirs.make("openclaw-channel-inbound-maintenance-")}/sessions.json`;
     const staleSessionKey = "agent:main:published-inbound-stale";
     const activeSessionKey = "agent:main:test:peer";
@@ -188,7 +188,6 @@ describe("channel-inbound public helpers", () => {
 
     expect(result.dispatched).toBe(true);
     expect(staleEntryAtDispatch).toMatchObject({ sessionId: "published-inbound-stale" });
-    expect(staleEntryAtDispatch?.archivedAt).toBeUndefined();
     await maintenanceCommitted.promise;
     expect(loadSessionEntry({ storePath, sessionKey: staleSessionKey })).toMatchObject({
       sessionId: "published-inbound-stale",

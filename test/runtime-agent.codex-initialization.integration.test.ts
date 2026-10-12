@@ -145,6 +145,16 @@ describe("Codex initialization through the registered session deletion owner", (
                 readinessCommitRefused = true;
                 throw new Error("injected readiness failure");
               }
+              if (
+                failure === "rollback commit" &&
+                request.stage === "commit" &&
+                isRecord(request.facts) &&
+                isRecord(request.facts.publication) &&
+                request.facts.publication.kind === "session-native-binding"
+              ) {
+                rollbackCommitRefused = true;
+                throw new Error("injected rollback failure");
+              }
               const offsets = reads.calls.map((call) => call.mock.contexts.length);
               try {
                 admit(request, grant);
@@ -316,16 +326,6 @@ describe("Codex initialization through the registered session deletion owner", (
               openOpenClawStateDatabase().db,
               params.targetKey,
               "main",
-            );
-          }
-          if (failure === "rollback commit") {
-            const database = openOpenClawAgentDatabase({ agentId: "main" });
-            database.db.function("observe_rollback_refusal", () => {
-              rollbackCommitRefused = true;
-              return 0;
-            });
-            database.db.exec(
-              "CREATE TEMP TRIGGER reject_rollback BEFORE DELETE ON session_nodes WHEN json_extract(OLD.entry_json, '$.initializationPending') = 1 BEGIN SELECT observe_rollback_refusal(); SELECT RAISE(ABORT, 'injected rollback failure'); END",
             );
           }
           if (
