@@ -57,7 +57,7 @@ function renderIdentityGateways(onClose: SidebarIdentityMenuParams["onClose"]) {
         unknown: t("nav.gateway.unknown"),
       }[gateway.health];
       const openWindow = (event: MouseEvent) => {
-        if (event.metaKey || event.ctrlKey) {
+        if (capability.openWindow && (event.metaKey || event.ctrlKey)) {
           event.preventDefault();
           event.stopPropagation();
           capability.openWindow(gateway.id);
@@ -88,7 +88,7 @@ function renderIdentityGateways(onClose: SidebarIdentityMenuParams["onClose"]) {
               : nothing
           }
           ${
-            !selected && index < 9
+            capability.openWindow && !selected && index < 9
               ? renderKbd(["⌘", String(index + 1)], {
                   className: "session-menu__shortcut",
                   ariaHidden: true,

@@ -102,7 +102,7 @@ export function startBrowserAuthRecovery(
                     }
                     const native = nativeGatewaysCapability();
                     const currentId = native?.snapshot?.currentId;
-                    if (native && currentId) {
+                    if (native?.reconnect && currentId) {
                       // The app owns a separate cookie store; a normal browser tab cannot renew it.
                       native.reconnect(currentId);
                       return;

@@ -41,6 +41,14 @@ if (!unsupportedControlUiBrowser) {
   installStaleChunkReloadListener();
   installMissingStylesheetRecovery();
 
+  if (isRemoteControlUiIngress() && window.parent !== window) {
+    void import("./app/native-gateways.runtime.ts")
+      .then(({ nativeGatewaysCapability }) => nativeGatewaysCapability())
+      .catch((error: unknown) => {
+        console.warn("OpenClaw embedder Gateway switcher failed to load.", error);
+      });
+  }
+
   if (isProd && !isRemoteControlUiIngress() && "serviceWorker" in navigator) {
     const swUrl = new URL(inferControlUiPublicAssetPath("sw.js"), window.location.origin);
     swUrl.searchParams.set("v", currentControlUiBuildId);
