@@ -65,7 +65,9 @@ describe("formatApprovalRequest club replay explanation", () => {
         },
       }),
     );
-    expect(stored).toContain("The message is answered as an unverified group DM sender, never as ~nec.");
+    expect(stored).toContain(
+      "The message is answered as an unverified group DM sender, never as ~nec.",
+    );
     expect(stored).not.toContain("will not be answered");
 
     const suppressed = formatApprovalRequest(
