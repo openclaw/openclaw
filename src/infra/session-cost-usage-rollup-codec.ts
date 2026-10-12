@@ -44,7 +44,7 @@ export type UsageCostRollupEntry = {
 export type UsageCostRollupEnvelope = Omit<UsageCostRollupEntry, "rollup"> & {
   format: typeof USAGE_COST_ROLLUP_FORMAT_VERSION;
   projection?: {
-    version: 1;
+    version: 2;
     dates: string[];
     canonicalNumbers: boolean;
   };
@@ -128,7 +128,7 @@ export function decodeUsageCostRollupEnvelope(
     if (
       record.projection !== undefined &&
       (!isRecord(record.projection) ||
-        record.projection.version !== 1 ||
+        record.projection.version !== 2 ||
         !Array.isArray(record.projection.dates) ||
         !record.projection.dates.every(
           (date) => typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(date),

@@ -78,7 +78,61 @@ afterEach(async () => {
 });
 
 describe("session cost usage SQLite cache", () => {
-  it("commits quarter-hour partitions with their checkpoint and retires deleted dates", async () => {
+  it("keeps a sparse year below 25 KB without discarding quarter-hour accounting", () => {
+    const rollup = createSessionUsageRollupData();
+    for (let index = 0; index < 500; index++) {
+      appendSessionUsageRollupContribution(rollup, {
+        timestamp:
+          Date.UTC(2025, 0, 1) +
+          Math.floor((index * 365) / 500) * 86_400_000 +
+          (index % 2) * 900_000,
+        role: "assistant",
+        model: "fixture",
+        provider: "test",
+        toolNames: [],
+        toolResultCounts: { total: 0, errors: 0 },
+        usageTotals: { ...rollup.untimestamped.totals, totalTokens: 10, totalCost: 1 },
+      });
+    }
+    const encoded = partitionUsageCostRollup({
+      version: USAGE_COST_ROLLUP_VERSION,
+      pricingFingerprint: "fixture",
+      scannedAt: 1,
+      parsedRecords: 500,
+      countedRecords: 500,
+      checkpoint: {
+        kind: "sqlite",
+        maxSeq: 500,
+        eventCount: 500,
+        size: 500,
+        mtimeMs: 1,
+        anchorHash: "fixture",
+      },
+      rollup,
+    });
+    const bytes =
+      Buffer.byteLength(encoded.valueJson) +
+      encoded.blob.byteLength +
+      encoded.partitions.reduce(
+        (sum, partition) =>
+          sum + Buffer.byteLength(partition.valueJson) + partition.blob.byteLength,
+        0,
+      );
+    expect(bytes).toBeLessThan(25_000);
+    const buckets = encoded.partitions.flatMap((partition) =>
+      Object.values(decodeUsageCostPartition(partition.valueJson, partition.blob)!.buckets),
+    );
+    expect(buckets.reduce((sum, bucket) => sum + bucket.totals.totalTokens, 0)).toBe(5_000);
+    expect(
+      buckets.map((bucket) => bucket.timestampMs).toSorted((left, right) => left - right),
+    ).toEqual(
+      Object.values(rollup.buckets)
+        .map((bucket) => bucket.timestampMs)
+        .toSorted((left, right) => left - right),
+    );
+  });
+
+  it("commits monthly quarter-hour partitions with their checkpoint and retires deleted months", async () => {
     const stateDir = tempDirs.make("openclaw-usage-partitions-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const agentId = "usage-partitions";
@@ -152,12 +206,13 @@ describe("session cost usage SQLite cache", () => {
           }),
         ).toBe(true);
         const days = readPartitions();
-        expect(days.map((day) => day.date)).toEqual(["2026-09-18", "2026-09-19"]);
-        const selected = readPartitions("2026-09-18", "2026-09-18");
+        expect(days.map((day) => day.date)).toEqual(["2026-09-01"]);
+        const selected = readPartitions("2026-09-01", "2026-09-01");
         expect(selected).toHaveLength(1);
         const day = decodeUsageCostPartition(selected[0]!.valueJson, selected[0]!.blob)!;
         expect(Object.values(day.buckets)).toMatchObject([
           { totals: { totalTokens: 20, totalCost: 2 } },
+          { totals: { totalTokens: 10, totalCost: 1 } },
         ]);
         expect(
           Object.keys(decodeUsageCostRollup(first.valueJson, "first", first.blob)!.rollup.buckets),
@@ -192,7 +247,7 @@ describe("session cost usage SQLite cache", () => {
             valueJson: utf8Json(rewritten.valueJson),
             blob: rewritten.blob,
             partitions: [],
-            removedDates: ["2026-09-18", "2026-09-19"],
+            removedDates: ["2026-09-01"],
             updatedAt: 3,
           }),
         ).toBe(true);
