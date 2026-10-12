@@ -18,20 +18,21 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { isProviderCatalogSourceAllowed } from "../plugins/provider-config-owner.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
-import {
-  resolveAuthProfileDatabaseOwnerId,
-  resolveAuthProfileDatabasePath,
-} from "./auth-profiles/sqlite.js";
 import { MODELS_JSON_STATE } from "./models-config-state.js";
 import type { PluginModelCatalogAuthSnapshot } from "./plugin-model-catalog-auth.js";
 import {
   withPluginModelCatalogPublicationLocks,
   withPluginModelCatalogWorker,
 } from "./plugin-model-catalog-execution.js";
+import { withHandedOffPluginModelCatalogs } from "./plugin-model-catalog-handoff.js";
 import {
   isGeneratedPluginModelCatalog,
   repairPluginModelCatalogTransportMetadata,
 } from "./plugin-model-catalog-repair.js";
+import {
+  pluginModelCatalogDatabaseOptions,
+  readPersistedPluginModelCatalogs,
+} from "./plugin-model-catalog-store.js";
 import {
   PLUGIN_MODEL_CATALOG_CACHE_SCOPE,
   PLUGIN_MODEL_CATALOG_MIGRATION_SCOPE,
@@ -58,21 +59,11 @@ function isPluginModelCatalogMigrationFile(filename: string): boolean {
 
 type PluginModelCatalogDatabase = Pick<OpenClawAgentKyselyDatabase, "cache_entries">;
 
-function pluginModelCatalogDatabaseOptions(agentDir: string) {
-  return {
-    agentId: resolveAuthProfileDatabaseOwnerId(agentDir),
-    path: resolveAuthProfileDatabasePath(agentDir),
-  };
-}
-
-function readPersistedPluginModelCatalogs(agentDir: string): PersistedPluginModelCatalog[] {
-  return readPluginModelCatalogEntries(
-    pluginModelCatalogDatabaseOptions(agentDir),
-    PLUGIN_MODEL_CATALOG_CACHE_SCOPE,
-  );
-}
-
-/** Native Doctor inspection and the public synchronous ModelRegistry SDK contract. */
+/**
+ * Native Doctor inspection and the public synchronous ModelRegistry SDK contract.
+ * Retained local catalogs stay authoritative; a request-owned handoff only fills
+ * plugin ids this agent directory does not retain at all.
+ */
 export function loadPersistedPluginModelCatalogsReadOnly(
   agentDir: string,
   pluginIds?: readonly string[],
@@ -80,9 +71,10 @@ export function loadPersistedPluginModelCatalogsReadOnly(
   if (pluginIds?.length === 0) {
     return [];
   }
-  return readPluginModelCatalogEntries(
-    pluginModelCatalogDatabaseOptions(agentDir),
-    PLUGIN_MODEL_CATALOG_CACHE_SCOPE,
+  // Keep the selection in the retained read itself: unrelated catalog payloads
+  // are never materialized, and only requested ids can be filled from handoff.
+  return withHandedOffPluginModelCatalogs(
+    readPersistedPluginModelCatalogs(agentDir, pluginIds),
     pluginIds,
   );
 }
