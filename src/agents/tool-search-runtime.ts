@@ -21,6 +21,7 @@ import {
 } from "./schema/tool-output-schema.js";
 import { bindJoinedCollectorInvocation } from "./subagents/swarm/swarm-collector-capability.js";
 import { markToolContractFailure } from "./tool-contract-error.js";
+import { getToolInvocationMetadata } from "./tool-invocation-metadata.js";
 import { isAgentToolReplaySafe } from "./tool-replay-safety.js";
 import {
   isToolResultError,
@@ -304,6 +305,13 @@ export class ToolSearchRuntime {
       this.observeNetworkContent(options.parentToolCallId);
     }
     return describeEntry(entry);
+  };
+
+  invocationMetadata = (id: string, input: unknown) => {
+    const entry = findEntry(resolveCatalog(this.ctx), id, {
+      codeModeSkills: this.ctx.codeModeSkills,
+    });
+    return getToolInvocationMetadata(entry.tool, input);
   };
 
   call = async (id: string, input?: unknown, options?: ToolSearchCallOptions) => {

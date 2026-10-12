@@ -34,6 +34,7 @@ import {
   combineExecutedToolBatches,
   resolveToolBatchTermination,
 } from "./tool-batch-completion.js";
+import { isSequentialToolBatch } from "./tool-batch-scheduling.js";
 import {
   createErrorToolResult,
   createToolExecutionErrorResult,
@@ -516,20 +517,13 @@ async function executeToolCalls(
       batch.warnings = admission?.warnings;
     }
   }
-  let hasSequentialToolCall = false;
-  if (config.toolExecution !== "sequential") {
-    for (const toolCall of toolCalls) {
-      if (signal?.aborted) {
-        break;
-      }
-      const resolution = await resolveToolCallTool(batch, toolCall);
-      if (resolution.kind === "resolved" && resolution.tool?.executionMode === "sequential") {
-        hasSequentialToolCall = true;
-        break;
-      }
-    }
-  }
-  const sequential = config.toolExecution === "sequential" || hasSequentialToolCall;
+  const sequential = await isSequentialToolBatch({
+    configuredMode: config.toolExecution,
+    calls: toolCalls,
+    signal,
+    resolve: (call) => resolveToolCallTool(batch, call),
+    lifecycle: batch.lifecycle,
+  });
   if (sequential && scheduling) {
     await scheduling.waitForPrevious();
   }

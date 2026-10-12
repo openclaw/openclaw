@@ -11,6 +11,7 @@ import {
   attachInternalToolExecutionPreparer,
   getInternalToolExecutionPreparer,
 } from "./runtime/internal-hooks.js";
+import { getToolInvocationMetadata } from "./tool-invocation-metadata.js";
 import { registerTrustedToolNoStartError } from "./tool-result-error.js";
 
 function throwAbortError(): never {
@@ -88,16 +89,15 @@ export function wrapToolWithAbortSignal(
       if (combinedSignal.aborted) {
         throwAbortError();
       }
+      const yieldRunSignal = getToolInvocationMetadata(tool, params).ownsTurnHandoff
+        ? abortSignal
+        : undefined;
       const execution = execute(toolCallId, params, combinedSignal, onUpdate);
       // Code Mode cancels its worker and bridges itself. Racing that owner loses
       // completed output and turns an intentional permission change into unknown dispatch.
       return ownsCancellationOutcome
         ? await execution
-        : await raceWithAbortSignal(
-            execution,
-            combinedSignal,
-            tool.name === "sessions_yield" ? abortSignal : undefined,
-          );
+        : await raceWithAbortSignal(execution, combinedSignal, yieldRunSignal);
     },
   };
   copyAgentToolMetadata(tool, wrappedTool, (source) =>
@@ -112,7 +112,9 @@ export function wrapToolWithAbortSignal(
       if (combinedSignal.aborted) {
         throwAbortError();
       }
-      const yieldRunSignal = tool.name === "sessions_yield" ? abortSignal : undefined;
+      const yieldRunSignal = getToolInvocationMetadata(tool, params.args).ownsTurnHandoff
+        ? abortSignal
+        : undefined;
       const sourcePreparation = sourcePreparer({ ...params, signal: combinedSignal });
       let prepared;
       try {
@@ -134,10 +136,14 @@ export function wrapToolWithAbortSignal(
           if (combinedSignal.aborted) {
             throwAbortError();
           }
+          const preparedYieldRunSignal = getToolInvocationMetadata(tool, prepared.args)
+            .ownsTurnHandoff
+            ? abortSignal
+            : undefined;
           const execution = prepared.execute(onImplementationStart);
           return ownsCancellationOutcome
             ? execution
-            : raceWithAbortSignal(execution, combinedSignal, yieldRunSignal);
+            : raceWithAbortSignal(execution, combinedSignal, preparedYieldRunSignal);
         },
         dispose: prepared.dispose,
       };
