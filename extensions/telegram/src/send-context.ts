@@ -26,6 +26,10 @@ import {
   bindTelegramRequestAuthority,
   findTelegramRequestAuthorityError,
 } from "./request-authority.js";
+import {
+  TELEGRAM_CLIENT_TIMEOUT_BACKSTOP_SECONDS,
+  telegramUploadTimeoutTransformer,
+} from "./request-timeouts.js";
 import type { TelegramRichMessageContextParams } from "./rich-message.js";
 import { maybePersistResolvedTelegramTarget } from "./target-writeback.js";
 import {
@@ -175,6 +179,7 @@ function resolveTelegramClientOptions(
   const entry: CachedTelegramClientOptions = {
     clientOptions: {
       fetch: asTelegramClientFetch(fetchImpl),
+      timeoutSeconds: TELEGRAM_CLIENT_TIMEOUT_BACKSTOP_SECONDS,
       ...(normalizedApiRoot ? { apiRoot: normalizedApiRoot } : {}),
     },
     transport,
@@ -321,6 +326,7 @@ export async function withTelegramApiContext<T>(
         }
       : client.clientOptions;
     const bot = new Bot(token, { client: clientOptions });
+    bot.api.config.use(telegramUploadTimeoutTransformer);
     if (opts.signal || opts.assertPlatformSendAuthorized) {
       // grammY wraps later transformers around earlier ones. Check authority
       // after the account queue drains, immediately before its HTTP client runs.
