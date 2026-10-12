@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { subscribeGitHubIdentityChanges } from "../agents/github-read-identity.js";
 import {
   captureIncognitoSessionBinding,
-  withIncognitoSessionBinding,
+  withAcquiredIncognitoSessionBinding,
   type IncognitoSessionBinding,
 } from "../config/sessions/session-incognito-binding.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
@@ -38,7 +38,7 @@ export function startGitHubPublicationDiscovery(params: {
   const sessions = new LruCache<{
     session: PublicationSessionIdentity;
     binding?: string;
-    incognito?: IncognitoSessionBinding;
+    incognito?: Pick<IncognitoSessionBinding["actor"], "path" | "identity">;
     fact: PublicationFact;
   }>(256);
   const keyOf = (session: PublicationSessionIdentity) =>
@@ -64,7 +64,15 @@ export function startGitHubPublicationDiscovery(params: {
               assertCurrent: () => !scheduler.signal.aborted && sessions.peek(key) === current,
             });
           const fact = await (current.incognito
-            ? withIncognitoSessionBinding(current.incognito, prepare)
+            ? withAcquiredIncognitoSessionBinding(
+                { ...current.session, storePath: current.incognito.path },
+                { assertCurrent: () => scheduler.signal.throwIfAborted() },
+                async ({ actor }) =>
+                  actor.identity.incarnation === current.incognito?.identity.incarnation
+                    ? prepare()
+                    : undefined,
+                { signal: scheduler.signal },
+              )
             : prepare());
           if (!scheduler.signal.aborted && sessions.peek(key) === current) {
             current.fact = fact ?? unavailable;
@@ -79,7 +87,7 @@ export function startGitHubPublicationDiscovery(params: {
     if (!current || current.session.sessionId !== session.sessionId) {
       current = {
         session: { ...session },
-        incognito: captureIncognitoSessionBinding(session),
+        incognito: captureIncognitoSessionBinding(session)?.actor,
         fact: unavailable,
       };
       sessions.set(key, current);

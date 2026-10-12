@@ -1,5 +1,4 @@
 import { resolveConfiguredGitHubToolIdentity } from "../../agents/github-tool-identity.js";
-import type { AgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
 import {
   parseWorkerGitHubLaunchBinding,
@@ -18,16 +17,13 @@ import { parseGitHubRemoteUrl } from "../github-remote.js";
 export async function prepareGitHubPublicationFact(
   params: PublicationSessionIdentity & {
     assertCurrent?: () => boolean;
-    sessionTarget?: AgentRunSessionTarget;
   },
 ): Promise<{ available: boolean; github?: WorkerGitHubLaunchBinding } | undefined> {
   try {
     if (params.assertCurrent?.() === false) {
       return undefined;
     }
-    const currentWorkspace = await prepareGitHubPublicationWorkspaceOwner(params, {
-      sessionTarget: params.sessionTarget,
-    });
+    const currentWorkspace = await prepareGitHubPublicationWorkspaceOwner(params);
     const workspace = currentWorkspace.initial;
     const identity = await prepareCurrentGitHubPublicationIdentity(params.agentId);
     const originUrl =
