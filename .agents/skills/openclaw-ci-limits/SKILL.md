@@ -328,6 +328,8 @@ These are intentionally guarded by the `ci-workflow-guards`,
   timed-out job against the newest completed scheduled main CI run. Matching
   job names/shards and supported failure signatures are pre-existing; a main
   pass or different signature is new; missing jobs or evidence are unknown.
+  Job-name-only matches are labeled in the reason; check their failing tests
+  against main before attributing the failure.
   Its table and JSON output reach `openclaw/ci-gate`; the existing gate result
   and known-main-red allowance stay unchanged. Superseded-run cancellation,
   runner routes, concurrency and fanout caps remain unchanged. The report

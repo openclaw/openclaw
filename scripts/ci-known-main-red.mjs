@@ -204,7 +204,8 @@ export function createMainFailureClassifier(options) {
         return {
           ...result,
           class: "pre-existing",
-          reason: "Same job failed on main; no signature comparison is available for this job",
+          reason:
+            "Job name only (signatures not compared); check failing tests against main before attribution",
         };
       }
       if (job.conclusion === "timed_out" || mainJob.conclusion === "timed_out") {

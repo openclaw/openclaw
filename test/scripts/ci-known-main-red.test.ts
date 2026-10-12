@@ -252,7 +252,12 @@ const known = async (options: Parameters<typeof classify>[0] = {}) =>
 
 describe("main failure attribution", () => {
   it.each([
-    { name: "matching Node assertions", failure: job, expected: "pre-existing" },
+    {
+      name: "matching Node assertions",
+      failure: job,
+      expected: "pre-existing",
+      reason: "Failure signatures match main",
+    },
     {
       name: "changed Node assertions",
       failure: job,
@@ -301,13 +306,17 @@ describe("main failure attribution", () => {
       name: "the same unparsed build failure",
       failure: { ...job, name: "build-artifacts" },
       expected: "pre-existing",
+      reason:
+        "Job name only (signatures not compared); check failing tests against main before attribution",
     },
     {
       name: "the same unparsed build timeout",
       failure: { ...job, name: "build-artifacts", conclusion: "timed_out" },
       expected: "pre-existing",
+      reason:
+        "Job name only (signatures not compared); check failing tests against main before attribution",
     },
-  ])("classifies $name as $expected", async ({ failure, expected, ...options }) => {
+  ])("classifies $name as $expected", async ({ failure, expected, reason, ...options }) => {
     const classifier = failureClassifier({
       ...options,
       mainJobs: [{ ...failure, id: 20 }],
@@ -318,6 +327,7 @@ describe("main failure attribution", () => {
       class: expected,
       mainRunId: 200,
       mainJobId: 20,
+      ...(reason ? { reason } : {}),
     });
   });
 

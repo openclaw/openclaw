@@ -275,12 +275,10 @@ Retain these additional fields:
 - `aggregate`: the CI gate's `jobId`, `causedBy` (all admitted failed-job IDs),
   `reason`, and `evidence` names establishing the downstream failure.
 
-Read the failure classification table in `pr-failure-report` or
-`openclaw/ci-gate`. Failures marked **pre-existing** need no further attribution;
-**new** and **unknown** failures still require the existing investigation and
-landing rules. All planned PR jobs finish after a sibling failure, so cancelled
-jobs are not proof of passing coverage. The table does not change gate semantics
-or authorize an admin landing by itself.
+Read `pr-failure-report` or `openclaw/ci-gate`: **pre-existing** with matching signatures needs no further attribution; for job-name-only **pre-existing**, check the failing tests against main before attributing the failure.
+
+**New** and **unknown** failures retain the existing investigation and landing
+rules. The table does not change gate semantics or authorize an admin landing.
 
 The tool verifies live run/attempt/PR/head identities, complete job accounting,
 the current effective GitHub Actions gate check-run, and source/artifact hashes.
