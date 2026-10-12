@@ -12,6 +12,7 @@ import { runWithTelegramSpooledReplayUpdate } from "./bot-processing-outcome.js"
 import {
   createBot,
   admitSpooledUpdate,
+  admitSpooledUpdates,
   commandMessage,
   harness,
   chat,
@@ -774,6 +775,80 @@ describe("createTelegramBot typed command pipeline", () => {
     expect(apiCalls.mock.calls.filter(([method]) => method === "sendMessage")).toHaveLength(4);
     expect(await getCachedSticker(lateStickerId)).toMatchObject({
       description: "A sticker after webhook expiry",
+    });
+  });
+
+  describe("client-created DM topic adoption through the inbound handler", () => {
+    // The client creates topic 500 and delivers the first message to the root chat;
+    // the private chat carries no `is_forum`, so inbound normalization copies the message.
+    const topicCreated = (messageId: number) => ({
+      message_id: messageId,
+      date: 1736380800,
+      chat,
+      from,
+      message_thread_id: messageId,
+      is_topic_message: true,
+      forum_topic_created: { name: "hello", icon_color: 0, is_name_implicit: true },
+    });
+    const rootText = (messageId: number, text: string) => ({
+      ...commandMessage(text),
+      entities: [],
+      message_id: messageId,
+      date: 1736380800,
+    });
+    const dmTopicsConfig = (requireTopic: boolean): OpenClawConfig => ({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          autoTopicLabel: false,
+          streaming: { mode: "off" },
+          ...(requireTopic ? { direct: { [String(chat.id)]: { requireTopic: true } } } : {}),
+        },
+      },
+    });
+    // Distinct ids per case: durable dedupe would treat reused ids as replays.
+    const updates = (topicId: number) => [
+      { update_id: topicId + 2300, message: topicCreated(topicId) },
+      { update_id: topicId + 2301, message: rootText(topicId + 1, "hello") },
+      { update_id: topicId + 2302, message: rootText(topicId + 2, "later") },
+    ];
+    const turns = () =>
+      new Map(harness.replySpy.mock.calls.map(([ctx]) => [ctx.RawBody, ctx.SessionKey]));
+    const sentThreadIds = () =>
+      new Map(
+        apiCalls.mock.calls
+          .filter(([method]) => method === "sendMessage")
+          .map(([, payload]) => {
+            const { text, message_thread_id } = requireRecord(payload, "sendMessage payload");
+            return [text, message_thread_id];
+          }),
+      );
+
+    it("routes the adopted root message into the created topic and a later one to root", async () => {
+      harness.replySpy.mockImplementation(async (ctx) => ({ text: `re:${ctx.RawBody}` }));
+      const bot = await createBot(false, true, dmTopicsConfig(false), true);
+      await admitSpooledUpdates(bot, updates(500));
+      expect(turns()).toEqual(
+        new Map([
+          ["hello", `agent:main:main:thread:${chat.id}:500`],
+          ["later", "agent:main:main"],
+        ]),
+      );
+      expect(sentThreadIds()).toEqual(
+        new Map([
+          ["re:hello", 500],
+          ["re:later", undefined],
+        ]),
+      );
+    });
+
+    it("admits the adopted root message under requireTopic and drops the bare root message", async () => {
+      harness.replySpy.mockImplementation(async (ctx) => ({ text: `re:${ctx.RawBody}` }));
+      const bot = await createBot(false, true, dmTopicsConfig(true), true);
+      await admitSpooledUpdates(bot, updates(600));
+      expect(turns()).toEqual(new Map([["hello", `agent:main:main:thread:${chat.id}:600`]]));
+      expect(sentThreadIds()).toEqual(new Map([["re:hello", 600]]));
     });
   });
 });

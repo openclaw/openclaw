@@ -15,7 +15,7 @@ import {
   type TelegramSpooledReplayDeferredParticipant,
 } from "./bot-processing-outcome.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
-import { resolveTelegramForumFlag } from "./bot/helpers.js";
+import { resolveTelegramForumFlag, resolveTelegramMessageThreadSpec } from "./bot/helpers.js";
 import { commitTelegramMessageDispatchReplay } from "./message-dispatch-dedupe.js";
 import { createTelegramIngressMonitor } from "./telegram-ingress-drain.js";
 import {
@@ -298,6 +298,231 @@ describe("createTelegramIngressMonitor", () => {
         expect(await queue.listPending()).toEqual([]);
       } finally {
         await monitor.stop();
+      }
+    });
+  });
+
+  const dmTopicChat = { id: 1001, type: "private" };
+  const dmTopicUser = { id: 1001, is_bot: false, first_name: "User" };
+  const dmTopicCreatedUpdate = () => ({
+    update_id: 500,
+    message: {
+      message_id: 500,
+      date: 1_760_000_000,
+      chat: dmTopicChat,
+      from: dmTopicUser,
+      message_thread_id: 500,
+      is_topic_message: true,
+      forum_topic_created: { name: "hello", icon_color: 0, is_name_implicit: true },
+    },
+  });
+  const dmRootMessageUpdate = () => ({
+    update_id: 501,
+    message: {
+      message_id: 501,
+      date: 1_760_000_000,
+      chat: dmTopicChat,
+      from: dmTopicUser,
+      text: "hello",
+    },
+  });
+  const dmTopicsBotInfo = { ...telegramBotInfoForTest, has_topics_enabled: true };
+
+  it("adopts a client-created DM topic at admission and keeps it through restart replay", async () => {
+    await withTempState(async (stateDir) => {
+      const queueOptions = { channelId: "telegram", accountId: "default", stateDir };
+      const eventId = String(501).padStart(16, "0");
+      const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>(queueOptions);
+      let finishDispatch!: () => void;
+      const dispatchGate = new Promise<void>((resolve) => {
+        finishDispatch = resolve;
+      });
+      let ownerSignal: AbortSignal | undefined;
+      const beforeRestart = createTelegramIngressMonitor({
+        queue,
+        getConfig: () => cfg,
+        accountId: "default",
+        botInfo: dmTopicsBotInfo,
+        dispatch: async (update, lifecycle) => {
+          if ((update as { update_id: number }).update_id === 501) {
+            // Hold the root message until the owner is aborted (restart before dispatch).
+            ownerSignal = lifecycle.abortSignal;
+            const participant = createTelegramSpooledReplayDeferredParticipant(
+              "test:dm-topic-adopt-restart",
+            );
+            await dispatchGate;
+            participant?.settle({ kind: "completed" });
+          }
+          return { kind: "completed" as const };
+        },
+      });
+      beforeRestart.start();
+      await beforeRestart.admit(dmTopicCreatedUpdate());
+      await beforeRestart.admit(dmRootMessageUpdate());
+      await vi.waitFor(() => expect(ownerSignal).toBeDefined());
+      // The decision is made once at admission and persisted with the row.
+      expect(await queue.listClaims()).toMatchObject([
+        { id: eventId, laneKey: "telegram:1001:topic:500", payload: { adoptedDmThreadId: 500 } },
+      ]);
+      const stopped = beforeRestart.stop();
+      await vi.waitFor(() => expect(ownerSignal?.aborted).toBe(true));
+      finishDispatch();
+      await stopped;
+      // Restart before dispatch: in-memory adoption state and message identity are gone.
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
+
+      const replayQueue =
+        createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>(queueOptions);
+      const dispatch = vi.fn(async (update: unknown) => {
+        expect(await replayQueue.listClaims()).toMatchObject([
+          { id: eventId, laneKey: "telegram:1001:topic:500" },
+        ]);
+        const message = (
+          update as { message: Parameters<typeof resolveTelegramMessageThreadSpec>[0] }
+        ).message;
+        expect(resolveTelegramMessageThreadSpec(message)).toEqual({ id: 500, scope: "dm" });
+        return { kind: "completed" as const };
+      });
+      const afterRestart = createTelegramIngressMonitor({
+        queue: replayQueue,
+        getConfig: () => cfg,
+        accountId: "default",
+        botInfo: dmTopicsBotInfo,
+        dispatch,
+      });
+      try {
+        afterRestart.start();
+        await afterRestart.waitForIdle();
+        expect(dispatch).toHaveBeenCalledOnce();
+        expect(await replayQueue.listFailed?.({ limit: "all" })).toEqual([]);
+        expect(await replayQueue.listPending({ limit: "all" })).toEqual([]);
+      } finally {
+        await afterRestart.stop();
+      }
+    });
+  });
+
+  it("replays legacy spool rows without adoptedDmThreadId unchanged and restores it from new rows", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>({
+        channelId: "telegram",
+        accountId: "default",
+        stateDir,
+      });
+      const eventId = (updateId: number) => String(updateId).padStart(16, "0");
+      // Row written before the optional field existed: same shape as any root message.
+      const legacy: TelegramSpooledUpdatePayload = {
+        version: 1,
+        updateId: 501,
+        receivedAt: 501,
+        update: dmRootMessageUpdate(),
+      };
+      const root = dmRootMessageUpdate();
+      const adopted: TelegramSpooledUpdatePayload = {
+        version: 1,
+        updateId: 502,
+        receivedAt: 502,
+        update: { ...root, update_id: 502, message: { ...root.message, message_id: 502 } },
+        adoptedDmThreadId: 500,
+      };
+      await queue.enqueue(eventId(501), legacy, { laneKey: "telegram:1001" });
+      await queue.enqueue(eventId(502), adopted, { laneKey: "telegram:1001:topic:500" });
+      const lanes = new Map<number, string | undefined>();
+      const resolved = new Map<number, ReturnType<typeof resolveTelegramMessageThreadSpec>>();
+      const monitor = createTelegramIngressMonitor({
+        queue,
+        getConfig: () => cfg,
+        accountId: "default",
+        botInfo: dmTopicsBotInfo,
+        dispatch: async (update) => {
+          const { update_id: updateId, message } = update as {
+            update_id: number;
+            message: Parameters<typeof resolveTelegramMessageThreadSpec>[0];
+          };
+          const claims = await queue.listClaims();
+          lanes.set(updateId, claims.find((claim) => claim.id === eventId(updateId))?.laneKey);
+          resolved.set(updateId, resolveTelegramMessageThreadSpec(message));
+          return { kind: "completed" as const };
+        },
+      });
+      try {
+        monitor.start();
+        await monitor.waitForIdle();
+        expect(lanes).toEqual(
+          new Map([
+            [501, "telegram:1001"],
+            [502, "telegram:1001:topic:500"],
+          ]),
+        );
+        expect(resolved).toEqual(
+          new Map([
+            [501, { scope: "dm" }],
+            [502, { id: 500, scope: "dm" }],
+          ]),
+        );
+        expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
+        expect(await queue.listPending({ limit: "all" })).toEqual([]);
+      } finally {
+        await monitor.stop();
+      }
+    });
+  });
+
+  it("scopes client-created DM topic adoption to the receiving bot account", async () => {
+    await withTempState(async (stateDir) => {
+      const resolved: Record<
+        "a" | "b",
+        Array<ReturnType<typeof resolveTelegramMessageThreadSpec>>
+      > = {
+        a: [],
+        b: [],
+      };
+      const lanes: Record<"a" | "b", string[]> = { a: [], b: [] };
+      const createAccountMonitor = (accountId: "a" | "b") => {
+        const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>({
+          channelId: "telegram",
+          accountId,
+          stateDir,
+        });
+        return createTelegramIngressMonitor({
+          queue,
+          getConfig: () => cfg,
+          accountId,
+          botInfo: dmTopicsBotInfo,
+          dispatch: async (update) => {
+            lanes[accountId].push(
+              ...(await queue.listClaims()).map((claim) => claim.laneKey ?? ""),
+            );
+            const message = (
+              update as { message: Parameters<typeof resolveTelegramMessageThreadSpec>[0] }
+            ).message;
+            resolved[accountId].push(resolveTelegramMessageThreadSpec(message));
+            return { kind: "completed" as const };
+          },
+        });
+      };
+      const botA = createAccountMonitor("a");
+      const botB = createAccountMonitor("b");
+      try {
+        botA.start();
+        botB.start();
+        await botA.admit(dmTopicCreatedUpdate());
+        // The same user's root message to bot B never consumes bot A's topic.
+        await botB.admit(dmRootMessageUpdate());
+        await botA.admit(dmRootMessageUpdate());
+        await botA.waitForIdle();
+        await botB.waitForIdle();
+        expect(lanes.b).toEqual(["telegram:1001"]);
+        expect(resolved.b).toEqual([{ scope: "dm" }]);
+        expect(lanes.a).toEqual(["telegram:1001:topic:500", "telegram:1001:topic:500"]);
+        expect(resolved.a).toEqual([
+          { id: 500, scope: "dm" },
+          { id: 500, scope: "dm" },
+        ]);
+      } finally {
+        await botA.stop();
+        await botB.stop();
       }
     });
   });

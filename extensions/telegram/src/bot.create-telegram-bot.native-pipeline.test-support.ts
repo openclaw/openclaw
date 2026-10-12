@@ -204,6 +204,14 @@ export async function admitSpooledUpdate(
   bot: Awaited<ReturnType<typeof createBot>>,
   update: unknown,
 ) {
+  return (await admitSpooledUpdates(bot, [update]))[0];
+}
+
+/** Admit updates in order through one account ingress monitor (shared admission state). */
+export async function admitSpooledUpdates(
+  bot: Awaited<ReturnType<typeof createBot>>,
+  updates: unknown[],
+) {
   const runtime = getTelegramRuntime();
   setTelegramRuntime({
     ...runtime,
@@ -221,10 +229,13 @@ export async function admitSpooledUpdate(
     });
     try {
       monitor.start();
-      const admission = await monitor.admit(update);
+      const admissions: Array<Awaited<ReturnType<typeof monitor.admit>>> = [];
+      for (const update of updates) {
+        admissions.push(await monitor.admit(update));
+      }
       await monitor.waitForIdle();
       await monitor.waitForDeferredClaims();
-      return admission;
+      return admissions;
     } finally {
       await monitor.stop();
     }
