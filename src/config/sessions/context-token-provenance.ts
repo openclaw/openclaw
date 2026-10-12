@@ -82,9 +82,7 @@ function resolveMatchingPersistedResolution(params: SessionContextSelection): nu
 }
 
 /** Returns persisted telemetry only when it belongs to the current producing selection. */
-export function resolveTrustedSessionContextTokens(
-  params: SessionContextSelection,
-): number | undefined {
+function resolveTrustedSessionContextTokens(params: SessionContextSelection): number | undefined {
   const contextTokens = asPositiveFiniteNumber(params.entry?.contextTokens);
   if (contextTokens === undefined) {
     return undefined;
@@ -126,7 +124,6 @@ export type SessionContextTokenLimits = {
 
 type SessionContextTokenProjectionParams = SessionContextSelection & {
   resolvedContextTokens: number | null | undefined;
-  authoredContextTokens?: number | null | undefined;
   resolvedContextTokensSource?: "resolved" | "resolved-v1" | "synthetic";
   configuredContextTokenLimits?: SessionContextTokenLimits;
   ownerCapacity?:
@@ -145,7 +142,7 @@ export function resolveProjectedSessionContextTokenBudget(
 ): { contextTokens: number; contextTokensSource: SessionEntry["contextTokensSource"] } | undefined {
   if (params.ownerCapacity && params.entry?.contextTokensSource === "synthetic") {
     const authored = asPositiveFiniteNumber(
-      params.configuredContextTokenLimits?.authoredContextTokenCap ?? params.authoredContextTokens,
+      params.configuredContextTokenLimits?.authoredContextTokenCap,
     );
     const owned =
       params.ownerCapacity.state === "ready"
@@ -173,7 +170,7 @@ export function resolveProjectedSessionContextTokenBudget(
         };
   }
   const authored = asPositiveFiniteNumber(
-    params.configuredContextTokenLimits?.effectiveConfiguredTokens ?? params.authoredContextTokens,
+    params.configuredContextTokenLimits?.effectiveConfiguredTokens,
   );
   // An estimated window is a last resort, never a constraint on real authority.
   const estimate =

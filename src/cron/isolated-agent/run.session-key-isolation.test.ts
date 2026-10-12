@@ -24,6 +24,7 @@ import {
   buildWorkspaceSkillSnapshotMock,
   dispatchCronDeliveryMock,
   lookupModelContextTokensMock,
+  lookupModelContextBudgetTokensMock,
   logWarnMock,
   resolveAgentSkillsFilterMock,
   resolveAllowedModelRefMock,
@@ -398,6 +399,30 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       expect(result.status).toBe("error");
       expect(result.error).toBe("cron: job execution timed out");
       expect(dispatchCronDeliveryMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("persists a prepared selectable budget instead of an already-known model scalar", async () => {
+    lookupModelContextTokensMock.mockReturnValue(1_000_000);
+    lookupModelContextBudgetTokensMock.mockReturnValue({
+      contextTokens: 200_000,
+      configuredContextTokenLimits: undefined,
+      source: "model",
+      contextTokensSource: "resolved",
+    });
+    const cronSession = makeCronSession();
+    cronSession.sessionEntry.contextWindow = "small";
+    resolveCronSessionMock.mockReturnValue(cronSession);
+    mockRunCronFallbackPassthrough();
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "done" }],
+      meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+    });
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
+    expect(result.status).toBe("ok");
+    expect(cronSession.sessionEntry).toMatchObject({
+      contextTokens: 200_000,
+      contextTokensSource: "resolved",
     });
   });
 

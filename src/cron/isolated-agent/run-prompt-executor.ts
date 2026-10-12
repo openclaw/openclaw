@@ -228,6 +228,7 @@ export function createCronPromptExecutor(
     } catch {
       // Non-canonicalizable job config: no grant registration for this run.
     }
+    let observedAuthProfileId: string | null | undefined;
     const fallbackResult = await runEmbeddedAgentEntry({
       preparedRunAdmission: cronAdmission.preparedRunAdmission,
       selection: {
@@ -283,6 +284,8 @@ export function createCronPromptExecutor(
       sessionOverride: { kind: "preserve" },
       abortSignal: params.abortSignal,
       runCandidate: async (providerOverride, modelOverride, runOptions) => {
+        observedAuthProfileId = undefined;
+        let candidateAuthProfileId: string | null | undefined;
         params.lifecycle.beginAttempt();
         const notifyExecutionStarted = (info?: { lifecycleGeneration?: string }) =>
           onExecutionStarted({
@@ -583,6 +586,9 @@ export function createCronPromptExecutor(
           ).modelThinkingCapability,
           requestedRouteResolution: "resolved",
           modelFallbacksOverride: cronFallbacksOverride,
+          onSuccessfulAuthProfile: (profileId) => {
+            candidateAuthProfileId = profileId ?? null;
+          },
           authProfileId: params.liveSelection.authProfileId,
           authProfileIdSource: params.liveSelection.authProfileId
             ? params.liveSelection.authProfileIdSource
@@ -611,6 +617,7 @@ export function createCronPromptExecutor(
           abortSignal: params.abortSignal,
           onLaneWait: params.onLaneWait,
         });
+        observedAuthProfileId = candidateAuthProfileId;
         bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
           result.meta?.systemPromptReport,
         );
@@ -646,6 +653,7 @@ export function createCronPromptExecutor(
       model: fallbackResult.model,
     });
     const completed = {
+      authProfileId: executionError ? undefined : observedAuthProfileId,
       runResult: fallbackResult.result,
       fallbackProvider: fallbackResult.provider,
       fallbackModel: fallbackResult.model,
