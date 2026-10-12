@@ -131,6 +131,27 @@ it("reads cold and warm pinned resources through awaited host construction witho
   });
 });
 
+it("keeps pinned resources available to the deprecated synchronous host", async () => {
+  await withLibraryHost(async ({ host, resourcePath }) => {
+    const read = host.hostCapabilities.createToolSurface!({
+      config,
+      runtimeToolAllowlist: ["read"],
+      toolConstructionPlan: {
+        includeBaseCodingTools: true,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: false,
+        includePluginTools: false,
+      },
+    }).find((tool) => tool.name === "read");
+    expect(read).toBeDefined();
+    const result = await read!.execute("legacy-library", { path: resourcePath });
+    expect(result.content).toEqual([
+      expect.objectContaining({ type: "text", text: expect.stringContaining(resourceContent) }),
+    ]);
+  });
+});
+
 it("retains prepared resources after other selections evict their shared cache entry", async () => {
   await withLibraryHost(async ({ build, resourcePath }) => {
     const prepare = librarySelection.prepareSkillLibrarySelection;
