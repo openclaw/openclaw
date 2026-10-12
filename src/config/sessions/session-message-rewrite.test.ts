@@ -114,7 +114,7 @@ it("returns the exact committed rewrite generation without selecting it again", 
         .prepare("SELECT generation FROM transcript_rewrite_watermarks WHERE session_id = ?")
         .get(f.scope.sessionId)?.generation,
     ).toBe(committedGeneration);
-    const rewritten = f.rows()[0];
+    const rewritten = f.rows().find((row) => JSON.parse(row.eventJson).id === "admission");
     assert(rewritten);
     expect(JSON.parse(rewritten.eventJson).message.content).toBe("rewritten");
   });
