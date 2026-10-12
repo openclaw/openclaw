@@ -4,10 +4,14 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ControlUiPublicSessionRequestGate } from "./control-ui-public-session-admission.js";
 import type { PublicSessionCardRenderer } from "./control-ui-public-session-card.js";
 import {
+  publicSessionMessageEntry,
+  publicSessionMessageText,
+} from "./control-ui-public-session-message.js";
+import {
   isPublicSessionShareActive,
   readPublicSessionShare,
 } from "./control-ui-public-session-read.js";
-import { publicMessageText, publicSessionTitle } from "./control-ui-public-session-render.js";
+import { publicSessionTitle } from "./control-ui-public-session-render.js";
 import type { PublicSessionShareLocator } from "./control-ui-public-session-token.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
@@ -49,8 +53,11 @@ export async function servePublicSessionCardRepresentation(params: {
         return null;
       }
       const quote = session.messages
-        .map(publicMessageText)
-        .find((message) => message?.role === "user")?.text;
+        .map((message) => {
+          const entry = publicSessionMessageEntry(message);
+          return entry?.role === "user" ? publicSessionMessageText(entry) : undefined;
+        })
+        .find((text) => text);
       const png = await card.render({
         ...session.cardFacts,
         title: publicSessionTitle(session.title),
@@ -72,6 +79,7 @@ export async function servePublicSessionCardRepresentation(params: {
       const representation = result.value;
       if (
         !representation ||
+        typeof representation.body !== "string" ||
         !representation.isCurrent() ||
         !isPublicSessionShareActive(config, locator, projection)
       ) {

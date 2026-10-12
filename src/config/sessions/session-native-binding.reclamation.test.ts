@@ -216,6 +216,46 @@ it.each([false, true])(
 );
 
 it.each([false, true])(
+  "rolls back initialization off the caller thread (binding: %s)",
+  async (withBinding) => {
+    await withNativeBindingFixture("agentsapi", async (fixture) => {
+      if (!withBinding) {
+        fixture.registry.agentHarnesses.length = 0;
+      }
+      const entry = fixture.readEntry();
+      assert(entry);
+      const initializer = createSessionInitialization(
+        { ...fixture.scope, lifecycleRevision: entry.lifecycleRevision },
+        () => {},
+        { config: {}, agentId: fixture.scope.agentId, entry },
+      );
+      const sql = observeHostDataSql();
+      try {
+        await expect(initializer.rollback(() => fixture.remove())).resolves.toMatchObject({
+          deleted: true,
+        });
+        expect(
+          sql.queries.filter((query) =>
+            /\b(?:session_nodes|session_windows|transcript_events|session_transcript_archives)\b/i.test(
+              query,
+            ),
+          ),
+        ).toEqual([]);
+        expect(() => initializer.handle.assertCurrent()).toThrow(
+          "Session initialization is rolling back",
+        );
+      } finally {
+        sql.restore();
+        initializer.close();
+      }
+      expect(fixture.readEntry()).toBeUndefined();
+      expect(loadTranscriptEventsSync(fixture.scope)).toEqual([]);
+      expect(fixture.readBinding() === undefined).toBe(withBinding);
+    });
+  },
+);
+
+it.each([false, true])(
   "retains rollback authority without a same-database grant reread (binding: %s)",
   async (withBinding) => {
     await withNativeBindingFixture("agentsapi", async (fixture) => {

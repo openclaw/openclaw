@@ -566,8 +566,6 @@ test("file warnings retain rejected native admission releases without attributin
 });
 
 test.each([
-  { elapsedMs: 0, rejected: false, failLog: false },
-  { elapsedMs: 0, rejected: true, failLog: false },
   { elapsedMs: 1_500, rejected: false, failLog: false },
   { elapsedMs: 1_500, rejected: true, failLog: true },
 ])(

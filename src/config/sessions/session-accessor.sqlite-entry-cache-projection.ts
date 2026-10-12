@@ -43,7 +43,9 @@ export function loadSessionEntrySnapshot(
   if (!metadata) {
     for (const row of iterateSqliteQuerySync(
       database.db,
-      selectSessionEntryRows(database, projection).select("updated_at").orderBy("session_key"),
+      selectSessionEntryRows(database, projection)
+        .select(["current_session_id", "updated_at"])
+        .orderBy("session_key"),
     )) {
       keys.push(row.session_key);
       const entry = parseSessionEntryJson(row, projection);

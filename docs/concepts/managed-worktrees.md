@@ -10,6 +10,28 @@ title: "Managed worktrees"
 
 Managed worktrees give an agent task its own git branch and checkout without placing temporary directories inside the source repository. OpenClaw records them in the shared state database and snapshots their tracked and non-ignored untracked contents before ordinary removal. [Capacity eviction](#capacity-and-eviction) can purge unsaved data when a snapshot cannot be made.
 
+When a new chat starts a managed worktree, OpenClaw can begin the first model
+turn while the checkout finishes. It first prepares the project instructions,
+workspace skills, and other prompt files from the selected Git commit in the
+final worktree directory. The initial prompt therefore uses the same paths and
+contents as a completed checkout. Workspace tools, including PDF analysis,
+local message attachments, and generation tools reading local references, wait for checkout and the session's
+initial diff baseline. Tools that do not use the workspace can run immediately,
+including generation with inline or remote references. Completion also waits
+for preparation, and a preparation failure ends the turn with a retryable error.
+
+Repositories with setup scripts, included files, unsupported checkout transforms,
+or project configuration that needs additional files finish preparation before
+the first turn starts. Active bootstrap hooks, including `bootstrap-extra-files`,
+also retain complete preparation so configured instructions remain available.
+Sandboxed projections require a fully published worktree before startup, as do
+required remote-worker placements. Codex configurations without native tool-hook
+admission and plugins that read workspace files while constructing tools wait for
+preparation before starting their model turn. An explicitly
+requested worktree name or existing session title can name the checkout.
+Otherwise, allocation chooses a short generated name while display-title
+generation runs in the background.
+
 Pull-request statistics may refresh Git's cached file timestamps in a managed
 checkout; they do not stage content or change commits. Statistics for user-managed
 checkouts keep their index unchanged.

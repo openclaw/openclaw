@@ -13,7 +13,7 @@ import type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   prepareSessionCatalogSourceActorProjector,
   readSessionTranscriptCatalogPage,
-  readSessionTranscriptCatalogTitle,
+  readSessionTranscriptCatalogTitleAsync,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { sessionShareGroups } from "./config.js";
 
@@ -161,7 +161,12 @@ export function createSessionShareNodeCommands(
           assertSourceCurrent,
         } of await readSharedEntries()) {
           const name = search
-            ? readSessionTranscriptCatalogTitle({ agentId, sessionKey, storePath, entry })
+            ? await readSessionTranscriptCatalogTitleAsync({
+                agentId,
+                sessionKey,
+                storePath,
+                entry,
+              })
             : undefined;
           if (
             search &&
@@ -191,7 +196,7 @@ export function createSessionShareNodeCommands(
         const selected = sessions.slice(offset, offset + params.limit);
         if (!search) {
           for (const session of selected) {
-            session.name = readSessionTranscriptCatalogTitle({
+            session.name = await readSessionTranscriptCatalogTitleAsync({
               agentId: session.agentId,
               sessionKey: session.threadId,
               storePath: session.storePath,

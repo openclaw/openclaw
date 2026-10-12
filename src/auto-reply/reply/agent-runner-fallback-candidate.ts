@@ -13,6 +13,7 @@ import { clearAgentRunTerminalWriteContext } from "../../infra/agent-run-termina
 import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
 import { CommandLane } from "../../process/lanes.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
+import { formatThinkingLevelClampNotice } from "../thinking.shared.js";
 import type { AgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { resolveFallbackCandidateRun, resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import { runCliFallbackCandidate } from "./agent-runner-cli-candidate.js";
@@ -127,6 +128,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
       preparedRunAdmission: params.preparedRunAdmission,
       modelResolve: {
         prompt: turn.commandBody,
+        awaitSessionDiffBaseline: turn.opts?.awaitSessionDiffBaseline,
         images: params.currentTurnImages.images,
         cwd: turn.followupRun.run.cwd,
         modelSelectionLocked: turn.followupRun.run.modelSelectionLocked,
@@ -351,6 +353,22 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
             params.state.maintenanceAuthProfile = candidate.maintenanceAuthProfile;
             params.state.compactionRequestBudget = candidate.compactionRequestBudget;
             result = candidate.result;
+          }
+          const thinking = result.meta.requestShaping?.thinking ?? candidateThinkLevel;
+          const thinkingClamp = formatThinkingLevelClampNotice({
+            requested: turn.followupRun.run.thinkLevel,
+            effective: thinking,
+            provider: result.meta.agentMeta?.provider ?? provider,
+            model: result.meta.agentMeta?.model ?? model,
+          });
+          if (thinkingClamp) {
+            result = {
+              ...result,
+              meta: {
+                ...result.meta,
+                requestShaping: { ...result.meta.requestShaping, thinking, thinkingClamp },
+              },
+            };
           }
           params.state.bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
             result.meta?.systemPromptReport,

@@ -1,6 +1,7 @@
 import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import { html, nothing, type TemplateResult } from "lit";
 import { buildControlUiResourcePath } from "../../../../../src/gateway/control-ui-resource-routes.js";
+import { isIncognitoSessionKey } from "../../../../../src/shared/incognito-session-key.js";
 import type { GatewaySessionRow, SessionBranch } from "../../../api/types.ts";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { resolveControlUiAuthCandidates } from "../../../app/control-ui-auth.ts";
@@ -33,6 +34,7 @@ import {
   areUiSessionKeysEquivalent,
   resolveUiSessionNavigationParentKey,
 } from "../../../lib/sessions/session-key.ts";
+import { presentedContent, type PresentationValue } from "../../../lit/presentation-binding.ts";
 import type { ChatPageHost } from "../chat-state-host.ts";
 import {
   ensureSidebarConversation,
@@ -61,6 +63,7 @@ type ChatPaneParentSession = {
 
 type ChatPaneHeaderProps = {
   paneId: string;
+  presented: PresentationValue;
   narrow: boolean;
   mergedChrome: boolean;
   navDrawerOpen?: boolean;
@@ -310,6 +313,8 @@ export function canRevealSessionWorkspace(params: {
 export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
   const drawerLabel = props.navDrawerOpen ? t("nav.collapse") : t("nav.expand");
   const hasSharingControl = props.sharingControl !== undefined && props.sharingControl !== nothing;
+  const incognito =
+    (props.incognito ?? props.session?.incognito) || isIncognitoSessionKey(props.session?.key);
 
   const runningSubagents =
     (props.runningSubagentCount ?? 0) > 0
@@ -351,14 +356,17 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
             : nothing
         }
         ${
-          (props.incognito ?? props.session?.incognito)
-            ? html`<span
-                class="chat-pane__incognito"
-                role="img"
-                aria-label=${t("chat.sessionHeader.incognito")}
-                title=${t("chat.sessionHeader.incognito")}
-                >${icons.lock}</span
-              >`
+          incognito
+            ? html`<openclaw-tooltip
+                .content=${t("sessionsView.incognitoDescription")}
+                placement="bottom"
+                open-on-click
+              >
+                <button type="button" class="chat-pane__incognito">
+                  <span aria-hidden="true">${icons.incognito}</span>
+                  ${t("sessionsView.incognitoLabel")}
+                </button>
+              </openclaw-tooltip>`
             : nothing
         }
         ${renderIdentityCrumbs(props)} ${props.publicAccessIndicator ?? nothing}
@@ -399,10 +407,13 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
       </div>
       <div class="chat-pane__header-trailing">
         ${props.detailsControl ?? nothing}
-        <openclaw-chat-pane-versions-menu
-          style="display: contents"
-          .menu=${props}
-        ></openclaw-chat-pane-versions-menu>
+        ${presentedContent(
+          props.presented,
+          html`<openclaw-chat-pane-versions-menu
+            style="display: contents"
+            .menu=${props}
+          ></openclaw-chat-pane-versions-menu>`,
+        )}
         <div class="chat-pane__actions">
           ${props.narrow ? nothing : runningSubagents} ${props.runAction ?? nothing}
           ${props.sharingControl ?? nothing} ${renderChatPaneLayoutMenu(props)}
@@ -411,6 +422,22 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
       </div>
       ${props.narrow ? runningSubagents : nothing}
     </div>
+    ${
+      incognito
+        ? html`<aside
+            class="chat-pane__incognito-notice"
+            aria-label=${t("sessionsView.incognitoLabel")}
+          >
+            <span class="chat-pane__incognito-notice-icon" aria-hidden="true"
+              >${icons.incognito}</span
+            >
+            <div>
+              <p>${t("sessionsView.incognitoDescription")}</p>
+              <p class="chat-pane__incognito-limits">${t("sessionsView.incognitoLimits")}</p>
+            </div>
+          </aside>`
+        : nothing
+    }
   `;
 }
 

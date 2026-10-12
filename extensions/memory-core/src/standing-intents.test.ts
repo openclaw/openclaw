@@ -12,6 +12,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
+  observeHostDataSql,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -35,6 +36,7 @@ import {
   matchStandingIntents,
   sweepStandingIntents,
 } from "./standing-intents.js";
+import { bindSqliteWorkerBackend } from "./standing-intents.worker.js";
 
 function createStandingIntent(
   params: Omit<Parameters<typeof createStandingIntentRaw>[0], "creatorSender">,
@@ -71,6 +73,104 @@ describe("standing intents", () => {
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
+  it("reuses lifecycle deadlines across bindings and invalidates them on writes and rollback", async () => {
+    const intent = await createStandingIntent({
+      agentId: "main",
+      description: "Review the release.",
+      triggerKeywords: ["release"],
+      nowMs: 1_000,
+      expiresAt: 10_000,
+      cooldownSeconds: 1,
+      maxFires: 3,
+    });
+    await closeOpenClawAgentDatabasesAsync();
+    closeOpenClawAgentDatabasesForTest();
+    const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
+    let refuseCommit = false;
+    const context = {
+      database: db,
+      admit(stage: "transaction" | "commit") {
+        if (stage === "commit" && refuseCommit) {
+          throw new Error("test commit refused");
+        }
+      },
+    };
+    let worker = bindSqliteWorkerBackend(undefined, context);
+    worker.execute({ type: "sweep", input: { nowMs: 1_000 } });
+    await worker.close();
+    worker = bindSqliteWorkerBackend(undefined, context);
+    const sql = observeHostDataSql();
+    try {
+      worker.execute({ type: "sweep", input: { nowMs: 1_001 } });
+      expect(sql.queries.filter((query) => query.includes('"standing_intents"'))).toEqual([]);
+    } finally {
+      sql.restore();
+    }
+    const match = prepareStandingIntentMatch({ prompt: "release", nowMs: 2_000 });
+    expect(match).toBeDefined();
+    expect(worker.execute({ type: "match", input: match! })).toMatchObject({
+      kind: "result",
+      value: [{ id: intent.id, status: "fired", fireCount: 1 }],
+    });
+    expect(worker.execute({ type: "list", input: { nowMs: 2_999 } })).toMatchObject({
+      kind: "result",
+      value: [{ id: intent.id, status: "fired" }],
+    });
+    refuseCommit = true;
+    expect(() => worker.execute({ type: "sweep", input: { nowMs: 3_000 } })).toThrow(
+      "test commit refused",
+    );
+    refuseCommit = false;
+    expect(worker.execute({ type: "list", input: { nowMs: 3_000 } })).toMatchObject({
+      kind: "result",
+      value: [{ id: intent.id, status: "armed" }],
+    });
+    expect(worker.execute({ type: "list", input: { nowMs: 10_000 } })).toMatchObject({
+      kind: "result",
+      value: [{ id: intent.id, status: "expired" }],
+    });
+    const row = {
+      id: "replacement",
+      description: "Review another release.",
+      trigger_keywords: '["release"]',
+      trigger_embedding: null,
+      channel_scope: null,
+      sender_scope: null,
+      creator_sender: "owner-sender",
+      status: "armed" as const,
+      expires_at: 12_000,
+      max_fires: 3,
+      fire_count: 0,
+      cooldown_seconds: 1,
+      last_fired_at: null,
+      created_at: 11_000,
+      source_session_id: null,
+    };
+    worker.execute({ type: "create", input: row });
+    expect(worker.execute({ type: "list", input: { nowMs: 12_000 } })).toMatchObject({
+      kind: "result",
+      value: [
+        { id: intent.id, status: "expired" },
+        { id: row.id, status: "expired" },
+      ],
+    });
+    worker.execute({ type: "create", input: { ...row, id: "cancelled", expires_at: 14_000 } });
+    worker.execute({ type: "cancel", input: { id: "cancelled" } });
+    expect(
+      worker.execute({ type: "list", input: { status: "cancelled", nowMs: 14_000 } }),
+    ).toMatchObject({
+      kind: "result",
+      value: [{ id: "cancelled", status: "cancelled" }],
+    });
+    worker.execute({ type: "create", input: { ...row, id: "large-expiry", expires_at: 2 ** 60 } });
+    expect(() => worker.execute({ type: "sweep", input: { nowMs: 15_000 } })).not.toThrow();
+    worker.execute({
+      type: "create",
+      input: { ...row, id: "large-fired-expiry", status: "fired", expires_at: 2 ** 60 },
+    });
+    expect(() => worker.execute({ type: "sweep", input: { nowMs: 15_000 } })).toThrow();
+    await worker.close();
+  });
   it("lazy-ensures the additive table idempotently", async () => {
     const first = await createStandingIntent({
       agentId: "main",

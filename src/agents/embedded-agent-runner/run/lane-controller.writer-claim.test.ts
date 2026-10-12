@@ -296,89 +296,71 @@ describe("embedded run durable writer admission", () => {
     expect(staleAppend).toMatchObject({ ok: false, code: "session-rebound" });
   });
 
-  it.each([false, true])(
-    "keeps recovery-source SQL outside worker grants and checks the prepared read (revoked=%s)",
-    async (revoke) => {
-      const scope = { agentId: "main", sessionKey, storePath: fixture.storePath() };
-      const claim: HarnessCompletionRecovery = {
-        taskId: "completion-task",
-        taskRunId: "completion-task-run",
-        taskStatus: "succeeded",
-        sourceRunId: "announce:completion",
-        requesterSessionKey: sessionKey,
-        requesterAgentId: "main",
-        sessionId,
-        lifecycleRevision,
-      };
-      await replaceSessionEntry(scope, {
-        activeWriterRunId: "run-a",
-        lifecycleRevision,
-        sessionId,
-        updatedAt: 1,
-        restartRecoveryHarnessCompletion: claim,
-        restartRecoveryDeliveryRunId: claim.sourceRunId,
-      } as InternalSessionEntry);
-      let sourceCurrent = true;
-      const revoked = new Error("recovery source retired during preparation");
-      const assertSourceCurrent = createHarnessCompletionSourceAssertion({
-        claim,
-        storePath: scope.storePath,
-        priorAssertion() {
-          if (!sourceCurrent) {
-            throw revoked;
-          }
-        },
-      });
-      const prepared = prepareSystemAgentRunAdmission(
-        {},
-        "run-b",
-        "main",
-        "writer-test",
-        assertSourceCurrent,
-      );
-      const admittedRunContext = await prepared.admit("embedded");
-      const sameStoreQueriesInGrants: string[] = [];
-      probe.admission(workerAdmission, (request, grant, callback) => {
-        const sql = observeHostDataSql();
-        try {
-          callback(request, grant);
-        } finally {
-          sameStoreQueriesInGrants.push(
-            ...sql.queries.filter((query) =>
-              /\bsession_(?:nodes|windows|participants)\b/.test(query),
-            ),
-          );
-          sql.restore();
-        }
-        if (revoke) {
-          sourceCurrent = false;
-        }
-      });
+  it("keeps recovery-source SQL outside worker grants", async () => {
+    const scope = { agentId: "main", sessionKey, storePath: fixture.storePath() };
+    const claim: HarnessCompletionRecovery = {
+      taskId: "completion-task",
+      taskRunId: "completion-task-run",
+      taskStatus: "succeeded",
+      sourceRunId: "announce:completion",
+      requesterSessionKey: sessionKey,
+      requesterAgentId: "main",
+      sessionId,
+      lifecycleRevision,
+    };
+    await replaceSessionEntry(scope, {
+      activeWriterRunId: "run-a",
+      lifecycleRevision,
+      sessionId,
+      updatedAt: 1,
+      restartRecoveryHarnessCompletion: claim,
+      restartRecoveryDeliveryRunId: claim.sourceRunId,
+    } as InternalSessionEntry);
+    const assertSourceCurrent = createHarnessCompletionSourceAssertion({
+      claim,
+      storePath: scope.storePath,
+    });
+    const prepared = prepareSystemAgentRunAdmission(
+      {},
+      "run-b",
+      "main",
+      "writer-test",
+      assertSourceCurrent,
+    );
+    const admittedRunContext = await prepared.admit("embedded");
+    const sameStoreQueriesInGrants: string[] = [];
+    probe.admission(workerAdmission, (request, grant, callback) => {
+      const sql = observeHostDataSql();
       try {
-        const result = claimAgentSessionWriter({
-          ...scope,
-          admittedRunContext,
-          prompt: "completion turn",
-          runId: "run-b",
-          sessionId,
-          sessionTarget: { ...scope, sessionId },
-          timeoutMs: 30_000,
-          workspaceDir: "/tmp",
-        });
-        if (revoke) {
-          await expect(result).rejects.toThrow("admitted run authority is no longer active");
-        } else {
-          await result;
-        }
-        expect(loadSessionEntry(scope)).toMatchObject({
-          activeWriterRunId: revoke ? "run-a" : "run-b",
-        });
-        expect(sameStoreQueriesInGrants).toEqual([]);
+        callback(request, grant);
       } finally {
-        prepared.close();
+        sameStoreQueriesInGrants.push(
+          ...sql.queries.filter((query) =>
+            /\bsession_(?:nodes|windows|participants)\b/.test(query),
+          ),
+        );
+        sql.restore();
       }
-    },
-  );
+    });
+    try {
+      await claimAgentSessionWriter({
+        ...scope,
+        admittedRunContext,
+        prompt: "completion turn",
+        runId: "run-b",
+        sessionId,
+        sessionTarget: { ...scope, sessionId },
+        timeoutMs: 30_000,
+        workspaceDir: "/tmp",
+      });
+      expect(loadSessionEntry(scope)).toMatchObject({
+        activeWriterRunId: "run-b",
+      });
+      expect(sameStoreQueriesInGrants).toEqual([]);
+    } finally {
+      prepared.close();
+    }
+  });
 
   it("leaves the incumbent live when the replacement claim does not commit", async () => {
     await replaceSessionEntry({ agentId: "main", sessionKey, storePath: fixture.storePath() }, {

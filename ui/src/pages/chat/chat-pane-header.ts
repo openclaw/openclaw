@@ -540,6 +540,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     const parentSession = this.observedParentSessionRow();
     const header = renderChatPaneHeader({
       paneId: this.paneId,
+      presented: { owner: this, isPresented: () => this.presented },
       narrow: this.narrow,
       mergedChrome: this.mergedChrome,
       navDrawerOpen: this.navDrawerOpen,

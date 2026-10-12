@@ -146,7 +146,7 @@ export function renderSessionRowBadges(params: {
     : placementLabel;
   const cloudLabel = [cloudPlacementLabel, diskSpaceLabel].filter(Boolean).join(" · ");
   return html`<span class="session-row-badges">
-    ${renderSessionRowBadge(params.incognito && t("sessionsView.incognito"), icons.lock, "incognito")}
+    ${renderSessionRowBadge(params.incognito && t("sessionsView.incognito"), icons.incognito, "incognito")}
     ${renderSessionRowBadge(
       pullRequestLabel || undefined,
       pullRequestState === "merged" ? icons.gitMerge : icons.gitPullRequest,

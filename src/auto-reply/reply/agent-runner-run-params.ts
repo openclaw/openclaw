@@ -102,6 +102,7 @@ export function buildFallbackCandidateTurnParams(params: AgentFallbackCandidateC
   const { turn } = params;
   return {
     preparedTtsPreferences: turn.opts?.preparedTtsPreferences,
+    awaitSessionDiffBaseline: turn.opts?.awaitSessionDiffBaseline,
     preparedRunAdmission: params.preparedRunAdmission,
     messageActionTurnCapability: params.messageActionTurnCapability,
     trigger: resolveReplyRunTrigger(turn),

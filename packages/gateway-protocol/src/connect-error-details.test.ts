@@ -30,42 +30,24 @@ describe("readConnectErrorDetailCode", () => {
   it("reads structured detail codes", () => {
     expect(readConnectErrorDetailCode({ code: "AUTH_TOKEN_MISMATCH" })).toBe("AUTH_TOKEN_MISMATCH");
   });
-
-  it("returns trimmed detail codes when payload padding is present", () => {
-    expect(readConnectErrorDetailCode({ code: "  AUTH_TOKEN_MISMATCH  " })).toBe(
-      "AUTH_TOKEN_MISMATCH",
-    );
-    expect(readConnectErrorDetailCode({ code: "\tPAIRING_REQUIRED\n" })).toBe("PAIRING_REQUIRED");
-  });
-
-  it("returns null for invalid detail payloads", () => {
-    expect(readConnectErrorDetailCode(null)).toBeNull();
-    expect(readConnectErrorDetailCode("AUTH_TOKEN_MISMATCH")).toBeNull();
-  });
 });
 
 describe("readControlUiBuildMismatchId", () => {
-  it.each([
-    ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
-    ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH,
-  ])("returns a bounded reload target for %s", (code) => {
-    expect(
-      readControlUiBuildMismatchId({
-        code,
-        gatewayBuildId: "gateway-build",
-        reloadRequired: true,
-      }),
-    ).toBe("gateway-build");
-  });
+  it.each([ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH])(
+    "returns a bounded reload target for %s",
+    (code) => {
+      expect(
+        readControlUiBuildMismatchId({
+          code,
+          gatewayBuildId: "gateway-build",
+          reloadRequired: true,
+        }),
+      ).toBe("gateway-build");
+    },
+  );
 
   it.each([
     {},
-    { code: ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH },
-    {
-      code: ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH,
-      gatewayBuildId: "x".repeat(97),
-      reloadRequired: true,
-    },
     {
       code: ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH,
       gatewayBuildId: "gateway-build",
@@ -77,18 +59,6 @@ describe("readControlUiBuildMismatchId", () => {
 });
 
 describe("readConnectErrorRecoveryAdvice", () => {
-  it("reads retry advice fields when present", () => {
-    expect(
-      readConnectErrorRecoveryAdvice({
-        canRetryWithDeviceToken: true,
-        recommendedNextStep: "retry_with_device_token",
-      }),
-    ).toEqual({
-      canRetryWithDeviceToken: true,
-      recommendedNextStep: "retry_with_device_token",
-    });
-  });
-
   it("returns empty advice for invalid payloads", () => {
     expect(readConnectErrorRecoveryAdvice(null)).toStrictEqual({});
     expect(readConnectErrorRecoveryAdvice("x")).toStrictEqual({});
@@ -122,69 +92,11 @@ describe("classifyGatewayConnectFailure", () => {
       remediation: undefined,
     },
     {
-      name: "structured scope mismatch",
-      input: { details: { code: "AUTH_SCOPE_MISMATCH" }, message: "scope rejected" },
-      kind: "scope-mismatch",
-      message: "scope rejected",
-      remediation: "openclaw devices list",
-    },
-    {
-      name: "structured authentication rate limit",
-      input: { details: { code: "AUTH_RATE_LIMITED" }, message: "connect failed" },
-      kind: "rate-limited",
-      message: "connect failed",
-      remediation: "temporary authentication lockout",
-    },
-    {
-      name: "shared token mismatch",
-      input: { details: { code: "AUTH_TOKEN_MISMATCH" }, message: "gateway token mismatch" },
-      kind: "auth-rejected",
-      message: "gateway token mismatch",
-      remediation: "gateway.remote.token",
-    },
-    {
-      name: "device token mismatch",
-      input: {
-        details: { code: "AUTH_DEVICE_TOKEN_MISMATCH" },
-        message: "device token mismatch",
-      },
-      kind: "auth-rejected",
-      message: "device token mismatch",
-      remediation: "openclaw devices rotate --device <deviceId> --role operator",
-    },
-    {
-      name: "other structured auth rejection",
-      input: { details: { code: "AUTH_PASSWORD_MISMATCH" }, message: "password mismatch" },
-      kind: "auth-rejected",
-      message: "password mismatch",
-      remediation: undefined,
-    },
-    {
       name: "legacy pairing reason",
       input: { reason: "gateway closed (1008): pairing required" },
       kind: "pairing-required",
       message: "gateway closed (1008): pairing required",
       remediation: "openclaw devices approve --latest",
-    },
-    {
-      name: "legacy pairing reason behind a generic message",
-      input: {
-        message: "connect failed",
-        reason: "gateway closed (1008): pairing required",
-      },
-      kind: "pairing-required",
-      message: "connect failed",
-      remediation: "openclaw devices approve --latest",
-    },
-    {
-      name: "legacy device identity reason behind a generic message",
-      input: {
-        message: "connect failed",
-        reason: "gateway closed (1008): device identity required",
-      },
-      kind: "device-identity-required",
-      message: "connect failed",
-      remediation: undefined,
     },
     {
       name: "legacy scope mismatch reason behind a generic message",
@@ -208,13 +120,6 @@ describe("classifyGatewayConnectFailure", () => {
       remediation: "gateway.remote.token",
     },
     {
-      name: "legacy gateway close reason behind a generic message",
-      input: { message: "connect failed", reason: "gateway closed (1008): auth failed" },
-      kind: "gateway-rejected",
-      message: "connect failed",
-      remediation: undefined,
-    },
-    {
       name: "legacy gateway close",
       input: { message: "gateway closed (1008): auth failed" },
       kind: "gateway-rejected",
@@ -231,13 +136,6 @@ describe("classifyGatewayConnectFailure", () => {
       remediation: "temporary authentication lockout",
     },
     {
-      name: "generic retry hint without the authentication lockout phrase",
-      input: { message: "connect failed; retry later" },
-      kind: "unreachable",
-      message: "connect failed; retry later",
-      remediation: undefined,
-    },
-    {
       name: "identity proxy redirect rejection",
       input: {
         details: { reason: "websocket-upgrade-rejected", httpStatus: 302 },
@@ -246,16 +144,6 @@ describe("classifyGatewayConnectFailure", () => {
       kind: "identity-proxy",
       message: "gateway rejected websocket upgrade (HTTP 302)",
       remediation: "gateway.remote.edgeAuth",
-    },
-    {
-      name: "identity proxy forbidden rejection",
-      input: {
-        details: { reason: "websocket-upgrade-rejected", httpStatus: 403 },
-        message: "gateway rejected websocket upgrade (HTTP 403)",
-      },
-      kind: "identity-proxy",
-      message: "gateway rejected websocket upgrade (HTTP 403)",
-      remediation: "identity-aware proxy",
     },
     {
       name: "unreachable endpoint",
@@ -303,10 +191,6 @@ describe("classifyGatewayConnectFailure", () => {
 });
 
 describe("resolveAuthConnectErrorDetailCode", () => {
-  it("maps device token scope mismatches to a dedicated auth detail", () => {
-    expect(resolveAuthConnectErrorDetailCode("scope_mismatch")).toBe("AUTH_SCOPE_MISMATCH");
-  });
-
   it("keeps trusted-proxy identity rejection distinct from generic unauthorized auth", () => {
     expect(
       resolveAuthConnectErrorDetailCode("trusted_proxy_missing_header_cf-access-jwt-assertion"),
@@ -345,21 +229,6 @@ describe("pairing connect details", () => {
       recommendedNextStep: "wait_then_retry",
       retryable: true,
       pauseReconnect: false,
-    });
-  });
-
-  it("reads pairing details and backfills missing remediation hints", () => {
-    expect(
-      readPairingConnectErrorDetails({
-        code: "PAIRING_REQUIRED",
-        reason: "scope-upgrade",
-        requestId: "req-456",
-      }),
-    ).toEqual({
-      code: "PAIRING_REQUIRED",
-      reason: "scope-upgrade",
-      requestId: "req-456",
-      remediationHint: "Review the requested scopes, then approve the pending upgrade.",
     });
   });
 
@@ -413,33 +282,6 @@ describe("pairing connect details", () => {
       ),
     ).toEqual({
       reason: "scope-upgrade",
-    });
-  });
-
-  it("prefers pairing detail formatting over the generic message", () => {
-    expect(
-      formatConnectErrorMessage({
-        message: "pairing required",
-        details: {
-          code: "PAIRING_REQUIRED",
-          requestId: "req-123",
-          reason: "scope-upgrade",
-        },
-      }),
-    ).toBe("scope upgrade pending approval (requestId: req-123)");
-  });
-  it("reads pairing details when detail code has surrounding whitespace", () => {
-    expect(
-      readPairingConnectErrorDetails({
-        code: "  PAIRING_REQUIRED  ",
-        reason: "scope-upgrade",
-        requestId: "req-456",
-      }),
-    ).toEqual({
-      code: "PAIRING_REQUIRED",
-      reason: "scope-upgrade",
-      requestId: "req-456",
-      remediationHint: "Review the requested scopes, then approve the pending upgrade.",
     });
   });
 

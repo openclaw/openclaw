@@ -1,10 +1,25 @@
 import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 import type { WorkerTaskChannel } from "../../infra/worker-task-server.js";
 import type { SessionTranscriptHydrationWorkerRequest } from "./session-transcript-hydration.types.js";
+import type { SessionEntryWorkerInput } from "./session-transcript-worker-read.types.js";
 import {
   MAX_SESSION_ROW_FACTS_KEYS,
   type SessionTranscriptWorkerValues,
 } from "./session-transcript-worker.types.js";
+
+export async function readSessionEntrySnapshotRequest(
+  request: Extract<SessionEntryWorkerInput, { mode: "snapshot" }>,
+) {
+  const { readTranscriptExportSnapshotReadOnlySync } =
+    await import("./session-accessor.sqlite-read.js");
+  const { projectSessionEntryRecord } =
+    await import("../../../packages/memory-host-sdk/src/host/session-entry-projection.js");
+  return {
+    snapshot: readTranscriptExportSnapshotReadOnlySync(request.options, {
+      projectEvent: request.includeOriginalMessages ? undefined : projectSessionEntryRecord,
+    }),
+  };
+}
 
 /** Read each hydrated view under the same worker-owned quarantine and snapshot admission. */
 export async function readSessionTranscriptHydrationRequest(

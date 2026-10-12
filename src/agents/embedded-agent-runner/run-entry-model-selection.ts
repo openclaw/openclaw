@@ -41,6 +41,7 @@ export async function resolveRunEntryModelSelection(
     params.assertCurrent();
     return resolveHookModelSelection({
       prompt: input.prompt,
+      awaitSessionDiffBaseline: input.awaitSessionDiffBaseline,
       attachments: buildBeforeModelResolveAttachments(input.images),
       provider: params.selection.provider,
       modelId: params.selection.model,

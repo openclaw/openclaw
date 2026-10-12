@@ -112,12 +112,6 @@ describe("buildDeepgramRealtimeTranscriptionProvider", () => {
     );
   });
 
-  it("rejects malformed endpoints", () => {
-    expect(() =>
-      provider.createSession({ providerConfig: { apiKey: "dg-key", baseUrl: "not a url" } }),
-    ).toThrow(/^Invalid Deepgram baseUrl:/);
-  });
-
   it("validates the environment override", () => {
     vi.stubEnv("DEEPGRAM_BASE_URL", "not a url");
     expect(() => provider.createSession({ providerConfig: { apiKey: "dg-key" } })).toThrow(

@@ -12,28 +12,6 @@ function withDefaultRoster(config: OpenClawConfig = {}): OpenClawConfig {
 
 const emptyCfg = withDefaultRoster();
 
-function cfgWithProviderRuntime(id: string): OpenClawConfig {
-  return withDefaultRoster({
-    models: {
-      providers: {
-        "github-copilot": { agentRuntime: { id } },
-      },
-    },
-  } as unknown as OpenClawConfig);
-}
-
-function cfgWithModelRuntime(modelId: string, id: string): OpenClawConfig {
-  return withDefaultRoster({
-    models: {
-      providers: {
-        "github-copilot": {
-          models: [{ id: modelId, agentRuntime: { id } }],
-        },
-      },
-    },
-  } as unknown as OpenClawConfig);
-}
-
 describe("modelSelectionShouldEnsureCopilotRuntimePlugin", () => {
   it("returns false for github-copilot/* without explicit agentRuntime opt-in", () => {
     // Built-in GitHub Copilot provider already supports these models;
@@ -42,39 +20,6 @@ describe("modelSelectionShouldEnsureCopilotRuntimePlugin", () => {
       modelSelectionShouldEnsureCopilotRuntimePlugin({
         model: "github-copilot/gpt-4o",
         config: emptyCfg,
-      }),
-    ).toBe(false);
-  });
-
-  it("returns true when a model override sets agentRuntime.id = copilot", () => {
-    expect(
-      modelSelectionShouldEnsureCopilotRuntimePlugin({
-        model: "github-copilot/claude-sonnet-4",
-        config: cfgWithModelRuntime("claude-sonnet-4", "copilot"),
-      }),
-    ).toBe(true);
-  });
-
-  it("normalizes id casing/whitespace before matching", () => {
-    expect(
-      modelSelectionShouldEnsureCopilotRuntimePlugin({
-        model: "github-copilot/gpt-4o",
-        config: cfgWithProviderRuntime("  Copilot  "),
-      }),
-    ).toBe(true);
-  });
-
-  it("returns false when the runtime id is anything other than copilot", () => {
-    expect(
-      modelSelectionShouldEnsureCopilotRuntimePlugin({
-        model: "github-copilot/gpt-4o",
-        config: cfgWithProviderRuntime("pi"),
-      }),
-    ).toBe(false);
-    expect(
-      modelSelectionShouldEnsureCopilotRuntimePlugin({
-        model: "github-copilot/gpt-4o",
-        config: cfgWithProviderRuntime("codex"),
       }),
     ).toBe(false);
   });

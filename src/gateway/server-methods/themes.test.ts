@@ -24,6 +24,7 @@ import {
   getUserPreferences,
   setUserPreferences,
 } from "../../state/user-preferences.test-support.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { linkEmail } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
@@ -45,16 +46,19 @@ vi.mock("../../plugins/theme-catalog.js", () => ({ listPluginThemes: () => plugi
 let state: OpenClawTestState;
 let requesterProfileId: string;
 let otherProfileId: string;
+let releaseProfiles: () => void;
 
 beforeEach(async () => {
   pluginThemes.length = 0;
   state = await createOpenClawTestState({ layout: "state-only", prefix: "themes-rpc-" });
   requesterProfileId = ensureProfileForEmail("requester@example.test").id;
   otherProfileId = ensureProfileForEmail("other@example.test").id;
+  releaseProfiles = (await prepareUserProfileCatalog()).release;
 });
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  releaseProfiles();
   await state.cleanup();
 });
 

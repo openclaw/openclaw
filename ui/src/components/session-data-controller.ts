@@ -97,6 +97,8 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   sessionCatalogRevision = 0;
   readonly sessionCatalogPageDepths = new Map<string, number>();
   private sessionScopeAgentId: string | null = null;
+  private agentSelectionSource: ApplicationContext["agentSelection"] | undefined;
+  private agentSelectionIntentRevision: number | undefined;
   private sessionsSource: SessionCapability | null = null;
   private filteredSessionScope: string | null = null;
   private unsubscribeFilteredSessions: (() => void) | null = null;
@@ -222,6 +224,8 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     this.gatewayClient = null;
     this.gatewayConnected = false;
     this.gatewayAvailable = false;
+    this.agentSelectionSource = undefined;
+    this.agentSelectionIntentRevision = undefined;
     this.retireSessionCatalogData();
     this.scroll.dispose();
     this.lineage.disconnect();
@@ -262,6 +266,14 @@ export class SessionDataController implements ReactiveController, SessionCatalog
 
   synchronizeSessionScope(): void {
     const context = this.context;
+    const selection = context?.agentSelection;
+    const foreground =
+      selection !== undefined &&
+      selection === this.agentSelectionSource &&
+      selection.intentRevision !== this.agentSelectionIntentRevision;
+    // Consume same-agent intent too, before a later automatic scope change can reuse it.
+    this.agentSelectionSource = selection;
+    this.agentSelectionIntentRevision = selection?.intentRevision;
     const nextAgentId = context ? normalizeAgentId(this.host.expandedAgentId()) : null;
     // A reconnect cannot revoke ownership until its replacement hello is authoritative.
     const nextCatalogAgentId =
@@ -309,7 +321,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
       context?.gateway.snapshot.phase === "connected" &&
       hasSidebarListFilter(this.host)
     ) {
-      void this.scheduleSidebarSessions();
+      void (foreground ? this.refreshSidebarSessions() : this.scheduleSidebarSessions());
     }
   }
 

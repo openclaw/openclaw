@@ -23,6 +23,14 @@ CLI, Doctor, cron, and plugin child processes must route mutations through the
 Gateway or acquire exclusive ownership while it is stopped. First admission,
 migration, repair, and final live-authority checks retain their existing owners.
 
+Agent deletion status is loaded on first admission and retained per agent in the
+physical shared database's process-owned facts. Journal writers publish pending,
+completed, and removed status at commit through the existing worker fact transport;
+rollback preserves the previous status. Session admission reuses this fact and the
+deletion owner's queue closure instead of reading the journal on every turn.
+Restart loads persisted tombstones again. Destructive cleanup retains its current
+journal-authority checks; schema, retention, and update behavior are unchanged.
+
 Once Gateway startup holds exclusive state ownership, it inspects the previous
 Gateway lease directly in a read-only worker instead of copying the shared
 database. Fresh or unverifiable owners still prevent startup; Doctor's schema
@@ -351,6 +359,7 @@ page that now holds the content.
 - <a id="creator-namespace-migration" />[Creator namespace migration](/reference/database-schemas/agent-schema-history#creator-namespace-migration)
 - <a id="participant-identity-migration" />[Participant identity migration](/reference/database-schemas/agent-schema-history#participant-identity-migration)
 - <a id="state-schema-history" />[State schema history](/reference/database-schemas/state-schema-history#state-schema-history)
+- <a id="state-schema-21" />[State schema 21](/reference/database-schemas/state-schema-history#state-schema-21)
 - <a id="state-schema-16" />[State schema 16](/reference/database-schemas/state-schema-history#state-schema-16)
 - <a id="state-schema-15" />[State schema 15](/reference/database-schemas/state-schema-history#state-schema-15)
 - <a id="state-schema-13" />[State schema 13](/reference/database-schemas/state-schema-history#state-schema-13)
@@ -362,6 +371,7 @@ page that now holds the content.
 - <a id="the-gateway-refuses-to-start-with-a-newer-schema-version-error" />[The Gateway refuses to start with a newer schema version error](/reference/database-schemas/integrity-and-recovery#the-gateway-refuses-to-start-with-a-newer-schema-version-error)
 - <a id="a-database-is-quarantined-after-integrity-verification-failed" />[A database is quarantined after integrity verification failed](/reference/database-schemas/integrity-and-recovery#a-database-is-quarantined-after-integrity-verification-failed)
 - <a id="downgrades-are-unsupported" />[Downgrades are unsupported](/reference/database-schemas/integrity-and-recovery#downgrades-are-unsupported)
+- <a id="example-state-schema-21-to-20" />[Example: state schema 21 to 20](/reference/database-schemas/integrity-and-recovery#example-state-schema-21-to-20)
 - <a id="example-state-schema-13-to-12" />[Example: state schema 13 to 12](/reference/database-schemas/integrity-and-recovery#example-state-schema-13-to-12)
 - <a id="example-state-schema-12-to-11" />[Example: state schema 12 to 11](/reference/database-schemas/integrity-and-recovery#example-state-schema-12-to-11)
 - <a id="example-state-schema-11-to-10" />[Example: state schema 11 to 10](/reference/database-schemas/integrity-and-recovery#example-state-schema-11-to-10)

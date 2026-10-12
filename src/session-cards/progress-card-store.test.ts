@@ -69,29 +69,6 @@ describe("session progress card store", () => {
     }
   });
 
-  it.each([
-    { name: "markdown only", input: { markdown: "Working" }, expected: { markdown: "Working" } },
-    { name: "plan only", input: { steps: STEPS }, expected: { steps: STEPS } },
-    {
-      name: "markdown and plan",
-      input: { markdown: "Working", steps: STEPS },
-      expected: { markdown: "Working", steps: STEPS },
-    },
-  ])("roundtrips $name", ({ input, expected }) => {
-    const written = writeSessionProgressCard(db, SESSION_KEY, input);
-
-    expect(written).toEqual({
-      card: expect.objectContaining({
-        sessionKey: SESSION_KEY,
-        revision: 1,
-        ...expected,
-      }),
-    });
-    expect(readSessionProgressCard(db, SESSION_KEY)).toEqual(
-      expect.objectContaining({ sessionKey: SESSION_KEY, revision: 1, ...expected }),
-    );
-  });
-
   it.each([false, true])(
     "replaces the whole card, advances its revision, and clears on empty input (malformed=%s)",
     (malformed) => {

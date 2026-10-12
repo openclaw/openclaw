@@ -519,16 +519,10 @@ export async function deliverAgentCommandResult(
   } = deliveryRouting;
 
   let deliveryLoggedError = false;
-  const reportDeliveryError = (message: string) => {
-    runtime.error?.(message);
-    if (!runtime.error) {
-      runtime.log(message);
-    }
-  };
   const logDeliveryError = (err: unknown) => {
     deliveryLoggedError = true;
     const message = `Delivery failed (${deliveryChannel}${deliveryTarget ? ` to ${deliveryTarget}` : ""}): ${String(err)}`;
-    reportDeliveryError(message);
+    runtime.error(message);
   };
   let strictPreDeliveryError: unknown;
   let deliveryStatus: AgentCommandDeliveryStatus | undefined;
@@ -647,6 +641,9 @@ export async function deliverAgentCommandResult(
     status?: AgentCommandDeliveryStatus,
     deliverySucceeded?: boolean,
   ): AgentCommandDeliveryResult => {
+    if (!opts.json && result.meta.requestShaping?.thinkingClamp) {
+      runtime.log(result.meta.requestShaping.thinkingClamp);
+    }
     if (opts.json) {
       const meta = result.meta;
       writeRuntimeJson(runtime, {
@@ -784,7 +781,7 @@ export async function deliverAgentCommandResult(
       `(reason=${deliveryStatus?.reason ?? "none"} session=${effectiveSessionKey ?? "unknown"} ` +
       `channel=${deliveryChannel ?? "none"} target=${deliveryTarget ?? "none"} ` +
       `payloads=${deliveryPayloads.length})`;
-    reportDeliveryError(message);
+    runtime.error(message);
   }
 
   return completeDelivery(deliveryStatus, deliverySucceeded);

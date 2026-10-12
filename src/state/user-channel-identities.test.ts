@@ -46,7 +46,6 @@ import {
   ensureGatewayOwnerProfile,
   ensureProfileForEmail,
   ensureProfileForTailscaleIdentity,
-  resolveUserProfileId,
 } from "./user-profiles.js";
 import type { UserChannelIdentity } from "./user-profiles.types.js";
 
@@ -120,7 +119,7 @@ it.each(["email binding", "stale role reply"] as const)(
         });
       }
       expect(prepared?.isCurrent()).toBe(true);
-      expect(resolveUserProfileId(source.id, options)).toBe(source.id);
+      expect(readUserProfileIdentity(source.id, options)?.profileId).toBe(source.id);
       expect(admin?.isCurrent()).toBe(false);
       expect(rolePolicy?.isCurrent()).toBe(false);
       expect(channel?.isCurrent()).toBe(false);

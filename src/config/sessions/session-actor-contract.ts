@@ -289,7 +289,7 @@ export type SessionActorOutcome<Value> =
     };
 
 export type SessionActorCommitObserver<Value> = {
-  /** Called once with captured native evidence before fallible publication or cleanup. */
+  /** Called once with read-only native evidence before fallible publication or cleanup. */
   committed(outcome: Extract<SessionActorOutcome<Value>, { kind: "committed" }>): void;
 };
 
@@ -352,7 +352,7 @@ export type SessionActor = SessionActorLifetime &
     readonly target: SessionActorTarget;
     /** Present only when the selected backend owns the storage domain. */
     readonly storage?: SessionActorStorage;
-    /** Detached installed MAIN state; undefined means fenced/missing. Never opens SQLite or dispatches a worker request. */
+    /** Read-only installed MAIN revision; copy before editing. Undefined means fenced/missing. Never dispatches a worker request. */
     snapshot(authority: SessionActorAuthority): SessionActorHotState | undefined;
     read(authority: SessionActorAuthority): Promise<SessionActorHotState>;
     /** Drain retained attempts and accepted descendants; a teardown timeout is not settlement. */

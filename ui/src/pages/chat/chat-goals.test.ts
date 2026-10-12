@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Value } from "typebox/value";
 import { afterEach, assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
@@ -32,6 +33,7 @@ const goal: SessionGoal = {
 
 beforeEach(() => vi.stubGlobal("sessionStorage", createStorageMock()));
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -75,6 +77,79 @@ function goalHost(requestHandlers: Record<string, unknown> = { "sessions.goal.up
 }
 
 describe("Goal control requests", () => {
+  it.each(["timeout", "unavailable"])(
+    "reconciles a Resume %s within the original action",
+    async (failure) => {
+      vi.useFakeTimers();
+      const current = observedRoster();
+      current.sessions[0]!.goal = { ...goal, status: "complete", updatedAt: 4 };
+      let attempts = 0;
+      const host = goalHost({
+        "sessions.goal.update": () => {
+          if (++attempts === 1) {
+            throw failure === "timeout"
+              ? new GatewayProtocolRequestTimeoutError({
+                  method: "sessions.goal.update",
+                  timeoutMs: 30_000,
+                  requestSent: true,
+                })
+              : new GatewayRequestError({ code: "UNAVAILABLE", message: "ACK lost" });
+          }
+          return {
+            status: "started",
+            goalId: goal.id,
+            runId: "settled-run",
+            replayed: true,
+            goal: { ...goal, status: "active", updatedAt: 3 },
+          };
+        },
+        "sessions.list": current,
+        "sessions.describe": { session: current.sessions[0] },
+      });
+      const submitted = mutateChatGoal(host, { action: "resume", goalId: goal.id });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await submitted).toBe(true);
+      const requests = host.request.mock.calls.filter(
+        ([method]) => method === "sessions.goal.update",
+      );
+      expect(requests).toHaveLength(2);
+      expect(requests[1]?.[1]).toEqual(requests[0]?.[1]);
+      expect(host.sessions.state.result?.sessions[0]?.goal?.status).toBe("complete");
+      expect(host.chatRunId).toBeNull();
+      expect(chatGoalRecovery(host)).toBeUndefined();
+      expect(sessionStorage.length).toBe(0);
+    },
+  );
+
+  it.each(["connection", "session", "principal", "expiry"])(
+    "does not automatically retry Resume after its %s changes",
+    async (changed) => {
+      vi.useFakeTimers();
+      const host = goalHost({
+        "sessions.goal.update": () => {
+          throw new GatewayRequestError({ code: "UNAVAILABLE", message: "ACK lost" });
+        },
+      });
+      const submitted = mutateChatGoal(host, { action: "resume", goalId: goal.id });
+      await vi.advanceTimersByTimeAsync(0);
+      if (changed === "connection") {
+        host.connectionEpoch += 1;
+      } else if (changed === "session") {
+        host.currentSessionId = "replacement-session";
+      } else if (changed === "principal") {
+        Object.defineProperty(host.client, "recoveryScope", { get: () => "other-principal" });
+      } else {
+        vi.setSystemTime(Date.now() + 24 * 60 * 60 * 1_000);
+      }
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await submitted).toBe(false);
+      expect(
+        host.request.mock.calls.filter(([method]) => method === "sessions.goal.update"),
+      ).toHaveLength(1);
+      expect(host.chatRunId).toBeNull();
+    },
+  );
+
   it("rejects an oversized edit without stranding recovery or blocking a corrected edit", async () => {
     const host = goalHost({
       "sessions.goal.update": (params: unknown) => {
@@ -210,9 +285,15 @@ describe("Goal control requests", () => {
   ] as const)(
     "reconciles a lost $action ACK after $recovery without resurrecting the run",
     async ({ action, recovery }) => {
+      vi.useFakeTimers();
       let fail = true;
       const method = action === "clear" ? "sessions.goal.clear" : "sessions.goal.update";
+      const current = observedRoster();
+      current.sessions[0]!.goal =
+        action === "clear" ? undefined : { ...goal, status: "active", updatedAt: 3 };
       const handlers = {
+        "sessions.list": current,
+        "sessions.describe": { session: current.sessions[0] },
         [method]: () => {
           if (fail) {
             if (action === "clear") {
@@ -233,7 +314,9 @@ describe("Goal control requests", () => {
         },
       };
       let host = goalHost(handlers);
-      expect(await mutateChatGoal(host, { action, goalId: goal.id })).toBe(false);
+      const submitted = mutateChatGoal(host, { action, goalId: goal.id });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await submitted).toBe(false);
       const firstRequest = host.request.mock.calls.find(
         ([calledMethod]) => calledMethod === method,
       )?.[1];
@@ -247,10 +330,6 @@ describe("Goal control requests", () => {
       if (action === "resume") {
         retireStoredGoalOperations(host.settings.gatewayUrl ?? "", host.client!.recoveryScope);
       }
-      const refresh = vi.spyOn(host.sessions, "refresh").mockResolvedValue();
-      host.sessions.patchRowLocal(host.sessionKey, {
-        goal: action === "clear" ? undefined : { ...goal, status: "active", updatedAt: 3 },
-      });
       expect(chatGoalRecovery(host)).toMatchObject({ pending: false });
       if (action === "clear") {
         expect(host.request).not.toHaveBeenCalled();
@@ -261,7 +340,6 @@ describe("Goal control requests", () => {
       expect(requests.at(-1)?.[2]).toMatchObject({ timeoutMs: 30_000 });
       expect(host.request).toHaveBeenCalledWith(method, firstRequest, { timeoutMs: 30_000 });
       expect(sessionStorage.length).toBe(0);
-      expect(refresh).toHaveBeenCalledOnce();
       expect(host.chatRunId).toBeNull();
       expect(host.sessions.state.result?.sessions[0]?.goal?.status).toBe(
         action === "clear" ? undefined : "active",

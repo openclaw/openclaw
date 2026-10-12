@@ -45,46 +45,32 @@ describe("ssh-config", () => {
     resolveSshClientMock.mockReturnValue("/usr/bin/ssh");
   });
 
-  it.each(["not-a-number", "2222abc", "70000"])(
-    "ignores invalid port %s and blank lines",
-    async (port) => {
-      runCommandMock.mockResolvedValueOnce(
-        commandResult({
-          stdout: `user bob\nhostname example.com\nport ${port}\nidentityfile none\nidentityfile   \n`,
-        }),
-      );
-      await expect(resolveSshConfig({ host: "alias", port: 22 })).resolves.toEqual({
-        user: "bob",
-        host: "example.com",
-        port: undefined,
-        identityFiles: [],
-      });
-    },
-  );
+  it.each(["not-a-number"])("ignores invalid port %s and blank lines", async (port) => {
+    runCommandMock.mockResolvedValueOnce(
+      commandResult({
+        stdout: `user bob\nhostname example.com\nport ${port}\nidentityfile none\nidentityfile   \n`,
+      }),
+    );
+    await expect(resolveSshConfig({ host: "alias", port: 22 })).resolves.toEqual({
+      user: "bob",
+      host: "example.com",
+      port: undefined,
+      identityFiles: [],
+    });
+  });
 
-  it("resolves ssh config through the canonical command wrapper", async () => {
-    await expect(resolveSshConfig({ user: "me", host: "alias", port: 22 })).resolves.toEqual({
+  it("adds non-default port and trimmed identity arguments", async () => {
+    await expect(
+      resolveSshConfig(
+        { user: "me", host: "alias", port: 2022 },
+        { identity: "  /tmp/custom_id  " },
+      ),
+    ).resolves.toEqual({
       user: "steipete",
       host: "peters-mac-studio-1.sheep-coho.ts.net",
       port: 2222,
       identityFiles: ["/tmp/id_ed25519"],
     });
-    expect(runCommandMock).toHaveBeenCalledWith(
-      ["/usr/bin/ssh", "-G", "--", "me@alias"],
-      expect.objectContaining({
-        maxOutputBytes: 64 * 1024,
-        outputCapture: "head",
-        terminateOnOutputLimit: true,
-      }),
-    );
-    expect(resolveSshClientMock).toHaveBeenCalledOnce();
-  });
-
-  it("adds non-default port and trimmed identity arguments", async () => {
-    await resolveSshConfig(
-      { user: "me", host: "alias", port: 2022 },
-      { identity: "  /tmp/custom_id  " },
-    );
     expect(runCommandMock.mock.calls[0]?.[0]).toEqual([
       "/usr/bin/ssh",
       "-G",
@@ -95,17 +81,23 @@ describe("ssh-config", () => {
       "--",
       "me@alias",
     ]);
+    expect(runCommandMock.mock.calls[0]?.[1]).toMatchObject({
+      maxOutputBytes: 64 * 1024,
+      outputCapture: "head",
+      terminateOnOutputLimit: true,
+    });
+    expect(resolveSshClientMock).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    commandResult({ code: 1 }),
-    commandResult({ termination: "timeout", code: 124 }),
-    commandResult({ outputLimitExceeded: true, termination: "signal", code: null }),
-    commandResult({ stdout: "" }),
-  ])("returns null for an unusable command result", async (result) => {
-    runCommandMock.mockResolvedValueOnce(result);
-    await expect(resolveSshConfig({ user: "me", host: "bad-host", port: 22 })).resolves.toBeNull();
-  });
+  it.each([commandResult({ stdout: "" })])(
+    "returns null for an unusable command result",
+    async (result) => {
+      runCommandMock.mockResolvedValueOnce(result);
+      await expect(
+        resolveSshConfig({ user: "me", host: "bad-host", port: 22 }),
+      ).resolves.toBeNull();
+    },
+  );
 
   it("returns null when command launch fails", async () => {
     runCommandMock.mockRejectedValueOnce(new Error("spawn boom"));

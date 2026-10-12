@@ -17,6 +17,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.message.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { projectChatDisplayMessage } from "../chat-display-projection.js";
@@ -809,6 +810,7 @@ describe("persisted chat image artifact recovery", () => {
       const context = createDirectChatContext({ getRuntimeConfig: () => config });
       const owner = ensureProfileForEmail("image-owner@example.test");
       const viewer = ensureProfileForEmail("image-viewer@example.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const entry = {
         sessionId: transcriptScope.sessionId,
         updatedAt: 1,

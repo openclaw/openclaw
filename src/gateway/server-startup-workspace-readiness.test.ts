@@ -8,6 +8,10 @@ import { resolveSandboxWorkspaceLayoutPaths } from "../agents/sandbox/shared.js"
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { getRuntimeConfig, writeConfigFile, type OpenClawConfig } from "../config/config.js";
 import { readConfigFileSnapshotWithPluginMetadata } from "../config/io.js";
+import {
+  attachRuntimeConfigWriteApplication,
+  createRuntimeConfigWriteApplication,
+} from "../config/runtime-write-application.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import {
   detectLegacyWorkspaceState,
@@ -320,10 +324,12 @@ describe("Gateway workspace migration readiness", () => {
       await state.writeConfig(cfg);
       server = await start(port);
       await server.startupSettled;
-      await writeConfigFile(nextConfig);
-      await expect
-        .poll(() => resolveAgentWorkspaceDir(getRuntimeConfig(), "main"))
-        .toBe(nextWorkspace);
+      reloadError.mockClear();
+      const application = createRuntimeConfigWriteApplication();
+      await writeConfigFile(nextConfig, attachRuntimeConfigWriteApplication({}, application));
+      expect(application.claimed).toBe(true);
+      expect(await application.result, JSON.stringify(reloadError.mock.calls)).toBe("applied");
+      expect(resolveAgentWorkspaceDir(getRuntimeConfig(), "main")).toBe(nextWorkspace);
       await expect(ensureAgentWorkspace({ dir: nextWorkspace })).resolves.toMatchObject({
         dir: nextWorkspace,
       });

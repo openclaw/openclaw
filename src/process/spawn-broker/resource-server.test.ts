@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import type { BrokerResourceResponse } from "./resource-protocol.js";
 import { createBrokerNativeResourceServer } from "./resource-server.js";
 import type { createBrokerResourceSocket } from "./resource-socket.js";
 
@@ -23,7 +24,11 @@ it("joins the same native close after transport loss instead of abandoning or du
     entered.resolve();
     await released.promise;
   });
-  vi.stubGlobal("__openclawResourceRetirementFixture", { close });
+  const receive = vi.fn(() => {
+    throw new Error("owner callback refused");
+  });
+  vi.stubGlobal("__openclawResourceRetirementFixture", { close, receive });
+  const responses: BrokerResourceResponse[] = [];
   const connected = Object.getOwnPropertyDescriptor(process, "connected");
   Object.defineProperty(process, "connected", { configurable: true, value: true });
   let accept: ((socket: { setTimeout: () => void }) => void) | undefined;
@@ -50,6 +55,7 @@ it("joins the same native close after transport loss instead of abandoning or du
     generation: 1,
     canAdmit: () => true,
     reportParent: async (message) => {
+      responses.push(message);
       if (message.type === "resource-created") {
         created.resolve();
       }
@@ -68,11 +74,17 @@ it("joins the same native close after transport loss instead of abandoning or du
         moduleUrl:
           "data:text/javascript," +
           encodeURIComponent(
-            "export function createNativeWorkerResource(){return globalThis.__openclawResourceRetirementFixture;}",
+            "export function createNativeWorkerResource(_target,_input,owner){const fixture=globalThis.__openclawResourceRetirementFixture;owner.on('message',fixture.receive);return fixture;}",
           ),
       },
     });
     await created.promise;
+    const ownerRequest = { type: "resource-owner", id: 1, sequence: 1, value: "request" } as const;
+    resource.receive(ownerRequest);
+    peer!.message(ownerRequest);
+    expect(receive).toHaveBeenCalledOnce();
+    expect(responses.some((response) => response.type === "resource-owner-rejected")).toBe(true);
+    expect(responses.some((response) => response.type === "resource-owner-received")).toBe(false);
     resource.receive({ type: "resource-close", id: 1, requestId: 1 });
     await entered.promise;
     resource.disconnect();

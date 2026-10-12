@@ -454,9 +454,7 @@ describe("session resolution metadata", () => {
             )
             .run("different", scope.sessionKey);
         }
-        expect(read(scope.sessionKey)?.sessionId).toBe(
-          kind === "mismatched-window" ? entry.sessionId : undefined,
-        );
+        expect(read(scope.sessionKey)).toBeUndefined();
         expect(read(siblingKey)?.sessionId).toBe("sibling");
         closeOpenClawAgentDatabasesForTest();
         for (const key of [scope.sessionKey, siblingKey]) {

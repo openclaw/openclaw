@@ -256,7 +256,8 @@ export function createIncognitoSessionActorFactory(params: {
                 append.header.projectionNeedsReconcile = false;
               }
             };
-            const value = outcome.value;
+            // Readiness is a mutable projection; keep the native receipt immutable.
+            const value = structuredClone(outcome.value);
             if (value && "kind" in value) {
               if (value.kind === "session-turn") {
                 value.projectionNeedsReconcile = false;
