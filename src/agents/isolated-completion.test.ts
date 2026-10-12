@@ -324,10 +324,10 @@ describe("runIsolatedCompletion", () => {
       );
       expect(error).toMatchObject({
         code: "output-rejected",
-        message: expect.stringContaining(`stop reason ${assistant.stopReason}`),
+        message: assistant.errorMessage,
       });
       if (kind === "terminal") {
-        expect(resolveModelFallbackError(error)).toMatchObject({ kind: "unknown" });
+        expect(resolveModelFallbackError(error)).toMatchObject({ kind: "terminal" });
       }
       expect(dispatch).toHaveBeenCalledOnce();
       expect(releaseRuntimeLease).toHaveBeenCalledOnce();
