@@ -13,7 +13,6 @@ import { resolveReplyDirectives } from "./get-reply-directives.js";
 import {
   expectContinueResult,
   makeSessionEntry,
-  parseInlineDirectivesForTargetSessionTest,
   makeTypingController,
   mockCallInput,
 } from "./get-reply-directives.target-session.test-helpers.js";
@@ -333,9 +332,12 @@ describe("resolveReplyDirectives", () => {
       failures: [],
     });
     mocks.shouldHandleTextCommands.mockReturnValue(true);
+    const actual = await vi.importActual<typeof import("./directive-handling.parse.js")>(
+      "./directive-handling.parse.js",
+    );
     const { parseInlineSessionDirectives } = await import("./directive-handling.parse.js");
     vi.mocked(parseInlineSessionDirectives).mockReturnValueOnce({
-      ...parseInlineDirectivesForTargetSessionTest("hello"),
+      ...actual.parseInlineSessionDirectives("hello"),
       cleaned: "",
       hasElevatedDirective: true,
     });
