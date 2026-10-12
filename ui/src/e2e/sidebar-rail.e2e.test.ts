@@ -143,6 +143,23 @@ suite.define(() => {
       const pins = rail.locator(".sidebar-rail__pin");
       const pinOrder = () =>
         pins.evaluateAll((rows) => rows.map((row) => row.getAttribute("data-sidebar-entry")));
+      let committedEntries = entries;
+      const changePins = async (action: () => Promise<void>, nextEntries: string[]) => {
+        const after = await gateway.deferNext("users.prefs.set");
+        await action();
+        const request = await gateway.waitForRequest("users.prefs.set", { after });
+        expect(request.params).toEqual({
+          entries: { "ui.railShortcuts": nextEntries },
+          expectedEntries: { "ui.railShortcuts": committedEntries },
+        });
+        // Post-commit profile reads must retain the accepted pin order.
+        await gateway.setMethodResponse("users.prefs.get", {
+          status: "ok",
+          entries: { "ui.railShortcuts": nextEntries, "ui.themeMode": "dark" },
+        });
+        await gateway.resolveDeferred("users.prefs.set");
+        committedEntries = nextEntries;
+      };
       await expect.poll(pinOrder).toEqual(entries);
       for (const row of unloaded) {
         const link = rail.getByRole("link", { name: row.label, exact: true });
@@ -183,8 +200,11 @@ suite.define(() => {
         throw new Error("Missing target pin bounds");
       }
       // Playwright drives native mouse drag/drop, beginning on the anchor itself.
-      await source.dragTo(target, { targetPosition: { x: box.width / 2, y: 2 } });
       const reordered = [entries[2]!, entries[0]!, entries[1]!, ...entries.slice(3)];
+      await changePins(
+        () => source.dragTo(target, { targetPosition: { x: box.width / 2, y: 2 } }),
+        reordered,
+      );
       await expect.poll(pinOrder).toEqual(reordered);
 
       const menu = page.locator(".sidebar-rail-pin-menu");
@@ -310,10 +330,16 @@ suite.define(() => {
       await menu.getByRole("menuitem", { name: "Unpin", exact: true }).waitFor();
       await page.keyboard.press("Escape");
       await source.click({ button: "right" });
-      await menu.getByRole("menuitem", { name: "Move down", exact: true }).click();
+      await changePins(
+        () => menu.getByRole("menuitem", { name: "Move down", exact: true }).click(),
+        [entries[0]!, entries[2]!, entries[1]!, entries[3]!],
+      );
       await expect.poll(pinOrder).toEqual([entries[0], entries[2], entries[1], entries[3]]);
       await source.click({ button: "right" });
-      await menu.getByRole("menuitem", { name: "Unpin", exact: true }).click();
+      await changePins(
+        () => menu.getByRole("menuitem", { name: "Unpin", exact: true }).click(),
+        entries.filter((entry) => entry !== entries[2]),
+      );
       await expect.poll(pinOrder).toEqual(entries.filter((entry) => entry !== entries[2]));
       expect(await gateway.getRequests("sessions.patch")).toEqual([]);
     });
