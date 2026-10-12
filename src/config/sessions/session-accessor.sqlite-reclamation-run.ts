@@ -19,7 +19,10 @@ import {
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
-import { getOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
+import {
+  getOpenClawDatabaseMaintenanceScope,
+  isOpenClawDatabaseMaintenanceWorkerAccess,
+} from "../../state/openclaw-state-db-async-lifecycle.js";
 import type {
   DeleteSessionEntryLifecycleParams,
   SqliteSessionReclamationDiagnostics,
@@ -71,8 +74,9 @@ import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-ru
 function hasNativeReclamationOwner(options: OpenClawAgentDatabaseOptions): boolean {
   return (
     !isMainThread ||
-    getOpenClawDatabaseMaintenanceScope()?.ownsSchemaMaintenance === true ||
-    hasAgentDatabaseMaintenanceAuthority() ||
+    (!isOpenClawDatabaseMaintenanceWorkerAccess() &&
+      (getOpenClawDatabaseMaintenanceScope()?.ownsSchemaMaintenance === true ||
+        hasAgentDatabaseMaintenanceAuthority())) ||
     isIncognitoOpenClawAgentSqlitePath(resolveOpenClawAgentSqlitePath(options), options)
   );
 }

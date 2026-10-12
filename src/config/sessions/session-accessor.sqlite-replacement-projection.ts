@@ -16,6 +16,7 @@ import type {
   SessionEntryReplacementUpdate,
 } from "./session-accessor.sqlite-contract.js";
 import {
+  captureNativeSessionWorkerDeletion,
   preparedSessionDeletionRequiresNativeTransaction,
   runPreparedSqliteSessionWrite,
   runSqliteSessionDeletionTransaction as runOpenClawAgentWriteTransaction,
@@ -516,6 +517,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
             if (typeof snapshot.databaseIdentity !== "string") {
               throw new Error("Session replacement requires its durable database identity");
             }
+            const captured = captureNativeSessionWorkerDeletion(deletedOwners);
             const committed = await commitSessionEntryReplacementsInWorker(
               databaseOptions,
               snapshot.databaseIdentity,
@@ -529,6 +531,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
                   : undefined,
               },
               params.retainedExecution,
+              captured ? { entries: deletedOwners, captured } : undefined,
             );
             return { maintenancePlans: committed.maintenancePlans, result: operation.result };
           } finally {

@@ -59,7 +59,7 @@ export type NativeBindingClientTestApi = {
 export async function withNativeBindingFixture<T>(
   kind: "codex" | "agentsapi",
   run: (fixture: Awaited<ReturnType<typeof createFixture>>) => Promise<T>,
-  mode: "worker" | "native" = "worker",
+  mode: "worker" | "legacy" = "worker",
 ): Promise<T> {
   return withOpenClawTestState(
     { scenario: "minimal", label: "native-binding-settlement" },
@@ -77,7 +77,7 @@ export async function withNativeBindingFixture<T>(
 
 async function createFixture(
   kind: "codex" | "agentsapi",
-  mode: "worker" | "native",
+  mode: "worker" | "legacy",
   env: NodeJS.ProcessEnv,
 ) {
   const database = openOpenClawAgentDatabase({ agentId: "main", env });
@@ -131,7 +131,7 @@ async function createFixture(
   const registry = createEmptyPluginRegistry();
   registry.plugins.push(createPluginRecord({ id: kind }));
   registry.agentHarnesses.push({ pluginId: kind, source: "runtime", harness: native.harness });
-  if (mode === "native") {
+  if (mode === "legacy") {
     // Exercise a released opaque sibling's post-commit cleanup alongside the
     // official harness's V2 store and typed worker participant.
     registry.agentHarnesses.push({

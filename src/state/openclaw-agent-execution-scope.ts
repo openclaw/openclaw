@@ -27,7 +27,10 @@ import type {
   AgentDatabaseExecutionFileIdentity,
 } from "./openclaw-agent-execution-contract.js";
 import type { IncognitoAgentExecutionOwner } from "./openclaw-agent-execution-incognito.js";
-import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
+import {
+  getOpenClawDatabaseMaintenanceScope,
+  isOpenClawDatabaseMaintenanceWorkerAccess,
+} from "./openclaw-state-db-async-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { captureOpenClawStateReadContext } from "./openclaw-state-worker-context.js";
 
@@ -93,8 +96,9 @@ export function supportsAgentDatabaseExecutionScope(
 ): boolean {
   const cleanup = getAgentDeletionDatabaseCleanup(options);
   return (
-    getOpenClawDatabaseMaintenanceScope()?.ownsSchemaMaintenance !== true &&
-    !hasAgentDatabaseMaintenanceAuthority() &&
+    (isOpenClawDatabaseMaintenanceWorkerAccess() ||
+      (getOpenClawDatabaseMaintenanceScope()?.ownsSchemaMaintenance !== true &&
+        !hasAgentDatabaseMaintenanceAuthority())) &&
     (!cleanup || cleanup.worker !== undefined)
   );
 }

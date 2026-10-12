@@ -3,6 +3,10 @@ import { DatabaseSync } from "node:sqlite";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import {
+  isSessionEntryDataSql,
+  observeHostDataSql,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as logging from "../../logging/logger.js";
 import {
@@ -98,7 +102,7 @@ function observeNextPeriodicMaintenance(delayMs = ageFacts.SESSION_ENTRY_MAINTEN
     withinTest(scheduled.promise, signal).finally(() => observer.mockRestore());
 }
 
-it("joins an accepted maintenance timer while Doctor drainage waits on other work", async () => {
+it("joins automatic worker maintenance while Doctor drainage waits on other work", async () => {
   const { request } = createStore();
   const maintenance = createOpenClawDatabaseMaintenanceScope({
     schemaMaintenance: true,
@@ -107,6 +111,8 @@ it("joins an accepted maintenance timer while Doctor drainage waits on other wor
   });
   const blocked = createDeferred();
   void maintenance.track(blocked.promise);
+  const warn = vi.spyOn(logging.getChildLogger({ subsystem: "session-sqlite" }), "warn");
+  const observation = observeHostDataSql();
   maintenance.run(() => kickSessionEntryMaintenanceAfterWrite(request));
   const closing = maintenance.close();
   try {
@@ -114,9 +120,12 @@ it("joins an accepted maintenance timer while Doctor drainage waits on other wor
     blocked.resolve();
     await expect(closing).resolves.toBeUndefined();
     expect(reclamationRun.runSqliteSessionReclamation).toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+    expect(observation.queries.filter(isSessionEntryDataSql)).toEqual([]);
   } finally {
     blocked.resolve();
     await Promise.allSettled([closing]);
+    observation.restore();
   }
 });
 

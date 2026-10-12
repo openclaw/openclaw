@@ -11,6 +11,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runWithDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
+import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as workerCpu from "../../infra/worker-cpu.js";
@@ -25,6 +26,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -281,42 +283,51 @@ test.each([false, true])(
     const before = inspect();
     expect(before).toMatchObject({ writerOpen: false, leases: [], repairIndex: undefined });
     const survivorEntry = loadSessionEntryReadOnly(survivor);
+    const owner = acquireGatewayStateOwner({ databasePath: stateDatabase.path });
+    const maintenance = createOpenClawDatabaseMaintenanceScope({
+      schemaMaintenance: true,
+      assertOwnerCurrent: owner.assertCurrent,
+      assertDatabaseAccess: owner.assertDatabaseAccess,
+    });
     try {
-      const operation = runSqliteSessionReclamation({
-        forceInProcess: true,
-        plan,
-        assertCommitAllowed: () => {
-          if (revoked) {
-            throw new Error("native reclamation authority revoked");
-          }
-        },
+      await maintenance.run(async () => {
+        const operation = runSqliteSessionReclamation({
+          plan,
+          assertCommitAllowed: () => {
+            if (revoked) {
+              throw new Error("native reclamation authority revoked");
+            }
+          },
+        });
+        if (revoked) {
+          await expect(operation).rejects.toThrow("native reclamation authority revoked");
+          // Read-only observation must not itself reopen or repair the rejected target.
+          expect(inspect()).toEqual(before);
+          expect(loadSessionEntryReadOnly(current)).toEqual(expectedEntry);
+        } else {
+          await expect(operation).resolves.toMatchObject({
+            kind: "lifecycle-artifacts",
+            value: { removedEntries: 1 },
+          });
+          const after = inspect();
+          expect(after).toMatchObject({
+            writerOpen: true,
+            repairIndex: { name: "idx_agent_cache_expiry" },
+            events: before.events,
+            windows: before.windows,
+          });
+          // Cold admission retains its worker alongside the adopted host handle.
+          expect(after.leases).toHaveLength(2);
+          expect(loadSessionEntryReadOnly(current)).toBeUndefined();
+        }
+        expect(database.db.isOpen).toBe(false);
+        expect(loadSessionEntryReadOnly(survivor)).toEqual(survivorEntry);
+        await closeOpenClawAgentDatabaseByPathAsync(database.path);
+        expect(inspect()).toMatchObject({ writerOpen: false, leases: [] });
       });
-      if (revoked) {
-        await expect(operation).rejects.toThrow("native reclamation authority revoked");
-        // Read-only observation must not itself reopen or repair the rejected target.
-        expect(inspect()).toEqual(before);
-        expect(loadSessionEntryReadOnly(current)).toEqual(expectedEntry);
-      } else {
-        await expect(operation).resolves.toMatchObject({
-          kind: "lifecycle-artifacts",
-          value: { removedEntries: 1 },
-        });
-        const after = inspect();
-        expect(after).toMatchObject({
-          writerOpen: true,
-          repairIndex: { name: "idx_agent_cache_expiry" },
-          events: before.events,
-          windows: before.windows,
-        });
-        // Cold admission retains its worker alongside the adopted host handle.
-        expect(after.leases).toHaveLength(2);
-        expect(loadSessionEntryReadOnly(current)).toBeUndefined();
-      }
-      expect(database.db.isOpen).toBe(false);
-      expect(loadSessionEntryReadOnly(survivor)).toEqual(survivorEntry);
-      await closeOpenClawAgentDatabaseByPathAsync(database.path);
-      expect(inspect()).toMatchObject({ writerOpen: false, leases: [] });
     } finally {
+      await maintenance.close();
+      owner.release();
       await closeOpenClawAgentDatabaseByPathAsync(database.path);
       await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();

@@ -146,10 +146,9 @@ it("uses each installed plugin owner's packaged codec during real binding deleti
   });
 });
 
-it("keeps archive bytes and identity publication equivalent to the released native adapter", async () => {
+it("keeps archive bytes and identity publication equivalent with a legacy cleanup companion", async () => {
   const outcomes: unknown[] = [];
-  const hostBindingSql = { native: 0, worker: 0 };
-  for (const mode of ["native", "worker"] as const) {
+  for (const mode of ["legacy", "worker"] as const) {
     await withNativeBindingFixture(
       "codex",
       async (fixture) => {
@@ -165,12 +164,7 @@ it("keeps archive bytes and identity publication equivalent to the released nati
         const sql = observeHostDataSql();
         try {
           const result = await fixture.remove({ archiveTranscript: true });
-          hostBindingSql[mode] = bindingWrites(sql.queries).length;
-          if (mode === "native") {
-            expect(hostBindingSql[mode]).toBeGreaterThan(0);
-          } else {
-            expect(hostBindingSql[mode]).toBe(0);
-          }
+          expect(bindingWrites(sql.queries)).toEqual([]);
           expect(result.deleted).toBe(true);
           expect(result.archivedTranscripts).toHaveLength(1);
           const bytes = readSessionArchiveContentSync(result.archivedTranscripts[0]!.archivedPath);
@@ -194,9 +188,6 @@ it("keeps archive bytes and identity publication equivalent to the released nati
       mode,
     );
   }
-  console.info(
-    `Native binding caller SQL: ${hostBindingSql.native} before -> ${hostBindingSql.worker} after`,
-  );
   expect(outcomes[1]).toEqual(outcomes[0]);
 });
 

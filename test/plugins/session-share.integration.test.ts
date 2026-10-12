@@ -749,7 +749,7 @@ describe("session-share node commands", () => {
         } finally {
           release.resolve();
         }
-        await expect(pending).rejects.toThrow(/identity|changed/i);
+        await expect(pending).rejects.toThrow(/identity|changed|no longer current/i);
       });
     },
   );

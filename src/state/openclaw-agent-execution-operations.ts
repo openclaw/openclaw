@@ -237,6 +237,13 @@ export async function loadAgentReplacementOperations() {
   } satisfies Handlers;
 }
 
+export async function loadAgentNativeReplacementOperations() {
+  const kernel = await import("../config/sessions/session-entry-replacement-native.worker.js");
+  return {
+    "session.entries.replaceWithBindings": kernel.commitSessionEntryReplacementWithBindings,
+  } satisfies Handlers;
+}
+
 export async function loadAgentRestartRecoveryOperations() {
   const kernel = await import("../config/sessions/session-accessor.sqlite-recovery.worker.js");
   return {
@@ -633,6 +640,7 @@ export type RegisteredAgentWorkerOperations = WorkerOperations<
     Awaited<ReturnType<typeof loadAgentTranscriptOperations>> &
     Awaited<ReturnType<typeof loadAgentTranscriptReadOperations>> &
     Awaited<ReturnType<typeof loadAgentReplacementOperations>> &
+    Awaited<ReturnType<typeof loadAgentNativeReplacementOperations>> &
     Awaited<ReturnType<typeof loadAgentEntryReadOperations>> &
     Awaited<ReturnType<typeof loadAgentEntryPatchOperations>> &
     Awaited<ReturnType<typeof loadAgentCompoundOperations>> &
