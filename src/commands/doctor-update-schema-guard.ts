@@ -185,7 +185,7 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
     ...schemas.pendingMigrations
       .filter((database) => database.kind === "agent")
       .map((database) => database.path),
-    ...(schemas.agentDatabaseMigrationDiscovery?.discovery.targets.map(
+    ...(schemas.agentDatabaseMigrationDiscovery?.discovery.schemaTargets.map(
       (database) => database.path,
     ) ?? []),
   ]);
