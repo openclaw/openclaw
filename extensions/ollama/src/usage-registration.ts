@@ -1,3 +1,4 @@
+import { collectConfiguredModelRefValues } from "@openclaw/model-catalog-core/configured-model-refs";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
@@ -15,6 +16,16 @@ export function createOllamaUsageHooks(): Pick<
   return {
     resolveUsageAuth: async (ctx) => {
       const provider = ctx.config.models?.providers?.ollama;
+      if (
+        !provider &&
+        ctx.env.OLLAMA_API_KEY?.trim() !== OLLAMA_DEFAULT_API_KEY &&
+        !collectConfiguredModelRefValues(ctx.config).some((ref) =>
+          ref.toLowerCase().startsWith("ollama/"),
+        )
+      ) {
+        // Hosted credentials alone do not opt into the daemon's separate account.
+        return { handled: true };
+      }
       const baseUrl = readProviderBaseUrl(provider) ?? OLLAMA_DEFAULT_BASE_URL;
       if (!isLocalOllamaBaseUrl(baseUrl)) {
         const token = ctx.resolveApiKeyFromConfigAndStore();
