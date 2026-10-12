@@ -25,6 +25,8 @@ const repositoryScriptEntries = [
   "apps/linux/scripts/test-stage-runtime.mjs!",
   // The Python onboarding driver installs this synthetic CLI by path.
   "apps/linux/tests/fixtures/onboarding-cli.mjs!",
+  // The Linux onboarding proof builds its card fixture through Vite's --config option.
+  "apps/linux/tests/fixtures/vite.onboarding.config.ts!",
   // apps/linux/README.md invokes this live Windows native-browser proof driver by path.
   "apps/linux/scripts/test-inline-browser.mjs!",
   // Linux App CI executes the injected native-auth bridge tests through Node.
