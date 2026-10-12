@@ -1472,6 +1472,42 @@ class GatewayBootstrapAuthTest {
   }
 
   @Test
+  fun refreshGatewayConnection_reentersTlsTrustReviewForChangedFingerprint() =
+    runBlocking {
+      val oldFingerprint = "aa".repeat(32)
+      val newFingerprint = "bb".repeat(32)
+      val probeResult = AtomicReference(GatewayTlsProbeResult(fingerprintSha256 = oldFingerprint))
+      val (_, prefs, runtime) =
+        gatewayFixture { _, _ -> probeResult.get() }
+      val endpoint = tlsGatewayEndpoint()
+      neutralizeColdStartAutoConnect(runtime)
+
+      prefs.gatewayRegistry.upsert(gatewayRegistryEntry(endpoint, null))
+      prefs.saveGatewayTlsFingerprint(endpoint.stableId, oldFingerprint)
+
+      runtime.connect(endpoint, auth(token = "shared-token"))
+      val initial = waitForDesiredConnection(runtime, "nodeSession")
+      assertEquals(oldFingerprint, readField<GatewayTlsParams>(initial, "tls").expectedFingerprint)
+      runtime.disconnect()
+      assertNull(desiredConnection(runtime, "nodeSession"))
+
+      probeResult.set(GatewayTlsProbeResult(fingerprintSha256 = newFingerprint, systemTrusted = true))
+      runtime.refreshGatewayConnection()
+
+      val prompt = waitForGatewayTrustPrompt(runtime)
+      assertEquals(oldFingerprint, prompt.previousFingerprintSha256)
+      assertEquals(newFingerprint, prompt.fingerprintSha256)
+      assertTrue(prompt.systemTrustAvailable)
+      assertEquals(oldFingerprint, prefs.loadGatewayTlsFingerprint(endpoint.stableId))
+      assertNull(desiredConnection(runtime, "nodeSession"))
+
+      runtime.declineGatewayTrustPrompt(prompt)
+      withTimeout(500) { runtime.pendingGatewayTrust.first { it == null } }
+      assertNull(desiredConnection(runtime, "nodeSession"))
+      assertEquals(oldFingerprint, prefs.loadGatewayTlsFingerprint(endpoint.stableId))
+    }
+
+  @Test
   fun foregroundAfterExplicitDisconnectStaysOfflineUntilExplicitReconnect() {
     val (runtime, prefs) = createNeutralizedRuntime()
     armSavedActiveManualGateway(prefs)
