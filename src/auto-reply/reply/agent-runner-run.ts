@@ -79,6 +79,7 @@ import {
   retireTerminalRestartRecoverySourceClaim,
 } from "./restart-recovery-source.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
+import { prepareSessionVerboseLevelReader } from "./session-verbose-level.js";
 import { resolveSourceReplyExpectation } from "./source-reply-delivery-mode.js";
 import { readChannelSourceTurnId } from "./source-turn-id.js";
 import { createTypingSignaler } from "./typing-mode.js";
@@ -195,7 +196,7 @@ export async function runReplyAgent(
   let restartRecoveryTarget: SessionEntryTargetPatchScope | undefined;
   try {
     restartRecoveryEntry =
-      sessionKey && storePath
+      sessionKey && storePath && (restartRecoverySourceTurnId || (shouldSteer && isActive))
         ? ((await readSessionEntryInWorker(
             { agentId: followupRun.run.agentId, storePath, sessionKey },
             assertReadCurrent,
@@ -284,19 +285,6 @@ export async function runReplyAgent(
     releaseUnusedAdmission();
     return questionInput.payload;
   }
-
-  const toolResultOptions = {
-    sessionKey,
-    storePath,
-    resolvedVerboseLevel,
-    verboseLevelOverride: followupRun.run.verboseLevelOverride,
-  };
-  const baseShouldEmitToolResult = createShouldEmitToolResult(toolResultOptions);
-  const channelProgressCanConsumeToolResults =
-    Boolean(opts?.forceToolResultProgress) && Boolean(opts?.onToolResult);
-  const shouldEmitToolResult = () =>
-    channelProgressCanConsumeToolResults || baseShouldEmitToolResult();
-  const shouldEmitToolOutput = createShouldEmitToolOutput(toolResultOptions);
 
   const pendingToolTasks = new Set<Promise<void>>();
   const blockReplyTimeoutMs = opts?.blockReplyTimeoutMs ?? BLOCK_REPLY_SEND_TIMEOUT_MS;
@@ -457,6 +445,23 @@ export async function runReplyAgent(
     agentAccountId: followupRun.run.agentAccountId,
   });
   followupRun.run.agentId ??= resolveDefaultAgentId(followupRun.run.config);
+
+  const toolResultOptions = {
+    readVerboseLevel: await prepareSessionVerboseLevelReader({
+      scope:
+        sessionKey && storePath && followupRun.run.verboseLevelOverride === undefined
+          ? { sessionKey, storePath, agentId: followupRun.run.agentId }
+          : undefined,
+      initialLevel: activeSessionEntry?.verboseLevel,
+      assertCurrent: assertReadCurrent,
+    }),
+    resolvedVerboseLevel,
+    verboseLevelOverride: followupRun.run.verboseLevelOverride,
+  };
+  const baseShouldEmitToolResult = createShouldEmitToolResult(toolResultOptions);
+  const shouldEmitToolResult = () =>
+    Boolean(opts?.forceToolResultProgress && opts?.onToolResult) || baseShouldEmitToolResult();
+  const shouldEmitToolOutput = createShouldEmitToolOutput(toolResultOptions);
 
   const replyToChannel = resolveOriginMessageProvider({
     originatingChannel: sessionCtx.OriginatingChannel,

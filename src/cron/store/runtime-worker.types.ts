@@ -19,7 +19,6 @@ import type {
   CronRunReceiptHandle,
   CronRunReceiptStatus,
   PreparedCronRunReceiptAdjudication,
-  PreparedCronRunReceiptClaim,
 } from "./run-receipt.types.js";
 import type { CronRunRecoveryProposal } from "./run-recovery-read.types.js";
 import type { CronRunRecoveryOutcome, CronRunRecoveryPreparation } from "./run-recovery.types.js";
@@ -51,18 +50,6 @@ export type StartupDeferredJob = {
   lastRunAtMs: number | undefined;
   lastRunStatus: CronRunStatus | undefined;
 };
-
-export type CronReservationReleasePolicy =
-  | {
-      kind: "general";
-      restoreLastError: boolean;
-      recompute: boolean;
-      terminal?: CronReceiptTerminal;
-      requireCurrentReceipt?: boolean;
-    }
-  | { kind: "manual-abandon" }
-  | { kind: "scheduled-ineligible" }
-  | { kind: "startup-settlement"; deferredJobs: StartupDeferredJob[]; staggerMs: number };
 
 type CronSkippedRunChange =
   | {
@@ -145,33 +132,11 @@ export type CronRuntimeMutationInputs = {
     };
     agentId?: string;
   };
-  "cron.reserveRuns": {
-    storeKey: string;
-    proposals: Array<{
-      jobId: string;
-      enabled: boolean;
-      configRevision: string;
-      nextRunAtMs?: number;
-      lastRunAtMs?: number;
-      lastRunStatus?: CronJob["state"]["lastRunStatus"];
-      immediate: boolean;
-    }>;
-    reservedAtMs: number;
-    preserveSchedule: boolean;
-    scheduleOwnershipAtMs: number;
-    onExit: boolean;
-  };
   "cron.maintainHistory": Record<string, never>;
-  "cron.activateRun": {
+  "cron.deferStartupJobs": {
     storeKey: string;
-    handle: CronRunReceiptHandle;
-    startedAtMs: number;
-    onExitSchedule?: { kind: "on-exit"; command: string; cwd?: string };
-  };
-  "cron.releaseReservations": {
-    storeKey: string;
-    jobIds: string[];
-    policy: CronReservationReleasePolicy;
+    deferredJobs: StartupDeferredJob[];
+    staggerMs: number;
   };
   "cron.markDeliveryStarted": {
     storeKey: string;
@@ -291,45 +256,14 @@ export type CronRuntimeMutationContracts = {
       runtimeFingerprint: string;
     };
   };
-  "cron.reserveRuns": {
-    input: CronRuntimeMutationInputs["cron.reserveRuns"];
-    snapshot: {
-      defaultAgentId?: string;
-      claims: PreparedCronRunReceiptClaim[];
-      locallyOwnedReceiptIds: string[];
-      replacements: CronRunReceiptHandle[];
-    };
-    outcome: {
-      reservations: Array<{ job: CronJob; runReceipt: CronRunReceiptHandle }>;
-      replacedReceipts: CronRunReceiptHandle[];
-    };
-  };
   "cron.maintainHistory": {
     input: CronRuntimeMutationInputs["cron.maintainHistory"];
     snapshot: { nowMs: number; protectedJobIds: string[]; locallyOwnedReceiptIds: string[] };
     outcome: { reconciled: number; pruned: number };
   };
-  "cron.activateRun": {
-    input: CronRuntimeMutationInputs["cron.activateRun"];
-    snapshot: { markerAtMs: number; defaultAgentId?: string };
-    outcome: {
-      activation?: { job: CronJob; receipt: CronRunReceiptHandle; previousLastError?: string };
-    };
-  };
-  "cron.releaseReservations": {
-    input: CronRuntimeMutationInputs["cron.releaseReservations"];
-    snapshot: {
-      nowMs: number;
-      defaultAgentId?: string;
-      notificationRouting: CronNotificationRouting;
-      reservations: Array<{
-        jobId: string;
-        markerAtMs: number;
-        runReceipt: CronRunReceiptHandle;
-        activationPreviousLastError?: { value: string | undefined };
-      }>;
-      deferTerminal: boolean;
-    };
+  "cron.deferStartupJobs": {
+    input: CronRuntimeMutationInputs["cron.deferStartupJobs"];
+    snapshot: { nowMs: number; notificationRouting: CronNotificationRouting };
     outcome: {
       jobs: CronJob[];
       notifications: CronNotificationIntent[];
@@ -399,7 +333,6 @@ export type CronRuntimeWorkerOperations = {
     };
     output:
       | { outcome: CronRuntimeMutationContracts[Type]["outcome"] }
-      | (Type extends "cron.reserveRuns" ? { conflict: CronRunReceipt } : never)
       | (Type extends "cron.finalizeRuns" ? { receiptRevision: CronReceiptRevisionRefusal } : never)
       | (Type extends "cron.mutateJobs"
           ? {

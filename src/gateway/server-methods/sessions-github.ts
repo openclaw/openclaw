@@ -29,7 +29,7 @@ import { SessionMutationAuthorizationChangedError } from "../session-sharing.js"
 import { SessionWorkspaceReservationBusyError } from "../worker-environments/placement-workspace-reservation.kernel.js";
 import {
   prepareGitHubPublicationOptionsRead,
-  preparePersonalGitHubSessionAction,
+  preparePersonalGitHubSessionActionV2,
 } from "./github-personal-authorization.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayMethod } from "./validation.js";
@@ -190,13 +190,17 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
         if (!params.sessionKey) {
           throw new Error("My GitHub publication requires an explicit session.");
         }
-        const action = preparePersonalGitHubSessionAction(options, {
+        const admitted = await preparePersonalGitHubSessionActionV2(options, {
           sessionKey: params.sessionKey,
           agentId,
         });
-        const result = await coordinator.requestPersonalForSession(params, action);
-        action.assertCurrent();
-        respond(true, result);
+        try {
+          const result = await coordinator.requestPersonalForSessionV2(params, admitted.action);
+          admitted.action.assertCurrent();
+          respond(true, result);
+        } finally {
+          admitted.release();
+        }
         return;
       }
       const loaded = readGitHubPublicationSession(sessionKey, agentId ? { agentId } : undefined);
@@ -215,7 +219,7 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
       };
       const admitted = await prepareGitHubPublicationRequesterV2(options, session);
       try {
-        const result = await coordinator.requestForSession({
+        const result = await coordinator.requestForSessionV2({
           ...params,
           ...session,
           requester: admitted.requester,
@@ -248,12 +252,14 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
             return;
           }
           let shared: SessionGitHubOptionsResult["shared"] = null;
+          let stale = false;
           let sharedUnavailableReason: SessionGitHubOptionsResult["sharedUnavailableReason"];
           try {
             const identity = await prepareCurrentGitHubPublicationOptionsIdentity(
               read.session.agentId,
               () => deadline.signal.throwIfAborted(),
             );
+            stale = identity.stale === true;
             shared = {
               source: identity.source,
               accountId: identity.account.accountId,
@@ -299,6 +305,7 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
           options.respond(true, {
             personal,
             shared,
+            ...(stale || personal?.stale ? { stale: true } : {}),
             ...(sharedUnavailableReason ? { sharedUnavailableReason } : {}),
             pendingPersonal,
             latestShared,
@@ -353,14 +360,18 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
     "sessions.github.confirm",
     validateSessionGitHubConfirmParams,
     async (options) => {
-      const action = preparePersonalGitHubSessionAction(options, options.params);
       const service = options.context.githubPublicationService;
       if (!service) {
         throw new Error("GitHub publication is unavailable.");
       }
-      const result = await service.confirmPersonal(options.params, action);
-      action.assertCurrent();
-      options.respond(true, result);
+      const admitted = await preparePersonalGitHubSessionActionV2(options, options.params);
+      try {
+        const result = await service.confirmPersonalV2(options.params, admitted.action);
+        admitted.action.assertCurrent();
+        options.respond(true, result);
+      } finally {
+        admitted.release();
+      }
     },
   ),
 };

@@ -19,6 +19,7 @@ import {
   readSqliteDatabaseWriteRevision,
   readSqliteDatabaseScopedWriteToken,
   revokeSqliteDatabaseAdmissions,
+  withSqliteDatabaseAdmissionExchange,
 } from "./sqlite-database-admission.js";
 import { runSqliteSchemaReadSnapshotSync } from "./sqlite-pinned-read-snapshot.js";
 import { schemaAdmission } from "./sqlite-schema-admission.js";
@@ -36,6 +37,34 @@ import { storageProcessTestEntrypoints } from "./storage-process-runtime.test-su
 
 describe("native SQLite schema snapshots and callbacks", () => {
   const { tempDirs, openDatabase } = useSqliteSchemaTestFixture();
+
+  it("publishes the next write after cold writer discovery throws", () => {
+    const filename = path.join(tempDirs.make("sqlite-custody-recovery-"), "agent.sqlite");
+    {
+      using initial = new DatabaseSync(filename);
+      initial.exec("CREATE TABLE proof (value INTEGER NOT NULL)");
+    }
+    const writer = openDatabase("", false, filename);
+    const sibling = openDatabase("", true, filename);
+    const before = readSqliteDatabaseScopedWriteToken(sibling, "session");
+    expect(before).toBeTypeOf("string");
+
+    expect(() =>
+      withSqliteDatabaseAdmissionExchange(
+        () => {
+          throw new Error("synthetic writer discovery refusal");
+        },
+        () => writer.exec("INSERT INTO proof VALUES (1)"),
+      ),
+    ).toThrow("synthetic writer discovery refusal");
+    expect(sibling.prepare("SELECT value FROM proof").all()).toEqual([]);
+
+    writer.exec("INSERT INTO proof VALUES (2)");
+    expect(sibling.prepare("SELECT value FROM proof").all()).toEqual([{ value: 2 }]);
+    const committed = readSqliteDatabaseScopedWriteToken(sibling, "session");
+    expect(committed).toBeTypeOf("string");
+    expect(committed).not.toBe(before);
+  });
 
   it.each(["autocommit", "commit", "rollback", "callback failure"] as const)(
     "settles %s writes while an unrelated read cursor remains open",
@@ -176,20 +205,20 @@ describe("native SQLite schema snapshots and callbacks", () => {
       const root = tempDirs.make("openclaw-admission-scoped-cursor-");
       const first = path.join(root, "first.sqlite");
       const second = path.join(root, "second.sqlite");
-      openDatabase(undefined, true, first);
-      openDatabase(undefined, true, second);
+      const firstDatabase = openDatabase(undefined, true, first);
+      const secondDatabase = openDatabase(undefined, true, second);
 
       expect(
         captureSqliteDatabaseAdmissions(cursor, { location: first }).map(
           (record) => record.location,
         ),
-      ).toEqual([first]);
+      ).toEqual([firstDatabase.location()]);
       expect(
         captureSqliteDatabaseAdmissions(
           cursor,
           nextCapture === "scoped" ? { location: second } : undefined,
         ).map((record) => record.location),
-      ).toEqual([second]);
+      ).toEqual([secondDatabase.location()]);
       expect(captureSqliteDatabaseAdmissions(cursor)).toEqual([]);
     },
   );
@@ -254,11 +283,12 @@ describe("native SQLite schema snapshots and callbacks", () => {
       inspection.close();
     }
     const database = openDatabase("", false, filename);
-    expect(captureSqliteDatabaseAdmissions().some((record) => record.location === filename)).toBe(
+    const location = database.location()!;
+    expect(captureSqliteDatabaseAdmissions().some((record) => record.location === location)).toBe(
       false,
     );
     admitSqliteSchema(database);
-    const record = captureSqliteDatabaseAdmissions().find((entry) => entry.location === filename)!;
+    const record = captureSqliteDatabaseAdmissions().find((entry) => entry.location === location)!;
     expect(fstatSync(record.descriptor).isFile()).toBe(true);
     const staleTransfer = structuredClone([record]);
     database.close();
@@ -276,7 +306,9 @@ describe("native SQLite schema snapshots and callbacks", () => {
     const database = openDatabase(undefined, true, filename);
     const snapshot = path.join(root, "snapshot.sqlite");
     linkSync(filename, snapshot);
-    const record = captureSqliteDatabaseAdmissions().find((entry) => entry.location === filename)!;
+    const record = captureSqliteDatabaseAdmissions().find(
+      (entry) => entry.location === database.location(),
+    )!;
     retireSqliteDatabaseAdmissionForPath(snapshot);
     expect(fstatSync(record.descriptor).isFile()).toBe(true);
     expect(tableExists(database, "original")).toBe(true);
@@ -706,10 +738,19 @@ describe("native SQLite schema snapshots and callbacks", () => {
         expect(raw.prepare("SELECT agent_id FROM schema_meta").get()?.agent_id).toBe("original");
         const replaced = openDatabase(schema("replacement"), true, replacement);
         expect(readExistingAgentSchemaMeta(replaced)?.agentId).toBe("replacement");
-        renameSync(replacement, filename);
+        let deniedFilename = filename;
+        if (process.platform === "win32") {
+          // Windows refuses replacing an open SQLite file; both handles keep their identity.
+          expect(() => renameSync(replacement, filename)).toThrow(
+            expect.objectContaining({ code: "EBUSY" }),
+          );
+          deniedFilename = replacement;
+        } else {
+          renameSync(replacement, filename);
+        }
         expect(readExistingAgentSchemaMeta(raw)?.agentId).toBe("original");
         expect(readExistingAgentSchemaMeta(replaced)?.agentId).toBe("replacement");
-        const denied = new DatabaseSync(filename);
+        const denied = new DatabaseSync(deniedFilename);
         try {
           denied.setAuthorizer((action, table) =>
             action === constants.SQLITE_READ && table === "schema_meta"

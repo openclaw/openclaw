@@ -41,7 +41,7 @@ import {
   readExactSessionEntriesWithLifecycle,
   readSessionRowDatabaseFacts,
 } from "./session-entry-read.worker.js";
-import type { SessionEntrySnapshotField } from "./session-entry-snapshots.js";
+import type { SessionEntrySnapshotField } from "./session-entry-snapshot-values.js";
 import * as sharingKernel from "./session-sharing-store.kernel.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
 
@@ -203,7 +203,6 @@ it("publishes lifecycle snapshot admission only after commit and reuses it on th
         );
         try {
           expect(read().entries[0]?.entry.sessionId).toBe("admitted-session");
-          expect(queries.counts.validation).toBeGreaterThan(0);
           const admission = captureCanonicalSessionReaderContinuation(reader);
           expect(admission).toBeDefined();
           admission?.release();

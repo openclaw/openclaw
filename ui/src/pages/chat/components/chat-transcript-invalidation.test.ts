@@ -1,7 +1,7 @@
-import { expectDefined } from "@openclaw/normalization-core";
 /* @vitest-environment jsdom */
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { html, nothing, render } from "lit";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { resolveThemeBranding } from "../../../../../packages/gateway-protocol/src/theme.ts";
 import { resolveControlUiAuthToken } from "../../../app/control-ui-auth.ts";
 import { currentThemeBranding, setCurrentThemeBranding } from "../../../app/theme-branding.ts";
@@ -10,6 +10,7 @@ import type { BoardProvider } from "../../../lib/board/provider.ts";
 import * as messageNormalizer from "../../../lib/chat/message-normalizer.ts";
 import * as videoPoster from "../../../lib/media/video-poster.ts";
 import { PRESENTATION_CHANGED_EVENT } from "../../../lit/presentation-binding.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createSessionCapabilityFixture, createTestChatPane } from "../chat-pane.test-support.ts";
 import * as chatThreadBuild from "../chat-thread-build.ts";
 import {
@@ -270,6 +271,7 @@ describe("chat transcript invalidation", () => {
           expectDefined(frame?.querySelector("img"), "loaded video poster").dispatchEvent(
             new Event("error"),
           );
+          flush();
         }
         expect(frame?.querySelector(".chat-assistant-attachment-card--compact")).toBeInstanceOf(
           HTMLElement,
@@ -299,6 +301,7 @@ describe("chat transcript invalidation", () => {
           props.transcriptVisible = false;
           await renderPreview();
         }
+        flush();
         expect(container.querySelector(".chat-video-preview img")).toBeNull();
         expect(revokeObjectURL).toHaveBeenCalledWith("blob:transcript-poster");
         visible = true;
@@ -610,7 +613,7 @@ describe("chat transcript invalidation", () => {
     }
   });
 
-  it("keeps settled rows idle across session metadata updates but refreshes their identity gutter", () => {
+  it("keeps settled rows idle across session metadata updates but refreshes their identity gutter", async () => {
     vi.spyOn(Date, "now").mockReturnValue(60_000);
     const props = threadProps("pane-session-metadata", "agent:main:main", [
       { role: "user", senderLabel: "Alex", content: "Hello" },
@@ -632,7 +635,11 @@ describe("chat transcript invalidation", () => {
 
     props.selectedSession = { ...props.selectedSession, kind: "group" };
     rerender();
-    expect(userRow.querySelector(".chat-avatar")).not.toBeNull();
+    await waitForSolid(() => {
+      expect(userRow.isConnected).toBe(true);
+      expect(container.querySelector(".chat-group.user")).toBe(userRow);
+      expect(userRow.querySelector(".chat-avatar")).not.toBeNull();
+    });
   });
 
   it("rechecks visible images when the same session changes workspace protection", async () => {
@@ -965,12 +972,15 @@ describe("chat transcript invalidation", () => {
       anchorToEnd: false,
     });
     const toolVisibilityController = createTestTranscript(toolVisibilityProps.paneId);
+    onTestFinished(() => toolVisibilityController.hostDisconnected());
     const toolVisibilityPane = document.body.appendChild(document.createElement("div"));
     const renderToolVisibility = async (next = toolVisibilityProps) => {
       render(renderChatThread(next, toolVisibilityController), toolVisibilityPane);
+      toolVisibilityController.hostUpdated();
       await settleToolBridges(toolVisibilityPane);
     };
     await renderToolVisibility();
+    toolVisibilityController.hostConnected();
     const visibilityState = getExpandedToolCards(toolVisibilitySession);
     const visibilityIds = [...visibilityState.keys()].filter((key) => key.startsWith("toolmsg:"));
     const expandedToolId = expectDefined(visibilityIds[0], "expanded standalone tool disclosure");
@@ -979,6 +989,7 @@ describe("chat transcript invalidation", () => {
       Array.from(
         toolVisibilityPane.querySelectorAll<HTMLButtonElement>(".chat-tool-msg-summary"),
       ).filter((button) => !button.closest(".chat-tool-msg-body"));
+    await waitForSolid(() => expect(disclosureButtons()).toHaveLength(2));
     expect(disclosureButtons()).toHaveLength(2);
     expect(disclosureButtons().map((button) => button.getAttribute("aria-expanded"))).toEqual([
       "false",

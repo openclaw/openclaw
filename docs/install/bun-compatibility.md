@@ -237,6 +237,18 @@ with a one-time `SQLITE_EARLY_TOPOLOGY` warning explaining its retained layout. 
 decision at creation; those started before it completes remain conservative for
 their lifetime, while later workers inherit the completed result.
 
+On conservative runtimes, a successful service runtime-pin inspection can leave
+private snapshot files pending cleanup until process exit. OpenClaw records a
+cleanup warning and retains ownership of those files without failing the
+inspection. Read errors and required-cleanup failures still stop the operation;
+the original state database is unchanged.
+
+Gateway discovery follows the same policy when Windows reports a private snapshot
+as busy after a successful read. On a runtime without qualified native close,
+startup records a warning and keeps the snapshot registered for later cleanup.
+Read, schema, admission, native-close, and other removal errors still fail; runtimes
+with qualified native close continue to require immediate cleanup.
+
 The result is never saved in config or state. Each new long-lived host checks its
 selected runtime and library again, including after an upgrade, downgrade, or rollback.
 No schema or data migration is needed, and the installed updater is unchanged.

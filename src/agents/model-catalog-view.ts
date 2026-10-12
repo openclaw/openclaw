@@ -52,12 +52,19 @@ export function selectModelCatalogRuntimeEntry(params: {
   entry: ModelCatalogEntry;
   routeVariants: readonly ModelCatalogEntry[];
   runtimeId: string;
+  /** Capacity belongs to its runtime; API capability donors cannot supply native limits. */
+  allowApiFallback?: boolean;
 }): { entry: ModelCatalogEntry; variants: ModelCatalogEntry[] } {
   const keyOf = createModelCatalogIdentityKeyResolver();
   const key = keyOf(params.entry);
   const observed = params.routeVariants.filter((variant) => keyOf(variant) === key);
   const variants = (observed.length ? observed : [params.entry])
-    .filter((variant) => !variant.nativeRuntime || variant.nativeRuntime === params.runtimeId)
+    .filter((variant) =>
+      variant.nativeRuntime
+        ? variant.nativeRuntime === params.runtimeId
+        : params.allowApiFallback !== false ||
+          ["openclaw", "auto", params.entry.provider].includes(params.runtimeId),
+    )
     .toSorted(
       (a, b) =>
         Number(b.nativeRuntime === params.runtimeId) - Number(a.nativeRuntime === params.runtimeId),

@@ -6,6 +6,7 @@ import { expect, test } from "vitest";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { createSessionTranscriptFtsInserter } from "../config/sessions/session-transcript-fts.js";
 import { listSessionsNeedingTranscriptIndexReconcile } from "../config/sessions/session-transcript-index.js";
+import { createTranscriptEventInserter } from "../config/sessions/transcript-payload.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { rpcReq, writeSessionStore } from "./test-helpers.js";
 import {
@@ -49,9 +50,6 @@ function seedTranscriptState(storePath: string): void {
     type: "message",
     message: { content: "phase3 e2e transcript message", role: "user" },
   });
-  const insertEvent = database.db.prepare(
-    "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, ?, ?, ?)",
-  );
   // The fixture is already projected; NULL eligibility would schedule an
   // unrelated background index rebuild during the deletion measurement.
   const insertActive = database.db.prepare(
@@ -95,6 +93,7 @@ function seedTranscriptState(storePath: string): void {
       [HISTORICAL_SESSION_ID, 1, "phase3-e2e-current-generation"],
       [UNRELATED_SESSION_ID, 1, "phase3-unrelated-generation"],
     ] as const) {
+      const insertEvent = createTranscriptEventInserter(database.db, sessionId);
       const insertFts = createSessionTranscriptFtsInserter(database.db, sessionId);
       const event =
         sessionId === UNRELATED_SESSION_ID
@@ -105,7 +104,7 @@ function seedTranscriptState(storePath: string): void {
             })
           : eventJson;
       for (let index = 0; index < rows; index += 1) {
-        insertEvent.run(sessionId, index, event, now + index);
+        insertEvent({ seq: index, eventJson: event, createdAt: now + index });
         insertActive.run(sessionId, index, index, index);
         insertFts({ ...ftsFields, messageId: `${sessionId}-message-${index}` });
       }

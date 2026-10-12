@@ -16,4 +16,5 @@ export type PreparedGitHubPublicationIdentity = Readonly<{
   host?: string;
   account: GitHubToolAccount;
   env: NodeJS.ProcessEnv;
+  stale?: true;
 }>;

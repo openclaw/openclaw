@@ -1,5 +1,3 @@
-import "../../../styles/chat/side-panel.css";
-import "./chat-files-panel.tsx";
 import {
   html,
   nothing,
@@ -7,6 +5,8 @@ import {
   type PropertyValues,
   type TemplateResult,
 } from "lit";
+import "../../../styles/chat/side-panel.css";
+import "./chat-files-panel.tsx";
 import { property } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
@@ -25,8 +25,9 @@ import {
   TERMINAL_PANEL_TOGGLE_EVENT,
   type PanelToggleElement,
 } from "../../../components/panel-toggle-contract.ts";
-import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
+import "../../../components/tooltip.ts";
+import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import { sidebarPanelDefinitions } from "../chat-pane-embedded-panels.ts";
 import { readLinkFavicon, type LinkFaviconFetcher } from "../link-favicon-cache.ts";
@@ -84,6 +85,13 @@ const HOSTED_TAB_REQUESTS = [
   ["terminal", TERMINAL_PANEL_TOGGLE_EVENT, { open: true, newSession: true }],
 ] as const;
 
+// The Solid strip writes active before Web Awesome reflects its attribute.
+function activePanelTab(root: ParentNode | null | undefined) {
+  return [...(root?.querySelectorAll<HTMLElementTagNameMap["wa-tab"]>("wa-tab") ?? [])].find(
+    (tab) => tab.active,
+  );
+}
+
 class ChatSidebarRegion extends OpenClawLightDomElement {
   @property({ attribute: false }) panelIdPrefix = "";
   @property({ attribute: false }) conversationTab?: Pick<SidebarPanelDefinition, "label" | "icon">;
@@ -98,7 +106,6 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
   @property({ attribute: false }) sideFocusOrigin?: () => HTMLElement | null;
   @property({ type: Number }) availableWidth = 0;
   private previousGeometry = "";
-  private geometryFrame: number | null = null;
   private contentMounted = false;
   private focusedSurface: Element | null = null;
   private focusBeforeSideLock: HTMLElement | null = null;
@@ -123,10 +130,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
     this.nativeCloseListeners?.abort();
     this.nativeCloseListeners = undefined;
     this.focusedSurface = null;
-    if (this.geometryFrame !== null) {
-      cancelAnimationFrame(this.geometryFrame);
-      this.geometryFrame = null;
-    }
+    cancelLayout(this);
     super.disconnectedCallback();
   }
 
@@ -188,7 +192,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
     this.focusedSurface = header;
     const restoreFocus = () => {
       if (this.layout.open && this.focusedSurface === header && header?.isConnected) {
-        header.querySelector<HTMLElement>("wa-tab[active]")?.focus();
+        activePanelTab(header)?.focus();
       }
     };
     const hosted = this.hostedTabsElement(active);
@@ -625,7 +629,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
           const now = document.activeElement;
           const moved = now instanceof HTMLElement && now !== document.body && now !== origin;
           if (this.sideFocusLocked && !moved) {
-            side?.querySelector<HTMLElement>('[data-region-header="side"] wa-tab[active]')?.focus();
+            activePanelTab(side?.querySelector('[data-region-header="side"]'))?.focus();
           }
         });
       }
@@ -648,16 +652,10 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
   }
 
   private scheduleGeometryCommit() {
-    if (this.geometryFrame !== null) {
-      return;
-    }
-    // Nested panels commit after this host. Measure their final geometry once,
-    // rather than forcing layout in the middle of each parent/child update.
-    this.geometryFrame = requestAnimationFrame(() => {
-      this.geometryFrame = null;
+    scheduleLayout(this, () => {
       const shell = this.parentElement;
       if (!this.isConnected || !shell) {
-        return;
+        return undefined;
       }
       const panel = shell.querySelector<HTMLElement>(
         ".sidebar-region__right-runtime > .side-panel",
@@ -670,15 +668,17 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
       // The manual panel render is the commit boundary for its transcript.
       // Track content, not region roles: swapping can keep the same main/side
       // widths while changing the transcript width and its row measurements.
-      panel?.dispatchEvent(
-        new CustomEvent(SIDEBAR_GEOMETRY_COMMIT_EVENT, {
-          bubbles: true,
-          detail: {
-            widthChanged: geometry !== this.previousGeometry,
-          },
-        }),
-      );
-      this.previousGeometry = geometry;
+      return () => {
+        panel?.dispatchEvent(
+          new CustomEvent(SIDEBAR_GEOMETRY_COMMIT_EVENT, {
+            bubbles: true,
+            detail: {
+              widthChanged: geometry !== this.previousGeometry,
+            },
+          }),
+        );
+        this.previousGeometry = geometry;
+      };
     });
   }
 

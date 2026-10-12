@@ -374,15 +374,12 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
   let retainedRequestConflict: ReturnType<typeof resolveChatSendRequestConflict>;
   try {
     gatewayWorkAdmission = await beginSessionWorkAdmission({
+      agentId,
       scope: storePath,
       isSettling: () => admittedRunAbort?.entry?.terminalOutcomeObserved === true,
       identities: [sessionKey, backingSessionId],
       storeWriterIdentities: [sessionKey, session.sessionTarget.storeKey],
-      assertAllowed: () =>
-        consumeChatSendCurrent(params, () => {
-          assertSessionTargetCurrent();
-          assertChatSendExclusiveAdmission(request, session);
-        }),
+      assertAllowed: assertSessionTargetCurrent,
       revalidateAllowed: async () => {
         if (!restartSafeRequest) {
           return commitChatWorkAdmission(null);

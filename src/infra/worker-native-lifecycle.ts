@@ -12,6 +12,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { captureSqliteWorkerEnvironmentData } from "./bun-sqlite-library.js";
+import { runWithMainThreadTask } from "./main-thread-stall.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import {
   captureRuntimeWorkerSource,
@@ -149,7 +150,9 @@ function nativeRuntime(source: NativeSource): NativeRuntime {
       handles,
       service() {
         for (;;) {
-          const next = receiveMessageOnPort(port1);
+          const next = runWithMainThreadTask("worker:control-decode", () =>
+            receiveMessageOnPort(port1),
+          );
           if (!next) {
             break;
           }

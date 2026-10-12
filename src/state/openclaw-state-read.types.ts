@@ -267,7 +267,6 @@ export type OpenClawStateReadCommand =
     }
   | { type: "githubPublication.sharedObservation"; input: SharedGitHubPublicationReadInput }
   | { type: "githubPublication.request"; requestId: string }
-  | { type: "githubRepository.request"; requestId: string }
   | { type: "githubPublication.knownPullRequestUrls"; input: GitHubPublicationReceiptTarget }
   | {
       type: "githubRepository.knownPullRequestUrls";
@@ -417,10 +416,6 @@ export type OpenClawStateReadResult =
       row: GitHubPublicationRow | undefined;
     }
   | {
-      type: "githubRepository.request";
-      row: RepositoryGitHubPublicationRow | undefined;
-    }
-  | {
       type: "githubPublication.knownPullRequestUrls";
       urls: string[];
     }
@@ -463,7 +458,6 @@ export type OpenClawStateReadResult =
       type: "subagents.runs";
       projection: "maintenance";
       runs: Map<string, SubagentRunMaintenanceRecord>;
-      maintenanceDigest: string;
     }
   | { type: "subagents.restore"; count: number }
   | {

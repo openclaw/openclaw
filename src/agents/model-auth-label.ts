@@ -6,11 +6,14 @@ import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import {
   externalCliDiscoveryForProviderAuth,
   ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync,
   loadAuthProfileStoreWithoutExternalProfiles,
   resolveAuthProfileDisplayLabel,
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
 import { isStoredCredentialCompatibleWithAuthProvider } from "./auth-profiles/order.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { readCodexCliCredentialsCached } from "./cli-credentials.js";
 import {
   resolveEnvApiKey,
@@ -18,7 +21,7 @@ import {
   resolveUsableCustomProviderApiKey,
 } from "./model-auth.js";
 
-export function resolveModelAuthLabel(params: {
+type ModelAuthLabelParams = {
   provider?: string;
   cfg?: OpenClawConfig;
   sessionEntry?: Partial<Pick<SessionEntry, "authProfileOverride">>;
@@ -27,7 +30,58 @@ export function resolveModelAuthLabel(params: {
   codexCliCredentialsHome?: string;
   includeExternalProfiles?: boolean;
   acceptedProviderIds?: readonly string[];
-}): string | undefined {
+  authStore?: AuthProfileStore;
+};
+
+/** @deprecated Retained for the synchronous Plugin SDK model-header API. Use resolveModelAuthLabelAsync. */
+export function resolveModelAuthLabel(params: ModelAuthLabelParams): string | undefined {
+  if (!params.provider?.trim()) {
+    return undefined;
+  }
+  const profileOverride = params.sessionEntry?.authProfileOverride?.trim();
+  const store =
+    params.authStore ??
+    (params.includeExternalProfiles === false
+      ? loadAuthProfileStoreWithoutExternalProfiles(params.agentDir, { profileId: profileOverride })
+      : ensureAuthProfileStore(params.agentDir, {
+          profileId: profileOverride,
+          externalCli: externalCliDiscoveryForProviderAuth({
+            cfg: params.cfg,
+            provider: normalizeProviderId(params.provider ?? ""),
+            preferredProfile: profileOverride,
+          }),
+        }));
+  return resolveModelAuthLabelFromStore(params, store);
+}
+
+export async function resolveModelAuthLabelAsync(
+  params: ModelAuthLabelParams,
+): Promise<string | undefined> {
+  if (!params.provider?.trim()) {
+    return undefined;
+  }
+  const profileOverride = params.sessionEntry?.authProfileOverride?.trim();
+  const store =
+    params.authStore ??
+    (params.includeExternalProfiles === false
+      ? await ensureAuthProfileStoreWithoutExternalProfilesAsync(params.agentDir, {
+          profileId: profileOverride,
+        })
+      : await ensureAuthProfileStoreAsync(params.agentDir, {
+          profileId: profileOverride,
+          externalCli: externalCliDiscoveryForProviderAuth({
+            cfg: params.cfg,
+            provider: normalizeProviderId(params.provider),
+            preferredProfile: profileOverride,
+          }),
+        }));
+  return resolveModelAuthLabelFromStore(params, store);
+}
+
+function resolveModelAuthLabelFromStore(
+  params: ModelAuthLabelParams,
+  store: AuthProfileStore,
+): string | undefined {
   const resolvedProvider = params.provider?.trim();
   if (!resolvedProvider) {
     return undefined;
@@ -35,17 +89,6 @@ export function resolveModelAuthLabel(params: {
 
   const providerKey = normalizeProviderId(resolvedProvider);
   const profileOverride = params.sessionEntry?.authProfileOverride?.trim();
-  const store =
-    params.includeExternalProfiles === false
-      ? loadAuthProfileStoreWithoutExternalProfiles(params.agentDir, { profileId: profileOverride })
-      : ensureAuthProfileStore(params.agentDir, {
-          profileId: profileOverride,
-          externalCli: externalCliDiscoveryForProviderAuth({
-            cfg: params.cfg,
-            provider: providerKey,
-            preferredProfile: profileOverride,
-          }),
-        });
   const acceptedProviderKeys = uniqueStrings(
     [...(params.acceptedProviderIds ?? []).map(normalizeProviderId), providerKey].filter(Boolean),
   );

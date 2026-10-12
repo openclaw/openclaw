@@ -38,6 +38,14 @@ import {
 } from "./store-validation.js";
 import type { WorkerEnvironmentMutationInput } from "./store.types.js";
 
+function resolveNullablePatch<T>(
+  patch: T | null | undefined,
+  current: T | null,
+  normalize: (value: T) => T,
+): T | null {
+  return patch === undefined ? current : patch === null ? null : normalize(patch);
+}
+
 export function createWorkerEnvironmentTransitionOps(db: DatabaseSync, now: () => number) {
   return {
     refreshBootstrapReceipt(
@@ -183,21 +191,17 @@ export function createWorkerEnvironmentTransitionOps(db: DatabaseSync, now: () =
           "Failed bootstrap transition requires explicit lease clearing after provider teardown",
         );
       }
-      const leaseId =
-        patch.leaseId === undefined
-          ? current.leaseId
-          : patch.leaseId === null
-            ? null
-            : requireWorkerEnvironmentString(patch.leaseId, "lease id");
+      const leaseId = resolveNullablePatch(patch.leaseId, current.leaseId, (value) =>
+        requireWorkerEnvironmentString(value, "lease id"),
+      );
       if (current.leaseId && leaseId !== current.leaseId && !clearsLeaseAfterTeardownFailure) {
         throw new Error("Worker environment provider lease id is immutable once persisted");
       }
-      const nodeDeviceId =
-        patch.nodeDeviceId === undefined
-          ? (current.nodeDeviceId ?? null)
-          : patch.nodeDeviceId === null
-            ? null
-            : requireWorkerEnvironmentString(patch.nodeDeviceId, "node device id");
+      const nodeDeviceId = resolveNullablePatch(
+        patch.nodeDeviceId,
+        current.nodeDeviceId ?? null,
+        (value) => requireWorkerEnvironmentString(value, "node device id"),
+      );
       if (
         current.nodeDeviceId &&
         nodeDeviceId !== current.nodeDeviceId &&
@@ -205,21 +209,16 @@ export function createWorkerEnvironmentTransitionOps(db: DatabaseSync, now: () =
       ) {
         throw new Error("Worker environment node device id is immutable once persisted");
       }
-      const sshEndpoint =
-        patch.sshEndpoint === undefined
-          ? current.sshEndpoint
-          : patch.sshEndpoint === null
-            ? null
-            : normalizeWorkerSshEndpoint(patch.sshEndpoint);
+      const sshEndpoint = resolveNullablePatch(
+        patch.sshEndpoint,
+        current.sshEndpoint,
+        normalizeWorkerSshEndpoint,
+      );
       const sharedHost = leaseId === null ? null : (patch.sharedHost ?? current.sharedHost);
       const desktop =
         leaseId === null
           ? null
-          : patch.desktop === undefined
-            ? current.desktop
-            : patch.desktop === null
-              ? null
-              : normalizeWorkerDesktopEndpoint(patch.desktop);
+          : resolveNullablePatch(patch.desktop, current.desktop, normalizeWorkerDesktopEndpoint);
       const acceptsBootstrapReceipt =
         to === "ready" &&
         (from === "bootstrapping" || (from === "provisioning" && sshEndpoint === null));
@@ -296,13 +295,9 @@ export function createWorkerEnvironmentTransitionOps(db: DatabaseSync, now: () =
         to === "failed" ||
         to === "orphaned";
       const ownerEndingTransition =
-        (from === "ready" || from === "idle" || from === "attached") &&
-        (to === "bootstrapping" ||
-          (from === "attached" && to === "idle") ||
-          to === "draining" ||
-          to === "destroyed" ||
-          to === "failed" ||
-          to === "orphaned");
+        revokesCredential &&
+        !acceptsAttachedCredential &&
+        (from === "ready" || from === "idle" || from === "attached");
       const ownerEpoch = acceptsBootstrapReceipt
         ? Math.max(1, current.ownerEpoch)
         : acceptsAttachedCredential || ownerEndingTransition

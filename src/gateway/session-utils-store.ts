@@ -218,7 +218,9 @@ export async function withGatewaySessionEntry<T>(
   cfg: OpenClawConfig = getRuntimeConfig(),
   assertConfigCurrent?: () => void,
 ): Promise<T> {
-  const assertRoutingCurrent = captureSessionMutationRouting(cfg);
+  const assertRoutingCurrent = captureSessionMutationRouting(cfg, undefined, [
+    { sessionKey, agentId: opts?.agentId },
+  ]);
   const assertConfig = assertConfigCurrent ?? (() => assertRoutingCurrent(getRuntimeConfig()));
   return withGatewaySessionStoreTarget(
     { cfg, key: sessionKey, ...opts },

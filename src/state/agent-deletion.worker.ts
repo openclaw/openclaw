@@ -5,12 +5,16 @@ import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
 } from "../infra/sqlite-worker-operation-admission.js";
-import { readAgentDeletionJournalAuthorityInDatabase } from "./agent-deletion-journal-authority.worker.js";
+import {
+  readAgentDeletionJournalAuthorityInDatabase,
+  retireAgentDeletionJournalInDatabase,
+} from "./agent-deletion-journal-authority.worker.js";
 import {
   beginAgentDeletionJournalInDatabase,
   completeAgentDeletionJournalInDatabase,
   deleteAgentDeletionJournalInDatabase,
   handoffAgentDeletionJournalInDatabase,
+  listPendingAgentDeletionJournalsInDatabase,
   readAgentDeletionJournalInDatabase,
   updateAgentDeletionJournalPathsInDatabase,
   type AgentDeletionJournalCleanupPath,
@@ -139,12 +143,15 @@ export const agentDeletionOperations = {
     ),
   "agentDeletion.read": (input: { agentId: string }, { open }: WorkerWriteOperationContext) =>
     readAgentDeletionJournalInDatabase(open(), input.agentId),
+  "agentDeletion.listPending": (_input: undefined, { open }: WorkerWriteOperationContext) =>
+    listPendingAgentDeletionJournalsInDatabase(open()),
   "agentDeletion.begin": (
     input: {
       entry: Parameters<typeof beginAgentDeletionJournalInDatabase>[1];
       lease: OpenClawStateLeaseIdentity;
       expectedClawInstall?: AgentDeletionWorkerPredicate["expectedClawInstall"];
       preserveDeleteFiles?: boolean;
+      recoveryOperationId?: string;
     },
     context: WorkerWriteOperationContext,
   ) =>
@@ -160,6 +167,7 @@ export const agentDeletionOperations = {
           database,
           input.entry,
           input.preserveDeleteFiles,
+          input.recoveryOperationId,
         );
         assertLease(database, input.lease, input.entry.agentId, "commit");
         deferSqliteWorkerCommitReceipt(database.db, {
@@ -175,6 +183,21 @@ export const agentDeletionOperations = {
     input: { guard: AgentDeletionWorkerGuard },
     context: WorkerWriteOperationContext,
   ) => guarded(input.guard, context, () => undefined),
+  "agentDeletion.retire": (
+    input: { guard: AgentDeletionWorkerGuard },
+    context: WorkerWriteOperationContext,
+  ) =>
+    guarded(
+      input.guard,
+      context,
+      (database) => {
+        const { agentId, operationId } = input.guard.predicate;
+        if (!retireAgentDeletionJournalInDatabase(database, agentId, operationId)) {
+          throw new Error(`Failed to retire deletion journal for agent ${agentId}.`);
+        }
+      },
+      { journalChanged: true },
+    ),
   "agentDeletion.assertNoDatabaseLeasesUnowned": (
     input: { agentId: string },
     context: WorkerWriteOperationContext,

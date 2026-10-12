@@ -827,6 +827,7 @@ activity does not reevaluate the guards or change their statuses. Command mentio
 in prose, quotes, or code fences are not approval comments. The workflow filters
 ordinary comments before allocating a runner; a command mention can start the
 lightweight resolver, which validates the syntax before scheduling review.
+GitHub still records skipped workflow runs for ordinary comments.
 Both guards share one review job, and comment events do not rerun the test suite.
 Evaluation uses trusted repository code and GitHub metadata without
 executing contributor code or comment text.

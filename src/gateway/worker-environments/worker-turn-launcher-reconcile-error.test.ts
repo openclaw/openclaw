@@ -85,7 +85,6 @@ describe("worker turn recovery after environment reconciliation errors", () => {
       resolveProvider: () => provider,
       prepareInstallation: async () => installation,
       bootstrapWorker: vi.fn(),
-      executeInference: vi.fn(),
       placementStore: createWorkerSessionPlacementGate(placements),
       nodeTunnelManager,
       logger: { warn },
@@ -93,6 +92,7 @@ describe("worker turn recovery after environment reconciliation errors", () => {
     const workspaceOperations = createWorkerWorkspaceOperationCoordinator();
     const dispatch = coordinateWorkerPlacementDispatch(
       createWorkerPlacementDispatchService({
+        initialPlacements: placements.list(),
         placements,
         environments,
         runnerAvailability: { read: () => undefined, version: () => 0 },

@@ -288,9 +288,6 @@ process.stdin.pipe(child.stdin);
                 bootstrapWorker: async () => {
                   throw new Error("Warm allocation already bootstrapped");
                 },
-                executeInference: async () => {
-                  throw new Error("No inference belongs in destination proof");
-                },
                 nodeTunnelManager: tunnels,
                 placementStore: createWorkerSessionPlacementGate(placements),
               });
@@ -300,6 +297,7 @@ process.stdin.pipe(child.stdin);
                 node: await adapter.getCurrentNode(deviceId),
               }));
               const runtime = createGatewayWorkerPlacementRuntime({
+                initialPlacements: placements.list(),
                 scheduler,
                 environments,
                 placements,

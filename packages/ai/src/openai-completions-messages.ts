@@ -55,9 +55,11 @@ export function convertMessages(
   options: {
     cacheOptOutIndexes?: Set<number>;
     preserveSystemPromptCacheBoundary?: boolean;
+    supportsTools?: boolean;
   } = {},
 ): ChatCompletionMessageParam[] {
   const params: ChatCompletionMessageParam[] = [];
+  const supportsTools = options.supportsTools !== false;
 
   const normalizeToolCallId = (id: string): string => {
     // Responses ids can contain a pipe plus a long provider item id. Chat
@@ -173,7 +175,15 @@ export function convertMessages(
         } else if (block.type === "thinking" && block.thinking.trim().length > 0) {
           nonEmptyThinkingBlocks.push(block);
         } else if (block.type === "toolCall") {
-          toolCalls.push(block);
+          if (supportsTools) {
+            toolCalls.push(block);
+          } else {
+            assistantTexts.push(
+              sanitizeSurrogates(
+                `[tool call id=${block.id} name=${block.name}] ${JSON.stringify(block.arguments)}`,
+              ),
+            );
+          }
         }
       });
       if (nonEmptyThinkingBlocks.length > 0 && compat.requiresThinkingAsText) {
@@ -261,15 +271,30 @@ export function convertMessages(
         const mediaPlaceholder = describeToolResultMediaPlaceholder(toolMsg.content);
         const images = toolMsg.content.filter(isImageWithMediaPayload);
         const content = textResult.trim() ? textResult : (mediaPlaceholder ?? "(no output)");
-        const toolResultMsg: ChatCompletionToolMessageParam = {
-          role: "tool",
-          content,
-          tool_call_id: toolMsg.toolCallId,
-        };
-        if (compat.requiresToolResultName && toolMsg.toolName) {
-          (toolResultMsg as typeof toolResultMsg & { name?: string }).name = toolMsg.toolName;
+        if (supportsTools) {
+          const toolResultMsg: ChatCompletionToolMessageParam = {
+            role: "tool",
+            content,
+            tool_call_id: toolMsg.toolCallId,
+          };
+          if (compat.requiresToolResultName && toolMsg.toolName) {
+            (toolResultMsg as typeof toolResultMsg & { name?: string }).name = toolMsg.toolName;
+          }
+          params.push(toolResultMsg);
+        } else {
+          const text = sanitizeSurrogates(
+            `[tool result id=${toolMsg.toolCallId} name=${toolMsg.toolName}] ${content}`,
+          );
+          // Collapse before recording later cache exclusions and strict-key shaping.
+          const previous = params.at(-1);
+          if (previous?.role !== "assistant") {
+            params.push({ role: "assistant", content: text });
+          } else if (Array.isArray(previous.content)) {
+            previous.content.push({ type: "text", text });
+          } else {
+            previous.content = previous.content ? `${previous.content}\n${text}` : text;
+          }
         }
-        params.push(toolResultMsg);
 
         if (images.length > 0 && model.input.includes("image")) {
           const boundedToolName = sanitizeSurrogates(truncateUtf16Safe(toolMsg.toolName ?? "", 64));
@@ -291,7 +316,7 @@ export function convertMessages(
       i = j - 1;
 
       if (imageContentParts.length > 0) {
-        if (compat.requiresAssistantAfterToolResult) {
+        if (supportsTools && compat.requiresAssistantAfterToolResult) {
           params.push({ role: "assistant", content: "I have processed the tool results." });
         }
         params.push({
@@ -300,7 +325,7 @@ export function convertMessages(
         });
         lastRole = "user";
       } else {
-        lastRole = "toolResult";
+        lastRole = supportsTools ? "toolResult" : "assistant";
       }
       continue;
     }

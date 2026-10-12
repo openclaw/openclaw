@@ -4,7 +4,7 @@ import type {
   ThemeWorkingIndicator,
 } from "../../../../../packages/gateway-protocol/src/theme.ts";
 import { icons } from "../../../components/icons.ts";
-import "../../../components/elapsed-time.ts";
+import "../../../components/elapsed-time.tsx";
 import "../../../components/working-phrase.ts";
 import { currentThemeBranding } from "../../../components/neutral-mark.ts";
 import { renderThemeBrandIcon } from "../../../components/theme-brand-icon.ts";
@@ -16,7 +16,7 @@ import type { TurnRecap } from "../chat-progress.ts";
 import type { ChatSubagentWait } from "../chat-subagent-wait.ts";
 import { selectWorkingClawSurprise } from "./chat-working-indicator-surprise.ts";
 
-export function renderChatBubbleDots(working = false) {
+function renderChatBubbleDots(working = false) {
   return html`<span
     class="chat-bubble-dots ${working ? "chat-bubble-dots--working" : ""}"
     aria-hidden="true"
@@ -25,8 +25,8 @@ export function renderChatBubbleDots(working = false) {
 }
 
 /** Local disclosure state stays on the native element while status text streams. */
-export function renderChatBubbleActivity(content: unknown, label: string, working = false) {
-  return html`<details class="chat-bubble-activity">
+function renderChatBubbleActivity(content: unknown, label: string, working = false) {
+  return html`<details class="chat-bubble-activity chat-bubble-activity--working">
     <summary
       class="chat-bubble-activity__summary"
       aria-label=${label}
@@ -224,7 +224,8 @@ export function renderChatWorkingIndicator(
   // Keep the live activity slot stable when the parent yields or resumes.
   const content = html`${waitingSubagents && options.subagentActivity ? nothing : status}
   ${options.subagentActivity ?? nothing}`;
-  return options.bubbleMode
+  // Human-action and child-wait states keep their existing visible controls.
+  return options.bubbleMode && working && runningSubagents === 0
     ? renderChatBubbleActivity(content, t("chat.view.workingDetails"), true)
     : content;
 }

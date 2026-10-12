@@ -10,7 +10,6 @@ import type { SessionTranscriptCorpusEntry } from "openclaw/plugin-sdk/memory-co
 import {
   formatMemoryIndexRebuildGuidance,
   MEMORY_CHUNKING_VERSION,
-  MEMORY_INDEX_VECTOR_TABLE,
   type MemorySyncParams,
   type MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -22,7 +21,6 @@ import {
   type EmbeddingProviderRuntime,
 } from "./embeddings.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
-import { memoryDatabaseTableExists } from "./manager-db-kernel.js";
 import { cleanupAgedMemoryReindexTempFiles, removeMemoryDatabaseFiles } from "./manager-db.js";
 import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import { withMemoryIndexGeneration } from "./manager-index-generation-lease.js";
@@ -626,7 +624,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
           return {
             nextMeta,
             vectorIndexComplete,
-            hasVectors: memoryDatabaseTableExists(shadow.db, "main", MEMORY_INDEX_VECTOR_TABLE),
+            hasVectors: shadow.facts.hasVectorTable,
           };
         } finally {
           // Escaped continuations must fail closed, never write to the live DB.

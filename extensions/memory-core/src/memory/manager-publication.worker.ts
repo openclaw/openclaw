@@ -7,17 +7,22 @@ import {
 import {
   closeMemorySqliteWalMaintenance,
   configureMemorySqliteWalMaintenance,
+  loadSqliteVecExtension,
   stopMemorySqliteWalMaintenance,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   assertTransactionUsable,
+  admitSqliteSchema,
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   openNodeSqliteDatabase,
   resolveExistingSqliteFileUri,
   requestSqliteWorkerOperationAdmission,
   readSqliteDatabasePendingWriteToken,
+  readSqliteDatabaseWriteTokenForPath,
   runSqliteImmediateTransactionSync,
+  runSqliteSingleStatementSync,
+  setSqliteBusyTimeout,
   supportsNodeSqliteExtensionLoading,
   tableExists,
   type SqliteWorkerBackend,
@@ -73,6 +78,7 @@ const agentConnectionPragmas = new WeakMap<
   DatabaseSync,
   Pick<MemoryShadowConnection["pragmas"], "busy_timeout" | "foreign_keys">
 >();
+const loadedExtensions = new WeakMap<DatabaseSync, string>();
 
 function failure(error: unknown): MemoryShadowFailure {
   return {
@@ -209,12 +215,11 @@ function createPublicationBackend(
         | { kind: "cache"; header: MemoryEmbeddingCacheHeader }
       ))
     | undefined;
-  let loadedExtension: string | undefined;
   const loadExtension = (extensionPath: string | undefined) => {
-    if (extensionPath && extensionPath !== loadedExtension) {
+    if (extensionPath && extensionPath !== loadedExtensions.get(db)) {
       loadSqliteVecExtensionFromPath(db, extensionPath);
       assertPath();
-      loadedExtension = extensionPath;
+      loadedExtensions.set(db, extensionPath);
     }
   };
   assertPath();
@@ -223,7 +228,11 @@ function createPublicationBackend(
       throw new Error("Invalid memory publication connection policy");
     }
     if (ownsConnection) {
-      db.exec(`PRAGMA ${name} = ${value}`);
+      if (name === "busy_timeout") {
+        setSqliteBusyTimeout(db, value);
+      } else {
+        db.exec(`PRAGMA ${name} = ${value}`);
+      }
     }
   }
   const discard = () => {
@@ -244,7 +253,7 @@ function createPublicationBackend(
     let restoredBusyTimeout = false;
     const restoreBusyTimeout = () => {
       if (!restoredBusyTimeout) {
-        db.exec(`PRAGMA busy_timeout = ${input.pragmas.busy_timeout}`);
+        setSqliteBusyTimeout(db, input.pragmas.busy_timeout);
         restoredBusyTimeout = true;
       }
     };
@@ -252,7 +261,7 @@ function createPublicationBackend(
       assertPath();
       // Failed BEGIN is returned to the preparing host without sleeping here.
       // It revalidates memory-file input before every retry, as before.
-      db.exec("PRAGMA busy_timeout = 0");
+      setSqliteBusyTimeout(db, 0);
       const value = run({
         onBegin: () => {
           entered = true;
@@ -288,6 +297,44 @@ function createPublicationBackend(
         { withCommit: hooks.withCommit },
       ),
     );
+  const writeSingleStatement = <T>(statement: () => T): MemoryPublicationResult<T> => {
+    let entered = false;
+    let committed = false;
+    let restoredBusyTimeout = true;
+    const restoreBusyTimeout = () => {
+      if (!restoredBusyTimeout) {
+        setSqliteBusyTimeout(db, input.pragmas.busy_timeout);
+        restoredBusyTimeout = true;
+      }
+    };
+    try {
+      entered = true;
+      admit("transaction");
+      // Autocommit makes the statement the effect boundary.
+      admit("commit");
+      setSqliteBusyTimeout(db, 0);
+      restoredBusyTimeout = false;
+      let value: T;
+      try {
+        value = runSqliteSingleStatementSync(db, statement);
+      } catch (error) {
+        const nativeCode = failure(error).errcode;
+        // Lock refusal leaves no durable write, so the preparing host may retry.
+        entered = nativeCode === undefined || ![5, 6].includes(nativeCode & 0xff);
+        throw error;
+      }
+      committed = true;
+      const writeToken = readSqliteDatabaseWriteTokenForPath(databasePath);
+      restoreBusyTimeout();
+      return { ok: true, value, writeToken };
+    } catch (error) {
+      return { ok: false, error: failure(error), entered, committed };
+    } finally {
+      if (db.isOpen) {
+        restoreBusyTimeout();
+      }
+    }
+  };
   const withFacts = <T>(result: MemoryPublicationResult<T>): MemoryPublicationResult<T> =>
     result.ok ? { ...result, facts: readMemoryDatabaseFacts(db) } : result;
   const writeMeta = (value: string) => {
@@ -300,6 +347,23 @@ function createPublicationBackend(
     );
   };
   return {
+    async prepare(command) {
+      if (command.type !== "vector.prepare") {
+        return;
+      }
+      const extensionPath = command.input.state.extensionPath;
+      const loadedPath = loadedExtensions.get(db);
+      if (loadedPath && (!extensionPath || extensionPath === loadedPath)) {
+        return;
+      }
+      // Module resolution can yield; the executor awaits preparation before
+      // entering its synchronous operation and transaction admission.
+      const loaded = await loadSqliteVecExtension({ db, extensionPath });
+      if (!loaded.ok || !loaded.extensionPath) {
+        throw new Error(loaded.error ?? "unknown sqlite-vec load error");
+      }
+      loadedExtensions.set(db, loaded.extensionPath);
+    },
     assertSettled() {
       assertTransactionUsable(db);
       if (!db.isOpen || db.isTransaction) {
@@ -326,7 +390,11 @@ function createPublicationBackend(
         // Storage/STRICT migration must disable foreign keys before BEGIN.
         db.exec("PRAGMA foreign_keys = OFF");
         try {
-          return withFacts(write(() => ensureMemoryIndexSchema({ ...command.input, db })));
+          const result = write(() => ensureMemoryIndexSchema({ ...command.input, db }));
+          if (result.ok) {
+            admitSqliteSchema(db);
+          }
+          return withFacts(result);
         } finally {
           if (db.isOpen) {
             db.exec(`PRAGMA foreign_keys = ${input.pragmas.foreign_keys}`);
@@ -340,13 +408,16 @@ function createPublicationBackend(
         return readMemorySourceChunks(db, command.input.source, command.input.path);
       }
       if (command.type === "index.writeMetadata") {
-        return withFacts(write(() => writeMeta(JSON.stringify(command.input))));
+        const serialized = JSON.stringify(command.input);
+        return withFacts(writeSingleStatement(() => writeMeta(serialized)));
       }
       if (command.type === "source.state") {
         return loadMemorySourceFileState({ db, ...command.input });
       }
       if (command.type === "source.refresh") {
-        return withFacts(write(() => refreshMemorySessionSourceState(db, command.input)));
+        return withFacts(
+          writeSingleStatement(() => refreshMemorySessionSourceState(db, command.input)),
+        );
       }
       if (command.type === "source.refreshOrigin") {
         return withFacts(write(() => refreshMemorySourceOrigin(db, command.input)));
@@ -461,15 +532,23 @@ function createPublicationBackend(
         });
         return command.type === "cache.write" ? finish(outcome) : outcome;
       }
-      if (command.type === "vector.retireLegacy") {
-        if (!tableExists(db, "chunks_vec")) {
-          return { ok: true, value: false };
+      if (command.type === "vector.prepare") {
+        const loadedPath = loadedExtensions.get(db);
+        if (!loadedPath) {
+          throw new Error("Memory vector extension was not prepared");
         }
-        loadExtension(command.input.state.extensionPath);
-        return write(() => {
-          db.exec("DROP TABLE IF EXISTS chunks_vec");
-          return true;
-        });
+        if (!tableExists(db, "chunks_vec")) {
+          return {
+            ok: true,
+            value: { extensionPath: loadedPath, retiredLegacy: false },
+          };
+        }
+        return withFacts(
+          write(() => {
+            db.exec("DROP TABLE IF EXISTS chunks_vec");
+            return { extensionPath: loadedPath, retiredLegacy: true };
+          }),
+        );
       }
       if (command.type === "vector.ensure") {
         const { dimensions } = command.input;

@@ -7,6 +7,7 @@ import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { ShellLayoutOwner } from "../app/shell-layout-owner.ts";
 import { ShellLayoutBoundary, ShellLayoutProvider } from "../app/shell-layout-traits-solid.tsx";
 import { ApplicationProvider, useApplication } from "../lib/reactive/context.ts";
+import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { collectGarbageForTest } from "../test-helpers/garbage-collection.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { defineSolidBridge, LitContent, type SolidBridgeElement } from "./solid-bridge.ts";
@@ -20,7 +21,7 @@ const changed = vi.fn<(host: Host, key: keyof Props) => void>();
 const Bridge = defineSolidBridge<Props, Methods>(
   "openclaw-solid-bridge-test",
   (props, host) => {
-    const local = { id: "owned" };
+    const local = { id: props.label };
     mounted(local);
     onCleanup(() => disposed(local));
     return (
@@ -74,6 +75,25 @@ function createHost() {
   return document.createElement("openclaw-solid-bridge-test") as Host;
 }
 
+it("runs Solid caller effects after the parent render completes", () => {
+  const EffectBridge = defineSolidBridge<{ label: string }>(
+    "openclaw-solid-effect-bridge-test",
+    (props) => {
+      const [label, setLabel] = createSignal("");
+      createEffect(
+        () => props.label,
+        (value) => {
+          setLabel(value);
+        },
+      );
+      return <output>{label()}</output>;
+    },
+    { properties: { label: { default: "" } } },
+  );
+  const view = render(() => <EffectBridge label="committed" />);
+  expect(view.getByText("committed")).toBeTruthy();
+});
+
 beforeEach(() => {
   mounted.mockClear();
   disposed.mockClear();
@@ -85,28 +105,37 @@ afterEach(async () => {
   await Promise.resolve();
 });
 
-it("mounts once, mirrors attributes/properties, and preserves synchronous imperative methods", async () => {
-  const host = createHost();
-  host.setAttribute("label", "attribute");
-  host.setAttribute("item-count", "4");
-  host.show();
-  const payload = {};
-  expect(host.setPayload(payload)).toBe(payload);
-  expect(host.enabled).toBe(true);
-  document.body.append(host);
-  await host.updateComplete;
-  expect(host.querySelector("output")?.textContent).toBe("attribute:4:true");
-  expect(host.payload).toBe(payload);
-  expect(host.hasAttribute("payload")).toBe(false);
-  expect(mounted).toHaveBeenCalledTimes(1);
+it.each([false, true])(
+  "mounts once and preserves setup reads with application provider: %s",
+  async (withProvider) => {
+    const host = createHost();
+    host.setAttribute("label", "attribute");
+    host.setAttribute("item-count", "4");
+    host.show();
+    const payload = {};
+    expect(host.setPayload(payload)).toBe(payload);
+    expect(host.enabled).toBe(true);
+    // SAFETY: this bridge test transports context without reading any capabilities.
+    const container = withProvider
+      ? createApplicationContextProvider({} as ApplicationContext)
+      : document.createElement("div");
+    container.append(host);
+    document.body.append(container);
+    await host.updateComplete;
+    expect(host.querySelector("output")?.textContent).toBe("attribute:4:true");
+    expect(host.payload).toBe(payload);
+    expect(host.hasAttribute("payload")).toBe(false);
+    expect(mounted).toHaveBeenCalledTimes(1);
 
-  host.label = "property";
-  host.removeAttribute("enabled");
-  host.close();
-  await host.updateComplete;
-  expect(host.querySelector("output")?.textContent).toBe("property:4:false");
-  expect(mounted).toHaveBeenCalledTimes(1);
-});
+    host.label = "property";
+    host.removeAttribute("enabled");
+    host.close();
+    await host.updateComplete;
+    expect(host.querySelector("output")?.textContent).toBe("property:4:false");
+    expect(host.querySelector("section")?.getAttribute("data-owned")).toBe("attribute");
+    expect(mounted).toHaveBeenCalledTimes(1);
+  },
+);
 
 it("publishes changed properties synchronously before rendering and suppresses equal assignments", async () => {
   const host = createHost();

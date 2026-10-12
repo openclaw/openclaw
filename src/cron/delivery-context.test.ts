@@ -51,10 +51,10 @@ describe("cron delivery context", () => {
     },
   ])(
     "resolves a concrete route with live context taking precedence %#",
-    ({ current, stored: saved, threadId, expected }) => {
+    async ({ current, stored: saved, threadId, expected }) => {
       extractDeliveryInfoMock.mockReturnValueOnce({ deliveryContext: saved, threadId });
       expect(
-        resolveCronCreationDelivery({
+        await resolveCronCreationDelivery({
           cfg: {},
           agentSessionKey: sessionKey,
           currentDeliveryContext: current,
@@ -89,10 +89,10 @@ describe("cron delivery context", () => {
     { current: { channel: " WebChat " }, sessionKey, stored, reads: 0 },
   ])(
     "does not turn absent or internal context into external delivery %#",
-    ({ current, stored: saved, sessionKey: key, reads }) => {
+    async ({ current, stored: saved, sessionKey: key, reads }) => {
       extractDeliveryInfoMock.mockReturnValueOnce({ deliveryContext: saved, threadId: undefined });
       expect(
-        resolveCronCreationDelivery({
+        await resolveCronCreationDelivery({
           cfg: {},
           agentSessionKey: key,
           currentDeliveryContext: current,

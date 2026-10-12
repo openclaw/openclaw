@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs, { type BigIntStats, type Stats } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync as HandoffDatabase } from "node:sqlite";
+import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { root as openLockRoot, type Root } from "@openclaw/fs-safe/root";
 import { sql } from "kysely";
 import { z } from "zod";
@@ -49,6 +50,8 @@ const HANDOFF_BUSY_TIMEOUT_MS = 5_000;
 const writeAdmissions = new AsyncLocalStorage<{
   owner: string;
   deadline: number;
+  databasePath: string;
+  lockRoot?: Root;
 }>();
 
 type HandoffDatabaseOwner = {
@@ -239,20 +242,24 @@ function createMissingDatabaseFile(
   parentReceipt: HandoffDirectoryReceipt,
 ): void {
   let descriptor: number | undefined;
+  let privateFile: ReturnType<typeof createPrivateWindowsFile> | undefined;
   try {
-    descriptor =
-      process.platform === "win32"
-        ? createPrivateWindowsFile(databasePath)
-        : fs.openSync(
-            databasePath,
-            fs.constants.O_RDWR |
-              fs.constants.O_CREAT |
-              fs.constants.O_EXCL |
-              fs.constants.O_NOFOLLOW,
-            0o600,
-          );
+    if (process.platform === "win32") {
+      privateFile = createPrivateWindowsFile(databasePath);
+      descriptor = privateFile.fd;
+    } else {
+      descriptor = fs.openSync(
+        databasePath,
+        fs.constants.O_RDWR | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW,
+        0o600,
+      );
+    }
   } catch (error) {
-    if (!hasErrnoCode(error, "EEXIST")) {
+    const alreadyExists =
+      process.platform === "win32"
+        ? error instanceof FsSafeError && error.code === "already-exists"
+        : hasErrnoCode(error, "EEXIST");
+    if (!alreadyExists) {
       throw error;
     }
   }
@@ -277,7 +284,9 @@ function createMissingDatabaseFile(
     const directorySync = syncDirectorySync(parentReceipt);
     requireDirectorySync(directorySync, "Managed handoff lease directory");
   } finally {
-    if (descriptor !== undefined) {
+    if (privateFile) {
+      privateFile.close();
+    } else if (descriptor !== undefined) {
       fs.closeSync(descriptor);
     }
   }
@@ -406,12 +415,14 @@ export function createManagedHandoffLeaseDatabase(
     if (!observeUnadoptable(target)) {
       return;
     }
+    const current = writeAdmissions.getStore();
+    const admission = current?.databasePath === target ? current : undefined;
     const release = acquireFileLockSyncWithRetry(
       target,
-      writeLockRoot
+      writeLockRoot || admission
         ? {
-            lockRoot: writeLockRoot,
-            reentrantOwner: writeAdmissions.getStore()?.owner,
+            lockRoot: writeLockRoot ?? admission?.lockRoot,
+            reentrantOwner: admission?.owner,
             timeoutMs: HANDOFF_BUSY_TIMEOUT_MS,
           }
         : undefined,
@@ -513,18 +524,28 @@ export function createManagedHandoffLeaseDatabase(
     }
   }
   function withDatabase<T>(write: boolean, operation: (db: HandoffDatabase) => T): T {
-    if (!write || !writeLockRoot) {
+    if (!write || (!writeLockRoot && (process.platform !== "win32" || existingIdentity))) {
       return accessDatabase(write, operation);
     }
     assertCurrent();
-    const admission = writeAdmissions.getStore() ?? {
-      owner: randomUUID(),
-      deadline: performance.now() + HANDOFF_BUSY_TIMEOUT_MS,
-    };
+    const inherited = writeAdmissions.getStore();
+    const admission =
+      inherited?.databasePath === databasePath
+        ? inherited
+        : {
+            owner: randomUUID(),
+            deadline: performance.now() + HANDOFF_BUSY_TIMEOUT_MS,
+            databasePath,
+            lockRoot: writeLockRoot,
+          };
+    if (!writeLockRoot && !existingIdentity) {
+      prepareHandoffDirectory(databasePath);
+    }
     const remaining = () => Math.max(0, Math.ceil(admission.deadline - performance.now()));
     // Wait before pinning a SHARED snapshot, which would block the current writer's commit.
+    // Direct Windows initializers share this lock: fs-safe briefly publishes two links.
     const release = acquireFileLockSyncWithRetry(databasePath, {
-      lockRoot: writeLockRoot,
+      lockRoot: writeLockRoot ?? admission.lockRoot,
       reentrantOwner: admission.owner,
       timeoutMs: remaining(),
     });

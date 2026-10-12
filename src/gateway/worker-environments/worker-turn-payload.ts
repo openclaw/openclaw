@@ -107,10 +107,8 @@ export function captureWorkerTurnInputAuthority(params: {
   transcriptTarget: BoundAgentRunSessionTarget;
   recorder: SessionPlacementTurnParams["userTurnTranscriptRecorder"];
   signal?: AbortSignal;
-  assertRunCurrent?: () => void;
+  assertRunCurrent: () => void;
   isBlocked: () => boolean;
-  placements: WorkerSessionPlacementStore;
-  turnClaim: WorkerSessionTurnClaim;
 }) {
   const assertInputCurrent = composeSessionSourceAssertion(
     [params.assertRunCurrent],
@@ -128,9 +126,6 @@ export function captureWorkerTurnInputAuthority(params: {
     assertSourceCurrent: composeSessionSourceAssertion([assertInputCurrent, transcriptSource]),
     assertContextCurrent: () => {
       assertInputCurrent();
-      if (!params.placements.validateTurnClaim(params.turnClaim)) {
-        throw new Error("Worker turn claim changed during context preparation");
-      }
       resolveWorkerTurnTranscriptTarget({
         ...params.transcriptTarget,
         sessionTarget: params.transcriptTarget,

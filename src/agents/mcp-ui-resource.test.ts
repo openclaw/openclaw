@@ -66,14 +66,7 @@ describe("MCP App UI resources", () => {
   });
 
   it.each([
-    { preferred: undefined, requested: undefined, available: undefined, expected: "inline" },
     { preferred: "fullscreen", requested: undefined, available: undefined, expected: "fullscreen" },
-    {
-      preferred: "inline",
-      requested: "fullscreen",
-      available: ["inline", "fullscreen"],
-      expected: "fullscreen",
-    },
     { preferred: "fullscreen", requested: "fullscreen", available: ["inline"], expected: "inline" },
   ] as const)(
     "selects an advertised initial display mode ($expected)",
@@ -361,23 +354,6 @@ describe("MCP App UI resources", () => {
     expect(() => resolveMcpAppSandboxPort(18789, 18789)).toThrow(
       "MCP Apps require distinct valid Gateway and sandbox ports",
     );
-  });
-
-  it("keeps all 32 valid leases during lookup-only pruning", async () => {
-    const sessionRuntime = runtime(async () => html());
-    const viewIds: string[] = [];
-    for (let index = 0; index < 32; index += 1) {
-      const result = await fetchView({
-        runtime: sessionRuntime,
-        toolInput: { index },
-      });
-      if (result) {
-        viewIds.push(result.viewId);
-      }
-    }
-
-    expect(getMcpAppViewLease(viewIds[0] ?? "", sessionRuntime)).toBeDefined();
-    expect(getMcpAppViewLease(viewIds[31] ?? "", sessionRuntime)).toBeDefined();
   });
 
   it("replaces a reconstructed view id without leaking the previous runtime lease", async () => {

@@ -1348,50 +1348,58 @@ describe("previous release update compatibility", () => {
     ]);
   });
 
-  it.each(["exact", "changed delegation", "changed binding", "changed target"])(
-    "traces only the exact shipped 2026.9.8 config alias (%s)",
-    (variant) => {
-      const facade =
-        'export { createConfigIO, readConfigFileSnapshot, readSourceConfigBestEffort } from "./config-abcdefgh.mjs";\n';
-      let alias = fsSync.readFileSync(
-        path.join(MODULE_ROOT, "test/fixtures/update-config-runtime-alias-2026.9.8.txt"),
-        "utf8",
-      );
-      if (variant === "changed delegation") {
-        alias = alias.replace("return runtime[name]", "return undefined");
-      } else if (variant === "changed binding") {
-        alias = alias.replace('select("createConfigIO")', 'select("readConfigFileSnapshot")');
-      } else if (variant === "changed target") {
-        alias = alias.replace('"./io.runtime-BNEtkwm5.mjs"', '"./"');
-      }
-      const record = () =>
-        recordImportedFixture('(await import("./io.runtime.js"))', {
-          "io.runtime.js": alias,
-          "io.runtime-BNEtkwm5.mjs": facade,
-          "config-abcdefgh.mjs": [
-            "//#region src/config/io.ts",
-            "export function createConfigIO() {}",
-            "export function readConfigFileSnapshot() {}",
-            "export function readSourceConfigBestEffort() {}",
-          ].join("\n"),
-        });
-      if (variant !== "exact") {
-        expect(record).toThrow("Cannot trace io.runtime.js export createConfigIO");
-        return;
-      }
-      expect(record().inventory.releases[0]?.chunks).toMatchObject([
-        {
-          path: "io.runtime.js",
-          exports: ["createConfigIO", "readConfigFileSnapshot", "readSourceConfigBestEffort"].map(
-            (exported) => ({
-              exported,
-              origin: { module: "src/config/io.ts", symbol: exported },
-            }),
-          ),
-        },
-      ]);
-    },
-  );
+  it.each(
+    (
+      [
+        ["2026.9.8", "io.runtime-BNEtkwm5.mjs"],
+        ["2026.10.5-beta.1", "io.runtime-t3hrjkTX.mjs"],
+      ] as const
+    ).flatMap(([release, target]) =>
+      ["exact", "changed delegation", "changed binding", "changed target"].map(
+        (variant) => [release, target, variant] as const,
+      ),
+    ),
+  )("traces only the exact shipped %s config alias (%s, %s)", (release, target, variant) => {
+    let alias = fsSync.readFileSync(
+      path.join(MODULE_ROOT, `test/fixtures/update-config-runtime-alias-${release}.txt`),
+      "utf8",
+    );
+    const exportedNames = [...alias.matchAll(/select\("(\w+)"\)/g)].flatMap(
+      (match) => match[1] ?? [],
+    );
+    const sortedNames = exportedNames.toSorted((left, right) =>
+      left < right ? -1 : left > right ? 1 : 0,
+    );
+    if (variant === "changed delegation") {
+      alias = alias.replace("return runtime[name]", "return undefined");
+    } else if (variant === "changed binding") {
+      alias = alias.replace('select("createConfigIO")', 'select("readConfigFileSnapshot")');
+    } else if (variant === "changed target") {
+      alias = alias.replace(`"./${target}"`, '"./"');
+    }
+    const record = () =>
+      recordImportedFixture('(await import("./io.runtime.js"))', {
+        "io.runtime.js": alias,
+        [target]: `export { ${exportedNames.join(", ")} } from "./config-abcdefgh.mjs";\n`,
+        "config-abcdefgh.mjs": [
+          "//#region src/config/io.ts",
+          ...exportedNames.map((name) => `export function ${name}() {}`),
+        ].join("\n"),
+      });
+    if (variant !== "exact") {
+      expect(record).toThrow(`Cannot trace io.runtime.js export ${sortedNames[0]}`);
+      return;
+    }
+    expect(record().inventory.releases[0]?.chunks).toMatchObject([
+      {
+        path: "io.runtime.js",
+        exports: sortedNames.map((exported) => ({
+          exported,
+          origin: { module: "src/config/io.ts", symbol: exported },
+        })),
+      },
+    ]);
+  });
 
   it("records literal dist imports alongside computed package assets", () => {
     const { inventory } = recordImportedFixture(
@@ -1489,6 +1497,147 @@ describe("previous release update compatibility", () => {
       expect(bridge.markPluginRegistryRetired()).toBe("current");
     },
   );
+
+  it.each([
+    {
+      access: "exact Promise.all destructuring",
+      statement:
+        'const [{ x: selected }, { y }] = await Promise.all([import("./left-abcdefgh.js"), import("./right-abcdefgh.js")]);',
+      names: [["x"], ["y"]],
+    },
+    {
+      access: "namespace binding",
+      statement:
+        'const [left, { y }] = await Promise.all([import("./left-abcdefgh.js"), import("./right-abcdefgh.js")]);',
+      names: [
+        ["x", "y"],
+        ["x", "y"],
+      ],
+    },
+    {
+      access: "object rest binding",
+      statement:
+        'const [{ x, ...rest }, { y }] = await Promise.all([import("./left-abcdefgh.js"), import("./right-abcdefgh.js")]);',
+      names: [
+        ["x", "y"],
+        ["x", "y"],
+      ],
+    },
+    {
+      access: "array rest binding",
+      statement:
+        'const [{ x }, ...rest] = await Promise.all([import("./left-abcdefgh.js"), import("./right-abcdefgh.js")]);',
+      names: [
+        ["x", "y"],
+        ["x", "y"],
+      ],
+    },
+    {
+      access: "default binding",
+      statement:
+        'const [{ x = 0 }, { y }] = await Promise.all([import("./left-abcdefgh.js"), import("./right-abcdefgh.js")]);',
+      names: [
+        ["x", "y"],
+        ["x", "y"],
+      ],
+    },
+    {
+      access: "intermediate array",
+      statement:
+        'const modules = await Promise.all([import("./left-abcdefgh.js"), import("./right-abcdefgh.js")]); const [{ x }, { y }] = modules;',
+      names: [
+        ["x", "y"],
+        ["x", "y"],
+      ],
+    },
+    {
+      access: "empty object binding",
+      statement:
+        'const [{}, { y }] = await Promise.all([import("./left-abcdefgh.js"), import("./right-abcdefgh.js")]);',
+      names: [
+        ["x", "y"],
+        ["x", "y"],
+      ],
+    },
+    {
+      access: "nested binding",
+      statement:
+        'const [{ x: { value } }, { y }] = await Promise.all([import("./left-abcdefgh.js"), import("./right-abcdefgh.js")]);',
+      names: [
+        ["x", "y"],
+        ["x", "y"],
+      ],
+    },
+    {
+      access: "omitted array binding",
+      statement:
+        'const [, { y }] = await Promise.all([import("./left-abcdefgh.js"), import("./right-abcdefgh.js")]);',
+      names: [
+        ["x", "y"],
+        ["x", "y"],
+      ],
+    },
+    {
+      access: "optional call",
+      statement:
+        'const [{ x }, { y }] = await Promise.all?.([import("./left-abcdefgh.js"), import("./right-abcdefgh.js")]);',
+      names: [
+        ["x", "y"],
+        ["x", "y"],
+      ],
+    },
+    {
+      access: "spread import array",
+      statement:
+        'const [{ x }, { y }] = await Promise.all([...[], import("./left-abcdefgh.js"), import("./right-abcdefgh.js")]);',
+      names: [
+        ["x", "y"],
+        ["x", "y"],
+      ],
+    },
+    {
+      access: "unawaited Promise.all",
+      statement:
+        'const modules = Promise.all([import("./left-abcdefgh.js"), import("./right-abcdefgh.js")]);',
+      names: [
+        ["x", "y"],
+        ["x", "y"],
+      ],
+    },
+    {
+      access: "different combiner",
+      statement:
+        'const [{ x }, { y }] = await Promise.race([import("./left-abcdefgh.js"), import("./right-abcdefgh.js")]);',
+      names: [
+        ["x", "y"],
+        ["x", "y"],
+      ],
+    },
+    {
+      access: "mixed array",
+      statement:
+        'const [{ x }, { y }] = await Promise.all([import("./left-abcdefgh.js"), import("./right-abcdefgh.js"), 1]);',
+      names: [
+        ["x", "y"],
+        ["x", "y"],
+      ],
+    },
+  ])("records conservative module contracts for $access", ({ statement, names }) => {
+    const { inventory } = recordImportedFixture(`await (async () => { ${statement} })()`, {
+      "left-abcdefgh.js": "//#region src/infra/left.ts\nexport const x = 1, y = 2;\n",
+      "right-abcdefgh.js": "//#region src/infra/right.ts\nexport const x = 3, y = 4;\n",
+    });
+    expect(
+      inventory.releases[0]?.chunks.map((chunk) => ({
+        path: chunk.path,
+        imported: chunk.imports.flatMap((entry) => entry.exports),
+        exported: chunk.exports.map((entry) => entry.exported),
+      })),
+    ).toEqual([
+      { path: "left-abcdefgh.js", imported: names[0], exported: names[0] },
+      { path: "right-abcdefgh.js", imported: names[1], exported: names[1] },
+    ]);
+  });
 
   it.each([
     {

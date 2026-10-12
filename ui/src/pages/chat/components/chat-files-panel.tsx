@@ -1,4 +1,4 @@
-import { For, Show, createEffect } from "solid-js";
+import { For, Show, createEffect, onCleanup } from "solid-js";
 import { icons } from "../../../components/icons.ts";
 import { McpAppUnmountGate } from "../../../components/mcp-app-unmount.ts";
 import {
@@ -30,7 +30,7 @@ type Props = {
   onClose: (id: string) => void;
 };
 type Methods = { selectHostedTab(id: string): void; closeHostedTab(id: string): Promise<void> };
-export type ChatFilesPanel = SolidBridgeElement<Props, Methods> & {
+type ChatFilesPanel = SolidBridgeElement<Props, Methods> & {
   readonly hostedTabs: PanelHostedTab[];
   readonly activeHostedTabId: string | null;
   readonly hostedActions: HTMLButtonElement;
@@ -38,7 +38,7 @@ export type ChatFilesPanel = SolidBridgeElement<Props, Methods> & {
 let filesPanelSequence = 0;
 
 /** The workspace owns tab order and selection; this view retains retiring app DOM. */
-export const ChatFilesPanel = defineSolidBridge<Props, Methods>(
+defineSolidBridge<Props, Methods>(
   "openclaw-chat-files-panel",
   (props, host) => {
     const contentId = `chat-files-content-${++filesPanelSequence}`;
@@ -98,18 +98,21 @@ export const ChatFilesPanel = defineSolidBridge<Props, Methods>(
     };
     const activeHostedTabId = () => props.activeId ?? (props.previews.length ? "browse" : null);
     let browseAction!: HTMLButtonElement;
+    const showBrowser = () => props.onSelect(null);
     <button
       ref={(element) => {
         browseAction = element;
+        // The Lit header hosts this action outside Solid's delegated event root.
+        browseAction.addEventListener("click", showBrowser);
       }}
       class="rail-header__action"
       type="button"
       aria-label={t("chat.sidePanel.files")}
       title={t("chat.sidePanel.files")}
-      onClick={() => props.onSelect(null)}
     >
       <Icon name="folder" />
     </button>;
+    onCleanup(() => browseAction.removeEventListener("click", showBrowser));
     const hostedActions = () => browseAction;
     Object.defineProperties(host, {
       hostedTabs: { configurable: true, get: hostedTabs },

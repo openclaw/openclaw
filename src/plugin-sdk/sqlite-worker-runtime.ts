@@ -19,13 +19,16 @@ export {
   getSqliteDatabaseAdmission,
   publishSqliteDatabaseAdmission,
   readSqliteDatabasePendingWriteToken,
+  readSqliteDatabaseWriteTokenForPath,
   type SqliteDatabaseAdmissionKey,
 } from "../infra/sqlite-database-admission.js";
 export { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
+export { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 export {
   assertTransactionUsable,
   runSqliteDeferredTransactionSync,
   runSqliteImmediateTransactionSync,
+  runSqliteSingleStatementSync,
 } from "../infra/sqlite-transaction.js";
 export type {
   SqliteWorkerBackend,

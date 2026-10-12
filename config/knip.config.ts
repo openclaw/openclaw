@@ -135,9 +135,6 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/run-with-pty.mjs!",
   "scripts/e2e/lib/sandbox-browser-sidecar/scenario.mjs!",
   "scripts/e2e/lib/session-cold-storage/client.mjs!",
-  // systemd-sealed-service-definition.sh executes these via Node stdin and a container path.
-  "scripts/e2e/lib/systemd-sealed-service-definition/file-mount.mjs!",
-  "scripts/e2e/lib/systemd-sealed-service-definition/paired-mounts.mjs!",
   // abandoned-update.sh invokes the upgrade ledger assertions through Node.
   "scripts/e2e/lib/upgrade-survivor/abandoned-update.mjs!",
   // backup-rollback.sh invokes capture and verification through this CLI.
@@ -774,6 +771,27 @@ const config = {
     // production uses them through their owning module/controller.
     "ui/src/pages/chat/chat-state-refresh.{ts,tsx}": ["exports"],
     "ui/src/pages/chat/composer-persistence.{ts,tsx}": ["exports"],
+    // The Lit/Solid presentation fixture and focused UI tests consume these seams;
+    // the full-tree companion scan continues to audit their actual consumers.
+    "ui/src/components/provider-icon.ts": ["exports"],
+    "ui/src/components/settings-ui.ts": ["exports"],
+    "ui/src/components/terminal/terminal-panel.ts": ["types"],
+    "ui/src/pages/chat/components/chat-attachment-card-solid.tsx": ["exports"],
+    "ui/src/pages/chat/components/chat-camera-capture.tsx": ["types"],
+    "ui/src/pages/chat/components/chat-child-attention.tsx": ["types"],
+    "ui/src/pages/chat/components/chat-ci-automation-control.{ts,tsx}": ["types"],
+    "ui/src/pages/chat/components/chat-ci-details.{ts,tsx}": ["types"],
+    "ui/src/pages/chat/components/chat-clawhub-card.tsx": ["exports"],
+    "ui/src/pages/chat/components/chat-details.tsx": ["types"],
+    "ui/src/pages/chat/components/chat-question-card{,-view}.{ts,tsx}": ["types"],
+    "ui/src/pages/chat/components/chat-skill-learned-notice.tsx": ["exports"],
+    "ui/src/pages/chat/components/chat-svg-attachment.tsx": ["exports"],
+    "ui/src/pages/chat/components/chat-summary-automations.tsx": ["types"],
+    "ui/src/pages/chat/components/chat-tool-output{,-view}.{ts,tsx}": ["exports"],
+    "ui/src/pages/chat/components/session-diff-panel.tsx": ["exports"],
+    "ui/src/pages/model-providers/data.ts": ["exports"],
+    "ui/src/pages/plugins/credential-editor.tsx": ["types"],
+    "ui/src/pages/plugins/skill-preview.tsx": ["exports"],
     // Focused media tests consume these explicit seams; production uses the helpers in-module.
     "src/agents/embedded-agent-subscribe.handlers.lifecycle.ts": ["exports"],
     "src/gateway/server-methods/chat-webchat-media.ts": ["exports"],
@@ -875,11 +893,7 @@ const config = {
         "src/lib/browser-redact.{ts,tsx}!",
         "vite.config.ts!",
         "vitest*.ts!",
-        // Dormant Solid 2 foundation (#168305 smoke fixture, #168405 state-owner projections):
-        // only their tests import them until Control UI views adopt Solid; drop these entries
-        // with the first production importer.
-        "src/lib/reactive/*.ts!",
-        "!src/lib/reactive/*.test.ts!",
+        // The standalone Solid compiler smoke is not a production import.
         "src/solid-smoke/solid-smoke.tsx!",
         // Solid presentation primitives (#168576) and the chat render lifecycle (#168657) land
         // before their page and chat consumers; drop each entry with its first production importer.

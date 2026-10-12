@@ -11,7 +11,7 @@ import { renderPluginSurface } from "../../../plugins/control-ui-view.ts";
 import type { WorkGroupRenderItem } from "../chat-thread-grouping.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import type { ToolCardOptions } from "./chat-tool-cards.solid.tsx";
-import type { ToolRenderOptions } from "./chat-tool-render-model.ts";
+import { type ToolRenderOptions, toolResultSurfaceProps } from "./chat-tool-render-model.ts";
 import { renderToolPreview } from "./widget-card.ts";
 export {
   resolveCollapsedToolDetail,
@@ -129,7 +129,7 @@ export function renderToolApprovalReviews(card: ToolCard) {
   ></openclaw-chat-tool-reviews>`;
 }
 
-export function renderPluginToolResult(
+function renderPluginToolResult(
   card: ToolCard | null | undefined,
   opts: ToolRenderOptions & { expanded: boolean },
   defaultView: unknown,
@@ -139,20 +139,7 @@ export function renderPluginToolResult(
   }
   return renderPluginSurface(
     "tool-result",
-    {
-      sessionKey: opts.sessionKey ?? "",
-      agentId: opts.agentId,
-      toolName: card.name,
-      toolCallId: card.callId ?? card.id,
-      input: card.args,
-      output: {
-        text: card.outputText,
-        details: card.details,
-        isError: card.isError,
-        completed: card.completed,
-      },
-      expanded: opts.expanded,
-    },
+    toolResultSurfaceProps(card, opts),
     defaultView,
     opts.presented ?? true,
   );

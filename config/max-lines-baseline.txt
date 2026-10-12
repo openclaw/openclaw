@@ -399,11 +399,9 @@ src/gateway/server-methods/agent.media-and-routing.test-utils.ts
 src/gateway/server-methods/agent.reset-and-identity.test-utils.ts
 src/gateway/server-methods/agent.sessions-and-models.test-utils.ts
 src/gateway/server-methods/agents-mutate.test.ts
-src/gateway/server-methods/agents.ts
 src/gateway/server-methods/approval-shared.test.ts
 src/gateway/server-methods/chat.directive-tags.test.ts
 src/gateway/server-methods/config.ts
-src/gateway/server-methods/cron.ts
 src/gateway/server-methods/cron.validation.test.ts
 src/gateway/server-methods/models-auth-status.test.ts
 src/gateway/server-methods/models.test.ts
@@ -443,7 +441,6 @@ src/infra/diagnostic-events.ts
 src/infra/exec-approvals-allowlist.ts
 src/infra/exec-authorization-plan.ts
 src/infra/infra-runtime.test.ts
-src/infra/npm-managed-root.test.ts
 src/infra/npm-managed-root.ts
 src/infra/outbound/deliver.test.ts
 src/infra/outbound/delivery-queue-recovery.ts
@@ -555,5 +552,4 @@ ui/src/pages/chat/talk/gateway-relay.test.ts
 ui/src/pages/config/config-page.ts
 ui/src/pages/config/view.browser.test.ts
 ui/src/pages/sessions/sessions-page.ts
-ui/src/pages/usage/view.ts
 ui/src/test-helpers/control-ui-e2e.ts

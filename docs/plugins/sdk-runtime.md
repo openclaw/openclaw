@@ -91,6 +91,15 @@ adds no public capability or deprecation. Plugins must still use the owning
 runtime operation and its live authority checks: a prior receipt or cached row
 does not certify raw-handle writers, foreign changes, or a later effect.
 
+The Gateway context's GitHub publication service has V2 request methods with
+required host-owned requester capabilities, plus awaited deferral and reporting
+methods. Forward those capabilities intact and await committed results before
+releasing request resources. Released opaque-requester and synchronous lifecycle
+methods remain deprecated compatibility routes; actual use shares one warning
+budget per plugin and publication family. See
+[GitHub publication migration](/plugins/sdk-migration/how-to-migrate#await-github-publication-operations)
+for the method mapping, callback ordering, and next-major removal contract.
+
 Use `createPluginRuntimeStore` to store the runtime reference for use outside the `register` callback:
 
 <Steps>
@@ -316,6 +325,12 @@ before asynchronous preparation and release it after publication cleanup. The
 private `sqlite-runtime` facade exposes that existing owner and its recorded
 native identity; each worker command keeps its own FIFO turn and live authority
 checks. Native maintenance and private shadow stores keep their existing owners.
+
+SQLite worker backends set connection lock-wait policy with
+`setSqliteBusyTimeout` from `openclaw/plugin-sdk/sqlite-worker-runtime`, including
+temporary changes. The connection owner retains the current timeout, skips
+unchanged assignments, and discards it on close; raw timeout PRAGMAs on an owned
+connection would bypass that policy.
 
 `readSqliteDatabaseWriteTokenForPath` from `openclaw/plugin-sdk/sqlite-runtime`
 reads the existing physical database identity and in-process writer receipt without
@@ -556,3 +571,13 @@ for provider selection, lifecycle, failure handling, limits, and diagnostics.
 <a id="api-runtime-tasks" />
 
 The former Tasks runtime is no longer available. See [removed Tasks and TaskFlow APIs](/plugins/sdk-migration/removed-surfaces#tasks-and-taskflow-apis-removed) for native-owner alternatives.
+
+### Bounded stale reads
+
+`openclaw/plugin-sdk/collection-runtime` exports `createStaleWhileRevalidateCache`
+for metadata readers. It coalesces refreshes, bounds retained entries and active
+loads, and returns `{ value, stale }`. Loads retain their credential and service authority checks before external requests.
+Revalidate each caller before delivering any result.
+`allowStale: false` waits for freshness; `refresh: true` replaces an older load.
+`clear()` retires pending cache publications. Cache keys must include the owning
+identity or revision; the cache never provides authorization.
