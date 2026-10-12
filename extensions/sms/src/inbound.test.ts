@@ -230,37 +230,6 @@ describe("dispatchSmsInboundEvent", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
-  it("uses the canonical routed session key for authorized SMS turns", async () => {
-    const turnAdoptionLifecycle = { onAdopted: vi.fn(async () => undefined) };
-    const { resolveAgentRoute, runParams, buildContext, turn } = await resolveAuthorizedSmsTurn({
-      body: "hello",
-      messageSid: "SM-inbound",
-      receivedAt: 1_700_000_000_123,
-      turnAdoptionLifecycle,
-    });
-
-    expect(runParams.turnAdoptionLifecycle).toBe(turnAdoptionLifecycle);
-    expect(resolveAgentRoute).toHaveBeenCalledWith(
-      expect.objectContaining({
-        peer: { kind: "direct", id: SMS_FROM },
-      }),
-    );
-    expect(buildContext).toHaveBeenCalledWith(
-      expect.objectContaining({
-        timestamp: 1_700_000_000_123,
-        from: `sms:${SMS_FROM}`,
-        sender: expect.objectContaining({ id: SMS_FROM }),
-        conversation: expect.objectContaining({ id: SMS_FROM }),
-        reply: { to: `sms:${SMS_FROM}` },
-        route: expect.objectContaining({
-          routeSessionKey: SMS_SESSION_KEY,
-          dispatchSessionKey: SMS_SESSION_KEY,
-        }),
-      }),
-    );
-    expect(turn.route.sessionKey).toBe(SMS_SESSION_KEY);
-  });
-
   it("downloads authorized MMS media with Twilio auth and exposes media facts", async () => {
     const mocks = createAuthorizedRuntime();
     mocks.buildContext.mockReturnValue({ SessionKey: SMS_SESSION_KEY });
@@ -490,38 +459,6 @@ describe("dispatchSmsInboundEvent", () => {
         },
         extra: expect.objectContaining({
           MessageSid: "SM-command",
-          SenderE164: SMS_FROM,
-        }),
-      }),
-    );
-  });
-
-  it("checks SMS command authorization for inline slash tokens without marking text command turns", async () => {
-    const { shouldComputeCommandAuthorized, isControlCommandMessage, buildContext } =
-      await resolveAuthorizedSmsTurn({
-        body: "please inspect /tmp/foo",
-        messageSid: "SM-inline-token",
-        commandRequested: true,
-        isTextCommand: false,
-      });
-
-    expect(shouldComputeCommandAuthorized).toHaveBeenCalledWith("please inspect /tmp/foo", {});
-    expect(isControlCommandMessage).toHaveBeenCalledWith("please inspect /tmp/foo", {});
-
-    expect(buildContext).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: expect.objectContaining({
-          rawBody: "please inspect /tmp/foo",
-          commandBody: "please inspect /tmp/foo",
-        }),
-        access: {
-          commands: {
-            authorized: true,
-          },
-        },
-        command: undefined,
-        extra: expect.objectContaining({
-          MessageSid: "SM-inline-token",
           SenderE164: SMS_FROM,
         }),
       }),

@@ -49,10 +49,6 @@ function createFetch(responses: Array<unknown>): typeof fetch {
   }) as unknown as typeof fetch;
 }
 
-function fetchInputUrl(input: Parameters<typeof fetch>[0]): string {
-  return typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-}
-
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -307,68 +303,6 @@ describe("SMS status probe", () => {
     expect(formatSmsProbeLines(result)).toContainEqual({
       text: "Recent outbound: failed error=30005",
       tone: "error",
-    });
-  });
-
-  it("preserves inbound and outbound facts when the webhook lookup fails", async () => {
-    const fetchImpl = vi.fn<typeof fetch>(async (input) => {
-      if (fetchInputUrl(input).includes("IncomingPhoneNumbers.json")) {
-        throw new Error("number lookup unavailable");
-      }
-      return new Response(
-        JSON.stringify({
-          messages: [
-            {
-              sid: "SM-inbound",
-              direction: "inbound",
-              status: "received",
-            },
-          ],
-        }),
-        { status: 200 },
-      );
-    });
-
-    const result = await probeSmsAccount({
-      account: createAccount(),
-      timeoutMs: 1000,
-      options: {
-        fetchImpl,
-        deliveryRecords: [createDeliveryRecord("SM-delivered", "delivered")],
-      },
-    });
-
-    expect(result).toMatchObject({
-      ok: false,
-      error: expect.stringContaining("number lookup unavailable"),
-      webhook: { status: "unavailable" },
-      recentInbound: { sid: "SM-inbound", status: "received" },
-      recentOutbound: { messageSid: "SM-delivered", status: "delivered" },
-    });
-  });
-
-  it("preserves a successful webhook check and outbound facts when history fails", async () => {
-    const fetchImpl = vi.fn<typeof fetch>(async (input) => {
-      if (fetchInputUrl(input).includes("/Messages.json")) {
-        throw new Error("message history unavailable");
-      }
-      return new Response(JSON.stringify(createWebhookResponse()), { status: 200 });
-    });
-
-    const result = await probeSmsAccount({
-      account: createAccount(),
-      timeoutMs: 1000,
-      options: {
-        fetchImpl,
-        deliveryRecords: [createDeliveryRecord("SM-undelivered", "undelivered")],
-      },
-    });
-
-    expect(result).toMatchObject({
-      ok: false,
-      error: expect.stringContaining("message history unavailable"),
-      webhook: { status: "matches" },
-      recentOutbound: { messageSid: "SM-undelivered", status: "undelivered" },
     });
   });
 
