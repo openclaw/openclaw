@@ -23,7 +23,7 @@ type WorkflowStep = {
 
 type Workflow = {
   name: string;
-  on: Record<string, { types?: string[]; workflows?: string[]; inputs?: Record<string, unknown> }>;
+  on: Record<string, { types?: string[]; workflows?: string[] }>;
   permissions: Record<string, string>;
   concurrency?: { group: string; "cancel-in-progress": boolean };
   jobs: Record<

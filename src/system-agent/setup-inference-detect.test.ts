@@ -65,7 +65,9 @@ const choice: ProviderAuthChoiceMetadata = {
 
 function detectWithProvider(
   detect: NonNullable<ProviderPlugin["auth"][number]["appGuidedSetup"]>["detect"],
-  nativeCandidates: InferenceBackendCandidate[] = [],
+  nativeCandidates:
+    | InferenceBackendCandidate[]
+    | NonNullable<DetectSetupInferenceDeps["detectInferenceBackends"]> = [],
   options: Pick<DetectSetupInferenceDeps, "onPartial" | "enablePluginInConfig"> & {
     choices?: ProviderAuthChoiceMetadata[];
   } = {},
@@ -89,7 +91,8 @@ function detectWithProvider(
       ...options,
       resolveManifestProviderAuthChoices: () => options.choices ?? [choice],
       resolvePluginProviders: () => [provider],
-      detectInferenceBackends: async () => nativeCandidates,
+      detectInferenceBackends:
+        typeof nativeCandidates === "function" ? nativeCandidates : async () => nativeCandidates,
     },
     "main",
   );
@@ -120,6 +123,89 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.clearAllMocks();
+});
+
+const environmentCandidate: InferenceBackendCandidate = {
+  kind: "openai-api-key",
+  modelRef: "fixture/environment-model",
+  label: "Environment sign-in",
+  detail: "Available from the environment",
+  credentials: true,
+};
+
+describe("setup inference discovery concurrency", () => {
+  it("probes provider services during CLI detection and publishes local results first", async () => {
+    const cliStarted = createDeferred();
+    const cliResult = createDeferred<InferenceBackendCandidate[]>();
+    const hookStarted = createDeferred();
+    const hookResult = createDeferred<ProviderAppGuidedSetupCandidate | null>();
+    const localPublished = createDeferred<SetupInferenceDetection>();
+    const detection = detectWithProvider(
+      () => {
+        hookStarted.resolve();
+        return hookResult.promise;
+      },
+      () => {
+        cliStarted.resolve();
+        return cliResult.promise;
+      },
+      {
+        onPartial: (partial) => {
+          if (
+            partial.candidates.some(({ modelRef }) => modelRef === environmentCandidate.modelRef)
+          ) {
+            localPublished.resolve(partial);
+          }
+        },
+      },
+    );
+    // Serial discovery cannot start the provider probe while CLI detection is pending.
+    await Promise.all([cliStarted.promise, hookStarted.promise]);
+    cliResult.resolve([environmentCandidate]);
+    expect((await localPublished.promise).candidates.map(({ modelRef }) => modelRef)).toEqual([
+      "fixture/environment-model",
+      "fixture/saved-model",
+    ]);
+    hookResult.resolve({ modelRef: "fixture/local-model" });
+    expect((await detection).candidates.map(({ modelRef }) => modelRef)).toEqual([
+      "fixture/environment-model",
+      "fixture/saved-model",
+      "fixture/local-model",
+    ]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("reports a provider discovery failure without waiting for CLI detection", async () => {
+    const detection = detectSetupInference(
+      {
+        resolveManifestProviderAuthChoices: () => [choice],
+        resolvePluginProviders: () => {
+          throw new Error("synthetic provider load failure");
+        },
+        detectInferenceBackends: () => new Promise(() => {}),
+      },
+      "main",
+    );
+    await expect(detection).rejects.toThrow("synthetic provider load failure");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("aborts pending provider probes when local detection fails", async () => {
+    const hookStarted = createDeferred<AbortSignal | undefined>();
+    const detection = detectWithProvider(
+      ({ signal }) => {
+        hookStarted.resolve(signal);
+        return new Promise(() => {});
+      },
+      async () => {
+        await hookStarted.promise;
+        throw new Error("synthetic CLI detection failure");
+      },
+    );
+    await expect(detection).rejects.toThrow("synthetic CLI detection failure");
+    expect((await hookStarted.promise)?.aborted).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });
 
 describe("setup inference discovery deadline", () => {
@@ -252,15 +338,7 @@ describe("setup inference discovery deadline", () => {
         hookStarted.resolve(signal);
         return hookResult.promise;
       },
-      [
-        {
-          kind: "openai-api-key",
-          modelRef: "fixture/environment-model",
-          label: "Environment sign-in",
-          detail: "Available from the environment",
-          credentials: true,
-        },
-      ],
+      [environmentCandidate],
     );
     const discoverySignal = await hookStarted.promise;
     await vi.advanceTimersByTimeAsync(30_000);

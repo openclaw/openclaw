@@ -75,9 +75,9 @@ export function persistInterruptedUpdateObservation(
   options: UpdateRunLedgerOptions,
   assertCurrent: (stage: "transaction" | "commit") => void,
 ): InterruptedUpdateSettlementResult {
+  assertCurrent("transaction");
   return runExistingOpenClawStateWriteTransaction(
     ({ db }) => {
-      assertCurrent("transaction");
       const accept = (run: UpdateRunRecord | undefined): InterruptedUpdateSettlementResult => {
         assertCurrent("commit");
         return { accepted: true, run };
@@ -106,7 +106,7 @@ export function persistInterruptedUpdateObservation(
       const uncertain = input.cleanup === "pending" || input.cleanup === "unknown";
       const verification = uncertain ? undefined : input.verification;
       if (!verification && previous && input.cleanup === undefined) {
-        return { accepted: true, run: current };
+        return accept(current);
       }
       upsertStep(current, {
         step: "reconcile:settle",

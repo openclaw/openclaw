@@ -44,21 +44,21 @@ describe("shared control ownership", () => {
       ]),
     ).toEqual([]);
     expect(
-      matchingFiles(/<details\b[^>]*class=["'][^"']*(?:menu|select|popover|dropdown)/u),
-    ).toEqual([
-      "pages/chat/components/chat-effort-picker.ts",
-      "pages/chat/components/chat-model-picker.ts",
-    ]);
+      matchingFiles(/<details\b[^>]*class=["'][^"']*(?:menu|select|popover|dropdown)/u, [
+        "pages/chat/components/chat-effort-picker.ts",
+        "pages/chat/components/chat-model-picker.ts",
+      ]),
+    ).toEqual([]);
   });
 
   it("limits custom comboboxes to approved searchable controls", () => {
     // Searchable controls own their keyboard policy; page consumers reuse them.
     expect(matchingFiles(/<[a-z][^>]*\srole=["'](?:combobox|listbox|option)["']/u)).toEqual([
       "components/command-palette-view.ts",
-      "components/composer-menu.ts",
       "components/multi-select.ts",
       "components/select-picker.ts",
       "components/session-group-defaults-dialog.ts",
+      "pages/chat/components/chat-composer-menu.ts",
       "pages/chat/components/chat-model-account-control.ts",
       "pages/chat/components/chat-model-picker-options.ts",
       "pages/chat/components/chat-model-picker.ts",
