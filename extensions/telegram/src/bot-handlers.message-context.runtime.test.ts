@@ -12,6 +12,7 @@ import {
   resetPluginStateStoreForTests,
   type OpenClawStateKyselyDatabaseForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -422,4 +423,81 @@ describe("Telegram same-turn reset context", () => {
       }
     },
   );
+});
+
+describe("Telegram DM-topic session model", () => {
+  const DM_CHAT_ID = 42001;
+  const TOPIC_KEY = `agent:main:main:thread:${DM_CHAT_ID}:${TOPIC_ID}`;
+  const dmPin = {
+    sessionId: "dm",
+    updatedAt: 1,
+    providerOverride: "anthropic",
+    modelOverride: "claude-sonnet-4-6",
+    modelOverrideSource: "user",
+  } satisfies SessionEntry;
+
+  it.each([
+    {
+      name: "the agent default for a historical topic that last ran on the DM pin",
+      topic: {
+        sessionId: "t",
+        updatedAt: 1,
+        modelProvider: "anthropic",
+        model: "claude-sonnet-4-6",
+      },
+      expected: "openai/gpt-5.4",
+    },
+    {
+      name: "the channel model for a fresh topic",
+      modelByChannel: "openai/gpt-5.4-mini",
+      expected: "openai/gpt-5.4-mini",
+    },
+    {
+      name: "a direct topic selection",
+      topic: { sessionId: "t", updatedAt: 1, providerOverride: "openai", modelOverride: "o3" },
+      expected: "openai/o3",
+    },
+    {
+      name: "an explicit parent's pin",
+      topic: { sessionId: "t", updatedAt: 1, parentSessionKey: "agent:main:spawner" },
+      expected: "anthropic/claude-sonnet-4-6",
+    },
+  ] satisfies Array<{
+    name: string;
+    topic?: SessionEntry;
+    modelByChannel?: string;
+    expected: string;
+  }>)("resolves $name", async ({ topic, modelByChannel, expected }) => {
+    const cfg = {
+      agents: { defaults: { model: "openai/gpt-5.4" } },
+      ...(modelByChannel
+        ? { channels: { modelByChannel: { telegram: { "*": modelByChannel } } } }
+        : {}),
+    } as OpenClawConfig;
+    const rows: Record<string, SessionEntry> = {
+      "agent:main:main": dmPin,
+      "agent:main:spawner": dmPin,
+      ...(topic ? { [TOPIC_KEY]: topic } : {}),
+    };
+    const sessionRuntime = createTelegramMessageSessionRuntime({
+      accountId: "default",
+      resolveTelegramGroupConfig: () => ({}),
+      telegramDeps: {
+        resolveStorePath: () => "/tmp/openclaw-telegram-dm-topic-model.json",
+        getSessionEntryAsync: async ({ sessionKey }: { sessionKey: string }) => rows[sessionKey],
+      } as unknown as RegisterTelegramHandlerParams["telegramDeps"],
+    });
+
+    const session = await sessionRuntime.resolveTelegramSessionState({
+      chatId: DM_CHAT_ID,
+      isGroup: false,
+      threadSpec: { id: TOPIC_ID, scope: "dm" },
+      botHasTopicsEnabled: true,
+      senderId: DM_CHAT_ID,
+      runtimeCfg: cfg,
+    });
+
+    expect(session.sessionKey).toBe(TOPIC_KEY);
+    expect(session.model).toBe(expected);
+  });
 });

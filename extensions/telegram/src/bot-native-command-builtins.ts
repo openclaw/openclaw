@@ -29,6 +29,7 @@ import {
   prepareTelegramCommandDispatch,
   type TelegramCommandExecutorParams,
 } from "./bot-native-command-dispatch.js";
+import { resolveTelegramUnpinnedTopicModel } from "./dm-topic-model.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
 import { buildTelegramNativeCommandCallbackData } from "./native-command-callback-data.js";
 
@@ -41,8 +42,16 @@ type TelegramCommandMenuModelContext = {
   sessionEntry?: SessionEntry;
 };
 
+type TelegramMenuModelParams = {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionKey: string;
+  modelParentSessionKey?: null;
+  chatId?: string;
+};
+
 async function resolveTelegramCommandMenuModelContext(
-  params: { cfg: OpenClawConfig; agentId: string; sessionKey: string },
+  params: TelegramMenuModelParams,
   mode: "menu" | "fast" = "menu",
 ): Promise<TelegramCommandMenuModelContext> {
   // Fast menus retain configured defaults even if session lookup fails.
@@ -68,16 +77,19 @@ async function resolveTelegramCommandMenuModelContext(
         sessionEntry: entry,
         loadSessionEntry: (sessionKey) => getSessionEntryAsync({ storePath, sessionKey }),
         sessionKey: params.sessionKey,
+        parentSessionKey: entry?.parentSessionKey ?? params.modelParentSessionKey,
         defaultProvider: defaultModel.provider,
       });
-      if (mode === "fast") {
+      if (!override?.model && params.modelParentSessionKey === null) {
+        // The row's last-run model may still be the DM pin this topic used to inherit.
+        context = resolveTelegramUnpinnedTopicModel(params, defaultModel);
+      } else if (mode === "fast") {
         return {
           provider: override?.provider ?? defaultModel.provider,
           model: override?.model ?? defaultModel.model,
           sessionEntry: entry,
         };
-      }
-      if (override?.model) {
+      } else if (override?.model) {
         context = {
           provider: override.provider || defaultModel.provider,
           model: override.model,
@@ -199,6 +211,8 @@ export async function executeTelegramBuiltinCommand(
           cfg: dispatch.runtimeCfg,
           agentId: dispatch.route.agentId,
           sessionKey: dispatch.targetSessionKey,
+          modelParentSessionKey: dispatch.modelParentSessionKey,
+          chatId: String(dispatch.msg.chat.id),
         })
       ).provider ??
       resolveDefaultModelForAgent({
@@ -223,6 +237,8 @@ export async function executeTelegramBuiltinCommand(
     cfg: dispatch.runtimeCfg,
     agentId: dispatch.route.agentId,
     sessionKey: menuNeedsModelContext ? dispatch.targetSessionKey : "",
+    modelParentSessionKey: dispatch.modelParentSessionKey,
+    chatId: String(dispatch.msg.chat.id),
   };
   const menuModelContext = menuNeedsModelContext
     ? await resolveTelegramCommandMenuModelContext(

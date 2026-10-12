@@ -29,6 +29,7 @@ import {
   resolveTelegramTargetSession,
 } from "./conversation-route.js";
 import { resolveTelegramDmHistoryLimit } from "./dm-history.js";
+import { resolveTelegramUnpinnedTopicModel } from "./dm-topic-model.js";
 import {
   buildTelegramSelfSenderName,
   isTelegramHistoryEntryAfterAmbientWatermark,
@@ -166,7 +167,7 @@ export function createTelegramMessageSessionRuntime({
       accountId,
       topicAgentId: topicConfig?.agentId,
     });
-    const sessionKey = resolveTelegramTargetSession({
+    const { sessionKey, modelParentSessionKey } = resolveTelegramTargetSession({
       ...params,
       cfg: params.runtimeCfg,
       route,
@@ -176,18 +177,28 @@ export function createTelegramMessageSessionRuntime({
       agentId: route.agentId,
     });
     const entry = await loadSessionEntry({ agentId: route.agentId, storePath, sessionKey });
+    const defaultModel = resolveDefaultModelForAgent({
+      cfg: params.runtimeCfg,
+      agentId: route.agentId,
+    });
     const storedOverride = await resolveStoredModelOverrideAsync({
       sessionEntry: entry,
       loadSessionEntry: (parentSessionKey) =>
         loadSessionEntry({ agentId: route.agentId, storePath, sessionKey: parentSessionKey }),
       sessionKey,
-      defaultProvider: resolveDefaultModelForAgent({
-        cfg: params.runtimeCfg,
-        agentId: route.agentId,
-      }).provider,
+      parentSessionKey: entry?.parentSessionKey ?? modelParentSessionKey,
+      defaultProvider: defaultModel.provider,
     });
-    const provider = entry?.modelProvider?.trim();
-    const model = entry?.model?.trim();
+    // The row's last-run model may still be the DM pin this topic used to inherit.
+    const unpinnedTopicModel =
+      !storedOverride?.model && modelParentSessionKey === null
+        ? resolveTelegramUnpinnedTopicModel(
+            { cfg: params.runtimeCfg, agentId: route.agentId, chatId: String(params.chatId) },
+            defaultModel,
+          )
+        : undefined;
+    const provider = unpinnedTopicModel?.provider ?? entry?.modelProvider?.trim();
+    const model = unpinnedTopicModel?.model ?? entry?.model?.trim();
     const modelCfg = params.runtimeCfg.agents?.defaults?.model;
     return {
       agentId: route.agentId,
