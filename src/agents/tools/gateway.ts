@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -39,7 +40,6 @@ import {
   loadOrCreateDeviceIdentityAsync,
 } from "../../infra/device-identity-async.js";
 import type { DeviceIdentity } from "../../infra/device-identity.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { prepareQuestionGatewayDispatch } from "../harness/host-private-capabilities.js";
 import { readPositiveIntegerParam, readToolStringParam } from "./common.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
@@ -265,11 +265,11 @@ const OPTIONAL_LOCAL_AGENT_RUNTIME_IDENTITY_METHODS = new Set<string>([
   "question.request",
 ]);
 
-function resolveApprovalRuntimeTokenForGatewayTool(params: {
+async function resolveApprovalRuntimeTokenForGatewayTool(params: {
   method: string;
   opts: GatewayCallOptions;
   target: GatewayOverrideTarget;
-}): string | undefined {
+}): Promise<string | undefined> {
   if (!APPROVAL_RUNTIME_METHODS.has(params.method)) {
     return undefined;
   }
@@ -672,7 +672,7 @@ export async function callGatewayTool<T = Record<string, unknown>>(
   }
   const agentRuntimeIdentityToken =
     typeof runtimeIdentity === "string" ? runtimeIdentity : undefined;
-  const approvalRuntimeToken = resolveApprovalRuntimeTokenForGatewayTool({
+  const approvalRuntimeToken = await resolveApprovalRuntimeTokenForGatewayTool({
     method,
     opts,
     target: gateway.target,

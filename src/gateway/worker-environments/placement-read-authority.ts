@@ -1,6 +1,9 @@
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
-import type { WorkerSessionPlacementReadResult } from "./placement-read-projection.types.js";
+import type {
+  WorkerPlacementRecoveryCandidate,
+  WorkerSessionPlacementReadResult,
+} from "./placement-read-projection.types.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import type {
   ClaimChange,
@@ -19,6 +22,21 @@ export function affectsPlacementObservation(change: ClaimChange, sessionId?: str
       ? change.kind !== "claim" || !change.localOnly
       : change.sessionId === sessionId)
   );
+}
+
+export function prunePublication(owner: PlacementAuthorityOwner, sessionId: string): void {
+  if (
+    !owner.claims.has(sessionId) &&
+    !owner.workspaceResults.has(sessionId) &&
+    !owner.observations.has(sessionId) &&
+    !owner.placementReaders.has(sessionId) &&
+    ![...owner.pending].some((change) => change.sessionId === sessionId)
+  ) {
+    owner.published.delete(sessionId);
+    if (!owner.tools.get(sessionId)?.authority) {
+      owner.tools.delete(sessionId);
+    }
+  }
 }
 
 /** Install committed postimages without revoking a destination on ordinary turn claims. */
@@ -183,6 +201,29 @@ export async function prepareCachedPlacementPreservationRead(
       return { placements: structuredClone(value), ...authority };
     },
   );
+}
+
+/** Recovery work stays live; empty inventories sleep until a placement writer commits. */
+export async function readCachedPlacementRecoveryCandidates(
+  captured: PlacementReadObservation,
+  read: () => Promise<WorkerPlacementRecoveryCandidate[]>,
+): Promise<WorkerPlacementRecoveryCandidate[]> {
+  const { owner, observation, authority, assertUsable } = captured;
+  try {
+    const signal = getAsyncWorkSignal();
+    signal?.throwIfAborted();
+    assertUsable();
+    const candidates = owner.recoveryCandidatesEmpty ? [] : await read();
+    signal?.throwIfAborted();
+    assertUsable();
+    // Discovery may overlap Stop; recovery acquires exact session authority before acting.
+    if (candidates.length === 0 && !observation.revoked && !hasPendingPublication(owner)) {
+      owner.recoveryCandidatesEmpty = true;
+    }
+    return candidates;
+  } finally {
+    authority.release();
+  }
 }
 
 export async function preparePlacementRead<T, Result>(

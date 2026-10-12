@@ -116,6 +116,12 @@ describe("Responses retained-user compaction replay", () => {
         ],
       },
       {
+        type: "message",
+        role: "assistant",
+        status: "completed",
+        content: [{ type: "output_text", text: "Retained answer.", annotations: [] }],
+      },
+      {
         type: "compaction",
         id: "cmp_retained",
         encrypted_content: "opaque-retained",
@@ -141,6 +147,68 @@ describe("Responses retained-user compaction replay", () => {
     expect(
       convertResponsesMessages(model, { messages: [saved] }, new Set(["openai"]), replayIdentity),
     ).toEqual(output);
+  });
+
+  it("replays compact-endpoint assistants without dangling provider item IDs after reload", () => {
+    // Captured compact endpoint shape; text, item IDs, and encrypted bytes are redacted.
+    const output = [
+      {
+        type: "message",
+        role: "user",
+        status: "completed",
+        content: [{ type: "input_text", text: "first" }],
+      },
+      {
+        type: "message",
+        role: "assistant",
+        id: "msg_first",
+        status: "completed",
+        content: [{ type: "output_text", text: "first answer", annotations: [] }],
+      },
+      {
+        type: "message",
+        role: "user",
+        status: "completed",
+        content: [{ type: "input_text", text: "second" }],
+      },
+      {
+        type: "message",
+        role: "assistant",
+        id: "msg_second",
+        status: "completed",
+        content: [{ type: "output_text", text: "second answer", annotations: [] }],
+      },
+      { type: "compaction", id: "cmp_canonical", encrypted_content: "opaque" },
+    ] satisfies OpenAIResponsesCompactionOutput;
+    const owner = createAssistant("covered");
+    captureOpenAIResponsesCompaction(
+      owner,
+      { type: "compaction", id: "cmp_canonical", encrypted_content: "opaque" },
+      "retained-users",
+      model,
+      buildOpenAIResponsesReasoningReplayMetadata(model, replayIdentity),
+      output,
+    );
+    // oxlint-disable-next-line unicorn/prefer-structured-clone -- Exercise persisted JSON reload.
+    const saved: AssistantMessage = JSON.parse(JSON.stringify(owner));
+    expect(saved.providerReplay).toMatchObject({
+      v: 1,
+      compactedWindow: { output: JSON.stringify(output) },
+    });
+    const next = convert({ messages: [saved] });
+    expect(next).toHaveLength(5);
+    expect(next[1]).not.toHaveProperty("id");
+    expect(next[3]).not.toHaveProperty("id");
+    expect(next[1]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "output_text", text: "first answer", annotations: [] }],
+    });
+    expect(next[3]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "output_text", text: "second answer", annotations: [] }],
+    });
+    expect(next[4]).toEqual(output[4]);
+    expect(isOpenAIResponsesCompactionOutput(next, model)).toBe(true);
   });
 
   it.each([

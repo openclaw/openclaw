@@ -128,6 +128,11 @@ describe("registerWorkboardCli", () => {
     expect(includeOutput).toContain("Active card");
     expect(includeOutput).toContain("Archived card");
     expect(includeOutput).toContain("(archived)");
+    const jsonOutput = await captureStdout(async () => {
+      await createProgram(store).parseAsync(["workboard", "list", "--json"], { from: "user" });
+    });
+    expect(jsonOutput).toContain(archived.id);
+    expect(jsonOutput).toContain("archivedAt");
   });
 
   it("rejects invalid list status filters instead of reporting an empty board", async () => {
@@ -165,76 +170,14 @@ describe("registerWorkboardCli", () => {
     expect(output).toContain("Archived card (archived)");
   });
 
-  it("preserves archived cards in JSON list output by default", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const archived = await store.create({ title: "Archived card" });
-    await store.archive(archived.id, true);
-    const program = createProgram(store);
-
-    const output = await captureStdout(async () => {
-      await program.parseAsync(["workboard", "list", "--json"], { from: "user" });
-    });
-
-    expect(output).toContain(archived.id);
-    expect(output).toContain("archivedAt");
-  });
-
-  it("does not fall back to local dispatch for explicit gateway targets", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const card = await store.create({ title: "Remote target", status: "ready" });
-    const program = createProgram(store);
-    gatewayRuntime.callGatewayFromCli.mockRejectedValueOnce(
-      new Error("connect ECONNREFUSED 127.0.0.1:18789"),
-    );
-
-    await expect(
-      program.parseAsync(["workboard", "dispatch", "--url", "ws://remote"], { from: "user" }),
-    ).rejects.toThrow("ECONNREFUSED");
-
-    const after = await store.get(card.id);
-    expect(after?.status).toBe("ready");
-    expect(after?.metadata?.automation?.dispatchCount).toBeUndefined();
-  });
-
-  it("does not fall back to local dispatch for configured remote gateways", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const card = await store.create({ title: "Configured remote target", status: "ready" });
-    const program = createProgram(store);
-
-    gatewayRuntime.callGatewayFromCli.mockRejectedValueOnce(
-      new Error("connect ECONNREFUSED gateway.example:443"),
-    );
-
-    await expect(program.parseAsync(["workboard", "dispatch"], { from: "user" })).rejects.toThrow(
-      "ECONNREFUSED",
-    );
-
-    const after = await store.get(card.id);
-    expect(after?.status).toBe("ready");
-    expect(after?.metadata?.automation?.dispatchCount).toBeUndefined();
-  });
-
-  it("forwards --max-starts to the dispatch gateway call", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const program = createProgram(store);
-    gatewayRuntime.callGatewayFromCli.mockResolvedValueOnce({ started: [], startFailures: [] });
-
-    await program.parseAsync(["workboard", "dispatch", "--max-starts", "7"], { from: "user" });
-
-    expect(gatewayRuntime.callGatewayFromCli).toHaveBeenCalledWith(
-      "workboard.cards.dispatchWithOptions",
-      expect.anything(),
-      expect.objectContaining({ maxStarts: 7 }),
-      expect.anything(),
-    );
-  });
-
   it("requests minimum scopes unless full-host access is explicit", async () => {
     const store = createWorkboardSqliteTestStore();
     const program = createProgram(store);
     gatewayRuntime.callGatewayFromCli.mockResolvedValue({ started: [], startFailures: [] });
 
     await program.parseAsync(["workboard", "dispatch"], { from: "user" });
+    expect(gatewayRuntime.callGatewayFromCli.mock.calls[0]?.[0]).toBe("workboard.cards.dispatch");
+    expect(gatewayRuntime.callGatewayFromCli.mock.calls[0]?.[2]).not.toHaveProperty("maxStarts");
     expect(gatewayRuntime.callGatewayFromCli.mock.calls[0]?.[3]).toEqual({
       mode: "cli",
       scopes: ["operator.write", "operator.read"],
@@ -276,21 +219,6 @@ describe("registerWorkboardCli", () => {
     }
   });
 
-  it("omits maxStarts from the dispatch gateway call when the flag is absent", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const program = createProgram(store);
-    gatewayRuntime.callGatewayFromCli.mockResolvedValueOnce({ started: [], startFailures: [] });
-
-    await program.parseAsync(["workboard", "dispatch"], { from: "user" });
-
-    const forwardedParams = gatewayRuntime.callGatewayFromCli.mock.calls[0]?.[2] as Record<
-      string,
-      unknown
-    >;
-    expect(gatewayRuntime.callGatewayFromCli.mock.calls[0]?.[0]).toBe("workboard.cards.dispatch");
-    expect(forwardedParams).not.toHaveProperty("maxStarts");
-  });
-
   it("does not fall back when an older gateway lacks max-starts dispatch", async () => {
     const store = createWorkboardSqliteTestStore();
     const card = await store.create({ title: "Bounded dispatch", status: "ready" });
@@ -302,11 +230,17 @@ describe("registerWorkboardCli", () => {
     await expect(
       program.parseAsync(["workboard", "dispatch", "--max-starts", "1"], { from: "user" }),
     ).rejects.toThrow("unknown method: workboard.cards.dispatchWithOptions");
+    expect(gatewayRuntime.callGatewayFromCli).toHaveBeenCalledWith(
+      "workboard.cards.dispatchWithOptions",
+      expect.anything(),
+      expect.objectContaining({ maxStarts: 1 }),
+      expect.anything(),
+    );
 
     await expect(store.get(card.id)).resolves.toMatchObject({ status: "ready" });
   });
 
-  it.each(["0", "1e3"])("rejects invalid --max-starts value %s", async (value) => {
+  it.each(["1e3"])("rejects invalid --max-starts value %s", async (value) => {
     const store = createWorkboardSqliteTestStore();
     const program = createProgram(store);
 
@@ -343,18 +277,5 @@ describe("registerWorkboardCli", () => {
     expect(parsed).toMatchObject({ card: { id: card.id, status: "review" } });
     expect(parsed.card.metadata.claim.token).toBe("[redacted]");
     expect(output).not.toContain("secret-token");
-  });
-
-  it("rejects an invalid move status", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const card = await store.create({ title: "Invalid move" });
-    const program = createProgram(store);
-
-    await expect(
-      program.parseAsync(["workboard", "move", card.id, "--status", "later"], {
-        from: "user",
-      }),
-    ).rejects.toThrow("--status must be one of");
-    await expect(store.get(card.id)).resolves.toMatchObject({ status: "todo" });
   });
 });

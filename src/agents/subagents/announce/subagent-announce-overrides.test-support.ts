@@ -17,14 +17,13 @@ type AnnounceTestDeps = Pick<typeof announceRuntime, "getRuntimeConfig"> & {
 
 type OutputTestDeps = Pick<
   typeof announceRuntime,
-  | "getRuntimeConfig"
-  | "readSessionMessagesAsync"
-  | "resolveAgentIdFromSessionKey"
-  | "resolveSessionStorePathCore"
+  "getRuntimeConfig" | "readSessionMessagesAsync" | "resolveSessionStorePathCore"
 > & {
   readSubagentSessionEntry: (
     ...args: Parameters<typeof announceRuntime.readSubagentSessionEntry>
-  ) => Awaited<ReturnType<typeof announceRuntime.readSubagentSessionEntry>>;
+  ) =>
+    | ReturnType<typeof announceRuntime.readSubagentSessionEntry>
+    | Awaited<ReturnType<typeof announceRuntime.readSubagentSessionEntry>>;
   callGateway: AnnounceTestDeps["callGateway"];
   findTranscriptEvent: typeof sessionAccessor.findTranscriptEvent;
   findSessionTranscriptArchiveEventReadOnly: typeof sessionHistory.findSessionTranscriptArchiveEventReadOnly;
@@ -145,13 +144,6 @@ function replaceOverrides(scope: Scope, overrides?: Overrides) {
       announceRuntime.readSessionMessagesAsync,
       () => vi.spyOn(announceRuntime, "readSessionMessagesAsync"),
       current.readSessionMessagesAsync,
-    );
-  }
-  if (current.resolveAgentIdFromSessionKey) {
-    install(
-      announceRuntime.resolveAgentIdFromSessionKey,
-      () => vi.spyOn(announceRuntime, "resolveAgentIdFromSessionKey"),
-      current.resolveAgentIdFromSessionKey,
     );
   }
   if (current.resolveSessionStorePathCore) {

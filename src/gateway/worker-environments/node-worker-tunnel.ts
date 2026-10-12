@@ -380,16 +380,19 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
         if (entry.executionMode !== "worker-turn") {
           throw new Error("remote-exec environments do not launch embedded worker turns");
         }
-        const plan = request.plan;
-        const claim = request.turnClaim;
-        const isDispatchAuthorized = () =>
-          isEnvironmentOwner(entry) &&
-          claim.owner.kind === "worker" &&
-          claim.owner.environmentId === entry.environmentId &&
-          claim.owner.ownerEpoch === entry.ownerEpoch &&
-          claim.sessionId === plan.admission.sessionId &&
-          claim.runId === plan.assignment.runId &&
-          options.validateWorkerTurn(claim);
+        const { plan, turnClaim: claim } = request;
+        const isDispatchAuthorized = Object.assign(() => {
+          request.assertCurrent?.();
+          return (
+            isEnvironmentOwner(entry) &&
+            claim.owner.kind === "worker" &&
+            claim.owner.environmentId === entry.environmentId &&
+            claim.owner.ownerEpoch === entry.ownerEpoch &&
+            claim.sessionId === plan.admission.sessionId &&
+            claim.runId === plan.assignment.runId &&
+            options.validateWorkerTurn(claim)
+          );
+        }, request.assertCurrent);
         const operation = options.launchNodeWorker({
           deviceId: entry.deviceId,
           input: buildLaunchInput(plan, claim),

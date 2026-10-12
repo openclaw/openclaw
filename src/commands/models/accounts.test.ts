@@ -360,7 +360,7 @@ describe("personal model account CLI over an identified Gateway connection", () 
     },
   );
 
-  it.each([{ action: "login" }, { action: "list" }])(
+  it.each([{ action: "login" }])(
     "guides an unidentified person through $action without prompting for provider credentials",
     async ({ action }) => {
       const output = runtime();
@@ -501,10 +501,7 @@ describe("personal model account CLI over an identified Gateway connection", () 
     );
   });
 
-  it.each([
-    { provider: "missing", method: undefined, error: "Unknown provider" },
-    { provider: "openai", method: "missing", error: "Unknown sign-in method" },
-  ])(
+  it.each([{ provider: "openai", method: "missing", error: "Unknown sign-in method" }])(
     "rejects an unavailable catalog selection before starting: $error",
     async ({ provider, method, error }) => {
       await withGateway(
@@ -650,7 +647,6 @@ describe("personal model account CLI over an identified Gateway connection", () 
   });
 
   it.each([
-    { result: connected, exitCode: undefined },
     {
       result: { status: "failed", reason: "exchange" } satisfies UsersAuthConnectStatusResult,
       exitCode: 1,

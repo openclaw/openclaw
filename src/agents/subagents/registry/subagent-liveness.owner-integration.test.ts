@@ -80,6 +80,8 @@ async function register(id: string, collect = false, expectsCompletionMessage = 
   await registerSubagentRun({
     runId: id,
     childSessionKey,
+    childAgentId: "main",
+    sessionEntry: { sessionId: `${id}-session`, lifecycleRevision: `${id}-revision` },
     requesterSessionKey: parent,
     requesterAgentId: "main",
     requesterDisplayKey: parent,

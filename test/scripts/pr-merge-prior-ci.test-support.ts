@@ -263,6 +263,7 @@ export function createPriorCiCandidateFactory(
         check_run_url: "https://api.github.com/repos/fixture/repo/check-runs/1",
       },
       {
+        // This fixture decodes retained receipts from before workflow cancellation was removed.
         ...job(603, "pr-fail-fast", "success"),
         steps: [
           {

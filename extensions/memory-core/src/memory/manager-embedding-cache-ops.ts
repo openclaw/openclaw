@@ -150,17 +150,10 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
         }
       };
       // Rebuilds use a shadow index; cache writes retain the captured published owner.
-      await generation.database.mutateEmbeddingCache(
-        mutation,
-        assertCurrent,
-        () => {
-          assertCurrent();
-          return this.canWriteEmbeddingCache(generation) ? generation.databaseRevision : undefined;
-        },
-        () => {
-          generation.cacheWritesInvalidated = true;
-        },
-      );
+      await generation.database.mutateEmbeddingCache(mutation, assertCurrent, () => {
+        assertCurrent();
+        return this.canWriteEmbeddingCache(generation);
+      });
     });
   }
 

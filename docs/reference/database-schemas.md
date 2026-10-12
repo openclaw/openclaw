@@ -23,6 +23,14 @@ CLI, Doctor, cron, and plugin child processes must route mutations through the
 Gateway or acquire exclusive ownership while it is stopped. First admission,
 migration, repair, and final live-authority checks retain their existing owners.
 
+Agent deletion status is loaded on first admission and retained per agent in the
+physical shared database's process-owned facts. Journal writers publish pending,
+completed, and removed status at commit through the existing worker fact transport;
+rollback preserves the previous status. Session admission reuses this fact and the
+deletion owner's queue closure instead of reading the journal on every turn.
+Restart loads persisted tombstones again. Destructive cleanup retains its current
+journal-authority checks; schema, retention, and update behavior are unchanged.
+
 Once Gateway startup holds exclusive state ownership, it inspects the previous
 Gateway lease directly in a read-only worker instead of copying the shared
 database. Fresh or unverifiable owners still prevent startup; Doctor's schema
@@ -48,13 +56,12 @@ Native SQLite initialization reads the loaded library's version and extension
 capability in one query before admitting real state databases. Auth-profile
 readers install their lock-wait timeout at connection open.
 Quarantine decision readers and writers set their existing lock-wait timeout at connection
-open. The quarantine store's format is admitted once per physical database per
-process, while existing guards retain the indexed durable quarantine-row lookup
-in one SQLite snapshot and validate any recorded file generation.
-A separate inspection process can admit a target before the Gateway's verifier
-confirms corruption; its next guard must observe that recorded refusal even when
-the target's physical identity is unchanged. Quarantine rows retain their pathname
-scope, and aliases still share physical format, schema, and integrity facts.
+open. The quarantine store's format and each target's decision are loaded once
+per physical store. Record and clear operations publish the committed decision
+through the existing in-process admission facts, including absence, so ordinary
+guards do not repeat the durable lookup. Explicit Doctor inspection reads disk,
+and recorded refusals still validate their file generation. Quarantine rows retain
+their pathname scope, and aliases still share physical format, schema, and integrity facts.
 The persisted schema, WAL safety, and recovery behavior are unchanged.
 
 Agent database opens apply private file and directory modes. Warm reads and writes
@@ -72,9 +79,9 @@ commits independently of reply delivery. See
 for ordering, rollback, and the writer families that still retain native guards.
 
 SQLite format, schema-version, integrity, canonical-index, and
-table-existence validation runs once per physical database per process load,
-on its first admission. The admitted facts are shared with all workers and
-handles, including later opens and reopens after idle close. File identity uses
+table-existence validation runs on a physical database's first admission.
+The admitted facts are shared with all workers and handles while any connection
+remains open. Final close retires those facts; a later reopen validates again. File identity uses
 volume, inode, and stable birthtime captured once with `fstat` on the retained
 admission descriptor, not SQL. Admission lookups and established borrowers reuse
 those shared facts without checking the pathname again. Native open and reopen
@@ -94,8 +101,9 @@ Current-row authority checks remain at their effect boundaries. Cached rows insi
 an active SQLite snapshot use that snapshot's identity and the connection's local
 mutation revision. They never carry a current committed-write revision or become
 reusable after the snapshot ends. Autocommit caches use the owning writer's receipts.
-Closing a connection clears its prepared statements
-and row caches, while physical-database admission survives for the process lifetime.
+Closing a connection clears its prepared statements and row caches. Final close
+also retires physical-database admission, keeping only the host's identity descriptor
+until explicit retirement can safely close it without releasing sibling POSIX locks.
 
 Worker dispatch carries snapshots prepared by the admission owner when it publishes
 facts or writer custody. Unchanged requests reuse the registry revision without
@@ -104,8 +112,8 @@ invalidate transferred facts immediately; retirement removes the published snaps
 This changes no schema, stored bytes, or update behavior.
 
 Shared-state content-version checks reuse the physical database's admitted version
-facts across handles and workers. Ordinary commits, transactions, and connection
-closure do not force another marker read. The migration owner publishes replacement
+facts across open handles and workers. Ordinary commits, transactions, and closing
+one of several connections do not force another marker read. The migration owner publishes replacement
 facts with its committed schema. Observed DDL without replacement facts expires
 the content-version admission: an unchanged catalog shape does not prove that the
 `config_machine_state` marker survived. The next owner lookup validates it once,
@@ -144,6 +152,13 @@ transaction, which publishes the new schema facts on commit; rollback cannot
 publish a schema that did not commit. Ordinary connection replacement and data
 commits do not repeat schema validation. Schemas, stored bytes, and update behavior
 are unchanged.
+
+Shared-state bootstrap checks native table options once after installing the
+canonical schema. When every ordinary table is already STRICT, it skips legacy
+STRICT rebuild planning and duplicate schema installation. Existing non-STRICT
+tables still use the transactional migration, and final canonical table and index
+validation remains mandatory. Doctor's explicit repair and version refusal are
+unchanged; this changes no stored format or upgrade/downgrade contract.
 
 Admitted schema facts survive data-only transaction settlement. Committed write
 receipts invalidate cached row facts. A settled write releases its receipt fence
@@ -299,6 +314,7 @@ reader job. Open the page that matches your task and stay there.
 
 | Page                                                                                           | Read it when                                                                                             |
 | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| [Database engines (experimental)](/reference/database-engines)                                 | Selecting PostgreSQL, understanding SQLite anchors, or observing statements and worker requests.         |
 | [Database layout](/reference/database-schemas/layout)                                          | The two database roles, their on-disk paths, and the tables behind individual features.                  |
 | [Versioning contract](/reference/database-schemas/versioning)                                  | How schema versions are recorded, when a bump is required, and how updaters cross one.                   |
 | [Per-person and companion storage](/reference/database-schemas/personal-data)                  | Personal GitHub connections, personal model accounts, and Apple companion delivery journals.             |
@@ -351,6 +367,7 @@ page that now holds the content.
 - <a id="creator-namespace-migration" />[Creator namespace migration](/reference/database-schemas/agent-schema-history#creator-namespace-migration)
 - <a id="participant-identity-migration" />[Participant identity migration](/reference/database-schemas/agent-schema-history#participant-identity-migration)
 - <a id="state-schema-history" />[State schema history](/reference/database-schemas/state-schema-history#state-schema-history)
+- <a id="state-schema-21" />[State schema 21](/reference/database-schemas/state-schema-history#state-schema-21)
 - <a id="state-schema-16" />[State schema 16](/reference/database-schemas/state-schema-history#state-schema-16)
 - <a id="state-schema-15" />[State schema 15](/reference/database-schemas/state-schema-history#state-schema-15)
 - <a id="state-schema-13" />[State schema 13](/reference/database-schemas/state-schema-history#state-schema-13)
@@ -362,6 +379,7 @@ page that now holds the content.
 - <a id="the-gateway-refuses-to-start-with-a-newer-schema-version-error" />[The Gateway refuses to start with a newer schema version error](/reference/database-schemas/integrity-and-recovery#the-gateway-refuses-to-start-with-a-newer-schema-version-error)
 - <a id="a-database-is-quarantined-after-integrity-verification-failed" />[A database is quarantined after integrity verification failed](/reference/database-schemas/integrity-and-recovery#a-database-is-quarantined-after-integrity-verification-failed)
 - <a id="downgrades-are-unsupported" />[Downgrades are unsupported](/reference/database-schemas/integrity-and-recovery#downgrades-are-unsupported)
+- <a id="example-state-schema-21-to-20" />[Example: state schema 21 to 20](/reference/database-schemas/integrity-and-recovery#example-state-schema-21-to-20)
 - <a id="example-state-schema-13-to-12" />[Example: state schema 13 to 12](/reference/database-schemas/integrity-and-recovery#example-state-schema-13-to-12)
 - <a id="example-state-schema-12-to-11" />[Example: state schema 12 to 11](/reference/database-schemas/integrity-and-recovery#example-state-schema-12-to-11)
 - <a id="example-state-schema-11-to-10" />[Example: state schema 11 to 10](/reference/database-schemas/integrity-and-recovery#example-state-schema-11-to-10)

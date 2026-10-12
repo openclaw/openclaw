@@ -15,6 +15,7 @@ import {
   createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
 } from "../../agents/run-termination.js";
+import { runWithAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-identity-admission.js";
 import { createChannelAdmissionAudit } from "../../channels/message-access/admission-evidence.js";
 import { getDiagnosticSessionActivitySnapshot } from "../../logging/diagnostic-run-activity.js";
@@ -38,6 +39,7 @@ import type {
   FallbackRunnerParams,
   EmbeddedAgentParams,
 } from "./agent-runner-execution.test-support.js";
+import { buildReplyDiagnosticsPayload } from "./agent-runner-result-diagnostics.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import {
   createReplyOperation,
@@ -72,6 +74,64 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     expect(result.outcome).toMatchObject({ kind: "settled", sessionWriter: compactionTarget });
     expect(result.outcome.compaction).toBeUndefined();
   });
+
+  it.each([false, true])(
+    "settles a tool-free response after workspace preparation (failed=%s)",
+    async (fails) => {
+      const ready = createDeferred();
+      const waiting = createDeferred();
+      const preparationError = new Error("Checkout failed; retry this session.");
+      let failure: Error | undefined;
+      const params = createMinimalRunAgentTurnParams();
+      if (!params.sessionKey) {
+        throw new Error("Expected the fixture session key");
+      }
+      state.runEmbeddedAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "A response without tools." }],
+        meta: {},
+      });
+      vi.mocked(emitAgentEvent).mockClear();
+      let completed = false;
+      const pending = runWithAgentWorkspaceReadiness(
+        {
+          sessionKey: params.sessionKey,
+          waitUntilReady: () => {
+            waiting.resolve();
+            return ready.promise;
+          },
+          assertCurrent: () => {},
+          getFailure: () => failure,
+        },
+        () => execution.executeAgentTurn(params),
+      ).finally(() => {
+        completed = true;
+      });
+      const terminals = () =>
+        vi
+          .mocked(emitAgentEvent)
+          .mock.calls.map(([event]) => event)
+          .filter(
+            (event) =>
+              event.stream === "lifecycle" &&
+              (event.data.phase === "end" || event.data.phase === "error"),
+          );
+      await Promise.race([waiting.promise, pending]);
+      expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+      expect(completed).toBe(false);
+      expect(terminals()).toEqual([]);
+      if (fails) {
+        failure = preparationError;
+        ready.reject(preparationError);
+      } else {
+        ready.resolve();
+      }
+      await pending;
+      expect(terminals()).toHaveLength(1);
+      expect(terminals()[0]?.data).toMatchObject(
+        fails ? { phase: "error", error: preparationError.message } : { phase: "end" },
+      );
+    },
+  );
 
   it("classifies cancellation raised by the real deferred lifecycle owner", async () => {
     state.runEmbeddedAgentMock.mockImplementationOnce(
@@ -295,13 +355,20 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     }
   });
 
-  it.each(["default"] as const)(
-    "revalidates original thinking for main-chat fallback with turn request=%s",
-    async (override) => {
+  it.each([
+    { override: "default", requested: "ultra", expected: ["ultra", "ultra"] },
+    { override: undefined, requested: "high", expected: ["high", "off"] },
+  ] as const)(
+    "revalidates original thinking for main-chat fallback with turn request=$requested",
+    async ({ override, requested, expected }) => {
       const followupRun = createFollowupRun();
       followupRun.run.provider = "openai";
       followupRun.run.model = "gpt-5.6-sol";
-      followupRun.run.thinkLevel = "ultra";
+      followupRun.run.thinkLevel = requested;
+      followupRun.run.thinkingCatalog = [
+        { provider: "openai", id: "gpt-5.6-sol", reasoning: true },
+        { provider: "demo", id: "basic", reasoning: false },
+      ];
       followupRun.run = { ...followupRun.run, thinkLevelOverride: override };
       followupRun.run.config = {
         agents: {
@@ -327,15 +394,33 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       state.runEmbeddedAgentMock.mockResolvedValue({ payloads: [{ text: "ok" }], meta: {} });
 
       const executeAgentTurn = await getExecuteAgentTurnForTest();
-      await executeAgentTurn({
+      const result = await executeAgentTurn({
         ...createMinimalRunAgentTurnParams({ followupRun }),
       });
 
-      expect(state.runEmbeddedAgentMock.mock.calls.map((call) => call[0]?.thinkLevel)).toEqual([
-        "ultra",
-        "ultra",
-      ]);
-      expect(followupRun.run.thinkLevel).toBe("ultra");
+      expect(state.runEmbeddedAgentMock.mock.calls.map((call) => call[0]?.thinkLevel)).toEqual(
+        expected,
+      );
+      expect(followupRun.run.thinkLevel).toBe(requested);
+      if (result.kind !== "success") {
+        throw new Error("Expected a successful fallback");
+      }
+      expect(result.runResult.meta.requestShaping?.thinkingClamp).toBe(
+        requested === "high"
+          ? "Thinking level clamped to off for demo/basic (requested high; preference retained)."
+          : undefined,
+      );
+      const notice = await buildReplyDiagnosticsPayload({
+        activeSessionEntry: undefined,
+        followupRun,
+        accounting: {
+          runResult: result.runResult,
+          providerUsed: "demo",
+          modelUsed: "basic",
+          contextTokensUsed: 0,
+        },
+      });
+      expect(notice?.text).toBe(result.runResult.meta.requestShaping?.thinkingClamp);
     },
   );
 

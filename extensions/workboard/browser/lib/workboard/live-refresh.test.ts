@@ -73,16 +73,6 @@ describe("Workboard live refresh", () => {
     );
   });
 
-  it("requests one canonical reload for each newly installed client", () => {
-    const host = {};
-    const first = createClient(() => ({ cards: [], statuses: ["todo", "done"] }));
-    const second = createClient(() => ({ cards: [], statuses: ["todo", "done"] }));
-
-    expect(configureWorkboardLiveRefresh({ host, client: first as never })).toBe(true);
-    expect(configureWorkboardLiveRefresh({ host, client: first as never })).toBe(false);
-    expect(configureWorkboardLiveRefresh({ host, client: second as never })).toBe(true);
-  });
-
   it("coalesces revisions that arrive during a canonical read", async () => {
     const host = {};
     const firstList = createDeferred<unknown>();

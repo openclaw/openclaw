@@ -9,13 +9,9 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserChannelIdentity } from "../state/user-channel-identities.js";
+import { prepareUserProfileCatalog, readUserProfileIdentity } from "../state/user-profile-list.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
-import {
-  ensureGatewayOwnerProfile,
-  ensureProfileForEmail,
-  getUserProfileRole,
-  resolveUserProfileId,
-} from "../state/user-profiles.js";
+import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { handleGatewayRequest } from "./server-methods.js";
 
@@ -72,6 +68,7 @@ it.each(["person", "shared owner"] as const)(
       if (kind === "person") {
         setUserProfileRole(admin.id, "admin");
       }
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const cfg: OpenClawConfig = {
         gateway: {
           roles: {
@@ -123,8 +120,8 @@ it.each(["person", "shared owner"] as const)(
         queries.mockRestore();
       }
       expect(resolveUserChannelIdentity(identity)).toBeUndefined();
-      expect(getUserProfileRole(person.id)).toBe("admin");
-      expect(resolveUserProfileId(secondary.id)).toBe(person.id);
+      expect(readUserProfileIdentity(person.id)?.role).toBe("admin");
+      expect(readUserProfileIdentity(secondary.id)?.profileId).toBe(person.id);
     });
   },
 );

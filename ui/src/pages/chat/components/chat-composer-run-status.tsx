@@ -11,7 +11,7 @@ type ComposerRunStatusProps = {
   onOpenSubagents: ((focus?: boolean) => void) | undefined;
 };
 
-export function ComposerRunStatusContent(props: ComposerRunStatusProps) {
+function ComposerRunStatusContent(props: ComposerRunStatusProps) {
   const wait = () => props.waitingSubagents;
   const child = () => wait()?.child;
   const startedAt = () => child()?.startedAt ?? wait()?.startedAt;

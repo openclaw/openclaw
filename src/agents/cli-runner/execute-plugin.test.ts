@@ -94,6 +94,8 @@ afterEach(() => {
 
 describe("plugin-owned CLI execution host boundary", () => {
   it("streams plugin events through the canonical host output boundary", async () => {
+    // Exercise stream translation independently of cold policy-worker startup time.
+    vi.useFakeTimers({ toFake: ["Date"] });
     const { context } = await createExecution();
     context.systemPrompt = `  Follow host policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}Keep credentials private.  `;
     context.promptContext = {

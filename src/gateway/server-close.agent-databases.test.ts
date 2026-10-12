@@ -667,7 +667,6 @@ it.skipIf(process.platform !== "linux")(
       const writerLeases = agentLeases.all(agent.path);
       expect(writerLeases).toHaveLength(2);
       await runSqliteSessionReclamation({
-        forceInProcess: false,
         plan: createSessionMaintenanceStatisticsOperation({ ...options, path: agent.path }),
       });
       expect(agentLeases.all(agent.path)).toEqual(writerLeases);

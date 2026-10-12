@@ -104,6 +104,8 @@ it.each(
       await registerSubagentRun({
         runId: id,
         childSessionKey: childKey(id),
+        childAgentId: "main",
+        sessionEntry: loadSessionEntry({ storePath, sessionKey: childKey(id) }),
         requesterSessionKey,
         controllerSessionKey,
         requesterAgentId: "main",
@@ -243,6 +245,8 @@ it.each(["chat", "rpc", "chat-rebind"] as const)(
     await registerSubagentRun({
       runId: "draining",
       childSessionKey: childKey("draining"),
+      childAgentId: "main",
+      sessionEntry: loadSessionEntry({ storePath, sessionKey: childKey("draining") }),
       requesterSessionKey: parentKey,
       controllerSessionKey: controllerKey,
       requesterAgentId: "main",
@@ -253,7 +257,10 @@ it.each(["chat", "rpc", "chat-rebind"] as const)(
     });
     const parentInterrupted = createDeferredCore();
     const childInterrupted = createDeferredCore();
-    const interruptChild = vi.fn(() => childInterrupted.resolve());
+    const interruptChild = vi.fn(() => {
+      childInterrupted.resolve();
+      return { runId: "draining" };
+    });
     const parentAdmission = await beginSessionWorkAdmission({
       scope: storePath,
       identities: [parentKey, "parent"],
@@ -263,6 +270,12 @@ it.each(["chat", "rpc", "chat-rebind"] as const)(
     const childAdmission = await beginSessionWorkAdmission({
       scope: storePath,
       identities: [childKey("draining"), "draining"],
+      run: {
+        runId: "draining",
+        sessionKey: childKey("draining"),
+        sessionId: "draining",
+        agentId: "main",
+      },
       assertAllowed: () => {},
       onInterrupt: interruptChild,
     });
@@ -371,6 +384,8 @@ it("lifecycle requester cleanup respects agent ownership without granting ordina
     await registerSubagentRun({
       runId: agentId,
       childSessionKey: "agent:" + agentId + ":subagent:global-child",
+      childAgentId: agentId,
+      sessionEntry: { sessionId: agentId },
       requesterSessionKey: "global",
       controllerSessionKey: "agent:" + agentId + ":other-controller",
       requesterAgentId: agentId,
@@ -453,6 +468,8 @@ it.each(["sessionId", "lifecycleRevision"] as const)(
       await registerSubagentRun({
         runId: "replacement-child",
         childSessionKey: childKey("replacement-child"),
+        childAgentId: "main",
+        sessionEntry: { sessionId: "replacement-child" },
         requesterSessionKey: "agent:main:other-requester",
         controllerSessionKey: parentKey,
         requesterAgentId: "main",

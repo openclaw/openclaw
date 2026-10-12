@@ -158,7 +158,6 @@ async function prepareNativeSessionRuntime(
       const prepared = await reader.withRead(
         {
           sessionKeys: [admission.sessionKey],
-          lifecycleSessionKey: admission.sessionKey,
           snapshotFields: [],
         },
         assertCallerCurrent,
@@ -176,7 +175,6 @@ async function prepareNativeSessionRuntime(
       {
         agentId: sessionAgentId,
         sessionKeys: [admission.sessionKey],
-        lifecycleSessionKey: admission.sessionKey,
         storePath: admission.storePath,
         includeAuthorization: true,
         snapshotFields: [],
@@ -260,6 +258,7 @@ export async function resolveEmbeddedRunModelSetup(params: {
     runParams.resolvedModelSelection ??
     (await resolveHookModelSelection({
       prompt: runParams.prompt,
+      awaitSessionDiffBaseline: runParams.awaitSessionDiffBaseline,
       attachments: buildBeforeModelResolveAttachments(runParams.images),
       provider: params.provider,
       modelId: params.modelId,

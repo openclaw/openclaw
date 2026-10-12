@@ -48,6 +48,7 @@ it.for(["before startup", "before inherited connection drain"] as const)(
       agentId: "main",
       agentDir: testState.path("agent"),
       outputTextPolicy: "strict-visible",
+      thinkLevel: "off",
     });
     const complete = vi.spyOn(sessionObserverModel, "defaultCompleteModel").mockImplementation(() =>
       trackAsyncWork(async () => {

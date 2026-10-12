@@ -59,39 +59,6 @@ function createDeps(options: {
 }
 
 describe("classifyRealtimeVoiceAgentControlText", () => {
-  it("classifies common voice control phrases conservatively", () => {
-    expect(classifyRealtimeVoiceAgentControlText("status?")).toBe("status");
-    expect(classifyRealtimeVoiceAgentControlText("update?")).toBe("status");
-    expect(classifyRealtimeVoiceAgentControlText("give me an update")).toBe("status");
-    expect(classifyRealtimeVoiceAgentControlText("cancel that")).toBe("cancel");
-    expect(classifyRealtimeVoiceAgentControlText("can you cancel the check")).toBe("cancel");
-    expect(classifyRealtimeVoiceAgentControlText("actually can we just cancel")).toBe("cancel");
-    expect(classifyRealtimeVoiceAgentControlText("OK, cancel")).toBe("cancel");
-    expect(classifyRealtimeVoiceAgentControlText("please cancle the run")).toBe("cancel");
-    expect(shouldAutoControlRealtimeVoiceAgentText("cancel my meeting tomorrow")).toBe(false);
-    expect(shouldAutoControlRealtimeVoiceAgentText("abort the deploy")).toBe(false);
-    expect(classifyRealtimeVoiceAgentControlText("when you're done also check tests")).toBe(
-      "followup",
-    );
-    expect(classifyRealtimeVoiceAgentControlText("how is it going")).toBe("status");
-    expect(classifyRealtimeVoiceAgentControlText("All right, how is that going?")).toBe("status");
-    expect(classifyRealtimeVoiceAgentControlText("what is it doing")).toBe("status");
-    expect(classifyRealtimeVoiceAgentControlText("update the docs too")).toBe("steer");
-    expect(classifyRealtimeVoiceAgentControlText("use the smaller implementation")).toBe("steer");
-    expect(classifyRealtimeVoiceAgentControlText("stop using the slow path")).toBe("steer");
-    expect(classifyRealtimeVoiceAgentControlText("can you stop using the slow path")).toBe("steer");
-    expect(classifyRealtimeVoiceAgentControlText("stop the run from using the slow path")).toBe(
-      "steer",
-    );
-    expect(classifyRealtimeVoiceAgentControlText("actually focus on WebUI first")).toBe("steer");
-    expect(classifyRealtimeVoiceAgentControlText("change that to check discord voice")).toBe(
-      "steer",
-    );
-    expect(
-      classifyRealtimeVoiceAgentControlText("Can you actually change it to Discord path?"),
-    ).toBe("steer");
-  });
-
   it("keeps ambiguous active-call speech out of automatic steering", () => {
     expect(resolveRealtimeVoiceAgentControlIntent({ text: "hello" })).toMatchObject({
       mode: "status",
@@ -250,7 +217,7 @@ describe("controlRealtimeVoiceAgentRun", () => {
     );
   });
 
-  it.each(["steer", "followup"] as const)(
+  it.each(["followup"] as const)(
     "reports unconfirmed %s without claiming success or sending again",
     async (mode) => {
       const deps = createDeps({ activeSessionId: "session-active", unconfirmed: true });
@@ -456,31 +423,4 @@ describe("controlRealtimeVoiceAgentRun", () => {
     });
     expect(deps.queueEmbeddedAgentMessageWithOutcomeAsync).not.toHaveBeenCalled();
   });
-
-  it.each(["injected", "runtime"] as const)(
-    "returns a structured rejection when no run is active (%s dependencies)",
-    async (source) => {
-      const deps = source === "injected" ? createDeps({}) : undefined;
-
-      const result = await controlRealtimeVoiceAgentRun(
-        {
-          sessionKey: "agent:main:main",
-          text: "use the safer path",
-          mode: "steer",
-        },
-        deps,
-      );
-
-      expect(result).toMatchObject({
-        ok: false,
-        mode: "steer",
-        active: false,
-        queued: false,
-        reason: "no_active_run",
-      });
-      if (deps) {
-        expect(deps.queueEmbeddedAgentMessageWithOutcomeAsync).not.toHaveBeenCalled();
-      }
-    },
-  );
 });

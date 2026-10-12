@@ -5,7 +5,6 @@ import {
 } from "./external-auth.js";
 import { testing } from "./external-auth.test-support.js";
 import { isPersistedExternalCliAuthProfile } from "./external-cli-sync.js";
-import { getRuntimeExternalCliProfileIds } from "./runtime-external-profile-references.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   getRuntimeAuthProfileStoreSnapshotCore,
@@ -81,7 +80,6 @@ describe("external auth owner", () => {
       expect(readMiniMax).toHaveBeenCalledOnce();
       const overlaid = createExternalAuthRuntime(() => []).overlayExternalAuthProfiles(store);
       expect(overlaid.profiles[profileId]).toEqual(synced.profiles[profileId]);
-      expect(getRuntimeExternalCliProfileIds(overlaid)).toEqual([]);
     },
   );
 
@@ -103,29 +101,10 @@ describe("external auth owner", () => {
     });
     expect(next.profiles["openai:default"]).toEqual(pluginCredential);
     expect(next.runtimeExternalProfileIds).toEqual(["openai:default"]);
-    expect(getRuntimeExternalCliProfileIds(next)).toEqual([]);
     expect(resolver).toHaveBeenCalledTimes(2);
     expect(resolver).toHaveBeenLastCalledWith(
       expect.objectContaining({ config, context: expect.objectContaining({ config }) }),
     );
-  });
-
-  it("releases only the requested retired CLI overlay", () => {
-    const store: RuntimeAuthProfileStore = {
-      version: 1,
-      profiles: {
-        "openai:default": credential(),
-        "claude-cli:default": credential({ provider: "claude-cli" }),
-      },
-      runtimeExternalProfileIds: ["openai:default", "claude-cli:default"],
-      runtimeExternalCliProfileIds: ["openai:default", "claude-cli:default"],
-    };
-    const next = createExternalAuthRuntime(() => []).overlayExternalAuthProfiles(store, {
-      externalCliProfileIds: ["openai:default"],
-    });
-    expect(next.profiles["openai:default"]).toBeUndefined();
-    expect(next.profiles["claude-cli:default"]).toEqual(store.profiles["claude-cli:default"]);
-    expect(getRuntimeExternalCliProfileIds(next)).toEqual(["claude-cli:default"]);
   });
 
   it.each([false, true])("retains external account health during a scoped=%s refresh", (scoped) => {

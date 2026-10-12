@@ -7,7 +7,7 @@ import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { sessionChangeAffectsStoredRow } from "../../sessions/session-row-facts.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
+import { freezeJsonSnapshot, isDeeplyFrozenPlainData } from "../../shared/immutable-data.js";
 import type {
   AgentDatabaseExecutionFileIdentity,
   AgentDatabaseIncognitoIdentity,
@@ -16,6 +16,7 @@ import { readSessionActivitySummary } from "./activity-summary.js";
 import {
   readPreparedSessionEntryChange,
   readPreparedSessionEntryPublicationSource,
+  readPreparedSessionSharingChange,
 } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import type {
   SessionActorHotState,
@@ -78,7 +79,7 @@ const pool = resolveGlobalSingleton<ReplicaPool>(
   },
 );
 
-function ensureReplicaSubscription(): void {
+export function ensureReplicaSubscription(): void {
   if (pool.unsubscribe) {
     return;
   }
@@ -86,6 +87,32 @@ function ensureReplicaSubscription(): void {
   pool.unsubscribe = sessionChanges.subscribeFacts((change) => {
     // Receipt installation reorders the LRU map, so visit the original cells once.
     const cellsBeforePublication = [...pool.cells.values()];
+    const publishedKey =
+      !("all" in change) && !change.factsInvalidated ? change.sessionKey : undefined;
+    const created = publishedKey ? readPreparedSessionEntryChange(change, publishedKey) : undefined;
+    if (publishedKey && created?.fullEntry && typeof created.source.identity === "string") {
+      const target: FileTarget = {
+        sessionKey: publishedKey,
+        database: {
+          kind: "file",
+          physicalIdentity: created.source.identity,
+          birthtime: created.source.birthtime,
+          nativeLocation: created.source.canonicalPath ?? created.source.filename,
+        },
+      };
+      if (
+        !pool.cells.has(targetKey(target)) &&
+        created.source.writeToken ===
+          readSqliteDatabaseWriteTokenForPath(target.database.nativeLocation)
+      ) {
+        // Creation already owns the complete entry; its first reader need not fetch it again.
+        retainSessionActorEntryFacts(
+          target,
+          { entry: created.fullEntry, snapshots: "full", projection: created.projection },
+          created.source.incarnation,
+        );
+      }
+    }
     for (const cell of cellsBeforePublication) {
       const { database, sessionKey } = cell.target;
       if (
@@ -153,6 +180,8 @@ function ensureReplicaSubscription(): void {
             previousProjection
               ? { hasBoard: previousProjection.hasBoard }
               : undefined);
+          // Metadata receipts retain side-table facts when their writer did not change sharing.
+          const sharingUnchanged = readPreparedSessionSharingChange(change) === "unchanged";
           cell.entry = freezeJsonSnapshot({
             target: cell.target,
             entry: structuredClone(prepared.fullEntry),
@@ -160,6 +189,8 @@ function ensureReplicaSubscription(): void {
             writeToken,
             snapshots: "full",
             projection,
+            members: sharingUnchanged ? previous?.members : undefined,
+            participants: sharingUnchanged ? previous?.participants : undefined,
           });
           cell.predicateColumns = deriveSessionPredicateColumns(JSON.stringify(prepared.fullEntry));
           cell.bytes = JSON.stringify(cell.entry).length * 2;
@@ -202,7 +233,9 @@ function retainSnapshot(
   state: SessionActorHotState,
   generation: string | undefined,
 ): void {
-  const detached = freezeJsonSnapshot(structuredClone(state));
+  const detached = isDeeplyFrozenPlainData(state)
+    ? state
+    : freezeJsonSnapshot(structuredClone(state));
   discard(cell);
   cell.snapshot = detached;
   cell.predicateColumns = detached.entry
@@ -299,6 +332,12 @@ export function readSessionActorEntryFacts(
     members: state.members,
     participants: state.participants,
     snapshots,
+    projection: cell.snapshot
+      ? {
+          hasBoard: cell.snapshot.hasBoard,
+          activitySummaryWatermark: cell.snapshot.transcript.watermark,
+        }
+      : cell.entry?.projection,
     dependencySessionIds: state.dependencySessionIds,
     writeToken: state.writeToken,
     predicateColumns: cell.predicateColumns,
@@ -489,7 +528,7 @@ export function createSessionActorReplica(
       throw new Error("Session actor replica is closed");
     }
     owned.pending += 1;
-    invalidate();
+    owned.reservation += 1;
     const selected = owned.reservation;
     const expectedGeneration = generation();
     let settled = false;
@@ -508,7 +547,7 @@ export function createSessionActorReplica(
   };
 
   return {
-    /** Each borrower validates its current physical generation before disclosure. */
+    /** Borrow the immutable revision only after validating its current physical generation. */
     read(): SessionActorHotState | undefined {
       params.lifetime.assertReadable();
       if (closed || !owned.snapshot) {
@@ -521,11 +560,12 @@ export function createSessionActorReplica(
         return undefined;
       }
       if (!accepts(owned.snapshot, owned.generation, token)) {
-        invalidate();
+        discard(owned);
+        forgetUnused(owned);
         return undefined;
       }
       touch(owned);
-      return structuredClone(owned.snapshot);
+      return owned.snapshot;
     },
     beginRead() {
       const settle = begin();
@@ -540,12 +580,13 @@ export function createSessionActorReplica(
     },
     beginCommand() {
       const previous = owned.snapshot;
+      const previousGeneration = owned.generation;
       const settle = begin();
       return {
         settle<Value>(outcome: SessionActorOutcome<Value>): boolean {
           return settle((expectedGeneration) => {
             if (outcome.kind === "rolled-back") {
-              return previous !== undefined && install(previous, expectedGeneration);
+              return previous !== undefined && install(previous, previousGeneration);
             }
             if (outcome.kind === "unknown") {
               discard(owned);

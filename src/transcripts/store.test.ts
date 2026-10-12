@@ -79,6 +79,67 @@ function session(
 }
 
 describe("TranscriptsStore", () => {
+  it("keeps selector and overview columns aligned on insert, replacement, and removal", async () => {
+    const { store } = createStore();
+    const target = {
+      ...session(),
+      source: {
+        providerId: "manual-transcript",
+        accountId: "account",
+        guildId: "guild",
+        channelId: "channel",
+        meetingUrl: "https://example.test/meeting",
+        threadTs: "thread",
+        fileId: "file",
+      },
+      metadata: { agentId: "agent" },
+    };
+    const database = () =>
+      openOpenClawStateDatabase({
+        env: { ...process.env, OPENCLAW_STATE_DIR: suiteStateDir },
+      }).db;
+    const readColumns = () =>
+      database()
+        .prepare(
+          `SELECT source_account_id, source_guild_id, source_channel_id, source_meeting_url,
+                  source_thread_ts, source_file_id, metadata_agent_id
+             FROM meeting_transcript_sessions WHERE session_id = ? AND started_at = ?`,
+        )
+        .get(target.sessionId, target.startedAt);
+    await store.writeSession(target);
+    expect(readColumns()).toEqual({
+      source_account_id: "account",
+      source_guild_id: "guild",
+      source_channel_id: "channel",
+      source_meeting_url: "https://example.test/meeting",
+      source_thread_ts: "thread",
+      source_file_id: "file",
+      metadata_agent_id: "agent",
+    });
+    await store.writeSession({
+      ...target,
+      source: { providerId: "manual-transcript", accountId: "replacement" },
+      metadata: {},
+    });
+    expect(readColumns()).toEqual({
+      source_account_id: "replacement",
+      source_guild_id: null,
+      source_channel_id: null,
+      source_meeting_url: null,
+      source_thread_ts: null,
+      source_file_id: null,
+      metadata_agent_id: null,
+    });
+    const summary = summarizeTranscripts({ session: target, utterances: [] });
+    await store.writeSummary({ ...summary, overview: "Initial overview" }, target);
+    await store.writeSummary({ ...summary, overview: "Replacement overview" }, target);
+    expect(
+      database()
+        .prepare("SELECT overview FROM meeting_transcript_summaries WHERE session_id = ?")
+        .get(target.sessionId),
+    ).toEqual({ overview: "Replacement overview" });
+  });
+
   it("keeps summary snapshot queries bound to the current session and persisted revision", async () => {
     const { store } = createStore();
     const first = session("summary-first");

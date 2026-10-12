@@ -5,7 +5,7 @@
  * Runtime callers import this barrel instead of storage-specific modules.
  */
 export * from "./session-history.js";
-export { listSessionPendingInputReceipts } from "./session-accessor.sqlite-pending-input-receipts.js";
+export { readSessionPendingInputReceiptsInWorker as listSessionPendingInputReceipts } from "./session-pending-input-receipts.js";
 export {
   bindSessionPendingInputSources,
   listSessionPendingInputs,
@@ -188,10 +188,7 @@ export {
   type RestartTombstoneRecoveryResult,
 } from "./session-accessor.sqlite-recovery.js";
 export { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
-export {
-  updateSessionProfileInvolvement,
-  updateSessionProfileInvolvementAsync,
-} from "./session-involvement-store.js";
+export { updateSessionProfileInvolvementAsync } from "./session-involvement-store.js";
 export { MAX_SESSION_PARTICIPANTS } from "./session-entry-provenance.js";
 export type { RecordSessionParticipantResult } from "./session-accessor.sqlite-participants.native.js";
 export { recordSessionParticipantInWorker as recordSessionParticipant } from "./session-sharing-store.async.js";
@@ -238,14 +235,12 @@ export {
   loadTranscriptEvents,
   loadTranscriptEventsSync,
   loadTranscriptHeaderSync,
-  loadTranscriptSuffixEventsBoundedSync,
   persistCompactionBoundaryWithSessionEntrySync,
   persistCompactionBoundaryWithSessionEntryAsync,
   preflightSessionTranscriptForManualCompact,
   publishTranscriptUpdate,
   readLatestTranscriptAssistantText,
   readTranscriptEventAtSeqSync,
-  readPreviousIndexedTranscriptEventSync,
   readTranscriptIdentityByEventId,
   readTranscriptRawDelta,
   readTranscriptMutationAtSync,

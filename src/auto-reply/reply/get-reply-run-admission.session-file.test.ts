@@ -155,6 +155,30 @@ function createAdmissionFixture() {
 afterEach(() => vi.clearAllMocks());
 
 describe("prepared reply transcript identity", () => {
+  it("carries an inherited thinking request through admission to candidate selection", async () => {
+    const { context, entry } = createAdmissionFixture();
+    entry.thinkingLevel = "high";
+    const catalog = [{ provider: "fixture", id: "basic", name: "Basic", reasoning: false }];
+    const result = await prepareReplyRunAdmission({
+      ...context,
+      thinkingRuntime: "openclaw",
+      params: {
+        ...context.params,
+        provider: "fixture",
+        model: "basic",
+        resolvedThinkLevel: "high",
+        modelState: {
+          ...context.params.modelState,
+          allowedModelCatalog: catalog,
+          resolveThinkingCatalog: async () => catalog,
+        },
+      },
+    });
+
+    expect(result).toMatchObject({ kind: "ready", resolvedThinkLevel: "high" });
+    expect(entry.thinkingLevel).toBe("high");
+  });
+
   it.each([
     { sessionKey: "global", agentId: "research" },
     { sessionKey: undefined, agentId: "main" },

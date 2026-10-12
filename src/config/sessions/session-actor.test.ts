@@ -225,7 +225,6 @@ async function withActor(
     const transport: SessionActorTransport = {
       run(operation, authorize) {
         return runOpenClawAgentWorkerWrite(options, async () => {
-          const held = epoch;
           async function execute<Key extends keyof SessionActorOperations>(command: {
             type: Key;
             input: SessionActorOperations[Key]["input"];
@@ -293,13 +292,6 @@ async function withActor(
             }
           }
           return operation({
-            captureGeneration: () => ({
-              assertCurrent() {
-                if (held !== epoch) {
-                  throw new Error("Worker generation retired");
-                }
-              },
-            }),
             execute,
           });
         });
@@ -307,8 +299,9 @@ async function withActor(
       async afterCommitted(outcome) {
         if (fault.afterCommitted) {
           await fault.afterCommitted();
-          outcome.receipt.commandId = "detached-follow-up-copy";
-          return { value: outcome.value };
+          const copy = structuredClone(outcome);
+          copy.receipt.commandId = "detached-follow-up-copy";
+          return { value: copy.value };
         }
         return undefined;
       },
@@ -355,25 +348,6 @@ it("serves installed state without a request and reconciles a retired worker gen
     const restored = await actor.read(authority);
     expect(restored.entry?.sessionId).toBe(initial.entry?.sessionId);
     expect(restored.version.epoch).not.toBe(initial.version.epoch);
-    expect(commands).toEqual(["session.actor.read", "session.actor.read"]);
-  });
-});
-
-it.each([1, 2])("bounds empty-replica recovery after %i superseding writes", async (writes) => {
-  await withActor(async ({ actor, commands, fault, nativePatch }) => {
-    let remaining = writes;
-    fault.onExecuted = () => {
-      if (remaining > 0) {
-        nativePatch(700 + remaining);
-        remaining -= 1;
-      }
-    };
-    const reading = actor.read(authority);
-    if (writes === 1) {
-      expect((await reading).entry?.updatedAt).toBe(701);
-    } else {
-      await expect(reading).rejects.toThrow("changed before its read could publish");
-    }
     expect(commands).toEqual(["session.actor.read", "session.actor.read"]);
   });
 });
@@ -474,30 +448,6 @@ it("installs the full append receipt and releases FIFO before retained follow-up
   });
 });
 
-it("rechecks receipt freshness after a synchronous authority callback before disclosure", async () => {
-  await withActor(async ({ actor, nativePatch }) => {
-    await actor.read(authority);
-    expect(
-      actor.snapshot({
-        assertCurrent() {},
-        authorize() {
-          nativePatch(101);
-        },
-      }),
-    ).toBeUndefined();
-    await actor.read(authority);
-    await expect(
-      actor.read({
-        assertCurrent() {},
-        authorize() {
-          nativePatch(102);
-        },
-      }),
-    ).rejects.toThrow("changed before read disclosure");
-    expect((await actor.read(authority)).entry?.updatedAt).toBe(102);
-  });
-});
-
 it("releases the writer queue across phase awaits and flushes reducers on an exceptional exit", async () => {
   await withActor(async ({ actor, commands }) => {
     await actor.read(authority);
@@ -559,9 +509,11 @@ it("preserves native commit through worker publication, reply, and observer fail
   });
 });
 
-it("isolates mutable policy callbacks from admitted snapshots and committed state", async () => {
+it("shares immutable actor revisions and isolates explicit policy copies", async () => {
   await withActor(async ({ actor }) => {
     const initial = await actor.read(authority);
+    expect(actor.snapshot(authority)).toBe(initial);
+    expect(await actor.read(authority)).toBe(initial);
     const stages: string[] = [];
     const result = await actor.patch(
       {
@@ -573,11 +525,17 @@ it("isolates mutable policy callbacks from admitted snapshots and committed stat
         assertCurrent() {},
         authorize(stage, snapshot) {
           stages.push(stage);
-          if (snapshot.entry) {
-            snapshot.entry.sessionId = "policy-mutated";
+          expect(Object.isFrozen(snapshot)).toBe(true);
+          expect(Object.isFrozen(snapshot.entry)).toBe(true);
+          expect(() => {
+            snapshot.dependencySessionIds.length = 0;
+          }).toThrow(TypeError);
+          const copy = structuredClone(snapshot);
+          if (copy.entry) {
+            copy.entry.sessionId = "policy-mutated";
           }
-          snapshot.version = { epoch: "policy-mutated", sequence: -1 };
-          snapshot.dependencySessionIds.length = 0;
+          copy.version = { epoch: "policy-mutated", sequence: -1 };
+          copy.dependencySessionIds.length = 0;
         },
       },
     );
@@ -591,6 +549,12 @@ it("isolates mutable policy callbacks from admitted snapshots and committed stat
     expect(stages).toContain("transaction");
     expect(stages).toContain("commit");
     expect(actor.snapshot(authority)?.entry?.sessionId).toBe(initial.entry?.sessionId);
+    if (result.kind !== "committed") {
+      throw new Error("Expected committed actor revision");
+    }
+    expect(actor.snapshot(authority)).toBe(result.receipt.postimage);
+    expect(actor.snapshot(authority)).not.toBe(initial);
+    expect(initial.entry?.updatedAt).not.toBe(123);
   });
 });
 

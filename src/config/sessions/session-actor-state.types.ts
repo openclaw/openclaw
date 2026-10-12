@@ -36,7 +36,7 @@ export type SessionActorAuthorityFacts = Pick<
   "target" | "version" | "writeToken" | "dependencySessionIds" | "entry"
 >;
 
-/** Host-owned live authority, rechecked at both synchronous admission boundaries. */
+/** Host-owned live authority, rechecked at both synchronous admission boundaries. Facts are read-only. */
 export type SessionActorAuthority = {
   assertCurrent(): void;
   authorize(

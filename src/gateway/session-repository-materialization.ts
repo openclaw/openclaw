@@ -26,7 +26,6 @@ import {
 import { readRepositoryGitHubPublicationBranchAsync } from "./github-publication-store-async.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 import { prepareRepositoryPublicationRestore } from "./github-repository-publication-restore.js";
-import { readRepositoryGitHubPublicationBranch } from "./github-repository-publication-store.js";
 import { withGatewaySessionEntryReadOnly } from "./session-utils-read-lifetime.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
 import { prepareSessionWorktree } from "./session-worktree-preparation.js";
@@ -93,7 +92,6 @@ async function materializeCapturedRepositoryWorkspace(
     branch: repository.branch,
     pushRepository: `${remote.owner}/${remote.repo}`,
   };
-  const branch = () => readRepositoryGitHubPublicationBranch(branchInput);
   const selected = await readRepositoryGitHubPublicationBranchAsync(branchInput);
   const published = selected.head;
   if (selected.unsettled) {
@@ -103,12 +101,7 @@ async function materializeCapturedRepositoryWorkspace(
   }
   const assertOtherOwners = () => {
     params.signal?.throwIfAborted();
-    const currentBranch = branch();
-    if (
-      currentBranch.unsettled ||
-      currentBranch.head?.pushed_head_commit !== published?.pushed_head_commit ||
-      preparedRepository.current()?.revision !== repository.revision
-    ) {
+    if (preparedRepository.current()?.revision !== repository.revision) {
       throw new Error("Repository workspace changed during Gateway materialization; retry move");
     }
   };

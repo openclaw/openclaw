@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isMainThread } from "node:worker_threads";
 import {
   readAmbientTranscriptWatermarkFromEntry,
   resolveAmbientTranscriptWatermarkKey,
@@ -47,6 +48,8 @@ import {
   sessionEntryCommitGuardOptions,
 } from "../config/sessions/session-source-authority.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { loadSessionTranscriptEvents } from "../config/sessions/session-transcript-events.js";
+import { readTranscriptStatsAsync as readAccessorTranscriptStatsAsync } from "../config/sessions/session-transcript-stats.js";
 import { normalizeResolvedMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
 import type { ResolvedSessionMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
 import type { AmbientTranscriptWatermark, SessionEntry } from "../config/sessions/types.js";
@@ -246,23 +249,60 @@ export async function listSessionEntriesAsync(params: {
   }));
 }
 
-/** Reads transcript events for a live SQLite-backed session identity. */
-export const loadTranscriptEventsSync: (params: {
+type SessionStoreTranscriptReadParams = {
   agentId?: string;
   env?: NodeJS.ProcessEnv;
   sessionId: string;
   sessionKey?: string;
   storePath?: string;
-}) => SessionStoreTranscriptEvent[] = loadAccessorTranscriptEventsSync;
+};
 
-/** Reads transcript freshness and byte size without materializing event rows. */
-export const readTranscriptStatsSync: (params: {
+/** @deprecated Use loadTranscriptEvents; removed in the next Plugin SDK major. */
+function loadTranscriptEventsSyncLegacy(
+  params: SessionStoreTranscriptReadParams,
+): SessionStoreTranscriptEvent[] {
+  warnPluginSdkDeprecation({
+    family: "session-store",
+    method: "loadTranscriptEventsSync",
+    replacement: "loadTranscriptEvents",
+  });
+  return loadAccessorTranscriptEventsSync(params);
+}
+
+/** Reads ordered transcript events through the session owner's worker. */
+export function loadTranscriptEvents(
+  params: SessionStoreTranscriptReadParams,
+): Promise<SessionStoreTranscriptEvent[]> {
+  return loadSessionTranscriptEvents(params);
+}
+
+export { loadTranscriptEventsSyncLegacy as loadTranscriptEventsSync };
+
+/** @deprecated Use readTranscriptStatsAsync; removed in the next Plugin SDK major. */
+function readSessionStoreTranscriptStatsSync(params: {
   agentId?: string;
   env?: NodeJS.ProcessEnv;
   sessionId: string;
   sessionKey?: string;
   storePath?: string;
-}) => { eventCount: number; maxSeq: number; sizeBytes: number } = readAccessorTranscriptStatsSync;
+}): { eventCount: number; maxSeq: number; sizeBytes: number } {
+  if (isMainThread) {
+    warnPluginSdkDeprecation({
+      family: "session-store",
+      method: "readTranscriptStatsSync",
+      replacement: "readTranscriptStatsAsync",
+    });
+  }
+  return readAccessorTranscriptStatsSync(params);
+}
+
+/** Reads transcript statistics through the existing session worker. */
+export const readTranscriptStatsAsync: (
+  params: Parameters<typeof readSessionStoreTranscriptStatsSync>[0],
+) => Promise<ReturnType<typeof readSessionStoreTranscriptStatsSync>> =
+  readAccessorTranscriptStatsAsync;
+
+export { readSessionStoreTranscriptStatsSync as readTranscriptStatsSync };
 
 /** Resolves the persisted session key for one SQLite transcript identity. */
 export { resolveTranscriptSessionKeyBySessionId } from "../config/sessions/session-accessor.js";

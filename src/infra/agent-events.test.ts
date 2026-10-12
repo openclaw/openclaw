@@ -525,7 +525,7 @@ test("filters by run and keeps a new subscription alive after a stale unsubscrib
   expect(seen).toEqual([1, 2, 4]);
 });
 
-test("visits a listener added by the last callback even when that callback throws", () => {
+test("starts new subscriptions on the next event even when their creator throws", () => {
   const order: string[] = [];
   onAgentEventForRun("run", () => {
     order.push("first");
@@ -533,7 +533,9 @@ test("visits a listener added by the last callback even when that callback throw
     throw new Error("listener failed after registering its successor");
   });
   emit("run");
-  expect(order).toEqual(["first", "late"]);
+  expect(order).toEqual(["first"]);
+  emit("run");
+  expect(order).toEqual(["first", "first", "late"]);
 });
 
 test.each(["global", "run"] as const)(
@@ -557,7 +559,7 @@ test.each(["global", "run"] as const)(
   },
 );
 
-test("keeps preserved listeners and additions live during reset", () => {
+test("keeps the admitted listener cohort through a preserving reset", () => {
   const order: string[] = [];
   onAgentEventForRun("run", () => {
     order.push("first");
@@ -568,10 +570,10 @@ test("keeps preserved listeners and additions live during reset", () => {
   onAgentEvent(() => order.push("old-global"));
   onAgentEventForRun("run", () => order.push("old-run"));
   emit("run");
-  expect(order).toEqual(["first", "old-global", "old-run", "new-global", "new-run"]);
+  expect(order).toEqual(["first", "old-global", "old-run"]);
 });
 
-test("reselects a mutated run cohort without revisiting earlier registrations", () => {
+test("does not reroute an event when a callback changes its run id", () => {
   const order: string[] = [];
   onAgentEventForRun("b", () => order.push("earlier-b"));
   onAgentEventForRun("a", () => order.push("first-a"));
@@ -582,10 +584,10 @@ test("reselects a mutated run cohort without revisiting earlier registrations", 
   onAgentEventForRun("a", () => order.push("later-a"));
   onAgentEventForRun("b", () => order.push("later-b"));
   emit("a");
-  expect(order).toEqual(["first-a", "global", "later-b"]);
+  expect(order).toEqual(["first-a", "global", "later-a"]);
 });
 
-test("retains independent nested cursors while new callbacks join both emissions", () => {
+test("retains independent listener cohorts through nested emissions", () => {
   const order: string[] = [];
   onAgentEventForRun("run", (event) => {
     order.push(`first:${String(event.data.text)}`);
@@ -598,16 +600,7 @@ test("retains independent nested cursors while new callbacks join both emissions
   });
   onAgentEvent((event) => order.push(`global:${String(event.data.text)}`));
   emit("run", "assistant", { text: "outer" });
-  expect(order).toEqual([
-    "first:outer",
-    "first:inner",
-    "global:inner",
-    "new-run:inner",
-    "new-global:inner",
-    "global:outer",
-    "new-run:outer",
-    "new-global:outer",
-  ]);
+  expect(order).toEqual(["first:outer", "first:inner", "global:inner", "global:outer"]);
 });
 
 test("captures runtime delivery before listeners and independently for nested emissions", () => {

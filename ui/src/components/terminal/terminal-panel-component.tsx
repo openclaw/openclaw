@@ -1,5 +1,4 @@
 import "../dock-panel-solid.css";
-import "../panel-tab-strip-solid.css";
 import "./terminal-panel.css";
 import { createMemo, untrack } from "solid-js";
 import { usePanelController } from "../solid-panel-controller.ts";

@@ -67,6 +67,7 @@ it.each([
       query.value = 'label:"Usage on"';
       query.dispatchEvent(new Event("input", { bubbles: true }));
       query.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }));
+      await vi.advanceTimersByTimeAsync(0);
       await page.updateComplete;
     }
 
@@ -87,10 +88,12 @@ it.each([
     expect(page.querySelectorAll(".daily-bar--empty")).toHaveLength(cache === "fresh" ? 2 : 0);
     expect(page.querySelector(".daily-chart-range")?.textContent).toContain("May 1, 2026");
     bars()[0]!.click();
+    await vi.advanceTimersByTimeAsync(0);
     await page.updateComplete;
     bars()
       .at(-1)!
       .dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
+    await vi.advanceTimersByTimeAsync(0);
     await page.updateComplete;
 
     expect(
@@ -107,3 +110,47 @@ it.each([
     ).toEqual(["Usage on 2026-05-02", "Usage on 2026-05-04"]);
   },
 );
+
+it("keeps the same calendar interactive while day totals are pending", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-05-04T12:00:00Z"));
+  focusDocument();
+  const snapshot = cacheSnapshot("fresh");
+  const daily = [dailyEntry("2026-05-02", 100), dailyEntry("2026-05-04", 900)];
+  const result = {
+    ...snapshot.result,
+    totals: { ...snapshot.result.totals, totalTokens: 1000 },
+    sessions: daily.map((day) => ({
+      key: `agent:main:${day.date}`,
+      usage: {
+        ...day,
+        activityDates: [day.date],
+        dailyBreakdown: [{ ...day, tokens: day.totalTokens, cost: day.totalCost }],
+      },
+    })),
+    aggregates: { ...snapshot.result.aggregates, costDaily: daily },
+  };
+  const unresolved = new Promise<never>(() => {});
+  const request = vi.fn(async (method: string, params?: Record<string, unknown>) =>
+    method === "sessions.usage"
+      ? Array.isArray(params?.selectedDays)
+        ? unresolved
+        : result
+      : { providers: [] },
+  );
+  const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
+  await preloadUsage(page);
+  const bars = () => [...page.querySelectorAll<HTMLElement>(".daily-bar-wrapper")];
+  const first = bars()[0]!;
+  const last = bars().at(-1)!;
+  first.click();
+  await page.updateComplete;
+  expect(page.querySelector(".usage-metric-badge")).toBeNull();
+  expect(bars()).toContain(last);
+  last.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
+  await page.updateComplete;
+  const days = request.mock.calls.findLast(([method]) => method === "sessions.usage")?.[1]
+    ?.selectedDays;
+  expect(days).toEqual(expect.arrayContaining(["2026-04-05", "2026-05-04"]));
+  expect(Array.isArray(days) && days.length > 1).toBe(true);
+});

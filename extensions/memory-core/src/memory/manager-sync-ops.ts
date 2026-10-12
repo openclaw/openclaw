@@ -50,7 +50,6 @@ export type { MemoryIndexWorkItem } from "./manager-sync-base.js";
 
 type MemorySyncProviderGenerationBase = {
   database: MemoryIndexDatabase;
-  databaseRevision: number;
   cacheWritesInvalidated: boolean;
   providerKey: string;
   identities: MemoryIndexProviderIdentity[];

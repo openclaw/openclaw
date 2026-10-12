@@ -245,6 +245,15 @@ are intentional accepted changes; all other observable contracts above stay gree
    computation, timer, catch-up, and config snapshots into the long-lived worker.
    Each step removes its superseded owner. In 2b-i the queued marker preserves
    the natural deadline until the existing outcome owner advances it.
+   The scheduling actor retains the shared worker through the existing state
+   lease. Its timer sends a wake notification; a finite admitted command reads
+   current rows and makes the due decision, leaving the writer available between
+   wakes. Shutdown joins the lease, and database retirement closes the same
+   resource. CRUD preparation and commit use one worker mutation implementation;
+   commit applies the intent to current rows, preserving intervening runtime
+   updates. Config snapshots are installed between commands. A queued receipt
+   consumes eligibility until completion owns retry, pacing, and the next
+   natural deadline.
    Proof: duplicate slot, capacity queue, disable/edit, manual
    force, consumed exit event, stream batch, catch-up, retry and clock-jump flows;
    crash at request/active boundaries and recover a copied old-format database.

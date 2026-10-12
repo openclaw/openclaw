@@ -319,7 +319,7 @@ device and platform labels are combined. Architecture labels such as **ARM** app
 when explicitly reported; a browser's `MacIntel` value does not identify an Intel
 CPU because Apple silicon Macs and desktop-mode iPads also report it.
 
-Toggle the sidebar with **⌘B** on Mac or **Ctrl+B** on Windows/Linux. Open the command palette with **⌘K** on Mac or **Ctrl+K** on Windows/Linux. Mac **Ctrl+B** and **Ctrl+K** remain available for native text editing.
+Toggle the sidebar with **⌘B** on Mac or **Ctrl+B** on Windows/Linux. Open the command palette with **⌘K**, **⌘P**, or **⌘Shift+P** on Mac, or **Ctrl+K**, **Ctrl+P**, or **Ctrl+Shift+P** on Windows/Linux. These shortcuts also work while typing and inside embedded widgets; the P shortcuts open the palette instead of browser printing. Mac **Ctrl+B** and **Ctrl+K** remain available for native text editing.
 
 The search field updates immediately, while command filtering and session searches wait until you pause typing for 200 ms. Previous results stay in place during that pause but cannot be selected until the new query applies. Press Enter to apply a pending query immediately and select an available matching result. Clearing the field restores the default commands immediately.
 
@@ -435,8 +435,8 @@ including while the team directory is loading or unavailable.
 5. Return to **Session sharing** and select **Disable public access** to stop anonymous reads. The same URL then returns an unavailable page to signed-out readers. Enabling access again makes that URL public again; disabling access cannot recall saved copies.
 
 The public page excludes tools, reasoning, files, images, widgets, hidden messages,
-and internal metadata. Credential-pattern redaction is best effort, so review the
-conversation itself before publishing. Public access does not let visitors send
+and internal metadata. Included text is not secret-masked, so review the
+conversation for credentials and other sensitive content before publishing. Public access does not let visitors send
 messages or grant authenticated Control UI permissions. For link lifecycle, pagination,
 backup behavior, and login-proxy configuration, see
 [Public session transcripts](/web/urls#public-session-transcripts).

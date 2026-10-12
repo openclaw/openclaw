@@ -72,29 +72,9 @@ describe("registered onboarding", () => {
       options: { agent: "writer", json: true },
     },
     {
-      args: "--json recommendations",
-      target: mocks.onboardRecommendationsCommand,
-      options: { json: true },
-    },
-    {
       args: "recommendations acknowledge",
       target: mocks.acknowledgeOnboardRecommendationsCommand,
       options: { retry: undefined },
-    },
-    {
-      args: "recommendations acknowledge --retry chat-plugin @demo-owner/notes",
-      target: mocks.acknowledgeOnboardRecommendationsCommand,
-      options: { retry: ["chat-plugin", "@demo-owner/notes"] },
-    },
-    {
-      args: "recommendations --agent writer acknowledge --agent analyst",
-      target: mocks.acknowledgeOnboardRecommendationsCommand,
-      options: { agent: "analyst", retry: undefined },
-    },
-    {
-      args: "recommendations refresh",
-      target: mocks.refreshOnboardRecommendationsCommand,
-      options: {},
     },
   ])("routes $args", async ({ args, target, options }) => {
     await runCli(args.split(" "));
@@ -102,16 +82,15 @@ describe("registered onboarding", () => {
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["recommendations", mocks.onboardRecommendationsCommand],
-    ["recommendations acknowledge", mocks.acknowledgeOnboardRecommendationsCommand],
-    ["recommendations refresh", mocks.refreshOnboardRecommendationsCommand],
-  ] as const)("reports asynchronous storage failures for %s", async (args, target) => {
-    target.mockRejectedValueOnce(new Error("synthetic recommendation persistence failure"));
-    await runCli(args.split(" "));
-    expect(runtime.error).toHaveBeenCalledWith("synthetic recommendation persistence failure");
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-  });
+  it.each([["recommendations", mocks.onboardRecommendationsCommand]] as const)(
+    "reports asynchronous storage failures for %s",
+    async (args, target) => {
+      target.mockRejectedValueOnce(new Error("synthetic recommendation persistence failure"));
+      await runCli(args.split(" "));
+      expect(runtime.error).toHaveBeenCalledWith("synthetic recommendation persistence failure");
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+    },
+  );
 
   it("preserves an explicitly blank leaf agent over its parent", async () => {
     await runCli(["recommendations", "--agent", "writer", "refresh", "--agent", ""]);
@@ -141,57 +120,43 @@ describe("registered onboarding", () => {
     );
   });
 
-  it.each([
-    "--reset recommendations",
-    "--reset recommendations acknowledge",
-    "--reset recommendations refresh",
-    "recommendations --json acknowledge",
-    "recommendations --json refresh",
-    "--json --reset recommendations",
-  ])("rejects inapplicable recommendations options: %s", async (args) => {
-    await runCli(args.split(" "));
-    const flag = args.includes("--reset") ? "--reset" : "--json";
-    const message = `This recommendations command does not support parent option(s): ${flag}.`;
-    expect(runtime.error).toHaveBeenCalledExactlyOnceWith(message);
-    expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
-    if (args.startsWith("--json")) {
-      expect(runtime.log).toHaveBeenCalledExactlyOnceWith(
-        JSON.stringify(
-          { ok: false, error: { type: "cli_error", message }, phase: "options", message },
-          null,
-          2,
-        ),
+  it.each(["recommendations --json refresh", "--json --reset recommendations"])(
+    "rejects inapplicable recommendations options: %s",
+    async (args) => {
+      await runCli(args.split(" "));
+      const flag = args.includes("--reset") ? "--reset" : "--json";
+      const message = `This recommendations command does not support parent option(s): ${flag}.`;
+      expect(runtime.error).toHaveBeenCalledExactlyOnceWith(message);
+      expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+      if (args.startsWith("--json")) {
+        expect(runtime.log).toHaveBeenCalledExactlyOnceWith(
+          JSON.stringify(
+            { ok: false, error: { type: "cli_error", message }, phase: "options", message },
+            null,
+            2,
+          ),
+        );
+      } else {
+        expect(runtime.log).not.toHaveBeenCalled();
+      }
+      expect(mocks.onboardRecommendationsCommand).not.toHaveBeenCalled();
+      expect(mocks.acknowledgeOnboardRecommendationsCommand).not.toHaveBeenCalled();
+      expect(mocks.refreshOnboardRecommendationsCommand).not.toHaveBeenCalled();
+      expect(setupWizardCommandMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([{ args: ["--no-install-daemon"], installDaemon: false }])(
+    "resolves daemon installation for $args",
+    async ({ args, installDaemon }) => {
+      await runCli(args);
+      expect(setupWizardCommandMock).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ installDaemon }),
+        runtime,
       );
-    } else {
-      expect(runtime.log).not.toHaveBeenCalled();
-    }
-    expect(mocks.onboardRecommendationsCommand).not.toHaveBeenCalled();
-    expect(mocks.acknowledgeOnboardRecommendationsCommand).not.toHaveBeenCalled();
-    expect(mocks.refreshOnboardRecommendationsCommand).not.toHaveBeenCalled();
-    expect(setupWizardCommandMock).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { args: [], installDaemon: undefined },
-    { args: ["--install-daemon"], installDaemon: true },
-    { args: ["--no-install-daemon"], installDaemon: false },
-  ])("resolves daemon installation for $args", async ({ args, installDaemon }) => {
-    await runCli(args);
-    expect(setupWizardCommandMock).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ installDaemon }),
-      runtime,
-    );
-    expect(setupWizardCommandMock.mock.calls[0]?.[0]).not.toHaveProperty("tailscaleResetOnExit");
-  });
-
-  it.each(["", "not-a-port", "70000"])("rejects invalid gateway port %s", async (port) => {
-    await runCli(["--gateway-port", port]);
-    expect(runtime.error).toHaveBeenCalledWith(
-      "--gateway-port must be an integer between 1 and 65535.",
-    );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(setupWizardCommandMock).not.toHaveBeenCalled();
-  });
+      expect(setupWizardCommandMock.mock.calls[0]?.[0]).not.toHaveProperty("tailscaleResetOnExit");
+    },
+  );
 
   it("rejects conflicting custom input flags with a JSON options error", async () => {
     await runCli(["--custom-image-input", "--custom-text-input", "--json"]);

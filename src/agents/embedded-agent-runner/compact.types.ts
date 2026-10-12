@@ -2,6 +2,7 @@ import type { Model } from "openclaw/plugin-sdk/llm";
 import type { CliSessionBinding, SessionEntry } from "../../config/sessions.js";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import type { ExecToolDefaults } from "../bash-tools.exec-types.js";
+import type { ModelCallUrgency } from "../run-trigger.js";
 import type { AgentRuntimeAuthPlan, AgentRuntimePlan } from "../runtime-plan/types.js";
 
 export type CompactEmbeddedAgentSessionParams = Pick<
@@ -111,6 +112,8 @@ export type CompactEmbeddedAgentSessionParams = Pick<
   /** Diagnostic trigger that made preflight compaction mandatory. */
   preflightCompactionTrigger?: "tokens" | "transcript_bytes";
   trigger?: "budget" | "overflow" | "manual";
+  /** Source-turn urgency survives replacing its trigger with a compaction reason. */
+  modelCallUrgency?: ModelCallUrgency;
   /**
    * Preflight callers can allow native/current-session harness compaction but
    * move plugin-owned budget compaction onto background turn maintenance.

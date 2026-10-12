@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as gatewayWork from "../process/gateway-work-admission.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
 import {
@@ -10,7 +11,9 @@ import { startCronMaintenance, stopCronMaintenance } from "./maintenance.js";
 
 const mocks = vi.hoisted(() => ({
   history: vi.fn(async () => {}),
-  registry: vi.fn(async () => ({})),
+  registry: vi.fn(async (): Promise<{ nextSweepAtMs: number | null }> => ({
+    nextSweepAtMs: null,
+  })),
   info: vi.fn(),
   warn: vi.fn(),
   error: vi.fn(),
@@ -36,6 +39,7 @@ let scheduler: ReturnType<typeof createTestGatewayScheduler>;
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.history.mockReset().mockResolvedValue(undefined);
+  mocks.registry.mockReset().mockResolvedValue({ nextSweepAtMs: null });
   clock = createGatewaySchedulerClock();
   gatewayWork.resetGatewayWorkAdmission();
   scheduler = createTestGatewayScheduler(clock.clock);
@@ -73,12 +77,65 @@ it.each([true])("runs retention after startup preparation, pending=%s", async (p
       expect(mocks.error).not.toHaveBeenCalled();
       await clock.advanceBy(60_000);
       expect(mocks.history).toHaveBeenCalledTimes(2);
-      expect(mocks.registry).toHaveBeenCalledTimes(2);
+      expect(mocks.registry).toHaveBeenCalledOnce();
       expect(mocks.info).toHaveBeenCalledTimes(pending ? 1 : 0);
     } finally {
       preparation.resolve();
     }
   });
+});
+
+it("sleeps until the retained session deadline while preserving history maintenance", async () => {
+  mocks.registry.mockResolvedValueOnce({ nextSweepAtMs: 70_000 });
+  startCronMaintenance(scheduler);
+  await clock.advanceBy(5_000);
+  await clock.advanceTo(65_000);
+  expect(mocks.history).toHaveBeenCalledTimes(2);
+  expect(mocks.registry).toHaveBeenCalledOnce();
+  await clock.advanceTo(70_000);
+  expect(mocks.history).toHaveBeenCalledTimes(2);
+  expect(mocks.registry).toHaveBeenCalledTimes(2);
+});
+
+it.each(["session", "stores", "config"] as const)(
+  "wakes for committed %s changes and replaces their previous expiry without polling unrelated sessions",
+  async (kind) => {
+    mocks.registry.mockResolvedValueOnce({ nextSweepAtMs: 200_000 });
+    startCronMaintenance(scheduler);
+    await clock.advanceBy(5_000);
+    await clock.advanceTo(10_000);
+    sessionChanges.emit({ sessionKey: "agent:main:main", scope: "session-entry" });
+    await clock.advanceTo(65_000);
+    expect(mocks.registry).toHaveBeenCalledOnce();
+
+    mocks.registry.mockResolvedValueOnce({ nextSweepAtMs: 500_000 });
+    if (kind === "session") {
+      sessionChanges.emit({ sessionKey: "agent:main:cron:job:run:new", scope: "session-entry" });
+    } else {
+      sessionChanges.emit({ all: true, scope: kind });
+    }
+    await clock.advanceTo(125_000);
+    expect(mocks.registry).toHaveBeenCalledTimes(2);
+    await clock.advanceTo(200_000);
+    expect(mocks.registry).toHaveBeenCalledTimes(2);
+  },
+);
+
+it("retains a committed cron wake received while the previous registry read is in flight", async () => {
+  const entered = createDeferredCore();
+  const result = createDeferredCore<{ nextSweepAtMs: number | null }>();
+  mocks.registry.mockImplementationOnce(() => {
+    entered.resolve();
+    return result.promise;
+  });
+  startCronMaintenance(scheduler);
+  const sweep = clock.advanceBy(5_000);
+  await entered.promise;
+  sessionChanges.emit({ sessionKey: "agent:main:cron:job:run:new", scope: "session-entry" });
+  result.resolve({ nextSweepAtMs: 500_000 });
+  await sweep;
+  await clock.advanceTo(65_000);
+  expect(mocks.registry).toHaveBeenCalledTimes(2);
 });
 
 it("cancels the startup wait when the Gateway stops", async () => {

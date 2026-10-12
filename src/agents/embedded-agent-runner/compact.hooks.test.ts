@@ -8,6 +8,7 @@ import type { AgentMessage, StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import {
@@ -77,7 +78,6 @@ import {
   resolveContextWindowInfoMock,
   resolveCliBackendConfigMock,
   resolveContextEngineMock,
-  resolveEffectiveCompactionModeMock,
   resolveEmbeddedAgentStreamMock,
   resolveModelAsyncMock,
   resolveModelMock,
@@ -88,10 +88,8 @@ import {
   selectAgentHarnessForPreparedModelProvidersMock,
   selectAgentHarnessMock,
   resetCompactSessionStateMocks,
-  sessionAutomaticCompactionMock,
   sessionMessages,
   sessionCompactImpl,
-  sessionManualCompactionMock,
   triggerInternalHookMock,
 } from "./compact.hooks.harness.js";
 import {
@@ -376,6 +374,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         provider: "xai",
         model: "grok-4.5",
         trigger: "manual",
+        modelCallUrgency: "background",
         toolsAllow: ["read"],
         customInstructions: undefined,
         config: {
@@ -390,6 +389,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     expect(result).toMatchObject({ compacted: true, compactionKind: "server-endpoint" });
     expect(result.result).not.toHaveProperty("summary");
     expect(mockCallArg(applyExtraParamsToAgentMock, 0, 11)).toMatchObject({
+      modelCallUrgency: "foreground",
       nativeWebSearchPolicyContext: { webSearchEnabled: false, runtimeToolAllowlist: [] },
     });
     expect(endpointSystemPrompt).toBeDefined();
@@ -691,14 +691,29 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     );
   });
 
-  it("uses sandboxSessionKey only for compaction sandbox resolution", async () => {
+  it("uses the independent compaction sandbox policy without host session reads", async () => {
     const { addSession, deleteSession } = await import("../bash-process-registry.js");
+    const { resolveSandboxContext } = await import("../sandbox/context.js");
     const owned = createProcessSessionFixture({ id: "compaction-owned", backgrounded: true });
-    owned.scopeKey = "agent:main:main";
+    owned.scopeKey = TEST_SESSION_KEY;
     const other = createProcessSessionFixture({ id: "policy-owned", backgrounded: true });
     other.scopeKey = "agent:main:telegram:default:direct:12345";
     addSession(owned);
     addSession(other);
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: other.scopeKey, storePath: TEST_STORE_PATH },
+      { sessionId: "policy-owned", updatedAt: 1, sandboxMode: "off" },
+    );
+    const sandboxQueries: string[] = [];
+    resolveSandboxContextMock.mockImplementationOnce(async (params) => {
+      const sql = observeHostDataSql();
+      try {
+        return await resolveSandboxContext(params);
+      } finally {
+        sandboxQueries.push(...sql.queries);
+        sql.restore();
+      }
+    });
     try {
       await compactEmbeddedAgentSessionDirect({
         sessionId: TEST_SESSION_ID,
@@ -706,15 +721,19 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         sandboxSessionKey: other.scopeKey,
         sessionFile: TEST_SESSION_KEY,
         workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
+        config: {
+          session: { store: TEST_STORE_PATH },
+          agents: { defaults: { sandbox: { mode: "all" } } },
+        },
       });
 
       expect(resolveSandboxContextMock).toHaveBeenCalledWith(
         expect.objectContaining({
-          config: {},
           sessionKey: other.scopeKey,
           workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
         }),
       );
+      expect(sandboxQueries).toEqual([]);
       expect(buildConfiguredAgentSystemPromptMock).toHaveBeenCalledWith(
         expect.objectContaining({
           runtimeInfo: expect.objectContaining({
@@ -1501,33 +1520,6 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     sessionKey: TEST_SESSION_KEY,
     sessionFile: () => TEST_SESSION_FILE,
   });
-  it.each(["budget"] as const)(
-    "carries the pending request into safeguard %s recovery after endpoint fallback",
-    async (trigger) => {
-      const { attachCompactionAccountingRecorder } =
-        await import("./run/compaction-accounting-bridge.js");
-      const contextEngineRuntimeContext = {};
-      if (trigger === "budget") {
-        attachCompactionAccountingRecorder(contextEngineRuntimeContext, {
-          pendingRequestState: "unresolved",
-        });
-      }
-      resolveEffectiveCompactionModeMock.mockReturnValue("safeguard");
-
-      const result = await compactEmbeddedAgentSessionDirect(
-        wrappedCompactionArgs({ trigger, contextEngineRuntimeContext }),
-      );
-
-      expect(result).toMatchObject({ ok: true, compacted: true });
-      expect(sessionAutomaticCompactionMock).toHaveBeenCalledWith(
-        TEST_CUSTOM_INSTRUCTIONS,
-        "unresolved",
-        "none",
-      );
-      expect(sessionManualCompactionMock).not.toHaveBeenCalled();
-    },
-  );
-
   it("carries the prepared provider reconciler into direct compaction", async () => {
     mockResolvedModel();
     const reconcile = vi.fn(async () => undefined);

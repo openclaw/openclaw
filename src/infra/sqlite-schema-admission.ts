@@ -2,13 +2,18 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { executeWithCachedStatement } from "./kysely-sync-cache-state.js";
-import type { SqliteDatabaseAdmissionKey } from "./sqlite-database-admission.js";
+import {
+  getSqliteDatabaseAdmission,
+  publishSqliteDatabaseAdmission,
+  type SqliteDatabaseAdmissionKey,
+} from "./sqlite-database-admission.js";
 import { runSqliteSchemaReadSnapshotSync } from "./sqlite-pinned-read-snapshot.js";
 
 export type SqliteSchemaFacts = {
   readonly admissionId: string;
   readonly revision: number;
   readonly userVersion: number;
+  readonly textEncoding: string;
   readonly schemaVersion: number;
   readonly tables: ReadonlySet<string>;
   readonly views: ReadonlySet<string>;
@@ -33,6 +38,8 @@ export const schemaAdmission: SqliteDatabaseAdmissionKey<SqliteSchemaFacts> = {
       typeof value.userVersion !== "number" ||
       !("schemaVersion" in value) ||
       typeof value.schemaVersion !== "number" ||
+      !("textEncoding" in value) ||
+      typeof value.textEncoding !== "string" ||
       !("tables" in value) ||
       !(value.tables instanceof Set) ||
       !("views" in value) ||
@@ -60,6 +67,7 @@ export const schemaAdmission: SqliteDatabaseAdmissionKey<SqliteSchemaFacts> = {
       admissionId: value.admissionId,
       revision: value.revision,
       userVersion: value.userVersion,
+      textEncoding: value.textEncoding,
       schemaVersion: value.schemaVersion,
       tables: value.tables,
       views: value.views,
@@ -71,17 +79,37 @@ export const schemaAdmission: SqliteDatabaseAdmissionKey<SqliteSchemaFacts> = {
   },
 };
 
+const textEncodingAdmission: SqliteDatabaseAdmissionKey<string> = {
+  name: "sqlite-text-encoding",
+  read: (value) => (typeof value === "string" ? value : undefined),
+};
+
+/** Native metadata read shared by admission and pre-admission migrations. */
+export function readSqliteTextEncoding(database: DatabaseSync): string {
+  const retained = getSqliteDatabaseAdmission(database, textEncodingAdmission);
+  if (retained !== undefined) {
+    return retained;
+  }
+  const encoding = executeWithCachedStatement(database, "PRAGMA encoding", [], (s) => s.get());
+  if (typeof encoding?.encoding !== "string") {
+    throw new Error("SQLite did not report its text encoding");
+  }
+  return encoding.encoding;
+}
+
 /** Capture the physical catalog once; native lifecycle owners publish the resulting facts. */
 function captureSqliteSchemaFacts(
   database: DatabaseSync,
   revision: number,
   validateUserVersion?: (userVersion: number) => void,
 ): SqliteSchemaFacts {
-  return runSqliteSchemaReadSnapshotSync(database, (schemaVersion) => {
+  const retainedTextEncoding = getSqliteDatabaseAdmission(database, textEncodingAdmission);
+  const facts = runSqliteSchemaReadSnapshotSync(database, (schemaVersion) => {
     const version = executeWithCachedStatement(database, "PRAGMA user_version", [], (s) => s.get());
     const userVersion = Number(version?.user_version ?? 0);
     // Validate the captured header before catalog errors can mask its refusal.
     validateUserVersion?.(userVersion);
+    const textEncoding = retainedTextEncoding ?? readSqliteTextEncoding(database);
     const objects = executeWithCachedStatement(
       database,
       "SELECT type, name, tbl_name, sql FROM main.sqlite_schema WHERE type IN ('table', 'view', 'index', 'trigger')",
@@ -93,6 +121,7 @@ function captureSqliteSchemaFacts(
       admissionId: randomUUID(),
       revision,
       userVersion,
+      textEncoding,
       schemaVersion,
       tables: new Set(tables.flatMap((row) => (typeof row.name === "string" ? [row.name] : []))),
       views: new Set(
@@ -138,6 +167,11 @@ function captureSqliteSchemaFacts(
       ),
     };
   });
+  // SQLite may still change an empty database's encoding before its first schema object.
+  if (retainedTextEncoding === undefined && (facts.tables.size > 0 || facts.views.size > 0)) {
+    publishSqliteDatabaseAdmission(database, textEncodingAdmission, facts.textEncoding);
+  }
+  return facts;
 }
 
 export function captureTrackedSqliteSchemaFacts(

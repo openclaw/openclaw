@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import {
   asNonNegativeFiniteNumber,
   asPositiveFiniteNumber,
@@ -45,6 +44,7 @@ import { resolveActiveFallbackState } from "../status/fallback-notice-state.js";
 import { readSessionFallbackModel } from "../status/session-fallback-model.js";
 import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
+import { channelAvatarRevision } from "./channel-avatar-reference.js";
 import { buildControlUiChannelAvatarUrl } from "./control-ui-contract.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { sessionHasAutomation } from "./session-automation-index.js";
@@ -59,6 +59,7 @@ import { isSessionPermissionChangePending } from "./session-permission-change.js
 import { projectSessionProviderReview } from "./session-provider-review-projection.js";
 import { readSessionRowModelFacts } from "./session-row-model-facts.js";
 import { buildSessionSwarmSummary } from "./session-swarm-summary.js";
+import type { SessionTranscriptUsageSnapshot } from "./session-transcript-derived-readers.js";
 import { readSessionTitleFieldsFromTranscript as readScopedSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
 import type {
   GatewaySessionModelSource,
@@ -112,6 +113,7 @@ export function readSessionRowInputs(params: {
   configuredAgentIds?: ReadonlySet<string>;
   agentId: string;
   skipTranscriptUsageFallback?: boolean;
+  transcriptUsage?: SessionTranscriptUsageSnapshot | null;
   lightweightListRow?: boolean;
   includeSwarmChildren?: boolean;
 }) {
@@ -153,6 +155,7 @@ export function readSessionRowInputs(params: {
           rowContext,
           agentId,
           storeAgentId: params.storeAgentId,
+          transcriptUsage: params.transcriptUsage,
         })
       : undefined;
   const { provider, model } = selectedModel;
@@ -343,7 +346,7 @@ export function resolveGatewaySessionActiveModel(params: {
           selectedModel: selectedModel.model,
           sessionEntry: params.entry,
           config: params.cfg,
-          terminalModel: params.terminalModel,
+          terminalModel: params.terminalModel ?? null,
           sessionScope: {
             agentId: params.storeAgentId ?? params.agentId,
             sessionKey: params.sessionKey,
@@ -366,11 +369,6 @@ export function resolveGatewaySessionActiveModel(params: {
   }).active
     ? { provider: active.provider, model: active.model }
     : undefined;
-}
-
-/** Opaque cache-busting revision for the channel-avatar route; never leaks the reference. */
-function channelAvatarRevision(reference: string): string {
-  return createHash("sha256").update(reference).digest("base64url").slice(0, 12);
 }
 
 /** Profile publications invalidate display facts independently of stored session metadata. */

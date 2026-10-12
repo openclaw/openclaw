@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { StatementSync } from "node:sqlite";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   readPersistedAuthProfileStateRaw,
   writePersistedAuthProfileStateRaw,
@@ -11,9 +11,14 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../p
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { observeMainThreadReads } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.test-support.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import {
@@ -21,11 +26,6 @@ import {
   readSessionArchiveContentSync,
 } from "./archive-compression.js";
 import { isSessionArchiveArtifactName } from "./artifacts.js";
-import {
-  closeSessionAccessorConformanceFixture,
-  createSessionAccessorConformanceFixture,
-  type SessionAccessorConformancePaths as TestPaths,
-} from "./session-accessor.conformance.test-support.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
@@ -70,6 +70,25 @@ vi.mock("../config.js", async () => ({
 }));
 
 import { getRuntimeConfig } from "../config.js";
+
+type TestPaths = {
+  sqlitePath: string;
+  stateDir: string;
+  storePath: string;
+  tempDir: string;
+};
+
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-accessor-conf-");
+
+function createTestPaths(): TestPaths {
+  const tempDir = sessionDirs.make();
+  return {
+    sqlitePath: path.join(tempDir, "openclaw-agent.sqlite"),
+    stateDir: path.join(tempDir, "state"),
+    storePath: path.join(tempDir, "sessions.json"),
+    tempDir,
+  };
+}
 
 type AccessorAdapter = {
   name: string;
@@ -178,11 +197,12 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
     };
 
     beforeEach(() => {
-      paths = createSessionAccessorConformanceFixture("openclaw-session-accessor-conf-");
+      paths = createTestPaths();
     });
 
     afterEach(async () => {
-      await closeSessionAccessorConformanceFixture(paths.tempDir);
+      // Retire scheduled maintenance before the next case changes its configuration.
+      await closeOpenClawAgentDatabasesAsync(paths.tempDir);
     });
 
     it("conforms for entry load/list/timestamp/upsert/update/replace/patch", async () => {
@@ -1155,11 +1175,12 @@ describe("sqlite session normalization", () => {
   let paths: TestPaths;
 
   beforeEach(() => {
-    paths = createSessionAccessorConformanceFixture("openclaw-session-sqlite-norm-");
+    paths = createTestPaths();
   });
 
   afterEach(async () => {
-    await closeSessionAccessorConformanceFixture(paths.tempDir);
+    // Retire scheduled maintenance before the next case changes its configuration.
+    await closeOpenClawAgentDatabasesAsync(paths.tempDir);
   });
 
   it("maintains normalized session node and window rows", async () => {
@@ -1417,13 +1438,14 @@ describe("sqlite session normalization", () => {
       ],
     );
 
-    const result = await forkSessionEntryFromParentTarget({
-      fallbackEntry: { sessionId: "", updatedAt: 1 },
-      parentTarget: { canonicalKey: parentKey, storeKeys: [parentKey] },
-      sessionTarget: { canonicalKey: childKey, storeKeys: [childKey] },
-      storePath: paths.sqlitePath,
-      decisionSkipPatch: () => ({ forkedFromParent: true, updatedAt: 11 }),
-    });
+    const result = await withEnvAsync({ OPENCLAW_STATE_DIR: paths.stateDir }, () =>
+      forkSessionEntryFromParentTarget({
+        fallbackEntry: { sessionId: "", updatedAt: 1 },
+        parentTarget: { canonicalKey: parentKey, storeKeys: [parentKey] },
+        sessionTarget: { canonicalKey: childKey, storeKeys: [childKey] },
+        storePath: paths.sqlitePath,
+      }),
+    );
 
     expect(result).toMatchObject({
       status: "skipped",
@@ -1432,11 +1454,7 @@ describe("sqlite session normalization", () => {
         status: "skip",
         reason: "parent-too-large",
       },
-      sessionEntry: {
-        forkedFromParent: true,
-        sessionId: "",
-        updatedAt: expect.any(Number),
-      },
+      sessionEntry: { sessionId: "", updatedAt: 1 },
     });
     if (result.status !== "skipped" || result.reason !== "decision-skip") {
       throw new Error(`expected decision-skip, got ${result.status}`);

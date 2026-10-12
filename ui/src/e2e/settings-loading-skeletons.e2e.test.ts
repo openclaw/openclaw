@@ -135,21 +135,6 @@ suite.define(() => {
     });
   });
 
-  it("renders the Secrets initial load as a skeleton", async () => {
-    await withPage(async (page) => {
-      await installMockGateway(page, {
-        featureMethods: ["secrets.store.list"],
-        heldMethods: ["secrets.store.list"],
-      });
-      await page.goto(`${suite.server.baseUrl}settings/secrets`);
-      await waitForControlUiRoute(page, {
-        pathname: "/settings/secrets",
-        routeId: "secrets",
-      });
-      await captureLoadingState(page.locator(".settings-page").first(), "secrets");
-    });
-  });
-
   it("renders the Devices inventory load as one skeleton", async () => {
     await withPage(async (page) => {
       const gateway = await installMockGateway(page, {

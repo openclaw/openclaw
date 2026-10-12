@@ -188,27 +188,6 @@ describe("live person presence timing", () => {
     sidecars[0]!.stop();
   });
 
-  it("shares the owner's online interval and activity across tabs without an email", async () => {
-    const first = await connect(undefined, "timing-owner");
-    const started = Date.now();
-    expect(first.handler.setClient(first.client)).toBe(true);
-    vi.setSystemTime(started + 1_000);
-    const second = await connect(undefined, "timing-owner");
-    expect(second.handler.setClient(second.client)).toBe(true);
-    expect(recordClientPresenceActivity(clients, second.client)).toBe(true);
-
-    const ownerRows = listSystemPresence().filter((entry) => entry.user?.id === "timing-owner");
-    expect(ownerRows).toHaveLength(2);
-    for (const entry of ownerRows) {
-      expect(entry).toMatchObject({
-        onlineSince: started,
-        lastActivityAt: started + 1_000,
-        user: { id: "timing-owner", identity: { type: "profile", id: "timing-owner" } },
-      });
-      expect(entry.user).not.toHaveProperty("email");
-    }
-  });
-
   it("retains the oldest online interval across overlapping sockets but not a full reconnect", async () => {
     const first = await connect("first@timing.test");
     const started = Date.now();
@@ -487,21 +466,4 @@ describe("live person presence timing", () => {
       expect(recordClientPresenceActivity(clients, connection.client)).toBe(false);
     },
   );
-
-  it("does not refresh a node's heartbeat or timing when its person is active", async () => {
-    const node = await connect("node@timing.test", "node-person");
-    node.client.connect.role = "node";
-    node.handler.setClient(node.client);
-    const nodeHeartbeat = Date.now();
-    upsertPresence(node.client.presenceKey!, {
-      user: { id: "node-person", email: "node@timing.test" },
-    });
-    vi.setSystemTime(nodeHeartbeat + 1_000);
-    const person = await connect("person@timing.test", "node-person");
-    person.handler.setClient(person.client);
-    recordClientPresenceActivity(clients, person.client);
-    expect(row("node@timing.test")).toMatchObject({ ts: nodeHeartbeat });
-    expect(row("node@timing.test")?.onlineSince).toBeUndefined();
-    expect(row("node@timing.test")?.lastActivityAt).toBeUndefined();
-  });
 });

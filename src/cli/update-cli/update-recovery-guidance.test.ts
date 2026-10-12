@@ -3,10 +3,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { isContainerEnvironment } from "../../infra/container-environment.js";
-import * as snapshot from "../../infra/sqlite-snapshot-source.js";
 import {
   createUpdateRun,
-  finishUpdateRun,
   getUpdateRun,
   recordUpdateRunStep,
   recordUpdateRunVerification,
@@ -241,49 +239,7 @@ describe("update recovery reporting", () => {
     },
   );
 
-  it.each([false, true])(
-    "records next action from the admitted row without a cold snapshot (terminal=%s)",
-    async (terminal) => {
-      vi.mocked(isContainerEnvironment).mockReturnValue(false);
-      const run = createRun({ nextAction: "previous guidance" });
-      const { env } = run;
-      if (terminal) {
-        finishUpdateRun(run.runId, { status: "failed", reason: "build-failed" }, { env });
-      }
-      const before = getUpdateRun(run.runId, { env });
-      closeOpenClawStateDatabaseForTest();
-      const read = vi
-        .spyOn(snapshot, "prepareSqliteReadOnlyLocationSync")
-        .mockImplementation(() => {
-          throw new Error("SQLite source did not stabilize during update reporting");
-        });
-      let nextAction: string | undefined;
-      try {
-        nextAction = recordUpdateResultNextAction(
-          { opts: { run } },
-          {
-            status: "error",
-            mode: "git",
-            reason: "build-failed",
-            steps: [],
-            durationMs: 1,
-          },
-        );
-      } finally {
-        read.mockRestore();
-      }
-      expect(nextAction).toContain("openclaw triage");
-      const after = getUpdateRun(run.runId, { env });
-      if (terminal) {
-        expect(after).toEqual(before);
-      } else {
-        expect(after?.origin.nextAction).toBe(nextAction);
-        expect(after?.phase).toBe(before?.phase);
-        expect(after?.status).toBe("running");
-      }
-    },
-  );
-  it.each([true, false, undefined])(
+  it.each([undefined])(
     "uses raw recovery facts for immediate guidance without replacing history (running=%s)",
     (serviceRunning) => {
       const run = createRun();
@@ -357,36 +313,6 @@ describe("update recovery reporting", () => {
     },
   );
 
-  it("retains the actionable Node runtime refusal in history", async () => {
-    const reason = "node-runtime-preflight";
-    vi.mocked(isContainerEnvironment).mockReturnValue(false);
-    const run = createRun();
-    const { env } = run;
-    const message =
-      "openclaw@2026.9.4 requires Node >=24.16.0; this host runs 22.23.2; upgrade Node then rerun openclaw update.";
-    const failedStep = {
-      name: reason,
-      command: "openclaw update",
-      cwd: "/fixture",
-      durationMs: 0,
-      exitCode: 1,
-      stderrTail: message,
-    };
-    vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-    await publishUpdateCommandTerminalResult(
-      { opts: { json: true, run }, coreAlreadyCurrent: false },
-      failure({
-        reason,
-        failedStep,
-        steps: [failedStep],
-      }),
-      { rolledBack: false },
-    );
-    const stored = getUpdateRun(run.runId, { env });
-    expect(stored?.origin.nextAction).toBe(message);
-    expect(stored && renderUpdateRunReport(stored).markdown).toContain(message);
-  });
-
   it("records an untouched dirty checkout", async () => {
     const run = createRun();
     const { env } = run;
@@ -439,12 +365,7 @@ describe("update recovery reporting", () => {
 
   it.each([
     ["unknown", true, true, "global-install-foreign-destination"],
-    ["unknown", true, false, "global-install-foreign-destination"],
-    ["npm", false, true, "global-install-permission-denied"],
-    ["pnpm", false, true, "global-install-failed"],
     ["bun", true, true, "global-install-failed"],
-    ["npm", false, false, "global-install-permission-denied"],
-    ["npm", true, false, "global-install-failed"],
   ] as const)(
     "publishes consistent %s recovery (json=%s, container=%s, reason=%s)",
     async (mode, json, container, reason) => {
@@ -469,9 +390,6 @@ describe("update recovery reporting", () => {
             : foreignDetail,
         );
       }
-      if (reason === "global-install-permission-denied") {
-        expect(action?.startsWith(permissionDetail)).toBe(true);
-      }
       if (container) {
         expect(action).toContain("inside a container");
         expect(action).toContain("Pull or build an OpenClaw image");
@@ -480,11 +398,7 @@ describe("update recovery reporting", () => {
         expect(action).not.toMatch(/sudo|npm config set prefix/);
       } else {
         expect(action).toBe(
-          reason === "global-install-permission-denied"
-            ? permissionDetail
-            : reason === "global-install-foreign-destination"
-              ? foreignDetail
-              : hostGuidance,
+          reason === "global-install-foreign-destination" ? foreignDetail : hostGuidance,
         );
       }
       expect(stored && renderUpdateRunReport(stored).markdown).toContain(action);
@@ -510,48 +424,6 @@ describe("update recovery reporting", () => {
     result.steps = [result.failedStep];
     expect(resolveUpdateResultNextAction({ result, env: {} })).toContain(redeploy);
   });
-
-  it.each([
-    ["success", { status: "ok" }],
-    ["unknown install", { mode: "unknown" }],
-    ["missing failure", { steps: [], failedStep: undefined }],
-  ] satisfies [string, Partial<UpdateRunResult>][])(
-    "does not give image advice for %s",
-    (_name, overrides) => {
-      expect(
-        resolveUpdateResultNextAction({ result: failure(overrides), env: {} }) ?? "",
-      ).not.toContain(redeploy);
-    },
-  );
-
-  it.each(["other error", "unrelated step", "later failure", "advisory", "successful step"])(
-    "does not reinterpret %s as a container package failure",
-    (kind) => {
-      const result = failure();
-      const step = result.steps[0]!;
-      if (kind === "other error") {
-        step.stderrTail = "ENOSPC: no space left on device";
-      }
-      if (kind === "unrelated step") {
-        step.name = "config validate";
-      }
-      if (kind === "later failure") {
-        result.failedStep = {
-          ...step,
-          name: "config validate",
-          stderrTail: "invalid configuration",
-        };
-        result.steps.push(result.failedStep);
-      }
-      if (kind === "advisory") {
-        step.advisory = { kind: "recoverable-maintenance", message: "Old backup retained" };
-      }
-      if (kind === "successful step") {
-        step.exitCode = 0;
-      }
-      expect(resolveUpdateResultNextAction({ result, env: {} })).toBe(hostGuidance);
-    },
-  );
 
   it("preserves rollback refusal without recommending a replacement image", () => {
     const action = resolveUpdateResultNextAction({

@@ -27,10 +27,6 @@ import {
   cronAbortErrorClassification,
   isSetupTimeoutErrorText,
 } from "./execution-errors.js";
-import {
-  assertServiceCronRunReceiptCurrent,
-  trackServiceCronRunReceiptSettlement,
-} from "./run-receipts.js";
 import type { CronServiceState } from "./state.js";
 import { resolveCronJobTimeoutMs } from "./timeout-policy.js";
 import {
@@ -235,19 +231,13 @@ async function executeJobCoreWithTimeoutUnfinalized(
   const runAbortController = new AbortController();
   const progress: CronRunProgress = {};
   let commandSettlement: Promise<CronCoreRunOutcome> | undefined;
-  const receiptSource = opts?.runReceipt
-    ? { handle: opts.runReceipt, context: opts.runReceiptContext }
-    : undefined;
-  const assertRunCurrent = receiptSource
-    ? () =>
-        assertServiceCronRunReceiptCurrent(
-          state,
-          receiptSource.handle,
-          opts?.activeJobMarker,
-          receiptSource.context,
-          runAbortController.signal,
-        )
-    : undefined;
+  const assertRunCurrent = async () => {
+    runAbortController.signal.throwIfAborted();
+    opts?.runReceiptContext?.admission.assertCurrent();
+    if (!isCronActiveJobMarkerCurrent(opts?.activeJobMarker)) {
+      throw new Error("Gateway restarting.");
+    }
+  };
   const deliveryAttemptFence = opts?.runReceipt
     ? createCronCompletionDeliveryFence({
         state,
@@ -431,15 +421,7 @@ async function executeJobCoreWithTimeoutUnfinalized(
         deliveryAttemptFence,
       );
     });
-    // Timeout/cancel projects an outcome before an abort-ignoring core settles;
-    // keep the receipt and shutdown drain tied to the underlying promise.
-    if (opts?.runReceipt) {
-      trackServiceCronRunReceiptSettlement({
-        state,
-        handle: opts.runReceipt,
-        settlement: runPromise,
-      });
-    }
+    // Abort-ignoring work remains tracked by the task owner for shutdown cleanup.
     trackActiveCronTaskRunSettlement(
       runPromise,
       runAbortController.signal,

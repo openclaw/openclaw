@@ -9,6 +9,31 @@ sidebarTitle: "How to migrate"
 
 The ordered migration steps. Work through them in order; each step is self-contained. Part of the [Plugin SDK migration](/plugins/sdk-migration) guide.
 
+## Await durable session persistence
+
+Use the asynchronous `SessionManager` methods for durable sessions on the
+Gateway main thread, including
+`openAsync`, `openModelContextAsync`, `readSessionContextAsync`, and
+`appendMessageAsync`. Deprecated synchronous SDK methods remain compatible until
+the next SDK major. Replace
+`readCodexSessionContext` with the reader from `createCodexSessionContextReader`.
+
+The `codex-session-transcript-runtime` facade also retains deprecated
+`validateCodexSessionTranscriptReadAdmission` and
+`validateCodexSessionTranscriptContextVersion` helpers. Keep validation with the
+owner supplied to `createCodexSessionContextReader` instead of issuing separate
+synchronous database reads. For transcript mirrors, replace
+`withCodexSessionTranscriptMirrorWriteLock` with
+`withCodexSessionTranscriptMirrorWrite`. These compatibility helpers remain until
+the next Plugin SDK major; actor-bound and incognito targets reject their
+synchronous database access.
+
+Opaque `AgentHarnessSessionDeletionMutation.commit` callbacks are deprecated.
+Use `createNativeSessionBindingLifecycleV2` for stored native bindings or
+`createNativeSessionCommitFinalizer` for effects that only run after commit.
+These existing participants let session deletion stay in the database worker;
+opaque callbacks retain the synchronous compatibility adapter until removal.
+
 ## Await GitHub publication operations
 
 The Gateway context's `githubPublicationService` provides versioned requests and
@@ -27,6 +52,13 @@ no new GitHub-specific SDK subpath.
 | `deferOrphanedRequests`     | `await deferOrphanedRequestsAsync` |
 | `listUnreportedResults`     | `await listUnreportedResultsAsync` |
 | `markReported`              | `await markReportedAsync`          |
+| `read`                      | `await readAsync`                  |
+| `personalStatus`            | `await personalStatusAsync`        |
+
+The Gateway context also exposes managed OAuth methods through `githubOAuthService`.
+Replace `cancelAuthorization(requestId)` with `await cancelAuthorizationAsync(requestId)`
+and `retireProfile(profileId)` with `await retireProfileAsync(profileId)`. The legacy
+methods retain synchronous results for this SDK major and warn on use.
 
 The same Gateway context exposes personal connection operations through
 `githubOAuthService.personal`. Replace
@@ -95,13 +127,12 @@ one destination transaction. The source remains reserved until that transaction
 settles. Async completion includes installation of its committed facts. Keep the
 requester's owner alive until the operation and its cleanup settle.
 
-Legacy requester assertions may read or mutate SQLite. The service selects their
-native compatibility route before invoking them; it does not serialize closures
-or invoke arbitrary host policy from inside a reserved worker transaction.
-Migrating to V2 changes that callback ordering: preparation precedes reservation,
-and typed predicates authorize commit. It does not preserve arbitrary
-transaction-local callback visibility. A failed or uncertain worker operation
-never retries through the legacy route or replays an accepted external effect.
+Publication no longer runs a native compatibility path. Legacy publication
+methods warn and fail with the replacement method name; they never fall back to
+synchronous SQLite. Migrate to V2 before calling publication. Preparation precedes
+reservation, and typed predicates authorize commit; arbitrary transaction-local
+callback visibility is not supported. A failed or uncertain worker operation never
+replays an accepted external effect.
 
 Await deferral and reporting before dependent reads or shutdown. Reporting and
 claim deferral each update the relevant publication kinds in one worker transaction. Accepted
@@ -119,12 +150,14 @@ without source reservations. A checkpoint becoming available or a session being
 restored after the check may require a new publication request; the original
 content and recorded GitHub effects remain intact.
 
-The deprecated methods retain their released signatures and completion timing;
-synchronous mutations still commit before returning. Actual legacy use emits one
-warning per plugin and the `github-publication` family per Gateway process,
-through the shared SDK warning helper. Unknown direct SDK consumers share one
+Deprecated publication methods retain their TypeScript signatures to make the
+migration discoverable, but fail explicitly at invocation. Actual legacy use emits
+one warning per plugin and the `github-publication` family per Gateway process,
+through the shared SDK warning helper. The warning states that the method no
+longer performs publication work and names its replacement. Unknown direct SDK consumers share one
 bounded family warning. These methods will be **removed in the next Plugin SDK
-major**. No schema, stored-data, retention, or update migration is required.
+major**. Personal OAuth compatibility methods described above retain their existing
+completion behavior. No schema, stored-data, retention, or update migration is required.
 
 ## Replace native SQLite runtime writes
 
@@ -186,10 +219,13 @@ There is no schema, stored-byte, retention, or update migration.
 Use host-bound `api.runtime.gateway.request` for approval requests, reads,
 history, grant operations, resolution, and waiting. Reads that expire rows are
 worker operations too. The host's method classification does not enlarge the
-internal principal's allowed methods. A released opaque approval commit guard
-selects its native compatibility adapter before execution, preserving its
-transaction-local visibility; worker failure never selects that adapter.
-The adapter remains deprecated until the next Plugin SDK major.
+internal principal's allowed methods. Released opaque approval commit guards
+retain their synchronous callback signature and run at the worker precommit
+boundary. A thrown callback rejects and rolls back the write. It can inspect
+current host authority, but cannot query tentative worker rows through the host
+connection or depend on the former host transaction view. The native
+SQLite adapter is removed; callbacks remain deprecated until the next Plugin SDK
+major.
 
 The shared warning budget is per plugin and capability family, on legacy use.
 Current effect-time authority checks remain synchronous. Schemas, stored bytes,
@@ -247,6 +283,17 @@ readers and current-owner checks. The service exposes `listBySessionAsync`,
 `resolveByConversationAsync`, and `touchAsync`. An async failure never selects a
 synchronous fallback. External adapters remain responsible for their own
 storage, currentness, and committed publication.
+
+For channel route ownership, replace `resolveConversationRouteOwner` and
+`prepareConversationRouteOwners` with `prepareConversationRouteOwnersAsync`.
+Await its `inspectBindings(refs)` callback during preparation, then return one
+synchronous resolver per input. The callback returns a reader for the prepared
+binding facts; invoke that reader inside the resolver so committed binding
+changes invalidate ownership before an external effect. Do not retain the
+preparation callback after returning. The Gateway releases the facts after
+selection or delivery. Discord, Matrix, Slack, and Telegram use this contract for all bundled
+route ownership reads; deprecated synchronous hooks remain for external plugins
+until the next Plugin SDK major and warn when called.
 
 The original synchronous keyed stores, opaque `update`/`deleteIf` callbacks,
 binding managers, and adapter registrations remain compatibility APIs. They
@@ -343,15 +390,21 @@ depending on refreshed connected views. Recording also awaits the collaboration
 writer's session involvement update before saving Inbox items. Both writes retain
 their existing owners and settle before Gateway worker shutdown.
 
-The shipped `list`, `dismiss`, `recordCommittedInput`, and `invalidate` methods
-remain synchronous third-party adapters until the next Plugin SDK major and
-explicit breaking-release approval. Each emits a `DEP_SESSION_PERSISTENCE`
-deprecation warning once per plugin and capability family per process; calls outside a
-plugin invocation warn once per method. Existing return values and completion
-timing stay intact, including recording before an immediate synchronous list.
-Notifications publish after the enclosing transaction commits and are discarded
-on rollback. This migration changes no schema, retained data, retention, or
-update behavior.
+The shipped synchronous signatures remain deprecated until the next Plugin SDK
+major, but their native persistence adapters have been retired. `list` and
+`dismiss` return `UNAVAILABLE` with the awaited replacement in the message;
+`invalidate` throws a migration-directed error. Legacy `recordCommittedInput`
+queues the worker operation after any enclosing transaction commits; rollback
+discards it. Await `recordCommittedInputAsync` for completion. Each
+emits a `DEP_SESSION_PERSISTENCE` warning once per plugin and capability family
+per process; unscoped calls share one SDK-level family warning. Rejected reads, dismissals, and invalidations do not schedule background work.
+Queued legacy recording drains on orderly shutdown; an abrupt process exit can
+lose a queued submission.
+
+Move recording outside any synchronous SQLite transaction and await it after
+the source message commits. The awaited Inbox writer owns its own transaction
+and publishes notifications only after that write commits. This migration
+changes no schema, retained data, retention, or update behavior.
 
 ## Await personal model-account operations
 
@@ -400,34 +453,55 @@ Command names, filtering, stored selections, and update behavior are unchanged.
 
 ## Await placement preparation
 
-Gateway contexts provide `workerSessionPlacementService.getAsync`, `getManyAsync`,
-`listAsync`, `listForReconcileAsync`, and `retireSessionPlacementAsync`.
-Await their results before using placement facts,
-starting dependent work, or releasing request resources. Their synchronous
-counterparts shipped through the 2026.9.8 Gateway SDK and remain deprecated
-compatibility methods until the next Plugin SDK major.
+Await placement reads and mutations before using their result, starting dependent
+work, or releasing request resources. The Gateway's native synchronous adapters
+are retired; the deprecated signatures remain until the next Plugin SDK major.
+
+| Deprecated `workerSessionPlacementService` method | Awaited replacement                            |
+| ------------------------------------------------- | ---------------------------------------------- |
+| `get`                                             | `getAsync`                                     |
+| `getMany`                                         | `getManyAsync`                                 |
+| `list`                                            | `listAsync`                                    |
+| `listForReconcile`                                | `listForReconcileAsync`                        |
+| `listPendingWorkspaceResults`                     | `listPendingWorkspaceResultsAsync`             |
+| `getWorkspaceResultReconcilingSessionIds`         | `getWorkspaceResultReconcilingSessionIdsAsync` |
+| `retireSessionPlacement`                          | `retireSessionPlacementAsync`                  |
+| `clearLocalTurnClaimsAfterRestart`                | `clearLocalTurnClaimsAfterRestartAsync`        |
+
+`get` and `getMany` only consume committed in-process receipts. Cold or invalidated
+entries throw with migration guidance; an owner-published absence remains a valid
+result. The synchronous inventory and mutation methods always throw and never
+schedule work. Calls emit a warning once per plugin and capability family.
 
 Placement activation callbacks receive the committed active placement directly.
-Use that result for maintenance scheduling instead of reading it again. Native
-readers remain available for final synchronous execution or disclosure guards;
-prepared placement facts do not replace those checks. Legacy placement reads
-warn once per plugin and capability family.
+Use that result for maintenance scheduling instead of reading it again. For final
+execution or disclosure guards, prepare authority with the placement owner, then
+check its live in-process facts immediately before the effect.
 
-Startup also awaits `clearLocalTurnClaimsAfterRestartAsync` while holding the
-state-directory lock, before admitting turns. The placement worker clears stale
-local claims and publishes the returned records after success. An uncertain result
-fails startup; the next boot can safely repeat the cleanup. Legacy synchronous retirement and
-restart cleanup warn once per plugin and capability family. Bundled reset and
-deletion paths await retirement; released custom Gateway contexts retain a
-separately selected synchronous adapter through the compatibility window.
+Startup awaits `clearLocalTurnClaimsAfterRestartAsync` while holding the
+state-directory lock, before admitting turns. The worker clears stale local claims
+and publishes returned records after success. An uncertain result fails startup;
+the next boot can safely repeat cleanup. Bundled reset and deletion paths await
+`retireSessionPlacementAsync`.
 
-Use `placementStandingGrants.resolveBindingAsync`, `validateAsync`, and
-`retainAsync` for node-grant preparation. `resolveAsync` combines binding and
-retained-parent validation in one request. These additions are optional on the
-released interface so existing custom service implementations remain compatible;
-the native Gateway supplies them. Keep `consume` at the final synchronous
-transport authorization boundary: earlier prepared facts do not replace current
-placement, pairing, or parent-approval authority.
+The built-in `placementStandingGrants` service has these replacements:
+
+| Deprecated method | Awaited replacement   |
+| ----------------- | --------------------- |
+| `resolveBinding`  | `resolveBindingAsync` |
+| `retain`          | `retainAsync`         |
+| `validate`        | `validateAsync`       |
+
+The synchronous methods throw migration-directed errors. `resolveAsync` combines
+binding and retained-parent validation in one request. Await `consumeAsync` just
+before transport handoff, then call `consume` synchronously at the effect. The
+final call checks the prepared write receipt, expiry, node, pairing, and placement
+binding without SQLite; a changed receipt rejects the grant. Do not treat an older
+preparation as permission for a later effect.
+
+The async additions remain optional on the released interface for custom service
+implementations. The built-in Gateway supplies them and never chooses a native
+fallback after a worker failure.
 
 Device-placement demand also has an awaited
 `workerPlacementDispatchService.getAdmittedDeviceSessionCountsAsync` companion.
@@ -505,6 +579,14 @@ change, retention change, or update migration is introduced.
 
 ## Prepare session catalog identities
 
+Await `readSessionTranscriptCatalogTitleAsync({ agentId, sessionKey, storePath, entry })`
+from `openclaw/plugin-sdk/session-transcript-runtime` when deriving a catalog title.
+It preserves metadata precedence and reads the bounded first-message fallback through
+the history worker. `readSessionTranscriptCatalogPage` also uses that worker while
+retaining raw event coordinates for pagination. The synchronous
+`readSessionTranscriptCatalogTitle` remains supported in the current Plugin SDK major,
+warns once per plugin, and will be removed in the next Plugin SDK major.
+
 Use `await prepareSessionCatalogSourceActorProjector({ pluginId, sourceDomain, actors })`
 from `openclaw/plugin-sdk/session-transcript-runtime` before projecting a source catalog page.
 The returned synchronous projector reads only the prepared profile and verified GitHub facts.
@@ -535,6 +617,35 @@ The released synchronous `createSessionCatalogSourceActorProjector` and
 `createSessionCatalogGitHubLinker` signatures remain available for existing plugins;
 bundled Session Share uses the awaited helpers. Schemas, stored data, retention,
 permissions, and update behavior are unchanged.
+
+## Replace unbound native session deletion callbacks
+
+Harness `withSessionDeletion` and `withSessionContextReset` hooks should pass
+factory-produced participants to `run`, instead of plain
+`AgentHarnessSessionDeletionMutation` objects with unbound `commit` and
+`rollback` callbacks. Import the factories from
+`openclaw/plugin-sdk/agent-harness-session-runtime`:
+
+| Deprecated callback                                                   | Replacement                                                                                |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| Direct callbacks that remove and restore a stored native binding      | The participant supplied by `createNativeSessionBindingLifecycleV2(...).withDeletion(...)` |
+| Direct callbacks that only finalize cleanup after the session commits | `createNativeSessionCommitFinalizer({ commit, rollback })`                                 |
+
+The binding lifecycle lets the existing worker transaction settle reversible
+stored state. The commit finalizer is only for cleanup without a reversible
+storage effect; it does not move arbitrary database callbacks to a worker.
+Use `wrapNativeSessionDeletionMutation` when adding live-authority or settlement
+hooks to either participant, so the wrapper preserves its worker ownership.
+
+During durable Gateway deletion, direct unbound callbacks run only after the
+worker acknowledges the session commit; their rollback callback is not used.
+Cleanup failures warn without undoing deletion, and a process exit can leave
+cleanup unfinished. Stopped-owner maintenance and process-local incognito
+deletion retain their native transaction contract. Legacy callbacks warn once
+per plugin and callback family and will be **removed in the next Plugin SDK
+major**. Factory-produced participants and the two harness hooks remain
+supported. See [deletion companions](/plugins/sdk-migration/compatibility-policy#harness-deletion-companions).
+This migration changes no schema, stored format, retention, or update behavior.
 
 ## Await session upstream links
 
@@ -581,6 +692,30 @@ at their existing effect boundary.
 The synchronous `listSessionEntries` API is deprecated until the next Plugin SDK
 major. Its existing arguments and complete-entry behavior remain available for
 compatibility, with a one-time deprecation warning on legacy use.
+
+## Await transcript statistics
+
+Use `await readTranscriptStatsAsync(scope)` from
+`openclaw/plugin-sdk/session-store-runtime` for one transcript, or
+`await readTranscriptStatsBatchReadOnlyAsync(scopes)` from
+`openclaw/plugin-sdk/memory-core-host-engine-sessions` for a batch. Durable reads
+run through the existing session worker. Batch results retain input order and
+duplicate IDs, return zero counts for missing transcripts in existing stores,
+and return `null` for unavailable stores without creating them.
+
+`readTranscriptStatsSync` and `readTranscriptStatsBatchReadOnlySync` retain their
+released signatures until the next Plugin SDK major. Legacy calls on the main
+thread emit a shared session-store deprecation warning; kernels already running
+inside database workers can keep their synchronous reads without a warning.
+
+Use `await statSessionEntry(path, options)` from
+`openclaw/plugin-sdk/memory-core-host-engine-sessions` to read transcript file
+metadata through the worker. `statSessionEntrySync` remains available until the
+next Plugin SDK major; passing already prepared transcript statistics to it
+only projects those values and does not query SQLite. `buildSessionEntry`
+also reads durable snapshots in the worker when an `onTranscriptMessage`
+observer is supplied, then invokes the observer on the caller with the original
+messages and timestamps.
 
 ## Prepare session entry changes
 
@@ -802,11 +937,11 @@ Replace `SessionManager.readSessionContext(target, read)` with
 `await SessionManager.readSessionContextAsync(target, read, { admission?, signal? })`.
 This reader preserves full-fidelity messages, including storage-only fields omitted
 from model context. Its consumer may return a promise; the iterator closes when
-the consumer settles, and source validation must succeed before the result is
-returned. A rewritten source or revoked admission rejects the read. The durable
-reader retains its database owner through consumption and cleanup;
-database closure revokes the read. Final acceptance uses the existing writer
-FIFO and native mutation witness, including rewrites made after worker validation.
+the consumer settles. The durable reader retains its database owner through
+consumption and cleanup; database closure, cancellation, or revoked admission
+rejects the read. A later append or rewrite does not invalidate the captured
+durable snapshot or the result already computed from it. A subsequent read sees
+the new transcript.
 The `session-manager-sync-context-read` record deprecates the synchronous reader on
 October 4, 2026, with one warning per process and removal at the next Plugin SDK
 major. Its existing synchronous result remains compatible during that window.
@@ -815,8 +950,9 @@ Actor-bound incognito sessions reject the deprecated synchronous persistence and
 context methods before native storage or loaded-view mutation. The error names
 the awaited replacement. Production incognito remains host-owned until the atomic
 worker activation; durable synchronous compatibility is unchanged. An ordinary
-`resolveCurrentTurnEntryId()` only walks the loaded view; to include omitted
-custom messages, await `openAsync(target)` and walk that complete view instead.
+`resolveCurrentTurnEntryId()` only walks the loaded view. Its
+`includeOmittedCustomMessages` option is deprecated; await `openAsync(target)`
+and walk that complete view instead.
 
 Bundled Codex history captures `captureCodexSessionContextReader(target, signal?)`
 from `openclaw/plugin-sdk/codex-session-transcript-runtime` before yielding. When
@@ -868,10 +1004,12 @@ User-turn transcript recorders also provide optional
 `completeProcessingAsync(outcome)` and `waitForPendingInputSettlement()` methods.
 Await processing completion before publishing its outcome. Completion records
 processing separately from transcript consumption; it does not append or consume
-the pending input. The synchronous `completeProcessing` callback shipped in
-`v2026.9.8` retains its immediate result for existing SDK consumers. The host
-uses that legacy callback only when a supplied recorder has no async companion,
-never after an async failure or an undefined async result.
+the pending input. Bundled callers complete through the awaited methods. Host-created recorders
+retain the deprecated synchronous `completeProcessing` adapter and its immediate
+return and transaction semantics until the next Plugin SDK major. Using it warns
+once per plugin. Replace it with `completeProcessingAsync`. The host also accepts
+plugin-supplied legacy callbacks when a recorder has no async companion, never
+after an async failure or an undefined async result.
 
 `finishPendingInput(disposition)` still revokes prompt custody synchronously.
 After calling it, await `waitForPendingInputSettlement()` when available before

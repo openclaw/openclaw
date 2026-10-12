@@ -4,7 +4,7 @@ import { createOpenClawCodingToolsAsync } from "../../agents/agent-tools.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/embedded-agent-runner/sandbox-info.js";
 import { resolveRuntimeSkillsPrompt } from "../../agents/embedded-agent-runner/skills-prompt.js";
-import { resolveNodeExecEligibility } from "../../agents/exec-defaults.js";
+import { resolveNodeExecEligibilityAsync } from "../../agents/exec-defaults.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../../agents/prompt-surface.js";
 import { resolveAgentRuntimePrompt } from "../../agents/runtime-prompt.js";
 import {
@@ -115,7 +115,7 @@ export async function resolveCommandsSystemPromptBundle(params: HandleCommandsPa
     sessionKey: params.sessionKey,
     classificationSessionKey: toolPolicySessionKey,
   });
-  const nodeSkills = resolveNodeExecEligibility({
+  const nodeSkills = await resolveNodeExecEligibilityAsync({
     agentId: sessionAgentId,
     cfg: params.cfg,
     sessionEntry: targetSessionEntry,

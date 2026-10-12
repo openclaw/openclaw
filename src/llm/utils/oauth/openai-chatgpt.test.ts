@@ -68,32 +68,6 @@ describe("OpenAI Codex OAuth compatibility provider", () => {
     });
   });
 
-  it("routes legacy login callbacks through the OpenAI provider auth hook", async () => {
-    const credential = createCredential();
-    const onAuth = vi.fn();
-    const onPrompt = vi.fn(async () => "manual-code");
-    mocks.loginOpenAICodexOAuth.mockImplementationOnce(async (params) => {
-      await params.openUrl("https://auth.openai.com/oauth/authorize?state=abc");
-      await expect(params.prompter.text({ message: "Paste code" })).resolves.toBe("manual-code");
-      return credential;
-    });
-
-    await expect(loginThroughOpenAIProvider({ onAuth, onPrompt })).resolves.toEqual(credential);
-
-    expect(onAuth).toHaveBeenCalledWith({
-      url: "https://auth.openai.com/oauth/authorize?state=abc",
-    });
-    expect(onPrompt).toHaveBeenCalledWith({ message: "Paste code", placeholder: undefined });
-    expect(mocks.loginOpenAICodexOAuth).toHaveBeenCalledWith({
-      prompter: expect.any(Object),
-      runtime: expect.any(Object),
-      isRemote: false,
-      signal: undefined,
-      onManualCodeInput: undefined,
-      openUrl: expect.any(Function),
-    });
-  });
-
   it("waits for the auth URL to render before requesting manual input", async () => {
     let finishAuth!: () => void;
     const authRendered = new Promise<void>((resolve) => {

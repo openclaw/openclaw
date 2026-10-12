@@ -1,6 +1,5 @@
 import os from "node:os";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { captureTranscriptRedactionSnapshot } from "../../agents/transcript-redact-text.js";
 import { getCliSessionBinding } from "../../config/sessions/cli-session-binding.js";
 import { readLegacyCompactionMetrics } from "../../config/sessions/legacy-compaction-history.js";
 import type {
@@ -25,7 +24,6 @@ function prepareChatHistoryParams<Params extends ChatHistoryPageParams>(input: P
     ? {
         ...input,
         cliHistoryHomeDir: process.env.HOME || os.homedir(),
-        cliHistoryRedaction: captureTranscriptRedactionSnapshot(),
       }
     : input;
 }

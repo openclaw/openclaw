@@ -12,11 +12,7 @@ import {
   resolveWindowsSpawnProgramCandidate,
 } from "../../../plugin-sdk/windows-spawn.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import {
-  createAwaitedDecodedOutput,
-  joinProcessCompletionAndOutput,
-  onDecodedOutput,
-} from "../../decoded-output.js";
+import { joinProcessCompletionAndOutput, onDecodedOutput } from "../../decoded-output.js";
 import { killProcessTree, signalProcessTree } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
 import { pipeProcessOutput } from "../../pipe-output.js";
@@ -31,6 +27,7 @@ import {
   resolveWindowsCommandShim,
 } from "../../windows-command.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "../cancellation-policy.js";
+import { createOutputRelay } from "../service-child-output-relay.js";
 import { createServiceChildRelayAdapter } from "../service-child-relay-host.js";
 import type {
   AwaitedStdoutConsumer,
@@ -332,14 +329,17 @@ export async function createChildAdapter(
   const childStdin = spawned.child.stdin;
   const stdin = createManagedChildStdin(childStdin);
   const outputUnsubscribers: Array<() => void> = [];
-  const awaitedStdout =
+  const stdoutRelay = createOutputRelay(
+    child.stdout,
+    false,
     params.stdoutConsumption === "awaited"
-      ? createAwaitedDecodedOutput(child.stdout, () => {
+      ? () => {
           if (!hardKillRequested) {
             kill("SIGKILL");
           }
-        })
-      : undefined;
+        }
+      : undefined,
+  );
   if (params.stderrDestination) {
     outputUnsubscribers.push(
       pipeProcessOutput(child.stderr, params.stderrDestination, (error) =>
@@ -421,7 +421,9 @@ export async function createChildAdapter(
     // Some Windows child processes never emit `close` after a hard kill.
     forceKillWaitFallbackTimer = setTimeout(() => {
       cleanup.reject(new Error("child cleanup could not be confirmed before the kill deadline"));
-      awaitedStdout?.close();
+      if (stdoutRelay.consume) {
+        stdoutRelay.clear();
+      }
       settleWait({ code: null, signal });
     }, FORCE_KILL_WAIT_FALLBACK_MS);
     forceKillWaitFallbackTimer.unref?.();
@@ -624,7 +626,7 @@ export async function createChildAdapter(
   };
 
   const dispose = () => {
-    awaitedStdout?.close();
+    stdoutRelay.clear();
     clearForcedWindowsCloseTimer();
     if (params.ownedWorker !== undefined) {
       disconnectWorkerIpc();
@@ -649,23 +651,18 @@ export async function createChildAdapter(
     stdin,
     oomScoreWrapperSelected: preparedSpawn.wrapped,
     supportsRawOutput: true,
-    onStdout: (listener, onRaw) => {
-      if (awaitedStdout) {
-        throw new Error("Process stdout requires its awaited consumer");
-      }
-      outputUnsubscribers.push(onDecodedOutput(child.stdout, listener, onRaw));
-    },
-    ...(awaitedStdout ? { consumeStdout: awaitedStdout.consume } : {}),
+    onStdout: stdoutRelay.subscribe,
+    ...(stdoutRelay.consume ? { consumeStdout: stdoutRelay.consume } : {}),
     onStderr: (listener, onRaw) => {
       outputUnsubscribers.push(onDecodedOutput(child.stderr, listener, onRaw));
     },
     onExit: events.onExit,
     onError: events.onError,
     wait: async () => {
-      if (!awaitedStdout) {
-        return await completion.promise;
-      }
-      return await joinProcessCompletionAndOutput(completion.promise, awaitedStdout.drain());
+      const output = stdoutRelay.drain();
+      return output
+        ? await joinProcessCompletionAndOutput(completion.promise, output)
+        : await completion.promise;
     },
     ...(process.platform === "win32" && {
       waitForExtinction: () => windowsCleanup ?? cleanup.promise.then(() => windowsFallback),

@@ -15,6 +15,7 @@ export {
   resolveExistingSqliteFileUri,
   supportsNodeSqliteExtensionLoading,
 } from "../infra/node-sqlite.js";
+export type { SqlConnection } from "../infra/sql-connection.js";
 export {
   getSqliteDatabaseAdmission,
   publishSqliteDatabaseAdmission,
@@ -22,12 +23,13 @@ export {
   readSqliteDatabaseWriteTokenForPath,
   type SqliteDatabaseAdmissionKey,
 } from "../infra/sqlite-database-admission.js";
-export { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 export { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
+export { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 export {
   assertTransactionUsable,
   runSqliteDeferredTransactionSync,
   runSqliteImmediateTransactionSync,
+  runSqliteReadSnapshotSync,
   runSqliteSingleStatementSync,
 } from "../infra/sqlite-transaction.js";
 export type {
@@ -39,3 +41,4 @@ export { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-op
 export { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
 export { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 export { ensureOpenClawAgentStandingIntentsSchema } from "../state/openclaw-agent-standing-intents-schema.js";
+export { stageOpenClawAgentDatabaseSchemaExtension } from "../state/openclaw-agent-db-schema-extension.worker.js";

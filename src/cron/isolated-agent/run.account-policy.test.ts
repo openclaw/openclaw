@@ -19,7 +19,7 @@ import { stop } from "../service/ops-lifecycle.js";
 import { list } from "../service/ops-read.js";
 import { enqueueRun } from "../service/ops-run.js";
 import type { CronEvent } from "../service/state.js";
-import { onTimer } from "../service/timer-scheduler.js";
+import { onTimer } from "../service/timer.test-support.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import type { CronStoredJob } from "../types.js";
