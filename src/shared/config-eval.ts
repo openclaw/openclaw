@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import { tryProcessCwd } from "../infra/safe-cwd.js";
 import { getOrCreatePromise } from "./lazy-promise.js";
 import type { RequirementsMetadata } from "./requirements.js";
 
@@ -89,14 +90,18 @@ function windowsPathExtensions(raw: string | undefined): string[] {
 const pendingBinaryAccess = new Map<string, Promise<void>>();
 
 // Installs can create binaries under unchanged PATH/PATHEXT, so cache only successful probes.
-let binaryCache: { path: string; pathExt: string; hits: Set<string> } | undefined;
+let binaryCache:
+  | { path: string; pathExt: string; cwd: string | undefined; hits: Set<string> }
+  | undefined;
 
 function resolveBinaryCache() {
   const isWindows = process.platform === "win32";
   const pathEnv = process.env.PATH ?? "";
   const pathExt = isWindows ? (process.env.PATHEXT ?? "") : "";
-  if (binaryCache?.path !== pathEnv || binaryCache.pathExt !== pathExt) {
-    binaryCache = { path: pathEnv, pathExt, hits: new Set() };
+  // Relative PATH entries select different executables after a working-directory change.
+  const cwd = tryProcessCwd();
+  if (binaryCache?.path !== pathEnv || binaryCache.pathExt !== pathExt || binaryCache.cwd !== cwd) {
+    binaryCache = { path: pathEnv, pathExt, cwd, hits: new Set() };
   }
   return binaryCache;
 }

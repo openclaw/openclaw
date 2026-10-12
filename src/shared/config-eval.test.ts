@@ -114,6 +114,20 @@ describe("config-eval helpers", () => {
     expect(hasBinary("tool")).toBe(false);
   });
 
+  it("invalidates cached relative-PATH hits when the working directory changes", () => {
+    const binDir = tempDirs.make("openclaw-binary-cwd-");
+    const executable = path.join(binDir, "fixture-tool");
+    fs.writeFileSync(executable, "#!/bin/sh\nexit 0\n");
+    fs.chmodSync(executable, 0o755);
+    vi.stubEnv("PATH", path.relative(process.cwd(), binDir));
+    expect(hasBinary("fixture-tool")).toBe(true);
+
+    fs.unlinkSync(executable);
+    expect(hasBinary("fixture-tool")).toBe(true);
+    vi.spyOn(process, "cwd").mockReturnValue(path.join(binDir, "other-workspace"));
+    expect(hasBinary("fixture-tool")).toBe(false);
+  });
+
   it("checks PATHEXT candidates and invalidates cached hits when PATHEXT changes", () => {
     mockProcessPlatform("win32");
     const toolsDir = tempDirs.make("openclaw-binary-pathext-");
@@ -153,6 +167,24 @@ describe("config-eval helpers", () => {
 });
 
 describe("prepared binary availability", () => {
+  it("does not reuse a successful probe from a different working directory", async () => {
+    const binDir = tempDirs.make("openclaw-prepared-cwd-");
+    const executable = path.join(binDir, "fixture-tool");
+    fs.writeFileSync(executable, "#!/bin/sh\nexit 0\n");
+    fs.chmodSync(executable, 0o755);
+    vi.stubEnv("PATH", path.relative(process.cwd(), binDir));
+    const first = await prepareBinaryAvailability(["fixture-tool"]);
+    expect(first.hasBinary("fixture-tool")).toBe(true);
+
+    fs.unlinkSync(executable);
+    vi.spyOn(process, "cwd").mockReturnValue(path.join(binDir, "other-workspace"));
+    expect(first.isCurrent()).toBe(false);
+    const next = await prepareBinaryAvailability(["fixture-tool"]);
+    expect(next.hasBinary("fixture-tool")).toBe(false);
+    expect(next.isCurrent()).toBe(true);
+    expect(hasBinary("fixture-tool")).toBe(false);
+  });
+
   it("sees an installation on the next operation while preserving successful cache reuse", async () => {
     const binDir = tempDirs.make("openclaw-prepared-binary-");
     vi.stubEnv("PATH", binDir);
