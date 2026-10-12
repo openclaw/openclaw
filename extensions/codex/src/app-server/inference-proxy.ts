@@ -7,6 +7,7 @@ import {
   fetchWithSsrFGuard,
   isBlockedHostnameOrIp,
   resolvePinnedHostnameWithPolicy,
+  type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   type RawData,
@@ -54,6 +55,24 @@ type ResidentTicket = {
   release: (() => void) | null;
   retiring: boolean;
 };
+
+function inferenceFakeIpPolicy(target: URL): SsrFPolicy | undefined {
+  if (
+    target.protocol !== "https:" ||
+    target.origin !== "https://chatgpt.com" ||
+    target.username ||
+    target.password
+  ) {
+    return undefined;
+  }
+  // Trusted fake-IP routing covers 198.18.0.0/15 and fc00::/7, not other private
+  // ranges. The SSRF guard still rejects metadata addresses and pins DNS.
+  return {
+    hostnameAllowlist: ["chatgpt.com"],
+    allowRfc2544BenchmarkRange: true,
+    allowIpv6UniqueLocalRange: true,
+  };
+}
 
 /** Private, fixed-destination relay. No upstream credentials or model content are retained. */
 export async function createCodexInferenceProxy(params: {
@@ -293,6 +312,7 @@ export async function createCodexInferenceProxy(params: {
             signal: upload.signal,
             // Refresh and DNS/proxy preparation await; revalidate both owners at physical I/O.
             beforeRequest: assertAuthorized,
+            policy: inferenceFakeIpPolicy(target),
             requireHttps: true,
             maxRedirects: 0,
             capture: false,
@@ -458,7 +478,12 @@ export async function createCodexInferenceProxy(params: {
         proxyAgent = createNodeProxyAgent({ mode: "env", targetUrl: target.href });
         const lookup = proxyAgent
           ? undefined
-          : (await resolvePinnedHostnameWithPolicy(target.hostname, { signal })).lookup;
+          : (
+              await resolvePinnedHostnameWithPolicy(target.hostname, {
+                signal,
+                policy: inferenceFakeIpPolicy(target),
+              })
+            ).lookup;
         assertHandshakeCurrent();
         target.protocol = "wss:";
         const headers = relayHeaders(req.headers);
