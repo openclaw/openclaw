@@ -57,7 +57,11 @@ export function selectAcpSessionRow(
   );
 }
 
-export function* selectAcpSessionRowsByKeys(db: DatabaseSync, keys: readonly string[]) {
+export function* selectAcpSessionRowsByKeys(
+  db: DatabaseSync,
+  keys: readonly string[],
+  firstCohort?: readonly AcpSessionRow[],
+) {
   const revision =
     keys.length <= MAX_RETAINED_ACP_SESSION_ROWS ? getSqliteReadOperationRevision(db) : undefined;
   let cached = metadataRows.get(db);
@@ -68,14 +72,14 @@ export function* selectAcpSessionRowsByKeys(db: DatabaseSync, keys: readonly str
       registerNodeSqliteDisposeCallback(db, () => metadataRows.delete(db));
     } else if (
       cached.schema !== revision.schema ||
-      cached.dataVersion !== revision.dataVersion ||
+      cached.writeRevision !== revision.writeRevision ||
       cached.mutationRevision !== revision.mutationRevision
     ) {
       Object.assign(cached, revision);
       cached.rows.clear();
     }
     const retainedRows = cached.rows;
-    if (keys.every((key) => retainedRows.has(key))) {
+    if (!firstCohort && keys.every((key) => retainedRows.has(key))) {
       const rows: AcpSessionRow[] = [];
       for (const key of new Set(keys)) {
         const row = retainedRows.get(key);
@@ -88,17 +92,20 @@ export function* selectAcpSessionRowsByKeys(db: DatabaseSync, keys: readonly str
     }
   }
   // Read the whole cohort on a miss: mixing retained and new rows would give
-  // callers a different view if a foreign commit occurs during this request.
+  // callers a different view if another writer commits during this request.
   for (let index = 0; index < keys.length; index += 500) {
     const cohort = keys.slice(index, index + 500);
-    const rows = executeSqliteQuerySync(
-      db,
-      getAcpSessionKysely(db)
-        .selectFrom("acp_sessions")
-        .selectAll()
-        .where("session_key", "in", sqliteStringSet(cohort)),
-    ).rows;
-    if (revision && cached) {
+    const rows =
+      index === 0 && firstCohort
+        ? firstCohort
+        : executeSqliteQuerySync(
+            db,
+            getAcpSessionKysely(db)
+              .selectFrom("acp_sessions")
+              .selectAll()
+              .where("session_key", "in", sqliteStringSet(cohort)),
+          ).rows;
+    if (revision && cached && getSqliteReadOperationRevision(db) === revision) {
       if (cached.rows.size + cohort.length > MAX_RETAINED_ACP_SESSION_ROWS) {
         cached.rows.clear();
       }
@@ -200,8 +207,8 @@ export function resolveReadableAcpSessionRow(params: {
   return row && acpSessionRowMatchesEntry(row, entry) ? row : undefined;
 }
 
-export function upsertAcpSessionMetaRow(db: DatabaseSync, row: Insertable<AcpSessionsTable>): void {
-  executeSqliteQuerySync(
+export function upsertAcpSessionMetaRow(db: DatabaseSync, row: Insertable<AcpSessionsTable>) {
+  return executeSqliteQueryTakeFirstSync(
     db,
     getAcpSessionKysely(db)
       .insertInto("acp_sessions")
@@ -221,6 +228,7 @@ export function upsertAcpSessionMetaRow(db: DatabaseSync, row: Insertable<AcpSes
           last_error: (eb) => eb.ref("excluded.last_error"),
           updated_at: (eb) => eb.ref("excluded.updated_at"),
         }),
-      ),
+      )
+      .returningAll(),
   );
 }

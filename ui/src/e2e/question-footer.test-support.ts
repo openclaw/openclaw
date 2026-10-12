@@ -3,6 +3,7 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
 import type { MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
+import { openDetailsPullRequests } from "./chat-details.test-support.ts";
 import { requireRecord, requireString } from "./chat-flow.test-support.ts";
 import { waitForWatchedSessionKey } from "./chat-github-publication.test-support.ts";
 
@@ -63,7 +64,9 @@ export function defineQuestionFooterTests({
         },
       });
       const pullRequest = page.locator(".chat-pr__link");
+      await openDetailsPullRequests(page);
       await pullRequest.waitFor();
+      await page.keyboard.press("Escape");
       await draft.fill("Keep this follow-up draft");
       const prompt = "Which progress note should I use?";
       const request = questionRecord("question-mobile-context", [
@@ -94,7 +97,7 @@ export function defineQuestionFooterTests({
         const layout = await shell.evaluate((element) => {
           const question = element.querySelector<HTMLElement>(".chat-question-panel--collapsed")!;
           const input = element.querySelector<HTMLElement>(".agent-chat__input")!;
-          const row = element.querySelector<HTMLElement>(".chat-pr")!;
+          const hasPullRequests = element.querySelector(".chat-pr") !== null;
           const notice = element.querySelector<HTMLElement>(".chat-error")!;
           const stack = element.querySelector<HTMLElement>(".chat-footer__context")!;
           const questionStyle = getComputedStyle(question);
@@ -102,7 +105,7 @@ export function defineQuestionFooterTests({
           return {
             shellBorder: getComputedStyle(element).borderTopWidth,
             shellShadow: getComputedStyle(element).boxShadow,
-            prBottom: row.getBoundingClientRect().bottom,
+            hasPullRequests,
             noticeTop: notice.getBoundingClientRect().top,
             noticeBottom: notice.getBoundingClientRect().bottom,
             questionTop: question.getBoundingClientRect().top,
@@ -120,7 +123,7 @@ export function defineQuestionFooterTests({
         });
         expect(layout.shellBorder).toBe("0px");
         expect(layout.shellShadow).toBe("none");
-        expect(layout.prBottom).toBeLessThanOrEqual(layout.noticeTop);
+        expect(layout.hasPullRequests).toBe(false);
         expect(layout.noticeBottom).toBeLessThanOrEqual(layout.questionTop);
         expect(layout.contextBottom).toBeLessThan(layout.inputTop);
         expect(layout.inputBottom).toBeLessThanOrEqual(height);
@@ -134,7 +137,9 @@ export function defineQuestionFooterTests({
           "07-question-mobile-context-" + screenshotName + "-" + theme + ".png",
         );
       }
+      await openDetailsPullRequests(page);
       await pullRequest.click({ trial: true });
+      await page.keyboard.press("Escape");
       await expand.tap();
       await expect.poll(() => composer.count()).toBe(0);
       await panel.getByRole("radio", { name: /Concise/ }).tap();
@@ -151,7 +156,9 @@ export function defineQuestionFooterTests({
       await expect.poll(() => panel.count()).toBe(0);
       await composer.waitFor();
       expect(await draft.inputValue()).toBe("Keep this follow-up draft");
+      await openDetailsPullRequests(page);
       await pullRequest.click({ trial: true });
+      await page.keyboard.press("Escape");
     },
   );
 }

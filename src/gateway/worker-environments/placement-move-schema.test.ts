@@ -67,7 +67,7 @@ describe("worker placement move schema", () => {
     expect(withoutMoveTable.placements.get("session-move")).toMatchObject({ state: "active" });
     expect(withoutMoveTable.moves.size).toBe(0);
     database.db.exec(previousSchema.slice(moveSchemaStart, moveSchemaEnd + ") STRICT;".length));
-    const begun = store.beginPlacementMove({
+    const begun = await store.beginPlacementMove({
       sessionId: "session-move",
       source: { generation: 4, environmentId: "environment-source", ownerEpoch: 7 },
       target: {
@@ -113,7 +113,7 @@ describe("worker placement move schema", () => {
 
     const reopened = openOpenClawStateDatabase(options);
     const reopenedStore = createWorkerSessionPlacementStore({ database: reopened });
-    expect(reopenedStore.getPlacementMove("session-move")).toEqual(begun.intent);
+    expect(await reopenedStore.getPlacementMoveAsync("session-move")).toEqual(begun.intent);
     expect(
       (await reopenedStore.readProjection(["session-move"])).moves.get("session-move"),
     ).toEqual(begun.intent);

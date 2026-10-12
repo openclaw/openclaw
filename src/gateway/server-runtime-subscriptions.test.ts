@@ -17,9 +17,7 @@ import {
 } from "../infra/agent-run-registry.js";
 import { createGatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
 import {
-  getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
-  tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import {
@@ -27,7 +25,6 @@ import {
   progressCardRefreshRunProjection,
 } from "../sessions/input-provenance.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
-import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import {
   waitForChatAbortControllerRemoval,
   waitForChatAbortTerminalPersistence,
@@ -35,14 +32,18 @@ import {
 import { abortChatRunById, removeChatAbortControllerEntry } from "./chat-abort.js";
 import { createGatewayServerActiveWorkInspectors } from "./server-active-work.js";
 import type { AgentEventHandlerOptions } from "./server-chat.js";
+import { GatewayConnectionWork } from "./server-connection-work.js";
 import { registerActivitySummaryPublicationTests } from "./server-runtime-subscriptions.activity-summary.test-support.js";
 import {
   createSubscriptionTestFixture,
   lifecycleState,
   readLifecycleState,
   registerSubscriptionChatRun,
+  registerSubscriptionRegistrationTests,
   registerAuditSubscriptionTests,
+  registerAssistantTailSubscriptionTests,
 } from "./server-runtime-subscriptions.test-support.js";
+import { registerTranscriptPublicationTests } from "./server-runtime-subscriptions.transcript.test-support.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 
 function waitForFast<T>(
@@ -71,7 +72,8 @@ const agentEventHandlerMocks = vi.hoisted(() => ({
 }));
 const transcriptBroadcastMocks = vi.hoisted(() => ({
   useActualHandler: false,
-  readMessageById: vi.fn(),
+  readMessageById:
+    vi.fn<typeof import("./session-transcript-readers.js").readSessionMessageByIdAsync>(),
 }));
 const runtimeConfigState = vi.hoisted(() => ({ value: {} as OpenClawConfig }));
 const observeActivitySummary = vi.hoisted(() =>
@@ -220,60 +222,91 @@ describe("startGatewayEventSubscriptions", () => {
     configureExecutionIdentityAdmissionSink(() => false)();
   });
 
-  it.each([
-    "same-id reset",
-    "replacement",
-    "missing row",
-    "missing row without ID",
-    "missing projection",
-  ])("does not attach a successor row after a queued %s", async (change) => {
-    const prepared = createDeferred();
-    const original = { sessionId: "original" };
-    let current: typeof original | undefined = change.startsWith("missing row")
-      ? undefined
-      : original;
-    let admitted = change !== "missing projection";
-    const projection = {
-      capture: () => current,
-      ensureMaterialized: () => prepared.promise,
-      withPreparedExactRows: async (_queries: unknown, consume: (read: unknown) => unknown) => {
-        await prepared.promise;
-        return { kind: "complete" as const, value: consume(undefined) };
-      },
-      isCurrent: (record: typeof original) => record === current,
-      snapshot: () => ({ row: current ? { key: "agent:main:queued", ...current } : null }),
-    } as unknown as SessionRowProjection;
-    const delivered = vi.fn();
-    agentEventHandlerMocks.create.mockImplementation((options: AgentEventHandlerOptions) =>
-      Object.assign(
-        (event: AgentEventPayload) => {
-          delivered(
-            options.loadGatewaySessionLifecycleSnapshotForEvent?.("agent:main:queued", {
-              agentId: "main",
-              ownerEvent: event,
-            }).row,
-          );
+  it.each(["before startup", "during close"] as const)(
+    "stops observer events %s while chat events continue draining",
+    async (phase) => {
+      const connectionWork = new GatewayConnectionWork();
+      const handler = Object.assign(vi.fn(), { dispose: vi.fn() });
+      agentEventHandlerMocks.create.mockReturnValue(handler);
+      if (phase === "before startup") {
+        connectionWork.beginClose();
+      }
+      unsubs = startGatewayEventSubscriptions({
+        ...createParams(),
+        signal: connectionWork.signal,
+      });
+      const observe = vi.spyOn(unsubs.sessionObserver, "handleEventAsync");
+      const emit = () =>
+        emitAgentEvent({ runId: "closing-observer", stream: "assistant", data: { text: "late" } });
+      if (phase === "during close") {
+        emit();
+        connectionWork.beginClose();
+      }
+      for (let index = 0; index < 9; index++) {
+        emit();
+      }
+      await unsubs.agentUnsub();
+
+      expect(warn).not.toHaveBeenCalled();
+      expect(observe).toHaveBeenCalledTimes(phase === "during close" ? 1 : 0);
+      expect(handler).toHaveBeenCalledTimes(phase === "during close" ? 10 : 9);
+      emit();
+      expect(handler).toHaveBeenCalledTimes(phase === "during close" ? 10 : 9);
+      observe.mockRestore();
+    },
+  );
+
+  it.each(["same-id reset", "missing row", "missing row without ID", "missing projection"])(
+    "does not attach a successor row after a queued %s",
+    async (change) => {
+      const prepared = createDeferred();
+      const original = { sessionId: "original" };
+      let current: typeof original | undefined = change.startsWith("missing row")
+        ? undefined
+        : original;
+      let admitted = change !== "missing projection";
+      const projection = {
+        capture: () => current,
+        ensureMaterialized: () => prepared.promise,
+        withPreparedExactRows: async (_queries: unknown, consume: (read: unknown) => unknown) => {
+          await prepared.promise;
+          return { kind: "complete" as const, value: consume(undefined) };
         },
-        { dispose: vi.fn() },
-      ),
-    );
-    unsubs = startGatewayEventSubscriptions({
-      ...createParams(),
-      getSessionRowProjection: () => (admitted ? projection : undefined),
-    });
-    emitAgentEvent({
-      runId: "queued-owner",
-      agentId: "main",
-      sessionKey: "agent:main:queued",
-      sessionId: change === "missing row without ID" ? undefined : "original",
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: 1 },
-    });
-    current = { sessionId: change === "replacement" ? "successor" : "original" };
-    admitted = true;
-    prepared.resolve();
-    await waitForFast(() => expect(delivered).toHaveBeenCalledWith(null));
-  });
+        isCurrent: (record: typeof original) => record === current,
+        snapshot: () => ({ row: current ? { key: "agent:main:queued", ...current } : null }),
+      } as unknown as SessionRowProjection;
+      const delivered = vi.fn();
+      agentEventHandlerMocks.create.mockImplementation((options: AgentEventHandlerOptions) =>
+        Object.assign(
+          (event: AgentEventPayload) => {
+            delivered(
+              options.loadGatewaySessionLifecycleSnapshotForEvent?.("agent:main:queued", {
+                agentId: "main",
+                ownerEvent: event,
+              }).row,
+            );
+          },
+          { dispose: vi.fn() },
+        ),
+      );
+      unsubs = startGatewayEventSubscriptions({
+        ...createParams(),
+        getSessionRowProjection: () => (admitted ? projection : undefined),
+      });
+      emitAgentEvent({
+        runId: "queued-owner",
+        agentId: "main",
+        sessionKey: "agent:main:queued",
+        sessionId: change === "missing row without ID" ? undefined : "original",
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 1 },
+      });
+      current = { sessionId: "original" };
+      admitted = true;
+      prepared.resolve();
+      await waitForFast(() => expect(delivered).toHaveBeenCalledWith(null));
+    },
+  );
 
   registerActivitySummaryPublicationTests(
     (projection, signal) => {
@@ -377,19 +410,6 @@ describe("startGatewayEventSubscriptions", () => {
     releaseAgentRunContext(runId, claimId);
   });
 
-  it("disposes a loaded agent event handler on unsubscribe", async () => {
-    const dispose = vi.fn();
-    const handler = Object.assign(vi.fn(), { dispose });
-    agentEventHandlerMocks.create.mockReturnValue(handler);
-    unsubs = startGatewayEventSubscriptions(createParams());
-
-    emitAgentEvent({ runId: "run-dispose", stream: "lifecycle", data: { phase: "error" } });
-    await waitForFast(() => expect(handler).toHaveBeenCalledOnce());
-
-    await unsubs.agentUnsub();
-    expect(dispose).toHaveBeenCalledOnce();
-  });
-
   it("uses the persisted bare-key owner for ownerless active-run projections", async () => {
     runtimeConfigState.value = {
       session: { scope: "global", store: "/tmp/openclaw-owned-sessions.sqlite" },
@@ -427,6 +447,13 @@ describe("startGatewayEventSubscriptions", () => {
         agentId: "ops",
       }),
     ).toEqual({ active: true, runIds: ["run-ops"] });
+    await unsubs.agentUnsub();
+    expect(handler.dispose).toHaveBeenCalledOnce();
+  });
+
+  registerSubscriptionRegistrationTests((params) => {
+    unsubs = startGatewayEventSubscriptions(params);
+    return unsubs;
   });
 
   it("drives a registered chat run through the terminal persistence transition table", async () => {
@@ -575,6 +602,12 @@ describe("startGatewayEventSubscriptions", () => {
             return { ok: false as const, error };
           },
         );
+        await awaitGateBeforeSettlement(
+          firstDispatchEntered.promise,
+          firstDrain,
+          "Terminal ownership settled before its held dispatch was released",
+        );
+        expect(firstSettled).toBe(false);
         const recovery = {
           runId,
           sessionKey,
@@ -602,12 +635,6 @@ describe("startGatewayEventSubscriptions", () => {
           );
         }
         const currentState = readLifecycleState(current);
-        await awaitGateBeforeSettlement(
-          firstDispatchEntered.promise,
-          firstDrain,
-          "Terminal ownership settled before its held dispatch was released",
-        );
-        expect(firstSettled).toBe(false);
         if (change !== "removed") {
           await successorDispatchEntered.promise;
         }
@@ -929,82 +956,23 @@ describe("startGatewayEventSubscriptions", () => {
     }
   });
 
-  it("logs real asynchronous transcript failures and recovers the broadcast queue", async () => {
-    transcriptBroadcastMocks.useActualHandler = true;
-    const failedRead = createDeferred();
-    const persistenceFailure = new Error("session transcript read failed");
-    const transcriptPosition = { source: "recovered-generation", rawSeq: 7 };
-    const storedMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "visible answer" }],
-      __openclaw: { transcriptPosition },
-    };
-    transcriptBroadcastMocks.readMessageById
-      .mockImplementationOnce(async () => {
-        await failedRead.promise;
-        throw persistenceFailure;
-      })
-      .mockResolvedValueOnce({ found: true, oversized: false, seq: 2, message: storedMessage });
+  registerTranscriptPublicationTests({
+    createParams,
+    installHandlerFactory: (factory) => agentEventHandlerMocks.create.mockImplementation(factory),
+    start: (params) => {
+      unsubs = startGatewayEventSubscriptions(params);
+      return unsubs;
+    },
+    transcriptBroadcastMocks,
+    warn,
+  });
 
-    const params = createParams();
-    params.sessionEventSubscribers.subscribe("conn-transcript");
-    unsubs = startGatewayEventSubscriptions(params);
-
-    const emitMessage = (messageId: string) =>
-      emitSessionTranscriptUpdate({
-        sessionFile: "/tmp/openclaw-transcript-dispatch.sqlite",
-        sessionKey: "agent:main:main",
-        message: { role: "assistant", content: [{ type: "text", text: "stale queued answer" }] },
-        messageId,
-        target: {
-          agentId: "main",
-          sessionId: "sess-transcript",
-          sessionKey: "agent:main:main",
-          storePath: "/tmp/openclaw-transcript-dispatch-sessions.json",
-        },
-      });
-
-    const admission = tryBeginGatewayRootWorkAdmission("test:transcript-publisher");
-    if (!admission) {
-      throw new Error("Transcript publisher admission was closed");
-    }
-    await admission.run(async () => emitMessage("failed-message"));
-    admission.release();
-    await waitForFast(() =>
-      expect(transcriptBroadcastMocks.readMessageById).toHaveBeenCalledOnce(),
-    );
-    try {
-      expect(getActiveGatewayRootWorkCount()).toBe(1);
-    } finally {
-      failedRead.resolve();
-    }
-    await waitForFast(() =>
-      expect(warn).toHaveBeenCalledWith("Transcript update dispatch failed", {
-        sessionKey: "agent:main:main",
-        error: persistenceFailure,
-      }),
-    );
-    expect(params.broadcastToConnIds).not.toHaveBeenCalled();
-
-    emitMessage("recovered-message");
-    await waitForFast(() => expect(params.broadcastToConnIds).toHaveBeenCalledOnce());
-    expect(params.broadcastToConnIds).toHaveBeenCalledWith(
-      "session.message",
-      expect.objectContaining({
-        sessionKey: "agent:main:main",
-        messageId: "recovered-message",
-        messageSeq: 2,
-        message: expect.objectContaining({
-          content: storedMessage.content,
-          __openclaw: expect.objectContaining({ transcriptPosition }),
-        }),
-      }),
-      new Set(["conn-transcript"]),
-      undefined,
-    );
-    expect(transcriptBroadcastMocks.readMessageById).toHaveBeenCalledTimes(2);
-    expect(warn).toHaveBeenCalledOnce();
-    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  registerAssistantTailSubscriptionTests({
+    createParams,
+    installHandlerFactory: (factory) => agentEventHandlerMocks.create.mockImplementation(factory),
+    start: (params) => {
+      unsubs = startGatewayEventSubscriptions(params);
+    },
   });
 
   it("broadcasts progress-card retirement without session-list subscribers", () => {
@@ -1019,18 +987,6 @@ describe("startGatewayEventSubscriptions", () => {
       "progressCard.changed",
       { sessionKey: "agent:work:global", revision: null },
       { sessionKeys: ["global"], agentId: "work" },
-    );
-  });
-
-  it("logs lifecycle handler failures", async () => {
-    unsubs = startGatewayEventSubscriptions(createParams());
-
-    emitSessionLifecycleEvent({ sessionKey: "agent:main:main", reason: "created" });
-
-    await waitForFast(() => expect(warn).toHaveBeenCalledTimes(1));
-    expect(warn).toHaveBeenCalledWith(
-      "Lifecycle event dispatch failed",
-      expect.objectContaining({ sessionKey: "agent:main:main" }),
     );
   });
 });

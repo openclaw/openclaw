@@ -235,12 +235,11 @@ pub(crate) fn normalize_gateway_url(raw: &str) -> Result<Url, String> {
         "Enter a valid Gateway URL, such as https://gateway.example.com.".to_string()
     })?;
     match url.scheme() {
-        "http" => url
-            .set_scheme("ws")
-            .map_err(|_| "Gateway URL could not be normalized.".to_string())?,
-        "https" => url
-            .set_scheme("wss")
-            .map_err(|_| "Gateway URL could not be normalized.".to_string())?,
+        "http" | "https" => {
+            let scheme = if url.scheme() == "http" { "ws" } else { "wss" };
+            url.set_scheme(scheme)
+                .map_err(|_| "Gateway URL could not be normalized.".to_string())?;
+        }
         "ws" | "wss" => {}
         _ => return Err("Gateway URL must use http://, https://, ws://, or wss://.".to_string()),
     }
@@ -363,8 +362,7 @@ pub(crate) fn config_path() -> Result<PathBuf, String> {
     }
     let state_dir = env::var_os("OPENCLAW_STATE_DIR")
         .filter(|path| !path.is_empty())
-        .map(PathBuf::from)
-        .map(Ok)
+        .map(|path| Ok(PathBuf::from(path)))
         .unwrap_or_else(|| crate::cli::openclaw_home().map_err(|error| error.to_string()))?;
     Ok(state_dir.join("openclaw.json"))
 }
@@ -426,10 +424,9 @@ fn file_secret(
     if id != "value"
         && (!id.starts_with('/')
             || id
-                .as_bytes()
-                .windows(2)
-                .any(|pair| pair[0] == b'~' && pair[1] != b'0' && pair[1] != b'1')
-            || id.ends_with('~'))
+                .split('~')
+                .skip(1)
+                .any(|escape| !escape.starts_with(['0', '1'])))
     {
         return Err(());
     }
@@ -556,11 +553,12 @@ fn configured_secret(
     if !valid_secret_provider(provider_name) {
         return Err(unavailable());
     }
-    let configured_provider = root
+    let provider = root
         .pointer("/secrets/providers")
         .and_then(Value::as_object)
         .and_then(|providers| providers.get(provider_name))
-        .and_then(Value::as_object);
+        .and_then(Value::as_object)
+        .filter(|provider| provider.get("source").and_then(Value::as_str) == Some(source));
     match source {
         "env" => {
             if !valid_secret_name(id) {
@@ -570,9 +568,6 @@ fn configured_secret(
                 .pointer("/secrets/defaults/env")
                 .and_then(Value::as_str)
                 .unwrap_or("default");
-            let provider = configured_provider.filter(|provider| {
-                provider.get("source").and_then(Value::as_str) == Some("env")
-            });
             if provider.is_none() && provider_name != default_provider {
                 return Err(unavailable());
             }
@@ -591,10 +586,7 @@ fn configured_secret(
                 .ok_or_else(unavailable)
         }
         "file" => {
-            let provider = configured_provider
-                .filter(|provider| provider.get("source").and_then(Value::as_str) == Some("file"))
-                .ok_or_else(unavailable)?;
-            file_secret(value, provider)
+            file_secret(value, provider.ok_or_else(unavailable)?)
                 .ok()
                 .filter(|secret| !secret.trim().is_empty())
                 .map(Some)
@@ -610,14 +602,17 @@ fn configured_secret(
 fn configured_tls_fingerprint(remote: &Map<String, Value>) -> Result<Option<String>, String> {
     match remote.get("tlsFingerprint") {
         None | Some(Value::Null) => Ok(None),
-        Some(Value::String(value))
-            if value.trim().len() == 64
-                && value.trim().bytes().all(|byte| byte.is_ascii_hexdigit()) =>
-        {
-            Ok(Some(value.trim().to_string()))
-        }
+        Some(Value::String(value)) => normalize_tls_fingerprint(value).map(Some),
         Some(_) => Err("Gateway TLS fingerprint must be 64 hexadecimal characters.".to_string()),
     }
+}
+
+pub(crate) fn normalize_tls_fingerprint(value: &str) -> Result<String, String> {
+    let value = value.trim();
+    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("Gateway TLS fingerprint must be 64 hexadecimal characters.".to_string());
+    }
+    Ok(value.to_string())
 }
 
 pub(crate) fn resolve_remote_tls_fingerprint(
@@ -625,11 +620,7 @@ pub(crate) fn resolve_remote_tls_fingerprint(
     gateway_url: &Url,
 ) -> Result<(), String> {
     if let Some(fingerprint) = &request.tls_fingerprint {
-        let value = fingerprint.trim();
-        if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            return Err("Gateway TLS fingerprint must be 64 hexadecimal characters.".to_string());
-        }
-        request.tls_fingerprint = Some(value.to_string());
+        request.tls_fingerprint = Some(normalize_tls_fingerprint(fingerprint)?);
         return Ok(());
     }
     let Some(root) = read_config(&config_path()?)? else {
@@ -712,14 +703,11 @@ fn load_saved_remote_at(path: &Path) -> Result<Option<RemoteGatewayRequest>, Str
     let Some(root) = read_config(path)? else {
         return Ok(None);
     };
-    let Some(gateway) = root.get("gateway").and_then(Value::as_object) else {
-        return Ok(None);
-    };
-    if gateway.get("mode").and_then(Value::as_str) != Some("remote") {
+    if root.pointer("/gateway/mode").and_then(Value::as_str) != Some("remote") {
         return Ok(None);
     }
-    let remote = gateway
-        .get("remote")
+    let remote = root
+        .pointer("/gateway/remote")
         .and_then(Value::as_object)
         .ok_or_else(|| {
             "Remote Gateway configuration is missing its connection settings.".to_string()
@@ -874,7 +862,7 @@ pub(crate) fn save_config_at(
     let mut root = read_config(path)?.unwrap_or_else(|| json!({}));
     let root_object = root
         .as_object_mut()
-        .ok_or_else(|| "OpenClaw configuration must contain a JSON object.".to_string())?;
+        .expect("read_config admits only JSON objects");
     let gateway = root_object
         .entry("gateway")
         .or_insert_with(|| json!({}))
@@ -888,12 +876,9 @@ pub(crate) fn save_config_at(
         .unwrap_or_default();
     let same_endpoint = old_remote.get("url").and_then(Value::as_str) == Some(gateway_url.as_str())
         && old_remote.get("sshTarget").and_then(Value::as_str) == request.ssh_target.as_deref();
-    let credentials = credential_endpoint_matches(&old_remote, request).then(|| {
-        (
-            old_remote.get("token").cloned(),
-            old_remote.get("password").cloned(),
-        )
-    });
+    let credentials = credential_endpoint_matches(&old_remote, request);
+    let preserved_credentials = ["token", "password"]
+        .map(|key| (key, old_remote.get(key).filter(|_| credentials).cloned()));
     let mut remote = if same_endpoint {
         old_remote
     } else {
@@ -901,14 +886,10 @@ pub(crate) fn save_config_at(
     };
     // Credential identity is independent of whole-map retention. Copy raw refs
     // across URL normalization/forward-port changes, never their resolved bytes.
-    remote.remove("token");
-    remote.remove("password");
-    if let Some((token, password)) = credentials {
-        if let Some(token) = token {
-            remote.insert("token".to_string(), token);
-        }
-        if let Some(password) = password {
-            remote.insert("password".to_string(), password);
+    for (key, value) in preserved_credentials {
+        remote.remove(key);
+        if let Some(value) = value {
+            remote.insert(key.to_string(), value);
         }
     }
     remote.insert("url".to_string(), json!(gateway_url.as_str()));
@@ -923,10 +904,9 @@ pub(crate) fn save_config_at(
             json!(request.remote_port.unwrap_or(DEFAULT_GATEWAY_PORT)),
         );
     } else {
-        remote.remove("sshTarget");
-        remote.remove("sshIdentity");
-        remote.remove("remotePort");
-        remote.remove("sshHostKeyPolicy");
+        for key in ["sshTarget", "sshIdentity", "remotePort", "sshHostKeyPolicy"] {
+            remote.remove(key);
+        }
     }
     if let Some(token) = normalize_optional(request.token.clone()) {
         remote.remove("password");
@@ -981,7 +961,7 @@ pub(crate) fn save_config_at(
     result
 }
 
-fn normalize_optional(value: Option<String>) -> Option<String> {
+pub(crate) fn normalize_optional(value: Option<String>) -> Option<String> {
     value
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
@@ -1064,31 +1044,22 @@ pub(crate) fn start_tunnel(
     if cancelled() {
         return Err("The SSH connection was superseded.".to_string());
     }
+    for option in [
+        "BatchMode=yes",
+        "StrictHostKeyChecking=yes",
+        "ExitOnForwardFailure=yes",
+        "ConnectTimeout=5",
+        "ControlMaster=no",
+        "ControlPath=none",
+        "ControlPersist=no",
+        "ForkAfterAuthentication=no",
+        "ServerAliveInterval=15",
+        "ServerAliveCountMax=3",
+    ] {
+        command.args(["-o", option]);
+    }
     let child = command
-        .args([
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "StrictHostKeyChecking=yes",
-            "-o",
-            "ExitOnForwardFailure=yes",
-            "-o",
-            "ConnectTimeout=5",
-            "-o",
-            "ControlMaster=no",
-            "-o",
-            "ControlPath=none",
-            "-o",
-            "ControlPersist=no",
-            "-o",
-            "ForkAfterAuthentication=no",
-            "-o",
-            "ServerAliveInterval=15",
-            "-o",
-            "ServerAliveCountMax=3",
-            "--",
-            &target,
-        ])
+        .args(["--", &target])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())

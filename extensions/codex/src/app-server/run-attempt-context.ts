@@ -52,7 +52,6 @@ export async function prepareCodexAttemptContext(
     agentDir,
     usesSupervisionConnection,
     resolvedWorkspace,
-    initialInactiveThreadBootstrapBindingForcedFreshStart,
     sandbox,
   } = connection;
   const { toolBridge } = attemptTools;
@@ -222,14 +221,10 @@ export async function prepareCodexAttemptContext(
     promptContextRange: undefined as CodexProjectedContextRange | undefined,
     developerInstructions: baseDeveloperInstructions,
     contextEngineProjection: undefined as CodexContextEngineThreadBootstrapProjection | undefined,
-    precomputedStaleBindingContinuityProjectionApplied: false,
-    staleBindingContinuityForcedFreshStart: false,
     // Set by the no-engine continuity appliers; gates calibration recording so a
     // dense direct or active-engine prompt can never persist a density sample
     // that later shrinks continuity history it did not measure.
     noEngineContinuityProjectionApplied: false,
-    inactiveThreadBootstrapBindingForcedFreshStart:
-      initialInactiveThreadBootstrapBindingForcedFreshStart,
   };
   const codexContextProjectionMaxChars = resolveCodexContextEngineProjectionMaxChars({
     contextTokenBudget: effectiveContextTokenBudget,

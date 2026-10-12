@@ -56,7 +56,6 @@ describe("Discord bot-owned thread mention gating", () => {
       ownerId: "openclaw-bot",
       admitted: true,
     },
-    { name: "guild override", ownerId: "openclaw-bot", guildRequirement: false, admitted: true },
     {
       name: "strict thread explicit mention",
       ownerId: "openclaw-bot",

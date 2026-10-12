@@ -65,15 +65,19 @@ export class MockProvider implements VoiceCallProvider {
   }
 
   private normalizeEvent(evt: Partial<NormalizedEvent>): NormalizedEvent | null {
-    if (!evt.type || !evt.callId) {
+    if (!evt.type || typeof evt.callId !== "string" || !evt.callId) {
       return null;
     }
 
     const base = {
       id: evt.id ?? crypto.randomUUID(),
       callId: evt.callId,
-      providerCallId: evt.providerCallId,
+      providerCallId: typeof evt.providerCallId === "string" ? evt.providerCallId : undefined,
       timestamp: evt.timestamp ?? Date.now(),
+      direction:
+        evt.direction === "inbound" || evt.direction === "outbound" ? evt.direction : undefined,
+      from: typeof evt.from === "string" ? evt.from : undefined,
+      to: typeof evt.to === "string" ? evt.to : undefined,
     };
 
     switch (evt.type) {

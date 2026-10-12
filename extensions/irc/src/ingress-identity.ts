@@ -70,7 +70,7 @@ function normalizeIrcNickHostEntry(value: string): string | null {
 
 function normalizeIrcNickUserEntry(value: string): string | null {
   const normalized = normalizeIrcAllowEntry(value);
-  if (!normalized || normalized === "*" || !isHostlessNickUser(normalized)) {
+  if (!isHostlessNickUser(normalized)) {
     return null;
   }
   return normalized;
@@ -92,9 +92,7 @@ export function createIrcIngressSubject(message: IrcInboundMessage) {
     stableId: stableCandidates[stableCandidates.length - 1] ?? nick,
     aliases: {
       "irc-id-nick-user": candidates.find((candidate) => isHostlessNickUser(candidate)),
-      "irc-id-nick-host": stableCandidates.find(
-        (candidate) => !candidate.includes("!") && candidate.includes("@"),
-      ),
+      "irc-id-nick-host": stableCandidates.find((candidate) => !candidate.includes("!")),
       "irc-nick": nick,
     },
   };

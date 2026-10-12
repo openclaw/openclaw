@@ -167,7 +167,7 @@ function formatPressureSummary(pressure: MemoryPressure): string {
 function logMemoryPressure(pressure: MemoryPressure): void {
   const nextStep =
     pressure.level === "critical"
-      ? "nextStep=run openclaw gateway diagnostics export, inspect an existing bundle with openclaw gateway stability --bundle latest, or on Node sample allocations with openclaw gateway call diagnostics.heapProfile --timeout 30000."
+      ? "nextStep=run openclaw gateway diagnostics export, inspect an existing bundle with openclaw gateway stability --bundle latest, or sample allocations with openclaw gateway call diagnostics.heapProfile --timeout 30000."
       : "nextStep=run openclaw gateway status --deep and openclaw gateway diagnostics export; restart gateway if pressure persists";
   const message =
     `memory pressure: level=${pressure.level} reason=${pressure.reason}` +

@@ -349,6 +349,11 @@ enabled.
 latency, and request fields such as method, URL, timeout, proxy, and policy)
 uses `debug` by default. Responses with a non-2xx status or at least one second
 of elapsed time remain at `info`, and transport failures remain warnings.
+`[model-fetch]` and `[responses]` report caller-signaled `AbortError` as `aborted`
+at `debug` (or `info` with the targeted flags), rather than as provider failures.
+The requesting layer owns the final cancellation or timeout outcome; an SDK can
+also abort its fetch when its own deadline expires. Explicit `TimeoutError`
+reasons and failures without a caller abort remain warnings.
 Elapsed time includes local-service preparation and waiting for response headers,
 but excludes streaming the response body. The targeted debug flags above promote
 start and fast successful response metadata to `info` when troubleshooting.
@@ -382,6 +387,24 @@ Talk lifecycle log records also flow to diagnostics-otel log export when
 OpenTelemetry log export is enabled, using the same bounded attributes as file
 logs. Configure `diagnostics.otel.logsExporter` to choose OTLP, stdout JSONL, or
 both sinks.
+
+### Chat-send startup
+
+The Gateway logs `slow chat send` when acknowledgement or startup takes at least
+one second. `stage=request` ends at acknowledgement; `stage=startup` ends when
+agent execution starts. `replyInitialization` covers inbound dispatch through
+session preparation. Later prompt, skills, tool catalog, model/auth, and runtime
+preparation belong to `preparation`, before the first model request.
+
+`detail.*` fields attribute those intervals using the existing reply and agent
+preparation spans, without enabling timeline file logging. They include session
+binding, cold transcript hydration, writer admission, snapshot reads, and commit,
+alongside workspace, Git baseline, hooks, and embedded preparation when used.
+`reply.session.writer` includes both queue waiting and `reply.session.initialize`;
+their difference indicates the writer wait. Parent and child spans overlap and
+must not be summed. Unfinished spans stop at the startup boundary; later model
+and tool latency does not extend them. Structured `chat.send.detail.*` phase
+events use the same durations when diagnostics are enabled.
 
 ### Embedded attempt preparation
 
@@ -619,13 +642,48 @@ Gateway `status` responses include `workerPools.transcriptReconciliation` and
 `workerPools.modelCatalog`. Each reports `maxWorkers`, `workers`, `workersCreated`,
 `activeTasks`, and `pendingTasks` from the pool owner. Both Gateway pools admit one
 worker at a time. Pending tasks include queued and executing work; creation counts
-belong to the current pool lifetime. The startup trace's `memory.ready` record also
-includes these pool counts.
+belong to the current pool lifetime. `workerPools.modelCatalog` also reports
+`workerFailures`: how many model-catalog workers have failed (run out of memory,
+exited, or timed out) since the Gateway started. A failed pool is replaced, so this
+count survives replacement. Each failure also logs one
+`model catalog worker failed` warning when it happens, with the worker's reason and
+the number of agent catalogs to republish on a new worker. A worker that exits while
+idle is counted and logged at once; the next catalog request replaces it.
+Shutdown and plugin retirement are not counted. The startup trace's `memory.ready`
+record also includes these pool counts.
 
 These figures describe worker and task counts. Process RSS includes every isolate
 and native allocation; Node's process heap flags can override a worker's requested
 heap limits. Use constructor or per-isolate measurements when attributing memory
 growth to a particular worker.
+
+### Slow Git content reads
+
+With process diagnostics and info-level logging enabled, `git/worker` emits
+`slow Git content read` after a diff, diff-baseline, or PR branch-facts operation
+lasting at least one second. The journal message includes the same fields as the
+structured file log. Records are limited to 60 per minute.
+
+`operation` identifies the caller family. `checkoutId` is a truncated SHA-256 of
+the absolute checkout path; linked checkouts have different IDs. `checkoutClass`
+is `managed` when the caller supplies managed-index ownership, otherwise
+`unspecified`. Paths, refs, command arguments, and output contents are not logged.
+
+`workerQueueWaitMs` measures admission wait (null if never dispatched).
+`firstHostRequestMs` includes that wait plus worker startup and work before the
+first host request. `workerMs` covers subsequent worker and host work;
+`settlementMs` covers final cleanup. `summedGitQueueWaitMs` measures waiting for
+shared content-process slots, while `summedGitWallMs` sums command execution
+including process settlement. Concurrent commands overlap, so their sum can
+exceed operation duration; these are wall times, not CPU times.
+
+`gitCommandCount` counts started host command requests, not Git's own subprocesses.
+`gitStdoutBytes` and `gitStderrBytes` count captured bytes, excluding any truncated
+output. `gitTimeoutCount` counts returned timeouts; `slowestGitCommand` records
+the longest command's allowlisted name, diff mode when applicable, duration, and
+termination. An operation can return successfully after a command times out
+because optional statistics fall back to unknown. Artifact and maintenance
+operations contribute to aggregate Git worker metrics but do not emit this log.
 
 ### Slow worktree cleanup
 
@@ -974,6 +1032,22 @@ capturing raw prompt or response content:
 
 These fields are available to diagnostic snapshots, model-call plugin hooks, and
 OTEL model-call spans/metrics when diagnostics export is enabled.
+
+Prompt-cache drop warnings include `requestGapMs` (start-to-start time since the
+session's previous request) and `promptTokens` when reported by the provider.
+`providerPrefix` compares final encoded request segments against the last request
+with usable cache-read usage: system instructions, tools, history messages, and
+other request parameters. It names the first differing segment or `prefix-match`
+when the previous prefix is unchanged. A match does not prove provider cache
+availability or retention. Unsupported transports and missing baselines report
+`unavailable`.
+
+Only hashes are retained, within the existing 512-entry diagnostic tracker.
+History comparison keeps the first 512 message hashes and one remaining-tail
+hash. A changed tail reports `message-tail:512`; a growing or shrinking tail
+reports `unverified-after:512` because its earlier prefix cannot be verified.
+Background sessions sharing a provider cache key keep separate diagnostic
+baselines. No prompt content or digest values appear in these warnings.
 
 ### Console styles
 

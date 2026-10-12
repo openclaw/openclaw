@@ -44,13 +44,11 @@ const profileRateLimiter = createFixedWindowRateLimiter({
 
 const publishLocks = new KeyedAsyncQueue();
 
-// NIP-05 format: user@domain.com
 const nip05FormatSchema = z
   .string()
   .regex(/^[a-z0-9._-]+@[a-z0-9.-]+\.[a-z]{2,}$/i, "Invalid NIP-05 format (user@domain.com)")
   .optional();
 
-// LUD-16 Lightning address format: user@domain.com
 const lud16FormatSchema = z
   .string()
   .regex(/^[a-z0-9._-]+@[a-z0-9.-]+\.[a-z]{2,}$/i, "Invalid Lightning address format")
@@ -360,7 +358,6 @@ async function handleUpdateProfile(
       return await publishNostrProfile(accountId, mergedProfile);
     });
 
-    // Only persist if at least one relay succeeded
     if (result.successes.length > 0) {
       await getPluginRuntimeGatewayRequestScope()?.revalidate?.();
       await ctx.updateConfigProfile(accountId, mergedProfile);

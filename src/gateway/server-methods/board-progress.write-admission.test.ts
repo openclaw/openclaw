@@ -10,6 +10,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
@@ -34,7 +35,7 @@ const methods = [
   "progressCard.put",
 ] as const;
 const cases = methods.flatMap((method) =>
-  (["allow", "abort", "guard", "route"] as const).map((change) => ({
+  (["allow", "guard"] as const).map((change) => ({
     method,
     change,
     cold: false,
@@ -51,7 +52,16 @@ describe("board and progress-card database write admission", () => {
         change: "allow-worker" as const,
         cold: false,
       })),
-    ...methods.map((method) => ({ method, change: "abort" as const, cold: true })),
+    ...(["board.update", "board.widget.grant", "progressCard.put"] as const).map((method) => ({
+      method,
+      change: "abort" as const,
+      cold: true,
+    })),
+    ...(["board.widget.put", "progressCard.put"] as const).map((method) => ({
+      method,
+      change: "route" as const,
+      cold: false,
+    })),
     { method: "progressCard.put" as const, change: "lifecycle" as const, cold: false },
   ])(
     "queues registered $method behind a native reservation ($change, cold=$cold)",
@@ -166,23 +176,17 @@ describe("board and progress-card database write admission", () => {
             grantReads.push(sql);
           }
         });
-        const createAdmission = admission.createSqliteWorkerOperationAdmission;
-        const grants = vi
-          .spyOn(admission, "createSqliteWorkerOperationAdmission")
-          .mockImplementation((admit, attachment) =>
-            createAdmission((admissionRequest, grant) => {
-              inGrant =
-                admissionRequest.stage === "transaction" || admissionRequest.stage === "commit";
-              if (inGrant) {
-                stages.push(admissionRequest.stage);
-              }
-              try {
-                admit(admissionRequest, grant);
-              } finally {
-                inGrant = false;
-              }
-            }, attachment),
-          );
+        const grants = probe.admission(admission, (admissionRequest, grant, admit) => {
+          inGrant = admissionRequest.stage === "transaction" || admissionRequest.stage === "commit";
+          if (inGrant) {
+            stages.push(admissionRequest.stage);
+          }
+          try {
+            admit(admissionRequest, grant);
+          } finally {
+            inGrant = false;
+          }
+        });
         const reservation = runOpenClawAgentWorkerWrite(database, async () => {
           request = handleGatewayRequest({
             req: { type: "req", id: "admission", method, params },

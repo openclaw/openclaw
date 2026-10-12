@@ -1,5 +1,3 @@
-// Resolution helpers derive media-understanding timeouts, prompts, byte/char
-// caps, scope decisions, model entries, and concurrency.
 import {
   MAX_TIMER_TIMEOUT_MS,
   resolveTimerTimeoutMs,
@@ -67,7 +65,6 @@ export function resolveCliModelEntry(
   return ok({ command, args });
 }
 
-/** Default per-provider media-understanding runtime timeout in milliseconds. */
 const DEFAULT_MEDIA_RUNTIME_TIMEOUT_MS = 30_000;
 const MIN_MEDIA_TIMEOUT_MS = 1000;
 
@@ -107,7 +104,6 @@ function resolveMaxChars(params: MediaEntryRunParams): number | undefined {
   return DEFAULT_MAX_CHARS_BY_CAPABILITY[capability];
 }
 
-/** Resolves the effective input byte cap for a model entry and capability. */
 export function resolveMaxBytes(params: MediaEntryRunParams): number {
   const configured =
     params.entry.maxBytes ??
@@ -153,7 +149,6 @@ export function resolveEntryRunOptions(params: MediaEntryRunParams): {
   };
 }
 
-/** Maps the message context to an allow/deny decision for configured media scope rules. */
 export function resolveScopeDecision(params: {
   scope?: MediaUnderstandingScopeConfig;
   ctx: MsgContext;
@@ -166,7 +161,6 @@ export function resolveScopeDecision(params: {
   });
 }
 
-/** Resolves configured model entries that can handle the requested media capability. */
 export function resolveModelEntries(params: {
   cfg: OpenClawConfig;
   capability: MediaUnderstandingCapability;
@@ -218,7 +212,6 @@ function preferredMediaModelRank(entry: MediaUnderstandingModelConfig, preferred
   return preferred === model ? 1 : 0;
 }
 
-/** Resolves the bounded media-understanding task concurrency from config. */
 export function resolveConcurrency(cfg: OpenClawConfig): number {
   const configured = cfg.tools?.media?.concurrency;
   if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {

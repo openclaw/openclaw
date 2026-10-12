@@ -24,7 +24,6 @@ import {
   getOptionalBrowserStateRuntime,
   isBrowserStateRuntimeCurrent,
   readCurrentBrowserState,
-  type BrowserDashboardOperation,
   type BrowserSessionTabAuthority,
   type BrowserStateRuntime,
 } from "./browser-runtime-state.js";
@@ -308,25 +307,7 @@ async function materialize(
   } catch (error) {
     // Creation owns this exact tab even if the caller or board disappears while opening it.
     if (ownership?.status === "durable") {
-      const cleanupAuthority = { runtime: authority.runtime };
       try {
-        await trackSessionBrowserTab({
-          sessionKey: definition.sessionKey,
-          targetId: ownership.nativeTargetId,
-          profile: profile.name,
-          ownership,
-          authority: cleanupAuthority,
-          dashboard: {
-            sessionKey: definition.sessionKey,
-            agentId: definition.agentId,
-            name: definition.name,
-            instanceId: definition.instanceId,
-            url: definition.url,
-            state: "released",
-          },
-        });
-      } catch (trackingError) {
-        // A full or unavailable store must still attempt cleanup on the captured endpoint.
         const outcome = await closeTrackedCdpTarget({
           profileName: profile.name,
           cdpUrl: profile.cdpUrl,
@@ -337,26 +318,15 @@ async function materialize(
           ssrfPolicy,
         });
         if (outcome.status === "unavailable" || outcome.status === "cancelled") {
-          throw new AggregateError(
-            [error, trackingError],
-            "Dashboard creation failed and its new tab could neither be retained nor closed",
-            { cause: trackingError },
-          );
+          throw new Error(`New dashboard tab cleanup ${outcome.status}`, { cause: error });
         }
-        throw error;
-      }
-      const released = (await tabsForDefinition(definition, cleanupAuthority)).find(
-        (tab) =>
-          tab.nativeTargetId === ownership.nativeTargetId &&
-          tab.profileFingerprint === ownership.profileFingerprint &&
-          tab.browserInstanceFingerprint === ownership.browserInstanceFingerprint,
-      );
-      if (!released || !(await releaseTab(released, cleanupAuthority)).released) {
-        throw new Error(
-          "Dashboard creation failed; its retained cleanup record will retry closing the new tab",
-          {
-            cause: error,
-          },
+      } catch (cleanupError) {
+        // A simultaneous creation and close failure leaves only this new tab,
+        // not a speculative durable cleanup workflow.
+        throw new AggregateError(
+          [error, cleanupError],
+          "Dashboard creation failed; close its newly opened tab manually.",
+          { cause: cleanupError },
         );
       }
     }
@@ -432,7 +402,6 @@ export async function assertBrowserDashboardTargetCurrent(
 
 async function serializeDashboardOperation(
   request: BrowserDashboardRequest,
-  kind: "materialize" | "stop",
   authority: BrowserDashboardAuthority,
   execute: (
     definition: BrowserDashboardDefinition,
@@ -445,42 +414,13 @@ async function serializeDashboardOperation(
   const operations = runtime.dashboardOperations;
   const key = operationKey(definition);
   const previous = operations.get(key);
-  let materializationFailure: BrowserDashboardOperation["materializationFailure"];
   const promise = (async () => {
+    // A failed open does not poison queued callers; each gets its own attempt.
     await previous?.promise.catch(() => undefined);
-    if (kind === "materialize") {
-      materializationFailure = previous?.materializationFailure;
-    }
     const current = await requireDefinition(definition, boundAuthority);
-    if (
-      materializationFailure &&
-      !materializationFailure.callerCancelled &&
-      sameBrowserDashboardDefinition(materializationFailure.definition, current)
-    ) {
-      throw materializationFailure.error;
-    }
-    materializationFailure = undefined;
-    try {
-      return await execute(current, boundAuthority);
-    } catch (error) {
-      if (kind === "materialize") {
-        let callerCancelled = false;
-        try {
-          assertAuthority(boundAuthority);
-        } catch {
-          callerCancelled = true;
-        }
-        materializationFailure = { error, definition: current, callerCancelled };
-      }
-      throw error;
-    }
+    return await execute(current, boundAuthority);
   })();
-  const pending = {
-    promise,
-    get materializationFailure() {
-      return materializationFailure;
-    },
-  };
+  const pending = { promise };
   // Publish each admitted successor before awaiting it, so Stop follows the full queue.
   operations.set(key, pending);
   try {
@@ -497,15 +437,11 @@ export async function requestBrowserDashboard(
   request: BrowserDashboardRequest & { resume?: boolean },
   authority: BrowserDashboardAuthority = {},
 ): Promise<BrowserDashboardResponse> {
-  return await serializeDashboardOperation(
-    request,
-    "materialize",
-    authority,
-    (definition, current) =>
-      withBrowserRequestScope(
-        { managedOnly: true, assertCurrent: () => assertDefinitionCurrent(definition, current) },
-        async () => await materialize(definition, request.resume === true, current),
-      ),
+  return await serializeDashboardOperation(request, authority, (definition, current) =>
+    withBrowserRequestScope(
+      { managedOnly: true, assertCurrent: () => assertDefinitionCurrent(definition, current) },
+      async () => await materialize(definition, request.resume === true, current),
+    ),
   );
 }
 
@@ -529,7 +465,7 @@ export async function stopBrowserDashboard(
   request: BrowserDashboardRequest,
   authority: BrowserDashboardAuthority = {},
 ): Promise<BrowserDashboardResponse> {
-  return await serializeDashboardOperation(request, "stop", authority, stopMaterializedDashboard);
+  return await serializeDashboardOperation(request, authority, stopMaterializedDashboard);
 }
 
 async function stopMaterializedDashboard(

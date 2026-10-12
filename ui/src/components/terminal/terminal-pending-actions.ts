@@ -54,7 +54,7 @@ export type TerminalIntentHost = {
  * Hosts bind while connected; the most recent binding executes.
  */
 export class TerminalIntentQueue {
-  private readonly actions: QueuedTerminalAction[];
+  private actions: QueuedTerminalAction[] = [];
   private refreshPending = false;
   private refreshTimedOut = false;
   private refreshTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
@@ -65,7 +65,6 @@ export class TerminalIntentQueue {
   private timeoutHost: TerminalIntentHost | null = null;
 
   constructor(private readonly persistent = true) {
-    this.actions = [];
     this.rehydrate();
   }
 
@@ -83,7 +82,7 @@ export class TerminalIntentQueue {
     const admitted = persisted.some((action) => action.kind !== "restore")
       ? persisted.filter((action) => action.kind !== "restore")
       : persisted;
-    this.actions.splice(0, this.actions.length, ...admitted);
+    this.actions = admitted;
     if (admitted.length !== persisted.length) {
       this.persist();
     }
@@ -220,11 +219,7 @@ export class TerminalIntentQueue {
     const tabs = source.tabs.toSorted(
       (a, b) => Number(a.id === source.activeId) - Number(b.id === source.activeId),
     );
-    for (let index = this.actions.length - 1; index >= 0; index -= 1) {
-      if (this.actions[index]?.kind === "restore") {
-        this.actions.splice(index, 1);
-      }
-    }
+    this.discardRestoreActions();
     this.actions.push(
       ...tabs.map((tab, index): TerminalHandoff => ({
         kind: "handoff",
@@ -242,15 +237,7 @@ export class TerminalIntentQueue {
     action: TerminalPanelAction,
     options: { deferUntilHostChange?: boolean } = {},
   ): Promise<void> {
-    let changed = false;
-    if (action.kind !== "restore") {
-      for (let index = this.actions.length - 1; index >= 0; index -= 1) {
-        if (this.actions[index]?.kind === "restore") {
-          this.actions.splice(index, 1);
-          changed = true;
-        }
-      }
-    }
+    let changed = action.kind !== "restore" && this.discardRestoreActions();
     const explicitIntentPending = this.actions.some((pending) => pending.kind !== "restore");
     const key = JSON.stringify(action);
     if (
@@ -318,6 +305,12 @@ export class TerminalIntentQueue {
       this.actions.splice(index, 1);
       this.persist();
     }
+  }
+
+  private discardRestoreActions(): boolean {
+    const count = this.actions.length;
+    this.actions = this.actions.filter((action) => action.kind !== "restore");
+    return count !== this.actions.length;
   }
 
   // Closing a terminal drops the intents queued for it, but only the panel the

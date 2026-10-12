@@ -8,7 +8,6 @@ import {
   assertAuthProfileMigrationStateAtDatabasePath,
 } from "./legacy-source-diagnostic.js";
 import { getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath } from "./mutation-lineage.js";
-import { captureOAuthRefreshClaimPublication } from "./oauth-refresh-marker.js";
 import {
   captureRuntimeAuthProfileLegacyCandidates,
   createEmptyAuthProfileStore,
@@ -50,6 +49,12 @@ export async function publishAuthProfileStoreUpdate(
   let currentStore = committed.store;
   let mutation = committed.publication;
   let isCommittedCurrent = committedIsCurrent;
+  const prepareReader = (databasePath: string, agentDir = path.dirname(databasePath)) =>
+    prepareAgentAuthProfileRowsRead({
+      databasePath,
+      agentId: resolveAuthProfileDatabaseOwnerId(agentDir),
+      env: owner.env,
+    });
   // A later native save may publish only its own delta. Keep this commit's
   // affected profiles, but reconcile them from rows that include both commits.
   while (!isCommittedCurrent()) {
@@ -61,11 +66,7 @@ export async function publishAuthProfileStoreUpdate(
       rows = await readSharedAuthProfileRows(context);
       context.admission.assertCurrent();
     } else {
-      const reader = prepareAgentAuthProfileRowsRead({
-        databasePath: owner.databasePath,
-        agentId: resolveAuthProfileDatabaseOwnerId(path.dirname(owner.databasePath)),
-        env: owner.env,
-      });
+      const reader = prepareReader(owner.databasePath);
       try {
         rows = await reader.read();
       } finally {
@@ -76,13 +77,7 @@ export async function publishAuthProfileStoreUpdate(
     currentStore =
       loadPersistedAuthProfileStoreFromRows(rows, owner.databasePath) ??
       createEmptyAuthProfileStore();
-    mutation = {
-      ...committed.publication,
-      oauthRefreshClaimIds: captureOAuthRefreshClaimPublication(
-        currentStore.profiles,
-        committed.publication.profileIds,
-      ),
-    };
+    mutation = committed.publication;
     isCommittedCurrent =
       getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(owner.databasePath) === revision
         ? current
@@ -91,11 +86,7 @@ export async function publishAuthProfileStoreUpdate(
   if (!shared) {
     // The shared owner can rotate while the local worker commits. Its current
     // rows and revision come from the same reader used by auth health publication.
-    const reader = prepareAgentAuthProfileRowsRead({
-      databasePath: owner.databasePath,
-      agentId: resolveAuthProfileDatabaseOwnerId(path.dirname(owner.databasePath)),
-      env: owner.env,
-    });
+    const reader = prepareReader(owner.databasePath);
     try {
       return await publishInlineAuthFailure(
         owner,
@@ -167,11 +158,7 @@ export async function publishAuthProfileStoreUpdate(
       assertAuthProfileMigrationStateAtDatabasePath(targetOwner.sharedDatabasePath);
       let local = currentStore;
       if (entry.databasePath !== owner.databasePath) {
-        reader = prepareAgentAuthProfileRowsRead({
-          databasePath: entry.databasePath,
-          agentId: resolveAuthProfileDatabaseOwnerId(entry.agentDir),
-          env: owner.env,
-        });
+        reader = prepareReader(entry.databasePath, entry.agentDir);
         local = markRuntimePersistedProfiles(
           loadPersistedAuthProfileStoreFromRows(await reader.read(), entry.databasePath) ??
             createEmptyAuthProfileStore(),

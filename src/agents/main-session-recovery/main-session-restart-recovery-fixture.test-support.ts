@@ -90,6 +90,18 @@ export function mainSessionEntry(overrides: SessionEntryFixture = {}): SessionEn
   });
 }
 
+export function runningSessionEntry(
+  sessionId: string,
+  overrides: SessionEntryFixture = {},
+): SessionEntry {
+  return createSessionEntry({
+    sessionId,
+    updatedAt: Date.now() - 10_000,
+    restartRecoveryDeliveryRunId: `${sessionId}-run`,
+    ...overrides,
+  });
+}
+
 export function makePendingFinalDelivery(
   text = "interrupted response",
   overrides: Partial<NonNullable<SessionEntry["pendingFinalDelivery"]>> = {},

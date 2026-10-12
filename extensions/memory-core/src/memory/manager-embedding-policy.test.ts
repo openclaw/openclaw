@@ -443,6 +443,41 @@ describe("memory embedding policy", () => {
     },
   );
 
+  it.each([
+    Object.assign(
+      new Error(
+        "openai embeddings failed (model: model-500, batch size: 429): expected 429 vectors, got 500",
+      ),
+      { code: "INVALID_EMBEDDING_RESPONSE" },
+    ),
+    Object.assign(new Error("input array max 64"), { code: "INVALID_EMBEDDING_RESPONSE" }),
+    ...["malformed JSON response", "JSON response exceeds 16777216 bytes"].map((condition) =>
+      Object.assign(
+        new Error(`openai embeddings failed (model: model-500, batch size: 429): ${condition}`),
+        {
+          embeddingErrorMessage: `openai embeddings failed: ${condition}`,
+        },
+      ),
+    ),
+  ])("does not retry or split malformed response diagnostics: %s", async (error) => {
+    const run = vi.fn(async (): Promise<number[][]> => {
+      throw error;
+    });
+    const waitForRetry = vi.fn(async () => {});
+    const onSuccess = vi.fn();
+    await expect(
+      runMemoryEmbeddingBatchRetryWithSplit({
+        items: ["first", "second"],
+        run,
+        waitForRetry,
+        onSuccess,
+      }),
+    ).rejects.toBe(error);
+    expect(run).toHaveBeenCalledOnce();
+    expect(waitForRetry).not.toHaveBeenCalled();
+    expect(onSuccess).not.toHaveBeenCalled();
+  });
+
   it("splits transport errors only when a smaller request can help", async () => {
     const splittableMessages = [
       "TypeError: fetch failed | other side closed",
@@ -494,6 +529,100 @@ describe("memory embedding policy", () => {
       "input array max 64.5",
     ]) {
       expect(await probeBatchSplits(message)).toBe(false);
+    }
+  });
+
+  it.each([
+    { declared: undefined, requests: [33, 10, 10, 10, 3] },
+    { declared: 10, requests: [10, 10, 10, 3] },
+    { declared: 20, requests: [20, 10, 10, 13, 10, 3] },
+  ])(
+    "preserves paired inputs and persists each slice once with declared cap $declared",
+    async ({ declared, requests }) => {
+      const items = Array.from({ length: 33 }, (_, index) => ({
+        input: index,
+        cacheCandidate: `candidate-${index}`,
+      }));
+      const completed: Array<{ candidates: string[]; outputs: string[] }> = [];
+      const run = vi.fn(async (batch: typeof items) => {
+        if (batch.length > 10) {
+          throw new Error("embeddings max input length is 10");
+        }
+        return batch.map((item) => `output-${item.input}`);
+      });
+
+      await expect(
+        runMemoryEmbeddingBatchRetryWithSplit({
+          items,
+          maxInputsPerRequest: declared,
+          run,
+          onSuccess: (batch, outputs) => {
+            completed.push({
+              candidates: batch.map((item) => item.cacheCandidate),
+              outputs,
+            });
+          },
+          waitForRetry: async () => {},
+        }),
+      ).resolves.toEqual(items.map((item) => `output-${item.input}`));
+      expect(run.mock.calls.map(([batch]) => batch.length)).toEqual(requests);
+      expect(completed).toEqual(
+        [items.slice(0, 10), items.slice(10, 20), items.slice(20, 30), items.slice(30)].map(
+          (batch) => ({
+            candidates: batch.map((item) => item.cacheCandidate),
+            outputs: batch.map((item) => `output-${item.input}`),
+          }),
+        ),
+      );
+    },
+  );
+
+  it.each([
+    { cap: 1, requests: [[0], [1], [2]] },
+    ...[undefined, 0, -1, 1.5, Number.NaN, Infinity, Number.MAX_SAFE_INTEGER + 1].map((cap) => ({
+      cap,
+      requests: [[0, 1, 2]],
+    })),
+  ])("uses only positive safe integer declarations: $cap", async ({ cap, requests }) => {
+    const run = vi.fn(async (items: number[]) => items);
+    await expect(
+      runMemoryEmbeddingBatchRetryWithSplit({
+        items: [0, 1, 2],
+        maxInputsPerRequest: cap,
+        run,
+        waitForRetry: async () => {},
+      }),
+    ).resolves.toEqual([0, 1, 2]);
+    expect(run.mock.calls.map(([items]) => items)).toEqual(requests);
+  });
+
+  it("falls back to recursive splitting for unusable or stale limits", async () => {
+    for (const [errorMessage, expectedCalls] of [
+      ["embeddings max input length is 0", [4, 2, 2]],
+      ["embeddings max input length is 3.5", [4, 2, 2]],
+      ["embeddings max input length is 9007199254740992", [4, 2, 2]],
+      [
+        "embeddings max input length is 4; batch size is invalid, it should not be larger than 3",
+        [4, 2, 2],
+      ],
+      ["embeddings max input length is 4", [4, 2, 2]],
+      ["embeddings max input length is 8", [4, 2, 2]],
+      ["embeddings max input length is 3", [4, 3, 2, 1, 1]],
+    ] as const) {
+      const run = vi.fn(async (items: number[]) => {
+        if (items.length > 2) {
+          throw new Error(errorMessage);
+        }
+        return items;
+      });
+      await expect(
+        runMemoryEmbeddingBatchRetryWithSplit({
+          items: [0, 1, 2, 3],
+          run,
+          waitForRetry: async () => {},
+        }),
+      ).resolves.toEqual([0, 1, 2, 3]);
+      expect(run.mock.calls.map(([items]) => items.length)).toEqual(expectedCalls);
     }
   });
 

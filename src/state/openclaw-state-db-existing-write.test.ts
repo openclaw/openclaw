@@ -4,6 +4,7 @@ import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import * as maintenance from "../infra/state-database-maintenance.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "./openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
@@ -134,7 +135,7 @@ describe("retained existing-state writer", () => {
     }
   });
 
-  it("retains WAL files and one integrity admission through ordinary local and foreign writes", () => {
+  it("retains WAL files and one integrity admission through ordinary local and sibling writes", () => {
     const options = fixture();
     const reads = observeSqliteReadSql(StatementSync.prototype);
     const writer = openExistingOpenClawStateWriter(options, contract);
@@ -148,7 +149,7 @@ describe("retained existing-state writer", () => {
         const stat = fs.statSync(`${options.path}${suffix}`);
         return { dev: stat.dev, ino: stat.ino };
       });
-      const external = new DatabaseSync(options.path);
+      const external = openNodeSqliteDatabase(options.path);
       try {
         external.prepare("INSERT INTO records VALUES (?, ?)").run(2, "foreign");
       } finally {
@@ -331,7 +332,7 @@ describe("retained existing-state writer", () => {
       sql: "INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '{', 1)",
       error: /invalid shared state schema content version/iu,
     },
-  ])("rejects $change before a retained write", ({ sql, error, markersChange, deferred }) => {
+  ])("rejects $change at first admission", ({ sql, error, markersChange, deferred }) => {
     const options = fixture(deferred);
     if (deferred) {
       const setup = new DatabaseSync(options.path);
@@ -348,30 +349,25 @@ describe("retained existing-state writer", () => {
       }
     }
     const run = () => {
+      // Raw fixture connections leave this physical file unadmitted until the writer opens it.
+      const external = new DatabaseSync(options.path);
+      try {
+        const before = readSchemaMarkers(external);
+        external.exec(sql);
+        if (!markersChange) {
+          expect(readSchemaMarkers(external)).toEqual(before);
+        }
+      } finally {
+        external.close();
+      }
       const writer = openExistingOpenClawStateWriter(options, contract);
       try {
-        writer.run(({ db }) => {
-          if (deferred) {
-            db.exec("INSERT INTO records VALUES (1, 'before removal')");
-          }
-        }, options);
-        writer.run(() => undefined, options);
-        const external = new DatabaseSync(options.path);
-        try {
-          const before = readSchemaMarkers(external);
-          external.exec(sql);
-          if (!markersChange) {
-            expect(readSchemaMarkers(external)).toEqual(before);
-          }
-        } finally {
-          external.close();
-        }
         const mutate = vi.fn(({ db }: { db: DatabaseSync }) => {
           db.exec("INSERT INTO records VALUES (2, 'refused')");
         });
         expect(() => writer.run(mutate, options)).toThrow(error);
         expect(mutate).not.toHaveBeenCalled();
-        expect(readValues(options.path)).toEqual(deferred ? [{ value: "before removal" }] : []);
+        expect(readValues(options.path)).toEqual([]);
       } finally {
         writer.close();
       }
@@ -383,41 +379,75 @@ describe("retained existing-state writer", () => {
     }
   });
 
-  it.each(["CREATE TABLE forbidden (id INTEGER)", "PRAGMA user_version = 1"])(
-    "rolls back rows and forbidden schema mutation: %s",
-    (sql) => {
-      const options = fixture();
-      const writer = openExistingOpenClawStateWriter(options, contract);
-      try {
-        writer.run(({ db }) => db.exec("INSERT INTO records VALUES (1, 'committed')"), options);
-        expect(() =>
-          writer.run(({ db }) => {
-            db.exec("INSERT INTO records VALUES (2, 'rolled back')");
-            db.exec(sql);
-          }, options),
-        ).toThrow(/cannot migrate schema/iu);
-        writer.assertSettled();
-      } finally {
-        writer.close();
-      }
-      const after = new DatabaseSync(options.path, { readOnly: true });
-      try {
-        expect(after.prepare("SELECT value FROM records ORDER BY id").all()).toEqual([
-          { value: "committed" },
-        ]);
-        expect(after.prepare("PRAGMA user_version").get()).toEqual({
-          user_version: OPENCLAW_STATE_SCHEMA_VERSION,
-        });
-        expect(
-          after.prepare("SELECT name FROM sqlite_schema WHERE name = 'forbidden'").get(),
-        ).toBeUndefined();
-      } finally {
-        after.close();
-      }
+  it.each([
+    { kind: "literal", sql: "SELECT 'CREATE' AS action", action: "CREATE" },
+    {
+      kind: "escaped literal",
+      sql: "SELECT 'DROP ''table''; PRAGMA user_version = 4' AS action",
+      action: "DROP 'table'; PRAGMA user_version = 4",
     },
-  );
+    {
+      kind: "quoted identifier",
+      sql: `SELECT "CREATE" AS action FROM (SELECT 'kept' AS "CREATE")`,
+      action: "kept",
+    },
+    {
+      kind: "comments",
+      sql: "/* CREATE TABLE ignored(id); */ SELECT 'kept' AS action -- ALTER TABLE ignored ADD extra",
+      action: "kept",
+    },
+  ])("commits $kind SQL payloads without revalidating format", ({ sql, action }) => {
+    const options = fixture();
+    const writer = openExistingOpenClawStateWriter(options, contract);
+    let observation: ReturnType<typeof observeSqliteReadSql> | undefined;
+    try {
+      expect(
+        writer.run(({ db }) => {
+          observation = observeSqliteReadSql(StatementSync.prototype);
+          const row = db.prepare(sql).get();
+          if (typeof row?.action !== "string") {
+            throw new Error("Expected the SQL payload to return action text");
+          }
+          db.prepare("INSERT INTO records VALUES (1, ?)").run(row.action);
+          return row;
+        }, options),
+      ).toEqual({ action });
+      if (!observation) {
+        throw new Error("Existing-state write callback did not execute");
+      }
+      expect(
+        observation.queries.filter(
+          (query) =>
+            schemaInventorySql.test(query) ||
+            /^PRAGMA\s+(?:user_version|schema_version)\b/iu.test(query),
+        ),
+      ).toEqual([]);
+      expect(readValues(options.path)).toEqual([{ value: action }]);
+    } finally {
+      observation?.restore();
+      writer.close();
+    }
+  });
 
-  it("rechecks current environment and schema scope for each retained write", () => {
+  it.each([
+    "CREATE TABLE IF NOT EXISTS records (id INTEGER PRIMARY KEY, value TEXT NOT NULL) STRICT",
+    `PRAGMA user_version=${OPENCLAW_STATE_SCHEMA_VERSION}`,
+    "REINDEX",
+  ])("commits no-op schema statements without claiming a migration: %s", (sql) => {
+    const options = fixture();
+    const writer = openExistingOpenClawStateWriter(options, contract);
+    try {
+      writer.run(({ db }) => {
+        db.exec(sql);
+        db.exec("INSERT INTO records VALUES (1, 'committed')");
+      }, options);
+      expect(readValues(options.path)).toEqual([{ value: "committed" }]);
+    } finally {
+      writer.close();
+    }
+  });
+
+  it("rechecks current environment for each retained write", () => {
     const options = fixture(true);
     const externalOptions = {
       ...options,
@@ -455,9 +485,6 @@ describe("retained existing-state writer", () => {
       }
     });
     try {
-      const refused = vi.fn();
-      expect(() => writer.run(refused, externalOptions)).toThrow(/schema|admission/iu);
-      expect(refused).not.toHaveBeenCalled();
       withExistingOpenClawStateSchema(options, () => {
         writer.run(
           ({ db }) => db.exec("INSERT INTO records VALUES (2, 'readmitted')"),

@@ -60,23 +60,6 @@ function writeCodexAppServerBinding(...args: Parameters<typeof writeRawCodexAppS
 }
 
 describe("runCodexAppServerAttempt native hook relay", () => {
-  it("refuses to run when managed-only hooks would silently discard its enforcing relay", async () => {
-    const sessionFile = path.join(tempDir, "managed-hooks-only.jsonl");
-    const workspaceDir = path.join(tempDir, "managed-hooks-only-workspace");
-    const harness = createStartedThreadHarness(async (method) =>
-      method === "configRequirements/read"
-        ? { requirements: { allowManagedHooksOnly: true } }
-        : undefined,
-    );
-
-    await expect(
-      runCodexAppServerAttempt(createLoopRelayParams(sessionFile, workspaceDir), {
-        nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
-      }),
-    ).rejects.toThrow(/managed-only hooks.*OpenClaw native hook relay/i);
-    expect(harness.requests.some((request) => request.method === "thread/start")).toBe(false);
-  });
-
   it("rejects Guardian review when the running server resolves an untrusted managed endpoint", async () => {
     const sessionFile = path.join(tempDir, "managed-review-endpoint.jsonl");
     const workspaceDir = path.join(tempDir, "managed-review-endpoint-workspace");

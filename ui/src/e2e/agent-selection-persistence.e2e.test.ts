@@ -84,7 +84,7 @@ async function screenshot(page: Page, name: string) {
   await writeFile(
     path.join(proofDir, name),
     await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
-      page.locator(".sidebar-agent-card__name"),
+      page.locator(".sidebar-agent-card__main"),
     ]),
   );
 }

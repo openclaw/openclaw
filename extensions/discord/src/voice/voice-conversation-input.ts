@@ -27,7 +27,7 @@ class DiscordVoiceConversationInput {
   private pendingAudioBytes = 0;
   private text: string[] = [];
   private textBytes = 0;
-  private segments: Promise<boolean>[] = [];
+  private segments: Promise<void>[] = [];
   private authorizationQueue: Promise<void> = Promise.resolve();
   readonly ready: Promise<void>;
 
@@ -137,11 +137,11 @@ class DiscordVoiceConversationInput {
     this.text.push("");
     const completed = result.then(async (outcome) => {
       if (this.state === "retired") {
-        return false;
+        return;
       }
       if (outcome.status === "excluded" || outcome.status === "unavailable") {
         this.retire();
-        return false;
+        return;
       }
       const text = outcome.status === "transcribed" ? outcome.text : "";
       const bytes = Buffer.byteLength(text);
@@ -150,7 +150,7 @@ class DiscordVoiceConversationInput {
           "discord voice: conversation transcript limit exceeded; recording continues, but speak a shorter request for a conversation response.",
         );
         this.retire();
-        return false;
+        return;
       }
       this.textBytes += bytes;
       this.text[index] = text;
@@ -158,9 +158,8 @@ class DiscordVoiceConversationInput {
       if (!allowed) {
         this.retire();
       }
-      return allowed;
     });
-    this.segments.push(Promise.race([completed, this.cancelled.promise.then(() => false)]));
+    this.segments.push(Promise.race([completed, this.cancelled.promise]));
   }
 
   async transcript(): Promise<string | undefined> {

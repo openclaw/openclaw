@@ -1,5 +1,6 @@
 import { err, ok } from "@openclaw/normalization-core/result";
 import { requestSessionEntriesCurrentAdmission } from "../config/sessions/session-entry-current-admission.worker.js";
+import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { captureOpenClawStateDatabaseReadAdmission } from "../state/openclaw-state-db-cache.js";
 import type {
@@ -7,10 +8,16 @@ import type {
   OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import type {
+  PluginStateOperationCommit,
+  PluginStateOperationInput,
+} from "./plugin-state-operation-contract.js";
+import { executePluginStateOperation } from "./plugin-state-operation.kernel.js";
+import { withPluginStateWorkerReceipt } from "./plugin-state-publication.js";
 import {
   compareAndApplyPluginStateEntry,
   observePluginStateEntry,
-} from "./plugin-state-store.comparison.js";
+} from "./plugin-state-store.comparison.worker.js";
 import {
   withPluginStateDatabaseReadOnly,
   wrapPluginStateError,
@@ -18,7 +25,6 @@ import {
 import { registerPluginStateSequencedJournalEntryInDatabase } from "./plugin-state-store.journal.js";
 import {
   countLivePluginStateNamespaceEntries,
-  deleteExpiredPluginStateEntries,
   deletePluginStateEntry,
   lookupPluginStateEntry,
 } from "./plugin-state-store.kernel.js";
@@ -34,7 +40,14 @@ import {
   listPluginStateEntriesInKeyRange,
   lookupPluginStateEntries,
 } from "./plugin-state-store.reads.js";
-import { registerPluginStateEntry } from "./plugin-state-store.retention.js";
+import {
+  readPluginStateRetention,
+  registerPluginStateEntry,
+} from "./plugin-state-store.retention.js";
+import type {
+  PluginStateOperationDefinitions,
+  PluginStateOperationHandler,
+} from "./plugin-state-store.types.js";
 import {
   type PluginStateWorkerOperations,
   pluginStateWorkerOperations,
@@ -44,6 +57,38 @@ import {
   clearRuntimeHealthEntries,
   hasRuntimeHealthEntriesToClear,
 } from "./runtime-health-store.kernel.js";
+
+const operationHandlers = new Map<
+  string,
+  PluginStateOperationHandler<PluginStateOperationDefinitions>
+>();
+
+function operationHandlerKey(input: PluginStateOperationInput): string {
+  return JSON.stringify([input.module.modulePath, input.module.boundaryRoot, input.exportName]);
+}
+
+/** Load plugin code before entering any native read or write transaction. */
+export async function preparePluginStateOperation(input: PluginStateOperationInput): Promise<void> {
+  const key = operationHandlerKey(input);
+  if (operationHandlers.has(key)) {
+    return;
+  }
+  const { loadValidatedPublicSurfaceModule } = await import("../plugins/public-surface-loader.js");
+  const loaded = loadValidatedPublicSurfaceModule({
+    ...input.module,
+    surfaceLabel: "plugin state operation",
+    capturedSource: true,
+  });
+  const handler: unknown = Reflect.get(loaded, input.exportName);
+  if (typeof handler !== "function") {
+    throw new Error("Plugin state operation module must export a synchronous handler");
+  }
+  operationHandlers.set(
+    key,
+    // SAFETY: The registered plugin owns its operation input/output contract; runtime enforces sync settlement.
+    handler as PluginStateOperationHandler<PluginStateOperationDefinitions>,
+  );
+}
 
 export function executePluginStateCommand(
   command: SqliteWorkerCommand<PluginStateWorkerOperations>,
@@ -69,6 +114,51 @@ export function executePluginStateCommand(
         ),
       ),
     );
+  if (command.type === "pluginState.executeOperation") {
+    try {
+      const handler = operationHandlers.get(operationHandlerKey(command.input));
+      if (!handler) {
+        throw new Error("Plugin state operation was not prepared");
+      }
+      if (command.input.writeStores.length === 0) {
+        const result = withPluginStateDatabaseReadOnly(
+          "lookup",
+          (store) => {
+            const run = () => executePluginStateOperation(store, command.input, handler);
+            return store.db.isTransaction ? run() : runSqliteDeferredTransactionSync(store.db, run);
+          },
+          options,
+        );
+        if (!result) {
+          throw new Error("Plugin state operation source is no longer available");
+        }
+        return ok(result);
+      }
+      const database = openDatabase();
+      return ok(
+        runOpenClawStateWriteTransaction(
+          (store) => {
+            admit("transaction");
+            const result = withPluginStateWorkerReceipt(
+              store.db,
+              () => executePluginStateOperation(store, command.input, handler),
+              (completed): PluginStateOperationCommit => ({
+                pluginStateOperation: {
+                  receiptId: command.input.receiptId,
+                  validUntil: completed.validUntil,
+                },
+              }),
+            );
+            admit("commit");
+            return result;
+          },
+          { ...options, database },
+        ),
+      );
+    } catch (error) {
+      return failure(error);
+    }
+  }
   if (
     command.type === "pluginState.lookup" ||
     command.type === "pluginState.lookupMany" ||
@@ -163,11 +253,24 @@ export function executePluginStateCommand(
     );
   }
   try {
+    if (command.type === "pluginState.replaceEntry") {
+      // Replacing an approval first revokes its predecessor, even if registration fails.
+      runOpenClawStateWriteTransaction(
+        (store) => {
+          admit("transaction");
+          withPluginStateWorkerReceipt(store.db, () =>
+            deletePluginStateEntry(store.db, command.input),
+          );
+          admit("commit");
+        },
+        { ...options, database },
+      );
+    }
     return ok(
       runOpenClawStateWriteTransaction(
         (store) => {
           admit("transaction");
-          const result = (() => {
+          const result = withPluginStateWorkerReceipt(store.db, () => {
             switch (command.type) {
               case "pluginState.appendJournal":
                 return registerPluginStateSequencedJournalEntryInDatabase(store, command.input);
@@ -187,7 +290,22 @@ export function executePluginStateCommand(
               case "pluginState.moveEntries":
                 return movePluginStateEntries(store, command.input);
               case "pluginState.register":
+              case "pluginState.replaceEntry":
                 return registerPluginStateEntry(store, command.input);
+              case "pluginState.replace": {
+                clearPluginStateNamespace(store.db, command.input);
+                if (command.input.entries.length === 0) {
+                  return undefined;
+                }
+                const retention = readPluginStateRetention(store.db, {
+                  ...command.input,
+                  now: Date.now(),
+                });
+                for (const entry of command.input.entries) {
+                  registerPluginStateEntry(store, { ...command.input, ...entry }, retention);
+                }
+                return undefined;
+              }
               case "pluginState.registerIfAbsent":
                 return registerPluginStateEntryIfAbsent(store, command.input);
               case "pluginState.deleteIfEqual":
@@ -200,12 +318,10 @@ export function executePluginStateCommand(
                 return clearPluginStateNamespace(store.db, command.input);
               case "pluginState.clearRuntimeHealth":
                 return clearRuntimeHealthEntries(store, command.input);
-              case "pluginState.sweep":
-                return deleteExpiredPluginStateEntries(store.db, Date.now());
               default:
                 throw new Error("Plugin-state read command entered its write path");
             }
-          })();
+          });
           admit("commit");
           return result;
         },

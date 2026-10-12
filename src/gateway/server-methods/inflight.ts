@@ -46,7 +46,7 @@ export function resolveGatewayInflightRequest(params: {
     return {
       kind: "handled",
       done: inflight.then((result) => {
-        const meta = result.meta ? { ...result.meta, cached: true } : { cached: true };
+        const meta = { ...result.meta, cached: true };
         params.respond(result.ok, result.payload, result.error, meta);
       }),
     };

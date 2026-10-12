@@ -7,16 +7,18 @@ import type {
   SessionPlacementWorkerRuntimeInstall,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
-import type { WorkerPlacementMoveIntent } from "./placement-move-intent.js";
+import type { WorkerPlacementMoveIntent } from "./placement-move-intent.types.js";
 import type { WorkerEnvironmentPlacementFacts } from "./placement-read-projection.types.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
+import { isWorkerEnvironmentAttachedTo } from "./placement-target.js";
 import type { WorkerEnvironmentServiceContract } from "./service-contract.js";
 
 export type WorkerSessionPlacementReader = Pick<WorkerSessionPlacementStore, "getMany"> &
   Partial<
     Pick<
       WorkerSessionPlacementStore,
+      | "getManyAsync"
       | "prepareRuntimeRefresh"
       | "getWorkspaceResultReconcilingSessionIds"
       | "getWorkspaceResultReconcilingSessionIdsAsync"
@@ -166,10 +168,7 @@ export function createWorkerPlacementRunnerAvailabilityReader(params: {
         : preparedEnvironment;
     if (
       environment?.providerId !== DEVICE_WORKER_PROVIDER_ID ||
-      environment.state !== "attached" ||
-      environment.ownerEpoch !== record.activeOwnerEpoch ||
-      environment.attachedSessionIds.length !== 1 ||
-      environment.attachedSessionIds[0] !== record.sessionId ||
+      !isWorkerEnvironmentAttachedTo(environment, record) ||
       !environment.nodeDeviceId
     ) {
       return undefined;

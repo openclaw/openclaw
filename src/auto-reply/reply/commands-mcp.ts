@@ -11,6 +11,7 @@ import type { ReplyPayload } from "../types.js";
 import {
   commandReply,
   defineAuthorizedTextCommand,
+  renderCommandJsonBlock,
   requireCommandFlagEnabled,
   requireGatewayClientScope,
 } from "./command-gates.js";
@@ -31,10 +32,6 @@ const MCP_SHOW_PRIVATE_ROUTE_REPLIES = {
     "MCP server configuration is sensitive. Private delivery was suppressed; no details were sent.",
   failed: MCP_SHOW_PRIVATE_ROUTE_UNAVAILABLE,
 };
-
-function renderJsonBlock(label: string, value: unknown): string {
-  return `${label}\n\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\``;
-}
 
 function redactMcpServerArgsForDisplay(server: unknown): unknown {
   if (!server || typeof server !== "object" || Array.isArray(server)) {
@@ -78,14 +75,14 @@ async function buildMcpShowReply(name?: string): Promise<ReplyPayload> {
       [name]: server,
     })[name];
     return {
-      text: renderJsonBlock(`🔌 MCP server "${name}" (${loaded.path})`, redactedServer),
+      text: renderCommandJsonBlock(`🔌 MCP server "${name}" (${loaded.path})`, redactedServer),
     };
   }
   if (Object.keys(loaded.mcpServers).length === 0) {
     return { text: `🔌 No MCP servers configured in ${loaded.path}.` };
   }
   return {
-    text: renderJsonBlock(
+    text: renderCommandJsonBlock(
       `🔌 MCP servers (${loaded.path})`,
       redactMcpServersForDisplay(loaded.mcpServers),
     ),
@@ -129,10 +126,7 @@ export const handleMcpCommand: CommandHandler = defineAuthorizedTextCommand(
       if (params.isGroup) {
         return await deliverGroupMcpShowReplyPrivately(params, mcpCommand.name);
       }
-      return {
-        shouldContinue: false,
-        reply: await buildMcpShowReply(mcpCommand.name),
-      };
+      return commandReply(await buildMcpShowReply(mcpCommand.name));
     }
 
     const missingAdminScope = requireGatewayClientScope(params, {
@@ -144,24 +138,19 @@ export const handleMcpCommand: CommandHandler = defineAuthorizedTextCommand(
       return missingAdminScope;
     }
 
-    if (mcpCommand.action === "set") {
-      const result = await setConfiguredMcpServer({
-        name: mcpCommand.name,
-        server: mcpCommand.value,
-        assertCurrent: params.command.assertOwnerCurrent,
-      });
-      if (!result.ok) {
-        return commandReply(`⚠️ ${result.error}`);
-      }
-      return commandReply(`🔌 MCP server "${mcpCommand.name}" saved to ${result.path}.`);
-    }
-
-    const result = await unsetConfiguredMcpServer({
+    const mutation = {
       name: mcpCommand.name,
       assertCurrent: params.command.assertOwnerCurrent,
-    });
+    };
+    const result =
+      mcpCommand.action === "set"
+        ? await setConfiguredMcpServer({ ...mutation, server: mcpCommand.value })
+        : await unsetConfiguredMcpServer(mutation);
     if (!result.ok) {
       return commandReply(`⚠️ ${result.error}`);
+    }
+    if (mcpCommand.action === "set") {
+      return commandReply(`🔌 MCP server "${mcpCommand.name}" saved to ${result.path}.`);
     }
     if (!result.removed) {
       return commandReply(`🔌 No MCP server named "${mcpCommand.name}" in ${result.path}.`);

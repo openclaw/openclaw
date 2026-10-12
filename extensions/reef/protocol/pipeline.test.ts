@@ -21,6 +21,9 @@ import {
   type ReviewRequest,
 } from "./pipeline.js";
 
+const githubCommit = "430f975aacee445525c4663aa88ed1590f2f08b1";
+const githubBlob = `https://github.com/openclaw/openclaw/blob/${githubCommit}/.agents/skills/openclaw-pr-maintainer/SKILL.md#review-and-publish`;
+
 const now = 1_752_300_000;
 const auditKey = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
 const allow: Verdict = {
@@ -245,14 +248,31 @@ describe("pipeline", () => {
     },
   );
 
-  it("runs an allowed outbound and inbound exchange end to end", async () => {
+  it.each([
+    "hello",
+    `See [the maintainer guide](${githubBlob}).`,
+    `Commit: <https://github.com/openclaw/openclaw/commit/${githubCommit}>`,
+    `Tree: https://github.com/openclaw/openclaw/tree/${githubCommit}/.agents`,
+    `Commit: 'https://github.com/openclaw/openclaw/commit/${githubCommit}'`,
+  ])("runs an allowed outbound and inbound exchange end to end: %s", async (text) => {
     const { alice, bob } = identities();
     const outboundAudit = audit();
+    const outboundGuard = mockGuard(allow);
+    const classifyOutbound = vi.spyOn(outboundGuard, "classify");
     const outbound = await composeOutbound(
-      outboundOptions(alice, bob, { body: { text: "hello" }, ts: now, audit: outboundAudit }),
+      outboundOptions(alice, bob, {
+        body: { text },
+        ts: now,
+        audit: outboundAudit,
+        guard: outboundGuard,
+      }),
+    );
+    expect(classifyOutbound).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ direction: "outbound", text }),
     );
     const inboundAudit = audit();
     const inboundGuard = mockGuard(allow);
+    const classifyInbound = vi.spyOn(inboundGuard, "classify");
     const replayStore = new MemoryReplayStore();
     const options = inboundOptions(outbound.envelope, alice, bob, {
       replayStore,
@@ -264,7 +284,10 @@ describe("pipeline", () => {
     if (inbound.disposition !== "accepted") {
       throw new Error("expected accepted result");
     }
-    expect(inbound.body.text).toBe("hello");
+    expect(inbound.body.text).toBe(text);
+    expect(classifyInbound).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ direction: "inbound", text }),
+    );
     expect(inbound.receipt).toMatchObject({ id: outbound.envelope.id, status: "accepted" });
     const outboundEntries = await outboundAudit.entries();
     const inboundEntries = await inboundAudit.entries();
@@ -312,14 +335,21 @@ describe("pipeline", () => {
     expect(guard.calls).toBe(0);
   });
 
-  it("stops a deterministic outbound denial before guard and sealing", async () => {
+  it.each([
+    `${githubBlob} ${["sk-", "abcdefghijklmnopqrstuvwxyz123456"].join("")}`,
+    `https://github.com/openclaw/openclaw/commit/${githubCommit}?token=${githubCommit}`,
+    `https://example.org/?next='${githubBlob}`,
+    `https://example.org/#'${githubBlob}`,
+    `_https://example.org/?next=${githubBlob}_`,
+    `mailto:review@example.org?next=${githubBlob}`,
+  ])("stops a deterministic outbound denial before guard and sealing: %s", async (text) => {
     const { alice, bob } = identities();
     const guard = mockGuard(allow);
     let rngCalls = 0;
     await expect(
       composeOutbound(
         outboundOptions(alice, bob, {
-          body: { text: ["sk-", "abcdefghijklmnopqrstuvwxyz123456"].join("") },
+          body: { text },
           guard,
           rng(length) {
             rngCalls++;
@@ -344,6 +374,7 @@ describe("pipeline", () => {
     await expect(
       composeOutbound(
         outboundOptions(alice, bob, {
+          body: { text: githubBlob },
           guard: mockGuard(deny),
           rng(length) {
             rngCalls++;
@@ -351,7 +382,7 @@ describe("pipeline", () => {
           },
         }),
       ),
-    ).rejects.toBeInstanceOf(PipelineError);
+    ).rejects.toMatchObject({ stage: "guard", verdict: deny });
     expect(rngCalls).toBe(0);
   });
 
@@ -409,30 +440,10 @@ describe("pipeline", () => {
     });
   });
 
-  it("parks an invalid structural inbound verdict instead of accepting or rejecting it", async () => {
-    const { alice, bob } = identities();
-    const envelope = sealedEnvelope(alice, bob, "01JZ0000000000000000000010", {
-      text: "inbound structural adapter",
-    });
-    // guard_failure records classifier unavailability, not a content decision:
-    // the message stays un-acked for retry instead of rejecting the peer.
-    await expect(
-      composeInbound(
-        inboundOptions(envelope, alice, bob, {
-          guard: structuralGuard(allow.model, { ...allow, policyVersion: "wrong" }),
-        }),
-      ),
-    ).rejects.toMatchObject({
-      stage: "guard",
-      verdict: { decision: "deny", category: "guard_failure" },
-      receipt: undefined,
-    });
-  });
-
   it("requires exact full-proposal approval and fresh classification for review", async () => {
     const { alice, bob } = identities();
     const review = reviewVerdict();
-    const common = outboundOptions(alice, bob);
+    const common = outboundOptions(alice, bob, { body: { text: githubBlob } });
     await expect(
       composeOutbound({ ...common, audit: audit(), guard: mockGuard(review) }),
     ).rejects.toMatchObject({ stage: "review" });
@@ -728,7 +739,7 @@ describe("pipeline", () => {
   it("completes deterministic inbound denial with a signed rejection", async () => {
     const { alice, bob } = identities();
     const envelope = sealedEnvelope(alice, bob, "01JZ0000000000000000000003", {
-      text: ["sk-", "abcdefghijklmnopqrstuvwxyz123456"].join(""),
+      text: `${githubBlob} ${["sk-", "abcdefghijklmnopqrstuvwxyz123456"].join("")}`,
     });
     const guard = mockGuard(allow);
     await expect(

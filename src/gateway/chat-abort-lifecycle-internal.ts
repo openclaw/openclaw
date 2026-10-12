@@ -17,6 +17,28 @@ export function isCurrentChatAbortExecution(entry: object): boolean {
   return current === entry && current.executionSettlement?.status === "pending";
 }
 
+/** Terminal publication retains its producer's entry, even after registration cleanup. */
+export function markChatAbortTerminalOutcome(
+  entry: Pick<ChatAbortControllerEntry, "terminalOutcomeObserved"> | undefined,
+): void {
+  if (entry) {
+    entry.terminalOutcomeObserved = true;
+  }
+}
+
+/** Publication may outlive cleanup, but cannot adopt a same-ID successor. */
+export function captureChatAbortRegistrationGuard(
+  entries: ReadonlyMap<string, ChatAbortControllerEntry>,
+  runIds: readonly string[],
+): () => boolean {
+  const captured = runIds.map((runId) => ({ runId, entry: entries.get(runId) }));
+  return () =>
+    captured.every(({ runId, entry }) => {
+      const current = entries.get(runId);
+      return current === undefined || current === entry;
+    });
+}
+
 /** Capture one exact registration; a same-key successor is never its completion owner. */
 export function captureChatAbortExecution(params: {
   entries: ReadonlyMap<string, ChatAbortControllerEntry>;
@@ -206,12 +228,12 @@ export async function waitForChatAbortControllerRemoval<
     projectSessionTerminalPending?: boolean;
     projectSessionTerminalPersistence?: Promise<void>;
   },
->(
-  params: {
-    entries: ReadonlyMap<string, TEntry>;
-    targets: ReadonlyArray<{ runId: string; entry: TEntry }>;
-  } & ({ timeoutMs: number; signal?: never } | { timeoutMs: null; signal: AbortSignal }),
-): Promise<boolean> {
+>(params: {
+  entries: ReadonlyMap<string, TEntry>;
+  targets: ReadonlyArray<{ runId: string; entry: TEntry }>;
+  timeoutMs: number | null;
+  signal?: AbortSignal;
+}): Promise<boolean> {
   const terminalOwnersSettled = () =>
     params.targets.every(({ entry }) => isChatAbortTerminalPersistenceSettled(entry));
   const registeredWaiters: Array<{ entry: TEntry; resolve: () => void }> = [];

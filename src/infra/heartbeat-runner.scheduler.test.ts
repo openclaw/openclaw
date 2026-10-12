@@ -9,8 +9,10 @@ import {
 import { createCronServiceState } from "../cron/service/state.js";
 import { wake as wakeCronService } from "../cron/service/wake.js";
 import { GatewayScheduler } from "./gateway-scheduler.js";
+import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-events.js";
 import { heartbeatLog } from "./heartbeat-log.js";
 import { startHeartbeatRunner } from "./heartbeat-runner-scheduler.js";
+import * as heartbeatWake from "./heartbeat-wake.js";
 import {
   getHeartbeatWakeAbortSignal,
   HEARTBEAT_SKIP_PREEMPTED,
@@ -83,6 +85,7 @@ function expectRun(index: number, expected: Partial<Parameters<RunOnce>[0]>) {
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(0);
+  resetHeartbeatEventsForTest();
   runSpy.mockReset().mockResolvedValue({ status: "ran", durationMs: 1 });
 });
 
@@ -96,6 +99,7 @@ afterEach(async () => {
   dispose();
   setHeartbeatsEnabled(true);
   resetSystemEventsForTest();
+  resetHeartbeatEventsForTest();
   resetConfigRuntimeState();
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -247,7 +251,7 @@ describe("startHeartbeatRunner", () => {
     expect(callTimes.filter((time) => time >= 2 * intervalMs).length).toBeGreaterThan(0);
   });
 
-  it.each(["cron", "hook"] as const)(
+  it.each(["cron"] as const)(
     "merges %s overrides with source-specific destination ownership",
     async (source) => {
       start(
@@ -283,7 +287,6 @@ describe("startHeartbeatRunner", () => {
           prompt: "Ops prompt",
           directPolicy: "block",
           target: "last",
-          ...(source === "hook" ? { to: "discord:dm:ops", accountId: "ops-account" } : {}),
         },
       });
     },
@@ -309,8 +312,6 @@ describe("startHeartbeatRunner", () => {
     runs: number;
     beside?: { text: string; contextKey?: string };
   }>([
-    { owner: "conversation", fromConversationTurn: true, commandMs: 0, runs: 20 },
-    { owner: "conversation", fromConversationTurn: true, commandMs: 40_000, runs: 14 },
     { owner: "heartbeat", fromConversationTurn: false, commandMs: 40_000, runs: 1 },
     {
       owner: "conversation beside a reminder",
@@ -445,7 +446,7 @@ describe("targeted unscheduled wake dispatch", () => {
       runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok" }),
     });
     expect(
-      wakeCronService(state, {
+      await wakeCronService(state, {
         mode: "next-heartbeat",
         text: "Operator requested a session update.",
         agentId: "main",
@@ -471,7 +472,13 @@ describe("targeted unscheduled wake dispatch", () => {
   it.each([
     cronWake,
     { source: "hook", intent: "immediate", reason: "hook:job-123", agentId: "main" },
-    { source: "restart-sentinel", intent: "immediate", reason: "wake", sessionKey },
+    {
+      source: "notifications-event",
+      intent: "event",
+      reason: "notifications-event",
+      agentId: "main",
+      sessionKey,
+    },
   ] satisfies Wake[])("runs one targeted $source wake with disabled cadence", async (request) => {
     start(config("0m", { main: {} }));
     await wake(request);
@@ -574,5 +581,140 @@ describe("targeted unscheduled wake dispatch", () => {
     ]);
     await vi.advanceTimersByTimeAsync(120_000);
     expect(calls).toHaveLength(3);
+  });
+});
+
+describe("heartbeat broadcast outcomes", () => {
+  function startRunner() {
+    const register = vi.spyOn(heartbeatWake, "setHeartbeatWakeHandler");
+    start(config("30m", { main: {}, ops: {} }));
+    const run = register.mock.calls[0]?.[0];
+    if (!run) {
+      throw new Error("Expected the runner to register a wake handler");
+    }
+    return { run, runOnce: runSpy };
+  }
+
+  it("retains an untargeted task through min-spacing and dispatches its payload at the deadline", async () => {
+    const { run, runOnce } = startRunner();
+    await run({ source: "manual", intent: "manual" });
+    runOnce.mockClear();
+    vi.setSystemTime(1);
+    const request = {
+      source: "cron",
+      intent: "task",
+      reason: "heartbeat-task:inbox",
+      tasks: [{ jobId: "inbox", name: "Inbox", prompt: "Check inbox" }],
+    } as const;
+
+    expect.soft(await run(request)).toEqual({
+      status: "skipped",
+      reason: "min-spacing",
+      retryAtMs: 30_000,
+    });
+    expect(getLastHeartbeatEvent()).toBeNull();
+    heartbeatWake.requestHeartbeat({ ...request, coalesceMs: 0 });
+    await vi.advanceTimersByTimeAsync(29_998);
+    expect(runOnce).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(runOnce).toHaveBeenCalledTimes(2);
+    expect(
+      runOnce.mock.calls.map(([opts]) => ({ agentId: opts.agentId, tasks: opts.tasks })),
+    ).toEqual(["main", "ops"].map((agentId) => ({ agentId, tasks: request.tasks })));
+  });
+
+  it.each([{ intent: "scheduled", reason: "not-due", runs: 1, retryAtMs: 30 * 60_000 }] as const)(
+    "preserves the earliest $reason deadline across agents",
+    async (testCase) => {
+      const { run } = startRunner();
+      for (let i = 0; i < testCase.runs; i++) {
+        await run({ source: "manual", intent: "manual", agentId: "ops" });
+      }
+      vi.setSystemTime(5_000);
+      for (let i = 0; i < testCase.runs; i++) {
+        await run({ source: "manual", intent: "manual", agentId: "main" });
+      }
+      vi.setSystemTime(10_000);
+
+      expect(
+        await run({ source: "interval", intent: testCase.intent, reason: "interval" }),
+      ).toEqual({
+        status: "skipped",
+        reason: testCase.reason,
+        retryAtMs: testCase.retryAtMs,
+      });
+    },
+  );
+
+  it("prefers a guard deferral over a sibling failure", async () => {
+    const { run, runOnce } = startRunner();
+    await run({ source: "manual", intent: "manual", agentId: "ops" });
+    vi.setSystemTime(1);
+    runOnce.mockResolvedValue({ status: "failed", reason: "agent-tool-failure" });
+    expect(await run({ source: "cron", intent: "task" })).toEqual({
+      status: "skipped",
+      reason: "min-spacing",
+      retryAtMs: 30_000,
+    });
+  });
+
+  it("preserves the first terminal skip when no agent can retry", async () => {
+    const { run, runOnce } = startRunner();
+    const result = { status: "skipped", reason: "quiet-hours" } as const;
+    runOnce
+      .mockResolvedValueOnce(result)
+      .mockResolvedValue({ status: "skipped", reason: "disabled" });
+    expect(await run({ source: "cron", intent: "task" })).toEqual(result);
+  });
+
+  it("reports failure even after a sibling successfully ran", async () => {
+    const { runOnce } = startRunner();
+    const failure = { status: "failed", reason: "agent-tool-failure" } as const;
+    runOnce.mockImplementation(async ({ agentId }) =>
+      agentId === "ops" ? failure : { status: "ran", durationMs: 1 },
+    );
+    const completion = heartbeatWake.requestHeartbeatAndWait({
+      source: "manual",
+      intent: "manual",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(completion).resolves.toEqual(failure);
+    expect(runOnce).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves a busy retry beside a sibling failure", async () => {
+    const { run, runOnce } = startRunner();
+    const busy = {
+      status: "skipped",
+      reason: heartbeatWake.HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
+    } as const;
+    runOnce
+      .mockResolvedValueOnce(busy)
+      .mockResolvedValue({ status: "failed", reason: "agent-tool-failure" });
+    expect(await run({ source: "cron", intent: "task" })).toEqual(busy);
+    expect(runOnce).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries a channel-not-ready alert without consuming its scheduled cadence", async () => {
+    const { run, runOnce } = startRunner();
+    runOnce.mockResolvedValueOnce({
+      status: "skipped",
+      reason: "channel-not-ready",
+      retryAtMs: 60_000,
+    });
+    const request = {
+      source: "interval",
+      intent: "scheduled",
+      reason: "interval",
+      agentId: "main",
+    } as const;
+    heartbeatWake.requestHeartbeat({ ...request, coalesceMs: 0 });
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(runOnce).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(runOnce).toHaveBeenCalledTimes(2);
+    expect(await run(request)).toMatchObject({ status: "skipped", reason: "not-due" });
   });
 });

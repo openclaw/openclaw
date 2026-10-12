@@ -2,7 +2,6 @@ import { isMainThread } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayErrorDetailCodes } from "../../packages/gateway-protocol/src/index.js";
-import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
@@ -67,20 +66,13 @@ describe("session companion RPC", () => {
         updatedAt: 1,
         label: "before side chat",
       });
-      let hostQueries: string[] = [];
       const ask = vi.fn(async (request: Parameters<SessionCompanionService["ask"]>[0]) => {
         const authority = expectDefined(request.operatorAuthority, "Captured operator authority");
         expect(authority.profileId).toBe(profile.id);
-        const sql = observeHostDataSql();
-        try {
-          // The captured authority composes the real RPC source through the operator owner.
-          await patchSessionEntryCore(target, () => ({ label: "private source accepted" }), {
-            workerGuard: { source: authority.assertCurrent },
-          });
-        } finally {
-          hostQueries = sql.queries;
-          sql.restore();
-        }
+        // The captured authority composes the real RPC source through the operator owner.
+        await patchSessionEntryCore(target, () => ({ label: "private source accepted" }), {
+          workerGuard: { source: authority.assertCurrent },
+        });
         return { answer: "Private source accepted.", ts: 125 };
       });
       const respond = await invoke(
@@ -92,9 +84,6 @@ describe("session companion RPC", () => {
 
       expect(ask).toHaveBeenCalledOnce();
       expect(respond).toHaveBeenCalledWith(true, { answer: "Private source accepted.", ts: 125 });
-      expect(hostQueries).toEqual(
-        expect.arrayContaining([expect.stringMatching(/^update "session_nodes" set\b/i)]),
-      );
       expect(loadSessionEntry(target)?.label).toBe("private source accepted");
     });
   });

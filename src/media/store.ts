@@ -41,7 +41,7 @@ const OUTBOUND_STAGING_TTL_MS = 24 * 60 * 60_000;
 const PLAYBACK_TRANSCODE_MAX_CACHE_BYTES = 512 * 1024 * 1024;
 /** Playback renditions outlive transient media but are still retired after one week. */
 const PLAYBACK_TRANSCODE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const DEFAULT_TTL_MS = 2 * 60 * 1000; // 2 minutes
+const DEFAULT_TTL_MS = 2 * 60 * 1000;
 const queuePlaybackCacheOperation = createAsyncLock();
 type CleanOldMediaOptions = {
   recursive?: boolean;
@@ -267,7 +267,6 @@ export async function writePlaybackTranscodeCache(params: {
   });
 }
 
-/** Prunes expired playback renditions and reapplies the fixed cache size budget. */
 export async function prunePlaybackTranscodeCache(): Promise<void> {
   await queuePlaybackCacheOperation(async () => {
     const cacheDir = resolveMediaScopedDir(
@@ -296,7 +295,6 @@ export async function pruneOutboundMedia(): Promise<void> {
   await pruneGeneratedHtmlProvenance(context);
 }
 
-/** Prunes expired non-playback media, optionally recursing into scoped subdirectories. */
 export async function cleanOldMedia(ttlMs = DEFAULT_TTL_MS, options: CleanOldMediaOptions = {}) {
   const context = captureOpenClawStateWorkerContext();
   await pruneNonPlaybackMedia(ttlMs, options);
@@ -305,7 +303,6 @@ export async function cleanOldMedia(ttlMs = DEFAULT_TTL_MS, options: CleanOldMed
   await pruneGeneratedHtmlProvenance(context);
 }
 
-/** Media-store file metadata returned after bytes are persisted under a safe media ID. */
 export type SavedMedia = {
   id: string;
   path: string;
@@ -705,7 +702,6 @@ export async function resolveMediaBufferPath(id: string, subdir = "inbound"): Pr
   return opened.realPath;
 }
 
-/** Read result for callers that need media bytes plus the resolved file path. */
 type ReadMediaBufferResult = {
   id: string;
   path: string;

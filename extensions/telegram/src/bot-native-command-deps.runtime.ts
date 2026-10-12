@@ -5,7 +5,7 @@ import type {
   ModelsAuthLoginFlowResult,
 } from "openclaw/plugin-sdk/provider-auth-login-flow-runtime";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { listSkillCommandsForAgents } from "openclaw/plugin-sdk/skill-commands-runtime";
+import { prepareSkillCommandsForAgents } from "openclaw/plugin-sdk/skill-commands-runtime";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import { syncTelegramMenuCommands } from "./bot-native-command-menu.js";
 import { loadTelegramSendModule } from "./send-runtime.js";
@@ -14,7 +14,7 @@ export type TelegramNativeCommandDeps = Pick<
   TelegramBotDeps,
   | "editMessageTelegram"
   | "getRuntimeConfig"
-  | "listSkillCommandsForAgents"
+  | "prepareSkillCommandsForAgents"
   | "readChannelAllowFromStore"
   | "syncTelegramMenuCommands"
 > & {
@@ -27,7 +27,7 @@ const bindSend = createLazyRuntimeMethodBinder(loadTelegramSendModule);
 export const defaultTelegramNativeCommandDeps: TelegramNativeCommandDeps = {
   getRuntimeConfig,
   readChannelAllowFromStore,
-  listSkillCommandsForAgents,
+  prepareSkillCommandsForAgents,
   syncTelegramMenuCommands,
   async runModelsAuthLoginFlow(opts) {
     const { runModelsAuthLoginFlow } =

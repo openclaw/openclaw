@@ -4,8 +4,7 @@ import { createDeferredCore } from "../../../shared/deferred.js";
 import { maybeWakeRequesterAfterAllChildrenSettled as runRequesterSettleWake } from "../announce/subagent-announce.requester-settle-wake.js";
 import type {
   blockSubagentCompletionDelivery,
-  mutateRequesterSettleWakeBatch,
-  settleRequesterCompletionBatch,
+  mutateRequesterCompletionBatch,
 } from "../completion/subagent-completion-admission.store.js";
 import type { SubagentCompletionMutationResult } from "../completion/subagent-completion-mutation.types.js";
 import {
@@ -100,8 +99,12 @@ function blockedPolicyDraft(
 
 function createRequesterSettleWakeMutationFixture(
   owners: CompletionPolicyOwners,
-): typeof mutateRequesterSettleWakeBatch {
+): typeof mutateRequesterCompletionBatch {
   return async (params) => {
+    const operation = params.operation;
+    if (operation.kind === "settle") {
+      throw new Error("Outcome settlement requires its settlement fixture");
+    }
     if (params.committed) {
       throw new Error("Native receipt reconciliation requires the registered worker fixture");
     }
@@ -118,8 +121,8 @@ function createRequesterSettleWakeMutationFixture(
           }
           original.push({ subagent: current });
           const next = structuredClone(current);
-          if (params.operation.kind === "transition") {
-            transitionRequesterSettleWakeState(next, params.operation.state);
+          if (operation.kind === "transition") {
+            transitionRequesterSettleWakeState(next, operation.state);
             postimages.set(next.runId, next);
           } else {
             postimages.set(next.runId, completeRequesterSettleWakeState(next) ? null : next);
@@ -132,8 +135,8 @@ function createRequesterSettleWakeMutationFixture(
         context: params.context,
         assertCurrent: params.assertCurrent,
         onPublished(_postimages, receipt) {
-          params.onCommitted(receipt);
-          params.onPublished();
+          params.onCommitted?.(receipt);
+          params.onPublished?.();
         },
       },
     );
@@ -143,12 +146,13 @@ function createRequesterSettleWakeMutationFixture(
 
 export async function mockRegistryRequesterWakeMutation() {
   const store = await import("../completion/subagent-completion-admission.store.js");
-  const original = store.mutateRequesterSettleWakeBatch;
+  const original = store.mutateRequesterCompletionBatch;
   const owners: CompletionPolicyOwners = new Map();
   const mutate = createRequesterSettleWakeMutationFixture(owners);
   const spy = vi
-    .spyOn(store, "mutateRequesterSettleWakeBatch")
+    .spyOn(store, "mutateRequesterCompletionBatch")
     .mockImplementation((params) =>
+      params.operation.kind !== "settle" &&
       params.entries.some((entry) => owners.has(getSubagentRunRuntimeKey(entry)))
         ? mutate(params)
         : original(params),
@@ -166,16 +170,19 @@ export async function mockRegistryRequesterWakeMutation() {
 
 export function mockBlockedCompletionDeliveryOwner(completionDeliveryMocks: {
   blockSubagentCompletionDelivery: Mock<typeof blockSubagentCompletionDelivery>;
-  settleRequesterCompletionBatch: Mock<typeof settleRequesterCompletionBatch>;
-  mutateRequesterSettleWakeBatch: Mock<typeof mutateRequesterSettleWakeBatch>;
+  mutateRequesterCompletionBatch: Mock<typeof mutateRequesterCompletionBatch>;
   ownersByEntry: CompletionPolicyOwners;
 }): void {
   // Policy fixtures use the real row owner; native worker suites own queue receipts.
-  completionDeliveryMocks.mutateRequesterSettleWakeBatch.mockImplementation(
-    createRequesterSettleWakeMutationFixture(completionDeliveryMocks.ownersByEntry),
+  const mutateWake = createRequesterSettleWakeMutationFixture(
+    completionDeliveryMocks.ownersByEntry,
   );
-  completionDeliveryMocks.settleRequesterCompletionBatch.mockImplementation(async (params) => {
-    const entries = params.entries.map(({ subagent }) => subagent);
+  completionDeliveryMocks.mutateRequesterCompletionBatch.mockImplementation(async (params) => {
+    if (params.operation.kind !== "settle") {
+      return mutateWake(params);
+    }
+    const { outcome } = params.operation;
+    const entries = params.entries;
     const owner = policyOwner(completionDeliveryMocks.ownersByEntry, entries);
     await mutateSubagentRuns(
       entries.map((entry) => entry.runId),
@@ -194,8 +201,8 @@ export function mockBlockedCompletionDeliveryOwner(completionDeliveryMocks: {
             next.expectsCompletionMessage &&
             ["pending", "in_progress"].includes(next.delivery?.status ?? "pending")
           ) {
-            if (params.outcome.delivered) {
-              const deliveredAt = params.outcome.deliveredAt ?? Date.now();
+            if (outcome.delivered) {
+              const deliveredAt = outcome.deliveredAt ?? Date.now();
               next.delivery = {
                 ...next.delivery,
                 status: "delivered",
@@ -207,9 +214,8 @@ export function mockBlockedCompletionDeliveryOwner(completionDeliveryMocks: {
             } else {
               blockedPolicyDraft(next, {
                 subagent: current,
-                reason:
-                  params.outcome.error ?? params.outcome.reason ?? "requester settle wake failed",
-                disposition: params.outcome.disposition,
+                reason: outcome.error ?? outcome.reason ?? "requester settle wake failed",
+                disposition: outcome.disposition,
               });
             }
           }
@@ -220,11 +226,7 @@ export function mockBlockedCompletionDeliveryOwner(completionDeliveryMocks: {
       {
         runs: owner.runs,
         context: params.context,
-        assertCurrent() {
-          if (!params.isCurrent()) {
-            throw new Error("Requester policy fixture owner changed");
-          }
-        },
+        assertCurrent: params.assertCurrent,
         onPublished(_postimages, receipt) {
           params.onCommitted?.(receipt);
           params.onPublished?.();

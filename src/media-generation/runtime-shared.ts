@@ -17,7 +17,10 @@ import {
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
-import { isProviderApiKeyConfigured } from "../plugins/provider-auth-availability.js";
+import {
+  isProviderApiKeyConfigured,
+  isProviderApiKeyConfiguredAsync,
+} from "../plugins/provider-auth-availability.js";
 import { getProviderEnvVarsCore } from "../secrets/provider-env-vars.js";
 
 function buildCapabilityCandidateFailure(
@@ -59,7 +62,7 @@ export async function runMediaGenerationCandidates<TProvider extends object, TRe
     | Promise<PreparedMediaGenerationCandidate<TResult>>;
   onFailure?: (attempt: FallbackAttempt) => void;
 }): Promise<TResult> {
-  const candidates = resolveCapabilityModelCandidates({
+  const candidates = await resolveCapabilityModelCandidatesAsync({
     ...params.request,
     modelConfig: params.request.cfg.agents?.defaults?.mediaModels?.[params.capability],
     parseModelRef: parseGenerationModelRef,
@@ -150,7 +153,9 @@ export function resolveMediaProviderRequestTimeoutMs(params: {
 }
 
 type CapabilityProviderCandidate = CapabilityModelProviderCandidate & {
+  /** @deprecated Implement isConfiguredAsync so credential reads use the worker. */
   isConfigured?: (ctx: { cfg?: OpenClawConfig; agentDir?: string }) => boolean;
+  isConfiguredAsync?: (ctx: { cfg?: OpenClawConfig; agentDir?: string }) => Promise<boolean>;
 };
 
 type ParsedAspectRatio = {
@@ -179,27 +184,21 @@ function resolveCurrentDefaultProviderId(cfg?: OpenClawConfig): string {
   return provider || DEFAULT_PROVIDER;
 }
 
-function resolveAutoCapabilityFallbackRefs(params: {
+type CapabilityFallbackParams = {
   cfg: OpenClawConfig;
   agentDir?: string;
   listProviders: (cfg?: OpenClawConfig) => CapabilityProviderCandidate[];
-}): string[] {
+};
+
+function buildAutoCapabilityFallbackRefs(
+  params: CapabilityFallbackParams,
+  configuredProviders: CapabilityProviderCandidate[],
+): string[] {
   const providerDefaults = new Map<string, { ref: string; aliases: string[] }>();
-  for (const provider of params.listProviders(params.cfg)) {
+  for (const provider of configuredProviders) {
     const providerId = normalizeOptionalString(provider.id);
     const modelId = normalizeOptionalString(provider.defaultModel);
-    if (
-      !providerId ||
-      !modelId ||
-      providerDefaults.has(providerId) ||
-      !(provider.isConfigured
-        ? provider.isConfigured({ cfg: params.cfg, agentDir: params.agentDir })
-        : isProviderApiKeyConfigured({
-            provider: provider.id,
-            cfg: params.cfg,
-            agentDir: params.agentDir,
-          }))
-    ) {
+    if (!providerId || !modelId || providerDefaults.has(providerId)) {
       continue;
     }
     const aliases = (provider.aliases ?? []).flatMap((alias) => {
@@ -227,8 +226,7 @@ function resolveAutoCapabilityFallbackRefs(params: {
   });
 }
 
-/** Builds ordered provider/model candidates for one media capability request. */
-export function resolveCapabilityModelCandidates(params: {
+type CapabilityModelCandidatesParams = {
   cfg: OpenClawConfig;
   modelConfig: AgentModelConfig | undefined;
   modelOverride?: string;
@@ -236,7 +234,13 @@ export function resolveCapabilityModelCandidates(params: {
   agentDir?: string;
   listProviders?: (cfg?: OpenClawConfig) => CapabilityProviderCandidate[];
   autoProviderFallback?: boolean;
-}): ParsedProviderModelRef[] {
+};
+
+function prepareCapabilityModelCandidates(params: CapabilityModelCandidatesParams): {
+  candidates: ParsedProviderModelRef[];
+  fallbackParams?: CapabilityFallbackParams;
+  add: (raw: string, useProviderMetadata: boolean) => void;
+} {
   const candidates: ParsedProviderModelRef[] = [];
   const seen = new Set<string>();
   let providers: CapabilityProviderCandidate[] | undefined;
@@ -275,7 +279,7 @@ export function resolveCapabilityModelCandidates(params: {
   if (override) {
     // Explicit model overrides are authoritative and should not be expanded into
     // auto provider fallback candidates.
-    return [override];
+    return { candidates: [override], add };
   }
 
   // Cross-provider fallback is a fixed product policy; Doctor removes the retired opt-out.
@@ -285,16 +289,84 @@ export function resolveCapabilityModelCandidates(params: {
   for (const fallback of resolveAgentModelFallbackValues(params.modelConfig)) {
     add(fallback, autoProviderFallbackEnabled);
   }
-  if (autoProviderFallbackEnabled && params.listProviders) {
-    for (const candidate of resolveAutoCapabilityFallbackRefs({
-      cfg: params.cfg,
-      agentDir: params.agentDir,
-      listProviders: () => getProviders(),
-    })) {
-      add(candidate, false);
+  return {
+    candidates,
+    add,
+    fallbackParams:
+      autoProviderFallbackEnabled && params.listProviders
+        ? { cfg: params.cfg, agentDir: params.agentDir, listProviders: () => getProviders() }
+        : undefined,
+  };
+}
+
+/** @deprecated Use resolveCapabilityModelCandidatesAsync for worker-backed credential reads. */
+export function resolveCapabilityModelCandidates(
+  params: CapabilityModelCandidatesParams,
+): ParsedProviderModelRef[] {
+  const prepared = prepareCapabilityModelCandidates(params);
+  const fallbackParams = prepared.fallbackParams;
+  if (fallbackParams) {
+    const configuredProviders: CapabilityProviderCandidate[] = [];
+    for (const provider of fallbackParams.listProviders(params.cfg)) {
+      if (!isAutoCapabilityFallbackCandidate(provider, configuredProviders)) {
+        continue;
+      }
+      const configured = provider.isConfigured
+        ? provider.isConfigured({ cfg: params.cfg, agentDir: params.agentDir })
+        : isProviderApiKeyConfigured({
+            provider: provider.id,
+            cfg: params.cfg,
+            agentDir: params.agentDir,
+          });
+      if (configured) {
+        configuredProviders.push(provider);
+      }
+    }
+    for (const ref of buildAutoCapabilityFallbackRefs(fallbackParams, configuredProviders)) {
+      prepared.add(ref, false);
     }
   }
-  return candidates;
+  return prepared.candidates;
+}
+
+function isAutoCapabilityFallbackCandidate(
+  provider: CapabilityProviderCandidate,
+  configuredProviders: CapabilityProviderCandidate[],
+): boolean {
+  const id = normalizeOptionalString(provider.id);
+  return Boolean(
+    id &&
+    normalizeOptionalString(provider.defaultModel) &&
+    !configuredProviders.some((configured) => normalizeOptionalString(configured.id) === id),
+  );
+}
+
+export async function resolveCapabilityModelCandidatesAsync(
+  params: CapabilityModelCandidatesParams,
+): Promise<ParsedProviderModelRef[]> {
+  const prepared = prepareCapabilityModelCandidates(params);
+  const fallbackParams = prepared.fallbackParams;
+  if (fallbackParams) {
+    const configuredProviders: CapabilityProviderCandidate[] = [];
+    for (const provider of fallbackParams.listProviders(params.cfg)) {
+      if (!isAutoCapabilityFallbackCandidate(provider, configuredProviders)) {
+        continue;
+      }
+      const ctx = { cfg: params.cfg, agentDir: params.agentDir };
+      const configured = provider.isConfiguredAsync
+        ? await provider.isConfiguredAsync(ctx)
+        : provider.isConfigured
+          ? provider.isConfigured(ctx)
+          : await isProviderApiKeyConfiguredAsync({ provider: provider.id, ...ctx });
+      if (configured) {
+        configuredProviders.push(provider);
+      }
+    }
+    for (const ref of buildAutoCapabilityFallbackRefs(fallbackParams, configuredProviders)) {
+      prepared.add(ref, false);
+    }
+  }
+  return prepared.candidates;
 }
 
 function normalizeSupportedValues<TValue extends string>(values?: readonly TValue[]): TValue[] {
@@ -392,7 +464,6 @@ function deriveAspectRatioFromSize(size?: string): string | undefined {
   return `${parsed.width / divisor}:${parsed.height / divisor}`;
 }
 
-/** Chooses the closest supported aspect ratio for a request. */
 export function resolveClosestAspectRatio(params: {
   requestedAspectRatio?: string;
   requestedSize?: string;
@@ -522,7 +593,6 @@ export function normalizeDurationToClosestMax(
   return Math.min(rounded, Math.max(1, Math.round(maxDurationSeconds)));
 }
 
-/** Builds user-visible metadata describing provider normalization decisions. */
 export function buildMediaGenerationNormalizationMetadata(params: {
   normalization?: MediaGenerationNormalizationMetadataInput;
   requestedSizeForDerivedAspectRatio?: string;
@@ -613,7 +683,6 @@ function formatCapabilityFailureAttempts(attempts: FallbackAttempt[]): string {
   return failures.join(" | ");
 }
 
-/** Formats setup guidance when no model is configured for a media capability. */
 export function buildNoCapabilityModelConfiguredMessage(params: {
   capabilityLabel: string;
   modelConfigKey: string;

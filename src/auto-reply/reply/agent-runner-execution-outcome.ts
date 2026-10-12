@@ -1,14 +1,17 @@
 import { hasCompletedSourceReplyDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { withExecRequestTurn } from "../../infra/exec-request-context.js";
 import { recordMessageToolRunOutcome } from "../../infra/message-tool-run-outcome-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { VisibleWorkSession } from "../get-reply-options.types.js";
 import { resolveAgentTurnExecutionStatus } from "./agent-runner-execution-status.js";
 import type { AgentTurnExecutionResult, AgentTurnParams } from "./agent-runner-execution.types.js";
+import type { SessionEventExecution } from "./session-event-contract.js";
+import { getReplySystemEventContext } from "./system-event-session-key.js";
 
 const messageToolOutcomeLog = createSubsystemLogger("auto-reply/message-tool-outcome");
 
-export async function recordAgentTurnExecutionOutcome(
+async function recordAgentTurnExecutionOutcome(
   params: AgentTurnParams,
   result: AgentTurnExecutionResult | undefined,
 ): Promise<void> {
@@ -71,5 +74,63 @@ export async function recordAgentTurnExecutionOutcome(
       ...values,
       error: formatErrorMessage(error),
     });
+  }
+}
+
+async function recordSessionEventTerminalOutcome(
+  event: SessionEventExecution | undefined,
+  runId: string,
+  result: AgentTurnExecutionResult | undefined,
+): Promise<void> {
+  await event?.onTerminal(
+    runId,
+    result?.outcome.kind === "aborted"
+      ? "aborted"
+      : result?.outcome.kind === "settled" && result.outcome.status === "ok"
+        ? "completed"
+        : "failed",
+  );
+}
+
+/** Source custody settles native work before publishing the turn's terminal observations. */
+export async function runAgentTurnWithOutcome(
+  params: AgentTurnParams,
+  runId: string,
+  run: () => Promise<AgentTurnExecutionResult>,
+): Promise<AgentTurnExecutionResult> {
+  const eventExecution = params.followupRun.run.internalEventExecution;
+  let terminalRecorded = false;
+  try {
+    if (eventExecution) {
+      eventExecution.assertCurrent?.();
+      await eventExecution.beforeStart?.();
+      params.replyOperation?.abortSignal.throwIfAborted();
+      eventExecution.assertCurrent?.();
+    }
+    const result = await withExecRequestTurn(
+      {
+        identity: {
+          runId,
+          sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
+          sessionId: params.followupRun.run.sessionId,
+          agentId: params.followupRun.run.agentId,
+        },
+        owners:
+          eventExecution?.execRequestOwners ??
+          getReplySystemEventContext(params.opts)?.execRequestOwners,
+        abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
+      },
+      run,
+    );
+    await recordAgentTurnExecutionOutcome(params, result);
+    terminalRecorded = true;
+    await recordSessionEventTerminalOutcome(eventExecution, runId, result);
+    return result;
+  } catch (error) {
+    if (!terminalRecorded) {
+      await recordAgentTurnExecutionOutcome(params, undefined);
+      await recordSessionEventTerminalOutcome(eventExecution, runId, undefined);
+    }
+    throw error;
   }
 }

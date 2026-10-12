@@ -24,10 +24,7 @@ function hasNarrowMemberRestriction(
 ): boolean {
   const users = channel?.users ?? guild.users ?? [];
   const roles = channel?.roles ?? guild.roles ?? [];
-  if ([...users, ...roles].some((entry) => isWildcardEntry(entry))) {
-    return false;
-  }
-  return users.length > 0 || roles.length > 0;
+  return ![...users, ...roles].some(isWildcardEntry) && (users.length > 0 || roles.length > 0);
 }
 
 function listBroadMemberTargetPaths(params: {

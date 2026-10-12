@@ -25,6 +25,7 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { createMigrationDatabaseHandle } from "./state-migrations.agent-database.js";
 import {
@@ -325,7 +326,7 @@ async function migrateAgentDatabase(
         agentId: params.agentId,
         database,
         pathname: params.pathname,
-        signal: maintenance.signal,
+        signal: resolveSqliteInspectionSignal(maintenance.signal),
       });
       return { archivedTranscripts: 0, transcriptSessions: 0, warnings };
     }
@@ -368,11 +369,11 @@ async function migrateAgentDatabase(
   }
 }
 
-function agentDatabaseNeedsTranscriptDirectiveMigration(params: {
+async function agentDatabaseNeedsTranscriptDirectiveMigration(params: {
   agentId: string;
   env: NodeJS.ProcessEnv;
   pathname: string;
-}): boolean {
+}): Promise<boolean> {
   const database = openNodeSqliteDatabase(params.pathname, { readOnly: true });
   try {
     const userVersion = Number(database.prepare("PRAGMA user_version").get()?.user_version ?? 0);
@@ -395,7 +396,7 @@ function agentDatabaseNeedsTranscriptDirectiveMigration(params: {
       return true;
     }
     if (
-      transcriptDirectiveArchivesNeedMigration(
+      await transcriptDirectiveArchivesNeedMigration(
         database,
         cursor.phase === "archives"
           ? { generation: cursor.generation, sessionId: cursor.sessionId }
@@ -420,6 +421,8 @@ export async function migrateHistoricalTranscriptDirectives(
     env?: NodeJS.ProcessEnv;
   } = {},
 ): Promise<MigrationMessages> {
+  const signal = resolveSqliteInspectionSignal();
+  signal?.throwIfAborted();
   const env = params.env ?? process.env;
   const changes: string[] = [];
   const warnings: string[] = [];
@@ -440,7 +443,7 @@ export async function migrateHistoricalTranscriptDirectives(
       try {
         assertMigrationTargetPathCurrent(target);
         if (
-          agentDatabaseNeedsTranscriptDirectiveMigration({
+          await agentDatabaseNeedsTranscriptDirectiveMigration({
             agentId: target.agentId,
             env,
             pathname: target.path,
@@ -449,6 +452,9 @@ export async function migrateHistoricalTranscriptDirectives(
           targets.push(target);
         }
       } catch (error) {
+        if (signal?.aborted && error === signal.reason) {
+          throw error;
+        }
         warnings.push(
           `Skipped historical transcript directive migration preflight for ${target.path}: ${String(error)}`,
         );
@@ -473,6 +479,9 @@ export async function migrateHistoricalTranscriptDirectives(
               );
             }
           } catch (error) {
+            if (signal?.aborted && error === signal.reason) {
+              throw error;
+            }
             warnings.push(
               `Skipped historical transcript directive migration for ${target.path}: ${String(error)}`,
             );
@@ -481,6 +490,9 @@ export async function migrateHistoricalTranscriptDirectives(
       });
     }
   } catch (error) {
+    if (signal?.aborted && error === signal.reason) {
+      throw error;
+    }
     warnings.push(`Skipped historical transcript directive migration: ${String(error)}`);
   }
   return {

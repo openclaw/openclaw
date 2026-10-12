@@ -43,7 +43,7 @@ describe("attached Browser tool runtime", () => {
     const runtime = await createAttachedBrowserToolRuntime({
       cdpUrl: "http://127.0.0.1:9222",
       ensureAttachTarget,
-      agentSessionKey: "worker:session-1",
+      agentSessionKey: "agent:worker-agent:worker:session-1",
       agentDir: "/tmp/worker-state",
       workspaceDir,
     });
@@ -76,7 +76,7 @@ describe("attached Browser tool runtime", () => {
     expect(mocks.createBrowserTool).toHaveBeenCalledWith({
       sandboxBridgeUrl: "http://127.0.0.1:18443",
       allowHostControl: false,
-      agentSessionKey: "worker:session-1",
+      agentSessionKey: "agent:worker-agent:worker:session-1",
       agentDir: "/tmp/worker-state",
       workspaceDir,
       screenshotResultMode: "path",

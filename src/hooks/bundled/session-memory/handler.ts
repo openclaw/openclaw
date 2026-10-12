@@ -23,6 +23,7 @@ import {
   parseAgentSessionKey,
   toAgentStoreSessionKey,
 } from "../../../routing/session-key.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import { shortenHomePath } from "../../../utils.js";
 import { resolveHookConfig } from "../../config.js";
 import type { HookHandler } from "../../hooks.js";
@@ -274,7 +275,7 @@ async function saveSessionMemoryNow(
   }
 }
 
-const saveSessionToMemory: HookHandler = (event) => {
+const saveSessionToMemory: HookHandler = async (event) => {
   // Manual commands retain their shipped hook contract, including /reset soft.
   // Automatic rollover uses a distinct lifecycle event so command hooks do not
   // receive synthetic commands and manual reset cannot double-write memory.
@@ -299,35 +300,41 @@ const saveSessionToMemory: HookHandler = (event) => {
   }
   const agentId = requireSessionMemoryAgentId(event);
   const cfg = context.cfg as OpenClawConfig | undefined;
-  // Gateway and soft-reset hooks already run before mutation; chat resets carry
-  // the snapshot captured by session initialization before closing the window.
-  const transcript =
-    (context.previousSessionMemory as SessionMemoryTranscript | undefined) ??
-    (sessionEntry?.sessionId
-      ? captureSessionMemoryTranscript(
-          {
-            agentId,
-            sessionId: sessionEntry.sessionId,
-            sessionKey: event.sessionKey,
-            storePath:
-              normalizeOptionalString(context.storePath) ??
-              resolveSessionStorePathCore(cfg?.session?.store, { agentId }),
-          },
-          cfg,
-        )
-      : ({ status: "available", content: null, originClass: "agent" } as const));
+  const captureComplete = createDeferredCore();
+  const captureAndSave = async () => {
+    // Chat resets carry their pre-mutation excerpt; other hooks capture before returning.
+    const transcript =
+      (context.previousSessionMemory as SessionMemoryTranscript | undefined) ??
+      (sessionEntry?.sessionId
+        ? await captureSessionMemoryTranscript(
+            {
+              agentId,
+              sessionId: sessionEntry.sessionId,
+              sessionKey: event.sessionKey,
+              storePath:
+                normalizeOptionalString(context.storePath) ??
+                resolveSessionStorePathCore(cfg?.session?.store, { agentId }),
+            },
+            cfg,
+          )
+        : ({ status: "available", content: null, originClass: "agent" } as const));
+    captureComplete.resolve();
+    await saveSessionMemoryNow(event, agentId, transcript);
+  };
+  // Reserve follow-up admission and register its settlement before capture can yield.
   const writePromise = isAutoReset
-    ? saveSessionMemoryNow(event, agentId, transcript)
-    : runWithGatewayIndependentRootWorkContinuation(
-        () => saveSessionMemoryNow(event, agentId, transcript),
-        "hooks:session-memory",
-      );
+    ? captureAndSave()
+    : runWithGatewayIndependentRootWorkContinuation(captureAndSave, "hooks:session-memory");
   pendingSessionMemoryWrites.add(writePromise);
-  void writePromise.finally(() => {
-    pendingSessionMemoryWrites.delete(writePromise);
-  });
-  // Automatic rollover dispatch is already detached from the successor turn.
-  // Keep its gateway admission alive until nested slug/model work finishes.
+  void writePromise.then(
+    () => pendingSessionMemoryWrites.delete(writePromise),
+    (error: unknown) => {
+      pendingSessionMemoryWrites.delete(writePromise);
+      captureComplete.reject(error);
+    },
+  );
+  // Manual reset waits for its excerpt but retains detached filename generation and writing.
+  await captureComplete.promise;
   if (isAutoReset) {
     return writePromise;
   }

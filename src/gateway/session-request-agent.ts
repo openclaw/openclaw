@@ -197,3 +197,20 @@ export function resolveRequestedSessionAgentId(
   });
   return invalidSessionRequest(selectionError.message);
 }
+
+/** Fresh children inherit a qualified parent only in explicit-ownership fleets. */
+export function resolveSessionCreateAgentId(
+  cfg: OpenClawConfig,
+  input: { key?: string; agentId?: string; parentSessionKey?: string },
+): RequestedSessionAgentIdResolution {
+  const parentAgentId =
+    cfg.agents?.ownership === "explicit" && input.key === undefined && input.agentId === undefined
+      ? parseAgentSessionKey(input.parentSessionKey?.trim())?.agentId
+      : undefined;
+  const agentId = input.agentId ?? parseAgentSessionKey(input.key)?.agentId ?? parentAgentId;
+  return resolveRequestedSessionAgentId(
+    cfg,
+    input.key ?? (agentId === undefined ? "main" : undefined),
+    agentId,
+  );
+}

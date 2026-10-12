@@ -63,7 +63,7 @@ export function routingFindings(
       findings.push({
         checkId: CHECK_IDS.policyRoutingAgentMismatch,
         severity: "error",
-        message: `Routing probe ${probe.id} resolved to agent ${result.agentId}, not ${probe.expect.agentId}.`,
+        message: `Routing check ${probe.id} resolved to agent ${result.agentId}, not ${probe.expect.agentId}.`,
         source: "policy",
         path: policyPath,
         target: resultTarget,
@@ -78,7 +78,7 @@ export function routingFindings(
       findings.push({
         checkId: CHECK_IDS.policyRoutingMatchKindMismatch,
         severity: "error",
-        message: `Routing probe ${probe.id} matched by ${result.matchedBy}, which is not an expected match kind.`,
+        message: `Routing check ${probe.id} matched by ${result.matchedBy}, which is not an expected match kind.`,
         source: "policy",
         path: policyPath,
         target: resultTarget,

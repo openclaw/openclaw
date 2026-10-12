@@ -6,17 +6,17 @@ import {
   observeTextareaOverflow,
   scheduleTextareaHeightAdjustment,
 } from "../chat/components/chat-composer-dom.ts";
-import { ComposerEmojiMenu } from "../chat/components/chat-composer-emoji.ts";
-import { HumanMentionMenu } from "../chat/components/chat-composer-mention-menu.ts";
-import type { ChatComposerPlusMenuView } from "../chat/components/chat-composer-plus-menu.ts";
+import { ComposerEmojiMenu } from "../chat/components/chat-composer-emoji.tsx";
+import { HumanMentionMenu } from "../chat/components/chat-composer-mention-menu.tsx";
+import type { ChatComposerPlusMenuView } from "../chat/components/chat-composer-plus-menu.tsx";
 import {
   createSkillMenuState,
   resetSkillMenuState,
-} from "../chat/components/chat-composer-skill-menu.ts";
+} from "../chat/components/chat-composer-skill-menu.tsx";
 import {
   createSlashMenuState,
   resetSlashMenuState,
-} from "../chat/components/chat-composer-slash-menu.ts";
+} from "../chat/components/chat-composer-slash-menu.tsx";
 import { insertComposerDictation } from "../chat/composer-dictation.ts";
 
 export class NewSessionComposerTextareaController {
@@ -195,11 +195,7 @@ export class NewSessionComposerTextareaController {
     draftOwnerKey: string,
   ) {
     const normalizedAgentId = agentId.trim();
-    if (
-      this.skillCommandClient === client &&
-      this.skillCommandAgentId === normalizedAgentId &&
-      this.skillCommandDraftOwnerKey === draftOwnerKey
-    ) {
+    if (this.ownsSkillCommands(client, normalizedAgentId, draftOwnerKey)) {
       return;
     }
     // The controller survives route, agent, and Gateway changes. Invalidate its
@@ -211,7 +207,11 @@ export class NewSessionComposerTextareaController {
     resetSkillMenuState(this.skillMenuState);
   }
 
-  ownsSkillCommands(client: GatewayBrowserClient, agentId: string, draftOwnerKey: string): boolean {
+  ownsSkillCommands(
+    client: GatewayBrowserClient | null,
+    agentId: string,
+    draftOwnerKey: string,
+  ): boolean {
     return (
       this.skillCommandClient === client &&
       this.skillCommandAgentId === agentId.trim() &&

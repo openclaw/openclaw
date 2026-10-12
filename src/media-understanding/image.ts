@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { prepareHeadersForSimpleCompletion } from "@openclaw/ai/transports";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -447,6 +449,16 @@ export async function describeImagesWithModelPayloadTransformCore(
     };
 
     const maxTokens = resolveImageToolMaxTokens(model.maxTokens, params.maxTokens);
+    // One image request carries one routing identity across the reasoning-only retry: re-rolling
+    // it per attempt would split a single image request across two provider conversations. The
+    // identity stays a routing header because a stream sessionId would also give unrelated
+    // providers prompt-cache affinity and retained WebSocket sessions.
+    const imageRequestHeaders = prepareHeadersForSimpleCompletion(requestModel, {
+      sessionId: randomUUID(),
+      ...(requestModel.provider === "github-copilot"
+        ? { headers: { "x-initiator": "user", "Copilot-Vision-Request": "true" } }
+        : {}),
+    });
     const completeImage = async (retry = false) => {
       params.signal?.throwIfAborted();
       assertResourcesOpen?.();
@@ -457,9 +469,7 @@ export async function describeImagesWithModelPayloadTransformCore(
         maxTokens,
         signal: requestSignal,
         ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-        ...(requestModel.provider === "github-copilot"
-          ? { headers: { "x-initiator": "user", "Copilot-Vision-Request": "true" } }
-          : {}),
+        ...(imageRequestHeaders ? { headers: imageRequestHeaders } : {}),
         ...(payloadHandler ? { onPayload: payloadHandler } : {}),
       };
       const task: Promise<AssistantMessage> = trackAsyncWork(() => {

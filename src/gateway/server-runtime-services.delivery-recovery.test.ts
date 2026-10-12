@@ -3,10 +3,8 @@ import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  captureDeliveryQueueStateContext,
-  loadDeliveryQueueEntry,
-} from "../infra/delivery-queue-sqlite.js";
+import { captureDeliveryQueueStateContext } from "../infra/delivery-queue-sqlite.js";
+import { loadDeliveryQueueEntry } from "../infra/delivery-queue-sqlite.test-support.js";
 import { computeBackoffMs } from "../infra/delivery-recovery.shared.js";
 import { PlatformMessageNotDispatchedError } from "../infra/outbound/deliver-types.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "../infra/outbound/delivery-queue-namespaces.js";

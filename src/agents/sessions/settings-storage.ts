@@ -124,24 +124,6 @@ export interface SettingsError {
   error: Error;
 }
 
-function replaceSettingsFile(path: string, content: string): void {
-  const savePath = resolveJsonSaveTarget(path);
-  const saveDir = realpathSync(dirname(savePath));
-  const canonicalSavePath = join(saveDir, basename(savePath));
-
-  // The atomic helper enforces explicit modes. Carry the existing parent mode
-  // and Node's writeFile creation mode forward so replacement changes no permissions.
-  // Keep rename failures fail-closed: copy fallback can expose a partial destination.
-  replaceFileAtomicSync({
-    filePath: canonicalSavePath,
-    content,
-    dirMode: statSync(saveDir).mode & 0o7777,
-    mode: 0o666 & ~process.umask(),
-    preserveExistingMode: true,
-    tempPrefix: basename(canonicalSavePath),
-  });
-}
-
 export class FileSettingsStorage implements SettingsStorage {
   private paths: Record<SettingsScope, string>;
 
@@ -180,7 +162,21 @@ export class FileSettingsStorage implements SettingsStorage {
       const current = existsSync(path) ? readFileSync(path, "utf-8") : undefined;
       const next = fn(current);
       if (next !== undefined) {
-        replaceSettingsFile(path, next);
+        const savePath = resolveJsonSaveTarget(path);
+        const saveDir = realpathSync(dirname(savePath));
+        const canonicalSavePath = join(saveDir, basename(savePath));
+
+        // The atomic helper enforces explicit modes. Carry the existing parent mode
+        // and Node's writeFile creation mode forward so replacement changes no permissions.
+        // Keep rename failures fail-closed: copy fallback can expose a partial destination.
+        replaceFileAtomicSync({
+          filePath: canonicalSavePath,
+          content: next,
+          dirMode: statSync(saveDir).mode & 0o7777,
+          mode: 0o666 & ~process.umask(),
+          preserveExistingMode: true,
+          tempPrefix: basename(canonicalSavePath),
+        });
       }
     } finally {
       release();

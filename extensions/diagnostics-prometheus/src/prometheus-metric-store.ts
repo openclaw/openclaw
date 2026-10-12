@@ -1,4 +1,4 @@
-import { metricKey, type LabelSet } from "./prometheus-format.js";
+import { formatLabels, metricKey, type LabelSet } from "./prometheus-format.js";
 
 type ScalarSample = {
   help: string;
@@ -8,10 +8,11 @@ type ScalarSample = {
 
 type HistogramSample = {
   buckets: number[];
+  bucketPrefixes: string[];
   counts: number[];
   count: number;
   help: string;
-  labels: LabelSet;
+  labels: string;
   sum: number;
 };
 
@@ -20,6 +21,8 @@ export type PrometheusMetricStore = ReturnType<typeof createPrometheusMetricStor
 const DURATION_BUCKETS_SECONDS = [
   0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600,
 ];
+// Match diagnostics-otel's one-hour agent range without removing existing le series.
+export const AGENT_DURATION_BUCKETS_SECONDS = [...DURATION_BUCKETS_SECONDS, 900, 1800, 3600];
 const MAX_PROMETHEUS_SERIES = 2048;
 const DROPPED_SERIES_COUNTER_NAME = "openclaw_prometheus_series_dropped_total";
 
@@ -103,10 +106,14 @@ export function createPrometheusMetricStore() {
     if (!sample) {
       sample = {
         buckets,
+        // Labels and bounds are fixed for this series; reset releases the prepared text.
+        bucketPrefixes: [...buckets, "+Inf"].map(
+          (le) => `${name}_bucket${formatLabels({ ...labels, le: String(le) })} `,
+        ),
         counts: buckets.map(() => 0),
         count: 0,
         help,
-        labels,
+        labels: formatLabels(labels),
         sum: 0,
       };
       histograms.set(key, sample);

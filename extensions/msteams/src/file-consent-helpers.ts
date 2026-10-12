@@ -7,24 +7,6 @@ export const FILE_CONSENT_THRESHOLD_BYTES = 4 * 1024 * 1024;
 
 type FileConsentMedia = Pick<PendingUpload, "buffer" | "filename" | "contentType">;
 
-function buildConsentActivity(params: {
-  media: FileConsentMedia;
-  description?: string;
-  uploadId: string;
-}): Record<string, unknown> {
-  const { media, description, uploadId } = params;
-  const consentCard = buildFileConsentCard({
-    filename: media.filename,
-    description: description || `File: ${media.filename}`,
-    sizeInBytes: media.buffer.length,
-    context: { uploadId },
-  });
-  return {
-    type: "message",
-    attachments: [consentCard],
-  };
-}
-
 /** In-process replies keep consent bytes in memory; CLI sends use the persisted variant below. */
 export function prepareFileConsentActivity(params: {
   media: FileConsentMedia;
@@ -40,7 +22,17 @@ export function prepareFileConsentActivity(params: {
     conversationId,
   });
 
-  return { activity: buildConsentActivity({ media, description, uploadId }), uploadId };
+  const consentCard = buildFileConsentCard({
+    filename: media.filename,
+    description: description || `File: ${media.filename}`,
+    sizeInBytes: media.buffer.length,
+    context: { uploadId },
+  });
+  const activity: Record<string, unknown> = {
+    type: "message",
+    attachments: [consentCard],
+  };
+  return { activity, uploadId };
 }
 
 /** Persist consent bytes for callbacks received by another process after the CLI exits. */

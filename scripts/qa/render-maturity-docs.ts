@@ -996,7 +996,7 @@ function evidenceScorecardWarnings(
       .filter((item) => (item.profile === "all" || item.profile === "release") && !item.scorecard)
       .map(
         (item) =>
-          `${item.path}: ${item.profile} profile qa-evidence.json does not include a scorecard field; run pnpm openclaw qa run --qa-profile ${item.profile} to produce deterministic scorecard rows`,
+          `${item.path}: ${item.profile} profile qa-evidence.json does not include a scorecard field; run pnpm openclaw qa run --qa-profile ${item.profile} to produce repeatable scorecard rows`,
       ),
     ...coverage.warnings,
   ];
@@ -1090,13 +1090,13 @@ function renderEvidenceSection(
       "",
       "These recorded categories describe the original run and do not contribute to current coverage.",
       "",
-      "| Profile | Recorded category | ID | Outcome | Features | Coverage IDs |",
-      "| --- | --- | --- | --- | --- | --- |",
+      "| Recorded category | ID | Features | Coverage IDs |",
+      "| --- | --- | --- | --- |",
     );
     for (const item of historical) {
       for (const category of item.scorecard?.categoryReports ?? []) {
         lines.push(
-          `| ${markdownEscape(item.profile)} | ${markdownEscape(category.name)} | ${markdownEscape(category.id)} | ${markdownEscape(category.status)} | ${markdownEscape(countText(category.features))} | ${markdownEscape(countText(category.coverageIds))} |`,
+          `| ${markdownEscape(category.name)} | ${markdownEscape(category.id)} | ${markdownEscape(countText(category.features))} | ${markdownEscape(countText(category.coverageIds))} |`,
         );
       }
     }

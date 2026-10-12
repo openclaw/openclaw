@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { hasErrnoCode } from "../../infra/errors.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import {
   createUpdateDoctorProcessCustody,
   type UpdateDoctorProcessNamespace,
@@ -15,11 +16,13 @@ import {
   readCommandProcessFailure,
 } from "../../process/exec-result.js";
 import {
+  resolveCommandEnv,
   runUtf8CommandWithTimeout,
   type CommandOptions,
   type SpawnResult,
 } from "../../process/exec.js";
 import { parseOpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withUpdateCommandExecutorChild } from "./update-command-executor.js";
 import type { UpdateDoctorInput } from "./update-command-migrated-types.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
@@ -117,7 +120,8 @@ export async function runUpdateDoctorProcess(
       "Doctor process custody requires its result channel.",
     );
   }
-  const custody = createUpdateDoctorProcessCustody(
+  const statePath = resolveOpenClawStateSqlitePath(resolveCommandEnv({ argv, ...options }));
+  const custody = await createUpdateDoctorProcessCustody(
     context.runId,
     context.root,
     resultPath,
@@ -167,7 +171,12 @@ export async function runUpdateDoctorProcess(
     }
     return outcome.result;
   } finally {
-    custody.close();
+    try {
+      // Doctor can migrate in another process, outside this parent's admission publication cells.
+      revokeSqliteDatabaseAdmissionsForPath(statePath);
+    } finally {
+      custody.close();
+    }
   }
 }
 

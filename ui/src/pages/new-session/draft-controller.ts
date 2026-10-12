@@ -92,7 +92,7 @@ export class NewSessionDraftController {
         if (!discard) {
           return;
         }
-        this.submission.attachmentDraft.reset({ release: true });
+        this.submission.attachmentDraft.reset();
         this.submission.setMessage("", []);
         await retryStaleChunkReloadWhenReachable({ timeoutMs: 0, ...reloadOptions });
       } catch {
@@ -163,6 +163,7 @@ export class NewSessionDraftController {
       {
         preferenceScope: callbacks.preferenceScope,
         readPalettePreference: callbacks.readPalettePreference,
+        readAgents: () => read().context?.agents,
         requestUpdate,
         updateComplete: () => host.updateComplete,
         onInvalidate: (reset, outcome) => {
@@ -221,18 +222,18 @@ export class NewSessionDraftController {
     });
     this.submission.draftPersistence.modelSelection = {
       read: () =>
-        read().context?.config?.current.newSessionModelDefaults === "configured"
+        this.place.modelControl.modelDefaultsPolicy === "configured"
           ? this.place.modelControl.draftSelection(this.place.agentId)
           : undefined,
       restore: (selection) => this.place.modelControl.restoreDraftSelection(selection),
       retire: () => {
-        if (read().context?.config?.current.newSessionModelDefaults === "configured") {
+        if (this.place.modelControl.modelDefaultsPolicy === "configured") {
           this.place.modelControl.retireDraftSelection();
         }
       },
     };
     this.place.modelControl.onDraftSelectionChange = () => {
-      if (read().context?.config?.current.newSessionModelDefaults === "configured") {
+      if (this.place.modelControl.modelDefaultsPolicy === "configured") {
         this.submission.draftPersistence.noteModelSelectionMutation();
       }
     };
@@ -279,7 +280,9 @@ export class NewSessionDraftController {
   }
 
   synchronizeSelections() {
-    const modelDefaultsPolicy = this.read().context?.config?.current.newSessionModelDefaults;
+    const modelDefaultsPolicy = this.place.requiredPlacement
+      ? "configured"
+      : this.read().context?.config?.current.newSessionModelDefaults;
     if (!this.place.agentsHydrated && this.agentsReady()) {
       this.place.setAgentsHydrated(true);
       this.place.adoptAgentDefaults({ preserveSelectedAgent: true, preserveSelectedFolder: true });
@@ -288,17 +291,18 @@ export class NewSessionDraftController {
       this.place.modelControl.load(context, this.place.agentId, !isCatalogTarget(data), {
         agent: this.place.selectedAgent(),
         preference: this.gateway.readPreference(this.place.agentId),
+        configuredDefaults: this.place.requiredPlacement,
       });
     }
     if (
-      modelDefaultsPolicy === "configured" &&
+      this.place.modelControl.modelDefaultsPolicy === "configured" &&
       this.modelDefaultsPolicy !== "configured" &&
       !this.submission.submitting &&
       this.place.modelControl.draftSelection(this.place.agentId)
     ) {
       this.submission.draftPersistence.noteModelSelectionMutation();
     }
-    this.modelDefaultsPolicy = modelDefaultsPolicy;
+    this.modelDefaultsPolicy = this.place.modelControl.modelDefaultsPolicy;
     this.place.restorePreferenceSelections();
     this.place.synchronizeTerminalHosts();
   }

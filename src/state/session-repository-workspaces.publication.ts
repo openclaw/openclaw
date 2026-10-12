@@ -2,6 +2,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import type { OpenClawStateDatabaseReadAdmission } from "./openclaw-state-db-async-lifecycle.js";
 import { registerOpenClawStateDatabaseLifecycleListener } from "./openclaw-state-db-cache.js";
+import { repositoryWorkspacePublication } from "./session-repository-workspaces.receipts.js";
 import type {
   RepositoryWorkspaceMutationResult,
   SessionRepositoryWorkspaceRecord,
@@ -13,11 +14,48 @@ type Row = {
   pending: Set<Promise<void>>;
   uncertain: boolean;
 };
-type Store = { path: string; rows: Map<string, Row> };
+type Store = { path: string; identity: string; rows: Map<string, Row> };
 const stores = resolveGlobalMap<string, Store>(
   Symbol.for("openclaw.repositoryWorkspacePublications"),
   "close-and-restart",
 );
+
+repositoryWorkspacePublication.subscribeFacts((change) => {
+  if (change.kind !== "committed" && change.kind !== "unknown") {
+    return;
+  }
+  if (change.kind === "committed" && change.receipt.facts.size === 0) {
+    return;
+  }
+  const identity = change.kind === "committed" ? change.receipt.source.identity : change.identity;
+  for (const store of stores.values()) {
+    if (store.identity !== identity) {
+      continue;
+    }
+    if (change.kind === "unknown") {
+      for (const row of store.rows.values()) {
+        row.revision = {};
+        row.uncertain = true;
+      }
+      continue;
+    }
+    for (const [key, fact] of change.receipt.facts) {
+      const row = store.rows.get(key);
+      if (!row || fact.kind === "unchanged") {
+        continue;
+      }
+      row.revision = {};
+      row.uncertain = fact.kind === "unknown";
+      if (fact.kind === "postimage") {
+        row.value = copy(fact.value);
+      }
+      if (fact.kind === "absent") {
+        row.value = undefined;
+        store.rows.delete(key);
+      }
+    }
+  }
+});
 
 registerOpenClawStateDatabaseLifecycleListener((event) => {
   if (event.kind !== "opened") {
@@ -33,7 +71,11 @@ function owner(admission: OpenClawStateDatabaseReadAdmission): Store {
   admission.assertCurrent();
   let store = stores.get(admission.coordinationKey);
   if (!store) {
-    store = { path: admission.identity.canonicalPath, rows: new Map() };
+    store = {
+      path: admission.identity.canonicalPath,
+      identity: admission.identity.key,
+      rows: new Map(),
+    };
     stores.set(admission.coordinationKey, store);
   }
   return store;
@@ -73,14 +115,13 @@ export function stageRepositoryWorkspacePublication(
       if (stores.get(admission.coordinationKey) === store && row.revision === revision) {
         if (committed) {
           row.value = copy(result.workspace);
-          if (!result.workspace) {
-            // Existing views retain the tombstone; the owner need not retain deleted rows.
-            store.rows.delete(result.workspaceId);
-          }
         }
         row.uncertain = !known;
       }
       row.pending.delete(pending.promise);
+      if (!row.value && row.pending.size === 0 && store.rows.get(result.workspaceId) === row) {
+        store.rows.delete(result.workspaceId);
+      }
       pending.resolve();
     },
   };
@@ -100,7 +141,7 @@ export async function prepareRepositoryWorkspaceRead(
   read: () => Promise<SessionRepositoryWorkspaceRecord | undefined>,
 ): Promise<PreparedRepositoryWorkspace> {
   const store = owner(admission);
-  const row = rowFor(store, workspaceId);
+  let row = rowFor(store, workspaceId);
   const assertSource = () => {
     admission.assertCurrent();
     if (stores.get(admission.coordinationKey) !== store) {
@@ -112,15 +153,19 @@ export async function prepareRepositoryWorkspaceRead(
       await Promise.all(row.pending);
     }
     assertSource();
+    if (store.rows.get(workspaceId) !== row) {
+      row = rowFor(store, workspaceId);
+      continue;
+    }
     const revision = row.revision;
     const workspace = await read();
     assertSource();
-    if (revision !== row.revision || row.pending.size) {
+    if (revision !== row.revision || row.pending.size || store.rows.get(workspaceId) !== row) {
       continue;
     }
     row.value = copy(workspace);
     row.uncertain = false;
-    if (!workspace && store.rows.get(workspaceId) === row) {
+    if (!workspace) {
       store.rows.delete(workspaceId);
     }
     return {
@@ -128,7 +173,7 @@ export async function prepareRepositoryWorkspaceRead(
       assertSourceCurrent: assertSource,
       current() {
         assertSource();
-        if (row.pending.size || row.uncertain) {
+        if (row.pending.size || store.rows.get(workspaceId)?.pending.size || row.uncertain) {
           throw new Error("Repository workspace mutation has not settled; refresh this session");
         }
         return row.value;

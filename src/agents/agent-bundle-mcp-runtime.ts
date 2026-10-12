@@ -13,7 +13,7 @@ import { logWarn } from "../logger.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   projectBundleMcpCatalogTools,
-  projectUnavailableBundleMcpCatalog,
+  projectBundleMcpCatalogFailure,
 } from "./agent-bundle-mcp-catalog-projection.js";
 import {
   createCombinedSessionMcpRuntime,
@@ -31,7 +31,6 @@ import type {
   McpRequestOptions,
   McpServerCatalog,
   McpToolCatalog,
-  McpToolCatalogDiagnostic,
   SessionMcpRuntime,
   SessionMcpRuntimeManager,
 } from "./agent-bundle-mcp-types.js";
@@ -104,20 +103,15 @@ type McpServerBackoffState = {
 
 export { createMcpJsonSchemaValidator as createBundleMcpJsonSchemaValidator };
 
-function hasConfiguredMcpRequestTimeout(rawServer: unknown): boolean {
+function getCatalogListTimeoutMs(rawServer: unknown, requestTimeoutMs: number): number {
   const record = asOptionalObjectRecord(rawServer);
-  return ["requestTimeoutMs", "timeout"].some(
+  const configured = ["requestTimeoutMs", "timeout"].some(
     (key) => asPositiveFiniteNumber(record?.[key]) !== undefined,
   );
-}
-
-function getCatalogListTimeoutMs(rawServer: unknown, requestTimeoutMs: number): number {
-  if (bundleMcpCatalogListTimeoutMs !== undefined) {
-    return bundleMcpCatalogListTimeoutMs;
-  }
-  return hasConfiguredMcpRequestTimeout(rawServer)
-    ? requestTimeoutMs
-    : BUNDLE_MCP_CATALOG_LIST_TIMEOUT_MS;
+  return (
+    bundleMcpCatalogListTimeoutMs ??
+    (configured ? requestTimeoutMs : BUNDLE_MCP_CATALOG_LIST_TIMEOUT_MS)
+  );
 }
 
 function setBundleMcpCatalogListTimeoutMsForTest(timeoutMs?: number): void {
@@ -397,23 +391,27 @@ function createServerMcpRuntime(
   let retiredCatalog: McpToolCatalog | undefined;
   const lifecycleAbortController = new AbortController();
   let catalog: McpToolCatalog | null = null;
+  // Transport health cannot revoke advertised schemas; only a successful list
+  // or retirement of this configuration owner replaces them.
+  let lastListedCatalog: McpToolCatalog | undefined;
   let catalogRetryAfterMs: number | undefined;
   let catalogInFlight: Promise<McpToolCatalog> | undefined;
-  let catalogInvalidationGeneration = 0;
   const invalidateCatalog = () => {
-    catalogInvalidationGeneration += 1;
     catalog = null;
     catalogRetryAfterMs = undefined;
   };
   const scheduleCatalogServerRetry = (message: string) => {
-    const unavailableCatalog = projectUnavailableBundleMcpCatalog(catalog, serverName, message);
-    if (!unavailableCatalog) {
-      invalidateCatalog();
-      return;
+    const server = lastListedCatalog?.servers[serverName];
+    invalidateCatalog();
+    if (server) {
+      catalog = projectBundleMcpCatalogFailure(lastListedCatalog, {
+        serverName,
+        safeServerName: server.safeServerName ?? serverName,
+        launchSummary: server.launchSummary,
+        message,
+      });
+      catalogRetryAfterMs = Date.now();
     }
-    catalogInvalidationGeneration += 1;
-    catalog = unavailableCatalog;
-    catalogRetryAfterMs = Date.now();
   };
   const catalogRetryIsDue = (): boolean =>
     catalogRetryAfterMs !== undefined && Date.now() >= catalogRetryAfterMs;
@@ -464,7 +462,8 @@ function createServerMcpRuntime(
   };
   const requireConnectedSession = (): BundleMcpSession => {
     const session = currentSession;
-    if (!session || !session.connected) {
+    // Retained descriptors cannot admit calls before the replacement finishes listing.
+    if (!session || !session.connected || !session.toolMetadata) {
       throw new Error(
         session?.disconnectReason
           ? `bundle-mcp server "${serverName}" is disconnected: ${session.disconnectReason}`
@@ -610,7 +609,6 @@ function createServerMcpRuntime(
     if (catalogInFlight) {
       return catalogInFlight;
     }
-    const catalogGeneration = catalogInvalidationGeneration;
     const inFlight = (async (): Promise<McpToolCatalog> => {
       const rawServer = loaded.mcpServers[serverName]!;
       const override = params.connectionOverrides?.get(serverName);
@@ -634,12 +632,10 @@ function createServerMcpRuntime(
       failIfDisposed();
 
       let session = currentSession;
-      while (session && !session.retiring && !session.connected && !session.connectPromise) {
+      if (session && !session.retiring && !session.connected && !session.connectPromise) {
         // A closed SDK client cannot reconnect cleanly on the same transport.
         await retireSessionIfCurrent(session);
-        // Retirement yields while closing. Preserve any replacement that a
-        // newer catalog generation installed during that await.
-        session = currentSession;
+        session = undefined;
       }
       if (session?.retiring) {
         session = undefined;
@@ -810,38 +806,32 @@ function createServerMcpRuntime(
             `bundle-mcp: failed to ${action} server "${serverName}" (${launchDescription}): ${message}`,
           );
         }
-        const diags: McpToolCatalogDiagnostic[] = [
-          {
-            serverName,
-            safeServerName,
-            launchSummary: launchDescription,
-            message,
-          },
-        ];
-        if (
-          !session.connected ||
-          isMcpHttpSessionExpired(session, error) ||
-          (!reusedSession && catalogInvalidationGeneration === catalogGeneration)
-        ) {
-          // Closed, expired, or isolated failed startups need a fresh process.
-          // A superseding catalog may reuse a healthy session; identity guards
-          // preserve any replacement installed before retirement yields.
+        if (!session.connected || isMcpHttpSessionExpired(session, error) || !reusedSession) {
+          // Closed, expired, or failed startups need a fresh process.
           await retireSessionIfCurrent(session);
         }
         failIfDisposed();
-        return { version: 1, generatedAt: Date.now(), servers: {}, tools: [], diagnostics: diags };
+        return projectBundleMcpCatalogFailure(lastListedCatalog, {
+          serverName,
+          safeServerName,
+          launchSummary: launchDescription,
+          message,
+        });
       }
     })();
     catalogInFlight = inFlight;
     try {
       const nextCatalog = await inFlight;
       failIfDisposed();
-      if (catalogInvalidationGeneration === catalogGeneration) {
-        catalog = nextCatalog;
-        catalogRetryAfterMs = nextCatalog.diagnostics?.length
-          ? (startupRetryAfterMs ?? Date.now() + BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS)
-          : undefined;
+      // A list-change notification during this load is best effort; the next
+      // notification or explicit refresh replaces the completed inventory.
+      catalog = nextCatalog;
+      if (!nextCatalog.diagnostics?.length) {
+        lastListedCatalog = nextCatalog;
       }
+      catalogRetryAfterMs = nextCatalog.diagnostics?.length
+        ? (startupRetryAfterMs ?? Date.now() + BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS)
+        : undefined;
       return nextCatalog;
     } finally {
       if (catalogInFlight === inFlight) {
@@ -856,14 +846,15 @@ function createServerMcpRuntime(
       return catalog;
     }
     if (!catalog) {
-      await loadCatalog();
-      if (catalog) {
-        return catalog;
-      }
-      // Replay one in-flight invalidation before accepting the latest completed
-      // snapshot. A server that invalidates every list must not block its siblings.
-      const replayedCatalog = await loadCatalog();
-      return catalog ?? replayedCatalog;
+      const retryExitedProcess = currentSession?.transportType === "stdio";
+      const loadedCatalog = await loadCatalog();
+      // Recover a previously healthy process once; HTTP list failures retain their diagnostic.
+      return retryExitedProcess &&
+        loadedCatalog.diagnostics?.length &&
+        lastListedCatalog &&
+        !currentSession
+        ? loadCatalog()
+        : loadedCatalog;
     }
 
     const staleCatalog = catalog;
@@ -1056,6 +1047,7 @@ function createServerMcpRuntime(
         };
         lifecycleAbortController.abort(createDisposedError(params.sessionId));
         catalog = null;
+        lastListedCatalog = undefined;
         catalogRetryAfterMs = undefined;
         const pendingCatalog = catalogInFlight;
         catalogInFlight = undefined;

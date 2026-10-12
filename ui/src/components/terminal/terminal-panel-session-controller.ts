@@ -195,7 +195,7 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
   scheduleLifecycleSync(): void {
     const token = ++this.lifecycleSyncToken;
     const generation = this.lifecycleGeneration;
-    // State teardown inside Lit's updated hook schedules a nested update.
+    // State teardown during the render commit can schedule a nested update.
     // Defer it; token + generation reject superseded connection epochs.
     queueMicrotask(() => {
       if (
@@ -478,10 +478,7 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
         // The server session is live and its sink registered; close it now or
         // it survives invisibly (eating the session cap) until disconnect.
         void boot.connection.close(result.sessionId);
-        if (this.tabs.includes(boot.tab)) {
-          boot.tab.cancelled = "lifecycle";
-          this.removeTab(boot.tab);
-        }
+        this.discardCancelledTab(boot.tab);
         return cancelledByUser;
       }
       this.adoptSession(boot.tab, result, ownerSessionKey !== undefined);
@@ -546,10 +543,7 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
         if (boot.tab.cancelled === "close") {
           void boot.connection.close(result.sessionId);
         }
-        if (this.tabs.includes(boot.tab)) {
-          boot.tab.cancelled = "lifecycle";
-          this.removeTab(boot.tab);
-        }
+        this.discardCancelledTab(boot.tab);
         return false;
       }
       this.adoptSession(boot.tab, result, agentOwned);
@@ -592,13 +586,17 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
       restore: { batch: restore, sessionId },
     });
     if (!this.isTerminalOperationCurrent(restore.operation, restore) || boot.tab.cancelled) {
-      if (this.tabs.includes(boot.tab)) {
-        boot.tab.cancelled = "lifecycle";
-        this.removeTab(boot.tab);
-      }
+      this.discardCancelledTab(boot.tab);
       return;
     }
     this.markRestoredSessionExited(boot.tab, sessionId);
+  }
+
+  private discardCancelledTab(tab: TerminalPanelSessionTab): void {
+    if (this.tabs.includes(tab)) {
+      tab.cancelled = "lifecycle";
+      this.removeTab(tab);
+    }
   }
 
   private markRestoredSessionExited(tab: TerminalPanelSessionTab, sessionId: string): void {

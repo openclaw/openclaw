@@ -12,6 +12,10 @@ CI continues during Full Release Validation; the legacy release-priority variabl
 does not pause workflow admission. See [deferred CI recovery](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-ci/SKILL.md#deferred-ci-recovery)
 for runs already deferred by older workflow revisions.
 
+The existing `live-cache` release job has a 30-minute budget for three sequential
+eight-minute checks on one runner: stored cache floors, transport prefixes, and
+agent-turn prefixes. See [prompt-cache regression coverage](/help/testing/suites#prompt-cache-regression-coverage).
+
 Native video smoke coverage uses four shards of four providers. Each provider has a ten-minute operation timeout plus 30 seconds of test overhead; each shard has a 50-minute job budget, leaving eight minutes for setup. These shards keep full-mode video testing disabled.
 
 Broad PRs retain their compact selected-owner Node plan when time-based splitting
@@ -43,9 +47,9 @@ budget, based on hosted 4-vCPU measurements with a slow-host margin. The release
 self-upgrade job gives first-hop lanes weight two at npm limit five, admitting at
 most two concurrently. It allows 210 minutes for three waves of six source versions,
 the survivor, and setup.
-Authenticated update restart uses a 2,280-second container budget, a 43-minute lane
+Authenticated update restart uses a 3,420-second container budget, a 62-minute lane
 budget, and a lane-specific 1,500-second command timeout. Its dedicated recovery
-chunk allows 55 minutes; the remaining OpenAI package chunk allows 60 minutes. See
+chunk allows 75 minutes; the remaining OpenAI package chunk allows 60 minutes. See
 [release-path chunks](/ci/release-validation/install-smoke-and-docker-e2e#release-path-chunks).
 
 For the published-upgrade regression gate, see [selection and routing](/ci/scope-and-routing#scope-and-routing), [runner budgets](/ci/capacity#runner-registration-budget), and [Package Acceptance baselines](/ci/release-validation#suite-profiles). Weekly validation is listed under [Update Migration](/ci/scheduled-workflows#update-migration).
@@ -59,6 +63,8 @@ Hourly iOS retains `ios-build (tests)` with Rust, voice, native Access, and focu
 Current iOS builds restore three independent input caches: verified Mermaid assets, SwiftPM source packages and binary artifacts, and the Watch RTC Cargo registry and compiled simulator library. Only trusted `main` push and scheduled runs save them; PRs restore only. Frozen targets retain their original cold path. Mermaid validates source and output hashes before copying resources. Its key covers the renderer's complete locked dependency graph, including workspace sources and optional build dependencies, so unrelated root dependency upgrades reuse the assets. SwiftPM keys cover Xcode, package manifests, and available `Package.resolved` files; automatic resolution remains enabled (the generated iOS project currently has no tracked lockfile). Watch keys cover Xcode, architecture, target mappings, the pinned Rust toolchain, lockfile, crate sources, and iOS build settings; the build phase verifies the library checksum and input fingerprint before reuse, and otherwise runs the locked Cargo build. Caching the finished slice avoids rebuilding the Rust standard library when a fresh runner installs `rust-src` with new timestamps. The hourly Watch engine test shares registry downloads, while its host Debug products stay out of the simulator Release cache.
 
 Current iOS Debug builds log CPU count, memory, machine model, booted simulators, and timestamps immediately around Xcode execution. The read-only hardware and simulator checks each have a five-second limit; unavailable diagnostics do not block the build. These markers distinguish simulator-query delays from Xcode startup, package resolution, and compilation.
+
+Shared OpenClawKit Periphery scans restore the same verified Watch RTC libraries published by trusted main CI, without saving caches. Both Apple consumers build their complete index in a separate timed step with streamed output retained as `build.log` in the consumer artifact. iOS uses a fresh run-owned index; Periphery analyzes that exact index without rebuilding. Scan scope and the shared dead-code intersection stay unchanged. Cache misses retain the locked Cargo build.
 
 iOS screenshot shards, release qualification, Store Release, and its screenshot-only operation use [larger hosted capacity](/ci/runners). Screenshot capture uses stock simulators and creates and cleans up one at a time; the screenshot-only operation can validate a selected branch without signing or uploading a release. The pairing, chat, and native Overview tests retain their existing assertions and deadlines.
 
@@ -103,6 +109,22 @@ Core lint discovers separate source and UI TypeScript projects, retaining shared
 
 Runtime topology checks inherit the existing [Go memory defaults](/ci/local-proof#local-equivalents), with caller overrides and the full architecture check sequence retained.
 
+Full Release Validation's Docker seed child uses the 16-class Blacksmith runner
+when no release runner group is configured, prepares the existing smoke package,
+and retains serial weighted lane admission. Hosted outage overrides and retries
+keep their recovery route. Ordinary manual dispatches retain hosted
+serial execution. All six lanes remain selected. The three long, unfitted hosted
+test rows (`core-runtime-config`, `agentic-cli-process`, and
+`agentic-control-plane-agent-chat`) have a 90-minute job cap until complete timing
+observations allow the release planner to split them. The targeted
+`update-restart-auth` lane has a 62-minute budget and a 75-minute job cap.
+Release-path migration matrices isolate channel switching and each published
+baseline on separate runners when multiple baselines are selected; per-host
+weighted resource limits and exact-candidate artifact checks remain unchanged.
+Package Acceptance admits its long standalone upgrade lanes before expanded
+scenario jobs and orders pinned baseline cohorts newest first, without changing
+its matrix cap or scenario coverage.
+
 Android native resource preparation uses the Mermaid renderer's filtered dependency install, including optional build tooling. Pnpm retains root dependencies but omits unrelated plugin packages; Gradle still builds the assets and runs the selected native tests and lint. Historical targets keep their compatibility path.
 
 Android phone tests use up to four isolated JVMs on Blacksmith and retain [Gradle-owned cache expiry](/ci/runners#runner-backend-modes). The same four normal rows split phone tests from app lint: Wear owns Wear tests and lint plus third-party app lint, and Kotlin lint owns Play/shared lint. Canonical Blacksmith push and PR first attempts, including forks, overlap all four rows; the GitHub override, retries, manual dispatches, schedules, and noncanonical repositories retain two. All test and lint tasks remain selected.
@@ -119,7 +141,13 @@ Windows keeps its complete explicit test inventory in five [measured project-ali
 
 Real-Gateway browser checks use [job budgets matched to their selected runner](/ci/runners#blacksmith-runner-capacity).
 
-Control UI CI installs the Chromium revision pinned by Playwright even when the browser cache misses. Current targets use the installer's `--require-playwright-chromium` mode; historical targets retain their existing installer. Browser startup diagnostics include provider, page, WebSocket, and Chromium process events to diagnose a session-readiness timeout even when it is reported only after unrelated unit work finishes.
+Control UI, repo E2E, and native live browser CI restore the Chromium revision pinned by the selected target's installed Playwright package, with separate OS/architecture cache keys and no fallback prefixes. The protected-main Vitest cache warmer publishes the browser cache in its short dependency job for both Linux backends; PR and release jobs remain restore-only. A cache miss still installs the managed browser, and current targets use the installer's `--require-playwright-chromium` mode rather than substituting system Chrome. Historical targets retain their Playwright installer and Linux dependency setup. Browser startup diagnostics include provider, page, WebSocket, and Chromium process events to diagnose a session-readiness timeout even when it is reported only after unrelated unit work finishes.
+
+The first `checks-ui` shard also runs a curated WebKit overlay and composer-focus project when changed paths touch its interaction owners, their styles, or the subset in `ui/vitest.config.ts`. The manifest owns that selection. WebKit runs sequentially after the existing UI tests, with the same three-worker limit and no additional runner or matrix row. Scheduled runs without changed paths and frozen targets omit it. The selected row installs the pinned Playwright WebKit browser and Linux dependencies. Run the same project explicitly with `OPENCLAW_UI_WEBKIT=1 pnpm --dir ui test --project=webkit --maxWorkers=3`; ordinary UI test runs remain Chromium-only. CDP-dependent modal media and accessibility-tree suites stay on Chromium until their browser-neutral replacements land.
+
+The WebKit project requires every selected assertion to pass, with no expected-failure exceptions. Shared fixtures wait for usable overlay content, inspect native adopted stylesheets, and establish keyboard traversal independently of Safari's pointer-focus behavior.
+
+Linux baseline ratchets and native grep tests reuse an existing `rg` or download the checksum-pinned ripgrep 14.1.1 release directly into the runner's temporary directory. Setup does not use apt, sudo, package-index refreshes, or package-manager locks. The small archive download has bounded retries and transfer timeouts; unsupported architectures and checksum failures fail the job.
 
 Browser extension CI launches the installed, patched Chrome MCP dependency directly, on Node and on the pinned Bun fork.
 
@@ -131,6 +159,10 @@ Changed-owner Node rows use existing file/group timing evidence with a
 150-test-second admission target and the existing 130-row PR cap. Complete files,
 canonical configs, and worker policies remain intact; predicted test seconds
 are separate from measured CI wall time.
+Known indivisible-file costs remain a floor when selected subsets are priced;
+older complete-group measurements cannot cap those costs. Process-heavy worktree
+and updater suites carry explicit case-cost weights so they do not share a row
+on the default per-file estimate.
 
 Plugin-sensitive PRs select their owner tests, transitive import consumers,
 protected regressions, and policy watches. The existing Plugin Prerelease workflow retains complete
@@ -162,6 +194,11 @@ coverage plus qualified Bun coverage; see
 [test runtime selection](/ci/pipeline#test-runtime-selection).
 Both runtimes group uncached, non-isolated UI files by environment in batches
 to reduce worker restarts while retaining native shard ownership and worker budgets.
+Bun UI workers also use an [allocation-based collection trigger](/ci/scope-and-routing/job-budgets)
+to preserve memory headroom across the three native shards.
+Main runs UI on Node, so a PR changing the runtime owner
+(`scripts/lib/ci-test-runtime.mts`) selects the three existing UI unit shards on
+Bun; see [scope selection](/ci/scope-and-routing/selection).
 
 Frozen-target CI loads its Node shard planner, planning helpers, and measured
 costs from the pinned `workflow_sha` checkout. Test discovery and execution still
@@ -215,7 +252,8 @@ concurrency limits. Missing group capacity queues jobs. Shared workflows receive
 an optional `runner_group` from their release caller, including `docker-release.yml`
 and `vercel-container-registry-publish.yml` from Release Publish; `docker-image-refresh.yml`,
 ordinary CI, scheduled performance, and unrelated reusable callers retain their routing.
-Approval and credentialed publish jobs (npm trusted publishing, ClawHub, Docker)
+Approval and credentialed publish jobs (npm trusted publishing, ClawHub, Docker,
+and GitHub App-backed release dispatch)
 keep their default GitHub-hosted labels, and the hourly plugin npm preview routes
 only when Release Publish dispatches it.
 The runner count, matrix caps, and default labels do not change.

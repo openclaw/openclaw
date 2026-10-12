@@ -16,7 +16,10 @@ import {
   type ReplyMessageInjectionAttempt,
   type ReplyMessageInjectionTarget,
 } from "../../auto-reply/reply/reply-run-registry.js";
-import { beginReplyMessageInjectionTarget as beginActualReplyMessageInjectionTarget } from "../../auto-reply/reply/reply-run-registry.message-injection.js";
+import {
+  beginReplyMessageInjectionTarget as beginActualReplyMessageInjectionTarget,
+  finalizeReplyMessageInjectionAttempt as finalizeActualReplyMessageInjectionAttempt,
+} from "../../auto-reply/reply/reply-run-registry.message-injection.js";
 import type { RuntimeMsgContext } from "../../auto-reply/templating.js";
 import {
   loadSessionEntry,
@@ -33,6 +36,7 @@ import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-trans
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import type { ChatImageContent } from "../chat-attachments.js";
 import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
 import {
@@ -79,8 +83,9 @@ vi.mock(import("../agent-turn/agent-job.js"), async (importOriginal) => ({
 vi.mock("../../auto-reply/reply/queue/settings-runtime.js", () => ({
   resolveQueueSettings: vi.fn(() => ({})),
 }));
+// mock-isolation: Injection fixtures provide owner authority without command-owner database admission.
 vi.mock("../../auto-reply/command-auth.js", () => ({
-  resolveCommandAuthorization: vi.fn(() => ({ senderIsOwner: true })),
+  resolveCommandAuthorizationAsync: vi.fn(() => ({ senderIsOwner: true })),
 }));
 vi.mock("../../auto-reply/reply/reply-tool-authority.js", () => ({
   resolveInboundReplyToolAuthorityOverlay: vi.fn(() => ({})),
@@ -214,28 +219,6 @@ describe("finalizeAcceptedChatSendMessageInjection", () => {
           outcome: "error",
           options: { reason: "question_response_indeterminate", error: errorMessage },
         },
-      }),
-    );
-  });
-
-  it("audits an unconfirmed-transcript steer abort as skipped, not completed", async () => {
-    vi.mocked(finalizeReplyMessageInjectionAttempt).mockResolvedValueOnce({
-      status: "accepted",
-      outcome: {
-        status: "accepted",
-        result: { transcriptCommit: "unconfirmed", errorMessage: "commit timeout" },
-      },
-      targetRunId: "run-1",
-      aborted: true,
-    });
-    await finalizeAcceptedChatSendMessageInjection(makeParams());
-
-    expect(logMessageProcessed).toHaveBeenCalledWith(
-      expect.objectContaining({ outcome: "skipped", reason: "reply_operation_aborted" }),
-    );
-    expect(emitInboundMessageAuditTerminal).toHaveBeenCalledWith(
-      expect.objectContaining({
-        terminal: { outcome: "skipped", options: { reason: "reply_operation_aborted" } },
       }),
     );
   });
@@ -569,6 +552,91 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
 });
 
 describe("gateway steer contract after the injection-start fence", () => {
+  it.each([false, true])(
+    "keeps work alive after an uncertain steer (statusOnly=%s)",
+    async (statusOnly) => {
+      const starter = makeStarterParams();
+      if (statusOnly) {
+        starter.turn.ctx.InputProvenance = {
+          kind: "internal_system",
+          sourceTool: "progress_card_refresh",
+        };
+      }
+      const operation = createReplyOperation({
+        sessionKey: starter.session.sessionKey!,
+        sessionId: "session-1",
+        resetTriggered: false,
+      });
+      onTestFinished(() => operation.complete());
+      const cancel = vi.fn();
+      operation.bindToolAuthoritySnapshot({
+        fingerprint: () => "steer-authority",
+        project: () => "steer-authority",
+      });
+      operation.bindToolAuthorityRoute({ provider: "test", model: "test" });
+      const errorMessage = "Steering receipt unavailable; do not replay this input.";
+      const queueMessage = vi.fn<ReplyBackendMessageInjectionV2["queueMessage"]>(
+        async (_text, options, assertCurrent) => {
+          assertCurrent();
+          options?.onQueueAccepted?.(true);
+          return { transcriptCommit: "unconfirmed", errorMessage };
+        },
+      );
+      operation.attachBackend({
+        kind: "embedded",
+        runId: "backing-run",
+        toolAuthorityFingerprint: "steer-authority",
+        cancel,
+        messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
+      });
+      operation.setPhase("running");
+      starter.target = expectDefined(
+        replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key),
+        "active steering target",
+      );
+      vi.mocked(beginReplyMessageInjectionTarget).mockImplementationOnce(
+        beginActualReplyMessageInjectionTarget,
+      );
+      vi.mocked(finalizeReplyMessageInjectionAttempt).mockImplementationOnce(
+        finalizeActualReplyMessageInjectionAttempt,
+      );
+      const attempt = expectDefined(
+        await createChatSendMessageInjectionStarter(starter)(),
+        "steering attempt",
+      );
+      await expect(attempt.outcome).resolves.toMatchObject({
+        status: "indeterminate",
+        errorMessage,
+      });
+      await expect(attempt.acceptance).resolves.toBe(true);
+      const params = makeParams();
+      params.ctx = starter.turn.ctx;
+      params.attempt = attempt;
+      params.target = starter.target;
+      params.context.chatRunState.hasAbortMarker = () => false;
+      await expect(finalizeAcceptedChatSendMessageInjection(params)).resolves.toBe(true);
+      expect(queueMessage).toHaveBeenCalledOnce();
+      expect(cancel).not.toHaveBeenCalled();
+      expect(operation.abortSignal.aborted).toBe(false);
+      expect(operation.phase).toBe("running");
+      expect(params.persistUserTurnTranscriptBestEffort).toHaveBeenCalledOnce();
+      expect(broadcastChatError).toHaveBeenCalledWith(
+        expect.objectContaining({ runId: "run-1", errorMessage }),
+      );
+      expect(broadcastChatFinal).not.toHaveBeenCalled();
+      expect(params.context.logGateway.warn).not.toHaveBeenCalled();
+      expect(setGatewayDedupeEntry).toHaveBeenCalledWith(
+        expect.objectContaining({
+          key: "chat:run-1",
+          entry: expect.objectContaining({
+            ok: statusOnly,
+            payload: expect.objectContaining({ status: statusOnly ? "accepted" : "error" }),
+          }),
+        }),
+      );
+    },
+  );
+
   it("routes a fail-closed inbound to follow-up dispatch exactly once, with no steer enqueued", async () => {
     // Mock-gateway contract: the pre-ACK path creates the starter, invokes
     // it after preparation, and hands the inbound to follow-up dispatch whenever

@@ -167,7 +167,7 @@ describe("audit event persistence", () => {
       ...database,
       database: openOpenClawStateDatabase(database),
     });
-    recordAuditEventInDatabase(
+    const middle = recordAuditEventInDatabase(
       auditInput({
         occurredAt: now + 1,
         sourceSequence: 2,
@@ -179,7 +179,7 @@ describe("audit event persistence", () => {
       }),
       { ...database, database: openOpenClawStateDatabase(database) },
     );
-    recordAuditEventInDatabase(
+    const newest = recordAuditEventInDatabase(
       auditInput({
         occurredAt: now + 2,
         sourceSequence: 3,
@@ -195,12 +195,14 @@ describe("audit event persistence", () => {
     );
 
     const first = await listAuditEvents({ database, limit: 2 });
+    expect(first.events).toEqual([newest, middle]);
     expect(first.events.map((event) => event.sourceSequence)).toEqual([3, 2]);
     expect(first.nextCursor).toBe(first.events[1]?.sequence);
 
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     const second = await listAuditEvents({ database, limit: 2, cursor: first.nextCursor });
+    expect(second.events).toEqual([oldest]);
     expect(second.events.map((event) => event.sourceSequence)).toEqual([1]);
     expect(second.events[0]?.eventId).toBe(oldest?.eventId);
     expect(second.nextCursor).toBeUndefined();
@@ -326,6 +328,125 @@ describe("audit event persistence", () => {
       }),
     ).toThrow("audit event sequence is outside the supported integer range");
     expect(db.prepare("SELECT COUNT(*) AS count FROM audit_events").get()).toEqual({ count: 0 });
+  });
+
+  it("returns an expired append only while bounded pruning still retains it", () => {
+    const database = createDatabaseOptions();
+    const owner = openOpenClawStateDatabase(database);
+    const now = Date.now();
+    const occurredAt = now - AUDIT_EVENT_RETENTION_MS_CONTRACT - 1_000;
+    owner.db
+      .prepare(
+        `WITH RECURSIVE numbers(n) AS (
+         SELECT 1 UNION ALL SELECT n + 1 FROM numbers WHERE n < ?
+       )
+       INSERT INTO audit_events (
+         event_id, source_id, source_sequence, occurred_at, kind, action, status,
+         actor_type, actor_id, agent_id, run_id
+       )
+       SELECT 'old-event-' || n, 'old-source-' || n, n, ?, 'agent_run',
+              'agent.run.started', 'started', 'agent', 'main', 'main', 'old-run'
+       FROM numbers`,
+      )
+      .run(AUDIT_EVENT_PRUNE_BATCH_ROWS_CONTRACT, occurredAt);
+
+    const retained = recordAuditEventInDatabase(auditInput({ occurredAt: occurredAt + 1 }), {
+      ...database,
+      database: owner,
+    });
+    expect(retained?.occurredAt).toBe(occurredAt + 1);
+    expect(
+      recordAuditEventInDatabase(auditInput({ occurredAt: occurredAt + 2 }), {
+        ...database,
+        database: owner,
+      }),
+    ).toBeUndefined();
+    expect(owner.db.prepare("SELECT COUNT(*) AS count FROM audit_events").get()).toEqual({
+      count: 0,
+    });
+  });
+
+  it("tracks earlier inserted expiries and retains events at the exact cutoff", () => {
+    const database = createDatabaseOptions();
+    const owner = openOpenClawStateDatabase(database);
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    const record = (sourceSequence: number, occurredAt: number) =>
+      recordAuditEventInDatabase(auditInput({ sourceSequence, occurredAt }), {
+        ...database,
+        database: owner,
+      });
+    const retained = () =>
+      owner.db.prepare("SELECT occurred_at FROM audit_events ORDER BY sequence").all();
+    try {
+      record(1, now + 100);
+      record(2, now - 100);
+      const cutoff = now - 100 + AUDIT_EVENT_RETENTION_MS_CONTRACT;
+      clock.mockReturnValue(cutoff);
+      record(3, cutoff);
+      expect(retained()).toEqual([
+        { occurred_at: now + 100 },
+        { occurred_at: now - 100 },
+        { occurred_at: cutoff },
+      ]);
+
+      clock.mockReturnValue(cutoff + 1);
+      record(4, cutoff + 1);
+      expect(retained()).toEqual([
+        { occurred_at: now + 100 },
+        { occurred_at: cutoff },
+        { occurred_at: cutoff + 1 },
+      ]);
+
+      const nextExpiry = now + 100 + AUDIT_EVENT_RETENTION_MS_CONTRACT + 1;
+      clock.mockReturnValue(nextExpiry);
+      record(5, nextExpiry);
+      expect(retained()).toEqual([
+        { occurred_at: cutoff },
+        { occurred_at: cutoff + 1 },
+        { occurred_at: nextExpiry },
+      ]);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("forgets expiry changes when the pruning transaction rolls back", () => {
+    const database = createDatabaseOptions();
+    const owner = openOpenClawStateDatabase(database);
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    const record = (sourceSequence: number) =>
+      recordAuditEventInDatabase(auditInput({ sourceSequence }), {
+        ...database,
+        database: owner,
+      });
+    try {
+      record(1);
+      owner.db.exec(`
+        CREATE TABLE audit_expiry_parent (id INTEGER PRIMARY KEY);
+        CREATE TABLE audit_expiry_child (
+          parent_id INTEGER NOT NULL,
+          FOREIGN KEY (parent_id) REFERENCES audit_expiry_parent(id)
+            DEFERRABLE INITIALLY DEFERRED
+        );
+        CREATE TRIGGER reject_audit_expiry
+        AFTER INSERT ON audit_events
+        BEGIN
+          INSERT INTO audit_expiry_child (parent_id) VALUES (1);
+        END;
+      `);
+      clock.mockReturnValue(now + AUDIT_EVENT_RETENTION_MS_CONTRACT + 1);
+      expect(() => record(2)).toThrow(/FOREIGN KEY/u);
+      owner.db.exec("DROP TRIGGER reject_audit_expiry");
+      const committed = record(3);
+      expect(committed).toBeDefined();
+      expect(owner.db.prepare("SELECT event_id FROM audit_events").all()).toEqual([
+        { event_id: committed?.eventId },
+      ]);
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it("keeps reused run ids distinct across actual event timestamps", async () => {

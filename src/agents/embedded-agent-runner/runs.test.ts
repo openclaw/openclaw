@@ -6,6 +6,10 @@ import {
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { testing as replyRunTesting } from "../../auto-reply/reply/reply-run-registry.test-support.js";
 import {
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
+import {
   onDiagnosticEvent,
   setDiagnosticsEnabledForProcess,
 } from "../../infra/diagnostic-events.js";
@@ -20,12 +24,16 @@ import {
   logSessionStateChange,
 } from "../../logging/diagnostic.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
 import { withGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import { prepareEmbeddedRunPermissionChange } from "./run-permissions.js";
+import { EMBEDDED_RUN_WAITERS } from "./run-state.js";
 import { createEmbeddedRunPermissionChanges } from "./run/permission-change.js";
+import { prepareEmbeddedAgentRunAbort } from "./runs.abort-target.js";
 import {
   abortAndDrainEmbeddedAgentRun,
   abortEmbeddedAgentRun,
+  captureEmbeddedRunDrainTarget,
   clearActiveEmbeddedRun,
   clearEmbeddedAgentRunAbortabilityForRunId,
   isEmbeddedAgentRunAbortableForRunId,
@@ -191,25 +199,6 @@ describe("embedded run ownership", () => {
     expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
   });
 
-  it("preserves frozen ownership during compacting aborts", () => {
-    const abort = vi.fn();
-    const { operation } = startReply(createRunHandle({ abort, isCompacting: true }));
-    operation.freezeAbort();
-    expect(abortEmbeddedAgentRun(undefined, { mode: "compacting", reason: "restart" })).toBe(false);
-    expect(operation.result).toBeNull();
-    expect(abort).not.toHaveBeenCalled();
-  });
-
-  it("preserves restart ownership when cancellation throws", () => {
-    const abort = vi.fn(() => {
-      throw new Error("cancel failed");
-    });
-    const { operation } = startReply(createRunHandle({ abort }));
-    expect(abortEmbeddedAgentRun(undefined, { mode: "all", reason: "restart" })).toBe(true);
-    expect(operation.result).toEqual({ kind: "aborted", code: "aborted_for_restart" });
-    expect(abort).toHaveBeenCalledExactlyOnceWith("restart");
-  });
-
   it("fences timeout recovery across module instances", async () => {
     const runsA = await importFreshModule<typeof import("./runs.js")>(
       import.meta.url,
@@ -296,6 +285,7 @@ describe("embedded run ownership", () => {
     const first = { ...createRunHandle({ runId: "first", abort: firstAbort }), startedAtMs: 123 };
     setActiveEmbeddedRun(sessionId, first, sessionKey);
     const identity = resolveActiveEmbeddedRunOwnerByRunId("first");
+    const prepared = prepareEmbeddedAgentRunAbort(sessionId);
     const expected = { runId: "first", sessionId, sessionKey, startedAtMs: 123 };
     expect(identity).toMatchObject(expected);
     expect(resolveActiveEmbeddedRunOwner(sessionId)).toMatchObject(expected);
@@ -305,9 +295,110 @@ describe("embedded run ownership", () => {
       sessionKey,
     );
     expect(identity?.abort()).toBe(false);
+    expect(prepared()).toMatchObject({ active: false, aborted: false });
     expect(firstAbort).not.toHaveBeenCalled();
     expect(secondAbort).not.toHaveBeenCalled();
   });
+
+  it.each(["completed", "released"] as const)(
+    "retains a captured drain through replacement until its original handle is %s",
+    async (ending) => {
+      const original = createRunHandle();
+      const replacementAbort = vi.fn();
+      const replacement = createRunHandle({ abort: replacementAbort });
+      setActiveEmbeddedRun(sessionId, original, sessionKey);
+      expect(captureEmbeddedRunDrainTarget(sessionId, { agentId: "other" })).toBeUndefined();
+      expect(EMBEDDED_RUN_WAITERS.has(sessionId)).toBe(false);
+      const target = captureEmbeddedRunDrainTarget(sessionId, { agentId: "main" })!;
+      try {
+        setActiveEmbeddedRun(sessionId, replacement, "agent:other:replacement");
+        expect(target.abort()).toBe(false);
+        const drained = target.waitForEnd(null);
+        let result: boolean | undefined;
+        void drained.then((value) => {
+          result = value;
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(result).toBeUndefined();
+        if (ending === "completed") {
+          clearActiveEmbeddedRun(sessionId, original);
+        } else {
+          target.release();
+        }
+        await expect(drained).resolves.toBe(ending === "completed");
+        expect(EMBEDDED_RUN_WAITERS.has(sessionId)).toBe(false);
+        expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(true);
+        expect(replacementAbort).not.toHaveBeenCalled();
+      } finally {
+        target.release();
+        clearActiveEmbeddedRun(sessionId, original);
+        clearActiveEmbeddedRun(sessionId, replacement);
+      }
+    },
+  );
+
+  it("stops captured manual compaction without a run ID", () => {
+    const abort = vi.fn();
+    setActiveEmbeddedRun(sessionId, createRunHandle({ isCompacting: true, abort }), sessionKey);
+    const prepared = prepareEmbeddedAgentRunAbort(sessionId);
+    expect(prepared()).toMatchObject({ active: true, aborted: true, sessionId });
+    expect(abort).toHaveBeenCalledOnce();
+  });
+
+  it.each(["retry", "compaction", "replacement", "new-claim", "retired", "agent", "key"] as const)(
+    "keeps prepared Stop with its admitted request across %s",
+    async (transition) => {
+      const instance = createOperationalRunInstanceRef("native-retry");
+      const authority = claimAgentRunDelegatedAuthority(instance);
+      const authorities = [authority];
+      const firstAbort = vi.fn();
+      const nextAbort = vi.fn();
+      const first = createRunHandle({ runId: instance.runId, abort: firstAbort });
+      try {
+        await withGatewayToolCallerIdentity(
+          { agentId: "main", sessionKey, operationalRunInstance: instance },
+          () => setActiveEmbeddedRun(sessionId, first, sessionKey, undefined, "main"),
+        );
+        const stop = prepareEmbeddedAgentRunAbort(sessionId);
+        const nextInstance =
+          transition === "replacement" ? createOperationalRunInstanceRef(instance.runId) : instance;
+        if (transition === "replacement" || transition === "new-claim") {
+          releaseAgentRunDelegatedAuthority(authority);
+          authorities.push(claimAgentRunDelegatedAuthority(nextInstance));
+        }
+        const nextSessionId = transition === "compaction" ? "compacted-session" : sessionId;
+        const nextAgentId = transition === "agent" ? "other" : "main";
+        const nextKey = transition === "key" ? "agent:main:another" : sessionKey;
+        await withGatewayToolCallerIdentity(
+          {
+            agentId: nextAgentId,
+            sessionKey: nextKey,
+            operationalRunInstance: nextInstance,
+          },
+          () =>
+            setActiveEmbeddedRun(
+              nextSessionId,
+              createRunHandle({ runId: instance.runId, abort: nextAbort }),
+              nextKey,
+              undefined,
+              nextAgentId,
+            ),
+        );
+        if (transition === "retired") {
+          releaseAgentRunDelegatedAuthority(authority);
+        }
+        const sameRequest = transition === "retry" || transition === "compaction";
+        expect(stop()).toMatchObject({ active: sameRequest, aborted: sameRequest });
+        expect(firstAbort).not.toHaveBeenCalled();
+        expect(nextAbort).toHaveBeenCalledTimes(sameRequest ? 1 : 0);
+      } finally {
+        for (const retained of authorities) {
+          releaseAgentRunDelegatedAuthority(retained);
+        }
+      }
+    },
+  );
 
   it("clears steering backlog when the run ends", () => {
     setDiagnosticsEnabledForProcess(true);

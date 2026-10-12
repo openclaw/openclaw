@@ -29,13 +29,31 @@ import {
   normalizePendingFinalDeliveryPayloads,
 } from "./pending-final-delivery.js";
 import { claimNextQueuedFollowupRequestFrom, enqueueFollowupRun } from "./queue.js";
-import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
+import {
+  isReplyOperationSuperseded,
+  resolveReplyOperationAbortReason,
+} from "./reply-operation-abort.js";
 import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
+import {
+  acquireReplyOperationSessionActor,
+  getReplyOperationSessionTarget,
+} from "./reply-run-registry.state.js";
 import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
 import { resolveReplySourceTurnId } from "./source-turn-id.js";
 import { buildStalledTurnRecoveryRun, STALLED_TURN_GUIDANCE } from "./stalled-turn-recovery.js";
+
+export function prependCompactionNotices(
+  result: ReplyPayload | ReplyPayload[] | undefined,
+  notices: readonly ReplyPayload[],
+  operation: ReplyOperation,
+): ReplyPayload | ReplyPayload[] | undefined {
+  if (notices.length === 0 || resolveReplyOperationAbortReason(operation)) {
+    return result;
+  }
+  return [...notices, ...(Array.isArray(result) ? result : result ? [result] : [])];
+}
 
 /** Continues a saved stalled request once, retaining its final-feedback obligation. */
 export function continueStalledReplyTurn({
@@ -112,6 +130,7 @@ type ExecutePreparedReplyAgentRunInput = Omit<
     getActiveSessionEntry: () => SessionEntry | undefined;
     isRestartRecoveryArmed: () => Promise<boolean>;
     sendDirectCompactionNotice: ((phase: CompactionNoticePhase) => Promise<void>) | undefined;
+    onCompactionNoticePayload?: (payload: ReplyPayload) => void;
     setRunFollowupTurn: (runner: FinalizeReplyAgentRunInput["runFollowupTurn"]) => void;
     setActiveSessionEntry: (entry: SessionEntry | undefined) => void;
     shouldEmitToolOutput: () => boolean;
@@ -129,7 +148,6 @@ export async function executePreparedReplyAgentRun(
     activeSessionStore,
     admitUserTurn,
     beginBeforeAgentReply,
-    cfg,
     checkpointBeforeAgentReply,
     defaultModel,
     followupRun,
@@ -138,7 +156,6 @@ export async function executePreparedReplyAgentRun(
     replyOperation,
     replyThreadingOverride,
     returnWithQueuedFollowupDrain,
-    runtimePolicySessionKey,
     sendDirectCompactionNotice,
     sessionCtx,
     sessionKey,
@@ -181,6 +198,7 @@ export async function executePreparedReplyAgentRun(
   activeSessionEntry = await traceAgentPhase("reply.preflight_compaction", () =>
     runSessionCompactionIfNeeded({
       ...context,
+      replyOperation,
       pendingUserEntryId: preflightAdmission?.entryId,
       promptForEstimate: followupRun.prompt,
       sessionEntry: activeSessionEntry,
@@ -241,12 +259,9 @@ export async function executePreparedReplyAgentRun(
         };
         if (sessionKey && storePath && normalizedHookReplies.length > 0) {
           const sourceReplyPolicy = resolveSourceReplyPolicy({
-            cfg,
-            sessionCtx,
-            sessionEntry: activeSessionEntry,
+            ...context,
             sessionKey,
-            runtimePolicySessionKey,
-            opts,
+            sessionEntry: activeSessionEntry,
           });
           if (!sourceReplyPolicy.suppressDelivery) {
             const pendingFinalDeliveryIntentId = crypto.randomUUID();
@@ -271,12 +286,9 @@ export async function executePreparedReplyAgentRun(
                 intentId: pendingFinalDeliveryIntentId,
                 deliveries: [{ id: pendingFinalDeliveryDeliveryId, state: "prepared" }],
                 context: resolveReplyRunDeliveryContext({
-                  cfg,
-                  sessionCtx,
-                  sessionEntry: activeSessionEntry,
+                  ...context,
                   sessionKey,
-                  runtimePolicySessionKey,
-                  opts,
+                  sessionEntry: activeSessionEntry,
                 }),
               },
             };
@@ -393,6 +405,19 @@ export function createReplyAgentRestartRecoveryController(
     normalizeOptionalString(sessionCtx.MessageSidFull);
   const recovery = createReplyRestartRecoveryClaimController({
     agentId: followupRun.run.agentId,
+    acquireSessionActor: async () => {
+      const actor = await acquireReplyOperationSessionActor(replyOperation);
+      if (!actor) {
+        return undefined;
+      }
+      const target = getReplyOperationSessionTarget(replyOperation);
+      if (!target) {
+        throw new Error("Reply operation has no session actor target");
+      }
+      return { actor, target };
+    },
+    operatorAuthority: followupRun.operatorAuthority,
+    inputProvenance: followupRun.run.inputProvenance,
     lifecycleGeneration: replyOperation.lifecycleGeneration,
     admissionRunId,
     executionRunId: opts?.runId,

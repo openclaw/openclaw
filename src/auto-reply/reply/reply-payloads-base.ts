@@ -51,7 +51,7 @@ export function applyReplyTagsToPayload(params: {
     });
     resolved = copyReplyPayloadMetadata(resolved, {
       ...resolved,
-      text: tags.text ? tags.text : undefined,
+      text: tags.text || undefined,
       replyToId: tags.replyToId ?? resolved.replyToId,
       replyToTag: tags.hasReplyTag || resolved.replyToTag,
       replyToCurrent: tags.replyToCurrent || resolved.replyToCurrent,

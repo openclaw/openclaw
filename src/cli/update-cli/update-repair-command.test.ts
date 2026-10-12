@@ -1,12 +1,19 @@
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   buildStatusUpdateRows,
   formatUpdateRestartStatusValue,
 } from "../../commands/status-update-restart.js";
+import {
+  packageActivationIdentity,
+  resolvePackageActivationAnchor,
+} from "../../infra/package-update-activation-journal.js";
+import { readPackageActivationReceipt } from "../../infra/package-update-activation.js";
 import * as sqliteWorkerStore from "../../infra/sqlite-worker-store.js";
 import { inspectUpdateRunDriver, readUpdateRunDriver } from "../../infra/update-run-driver.js";
 import {
@@ -144,6 +151,51 @@ afterEach(async () => {
 });
 
 describe("update repair ledger recovery", () => {
+  it.each(["aborted", "publishing"])(
+    "exits nonzero while a released %s package record remains pending",
+    async (phase) => {
+      const installKey = await mocks.resolveRoot();
+      const anchor = resolvePackageActivationAnchor(installKey);
+      fs.mkdirSync(anchor, { mode: 0o700 });
+      const journal = path.join(anchor, "operation.sqlite");
+      const operationId = randomUUID();
+      const db = new DatabaseSync(journal);
+      fs.chmodSync(journal, 0o600);
+      try {
+        // Released in-anchor receipts belong to their original helper. The
+        // public command must report pending recovery before finalization.
+        db.exec("CREATE TABLE package_activation (slot INTEGER, phase TEXT, descriptor_json TEXT)");
+        db.prepare("INSERT INTO package_activation VALUES (1, ?, ?)").run(
+          phase,
+          JSON.stringify({
+            version: 1,
+            operationId,
+            authority: { installKey },
+            anchorIdentity: packageActivationIdentity(anchor, true),
+            journalIdentity: packageActivationIdentity(journal, false),
+            parentIdentity: packageActivationIdentity(path.dirname(anchor), "parent"),
+          }),
+        );
+      } finally {
+        db.close();
+      }
+      const before = fs.readFileSync(journal);
+
+      await runRegisteredCli({
+        register: registerUpdateCli,
+        argv: ["update", "repair", "--yes", "--json"],
+      });
+
+      expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+      expect(mocks.runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining(path.join(anchor, "recovery.mjs")),
+      );
+      expect(mocks.finalize).not.toHaveBeenCalled();
+      expect(readPackageActivationReceipt(installKey)).toMatchObject({ phase, operationId });
+      expect(fs.readFileSync(journal)).toEqual(before);
+    },
+  );
+
   it.each([
     { legacy: true, target: "2026.9.3" },
     { legacy: false, target: "2026.9.2" },

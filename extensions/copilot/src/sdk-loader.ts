@@ -90,7 +90,7 @@ function createMissingSdkError(
     "",
     `  npm install ${COPILOT_SDK_SPEC}`,
     "",
-    `The legacy fallback location is still probed at\n  ${fallbackPath}`,
+    `The legacy fallback location is still checked at\n  ${fallbackPath}`,
     "",
     "Primary resolution error:",
     `  ${summarizeError(primaryErr)}`,

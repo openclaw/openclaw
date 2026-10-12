@@ -368,7 +368,7 @@ it.each(
       chatStream: hydrated ? "Waiting for approval" : null,
       requestHandlers: {
         "chat.startup": () => history.promise,
-        "chat.abort": { aborted: true },
+        "sessions.abort": { status: "aborted" },
         "chat.send": { runId: "approval-command", status: "started" },
       },
     });
@@ -392,12 +392,12 @@ it.each(
       }
       expect(host.chatLoading).toBe(true);
       if (action === "abort") {
-        expect(host.request).toHaveBeenCalledWith("chat.abort", {
-          runId: "waiting-run",
-          sessionKey: host.sessionKey,
+        expect(host.request).toHaveBeenCalledWith("sessions.abort", {
+          key: host.sessionKey,
+          clearQueued: true,
         });
       } else {
-        expect(host.request).not.toHaveBeenCalledWith("chat.abort", expect.anything());
+        expect(host.request).not.toHaveBeenCalledWith("sessions.abort", expect.anything());
       }
       if (action === "approve") {
         expect(host.request).toHaveBeenCalledWith(

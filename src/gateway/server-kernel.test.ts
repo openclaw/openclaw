@@ -119,10 +119,10 @@ describe("createGatewayKernel", () => {
           },
           controlUiEnabled: false,
           sidecarStartup: "defer",
-          tryRecoverChannelAutostartSuppression: () => true,
+          tryRecoverChannelAutostartSuppression: async () => undefined,
         });
 
-        await expect(kernel.channelManager.recoverAutostartSuppression()).resolves.toBe(true);
+        await expect(kernel.channelManager.recoverAutostartSuppression()).resolves.toBeUndefined();
         expect(startAccount).not.toHaveBeenCalled();
 
         if (closing) {
@@ -403,6 +403,8 @@ describe("createGatewayKernel", () => {
         env: {
           ...KERNEL_TEST_ENV,
           OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
+          OPENCLAW_SKIP_CHANNELS: undefined,
+          OPENCLAW_SKIP_PROVIDERS: undefined,
         },
       });
       const previousOverrides = getConfigOverrides();

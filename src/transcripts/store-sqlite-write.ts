@@ -40,17 +40,6 @@ type TranscriptSummaryValues = Pick<
   "generated_at" | "summary_json" | "markdown" | "utterance_count"
 >;
 
-function assertMeetingTranscriptSelectorAvailableInDatabase(
-  database: DatabaseSync,
-  session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
-  selector: string,
-): void {
-  const owner = readTranscriptCanonicalSessionRow(database, selector);
-  if (owner && (owner.session_id !== session.sessionId || owner.started_at !== session.startedAt)) {
-    throw new TranscriptSessionConflictError();
-  }
-}
-
 export function writeMeetingTranscriptSessionInDatabase(
   database: DatabaseSync,
   params: {
@@ -67,7 +56,10 @@ export function writeMeetingTranscriptSessionInDatabase(
   ) {
     throw new TranscriptsSummaryChangedError();
   }
-  assertMeetingTranscriptSelectorAvailableInDatabase(database, session, sessionValues.selector);
+  const owner = readTranscriptCanonicalSessionRow(database, sessionValues.selector);
+  if (owner && (owner.session_id !== session.sessionId || owner.started_at !== session.startedAt)) {
+    throw new TranscriptSessionConflictError();
+  }
   const previous = executeSqliteQueryTakeFirstSync(
     database,
     meetingTranscriptSessionQuery(database, session).selectAll(),

@@ -10,6 +10,14 @@ const DISCORD_WIDGET_HTML_MAX_BYTES = 48 * 1024;
 type WidgetPresenter = Parameters<OpenClawPluginApi["registerWidgetPresenter"]>[0];
 type WidgetPresenterContext = Parameters<WidgetPresenter["availability"]>[0];
 
+const unavailable = () => ({
+  ok: false as const,
+  error: {
+    code: "unavailable" as const,
+    message: "Discord Activities are unavailable for the current channel and account.",
+  },
+});
+
 function resolveDiscordChannelId(context: WidgetPresenterContext): string | undefined {
   const raw =
     context.nativeChannelId?.trim() ||
@@ -59,24 +67,12 @@ export function createDiscordWidgetPresenter(runtime: DiscordActivitiesRuntime):
     async availability(context) {
       return resolveDiscordPresentationRoute(context, runtime)
         ? { ok: true, value: { available: true } }
-        : {
-            ok: false,
-            error: {
-              code: "unavailable",
-              message: "Discord Activities are unavailable for the current channel and account.",
-            },
-          };
+        : unavailable();
     },
     async present({ context, document, title }) {
       const route = resolveDiscordPresentationRoute(context, runtime);
       if (!route) {
-        return {
-          ok: false,
-          error: {
-            code: "unavailable",
-            message: "Discord Activities are unavailable for the current channel and account.",
-          },
-        };
+        return unavailable();
       }
       if (Array.from(title).length > 80) {
         return {

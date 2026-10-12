@@ -30,8 +30,7 @@ export function resolveDiscordMessageText(
 ): string {
   const rawText =
     resolveDiscordMessageMentionDocuments(message)
-      .map((text) => normalizeOptionalString(text))
-      .filter(Boolean)
+      .map((text) => text.trim())
       .join("\n") ||
     normalizeOptionalString(options?.fallbackText) ||
     "";
@@ -152,10 +151,7 @@ function resolveDiscordMessageComponents(message: Message): unknown {
 function extractDiscordComponentsV2Text(components: unknown): string {
   const parts: string[] = [];
   collectDiscordTextDisplayDocuments(components, parts);
-  return parts
-    .map((part) => normalizeOptionalString(part))
-    .filter((part): part is string => Boolean(part))
-    .join("\n");
+  return parts.map((part) => part.trim()).join("\n");
 }
 
 function collectDiscordTextDisplayDocuments(value: unknown, parts: string[]): void {

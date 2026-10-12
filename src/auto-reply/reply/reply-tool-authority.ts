@@ -1,8 +1,6 @@
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { stableStringify } from "@openclaw/normalization-core";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
   GATEWAY_CLIENT_CAPS,
   hasGatewayClientCap,
@@ -34,11 +32,11 @@ import {
   attachToolAllowlistIntersection,
   readToolAllowlistIntersection,
 } from "../../agents/tool-policy.js";
-import { normalizeChatType } from "../../channels/chat-type.js";
 import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { resolveGroupSessionKey } from "../../config/sessions/group.js";
+import { getSessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
 import { withSessionEntriesFromStoresInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
 import {
   prepareGatewaySessionEntryReadOnlyInWorker,
   type GatewaySessionEntryReadPlan,
@@ -46,14 +44,19 @@ import {
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import type { RuntimeMsgContext } from "../templating.js";
-import { resolveOriginMessageProvider } from "./origin-routing.js";
 import type { FollowupRun } from "./queue/types.js";
 import type {
   ReplyToolAuthorityOverlay,
   ReplyToolAuthorityRoute,
   ReplyToolAuthoritySnapshot,
 } from "./reply-run-registry.contracts.js";
+import {
+  captureReplyToolAuthoritySession,
+  selectReplyToolAuthorityEntry,
+  withReplyToolAuthorityCohort,
+  type CapturedReplyToolAuthoritySession,
+} from "./reply-tool-authority-cohort.js";
+import { prepareMemoryReplyToolAuthorityCaller } from "./reply-tool-authority-memory.js";
 import { prepareNativeReplyToolAuthorityRead } from "./reply-tool-authority.native-read.js";
 
 export type ReplyToolAuthorityInput = {
@@ -105,53 +108,7 @@ export type ReplyToolAuthorityInput = {
     Pick<FollowupRun["run"], "sessionId" | "sessionFile" | "workspaceDir" | "provider" | "model">;
 };
 
-/** Projects current inbound facts against the active run's frozen authority snapshot. */
-export function resolveInboundReplyToolAuthorityOverlay(params: {
-  ctx: RuntimeMsgContext;
-  sessionEntry?: Pick<SessionEntry, "permissionMode" | "spawnedBy" | "toolOverrides">;
-  senderIsOwner: boolean;
-  operatorAuthority?: AdmittedRunOperatorAuthority;
-  toolsAllow?: string[];
-  disableTools: boolean;
-}): ReplyToolAuthorityOverlay {
-  const { ctx } = params;
-  return {
-    operatorAuthority: params.operatorAuthority,
-    permissionMode: params.sessionEntry?.permissionMode,
-    toolOverrides: params.sessionEntry?.toolOverrides,
-    originatingChannel: ctx.OriginatingChannel,
-    messageProvider: resolveOriginMessageProvider({
-      originatingChannel: ctx.OriginatingChannel,
-      provider: ctx.Provider ?? ctx.Surface,
-    }),
-    chatType: normalizeChatType(ctx.ChatType),
-    agentAccountId: ctx.AccountId,
-    conversationToolPolicy: ctx.ConversationToolPolicy,
-    groupId: resolveGroupSessionKey(ctx)?.id,
-    groupChannel:
-      normalizeOptionalString(ctx.GroupChannel) ?? normalizeOptionalString(ctx.GroupSubject),
-    groupSpace: normalizeOptionalString(ctx.GroupSpace),
-    memberRoleIds: normalizeArrayBackedTrimmedStringList(ctx.MemberRoleIds),
-    spawnedBy: normalizeOptionalString(params.sessionEntry?.spawnedBy),
-    senderId: normalizeOptionalString(ctx.SenderId),
-    senderName: normalizeOptionalString(ctx.SenderName),
-    senderUsername: normalizeOptionalString(ctx.SenderUsername),
-    senderE164: normalizeOptionalString(ctx.SenderE164),
-    senderIsOwner: params.senderIsOwner,
-    inputProvenance: ctx.InputProvenance,
-    trustedInternalHandoff: undefined,
-    scheduledToolPolicy: undefined,
-    runtimePluginToolGrant: undefined,
-    toolsAllow: params.toolsAllow,
-    disableTools: params.disableTools,
-    traceAuthorized:
-      params.senderIsOwner || (ctx.GatewayClientScopes ?? []).includes("operator.admin"),
-    approvalReviewerDeviceId: normalizeOptionalString(ctx.ApprovalReviewerDeviceId),
-    clientCaps: ctx.GatewayClientCaps,
-    gatewayUiCommandTarget: ctx.GatewayUiCommandTarget,
-    toolBindings: ctx.GatewayRunToolBindings,
-  };
-}
+export { resolveInboundReplyToolAuthorityOverlay } from "./reply-tool-authority-inbound.js";
 
 function applyReplyToolAuthorityOverlay(
   snapshot: ReplyToolAuthorityInput,
@@ -194,6 +151,15 @@ function applyReplyToolAuthorityOverlay(
   };
 }
 
+function resolveReplyToolSandboxParams(execution: ReplyToolAuthorityInput["run"]) {
+  return {
+    cfg: execution.config,
+    agentId: execution.agentId,
+    sessionKey: execution.sessionKey,
+    classificationSessionKey: execution.runtimePolicySessionKey ?? execution.sessionKey,
+  };
+}
+
 export function resolveReplyToolAuthorityContext(
   snapshot: ReplyToolAuthorityInput,
   route?: ReplyToolAuthorityRoute,
@@ -204,13 +170,7 @@ export function resolveReplyToolAuthorityContext(
   const model = route?.model ?? execution.model;
   const policySessionKey = execution.runtimePolicySessionKey ?? execution.sessionKey;
   const sandboxRuntime =
-    preparedSandbox ??
-    resolveSandboxRuntimeStatus({
-      cfg: execution.config,
-      agentId: execution.agentId,
-      sessionKey: execution.sessionKey,
-      classificationSessionKey: policySessionKey,
-    });
+    preparedSandbox ?? resolveSandboxRuntimeStatus(resolveReplyToolSandboxParams(execution));
   const capabilityProfile = resolveConversationCapabilityProfile({
     config: execution.config,
     sessionId: execution.sessionId,
@@ -256,12 +216,7 @@ async function withPreparedReplyToolAuthorityContext<T>(
     assertCurrentOperatorAuthority(input.operatorAuthority);
   };
   return withSandboxRuntimeStatusInWorker(
-    {
-      cfg: input.run.config,
-      agentId: input.run.agentId,
-      sessionKey: input.run.sessionKey,
-      classificationSessionKey: input.run.runtimePolicySessionKey ?? input.run.sessionKey,
-    },
+    resolveReplyToolSandboxParams(input.run),
     { env: { ...process.env }, cwd: process.cwd(), ...source, assertCurrent: assertActive },
     async (sandbox) => {
       assertActive();
@@ -272,44 +227,32 @@ async function withPreparedReplyToolAuthorityContext<T>(
   );
 }
 
-function isReplyToolAllowed(
+/** Screen needs browser control; theme remains requester-scoped without it. */
+export function resolveReplyPersonalToolTargets(
   input: ReplyToolAuthorityInput,
-  toolName: string,
-  preparedProfile?: ResolvedConversationCapabilityProfile,
-): boolean {
-  if (input.disableTools === true || !isRuntimeToolAllowed(toolName, input.toolsAllow)) {
-    return false;
-  }
-  const policies = resolveConversationToolPolicies({
-    capabilityProfile: preparedProfile ?? resolveReplyToolAuthorityContext(input).capabilityProfile,
-  });
-  return isToolAllowedByPolicies(toolName, [
-    ...Object.values(policies),
-    input.run.senderIsOwner === false ? { deny: [...GATEWAY_OWNER_ONLY_CORE_TOOLS] } : undefined,
-  ]);
-}
-
-/** Browser identity matters to admission only while this turn can control the UI. */
-export function resolveReplyScreenToolTarget(
-  input: ReplyToolAuthorityInput,
-  preparedProfile?: ResolvedConversationCapabilityProfile,
+  preparedProfile: ResolvedConversationCapabilityProfile,
 ) {
-  return input.run.gatewayUiCommandTarget &&
-    hasGatewayClientCap(input.run.clientCaps, GATEWAY_CLIENT_CAPS.UI_COMMANDS) &&
-    isReplyToolAllowed(input, "screen", preparedProfile)
-    ? input.run.gatewayUiCommandTarget
-    : undefined;
-}
-
-/** Profile appearance remains requester-scoped even without browser control. */
-export function resolveReplyThemeProfileId(
-  input: ReplyToolAuthorityInput,
-  preparedProfile?: ResolvedConversationCapabilityProfile,
-): string | undefined {
-  return input.run.gatewayUiCommandTarget?.profileId &&
-    isReplyToolAllowed(input, "theme", preparedProfile)
-    ? input.run.gatewayUiCommandTarget.profileId
-    : undefined;
+  const target = input.run.gatewayUiCommandTarget;
+  let policies: ReturnType<typeof resolveConversationToolPolicies> | undefined;
+  const isAllowed = (toolName: string) => {
+    if (input.disableTools === true || !isRuntimeToolAllowed(toolName, input.toolsAllow)) {
+      return false;
+    }
+    policies ??= resolveConversationToolPolicies({ capabilityProfile: preparedProfile });
+    return isToolAllowedByPolicies(toolName, [
+      ...Object.values(policies),
+      input.run.senderIsOwner === false ? { deny: [...GATEWAY_OWNER_ONLY_CORE_TOOLS] } : undefined,
+    ]);
+  };
+  return {
+    screenTarget:
+      target &&
+      hasGatewayClientCap(input.run.clientCaps, GATEWAY_CLIENT_CAPS.UI_COMMANDS) &&
+      isAllowed("screen")
+        ? target
+        : undefined,
+    themeProfileId: target?.profileId && isAllowed("theme") ? target.profileId : undefined,
+  };
 }
 
 const operatorAuthorityIdentities = resolveGlobalSingleton(
@@ -324,18 +267,16 @@ export function resolveReplyOperatorAuthorityKey(
   if (!authority) {
     return "";
   }
-  const identity = (value: object): number => {
-    let key = operatorAuthorityIdentities.keys.get(value);
-    if (key === undefined) {
-      key = operatorAuthorityIdentities.nextId++;
-      operatorAuthorityIdentities.keys.set(value, key);
-    }
-    return key;
-  };
+  const source = authority.source ?? authority;
+  let identity = operatorAuthorityIdentities.keys.get(source);
+  if (identity === undefined) {
+    identity = operatorAuthorityIdentities.nextId++;
+    operatorAuthorityIdentities.keys.set(source, identity);
+  }
   return JSON.stringify([
     authority.profileId,
     [...new Set(authority.scopes.map((scope) => scope.trim()).filter(Boolean))].toSorted(),
-    identity(authority.source ?? authority),
+    identity,
   ]);
 }
 
@@ -357,8 +298,10 @@ export function resolveFollowupRunToolAuthorityFingerprint(
     preparedContext ?? resolveReplyToolAuthorityContext(snapshot, route);
   const authority = snapshot.operatorAuthority;
   assertCurrentOperatorAuthority(authority);
-  const screenTarget = resolveReplyScreenToolTarget(snapshot, capabilityProfile);
-  const themeProfileId = resolveReplyThemeProfileId(snapshot, capabilityProfile);
+  const { screenTarget, themeProfileId } = resolveReplyPersonalToolTargets(
+    snapshot,
+    capabilityProfile,
+  );
   return createHash("sha256")
     .update(
       stableStringify({
@@ -419,6 +362,16 @@ export async function resolveFollowupRunToolAuthorityFingerprintAsync(
   route?: ReplyToolAuthorityRoute,
   assertCurrent: () => void = () => {},
 ): Promise<string> {
+  const sessionKey = snapshot.run.runtimePolicySessionKey ?? snapshot.run.sessionKey;
+  const memory = sessionKey && getSessionActorStorageBinding({ sessionKey });
+  if (memory && !isToolAuthorityReadCaptureActive()) {
+    assertCurrent();
+    return resolvePreparedReplyToolAuthorityFingerprint(
+      snapshot,
+      route,
+      memory.actor.snapshot(memory.authority)?.entry,
+    );
+  }
   if (isToolAuthorityReadCaptureActive()) {
     const owner = prepareReplyToolAuthority(snapshot);
     const fingerprint = await owner.fingerprintAsync(route);
@@ -437,9 +390,26 @@ export async function resolveFollowupRunToolAuthorityFingerprintAsync(
 }
 
 /** Capture execution policy once; incoming overlays replace only caller-owned facts. */
+function resolvePreparedReplyToolAuthorityFingerprint(
+  input: ReplyToolAuthorityInput,
+  route: ReplyToolAuthorityRoute | undefined,
+  entry: SessionEntry | undefined,
+) {
+  const sandbox = resolveSandboxRuntimeStatus({
+    ...resolveReplyToolSandboxParams(input.run),
+    preparedSessionEntry: entry ?? null,
+  });
+  return resolveFollowupRunToolAuthorityFingerprint(
+    input,
+    route,
+    resolveReplyToolAuthorityContext(input, route, sandbox),
+  );
+}
+
 export function prepareReplyToolAuthority(
   run: ReplyToolAuthorityInput,
   narrow?: (input: ReplyToolAuthorityInput) => ReplyToolAuthorityInput,
+  resolveReader?: () => SessionEntryCohortReader | undefined,
 ): ReplyToolAuthoritySnapshot &
   Required<Pick<ReplyToolAuthoritySnapshot, "fingerprintAsync" | "projectAsync">> {
   const handoff = run.run.trustedInternalHandoff;
@@ -481,26 +451,41 @@ export function prepareReplyToolAuthority(
       memberRoleIds: run.run.memberRoleIds ? [...run.run.memberRoleIds] : undefined,
     },
   };
+  const projectInput = (overlay?: ReplyToolAuthorityOverlay) => {
+    const incoming = overlay ? applyReplyToolAuthorityOverlay(snapshot, overlay) : snapshot;
+    return narrow ? narrow(incoming) : incoming;
+  };
   const env = { ...process.env };
   const cwd = process.cwd();
-  let captured:
-    | {
-        storePath: string;
-        canonicalKey: string;
-        storeKeys: readonly string[];
-        agentId: string;
-        source: Awaited<
-          ReturnType<typeof prepareGatewaySessionEntryReadOnlyInWorker>
-        >["loaded"]["capturedReadSource"];
-        sources: Awaited<
-          ReturnType<typeof prepareGatewaySessionEntryReadOnlyInWorker>
-        >["loaded"]["capturedReadSources"];
-        sessionId: string | undefined;
-        lifecycleRevision: SessionEntry["lifecycleRevision"];
-      }
-    | undefined;
+  const sessionKey = snapshot.run.runtimePolicySessionKey ?? snapshot.run.sessionKey;
+  const memory = sessionKey && getSessionActorStorageBinding({ sessionKey });
+  let captured: CapturedReplyToolAuthoritySession | undefined;
   let capturedReadPlan: GatewaySessionEntryReadPlan | undefined;
-  const prepare = async (input: ReplyToolAuthorityInput, route?: ReplyToolAuthorityRoute) => {
+  const assertClassificationSession = (
+    entry: SessionEntry | undefined,
+    expected: typeof captured,
+  ) => {
+    if (
+      expected &&
+      (entry?.sessionId !== expected.sessionId ||
+        entry?.lifecycleRevision !== expected.lifecycleRevision)
+    ) {
+      throw new Error("Tool authority classification session changed");
+    }
+  };
+  const prepare = async (
+    input: ReplyToolAuthorityInput,
+    route?: ReplyToolAuthorityRoute,
+    consumeInitialSelection = false,
+  ) => {
+    if (memory) {
+      return resolvePreparedReplyToolAuthorityFingerprint(
+        input,
+        route,
+        memory.actor.snapshot(memory.authority)?.entry,
+      );
+    }
+    let selectedFingerprint: string | undefined;
     const assertCurrent = () => {
       assertCurrentOperatorAuthority(snapshot.operatorAuthority);
       assertCurrentOperatorAuthority(input.operatorAuthority);
@@ -508,30 +493,37 @@ export function prepareReplyToolAuthority(
     const key = snapshot.run.runtimePolicySessionKey ?? snapshot.run.sessionKey;
     capturedReadPlan?.assertCurrent();
     const preparedLookup = key
-      ? await prepareGatewaySessionEntryReadOnlyInWorker({
-          cfg: snapshot.run.config ?? {},
-          key,
-          agentId: resolveSessionAgentId({
-            config: snapshot.run.config,
-            sessionKey: key,
-            fallbackAgentId: key === snapshot.run.sessionKey ? snapshot.run.agentId : undefined,
-          }),
-          env,
-          assertActive: assertCurrent,
-        })
+      ? await prepareGatewaySessionEntryReadOnlyInWorker(
+          {
+            cfg: snapshot.run.config ?? {},
+            key,
+            agentId: resolveSessionAgentId({
+              config: snapshot.run.config,
+              sessionKey: key,
+              fallbackAgentId: key === snapshot.run.sessionKey ? snapshot.run.agentId : undefined,
+            }),
+            env,
+            assertActive: assertCurrent,
+          },
+          consumeInitialSelection
+            ? (target) => {
+                const entry = selectReplyToolAuthorityEntry(target, key);
+                if (!entry) {
+                  return;
+                }
+                assertCurrent();
+                selectedFingerprint = resolvePreparedReplyToolAuthorityFingerprint(
+                  input,
+                  route,
+                  entry,
+                );
+                assertCurrent();
+              }
+            : undefined,
+        )
       : undefined;
     if (preparedLookup) {
-      const loaded = preparedLookup.loaded;
-      const identity = {
-        storePath: loaded.storePath,
-        canonicalKey: loaded.canonicalKey,
-        storeKeys: [...loaded.storeKeys],
-        agentId: loaded.agentId,
-        source: loaded.capturedReadSource,
-        sources: loaded.capturedReadSources,
-        sessionId: loaded.entry?.sessionId,
-        lifecycleRevision: loaded.entry?.lifecycleRevision,
-      };
+      const identity = captureReplyToolAuthoritySession(preparedLookup.loaded);
       if (captured && !isDeepStrictEqual(identity, captured)) {
         throw new Error("Tool authority classification source changed");
       }
@@ -540,6 +532,9 @@ export function prepareReplyToolAuthority(
         capturedReadPlan = preparedLookup.readPlan;
       }
       capturedReadPlan?.assertCurrent();
+    }
+    if (selectedFingerprint !== undefined) {
+      return selectedFingerprint;
     }
     return withPreparedReplyToolAuthorityContext(
       input,
@@ -550,15 +545,7 @@ export function prepareReplyToolAuthority(
         env,
         cwd,
         readSource: captured?.source,
-        assertEntryCurrent: (entry) => {
-          if (
-            captured &&
-            (entry?.sessionId !== captured.sessionId ||
-              entry?.lifecycleRevision !== captured.lifecycleRevision)
-          ) {
-            throw new Error("Tool authority classification session changed");
-          }
-        },
+        assertEntryCurrent: (entry) => assertClassificationSession(entry, captured),
       },
     );
   };
@@ -571,27 +558,59 @@ export function prepareReplyToolAuthority(
     },
     requestedRoute: Object.freeze({ provider: snapshot.run.provider, model: snapshot.run.model }),
     fingerprint: (route?: ReplyToolAuthorityRoute) =>
-      resolveFollowupRunToolAuthorityFingerprint(snapshot, route),
-    fingerprintAsync: (route?: ReplyToolAuthorityRoute) => prepare(snapshot, route),
+      memory
+        ? resolvePreparedReplyToolAuthorityFingerprint(
+            snapshot,
+            route,
+            memory.actor.snapshot(memory.authority)?.entry,
+          )
+        : resolveFollowupRunToolAuthorityFingerprint(snapshot, route),
+    fingerprintAsync: async (route?: ReplyToolAuthorityRoute) =>
+      memory
+        ? prepare(snapshot, route)
+        : withReplyToolAuthorityCohort({
+            reader: resolveReader?.(),
+            original: captured,
+            readPlan: capturedReadPlan,
+            env,
+            assertCurrent: () => assertCurrentOperatorAuthority(snapshot.operatorAuthority),
+            prepare: () => prepare(snapshot, route, captured === undefined),
+            consume: (entry) =>
+              resolvePreparedReplyToolAuthorityFingerprint(snapshot, route, entry),
+          }),
     projectAsync: async (overlay: ReplyToolAuthorityOverlay, route: ReplyToolAuthorityRoute) => {
-      const assertCurrent = () => assertCurrentOperatorAuthority(snapshot.operatorAuthority);
-      assertCurrent();
-      const incoming = applyReplyToolAuthorityOverlay(snapshot, overlay);
-      return prepare(narrow ? narrow(incoming) : incoming, route);
+      assertCurrentOperatorAuthority(snapshot.operatorAuthority);
+      return prepare(projectInput(overlay), route);
     },
     project: (overlay: ReplyToolAuthorityOverlay, route: ReplyToolAuthorityRoute) => {
       // Steering retains the running turn's authority and browser bindings across reconnects.
       assertCurrentOperatorAuthority(snapshot.operatorAuthority);
-      const incoming = applyReplyToolAuthorityOverlay(snapshot, overlay);
-      return resolveFollowupRunToolAuthorityFingerprint(
-        narrow ? narrow(incoming) : incoming,
-        route,
-      );
+      return memory
+        ? resolvePreparedReplyToolAuthorityFingerprint(
+            projectInput(overlay),
+            route,
+            memory.actor.snapshot(memory.authority)?.entry,
+          )
+        : resolveFollowupRunToolAuthorityFingerprint(projectInput(overlay), route);
     },
   };
   bindReplyToolAuthorityCallerRead(
     result.projectAsync,
     async (caller, expected, route, assertActive) => {
+      if (memory) {
+        const projected = projectInput(caller);
+        const prepared = prepareMemoryReplyToolAuthorityCaller(memory, assertActive, (entry) =>
+          [snapshot, projected].every(
+            (input) =>
+              resolvePreparedReplyToolAuthorityFingerprint(input, route, entry) === expected,
+          ),
+        );
+        recordPreparedToolAuthorityRead({
+          ...prepared,
+          assertLegacyCurrent: () => prepared.assertPrepared([]),
+        });
+        return prepared;
+      }
       if (isIncognitoSessionKey(snapshot.run.runtimePolicySessionKey ?? snapshot.run.sessionKey)) {
         if (!captured) {
           await prepare(snapshot, route);
@@ -606,11 +625,13 @@ export function prepareReplyToolAuthority(
         // Published lineage is SQL-free; mutable native policy still uses compatibility.
         return undefined;
       }
-      await prepare(snapshot, route);
+      // The consuming phase rereads this plan's original sources before checking policy.
+      if (!captured) {
+        await prepare(snapshot, route);
+      }
       assertActive();
       const original = captured;
-      const incoming = caller ? applyReplyToolAuthorityOverlay(snapshot, caller) : snapshot;
-      const projected = narrow ? narrow(incoming) : incoming;
+      const projected = projectInput(caller);
       const plan = capturedReadPlan;
       if (original && !plan) {
         throw new Error("Tool authority classification source is unavailable");
@@ -621,18 +642,9 @@ export function prepareReplyToolAuthority(
       };
       const assertEntry = (entry: SessionEntry | undefined) => {
         assertSources();
-        if (
-          original &&
-          (entry?.sessionId !== original.sessionId ||
-            entry?.lifecycleRevision !== original.lifecycleRevision)
-        ) {
-          throw new Error("Tool authority classification session changed");
-        }
+        assertClassificationSession(entry, original);
         const sandbox = resolveSandboxRuntimeStatus({
-          cfg: snapshot.run.config,
-          agentId: snapshot.run.agentId,
-          sessionKey: snapshot.run.sessionKey,
-          classificationSessionKey: snapshot.run.runtimePolicySessionKey ?? snapshot.run.sessionKey,
+          ...resolveReplyToolSandboxParams(snapshot.run),
           preparedSessionEntry: entry ?? null,
         });
         for (const input of [snapshot, projected]) {

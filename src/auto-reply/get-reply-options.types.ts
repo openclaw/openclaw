@@ -245,6 +245,8 @@ export type GetReplyOptions = {
    * channel to surface progress via its own streaming/edit UX.
    */
   suppressDefaultToolProgressMessages?: boolean;
+  /** Keep automatic progress private for turns whose canonical reply expectation is optional. */
+  progressRequiresReply?: boolean;
   /** Suppress standalone tool/progress text even when verbose progress is enabled. */
   suppressToolProgressMessages?: boolean;
   /** Allow channel-owned tool lifecycle feedback while text progress remains hidden. */

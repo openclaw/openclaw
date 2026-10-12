@@ -67,7 +67,6 @@ export function createNodeWorkerWorkspaceActions(params: {
     environmentId: params.environmentId,
     ownerEpoch: params.ownerEpoch,
     sessionId: params.sessionId,
-    generation: params.ownerEpoch,
     isAuthorized: params.isOwnerCurrent,
     signal: params.ownerSignal,
   };

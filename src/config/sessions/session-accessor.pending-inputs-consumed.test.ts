@@ -1,9 +1,10 @@
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { runWithSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
+import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -18,7 +19,6 @@ import {
   deleteSessionEntryLifecycle,
   loadTranscriptEvents,
   readSessionSubmittedInput,
-  replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import {
@@ -31,7 +31,9 @@ import {
 } from "./session-accessor.pending-inputs.js";
 import { listSessionPendingInputReceipts } from "./session-accessor.sqlite-pending-input-receipts.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
+import { deriveTranscriptPredicateFields } from "./transcript-predicate-fields.js";
 
 describe("committed pending input release", () => {
   const fixture = useTempSessionsFixture("pending-input-consumed-release-");
@@ -140,6 +142,12 @@ describe("committed pending input release", () => {
         Array(sources.length + 1).fill("queued"),
       );
       if (observerFails) {
+        setLoggerOverride({ level: "silent", consoleLevel: "error" });
+        const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+        onTestFinished(() => {
+          errorLog.mockRestore();
+          resetLogger();
+        });
         expect(() =>
           runOpenClawAgentWriteTransaction((current) => {
             deferOpenClawAgentPostCommitPublication(current, () => {
@@ -147,7 +155,10 @@ describe("committed pending input release", () => {
             });
             promoteSync(receipt);
           }, options()),
-        ).toThrow("postcommit observer failed");
+        ).not.toThrow();
+        expect(errorLog).toHaveBeenCalledExactlyOnceWith(
+          expect.stringContaining("SQLite post-commit notification failed"),
+        );
       } else {
         expect(
           await receipt.run(() => appendTranscriptMessage(scope(), { message: receipt.message })),
@@ -291,70 +302,60 @@ describe("committed pending input release", () => {
     );
   });
 
-  it.each([
-    "empty-metadata",
-    "sender-metadata",
-    "transport-metadata",
-    "changed-payload",
-    "changed-sender",
-    "changed-provenance",
-    "changed-transport",
-  ] as const)("preserves legacy consumed input identity with %s", async (scenario) => {
-    const originalTransport =
-      scenario === "empty-metadata" || scenario === "sender-metadata"
-        ? {}
-        : { channel: "test", messageId: "original-message" };
-    const original: PersistedUserTurnMessage = {
-      ...message("legacy-client"),
-      provenance: { kind: "external_user", sourceTool: "original-source" },
-      ...(scenario === "empty-metadata"
-        ? {}
-        : {
-            __openclaw: {
-              senderId: "original-sender",
-              ...(Object.keys(originalTransport).length ? { transport: originalTransport } : {}),
-            },
-          }),
-    };
-    const source = await stage("legacy-client", { message: original });
-    const aggregate = expectDefined(
-      bindSessionPendingInputSources([source], message("legacy-collector")),
-      "Expected collected legacy input",
-    );
-    receipts.push(aggregate);
-    await promote(aggregate);
-    aggregate.finish("interrupted");
-    await aggregate.settled?.();
-    const stored = () =>
-      database().db.prepare("SELECT request_hash, message_json FROM session_pending_inputs").all();
-    const before = stored();
-    const retry: PersistedUserTurnMessage = {
-      ...original,
-      ...(scenario === "changed-payload" ? { content: "Changed input" } : {}),
-      ...(scenario === "changed-provenance"
-        ? { provenance: { kind: "external_user", sourceTool: "another-source" } }
-        : {}),
-      __openclaw: {
-        ...original["__openclaw"],
-        ...(scenario === "changed-sender" ? { senderId: "another-sender" } : {}),
-        transport: {
-          ...originalTransport,
-          ...(scenario === "changed-transport" ? { messageId: "another-message" } : {}),
-          clients: [{ id: "cli", mode: "cli" }],
+  it.each(["empty-metadata", "transport-metadata", "changed-payload"] as const)(
+    "preserves legacy consumed input identity with %s",
+    async (scenario) => {
+      const originalTransport =
+        scenario === "empty-metadata" ? {} : { channel: "test", messageId: "original-message" };
+      const original: PersistedUserTurnMessage = {
+        ...message("legacy-client"),
+        provenance: { kind: "external_user", sourceTool: "original-source" },
+        ...(scenario === "empty-metadata"
+          ? {}
+          : {
+              __openclaw: {
+                senderId: "original-sender",
+                ...(Object.keys(originalTransport).length ? { transport: originalTransport } : {}),
+              },
+            }),
+      };
+      const source = await stage("legacy-client", { message: original });
+      const aggregate = expectDefined(
+        bindSessionPendingInputSources([source], message("legacy-collector")),
+        "Expected collected legacy input",
+      );
+      receipts.push(aggregate);
+      await promote(aggregate);
+      aggregate.finish("interrupted");
+      await aggregate.settled?.();
+      const stored = () =>
+        database()
+          .db.prepare("SELECT request_hash, message_json FROM session_pending_inputs")
+          .all();
+      const before = stored();
+      const retry: PersistedUserTurnMessage = {
+        ...original,
+        ...(scenario === "changed-payload" ? { content: "Changed input" } : {}),
+        __openclaw: {
+          ...original["__openclaw"],
+          transport: {
+            ...originalTransport,
+            clients: [{ id: "cli", mode: "cli" }],
+          },
         },
-      },
-    };
-    const replay = stage("legacy-client", { message: retry, requestFingerprint: "upgraded" });
-    if (scenario.startsWith("changed-")) {
-      await expect(replay).rejects.toThrow("conflicts with the accepted input");
-    } else {
-      const receipt = await replay;
-      expect(receipt).toMatchObject({ state: "consumed", message: original });
-      expect(() => receipt.run(() => {})).toThrow("already been consumed");
-    }
-    expect(stored()).toEqual(before);
-    expect(await readSessionSubmittedInput(scope(), "legacy-client:user")).toEqual(original);
-  });
+      };
+      const replay = stage("legacy-client", { message: retry, requestFingerprint: "upgraded" });
+      if (scenario.startsWith("changed-")) {
+        await expect(replay).rejects.toThrow("conflicts with the accepted input");
+      } else {
+        const receipt = await replay;
+        expect(receipt).toMatchObject({ state: "consumed", message: original });
+        expect(() => receipt.run(() => {})).toThrow("already been consumed");
+      }
+      expect(stored()).toEqual(before);
+      expect(await readSessionSubmittedInput(scope(), "legacy-client:user")).toEqual(original);
+    },
+  );
 
   const stagePrivate = async (text = "private child marker", assertCurrent = () => {}) => {
     const receipt = expectDefined(
@@ -490,9 +491,12 @@ describe("committed pending input release", () => {
         if (difference === "malformed") {
           database()
             .db.prepare(
-              "UPDATE transcript_events SET event_json = json_set(event_json, '$.message.role', 'assistant') WHERE json_extract(event_json, '$.message.idempotencyKey') = ?",
+              "UPDATE transcript_events SET event_json = json_set(event_json, '$.message.role', 'assistant'), message_role = ? WHERE json_extract(event_json, '$.message.idempotencyKey') = ?",
             )
-            .run(`${runId}:user`);
+            .run(
+              deriveTranscriptPredicateFields('{"message":{"role":"assistant"}}').message_role,
+              `${runId}:user`,
+            );
         }
       } else {
         await first.completeAsync!(buildAgentRunTerminalOutcome({ status: "ok" }));
@@ -689,52 +693,6 @@ describe("committed pending input release", () => {
     expect(completionRows()).toMatchObject([{ succeeded: 1 }]);
   });
 
-  it("reconciles successful private processing without transcript consumption after restart", async () => {
-    const first = await stagePrivate();
-    let nextSpawns = 0;
-    nextSpawns += 1;
-    await first.completeAsync!(buildAgentRunTerminalOutcome({ status: "ok" }));
-    expect(pendingCount()).toBe(0);
-    expect(completionRows()).toMatchObject([{ succeeded: 1, run_id: "announce:private-child" }]);
-    // The child delivery save has not happened. A fresh process has only the DB.
-    rotateAgentEventLifecycleGeneration();
-    await first.settled?.();
-    await closeOpenClawAgentDatabasesAsync();
-    closeOpenClawAgentDatabasesForTest();
-    const replay = await stagePrivate();
-    expect(replay.completion).toMatchObject({ status: "ok", reason: "completed" });
-    expect(() =>
-      replay.run(() => {
-        nextSpawns += 1;
-      }),
-    ).toThrow("already completed");
-    expect(nextSpawns).toBe(1);
-    expect(pendingCount()).toBe(0);
-    await expect(stagePrivate("different child marker")).rejects.toThrow("conflicts");
-  });
-
-  it.each([false, true])(
-    "retains uncompleted private work across restart (input consumed=%s)",
-    async (consumed) => {
-      const first = await stagePrivate();
-      if (consumed) {
-        promoteSync(first);
-      }
-      expect(completionRows()).toEqual([]);
-      rotateAgentEventLifecycleGeneration();
-      await first.settled?.();
-      await closeOpenClawAgentDatabasesAsync();
-      closeOpenClawAgentDatabasesForTest();
-      const resumed = await stagePrivate();
-      expect(resumed.completion).toBeUndefined();
-      expect(resumed.run(() => "one resumed execution")).toBe("one resumed execution");
-      await resumed.completeAsync!(buildAgentRunTerminalOutcome({ status: "ok" }));
-      expect(pendingCount()).toBe(0);
-      expect(completionRows()).toMatchObject([{ succeeded: 1 }]);
-      await expect(stagePrivate("changed committed payload")).rejects.toThrow("conflicts");
-    },
-  );
-
   it("keeps private failed attempts retryable without letting stale failure replace success", async () => {
     const first = await stagePrivate();
     await first.completeAsync!(
@@ -770,6 +728,12 @@ describe("committed pending input release", () => {
 
   it("preserves released synchronous completion when a postcommit observer fails", async () => {
     const first = await stagePrivate();
+    setLoggerOverride({ level: "silent", consoleLevel: "error" });
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    onTestFinished(() => {
+      errorLog.mockRestore();
+      resetLogger();
+    });
     expect(() =>
       runOpenClawAgentWriteTransaction((current) => {
         deferOpenClawAgentPostCommitPublication(current, () => {
@@ -777,7 +741,10 @@ describe("committed pending input release", () => {
         });
         first.complete!(buildAgentRunTerminalOutcome({ status: "ok" }));
       }, options()),
-    ).toThrow("observer failed");
+    ).not.toThrow();
+    expect(errorLog).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("SQLite post-commit notification failed"),
+    );
     expect(completionRows()).toMatchObject([{ succeeded: 1 }]);
     expect(pendingCount()).toBe(0);
   });

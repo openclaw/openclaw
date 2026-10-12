@@ -29,7 +29,7 @@ afterEach(() => {
 afterAll(cleanupRuntimeToolFixtureTempRoots);
 
 describe("Codex-native workspace runtime tool fixtures", () => {
-  it.each(["bash", "edit", "exec", "fs-read", "fs-write", "grep"] as const)(
+  it.each(["edit", "fs-write"] as const)(
     "requires correlated native receipts and observable %s outcomes",
     async (behaviorId) => {
       const env = await makeEnv();

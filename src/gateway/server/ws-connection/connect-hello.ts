@@ -37,10 +37,10 @@ import { canReadDetailedUpdateMetadata } from "../../events.js";
 import { ADMIN_SCOPE } from "../../method-scopes.js";
 import { scheduleNodeConnectionNotification } from "../../node-connection-notifications.js";
 import { operatorSessionCap } from "../../operator-role-policy.js";
+import { MAX_PAYLOAD_BYTES } from "../../payload-limits.js";
 import { resolveBrowserAuthOrigin } from "../../provider-browser-auth.js";
 import {
   MAX_BUFFERED_BYTES,
-  MAX_PAYLOAD_BYTES,
   TICK_INTERVAL_MS,
   WEBSOCKET_OPEN_READY_STATE,
 } from "../../server-constants.js";
@@ -184,6 +184,8 @@ export async function sendGatewayHello(
           : []),
         GATEWAY_SERVER_CAPS.GATEWAY_RESTART_TARGET_SAFE,
         GATEWAY_SERVER_CAPS.LOCAL_STATE_OWNER_ROUTING,
+        GATEWAY_SERVER_CAPS.MODELS_AUTH_SET_API_KEY_OWNER,
+        GATEWAY_SERVER_CAPS.MODELS_AUTH_LOGIN_OWNER,
         GATEWAY_SERVER_CAPS.CHANNELS_PAIRING_LIST_OWNER,
         GATEWAY_SERVER_CAPS.CHANNELS_PAIRING_APPROVE_OWNER,
         GATEWAY_SERVER_CAPS.EXEC_APPROVALS_GET_OWNER,
@@ -204,6 +206,7 @@ export async function sendGatewayHello(
         GATEWAY_SERVER_CAPS.NODE_WORKER_LAUNCH_TOOL_NAMES,
         GATEWAY_SERVER_CAPS.NODE_WORKER_NATIVE_INFERENCE,
         GATEWAY_SERVER_CAPS.NODE_WORKER_PORTAL_STREAM,
+        GATEWAY_SERVER_CAPS.NODE_WORKER_PROMPT_CONTEXT,
         GATEWAY_SERVER_CAPS.NODE_WORKER_STATUS_WAIT,
         GATEWAY_SERVER_CAPS.PROFILE_BINDING,
         GATEWAY_SERVER_CAPS.PUBLISHED_MODEL_CATALOG,

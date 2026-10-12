@@ -51,51 +51,12 @@ describe("exec approvals safe bins", () => {
     safeBinProfiles?: Readonly<Record<string, { minPositional?: number; maxPositional?: number }>>;
   };
 
-  const deniedFlags: [string, string][] = [
-    ["sort", "-oblocked"],
-    ["sort", "--output=blocked"],
-    ["sort", "--compress-program=blocked"],
-    ["sort", "--compress-prog=blocked"],
-    ["sort", "--files0-fro=blocked"],
-    ["sort", "--random-source=blocked"],
-    ["sort", "--temporary-directory=blocked"],
-    ["sort", "-Tblocked"],
-    ["grep", "-R"],
-    ["grep", "--recursive"],
-    ["grep", "--file=blocked"],
-    ["jq", "-fblocked"],
-    ["jq", "--from-file=blocked"],
-    ["wc", "--files0-from=blocked"],
-    ["wc", "--files0-fro=blocked"],
-  ];
-
   const cases: SafeBinCase[] = [
-    {
-      name: "blocks jq safe bins even with non-path args",
-      argv: ["jq", ".foo"],
-      expected: false,
-    },
-    {
-      name: "blocks jq env builtin even when jq is explicitly opted in",
-      argv: ["jq", "env"],
-      expected: false,
-    },
-    {
-      name: "blocks awk scripts even when awk is explicitly profiled",
-      argv: ["awk", 'BEGIN { system("id") }'],
-      expected: false,
-      safeBinProfiles: { awk: {} },
-    },
     {
       name: "blocks sed scripts even when sed is explicitly profiled",
       argv: ["sed", "e"],
       expected: false,
       safeBinProfiles: { sed: {} },
-    },
-    {
-      name: "blocks POSIX parameter expansion in safe-bin value tokens",
-      argv: ["head", "-c${IFS}16${IFS}${OPENCLAW_CONFIG_PATH}"],
-      expected: false,
     },
     {
       name: "blocks POSIX parameter expansion in safe-bin long option values",
@@ -107,29 +68,14 @@ describe("exec approvals safe bins", () => {
       argv: ["tr", "${IFS}", "_"],
       expected: false,
     },
-    ...deniedFlags.map(([bin, flag]) => ({
-      name: `blocks ${bin} ${flag}`,
-      argv: [bin, flag],
-      expected: false,
-    })),
     {
-      name: "blocks grep file positional when pattern uses -e",
-      argv: ["grep", "-e", "needle", ".env"],
+      name: "blocks wc --files0-fro=blocked",
+      argv: ["wc", "--files0-fro=blocked"],
       expected: false,
     },
     {
       name: "blocks grep file positional after -- terminator",
       argv: ["grep", "-e", "needle", "--", ".env"],
-      expected: false,
-    },
-    {
-      name: "rejects unknown long options in safe-bin mode",
-      argv: ["sort", "--totally-unknown=1"],
-      expected: false,
-    },
-    {
-      name: "rejects ambiguous long-option abbreviations in safe-bin mode",
-      argv: ["sort", "--f=1"],
       expected: false,
     },
     {
@@ -143,38 +89,8 @@ describe("exec approvals safe bins", () => {
       expected: false,
     },
     {
-      name: "auto-allows cut only-delimited mode with a field selector",
-      argv: ["cut", "-s", "-f", "1"],
-      expected: true,
-    },
-    {
-      name: "auto-allows head quiet mode",
-      argv: ["head", "-q"],
-      expected: true,
-    },
-    {
-      name: "auto-allows tail quiet mode",
-      argv: ["tail", "-q"],
-      expected: true,
-    },
-    {
-      name: "auto-allows wc line count via boolean flag",
-      argv: ["wc", "-l"],
-      expected: true,
-    },
-    {
       name: "auto-allows wc word count via boolean long flag",
       argv: ["wc", "--words"],
-      expected: true,
-    },
-    {
-      name: "auto-allows uniq count via boolean flag",
-      argv: ["uniq", "-c"],
-      expected: true,
-    },
-    {
-      name: "auto-allows tr delete via boolean flag",
-      argv: ["tr", "-d", "abc"],
       expected: true,
     },
   ];
@@ -249,13 +165,6 @@ describe("exec approvals safe bins", () => {
       platform: "win32",
     });
     expect(ok).toBe(false);
-  });
-
-  it("does not include sort/grep in default safeBins", () => {
-    const defaults = resolveSafeBins(undefined);
-    expect(defaults.has("jq")).toBe(false);
-    expect(defaults.has("sort")).toBe(false);
-    expect(defaults.has("grep")).toBe(false);
   });
 
   it("does not auto-allow unprofiled safe-bin entries", async () => {

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as sqliteRuntime from "../infra/bun-sqlite-library.js";
 import {
   adoptPreparedLocation,
   cleanupSnapshotOperations,
@@ -206,7 +207,7 @@ beforeEach(() => {
     );
   mocks.close.mockReset().mockResolvedValue();
   mocks.read.mockReset().mockResolvedValue({
-    value: { ok: true, type: "fleet.list", sourceAdmitted: true, cells: [] },
+    value: { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] },
   });
 });
 
@@ -222,7 +223,7 @@ afterEach(async () => {
 
 function runDirectRead() {
   return withArtifactPreservingStateReads(() =>
-    executeExistingOpenClawStateRead({ path: mocks.source }, { type: "fleet.list" }),
+    executeExistingOpenClawStateRead({ path: mocks.source }, { type: "backup.runs" }),
   );
 }
 
@@ -239,6 +240,64 @@ function assertFilesRetained() {
   exitCleanup?.();
   expect(mocks.removed).toEqual([]);
 }
+
+it.each([
+  { capable: false, failure: "busy", succeeds: true },
+  { capable: true, failure: "busy", succeeds: false },
+  { capable: false, failure: "permission", succeeds: false },
+  { capable: false, failure: "read", succeeds: false },
+  { capable: false, failure: "native close", succeeds: false },
+] as const)(
+  "settles discovery with $failure cleanup (native close capable: $capable)",
+  async ({ capable, failure, succeeds }) => {
+    const runtime = vi.spyOn(sqliteRuntime, "getSqliteRuntimeCapabilities").mockReturnValue({
+      ...sqliteRuntime.getSqliteRuntimeCapabilities(),
+      explicitSqliteCloseReleasesNativeResources: capable,
+    });
+    const busy = Object.assign(new Error("private SQLite file is still open"), {
+      code: failure === "permission" ? "EACCES" : "EBUSY",
+    });
+    mocks.prepare.mockImplementation(async () =>
+      adoptPreparedLocation(`${mocks.directory}/database.sqlite`, mocks.directory, true),
+    );
+    mocks.removeAsync.mockRejectedValue(busy);
+    if (failure === "native close") {
+      mocks.close.mockRejectedValue(new Error("native close failed"));
+    }
+    try {
+      const result = await captureOutcome(
+        withOpenClawStateDatabaseReadSnapshot(
+          async () => {
+            await executeExistingOpenClawStateRead({ path: mocks.source }, { type: "backup.runs" });
+            if (failure === "read") {
+              throw new Error("discovery read failed");
+            }
+            return "discovered";
+          },
+          { path: mocks.source },
+        ),
+      );
+      expect(mocks.removed).toEqual([]);
+      mocks.close.mockResolvedValue();
+      mocks.removeAsync.mockImplementation(async (file) => {
+        mocks.removed.push(file);
+      });
+      for (const resource of mocks.resources) {
+        await resource.close();
+      }
+      await cleanupSnapshotOperations();
+      expect(mocks.removed).toEqual([mocks.directory]);
+      expect(mocks.read).toHaveBeenCalledOnce();
+      if (succeeds) {
+        expect(result).toEqual({ value: "discovered" });
+      } else {
+        expect(result).toHaveProperty("error");
+      }
+    } finally {
+      runtime.mockRestore();
+    }
+  },
+);
 
 it.each(["direct", "snapshot"] as const)(
   "joins a pending %s preparation handoff before removing its directory",
@@ -280,7 +339,7 @@ it("joins the direct reader and its transport close before deleting prepared byt
     reading.resolve();
     await finishRead.promise;
     mocks.events.push("read-settled");
-    return { value: { ok: true, type: "fleet.list", sourceAdmitted: true, cells: [] } };
+    return { value: { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] } };
   });
   mocks.close.mockImplementation(async () => {
     closing.resolve();
@@ -326,7 +385,7 @@ it("retains an enclosing snapshot callback while cleanup closes new read admissi
     const rejected = await escaped(() =>
       captureOutcome(
         Promise.resolve().then(() =>
-          executeExistingOpenClawStateRead({ path: mocks.source }, { type: "fleet.list" }),
+          executeExistingOpenClawStateRead({ path: mocks.source }, { type: "backup.runs" }),
         ),
       ),
     );
@@ -435,7 +494,7 @@ it("forwards caller cancellation while retaining descendants and transport close
   mocks.read.mockImplementation(async () => {
     reading.resolve();
     await finishRead.promise;
-    return { value: { ok: true, type: "fleet.list", sourceAdmitted: true, cells: [] } };
+    return { value: { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] } };
   });
   mocks.close.mockImplementation(async () => {
     closing.resolve();
@@ -459,7 +518,7 @@ it("forwards caller cancellation while retaining descendants and transport close
             mocks.events.push("descendant-settled");
           });
           reader = captureOutcome(
-            executeExistingOpenClawStateRead({ path: mocks.source }, { type: "fleet.list" }),
+            executeExistingOpenClawStateRead({ path: mocks.source }, { type: "backup.runs" }),
           );
           entered.resolve();
           await finishCallback.promise;

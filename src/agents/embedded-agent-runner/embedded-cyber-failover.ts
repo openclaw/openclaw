@@ -39,20 +39,18 @@ export function resolveEmbeddedCyberFailoverTarget(
     raw: string;
   } & ModelManifestNormalizationContext,
 ): ModelRef | null {
-  const aliasIndex = buildModelAliasIndex({
+  const modelContext = {
     cfg: params.cfg,
     agentId: params.agentId,
     defaultProvider: "openai",
     manifestPlugins: params.manifestPlugins,
-  });
+  };
+  const aliasIndex = buildModelAliasIndex(modelContext);
   return (
     resolveModelRefFromString({
-      cfg: params.cfg,
-      agentId: params.agentId,
+      ...modelContext,
       raw: params.raw,
-      defaultProvider: "openai",
       aliasIndex,
-      manifestPlugins: params.manifestPlugins,
     })?.ref ?? null
   );
 }

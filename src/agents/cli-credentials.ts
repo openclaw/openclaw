@@ -20,12 +20,10 @@ type CachedValue<T> = {
   value: T | null;
   readAt: number;
   cacheKey: string;
-  sourceFingerprint?: number | string | null;
+  sourceFingerprint: number | null;
 };
 
-let codexCliCache: CachedValue<CodexCliCredential> | null = null;
-let minimaxCliCache: CachedValue<MiniMaxCliCredential> | null = null;
-let geminiCliCache: CachedValue<GeminiCliCredential> | null = null;
+const readCachedCodexCredential = createCachedCliCredentialReader<CodexCliCredential>();
 
 export type CodexCliCredential = {
   type: "oauth";
@@ -75,30 +73,9 @@ export function resolveCodexCliHomePath(codexHome?: string, env: NodeJS.ProcessE
   }
 }
 
-function codexAuthJsonUsesChatGptTokens(data: Record<string, unknown>): boolean {
+function readCodexAuthMode(data: Record<string, unknown>): string {
   const authMode = typeof data.auth_mode === "string" ? data.auth_mode.toLowerCase() : undefined;
-  if (authMode) {
-    return authMode === "chatgpt" || authMode === "chatgptauthtokens";
-  }
-  return typeof data.OPENAI_API_KEY !== "string";
-}
-
-function codexAuthJsonUsesApiKey(data: Record<string, unknown>): boolean {
-  const authMode = typeof data.auth_mode === "string" ? data.auth_mode.toLowerCase() : undefined;
-  if (authMode) {
-    return authMode === "apikey" || authMode === "api_key";
-  }
-  return typeof data.OPENAI_API_KEY === "string";
-}
-
-function resolveMiniMaxCliCredentialsPath(homeDir?: string) {
-  const baseDir = resolveOsHomeRelativePath(homeDir ?? "~");
-  return path.join(baseDir, MINIMAX_CLI_CREDENTIALS_RELATIVE_PATH);
-}
-
-function resolveGeminiCliCredentialsPath(homeDir?: string) {
-  const baseDir = resolveOsHomeRelativePath(homeDir ?? "~");
-  return path.join(baseDir, GEMINI_CLI_CREDENTIALS_RELATIVE_PATH);
+  return authMode || (typeof data.OPENAI_API_KEY === "string" ? "api_key" : "chatgpt");
 }
 
 function readFileMtimeMs(filePath: string): number | null {
@@ -109,43 +86,44 @@ function readFileMtimeMs(filePath: string): number | null {
   }
 }
 
-function readCachedCliCredential<T>(options: {
-  ttlMs: number;
-  cache: CachedValue<T> | null;
-  cacheKey: string;
-  read: () => T | null;
-  setCache: (next: CachedValue<T> | null) => void;
-  readSourceFingerprint?: () => number | string | null;
-}): T | null {
-  const { ttlMs, cache, cacheKey, read, setCache, readSourceFingerprint } = options;
-  if (ttlMs <= 0) {
-    return read();
-  }
+function createCachedCliCredentialReader<T>() {
+  let cache: CachedValue<T> | null = null;
+  return (options: {
+    ttlMs: number;
+    cacheKey: string;
+    read: () => T | null;
+    sourcePath: string;
+  }): T | null => {
+    const { ttlMs, cacheKey, read, sourcePath } = options;
+    if (ttlMs <= 0) {
+      return read();
+    }
 
-  const now = Date.now();
-  const sourceFingerprint = readSourceFingerprint?.();
-  if (
-    cache &&
-    cache.cacheKey === cacheKey &&
-    cache.sourceFingerprint === sourceFingerprint &&
-    now - cache.readAt < ttlMs
-  ) {
-    return cache.value;
-  }
+    const now = Date.now();
+    const sourceFingerprint = readFileMtimeMs(sourcePath);
+    if (
+      cache &&
+      cache.cacheKey === cacheKey &&
+      cache.sourceFingerprint === sourceFingerprint &&
+      now - cache.readAt < ttlMs
+    ) {
+      return cache.value;
+    }
 
-  const value = read();
-  const cachedSourceFingerprint = readSourceFingerprint?.();
-  if (!readSourceFingerprint || cachedSourceFingerprint === sourceFingerprint) {
-    setCache({
-      value,
-      readAt: now,
-      cacheKey,
-      sourceFingerprint: cachedSourceFingerprint,
-    });
-  } else {
-    setCache(null);
-  }
-  return value;
+    const value = read();
+    const cachedSourceFingerprint = readFileMtimeMs(sourcePath);
+    if (cachedSourceFingerprint === sourceFingerprint) {
+      cache = {
+        value,
+        readAt: now,
+        cacheKey,
+        sourceFingerprint: cachedSourceFingerprint,
+      };
+    } else {
+      cache = null;
+    }
+    return value;
+  };
 }
 
 function computeCodexKeychainAccount(codexHome: string) {
@@ -223,7 +201,7 @@ function parseCodexOauthCredential(
   data: Record<string, unknown>,
   fallbackExpiry: number | undefined,
 ): CodexCliCredential | null {
-  if (!codexAuthJsonUsesChatGptTokens(data)) {
+  if (!["chatgpt", "chatgptauthtokens"].includes(readCodexAuthMode(data))) {
     return null;
   }
   const tokens = data.tokens as Record<string, unknown> | undefined;
@@ -254,7 +232,7 @@ function parseCodexOauthCredential(
 function parseCodexApiKeyCredential(
   data: Record<string, unknown>,
 ): CodexCliApiKeyCredential | null {
-  if (!codexAuthJsonUsesApiKey(data)) {
+  if (!["apikey", "api_key"].includes(readCodexAuthMode(data))) {
     return null;
   }
   const key = typeof data.OPENAI_API_KEY === "string" ? data.OPENAI_API_KEY.trim() : "";
@@ -432,9 +410,8 @@ export function readCodexCliCredentialsCached(options?: {
   const authPath = path.join(resolveCodexCliHomePath(options?.codexHome), CODEX_CLI_AUTH_FILENAME);
   const keychainIntent =
     platform === "darwin" && options?.allowKeychainPrompt !== false ? "keychain" : "file";
-  return readCachedCliCredential({
+  return readCachedCodexCredential({
     ttlMs,
-    cache: codexCliCache,
     cacheKey: `${platform}|${authPath}:${keychainIntent}`,
     read: () =>
       readCodexCliCredentials({
@@ -443,43 +420,45 @@ export function readCodexCliCredentialsCached(options?: {
         platform: options?.platform,
         execSync: options?.execSync,
       }),
-    setCache: (next) => {
-      codexCliCache = next;
-    },
-    readSourceFingerprint: () => readFileMtimeMs(authPath),
+    sourcePath: authPath,
   });
 }
 
-export function readMiniMaxCliCredentialsCached(options?: {
+type CliFileCredentialOptions = {
   ttlMs?: number;
   homeDir?: string;
-}): MiniMaxCliCredential | null {
-  const credPath = resolveMiniMaxCliCredentialsPath(options?.homeDir);
-  return readCachedCliCredential({
-    ttlMs: options?.ttlMs ?? 0,
-    cache: minimaxCliCache,
-    cacheKey: credPath,
-    read: () => readMiniMaxCliCredentials(credPath),
-    setCache: (next) => {
-      minimaxCliCache = next;
-    },
-    readSourceFingerprint: () => readFileMtimeMs(credPath),
-  });
+};
+
+function createCachedCliFileReader<T>(relativePath: string, read: (pathname: string) => T | null) {
+  const readCached = createCachedCliCredentialReader<T>();
+  return (options?: CliFileCredentialOptions): T | null => {
+    const credPath = path.join(resolveOsHomeRelativePath(options?.homeDir ?? "~"), relativePath);
+    return readCached({
+      ttlMs: options?.ttlMs ?? 0,
+      cacheKey: credPath,
+      read: () => read(credPath),
+      sourcePath: credPath,
+    });
+  };
 }
 
-export function readGeminiCliCredentialsCached(options?: {
-  ttlMs?: number;
-  homeDir?: string;
-}): GeminiCliCredential | null {
-  const credPath = resolveGeminiCliCredentialsPath(options?.homeDir);
-  return readCachedCliCredential({
-    ttlMs: options?.ttlMs ?? 0,
-    cache: geminiCliCache,
-    cacheKey: credPath,
-    read: () => readGeminiCliCredentials(credPath),
-    setCache: (next) => {
-      geminiCliCache = next;
-    },
-    readSourceFingerprint: () => readFileMtimeMs(credPath),
-  });
+const readCachedMiniMax = createCachedCliFileReader(
+  MINIMAX_CLI_CREDENTIALS_RELATIVE_PATH,
+  readMiniMaxCliCredentials,
+);
+const readCachedGemini = createCachedCliFileReader(
+  GEMINI_CLI_CREDENTIALS_RELATIVE_PATH,
+  readGeminiCliCredentials,
+);
+
+export function readMiniMaxCliCredentialsCached(
+  options?: CliFileCredentialOptions,
+): MiniMaxCliCredential | null {
+  return readCachedMiniMax(options);
+}
+
+export function readGeminiCliCredentialsCached(
+  options?: CliFileCredentialOptions,
+): GeminiCliCredential | null {
+  return readCachedGemini(options);
 }

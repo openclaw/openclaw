@@ -55,9 +55,11 @@ const INTERRUPTED_NETWORK_ERROR_RE =
   /\beconnrefused\b|\beconnreset\b|\beconnaborted\b|\benetreset\b|\behostunreach\b|\behostdown\b|\benetunreach\b|\bepipe\b|\bsocket hang up\b|\bconnection refused\b|\bconnection reset\b|\bconnection aborted\b|\bnetwork is unreachable\b|\bhost is unreachable\b|\bfetch failed\b|\bconnection error\b|\bnetwork request failed\b/i;
 const SANDBOX_BLOCKED_RE =
   /\bapproval is required\b|\bapproval timed out\b|\bapproval was denied\b|\bblocked by sandbox\b|\bsandbox\b.*\b(?:blocked|denied|forbidden|disabled|not allowed)\b|\bexec denied\s*\(/i;
-const OAUTH_REFRESH_TIMEOUT_RE = /\boauth refresh call\b.*\bexceeded hard timeout\b/i;
-const OAUTH_CALLBACK_TIMEOUT_RE = /\bcallback_timeout\b/i;
-const OAUTH_CALLBACK_VALIDATION_RE = /\bcallback_validation_failed\b/i;
+const OAUTH_FAILURE_PATTERNS = [
+  [/\boauth refresh call\b.*\bexceeded hard timeout\b/i, "refresh_timeout"],
+  [/\bcallback_timeout\b/i, "callback_timeout"],
+  [/\bcallback_validation_failed\b/i, "callback_validation"],
+] as const;
 function isHtmlErrorResponse(raw: string, status?: number): boolean {
   if (status === undefined || status < 400) {
     return false;
@@ -85,27 +87,6 @@ function isAuthScopeErrorMessage(raw: string, status?: number, provider?: string
   }
   return status === undefined ? hasScopeHint : status === 401 || status === 403;
 }
-function isSandboxBlockedErrorMessage(raw: string): boolean {
-  return Boolean(formatExecDeniedUserMessage(raw)) || SANDBOX_BLOCKED_RE.test(raw);
-}
-function isSchemaErrorMessage(
-  raw: string,
-  opts?: { provider?: string; providerPlugin?: PreparedProviderFailoverOwner | null },
-): boolean {
-  if (isReplayInvalidErrorMessage(raw) || isContextOverflowErrorFromTables(raw)) {
-    return false;
-  }
-  // Schema copy requires message evidence, not a generic HTTP 400 classification.
-  return classifyFailoverReason(raw, opts) === "format" || matchesFormatErrorPattern(raw);
-}
-function isTimeoutTransportErrorMessage(raw: string, status?: number): boolean {
-  return (
-    isTimeoutErrorMessage(raw) ||
-    INTERRUPTED_NETWORK_ERROR_RE.test(raw) ||
-    (status !== undefined &&
-      [408, 499, 500, 502, 503, 504, 521, 522, 523, 524, 529].includes(status))
-  );
-}
 function isOAuthRefreshContentionMessage(raw: string): boolean {
   return (
     /\brefresh_contention\b/i.test(raw) ||
@@ -127,20 +108,16 @@ export function classifyProviderRuntimeFailureKind(
   if (!message && typeof status !== "number" && !hasStructuredErrorSignal) {
     return "empty_response";
   }
-  if (normalizedSignal.code === "refresh_contention") {
+  if (
+    normalizedSignal.code === "refresh_contention" ||
+    (message && isOAuthRefreshContentionMessage(message))
+  ) {
     return "refresh_contention";
   }
-  if (message && isOAuthRefreshContentionMessage(message)) {
-    return "refresh_contention";
-  }
-  if (message && OAUTH_REFRESH_TIMEOUT_RE.test(message)) {
-    return "refresh_timeout";
-  }
-  if (message && OAUTH_CALLBACK_TIMEOUT_RE.test(message)) {
-    return "callback_timeout";
-  }
-  if (message && OAUTH_CALLBACK_VALIDATION_RE.test(message)) {
-    return "callback_validation";
+  for (const [pattern, kind] of OAUTH_FAILURE_PATTERNS) {
+    if (message && pattern.test(message)) {
+      return kind;
+    }
   }
   if (message && classifyOAuthRefreshFailure(message)) {
     return "auth_refresh";
@@ -178,13 +155,20 @@ export function classifyProviderRuntimeFailureKind(
   if (message && DNS_ERROR_RE.test(message)) {
     return "dns";
   }
-  if (message && isSandboxBlockedErrorMessage(message)) {
+  if (message && (formatExecDeniedUserMessage(message) || SANDBOX_BLOCKED_RE.test(message))) {
     return "sandbox_blocked";
   }
   if (message && isReplayInvalidErrorMessage(message)) {
     return "replay_invalid";
   }
-  if (message && isSchemaErrorMessage(message, { ...opts, provider: normalizedSignal.provider })) {
+  const schemaOptions = message ? { ...opts, provider: normalizedSignal.provider } : undefined;
+  // Schema copy requires message evidence, not a generic HTTP 400 classification.
+  if (
+    message &&
+    !isContextOverflowErrorFromTables(message) &&
+    (classifyFailoverReason(message, schemaOptions) === "format" ||
+      matchesFormatErrorPattern(message))
+  ) {
     return "schema";
   }
   // Plain HTTP 401 / invalid-token replies should be safe chat copy, but the
@@ -207,7 +191,13 @@ export function classifyProviderRuntimeFailureKind(
   if (failoverReason === "timeout" || failoverReason === "overloaded") {
     return "timeout";
   }
-  if (message && isTimeoutTransportErrorMessage(message, status)) {
+  if (
+    message &&
+    (isTimeoutErrorMessage(message) ||
+      INTERRUPTED_NETWORK_ERROR_RE.test(message) ||
+      (status !== undefined &&
+        [408, 499, 500, 502, 503, 504, 521, 522, 523, 524, 529].includes(status)))
+  ) {
     return "timeout";
   }
   if (message && isExactUnknownNoDetailsError(message)) {

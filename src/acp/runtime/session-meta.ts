@@ -1,3 +1,4 @@
+import { getSessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
 import { captureIncognitoSessionBinding } from "../../config/sessions/session-incognito-binding.js";
 import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 /** SQLite-backed ACP session metadata storage keyed through session-store entries. */
@@ -26,24 +27,6 @@ import { bindAcpSessionMeta } from "./session-meta-write.kernel.js";
 export { resolveSessionStorePathForAcp } from "./session-meta-store.js";
 
 export type { AcpSessionStoreEntry } from "./session-meta-store.js";
-
-/** @deprecated Use readAcpSessionMetaAsync for runtime reads. Native maintenance retains this reader. */
-export function readAcpSessionMeta(params: {
-  sessionKey: string;
-  agentId?: string;
-  cfg?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  databasePath?: string;
-}): SessionAcpMeta | undefined {
-  if (params.sessionKey.trim() && captureIncognitoSessionBinding(params)) {
-    throw new IncognitoSessionSyncAccessError("readAcpSessionMeta", "readAcpSessionMetaAsync");
-  }
-  return readAcpSessionEntry({
-    ...params,
-    sessionKey: params.sessionKey.trim(),
-    clone: false,
-  })?.acp;
-}
 
 export function readAcpSessionMetaBatch(params: {
   entries: ReadonlyArray<{
@@ -134,7 +117,10 @@ export function readAcpSessionEntry(params: {
   if (!sessionKey) {
     return null;
   }
-  if (captureIncognitoSessionBinding(params)) {
+  if (
+    getSessionActorStorageBinding({ ...params, sessionKey }) ||
+    captureIncognitoSessionBinding(params)
+  ) {
     throw new IncognitoSessionSyncAccessError("readAcpSessionEntry", "readAcpSessionEntryAsync");
   }
   const storeEntry = readSessionEntryFromStore(params);

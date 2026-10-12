@@ -10,7 +10,6 @@ import {
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   findTelegramPollRegistryEntry,
-  findTelegramPollRegistryEntrySync,
   recordTelegramPollRegistryEntry,
   retireTelegramPollRegistryEntry,
   type TelegramPollRegistryEntry,
@@ -61,9 +60,6 @@ describe("telegram poll registry", () => {
     }
     expect(entry.expiresAt - entry.createdAt).toBe(48 * 60 * 60 * 1000);
     await expect(findTelegramPollRegistryEntry({ pollId: "poll-closed" })).resolves.toMatchObject({
-      threadSpec: { scope: "forum", id: 88 },
-    });
-    expect(findTelegramPollRegistryEntrySync({ pollId: "poll-closed" })).toMatchObject({
       threadSpec: { scope: "forum", id: 88 },
     });
 

@@ -233,9 +233,7 @@ export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createCh
     },
     status: qaChannelStatus,
     gateway: {
-      startAccount: async (ctx) => {
-        await startQaGatewayAccount(QA_CHANNEL_ID, qaChannelRuntimeMeta.label, ctx);
-      },
+      startAccount: (ctx) => startQaGatewayAccount(QA_CHANNEL_ID, qaChannelRuntimeMeta.label, ctx),
     },
     threading: {
       resolveReplyTransport: ({

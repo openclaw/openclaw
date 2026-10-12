@@ -1,3 +1,7 @@
+import {
+  findGraphemeChunkEnd,
+  firstGraphemeClusterLength,
+} from "@openclaw/normalization-core/grapheme";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { FenceSpan } from "../../packages/markdown-core/src/fences.js";
 import {
@@ -48,6 +52,8 @@ export type BlockChunkMetadata = {
 
 type BlockChunkDrain = {
   force: boolean;
+  /** Only for cumulative previews that replace previously emitted text. */
+  mutablePreview?: boolean;
   emit: (chunk: string, options?: BlockChunkMetadata) => void;
 };
 
@@ -182,6 +188,12 @@ export class EmbeddedBlockChunker {
 
   /** Replace pending source; the snapshot owner can attest that the consumed prefix is unchanged. */
   replace(text: string, sourceOffset = 0, prefixRetained = false): boolean {
+    const readMaxChars = () =>
+      Math.max(
+        1,
+        Math.floor(this.#chunking?.minChars ?? 1),
+        Math.floor(this.#chunking?.maxChars ?? Infinity),
+      );
     const pendingOffset = sourceOffset - this.#consumedLength;
     const next =
       this.#buffer.slice(0, Math.max(0, pendingOffset)) + text.slice(Math.max(0, -pendingOffset));
@@ -194,11 +206,7 @@ export class EmbeddedBlockChunker {
     if (sourceOffset === 0 && text.length < this.#consumedLength) {
       const { spans, state } = scanFenceSpans(text);
       const fence = state.open ? spans.at(-1) : undefined;
-      const maxChars = Math.max(
-        1,
-        Math.floor(this.#chunking?.minChars ?? 1),
-        Math.floor(this.#chunking?.maxChars ?? Infinity),
-      );
+      const maxChars = readMaxChars();
       const reopenLine =
         fence && this.#chunking ? resolveFenceReopenLine(fence, maxChars) : undefined;
       this.#reopenPrefix = reopenLine ? `${reopenLine}\n` : "";
@@ -206,11 +214,7 @@ export class EmbeddedBlockChunker {
     }
     const consumedLength = Math.min(this.#consumedLength, sourceOffset + text.length);
     if (!prefixRetained && sourceOffset === 0 && this.#codeContext && consumedLength > 0) {
-      const maxChars = Math.max(
-        1,
-        Math.floor(this.#chunking?.minChars ?? 1),
-        Math.floor(this.#chunking?.maxChars ?? Infinity),
-      );
+      const maxChars = readMaxChars();
       this.#codeContext = prepareIndentedCode(text, "", true, maxChars).contextAt(consumedLength);
     }
     if (consumedLength === 0) {
@@ -275,16 +279,24 @@ export class EmbeddedBlockChunker {
     if (!this.#buffer || (!params.force && !chunking)) {
       return;
     }
-    if (!chunking) {
-      preparedSourceBreaks.push(sourceStart + this.#buffer.length);
-      emit(this.bufferedText, {
-        sourceText: this.#buffer,
+    const emitChunk = (chunk: string, from: number, to: number, startsAtLineStart: boolean) => {
+      preparedSourceBreaks.push(sourceStart + to);
+      emit(chunk, {
+        sourceText: this.#buffer.slice(from, to),
         sourceGeneration: this.#sourceGeneration,
         reconciledSourceBreak: reconciledSourceBreak || undefined,
-        sourceStart: this.#sourceOffset + this.#consumedLength,
-        sourceEnd: this.#sourceOffset + this.#consumedLength + this.#buffer.length,
-        startsAtLineStart: Boolean(this.#reopenPrefix) || this.#bufferStartsAtLineStart,
+        sourceStart: this.#sourceOffset + this.#consumedLength + from,
+        sourceEnd: this.#sourceOffset + this.#consumedLength + to,
+        startsAtLineStart,
       });
+    };
+    if (!chunking) {
+      emitChunk(
+        this.bufferedText,
+        0,
+        this.#buffer.length,
+        Boolean(this.#reopenPrefix) || this.#bufferStartsAtLineStart,
+      );
       this.#bufferStartsAtLineStart = this.#buffer.endsWith("\n");
       this.#consumedLength += this.#buffer.length;
       this.#buffer = "";
@@ -310,15 +322,7 @@ export class EmbeddedBlockChunker {
 
     if (force && source.length <= maxChars && !this.#reopenPrefix) {
       if (source.trim().length > 0) {
-        preparedSourceBreaks.push(sourceStart + this.#buffer.length);
-        emit(source, {
-          sourceText: this.#buffer,
-          sourceGeneration: this.#sourceGeneration,
-          reconciledSourceBreak: reconciledSourceBreak || undefined,
-          sourceStart: this.#sourceOffset + this.#consumedLength,
-          sourceEnd: this.#sourceOffset + this.#consumedLength + this.#buffer.length,
-          startsAtLineStart,
-        });
+        emitChunk(source, 0, this.#buffer.length, startsAtLineStart);
       }
       this.#bufferStartsAtLineStart = this.#buffer.endsWith("\n");
       this.#codeContext = indentedCode.contextAt(originalSource.length);
@@ -374,19 +378,13 @@ export class EmbeddedBlockChunker {
       Math.max(0, indentedCode.toSource(originalIndex(index)) - this.#reopenPrefix.length);
     let start = 0;
     let reopenFence: FenceSplit | undefined;
-    const emitSourceChunk = (chunk: string, from: number, to: number) => {
-      preparedSourceBreaks.push(sourceStart + sourceOffset(to));
-      emit(chunk, {
-        sourceText: this.#buffer.slice(sourceOffset(from), sourceOffset(to)),
-        sourceGeneration: this.#sourceGeneration,
-        reconciledSourceBreak: reconciledSourceBreak || undefined,
-        sourceStart: this.#sourceOffset + this.#consumedLength + sourceOffset(from),
-        sourceEnd: this.#sourceOffset + this.#consumedLength + sourceOffset(to),
-        startsAtLineStart:
-          Boolean(reopenFence) ||
-          (from === 0 ? startsAtLineStart : source.charAt(from - 1) === "\n"),
-      });
-    };
+    const emitSourceChunk = (chunk: string, from: number, to: number) =>
+      emitChunk(
+        chunk,
+        sourceOffset(from),
+        sourceOffset(to),
+        Boolean(reopenFence) || (from === 0 ? startsAtLineStart : source.charAt(from - 1) === "\n"),
+      );
     const resumedFence = this.#reopenPrefix ? fenceSpans[0] : undefined;
     if (resumedFence) {
       const closeStart = findFenceCloseLineStart(source, resumedFence);
@@ -434,6 +432,7 @@ export class EmbeddedBlockChunker {
         force && remainingLength <= maxChars
           ? this.#pickPreferredBreakIndex(view, unsafe, chunking, false, 1, start, openFence)
           : this.#pickBreakIndex(
+              params,
               view,
               spans,
               chunking,
@@ -465,27 +464,45 @@ export class EmbeddedBlockChunker {
         breakResult.index = sliceUtf16Safe(view, 0, boundary - removedLength - start).length;
       }
 
-      const consumed = this.#resolveBreakResult({
-        breakResult,
-        reopenPrefix,
-        source,
-        start,
-      });
-      if (consumed === null) {
+      if (breakResult.index <= 0) {
         continue;
       }
-      if (consumed.chunk) {
-        emitSourceChunk(consumed.chunk, start, consumed.start);
+      let nextStart = start + breakResult.index;
+      let chunk = `${reopenPrefix}${source.slice(start, nextStart)}`;
+      let nextReopenFence: FenceSplit | undefined;
+      const fenceSplit = breakResult.fenceSplit;
+      if (chunk.trim().length === 0) {
+        chunk = "";
+        nextStart = skipLeadingNewlines(source, nextStart);
+      } else if (fenceSplit) {
+        chunk += chunk.endsWith("\n")
+          ? fenceSplit.closeFenceLine
+          : `\n${fenceSplit.closeFenceLine}`;
+        if (nextStart === findFenceCloseLineStart(source, fenceSplit.fence)) {
+          // The synthetic closer already owns this boundary; replaying the source
+          // closer after reopening would publish an empty fenced-code message.
+          nextStart = skipLeadingNewlines(source, fenceSplit.fence.end);
+        } else {
+          nextReopenFence = fenceSplit;
+        }
+      } else {
+        if (nextStart < source.length && /\s/.test(source.charAt(nextStart))) {
+          nextStart += 1;
+        }
+        nextStart = skipLeadingNewlines(source, nextStart);
       }
-      start = consumed.start;
-      reopenFence = consumed.reopenFence;
+      if (chunk) {
+        emitSourceChunk(chunk, start, nextStart);
+      }
+      start = nextStart;
+      reopenFence = nextReopenFence;
 
       const nextLength =
         (reopenFence ? `${reopenFence.reopenFenceLine}\n`.length : 0) + (source.length - start);
-      if (nextLength < minChars && !force) {
-        break;
-      }
-      if (nextLength < maxChars && !force && !chunking.flushOnParagraph) {
+      if (
+        !force &&
+        (nextLength < minChars || (nextLength < maxChars && !chunking.flushOnParagraph))
+      ) {
         break;
       }
     }
@@ -504,50 +521,6 @@ export class EmbeddedBlockChunker {
     this.#buffer = this.#buffer.slice(consumed);
     this.#reopenPrefix =
       !this.#codeContext && reopenFence ? `${reopenFence.reopenFenceLine}\n` : "";
-  }
-
-  #resolveBreakResult(params: {
-    breakResult: BreakResult;
-    reopenPrefix: string;
-    source: string;
-    start: number;
-  }): { chunk?: string; start: number; reopenFence?: FenceSplit } | null {
-    const { breakResult, reopenPrefix, source, start } = params;
-    const breakIdx = breakResult.index;
-    if (breakIdx <= 0) {
-      return null;
-    }
-
-    const absoluteBreakIdx = start + breakIdx;
-    let rawChunk = `${reopenPrefix}${source.slice(start, absoluteBreakIdx)}`;
-    if (rawChunk.trim().length === 0) {
-      return { start: skipLeadingNewlines(source, absoluteBreakIdx), reopenFence: undefined };
-    }
-
-    const fenceSplit = breakResult.fenceSplit;
-    if (fenceSplit) {
-      const closeFence = rawChunk.endsWith("\n")
-        ? fenceSplit.closeFenceLine
-        : `\n${fenceSplit.closeFenceLine}`;
-      rawChunk = `${rawChunk}${closeFence}`;
-      const closeFenceStart = findFenceCloseLineStart(source, fenceSplit.fence);
-      if (absoluteBreakIdx === closeFenceStart) {
-        // The synthetic closer already owns this boundary; replaying the source
-        // closer after reopening would publish an empty fenced-code message.
-        return { chunk: rawChunk, start: skipLeadingNewlines(source, fenceSplit.fence.end) };
-      }
-      return { chunk: rawChunk, start: absoluteBreakIdx, reopenFence: fenceSplit };
-    }
-
-    const nextStart =
-      absoluteBreakIdx < source.length && /\s/.test(source.charAt(absoluteBreakIdx))
-        ? absoluteBreakIdx + 1
-        : absoluteBreakIdx;
-    return {
-      chunk: rawChunk,
-      start: skipLeadingNewlines(source, nextStart),
-      reopenFence: undefined,
-    };
   }
 
   // Forced tails take the first paragraph/newline break; capped windows take the last.
@@ -599,6 +572,7 @@ export class EmbeddedBlockChunker {
   }
 
   #pickBreakIndex(
+    { force, mutablePreview }: BlockChunkDrain,
     buffer: string,
     spans: BreakSpans,
     chunking: BlockReplyChunking,
@@ -651,6 +625,10 @@ export class EmbeddedBlockChunker {
       ).length;
       // An unfinished span ends at the buffer boundary without a source closer.
       const absoluteBreakIndex = offset + forcedBreakIndex;
+      const endingFence = findFenceSpanAt(spans.fences, absoluteBreakIndex - 1);
+      if (endingFence?.end === absoluteBreakIndex && endingFence !== openFence) {
+        return { index: forcedBreakIndex };
+      }
       const fence =
         findFenceSpanAt(spans.fences, absoluteBreakIndex) ??
         (openFence?.end === absoluteBreakIndex ? openFence : undefined);
@@ -679,7 +657,23 @@ export class EmbeddedBlockChunker {
           fenceSplit: { closeFenceLine, reopenFenceLine, fence },
         };
       }
-      return { index: forcedBreakIndex };
+      // Trailing clusters can gain combining marks or ZWJ continuations.
+      // Permanent replies wait for lookahead; cumulative previews can revise them.
+      const waitForBoundary = !force && !mutablePreview;
+      const graphemeSource =
+        !force && /[\uD800-\uDBFF]$/u.test(buffer) ? buffer.slice(0, -1) : buffer;
+      const maxEnd = Math.min(forcedBreakIndex, graphemeSource.length - (waitForBoundary ? 1 : 0));
+      const wholeEnd = findGraphemeChunkEnd(graphemeSource, 0, maxEnd, maxEnd, false);
+      if (waitForBoundary && wholeEnd > 0 && buffer.length === forcedBreakIndex) {
+        // Wait for lookahead instead of turning a full chunk into a shorter
+        // prefix and a trailing fragment solely to reserve its last cluster.
+        return { index: 0 };
+      }
+      return {
+        index:
+          wholeEnd ||
+          (firstGraphemeClusterLength(graphemeSource) >= forcedBreakIndex ? forcedBreakIndex : 0),
+      };
     }
 
     return { index: -1 };
@@ -700,9 +694,6 @@ function findNextParagraphBreak(
   startIndex = 0,
   minCharsFromStart = 1,
 ): ParagraphBreak | null {
-  if (startIndex < 0) {
-    return null;
-  }
   const re = /\n[\t ]*\n+/g;
   re.lastIndex = startIndex;
   let match: RegExpExecArray | null;

@@ -9,10 +9,7 @@ import type { Mode, Platform, Provider, ProviderAuth } from "./types.ts";
 
 type ResolveLatestVersionDeps = {
   createTempDir?: (prefix: string) => string;
-  removeDir?: typeof rmSync;
   runCommand?: typeof run;
-  tempDir?: typeof tmpdir;
-  writeFile?: typeof writeFileSync;
 };
 
 export function parseBoolEnv(value: string | undefined): boolean {
@@ -127,14 +124,11 @@ export function resolveLatestVersion(
     return versionOverride;
   }
   const createTempDir = deps.createTempDir ?? mkdtempSync;
-  const removeDir = deps.removeDir ?? rmSync;
   const runCommand = deps.runCommand ?? run;
-  const resolveTempDir = deps.tempDir ?? tmpdir;
-  const writeFile = deps.writeFile ?? writeFileSync;
-  const userConfigDir = createTempDir(path.join(resolveTempDir(), "openclaw-npm-"));
+  const userConfigDir = createTempDir(path.join(tmpdir(), "openclaw-npm-"));
   const userConfigPath = path.join(userConfigDir, "npmrc");
   try {
-    writeFile(userConfigPath, "", "utf8");
+    writeFileSync(userConfigPath, "", "utf8");
     return runCommand("npm", [
       "view",
       "openclaw",
@@ -143,6 +137,6 @@ export function resolveLatestVersion(
       userConfigPath,
     ]).stdout.trim();
   } finally {
-    removeDir(userConfigDir, { force: true, recursive: true });
+    rmSync(userConfigDir, { force: true, recursive: true });
   }
 }

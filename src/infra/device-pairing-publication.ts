@@ -20,7 +20,7 @@ type Publication = {
   epoch: number;
   revision?: string;
   blocked: boolean;
-  mutation?: object;
+  mutation?: { invalidatesAuthority: boolean };
   complete: boolean;
   rows: Map<string, DevicePairingBinding | null>;
   nodes?: DevicePairingNodeSnapshot;
@@ -58,6 +58,15 @@ const publications = resolveGlobalSingleton(
     return state;
   },
 );
+
+/** Native pairing writers retire the node projection after their transaction commits. */
+export function invalidateDevicePairingNodeSnapshot(path: string): void {
+  const publication = publications.get(path);
+  if (publication) {
+    publication.epoch++;
+    publication.nodes = undefined;
+  }
+}
 
 export function captureDevicePairingPublication(admission: OpenClawStateDatabaseReadAdmission) {
   const path = admission.databasePath;
@@ -97,6 +106,17 @@ export function captureDevicePairingPublication(admission: OpenClawStateDatabase
       publications.get(path) === captured && captured.epoch === epoch && !captured.mutation,
     completeRevision: () =>
       !captured.blocked && captured.complete ? captured.revision : undefined,
+    readNodes() {
+      for (const service of captured.pending) {
+        service();
+      }
+      return publications.get(path) === captured &&
+        !captured.blocked &&
+        !captured.mutation &&
+        captured.complete
+        ? captured.nodes
+        : undefined;
+    },
     fail() {
       if (publications.get(path) === captured && captured.epoch === epoch) {
         captured.blocked = true;
@@ -158,8 +178,7 @@ export function captureDevicePairingPublication(admission: OpenClawStateDatabase
     },
     beginMutation(invalidatesAuthority: boolean) {
       captured.epoch++;
-      captured.blocked ||= invalidatesAuthority;
-      const mutation = {};
+      const mutation: NonNullable<Publication["mutation"]> = { invalidatesAuthority };
       captured.mutation = mutation;
       return {
         publish(receipt: DevicePairingCommitReceipt) {
@@ -184,6 +203,8 @@ export function captureDevicePairingPublication(admission: OpenClawStateDatabase
           if (settled && captured.mutation === mutation) {
             captured.mutation = undefined;
             captured.epoch++;
+          } else if (!settled && captured.mutation === mutation) {
+            captured.blocked = true;
           }
         },
       };
@@ -210,6 +231,7 @@ export function getPublishedPairedDeviceBinding(
   if (
     !publication ||
     publication.blocked ||
+    publication.mutation?.invalidatesAuthority ||
     (!publication.complete && !publication.rows.has(deviceId))
   ) {
     throw new Error("Device pairing authority requires a current worker publication");

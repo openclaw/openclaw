@@ -8,7 +8,7 @@ import {
 import { getPreparedModelFullCatalogAuth } from "../../agents/prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
 import { getPreparedModelRuntimeStartupStatus } from "../../agents/prepared-model-runtime.startup-status.js";
-import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
+import { resolveRuntimeModelConfigCacheKey } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
@@ -128,7 +128,7 @@ export function captureGenerationFacts(deps: ChatMetadataRuntimeDeps): PreparedG
   );
   return {
     config,
-    configKey: resolveRuntimeConfigCacheKey(config),
+    configKey: resolveRuntimeModelConfigCacheKey(config),
     pluginRegistryVersion: deps.getPluginRegistryVersion(),
     agents,
   };
@@ -137,7 +137,7 @@ export function captureGenerationFacts(deps: ChatMetadataRuntimeDeps): PreparedG
 export function generationFactsMatch(
   left: PreparedGenerationFacts,
   right: PreparedGenerationFacts,
-  scope: "metadata" | "catalog" | "auth" = "metadata",
+  scope: "metadata" | "catalog" | "auth" | "commands" = "metadata",
 ): boolean {
   if (
     left.configKey !== right.configKey ||
@@ -150,12 +150,16 @@ export function generationFactsMatch(
     const candidate = right.agents[index];
     return (
       candidate?.agentId === agent.agentId &&
-      candidate.owner === agent.owner &&
-      candidate.authStoreRevision === agent.authStoreRevision &&
-      // Full catalogs carry their own paired auth generation.
-      candidate.modelCatalog === agent.modelCatalog &&
-      (scope === "auth" || candidate.catalogRefreshFailed === agent.catalogRefreshFailed) &&
-      (scope !== "metadata" || candidate.skillsVersion === agent.skillsVersion)
+      (scope === "commands"
+        ? candidate.skillsVersion === agent.skillsVersion &&
+          candidate.owner.workspaceDir === agent.owner.workspaceDir
+        : // Config stamping replaces the reader object without replacing its generation.
+          candidate.owner.isCurrent === agent.owner.isCurrent &&
+          candidate.authStoreRevision === agent.authStoreRevision &&
+          // Full catalogs carry their own paired auth generation.
+          candidate.modelCatalog === agent.modelCatalog &&
+          (scope === "auth" || candidate.catalogRefreshFailed === agent.catalogRefreshFailed) &&
+          (scope !== "metadata" || candidate.skillsVersion === agent.skillsVersion))
     );
   });
 }

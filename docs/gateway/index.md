@@ -75,6 +75,27 @@ Gateway config reload watches the active config file path (resolved from profile
 - Default bind mode: `loopback`. Inside a detected container environment the effective default is `auto` (resolves to `0.0.0.0` for port-forwarding), unless Tailscale serve/funnel is active, which always forces `loopback`.
 - Auth is required by default. Shared-secret setups use `gateway.auth.token` / `gateway.auth.password` (or `OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD`), and non-loopback reverse-proxy setups can use `gateway.auth.mode: "trusted-proxy"`.
 
+### Module compile cache
+
+The packaged CLI and the compiled `dist/index.js` entry automatically enable
+Node's on-disk module compile cache. This includes compiled source deployments
+that retain their Git checkout. Cache entries live outside the release directory,
+under the operating system's temporary directory by default. Set
+`NODE_COMPILE_CACHE` to a writable persistent cache root to retain them across
+host reboots. OpenClaw namespaces that root by package version and build identity;
+each new build starts with its own cache. `NODE_DISABLE_COMPILE_CACHE=1` disables
+it. An unavailable cache produces one diagnostic and startup continues.
+With Node's permission model enabled, an already-active cache remains caller-owned
+so cache scoping never requires launching a process that permissions may forbid.
+
+The first boot populates the cache; later boots reuse it. Deployment systems can
+warm a candidate before cutover by booting and cleanly stopping it with isolated
+state, a loopback port, the runtime user, and the same cache root. Warm it at its
+final release path: moving the release after warming can prevent Node from
+reusing its entries. Recent build caches coexist, including the serving release
+and a prepared candidate. Cleanup bounds the combined cache to 512 MiB and
+expires bytecode older than seven days.
+
 ## OpenAI-compatible endpoints
 
 OpenClaw's highest-leverage compatibility surface:
@@ -349,7 +370,7 @@ sudo systemctl enable --now openclaw-gateway[-<profile>].service
   </Tab>
 </Tabs>
 
-Invalid configuration errors exit with code `78`. Linux systemd units use `RestartPreventExitStatus=78` to stop relaunching until the config is fixed. launchd and Windows Task Scheduler do not have an equivalent per-exit-code stop rule, so the Gateway also persists rapid unclean boot history and suppresses channel/provider account auto-start after repeated startup failures. In that safe mode the control plane still starts for inspection and repair, config hot reloads and `secrets.reload` refuse automatic channel restarts, and an explicit operator `channels.start` request can override the suppression. Step-by-step recovery lives in [Restart recovery](/gateway/restart-recovery#safety-valves-and-observability).
+Invalid configuration errors exit with code `78`. Linux systemd units use `RestartPreventExitStatus=78` to stop relaunching until the config is fixed. launchd and Windows Task Scheduler do not have an equivalent per-exit-code stop rule, so the Gateway also persists rapid unclean boot history and suppresses channel/provider account auto-start after repeated startup failures. In that safe mode the control plane still starts for inspection and repair, main-session restart recovery pauses until the full breaker window drains and then resumes automatically in the same process, config hot reloads and `secrets.reload` refuse automatic channel restarts, and an explicit operator `channels.start` request can override the suppression. Step-by-step recovery lives in [Restart recovery](/gateway/restart-recovery#safety-valves-and-observability).
 
 ## Dev profile quick path
 

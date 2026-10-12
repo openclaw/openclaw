@@ -444,6 +444,8 @@ type CliBackendPluginBase = {
     modelDisplay: string;
     agentId?: string;
     systemPrompt: string;
+    /** Short IDs of OpenClaw MCP tools exposed to this invocation after policy filtering. */
+    openClawMcpToolNames?: readonly string[];
   }) => string | null | undefined;
   /**
    * Backend-owned bidirectional text replacements.
@@ -500,12 +502,6 @@ type CliBackendPluginBase = {
   resolveModelId?: (ctx: CliBackendResolveModelIdContext) => string;
   /** How this backend enforces an exact per-run `toolAvailability` contract. */
   toolAvailabilityEnforcement?: CliBackendToolAvailabilityEnforcement;
-  /**
-   * Exact-tool execution suppresses ambient instruction files, skills, hooks,
-   * and plugins so the host-prepared instruction snapshot remains authoritative.
-   * Required for rooted runs; omission keeps those runs unavailable.
-   */
-  isolatesInstructionsWithExactTools?: true;
   /**
    * Maps the observed native list, intersected with the host selection, to equivalent
    * cron capabilities: read/write/edit/apply_patch/exec/process/web_search/web_fetch.

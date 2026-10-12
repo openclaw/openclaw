@@ -101,23 +101,19 @@ export const SandboxDockerSchema = z
           "Use a custom bridge network, or set dangerouslyAllowContainerNamespaceJoin=true only when you fully trust this runtime.",
       });
     }
-    if (normalizeLowercaseStringOrEmpty(data.seccompProfile ?? "") === "unconfined") {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["seccompProfile"],
-        message:
-          'Sandbox security: seccomp profile "unconfined" is blocked. ' +
-          "Use a custom seccomp profile file or omit this setting.",
-      });
-    }
-    if (normalizeLowercaseStringOrEmpty(data.apparmorProfile ?? "") === "unconfined") {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["apparmorProfile"],
-        message:
-          'Sandbox security: AppArmor profile "unconfined" is blocked. ' +
-          "Use a named AppArmor profile or omit this setting.",
-      });
+    for (const [key, profile, replacement] of [
+      ["seccompProfile", "seccomp", "a custom seccomp profile file"],
+      ["apparmorProfile", "AppArmor", "a named AppArmor profile"],
+    ] as const) {
+      if (normalizeLowercaseStringOrEmpty(data[key] ?? "") === "unconfined") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [key],
+          message:
+            `Sandbox security: ${profile} profile "unconfined" is blocked. ` +
+            `Use ${replacement} or omit this setting.`,
+        });
+      }
     }
   })
   .optional();

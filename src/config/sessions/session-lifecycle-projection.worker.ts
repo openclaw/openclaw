@@ -10,7 +10,10 @@ import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import { hasPendingSessionTranscriptArchives } from "./session-accessor.sqlite-archive-store-kernel.js";
 import { assertSessionSubagentRunsCurrent } from "./session-accessor.sqlite-descendant-basis.js";
-import { readSessionEntryStore } from "./session-accessor.sqlite-entry-store.js";
+import {
+  readSessionEntryCount,
+  readSessionEntryStore,
+} from "./session-accessor.sqlite-entry-store.js";
 import { collectLifecycleIdentityChanges } from "./session-accessor.sqlite-identity.js";
 import {
   finishProjectedLifecycleRemovalPlans,
@@ -23,10 +26,12 @@ import type {
 import { commitPreparedSessionEntryLifecycleMutationInDatabase } from "./session-accessor.sqlite-projection-state.js";
 import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
 import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worker.js";
+import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
 import type {
   SessionLifecycleProjectionCommit,
   SessionLifecycleProjectionCommitted,
 } from "./session-lifecycle-projection.types.js";
+import type { SessionEntry } from "./types.js";
 
 export function commitSessionLifecycleProjection(
   input: SessionLifecycleProjectionCommit,
@@ -36,12 +41,16 @@ export function commitSessionLifecycleProjection(
     assertSessionSubagentRunsCurrent(input, options.env ?? process.env);
     const progressCardResetKeys: string[] = [];
     const projectionReconcileSessionIds: string[] = [];
+    const postimages: SessionEntryWritePostimages = new Map();
+    const archivedPrevious = new Map<string, SessionEntry>();
     const result = commitPreparedSessionEntryLifecycleMutationInDatabase(
       database,
       input,
       input.removalPlans,
       {
         resetScope: { agentId: input.agentId, path: database.path, env: options.env },
+        postimages,
+        onArchived: (sessionKey, previous) => archivedPrevious.set(sessionKey, previous),
         onResetBoundary: ({
           sessionKey,
           sessionId,
@@ -57,6 +66,20 @@ export function commitSessionLifecycleProjection(
         },
       },
     );
+    const identity = collectLifecycleIdentityChanges(input.projected, result.removedSessionKeys);
+    for (const [sessionKey, previous] of archivedPrevious) {
+      if (!identity.previous.has(sessionKey)) {
+        identity.previous.set(sessionKey, previous);
+      }
+    }
+    for (const sessionKey of identity.current.keys()) {
+      if (!postimages.has(sessionKey)) {
+        identity.current.delete(sessionKey);
+      }
+    }
+    for (const [sessionKey, postimage] of postimages) {
+      identity.current.set(sessionKey, postimage.entry);
+    }
     const candidate: SessionLifecycleProjectionCommitted = {
       kind: "session-lifecycle-projection",
       result,
@@ -64,7 +87,7 @@ export function commitSessionLifecycleProjection(
       projectionReconcileSessionIds,
       publication: prepareSessionEntryReplacementPublication(
         {
-          ...collectLifecycleIdentityChanges(input.projected, result.removedSessionKeys),
+          ...identity,
           pendingArchiveRecovery: result.pendingArchives,
           membershipInvalidatedKeys: [
             ...result.removedSessionKeys,
@@ -75,6 +98,7 @@ export function commitSessionLifecycleProjection(
           maintenancePlans: result.maintenancePlans,
         },
         database,
+        { postimages },
       ),
     };
     const receipt = transferSessionEntryWorkerCandidate(database, admit, candidate);
@@ -90,6 +114,7 @@ type LifecycleProjectionPreparation = {
 };
 
 export type SessionLifecyclePlanningOperations = {
+  count: { input: undefined; output: number };
   prepare: {
     input: LifecycleRemovalProjectionInput & { upsertSessionKeys: string[] };
     output: LifecycleProjectionPreparation;
@@ -126,7 +151,10 @@ export function bindSqliteWorkerBackend(
   return {
     execute(command) {
       assertOpen();
-      return runSqliteDeferredTransactionSync(database.db, () => {
+      if (command.type === "count") {
+        return readSessionEntryCount(database);
+      }
+      const prepare = () => {
         if (command.type === "prepare") {
           const input = command.input;
           const store = readSessionEntryStore(database, {
@@ -151,21 +179,19 @@ export function bindSqliteWorkerBackend(
           };
         }
         const input = command.input;
-        return input.selected.projectedRemovals.length
-          ? finishProjectedLifecycleRemovalPlans(
-              database,
-              input.archiveDirectory,
-              input.store,
-              input.selected,
-              input.upsertedEntries,
-            )
-          : {
-              deletePlans: [],
-              removals: [],
-              upsertedEntries: input.upsertedEntries,
-              archiveRecovery: input.archiveRecovery,
-            };
-      });
+        return finishProjectedLifecycleRemovalPlans(
+          database,
+          input.archiveDirectory,
+          input.store,
+          input.selected,
+          input.upsertedEntries,
+        );
+      };
+      // Without removals the inventory is one statement. Archive recovery is an
+      // independent scheduling hint, already carried across asynchronous builders.
+      return command.type === "prepare" && command.input.removals.length === 0
+        ? prepare()
+        : runSqliteDeferredTransactionSync(database.db, prepare);
     },
     assertSettled() {
       assertOpen();

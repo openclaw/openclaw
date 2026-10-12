@@ -1,5 +1,3 @@
-// Gateway HTTP server routes control UI, OpenAI-compatible APIs, plugin HTTP
-// surfaces, hooks, readiness, auth, and WebSocket upgrades.
 import {
   createServer as createHttpServer,
   type Server as HttpServer,
@@ -20,6 +18,7 @@ import {
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
 import { runHttpConnectionRequest } from "../infra/http-request-lifecycle.js";
+import { runWithMainThreadTask } from "../infra/main-thread-stall.js";
 import { readTailscaleWhoisIdentity } from "../infra/tailscale.js";
 import { parseDevicePairingJoinRequestPath } from "../pairing/join-code.js";
 import { getWebhookLegacyListener } from "../plugins/http-legacy-listener.js";
@@ -27,9 +26,12 @@ import { NODE_WORKER_BUNDLE_TRANSFER_PATH } from "../worker/node-bundle-install-
 import { resolveAssistantAgentId } from "./assistant-identity.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { parseControlUiUserAvatarPath, parseControlUiResourcePath } from "./control-ui-contract.js";
+import { parseControlUiResourcePath } from "./control-ui-contract.js";
 import { respondNotFound, respondPlainText } from "./control-ui-http-utils.js";
-import { CONTROL_UI_IMAGE_HTTP_ROUTES } from "./control-ui-image-http-routes.js";
+import {
+  CONTROL_UI_IMAGE_HTTP_ROUTES,
+  CONTROL_UI_USER_IMAGE_HTTP_ROUTES,
+} from "./control-ui-image-http-routes.js";
 import { controlUiPluginAssetRoot } from "./control-ui-plugin-assets-contract.js";
 import { resolveAssistantMediaRoutePath } from "./control-ui-resource-routes.js";
 import {
@@ -49,14 +51,18 @@ import {
   classifyWorkerBootstrapArtifactTransferPath,
   WORKER_BOOTSTRAP_ARTIFACT_TRANSFER_PATH,
 } from "./gateway-http-route-contracts.js";
-import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
+import type { authorizePluginGatewayHttpRequestOrReply } from "./http-auth-utils.js";
 import {
   finishFailedGatewayHttpResponse,
   sendGatewayAuthFailure,
   setDefaultSecurityHeaders,
   isWebSocketUpgradeRequest,
 } from "./http-common.js";
-import { finishGatewayHttpAuthorityError } from "./http-request-authority.js";
+import {
+  finishGatewayHttpAuthorityError,
+  runGatewayHttpRequest,
+  type GatewayHttpRequestLifetime,
+} from "./http-request-authority.js";
 import {
   markGatewayIngressTransport,
   prepareGatewayIngressAttribution,
@@ -70,6 +76,7 @@ import {
 } from "./provider-browser-auth.js";
 import type { ControlUiRootState } from "./server-control-ui-root.js";
 import {
+  getNativeHookRelayModule,
   getControlUiModule,
   getControlUiPluginAssetsModule,
   getCanvasServeModule,
@@ -84,7 +91,6 @@ import {
   getSessionHistoryHttpModule,
   getSessionKillHttpModule,
   getToolsInvokeHttpModule,
-  getUserProfilesHttpModule,
   getDevicePairingJoinHttpModule,
   getPluginNodeCapabilityAuthModule,
   getHttpAuthUtilsModule,
@@ -116,12 +122,10 @@ import {
   type NodeWorkspaceTransferHttpCallback,
 } from "./worker-environments/node-workspace-transfer-http.js";
 
-type WatchNodeHttpRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
-type McpOAuthCallbackHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
+type GatewayHttpRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 
 type GatewayHttpRequestStage = () => Promise<boolean> | boolean;
 
-/** Creates the gateway HTTP/HTTPS server and ordered request-stage router. */
 export function createGatewayHttpServer(opts: {
   /** Pre-bound listener supplied by the internal test transport. */
   testListener?: HttpServer;
@@ -132,8 +136,8 @@ export function createGatewayHttpServer(opts: {
   openAiChatCompletionsEnabled?: boolean;
   openResponsesEnabled?: boolean;
   handleHooksRequest: HooksRequestHandler;
-  handleMcpOAuthCallbackRequest?: McpOAuthCallbackHandler;
-  handleWatchNodeRequest?: WatchNodeHttpRequestHandler;
+  handleMcpOAuthCallbackRequest?: GatewayHttpRequestHandler;
+  handleWatchNodeRequest?: GatewayHttpRequestHandler;
   handlePluginRequest?: PluginHttpRequestHandler;
   shouldEnforcePluginGatewayAuth?: (pathContext: PluginRoutePathContext) => boolean;
   isPluginAuthenticatedRoute?: (pathContext: PluginRoutePathContext) => boolean;
@@ -153,6 +157,7 @@ export function createGatewayHttpServer(opts: {
   getStartup?: StartupChecker;
   getRuntimeConfig?: () => OpenClawConfig;
   getGatewayRequestContext?: () => GatewayRequestContext | undefined;
+  httpRequestLifetime?: GatewayHttpRequestLifetime;
   isStartupPluginRuntimeReady?: () => boolean;
   isTerminalEnabled?: () => boolean;
   tlsOptions?: TlsOptions;
@@ -185,13 +190,10 @@ export function createGatewayHttpServer(opts: {
     expectation?: "continue" | "reject",
   ) => {
     markGatewayIngressTransport(req, opts.ingressTransport ?? { kind: "ordinary" });
-    void runHttpConnectionRequest(
-      req,
-      () =>
-        runWithDiagnosticTraceContext(createDiagnosticTraceContext(), () =>
-          handleRequest(req, res, expectation),
-        ),
-      res,
+    void runGatewayHttpRequest(req, res, opts.httpRequestLifetime, () =>
+      runWithDiagnosticTraceContext(createDiagnosticTraceContext(), () =>
+        runWithMainThreadTask("gateway:http", () => handleRequest(req, res, expectation)),
+      ),
     ).catch((error: unknown) => {
       console.error("[gateway-http] failed to finalize request:", error);
       if (!res.destroyed) {
@@ -221,7 +223,7 @@ export function createGatewayHttpServer(opts: {
     req: IncomingMessage,
     res: ServerResponse,
     expectation?: "continue" | "reject",
-  ) {
+  ): Promise<"failed" | undefined> {
     // Legacy ports retain their plugin's raw URLs and wire responses, not Gateway endpoints.
     if (getWebhookLegacyListener(req)) {
       try {
@@ -230,10 +232,14 @@ export function createGatewayHttpServer(opts: {
           res.end();
         }
       } catch (error) {
+        if (finishGatewayHttpAuthorityError(res, error)) {
+          return undefined;
+        }
         console.error("[gateway-http] legacy plugin request failed:", error);
         res.destroy(error instanceof Error ? error : undefined);
+        return "failed";
       }
-      return;
+      return undefined;
     }
     // Read only the published snapshot: even liveness and rejection responses need
     // current headers without depending on config IO or auth resolution.
@@ -243,7 +249,7 @@ export function createGatewayHttpServer(opts: {
     if (expectation === "reject") {
       res.writeHead(417);
       res.end();
-      return;
+      return undefined;
     }
     if (expectation === "continue") {
       res.writeContinue();
@@ -251,21 +257,21 @@ export function createGatewayHttpServer(opts: {
 
     // Don't interfere with real WebSocket upgrades; ws handles the 'upgrade' event.
     if (isWebSocketUpgradeRequest(req)) {
-      return;
+      return undefined;
     }
     if (req.headers.upgrade !== undefined) {
       res.statusCode = 400;
       res.setHeader("Connection", "close");
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
       res.end("Bad Request");
-      return;
+      return undefined;
     }
 
     try {
       const requestPath = URL.parse(req.url ?? "/", "http://localhost")?.pathname;
       if (requestPath === undefined) {
         sendGatewayAuthFailure(res, { ok: false, reason: "unauthorized" });
-        return;
+        return undefined;
       }
       if (classifyGatewayProbePath(requestPath) === "live") {
         await handleGatewayProbeRequest(
@@ -279,7 +285,7 @@ export function createGatewayHttpServer(opts: {
           getReadiness,
           getStartup,
         );
-        return;
+        return undefined;
       }
 
       const configSnapshot = loadGatewayConfig();
@@ -308,7 +314,7 @@ export function createGatewayHttpServer(opts: {
       const scopedNodeCapability = normalizePluginNodeCapabilityScopedUrl(req.url ?? "/");
       if (scopedNodeCapability.malformedScopedPath) {
         sendGatewayAuthFailure(res, { ok: false, reason: "unauthorized" });
-        return;
+        return undefined;
       }
       if (scopedNodeCapability.rewrittenUrl) {
         // Scoped capability URLs are normalized before auth/routing so built-in handlers,
@@ -328,10 +334,10 @@ export function createGatewayHttpServer(opts: {
             gatewayRequestClientIp: ingressAttribution.remoteAddress,
           }))
         ) {
-          return;
+          return undefined;
         }
         sendGatewayAuthFailure(res, { ok: false, reason: ingressAttribution.reason });
-        return;
+        return undefined;
       }
       const requestClientIp = ingressAttribution.clientIp;
       const resolvedAuthValue = getResolvedAuth();
@@ -420,6 +426,9 @@ export function createGatewayHttpServer(opts: {
         clientIp: ingressAttribution.rateLimit.subject.key,
         rateLimiter: joinRateLimiter,
       };
+      addAdmittedStage(scopedRequestPath.startsWith("/__openclaw__/native-hook"), async () =>
+        (await getNativeHookRelayModule()).handleNativeHookRelayHttpRequest(transferRequest),
+      );
       addAdmittedStage(
         classifyWorkerBootstrapArtifactTransferPath(scopedRequestPath) !== "outside",
         () =>
@@ -451,11 +460,8 @@ export function createGatewayHttpServer(opts: {
       if (devicePairingJoinShortcode !== null) {
         addAdmittedStage(true, async () =>
           (await getDevicePairingJoinHttpModule()).handleDevicePairingJoinHttpRequest({
-            req,
-            res,
+            ...transferRequest,
             shortcode: devicePairingJoinShortcode,
-            clientIp: ingressAttribution.rateLimit.subject.key,
-            rateLimiter: joinRateLimiter,
           }),
         );
       }
@@ -525,18 +531,14 @@ export function createGatewayHttpServer(opts: {
           await getControlUiPluginAssetsModule()
         ).handleControlUiPluginAssetRequest(req, res, controlUiRouteOptions);
       });
-      const userProfileAvatarRoute = parseControlUiUserAvatarPath(
-        scopedRequestPath,
-        controlUiRouteBasePath,
-      );
-      addAdmittedStage(userProfileAvatarRoute.matched, async () =>
-        (await getUserProfilesHttpModule()).handleUserProfileAvatarHttpRequest(
-          req,
-          res,
-          scopedRequestPath,
-          { ...routeAuth, basePath: controlUiRouteBasePath },
-        ),
-      );
+      for (const [parse, loadHandler] of CONTROL_UI_USER_IMAGE_HTTP_ROUTES) {
+        addAdmittedStage(parse(scopedRequestPath, controlUiRouteBasePath).matched, async () =>
+          (await loadHandler())(req, res, scopedRequestPath, {
+            ...routeAuth,
+            basePath: controlUiRouteBasePath,
+          }),
+        );
+      }
       addAdmittedStage(openResponsesEnabled && scopedRequestPath === "/v1/responses", async () =>
         (await getOpenResponsesHttpModule()).handleOpenResponsesHttpRequest(req, res, {
           ...operatorAuth(),
@@ -582,7 +584,6 @@ export function createGatewayHttpServer(opts: {
           clients,
           nodeCapability: nodeCapability!,
           capability: scopedNodeCapability.capability,
-          malformedScopedPath: scopedNodeCapability.malformedScopedPath,
           rateLimiter,
         });
         if (!ok.ok) {
@@ -623,9 +624,9 @@ export function createGatewayHttpServer(opts: {
       // Core and recovery routes run first, then plugin routes, then read-only Control UI
       // surfaces. Non-GET requests the SPA does not claim reach the startup 503 before final 404.
       if (handlePluginRequest) {
-        let pluginGatewayAuthSatisfied = false;
-        let pluginGatewayRequestAuth: AuthorizedGatewayHttpRequest | undefined;
-        let pluginRequestOperatorScopes: string[] | undefined;
+        let pluginAuthorization: Awaited<
+          ReturnType<typeof authorizePluginGatewayHttpRequestOrReply>
+        > = null;
         // Auth and dispatch stay separate so authorized context reaches the handler.
         requestStages.push(
           async () => {
@@ -642,30 +643,24 @@ export function createGatewayHttpServer(opts: {
             const { authorizePluginGatewayHttpRequestOrReply } = await getHttpAuthUtilsModule();
             const { resolvePluginRouteRuntimeOperatorScopes } =
               await getPluginRouteRuntimeScopesModule();
-            const authResult = await authorizePluginGatewayHttpRequestOrReply({
+            pluginAuthorization = await authorizePluginGatewayHttpRequestOrReply({
               req,
               res,
               ...routeAuth,
               requestPath: scopedRequestPath,
               resolveOperatorScopes: resolvePluginRouteRuntimeOperatorScopes,
             });
-            if (!authResult) {
-              return true;
-            }
-            pluginGatewayAuthSatisfied = true;
-            pluginGatewayRequestAuth = authResult.requestAuth;
-            pluginRequestOperatorScopes = authResult.operatorScopes;
-            return false;
+            return !pluginAuthorization;
           },
           () => {
-            if (pluginGatewayRequestAuth?.hasCurrentClientAuthority?.() === false) {
+            if (pluginAuthorization?.requestAuth.hasCurrentClientAuthority?.() === false) {
               sendGatewayAuthFailure(res, { ok: false, reason: "unauthorized" });
               return true;
             }
             return handlePluginRequest(req, res, pluginPathContext, {
-              gatewayAuthSatisfied: pluginGatewayAuthSatisfied,
-              gatewayRequestAuth: pluginGatewayRequestAuth,
-              gatewayRequestOperatorScopes: pluginRequestOperatorScopes,
+              gatewayAuthSatisfied: pluginAuthorization !== null,
+              gatewayRequestAuth: pluginAuthorization?.requestAuth,
+              gatewayRequestOperatorScopes: pluginAuthorization?.operatorScopes,
               gatewayRequestClientIp: requestClientIp,
             });
           },
@@ -721,7 +716,7 @@ export function createGatewayHttpServer(opts: {
       // A completed or disconnected response owns the request even when a stage reports fallthrough.
       for (const stage of requestStages) {
         if ((await stage()) || res.destroyed || res.writableEnded) {
-          return;
+          return undefined;
         }
       }
 
@@ -731,16 +726,18 @@ export function createGatewayHttpServer(opts: {
         res.setHeader("Cache-Control", "no-store");
         res.setHeader("Retry-After", "1");
         respondPlainText(res, 503, "Plugin runtime is starting");
-        return;
+        return undefined;
       }
 
       respondNotFound(res);
+      return undefined;
     } catch (err) {
       if (finishGatewayHttpAuthorityError(res, err)) {
-        return;
+        return undefined;
       }
       console.error("[gateway-http] unhandled error in request handler:", err);
       finishFailedGatewayHttpResponse(res);
+      return "failed";
     }
   }
 

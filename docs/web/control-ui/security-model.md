@@ -30,9 +30,13 @@ In practice:
 
 Page metadata reads stop at the end of the HTML head or after 64 KiB, whichever
 comes first; metadata beyond that limit is omitted. The Gateway streams the head
-without building a page DOM. Anonymous previews share a bounded URL cache for one
-hour when available, or five minutes when unavailable; URL fragments share the
-same entry. Disabling automatic favicons also suppresses cached previews.
+without building a page DOM. Anonymous previews use a bounded cache per requesting
+principal and runtime config revision for one hour when available, or five minutes
+when unavailable; URL fragments share the same entry. Repeated links share pending
+requests, and a page that declares the same social image and favicon downloads it
+once. The 15-second preview deadline includes queue wait, fetching, and image work.
+Disabling automatic favicons or retiring the request's authority suppresses cached
+previews too.
 
 The browser-side CSP restriction itself is always on and not configurable.
 
@@ -44,6 +48,20 @@ connection. **Log in** goes through a protected same-origin handoff and returns
 to that thread with the person's existing permissions. Identity headers on the
 anonymous thread path do not authorize private access. Private and missing
 threads have the same anonymous unavailable response.
+
+In token/password deployments, the reader can recognize a browser-held session
+token or paired-device credential scoped to the current Gateway address and base
+path. After the protected probe returns `401`, that presence is only a navigation
+hint to open the app shell; the reader never sends the credential or authorizes
+session data. The app's existing WebSocket and bootstrap checks still apply.
+A `204` probe continues into the app, while `403` keeps the public reader even
+when local credentials exist. Trusted-proxy and external-login handoffs retain
+their existing authentication and permission checks.
+
+Loopback HTTP retains its public-reader support. On non-secure ingress where
+publication is unavailable, token/password chat links serve the app shell
+directly, without looking up or disclosing a transcript. Serving the shell grants
+no Gateway or session access.
 
 The public renderer includes only user messages and assistant final-answer text.
 It omits tools, reasoning, files, images, widgets, hidden messages, and internal

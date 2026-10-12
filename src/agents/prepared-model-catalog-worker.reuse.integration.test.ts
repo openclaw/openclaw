@@ -137,8 +137,10 @@ ${execution(PROVIDER_ID)}`,
           `const fs = require("node:fs");
 module.exports = { id: ${JSON.stringify(provider)}, register(api) {
   ${registration(provider)}
+  let normalization = 0;
   api.registerProvider({
     id: ${JSON.stringify(provider)}, label: "Scoped reuse fixture", auth: [],
+    normalizeResolvedModel: ({ model }) => ({ ...model, name: "Observed " + ++normalization }),
     catalog: { run(context) {
       ${execution(provider)}
       const auth = context.resolveProviderApiKey(${JSON.stringify(provider)});
@@ -261,6 +263,13 @@ module.exports = { id: ${JSON.stringify(provider)}, register(api) {
       expect(
         catalog.entries.filter((entry) => entry.provider === provider).map(({ id }) => id),
       ).toEqual([`auth-${key}`]);
+      // Catalog display and executable rows must share one provider observation.
+      expect(snapshot.readPublishedModels?.()?.get(provider)).toContainEqual(
+        expect.objectContaining({
+          id: `auth-${key}`,
+          name: catalog.entries.find((entry) => entry.provider === provider)?.name,
+        }),
+      );
       expect(
         getPreparedModelFullCatalogAuth(catalog)?.authStore.profiles[profileId(provider)],
       ).toMatchObject({ key });

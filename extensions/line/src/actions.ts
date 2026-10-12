@@ -421,9 +421,6 @@ export function normalizeLineAction(action: Action, labelLimit = LINE_ACTION_LAB
   return action.label === label ? action : { ...action, label };
 }
 
-/**
- * Create a message action (sends text when tapped)
- */
 export function messageAction(label: string, text?: string): Action {
   return normalizeLineAction({
     type: "message",
@@ -432,9 +429,6 @@ export function messageAction(label: string, text?: string): Action {
   });
 }
 
-/**
- * Create a URI action (opens a URL when tapped)
- */
 export function uriAction(label: string, uri: string): Action {
   return normalizeLineAction({
     type: "uri",
@@ -443,9 +437,6 @@ export function uriAction(label: string, uri: string): Action {
   });
 }
 
-/**
- * Create a postback action (sends data to webhook when tapped)
- */
 export function postbackAction(label: string, data: string, displayText?: string): Action {
   return normalizeLineAction({
     type: "postback",

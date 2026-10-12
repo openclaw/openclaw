@@ -121,6 +121,7 @@ const realGatewayFiles = [
   "chat-loading-performance.real-gateway",
   "chat-project-media.real-gateway",
   "chat-stop-finished-run.real-gateway",
+  "chat-stop-owned-exec.real-gateway",
   "chat-thinking-metadata.real-gateway",
   "chat-tts-supplement.real-gateway",
   "chat-widget-sandbox.real-gateway",
@@ -349,6 +350,9 @@ function probeOwnership(
       timeout: DEFAULT_VITEST_TEST_TIMEOUT_MS,
       env: {
         ...process.env,
+        // Discovery runs no tests; keep scheduling stable across subprocesses
+        // instead of comparing different snapshots of the host's current load.
+        CI: "1",
         OPENCLAW_VITEST_INCLUDE_FILE: options.include ? includeFile : "",
         OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: options.skipRealGateway ? "1" : "",
       },
@@ -615,6 +619,13 @@ describe("Control UI E2E resource ownership", () => {
         },
         {
           file: "ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial-standalone",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
+          file: "ui/src/e2e/chat-stop-owned-exec.real-gateway.e2e.test.ts",
           project: "ui-e2e-serial-standalone",
           phase: 1,
           workers: 1,

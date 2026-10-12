@@ -9,6 +9,7 @@ import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
 import type { RealtimeVoiceProviderPlugin } from "../../../plugins/types.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
 import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import * as clientVoiceSession from "../../../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
@@ -27,7 +28,7 @@ import { talkClientHandlers } from "./client.js";
 import { talkSessionHandlers } from "./session.js";
 
 const mocks = vi.hoisted(() => ({
-  resolveConfiguredRealtimeVoiceProvider: vi.fn(),
+  resolveConfiguredRealtimeVoiceProviderAsync: vi.fn(),
   bootstrap: vi.fn(async () => "Agent context fixture."),
   createRelay: vi.fn(() => ({
     relaySessionId: "test-relay",
@@ -38,15 +39,16 @@ const mocks = vi.hoisted(() => ({
   transcriptionProviders: vi.fn(() => []),
 }));
 
+// mock-isolation: Keep provider registration and credential state outside handler tests.
 vi.mock("../../../talk/provider-resolver.js", () => ({
-  resolveConfiguredRealtimeVoiceProvider: mocks.resolveConfiguredRealtimeVoiceProvider,
+  resolveConfiguredRealtimeVoiceProviderAsync: mocks.resolveConfiguredRealtimeVoiceProviderAsync,
 }));
 vi.mock("../../../talk/provider-registry.js", () => ({ listRealtimeVoiceProviders: () => [] }));
 vi.mock("../../../agents/realtime-bootstrap-context.js", () => ({
   resolveRealtimeVoiceAgentContextInstructions: mocks.bootstrap,
 }));
-vi.mock("../relay/index.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../relay/index.js")>()),
+vi.mock("../relay/session-create.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../relay/session-create.js")>()),
   createTalkRealtimeRelaySession: mocks.createRelay,
 }));
 vi.mock("../transcription-relay.js", async (importOriginal) => ({
@@ -138,7 +140,7 @@ beforeEach(async () => {
   Object.defineProperty(provider, Symbol.for("openclaw.internal.realtime-voice-provider.v1"), {
     value: { isBrowserSessionConfigured: () => true, cancelBrowserSession },
   });
-  mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+  mocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
     provider,
     providerConfig: {},
     capabilities: provider.capabilities,
@@ -265,6 +267,40 @@ describe("Talk target preparation through Gateway authorization", () => {
     },
   );
 
+  it("creates Talk in its custom suffixed store without adopting an unsuffixed decoy", async () => {
+    config.session = { store: state.statePath("shared.json") };
+    config.agents!.defaults = { sessionStore: { agentId: "primary" } };
+    const unsuffixed = openOpenClawAgentDatabase({
+      agentId: "main",
+      path: state.statePath("shared.sqlite"),
+    });
+    const selected = openOpenClawAgentDatabase({
+      agentId: "primary",
+      path: state.statePath("shared.primary.sqlite"),
+    });
+    const scope = { agentId: "primary", sessionKey: "agent:primary:main" };
+    await replaceSessionEntry(
+      { ...scope, storePath: unsuffixed.path },
+      {
+        sessionId: "unsuffixed-decoy",
+        updatedAt: 1,
+        label: "Other physical store",
+      },
+    );
+    expect(loadSessionEntry({ ...scope, storePath: selected.path })).toBeUndefined();
+    const respond = await dispatch("talk.client.create", {
+      ...createParams,
+      sessionKey: scope.sessionKey,
+    });
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining(browserSession), undefined);
+    const createdSessionId = loadSessionEntry({ ...scope, storePath: selected.path })?.sessionId;
+    expect(createdSessionId).toBeTruthy();
+    expect(createdSessionId).not.toBe("unsuffixed-decoy");
+    expect(loadSessionEntry({ ...scope, storePath: unsuffixed.path })?.sessionId).toBe(
+      "unsuffixed-decoy",
+    );
+  });
+
   it.each([
     { name: "custom main", sessionKey: "main", mainKey: "home", canonicalKey: "agent:voice:home" },
     { name: "omitted custom main", mainKey: "home", canonicalKey: "agent:voice:home" },
@@ -366,7 +402,7 @@ describe("Talk target preparation through Gateway authorization", () => {
     { name: "missing voice id", params: { sessionKey: "main" } },
     { name: "relay origin", params: { sessionKey: "main", voiceSessionId: "relay-call" } },
   ])("rejects a client close with $name without changing the voice record", async ({ params }) => {
-    clientVoiceSession.createOrResumeClientVoiceSession({
+    await clientVoiceSession.createOrResumeClientVoiceSession({
       agentId: "voice",
       sessionKey: "main",
       voiceSessionId: "relay-call",
@@ -582,7 +618,7 @@ describe("Talk target preparation through Gateway authorization", () => {
   });
 
   it.each(["owner", "sharing", "incognito", "replacement"] as const)(
-    "rechecks %s after the guarded ensure settles and before publishing the call",
+    "rechecks %s after session preparation and before committing the voice call",
     async (change) => {
       if (change === "sharing") {
         await replaceSessionEntry(
@@ -595,27 +631,36 @@ describe("Talk target preparation through Gateway authorization", () => {
           },
         );
       }
-      const ensure = clientVoiceSession.ensureClientVoiceAgentSessionEntry;
-      vi.spyOn(clientVoiceSession, "ensureClientVoiceAgentSessionEntry").mockImplementationOnce(
+      const createVoice = clientVoiceSession.createOrResumeClientVoiceSession;
+      let changedBeforeVoiceCommit = false;
+      vi.spyOn(clientVoiceSession, "createOrResumeClientVoiceSession").mockImplementationOnce(
         async (params) => {
-          const sessionId = await ensure(params);
+          const scope = {
+            agentId: params.agentId,
+            sessionKey: params.sessionKey,
+            storePath: params.source?.storePath,
+          };
+          const sessionId = loadSessionEntry(scope)?.sessionId;
+          expect(sessionId).toBeTruthy();
           if (change === "owner") {
             config = { ...config, talk: { agentId: "primary" } };
           } else {
-            await replaceSessionEntry(params, {
-              sessionId: change === "replacement" ? "replacement-session" : sessionId,
+            await replaceSessionEntry(scope, {
+              sessionId: change === "replacement" ? "replacement-session" : sessionId!,
               updatedAt: 2,
               createdActor: { type: "human", source: "profile", id: "another-person" },
               ...(change === "incognito" ? { incognito: true } : { visibility: "read-only" }),
             });
           }
-          return sessionId;
+          changedBeforeVoiceCommit = true;
+          return createVoice(params);
         },
       );
       const respond = await dispatch("talk.client.create", {
         ...createParams,
         voiceSessionId: "provisional",
       });
+      expect(changedBeforeVoiceCommit).toBe(true);
       expect(respond).toHaveBeenCalledWith(
         false,
         undefined,

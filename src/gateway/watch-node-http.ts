@@ -150,20 +150,6 @@ class WatchNodePairingRateLimitError extends Error {
   }
 }
 
-function normalizePath(req: IncomingMessage): string | null {
-  try {
-    return new URL(req.url ?? "/", "http://localhost").pathname;
-  } catch {
-    return null;
-  }
-}
-
-function readBearerToken(req: IncomingMessage): string | null {
-  const header = req.headers.authorization?.trim() ?? "";
-  const match = /^Bearer\s+(.+)$/i.exec(header);
-  return match?.[1]?.trim() || null;
-}
-
 function resolveWatchClientAddress(
   req: IncomingMessage,
   config: OpenClawConfig,
@@ -236,50 +222,9 @@ function isCanonicalWatchNode(connect: ConnectParams): boolean {
   );
 }
 
-function createChallengeStore() {
-  const challenges = new Map<string, PendingChallenge>();
-
-  const pruneExpired = (current: number) => {
-    for (const [nonce, challenge] of challenges) {
-      if (challenge.expiresAtMs <= current) {
-        challenges.delete(nonce);
-      }
-    }
-  };
-
-  return {
-    issue: (clientKey: string, current: number) => {
-      pruneExpired(current);
-      const clientNonces = [...challenges.entries()].filter(
-        ([, challenge]) => challenge.clientKey === clientKey,
-      );
-      while (clientNonces.length >= MAX_PENDING_CHALLENGES_PER_CLIENT) {
-        const oldest = clientNonces.shift();
-        if (oldest) {
-          challenges.delete(oldest[0]);
-        }
-      }
-      pruneMapToMaxSize(challenges, MAX_PENDING_CHALLENGES - 1);
-      const nonce = randomBytes(24).toString("base64url");
-      const expiresAtMs = current + CHALLENGE_TTL_MS;
-      challenges.set(nonce, { clientKey, expiresAtMs });
-      return { nonce, ts: current, expiresAtMs };
-    },
-    consume: (nonce: string, clientKey: string, current: number) => {
-      const challenge = challenges.get(nonce);
-      challenges.delete(nonce);
-      return Boolean(
-        challenge && challenge.clientKey === clientKey && challenge.expiresAtMs > current,
-      );
-    },
-    clear: () => challenges.clear(),
-  };
-}
-
-/** Create the first-party watchOS node HTTP transport for one Gateway process. */
 export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions) {
   const now = options.now ?? Date.now;
-  const challenges = createChallengeStore();
+  const challenges = new Map<string, PendingChallenge>();
   const sessionsByToken = new Map<string, WatchNodeSession>();
   const sessionsByNodeId = new Map<string, WatchNodeSession>();
   let closed = false;
@@ -353,11 +298,6 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
       SESSION_IDLE_MS,
     );
     session.expiresTimer.unref?.();
-  };
-
-  const touchSession = (session: WatchNodeSession) => {
-    session.lastSeenAtMs = now();
-    armExpiry(session);
   };
 
   const sendQueuedEvent = (res: ServerResponse, queued: QueuedNodeEvent): boolean => {
@@ -453,7 +393,8 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
     req: IncomingMessage,
     res: ServerResponse,
   ): Promise<WatchNodeSession | null> => {
-    const token = readBearerToken(req);
+    const header = req.headers.authorization?.trim() ?? "";
+    const token = /^Bearer\s+(.+)$/i.exec(header)?.[1]?.trim() || null;
     const session = token ? sessionsByToken.get(token) : undefined;
     if (!session) {
       sendUnauthorized(res);
@@ -492,7 +433,8 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
       sendUnauthorized(res);
       return;
     }
-    touchSession(session);
+    session.lastSeenAtMs = now();
+    armExpiry(session);
     operation(session);
   };
 
@@ -504,9 +446,27 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
       return;
     }
     options.rateLimiter?.recordFailure(clientKey, AUTH_RATE_LIMIT_SCOPE_WATCH_CHALLENGE);
-    const challenge = challenges.issue(clientKey, now());
+    const current = now();
+    for (const [nonce, challenge] of challenges) {
+      if (challenge.expiresAtMs <= current) {
+        challenges.delete(nonce);
+      }
+    }
+    const clientNonces = [...challenges.entries()].filter(
+      ([, challenge]) => challenge.clientKey === clientKey,
+    );
+    while (clientNonces.length >= MAX_PENDING_CHALLENGES_PER_CLIENT) {
+      const oldest = clientNonces.shift();
+      if (oldest) {
+        challenges.delete(oldest[0]);
+      }
+    }
+    pruneMapToMaxSize(challenges, MAX_PENDING_CHALLENGES - 1);
+    const nonce = randomBytes(24).toString("base64url");
+    const expiresAtMs = current + CHALLENGE_TTL_MS;
+    challenges.set(nonce, { clientKey, expiresAtMs });
     res.setHeader("Cache-Control", "no-store");
-    sendJson(res, 200, { ok: true, ...challenge });
+    sendJson(res, 200, { ok: true, nonce, ts: current, expiresAtMs });
   };
 
   const handleConnect = async (req: IncomingMessage, res: ServerResponse) => {
@@ -551,8 +511,12 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
       req,
       options.getConfig(),
     );
+    const challenge = challenges.get(connect.device.nonce);
+    challenges.delete(connect.device.nonce);
     if (
-      !challenges.consume(connect.device.nonce, clientKey, current) ||
+      !challenge ||
+      challenge.clientKey !== clientKey ||
+      !(challenge.expiresAtMs > current) ||
       Math.abs(current - connect.device.signedAt) > SIGNATURE_SKEW_MS
     ) {
       sendUnauthorized(res);
@@ -1106,7 +1070,7 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
   ]);
 
   const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
-    const path = normalizePath(req);
+    const path = URL.parse(req.url ?? "/", "http://localhost")?.pathname ?? null;
     if (!path?.startsWith(`${BASE_PATH}/`)) {
       return false;
     }

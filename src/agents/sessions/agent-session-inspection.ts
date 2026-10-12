@@ -10,11 +10,12 @@ import {
   hasPersistedAssistantContent,
 } from "./agent-session-utils.js";
 import type { ContextUsage } from "./extensions/index.js";
+import { withSessionManagerWriteAssertion } from "./session-manager-write-admission.js";
 import { getLatestCompactionEntry } from "./session-manager.js";
 import { warnSessionPersistenceDeprecation } from "./session-persistence-deprecation.js";
 
 export abstract class AgentSessionInspection extends AgentSessionModels {
-  /** @deprecated Use setSessionNameAsync; removed at the next Plugin SDK major. */
+  /** @deprecated Use setSessionNameAsync; removed in the next Plugin SDK major. */
   setSessionName(name: string): void {
     warnSessionPersistenceDeprecation("AgentSession.setSessionName", "setSessionNameAsync");
     this.sessionManager.appendSessionInfo(name);
@@ -26,16 +27,25 @@ export abstract class AgentSessionInspection extends AgentSessionModels {
     const manager = this.sessionManager;
     const target = manager.getSessionTarget();
     const sessionId = manager.getSessionId();
-    const assertCurrent = target ? captureOwnedTranscriptWriteAssertion(target) : undefined;
-    await manager.appendSessionInfoAsync(name);
-    assertCurrent?.();
-    if (
-      this.sessionManager !== manager ||
-      manager.getSessionId() !== sessionId ||
-      !sameSessionTranscriptTargetBinding(target, manager.getSessionTarget())
-    ) {
-      throw new Error("Session changed before publishing its display name");
-    }
+    const runner = this.currentExtensionRunner;
+    const context = runner.createContext();
+    const assertOwned = target ? captureOwnedTranscriptWriteAssertion(target) : undefined;
+    const assertCurrent = () => {
+      assertOwned?.();
+      if (
+        this.sessionManager !== manager ||
+        manager.getSessionId() !== sessionId ||
+        !sameSessionTranscriptTargetBinding(target, manager.getSessionTarget()) ||
+        this.currentExtensionRunner !== runner ||
+        context.sessionManager !== manager
+      ) {
+        throw new Error("Session changed before publishing its display name");
+      }
+    };
+    await withSessionManagerWriteAssertion(manager, assertCurrent, () =>
+      manager.appendSessionInfoAsync(name),
+    );
+    assertCurrent();
     this.emit({ type: "session_info_changed", name: manager.getSessionName() });
   }
 
@@ -66,10 +76,9 @@ export abstract class AgentSessionInspection extends AgentSessionModels {
       : -1;
     const compactionIndex = Math.max(clientCompactionIndex, providerCheckpointIndex);
     const providerCheckpoint = providerCheckpointIndex > clientCompactionIndex;
-    let estimateFromContent = false;
+    let usageSource: "unknown" | "content" | "provider" = "unknown";
 
     if (compactionIndex >= 0) {
-      let hasPostCompactionUsage = false;
       for (let index = branchEntries.length - 1; index > compactionIndex; index -= 1) {
         // SAFETY: The reverse index stays within the canonical branch entries.
         const entry = branchEntries[index]!;
@@ -82,27 +91,27 @@ export abstract class AgentSessionInspection extends AgentSessionModels {
               continue;
             }
             if (assistant.usage.contextUsage?.state === "unavailable") {
-              estimateFromContent = true;
+              usageSource = "content";
               continue;
             }
             const contextTokens = calculateContextTokens(assistant.usage);
             if (contextTokens > 0) {
-              hasPostCompactionUsage = true;
-              estimateFromContent = false;
+              usageSource = "provider";
               break;
             }
           }
         }
       }
 
-      if (!hasPostCompactionUsage && (providerCheckpoint || !estimateFromContent)) {
+      if (usageSource !== "provider" && (providerCheckpoint || usageSource !== "content")) {
         return { tokens: null, contextWindow, percent: null };
       }
     }
 
-    const tokens = estimateFromContent
-      ? estimateMessagesFromContent(this.messages)
-      : estimateContextTokens(this.messages).tokens;
+    const tokens =
+      usageSource === "content"
+        ? estimateMessagesFromContent(this.messages)
+        : estimateContextTokens(this.messages).tokens;
     const percent = (tokens / contextWindow) * 100;
 
     return {

@@ -35,6 +35,16 @@ scenario:
         qaImpact: P1
         action: execute native apply_patch behavior separately from OpenClaw dynamic tool parity
         reason: Codex app-server intentionally owns edit natively; the fixture must not require OpenClaw dynamic edit exposure.
+      happyPrompt: >-
+        tool search qa check target=edit. Use the edit tool exactly once on
+        runtime-tool-fixture-edit.txt to replace "before edit" with "after edit".
+        If discovery is needed, discover edit and then call it; discovery alone
+        does not complete this task. Summarize the actual tool result.
+      failurePrompt: >-
+        tool search qa failure target=edit. Use the edit tool exactly once on
+        runtime-tool-fixture-edit.txt to replace "missing fixture text" with
+        "unreachable edit". Report the missing-match error; do not adjust the
+        match, use another tool, or retry.
       promptSnippet: "target=edit"
       failurePromptSnippet: "failure target=edit"
 

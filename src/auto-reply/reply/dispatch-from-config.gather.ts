@@ -7,7 +7,10 @@ import {
   resolveAgentWorkspaceDir,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
-import type { PreparedReplyDispatchRuntime } from "../../agents/prepared-model-runtime.types.js";
+import type {
+  PreparedModelRuntimeLease,
+  PreparedReplyDispatchRuntime,
+} from "../../agents/prepared-model-runtime.types.js";
 import { normalizeExplicitSessionKey } from "../../config/sessions/explicit-session-key-normalization.js";
 import {
   deriveInboundMessageHookContext,
@@ -42,12 +45,12 @@ import type {
   InboundMessageAuditTerminalRecorder,
 } from "./dispatch-from-config.audit.js";
 import {
+  resolveBoundAcpDispatchRuntimeOwner,
   resolveBoundAcpDispatchSessionKey,
   resolveSessionStoreLookup,
 } from "./dispatch-from-config.context.js";
 import { createShouldEmitVerboseProgress } from "./dispatch-from-config.harness-defaults.js";
 import { createDispatchReplyOperationCoordinator } from "./dispatch-from-config.lifecycle.js";
-import { createFinalizationAwareTtsPayloadApplier } from "./dispatch-from-config.payloads.js";
 import {
   loadPreparedModelRuntime,
   loadRuntimePlugins,
@@ -73,6 +76,7 @@ export async function gatherDispatchRequest(
   params: DispatchFromConfigParams,
   messageAuditTerminal: InboundMessageAuditTerminalRecorder | undefined,
   allowActiveQueueResolution = false,
+  onRuntimeLease?: (lease: PreparedModelRuntimeLease) => void,
 ) {
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
   const ctx = isFinalizedInboundContext(params.ctx)
@@ -107,7 +111,9 @@ export async function gatherDispatchRequest(
   const state = {
     params: normalizedParams,
     messageAuditTerminal,
-    allowInboundHandlers: replyOperationRunState.heartbeat === undefined,
+    allowInboundHandlers:
+      replyOperationRunState.heartbeat === undefined &&
+      !params.replyOptions?.internalEventExecution,
     get inboundDedupeReplayUnsafe() {
       // Read the recorded input outcome even when source adoption or cleanup fails.
       // Queued followups have not transferred custody to the active run yet.
@@ -349,24 +355,21 @@ export async function gatherDispatchRequest(
     return finishReplyOperationAborted();
   }
   const dispatchKind = resolveSessionDispatchKind(acpDispatchSessionKey, sessionStoreEntry.entry);
-  let preparedSessionBinding: ReplySessionBinding | undefined =
-    sessionStoreEntry.sessionKey && sessionStoreEntry.entry?.sessionId
+  const toSessionBinding = ({
+    sessionKey: bindingSessionKey,
+    entry,
+    storePath,
+  }: typeof sessionStoreEntry): ReplySessionBinding | undefined =>
+    bindingSessionKey && entry?.sessionId
       ? {
-          sessionKey: sessionStoreEntry.sessionKey,
-          sessionId: sessionStoreEntry.entry.sessionId,
-          lifecycleRevision: sessionStoreEntry.entry.lifecycleRevision,
-          storePath: sessionStoreEntry.storePath,
+          sessionKey: bindingSessionKey,
+          sessionId: entry.sessionId,
+          lifecycleRevision: entry.lifecycleRevision,
+          storePath,
         }
       : undefined;
-  let preparedOperationSessionBinding: ReplySessionBinding | undefined =
-    operationSessionStoreEntry.sessionKey && operationSessionStoreEntry.entry?.sessionId
-      ? {
-          sessionKey: operationSessionStoreEntry.sessionKey,
-          sessionId: operationSessionStoreEntry.entry.sessionId,
-          lifecycleRevision: operationSessionStoreEntry.entry.lifecycleRevision,
-          storePath: operationSessionStoreEntry.storePath,
-        }
-      : undefined;
+  let preparedSessionBinding = toSessionBinding(sessionStoreEntry);
+  let preparedOperationSessionBinding = toSessionBinding(operationSessionStoreEntry);
   const sessionKeysMatch = (left?: string, right?: string) =>
     Boolean(
       left &&
@@ -384,45 +387,16 @@ export async function gatherDispatchRequest(
   };
   const resolveOperationExpectedSessionId = () =>
     preparedOperationSessionBinding?.sessionId ?? operationSessionStoreEntry.entry?.sessionId;
-  const resolvePreparedTranscriptBinding = (mirrorSessionKey?: string) => {
-    if (
-      !preparedSessionBinding ||
-      !sessionKeysMatch(mirrorSessionKey, preparedSessionBinding.sessionKey)
-    ) {
-      return undefined;
-    }
-    return preparedSessionBinding;
-  };
+  const resolvePreparedTranscriptBinding = (mirrorSessionKey?: string) =>
+    preparedSessionBinding && sessionKeysMatch(mirrorSessionKey, preparedSessionBinding.sessionKey)
+      ? preparedSessionBinding
+      : undefined;
   const sessionAgentId = resolveSessionAgentId({
     sessionKey: acpDispatchSessionKey,
     config: cfg,
     fallbackAgentId: ctx.AgentId,
   });
   const sessionAgentCfg = resolveAgentConfig(cfg, sessionAgentId);
-  const assertProgressCurrent = () => {
-    assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-    params.replyOptions?.abortSignal?.throwIfAborted();
-    replyOperationCoordinator.getDispatchAbortSignal()?.throwIfAborted();
-    assertRequestCurrent();
-  };
-  const verboseProgress = createShouldEmitVerboseProgress({
-    agentId: sessionAgentId,
-    sessionKey: acpDispatchSessionKey,
-    storePath: sessionStoreEntry.storePath,
-    initialExplicitLevel: sessionStoreEntry.entry?.verboseLevel,
-    assertCurrent: assertProgressCurrent,
-    fallbackLevel:
-      normalizeVerboseLevel(
-        sessionStoreEntry.entry?.verboseLevel ??
-          sessionAgentCfg?.verboseDefault ??
-          cfg.agents?.defaults?.verboseDefault ??
-          "",
-      ) ?? "off",
-  });
-  const shouldEmitVerboseProgress = verboseProgress.shouldEmit;
-  const shouldEmitFullVerboseProgress = verboseProgress.shouldEmitFull;
-  const shouldEmitVerboseProgressAsync = verboseProgress.shouldEmitAsync;
-  const shouldEmitFullVerboseProgressAsync = verboseProgress.shouldEmitFullAsync;
   const replyRoute = resolveEffectiveReplyRoute({ ctx, entry: sessionStoreEntry.entry });
   // Restore route thread context only from the active turn or the thread-scoped session key.
   // Do not read thread ids from the normalised session store here: `origin.threadId` can be
@@ -440,7 +414,7 @@ export async function gatherDispatchRequest(
   // A bound ACP key names an external harness, not a configured model-runtime owner.
   // Keep the source owner for Gateway dispatch while ACP execution uses the bound target below.
   const preparedReplyDispatchAgentId = boundAcpDispatchSessionKey
-    ? resolveSessionAgentId({ sessionKey, config: cfg, fallbackAgentId: ctx.AgentId })
+    ? resolveBoundAcpDispatchRuntimeOwner({ sessionKey, cfg, ctx })
     : sessionAgentId;
   let preparedReplyDispatchRuntime: PreparedReplyDispatchRuntime | undefined;
   let preparedTtsPreferences: PreparedTtsPreferences;
@@ -453,7 +427,9 @@ export async function gatherDispatchRequest(
         const { loadPublishedGatewayReplyDispatchRuntime } = await loadPreparedModelRuntime();
         return await loadPublishedGatewayReplyDispatchRuntime({
           agentId: preparedReplyDispatchAgentId,
+          demand: params.replyOptions?.isHeartbeat ? "scheduled" : "interactive",
           abortSignal: params.replyOptions?.abortSignal,
+          onRuntimeLease,
         });
       },
     );
@@ -483,12 +459,26 @@ export async function gatherDispatchRequest(
     routeThreadId,
     sessionWorkerPlacementContext: normalizedParams.sessionWorkerPlacementContext,
   });
-  const { getDispatchReplyOperation, getPreDispatchAbortSignal } = replyOperationCoordinator;
-  const maybeApplyTtsWithFinalizationLease = createFinalizationAwareTtsPayloadApplier({
-    preparedTtsPreferences,
-    getReplyOperation: getDispatchReplyOperation,
-    hasInboundAudio: () =>
-      inboundAudio || getDispatchReplyOperation()?.acceptedSteeredInboundAudio === true,
+  const { getPreDispatchAbortSignal } = replyOperationCoordinator;
+  const assertProgressCurrent = () => {
+    assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+    params.replyOptions?.abortSignal?.throwIfAborted();
+    replyOperationCoordinator.getDispatchAbortSignal()?.throwIfAborted();
+    assertRequestCurrent();
+  };
+  const verboseProgress = await createShouldEmitVerboseProgress({
+    agentId: sessionAgentId,
+    sessionKey: acpDispatchSessionKey,
+    storePath: sessionStoreEntry.storePath,
+    initialExplicitLevel: sessionStoreEntry.entry?.verboseLevel,
+    assertCurrent: assertProgressCurrent,
+    fallbackLevel:
+      normalizeVerboseLevel(
+        sessionStoreEntry.entry?.verboseLevel ??
+          sessionAgentCfg?.verboseDefault ??
+          cfg.agents?.defaults?.verboseDefault ??
+          "",
+      ) ?? "off",
   });
   const pluginRegistry =
     preparedReplyDispatchRuntime?.inboundPluginRegistry ??
@@ -600,10 +590,10 @@ export async function gatherDispatchRequest(
     operationSessionStoreEntry,
     noteRunVerbosity: verboseProgress.noteRunVerbosity,
     assertProgressCurrent,
-    shouldEmitVerboseProgress,
-    shouldEmitFullVerboseProgress,
-    shouldEmitVerboseProgressAsync,
-    shouldEmitFullVerboseProgressAsync,
+    shouldEmitVerboseProgress: verboseProgress.shouldEmit,
+    shouldEmitFullVerboseProgress: verboseProgress.shouldEmitFull,
+    shouldEmitVerboseProgressAsync: verboseProgress.shouldEmitAsync,
+    shouldEmitFullVerboseProgressAsync: verboseProgress.shouldEmitFullAsync,
     replyRoute,
     routeReplyThreadId,
     inboundAudio,
@@ -614,7 +604,6 @@ export async function gatherDispatchRequest(
     pluginRegistry,
     replyOperationRunState,
     ...replyOperationCoordinator,
-    maybeApplyTtsWithFinalizationLease,
     hookRunner,
     timestamp,
     messageIdForHook,

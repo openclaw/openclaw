@@ -24,6 +24,11 @@ export function createSubagentSpawnLifecycleEmitter(params: {
   spawned: (hookRunId: string) => Promise<void>;
   failed: (hookRunId: string) => Promise<boolean>;
 } {
+  const hookContext = (runId: string) => ({
+    runId,
+    childSessionKey: params.childSessionKey,
+    requesterSessionKey: params.requesterInternalKey,
+  });
   // "spawned"/"started" hooks mean an accepted Gateway run. Direct runs emit
   // after the shared pipeline; queued collectors emit from the scheduler start.
   return {
@@ -37,11 +42,7 @@ export function createSubagentSpawnLifecycleEmitter(params: {
               childSessionKey: params.childSessionKey,
               requester: params.progressOrigin,
             },
-            {
-              runId: hookRunId,
-              childSessionKey: params.childSessionKey,
-              requesterSessionKey: params.requesterInternalKey,
-            },
+            hookContext(hookRunId),
           );
         } catch {
           // Presentation hooks are best-effort after durable registration.
@@ -65,11 +66,7 @@ export function createSubagentSpawnLifecycleEmitter(params: {
               mode: params.spawnMode,
               ...params.resolvedModelMetadata,
             },
-            {
-              runId: hookRunId,
-              childSessionKey: params.childSessionKey,
-              requesterSessionKey: params.requesterInternalKey,
-            },
+            hookContext(hookRunId),
           );
         } catch {
           // Spawn stays accepted if lifecycle presentation fails.
@@ -92,11 +89,7 @@ export function createSubagentSpawnLifecycleEmitter(params: {
             outcome: "error",
             error: "Session failed to start",
           },
-          {
-            runId: hookRunId,
-            childSessionKey: params.childSessionKey,
-            requesterSessionKey: params.requesterInternalKey,
-          },
+          hookContext(hookRunId),
         );
         return true;
       } catch {

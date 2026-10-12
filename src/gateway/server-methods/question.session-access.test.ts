@@ -6,7 +6,7 @@ import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
+import { projectionLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { releaseAgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
@@ -39,6 +39,15 @@ import {
 import type { GatewayClient } from "./types.js";
 
 installQuestionTestHooks();
+
+function invalidateQuestionReadFacts() {
+  sessionChanges.invalidate({
+    agentId: "main",
+    sessionKey: requestParams.sessionKey,
+    storePath: resolveOpenClawAgentSqlitePath({ agentId: "main" }),
+    factsInvalidated: true,
+  });
+}
 
 const sourceReleases = new Set<() => void>();
 afterEach(() => {
@@ -136,16 +145,6 @@ async function fixture(state: OpenClawTestState) {
   const request = (id = "ordinary-question", client = producer) =>
     call("question.request", { ...requestParams, id, timeoutMs: 10_000 }, client);
   return { owner, viewer, producer, cfg, entry, write, call, request, sourceController };
-}
-
-async function expectRejectedCreatorRestamp(f: Awaited<ReturnType<typeof fixture>>) {
-  const updated = await f.write({
-    createdActor: { ...f.entry.createdActor, id: f.viewer.authenticatedUserProfile!.profileId },
-  });
-  expect(updated?.createdActor).toEqual(f.entry.createdActor);
-  expect(
-    loadSessionEntry({ agentId: "main", sessionKey: requestParams.sessionKey })?.createdActor,
-  ).toEqual(f.entry.createdActor);
 }
 
 it("keeps a trusted narrow question on worker-backed RPCs and fanout through label changes and completion", async () => {
@@ -456,7 +455,7 @@ it.each(["closed claim", "absent", "incognito", "disallowed agent"] as const)(
   },
 );
 
-it.each(["generation", "session", "creator restamp", "profile", "reused id"] as const)(
+it.each(["generation", "session", "profile", "reused id"] as const)(
   "rechecks held answer delivery after %s",
   async (change) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -483,9 +482,6 @@ it.each(["generation", "session", "creator restamp", "profile", "reused id"] as 
         if (change === "session") {
           await f.write({ sessionId: "replacement" });
         }
-        if (change === "creator restamp") {
-          await expectRejectedCreatorRestamp(f);
-        }
         if (change === "profile") {
           observer.authenticatedUserProfile = f.viewer.authenticatedUserProfile;
         }
@@ -496,21 +492,14 @@ it.each(["generation", "session", "creator restamp", "profile", "reused id"] as 
           manager.resolve(id, answers);
         }
         const outcome = (await settled)[0];
-        if (change === "creator restamp") {
-          expect(outcome).toEqual({
-            status: "fulfilled",
-            value: [true, { status: "answered", answers }, undefined],
-          });
-        } else {
-          const error =
-            change === "profile"
-              ? { code: "FORBIDDEN", message: "Gateway requester authority changed" }
-              : { details: { reason: "QUESTION_NOT_FOUND" } };
-          expect(outcome).toMatchObject({
-            status: "fulfilled",
-            value: [false, undefined, error],
-          });
-        }
+        const error =
+          change === "profile"
+            ? { code: "FORBIDDEN", message: "Gateway requester authority changed" }
+            : { details: { reason: "QUESTION_NOT_FOUND" } };
+        expect(outcome).toMatchObject({
+          status: "fulfilled",
+          value: [false, undefined, error],
+        });
         expect(manager.get(id)?.status).toBe(change === "reused id" ? "pending" : "answered");
       } finally {
         manager.close();
@@ -525,7 +514,6 @@ it.each([
   "close",
   "reused id",
   "generation",
-  "creator restamp",
   "unrelated",
   "publication delay",
   "database close",
@@ -544,22 +532,25 @@ it.each([
       owner.send.mockClear();
       const entered = createDeferredCore();
       const release = createDeferredCore();
-      const run = historyLane.pool.run.bind(historyLane.pool);
+      invalidateQuestionReadFacts();
+      const run = projectionLane.pool.run.bind(projectionLane.pool);
       let held = false;
-      const spy = vi.spyOn(historyLane.pool, "run").mockImplementation(async (input, options) => {
-        let exact = false;
-        const result = await run(async () => {
-          const request = typeof input === "function" ? await input() : input;
-          exact = request.kind === "session-exact-entries";
-          return request;
-        }, options);
-        if (exact && !held) {
-          held = true;
-          entered.resolve();
-          await release.promise;
-        }
-        return result;
-      });
+      const spy = vi
+        .spyOn(projectionLane.pool, "run")
+        .mockImplementation(async (input, options) => {
+          let exact = false;
+          const result = await run(async () => {
+            const request = typeof input === "function" ? await input() : input;
+            exact = request.kind === "session-exact-entries";
+            return request;
+          }, options);
+          if (exact && !held) {
+            held = true;
+            entered.resolve();
+            await release.promise;
+          }
+          return result;
+        });
       const answer = { answers: { destination: ["Committed"] } };
       const observation = manager.observe("ordinary-question")!;
       const releaseAccess =
@@ -594,9 +585,6 @@ it.each([
         if (change === "generation") {
           await f.write({ lifecycleRevision: "replacement" });
         }
-        if (change === "creator restamp") {
-          await expectRejectedCreatorRestamp(f);
-        }
         if (change === "database close") {
           await closeOpenClawAgentDatabaseByPathAsync(
             resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
@@ -619,9 +607,9 @@ it.each([
         release.resolve();
         await manager.drain();
         expect(owner.send).toHaveBeenCalledTimes(
-          ["creator restamp", "unrelated", "publication delay"].includes(change) ? 1 : 0,
+          ["unrelated", "publication delay"].includes(change) ? 1 : 0,
         );
-        if (change === "creator restamp" || change === "publication delay") {
+        if (change === "publication delay") {
           expect(JSON.parse(String(owner.send.mock.calls[0]?.[0]))).toMatchObject({
             type: "event",
             event: "question.resolved",
@@ -639,7 +627,7 @@ it.each([
         if (change === "unrelated") {
           expect(spy).toHaveBeenCalledOnce();
         }
-        if (change === "generation" || change === "creator restamp") {
+        if (change === "generation") {
           expect(manager.get("ordinary-question")).toMatchObject({
             status: "answered",
             answers: answer,
@@ -673,8 +661,9 @@ it.each([
       }
       const entered = createDeferredCore();
       const release = createDeferredCore();
-      const run = historyLane.pool.run.bind(historyLane.pool);
-      const spy = vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
+      invalidateQuestionReadFacts();
+      const run = projectionLane.pool.run.bind(projectionLane.pool);
+      const spy = vi.spyOn(projectionLane.pool, "run").mockImplementation(async (...args) => {
         const result = await run(...args);
         entered.resolve();
         await release.promise;
@@ -754,8 +743,9 @@ it.each(["admin", "narrow"] as const)(
           canReceiveSessionEvent: fallback,
         }).broadcast,
       );
-      const spy = vi.spyOn(historyLane.pool, "run").mockRejectedValue(failure);
+      const spy = vi.spyOn(projectionLane.pool, "run").mockRejectedValue(failure);
       try {
+        invalidateQuestionReadFacts();
         const client = kind === "narrow" ? f.producer : adminRequestClient;
         const request = f.call(
           "question.request",

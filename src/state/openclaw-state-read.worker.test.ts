@@ -16,9 +16,9 @@ vi.mock("../infra/worker-task-server.js", async (importOriginal) => ({
     mock.handler.mockImplementation(handler);
   },
 }));
-vi.mock("../fleet/registry.kernel.js", () => ({
-  listFleetCellsInDatabase: mock.query,
-  getFleetCellInDatabase: () => undefined,
+vi.mock("./backup-run-records.kernel.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./backup-run-records.kernel.js")>()),
+  readBackupRunsInDatabase: mock.query,
 }));
 vi.mock("./openclaw-agent-db-registry.read.js", () => ({
   readRegisteredAgentDatabaseRows: mock.query,
@@ -41,7 +41,7 @@ const request: OpenClawStateReadRequest = {
   databasePath: "/fixture/state.sqlite",
   location: "/fixture/snapshot.sqlite",
   checkFreshAdmission: false,
-  command: { type: "fleet.list" },
+  command: { type: "backup.runs" },
 };
 
 beforeEach(() => {
@@ -58,8 +58,8 @@ beforeEach(() => {
 });
 
 it.each([
-  { type: "fleet.list", outcome: "query-error" },
-  { type: "fleet.list", outcome: "schema-error" },
+  { type: "backup.runs", outcome: "query-error" },
+  { type: "backup.runs", outcome: "schema-error" },
   { type: "agentDatabaseRegistry.read", outcome: "success" },
   { type: "agentDatabaseRegistry.read", outcome: "query-error" },
   { type: "agentDatabaseRegistry.read", outcome: "schema-error" },
@@ -83,7 +83,7 @@ it.each([
   }
   const reply = await mock.handler({ ...request, command: { type } });
   const sourceAdmitted = outcome === "schema-error" ? undefined : true;
-  if (type === "fleet.list" || outcome === "cleanup-error") {
+  if (type === "backup.runs" || outcome === "cleanup-error") {
     expect(reply).toMatchObject({ ok: false, message: failure.message, sourceAdmitted });
   } else {
     expect(reply).toEqual({

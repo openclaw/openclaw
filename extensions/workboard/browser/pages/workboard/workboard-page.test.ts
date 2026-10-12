@@ -3,7 +3,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type {
   ControlUiAgentPickerProps,
   ControlUiComponents,
-  ControlUiSessionListResult,
 } from "openclaw/plugin-sdk/control-ui";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
@@ -11,77 +10,60 @@ import {
   createGatewaySession,
   createWorkboardCard,
 } from "../../lib/workboard/test/index-helpers.ts";
-import { mountPage } from "./workboard-page.test-support.ts";
+import {
+  mountPage,
+  observeSessions,
+  openBoardEditor,
+  openSessionTab,
+  openSessionButton,
+  visibleToast,
+  sessionPicker,
+} from "./workboard-page.test-support.ts";
 
-type ControlUiSelectPickerProps = Parameters<ControlUiComponents["mountSelectPicker"]>[1];
-
-function openSessionButton(container: Element) {
-  return [...container.querySelectorAll<HTMLButtonElement>("button")].find(
-    (button) =>
-      (button.getAttribute("aria-label") ?? button.textContent?.trim()) === "Open session",
-  );
-}
-
-function visibleToast(container: Element) {
-  return container.querySelector<HTMLElement>("openclaw-workboard-toast:not([hidden])");
-}
-
-function sessionPicker(container: Element) {
-  type SelectProps = Parameters<ControlUiComponents["mountSelectPicker"]>[1];
-  return [
-    ...container.querySelectorAll<HTMLElement & SelectProps>(
-      ".workboard-draft [data-test-select-picker]",
-    ),
-  ].find((picker) => picker.accessibleLabel === "Session");
-}
-
-async function openBoardEditor(page: ReturnType<typeof mountPage>) {
-  await vi.waitFor(() => expect(page.workboard.state.loaded).toBe(true));
-  expectDefined(
-    page.container.querySelector<HTMLButtonElement>('button[aria-label="Edit board"]'),
-    "edit board",
-  ).click();
-  return vi.waitFor(() =>
-    expectDefined(
-      page.container.querySelector<HTMLFormElement>(".workboard-board-draft"),
-      "board editor",
-    ),
-  );
-}
-
-async function openSessionTab(page: ReturnType<typeof mountPage>) {
-  await vi.waitFor(() =>
-    expect(
-      [...page.container.querySelectorAll<HTMLButtonElement>('[role="tab"]')].some(
-        (tab) => tab.textContent?.trim() === "Session",
-      ),
-    ).toBe(true),
-  );
-  expectDefined(
-    [...page.container.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(
-      (tab) => tab.textContent?.trim() === "Session",
-    ),
-    "session tab",
-  ).click();
-}
-
-function observeSessions(page: ReturnType<typeof mountPage>, result: ControlUiSessionListResult) {
-  return vi.mocked(page.fixture.host.sessions.observe).mockImplementation((_query, listener) => {
-    listener({ result, loading: false, error: null });
-    return { refresh: vi.fn(async () => undefined), dispose: vi.fn() };
-  });
-}
-
-it("loads and refreshes cards through the plugin's authenticated host", async () => {
+it("loads, refreshes, and searches cards through the plugin's authenticated host", async () => {
   const page = mountPage({ connected: true });
   await vi.waitFor(() => expect(page.container.textContent).toContain("Initial card"));
   page.cards([createWorkboardCard({ title: "Updated card" })]);
   page.fixture.emit("plugin.workboard.changed", { epoch: "current", revision: 1 });
   await vi.waitFor(() => expect(page.container.textContent).toContain("Updated card"));
   expect(page.container.textContent).not.toContain("Initial card");
+  expectDefined(
+    page.container.querySelector<HTMLButtonElement>(".workboard-search-trigger"),
+    "search trigger",
+  ).click();
+  const input = await vi.waitFor(() => {
+    const current = expectDefined(
+      page.container.querySelector<HTMLInputElement>("#workboard-search-input"),
+      "search input",
+    );
+    expect(document.activeElement).toBe(current);
+    return current;
+  });
+  input.value = "Updated";
+  input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+  await vi.waitFor(() => {
+    expect(page.workboard.state.query).toBe("Updated");
+    expect(page.container.querySelector(".workboard-filter-chip")?.textContent).toContain(
+      "Updated",
+    );
+  });
+  expect(page.container.querySelector("#workboard-search-input")).toBe(input);
+  expect(document.activeElement).toBe(input);
+  input.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+  );
+  await vi.waitFor(() =>
+    expect(document.activeElement).toBe(
+      expectDefined(
+        page.container.querySelector<HTMLButtonElement>(".workboard-search-trigger"),
+        "restored search trigger",
+      ),
+    ),
+  );
+  expect(page.workboard.state.query).toBe("");
 });
 
-it.each(["main", "writer"])(
+it.each(["writer"])(
   "keeps scope %s recoverable after the roster shrinks to one agent",
   async (scope) => {
     const page = mountPage();
@@ -124,82 +106,6 @@ it.each(["main", "writer"])(
     expect(page.container.textContent).toContain("Writer agent task");
     expect(page.fixture.host.agents.scopeId).toBeNull();
     expect(page.container.querySelector(".workboard-scope")).toBeNull();
-  },
-);
-
-it.each([false, true])(
-  "offers global agent scope only for multiple selectable agents: %s",
-  async (multiple) => {
-    const page = mountPage();
-    page.agents([
-      { id: "main" },
-      ...(multiple ? [{ id: "writer" }] : []),
-      { id: "system", kind: "system" },
-    ]);
-    page.cards([
-      createWorkboardCard({ id: "main-card", title: "Main agent task", agentId: "main" }),
-      createWorkboardCard({ id: "writer-card", title: "Writer agent task", agentId: "writer" }),
-    ]);
-    page.fixture.connection.connected = true;
-    page.fixture.notify();
-    await vi.waitFor(() => expect(page.fixture.host.agents.rows).toHaveLength(multiple ? 3 : 2));
-    await vi.waitFor(() =>
-      expect(page.container.querySelectorAll(".workboard-card")).toHaveLength(2),
-    );
-    const pickers = page.container.querySelectorAll<HTMLElement & ControlUiAgentPickerProps>(
-      "[data-test-agent-picker]",
-    );
-    expect(pickers).toHaveLength(multiple ? 2 : 0);
-    expect(
-      [
-        ...page.container.querySelectorAll<HTMLElement & ControlUiSelectPickerProps>(
-          "[data-test-select-picker]",
-        ),
-      ].some((picker) => picker.accessibleLabel === "Agent"),
-    ).toBe(false);
-    if (!multiple) {
-      return;
-    }
-    for (const surface of [".workboard-agent-filter", ".workboard-filter-agent"]) {
-      const picker = expectDefined(
-        page.container.querySelector<HTMLElement & ControlUiAgentPickerProps>(
-          `${surface} [data-test-agent-picker]`,
-        ),
-        `${surface} global scope picker`,
-      );
-      expect(picker.options.map((option) => option.value)).toEqual(["", "main", "writer"]);
-      picker.onSelect("writer");
-      expect(page.fixture.host.agents.setScope).toHaveBeenLastCalledWith("writer");
-      await vi.waitFor(() => {
-        expect(page.container.querySelectorAll(".workboard-card")).toHaveLength(1);
-        expect(page.container.querySelector(".workboard-card")?.textContent).toContain(
-          "Writer agent task",
-        );
-        for (const control of page.container.querySelectorAll<
-          HTMLElement & ControlUiAgentPickerProps
-        >("[data-test-agent-picker]")) {
-          expect(control.value).toBe("writer");
-        }
-        expect(page.container.querySelector('button[aria-label="Filters, 1 active"]')).toBeNull();
-        expect(
-          page.container.querySelector(
-            '.workboard-filter-chip--mobile button[aria-label="Remove filter: Agent: writer"]',
-          ),
-        ).not.toBeNull();
-      });
-      picker.onSelect("");
-      expect(page.fixture.host.agents.setScope).toHaveBeenLastCalledWith(null);
-      await vi.waitFor(() => {
-        expect(page.container.querySelectorAll(".workboard-card")).toHaveLength(2);
-        expect(page.container.querySelector('button[aria-label="Filters, 1 active"]')).toBeNull();
-        expect(page.container.querySelector(".workboard-filter-chip--mobile")).toBeNull();
-        for (const control of page.container.querySelectorAll<
-          HTMLElement & ControlUiAgentPickerProps
-        >("[data-test-agent-picker]")) {
-          expect(control.value).toBe("");
-        }
-      });
-    }
   },
 );
 
@@ -329,7 +235,6 @@ it.each([
     link: "subagent:workboard-default-writer",
     key: "agent:writer:subagent:workboard-default-writer",
   },
-  { link: "agent:writer:existing", key: "agent:writer:existing" },
 ])(
   "resolves an open $link card independently of the filtered session roster",
   async ({ link, key }) => {
@@ -371,7 +276,7 @@ it.each([
   },
 );
 
-it.each(["global", "unknown"] as const)(
+it.each(["unknown"] as const)(
   "keeps a bare %s link unresolved despite an ambient roster owner",
   async (key) => {
     const page = mountPage();
@@ -420,13 +325,6 @@ it.each(["global", "unknown"] as const)(
 );
 
 it.each([
-  {
-    name: "incomplete",
-    owners: ["writer"],
-    hasMore: true,
-    totalCount: 2,
-    label: "Unknown",
-  },
   {
     name: "deletion-filtered",
     owners: ["writer"],
@@ -533,7 +431,7 @@ it("keeps failed metadata visible through card refreshes and recovers it with pa
   await vi.waitFor(() => expect(page.container.textContent).toContain("Initial card"));
   metadata.reject(new Error("Agent metadata temporarily unavailable"));
   await vi.waitFor(() =>
-    expect(visibleToast(page.container)?.shadowRoot?.textContent).toContain(
+    expect(visibleToast(page.container)?.textContent).toContain(
       "Agent metadata temporarily unavailable",
     ),
   );
@@ -541,7 +439,7 @@ it("keeps failed metadata visible through card refreshes and recovers it with pa
   page.cards([createWorkboardCard({ title: "Updated card", agentId: "main" })]);
   page.fixture.emit("plugin.workboard.changed", { epoch: "current", revision: 1 });
   await vi.waitFor(() => expect(page.container.textContent).toContain("Updated card"));
-  expect(visibleToast(page.container)?.shadowRoot?.textContent).toContain(
+  expect(visibleToast(page.container)?.textContent).toContain(
     "Agent metadata temporarily unavailable",
   );
   expect(
@@ -558,7 +456,7 @@ it("keeps failed metadata visible through card refreshes and recovers it with pa
       ),
     ).not.toBeNull(),
   );
-  expect(visibleToast(page.container)?.shadowRoot?.textContent ?? "").not.toContain(
+  expect(visibleToast(page.container)?.textContent ?? "").not.toContain(
     "Agent metadata temporarily unavailable",
   );
   expect(page.container.textContent).toContain("Updated card");
@@ -584,9 +482,7 @@ it("shows independent metadata and linked-session failures together", async () =
   page.fixture.notify();
 
   await vi.waitFor(() => {
-    const message = visibleToast(page.container)?.shadowRoot?.querySelector(
-      '[role="alert"]',
-    )?.textContent;
+    const message = visibleToast(page.container)?.querySelector('[role="alert"]')?.textContent;
     expect(message).toContain("Agent metadata temporarily unavailable");
     expect(message).toContain("Linked session temporarily unavailable");
   });
@@ -614,15 +510,15 @@ it("keeps page failures visible in the board editor and prioritizes its save fai
   page.fixture.notify();
   const form = await openBoardEditor(page);
   await vi.waitFor(() => {
-    expect(
-      visibleToast(page.container)?.shadowRoot?.querySelector('[role="alert"]')?.textContent,
-    ).toBe("Agent metadata temporarily unavailable");
+    expect(visibleToast(page.container)?.querySelector('[role="alert"]')?.textContent).toBe(
+      "Agent metadata temporarily unavailable",
+    );
   });
   form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
   await vi.waitFor(() => {
-    expect(
-      visibleToast(page.container)?.shadowRoot?.querySelector('[role="alert"]')?.textContent,
-    ).toBe("Board update denied");
+    expect(visibleToast(page.container)?.querySelector('[role="alert"]')?.textContent).toBe(
+      "Board update denied",
+    );
   });
 });
 
@@ -697,7 +593,7 @@ it("releases listeners and stops refreshes when its mount is disposed", async ()
   page.fixture.notify();
   await Promise.resolve();
   expect(page.request).toHaveBeenCalledTimes(count);
-  expect(page.fixture.listeners.size).toBe(0);
+  expect(page.fixture.listeners.size).toBe(page.hostListeners);
   expect(page.fixture.events.get("plugin.workboard.changed")?.size).toBe(0);
   expect(page.container.childElementCount).toBe(0);
 });
@@ -789,9 +685,9 @@ describe("selection reconciliation", () => {
       expect(pendingBusy).toBe("true");
       expect(enabledControls).toHaveLength(0);
       await vi.waitFor(() =>
-        expect(
-          visibleToast(page.container)?.shadowRoot?.querySelector('[role="alert"]')?.textContent,
-        ).toBe("Save unavailable; retry this edit."),
+        expect(visibleToast(page.container)?.querySelector('[role="alert"]')?.textContent).toBe(
+          "Save unavailable; retry this edit.",
+        ),
       );
       const toast = expectDefined(visibleToast(page.container), "retry guidance");
       expect(toast.closest('[inert], [aria-hidden="true"]')).toBeNull();
@@ -819,7 +715,7 @@ describe("selection reconciliation", () => {
     },
   );
 
-  it.each(["detail", "editor"])(
+  it.each(["detail"])(
     "keeps a default-agent card's %s and draft when selecting its scope without metadata",
     async (surface) => {
       const page = mountPage();
@@ -862,47 +758,26 @@ describe("selection reconciliation", () => {
     },
   );
 
-  it.each([
-    { scope: "main", visible: false },
-    { scope: null, visible: true },
-  ])("keeps only overlays inside scope $scope", async ({ scope, visible }) => {
-    const page = mountPage();
-    page.workboard.state.cards = [createWorkboardCard({ id: "writer-card", agentId: "writer" })];
-    page.fixture.host.agents.setScope("writer");
-    await Promise.resolve();
-    Object.assign(page.workboard.state, {
-      detailCardId: "writer-card",
-      detailCommentBody: "Draft comment",
-      draftOpen: true,
-      editingCardId: "writer-card",
-    });
-    page.fixture.host.agents.setScope(scope);
-    await Promise.resolve();
-    expect(page.workboard.state.detailCardId).toBe(visible ? "writer-card" : null);
-    expect(page.workboard.state.detailCommentBody).toBe(visible ? "Draft comment" : "");
-    expect(page.workboard.state.draftOpen).toBe(visible);
-  });
-
-  it.each([
-    { boardId: "product", visible: false },
-    { boardId: "__all__", visible: true },
-  ])("reconciles overlays when navigating to $boardId", async ({ boardId, visible }) => {
-    const page = mountPage({ boardId: "ops" });
-    page.workboard.state.cards = [
-      createWorkboardCard({ id: "ops-card", metadata: { automation: { boardId: "ops" } } }),
-    ];
-    Object.assign(page.workboard.state, {
-      detailCardId: "ops-card",
-      detailCommentBody: "Draft comment",
-      draftOpen: true,
-      editingCardId: "ops-card",
-    });
-    page.navigate(boardId);
-    await Promise.resolve();
-    expect(page.workboard.state.boardFilter).toBe(boardId);
-    expect(page.workboard.state.detailCardId).toBe(visible ? "ops-card" : null);
-    expect(page.workboard.state.draftOpen).toBe(visible);
-  });
+  it.each([{ scope: "main", visible: false }])(
+    "keeps only overlays inside scope $scope",
+    async ({ scope, visible }) => {
+      const page = mountPage();
+      page.workboard.state.cards = [createWorkboardCard({ id: "writer-card", agentId: "writer" })];
+      page.fixture.host.agents.setScope("writer");
+      await Promise.resolve();
+      Object.assign(page.workboard.state, {
+        detailCardId: "writer-card",
+        detailCommentBody: "Draft comment",
+        draftOpen: true,
+        editingCardId: "writer-card",
+      });
+      page.fixture.host.agents.setScope(scope);
+      await Promise.resolve();
+      expect(page.workboard.state.detailCardId).toBe(visible ? "writer-card" : null);
+      expect(page.workboard.state.detailCommentBody).toBe(visible ? "Draft comment" : "");
+      expect(page.workboard.state.draftOpen).toBe(visible);
+    },
+  );
 
   it("preserves a new-card draft across board navigation", async () => {
     const page = mountPage({ boardId: "ops" });

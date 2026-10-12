@@ -68,30 +68,20 @@ export async function loadPairedComputerUseAvailabilityForSurface(params: {
       .toSorted((a, b) => a.nodeId.localeCompare(b.nodeId))
       .map(({ nodeId, computerUse }) => ({ nodeId, computerUse })),
   });
-  const advertised = new Set<ComputerUseV2ActionName>();
-  for (const node of eligible) {
-    for (const action of node.computerUse?.actions ?? COMPUTER_USE_V1_ACTION_NAMES) {
-      advertised.add(action);
-    }
-  }
-  if (gateway.available) {
-    for (const action of gateway.computerUse.actions) {
-      advertised.add(action);
-    }
-  }
+  const capabilities = [
+    ...eligible.map((node) => node.computerUse),
+    ...(gateway.configured && gateway.computerUse ? [gateway.computerUse] : []),
+  ];
+  const advertised = new Set(
+    capabilities.flatMap((capability) => capability?.actions ?? COMPUTER_USE_V1_ACTION_NAMES),
+  );
   return {
     cacheKey,
     prepared: {
       actions: COMPUTER_USE_V2_ACTION_NAMES.filter((action) => advertised.has(action)),
       gateway,
       // Per-provider guidance is only exact when there is one possible target.
-      guidanceCapabilities: gateway.available
-        ? eligible.length === 0
-          ? gateway.computerUse
-          : undefined
-        : eligible.length === 1
-          ? eligible[0]?.computerUse
-          : undefined,
+      guidanceCapabilities: capabilities.length === 1 ? capabilities[0] : undefined,
     },
   };
 }

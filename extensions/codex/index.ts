@@ -1,7 +1,3 @@
-/**
- * Bundled Codex plugin entry: app-server harness, media understanding,
- * migration provider, CLI-session commands, and binding hooks.
- */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   normalizePluginsConfig,
@@ -120,10 +116,7 @@ export default definePluginEntry({
         // the feature's own surface (see requireLiveToolPolicy).
         enabledByDefault: livePluginConfig !== undefined,
       }).enabled;
-      if (!enabled) {
-        return undefined;
-      }
-      return livePluginConfig;
+      return enabled ? livePluginConfig : undefined;
     };
     const resolveCurrentPluginConfig = () => resolvePluginConfig(resolveCurrentConfig);
     const appServerConfig = readCodexPluginConfig(resolveCurrentPluginConfig()).appServer;
@@ -142,8 +135,8 @@ export default definePluginEntry({
       );
     }
     let bindingStateStore: PluginStateSyncKeyedStore<StoredCodexAppServerBinding> | undefined;
-    let bindingMutationStore: PluginStateKeyedStore<StoredCodexAppServerBinding> | undefined;
-    let managedThreadStateStore: PluginStateKeyedStore<StoredCodexManagedThread> | undefined;
+    let bindingMutationStore: PluginStateKeyedStore<StoredCodexAppServerBinding, 2> | undefined;
+    let managedThreadStateStore: PluginStateKeyedStore<StoredCodexManagedThread, 2> | undefined;
     const bindingStateOptions = {
       namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
       maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
@@ -154,32 +147,25 @@ export default definePluginEntry({
         api.runtime.state.openSyncKeyedStore<StoredCodexAppServerBinding>(bindingStateOptions));
     const openBindingMutationStore = () =>
       (bindingMutationStore ??=
-        api.runtime.state.openKeyedStore<StoredCodexAppServerBinding>(bindingStateOptions));
+        api.runtime.state.openKeyedStoreV2<StoredCodexAppServerBinding>(bindingStateOptions));
     // The base registration runtime deliberately rejects state access. Open the
     // store only when a proxied runtime performs the first binding operation.
     const lazyBindingStateStore: Parameters<typeof createLazyCodexAppServerBindingStore>[0] = {
-      deleteIf: (key, predicate) => openBindingStateStore().deleteIf!(key, predicate),
-      entries: () => openBindingStateStore().entries(),
+      // Final effect guards still see raw SDK revocations until the next SDK major.
       lookup: (key) => openBindingStateStore().lookup(key),
       asyncReads: {
         lookup: (key) => openBindingMutationStore().lookup(key),
-        get lookupMany() {
-          const store = openBindingMutationStore();
-          return store.lookupMany?.bind(store);
-        },
+        lookupMany: (keys) => openBindingMutationStore().lookupMany(keys),
+        entries: () => openBindingMutationStore().entries(),
       },
-      registerIfAbsent: (key, value, options) =>
-        openBindingStateStore().registerIfAbsent(key, value, options),
-      withCurrent: (authority) => {
-        const store = openBindingMutationStore();
-        if (!store.withCurrent) {
-          throw new Error("Codex bindings require action-bound plugin-state mutations");
-        }
-        return store.withCurrent(authority);
-      },
+      withCurrent: (authority) =>
+        api.runtime.state.openKeyedStoreV2<StoredCodexAppServerBinding>(
+          bindingStateOptions,
+          authority,
+        ),
     };
     const openManagedThreadStateStore = () =>
-      (managedThreadStateStore ??= api.runtime.state.openKeyedStore<StoredCodexManagedThread>({
+      (managedThreadStateStore ??= api.runtime.state.openKeyedStoreV2<StoredCodexManagedThread>({
         namespace: CODEX_MANAGED_THREAD_NAMESPACE,
         maxEntries: CODEX_MANAGED_THREAD_MAX_ENTRIES,
         // Catalog-only ownership may evict its oldest row. Modern rollouts/transcripts are
@@ -207,7 +193,7 @@ export default definePluginEntry({
       getPluginConfig: resolveCurrentPluginConfig,
       getRuntimeConfig: resolveCurrentConfig,
       openResidentState: (homeId) =>
-        api.runtime.state.openKeyedStore<StoredCodexCatalogEntry>({
+        api.runtime.state.openKeyedStoreV2<StoredCodexCatalogEntry>({
           namespace: `${CODEX_CATALOG_STATE_NAMESPACE}.${homeId.replaceAll(":", "-")}`,
           maxEntries: CODEX_CATALOG_MAX_ROWS + 1,
           overflowPolicy: "reject-new",
@@ -240,9 +226,10 @@ export default definePluginEntry({
       api.registerNodeInvokePolicy(policy);
     }
     if (readCodexPluginConfig(resolveCurrentPluginConfig()).supervision?.enabled === true) {
-      const { resolveCodexAppServerAuthProfileIdForAgent } = createCodexAuthProfileSelection(
-        api.runtime.modelAuth,
-      );
+      const {
+        resolveCodexAppServerAuthProfileIdForAgent,
+        resolveCodexAppServerAuthProfileIdAtEffect,
+      } = createCodexAuthProfileSelection(api.runtime.modelAuth);
       api.registerTool(
         {
           contextVersion: 2,
@@ -259,6 +246,7 @@ export default definePluginEntry({
               getPluginConfig: () => resolvePluginConfig(resolveToolRuntimeConfig),
               getRuntimeConfig: resolveToolRuntimeConfig,
               resolveAuthProfileId: resolveCodexAppServerAuthProfileIdForAgent,
+              resolveAuthProfileIdAtEffect: resolveCodexAppServerAuthProfileIdAtEffect,
               resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
               senderIsOwner: context.senderIsOwner,
               assertInvocationCurrent: context.assertInvocationCurrent,

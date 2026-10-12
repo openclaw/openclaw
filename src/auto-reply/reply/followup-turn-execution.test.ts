@@ -192,80 +192,7 @@ describe("executeFollowupTurn", () => {
     expect(onAgentRunStart).toHaveBeenCalledWith("run-1");
   });
 
-  it("ignores older verbosity from the admitted session generation", async () => {
-    const currentEntry = {
-      sessionId: "session",
-      lifecycleRevision: "owned",
-      updatedAt: 2,
-      verboseLevel: "off" as const,
-    };
-    const turn = createTurn({
-      session: {
-        kind: "session",
-        key: "main",
-        storePath: "/tmp/sessions.json",
-        current: () => currentEntry,
-        publish: () => undefined,
-        adopt: () => undefined,
-      },
-    });
-    state.loadEntryReadOnly.mockReturnValue({
-      ...currentEntry,
-      updatedAt: 1,
-      verboseLevel: "full",
-    });
-
-    await executeTestTurn({
-      turn,
-    });
-
-    const call = state.execute.mock.calls[0]?.[0] as AgentTurnParams;
-    expect(call.resolvedVerboseLevel).toBe("off");
-  });
-
-  it("refreshes awaited visibility without native reads or replacement-session verbosity", async () => {
-    const entry = {
-      sessionId: "session",
-      lifecycleRevision: "owned",
-      updatedAt: 1,
-      verboseLevel: "off" as const,
-    };
-    const turn = createTurn({
-      session: {
-        kind: "session",
-        key: "main",
-        storePath: "/tmp/sessions.json",
-        current: () => entry,
-        publish: () => undefined,
-        adopt: () => undefined,
-      },
-    });
-    const legacy = vi.fn();
-    await executeTestTurn({
-      turn,
-      defaults: {
-        opts: {
-          onVerboseProgressVisibility: legacy,
-          onVerboseProgressVisibilityAsync: async (isActive) => {
-            state.readEntry.mockResolvedValue(entry);
-            expect(await isActive()).toBe(false);
-            state.readEntry.mockResolvedValue({ ...entry, verboseLevel: "full" });
-            expect(await isActive()).toBe(true);
-            state.readEntry.mockResolvedValue({
-              ...entry,
-              lifecycleRevision: "replacement",
-              verboseLevel: "full",
-            });
-            expect(await isActive()).toBe(false);
-            expect(state.loadEntryReadOnly).not.toHaveBeenCalled();
-          },
-        },
-      },
-    });
-    expect(legacy).not.toHaveBeenCalled();
-  });
-
-  it("rejects awaited visibility when the followup is revoked during its read", async () => {
+  it("rejects progress preparation when the followup is revoked during its read", async () => {
     const pending = Promise.withResolvers<undefined>();
     const entered = Promise.withResolvers<void>();
     const abort = new AbortController();
@@ -334,6 +261,37 @@ describe("executeFollowupTurn", () => {
 
     expect(result.commentaryPayloadsEnabled).toBe(false);
   });
+
+  it.each(["optional", "required"] as const)(
+    "uses queued %s requiredness for previews but preserves media",
+    async (expectation) => {
+      const turn = createTurn();
+      turn.queued.run.terminalReplyExpectation = expectation;
+      turn.queued.run.verboseLevelOverride = "off";
+      const onItemEvent = vi.fn(async () => true);
+      const onDurableToolResult = vi.fn(async () => {});
+      const media = { mediaUrl: "https://example.test/result.png" };
+      state.execute.mockImplementation(async (params: AgentTurnParams) => {
+        await params.opts?.onItemEvent?.({ kind: "tool", name: "read", status: "running" });
+        await params.opts?.onToolResult?.(media);
+        return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
+      });
+      const result = await executeTestTurn({
+        turn,
+        defaults: {
+          opts: {
+            progressRequiresReply: true,
+            suppressDefaultToolProgressMessages: true,
+            onItemEvent,
+          },
+        },
+        onToolResult: onDurableToolResult,
+      });
+      await result.progress.drain();
+      expect(onItemEvent).toHaveBeenCalledTimes(expectation === "required" ? 1 : 0);
+      expect(onDurableToolResult).toHaveBeenCalledExactlyOnceWith(media);
+    },
+  );
 
   it("suppresses queued verbose-off preambles with only a static opt-in", async () => {
     const onItemEvent = vi.fn(async () => true as const);

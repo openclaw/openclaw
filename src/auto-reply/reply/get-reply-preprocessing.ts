@@ -21,10 +21,7 @@ const linkUnderstandingApplyRuntimeLoader = createLazyImportLoader(
 
 export function hasLinkCandidate(ctx: MsgContext): boolean {
   const message = ctx.agentText;
-  if (!message) {
-    return false;
-  }
-  return /\bhttps?:\/\/\S+/i.test(message);
+  return Boolean(message && /\bhttps?:\/\/\S+/i.test(message));
 }
 
 export async function applyMediaUnderstandingIfNeeded(params: {

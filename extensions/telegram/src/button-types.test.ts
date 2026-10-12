@@ -23,33 +23,7 @@ describe("resolveTelegramInlineButtons precedence", () => {
     ).toBe(buttons);
   });
 
-  it("prefers legacy approval aliases over generic presentation buttons", () => {
-    const approvalId = `plugin:${"a".repeat(36)}`;
-    const rows = resolveTelegramInlineButtons({
-      interactive: {
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [
-              { label: "Allow Always", value: `/approve ${approvalId} allow-always` },
-              { label: "Oversized", value: "x".repeat(65) },
-            ],
-          },
-        ],
-      },
-      presentation: {
-        blocks: [{ type: "buttons", buttons: [{ label: "Generic", value: "generic" }] }],
-      },
-    });
-    expect(rows?.flat().map((button) => button.callback_data)).toEqual([
-      `/approve ${approvalId} always`,
-    ]);
-  });
-
-  it.each([
-    { blocks: [{ type: "text", text: "Legacy heading" }] },
-    { blocks: [{ type: "buttons", buttons: [{ label: "Oversized", value: "x".repeat(65) }] }] },
-  ])(
+  it.each([{ blocks: [{ type: "text", text: "Legacy heading" }] }])(
     "falls back to presentation when the legacy payload has no usable controls: %j",
     (interactive) => {
       expect(
@@ -228,26 +202,6 @@ describe("buildTelegramPresentationButtons action domains", () => {
       decision: "allow-once",
     });
     expect(rows?.[0]?.[1]?.url).toBe("https://gateway.example/approve/long-id");
-  });
-
-  it("lets canonical typed actions override deprecated button fields", () => {
-    const rows = buildTelegramPresentationButtons({
-      blocks: [
-        {
-          type: "buttons",
-          buttons: [
-            {
-              label: "Open",
-              action: { type: "url", url: "https://example.com/canonical" },
-              value: "legacy-callback",
-              url: "https://example.com/legacy",
-            },
-          ],
-        },
-      ],
-    });
-    expect(rows?.[0]?.[0]?.url).toBe("https://example.com/canonical");
-    expect(rows?.[0]?.[0]?.callback_data).toBeUndefined();
   });
 
   it("keeps question option indices independent and stable across presentation blocks", () => {

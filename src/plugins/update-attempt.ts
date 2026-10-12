@@ -5,6 +5,7 @@ import type { UpdateChannel } from "../infra/update-channels.js";
 import { CLAWHUB_INSTALL_ERROR_CODE, isUnavailableClawHubTarget } from "./clawhub-error-codes.js";
 import { installPluginFromClawHub } from "./clawhub.js";
 import { installPluginFromGitSpec } from "./git-install.js";
+import { installWithSourceFallback } from "./install-channel-specs.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.types.js";
 import { copyPluginInstallTransactionRequest } from "./install-transaction.js";
 import {
@@ -160,6 +161,7 @@ type PluginUpdateSuccess = Extract<PluginUpdateInstallResult, { ok: true }>;
 
 type PluginUpdateAttemptState = {
   activeClawHubInstallSpec?: string;
+  npmFallbackSpec?: string;
   channelFallbackSuffix: string;
 };
 
@@ -284,6 +286,7 @@ export async function runPluginUpdateAttempt(params: {
   onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
   expectedIntegrity?: string;
   clawhubSpecs?: PluginUpdateSpecPlan;
+  officialNpmFallback?: { installSpec: string; recordSpec: string; expectedIntegrity?: string };
   trustedSourceLinkedOfficialInstall: boolean;
   expectedReplacementPluginId?: string;
   onNpmInstall: () => void;
@@ -386,10 +389,45 @@ export async function runPluginUpdateAttempt(params: {
     activeClawHubInstallSpec = params.clawhubSpecs.fallbackSpec;
   }
 
-  return {
+  const attempt: PluginUpdateAttemptResult = {
     kind: "result",
     result,
     activeClawHubInstallSpec,
     channelFallbackSuffix,
   };
+  const fallback = params.officialNpmFallback;
+  if (params.record.source !== "clawhub" || !fallback || !activeClawHubInstallSpec) {
+    return attempt;
+  }
+  const selected = await installWithSourceFallback<PluginUpdateAttemptResult>({
+    sources: [
+      { source: "clawhub", spec: activeClawHubInstallSpec },
+      { source: "npm", spec: fallback.installSpec },
+    ],
+    install: async (source) => {
+      if (source.source === "clawhub") {
+        return attempt;
+      }
+      const npmAttempt = await runPluginUpdateAttempt(
+        copyPluginInstallTransactionRequest(params, {
+          ...params,
+          record: { source: "npm", spec: fallback.recordSpec },
+          effectiveSpec: fallback.installSpec,
+          npmMetadata: undefined,
+          expectedIntegrity: fallback.expectedIntegrity,
+          trustedSourceLinkedOfficialInstall: true,
+          officialNpmFallback: undefined,
+        }),
+      );
+      return npmAttempt.kind === "result"
+        ? { ...npmAttempt, npmFallbackSpec: fallback.recordSpec, channelFallbackSuffix }
+        : npmAttempt;
+    },
+    result: (entry) => (entry.kind === "result" ? entry.result : { ok: false }),
+    onFallback: (message) => {
+      channelFallbackSuffix += ` ${message}`;
+      params.logger.warn?.(message);
+    },
+  });
+  return selected.attempt;
 }

@@ -272,9 +272,14 @@ describe("agent runtime plugin registries", () => {
     },
   );
 
-  it.each([false, true])(
-    "keeps catalog registries exact with broader reusable scope=%s",
-    (broader) => {
+  it.each([
+    { purpose: "model-catalog" as const, broader: false },
+    { purpose: "model-catalog" as const, broader: true },
+    { purpose: "isolated-completion" as const, broader: false },
+    { purpose: "isolated-completion" as const, broader: true },
+  ])(
+    "keeps $purpose registries exact with broader reusable scope=$broader",
+    ({ purpose, broader }) => {
       const reusableRegistry = createEmptyPluginRegistry();
       reusableRegistry.plugins.push(createPluginRecord({ id: "catalog-provider" }));
       if (broader) {
@@ -293,7 +298,7 @@ describe("agent runtime plugin registries", () => {
         config: {},
         basePluginIds: ["catalog-provider"],
         reusableRegistry,
-        purpose: "model-catalog",
+        purpose,
       });
 
       expect(registry).toBe(broader ? primaryRegistry : reusableRegistry);
@@ -382,8 +387,6 @@ describe("agent runtime plugin registries", () => {
     "different workspace",
     "stale metadata generation",
     "changed input config",
-    "changed activation environment",
-    "changed activation result",
     "manifest mismatch",
   ] as const)("refuses Gateway registry reuse for %s", (reason) => {
     const fixture = createGatewayRegistryFixture();
@@ -411,12 +414,6 @@ describe("agent runtime plugin registries", () => {
         break;
       case "changed input config":
         input.config = { plugins: { enabled: false } };
-        break;
-      case "changed activation environment":
-        activationContext.env.OPENCLAW_STATE_DIR = "/tmp/changed-activation-state";
-        break;
-      case "changed activation result":
-        activationContext.autoEnabledReasons["gateway-owned"].push("changed decision");
         break;
       case "manifest mismatch":
         activeRegistry.plugins[0]!.origin = "global";

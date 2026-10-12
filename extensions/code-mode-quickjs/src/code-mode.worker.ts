@@ -692,61 +692,54 @@ async function main(
     if (config.timeoutMs <= 0) {
       throw new CodeModeWorkerFailure("timeout", "code mode timeout exceeded");
     }
+    let payload: CodeModeWorkerPayload;
     if (input.kind === "exec" && typeof input.source === "string") {
-      return captureWorkerResult(
-        await run(
-          {
-            kind: "exec",
-            wasmModule: input.wasmModule,
-            wasmExtensions: input.wasmExtensions,
-            source: input.source,
-            prelude: typeof input.prelude === "string" ? input.prelude : undefined,
-            executionTimeoutMs:
-              typeof input.executionTimeoutMs === "number" ? input.executionTimeoutMs : undefined,
-            config,
-            catalog: Array.isArray(input.catalog) ? input.catalog : [],
-            apiFiles: Array.isArray(input.apiFiles)
-              ? (input.apiFiles as CodeModeApiVirtualFile[]) // SAFETY: Only host-prepared declaration files enter this channel.
-              : [],
-            namespaces: Array.isArray(input.namespaces)
-              ? (input.namespaces as CodeModeNamespaceDescriptor[]) // SAFETY: The host serializes these descriptors before dispatch.
-              : [],
-            swarmEnabled: input.swarmEnabled === true,
-          },
-          channel,
-        ),
+      payload = {
+        kind: "exec",
+        wasmModule: input.wasmModule,
+        wasmExtensions: input.wasmExtensions,
+        source: input.source,
+        prelude: typeof input.prelude === "string" ? input.prelude : undefined,
+        executionTimeoutMs:
+          typeof input.executionTimeoutMs === "number" ? input.executionTimeoutMs : undefined,
         config,
-        input.retainFinalValue === true,
-      );
-    }
-    // SAFETY: This process's QuickJS workers produce snapshots; the host returns them unchanged.
-    const snapshot = input.continuation as Snapshot | undefined;
-    if (input.kind === "resume" && snapshot?.memory instanceof Uint8Array) {
-      return captureWorkerResult(
-        await run(
-          {
-            kind: "resume",
-            wasmModule: input.wasmModule,
-            wasmExtensions: input.wasmExtensions,
-            continuation: snapshot,
-            config,
-            settledRequests: Array.isArray(input.settledRequests)
-              ? (input.settledRequests as SettledBridgeRequest[]) // SAFETY: The core broker constructs envelopes around guest JSON.
-              : [],
-            pendingRequests: Array.isArray(input.pendingRequests)
-              ? (input.pendingRequests as PendingBridgeRequest[]) // SAFETY: The broker returns this worker's pending descriptors.
-              : [],
-          },
-          channel,
-        ),
+        catalog: Array.isArray(input.catalog) ? input.catalog : [],
+        apiFiles: Array.isArray(input.apiFiles)
+          ? (input.apiFiles as CodeModeApiVirtualFile[]) // SAFETY: Only host-prepared declaration files enter this channel.
+          : [],
+        namespaces: Array.isArray(input.namespaces)
+          ? (input.namespaces as CodeModeNamespaceDescriptor[]) // SAFETY: The host serializes these descriptors before dispatch.
+          : [],
+        swarmEnabled: input.swarmEnabled === true,
+      };
+    } else {
+      // SAFETY: This process's QuickJS workers produce snapshots; the host returns them unchanged.
+      const snapshot = input.continuation as Snapshot | undefined;
+      if (input.kind !== "resume" || !(snapshot?.memory instanceof Uint8Array)) {
+        return {
+          ...failedWorkerResult("invalid_input", "invalid code mode worker input"),
+          output: EMPTY_CODE_MODE_OUTPUT,
+        };
+      }
+      payload = {
+        kind: "resume",
+        wasmModule: input.wasmModule,
+        wasmExtensions: input.wasmExtensions,
+        continuation: snapshot,
         config,
-        input.retainFinalValue === true,
-      );
+        settledRequests: Array.isArray(input.settledRequests)
+          ? (input.settledRequests as SettledBridgeRequest[]) // SAFETY: The core broker constructs envelopes around guest JSON.
+          : [],
+        pendingRequests: Array.isArray(input.pendingRequests)
+          ? (input.pendingRequests as PendingBridgeRequest[]) // SAFETY: The broker returns this worker's pending descriptors.
+          : [],
+      };
     }
-    return {
-      ...failedWorkerResult("invalid_input", "invalid code mode worker input"),
-      output: EMPTY_CODE_MODE_OUTPUT,
-    };
+    return captureWorkerResult(
+      await run(payload, channel),
+      config,
+      input.retainFinalValue === true,
+    );
   } catch (error) {
     const timedOut = isQuickJsInterruptedError(error);
     const code = timedOut

@@ -92,19 +92,19 @@ describe("agent registration commit publication", () => {
       const assertCurrent = vi.fn(() => fixture.admission.assertCurrent());
       const registration = fixture.capture({ admission: { ...fixture.admission, assertCurrent } });
       registration.begin();
-      if (throws) {
-        assertCurrent.mockImplementation(() => {
-          throw new Error("existing schema scope ended");
-        });
-        expect(() => registration.finish()).toThrow("existing schema scope ended");
-      }
       const prepared = registryListing.prepareOpenClawAgentDatabaseRegistrySnapshotRead(
         { env: fixture.env },
         () => false,
       );
       try {
-        if (!throws) {
-          await expect(prepared.read()).rejects.toThrow("ownership is changing");
+        await expect(prepared.read()).rejects.toThrow(
+          "Agent database registry ownership is changing during discovery",
+        );
+        if (throws) {
+          assertCurrent.mockImplementation(() => {
+            throw new Error("existing schema scope ended");
+          });
+          expect(() => registration.finish()).toThrow("existing schema scope ended");
         }
       } finally {
         registration.finish();

@@ -26,8 +26,8 @@ import { resolveSystemMainSessionTarget, type SessionEntry } from "../config/ses
 import {
   applySessionEntryLifecycleMutation,
   listSessionEntriesCore,
-  replaceTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { SessionOrigin } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -327,7 +327,7 @@ function applyGatewaySkipEnv() {
     : "openclaw-test-no-bundled-extensions";
 }
 
-function resetGatewayMutableTestFixtures(): void {
+function resetGatewayMutableTestFixtures(sessionStorePath?: string): void {
   testTailnetIPv4.value = undefined;
   testTailscaleWhois.value = null;
   testTailscaleWhois.calls.length = 0;
@@ -346,13 +346,13 @@ function resetGatewayMutableTestFixtures(): void {
   testState.cronTriggersEnabled = undefined;
   testState.cronStorePath = undefined;
   testState.sessionConfig = undefined;
-  testState.sessionStorePath = undefined;
+  testState.sessionStorePath = sessionStorePath;
   testState.agentConfig = undefined;
   testState.agentsConfig = undefined;
   testState.bindingsConfig = undefined;
   testState.channelsConfig = undefined;
   testState.allowFrom = undefined;
-  lastSyncedSessionStorePath = testState.sessionStorePath;
+  lastSyncedSessionStorePath = undefined;
   lastSyncedSessionConfigJson = undefined;
   testIsNixMode.value = false;
   cronIsolatedRun.mockReset();
@@ -482,7 +482,9 @@ async function resetGatewayTestRuntimeOnly() {
   resetConfigRuntimeState();
   invalidateSessionSharingSnapshot();
   resetTestPluginRegistry();
-  resetGatewayMutableTestFixtures();
+  // A suite fixture owns this physical store until its explicit disposal.
+  // Publishing a temporary default would revoke its retained execution owner.
+  resetGatewayMutableTestFixtures(testState.sessionStorePath);
   clearSessionStoreCacheForTest();
   await persistTestSessionConfig();
   resetSystemEventsForTest();

@@ -145,6 +145,8 @@ export type GitCommandOptions = Pick<
   | "maxOutputBytes"
   | "terminateOnOutputLimit"
 > & {
+  /** Canonical ref owner when content commands use a temporary safe configuration view. */
+  refMutationDirectory?: string;
   /** Yield CPU to foreground Gateway work for content-heavy background reads. */
   lowerPriority?: boolean;
   operation?: GitProcessOperation;
@@ -210,6 +212,7 @@ async function executeGitCommandWithOutput<Result extends SpawnResult | BufferSp
 }
 
 export type GitBufferedCommandOptions = BufferedCommandOptions & {
+  refMutationDirectory?: string;
   lowerPriority?: boolean;
   beforeRun?: () => void;
   startRun?: GitOperationStarter;

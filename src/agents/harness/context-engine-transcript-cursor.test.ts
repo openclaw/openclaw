@@ -6,19 +6,25 @@ import {
   readSessionTranscriptVisibleMessageDelta,
   type SessionTranscriptTargetParams,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   appendTranscriptMessage,
-  replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import * as transcriptAnchors from "../../config/sessions/session-transcript-anchor-read.js";
 import type { ContextEngine, ContextEngineSessionTarget } from "../../context-engine/types.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
-import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import {
+  cleanupSessionStateForTest,
+  useSessionStoreTempDirs,
+} from "../../test-utils/session-state-cleanup.js";
 import {
   bootstrapHarnessContextEngine,
   finalizeHarnessContextEngineTurn,
 } from "./context-engine-lifecycle.js";
+
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-context-terminal-");
 
 function requireTranscriptTarget(params: {
   sessionId: string;
@@ -46,6 +52,71 @@ function readMessageContent(message: AgentMessage): unknown {
 }
 
 describe("context engine transcript cursor contract", () => {
+  it("records a reconstructed terminal anchor despite an intervening transcript append", async () => {
+    const target = {
+      agentId: "main",
+      sessionId: "terminal-append",
+      sessionKey: "agent:main:terminal-append",
+      storePath: path.join(sessionDirs.make(), "sessions.json"),
+    };
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const user = await appendTranscriptMessage(target, {
+      message: { role: "user", content: "request" },
+      now: 1_000,
+    });
+    const terminal = await appendTranscriptMessage(target, {
+      message: { role: "assistant", content: "reply" },
+      parentId: user!.messageId,
+      now: 2_000,
+    });
+    const readAnchor = transcriptAnchors.readActiveTranscriptEntryAnchorAsync;
+    const read = vi
+      .spyOn(transcriptAnchors, "readActiveTranscriptEntryAnchorAsync")
+      .mockImplementation(async (...args) => {
+        const anchor = await readAnchor(...args);
+        // Append after the snapshot is read, before finalization consumes its terminal anchor.
+        await appendTranscriptMessage(target, {
+          message: { role: "assistant", content: "later reply" },
+          now: 3_000,
+        });
+        return anchor;
+      });
+    const record = vi.fn();
+    const engine: ContextEngine = {
+      info: { id: "terminal-proof", name: "Terminal proof" },
+      ingest: async () => ({ ingested: true }),
+      assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+      compact: async () => ({ ok: true, compacted: false }),
+    };
+    try {
+      await finalizeHarnessContextEngineTurn({
+        contextEngine: engine,
+        sessionIdUsed: target.sessionId,
+        sessionKey: target.sessionKey,
+        sessionFile: target.storePath,
+        messagesSnapshot: [],
+        prePromptMessageCount: 0,
+        promptError: false,
+        aborted: false,
+        yieldAborted: false,
+        turnCandidate: {
+          admission: { ...user!.anchor!, logicalTurnId: "turn", role: "user" },
+          terminalEntryId: terminal!.messageId,
+          record,
+        },
+        warn: vi.fn(),
+      });
+      expect(read).toHaveBeenCalledOnce();
+      expect(record).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          boundary: expect.objectContaining({ terminal: terminal!.anchor }),
+        }),
+      );
+    } finally {
+      read.mockRestore();
+    }
+  });
+
   it("bootstraps, resumes appends, and rebuilds after replacement through the public SDK", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-context-engine-cursor-"));
     const storePath = path.join(tempDir, "sessions.json");

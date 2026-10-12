@@ -1,11 +1,25 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { transitionMainSessionRecovery } from "../../agents/main-session-recovery/main-session-recovery-state.js";
 import {
   mergeSessionEntry,
   resolveSessionResetPolicy,
   type InternalSessionEntry as SessionEntry,
 } from "../../config/sessions.js";
+import * as transcriptReader from "../../config/sessions/session-transcript-anchor-read.js";
 import { buildAgentSessionPatch, type AgentSessionPatchBuild } from "./agent-session-patch.js";
+
+beforeEach(() => {
+  const read = transcriptReader.readSessionTranscriptAnchorsAsync;
+  vi.spyOn(transcriptReader, "readSessionTranscriptAnchorsAsync").mockImplementation((...args) =>
+    args[1].includeMetadata
+      ? Promise.resolve({
+          anchors: [],
+          metadata: { present: true, observedAt: null, updatedAt: null },
+        })
+      : read(...args),
+  );
+});
+afterEach(() => vi.restoreAllMocks());
 
 async function buildPatch(
   touchInteraction: boolean,
@@ -40,7 +54,6 @@ async function buildPatch(
       visibleRequest: true,
       fallbackSessionId: "fallback",
       touchInteraction,
-      failedSessionTranscriptMissing: () => false,
     })
   ).patch;
 }
@@ -71,7 +84,6 @@ async function buildCreationPatch(opts: {
     visibleRequest: opts.visibleRequest ?? true,
     fallbackSessionId: "fallback",
     touchInteraction: false,
-    failedSessionTranscriptMissing: () => false,
   });
 }
 

@@ -5,10 +5,13 @@ import {
   captureExternalSessionCommitGuard,
   composeSessionSourceAssertion,
 } from "../config/sessions/session-source-authority.js";
-import { isGatewayNativeApprovalMethod } from "../infra/approval-gateway-runtime-methods.js";
+import { isGatewayWorkerApprovalMethod } from "../infra/approval-gateway-runtime-methods.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.types.js";
-import { readGatewayDeviceRevocationGuard } from "./device-revocation.js";
+import {
+  hasPreparedGatewayDeviceAuthority,
+  readGatewayDeviceRevocationGuard,
+} from "./device-revocation.js";
 import {
   isInternalApprovalCommitGuard,
   retainInternalApprovalCommitGuard,
@@ -320,6 +323,17 @@ export async function dispatchGatewayMethodInProcessRaw(
         }
         assertSource();
       },
+      {
+        preparedCheck: (assertSource) => {
+          throwIfGatewayDispatchAborted(method, options?.signal);
+          if (
+            !hasPreparedGatewayDeviceAuthority(resolved.client, resolved.hasCurrentClientAuthority)
+          ) {
+            throw new Error(`Gateway client authority closed before dispatching ${method}.`);
+          }
+          assertSource();
+        },
+      },
     );
     const assertCreatedInputSourceCurrent = resolved.assertCreatedInputSourceCurrent;
     const sessionMutationCommitGuard = composeSessionSourceAssertion([
@@ -328,7 +342,7 @@ export async function dispatchGatewayMethodInProcessRaw(
       assertExplicitRequestCurrent,
     ]);
     if (
-      isGatewayNativeApprovalMethod(method) &&
+      isGatewayWorkerApprovalMethod(method) &&
       (!options?.sessionMutationCommitGuard ||
         isInternalApprovalCommitGuard(options.sessionMutationCommitGuard)) &&
       (!resolved.hasCurrentClientAuthority ||

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import pMap from "p-map";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentEntryConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -83,8 +84,11 @@ describe("chat metadata with published model owners", () => {
         });
         return entry;
       };
-      const configured = await Promise.all(
-        Array.from({ length: count }, (_, index) => add(index === 0 ? "main" : `agent-${index}`)),
+      // Exercise a large roster without exhausting broker slots during fixture writes.
+      const configured = await pMap(
+        Array.from({ length: count }, (_, index) => (index === 0 ? "main" : `agent-${index}`)),
+        add,
+        { concurrency: 2, stopOnError: false },
       );
       const published = new Map<string, PreparedModelRuntimeSnapshot>();
       const publish = async (entry: Awaited<ReturnType<typeof add>>, force = false) => {

@@ -1,4 +1,5 @@
 import { formatCliCommand } from "../../../cli/command-format.js";
+import { formatCliJsonFailure } from "../../../cli/failure-output.js";
 import type { GatewayServiceLoadState } from "../../../daemon/service-types.js";
 import { redactSecrets } from "../../../logging/redact.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../../runtime.js";
@@ -205,7 +206,7 @@ export function logNonInteractiveOnboardingFailure(params: {
 
   if (params.opts.json) {
     writeRuntimeJson(params.runtime, {
-      ok: false,
+      ...formatCliJsonFailure(output.message),
       mode: params.mode,
       phase: params.phase,
       message: output.message,
@@ -228,7 +229,7 @@ export function logNonInteractiveOnboardingFailure(params: {
     service ? `Service: ${service.label} (${serviceLoadText})` : undefined,
     gatewayRuntime ? `Runtime: ${gatewayRuntime}` : undefined,
     output.diagnostics?.lastGatewayError
-      ? `Last gateway error: ${output.diagnostics.lastGatewayError}`
+      ? `Recent Gateway log error (may be from an earlier run): ${output.diagnostics.lastGatewayError}`
       : undefined,
     output.diagnostics?.inspectError
       ? `Diagnostics warning: ${output.diagnostics.inspectError}`

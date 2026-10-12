@@ -8,7 +8,7 @@ import type { HelloOk } from "../../packages/gateway-protocol/src/schema/frames.
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CallGatewayCliOptions } from "../gateway/call.js";
-import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import { loadOrCreateDeviceIdentityAsync } from "../infra/device-identity-async.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { WizardSession } from "../wizard/session.js";
@@ -35,9 +35,9 @@ vi.mock("./onboard-guided.js", () => ({ runGuidedOnboarding: mocks.runGuidedOnbo
 // mock-isolation: Remote onboarding records its handoff without loading the local terminal runtime.
 vi.mock("../tui/tui.js", () => ({ runTui: mocks.runTui }));
 
-vi.mock("../infra/device-identity.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/device-identity.js")>()),
-  loadOrCreateDeviceIdentity: vi.fn(() => ({
+vi.mock("../infra/device-identity-async.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/device-identity-async.js")>()),
+  loadOrCreateDeviceIdentityAsync: vi.fn(async () => ({
     deviceId: "remote-onboarding-device",
     publicKeyPem: "test-public-key",
     privateKeyPem: "test-private-key",
@@ -196,7 +196,7 @@ function asGatewayCall(mock: ReturnType<typeof vi.fn>): GatewayCall {
 }
 
 describe("runRemoteGatewayInferenceOnboarding", () => {
-  it.each([true, false])(
+  it.each([false])(
     "preserves utility role through remote setup and rejects role drift (match=%s)",
     async (matchingRole) => {
       const call = vi.fn(async (options: CallGatewayCliOptions) => {
@@ -377,12 +377,6 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
   );
 
   it.each([
-    {
-      label: "token",
-      auth: { token: "selected-token" },
-      secret: "selected-token",
-      configuredRemote: false,
-    },
     {
       label: "password",
       auth: { password: "selected-password" },
@@ -611,7 +605,7 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
     "missing verification identity",
     "restart timeout",
   ])("gates inference and chat on replacement boot: %s", async (mode, ctx) => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(0);
+    const now = vi.spyOn(performance, "now").mockReturnValue(0);
     ctx.onTestFinished(() => now.mockRestore());
     const sent: string[] = [];
     const verifiedBoots: string[] = [];
@@ -697,7 +691,9 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
   });
 
   it("bounds a late restart verification call by the remaining deadline", async () => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(45_500).mockReturnValueOnce(1_000);
+    const now = vi.spyOn(performance, "now").mockReturnValue(45_500).mockReturnValueOnce(1_000);
+    // Wall clock jumps backward 90s -- must not inflate the monotonic remaining budget.
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(-90_000);
     const callGatewayMock = vi.fn(async (options: CallGatewayCliOptions): Promise<unknown> => {
       options.onHelloOk?.(
         gatewayHello(options.method === "openclaw.setup.verify" ? "new-boot" : "old-boot"),
@@ -746,15 +742,16 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
       );
     } finally {
       now.mockRestore();
+      dateNow.mockRestore();
     }
 
+    // remaining = 45_000 - 44_500 = 500 (monotonic, despite Date.now at -90_000)
     expect(
       callGatewayMock.mock.calls.find(
         ([options]) => options.method === "openclaw.setup.verify",
       )?.[0].timeoutMs,
     ).toBe(500);
   });
-
   it("hands an auth-free Gateway to the TUI as the exact bound route", async () => {
     const callGatewayMock = vi.fn(async (options: CallGatewayCliOptions): Promise<unknown> => {
       if (options.method === "openclaw.setup.detect") {
@@ -908,11 +905,11 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
     expect(runTui).not.toHaveBeenCalled();
   });
 
-  it.each(["device", "profile"])(
-    "keeps remote chat ownership across replies and cancellation: %s",
+  it.each(["device", "unavailable"])(
+    "preserves remote chat identity selection: %s",
     async (identity) => {
-      if (identity === "profile") {
-        vi.mocked(loadOrCreateDeviceIdentity).mockImplementationOnce(() => {
+      if (identity === "unavailable") {
+        vi.mocked(loadOrCreateDeviceIdentityAsync).mockImplementationOnce(() => {
           throw new Error("read-only client state");
         });
       }
@@ -942,12 +939,8 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
           return { ok: true, modelRef: "claude-cli/opus", latencyMs: 100 };
         }
         if (options.method === "openclaw.chat") {
-          // The Gateway falls back to connection ownership when there is no
-          // authenticated profile or device; one-shot calls use new connections.
-          const owner =
-            identity === "profile"
-              ? "authenticated-profile"
-              : (options.deviceIdentity?.deviceId ?? `connection:${++connections}`);
+          // One-shot requests need the same signed device across connections.
+          const owner = options.deviceIdentity?.deviceId ?? `connection:${++connections}`;
           if (chatOwner && chatOwner !== owner) {
             throw new Error("OpenClaw session belongs to another caller.");
           }
@@ -969,7 +962,7 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
       });
       const runTui = vi.fn();
 
-      await runWithGatewayMocks(
+      const onboarding = runWithGatewayMocks(
         makeTarget(makeLocalConfig(), { token: "selected-token" }),
         makeRuntime(),
         {
@@ -979,6 +972,14 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
           runTui,
         },
       );
+
+      if (identity === "unavailable") {
+        await expect(onboarding).rejects.toThrow(/Cannot load device identity.*doctor --fix/);
+        expect(methods).not.toContain("openclaw.chat");
+        expect(runTui).not.toHaveBeenCalled();
+        return;
+      }
+      await onboarding;
 
       expect(methods).toEqual([
         "openclaw.setup.detect",

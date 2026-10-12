@@ -10,6 +10,8 @@ export const toolingIsolatedTestFiles = [
   "test/scripts/check-extension-package-tsc-boundary.test.ts",
   "test/scripts/check-plugin-sdk-wildcard-reexports.test.ts",
   "test/scripts/control-ui-i18n.test.ts",
+  "test/scripts/managed-child-process.drain.test.ts",
+  "test/scripts/managed-child-process.termination.test.ts",
   "test/scripts/openclaw-e2e-instance.test.ts",
   "test/scripts/test-projects-build-admission.test.ts",
   "test/scripts/vitest-fork-shutdown.test.ts",

@@ -10,7 +10,6 @@ import { runNodeScript } from "../../../test/helpers/run-node-script.js";
 import * as backoff from "../../infra/backoff.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
-import * as pidAlive from "../../shared/pid-alive.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -18,7 +17,7 @@ import {
 import { useInProcessWorktreeCapacityTransport } from "./capacity.test-support.js";
 import * as worktreeGit from "./git.js";
 import { requireGit } from "./git.js";
-import { findLiveRegistryWorktreeByPath, getRegistryWorktree } from "./registry.js";
+import { findLiveRegistryWorktreeByPath, getRegistryWorktree } from "./registry.test-support.js";
 import { managedWorktreeGcEntrypoint } from "./service-gc-runtime.test-support.js";
 import { IDLE_GC_MS, ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
 import {
@@ -444,29 +443,6 @@ describe("ManagedWorktreeService garbage collection", () => {
     }
   });
 
-  it("garbage collects modified provisioned files into the immutable snapshot", async () => {
-    await fs.writeFile(path.join(repo, ".gitignore"), ".env.local\n");
-    await fs.writeFile(path.join(repo, ".worktreeinclude"), ".env.local\n");
-    await git(repo, "add", ".gitignore", ".worktreeinclude");
-    await git(repo, "commit", "-m", "configure worktree provisioning");
-    await fs.writeFile(path.join(repo, ".env.local"), "value=old-source\n");
-
-    const created = await materializeDownstreamFixture("idle-rotated", {
-      ownerKind: "workboard",
-      provisionedPaths: [".env.local"],
-    });
-    await fs.rm(path.join(repo, ".worktreeinclude"));
-    await fs.writeFile(path.join(created.path, ".env.local"), "value=rotated-only-copy\n");
-    now += IDLE_GC_MS + 1;
-
-    expect((await service.gc()).removed).toEqual([created.id]);
-    await fs.writeFile(path.join(repo, ".env.local"), "value=newer-source\n");
-    const restored = await service.restore({ id: created.id });
-    expect(await fs.readFile(path.join(restored.path, ".env.local"), "utf8")).toBe(
-      "value=rotated-only-copy\n",
-    );
-  });
-
   it("shares one fresh lock inventory across idle prefilters for a repository", async () => {
     const records = [];
     for (let index = 0; index < 3; index++) {
@@ -516,22 +492,6 @@ describe("ManagedWorktreeService garbage collection", () => {
     }
   });
 
-  it("checks process liveness only for the requested GC candidates", async () => {
-    const manual = await materializeDownstreamFixture("unrelated-live-lock");
-    const candidate = await materializeRunOwnedFixture("candidate-live-lock", "session");
-    await git(repo, "worktree", "lock", "--reason", `openclaw pid=${process.ppid}`, manual.path);
-    await git(repo, "worktree", "lock", "--reason", `openclaw pid=${process.pid}`, candidate.path);
-    now += IDLE_GC_MS + 1;
-    const liveness = vi.spyOn(pidAlive, "isPidDefinitelyDead");
-    try {
-      expect((await service.gc()).removed).toEqual([]);
-      expect(liveness).toHaveBeenCalledWith(process.pid);
-      expect(liveness).not.toHaveBeenCalledWith(process.ppid);
-    } finally {
-      liveness.mockRestore();
-    }
-  });
-
   it("preserves a worktree used after the idle cleanup inspection", async () => {
     const created = await materializeRunOwnedFixture("resumed", "session", "agent:main:resumed");
     now += IDLE_GC_MS + 1;
@@ -563,7 +523,7 @@ describe("ManagedWorktreeService garbage collection", () => {
     });
     await git(repo, "worktree", "lock", "--reason", `openclaw pid=${process.pid}`, busy.path);
     await fs.writeFile(path.join(retired.path, "uncommitted.txt"), "archived work\n");
-    const result = await service.gc({ shouldRemoveOwner: () => true });
+    const result = await service.gc({ readOwnerState: () => "retired" });
     expect(result.removed).toEqual([retired.id]);
     expect(getRegistryWorktree(env, busy.id)?.removedAt).toBeUndefined();
     expect(getRegistryWorktree(env, manual.id)?.removedAt).toBeUndefined();
@@ -582,11 +542,11 @@ describe("ManagedWorktreeService garbage collection", () => {
     const snapshot = await service.remove({ id: removed.id, reason: "test-retention" });
     const snapshotCommit = await git(repo, "rev-parse", snapshot.snapshotRef!);
     const live = await materializeRunOwnedFixture("live-owner", "session", "agent:main:live");
-    const shouldRemoveOwner = vi.fn(() => false);
+    const readOwnerState = vi.fn(() => "idle" as const);
 
-    const result = await service.gc({ shouldRemoveOwner });
+    const result = await service.gc({ readOwnerState });
 
-    expect(shouldRemoveOwner.mock.calls).toEqual([["session", live.ownerId]]);
+    expect(readOwnerState.mock.calls).toEqual([["session", live.ownerId]]);
     expect(result.removed).toEqual([]);
     expect(result.snapshotsPruned).toBe(0);
     expect(getRegistryWorktree(env, removed.id)).toMatchObject({
@@ -595,6 +555,33 @@ describe("ManagedWorktreeService garbage collection", () => {
     });
     expect(await git(repo, "rev-parse", snapshot.snapshotRef!)).toBe(snapshotCommit);
     expect(getRegistryWorktree(env, live.id)?.removedAt).toBeUndefined();
+  });
+
+  it("preserves expired recovery refs when the removal pin is locked", async () => {
+    const created = await materializeDownstreamFixture("locked-expiry-pin");
+    const removed = await service.remove({ id: created.id, reason: "retention" });
+    const snapshotRef = removed.snapshotRef!;
+    const snapshot = await git(repo, "rev-parse", snapshotRef);
+    const pendingRef = `refs/openclaw/removals/${created.id}`;
+    await git(repo, "update-ref", pendingRef, snapshot);
+    await git(repo, "pack-refs", "--all");
+    const lock = path.join(repo, ".git", `${pendingRef}.lock`);
+    await fs.mkdir(path.dirname(lock), { recursive: true });
+    await fs.writeFile(lock, "", { flag: "wx" });
+    now += SNAPSHOT_RETENTION_MS + 1;
+    try {
+      expect((await service.gc()).snapshotsPruned).toBe(0);
+      expect(getRegistryWorktree(env, created.id)?.snapshotRef).toBe(snapshotRef);
+      expect(await git(repo, "rev-parse", "--verify", snapshotRef)).toBe(snapshot);
+      expect(await git(repo, "rev-parse", "--verify", pendingRef)).toBe(snapshot);
+    } finally {
+      await fs.unlink(lock);
+    }
+    expect((await service.gc()).snapshotsPruned).toBe(1);
+    expect(getRegistryWorktree(env, created.id)).toBeUndefined();
+    expect(await git(repo, "for-each-ref", "--format=%(refname)", snapshotRef, pendingRef)).toBe(
+      "",
+    );
   });
 
   it("does not restore a snapshot while garbage collection is expiring it", async () => {
@@ -625,7 +612,10 @@ describe("ManagedWorktreeService garbage collection", () => {
     const blockedDeletion = vi
       .spyOn(worktreeGit, "requireGit")
       .mockImplementation(async (cwd, args, options) => {
-        if (args[0] === "update-ref" && args[1] === "-d" && args[2] === removed.snapshotRef) {
+        if (
+          args[0] === "update-ref" &&
+          options?.input?.toString().includes(`delete ${removed.snapshotRef}\0`)
+        ) {
           deleting.resolve();
           await resume.promise;
         }

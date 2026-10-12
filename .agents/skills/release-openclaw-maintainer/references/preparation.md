@@ -55,6 +55,8 @@ be repaired later to add that platform.
 When backport discovery is requested or part of planning, read
 [backport discovery](backport-discovery.md), freeze the baseline and main SHA,
 and obtain approval for the categorized ledger before mutating the branch.
+Include its selected-contract closure and CI-optimization dispositions; recheck
+closure against the final candidate before freezing or starting qualification.
 Backports stay optional and operator-selected. An unspecified target means the
 newest open release branch. Extended-stable preparation additionally uses
 [its backport procedure](extended-stable-backports.md).
@@ -81,12 +83,22 @@ adjacent improvements. Validate that exact source and its publication bytes.
 
 Use `$openclaw-changelog-update` for source-history inventory, human credit,
 editorial grouping, renderer limits, and verification. Generate the complete
-history manifest and notes during preparation; editorial work may overlap
-Code validation. Refresh them for actual source changes, not tooling retries.
-Beta notes use the stable-base
-`## YYYY.M.PATCH` section in `CHANGELOG/YYYY.M.PATCH.md`, with Highlights,
-Changes and Fixes. `CHANGELOG.md` is the generated index; the matching
-`CHANGELOG/records/YYYY.M.PATCH.md` retains the complete contribution record.
+history manifest and notes once, during preparation; editorial work may overlap
+Code validation. Notes are then frozen through validation recovery: a backport
+that creates a replacement Code SHA does not refresh them, and neither does a
+tooling retry. After the final Code SHA is green, refresh them at most once, as
+a notes-only descendant that credits every admitted backport (see
+[qualify publication bytes](regular-release.md#qualify-publication-bytes)).
+Beta notes use the exact
+`## YYYY.M.PATCH-beta.N` section in `CHANGELOG/YYYY.M.PATCH-beta.N.md` and
+matching `CHANGELOG/records/YYYY.M.PATCH-beta.N.md`. Capture npm's current
+`openclaw@beta` version before publication as the delta baseline, including a
+stable version when `beta` and `latest` coincide. Never choose the last GitHub
+prerelease. Preserve the resolved tag in the contribution manifest and reuse
+it for verification/recovery after the selector moves. Every beta gets freshly
+inventoried delta prose; a new candidate refuses cumulative-only notes.
+Stable notes remain cumulative in `CHANGELOG/YYYY.M.PATCH.md`, with their own
+record. `CHANGELOG.md` is the generated index.
 Use the shared resolver and writer documented in the changelog skill. Canonical PR
 provenance follows current `origin/main`; retain a release-branch PR only while
 its change has not been forward-ported. Do not change root README as routine

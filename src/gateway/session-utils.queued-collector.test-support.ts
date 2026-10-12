@@ -119,7 +119,6 @@ export function useQueuedCollectorFixture() {
               visibleRequest: false,
               fallbackSessionId: expectDefined(entry?.sessionId, "created child identity"),
               touchInteraction: false,
-              failedSessionTranscriptMissing: () => false,
             })
           ).patch,
         );

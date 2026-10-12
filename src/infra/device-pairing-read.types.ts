@@ -14,7 +14,10 @@ export type DevicePairingReadCommand =
     };
 
 export type DevicePairingBinding = { identity: string; generation?: string };
-export type DevicePairingBindingFact = { deviceId: string; binding: DevicePairingBinding | null };
+export type DevicePairingBindingFact = {
+  deviceId: string;
+  binding: DevicePairingBinding | null;
+};
 export type DevicePairingNodeSnapshot = {
   readonly paired: readonly PairedDevice[];
   readonly bindings: ReadonlyMap<string, DevicePairingBinding>;

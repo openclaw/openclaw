@@ -178,22 +178,32 @@ async function runThroughFailureRecovery(params: {
         runId,
         sessionId,
         sessionKey: `agent:main:${params.provider}:${params.fixture.code}`,
+        sessionFile: `${state.agentDir()}/session.jsonl`,
+        workspaceDir: state.agentDir(),
+        prompt: "hello",
+        timeoutMs: 60_000,
         config: {},
-      };
+      } satisfies Parameters<typeof handleEmbeddedAssistantFailure>[0]["runInput"]["runParams"];
       const failover = createEmbeddedRunFailoverRetryController({
-        runParams: runParams as never,
-        provider: params.provider,
-        modelId: MODEL_ID,
-        globalLane: "qwen-dashscope-throttle-test",
-        agentDir: state.agentDir(),
-        fallbackConfigured: false,
-        profileFailureStore: profileStore,
-        getLastProfileId: () => profileId,
+        runInput: {
+          runParams,
+          globalLane: "qwen-dashscope-throttle-test",
+          agentDir: state.agentDir(),
+          fallbackConfigured: false,
+        },
+        preparedRuntime: {
+          provider: params.provider,
+          modelId: MODEL_ID,
+          profileFailureStore: profileStore,
+          snapshot: () => ({
+            lastProfileId: profileId,
+            pluginHarnessOwnsTransport: false,
+            agentHarness: { id: "embedded" },
+          }),
+          getApiKeyInfo: () => null,
+          advanceAttemptAuthProfile: async () => false,
+        },
         getSessionId: () => sessionId,
-        harnessOwnsTransport: () => false,
-        getRuntimeAuthOwnerId: () => "embedded",
-        getApiKeyInfo: () => null,
-        advanceAuthProfile: async () => false,
       });
       const attempt = makeEmbeddedRunnerAttempt({
         lastAssistant: assistant,
@@ -208,36 +218,44 @@ async function runThroughFailureRecovery(params: {
       const suspensionReasons: string[] = [];
       try {
         await handleEmbeddedAssistantFailure({
-          runParams: runParams as never,
-          attempt,
-          attemptAssistant: assistant,
-          currentAttemptAssistant: assistant,
-          terminalState,
-          activeErrorContext: { provider: params.provider, model: MODEL_ID },
-          provider: params.provider,
+          runInput: {
+            runParams,
+            fallbackConfigured: false,
+            suspendForFailure: ({ reason }) => {
+              suspensionReasons.push(reason);
+            },
+            agentDir: state.agentDir(),
+            isProbeSession: false,
+          },
+          normalizedAttempt: {
+            attempt,
+            attemptAssistant: assistant,
+            currentAttemptAssistant: assistant,
+            terminalState,
+            activeErrorContext: { provider: params.provider, model: MODEL_ID },
+          },
+          preparedRuntime: {
+            provider: params.provider,
+            modelId: MODEL_ID,
+            model: { id: MODEL_ID },
+            attemptedThinking: new Set(["off"]),
+            attemptAuthProfileStore: profileStore,
+            maybeRefreshRuntimeAuthForAuthError: async () => false,
+          },
+          runtime: {
+            thinkLevel: "off",
+            pluginHarnessOwnsTransport: false,
+            lastProfileId: profileId,
+          },
           providerOwner: params.providerOwner,
-          modelId: MODEL_ID,
-          model: MODEL_ID,
-          thinkLevel: "off",
           getThinkLevel: () => "off",
-          attemptedThinking: new Set(["off"]),
-          fallbackConfigured: false,
-          pluginHarnessOwnsTransport: false,
-          authProfileId: profileId,
-          authProfileStore: profileStore,
           runtimeAuthRetry: false,
-          maybeRefreshRuntimeAuthForAuthError: async () => false,
           failover,
           emptyErrorRetries: 0,
           overloadProfileRotations: 0,
           previousRetryFailoverReason: null,
           traceAttempts: [],
-          suspendForFailure: ({ reason }) => {
-            suspensionReasons.push(reason);
-          },
           suspensionSessionId: sessionId,
-          agentDir: state.agentDir(),
-          isProbeSession: false,
         });
       } catch (error) {
         failureReason =

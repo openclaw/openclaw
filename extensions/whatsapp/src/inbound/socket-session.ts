@@ -219,16 +219,22 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
     );
   };
 
+  const currentSocketOperations = (currentSock: WASocket) =>
+    createWhatsAppSocketOperationTimeoutAdapter(currentSock, sendOperationTimeoutMs, {
+      assertCurrent: () => {
+        if (getCurrentSock() !== currentSock) {
+          throw new Error(RECONNECT_IN_PROGRESS_ERROR);
+        }
+      },
+      onSendMessageTimeout: ({ jid, promise }) => trackLateAcceptedSend(jid, promise),
+    });
+
   let reachoutTimeLock: ReachoutTimelockState | undefined;
   let reachoutTimeLockFetch: Promise<ReachoutTimelockState | undefined> | undefined;
-  let reachoutTimeLockVersion = 0;
-  let verifiedSendReady:
-    | { jid: string; sock: WASocket; reachoutTimeLockVersion: number }
-    | undefined;
+  let verifiedSendReady: { jid: string; sock: WASocket } | undefined;
 
   const rememberReachoutTimeLock = (state: ReachoutTimelockState | undefined) => {
     reachoutTimeLock = state;
-    reachoutTimeLockVersion += 1;
     verifiedSendReady = undefined;
   };
 
@@ -258,26 +264,6 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
     return await reachoutTimeLockFetch;
   };
 
-  const rememberVerifiedSendReady = (jid: string, currentSock: WASocket) => {
-    verifiedSendReady = {
-      jid,
-      sock: currentSock,
-      reachoutTimeLockVersion,
-    };
-  };
-
-  const consumeVerifiedSendReady = (jid: string, currentSock: WASocket): boolean => {
-    if (
-      verifiedSendReady?.jid !== jid ||
-      verifiedSendReady.sock !== currentSock ||
-      verifiedSendReady.reachoutTimeLockVersion !== reachoutTimeLockVersion
-    ) {
-      return false;
-    }
-    verifiedSendReady = undefined;
-    return true;
-  };
-
   const assertCanSendToJid = async (
     jid: string,
     currentSock: WASocket,
@@ -286,7 +272,12 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
     if (!isDirectUserJid(jid)) {
       return;
     }
-    if (readinessOptions?.useVerifiedReady && consumeVerifiedSendReady(jid, currentSock)) {
+    if (
+      readinessOptions?.useVerifiedReady &&
+      verifiedSendReady?.jid === jid &&
+      verifiedSendReady.sock === currentSock
+    ) {
+      verifiedSendReady = undefined;
       return;
     }
     const state =
@@ -301,8 +292,8 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
     }
     if (readinessOptions?.rememberReady && state) {
       // The top-level direct send checks readiness before typing; consume this
-      // same socket/JID/version proof at the native send.
-      rememberVerifiedSendReady(jid, currentSock);
+      // same socket/JID proof at the native send unless a timelock update invalidates it.
+      verifiedSendReady = { jid, sock: currentSock };
     }
   };
 
@@ -328,20 +319,11 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
       if (currentSock) {
         try {
           await assertCanSendToJid(jid, currentSock, { useVerifiedReady: true });
-          const result = await createWhatsAppSocketOperationTimeoutAdapter(
-            currentSock,
-            sendOperationTimeoutMs,
-            {
-              assertCurrent: () => {
-                if (getCurrentSock() !== currentSock) {
-                  throw new Error(RECONNECT_IN_PROGRESS_ERROR);
-                }
-              },
-              onSendMessageTimeout: ({ jid: timedOutJid, promise }) => {
-                trackLateAcceptedSend(timedOutJid, promise);
-              },
-            },
-          ).sendMessage(jid, content, sendOptions);
+          const result = await currentSocketOperations(currentSock).sendMessage(
+            jid,
+            content,
+            sendOptions,
+          );
           rememberOutboundMessage(jid, result);
           return result;
         } catch (error) {
@@ -382,17 +364,7 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
       if (!currentSock) {
         throw new Error(RECONNECT_IN_PROGRESS_ERROR);
       }
-      return await createWhatsAppSocketOperationTimeoutAdapter(
-        currentSock,
-        sendOperationTimeoutMs,
-        {
-          assertCurrent: () => {
-            if (getCurrentSock() !== currentSock) {
-              throw new Error(RECONNECT_IN_PROGRESS_ERROR);
-            }
-          },
-        },
-      ).sendPresenceUpdate(presenceLocal, jid);
+      return await currentSocketOperations(currentSock).sendPresenceUpdate(presenceLocal, jid);
     },
   };
 

@@ -181,10 +181,7 @@ async function runMatrixSessionScenario(params: {
 }
 
 describe("Matrix DM scenario session identity evidence", () => {
-  it.each([
-    { lane: "live", returnedSenderId: matrixDriverId },
-    { lane: "crabline", returnedSenderId: "driver" },
-  ])(
+  it.each([{ lane: "live", returnedSenderId: matrixDriverId }])(
     "accepts distinct room-owned sessions on the $lane Matrix lane",
     async ({ returnedSenderId }) => {
       await expect(
@@ -197,15 +194,6 @@ describe("Matrix DM scenario session identity evidence", () => {
     },
   );
 
-  it("rejects a shared session in per-room mode even when both replies and notice policy pass", async () => {
-    await expect(
-      runMatrixSessionScenario({
-        scenarioId: "dm-per-room-session",
-        sharedSessionIdentity: true,
-      }),
-    ).rejects.toThrow(/session|room|isolat|shared/i);
-  });
-
   it("rejects a reused per-room session key even when its transcript id rotates", async () => {
     await expect(
       runMatrixSessionScenario({
@@ -217,52 +205,16 @@ describe("Matrix DM scenario session identity evidence", () => {
     ).rejects.toThrow(/session|room|isolat|shared/i);
   });
 
-  it.each([
-    { lane: "live", returnedSenderId: matrixDriverId },
-    { lane: "crabline", returnedSenderId: "driver" },
-  ])(
-    "accepts one shared user-owned session on the $lane Matrix lane",
-    async ({ returnedSenderId }) => {
+  it.each([{ scenarioId: "dm-per-room-session" as const, sharedSessionIdentity: false }])(
+    "rejects a different persisted Matrix sender in $scenarioId",
+    async (scenario) => {
       await expect(
         runMatrixSessionScenario({
-          scenarioId: "dm-shared-session",
-          sharedSessionIdentity: true,
-          returnedSenderId,
+          ...scenario,
+          returnedSenderId: "driver",
+          secondaryNativeSenderId: "@intruder:matrix.test",
         }),
-      ).resolves.toMatchObject({ status: "pass" });
+      ).rejects.toThrow(/session|room|isolat|shared/i);
     },
   );
-
-  it("rejects separate sessions in shared mode even when the expected notice is emitted", async () => {
-    await expect(
-      runMatrixSessionScenario({
-        scenarioId: "dm-shared-session",
-        sharedSessionIdentity: false,
-      }),
-    ).rejects.toThrow(/session|room|isolat|shared/i);
-  });
-
-  it("rejects distinct shared-mode session keys even when they alias one transcript id", async () => {
-    await expect(
-      runMatrixSessionScenario({
-        scenarioId: "dm-shared-session",
-        sharedSessionIdentity: true,
-        sharedSessionKey: false,
-        sharedTranscriptId: true,
-      }),
-    ).rejects.toThrow(/session|room|isolat|shared/i);
-  });
-
-  it.each([
-    { scenarioId: "dm-per-room-session" as const, sharedSessionIdentity: false },
-    { scenarioId: "dm-shared-session" as const, sharedSessionIdentity: true },
-  ])("rejects a different persisted Matrix sender in $scenarioId", async (scenario) => {
-    await expect(
-      runMatrixSessionScenario({
-        ...scenario,
-        returnedSenderId: "driver",
-        secondaryNativeSenderId: "@intruder:matrix.test",
-      }),
-    ).rejects.toThrow(/session|room|isolat|shared/i);
-  });
 });

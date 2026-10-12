@@ -12,7 +12,6 @@ import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-work
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
-  captureSessionTranscriptReconcileGeneration,
   closeSessionTranscriptReconcileWorkerPool,
   getSessionTranscriptReconcileWorkerPoolSnapshot,
   runSessionTranscriptReconcileOperation,
@@ -22,20 +21,16 @@ import type { SessionTranscriptReconcileWorkerMessage } from "./session-transcri
 
 function runDiskTask(context: OpenClawStateWorkerContext, pathname: string) {
   return runSessionTranscriptReconcileOperation(
-    captureSessionTranscriptReconcileGeneration(),
     async (operation) => {
-      const task = await operation.startTask(
-        {
-          mode: "disk",
-          sessionIds: [],
-          agentId: "main",
-          path: pathname,
-          stateDir: context.environment.OPENCLAW_STATE_DIR,
-          externallySupervised: true,
-          leaseId: randomUUID(),
-        },
-        0,
-      );
+      const task = await operation.startTask({
+        mode: "disk",
+        sessionIds: [],
+        agentId: "main",
+        path: pathname,
+        stateDir: context.environment.OPENCLAW_STATE_DIR,
+        externallySupervised: true,
+        leaseId: randomUUID(),
+      });
       const messages: string[] = [];
       task.port.on("message", (message: SessionTranscriptReconcileWorkerMessage) => {
         messages.push(message.type);
@@ -143,7 +138,10 @@ it("refuses an agent replacement during canonical first creation", async () => {
         });
       const observation = observe(context, agentPath);
       try {
-        await expect(runDiskTask(context, agentPath)).rejects.toThrow();
+        await expect(runDiskTask(context, agentPath)).resolves.toEqual([
+          "failed",
+          "lease-released",
+        ]);
         expect(replaced).toBe(true);
         expect(readDatabasePathIdentitySync(agentPath).key).not.toBe(original.key);
         await closeSessionTranscriptReconcileWorkerPool();

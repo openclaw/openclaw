@@ -37,17 +37,62 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { assertOpenClawDatabasesReady } from "../../state/openclaw-database-preflight.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { createAgentRunDirectAbortError } from "../run-termination.js";
 import { readStartupRecoveryWarning } from "./main-session-restart-recovery-diagnostics.js";
 import {
   markRestartAbortedMainSessions,
   markStartupOrphanedMainSessionsForRecovery,
 } from "./main-session-restart-recovery-marking.js";
-import { discoverRestartRecoveryStoreTargets } from "./main-session-restart-recovery-shared.js";
+import {
+  discoverRestartRecoveryStoreTargets,
+  mainSessionRecoveryLog,
+} from "./main-session-restart-recovery-shared.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-restart-owner-");
+
+it("reports why supplied shutdown candidates could not be marked", async () => {
+  const stateDir = sessionDirs.make();
+  const storePath = path.join(stateDir, "sessions.json");
+  const sessionKey = "agent:main:main";
+  await replaceSessionEntry(
+    { storePath, sessionKey },
+    {
+      sessionId: "main-session",
+      updatedAt: 1,
+      lifecycleRunId: "main-run",
+    },
+  );
+  const warn = vi.spyOn(mainSessionRecoveryLog, "warn");
+  try {
+    expect(
+      await markRestartAbortedMainSessions({
+        cfg: { session: { store: storePath } },
+        stateDir,
+        resolveGatewayContext: () => undefined,
+        activeRuns: [
+          {
+            sessionKey,
+            sessionId: "main-session",
+            runId: "main-run",
+            lifecycleGeneration: getAgentEventLifecycleGeneration(),
+          },
+        ],
+        isActiveRun: () => false,
+      }),
+    ).toEqual({ marked: 0, skipped: 0 });
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("activeRuns=1 skipped=0 skipReason=owner_changed"),
+    );
+    expect(loadSessionEntry({ storePath, sessionKey })?.mainRestartRecovery).toBeUndefined();
+  } finally {
+    warn.mockRestore();
+  }
+});
 
 it("keeps healthy stores recoverable when an earlier startup mark fails", async () => {
   await withOpenClawTestState({ label: "recovery-mark-failure" }, async (state) => {
@@ -283,7 +328,7 @@ it("marks healthy startup orphans while leaving a refused secondary database unt
   });
 });
 
-it("marks only the closing Gateway's exact active admissions", async () => {
+it("marks only the closing Gateway's exact durable admissions and leaves host incognito volatile", async () => {
   const stateDir = sessionDirs.make();
   const storePath = path.join(stateDir, "sessions.json");
   const resolveGatewayContext = () => undefined;
@@ -308,6 +353,26 @@ it("marks only the closing Gateway's exact active admissions", async () => {
         }),
       );
     }
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const incognitoTarget = {
+      agentId: "main",
+      env,
+      sessionKey: "agent:main:dashboard:incognito-closing",
+      storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
+    };
+    await replaceSessionEntry(incognitoTarget, {
+      sessionId: "volatile",
+      updatedAt: Date.now(),
+      incognito: true,
+    });
+    admissions.push(
+      await beginSessionWorkAdmission({
+        scope: incognitoTarget.storePath,
+        identities: [incognitoTarget.sessionKey, "volatile"],
+        resolveGatewayContext,
+        assertAllowed() {},
+      }),
+    );
     await markRestartAbortedMainSessions({
       cfg: { session: { store: storePath } },
       stateDir,
@@ -320,12 +385,14 @@ it("marks only the closing Gateway's exact active admissions", async () => {
     expect(
       loadSessionEntry({ storePath, sessionKey: "agent:main:other" })?.abortedLastRun,
     ).toBeUndefined();
+    expect(loadSessionEntry(incognitoTarget)?.abortedLastRun).toBeUndefined();
+    expect(captureOpenClawAgentDatabaseExecution.listIncognito(env)).toEqual([]);
   } finally {
     admissions.forEach((admission) => admission.release());
   }
 });
 
-it.each(["release", "completed", "rotation"] as const)(
+it.each(["release", "completed", "cancelled", "rotation"] as const)(
   "does not commit a restart mark when %s invalidates its owner after planning",
   async (change) => {
     const stateDir = sessionDirs.make();
@@ -334,6 +401,8 @@ it.each(["release", "completed", "rotation"] as const)(
     const sessionId = "closing";
     const resolveGatewayContext = () => undefined;
     let admission: SessionWorkAdmissionLease | undefined;
+    let cancelled = false;
+    const cancellation = createAgentRunDirectAbortError();
     const apply = sessionAccessor.applySessionEntryReplacements;
     let restoreSpy = () => {};
     try {
@@ -342,6 +411,8 @@ it.each(["release", "completed", "rotation"] as const)(
         scope: storePath,
         identities: [sessionKey, sessionId],
         resolveGatewayContext,
+        isSettling: () => cancelled,
+        getAbortReason: () => (cancelled ? cancellation : undefined),
         assertAllowed: () => {},
       });
       const spy = vi
@@ -353,6 +424,12 @@ it.each(["release", "completed", "rotation"] as const)(
               const prepared = await params.update(entries);
               if (change === "rotation") {
                 rotateAgentEventLifecycleGeneration();
+              } else if (change === "cancelled") {
+                cancelled = true;
+                sessionAccessor.replaceSessionEntrySync(
+                  { storePath, sessionKey },
+                  { sessionId, status: "killed", updatedAt: Date.now(), endedAt: 123 },
+                );
               } else {
                 admission?.release();
                 if (change === "completed") {
@@ -382,6 +459,12 @@ it.each(["release", "completed", "rotation"] as const)(
       if (change === "completed") {
         expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
           status: "done",
+          endedAt: 123,
+        });
+      }
+      if (change === "cancelled") {
+        expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
+          status: "killed",
           endedAt: 123,
         });
       }

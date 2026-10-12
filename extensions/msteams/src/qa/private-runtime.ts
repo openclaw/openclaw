@@ -1,4 +1,3 @@
-// Private QA runtime support for the Microsoft Teams live transport adapter.
 import type { ClientOptions, RequestContext } from "@microsoft/teams.common";
 import {
   fetchWithSsrFGuard,

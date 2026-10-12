@@ -386,11 +386,9 @@ function replaceMergedProfileReferences(params: {
   const next = {
     ...store,
     profiles,
-    ...(order && Object.keys(order).length > 0 ? { order } : { order: undefined }),
-    ...(lastGood && Object.keys(lastGood).length > 0 ? { lastGood } : { lastGood: undefined }),
-    ...(usageStats && Object.keys(usageStats).length > 0
-      ? { usageStats }
-      : { usageStats: undefined }),
+    order: order && Object.keys(order).length > 0 ? order : undefined,
+    lastGood: lastGood && Object.keys(lastGood).length > 0 ? lastGood : undefined,
+    usageStats: usageStats && Object.keys(usageStats).length > 0 ? usageStats : undefined,
   };
   setRuntimeExternalCliProfileIds(
     next,
@@ -510,30 +508,24 @@ export function mergeAuthProfileStores(
     lastGood,
     usageStats,
   };
-  const runtimePersistedProfileIds = [
-    ...(base.runtimePersistedProfileIds ?? []).filter(
-      (profileId) => !overrideProfileIds.has(profileId),
-    ),
-    ...(override.runtimePersistedProfileIds ?? []),
-  ]
-    .filter((profileId) => merged.profiles[profileId])
-    .toSorted();
+  const mergeRuntimeProfileIds = (baseIds: string[] = [], overrideIds: string[] = []) =>
+    [...baseIds.filter((profileId) => !overrideProfileIds.has(profileId)), ...overrideIds]
+      .filter((profileId) => merged.profiles[profileId])
+      .toSorted();
+  const runtimePersistedProfileIds = mergeRuntimeProfileIds(
+    base.runtimePersistedProfileIds,
+    override.runtimePersistedProfileIds,
+  );
   const runtimeLocalProfileIds = override.runtimeLocalProfileIds
     ?.filter((profileId) => merged.profiles[profileId])
     .toSorted();
-  const baseRuntimeExternalProfileIds =
+  const runtimeExternalProfileIds = mergeRuntimeProfileIds(
     override.runtimeExternalProfileIdsAuthoritative === true &&
-    options?.preserveBaseRuntimeExternalProfiles !== true
+      options?.preserveBaseRuntimeExternalProfiles !== true
       ? []
-      : (base.runtimeExternalProfileIds ?? []).filter(
-          (profileId) => !overrideProfileIds.has(profileId),
-        );
-  const runtimeExternalProfileIds = [
-    ...baseRuntimeExternalProfileIds,
-    ...(override.runtimeExternalProfileIds ?? []),
-  ]
-    .filter((profileId) => merged.profiles[profileId])
-    .toSorted();
+      : base.runtimeExternalProfileIds,
+    override.runtimeExternalProfileIds,
+  );
   const runtimeExternalProfileIdsAuthoritative =
     base.runtimeExternalProfileIdsAuthoritative === true ||
     override.runtimeExternalProfileIdsAuthoritative === true;

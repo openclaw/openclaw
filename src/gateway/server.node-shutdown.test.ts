@@ -6,6 +6,7 @@ import {
   WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { writeConfigFile } from "../config/config.js";
 import { approveNodePairing, requestNodePairing } from "../infra/device-pairing-node.js";
@@ -20,11 +21,17 @@ import { markGatewayRestartDraining } from "../process/gateway-work-admission.js
 import { createDeferredCore } from "../shared/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { pairDeviceIdentity } from "./device-authz.test-helpers.js";
+import { openTrackedWs, pairDeviceIdentity } from "./device-authz.test-helpers.js";
 import { respondToNodeShutdown } from "./node-shutdown.test-support.js";
 import { createGatewayKernel } from "./server-kernel.js";
 import { connectGatewayClient } from "./test-helpers.e2e.js";
-import { installGatewayTestHooks, startServer, writeSessionStore } from "./test-helpers.js";
+import {
+  connectOk,
+  installGatewayTestHooks,
+  rpcReq,
+  startServer,
+  writeSessionStore,
+} from "./test-helpers.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import { sessionStoreEntry } from "./test/server-sessions.test-helpers.js";
 import { hashWorkerCredential } from "./worker-environments/credential.js";
@@ -107,7 +114,7 @@ test.for(["direct", "restart"] as const)(
       });
     let node: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
     let operator: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
-    let controller: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+    let controller: WebSocket | undefined;
     let closing: Promise<void> | undefined;
     let ordinaryRequest: Promise<unknown> | undefined;
     const stopped = createDeferredCore<unknown>();
@@ -285,23 +292,45 @@ test.for(["direct", "restart"] as const)(
             }
             suspensionId = suspension.suspensionId;
             markGatewayRestartDraining();
-            controller = await connectOperator(["operator.admin"]);
+            controller = await openTrackedWs(port);
+            await connectOk(controller, {
+              token: "secret",
+              scopes: ["operator.admin"],
+              client: {
+                id: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+                mode: GATEWAY_CLIENT_MODES.BACKEND,
+                version: "dev",
+                platform: process.platform,
+              },
+            });
             await expect(
-              controller.request("gateway.suspend.status", {
+              rpcReq(controller, "gateway.suspend.status", {
                 suspensionId,
                 includeLifecycle: true,
               }),
             ).resolves.toMatchObject({
-              status: "draining",
-              ownerId: "node-shutdown",
-              phase: "interrupting",
+              ok: true,
+              payload: {
+                status: "draining",
+                ownerId: "node-shutdown",
+                phase: "interrupting",
+              },
             });
             await expect(
-              controller.request("gateway.suspend.status", { suspensionId: "foreign" }),
-            ).rejects.toThrow("a different gateway suspension is prepared");
-            await expect(controller.request("sessions.list", {})).rejects.toThrow(
-              "unavailable during gateway restart",
-            );
+              rpcReq(controller, "gateway.suspend.status", { suspensionId: "foreign" }),
+            ).resolves.toMatchObject({
+              ok: false,
+              error: { message: "a different gateway suspension is prepared" },
+            });
+            // The high-level client parks bootstrap reads; assert the server's wire refusal.
+            await expect(rpcReq(controller, "sessions.list", {})).resolves.toMatchObject({
+              ok: false,
+              error: {
+                code: "UNAVAILABLE",
+                message: "sessions.list unavailable during gateway restart",
+                details: { reason: "gateway-restarting" },
+              },
+            });
             await expect(connectNode()).rejects.toThrow(
               "connect unavailable during gateway restart",
             );
@@ -358,7 +387,7 @@ test.for(["direct", "restart"] as const)(
         },
         () => node?.stopAndWait({ timeoutMs: 1_000 }),
         () => operator?.stopAndWait({ timeoutMs: 1_000 }),
-        () => controller?.stopAndWait({ timeoutMs: 1_000 }),
+        () => controller && closeGatewayTestWebSocket(controller),
         async () => {
           await ordinaryRequest;
         },

@@ -9,17 +9,23 @@ import {
   prepareSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import { captureSqliteReaderOwner } from "../../infra/sqlite-reader-lifecycle.js";
+import { getSqliteReadScopeRevision } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import type { TranscriptReadWindow } from "../../sessions/transcript-read-window.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
+import type {
+  SessionTranscriptContextVersion,
+  TranscriptEvent,
+} from "./session-accessor.sqlite-contract.js";
 import type { UnindexedHistoryControl } from "./session-accessor.sqlite-history-navigation.types.js";
 import type { resolveSqliteTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
+import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
+import { retainTranscriptContextFacts } from "./session-transcript-context-facts.js";
 import type { SessionTranscriptProjectionState } from "./session-transcript-index.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
-import { transcriptEventJsonSql } from "./transcript-payload.js";
+import { readTranscriptPayload, type TranscriptPayloadRecord } from "./transcript-payload.js";
 
 type ActiveTranscriptDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -27,6 +33,7 @@ type ActiveTranscriptDatabase = Pick<
   | "session_transcript_cold_archives"
   | "transcript_rewrite_watermarks"
   | "session_transcript_index_state"
+  | "session_windows"
   | "transcript_event_identities"
   | "transcript_events"
 >;
@@ -36,7 +43,9 @@ type TranscriptReadDatabase = Pick<OpenClawAgentDatabase, "agentId" | "db" | "pa
 export type CurrentTranscriptProjection = {
   database: TranscriptReadDatabase;
   generation: string | undefined;
+  version: SessionTranscriptContextVersion;
   hasUnindexedPrefix: boolean;
+  latestIndexedReset?: { active_position: number; event_type: "reset"; seq: number } | null;
   unindexedHistoryControls?: {
     coveredThrough: number;
     rows: readonly UnindexedHistoryControl[];
@@ -115,7 +124,7 @@ export function readSnapshotEventRows(
   const sessionId = projection.resolved.sessionId;
   const query = getActiveTranscriptKysely(projection.database)
     .selectFrom("transcript_events as event")
-    .select(["event.seq", transcriptEventJsonSql(projection.database.db, "event").as("event_json")])
+    .select(["event.seq", "event.event_json", "event.event_zstd", "event.event_utf8_bytes"])
     .where("event.session_id", "=", sessionId);
   return executeSqliteQuerySync(
     projection.database.db,
@@ -128,17 +137,18 @@ export function readSnapshotEventRows(
   ).rows;
 }
 
-export function parseActiveTranscriptMessageRow(row: {
-  event_seq: number;
-  event_json: string;
-  message_position: number | null;
-}): SessionTranscriptMessageEvent {
+export function parseActiveTranscriptMessageRow(
+  row: Pick<TranscriptPayloadRecord, "event_json" | "event_zstd" | "event_utf8_bytes"> & {
+    event_seq: number;
+    message_position: number | null;
+  },
+): SessionTranscriptMessageEvent {
   if (row.message_position === null) {
     throw new Error("Active transcript message row is missing its message position");
   }
   return {
     // SAFETY: The active projection indexes serialized TranscriptEvent rows.
-    event: JSON.parse(row.event_json) as TranscriptEvent,
+    event: JSON.parse(readTranscriptPayload(row)) as TranscriptEvent,
     eventSeq: row.event_seq,
     // Gateway cursors use the visible-message ordinal, matching the JSONL index.
     // Raw event seq includes headers/control rows and would make pages overlap.
@@ -188,14 +198,13 @@ export function selectMessageRows(
         .where("active.message_position", "<", selection.endExclusive);
 }
 
-export function selectMessagePayload(
-  database: Pick<TranscriptReadDatabase, "db">,
-  query: ReturnType<typeof selectMessageRows>,
-) {
+export function selectMessagePayload(query: ReturnType<typeof selectMessageRows>) {
   return query.select([
     "active.event_seq",
     "active.message_position",
-    transcriptEventJsonSql(database.db, "event").as("event_json"),
+    "event.event_json",
+    "event.event_zstd",
+    "event.event_utf8_bytes",
   ]);
 }
 
@@ -236,7 +245,6 @@ const messageRangeReaders = createSqliteQueryCache((db) => {
       Parameters<typeof parseActiveTranscriptMessageRow>[0]
     >(database.db, (parameter) =>
       selectMessagePayload(
-        database,
         selectMessageRows(
           database,
           parameter((params) => params.sessionId),
@@ -255,7 +263,6 @@ const messageRangeReaders = createSqliteQueryCache((db) => {
       Parameters<typeof parseActiveTranscriptMessageRow>[0]
     >(database.db, (parameter) =>
       selectMessagePayload(
-        database,
         selectMessageRows(
           database,
           parameter((params) => params.sessionId),
@@ -285,18 +292,40 @@ function buildProjectionSnapshotQuery(
   return db
     .selectFrom(target)
     .leftJoin("session_transcript_index_state as state", "state.session_id", "target.session_id")
+    .leftJoin("session_windows as window", "window.session_id", "target.session_id")
     .leftJoin(
       "transcript_rewrite_watermarks as watermark",
       "watermark.session_id",
       "target.session_id",
     )
+    .leftJoin("session_transcript_active_events as latest_reset", (join) =>
+      join
+        .onRef("latest_reset.session_id", "=", "target.session_id")
+        .on("latest_reset.event_seq", "=", (eb) =>
+          eb
+            .selectFrom("transcript_event_identities as reset_identity")
+            .innerJoin("session_transcript_active_events as reset_active", (resetJoin) =>
+              resetJoin
+                .onRef("reset_active.session_id", "=", "reset_identity.session_id")
+                .onRef("reset_active.event_seq", "=", "reset_identity.seq"),
+            )
+            .select("reset_identity.seq")
+            .whereRef("reset_identity.session_id", "=", "target.session_id")
+            .where("reset_identity.event_type", "=", "reset")
+            .orderBy("reset_identity.seq", "desc")
+            .limit(1),
+        ),
+    )
     .select([
       "watermark.generation",
+      "window.transcript_updated_at",
       "state.active_event_count",
       "state.active_message_count",
       "state.indexed_seq",
       "state.leaf_event_id",
       "state.needs_rebuild",
+      "latest_reset.active_position as reset_active_position",
+      "latest_reset.event_seq as reset_seq",
     ])
     .select((eb) => [
       eb
@@ -358,11 +387,57 @@ const projectionSnapshotReader = createSqliteQueryCache((db) =>
 );
 
 function readProjectionSnapshot(database: TranscriptReadDatabase, sessionId: string) {
+  const actor = readSessionActorTransactionState(database, { sessionId });
+  if (actor) {
+    const { active, coldArchive, identities, navigation, projection } = actor.transcript;
+    let latestIndexedReset: CurrentTranscriptProjection["latestIndexedReset"] = null;
+    let hasUnindexedPrefix = true;
+    for (const identity of identities.values()) {
+      hasUnindexedPrefix &&= identity.seq !== navigation[0]?.seq;
+      const row = active.get(identity.seq);
+      if (
+        identity.event_type === "reset" &&
+        row &&
+        (!latestIndexedReset || identity.seq > latestIndexedReset.seq)
+      ) {
+        latestIndexedReset = {
+          active_position: row.active_position,
+          event_type: "reset",
+          seq: identity.seq,
+        };
+      }
+    }
+    return {
+      cold: Boolean(coldArchive),
+      generation: actor.hot.transcript.version.generation ?? undefined,
+      updatedAt: actor.hot.transcript.version.updatedAt,
+      hasUnclassified: projection?.hasUnclassifiedEvents ?? false,
+      latestIndexedReset,
+      hasUnindexedPrefix,
+      latestSeq: navigation.at(-1)?.seq ?? null,
+      state: projection && {
+        activeEventCount: projection.activeEventCount,
+        activeMessageCount: projection.activeMessageCount,
+        indexedSeq: projection.indexedSeq,
+        leafEventId: projection.leafEventId,
+        needsRebuild: projection.needsRebuild,
+      },
+    };
+  }
   const row = projectionSnapshotReader(database.db)(sessionId).rows[0]!;
   return {
     cold: Boolean(row.is_cold),
     generation: row.generation ?? undefined,
+    updatedAt: row.transcript_updated_at ?? null,
     hasUnclassified: Boolean(row.has_unclassified),
+    latestIndexedReset:
+      typeof row.reset_seq === "number" && typeof row.reset_active_position === "number"
+        ? {
+            active_position: row.reset_active_position,
+            event_type: "reset" as const,
+            seq: row.reset_seq,
+          }
+        : null,
     hasUnindexedPrefix: Boolean(row.has_unindexed_prefix),
     latestSeq: row.latest_seq,
     ...(typeof row.indexed_seq === "number"
@@ -390,42 +465,55 @@ export function readCurrentProjectionSnapshot<T>(
   if (readerOperation) {
     diagnostics.readerOperation = readerOperation;
   }
-  return runSqliteDeferredTransactionSync(
-    database.db,
-    () => {
-      const snapshot = readProjectionSnapshot(database, resolved.sessionId);
-      if (snapshot.state) {
-        diagnostics.activeEvents = snapshot.state.activeEventCount;
-        diagnostics.activeMessages = snapshot.state.activeMessageCount;
-        diagnostics.indexedSeq = snapshot.state.indexedSeq;
-      }
-      if (snapshot.cold) {
-        throw new SessionTranscriptColdError(resolved.sessionId);
-      }
-      const empty = snapshot.latestSeq === null;
-      const state = empty ? EMPTY_PROJECTION_STATE : snapshot.state;
-      if (
-        !state ||
-        state.needsRebuild ||
-        (!empty && (state.indexedSeq !== snapshot.latestSeq || snapshot.hasUnclassified))
-      ) {
-        return { kind: "unavailable" as const };
-      }
-      return {
-        kind: "value" as const,
-        value: read({
-          database,
-          generation: snapshot.generation,
-          hasUnindexedPrefix: !empty && snapshot.hasUnindexedPrefix,
-          resolved,
-          state,
-        }),
-      };
-    },
-    {
-      databaseLabel: database.path,
-      operationLabel: "sessions.history.read",
-      diagnosticContext: diagnostics,
-    },
-  );
+  const readSnapshot = () => {
+    const snapshot = readProjectionSnapshot(database, resolved.sessionId);
+    if (snapshot.state) {
+      diagnostics.activeEvents = snapshot.state.activeEventCount;
+      diagnostics.activeMessages = snapshot.state.activeMessageCount;
+      diagnostics.indexedSeq = snapshot.state.indexedSeq;
+    }
+    if (snapshot.cold) {
+      throw new SessionTranscriptColdError(resolved.sessionId);
+    }
+    const version = {
+      generation: snapshot.generation ?? null,
+      rawSeq: snapshot.latestSeq,
+      updatedAt: snapshot.updatedAt,
+    };
+    retainTranscriptContextFacts(
+      database,
+      resolved.sessionId,
+      version,
+      getSqliteReadScopeRevision(database.db),
+      false,
+    );
+    const empty = snapshot.latestSeq === null;
+    const state = empty ? EMPTY_PROJECTION_STATE : snapshot.state;
+    if (
+      !state ||
+      state.needsRebuild ||
+      (!empty && (state.indexedSeq !== snapshot.latestSeq || snapshot.hasUnclassified))
+    ) {
+      return { kind: "unavailable" as const };
+    }
+    return {
+      kind: "value" as const,
+      value: read({
+        database,
+        generation: snapshot.generation,
+        version,
+        hasUnindexedPrefix: !empty && snapshot.hasUnindexedPrefix,
+        latestIndexedReset: empty ? null : snapshot.latestIndexedReset,
+        resolved,
+        state,
+      }),
+    };
+  };
+  return database.db.isTransaction
+    ? readSnapshot()
+    : runSqliteDeferredTransactionSync(database.db, readSnapshot, {
+        databaseLabel: database.path,
+        operationLabel: "sessions.history.read",
+        diagnosticContext: diagnostics,
+      });
 }

@@ -206,7 +206,6 @@ async function buildCdpRoleSnapshot(params: {
   };
 }
 
-/** Build a role/name text snapshot with stable refs from CDP DOM and AX data. */
 type CdpRoleSnapshotRequest = {
   urlEntries?: SnapshotUrlEntry[];
   options?: RoleSnapshotOptions;

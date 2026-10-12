@@ -56,6 +56,7 @@ export function bindProviderReplayNodeAvailability(
         enabled: true,
         capacity: { total: 1, available: 1 },
         capturedExecPolicy: true,
+        promptContext: 1,
       },
       commands: [],
     },
@@ -65,7 +66,8 @@ export function bindProviderReplayNodeAvailability(
 type DispatchOptions = Parameters<typeof createWorkerPlacementDispatchService>[0];
 
 export function createProviderReplayDispatch(
-  options: Pick<DispatchOptions, "placements" | "environments"> & Partial<DispatchOptions>,
+  options: Pick<DispatchOptions, "placements" | "environments" | "initialPlacements"> &
+    Partial<DispatchOptions>,
 ) {
   return createWorkerPlacementDispatchService({
     runnerAvailability: { read: () => undefined, version: () => 0 },

@@ -130,7 +130,6 @@ export function createCodexSteeringQueue(params: {
     text: string;
     resolve: () => void;
     reject: (error: unknown) => void;
-    settled: boolean;
   };
   type PreparedSteerMessage = PendingSteerMessage & {
     prepared: Awaited<ReturnType<typeof params.prepareMessage>>;
@@ -178,21 +177,19 @@ export function createCodexSteeringQueue(params: {
   };
 
   const resolveItem = (item: PreparedSteerMessage) => {
-    if (item.settled) {
+    if (!pendingMessages.has(item)) {
       return;
     }
     acceptItem(item);
-    item.settled = true;
     pendingMessages.delete(item);
     item.onQueueSettled?.();
     item.resolve();
   };
 
   const rejectItem = (item: PendingSteerMessage, error: unknown) => {
-    if (item.settled) {
+    if (!pendingMessages.has(item)) {
       return;
     }
-    item.settled = true;
     pendingMessages.delete(item);
     reportItemAcceptance(item, false);
     item.onQueueSettled?.();
@@ -250,7 +247,7 @@ export function createCodexSteeringQueue(params: {
   };
 
   const sendBatch = async (items: PendingSteerMessage[]) => {
-    const pendingItems = items.filter((item) => !item.settled);
+    const pendingItems = items.filter((item) => pendingMessages.has(item));
     let liveItems: PreparedSteerMessage[] = [];
     if (pendingItems.length === 0) {
       return;
@@ -261,7 +258,7 @@ export function createCodexSteeringQueue(params: {
       assertActive();
       const prepared: PreparedSteerMessage[] = [];
       const isCurrent = (item: PendingSteerMessage) => {
-        if (item.settled) {
+        if (!pendingMessages.has(item)) {
           return false;
         }
         try {
@@ -438,7 +435,6 @@ export function createCodexSteeringQueue(params: {
         text,
         resolve,
         reject,
-        settled: false,
       };
       pendingMessages.add(item);
       batchedMessages.push(item);

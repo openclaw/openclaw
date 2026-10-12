@@ -16,19 +16,19 @@ const transcript = vi.hoisted(() => ({
 
 // mock-isolation: Exercise catalog import ordering without opening the SQLite transcript owner.
 vi.mock("../plugin-sdk/session-transcript-runtime.js", () => ({
-  withSessionTranscriptWriteLock: async (
+  withSessionTranscriptWrite: async (
     _params: unknown,
     run: (context: {
       appendMessage: (params: {
         message: Record<string, unknown>;
         idempotencyLookup?: string;
-        beforeFreshMessageCommit?: () => void;
+        preparation?: { source?: () => void };
       }) => Promise<void>;
     }) => Promise<void>,
   ) => {
     transcript.lockCalls += 1;
     await run({
-      appendMessage: async ({ message, idempotencyLookup, beforeFreshMessageCommit }) => {
+      appendMessage: async ({ message, idempotencyLookup, preparation }) => {
         const key = message.idempotencyKey;
         if (
           idempotencyLookup === "scan" &&
@@ -37,7 +37,7 @@ vi.mock("../plugin-sdk/session-transcript-runtime.js", () => ({
         ) {
           return;
         }
-        beforeFreshMessageCommit?.();
+        preparation?.source?.();
         transcript.messages.push(message);
       },
     });

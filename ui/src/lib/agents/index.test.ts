@@ -8,7 +8,6 @@ import {
   loadToolsCatalog,
   loadToolsEffective,
   refreshVisibleToolsEffectiveForCurrentSession,
-  resetToolsEffectiveState,
   setDefaultAgent,
 } from "./index.ts";
 import type { AgentsState } from "./index.ts";
@@ -354,26 +353,6 @@ describe("loadToolsCatalog", () => {
     expect(state.toolsCatalogLoading).toBe(false);
   });
 
-  it("ignores catalog responses after selected agent changes mid-request", async () => {
-    const { state, request } = createState();
-    const response = deferred<unknown>();
-    request.mockReturnValue(response.promise);
-
-    const pending = loadToolsCatalog(state, "main");
-    state.agentsSelectedId = "other-agent";
-    response.resolve({
-      agentId: "main",
-      profiles: [{ id: "full", label: "Full" }],
-      groups: [],
-      groupSettings: [],
-    });
-    await pending;
-
-    expect(state.toolsCatalogResult).toBeNull();
-    expect(state.toolsCatalogError).toBeNull();
-    expect(state.toolsCatalogLoading).toBe(false);
-  });
-
   it("keeps a replacement-client catalog load isolated from the old request", async () => {
     const { state, request: oldRequest } = createState();
     const oldResult = deferred<unknown>();
@@ -449,26 +428,6 @@ describe("loadToolsEffective", () => {
     expect(state.toolsEffectiveLoading).toBe(false);
   });
 
-  it("ignores effective-tool responses after selected agent changes mid-request", async () => {
-    const { state, request } = createState();
-    const response = deferred<unknown>();
-    request.mockReturnValue(response.promise);
-
-    const pending = loadToolsEffective(state, { agentId: "main", sessionKey: "main" });
-    state.agentsSelectedId = "other-agent";
-    response.resolve({
-      agentId: "main",
-      profile: "coding",
-      groups: [],
-    });
-    await pending;
-
-    expect(state.toolsEffectiveResult).toBeNull();
-    expect(state.toolsEffectiveResultKey).toBeNull();
-    expect(state.toolsEffectiveError).toBeNull();
-    expect(state.toolsEffectiveLoading).toBe(false);
-  });
-
   it("keeps a replacement-client effective-tools load isolated from the old request", async () => {
     const { state, request: oldRequest } = createState();
     const oldResult = deferred<unknown>();
@@ -534,29 +493,6 @@ describe("loadToolsEffective", () => {
 
     expect(state.toolsEffectiveResult?.profile).toBe("current");
     expect(state.toolsEffectiveError).toBeNull();
-  });
-
-  it("retires an old tools request when the same session is reset and reloaded", async () => {
-    const { state, request } = createState();
-    const oldRequest = deferred<unknown>();
-    const currentRequest = deferred<unknown>();
-    request.mockReturnValueOnce(oldRequest.promise).mockReturnValueOnce(currentRequest.promise);
-    state.agentsPanel = "tools";
-    state.sessionKey = "agent:main:current";
-
-    const staleLoad = refreshVisibleToolsEffectiveForCurrentSession(state);
-    resetToolsEffectiveState(state);
-    const currentLoad = refreshVisibleToolsEffectiveForCurrentSession(state);
-    oldRequest.resolve({ agentId: "main", profile: "stale", groups: [] });
-    await staleLoad;
-
-    expect(state.toolsEffectiveResult).toBeNull();
-    expect(state.toolsEffectiveLoading).toBe(true);
-
-    currentRequest.resolve({ agentId: "main", profile: "current", groups: [] });
-    await currentLoad;
-    expect(state.toolsEffectiveResult?.profile).toBe("current");
-    expect(state.toolsEffectiveLoading).toBe(false);
   });
 
   it("uses the catalog provider when the active session reports a stale provider", async () => {

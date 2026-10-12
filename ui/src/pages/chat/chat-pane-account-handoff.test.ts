@@ -11,7 +11,7 @@ import { createTestChatPane } from "./chat-pane.test-support.ts";
 import {
   admitStoredChatComposerQueueItem,
   ChatComposerPersistence,
-  loadChatComposerSnapshot,
+  loadChatComposerState,
 } from "./composer-persistence.ts";
 
 afterEach(() => {
@@ -73,7 +73,7 @@ it("keeps A offline input with A when a same-client B hello replaces the pane be
   persistence.schedule();
   persistence.persistNow();
   await settle();
-  const original = loadChatComposerSnapshot(state, state.sessionKey);
+  const original = loadChatComposerState(state, state.sessionKey).snapshot;
   expect(original?.draft).toBe("A newer private draft");
   // GatewayBrowserClient replaces identity before notifying hello observers. The
   // route can unmount the A pane before its persistence sees recovery readiness.
@@ -100,14 +100,14 @@ it("keeps A offline input with A when a same-client B hello replaces the pane be
   await settle();
   expect(destination.chatMessage).toBe("");
   expect(destination.chatAttachments).toEqual([]);
-  expect(loadChatComposerSnapshot(destination, destination.sessionKey)?.draft ?? "").toBe("");
+  expect(loadChatComposerState(destination, destination.sessionKey).snapshot?.draft ?? "").toBe("");
   expect(
     write.mock.calls
       .filter(([scope]) => scope.recoveryScope === "account-b")
       .some(([, draft]) => draft.text.includes("A newer") || draft.attachments.length),
   ).toBe(false);
   account = "account-a";
-  expect(loadChatComposerSnapshot(destination, destination.sessionKey)).toMatchObject({
+  expect(loadChatComposerState(destination, destination.sessionKey).snapshot).toMatchObject({
     draft: "A newer private draft",
     queue: [{ id: "a-queue" }],
   });

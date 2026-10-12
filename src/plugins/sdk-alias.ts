@@ -244,18 +244,23 @@ function resolveTrustedOpenClawRootFromArgvHint(params: {
   return hasTrustedOpenClawRootIndicator({ packageRoot, packageJson }) ? packageRoot : null;
 }
 
-function findNearestPluginSdkPackageRoot(startDir: string): string | null {
+function* pluginSdkAncestorDirs(startDir: string): Generator<string> {
   let cursor = path.resolve(startDir);
   for (let i = 0; i < 12; i += 1) {
-    const subpaths = readPluginSdkSubpathsFromPackageRoot(cursor);
-    if (subpaths) {
-      return cursor;
-    }
+    yield cursor;
     const parent = path.dirname(cursor);
     if (parent === cursor) {
       break;
     }
     cursor = parent;
+  }
+}
+
+function findNearestPluginSdkPackageRoot(startDir: string): string | null {
+  for (const dir of pluginSdkAncestorDirs(startDir)) {
+    if (readPluginSdkSubpathsFromPackageRoot(dir)) {
+      return dir;
+    }
   }
   return null;
 }
@@ -299,14 +304,8 @@ function listAncestorPluginRuntimeModuleCandidates(params: {
     if (!start) {
       continue;
     }
-    let cursor = path.resolve(start);
-    for (let i = 0; i < 12; i += 1) {
-      candidates.push(...listPluginRuntimeModuleCandidates(cursor, params.orderedKinds));
-      const parent = path.dirname(cursor);
-      if (parent === cursor) {
-        break;
-      }
-      cursor = parent;
+    for (const dir of pluginSdkAncestorDirs(start)) {
+      candidates.push(...listPluginRuntimeModuleCandidates(dir, params.orderedKinds));
     }
   }
   return dedupeResolvedPaths(candidates);
@@ -781,92 +780,52 @@ function resolveWorkspacePackageAliasMap(
 function isBundledPluginModulePath(params: {
   packageRoot: string;
   modulePath: string;
-  pluginId: string;
+  pluginId?: string;
 }) {
   const normalizedModulePath = path.resolve(params.modulePath);
-  const roots = [
-    path.join(params.packageRoot, "extensions", params.pluginId),
-    path.join(params.packageRoot, "dist", "extensions", params.pluginId),
-    path.join(params.packageRoot, "dist-runtime", "extensions", params.pluginId),
-  ];
-  return roots.some(
-    (root) =>
-      normalizedModulePath === root || normalizedModulePath.startsWith(`${root}${path.sep}`),
-  );
-}
-
-function isAnyBundledPluginModulePath(params: { packageRoot: string; modulePath: string }) {
-  const normalizedModulePath = path.resolve(params.modulePath);
-  return ["extensions", path.join("dist", "extensions"), path.join("dist-runtime", "extensions")]
-    .map((segment) => path.join(params.packageRoot, segment))
-    .some((root) => normalizedModulePath.startsWith(`${root}${path.sep}`));
-}
-
-function isOfficialInstalledPluginPackageRoot(params: {
-  packageRoot: string;
-  packageName: string;
-}) {
-  const [scope, name] = params.packageName.split("/");
-  if (!scope || !name) {
-    return false;
-  }
-  const segments = path.resolve(params.packageRoot).split(path.sep).filter(Boolean);
-  const last = segments.at(-1);
-  const packageScope = segments.at(-2);
-  const nodeModules = segments.at(-3);
-  return last === name && packageScope === scope && nodeModules === "node_modules";
+  return ["", "dist", "dist-runtime"].some((layout) => {
+    const root = path.join(params.packageRoot, layout, "extensions", params.pluginId ?? "");
+    return (
+      (params.pluginId !== undefined && normalizedModulePath === root) ||
+      normalizedModulePath.startsWith(`${root}${path.sep}`)
+    );
+  });
 }
 
 function isOfficialInstalledPluginModulePath(params: { modulePath: string; packageName: string }) {
-  let cursor = path.dirname(path.resolve(params.modulePath));
-  for (let depth = 0; depth < 12; depth += 1) {
+  for (const cursor of pluginSdkAncestorDirs(path.dirname(path.resolve(params.modulePath)))) {
     const packageJson = readPluginSdkPackageJson(cursor);
-    if (packageJson) {
-      return (
-        packageJson.name === params.packageName &&
-        isOfficialInstalledPluginPackageRoot({
-          packageRoot: cursor,
-          packageName: params.packageName,
-        })
-      );
+    if (!packageJson) {
+      continue;
     }
-    const parent = path.dirname(cursor);
-    if (parent === cursor) {
-      break;
+    if (packageJson.name !== params.packageName) {
+      return false;
     }
-    cursor = parent;
+    const [scope, name] = params.packageName.split("/");
+    const segments = path.resolve(cursor).split(path.sep).filter(Boolean);
+    return Boolean(
+      scope &&
+      name &&
+      segments.at(-1) === name &&
+      segments.at(-2) === scope &&
+      segments.at(-3) === "node_modules",
+    );
   }
   return false;
-}
-
-function isTrustedPrivatePluginSdkOwnerPath(params: {
-  packageRoot: string;
-  modulePath: string;
-  owner: PrivatePluginSdkSubpathOwner;
-}) {
-  if (
-    isBundledPluginModulePath({
-      packageRoot: params.packageRoot,
-      modulePath: params.modulePath,
-      pluginId: params.owner.bundledPluginId,
-    })
-  ) {
-    return true;
-  }
-  return params.owner.officialInstalledPackageName
-    ? isOfficialInstalledPluginModulePath({
-        modulePath: params.modulePath,
-        packageName: params.owner.officialInstalledPackageName,
-      })
-    : false;
 }
 
 function listTrustedPrivatePluginSdkOwnerKeys(params: {
   packageRoot: string;
   modulePath: string;
 }): string[] {
-  return PRIVATE_PLUGIN_SDK_SUBPATH_OWNERS.filter((owner) =>
-    isTrustedPrivatePluginSdkOwnerPath({ ...params, owner }),
+  return PRIVATE_PLUGIN_SDK_SUBPATH_OWNERS.filter(
+    (owner) =>
+      isBundledPluginModulePath({ ...params, pluginId: owner.bundledPluginId }) ||
+      (owner.officialInstalledPackageName &&
+        isOfficialInstalledPluginModulePath({
+          modulePath: params.modulePath,
+          packageName: owner.officialInstalledPackageName,
+        })),
   ).map((owner) => owner.bundledPluginId);
 }
 
@@ -1022,7 +981,7 @@ export function preparePluginLoaderAliases(
       ? listTrustedPrivatePluginSdkOwnerKeys({ packageRoot: ownerPackageRoot, modulePath })
       : [],
     bundledPlugin: ownerPackageRoot
-      ? isAnyBundledPluginModulePath({ packageRoot: ownerPackageRoot, modulePath })
+      ? isBundledPluginModulePath({ packageRoot: ownerPackageRoot, modulePath })
       : false,
   };
   const cache = getPluginCache();

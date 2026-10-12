@@ -6,9 +6,9 @@ description: Choose proportional OpenClaw tests and checks, diagnose failures, a
 # OpenClaw Testing
 
 Prove the changed contract with the smallest meaningful check, complete required
-checks, then finish. Broaden or repeat only for new changes, failures, or
-unresolved risks. Do not add tests that merely mirror reversible, low-impact
-implementation changes; use `$test-audit` when authoring or reviewing tests.
+checks, then finish. Broaden or repeat only for changed inputs, failures, or
+unresolved risks. For behavioral proof, use the [boundary guide](../../../docs/help/testing/writing-tests.md#prove-behavior-at-the-owning-boundary);
+use `$test-audit` when authoring or reviewing tests.
 
 For ordinary local tests, start at `docs/reference/test.md#routine-local-order`
 and `#core-commands`; read `docs/ci.md` when CI scope or runner behavior matters. Follow the touched subtree's `AGENTS.md`.

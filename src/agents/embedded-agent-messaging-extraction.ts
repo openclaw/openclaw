@@ -35,7 +35,7 @@ export function extractMessagingToolSourceReplyPayload(
   if (status && status !== "sent") {
     return undefined;
   }
-  return readSourceReplyPayload(details, readRecord(details.sourceReply) ?? details);
+  return readSourceReplyPayload(readRecord(details.sourceReply) ?? details, details);
 }
 
 /**
@@ -53,7 +53,7 @@ export function extractToolAuthoredSourceReplyPayload(
   if (!details || !sourceReply || sourceReply.final === false) {
     return undefined;
   }
-  const payload = readSourceReplyPayload(details, sourceReply);
+  const payload = readSourceReplyPayload(sourceReply);
   if (!payload) {
     return undefined;
   }
@@ -80,22 +80,23 @@ export function resolveSourceReplyMediaUrls(
 }
 
 function readSourceReplyPayload(
-  details: Record<string, unknown>,
   sourceReply: Record<string, unknown>,
+  // Only already-sent message mirrors support top-level legacy delivery fields.
+  legacyDetails?: Record<string, unknown>,
 ): MessagingToolSourceReplyPayload | undefined {
   const payload: MessagingToolSourceReplyPayload = {};
-  const text = readStringValue(sourceReply.text) ?? readStringValue(details.message);
-  if (text) {
-    payload.text = text;
-  }
-  const mediaUrl = readStringValue(sourceReply.mediaUrl) ?? readStringValue(details.mediaUrl);
-  if (mediaUrl) {
-    payload.mediaUrl = mediaUrl;
-  }
+  const copyText = (key: "text" | "mediaUrl" | "idempotencyKey", fallback: string = key) => {
+    const value = readStringValue(sourceReply[key]) ?? readStringValue(legacyDetails?.[fallback]);
+    if (value) {
+      payload[key] = value;
+    }
+  };
+  copyText("text", "message");
+  copyText("mediaUrl");
   const rawMediaUrls = Array.isArray(sourceReply.mediaUrls)
     ? sourceReply.mediaUrls
-    : Array.isArray(details.mediaUrls)
-      ? details.mediaUrls
+    : Array.isArray(legacyDetails?.mediaUrls)
+      ? legacyDetails.mediaUrls
       : [];
   const mediaUrls = rawMediaUrls.filter((value): value is string => typeof value === "string");
   if (mediaUrls.length > 0) {
@@ -132,7 +133,7 @@ function readSourceReplyPayload(
   if (typeof sourceReply.trustedLocalMedia === "boolean") {
     payload.trustedLocalMedia = sourceReply.trustedLocalMedia;
   }
-  if (sourceReply.audioAsVoice === true || details.audioAsVoice === true) {
+  if (sourceReply.audioAsVoice === true || legacyDetails?.audioAsVoice === true) {
     payload.audioAsVoice = true;
   }
   const presentation = normalizeMessagePresentation(sourceReply.presentation);
@@ -147,43 +148,11 @@ function readSourceReplyPayload(
   if (channelData) {
     payload.channelData = { ...channelData };
   }
-  const idempotencyKey =
-    readStringValue(sourceReply.idempotencyKey) ?? readStringValue(details.idempotencyKey);
-  if (idempotencyKey) {
-    payload.idempotencyKey = idempotencyKey;
-  }
-  if (details.sourceReplyTranscriptOwner === true) {
+  copyText("idempotencyKey");
+  if (legacyDetails?.sourceReplyTranscriptOwner === true) {
     payload.transcriptOwner = true;
   }
   return Object.keys(payload).length > 0 ? payload : undefined;
-}
-
-function resolveMessageToolTarget(params: {
-  action: string;
-  args: Record<string, unknown>;
-  providerId: string | null;
-  currentChannelId?: string;
-  currentMessagingTarget?: string;
-}): string | undefined {
-  const directTarget =
-    normalizeOptionalString(params.args.target) ??
-    normalizeOptionalString(params.args.to) ??
-    normalizeOptionalString(params.args.channelId);
-  if (directTarget) {
-    return directTarget;
-  }
-  const aliases = params.providerId
-    ? getChannelPlugin(params.providerId)?.actions?.messageActionTargetAliases?.[
-        params.action as ChannelMessageActionName
-      ]?.deliveryTargetAliases
-    : undefined;
-  for (const alias of aliases ?? []) {
-    const aliasTarget = normalizeOptionalStringifiedId(params.args[alias]);
-    if (aliasTarget) {
-      return aliasTarget;
-    }
-  }
-  return params.currentMessagingTarget ?? params.currentChannelId;
 }
 
 function resolveMessagingToolThreadEvidence(params: {
@@ -194,15 +163,7 @@ function resolveMessagingToolThreadEvidence(params: {
   replyToId?: string;
   allowImplicitThread: boolean;
   threadSuppressed: boolean;
-  options?: {
-    config?: OpenClawConfig;
-    currentChannelId?: string;
-    currentMessagingTarget?: string;
-    currentThreadId?: string;
-    currentMessageId?: string | number;
-    replyToMode?: "off" | "first" | "all" | "batched";
-    hasRepliedRef?: { value: boolean };
-  };
+  options?: Parameters<typeof extractMessagingToolSend>[2];
 }): Pick<MessagingToolSend, "threadId" | "threadImplicit" | "threadSuppressed"> {
   const threading = getChannelPlugin(params.providerId)?.threading;
   const autoThreadResolver = params.allowImplicitThread
@@ -286,6 +247,14 @@ export function extractMessagingToolSend(
         }
       : undefined;
   }
+  let providerId: string | null;
+  let provider: string;
+  let to: string | undefined;
+  let resolvedAccountId: string | undefined;
+  let threadId: string | undefined;
+  let outboundReplyToId: string | undefined;
+  let threadSuppressed: boolean;
+  let allowImplicitThread: boolean;
   if (toolName === "message") {
     if (!isMessagingToolTargetEvidenceAction(toolName, args)) {
       return undefined;
@@ -293,95 +262,91 @@ export function extractMessagingToolSend(
     const providerRaw = normalizeOptionalString(args.provider) ?? "";
     const channelRaw = normalizeOptionalString(args.channel) ?? "";
     const providerHint = providerRaw || channelRaw;
-    const providerId = providerHint ? normalizeChannelId(providerHint) : null;
-    const toRaw = resolveMessageToolTarget({
-      action,
-      args,
-      providerId,
-      currentChannelId: options?.currentChannelId,
-      currentMessagingTarget: options?.currentMessagingTarget,
-    });
+    providerId = providerHint ? normalizeChannelId(providerHint) : null;
+    const currentChannelId = options?.currentChannelId;
+    const currentMessagingTarget = options?.currentMessagingTarget;
+    let toRaw =
+      normalizeOptionalString(args.target) ??
+      normalizeOptionalString(args.to) ??
+      normalizeOptionalString(args.channelId);
+    if (!toRaw) {
+      const aliases = providerId
+        ? getChannelPlugin(providerId)?.actions?.messageActionTargetAliases?.[
+            action as ChannelMessageActionName
+          ]?.deliveryTargetAliases
+        : undefined;
+      for (const alias of aliases ?? []) {
+        toRaw = normalizeOptionalStringifiedId(args[alias]);
+        if (toRaw) {
+          break;
+        }
+      }
+      toRaw ??= currentMessagingTarget ?? currentChannelId;
+    }
     if (!toRaw) {
       return undefined;
     }
-    const provider = providerId ?? normalizeOptionalLowercaseString(providerHint) ?? "message";
+    provider = providerId ?? normalizeOptionalLowercaseString(providerHint) ?? "message";
     const pluginExtractionArgs = { ...args, to: toRaw };
     const pluginExtracted = providerId
       ? getChannelPlugin(providerId)?.actions?.extractToolSend?.({ args: pluginExtractionArgs })
       : null;
-    const to = normalizeTargetForProvider(provider, pluginExtracted?.to ?? toRaw);
-    const resolvedAccountId = normalizeOptionalString(pluginExtracted?.accountId) ?? accountId;
-    const threadId =
+    to = normalizeTargetForProvider(provider, pluginExtracted?.to ?? toRaw);
+    resolvedAccountId = normalizeOptionalString(pluginExtracted?.accountId) ?? accountId;
+    threadId =
       normalizeOptionalString(pluginExtracted?.threadId) ?? normalizeOptionalString(args.threadId);
     const replyToId = normalizeOptionalString(args.replyTo);
     // Normal sends use prepared core delivery, where provider transport owns
     // reply/thread precedence. Other send-like actions use plugin dispatch.
-    const outboundReplyToId = action === "send" ? replyToId : undefined;
-    const threadSuppressed =
+    outboundReplyToId = action === "send" ? replyToId : undefined;
+    threadSuppressed =
       pluginExtracted?.threadSuppressed === true ||
       args.topLevel === true ||
       args.threadId === null;
-    return to
-      ? {
-          tool: toolName,
-          provider,
-          accountId: resolvedAccountId,
-          to,
-          ...(providerId
-            ? resolveMessagingToolThreadEvidence({
-                providerId,
-                to,
-                accountId: resolvedAccountId,
-                threadId,
-                replyToId: outboundReplyToId,
-                allowImplicitThread: pluginExtracted
-                  ? pluginExtracted.threadImplicit === true
-                  : true,
-                threadSuppressed,
-                options,
-              })
-            : {
-                ...(threadId ? { threadId } : {}),
-                ...(threadSuppressed ? { threadSuppressed: true } : {}),
-              }),
-        }
-      : undefined;
+    allowImplicitThread =
+      Boolean(to && providerId) && (!pluginExtracted || pluginExtracted.threadImplicit === true);
+  } else {
+    providerId = normalizeChannelId(toolName);
+    if (!providerId) {
+      return undefined;
+    }
+    provider = providerId;
+    const extracted = getChannelPlugin(providerId)?.actions?.extractToolSend?.({ args });
+    if (!extracted?.to) {
+      return undefined;
+    }
+    to = normalizeTargetForProvider(providerId, extracted.to);
+    threadId = normalizeOptionalString(extracted.threadId);
+    threadSuppressed = extracted.threadSuppressed === true;
+    resolvedAccountId = normalizeOptionalString(extracted.accountId) ?? accountId;
+    const nativeReplyToMode = options?.replyToMode;
+    const nativeSingleUseMode = nativeReplyToMode === "first" || nativeReplyToMode === "batched";
+    allowImplicitThread =
+      extracted.threadImplicit === true &&
+      nativeReplyToMode !== undefined &&
+      (!nativeSingleUseMode || options?.hasRepliedRef !== undefined);
   }
-
-  const providerId = normalizeChannelId(toolName);
-  if (!providerId) {
-    return undefined;
-  }
-  const plugin = getChannelPlugin(providerId);
-  const extracted = plugin?.actions?.extractToolSend?.({ args });
-  if (!extracted?.to) {
-    return undefined;
-  }
-  const to = normalizeTargetForProvider(providerId, extracted.to);
-  const threadId = normalizeOptionalString(extracted.threadId);
-  const threadSuppressed = extracted.threadSuppressed === true;
-  const extractedAccountId = normalizeOptionalString(extracted.accountId) ?? accountId;
-  const nativeReplyToMode = options?.replyToMode;
-  const nativeSingleUseMode = nativeReplyToMode === "first" || nativeReplyToMode === "batched";
-  const canResolveNativeImplicitThread =
-    extracted.threadImplicit === true &&
-    nativeReplyToMode !== undefined &&
-    (!nativeSingleUseMode || options?.hasRepliedRef !== undefined);
   return to
     ? {
         tool: toolName,
-        provider: providerId,
-        accountId: extractedAccountId,
+        provider,
+        accountId: resolvedAccountId,
         to,
-        ...resolveMessagingToolThreadEvidence({
-          providerId,
-          to,
-          accountId: extractedAccountId,
-          threadId,
-          allowImplicitThread: canResolveNativeImplicitThread,
-          threadSuppressed,
-          options,
-        }),
+        ...(providerId
+          ? resolveMessagingToolThreadEvidence({
+              providerId,
+              to,
+              accountId: resolvedAccountId,
+              threadId,
+              replyToId: outboundReplyToId,
+              allowImplicitThread,
+              threadSuppressed,
+              options,
+            })
+          : {
+              ...(threadId ? { threadId } : {}),
+              ...(threadSuppressed ? { threadSuppressed: true } : {}),
+            }),
       }
     : undefined;
 }

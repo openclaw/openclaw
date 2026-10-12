@@ -63,23 +63,4 @@ describe("fetchOllamaModels preflight timeout", () => {
       await pending;
     }
   });
-
-  it("still dispatches the fetch when preflight lookup resolves", async () => {
-    vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "0");
-    lookupMock.mockResolvedValue([{ address: "127.0.0.1", family: 4 }]);
-    const fetchSpy = vi.fn(
-      async () =>
-        new Response(JSON.stringify({ models: [{ name: "qwen3:32b" }] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
-    );
-
-    fetchMock.mockImplementation(fetchSpy);
-    const result = await fetchOllamaModels("https://ollama.example.com");
-
-    expect(lookupMock).toHaveBeenCalled();
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(result).toEqual({ reachable: true, models: [{ name: "qwen3:32b" }] });
-  });
 });

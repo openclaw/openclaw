@@ -64,12 +64,10 @@ function pruneSidebarAgentSessionCaches(
   agentIds: readonly string[],
 ): void {
   const retainedAgentIds = new Set(agentIds.map(normalizeAgentId));
-  for (const agentId of Object.keys(owner.sessionResultsByAgent)) {
-    if (!retainedAgentIds.has(agentId)) {
-      const next = { ...owner.sessionResultsByAgent };
-      delete next[agentId];
-      owner.sessionResultsByAgent = next;
-    }
+  const entries = Object.entries(owner.sessionResultsByAgent);
+  const retained = entries.filter(([agentId]) => retainedAgentIds.has(agentId));
+  if (retained.length !== entries.length) {
+    owner.sessionResultsByAgent = Object.fromEntries(retained);
   }
   if (owner.sessionsAgentId && !retainedAgentIds.has(normalizeAgentId(owner.sessionsAgentId))) {
     owner.sessionsResult = null;

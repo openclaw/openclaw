@@ -7,10 +7,7 @@ import {
 import { ToolInputError } from "./tool-input-error.js";
 
 function isModuleLoaderCallee(callee: import("acorn").Expression | import("acorn").Super): boolean {
-  if (callee.type === "ParenthesizedExpression") {
-    return isModuleLoaderCallee(callee.expression);
-  }
-  if (callee.type === "ChainExpression") {
+  if (callee.type === "ParenthesizedExpression" || callee.type === "ChainExpression") {
     return isModuleLoaderCallee(callee.expression);
   }
   if (callee.type === "SequenceExpression") {

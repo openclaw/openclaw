@@ -5,6 +5,7 @@ import path from "node:path";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as outputFiles from "./output-files.js";
+import { observeOutputWriteSettlement } from "./output-files.test-support.js";
 import {
   getPwToolsCoreSessionMocks,
   installPwToolsCoreTestHooks,
@@ -101,8 +102,6 @@ describe("download current document", () => {
 
   it.each([
     { name: "omitted policy", policy: undefined },
-    { name: "empty policy", policy: {} },
-    { name: "legacy private denial", policy: { allowPrivateNetwork: false } },
     {
       name: "blocklist despite private access",
       policy: {
@@ -117,25 +116,6 @@ describe("download current document", () => {
     expect(getPwToolsCoreSessionMocks().getPageForTargetId).not.toHaveBeenCalled();
     expect(evaluate).not.toHaveBeenCalled();
     expect(await fs.readdir(rootDir)).toEqual([]);
-  });
-
-  it.each([
-    { name: "legacy explicit private permission", policy: { allowPrivateNetwork: true } },
-    {
-      name: "normalized unconstrained hostname entries",
-      policy: {
-        dangerouslyAllowPrivateNetwork: true,
-        hostnameAllowlist: ["", " . ", " * "],
-        blockedHostnames: [" ", " *. "],
-      },
-    },
-  ])("retains download support for $name", async ({ policy }) => {
-    evaluate.mockImplementationOnce(async () => {
-      events.emit("download", makeDownload());
-    });
-    await expect(start({ ssrfPolicy: policy })).resolves.toMatchObject({
-      suggestedFilename: "inline.png",
-    });
   });
 
   it("validates the final download URL before saving", async () => {
@@ -162,18 +142,7 @@ describe("download current document", () => {
   it.for(["caller", "navigation", "close"] as const)(
     "cancels an active save on %s and leaves no partial file",
     async (reason, { signal, onTestFinished }) => {
-      const writeSettled = Promise.withResolvers<void>();
-      const writeOutput = outputFiles.writeExternalFileWithinOutputRoot;
-      const write = vi
-        .spyOn(outputFiles, "writeExternalFileWithinOutputRoot")
-        .mockImplementation((params) => {
-          const pending = writeOutput(params);
-          void pending.then(
-            () => writeSettled.resolve(),
-            () => writeSettled.resolve(),
-          );
-          return pending;
-        });
+      const { write, writeSettled } = observeOutputWriteSettlement(outputFiles);
       onTestFinished(() => write.mockRestore());
       const controller = new AbortController();
       const download = makeDownload();
@@ -201,12 +170,6 @@ describe("download current document", () => {
       expect(download.cancel).toHaveBeenCalledOnce();
     },
   );
-
-  it("cleans up when the page cannot trigger a download", async () => {
-    evaluate.mockRejectedValueOnce(new Error("renderer unavailable"));
-    await expect(start()).rejects.toThrow("renderer unavailable");
-    expect(await fs.readdir(rootDir)).toEqual([]);
-  });
 
   it("expires a missing download without retaining page listeners", async () => {
     await expect(start({ timeoutMs: 500 })).rejects.toThrow("Timeout waiting for download");

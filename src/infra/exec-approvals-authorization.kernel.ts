@@ -13,7 +13,6 @@ import type {
 import type { ExecApprovalsFile } from "./exec-approvals-core.js";
 import { maxAsk, minSecurity } from "./exec-approvals-policy.js";
 import { resolveExecApprovalsFromFileInternal } from "./exec-approvals-resolver.js";
-import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 import { isGeneratedHashedArgPattern } from "./exec-command-resolution.js";
 
 export function assertCurrentUsageAuthorization(params: {
@@ -122,29 +121,6 @@ export function assertCurrentUsageAuthorization(params: {
   if (params.authorization.requireAutoAllowSkills && !current.agent.autoAllowSkills) {
     throw new Error("Exec approval changed before execution");
   }
-}
-
-export function applyRecordedAllowlistUse(params: {
-  file: ExecApprovalsFile;
-  agentId: string | undefined;
-  matches: readonly ExecAllowlistEntry[];
-  command: string;
-  resolvedPath?: string;
-  authorization?: ExecApprovalUsageAuthorization;
-}): ExecApprovalsFile | null {
-  const keys = new Set(
-    params.matches.filter((entry) => entry.pattern).map(buildAllowlistEntryMatchKey),
-  );
-  if (params.authorization) {
-    assertCurrentUsageAuthorization({
-      file: params.file,
-      agentId: params.agentId,
-      command: params.command,
-      matchKeys: keys,
-      authorization: params.authorization,
-    });
-  }
-  return applyRecordedAllowlistMetadata({ ...params, keys });
 }
 
 function applyRecordedAllowlistMetadata(params: {

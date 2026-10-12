@@ -3,15 +3,17 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
-import { vi } from "vitest";
+import { Value } from "typebox/value";
 import { WebSocketServer } from "ws";
 import type {
+  SessionCatalog,
   SessionsCatalogListParams,
   SessionsCatalogListResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { SessionsCatalogHostEventSchema } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
-import * as maintenance from "../../config/sessions/session-accessor.sqlite-maintenance.js";
+import { observeSessionMaintenanceCompletion } from "../../config/sessions/session-accessor.sqlite-maintenance-completion.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -26,7 +28,7 @@ import {
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import { createPluginServiceScheduler } from "../../plugins/service-scheduler.js";
 import type { OpenClawPluginDefinition } from "../../plugins/types.js";
-import { createDeferredCore } from "../../shared/deferred.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import {
@@ -270,6 +272,7 @@ export async function createComposedCatalogFixture(
     await service.start(serviceContext);
     const connection = new AbortController();
     let sequence = 0;
+    const setupPublications = new Map<string, (catalog: SessionCatalog) => void>();
     const client = {
       connectionSignal: connection.signal,
       connId: "composed-catalog",
@@ -279,7 +282,14 @@ export async function createComposedCatalogFixture(
       getRuntimeConfig: () => config,
       logGateway: createSubsystemLogger("catalog-benchmark"),
       broadcast: () => {},
-      broadcastToConnIds: () => {},
+      broadcastToConnIds: (event, payload) => {
+        if (
+          event === "sessions.catalog.host" &&
+          Value.Check(SessionsCatalogHostEventSchema, payload)
+        ) {
+          setupPublications.get(payload.progressId)?.(payload.catalog);
+        }
+      },
       nodeSendToSession: () => {},
       registerToolEventRecipient: () => {},
     });
@@ -324,9 +334,7 @@ export async function createComposedCatalogFixture(
         ...params,
         hostIds: ["gateway:local"],
       })) as SessionsCatalogListResult;
-    const list = async (params: Partial<SessionsCatalogListParams> = {}) => {
-      const result = await requestList(params);
-      const catalog = result.catalogs.find((value) => value.id === "codex");
+    const readHost = (catalog: SessionCatalog | undefined) => {
       if (!catalog || catalog.error) {
         throw new Error(catalog?.error?.message ?? "Missing Codex catalog");
       }
@@ -339,7 +347,33 @@ export async function createComposedCatalogFixture(
       }
       return host;
     };
-    const setupMaintenance = { started: 0, completed: 0 };
+    const list = async (params: Partial<SessionsCatalogListParams> = {}) =>
+      readHost((await requestList(params)).catalogs.find((value) => value.id === "codex"));
+    const setupList = async (params: Partial<SessionsCatalogListParams> = {}) => {
+      const work = new AsyncWorkScope();
+      const progressId = `catalog-setup-${++sequence}`;
+      let published: SessionCatalog | undefined;
+      setupPublications.set(progressId, (catalog) => {
+        if (catalog.id === "codex" && catalog.hosts.every((host) => !host.pending)) {
+          published = catalog;
+        }
+      });
+      try {
+        const result = await work.track(() => requestList({ ...params, progressId }));
+        // The persistence marker can precede this request's provider and host publication.
+        return await work.runWhenIdle(() => {
+          const catalog = result.catalogs.find((value) => value.id === "codex");
+          return readHost(
+            catalog?.error?.code === "catalog_pending" ? (published ?? catalog) : catalog,
+          );
+        });
+      } finally {
+        setupPublications.delete(progressId);
+        await work.drain();
+      }
+    };
+    const setupMaintenance = { completed: 0 };
+    let maintenanceReady: ReturnType<typeof observeSessionMaintenanceCompletion> | undefined;
     return {
       api,
       projection,
@@ -347,43 +381,28 @@ export async function createComposedCatalogFixture(
       requests,
       requestList,
       list,
+      setupList,
       setupMaintenance,
       async continueSession(hostId: string, threadId: string, sourceHomeId?: string) {
-        const finalize =
-          maintenance.finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort;
-        const completed = createDeferredCore<Awaited<ReturnType<typeof finalize>>>();
-        const observer = vi
-          .spyOn(maintenance, "finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort")
-          .mockImplementation((scope, plans, options) => {
-            const result = finalize(scope, plans, options);
-            // Creation also finalizes an empty plan; only the readiness patch's
-            // automatic owner supplies isCurrent. Join it before the next adoption.
-            if (scope.agentId === "main" && scope.path === databasePath && options?.isCurrent) {
-              setupMaintenance.started++;
-              void result.then((value) => {
-                setupMaintenance.completed++;
-                completed.resolve(value);
-              }, completed.reject);
-            }
-            return result;
-          });
-        try {
-          const [result] = await Promise.all([
-            call("sessions.catalog.continue", {
-              catalogId: "codex",
-              agentId: "main",
-              hostId,
-              threadId,
-              sourceHomeId,
-            }),
-            completed.promise,
-          ]);
-          // Let the maintenance owner finish its post-finalizer continuation.
-          await nextTurn();
-          return result;
-        } finally {
-          observer.mockRestore();
-        }
+        // Fresh adoptions reuse the first acknowledged maintenance deadline; subsequent
+        // no-op writes need not schedule another pass for the fixture to observe.
+        const completed = (maintenanceReady ??= observeSessionMaintenanceCompletion(databasePath, {
+          automatic: true,
+        })).then(() => {
+          setupMaintenance.completed++;
+        });
+        const [result] = await Promise.all([
+          call("sessions.catalog.continue", {
+            catalogId: "codex",
+            agentId: "main",
+            hostId,
+            threadId,
+            sourceHomeId,
+          }),
+          completed,
+        ]);
+        await nextTurn();
+        return result;
       },
       async close() {
         connection.abort();

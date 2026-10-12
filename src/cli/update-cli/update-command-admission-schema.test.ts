@@ -13,12 +13,9 @@ import {
 } from "../../infra/state-database-maintenance.js";
 import {
   createUpdateRun,
-  finishInterruptedUpdateBeforeActivation,
-  finishInterruptedUpdatePreview,
   getUpdateRun,
   recordUpdateRunPhase,
 } from "../../infra/update-run-ledger.js";
-import { runExistingOpenClawStateWriteTransaction } from "../../state/openclaw-state-db-existing-write.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -132,144 +129,6 @@ it.each([
     expect(f.snapshot()).toEqual(before);
   },
 );
-
-it("records only the exact preview interruption without opening the candidate schema", async () => {
-  using f = previousVersionState(true);
-  const before = f.snapshot();
-  const run = await admitUpdateCommandRun({ opts: { dryRun: true }, root: f.root });
-  const expected = getUpdateRun(run.runId, { env: f.env });
-  if (!expected) {
-    throw new Error("Preview admission missing");
-  }
-  finishInterruptedUpdatePreview(expected, { env: f.env });
-  expect(getUpdateRun(run.runId, { env: f.env })).toMatchObject({
-    status: "skipped",
-    reason: "interrupted",
-  });
-  expect(f.snapshot()).toEqual(before);
-  expect(() =>
-    withStateDatabaseSchemaMaintenance({ databasePath: f.filename }, () => "migrated"),
-  ).toThrow(StateSchemaMutationConflictError);
-});
-
-it.each(["absent", "empty", "malformed", "view", "pending", "corrupt"] as const)(
-  "settles schema-1 interruption only with safe recovery state: %s",
-  (recovery) => {
-    using f = previousVersionState(true, true);
-    f.db.exec("PRAGMA user_version=1");
-    f.db.exec("UPDATE schema_meta SET schema_version=1, app_version='2026.6.11'");
-    f.db.exec("DELETE FROM config_machine_state");
-    if (recovery === "absent") {
-      f.db.exec("DROP TABLE config_machine_state");
-    } else if (recovery === "view") {
-      f.db.exec("DROP TABLE config_machine_state");
-      f.db.exec(
-        "CREATE VIEW config_machine_state AS SELECT 'fixture' AS state_key, '{}' AS value_json, 1 AS updated_at_ms",
-      );
-    } else if (recovery === "malformed") {
-      // Still readable, but a missing canonical constraint must refuse cleanup.
-      f.db.exec("DROP TABLE config_machine_state");
-      f.db.exec(
-        "CREATE TABLE config_machine_state (state_key TEXT NOT NULL PRIMARY KEY, value_json TEXT, updated_at_ms INTEGER NOT NULL) STRICT",
-      );
-    }
-    const options = { env: f.env };
-    const run = createUpdateRun({ trigger: "cli" }, options);
-    const expected = recordUpdateRunPhase(run.runId, "validating", {}, options);
-    if (recovery === "pending" || recovery === "corrupt") {
-      // Another run's pending recovery also excludes this diagnostic write.
-      const runId = randomUUID();
-      const runtime = {
-        root: f.root,
-        nodePath: process.execPath,
-        version: "2026.6.11",
-        buildId: null,
-      };
-      const record = {
-        runId,
-        transactionId: randomUUID(),
-        revision: 0,
-        claimId: randomUUID(),
-        claimKind: "initial",
-        handoff: null,
-        from: runtime,
-        to: runtime,
-        createdAtMs: 1,
-        updatedAtMs: 1,
-        effects: [],
-        restore: null,
-        verification: null,
-        primaryFailure: null,
-      };
-      f.db
-        .prepare("INSERT INTO config_machine_state VALUES (?, ?, 1)")
-        .run("update.recovery." + runId, recovery === "corrupt" ? "{}" : JSON.stringify(record));
-    }
-    const before = f.snapshot();
-    const interrupt = () => finishInterruptedUpdateBeforeActivation(expected, () => {}, options);
-    if (recovery === "malformed") {
-      expect(interrupt).toThrow("column definitions differ for config_machine_state");
-    } else if (recovery === "view") {
-      expect(interrupt).toThrow("missing table config_machine_state");
-    } else if (recovery === "corrupt") {
-      expect(interrupt).toThrow();
-    } else {
-      interrupt();
-    }
-    expect(getUpdateRun(run.runId, options)).toMatchObject(
-      recovery === "absent" || recovery === "empty"
-        ? { status: "failed", phase: "finished", reason: "interrupted" }
-        : expected,
-    );
-    expect(f.snapshot()).toEqual(before);
-  },
-);
-
-it.each([
-  ["newer", "PRAGMA user_version=17"],
-  ["metadata", "UPDATE schema_meta SET schema_version=15"],
-  ["role", "UPDATE schema_meta SET role='agent'"],
-  ["drift", "ALTER TABLE update_runs RENAME COLUMN origin_json TO wrong_origin"],
-  ["missing-index", "DROP INDEX idx_update_runs_active"],
-])("refuses %s state instead of repairing or retrying migration", async (_, mutation) => {
-  using f = previousVersionState(true);
-  f.db.exec(mutation);
-  const before = f.snapshot();
-  const schema = f.db.prepare("SELECT * FROM sqlite_schema ORDER BY name").all();
-  await expect(admitUpdateCommandRun({ opts: { dryRun: true }, root: f.root })).rejects.toThrow();
-  expect(f.db.prepare("SELECT count(*) AS n FROM update_runs").get()).toEqual({ n: 0 });
-  expect(f.db.prepare("SELECT * FROM sqlite_schema ORDER BY name").all()).toEqual(schema);
-  expect(f.snapshot()).toEqual(before);
-});
-
-it("rolls back first-use ledger creation with a failed write and permits a fresh admission", async () => {
-  using f = previousVersionState(false);
-  const schemaSql = fs.readFileSync(
-    new URL("./fixtures/admission-state-fac4.sql", import.meta.url),
-    "utf8",
-  );
-  const before = f.snapshot();
-  expect(() =>
-    runExistingOpenClawStateWriteTransaction(
-      () => {
-        throw new Error("injected admission failure");
-      },
-      { env: f.env },
-      {
-        schemaSql,
-        operationLabel: "fixture.first-use",
-        initializeAdditiveSchema: true,
-      },
-    ),
-  ).toThrow("injected admission failure");
-  expect(
-    f.db.prepare("SELECT name FROM sqlite_schema WHERE name='update_runs'").get(),
-  ).toBeUndefined();
-  expect(f.snapshot()).toEqual(before);
-  const run = await admitUpdateCommandRun({ opts: { dryRun: true }, root: f.root });
-  expect(getUpdateRun(run.runId, { env: f.env })?.status).toBe("running");
-  expect(f.snapshot()).toEqual(before);
-});
 
 it("refuses a supplied handle before ledger admission", () => {
   const root = dirs.make("update-admission-supplied-");

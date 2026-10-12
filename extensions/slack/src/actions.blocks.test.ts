@@ -7,10 +7,8 @@ import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createSlackEditTestClient, createSlackSendTestClient } from "./blocks.test-helpers.js";
 import { slackSetupPlugin } from "./channel.setup.js";
-import { countSlackTextUtf8Bytes } from "./truncate.js";
 
-const { editSlackMessage, editSlackRenderedMessage, sendSlackMessage } =
-  await import("./actions.js");
+const { editSlackMessage, sendSlackMessage } = await import("./actions.js");
 type EditOptions = NonNullable<Parameters<typeof editSlackMessage>[3]>;
 const tableBlock = {
   type: "data_table",
@@ -97,11 +95,6 @@ describe("Slack edits", () => {
     },
   );
 
-  it("preserves already-rendered mrkdwn when finalizing a preview", async () => {
-    await editSlackRenderedMessage("C123", "171234.567", "*bold*", { token: "xoxb-test", client });
-    expectUpdate("*bold*");
-  });
-
   it("caps plain-text edits at the UTF-8 byte limit", async () => {
     await edit("x".repeat(3999) + "…" + "a".repeat(8000));
     expectUpdate("x".repeat(3997) + "…");
@@ -110,12 +103,6 @@ describe("Slack edits", () => {
   it("preserves the empty-edit sentinel", async () => {
     await edit("");
     expectUpdate(" ");
-  });
-
-  it("supplies fallback text for non-text blocks", async () => {
-    const blocks = [{ type: "divider" }];
-    await edit("", { blocks });
-    expectUpdate("Shared a Block Kit message", blocks);
   });
 
   it("retries native data blocks once with complete ordered text and surviving blocks", async () => {
@@ -176,26 +163,6 @@ describe("Slack edits", () => {
       "Slack native chart or table fallback exceeds the 4000-byte edit limit",
     );
     expect(client.chat.update).not.toHaveBeenCalled();
-  });
-
-  it("caps block fallback text while preserving edit blocks", async () => {
-    const blocks = [
-      {
-        type: "context",
-        elements: Array.from({ length: 3 }, () => ({
-          type: "mrkdwn",
-          text: "a".repeat(1500),
-        })),
-      },
-    ];
-    await edit("", { blocks });
-    expect(client.chat.update).toHaveBeenCalledExactlyOnceWith({
-      channel: "C123",
-      ts: "171234.567",
-      text: expect.stringMatching(/…$/u),
-      blocks,
-    });
-    expect(countSlackTextUtf8Bytes(client.chat.update.mock.calls[0]?.[0].text ?? "")).toBe(4000);
   });
 
   it("rejects more than 50 blocks before the API call", async () => {

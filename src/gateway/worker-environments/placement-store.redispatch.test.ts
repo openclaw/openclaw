@@ -53,7 +53,8 @@ describe("failed worker placement redispatch", () => {
         if (
           isRecord(value) &&
           value.sessionId === SESSION.sessionId &&
-          value.state === "requested"
+          isRecord(value.placement) &&
+          value.placement.state === "requested"
         ) {
           corrupted += 1;
           return receive(slot, { ...reply, value: new Uint8Array([0]) }, owner);
@@ -91,7 +92,7 @@ describe("failed worker placement redispatch", () => {
           owner: placementTurnOwner(active),
         });
       } else if (scenario === "move") {
-        store.beginPlacementMove({
+        await store.beginPlacementMove({
           sessionId: SESSION.sessionId,
           source: {
             generation: active.generation,

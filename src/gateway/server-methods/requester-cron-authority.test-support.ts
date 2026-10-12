@@ -8,6 +8,7 @@ import {
   prepareAgentRunAdmission,
   resolveAdmittedRunActiveAssertion,
   type AdmittedRunContext,
+  type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
 import { createOpenClawCodingTools } from "../../agents/agent-tools.js";
 import {
@@ -84,6 +85,7 @@ export function installRequesterCronAuthorityTestHooks() {
 
   afterEach(async () => {
     cron?.stop();
+    await cron?.waitForIdle();
     revokeRequesterCronAuthority(SESSION);
     await cleanupSessionStateForTest({ stateDir });
     closeOpenClawAgentDatabasesForTest(stateDir);
@@ -130,9 +132,11 @@ export async function inRun<T>(
   runId: string,
   admitted: GatewayCronCreatorAuthorityAdmission | undefined,
   run: RequesterRun<T>,
+  operatorAuthority?: AdmittedRunOperatorAuthority,
 ) {
   const runAdmission = prepareAgentRunAdmission({
     cfg: getRuntimeConfig(),
+    operatorAuthority,
     operationalRunInstance: createOperationalRunInstanceRef(runId),
     facts: {
       runId,
