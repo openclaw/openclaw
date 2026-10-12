@@ -22,6 +22,7 @@ const log = createSubsystemLogger("browser").child("extension-relay");
 /** App-level keepalive interval; message traffic keeps the MV3 worker alive. */
 const EXTENSION_PING_INTERVAL_MS = 20_000;
 const EXTENSION_HELLO_TIMEOUT_MS = 10_000;
+const MAX_CONCURRENT_TAB_ATTACHMENTS = 2;
 
 const BROWSER_TARGET_ID = "openclaw-extension-relay";
 /** Playwright requires every attached page target to identify its browser context. */
@@ -99,6 +100,8 @@ export class ExtensionRelayBridge {
     (tabId) => (this.tabs.get(tabId)?.claimants.size ?? 0) > 0,
   );
   private readonly pendingExtension = new Map<number, PendingExtensionCommand>();
+  private activeTabAttachments = 0;
+  private readonly tabAttachmentWaiters: Array<() => void> = [];
   private nextSeq = 1;
   private nextSessionOrdinal = 1;
   private nextExtensionCandidateOrdinal = 1;
@@ -525,7 +528,16 @@ export class ExtensionRelayBridge {
     const attachment =
       createdTargetId !== undefined
         ? Promise.resolve({ targetId: createdTargetId })
-        : this.callExtension({ type: "attach", tabId });
+        : this.withTabAttachmentSlot(async () => {
+            if (
+              this.extension !== extension ||
+              this.tabs.get(tabId) !== tab ||
+              tab.claimants.size === 0
+            ) {
+              throw new Error("Target claimant retired before attachment");
+            }
+            return await this.callExtension({ type: "attach", tabId });
+          });
     const attaching = attachment.then(async (response) => {
       const result = asOptionalRecord(response);
       const targetId = result?.targetId;
@@ -585,6 +597,26 @@ export class ExtensionRelayBridge {
       // A replacement extension may already have started a fresh attach for this tab.
       if (tab.attaching === attaching) {
         tab.attaching = undefined;
+      }
+    }
+  }
+
+  private async withTabAttachmentSlot<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.activeTabAttachments >= MAX_CONCURRENT_TAB_ATTACHMENTS) {
+      await new Promise<void>((resolve) => {
+        this.tabAttachmentWaiters.push(resolve);
+      });
+    } else {
+      this.activeTabAttachments += 1;
+    }
+    try {
+      return await operation();
+    } finally {
+      const next = this.tabAttachmentWaiters.shift();
+      if (next) {
+        next();
+      } else {
+        this.activeTabAttachments -= 1;
       }
     }
   }
@@ -742,7 +774,12 @@ export class ExtensionRelayBridge {
           if (claim.client === client) {
             tab.claimants.delete(claim);
             if (tab.attaching) {
-              acquisitions.push(tab.attaching.then(() => this.detachUnusedAttachments()));
+              acquisitions.push(
+                tab.attaching.then(
+                  () => this.detachUnusedAttachments(),
+                  () => this.detachUnusedAttachments(),
+                ),
+              );
             }
           }
         }
