@@ -49,6 +49,12 @@ extension OpenClawChatComposer {
             if self.viewModel.sessionBranches.count > 1 {
                 self.branchMenu
             }
+            self.cleanInlineModelPicker(compact: false, inOptionsMenu: true)
+            self.cleanInlineEffortMenu(inOptionsMenu: true)
+            self.cleanContextUsageMenu(inOptionsMenu: true)
+            if self.viewModel.supportsComposerCapabilities {
+                self.cleanInlinePermissionMenu(inOptionsMenu: true)
+            }
             self.verbosityPicker
                 .disabled(!self.viewModel.composerEffortMutationAvailable)
             self.cleanComposerCapabilityItems
@@ -64,15 +70,6 @@ extension OpenClawChatComposer {
         }
         #endif
     }
-
-    #if os(iOS)
-    var cleanDraftRow: some View {
-        self.editorOverlay
-            .frame(maxWidth: .infinity, minHeight: self.textMinHeight, alignment: .topLeading)
-            .padding(.horizontal, CleanChatComposerMetrics.editorInlineInset)
-            .padding(.top, CleanChatComposerMetrics.editorBlockInset)
-    }
-    #endif
 
     @ViewBuilder
     var cleanLeadingControls: some View {
@@ -102,19 +99,20 @@ extension OpenClawChatComposer {
         self.cleanAttachmentMenu
         #if os(iOS)
         if self.viewModel.supportsComposerCapabilities {
-            self.cleanInlinePermissionMenu
+            self.cleanInlinePermissionMenu()
         }
         #endif
         #endif
     }
 
     @ViewBuilder
-    var cleanContextUsageMenu: some View {
+    func cleanContextUsageMenu(inOptionsMenu: Bool = false) -> some View {
         if let usage = self.viewModel.contextUsage {
             OpenClawChatContextUsageControl(
                 usage: usage,
                 canCompact: self.viewModel.canRequestSessionCompact,
                 controlSize: self.cleanControlHeight,
+                showsLabel: inOptionsMenu,
                 onCompact: self.viewModel.requestSessionCompact)
         }
     }
@@ -128,22 +126,22 @@ extension OpenClawChatComposer {
 
     private func cleanInlineControls(compactModel: Bool) -> some View {
         HStack(spacing: CleanChatComposerMetrics.footerControlGap) {
-            self.cleanContextUsageMenu
+            self.cleanContextUsageMenu()
             // Camera switching only displaces settings in the compact iOS footer.
             #if os(macOS)
             self.cleanInlineModelPicker(compact: compactModel)
-            self.cleanInlineEffortMenu
+            self.cleanInlineEffortMenu()
             #else
             if !self.cleanShowsCameraFlip {
                 self.cleanInlineModelPicker(compact: compactModel)
-                self.cleanInlineEffortMenu
+                self.cleanInlineEffortMenu()
             }
             #endif
             self.cleanCaptureAndPrimaryControls
         }
     }
 
-    private func cleanInlineModelPicker(compact: Bool) -> some View {
+    private func cleanInlineModelPicker(compact: Bool, inOptionsMenu: Bool = false) -> some View {
         let sections = self.viewModel.modelPickerSections
         return Menu {
             if let target = self.viewModel.modelSelectionTargetDescription {
@@ -194,7 +192,16 @@ extension OpenClawChatComposer {
             }
             #endif
         } label: {
-            self.cleanInlineModelLabel(compact: compact)
+            if inOptionsMenu {
+                Label {
+                    Text(String(format: String(localized: "Model: %@"), self.viewModel.composerInlineModelLabel))
+                        .font(OpenClawChatTypography.body)
+                } icon: {
+                    Image(systemName: "cpu")
+                }
+            } else {
+                self.cleanInlineModelLabel(compact: compact)
+            }
         }
         .menuIndicator(.hidden)
         .tint(OpenClawChatTheme.muted)
@@ -210,7 +217,9 @@ extension OpenClawChatComposer {
                 self.viewModel.hasActiveRunForComposerSettings)
         #endif
         .help(self.cleanInlineModelDisabledHint ?? self.viewModel.composerInlineModelLabel)
-        .accessibilityLabel("Model")
+        .accessibilityLabel(inOptionsMenu
+            ? String(format: String(localized: "Model: %@"), self.viewModel.composerInlineModelLabel)
+            : String(localized: "Model"))
         .accessibilityValue(self.viewModel.composerInlineModelLabel)
         .accessibilityHint(self.cleanInlineModelDisabledHint ?? "")
         .accessibilityIdentifier("chat-composer-inline-model")
@@ -256,7 +265,7 @@ extension OpenClawChatComposer {
         #endif
     }
 
-    private var cleanInlineEffortMenu: some View {
+    private func cleanInlineEffortMenu(inOptionsMenu: Bool = false) -> some View {
         #if os(macOS)
         OpenClawChatEffortControl(
             thinkingOptions: self.viewModel.showsThinkingPicker ? self.viewModel.thinkingLevelOptions : [],
@@ -289,30 +298,39 @@ extension OpenClawChatComposer {
                 self.fastModeToggle
             }
         } label: {
-            ZStack(alignment: .topTrailing) {
-                ZStack {
-                    Circle()
-                        .trim(from: 0.12, to: 0.88)
-                        .stroke(.secondary, style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
-                        .rotationEffect(.degrees(90))
-                    Capsule()
-                        .fill(.secondary)
-                        .frame(width: 1.5, height: 7)
-                        .offset(y: -3.5)
-                        .rotationEffect(.degrees(self.viewModel.composerInlineEffortAngle))
+            if inOptionsMenu {
+                Label {
+                    Text(String(format: String(localized: "Effort: %@"), self.viewModel.composerInlineEffortLabel))
+                        .font(OpenClawChatTypography.body)
+                } icon: {
+                    Image(systemName: "gauge.with.dots.needle.50percent")
                 }
-                .frame(width: 18, height: 18)
-                if self.viewModel.fastModeIsEnabled {
-                    Image(systemName: "bolt.fill")
-                        .font(OpenClawChatTypography.caption)
-                        .foregroundStyle(OpenClawChatTheme.accent)
-                        .offset(x: 7, y: -6)
+            } else {
+                ZStack(alignment: .topTrailing) {
+                    ZStack {
+                        Circle()
+                            .trim(from: 0.12, to: 0.88)
+                            .stroke(.secondary, style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                            .rotationEffect(.degrees(90))
+                        Capsule()
+                            .fill(.secondary)
+                            .frame(width: 1.5, height: 7)
+                            .offset(y: -3.5)
+                            .rotationEffect(.degrees(self.viewModel.composerInlineEffortAngle))
+                    }
+                    .frame(width: 18, height: 18)
+                    if self.viewModel.fastModeIsEnabled {
+                        Image(systemName: "bolt.fill")
+                            .font(OpenClawChatTypography.caption)
+                            .foregroundStyle(OpenClawChatTheme.accent)
+                            .offset(x: 7, y: -6)
+                    }
                 }
+                .frame(
+                    width: self.cleanControlHeight,
+                    height: self.cleanControlHeight)
+                .contentShape(Rectangle())
             }
-            .frame(
-                width: self.cleanControlHeight,
-                height: self.cleanControlHeight)
-            .contentShape(Rectangle())
         }
         .menuIndicator(.hidden)
         .tint(OpenClawChatTheme.muted)
@@ -321,7 +339,9 @@ extension OpenClawChatComposer {
                 self.viewModel.isUpdatingSessionSettings)
         .disabled(self.viewModel.hasActiveRunForComposerSettings)
         .help(self.cleanInlineEffortDisabledHint ?? self.viewModel.composerInlineEffortLabel)
-        .accessibilityLabel("Effort")
+        .accessibilityLabel(inOptionsMenu
+            ? String(format: String(localized: "Effort: %@"), self.viewModel.composerInlineEffortLabel)
+            : String(localized: "Effort"))
         .accessibilityValue(self.viewModel.composerInlineEffortLabel)
         .accessibilityHint(self.cleanInlineEffortDisabledHint ?? "")
         .accessibilityIdentifier("chat-composer-inline-effort")
@@ -369,6 +389,7 @@ extension OpenClawChatComposer {
                 isComposerEnabled: self.isComposerEnabled,
                 isAttachmentInputEnabled: self.isAttachmentInputEnabled,
                 controlSize: self.cleanControlHeight,
+                enablesTasteMotion: self.enablesTasteMotion,
                 onCancelDictation: {
                     ChatDictationActions.cancel(task: self.$dictationTask, control: self.dictationControl)
                 },

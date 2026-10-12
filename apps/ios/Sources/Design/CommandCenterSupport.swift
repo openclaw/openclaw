@@ -19,7 +19,7 @@ struct CommandSessionRow: View {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     if self.item.isUnread {
                         Circle()
-                            .fill(OpenClawBrand.accent)
+                            .fill(Color.primary)
                             .frame(width: 7, height: 7)
                             .accessibilityHidden(true)
                     }
@@ -58,6 +58,11 @@ struct CommandSessionRow: View {
             OpenClawSessionColorStripe(color: self.item.sessionColor)
         }
         .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityValue([
+            self.item.isUnread ? String(localized: "Unread") : nil,
+            self.item.isPinned ? String(localized: "Pinned") : nil,
+        ].compactMap(\.self).joined(separator: ", "))
     }
 
     private var stateLabel: String {
@@ -67,6 +72,14 @@ struct CommandSessionRow: View {
         case "recent": String(localized: "recent")
         default: self.item.state
         }
+    }
+}
+
+/// Session menus inherit the app brand tint. DESIGN.md reserves red for
+/// destructive work, so standard actions use the system label instead.
+enum CommandSessionMenuChrome {
+    static var standardActionTint: Color {
+        .primary
     }
 }
 
@@ -107,6 +120,7 @@ struct CommandSessionActionsModifier: ViewModifier {
                 OpenClawSessionColorMenu(color: self.session.color) {
                     self.patch(color: .some($0))
                 }
+                .tint(CommandSessionMenuChrome.standardActionTint)
                 if !self.isArchived {
                     self.actionButton(
                         self.session.pinned == true
@@ -272,6 +286,7 @@ struct CommandSessionActionsModifier: ViewModifier {
                 Label("Snooze", systemImage: "clock")
                     .font(OpenClawType.subhead)
             }
+            .tint(CommandSessionMenuChrome.standardActionTint)
         }
     }
 
@@ -295,6 +310,7 @@ struct CommandSessionActionsModifier: ViewModifier {
             Label("Move to Group", systemImage: "folder")
                 .font(OpenClawType.subhead)
         }
+        .tint(CommandSessionMenuChrome.standardActionTint)
     }
 
     private var deleteButton: some View {
@@ -335,8 +351,10 @@ struct CommandSessionActionsModifier: ViewModifier {
                     .font(OpenClawType.subhead)
             } icon: {
                 Image(systemName: systemImage)
+                    .foregroundStyle(CommandSessionMenuChrome.standardActionTint)
             }
         }
+        .tint(CommandSessionMenuChrome.standardActionTint)
     }
 
     private func beginRename() {
