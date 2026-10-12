@@ -34,7 +34,7 @@ import {
   resolveSessionMutationAuthorization,
   resolveSessionSharingTarget,
 } from "../session-sharing.js";
-import { loadGatewaySessionEntryReadOnly } from "../session-utils-store.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import {
   beginTaskSuggestionAcceptance,
   createTaskSuggestion,
@@ -283,7 +283,7 @@ async function deliverSuggestedTaskToSourceSession(
   const fail = (error: NonNullable<Parameters<RespondFn>[2]>) =>
     restoreSuggestedTaskClaim({ taskId: params.taskId, options: params.options, error });
   let sourceFacts: SessionFactsRead<PreparedSessionMutationFacts> | undefined;
-  let nativeSource: ReturnType<typeof loadGatewaySessionEntryReadOnly> | undefined;
+  let nativeSource: Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>> | undefined;
   try {
     if (captureIncognitoSessionSource({ sessionKey: params.suggestion.sessionKey, agentId })) {
       sourceFacts = await prepareSessionMutationFacts({
@@ -293,7 +293,11 @@ async function deliverSuggestedTaskToSourceSession(
         allowMissing: true,
       });
     } else {
-      nativeSource = loadGatewaySessionEntryReadOnly(params.suggestion.sessionKey, { agentId });
+      nativeSource = await loadGatewaySessionEntryReadOnlyInWorker({
+        cfg: params.options.context.getRuntimeConfig(),
+        key: params.suggestion.sessionKey,
+        agentId,
+      });
     }
   } catch (error) {
     return fail(errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));

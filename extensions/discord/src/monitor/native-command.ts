@@ -8,7 +8,7 @@ import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
   parseCommandArgs,
-  resolveCommandArgMenu,
+  resolveCommandArgMenuAsync,
   serializeCommandArgs,
   type CommandArgs,
   type NativeCommandSpec,
@@ -458,7 +458,7 @@ async function dispatchDiscordCommandInteraction(
   const menu =
     command.key === "verbose" && bindingReadiness?.ok === false
       ? null
-      : resolveCommandArgMenu({
+      : await resolveCommandArgMenuAsync({
           command,
           args: commandArgs,
           cfg,

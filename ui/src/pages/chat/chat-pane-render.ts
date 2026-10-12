@@ -75,13 +75,6 @@ export class ChatPane extends ChatPaneLayoutRender {
     this,
     () => this.state ?? undefined,
   );
-  private presentationUserId: string | null = null;
-  private readonly retrySessionPlacementStartup = () => {
-    const sessionKey = this.state?.sessionKey;
-    if (sessionKey) {
-      this.context.placementStartup.retry(sessionKey);
-    }
-  };
 
   override render() {
     const state = this.state;
@@ -682,7 +675,15 @@ export class ChatPane extends ChatPaneLayoutRender {
       allowExternalEmbedUrls: state.allowExternalEmbedUrls,
       fetchLinkFavicon: resolveChatLinkFaviconFetcher(state),
       chatMessageMaxWidth: state.settings.chatMessageMaxWidth,
-      chatBubbleMode: isChatBubbleMode(state.settings, state.sessionKey),
+      chatBubbleMode: isChatBubbleMode(
+        state.settings,
+        state.sessionKey,
+        this.context.config.current.chatBubblesEnabled,
+        resolveUiConfiguredMainKey({
+          agentsList: this.context.agents.state.agentsList,
+          hello: this.context.gateway.snapshot.hello,
+        }),
+      ),
       branding: this.context?.theme.branding,
       assistantAttachmentAuthToken: resolveControlUiAuthToken(state),
       resolveArtifactDownload: (params, signal) =>

@@ -13,6 +13,29 @@ const DEPRECATED_SESSION_COMPAT = {
 export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
   REPLY_TOOL_AUTHORITY_COMPAT_RECORD,
   {
+    code: "session-store-sync-listing",
+    ...DEPRECATED_SESSION_COMPAT,
+    introduced: "2026-09-08",
+    deprecated: "2026-10-11",
+    warningStarts: "2026-10-11",
+    replacement:
+      "Await listSessionEntriesAsync with an explicit agentId for read-only metadata; use getSessionEntryAsync for complete entries. Retain final deletion and disclosure authority at the effect boundary. The synchronous listing remains compatible until the next Plugin SDK major.",
+    docsPath: "/plugins/sdk-migration/how-to-migrate#await-session-metadata-listings",
+    surfaces: [
+      "openclaw/plugin-sdk/session-store-runtime.listSessionEntries",
+      "api.runtime.agent.session.listSessionEntries",
+    ],
+    diagnostics: [
+      "TypeScript @deprecated annotations and one shared DEP_PLUGIN_SDK warning per plugin and session-store family per process on legacy use",
+    ],
+    tests: [
+      "src/plugin-sdk/session-store-runtime.async.test.ts",
+      "src/plugins/compat/registry.test.ts",
+    ],
+    releaseNote:
+      "Plugins can list current session metadata through the existing session worker without loading saved prompts or creating missing databases. Bundled Discord thread-close and Codex pre-archive enumeration use the async API; the released synchronous contract remains available. Stored data and update behavior are unchanged.",
+  },
+  {
     code: "github-publication-native-callbacks",
     ...DEPRECATED_SESSION_COMPAT,
     introduced: "2026-08-19",

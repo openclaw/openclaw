@@ -324,8 +324,10 @@ vi.mock("../../cron/service/active-run-cancellation.js", () => ({
   waitForActiveCronTaskRuns: (timeoutMs: number) => waitForActiveCronTaskRuns(timeoutMs),
 }));
 
+// mock-isolation: Run-loop fixtures own config and lifecycle state without a live snapshot.
 vi.mock("../../config/runtime-snapshot.js", () => ({
   clearRuntimeConfigSnapshot: () => clearRuntimeConfigSnapshot(),
+  getRuntimeConfigSnapshot: () => null,
   getRuntimeConfigSourceSnapshot: () => null,
   registerRuntimeConfigSnapshotPreparer: vi.fn(),
 }));

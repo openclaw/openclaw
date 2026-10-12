@@ -441,7 +441,9 @@ export function adoptRetainedPreparedLocation(
   let pending: Promise<boolean> | undefined;
   let retainedCleanup: RetainedOperation<boolean> | undefined;
   let reported = false;
+  let cleanupFailure: unknown;
   const reportFailure = (error: unknown) => {
+    cleanupFailure = error;
     if (!requireCleanup && !reported) {
       reported = true;
       emitSnapshotCleanupFailure(
@@ -457,6 +459,7 @@ export function adoptRetainedPreparedLocation(
     } else if (requireCleanup) {
       throw new SqliteSnapshotCleanupError(
         `SQLite read-only worker snapshot cleanup failed: ${tempDir}`,
+        { cause: cleanupFailure },
       );
     }
     return removed;

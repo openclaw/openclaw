@@ -500,7 +500,7 @@ export function renderChat(props: ChatProps) {
           </div>
           ${taskSuggestionTray}
         </div>`;
-  // Keep the affordance mounted so visibility changes can finish their exit transition.
+  // Keep the affordance mounted so showing it never changes the transcript layout.
   const scrollToBottomButton = props.onScrollToBottom
     ? html`
         <div class="chat-scroll-to-bottom-wrap">

@@ -32,10 +32,10 @@ it("reads current delivery facts without decoding unrelated session payloads", a
     save(sessionKey, "source-recipient");
     save("agent:main:main", "main-recipient");
     // Admission owns cold validation; measure the ordinary repeated read after it settles.
-    readCronDeliveryTargetContexts(cfg, requests);
+    await readCronDeliveryTargetContexts(cfg, requests);
     const parse = vi.spyOn(JSON, "parse");
     try {
-      const result = readCronDeliveryTargetContexts(cfg, requests);
+      const result = await readCronDeliveryTargetContexts(cfg, requests);
       expect(result).toMatchObject([
         {
           ok: true,
@@ -79,7 +79,7 @@ it("reads current delivery facts without decoding unrelated session payloads", a
     // A route can change without advancing either timestamp or lifecycle revision.
     save(sessionKey, "new-source-recipient");
     save("agent:main:main", "new-main-recipient");
-    expect(readCronDeliveryTargetContexts(cfg, requests)).toMatchObject([
+    expect(await readCronDeliveryTargetContexts(cfg, requests)).toMatchObject([
       { ok: true, value: { main: { delivery: { context: { to: "new-source-recipient" } } } } },
       { ok: true, value: { main: { delivery: { context: { to: "new-main-recipient" } } } } },
     ]);

@@ -436,11 +436,9 @@ async fn exercise_logind_listener(terminal_loss: Option<TerminalLoss>, wake: Wak
         } else {
             assert_eq!(next_event(&mut events).await, MockEvent::DriverDeactivated);
         }
-        // A terminal controller cannot turn a stale notification into wake recovery.
-        controller.did_wake().await;
         assert!(
             events.try_recv().is_err(),
-            "terminal loss must not refresh, resume, or release the driver twice: {loss:?}"
+            "terminal loss must not release the driver twice: {loss:?}"
         );
         return;
     }

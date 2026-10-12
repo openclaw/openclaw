@@ -223,18 +223,7 @@ const VoiceCallRealtimeConfigSchema = z
     /** Provider-owned raw config blobs keyed by provider id. */
     providers: VoiceCallProvidersConfigSchema,
   })
-  .strict()
-  .default({
-    enabled: false,
-    instructions: DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS,
-    toolPolicy: "safe-read-only",
-    consultPolicy: "auto",
-    tools: [],
-    // Keep outer defaults' arrays independent of the inner object defaults.
-    fastContext: VoiceCallRealtimeFastContextConfigSchema.parse({}),
-    agentContext: VoiceCallRealtimeAgentContextConfigSchema.parse({}),
-    providers: {},
-  });
+  .strict();
 export type VoiceCallRealtimeConfig = z.infer<typeof VoiceCallRealtimeConfigSchema>;
 
 const VoiceCallStreamingConfigSchema = z
@@ -325,7 +314,7 @@ export const VoiceCallConfigSchema = z
 
     streaming: VoiceCallStreamingConfigSchema.default(VoiceCallStreamingConfigSchema.parse({})),
 
-    realtime: VoiceCallRealtimeConfigSchema,
+    realtime: VoiceCallRealtimeConfigSchema.default(VoiceCallRealtimeConfigSchema.parse({})),
 
     /** Session memory scope for voice conversations. */
     sessionScope: VoiceCallSessionScopeSchema.default("per-phone"),
