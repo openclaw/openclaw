@@ -2,17 +2,17 @@ import { Show } from "solid-js";
 import "../../../styles/chat/composer-context-strip.css";
 import type { SessionGoal } from "../../../api/types.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { t } from "../../../i18n/index.ts";
 import { registerChatGoalsEnglish } from "../../../i18n/locales/en-chat-goals.ts";
 import type { ChatGoalDraftMode } from "../../../lib/chat/chat-types.ts";
 import type { SlashCommandDef } from "../../../lib/chat/commands.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { adjustTextareaHeight } from "./chat-composer-dom.ts";
 import { resetSkillMenuState } from "./chat-composer-skill-menu.tsx";
 import { resetSlashMenuState } from "./chat-composer-slash-menu.tsx";
 import { commitComposerDraft, composerDraftKey } from "./chat-composer-state.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
-registerChatGoalsEnglish();
+registerEnglishCatalog(registerChatGoalsEnglish);
 
 export function createGoalComposerController(
   props: ChatComposerProps,

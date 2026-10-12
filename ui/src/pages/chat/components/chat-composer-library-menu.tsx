@@ -1,8 +1,8 @@
 import { For } from "solid-js";
 import { icons } from "../../../components/icons.ts";
-import { t } from "../../../i18n/index.ts";
 import { registerSkillLibraryEnglish } from "../../../i18n/locales/en-skill-library.ts";
 import { registerSkillsBrowserEnglish } from "../../../i18n/locales/en-skills-browser.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { ComposerLibraryProps } from "../composer-library-session.ts";
 import { LitContent } from "./chat-composer-interop.tsx";
 import {
@@ -11,8 +11,8 @@ import {
   renderCapabilityMenuState,
 } from "./chat-composer-menu-rows.tsx";
 
-registerSkillsBrowserEnglish();
-registerSkillLibraryEnglish();
+registerEnglishCatalog(registerSkillsBrowserEnglish);
+registerEnglishCatalog(registerSkillLibraryEnglish);
 
 function renderLibraryStatus(library: ComposerLibraryProps) {
   return (

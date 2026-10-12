@@ -1,12 +1,14 @@
 import { html, render } from "lit";
+import { createComponent, createSignal } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
 import { solidTemplate } from "../pages/chat/components/chat-composer-controls.ts";
 import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import { renderComposerLibraryMenuSolid } from "../pages/chat/components/chat-composer-library-menu.tsx";
-import { renderChatComposerPlusMenu } from "../pages/chat/components/chat-composer-plus-menu.tsx";
+import { renderComposerMenuOption } from "../pages/chat/components/chat-composer-menu.tsx";
 import "../pages/chat/components/browser-tab-card.tsx";
-import { renderComposerMenuOption } from "./composer-menu.ts";
+import { renderChatComposerPlusMenu } from "../pages/chat/components/chat-composer-plus-menu.tsx";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
 import "../test-helpers/load-styles.ts";
 import "./menu-surface.ts";
 import "./resizable-divider.ts";
@@ -453,23 +455,25 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
       const highlight = useTheme(theme);
       const host = document.createElement("div");
       document.body.append(host);
-      const renderOption = (active: boolean) => {
-        render(
-          renderComposerMenuOption({
+      const [active, setActive] = createSignal(false);
+      mountSolid(
+        () =>
+          createComponent(renderComposerMenuOption, {
             id: "hover-command",
-            active,
+            get active() {
+              return active();
+            },
             select: () => {},
-            hover: () => renderOption(true),
+            hover: () => setActive(true),
             icon: "",
             name: "/help",
             description: "Show commands",
           }),
-          host,
-        );
-      };
-      renderOption(false);
+        { container: host },
+      );
       const option = host.querySelector<HTMLElement>('[role="option"]')!;
       await hoverBackground(option, highlight);
+      expect(host.querySelector('[role="option"]')).toBe(option);
       expect(option.getAttribute("aria-selected")).toBe("true");
       expect(getComputedStyle(option).cursor).toBe("pointer");
     },

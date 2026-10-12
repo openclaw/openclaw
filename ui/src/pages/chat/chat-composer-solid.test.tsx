@@ -1,9 +1,11 @@
 import { render, nothing } from "lit";
 /* @vitest-environment jsdom */
 import { createSignal } from "solid-js";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
+import { i18n } from "../../i18n/lib/translate.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createComposerContainer,
   createComposerProps,
@@ -11,6 +13,7 @@ import {
 } from "./chat-composer.test-support.ts";
 import { renderComposerDictationSendAction } from "./components/chat-composer-controls.tsx";
 import { ChatComposer } from "./components/chat-composer.tsx";
+import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.tsx";
 import { ComposerDictationController } from "./composer-dictation.ts";
 
 afterEach(() => resetComposerFixture());
@@ -20,6 +23,82 @@ function mountComposer(view: Parameters<typeof mountSolid>[0]) {
     container: document.body.appendChild(createComposerContainer()),
   });
 }
+
+it("updates composer text on a live locale change without disturbing an IME draft", async () => {
+  onTestFinished(captureI18nStateForTesting());
+  await i18n.setLocale("en");
+  const onDraftChange = vi.fn();
+  const props = createComposerProps({
+    assistantName: "Locale fixture",
+    draft: "Unfinished draft",
+    permissionPicker: { canSelectFull: true, onSelect: vi.fn() },
+    onDraftChange,
+  });
+  const view = mountComposer(() => <ChatComposer {...props} />);
+  const textarea = view.container.querySelector("textarea")!;
+  const heading = view.container.querySelector(".chat-controls__permission-heading")!;
+  expect(heading.textContent).toBe("Execution permissions");
+  expect(textarea.placeholder).toBe("Message Locale fixture");
+
+  textarea.focus();
+  textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+  textarea.value = "Unfinished 日本語";
+  textarea.setSelectionRange(11, 14);
+  textarea.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: true }));
+  const writes = vi.spyOn(HTMLTextAreaElement.prototype, "value", "set");
+
+  await i18n.setLocale("de");
+  flush();
+
+  expect(heading.textContent).toBe("Ausführungsberechtigungen");
+  expect(textarea.placeholder).toBe("Nachricht an Locale fixture");
+  expect(view.container.querySelector(".chat-controls__permission-heading")).toBe(heading);
+  expect(view.container.querySelector("textarea")).toBe(textarea);
+  expect(document.activeElement).toBe(textarea);
+  expect(textarea.value).toBe("Unfinished 日本語");
+  expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([11, 14]);
+  expect(writes).not.toHaveBeenCalled();
+  expect(onDraftChange).not.toHaveBeenCalled();
+});
+
+it("updates an existing private draft recovery error when the locale changes", async () => {
+  onTestFinished(captureI18nStateForTesting());
+  await i18n.setLocale("en");
+  const controller = new AbortController();
+  const review = reviewPrivateComposerDraft({
+    text: "Recover this draft",
+    attachments: [{ id: "unavailable", fileName: "draft.txt", mimeType: "text/plain" }],
+    hasGoal: false,
+    pendingReads: 0,
+    isCurrent: () => true,
+    signal: controller.signal,
+  });
+  onTestFinished(async () => {
+    controller.abort();
+    await review;
+  });
+  const download = await waitForSolid(() => {
+    const button = [...document.querySelectorAll("button")].find(
+      (candidate) => candidate.textContent?.trim() === "Download draft.txt",
+    );
+    expect(button).toBeDefined();
+    return button!;
+  });
+  download.click();
+  flush();
+  const error = document.querySelector('[role="alert"]')!;
+  expect(error.textContent).toBe(
+    "This attachment is no longer available to download. Keep the draft open and recover the original file before discarding it.",
+  );
+
+  await i18n.setLocale("de");
+  flush();
+
+  expect(document.querySelector('[role="alert"]')).toBe(error);
+  expect(error.textContent).toBe(
+    "Dieser Anhang kann nicht mehr heruntergeladen werden. Lassen Sie den Entwurf geöffnet und stellen Sie die Originaldatei wieder her, bevor Sie ihn verwerfen.",
+  );
+});
 
 it("retains the native input and IME draft across external composer updates", () => {
   let draft = "hello";

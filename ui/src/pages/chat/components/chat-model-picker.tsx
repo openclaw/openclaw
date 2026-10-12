@@ -5,11 +5,11 @@ import { hasProviderBrandIcon, providerDisplayLabel } from "../../../components/
 import { Icon } from "../../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../../components/solid/provider-icon.tsx";
 import "../../../components/tooltip.ts";
-import { t } from "../../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import { canonicalModelAuthProviderId } from "../../../lib/model-auth.ts";
 import type { ChatModelCatalogState as ModelCatalogState } from "../../../lib/model-catalog-store.ts";
 import type { ModelProviderAuthLabel } from "../../../lib/model-provider-auth-label.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { solidTemplate } from "./chat-composer-controls.ts";
 import { LitContent } from "./chat-composer-interop.tsx";
 import {
@@ -40,7 +40,7 @@ import {
 } from "./chat-model-picker-search.ts";
 import { handleChatComposerDetailsToggle, syncChatPickerOverlay } from "./chat-picker-overlay.ts";
 
-registerModelControlsEnglish();
+registerEnglishCatalog(registerModelControlsEnglish);
 
 export type ChatModelPickerParams = {
   providerAuth?: ReadonlyMap<string, ModelProviderAuthLabel>;
