@@ -67,6 +67,11 @@ export class PostgresSyncConnection implements SqlConnection {
   }
 
   private loseConnection(): Error {
+    if (!this.failure && this.outcomeUnknown) {
+      // The write may have committed, so invalidate anchor caches before reconnecting.
+      beginSqliteDatabaseWrite(this.anchor);
+      finishSqliteDatabaseWrite(this.anchor);
+    }
     this.failure ??= this.outcomeUnknown
       ? new SqliteWorkerError("PostgreSQL connection lost; outcome unknown", "outcome-unknown")
       : new Error("PostgreSQL connection lost; transaction rolled back");

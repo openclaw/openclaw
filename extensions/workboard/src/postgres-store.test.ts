@@ -254,7 +254,11 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
     using sent = vi.spyOn(MessagePort.prototype, "postMessage");
     expect(() => db.exec("SELECT 2")).toThrow(message);
     expect(sent).not.toHaveBeenCalled();
-    expect(readSqliteDatabaseWriteTokenForPath(dbPath)).toBe(token);
+    if (unknown) {
+      expect(readSqliteDatabaseWriteTokenForPath(dbPath)).not.toBe(token);
+    } else {
+      expect(readSqliteDatabaseWriteTokenForPath(dbPath)).toBe(token);
+    }
     const persisted = await observer.query(
       `SELECT id FROM ${quoteIdentifier(db.schema)}.workboard_boards`,
     );

@@ -60,8 +60,7 @@ export function runPostgresTransactionSync<T>(
           }
           db.exec("COMMIT");
           if (!readOnly) {
-            // The anchor carries the broker's cache identity. Only a confirmed
-            // PostgreSQL commit may advance it; rollback must retain its token.
+            // Confirmed commits advance the broker's anchor; definite rollback retains its token.
             beginSqliteDatabaseWrite(db.anchor);
             finishSqliteDatabaseWrite(db.anchor);
           }

@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { MessageChannel, receiveMessageOnPort } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readSqliteDatabaseScopedWriteToken } from "../sqlite-database-admission.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../sqlite-worker-contract.js";
 import { PostgresSyncConnection } from "./connection.js";
 import type { BridgeReply, BridgeRequest } from "./protocol.js";
@@ -104,6 +105,7 @@ describe("PostgreSQL bridge request correlation", () => {
     "poisons a connection with a %s reply and never sends another operation",
     (mode) => {
       const { db, sent, terminate } = transportFixture(mode);
+      const before = readSqliteDatabaseScopedWriteToken(db.anchor, "entry");
       let failure: unknown;
       try {
         db.exec("SELECT 7");
@@ -115,13 +117,26 @@ describe("PostgreSQL bridge request correlation", () => {
         code: "outcome-unknown",
       });
       expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(true);
+      const after = readSqliteDatabaseScopedWriteToken(db.anchor, "entry");
+      expect(after).not.toBe(before);
       expect(terminate).toHaveBeenCalledOnce();
       const count = sent.mock.calls.length;
       expect(() => db.exec("SELECT 8")).toThrow("PostgreSQL connection lost; outcome unknown");
       expect(() => db.prepare("SELECT 9")).toThrow("PostgreSQL connection lost; outcome unknown");
       expect(sent).toHaveBeenCalledTimes(count);
+      expect(readSqliteDatabaseScopedWriteToken(db.anchor, "entry")).toBe(after);
     },
   );
+
+  it("retains the anchor token when a lost mid-transaction statement definitely rolls back", () => {
+    const { db } = transportFixture("missing");
+    db.isTransaction = true;
+    const before = readSqliteDatabaseScopedWriteToken(db.anchor, "entry");
+    expect(() => db.exec("UPDATE entries SET value = 8")).toThrow(
+      "PostgreSQL connection lost; transaction rolled back",
+    );
+    expect(readSqliteDatabaseScopedWriteToken(db.anchor, "entry")).toBe(before);
+  });
 
   it("poisons an expired request deadline without extending it after a wakeup", () => {
     const { db, sent, waits } = transportFixture("timeout");
