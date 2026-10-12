@@ -1973,6 +1973,7 @@ packages/gateway-protocol/src/schema/session-participant.ts
 src/config/sessions/internal-session-key.ts
 src/config/sessions/session-accessor.sqlite-entry-cache-state.ts
 src/config/sessions/session-accessor.sqlite-entry-read.ts
+src/config/sessions/session-accessor.sqlite-entry-select.ts
 src/config/sessions/session-accessor.sqlite-entry-revision.ts
 src/config/sessions/session-accessor.sqlite-participant-projection.ts
 src/config/sessions/session-participant-identity.ts
