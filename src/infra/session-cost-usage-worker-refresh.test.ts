@@ -15,8 +15,11 @@ import {
 import { createSessionTranscriptHeader } from "../config/sessions/transcript-header.js";
 import { selectBilledTranscriptEvents } from "./session-cost-usage-inherited.js";
 import {
+  decodeUsageCostPartition,
+  partitionUsageCostRollup,
+} from "./session-cost-usage-partitions.js";
+import {
   decodeUsageCostRollup,
-  encodeUsageCostRollup,
   type UsageCostRollupEntry,
 } from "./session-cost-usage-rollup-codec.js";
 import { scanUsageCostRollupInWorker } from "./session-cost-usage-worker-refresh.js";
@@ -491,8 +494,18 @@ it("counts a prompt and its re-mirrored copy once", async () => {
 
 it("counts the pair once when a cached refresh ends between its rows", async () => {
   const first = await scan(mirroredTurn.slice(0, 1));
-  const encoded = encodeUsageCostRollup(first);
-  const cached = decodeUsageCostRollup(encoded.valueJson, first.pricingFingerprint, encoded.blob);
+  const persisted = partitionUsageCostRollup(first);
+  const cached = decodeUsageCostRollup(
+    persisted.valueJson,
+    first.pricingFingerprint,
+    persisted.blob,
+  )!;
+  for (const partition of persisted.partitions) {
+    Object.assign(
+      cached.rollup.buckets,
+      decodeUsageCostPartition(partition.valueJson, partition.blob)!.buckets,
+    );
+  }
   expect(userMessages(await scan(mirroredTurn, cached))).toBe(1);
 });
 
