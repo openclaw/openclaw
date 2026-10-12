@@ -132,11 +132,8 @@ describe("secrets runtime provider and media surfaces", () => {
         agentDirs: ["/tmp/openclaw-agent-main"],
         loadAuthStore: () => ({ version: 1, profiles: {} }),
       });
-      const {
-        activateSecretsRuntimeSnapshot,
-        getActiveSecretsRuntimeSnapshot,
-        refreshActiveProviderAuthRuntimeSnapshot,
-      } = await import("./runtime.js");
+      const { getActiveSecretsRuntimeSnapshot, refreshActiveProviderAuthRuntimeSnapshot } =
+        await import("./runtime.js");
       const { getRuntimeConfigSourceSnapshot, getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
         await import("../config/runtime-snapshot.js");
       activateSecretsRuntimeSnapshot(initial);
@@ -208,11 +205,8 @@ describe("secrets runtime provider and media surfaces", () => {
       agentDirs: ["/tmp/openclaw-agent-main"],
       loadAuthStore: () => ({ version: 1, profiles: {} }),
     });
-    const {
-      activateSecretsRuntimeSnapshot,
-      getActiveSecretsRuntimeSnapshot,
-      refreshActiveProviderAuthRuntimeSnapshot,
-    } = await import("./runtime.js");
+    const { getActiveSecretsRuntimeSnapshot, refreshActiveProviderAuthRuntimeSnapshot } =
+      await import("./runtime.js");
     const { setRuntimeConfigSnapshot } = await import("../config/runtime-snapshot.js");
     activateSecretsRuntimeSnapshot(initial);
     const openaiProvider = initial.config.models?.providers?.openai;
@@ -253,11 +247,8 @@ describe("secrets runtime provider and media surfaces", () => {
       agentDirs: ["/tmp/openclaw-agent-main"],
       loadAuthStore: () => ({ version: 1, profiles: {} }),
     });
-    const {
-      activateSecretsRuntimeSnapshot,
-      getActiveSecretsRuntimeSnapshot,
-      refreshActiveProviderAuthRuntimeSnapshot,
-    } = await import("./runtime.js");
+    const { getActiveSecretsRuntimeSnapshot, refreshActiveProviderAuthRuntimeSnapshot } =
+      await import("./runtime.js");
     const { registerProviderAuthRuntimeSnapshotActivationOwner } =
       await import("./runtime-state.js");
     const { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
