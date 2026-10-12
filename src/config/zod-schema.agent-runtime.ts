@@ -60,15 +60,25 @@ export const HeartbeatSchema = z
     isolatedSession: z.boolean().optional(),
   })
   .superRefine((val, ctx) => {
-    if (val.every) {
-      try {
-        parseDurationMs(val.every, { defaultUnit: "m" });
-      } catch {
+    if (val.every !== undefined) {
+      const every = normalizeOptionalString(val.every);
+      if (!every) {
+        // Blank must not disable heartbeat the way "0m" does; reject before persist.
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["every"],
-          message: "invalid duration (use ms, s, m, h)",
+          message: 'must not be blank (use "0m" to disable heartbeat)',
         });
+      } else {
+        try {
+          parseDurationMs(every, { defaultUnit: "m" });
+        } catch {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["every"],
+            message: "invalid duration (use ms, s, m, h)",
+          });
+        }
       }
     }
 
