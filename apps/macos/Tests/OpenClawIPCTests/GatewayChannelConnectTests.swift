@@ -1,5 +1,6 @@
 import Foundation
 import OpenClawProtocol
+import os
 import Testing
 @testable import OpenClaw
 @testable import OpenClawKit
@@ -416,8 +417,15 @@ struct GatewayChannelConnectTests {
     @Test(arguments: [false, true])
     func `startup readiness clears recorded connect failure delays`(alreadyWaiting: Bool) async throws {
         let gate = NonCooperativeGate()
+        let firstSocket = OSAllocatedUnfairLock(initialState: true)
         let session = GatewayTestWebSocketSession(taskFactory: {
-            GatewayTestWebSocketTask(receiveHook: { _, _ in throw URLError(.cannotConnectToHost) })
+            let shouldFail = firstSocket.withLock { isFirst in
+                defer { isFirst = false }
+                return isFirst
+            }
+            return shouldFail
+                ? GatewayTestWebSocketTask(receiveHook: { _, _ in throw URLError(.cannotConnectToHost) })
+                : GatewayTestWebSocketTask()
         })
         let channel = try GatewayChannelActor(
             url: #require(URL(string: "ws://example.invalid")),
@@ -448,7 +456,7 @@ struct GatewayChannelConnectTests {
                 await channel.clearConnectFailureBackoff()
                 retry = Task { try await channel.connect() }
             }
-            await #expect(throws: (any Error).self) { try await retry.value }
+            try await retry.value
             #expect(session.snapshotMakeCount() == 2)
         }
     }
@@ -507,7 +515,7 @@ struct GatewayChannelConnectTests {
             session: WebSocketSessionBox(session: session),
             connectOptions: options)
         await channel._test_setConnectTimeoutSeconds(0.1)
-        await channel._test_setConnectAttemptFinishedHandler { _ in
+        await channel._test_setConnectAttemptFinishedHandler {
             Task { await completion.record() }
         }
 
@@ -554,7 +562,9 @@ struct GatewayChannelConnectTests {
         })
         let url = try #require(URL(string: "wss://gateway.example.invalid"))
         let channel = GatewayChannelActor(
-            url: url, token: nil, session: WebSocketSessionBox(session: session),
+            url: url,
+            token: nil,
+            session: WebSocketSessionBox(session: session),
             connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions)
         var caught: (any Error)?
         do {

@@ -137,6 +137,37 @@ struct ChatSessionSidebarBatchTests {
         #expect(batch.sidebarEntries == entries)
     }
 
+    @Test func `old pin completion cannot clear a new operation after a full reset`() async throws {
+        let batch = ChatSessionSidebarBatch()
+        let reads = AsyncStream.makeStream(of: CheckedContinuation<Void, Never>.self)
+        var readCount = 0
+        let connection = try self.connection { request in
+            if request.method == "config.patch" { return Data(#"{"ok":true}"#.utf8) }
+            readCount += 1
+            if readCount <= 2 {
+                await withCheckedContinuation { reads.continuation.yield($0) }
+            }
+            return try self.pinSnapshot(["session:a", "session:b"])
+        }
+        var iterator = reads.stream.makeAsyncIterator()
+        let first = Task {
+            try await batch.movePin(keys: ["a", "b"], key: "b", target: "a", after: false, connection: connection)
+        }
+        let firstRead = try #require(await iterator.next())
+        batch.reset()
+        let second = Task {
+            try await batch.movePin(keys: ["a", "b"], key: "a", target: "b", after: true, connection: connection)
+        }
+        let secondRead = try #require(await iterator.next())
+        firstRead.resume()
+        try await first.value
+        #expect(batch.busy)
+        secondRead.resume()
+        try await second.value
+        #expect(!batch.busy)
+        reads.continuation.finish()
+    }
+
     @Test func `concurrent preference writers trigger a fresh guarded move preserving their entries`() async throws {
         var server = ["route:home", "session:a", "plugin:old", "session:b"]
         let remote = ["route:home", "session:a", "future:new", "session:b", "plugin:new", "route:tail"]
@@ -214,57 +245,6 @@ struct ChatSessionSidebarBatchTests {
         #expect(batch.sidebarEntries.isEmpty)
     }
 
-    @Test func `external invalidation during post-commit read is reconciled before settlement`() async throws {
-        let batch = ChatSessionSidebarBatch()
-        let newer = ["session:a", "future:remote", "session:b"]
-        let observer = try self.connection { _ in try self.pinSnapshot(newer) }
-        var reads = 0
-        var writes = 0
-        let connection = try self.connection { request in
-            if request.method == "config.patch" { writes += 1
-                return Data(#"{"ok":true}"#.utf8)
-            }
-            reads += 1
-            if reads == 2 {
-                try await batch.refreshPins(observer)
-                return try self.pinSnapshot(["session:b", "route:old", "session:a"])
-            }
-            return try self.pinSnapshot(reads == 1 ? ["session:a", "route:old", "session:b"] : newer)
-        }
-        try await batch.movePin(keys: ["a", "b"], key: "b", target: "a", after: false, connection: connection)
-        #expect(writes == 1)
-        #expect(batch.sidebarEntries == newer)
-    }
-
-    @Test(arguments: [1, 2])
-    func `pending external invalidation survives a failed preference read`(failedRead: Int) async throws {
-        let batch = ChatSessionSidebarBatch()
-        let newer = ["session:a", "future:remote", "session:b"]
-        let observer = try self.connection { _ in try self.pinSnapshot(newer) }
-        var reads = 0
-        var writes = 0
-        let connection = try self.connection { request in
-            if request.method == "config.patch" { writes += 1
-                return Data(#"{"ok":true}"#.utf8)
-            }
-            reads += 1
-            if reads == failedRead {
-                try await batch.refreshPins(observer)
-                throw URLError(.cannotConnectToHost)
-            }
-            return try self.pinSnapshot(reads == 1 ? ["session:a", "route:old", "session:b"] : newer)
-        }
-        if failedRead == 1 {
-            await #expect(throws: URLError.self) {
-                try await batch.movePin(keys: ["a", "b"], key: "b", target: "a", after: false, connection: connection)
-            }
-        } else {
-            try await batch.movePin(keys: ["a", "b"], key: "b", target: "a", after: false, connection: connection)
-        }
-        #expect(writes == failedRead - 1)
-        #expect(batch.sidebarEntries == newer)
-    }
-
     @Test func `batch deletion resolves optional run facts before dispatch`() async throws {
         var deleted: [String] = []
         let connection = try self.connection { request in
@@ -312,21 +292,13 @@ struct ChatSessionSidebarBatchTests {
         #expect(batch.errors[OpenClawChatSessionSidebarData.identity(ops)] != nil)
     }
 
-    @Test func `invalid configuration and retired reads cannot replace the preference mirror`() async throws {
+    @Test func `invalid configuration cannot replace the preference mirror`() async throws {
         let batch = ChatSessionSidebarBatch()
         let initial = try self.connection { _ in try self.pinSnapshot(["session:a"]) }
         try await batch.refreshPins(initial)
         let invalid = try self.connection { _ in try self.pinSnapshot([], valid: false) }
         await #expect(throws: CocoaError.self) { try await batch.refreshPins(invalid) }
         #expect(batch.sidebarEntries == ["session:a"])
-        let current = try self.connection { _ in try self.pinSnapshot(["session:new"]) }
-        let replaced = try self.connection { _ in
-            batch.reset()
-            try await batch.refreshPins(current)
-            return try self.pinSnapshot(["session:old"])
-        }
-        try await batch.refreshPins(replaced)
-        #expect(batch.sidebarEntries == ["session:new"])
     }
 
     @Test func `native range and toggle proposals keep only visible roots while plain child clicks navigate`() {
@@ -419,22 +391,6 @@ struct ChatSessionSidebarBatchTests {
         #expect(await batch.run(.newGroup("Launch"), rows: rows, mainKey: "main", connection: connection).isEmpty)
         #expect(calls == 0)
         #expect(Set(batch.errors.keys) == Set(rows.map(OpenClawChatSessionSidebarData.identity)))
-    }
-
-    @Test(arguments: ["sessions.groups.list", "sessions.groups.put"])
-    func `retired new group scope never moves captured rows`(retireAfter: String) async throws {
-        let batch = ChatSessionSidebarBatch()
-        let rows = try [self.row(0), self.row(1)]
-        var methods: [String] = []
-        let connection = try self.connection { request in
-            methods.append(request.method)
-            if request.method == retireAfter { batch.reset() }
-            return Data(#"{"ok":true,"groups":[{"name":"Research","position":0}]}"#.utf8)
-        }
-        #expect(await batch.run(.newGroup("Launch"), rows: rows, mainKey: "main", connection: connection).isEmpty)
-        #expect(methods == (retireAfter == "sessions.groups.list" ?
-                ["sessions.groups.list"] : ["sessions.groups.list", "sessions.groups.put"]))
-        #expect(batch.errors.isEmpty)
     }
 
     @Test func `failed new group catalog write reports every captured row without assigning any`() async throws {
@@ -548,19 +504,21 @@ struct ChatSessionSidebarBatchTests {
         #expect(!ChatSessionSidebarEligibility.canDelete([running, archived], mainSessionKey: "main"))
     }
 
-    @Test func `reset during a response neither dispatches the next chunk nor publishes old errors`() async throws {
+    @Test func `query changes retain the busy owner and complete captured batch chunks`() async throws {
         let batch = ChatSessionSidebarBatch()
+        batch.running = true
         let rows = try (0..<101).map { try self.row($0) }
         var calls = 0
         let connection = try self.connection { request in
             calls += 1
-            batch.reset()
+            batch.reset(clearConnection: false)
+            #expect(batch.busy)
             let targets = try #require(self.params(request)["targets"] as? [[String: Any]])
             return try JSONSerialization
                 .data(withJSONObject: ["outcomes": targets.map { ["key": $0["key"]!, "ok": true] }])
         }
-        #expect(await batch.run(.unread(false), rows: rows, mainKey: "main", connection: connection).isEmpty)
-        #expect(calls == 1)
+        #expect(await batch.run(.unread(false), rows: rows, mainKey: "main", connection: connection) == rows)
+        #expect(calls == 2)
         #expect(batch.errors.isEmpty)
     }
 

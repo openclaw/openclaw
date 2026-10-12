@@ -465,7 +465,6 @@ final class MacNodeModeCoordinator: NSObject {
 
             let cameraEnabled = defaults.object(forKey: cameraEnabledKey) as? Bool ?? false
             let codexThreadCatalogEnabled = MacNodeCodexThreadCatalog.shouldAdvertise()
-            let claudeSessionCatalogEnabled = MacNodeClaudeSessionCatalog.shouldAdvertise()
 
             do {
                 let endpointAttemptGeneration = self.endpointAttemptGeneration
@@ -480,8 +479,7 @@ final class MacNodeModeCoordinator: NSObject {
                     endpointGeneration: endpointAttemptGeneration,
                     routeAuthorityGeneration: routeAuthorityGeneration,
                     cameraEnabled: cameraEnabled,
-                    codexThreadCatalogEnabled: codexThreadCatalogEnabled,
-                    claudeSessionCatalogEnabled: claudeSessionCatalogEnabled)
+                    codexThreadCatalogEnabled: codexThreadCatalogEnabled)
                 else { continue }
 
                 guard try await self.connectWithTLSRepair(attempt) else {
@@ -517,8 +515,7 @@ final class MacNodeModeCoordinator: NSObject {
         endpointGeneration: UInt64,
         routeAuthorityGeneration: UInt64,
         cameraEnabled: Bool,
-        codexThreadCatalogEnabled: Bool,
-        claudeSessionCatalogEnabled: Bool) async throws -> ConnectionAttempt?
+        codexThreadCatalogEnabled: Bool) async throws -> ConnectionAttempt?
     {
         let config = endpoint.config
         let provider = ComputerControlProvider.current()
@@ -533,8 +530,7 @@ final class MacNodeModeCoordinator: NSObject {
             computerControlProvider: provider,
             locationMode: OpenClawLocationMode(rawValue: rawLocationMode) ?? .off,
             connectionMode: AppStateStore.shared.connectionMode,
-            codexThreadCatalogEnabled: codexThreadCatalogEnabled,
-            claudeSessionCatalogEnabled: claudeSessionCatalogEnabled)
+            codexThreadCatalogEnabled: codexThreadCatalogEnabled)
         // If Computer Control was turned off, release any button the
         // computer.act service is still holding rather than waiting for
         // the idle watchdog. This refresh loop re-runs on the settings
@@ -1222,8 +1218,7 @@ extension MacNodeModeCoordinator {
         computerControlProvider: ComputerControlProvider = .peekaboo,
         locationMode: OpenClawLocationMode,
         connectionMode: AppState.ConnectionMode,
-        codexThreadCatalogEnabled: Bool = false,
-        claudeSessionCatalogEnabled: Bool = false) -> [String]
+        codexThreadCatalogEnabled: Bool = false) -> [String]
     {
         var caps: [String] = [
             OpenClawCapability.canvas.rawValue,
@@ -1236,13 +1231,8 @@ extension MacNodeModeCoordinator {
             caps.append(OpenClawCapability.computer.rawValue)
         }
         if locationMode != .off { caps.append(OpenClawCapability.location.rawValue) }
-        // A local Gateway already catalogs this user's Codex home. Advertise the
-        // node-owned catalog only when this Mac supplies it to a remote Gateway.
         if codexThreadCatalogEnabled, connectionMode == .remote {
             caps.append(MacNodeCodexThreadCatalogContract.capability)
-        }
-        if claudeSessionCatalogEnabled, connectionMode == .remote {
-            caps.append(MacNodeClaudeSessionCatalogContract.capability)
         }
         return caps
     }
@@ -1276,9 +1266,6 @@ extension MacNodeModeCoordinator {
         }
         if capsSet.contains(MacNodeCodexThreadCatalogContract.capability) {
             commands.append(contentsOf: MacNodeCodexThreadCatalogContract.commands)
-        }
-        if capsSet.contains(MacNodeClaudeSessionCatalogContract.capability) {
-            commands.append(contentsOf: MacNodeClaudeSessionCatalogContract.commands)
         }
         if capsSet.contains(OpenClawCapability.computer.rawValue) {
             commands.append(OpenClawComputerCommand.act.rawValue)
