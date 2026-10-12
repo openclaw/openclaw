@@ -4,8 +4,8 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { Kbd } from "../../../components/solid/kbd.tsx";
 import { ProviderBrandIcon } from "../../../components/solid/provider-icon.tsx";
 import "../../../components/tooltip.ts";
-import { t } from "../../../i18n/index.ts";
 import { formatModelRuntimeLabel } from "../../../lib/model-runtime-label.ts";
+import { t } from "../../../lib/reactive/i18n.ts";
 import {
   formatModelContextMeta,
   formatModelLabel,

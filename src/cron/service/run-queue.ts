@@ -527,6 +527,7 @@ async function launchCronRun(
               request: {
                 executionJob,
                 preserveCadence: isImmediateCronRunMode(options.mode),
+                onExitWatcherCompletion: options.onExit !== undefined,
                 scheduleOwnershipAtMs:
                   options.scheduleOwnershipAtMs ?? entry.runReceipt.startedAtMs,
                 runId: options.runId,

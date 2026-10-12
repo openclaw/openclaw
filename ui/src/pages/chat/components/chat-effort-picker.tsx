@@ -1,17 +1,17 @@
 import { For, createMemo } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../components/tooltip.ts";
-import { t } from "../../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import type {
   ChatFastModeSelectState,
   ChatFastModeSelectValue,
 } from "../../../lib/chat/model-select-state.ts";
 import type { ChatThinkingSelectState } from "../../../lib/chat/thinking.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { liveValue } from "../../../lib/reactive/live-value.ts";
 import { handleChatComposerDetailsToggle, syncChatPickerOverlay } from "./chat-picker-overlay.ts";
 
-registerModelControlsEnglish();
+registerEnglishCatalog(registerModelControlsEnglish);
 
 export type ChatEffortPickerParams = {
   disabled: boolean;

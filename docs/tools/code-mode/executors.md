@@ -44,6 +44,12 @@ the Code Mode tool bridge retain OpenClaw's normal policy, approvals, hooks,
 and session ownership under either executor. These checks mediate tool calls;
 they cannot contain hostile code that escapes a Node VM context.
 
+Session sandboxing does not move Code Mode cells into the sandbox. Under the
+Node executor, a cell from a sandboxed session, including one created by a
+[role that requires sandboxing](/gateway/operator-scopes#named-operator-roles),
+still runs in the Gateway process. Use QuickJS on Gateways where untrusted
+people can start sessions on the built-in runtime.
+
 ## Set the executor
 
 In the web interface, open **Settings → Agents & Tools → Labs** and use

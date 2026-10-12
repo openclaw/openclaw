@@ -1,6 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { icons } from "../../../components/icons.ts";
-import { t } from "../../../i18n/index.ts";
+import { t } from "../../../lib/reactive/i18n.ts";
 import { LitContent } from "./chat-composer-interop.tsx";
 
 export function menuDivider(): JSX.Element {

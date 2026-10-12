@@ -28,6 +28,8 @@ export type ChatSessionAbortParams = {
   stopReason?: string;
   requester: ChatAbortRequester;
   assertCurrent?: () => void;
+  /** Prepare persisted request facts immediately before the synchronous cancellation effects. */
+  beforeAbort?: () => Promise<void>;
   /**
    * Session Stop owners also stop admitted or embedded controller-less producers
    * and record their cancellation. They must supply their live authority as assertCurrent.

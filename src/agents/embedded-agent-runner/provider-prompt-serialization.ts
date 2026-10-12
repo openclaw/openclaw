@@ -20,6 +20,7 @@ export type ProviderPromptCachePrefix = {
 
 const MAX_MESSAGE_FINGERPRINTS = 512;
 const MAX_MESSAGE_FIELD_FINGERPRINTS = 32;
+const WIRE_PREFIX_BYTES = 4096;
 // Only protocol field names may survive the worker; extension keys can contain private data.
 const MESSAGE_FIELDS = new Set([
   "role",
@@ -140,6 +141,15 @@ export function prepareProviderPrompt({ payload, encode }: ProviderPromptTask): 
   byteWeight: number;
   encoded: ReturnType<typeof serializeModelRequestBody> | undefined;
   cachePrefix?: ProviderPromptCachePrefix;
+  wire?: {
+    requestBytes: number;
+    prefixBytes: number;
+    prefixHash: string;
+    cacheKeyPresent: boolean;
+    cacheKeyHash?: string;
+    previousResponseIdPresent: boolean;
+    modelHash?: string;
+  };
 } {
   if (!encode) {
     return { ...sha256StableValue(payload), encoded: undefined };
@@ -153,5 +163,16 @@ export function prepareProviderPrompt({ payload, encode }: ProviderPromptTask): 
     byteWeight: encoded.body.byteLength,
     encoded,
     cachePrefix,
+    wire: {
+      requestBytes: encoded.body.byteLength,
+      prefixBytes: Math.min(encoded.body.byteLength, WIRE_PREFIX_BYTES),
+      prefixHash: createHash("sha256")
+        .update(encoded.body.subarray(0, WIRE_PREFIX_BYTES))
+        .digest("hex"),
+      cacheKeyPresent: cachePrefix?.parameters.fields?.prompt_cache_key !== undefined,
+      cacheKeyHash: cachePrefix?.parameters.fields?.prompt_cache_key?.slice(0, 16),
+      previousResponseIdPresent: cachePrefix?.continuation ?? false,
+      modelHash: cachePrefix?.parameters.fields?.model?.slice(0, 16),
+    },
   };
 }

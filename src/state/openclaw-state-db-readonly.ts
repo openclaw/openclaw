@@ -4,13 +4,13 @@ import path from "node:path";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { sleepWithAbort } from "@openclaw/retry";
 import { acquireWithWait } from "../infra/acquire-with-wait.js";
-import { getSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { StateDatabaseAdmissionPendingError } from "../infra/gateway-state-owner-record.js";
 import { SqliteCoordinatorError } from "../infra/sqlite-lifecycle-errors.js";
 import {
   retainSnapshotTempDirectory,
   retainSnapshotWork,
+  deferSqliteSnapshotCleanupAfterRead,
   SqliteSnapshotCleanupError,
 } from "../infra/sqlite-readonly-location-cleanup.js";
 import { prepareSqliteReadOnlyLocationSyncInProcess } from "../infra/sqlite-readonly-location.js";
@@ -20,7 +20,6 @@ import {
   prepareSqliteReadOnlyLocationSync,
 } from "../infra/sqlite-snapshot-source.js";
 import { isUpdateRehearsalPrivateDatabase } from "../infra/update-rehearsal-paths.js";
-import { getChildLogger } from "../logging/logger.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
@@ -172,18 +171,7 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
             return;
           }
         } catch (error) {
-          if (
-            readSucceeded &&
-            !getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources &&
-            error instanceof SqliteSnapshotCleanupError &&
-            hasErrnoCode(error.cause, "EBUSY")
-          ) {
-            // Logical close can precede native release on Bun Windows. The
-            // snapshot registry keeps these private bytes for later cleanup.
-            getChildLogger({ subsystem: "infra/sqlite-snapshot" }).warn(
-              { path: prepared.cleanupRoot, errorCode: "EBUSY" },
-              "Discovery snapshot cleanup deferred until native SQLite resources are released.",
-            );
+          if (readSucceeded && deferSqliteSnapshotCleanupAfterRead(error, prepared.cleanupRoot)) {
             return;
           }
           cause = error;

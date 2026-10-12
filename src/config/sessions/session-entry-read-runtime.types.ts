@@ -6,6 +6,7 @@ import type {
   SessionExactEntriesWorkerSelection,
   SessionEntryCohortRequest,
   SessionEntryCohortResult,
+  SessionExactEntriesWorkerRequest,
 } from "./session-entry-read.types.js";
 import type { SessionEntrySnapshotField } from "./session-entry-snapshot-values.js";
 
@@ -28,6 +29,7 @@ export type SessionEntryWorkerRead = SessionStoreWorkerReadScope &
     includeMembers?: boolean;
     includeParticipantRecords?: boolean;
     includeAuthorization?: boolean;
+    transcript?: SessionExactEntriesWorkerRequest["transcript"];
   };
 
 export type SessionStoreWorkerReadInput = Omit<SessionStoreWorkerReadScope, "agentId"> & {

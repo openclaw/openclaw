@@ -22,7 +22,6 @@ import { withOpenClawTestState } from "../../../../src/test-utils/openclaw-test-
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import { listSessionTranscriptCorpusEntriesForAgent } from "./session-files.js";
-import { listSessionTranscriptCorpusEntriesForAgentSync } from "./session-transcript-corpus.js";
 
 function pauseDirectoryDiscovery(sessionsDir: string) {
   const entered = createDeferred();
@@ -73,11 +72,17 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
         expect(tableExists(db, "session_transcript_archives")).toBe(archiveTablePresent);
 
         const options = { includeContentRevision, readOnly };
-        const expected = listSessionTranscriptCorpusEntriesForAgentSync("main", options);
         const actual = await listSessionTranscriptCorpusEntriesForAgent("main", options);
 
-        expect(actual).toEqual(expected);
         expect(actual).toHaveLength(2);
+        expect(actual.find((entry) => entry.artifactKind === "active-session")).toMatchObject({
+          agentId: "main",
+          sessionFile: "agent:main:cron:job-1:run:run-1",
+          sessionId: "cron-thread",
+          generatedByCronRun: true,
+          sessionKind: "cron",
+          transcriptSource: "sqlite",
+        });
         const archive = actual.find((entry) => entry.artifactKind === "archive-artifact");
         expect(archive).toMatchObject({
           sessionFile: archivePath,
@@ -193,7 +198,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
         transcriptSource: "sqlite",
         updatedAtMs: persisted?.updatedAt,
       };
-      expect(listSessionTranscriptCorpusEntriesForAgentSync("main", options)).toEqual([
+      await expect(listSessionTranscriptCorpusEntriesForAgent("main", options)).resolves.toEqual([
         { ...expected, sessionKind: "interactive" },
       ]);
 
@@ -206,9 +211,6 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
         db.prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?").get(sessionKey)
           ?.entry_valid;
       expect(validity()).toBe(0);
-      expect(listSessionTranscriptCorpusEntriesForAgentSync("main", options)).toEqual([expected]);
-      expect(validity()).toBe(0);
-
       await expect(listSessionTranscriptCorpusEntriesForAgent("main", options)).resolves.toEqual([
         expected,
       ]);

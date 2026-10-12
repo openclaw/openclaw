@@ -5,7 +5,6 @@ import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../../../src/sha
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { normalizeBasePath } from "../../../app-route-paths.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { t } from "../../../i18n/index.ts";
 import { formatCompactTokenCount, formatCost } from "../../../lib/format.ts";
 import { isMonitoredAuthProvider } from "../../../lib/model-auth.ts";
 import {
@@ -14,6 +13,7 @@ import {
   type ProviderQuotaGroup,
   type ProviderUsageDisplayProps,
 } from "../../../lib/provider-quota-summary.ts";
+import { t } from "../../../lib/reactive/i18n.ts";
 import { resolveSessionContextLimit } from "../../../lib/sessions/context-budget.ts";
 import { handleChatComposerDetailsToggle, syncChatPickerOverlay } from "./chat-picker-overlay.ts";
 

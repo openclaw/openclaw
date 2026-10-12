@@ -1,6 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, expect, it, vi } from "vitest";
-import { runWithSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -8,7 +7,6 @@ import {
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { upsertSessionEntryCore } from "./session-accessor.js";
 import { readSessionEntryCount } from "./session-accessor.sqlite-entry-inventory.js";
-import { bindSqliteWorkerBackend } from "./session-lifecycle-projection.worker.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-entry-count-");
 
@@ -41,19 +39,10 @@ it("counts mixed validated and raw entries with the same archive filter", async 
       "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, 1)",
     )
     .run("agent:main:invalid", "invalid", "{");
-  const planner = runWithSqliteWorkerStateContext({ environment: scope.env }, () =>
-    bindSqliteWorkerBackend(
-      { agentId: scope.agentId },
-      { database: database.db, databasePath: database.path },
-    ),
-  );
-  try {
+  {
     using transactionSql = vi.spyOn(database.db, "exec");
-    expect(planner.execute({ type: "count", input: undefined })).toBe(4);
+    expect(readSessionEntryCount(database)).toBe(4);
     expect(transactionSql).not.toHaveBeenCalled();
-    planner.assertSettled?.();
-  } finally {
-    await planner.close();
   }
   expect(readSessionEntryCount(database, { includeArchived: false })).toBe(2);
   database.db

@@ -4,22 +4,27 @@ import {
   DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_ID,
 } from "./defaults.js";
 
+export type ManagedLlamaModel = {
+  id: string;
+  path: string;
+  contextSize?: number;
+  maxTokens?: number;
+  projectorPath?: string;
+  imageMaxTokens?: number;
+  device?: string;
+};
+
 export type ManagedLlamaChatModel =
   | { mode: "preserve" }
   | { mode: "remove" }
-  | {
-      mode: "configure";
-      id: string;
-      path: string;
-      contextSize?: number;
-      maxTokens?: number;
-    };
+  | ({ mode: "configure" } & ManagedLlamaModel);
 
 export type LlamaServerPresetOptions = {
   chatModel: ManagedLlamaChatModel;
   configuredChatModelIds?: readonly string[];
   embeddingModelPath?: string;
   defaultEmbeddingModelPath?: string;
+  mediaModels?: readonly ManagedLlamaModel[];
   // Settings the router already passes to every model: its args and its effective environment.
   serviceSettings?: {
     args?: readonly string[];
@@ -78,10 +83,47 @@ const PRESET_KEY_ALIASES: Record<string, string> = {
   LLAMA_ARG_UBATCH: "ubatch-size",
   embeddings: "embedding",
   LLAMA_ARG_EMBEDDINGS: "embedding",
+  LLAMA_ARG_MMPROJ: "mmproj",
+  mm: "mmproj",
+  mmdev: "mmproj-device",
+  MTMD_BACKEND_DEVICE: "mmproj-device",
+  LLAMA_ARG_IMAGE_MAX_TOKENS: "image-max-tokens",
   np: "parallel",
   LLAMA_ARG_N_PARALLEL: "parallel",
+  dev: "device",
+  LLAMA_ARG_DEVICE: "device",
+  sm: "split-mode",
+  LLAMA_ARG_SPLIT_MODE: "split-mode",
+
   LLAMA_ARG_KV_UNIFIED_PER_SLOT: "kv-unified-per-slot",
 };
+
+// Router CLI options override model sections in the pinned llama.cpp runtime.
+export function assertMediaPresetLimits(
+  args: readonly string[],
+  models: readonly { contextSize: number; imageMaxTokens: number }[],
+): void {
+  const limits: Record<string, number> = {
+    "ctx-size": Math.min(...models.map((model) => model.contextSize)),
+    "image-max-tokens": Math.min(...models.map((model) => model.imageMaxTokens)),
+    parallel: 1,
+  };
+  for (let index = 0; index < args.length; index++) {
+    const [option = "", inlineValue] = args[index]!.split("=", 2);
+    const name = option.replace(/^--?/u, "").replaceAll("_", "-");
+    const key = PRESET_KEY_ALIASES[name] ?? name;
+    const limit = limits[key];
+    if (limit === undefined) {
+      continue;
+    }
+    const value = Number(inlineValue ?? args[++index]);
+    if (!Number.isInteger(value) || value < 1 || value > limit) {
+      throw new Error(
+        `Router option ${option} exceeds the local media limit (${limit}). Lower it or move it into the existing model's preset section, then retry local media setup. Existing configuration is unchanged.`,
+      );
+    }
+  }
+}
 
 const PRESET_SETTING_PATTERN =
   /(?<![^\r\n])([a-zA-Z_][a-zA-Z0-9_.-]*)([ \t]*=[ \t]*)([^\r\n]*?)([ \t]*(?:[;#][^\r\n]*)?)(\r\n|\n|\r|(?![\s\S]))/g;
@@ -165,15 +207,34 @@ export function buildLlamaServerPreset(
       sections.delete(id);
     }
   }
-  if (params.chatModel.mode === "configure") {
+  const models = [
+    ...(params.chatModel.mode === "configure" ? [params.chatModel] : []),
+    ...(params.mediaModels ?? []),
+  ];
+  for (const model of models) {
     updateModelSection(
       sections,
-      params.chatModel.id,
+      model.id,
       {
-        model: assertIniValue(params.chatModel.path, "llama.cpp model path"),
-        "ctx-size": String(params.chatModel.contextSize ?? DEFAULT_LLAMA_CPP_CONTEXT_SIZE),
-        "n-predict": String(params.chatModel.maxTokens ?? 2048),
+        model: assertIniValue(model.path, "llama.cpp model path"),
+        "ctx-size": String(model.contextSize ?? DEFAULT_LLAMA_CPP_CONTEXT_SIZE),
+        "n-predict": String(model.maxTokens ?? 2048),
         jinja: "true",
+        ...(model.projectorPath
+          ? {
+              mmproj: assertIniValue(model.projectorPath, "llama.cpp projector path"),
+              "image-max-tokens": String(model.imageMaxTokens ?? 1024),
+              parallel: "1",
+              "load-on-startup": "false",
+            }
+          : {}),
+        ...(model.device
+          ? {
+              device: assertIniValue(model.device, "llama.cpp device"),
+              "mmproj-device": assertIniValue(model.device, "llama.cpp projector device"),
+              "split-mode": "none",
+            }
+          : {}),
       },
       newline,
     );
@@ -214,7 +275,7 @@ export function buildLlamaServerPreset(
     );
   }
   const embeddingSection = sections.get(DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_ID);
-  if (!embeddingSection) {
+  if (!embeddingSection && params.mediaModels === undefined) {
     throw new Error("llama.cpp embedding model path is required for a new managed preset");
   }
   sections.delete(DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_ID);
@@ -222,7 +283,7 @@ export function buildLlamaServerPreset(
     ...[...sections]
       .toSorted(([left], [right]) => Number(left > right) - Number(left < right))
       .map(([, section]) => section),
-    embeddingSection,
+    ...(embeddingSection ? [embeddingSection] : []),
   ];
   return (
     header +
