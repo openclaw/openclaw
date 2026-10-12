@@ -101,7 +101,7 @@ import {
   verifyDevUpdateStatus,
   verifyPackagedUpgradeUpdateResult,
   verifyWindowsPackagedUpgradeFallbackInstall,
-  waitForGatewayWithStartupMigrationRestart,
+  waitForGatewayWithStartupRecovery,
   writePackageDistInventoryForCandidate,
   writeSummary,
 } from "../../scripts/lib/cross-os-release-checks/index.ts";
@@ -561,7 +561,8 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       const firstError = new Error("first gateway exited");
       let restartCalls = 0;
 
-      await waitForGatewayWithStartupMigrationRestart({
+      await waitForGatewayWithStartupRecovery({
+        gatewayPort: 18_789,
         gatewayHolder: holder,
         restartGateway: async () => {
           restartCalls += 1;
@@ -614,7 +615,8 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       let restartCalls = 0;
 
       await expect(
-        waitForGatewayWithStartupMigrationRestart({
+        waitForGatewayWithStartupRecovery({
+          gatewayPort: 18_789,
           gatewayHolder: holder,
           restartGateway: async () => {
             restartCalls += 1;
@@ -647,7 +649,8 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       let restartCalls = 0;
 
       await expect(
-        waitForGatewayWithStartupMigrationRestart({
+        waitForGatewayWithStartupRecovery({
+          gatewayPort: 18_789,
           gatewayHolder: holder,
           restartGateway: async () => {
             restartCalls += 1;
@@ -686,7 +689,8 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       let restartCalls = 0;
 
       await expect(
-        waitForGatewayWithStartupMigrationRestart({
+        waitForGatewayWithStartupRecovery({
+          gatewayPort: 18_789,
           gatewayHolder: holder,
           restartGateway: async () => {
             restartCalls += 1;

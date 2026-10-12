@@ -30,11 +30,12 @@ import { readLogFileSize } from "./logs.ts";
 import {
   canConnectToLoopbackPort,
   captureGatewayProcess,
+  configureReplacementGatewayPort,
   hasChildExited,
   resolveCommandSpawnInvocation,
   runCommand,
   runCommandInvocation,
-  waitForGatewayWithStartupMigrationRestart,
+  waitForGatewayWithStartupRecovery,
   withAllocatedGatewayPort,
 } from "./process.ts";
 import { formatError, shellEscapeForSh, sleep } from "./shared.ts";
@@ -569,15 +570,33 @@ export async function waitForInstalledGateway(params: {
       throw new Error("Gateway restart coordination requires a gateway log path.");
     }
     const gatewayLogPath = params.gatewayLogPath;
-    await waitForGatewayWithStartupMigrationRestart({
+    await waitForGatewayWithStartupRecovery({
+      gatewayPort: params.lane.gatewayPort,
       gatewayHolder: params.gatewayHolder,
-      restartGateway: () =>
-        startManualGatewayFromInstalledCli({
+      restartGateway: async (reason) => {
+        if (reason === "port-busy") {
+          await configureReplacementGatewayPort({
+            lane: params.lane,
+            logPath: params.logPath,
+            run: (args, timeoutMs) =>
+              runInstalledCli({
+                cliPath: params.cliPath,
+                args,
+                cwd: params.lane.homeDir,
+                env: params.env,
+                logPath: params.logPath,
+                timeoutMs,
+                check: false,
+              }),
+          });
+        }
+        return startManualGatewayFromInstalledCli({
           lane: params.lane,
           cliPath: params.cliPath,
           env: params.env,
           logPath: gatewayLogPath,
-        }),
+        });
+      },
       waitUntilReady: (gateway) =>
         waitForInstalledGateway({
           lane: params.lane,

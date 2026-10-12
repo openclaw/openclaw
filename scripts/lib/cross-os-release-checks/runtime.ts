@@ -34,10 +34,11 @@ import {
 } from "./network-smokes.ts";
 import {
   captureGatewayProcess,
+  configureReplacementGatewayPort,
   hasChildExited,
   registerActiveChildProcessTree,
   runCommand,
-  waitForGatewayWithStartupMigrationRestart,
+  waitForGatewayWithStartupRecovery,
 } from "./process.ts";
 import { logLanePhase } from "./reporting.ts";
 import { formatError, sleep } from "./shared.ts";
@@ -177,14 +178,31 @@ export async function waitForGateway(
       throw new Error("Gateway restart coordination requires a gateway log path.");
     }
     const gatewayLogPath = params.gatewayLogPath;
-    await waitForGatewayWithStartupMigrationRestart({
+    await waitForGatewayWithStartupRecovery({
+      gatewayPort: params.lane.gatewayPort,
       gatewayHolder: params.gatewayHolder,
-      restartGateway: () =>
-        startGateway({
+      restartGateway: async (reason) => {
+        if (reason === "port-busy") {
+          await configureReplacementGatewayPort({
+            lane: params.lane,
+            logPath: params.logPath,
+            run: (args, timeoutMs) =>
+              runOpenClaw({
+                lane: params.lane,
+                env: params.env,
+                args,
+                logPath: params.logPath,
+                timeoutMs,
+                check: false,
+              }),
+          });
+        }
+        return startGateway({
           lane: params.lane,
           env: params.env,
           logPath: gatewayLogPath,
-        }),
+        });
+      },
       waitUntilReady: (gateway) =>
         waitForGateway({
           lane: params.lane,
