@@ -6,6 +6,7 @@ import {
   tryResolveLegacyCompatibilityAgentId,
 } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatAgentDatabaseCorruptionRepairHint } from "../infra/agent-database-recovery-guidance.js";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatAgentDatabaseOwnershipRepairHint } from "../infra/state-migrations.agent-owner-guidance.js";
@@ -76,6 +77,9 @@ export function createAgentDatabaseInspectionRefusal(params: {
     resolveUpdateRehearsalRoot(process.env) &&
     params.reason.includes("creating its private snapshot:") &&
     /(?:code=(?:ENOSPC|EDQUOT)\b|errcode=13\b)/u.test(params.reason);
+  const corruptionRepairHint = params.pending
+    ? undefined
+    : formatAgentDatabaseCorruptionRepairHint(params.agentId, params.cause);
   const refusal: AgentDatabaseAdmissionRefusal = {
     agentId: params.agentId,
     paths: params.paths,
@@ -85,7 +89,9 @@ export function createAgentDatabaseInspectionRefusal(params: {
       ? "Free space in the reported snapshot cache, then retry the update. This candidate snapshot failure does not require repairing the serving database."
       : params.pending
         ? 'Sessions remain unavailable until background inspection and preparation finish. If they cannot complete, stop the Gateway, run "openclaw doctor --fix", and restart.'
-        : 'Sessions remain unavailable. Stop the Gateway, run "openclaw doctor --fix" to inspect and repair this agent database, and restart.',
+        : corruptionRepairHint
+          ? `Sessions remain unavailable. ${corruptionRepairHint}`
+          : 'Sessions remain unavailable. Stop the Gateway, run "openclaw doctor --fix" to inspect and repair this agent database, and restart.',
   };
   refusalCauses.set(refusal, params.cause);
   return refusal;

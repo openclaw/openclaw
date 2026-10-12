@@ -15,6 +15,7 @@ import {
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import * as nodeSqlite from "./node-sqlite.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
@@ -30,6 +31,10 @@ import {
   writeArchive,
   type FixtureEvent,
 } from "./state-migrations.media-persistence.test-support.js";
+import {
+  createLegacyStateMigrationStepReceipt,
+  DoctorStateMigrationRefusalError,
+} from "./state-migrations.messages.js";
 
 const tempDirs: string[] = [];
 
@@ -38,6 +43,48 @@ afterEach(() => {
 });
 
 describe("legacy media persistence doctor migration", () => {
+  it.each([
+    { profile: undefined, agentId: "main" },
+    { profile: "p".repeat(64), agentId: "main" },
+    { profile: "p".repeat(64), agentId: "a".repeat(64) },
+  ])(
+    "reports offline recovery for a corrupt agent database and preserves the source (profile=$profile, agent=$agentId)",
+    async ({ profile, agentId }) => {
+      await withEnvAsync(
+        { OPENCLAW_PROFILE: profile, OPENCLAW_CONTAINER_HINT: undefined },
+        async () => {
+          const recoveryCommand = profile
+            ? `openclaw --profile ${profile} doctor --session-sqlite recover --session-sqlite-agent ${agentId}`
+            : `openclaw doctor --session-sqlite recover --session-sqlite-agent ${agentId}`;
+          const stateDir = makeTempDir(tempDirs, "media-persistence-corrupt-guidance-");
+          const env = { OPENCLAW_STATE_DIR: stateDir };
+          const pathname = createLegacyDatabaseFixture({ agentId, env, eventsBySession: {} });
+          const damaged = fs.readFileSync(pathname);
+          damaged.write("XXXXXXXXX", 0);
+          fs.writeFileSync(pathname, damaged);
+          const result = await migrateLegacyMediaPersistence({ env });
+          expect(result.warningDisposition).not.toBe("recoverable");
+          expect(result.warnings.join("\n")).toContain("file is not a database");
+          const receipt = createLegacyStateMigrationStepReceipt(
+            {
+              id: "media-persistence",
+              phase: "shared",
+              source: [],
+              target: [],
+              requiredness: "required",
+              reversibility: "checkpoint-required",
+            },
+            result,
+          );
+          const refusal = new DoctorStateMigrationRefusalError([receipt]);
+          expect(refusal.message).toContain(recoveryCommand);
+          expect(refusal.message).toContain(".corrupt-");
+          expect(fs.readFileSync(pathname)).toEqual(damaged);
+        },
+      );
+    },
+  );
+
   it("reports skipped embedding cache rows as recoverable Doctor warnings after a schema-21 upgrade", async () => {
     const stateDir = makeTempDir(tempDirs, "memory-cache-migration-warning-");
     const env = { OPENCLAW_STATE_DIR: stateDir };

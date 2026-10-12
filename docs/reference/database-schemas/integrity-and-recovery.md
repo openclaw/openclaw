@@ -934,7 +934,18 @@ the underlying database error.
 
 ### A database is quarantined after integrity verification failed
 
-The background verifier proved the file is corrupt, and every open now fails fast instead of rescanning. Restore the database from a backup or repair it, then run `openclaw doctor --fix` to clear the quarantine record. Doctor reports an explicit error if the quarantine record itself cannot be cleared; rerun it until it reports clean.
+The background verifier proved the file is corrupt, and every open now fails fast instead of rescanning.
+For an agent database that Doctor cannot open or repair, stop the Gateway, preserve
+a backup of the database and its SQLite sidecars, then run
+`openclaw doctor --session-sqlite recover --session-sqlite-agent <id>` against the
+same state/config. Recovery repairs supported index corruption in place or
+preserves the damaged file set with a `.corrupt-<timestamp>` suffix before
+preparing a fresh database. Restore a verified backup if you need the previous
+sessions. See [SQLite maintenance](/cli/doctor/sqlite-maintenance).
+For other databases, restore a verified backup or repair the offline database,
+then run `openclaw doctor --fix` to clear the quarantine record. Doctor reports
+an explicit error if the quarantine record itself cannot be cleared; rerun it
+until it reports clean.
 
 Media migration uses the schema admission integrity check first. Healthy agent
 databases do not repeat that full-file scan inside an immediate repair transaction.

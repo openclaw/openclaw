@@ -17,6 +17,7 @@ import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.
 import {
   AgentDatabaseAdmissionError,
   captureAgentDatabaseAdmission,
+  createAgentDatabaseAdmissionErrorShape,
   createAgentDatabaseInspectionRefusal,
   evaluateAgentDatabaseAdmissions,
   preparePendingAgentDatabase,
@@ -56,6 +57,60 @@ afterEach(async () => {
 });
 
 describe("agent database admission", () => {
+  it.each([
+    { errcode: 26, pending: false, recover: true },
+    { errcode: 267, pending: false, recover: true },
+    { errcode: 5, pending: false, recover: false },
+    { errcode: 10, pending: false, recover: false },
+    { errcode: 13, pending: false, recover: false },
+    { errcode: 26, pending: true, recover: false },
+  ])(
+    "reports recovery only for completed corrupt inspections ($errcode, pending=$pending)",
+    ({ errcode, pending, recover }) => {
+      const native = Object.assign(new Error("native SQLite failure"), {
+        code: "ERR_SQLITE_ERROR",
+        errcode,
+      });
+      const cause = new Error("inspection failed", { cause: native });
+      const refusal = createAgentDatabaseInspectionRefusal({
+        agentId: "worker",
+        paths: ["/synthetic/agent.sqlite"],
+        reason: cause.message,
+        cause,
+        pending,
+      });
+      const output = createAgentDatabaseAdmissionErrorShape(refusal);
+      expect(
+        output.message.includes("doctor --session-sqlite recover --session-sqlite-agent worker"),
+      ).toBe(recover);
+      expect(output.retryable).toBe(pending);
+    },
+  );
+
+  it("reports offline recovery for integrity findings without a transient cause", () => {
+    const cause = new Error("SQLite integrity_check failed: invalid page");
+    cause.name = "SqliteIntegrityError";
+    const refusal = createAgentDatabaseInspectionRefusal({
+      agentId: "worker",
+      paths: [],
+      reason: cause.message,
+      cause,
+    });
+    expect(createAgentDatabaseAdmissionErrorShape(refusal).message).toContain(
+      "doctor --session-sqlite recover --session-sqlite-agent worker",
+    );
+    cause.cause = Object.assign(new Error("database is locked"), { errcode: 5 });
+    const transient = createAgentDatabaseInspectionRefusal({
+      agentId: "worker",
+      paths: [],
+      reason: cause.message,
+      cause,
+    });
+    expect(createAgentDatabaseAdmissionErrorShape(transient).message).not.toContain(
+      "--session-sqlite recover",
+    );
+  });
+
   it("does not let an unavailable required agent hide a newer required database", async () => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-admission-mixed-") };
     const config: OpenClawConfig = {
