@@ -141,6 +141,7 @@ async function startHttpHarness(options?: {
 
 function sendRequest(options?: {
   id?: string | number;
+  taskId?: string;
   contextId?: string;
   messageId?: string;
   text?: string;
@@ -153,6 +154,7 @@ function sendRequest(options?: {
     method: options?.method ?? "SendMessage",
     params: {
       message: {
+        ...(options?.taskId ? { taskId: options.taskId } : {}),
         ...(options?.messageId ? { messageId: options.messageId } : {}),
         ...(options?.contextId ? { contextId: options.contextId } : {}),
         role: "ROLE_USER",
@@ -670,6 +672,130 @@ describe("A2A JSON-RPC protocol boundary", () => {
         },
       },
     });
+  });
+});
+
+describe("A2A SendMessage task references", () => {
+  it.each(["SendMessage", "message/send"])(
+    "%s rejects missing and foreign task references without allocating or dispatching work",
+    async (method) => {
+      const onDispatch = vi.fn(async () => {
+        throw new Error("Unexpected task-reference dispatch");
+      });
+      const harness = await startHttpHarness({ onDispatch });
+      const foreign = harness.taskStore.create("private-context", "beta");
+      const before = structuredClone(foreign);
+      const create = vi.spyOn(harness.taskStore, "create");
+      const start = vi.spyOn(harness.taskStore, "start");
+      const wait = vi.spyOn(harness.taskStore, "wait");
+
+      for (const taskId of ["missing", foreign.id]) {
+        for (const returnImmediately of [false, true]) {
+          const response = await harness.post(
+            sendRequest({ method, taskId, contextId: "different-context", returnImmediately }),
+          );
+          await expect(response.json()).resolves.toEqual({
+            jsonrpc: "2.0",
+            id: "send-1",
+            error: { code: -32001, message: "Task not found" },
+          });
+        }
+      }
+
+      expect(create).not.toHaveBeenCalled();
+      expect(start).not.toHaveBeenCalled();
+      expect(wait).not.toHaveBeenCalled();
+      expect(onDispatch).not.toHaveBeenCalled();
+      expect(harness.taskStore.get(foreign.id, "beta")).toEqual(before);
+    },
+  );
+
+  it("treats an expired task reference as missing", async () => {
+    let now = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const onDispatch = vi.fn(async () => {
+      throw new Error("Unexpected task-reference dispatch");
+    });
+    const harness = await startHttpHarness({ onDispatch });
+    const task = harness.taskStore.create("expired-context", "alpha");
+    harness.taskStore.completeNext(task.contextId, "old reply", "alpha");
+    now += 24 * 60 * 60 * 1_000 + 1;
+    const create = vi.spyOn(harness.taskStore, "create");
+
+    const response = await harness.post(sendRequest({ taskId: task.id, returnImmediately: true }));
+
+    await expect(response.json()).resolves.toMatchObject({ error: { code: -32001 } });
+    expect(create).not.toHaveBeenCalled();
+    expect(onDispatch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "TASK_STATE_SUBMITTED",
+    "TASK_STATE_WORKING",
+    "TASK_STATE_COMPLETED",
+    "TASK_STATE_FAILED",
+    "TASK_STATE_CANCELED",
+    "TASK_STATE_REJECTED",
+  ] as const)("refuses same-task continuation in %s without mutation", async (state) => {
+    const onDispatch = vi.fn(async () => {
+      throw new Error("Unexpected task-reference dispatch");
+    });
+    const harness = await startHttpHarness({ onDispatch });
+    const task = harness.taskStore.create("owned-context", "alpha");
+    // Canceled is a protocol state, not a claim that this plugin supports cancellation.
+    task.status = { state, timestamp: task.status.timestamp };
+    const before = structuredClone(task);
+    const create = vi.spyOn(harness.taskStore, "create");
+    const start = vi.spyOn(harness.taskStore, "start");
+    const wait = vi.spyOn(harness.taskStore, "wait");
+
+    for (const contextId of [undefined, task.contextId, "conflicting-context"]) {
+      const response = await harness.post(sendRequest({ taskId: task.id, contextId }));
+      await expect(response.json()).resolves.toMatchObject({
+        error: {
+          code: contextId === "conflicting-context" ? -32602 : -32004,
+        },
+      });
+    }
+
+    expect(harness.taskStore.get(task.id, "alpha")).toEqual(before);
+    expect(create).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
+    expect(wait).not.toHaveBeenCalled();
+    expect(onDispatch).not.toHaveBeenCalled();
+  });
+
+  it("keeps context-only follow-ups as new tasks while dropping rejected notifications in a batch", async () => {
+    const harness = await startHttpHarness();
+    const original = harness.taskStore.create("shared-context", "alpha");
+    harness.taskStore.completeNext(original.contextId, "original reply", "alpha");
+    const before = structuredClone(original);
+    const create = vi.spyOn(harness.taskStore, "create");
+    const { id: _id, ...notification } = sendRequest({ taskId: original.id });
+
+    const response = await harness.post([
+      notification,
+      sendRequest({ id: "rejected", taskId: original.id }),
+      sendRequest({ id: "follow-up", contextId: original.contextId, text: "follow up" }),
+    ]);
+
+    await expect(response.json()).resolves.toEqual([
+      { jsonrpc: "2.0", id: "rejected", error: { code: -32004, message: expect.any(String) } },
+      {
+        jsonrpc: "2.0",
+        id: "follow-up",
+        result: {
+          task: expect.objectContaining({
+            id: expect.not.stringMatching(original.id),
+            contextId: original.contextId,
+            status: expect.objectContaining({ state: "TASK_STATE_COMPLETED" }),
+            artifacts: [expect.objectContaining({ parts: [{ text: "echo: follow up" }] })],
+          }),
+        },
+      },
+    ]);
+    expect(create).toHaveBeenCalledExactlyOnceWith(original.contextId, "alpha");
+    expect(harness.taskStore.get(original.id, "alpha")).toEqual(before);
   });
 });
 

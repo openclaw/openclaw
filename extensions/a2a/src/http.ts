@@ -223,6 +223,24 @@ export function createA2aHttpHandler(params: A2aHttpHandlerParams) {
         if (!text) {
           throw new A2aProtocolError(-32602, "Message must contain at least one usable text part");
         }
+        if (message.taskId !== undefined) {
+          const referencedTask = params.taskStore.get(message.taskId, peerName);
+          if (!referencedTask) {
+            throw new A2aProtocolError(-32001, "Task not found");
+          }
+          if (message.contextId !== undefined && message.contextId !== referencedTask.contextId) {
+            throw new A2aProtocolError(
+              -32602,
+              "Message contextId does not match the referenced task",
+            );
+          }
+          // A context-only follow-up starts new work; a task reference must never
+          // silently allocate a replacement for an active or terminal task.
+          throw new A2aProtocolError(
+            -32004,
+            "Task continuation is not supported; omit taskId and reuse contextId to start a new task",
+          );
+        }
         const contextId = message.contextId ?? `ctx-${randomUUID()}`;
         const task = params.taskStore.create(contextId, peerName);
         params.taskStore.start(task.id);
