@@ -5,7 +5,10 @@ import {
   getAgentRunLifecycleGeneration,
   releaseAgentRunContext,
 } from "../../../infra/agent-run-registry.js";
-import { observeSubagentExecution } from "./subagent-execution-observation.js";
+import {
+  observeSubagentExecution,
+  resolveYieldedLeafPausedForMs,
+} from "./subagent-execution-observation.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -108,5 +111,42 @@ describe("subagent execution observation", () => {
     expect(observeSubagentExecution(parent, subagentRuns.values()).wait).toEqual({
       kind: "external",
     });
+  });
+
+  it("reports pause age only for a continuable yielded leaf", () => {
+    const now = 2_000_000_000_000;
+    const pausedAt = now - 90_000_000;
+    const paused = (id: string, overrides: Partial<SubagentRunRecord> = {}) =>
+      run(id, {
+        pauseReason: "sessions_yield",
+        execution: { status: "terminal", endedAt: pausedAt },
+        ...overrides,
+      });
+    const age = (entry: SubagentRunRecord, children: SubagentRunRecord[] = []) =>
+      resolveYieldedLeafPausedForMs(entry, observeSubagentExecution(entry, children), now);
+
+    expect(age(paused("leaf"))).toBe(90_000_000);
+    expect(age(paused("future", { execution: { status: "terminal", endedAt: now + 5 } }))).toBe(0);
+
+    const parent = paused("parent");
+    const child = run("child", {
+      requesterSessionKey: parent.childSessionKey,
+      expectsCompletionMessage: true,
+    });
+    expect(age(parent, [child])).toBeUndefined();
+    expect(age(paused("collector", { collect: true }))).toBeUndefined();
+    expect(age(run("running"))).toBeUndefined();
+    expect(
+      age(
+        paused("resumed", {
+          execution: { status: "running", startedAt: pausedAt, endedAt: pausedAt },
+        }),
+      ),
+    ).toBeUndefined();
+    expect(
+      age(run("finished", { execution: { status: "terminal", endedAt: pausedAt } })),
+    ).toBeUndefined();
+    expect(age(paused("killed", { endedReason: "subagent-killed" }))).toBeUndefined();
+    expect(age(paused("no-timestamp", { execution: { status: "terminal" } }))).toBeUndefined();
   });
 });
