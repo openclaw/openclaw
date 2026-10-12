@@ -21,6 +21,7 @@ this variable the browser control runtime still works through the CLI and
 agent tools, but nothing listens on the loopback control port.
 
 - Status/start/stop: `GET /`, `GET /doctor`, `POST /start`, `POST /stop`, `POST /reset-profile`
+- Native enterprise policy: `GET /policy` (see [CLI policy guidance](/cli/browser#native-enterprise-policy))
 - Profiles: `GET /profiles`, `POST /profiles/create`, `DELETE /profiles/:name`
 - Tabs: `GET /tabs`, `POST /tabs/open`, `POST /tabs/focus`, `DELETE /tabs/:targetId`, `POST /tabs/action`
 - Snapshot/screenshot/stream: `GET /snapshot`, `POST /screenshot`, `POST /screencast`
@@ -236,7 +237,7 @@ All commands accept `--browser-profile <name>` to target a specific profile, and
 ```bash
 openclaw browser status
 openclaw browser doctor
-openclaw browser doctor --deep    # add a live snapshot check
+openclaw browser doctor --deep    # inspect native policy and take a live snapshot
 openclaw browser start
 openclaw browser start --headless # one-shot local managed headless launch
 openclaw browser stop            # also clears emulation on attach-only/remote CDP

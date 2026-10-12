@@ -2,10 +2,15 @@
  * CDP page-session preparation and committed-navigation observation.
  */
 import { createHash } from "node:crypto";
+import { stripVTControlCharacters } from "node:util";
+import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { z } from "zod";
 import type { CdpProtocolSend } from "./cdp-ax.js";
 import { assertCdpEndpointAllowed, type CdpSendFn, withCdpSocket } from "./cdp.helpers.js";
+import { BrowserError, BrowserNativePolicyBlockedError } from "./errors.js";
 
 /** HTTP and WebSocket timeout options for CDP actions that need discovery. */
 export type CdpActionTimeouts = {
@@ -42,6 +47,91 @@ export type CdpDocumentIdentities = {
   mainFrame?: string;
   frameTree?: string;
 };
+
+const nativeNavigationErrorSchema = z.object({
+  result: z.object({
+    value: z.object({ code: z.string(), summary: z.string() }),
+  }),
+});
+
+const nativeNavigationFrameSchema = z.object({
+  frameTree: z
+    .object({
+      frame: z
+        .object({
+          id: z.string().optional(),
+          loaderId: z.string().optional(),
+          url: z.string().optional(),
+        })
+        .optional(),
+    })
+    .optional(),
+});
+
+async function assertCdpFrameNavigationSucceeded(
+  send: CdpProtocolSend,
+  frame: CdpFrameTree["frame"],
+  sessionId?: string,
+): Promise<void> {
+  if (frame?.url !== "chrome-error://chromewebdata/") {
+    return;
+  }
+  // This document is Chromium-owned. Ordinary websites cannot supply the
+  // authoritative error URL, even if they copy its HTML or loadTimeDataRaw.
+  const native = nativeNavigationErrorSchema.safeParse(
+    await send(
+      "Runtime.evaluate",
+      {
+        expression: `(() => {
+        const data = globalThis.loadTimeDataRaw;
+        const summary = document.createElement('div');
+        summary.innerHTML = typeof data?.summary?.msg === 'string' ? data.summary.msg : '';
+        return {
+          code: typeof data?.errorCode === 'string' ? data.errorCode : '',
+          summary: (summary.textContent || '').slice(0, 800)
+        };
+      })()`,
+        returnByValue: true,
+      },
+      sessionId,
+    ),
+  );
+  const current = nativeNavigationFrameSchema.parse(
+    await send("Page.getFrameTree", undefined, sessionId),
+  );
+  const currentFrame = current.frameTree?.frame;
+  if (currentFrame?.url !== "chrome-error://chromewebdata/") {
+    return;
+  }
+  // A concurrent navigation can replace the error document while evaluation
+  // awaits. Trust its text only while the browser still reports the same loader.
+  const sameDocument =
+    typeof frame.id === "string" &&
+    typeof frame.loaderId === "string" &&
+    currentFrame.id === frame.id &&
+    currentFrame.loaderId === frame.loaderId;
+  const detail = native.success && sameDocument ? native.data.result.value : undefined;
+  if (detail?.code === "ERR_BLOCKED_BY_ADMINISTRATOR") {
+    throw new BrowserNativePolicyBlockedError("navigation");
+  }
+  const code =
+    detail?.code && /^ERR_[A-Z0-9_]+$/.test(detail.code)
+      ? `net::${truncateUtf16Safe(detail.code, 100)}. `
+      : "";
+  const summary = detail?.summary
+    ? truncateUtf16Safe(redactToolPayloadText(stripVTControlCharacters(detail.summary)), 800)
+    : "The browser committed a navigation error page.";
+  throw new BrowserError(
+    `${code}Chromium could not load this page. Browser reported: ${summary}. Inspect this tab and chrome://policy if your organization restricts access.`,
+    400,
+  );
+}
+
+/** Report a committed native browser error without interpreting policy URL patterns. */
+export async function assertCdpNavigationSucceeded(send: CdpProtocolSend): Promise<void> {
+  const result = nativeNavigationFrameSchema.parse(await send("Page.getFrameTree"));
+  await assertCdpFrameNavigationSucceeded(send, result.frameTree?.frame);
+}
 
 function readCommittedFrameUrl(
   frame: NonNullable<CdpFrameTreeResult["frameTree"]>["frame"],
@@ -123,6 +213,7 @@ async function waitForCdpNavigationResult(
       const now = Date.now();
       if (stableCandidate?.key === key) {
         if (now - stableCandidate.since >= CDP_TARGET_NAVIGATION_STABILITY_MS) {
+          await assertCdpFrameNavigationSucceeded(send, frame, sessionId);
           return finalUrl;
         }
       } else {
@@ -205,8 +296,11 @@ export async function waitForCdpCommittedNavigationUrl(opts: {
         lookup: pinned?.lookup,
       },
     );
-  } catch {
+  } catch (error) {
     opts.signal?.throwIfAborted();
+    if (error instanceof BrowserError) {
+      throw error;
+    }
     return undefined;
   }
 }

@@ -2,18 +2,29 @@ import { execFile } from "node:child_process";
 import { EventEmitter, once } from "node:events";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
-import { Agent, createServer } from "node:http";
-import type { AddressInfo } from "node:net";
+import { Agent } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
-import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const execFileSyncMock = vi.hoisted(() => vi.fn());
+const nativeProcessIdentities = vi.hoisted(
+  () => new Map<number, () => import("@openclaw/proc-safe/identity").ProcessIdentity | null>(),
+);
+
+vi.mock("@openclaw/proc-safe/identity", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@openclaw/proc-safe/identity")>();
+  return {
+    ...actual,
+    readProcessIdentity: (pid: number) => {
+      const readFixture = nativeProcessIdentities.get(pid);
+      return readFixture ? readFixture() : actual.readProcessIdentity(pid);
+    },
+  };
+});
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -71,6 +82,7 @@ vi.mock("./cdp-timeouts.js", async () => {
 });
 
 import { CHROME_STDERR_HINT_MAX_CHARS } from "./cdp-timeouts.js";
+import { withMockChromeCdpServer } from "./chrome.cdp.test-harness.js";
 import {
   inspectLocalChromeHeadlessMode,
   isChromeCdpReady,
@@ -80,10 +92,13 @@ import {
   stopOwnedOpenClawChrome,
 } from "./chrome.js";
 import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js";
-import { BROWSER_ERROR_REASONS, BrowserProfileUnavailableError } from "./errors.js";
+import {
+  BROWSER_ERROR_REASONS,
+  BrowserNativePolicyBlockedError,
+  BrowserProfileUnavailableError,
+  toBrowserErrorResponse,
+} from "./errors.js";
 import { makeBrowserProfile, makeBrowserServerState } from "./server-context.test-harness.js";
-
-const CHROME_TEST_WS_MAX_PAYLOAD_BYTES = 1024 * 1024;
 
 type FakeProc = EventEmitter & {
   pid?: number;
@@ -267,75 +282,6 @@ function mockLinuxManagedChromeOwnership(params: {
   }) as typeof fs.readlinkSync);
 }
 
-async function withMockChromeCdpServer(params: {
-  wsPath: string;
-  onConnection?: (wss: WebSocketServer) => void;
-  onCommand?: (method: string) => unknown;
-  run: (baseUrl: string) => Promise<void>;
-}) {
-  const server = createServer((req, res) => {
-    if (req.url === "/json/version") {
-      const addr = server.address() as AddressInfo;
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(
-        JSON.stringify({
-          webSocketDebuggerUrl: `ws://127.0.0.1:${addr.port}${params.wsPath}`,
-        }),
-      );
-      return;
-    }
-    res.writeHead(404);
-    res.end();
-  });
-  const wss = new WebSocketServer({ noServer: true, maxPayload: CHROME_TEST_WS_MAX_PAYLOAD_BYTES });
-  server.on("upgrade", (req, socket, head) => {
-    if (req.url !== params.wsPath) {
-      socket.destroy();
-      return;
-    }
-    wss.handleUpgrade(req, socket, head, (ws) => {
-      wss.emit("connection", ws, req);
-    });
-  });
-  if (params.onConnection) {
-    params.onConnection(wss);
-  } else {
-    wss.on("connection", (ws) => {
-      ws.on("message", (raw) => {
-        const message = JSON.parse(rawDataToString(raw)) as {
-          id?: unknown;
-          method?: unknown;
-        };
-        if (typeof message.id === "number" && typeof message.method === "string") {
-          const result = params.onCommand
-            ? params.onCommand(message.method)
-            : message.method === "Browser.getVersion"
-              ? { product: "Chrome/Mock", userAgent: "OpenClawTest" }
-              : undefined;
-          if (result !== undefined) {
-            ws.send(JSON.stringify({ id: message.id, result }));
-          }
-        }
-      });
-    });
-  }
-  await new Promise<void>((resolve, reject) => {
-    server.listen(0, "127.0.0.1", () => resolve());
-    server.once("error", reject);
-  });
-  try {
-    const addr = server.address() as AddressInfo;
-    await params.run(`http://127.0.0.1:${addr.port}`);
-  } finally {
-    await new Promise<void>((resolve) => {
-      wss.close(() => resolve());
-    });
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
-  }
-}
-
 describe("chrome.ts internal", () => {
   beforeEach(() => {
     vi.useRealTimers();
@@ -354,6 +300,7 @@ describe("chrome.ts internal", () => {
     vi.restoreAllMocks();
     spawnMock.mockReset();
     execFileSyncMock.mockReset();
+    nativeProcessIdentities.clear();
     ensurePortAvailableMock.mockReset();
     ensurePortAvailableMock.mockImplementation(async () => {});
     registerManagedProxyBrowserCdpBypassMock.mockReset();
@@ -816,6 +763,7 @@ describe("chrome.ts internal", () => {
     });
 
     it("clears stale singleton locks even when the profile-in-use marker rolls out of the stderr tail", async () => {
+      nativeProcessIdentities.set(535, () => null);
       vi.spyOn(process, "kill").mockImplementation(() => {
         throw Object.assign(new Error("ESRCH"), { code: "ESRCH" });
       });
@@ -1131,6 +1079,13 @@ describe("chrome.ts internal", () => {
     ])(
       "distinguishes a $name profile lock before releasing data",
       async ({ error, target, expected }) => {
+        nativeProcessIdentities.set(43213, () => ({
+          pid: 43213,
+          parentPid: 1,
+          startTimeMicros: Date.UTC(2026, 6, 17, 12) * 1000,
+          startTimeResolutionMicros: 1,
+          exited: false,
+        }));
         stubBrowserExecutableAndPrefs("present");
         const profile = { ...makeProfile(51117), driver: "openclaw" as const };
         const lockPath = path.join(resolveOpenClawUserDataDir(profile.name), "SingletonLock");
@@ -1181,7 +1136,14 @@ describe("chrome.ts internal", () => {
 
         const managedPid = 43213;
         let managedProcessAlive = true;
-        let processStartTime = "Fri Jul 17 12:00:00 2026";
+        let processStartTimeMicros = Date.UTC(2026, 6, 17, 12) * 1000;
+        nativeProcessIdentities.set(managedPid, () => ({
+          pid: managedPid,
+          parentPid: 1,
+          startTimeMicros: processStartTimeMicros,
+          startTimeResolutionMicros: 1,
+          exited: !managedProcessAlive,
+        }));
         let rotateProcessIdentity = true;
         let userDataDir = "";
         const killSpy = vi.spyOn(process, "kill").mockImplementation(((pid, signal) => {
@@ -1201,7 +1163,7 @@ describe("chrome.ts internal", () => {
             onCommand: (method) => {
               if (method === "SystemInfo.getProcessInfo") {
                 if (rotateProcessIdentity) {
-                  processStartTime = "Fri Jul 17 12:01:00 2026";
+                  processStartTimeMicros += 60_000_000;
                   rotateProcessIdentity = false;
                 }
                 return { processInfo: [{ type: "browser", id: managedPid }] };
@@ -1229,9 +1191,6 @@ describe("chrome.ts internal", () => {
               execFileSyncMock.mockImplementation((command: string, args: string[]) => {
                 if (command === "ps" && args.includes("command=")) {
                   return `${executablePath} --remote-debugging-port=${port} --user-data-dir=${userDataDir}${suffix} --no-first-run\n`;
-                }
-                if (path.basename(command) === "ps" && args.includes("lstart=")) {
-                  return `${processStartTime}\n`;
                 }
                 if (command === "lsof") {
                   return `p${managedPid}\n`;
@@ -1388,6 +1347,36 @@ describe("chrome.ts internal", () => {
       } finally {
         await fsp.rm(userDataDir, { recursive: true, force: true });
       }
+    });
+
+    it.each(["system admin", "the system admin"])(
+      "retains a native remote-debugging denial from %s after stderr rolls",
+      async (administrator) => {
+        const { error, proc } = await captureFailedLaunchStderr({
+          port: 55560,
+          chunks: [
+            "DevTools remote debugging is disallowed by ",
+            `${administrator}.\n`,
+            Buffer.alloc(70 * 1024, "x"),
+          ],
+        });
+        expect(error).toBeInstanceOf(BrowserNativePolicyBlockedError);
+        expect(toBrowserErrorResponse(error)).toMatchObject({
+          status: 403,
+          reason: BROWSER_ERROR_REASONS.nativePolicyBlocked,
+          message: expect.stringContaining("RemoteDebuggingAllowed"),
+        });
+        expect(proc.kill).toHaveBeenCalledWith("SIGKILL");
+      },
+    );
+
+    it("does not treat a quoted console message as a native launch denial", async () => {
+      const { error } = await captureFailedLaunchStderr({
+        port: 55561,
+        chunks: ['console: "DevTools remote debugging is disallowed by the system admin."\n'],
+      });
+      expect(error).not.toBeInstanceOf(BrowserNativePolicyBlockedError);
+      expect(error.message).toContain("Failed to start Chrome CDP");
     });
 
     it("keeps only a bounded UTF-8-safe newest stderr tail when launch fails after large stderr", async () => {

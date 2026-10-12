@@ -67,7 +67,7 @@ openclaw browser stop
 openclaw browser --browser-profile openclaw reset-profile
 ```
 
-- `doctor --deep` adds a live snapshot check: useful when basic CDP readiness is green but you want proof the current tab can be inspected.
+- `doctor --deep` adds a live snapshot and native policy inspection: useful when basic CDP readiness is green but you want proof the current tab can be inspected.
 - For a running local managed profile, `status` and `doctor` report cached
   graphics diagnostics from Chrome: hardware/software classification, renderer,
   backend, device/driver, feature and disabled-status details, and accelerated
@@ -76,6 +76,43 @@ openclaw browser --browser-profile openclaw reset-profile
 - `stop` closes the active control session and clears temporary emulation overrides. This applies even to `attachOnly` and remote CDP profiles, where OpenClaw did not launch the browser process itself. For local managed profiles, `stop` also stops the spawned browser process.
 - `start --headless` applies only to that start request, and only when OpenClaw launches a local managed browser. It does not rewrite `browser.headless` or profile config, and is a no-op for an already-running browser.
 - On Linux hosts without `DISPLAY` or `WAYLAND_DISPLAY`, local managed profiles run headless automatically unless `OPENCLAW_BROWSER_HEADLESS=0`, `browser.headless=false`, or `browser.profiles.<name>.headless=false` explicitly requests a visible browser.
+
+## Native enterprise policy
+
+```bash
+openclaw browser --browser-profile openclaw policy
+openclaw browser --browser-profile openclaw --json policy
+```
+
+Chromium enforces policy installed through MDM or its local OS policy provider.
+OpenClaw uses that browser's policy and never overrides administrator restrictions
+or switches browsers to avoid them. Policy applies to the installed browser,
+including other profiles and sessions according to native scope.
+
+`policy` inspects a running CDP browser through `chrome://policy`. It identifies
+the actual browser and reports native values, sources, levels, scope, conflicts,
+errors, and ignored settings. `effective` means loaded entries were observed;
+check their native diagnostics before treating them as protection. `none` means
+the browser reported no entries. `unsupported`, `unverified`, and `failed` never
+mean policy is absent. Routine `status` reports availability without opening tabs.
+
+Automatic inspection is verified with Linux Google Chrome and Chromium 144,
+and Google Chrome 154. Other versions must provide one of these native page
+formats. macOS and Windows
+use native policy normally; automatic inspection is unavailable until verified
+on those platforms. Inspect the browser's policy page there. Other derivatives,
+Chrome MCP, the extension relay, and non-Chromium engines do not advertise
+automatic verification.
+
+If `RemoteDebuggingAllowed` disables browser control, inspect `chrome://policy`
+manually and contact your administrator. A native
+`net::ERR_BLOCKED_BY_ADMINISTRATOR` navigation error gives the same policy
+inspection and administrator guidance. OpenClaw does not bypass either restriction.
+
+Native URL policies govern browser navigation, not every network request.
+For example, `URLBlocklist` is not a complete network firewall and does not
+replace network-level controls. See the
+[Chrome policy reference](https://chromeenterprise.google/policies/).
 
 ## If the command is missing
 

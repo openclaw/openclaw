@@ -12,6 +12,7 @@ import {
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
 import {
+  assertNativePageNavigationSucceeded,
   assertPageNavigationCompletedSafely,
   getPageForTargetId,
   isBrowserObservedDialogBlockedError,
@@ -236,23 +237,29 @@ async function assertObservedInteractionNavigations(
   onNoMainFrameNavigation?: () => Promise<void>,
 ): Promise<void> {
   const navigationPolicy = interactionNavigationPolicy(opts);
+  const hasNavigationPolicy = hasInteractionNavigationPolicy(navigationPolicy);
   let subframeError: unknown;
   try {
-    for (const frameUrl of opts.observed.subframes) {
-      await assertBrowserNavigationResultAllowed({ url: frameUrl, ...navigationPolicy });
+    if (hasNavigationPolicy) {
+      for (const frameUrl of opts.observed.subframes) {
+        await assertBrowserNavigationResultAllowed({ url: frameUrl, ...navigationPolicy });
+      }
     }
   } catch (err) {
     subframeError = err;
   }
   if (opts.observed.mainFrameNavigated) {
-    await assertPageNavigationCompletedSafely({
-      cdpUrl: opts.cdpUrl,
-      page: opts.page,
-      response: null,
-      ...navigationPolicy,
-      targetId: opts.targetId,
-    });
-  } else if (onNoMainFrameNavigation) {
+    if (hasNavigationPolicy) {
+      await assertPageNavigationCompletedSafely({
+        cdpUrl: opts.cdpUrl,
+        page: opts.page,
+        response: null,
+        ...navigationPolicy,
+        targetId: opts.targetId,
+      });
+    }
+    await assertNativePageNavigationSucceeded(opts.page);
+  } else if (hasNavigationPolicy && onNoMainFrameNavigation) {
     await onNoMainFrameNavigation();
   }
   if (subframeError) {
@@ -312,10 +319,6 @@ async function assertInteractionNavigationCompletedSafely<T>(
     targetId?: string;
   } & BrowserNavigationPolicyOptions,
 ): Promise<T> {
-  const navigationPolicy = interactionNavigationPolicy(opts);
-  if (!hasInteractionNavigationPolicy(navigationPolicy)) {
-    return await opts.action();
-  }
   // Phase 1: keep a framenavigated listener alive for the entire duration of the
   // action so navigations triggered mid-click or mid-evaluate are not missed.
   // Using a fixed pre-action timer would expire before the action finishes for
@@ -410,6 +413,9 @@ export async function awaitNavigationGuardedInteraction<T>(
   type PolicyCheckOutcome = { state: "allowed" } | { state: "failed"; error: unknown };
   const navigationPolicy = interactionNavigationPolicy(opts);
   const hasNavigationPolicy = hasInteractionNavigationPolicy(navigationPolicy);
+  const popups = new Set<Page>();
+  const observePopup = (popup: Page) => popups.add(popup);
+  opts.page.on("popup", observePopup);
   let observedPolicyError: unknown;
   const activePolicyChecks = new Set<Promise<PolicyCheckOutcome>>();
   let unsafeSourceQuarantine: Promise<void> | undefined;
@@ -480,6 +486,7 @@ export async function awaitNavigationGuardedInteraction<T>(
             ...navigationPolicy,
             targetId: opts.targetId,
           });
+          await assertNativePageNavigationSucceeded(opts.page);
         }
       }
     },
@@ -493,7 +500,17 @@ export async function awaitNavigationGuardedInteraction<T>(
     throw err;
   });
   try {
-    return await awaitActionWithAbort(guardedAction, abortPromise, onActionResolvedAfterAbort);
+    const result = await awaitActionWithAbort(
+      guardedAction,
+      abortPromise,
+      onActionResolvedAfterAbort,
+    );
+    for (const popup of popups) {
+      if (!popup.isClosed()) {
+        await assertNativePageNavigationSucceeded(popup);
+      }
+    }
+    return result;
   } catch (err) {
     if (observedPolicyError === undefined && activePolicyChecks.size > 0) {
       const outcomes = await Promise.all(activePolicyChecks);
@@ -510,6 +527,8 @@ export async function awaitNavigationGuardedInteraction<T>(
       throw toErrorObject(observedPolicyError, "Non-Error thrown");
     }
     throw err;
+  } finally {
+    opts.page.off("popup", observePopup);
   }
 }
 

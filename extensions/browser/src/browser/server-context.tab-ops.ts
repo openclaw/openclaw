@@ -25,6 +25,7 @@ import { getChromeMcpModule } from "./chrome-mcp.runtime.js";
 import type { BrowserOpenResult } from "./client.types.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { resolveBrowserEngine } from "./engines/registry.js";
+import { BrowserError } from "./errors.js";
 import {
   assertBrowserNavigationAllowed,
   assertBrowserNavigationResultAllowed,
@@ -447,7 +448,12 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
         waitForNavigationResult: true,
         ...(cdpActionTimeouts ? { timeouts: cdpActionTimeouts } : {}),
         ...(opts?.signal ? { signal: opts.signal } : {}),
-      }).catch(() => null);
+      }).catch((error: unknown) => {
+        if (error instanceof BrowserError) {
+          throw error;
+        }
+        return null;
+      });
       createdTargetId = createdViaCdp?.targetId;
       opts?.signal?.throwIfAborted();
 

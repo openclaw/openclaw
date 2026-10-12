@@ -2,6 +2,8 @@ import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { SsrFBlockedError } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Page, Request, Response, Route } from "playwright-core";
+import { assertCdpNavigationSucceeded } from "./cdp-page-session.js";
+import { BrowserNativePolicyBlockedError } from "./errors.js";
 import {
   assertBrowserNavigationAllowed,
   assertBrowserNavigationRedirectChainAllowed,
@@ -17,6 +19,7 @@ import {
   pageTargetInfo,
 } from "./pw-session-connection.js";
 import { isConnectionScopedPage } from "./pw-session-page-target.js";
+import { withPageScopedCdpClient } from "./pw-session.page-cdp.js";
 
 type BrowserDocumentNavigationRequestKind = "top-level" | "subframe";
 
@@ -88,6 +91,14 @@ export async function closeBlockedNavigationTarget(opts: {
   } else {
     await opts.page.close().catch(() => {});
   }
+}
+
+/** Inspect Chromium's error document while preserving semantic-engine contracts. */
+export async function assertNativePageNavigationSucceeded(page: Page): Promise<void> {
+  if (isConnectionScopedPage(page) || page.isClosed()) {
+    return;
+  }
+  await withPageScopedCdpClient({ page, fn: assertCdpNavigationSucceeded, timeoutMs: 5_000 });
 }
 
 // On policy denial: quarantines and rethrows (never closes).
@@ -446,10 +457,20 @@ export async function gotoPageWithNavigationGuard(
   // A live-page cleanup failure is observable, but the original navigation
   // error owns the result and must not lose its precedence.
   if (navigationFailed) {
+    // page.goto owns this dependency diagnostic. Evaluate exceptions and URLs
+    // containing the same text cannot establish a native policy denial.
+    if (
+      navigationError instanceof Error &&
+      !isConnectionScopedPage(opts.page) &&
+      /^page\.goto: net::ERR_BLOCKED_BY_ADMINISTRATOR(?:\s|$)/.test(navigationError.message)
+    ) {
+      throw new BrowserNativePolicyBlockedError("navigation", { cause: navigationError });
+    }
     throw navigationError;
   }
   if (cleanupError !== undefined) {
     throw toErrorObject(cleanupError, "Non-Error thrown");
   }
+  await assertNativePageNavigationSucceeded(opts.page);
   return response;
 }

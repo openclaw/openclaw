@@ -1,3 +1,4 @@
+import { resolveCdpControlPolicy } from "../cdp-reachability-policy.js";
 import { redactCdpUrl } from "../cdp.helpers.js";
 import { snapshotAria } from "../cdp.js";
 import { getChromeMcpPid, takeChromeMcpSnapshot } from "../chrome-mcp.js";
@@ -10,6 +11,11 @@ import { resolveManagedBrowserHeadlessMode } from "../config.js";
 import { buildBrowserDoctorReport } from "../doctor.js";
 import { listBrowserEngines, resolveBrowserEngine } from "../engines/registry.js";
 import { BrowserError } from "../errors.js";
+import {
+  inspectNativeBrowserPolicy,
+  nativePolicyAvailability,
+  summarizeNativePolicy,
+} from "../native-policy.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import { createBrowserProfilesService } from "../profiles-service.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
@@ -212,6 +218,7 @@ async function buildBrowserStatus(
     executablePath: profileCtx.profile.executablePath ?? null,
     attachOnly: profileCtx.profile.attachOnly,
     graphics,
+    nativePolicy: nativePolicyAvailability(profileCtx.profile),
   };
 }
 
@@ -302,6 +309,35 @@ function parseHeadlessStartOverride(params: {
 }
 
 export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: BrowserRouteContext) {
+  const inspectProfileNativePolicy = (
+    req: BrowserRequest,
+    profileCtx: ProfileContext,
+    signal: AbortSignal,
+  ) =>
+    inspectNativeBrowserPolicy({
+      profile: profileCtx.profile,
+      ssrfPolicy: resolveCdpControlPolicy(profileCtx.profile, ctx.state().resolved.ssrfPolicy),
+      signal,
+      assertCurrent: req.assertCurrent
+        ? async () => await req.assertCurrent?.(profileCtx.profile)
+        : undefined,
+    });
+
+  app.get("/policy", async (req, res) => {
+    const profileCtx = resolveProfileContext(req, res, ctx);
+    if (!profileCtx) {
+      return;
+    }
+    await sendBasicJsonResponse(res, () =>
+      runProfileRouteOperation({
+        profileCtx,
+        signal: req.signal,
+        assertCurrent: req.assertCurrent,
+        run: (signal) => inspectProfileNativePolicy(req, profileCtx, signal),
+      }),
+    );
+  });
+
   app.get("/system-profiles", async (req, res) => {
     await sendBasicJsonResponse(res, async () => ({
       systemProfiles: await createBrowserProfilesService(ctx).listSystemProfiles(
@@ -356,6 +392,19 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
                 status.transport === "extension" ? identity?.extensionVersion : undefined,
             });
             if (toBoolean(req.query.deep) === true || toBoolean(req.query.live) === true) {
+              const policy = await inspectProfileNativePolicy(req, profileCtx, signal);
+              report.status.nativePolicy = summarizeNativePolicy(policy);
+              report.checks.push({
+                id: "native-policy",
+                label: "Native enterprise policy",
+                status:
+                  policy.state === "failed"
+                    ? "fail"
+                    : policy.state === "effective" || policy.state === "none"
+                      ? "pass"
+                      : "info",
+                summary: report.status.nativePolicy.detail,
+              });
               report.checks.push(await runBrowserLiveProbe(profileCtx, signal));
               report.ok = report.checks.every((check) => check.status !== "fail");
             }

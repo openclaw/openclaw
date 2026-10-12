@@ -18,6 +18,7 @@ type NavigationGuardCall = {
 };
 
 const session = vi.hoisted(() => ({
+  assertNativePageNavigationSucceeded: vi.fn(async () => {}),
   assertPageNavigationCompletedSafely: vi.fn(async () => {}),
   closeBlockedNavigationTarget: vi.fn(async () => {}),
   ensurePageState: vi.fn(() => ({})),
@@ -26,6 +27,8 @@ const session = vi.hoisted(() => ({
     if (!pageState.page) {
       throw new Error("missing page");
     }
+    pageState.page.on ??= vi.fn();
+    pageState.page.off ??= vi.fn();
     return pageState.page;
   }),
   gotoPageWithNavigationGuard: vi.fn(async () => null),

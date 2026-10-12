@@ -85,6 +85,11 @@ export type BrowserTabOwnership =
         | "browser-identity-lookup-failed";
     };
 
+export type NativeBrowserPolicyStatus = {
+  state: "effective" | "none" | "unverified" | "unsupported" | "failed";
+  detail: string;
+};
+
 export type BrowserStatus = {
   enabled: boolean;
   profile?: string;
@@ -123,6 +128,7 @@ export type BrowserStatus = {
    * Passive status calls never launch a browser to populate this field.
    */
   graphics?: BrowserGraphicsDiagnostics | null;
+  nativePolicy?: NativeBrowserPolicyStatus;
 };
 
 /** Browser tab record exposed by tab listing and tab mutation endpoints. */

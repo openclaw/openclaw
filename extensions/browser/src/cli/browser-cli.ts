@@ -32,6 +32,13 @@ function browserCommandGroups(
 ): CommandGroupEntry[] {
   return [
     {
+      placeholders: [command("policy", "Inspect effective native Chromium enterprise policy")],
+      register: async () => {
+        const module = await import("./browser-cli-policy.js");
+        module.registerBrowserPolicyCommands(browser, parentOpts);
+      },
+    },
+    {
       placeholders: [
         command("status", "Show browser status"),
         command("start", "Start the browser (no-op if already running)"),
@@ -48,7 +55,10 @@ function browserCommandGroups(
         command("create-profile", "Create a new browser profile"),
         command("delete-profile", "Delete a browser profile"),
         command("doctor", "Check browser plugin readiness", [
-          { flags: "--deep", description: "Run a live snapshot check" },
+          {
+            flags: "--deep",
+            description: "Inspect native enterprise policy and run a live snapshot check",
+          },
         ]),
       ],
       register: async () => {

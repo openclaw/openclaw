@@ -73,7 +73,7 @@ function installBrowserMocks() {
   });
   const mainFrame = {};
   const browserEvents = new EventEmitter();
-  const sessionSend = vi.fn(async (method: string) =>
+  const sessionSend = vi.fn<(method: string) => Promise<Record<string, unknown>>>(async (method) =>
     method === "Target.getTargetInfo" ? { targetInfo: { targetId: "TARGET_1" } } : {},
   );
   const context = {
@@ -88,7 +88,6 @@ function installBrowserMocks() {
   } as unknown as import("playwright-core").BrowserContext;
   const page = {
     on: vi.fn(),
-    isClosed: vi.fn(() => false),
     context: () => context,
     goto: pageGoto,
     title: vi.fn(async () => ""),
@@ -96,6 +95,7 @@ function installBrowserMocks() {
     route: pageRoute,
     unroute: pageUnroute,
     close: pageClose,
+    isClosed: () => !openPages.includes(page),
     mainFrame: () => mainFrame,
   } as unknown as import("playwright-core").Page;
   const browser = {
@@ -379,6 +379,34 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
         targetId: "TARGET_1",
       }),
     );
+    expect(f.pageClose).not.toHaveBeenCalled();
+  });
+  it("allows read-only inspection of a committed native browser error page", async () => {
+    f.pushOpenPage();
+    f.pageUrl.mockReturnValue("chrome-error://chromewebdata/");
+    f.sessionSend.mockImplementation(async (method) => {
+      if (method === "Page.getFrameTree") {
+        return {
+          frameTree: {
+            frame: { id: "FRAME_1", loaderId: "LOADER_1", url: "chrome-error://chromewebdata/" },
+          },
+        };
+      }
+      return {
+        result: {
+          value: { code: "ERR_BLOCKED_BY_ADMINISTRATOR", summary: "Organization denied access" },
+        },
+      };
+    });
+    await expect(
+      assertPageNavigationCompletedSafely({
+        cdpUrl,
+        page: f.page,
+        response: null,
+        ssrfPolicy: strictPolicy,
+        targetId: "TARGET_1",
+      }),
+    ).resolves.toBeUndefined();
     expect(f.pageClose).not.toHaveBeenCalled();
   });
 });

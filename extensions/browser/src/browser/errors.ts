@@ -4,6 +4,7 @@ const BROWSER_NAVIGATION_BLOCKED_MESSAGE = "browser navigation blocked by policy
 export const BROWSER_ERROR_REASONS = {
   noDisplayForHeadedProfile: "no_display_for_headed_profile",
   navigationBlocked: "navigation_blocked",
+  nativePolicyBlocked: "native_policy_blocked",
 } as const;
 
 export const BROWSER_ACT_ERROR_CODES = {
@@ -43,7 +44,11 @@ export type BrowserNoDisplayErrorMetadata = {
 
 export type BrowserErrorMetadata =
   | BrowserNoDisplayErrorMetadata
-  | { reason: typeof BROWSER_ERROR_REASONS.navigationBlocked };
+  | {
+      reason:
+        | typeof BROWSER_ERROR_REASONS.navigationBlocked
+        | typeof BROWSER_ERROR_REASONS.nativePolicyBlocked;
+    };
 
 type WithBrowserErrorMetadata<T> = T | (T & BrowserErrorMetadata);
 export type BrowserErrorResponse = WithBrowserErrorMetadata<{
@@ -70,6 +75,19 @@ export class BrowserError extends Error {
 /** A browser interaction failed without establishing a service outage. */
 export class BrowserActionError extends BrowserError {
   readonly code = BROWSER_ACT_ERROR_CODES.operationFailed;
+}
+
+/** Established by the native launch/navigation owner, never by page error text. */
+export class BrowserNativePolicyBlockedError extends BrowserError {
+  constructor(operation: "navigation" | "remote-debugging", options?: ErrorOptions) {
+    super(
+      operation === "navigation"
+        ? "Chromium blocked this navigation through enterprise policy. Run openclaw browser policy or inspect chrome://policy in the selected browser; ask the policy administrator for access."
+        : "Chromium enterprise policy disables remote debugging, so OpenClaw cannot control this browser. Inspect RemoteDebuggingAllowed in chrome://policy and contact the policy administrator; OpenClaw will not override it.",
+      403,
+      options,
+    );
+  }
 }
 
 /**
@@ -146,6 +164,13 @@ export class BrowserResourceExhaustedError extends BrowserError {
 }
 
 export function toBrowserErrorResponse(err: unknown): BrowserErrorResponse | null {
+  if (err instanceof BrowserNativePolicyBlockedError) {
+    return {
+      status: err.status,
+      message: err.message,
+      reason: BROWSER_ERROR_REASONS.nativePolicyBlocked,
+    };
+  }
   if (err instanceof BrowserActionError) {
     return { status: err.status, message: err.message, code: err.code };
   }
@@ -221,7 +246,10 @@ export function parseBrowserErrorPayload(value: unknown): BrowserErrorPayload | 
     : unrecognizedCode
       ? { unrecognizedCode: true }
       : {};
-  if (body.reason === BROWSER_ERROR_REASONS.navigationBlocked) {
+  if (
+    body.reason === BROWSER_ERROR_REASONS.navigationBlocked ||
+    body.reason === BROWSER_ERROR_REASONS.nativePolicyBlocked
+  ) {
     return { error: body.error, ...actionCode, reason: body.reason };
   }
   if (body.reason === BROWSER_ERROR_REASONS.noDisplayForHeadedProfile) {

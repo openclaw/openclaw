@@ -27,22 +27,25 @@ describe("browser action errors", () => {
     });
   });
 
-  it("preserves the navigation reason without forwarding policy details", () => {
-    expect(
-      parseBrowserErrorPayload({
+  it.each(["navigation_blocked", "native_policy_blocked"])(
+    "preserves %s without forwarding policy details",
+    (reason) => {
+      expect(
+        parseBrowserErrorPayload({
+          error: "browser navigation blocked by policy",
+          reason,
+          details: { url: "http://internal.example/admin", address: "10.0.0.1" },
+          cause: "private lookup details",
+        }),
+      ).toEqual({
         error: "browser navigation blocked by policy",
-        reason: "navigation_blocked",
-        details: { url: "http://internal.example/admin", address: "10.0.0.1" },
-        cause: "private lookup details",
-      }),
-    ).toEqual({
-      error: "browser navigation blocked by policy",
-      reason: "navigation_blocked",
-    });
-    expect(
-      parseBrowserErrorPayload({ error: "failure", reason: "untrusted_reason", details: {} }),
-    ).toEqual({ error: "failure" });
-  });
+        reason,
+      });
+      expect(
+        parseBrowserErrorPayload({ error: "failure", reason: "untrusted_reason", details: {} }),
+      ).toEqual({ error: "failure" });
+    },
+  );
 });
 
 describe("BrowserTabNotFoundError", () => {

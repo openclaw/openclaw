@@ -169,6 +169,60 @@ describe("CDP target creation", () => {
     expect(browser.messages.map((message) => message.method)).not.toContain("Runtime.evaluate");
   });
 
+  it("reports Chromium's native error document and closes the unreturned target", async () => {
+    const browser = await startBrowser((message) => {
+      if (message.method === "Target.createTarget") {
+        return { result: { targetId: "TARGET" } };
+      }
+      if (message.method === "Page.getFrameTree") {
+        return {
+          result: {
+            frameTree: {
+              frame: {
+                id: "FRAME",
+                loaderId: "NATIVE_ERROR",
+                url: "chrome-error://chromewebdata/",
+                unreachableUrl: "http://127.0.0.1:8080/blocked",
+              },
+            },
+          },
+        };
+      }
+      if (message.method === "Runtime.evaluate") {
+        return {
+          result: {
+            result: {
+              value: {
+                code: "",
+                summary: "Your organization doesn’t allow you to view this site",
+              },
+            },
+          },
+        };
+      }
+      if (message.method === "Target.closeTarget") {
+        return { result: { success: true } };
+      }
+      return undefined;
+    });
+    await expect(
+      createTargetViaCdp({
+        cdpUrl: browser.cdpUrl,
+        url: "http://127.0.0.1:8080/blocked",
+        ssrfPolicy: { allowPrivateNetwork: true },
+        waitForNavigationResult: true,
+      }),
+    ).rejects.toMatchObject({
+      status: 400,
+      message: expect.stringContaining("Your organization doesn’t allow you to view this site"),
+    });
+    expect(
+      browser.messages
+        .filter((message) => message.method === "Target.closeTarget")
+        .map((message) => message.params?.targetId),
+    ).toEqual(["TARGET"]);
+  });
+
   it.each([
     { abortAt: "creation", closeFails: false },
     { abortAt: "navigation", closeFails: true },

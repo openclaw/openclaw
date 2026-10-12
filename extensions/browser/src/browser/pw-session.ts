@@ -27,6 +27,7 @@ export {
   storeRoleRefsForTarget,
 } from "./pw-session-state.js";
 export {
+  assertNativePageNavigationSucceeded,
   assertPageNavigationCompletedSafely,
   closeBlockedNavigationTarget,
   gotoPageWithNavigationGuard,

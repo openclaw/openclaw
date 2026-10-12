@@ -33,6 +33,7 @@ let pageState: {
 };
 
 const sessionMocks = vi.hoisted(() => ({
+  assertNativePageNavigationSucceeded: vi.fn(async () => {}),
   assertPageNavigationCompletedSafely: vi.fn(async () => {}),
   beginActionDownloadCaptureOnPage: vi.fn(() => ({
     drain: vi.fn(async (): Promise<HarnessManagedDownload[] | undefined> => undefined),

@@ -129,13 +129,20 @@ describe("browser manage timeout option", () => {
       })
       .mockResolvedValueOnce({ profiles: [] })
       .mockResolvedValueOnce({ tabs: [] })
+      .mockResolvedValueOnce({
+        state: "none",
+        browser: "Google Chrome",
+        version: "154.0.8037.97",
+        os: "Linux",
+        policies: {},
+      })
       .mockResolvedValueOnce({ format: "aria", nodes: [{}] });
     const program = createBrowserManageProgram({ withParentTimeout: true });
     await program.parseAsync(["browser", "--json", ...scenario.args, "doctor", "--deep"], {
       from: "user",
     });
 
-    for (const route of ["/doctor", "/profiles", "/tabs", "/snapshot"]) {
+    for (const route of ["/doctor", "/profiles", "/tabs", "/policy", "/snapshot"]) {
       const request = findBrowserManageCall(route);
       const timeoutMs = route === "/snapshot" ? 10000 : scenario.managementTimeoutMs;
       expect(request?.[2].timeoutMs).toBe(timeoutMs);
