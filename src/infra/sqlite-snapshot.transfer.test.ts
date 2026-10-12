@@ -97,6 +97,7 @@ function mockExclusiveCopyTransfer() {
       return {
         method: "exclusive-copy",
         identity: await target.stat(),
+        exactIdentity: await target.stat({ bigint: true }),
         directorySync: await syncDirectory(path.dirname(options.targetPath)),
       };
     } finally {

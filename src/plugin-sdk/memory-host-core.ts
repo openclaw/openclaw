@@ -132,9 +132,9 @@ async function readMemoryHostEventExportOwnership(
     (parsed.fileDev === undefined) !== (parsed.fileIno === undefined) ||
     (parsed.fileDev !== undefined &&
       (typeof parsed.fileDev !== "string" ||
-        !/^\d+$/u.test(parsed.fileDev) ||
+        !/^-?\d+$/u.test(parsed.fileDev) ||
         typeof parsed.fileIno !== "string" ||
-        !/^\d+$/u.test(parsed.fileIno)))
+        !/^-?\d+$/u.test(parsed.fileIno)))
   ) {
     return { kind: "foreign" };
   }

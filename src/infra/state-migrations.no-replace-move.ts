@@ -64,6 +64,7 @@ async function pinMoveParent(root: MigrationMoveRoot, from: string): Promise<Pin
     const admitted = await root.stat(relativePath);
     if (
       !admitted.isDirectory ||
+      !admitted.exactIdentity ||
       !sameFileIdentity(admitted.exactIdentity, parent.receipt.exactIdentity)
     ) {
       throw new FsSafeError("path-mismatch", "legacy migration source parent changed");

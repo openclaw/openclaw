@@ -38,9 +38,11 @@ export async function createBackupScratchDirectory(root: string): Promise<Backup
     try {
       boundary = await createRoot(directory);
       const observed = await fs.lstat(directory, { bigint: true });
+      const admitted = await boundary.stat(".");
       if (
         !observed.isDirectory() ||
-        !sameFileIdentity(observed, (await boundary.stat(".")).exactIdentity)
+        !admitted.exactIdentity ||
+        !sameFileIdentity(observed, admitted.exactIdentity)
       ) {
         throw new Error("Backup scratch directory identity changed");
       }
@@ -170,6 +172,9 @@ async function cleanupBackupScratchDirectory(
   try {
     if (boundary && !path.basename(directory).startsWith(retiredPrefix)) {
       const expected = (await boundary.stat(".")).exactIdentity;
+      if (!expected) {
+        throw new Error("Backup scratch directory identity unavailable");
+      }
       const parent = await createRoot(path.dirname(directory));
       const retiredPath = await createPrivateSqliteTempDirectory(parent.rootReal, retiredPrefix);
       const retiredName = path.basename(retiredPath);
@@ -194,7 +199,8 @@ async function cleanupBackupScratchDirectory(
       });
       directory = path.join(parent.rootReal, retiredName);
       boundary = await createRoot(directory);
-      if (!sameFileIdentity(expected, (await boundary.stat(".")).exactIdentity)) {
+      const retired = await boundary.stat(".");
+      if (!retired.exactIdentity || !sameFileIdentity(expected, retired.exactIdentity)) {
         throw new Error("Retired backup scratch directory identity changed");
       }
     }
@@ -327,10 +333,12 @@ export async function maintainBackupScratch(params: {
           }
           const boundary = await createRoot(directory);
           const current = await fs.lstat(directory, { bigint: true });
+          const admitted = await boundary.stat(".");
           if (
             !current.isDirectory() ||
             !sameFileIdentity(before, current) ||
-            !sameFileIdentity(before, (await boundary.stat(".")).exactIdentity)
+            !admitted.exactIdentity ||
+            !sameFileIdentity(before, admitted.exactIdentity)
           ) {
             throw new Error("Scratch directory identity changed");
           }
