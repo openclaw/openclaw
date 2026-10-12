@@ -595,6 +595,8 @@ it("discovers deduplicated native model IDs through initialize without a turn", 
             supportedEffortLevels: ["low", "max"] },
           { value: "future", resolvedModel: "claude-future[1m]", displayName: "Future",
             supportedEffortLevels: ["low", "max"] },
+          { value: "opus", resolvedModel: "claude-opus-5-5", displayName: "Opus",
+            supportedEffortLevels: ["low", "max"] },
         ] },
       } }) + "\\n");
     });
@@ -614,7 +616,7 @@ it("discovers deduplicated native model IDs through initialize without a turn", 
     expect.objectContaining({
       id: "claude-future[1m]",
       thinkingLevelMap: {
-        off: null,
+        off: "off",
         minimal: null,
         low: "low",
         medium: null,
@@ -622,6 +624,10 @@ it("discovers deduplicated native model IDs through initialize without a turn", 
         xhigh: null,
         max: "max",
       },
+    }),
+    expect.objectContaining({
+      id: "claude-opus-5-5",
+      thinkingLevelMap: expect.objectContaining({ off: null, low: "low", max: "max" }),
     }),
   ]);
 });
