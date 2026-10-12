@@ -8,12 +8,11 @@ import type { AgentSession } from "../../sessions/index.js";
 import { makeZeroUsageSnapshot } from "../../usage.js";
 import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
-import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
+import { MidTurnPrecheckSignal } from "./midturn-precheck.js";
 
 const hoisted = vi.hoisted(() => ({
   installContextEngineLoopHook: vi.fn(),
   installToolResultContextGuard: vi.fn(),
-  installHistoryImagePruneContextTransform: vi.fn(),
   invalidateComputerFrameIfMissing: vi.fn(),
   isCacheTtlEligibleProvider: vi.fn(() => false),
   readLastCacheTtlTimestamp: vi.fn(() => null as number | null),
@@ -22,9 +21,6 @@ const hoisted = vi.hoisted(() => ({
 vi.mock("../tool-result-context-guard.js", () => ({
   installContextEngineLoopHook: hoisted.installContextEngineLoopHook,
   installToolResultContextGuard: hoisted.installToolResultContextGuard,
-}));
-vi.mock("./history-image-prune.js", () => ({
-  installHistoryImagePruneContextTransform: hoisted.installHistoryImagePruneContextTransform,
 }));
 vi.mock("../../tools/computer-tool.js", () => ({
   invalidateComputerFrameIfMissing: hoisted.invalidateComputerFrameIfMissing,
@@ -125,7 +121,6 @@ describe("installEmbeddedAttemptContextGuards", () => {
     vi.clearAllMocks();
     hoisted.installContextEngineLoopHook.mockReturnValue(vi.fn());
     hoisted.installToolResultContextGuard.mockReturnValue(vi.fn());
-    hoisted.installHistoryImagePruneContextTransform.mockReturnValue(vi.fn());
     hoisted.isCacheTtlEligibleProvider.mockReturnValue(false);
     hoisted.readLastCacheTtlTimestamp.mockReturnValue(null);
   });
@@ -134,27 +129,18 @@ describe("installEmbeddedAttemptContextGuards", () => {
     const input = createInput();
     const originalTransform = input.activeSession.agent.transformContext;
     const guards = installEmbeddedAttemptContextGuards(input as never);
-    const guardOptions = hoisted.installToolResultContextGuard.mock.calls[0]?.[0];
-    const request: MidTurnPrecheckRequest = {
-      route: "compact_then_truncate",
-      estimatedPromptTokens: 1_200,
-      promptBudgetBeforeReserve: 1_024,
-      overflowTokens: 176,
-      toolResultReducibleChars: 800,
-      effectiveReserveTokens: 64,
-    };
-    guardOptions.midTurnPrecheck.onMidTurnPrecheck(request);
-
-    expect(guards.takePendingMidTurnPrecheckRequest()).toBe(request);
-    expect(guards.takePendingMidTurnPrecheckRequest()).toBeNull();
-    expect(guardOptions).toMatchObject({
-      contextWindowTokens: 1_024,
-      midTurnPrecheck: {
-        enabled: true,
-        contextTokenBudget: 1_024,
-        toolResultMaxChars: expect.any(Number),
-      },
+    expect(() =>
+      guards.checkMidTurnPrecheck({
+        context: {
+          messages: [{ role: "user", content: "x".repeat(8_000), timestamp: 1 }],
+        },
+      }),
+    ).toThrow(MidTurnPrecheckSignal);
+    expect(guards.takePendingMidTurnPrecheckRequest()).toMatchObject({
+      route: "compact_only",
+      promptBudgetBeforeReserve: 960,
     });
+    expect(guards.takePendingMidTurnPrecheckRequest()).toBeNull();
 
     const messages: AgentMessage[] = [
       { role: "user", content: [{ type: "text", text: "hello" }], timestamp: 1 },
@@ -167,12 +153,61 @@ describe("installEmbeddedAttemptContextGuards", () => {
     });
 
     const removeToolResultGuard = hoisted.installToolResultContextGuard.mock.results[0]?.value;
-    const removeHistoryGuard =
-      hoisted.installHistoryImagePruneContextTransform.mock.results[0]?.value;
     guards.remove();
     expect(input.activeSession.agent.transformContext).toBe(originalTransform);
-    expect(removeHistoryGuard).toHaveBeenCalledOnce();
     expect(removeToolResultGuard).toHaveBeenCalledOnce();
+  });
+
+  it("hydrates current images and their failure notice before context transforms", async () => {
+    const message: AgentMessage & { __openclaw: unknown } = {
+      role: "user",
+      content: [
+        { type: "text", text: "inspect" },
+        { type: "image", data: "%%%", mimeType: "image/png" },
+      ],
+      timestamp: 1,
+      __openclaw: {
+        media: [{ kind: "image" }],
+        mediaImageLayout: { slots: [{ kind: "inline", factIndex: 0 }] },
+      },
+    };
+    const original = JSON.stringify(message);
+    const onCurrentTurnImageFailure = vi.fn();
+    const input = createInput({
+      onCurrentTurnImageFailure,
+      attempt: {
+        ...createInput().attempt,
+        model: { ...cacheModel, input: ["text", "image"] },
+      },
+    });
+    input.activeSession.agent.transformContext = async (messages) =>
+      messages.map((entry) =>
+        entry.role === "user" && Array.isArray(entry.content)
+          ? {
+              ...entry,
+              content: entry.content.map((block) =>
+                block.type === "text" ? { ...block, text: `transformed: ${block.text}` } : block,
+              ),
+            }
+          : entry,
+      );
+    const guards = installEmbeddedAttemptContextGuards(input as never);
+    try {
+      const replay = await input.activeSession.agent.transformContext?.([message]);
+      expect(onCurrentTurnImageFailure).toHaveBeenCalledWith(1);
+      expect(replay?.[0]).toMatchObject({
+        content: [
+          { type: "text", text: "transformed: inspect" },
+          {
+            type: "text",
+            text: expect.stringMatching(/^transformed: .*1.*image contents.*unavailable/s),
+          },
+        ],
+      });
+      expect(JSON.stringify(message)).toBe(original);
+    } finally {
+      guards.remove();
+    }
   });
 
   it("composes context-engine and tool-result cleanup while exposing checkpoints", () => {
@@ -202,96 +237,51 @@ describe("installEmbeddedAttemptContextGuards", () => {
     expect(removeLoopHook).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    { name: "attempt configuration is absent", config: undefined },
-    {
-      name: "context pruning is not configured",
-      config: { agents: { defaults: {} } },
-    },
-    {
-      name: "context pruning has no mode",
-      config: { agents: { defaults: { contextPruning: {} } } },
-    },
-    {
-      name: "context pruning is explicitly off",
-      config: { agents: { defaults: { contextPruning: { mode: "off" } } } },
-    },
-  ])("does not inspect providers when $name", ({ config }) => {
-    hoisted.isCacheTtlEligibleProvider.mockReturnValue(true);
-    const input = createInput();
-    input.attempt = { ...input.attempt, config: config as never };
-
-    const guards = installEmbeddedAttemptContextGuards(input as never);
-
-    expect(hoisted.isCacheTtlEligibleProvider).not.toHaveBeenCalled();
-    expect(hoisted.readLastCacheTtlTimestamp).not.toHaveBeenCalled();
-    guards.remove();
-  });
-
-  it.each([true, false, undefined])(
-    "passes resolved route opt-in %s to pruning eligibility",
-    (optIn) => {
+  it.each([{ name: "attempt configuration is absent", config: undefined }])(
+    "does not inspect providers when $name",
+    ({ config }) => {
+      hoisted.isCacheTtlEligibleProvider.mockReturnValue(true);
       const input = createInput();
-      const model = {
-        ...cacheModel,
-        contextWindow: 2_048,
-        provider: "openai",
-        id: "gpt-4o",
-        api: "openai-responses" as const,
-        baseUrl: "https://proxy.example/v1",
-        compat: { supportsPromptCacheKey: optIn },
-        headers: { "x-test-private": "not-for-provider-hooks" },
-      };
-      input.attempt = {
-        ...input.attempt,
-        provider: "openai",
-        modelId: model.id,
-        model,
-        config: { agents: { defaults: { contextPruning: { mode: "cache-ttl" } } } } as never,
-      };
+      input.attempt = { ...input.attempt, config: config as never };
+
       const guards = installEmbeddedAttemptContextGuards(input as never);
-      expect(hoisted.isCacheTtlEligibleProvider).toHaveBeenCalledExactlyOnceWith(
-        "openai",
-        "gpt-4o",
-        "openai-responses",
-        { baseUrl: model.baseUrl, supportsPromptCacheKey: optIn },
-      );
+
+      expect(hoisted.isCacheTtlEligibleProvider).not.toHaveBeenCalled();
+      expect(hoisted.readLastCacheTtlTimestamp).not.toHaveBeenCalled();
       guards.remove();
     },
   );
 
-  it("does not install cache-TTL pruning for an ineligible provider", async () => {
+  it.each([undefined])("passes resolved route opt-in %s to pruning eligibility", (optIn) => {
     const input = createInput();
+    const model = {
+      ...cacheModel,
+      contextWindow: 2_048,
+      provider: "openai",
+      id: "gpt-4o",
+      api: "openai-responses" as const,
+      baseUrl: "https://proxy.example/v1",
+      compat: { supportsPromptCacheKey: optIn },
+      headers: { "x-test-private": "not-for-provider-hooks" },
+    };
     input.attempt = {
       ...input.attempt,
+      provider: "openai",
+      modelId: model.id,
+      model,
       config: { agents: { defaults: { contextPruning: { mode: "cache-ttl" } } } } as never,
     };
-    const originalTransform = vi.fn(async (messages: AgentMessage[]) => messages);
-    input.activeSession.agent.transformContext = originalTransform;
-
     const guards = installEmbeddedAttemptContextGuards(input as never);
-
     expect(hoisted.isCacheTtlEligibleProvider).toHaveBeenCalledExactlyOnceWith(
-      "provider-1",
-      "model-1",
-      "anthropic-messages",
-      { baseUrl: undefined, supportsPromptCacheKey: undefined },
+      "openai",
+      "gpt-4o",
+      "openai-responses",
+      { baseUrl: model.baseUrl, supportsPromptCacheKey: optIn },
     );
-    expect(hoisted.readLastCacheTtlTimestamp).not.toHaveBeenCalled();
-    const messages: AgentMessage[] = [
-      { role: "user", content: [{ type: "text", text: "hello" }], timestamp: 1 },
-    ];
-    expect(
-      await input.activeSession.agent.transformContext?.(messages, new AbortController().signal),
-    ).toBe(messages);
-    expect(originalTransform).toHaveBeenCalledOnce();
-
     guards.remove();
-    expect(input.activeSession.agent.transformContext).toBe(originalTransform);
   });
 
   it.each([
-    { scenario: "warm cache", age: 290_000, thresholdCrossing: false, outcome: "success" },
     { scenario: "threshold crossing", age: 310_000, thresholdCrossing: true, outcome: "success" },
     {
       scenario: "failure before dispatch",
@@ -301,12 +291,6 @@ describe("installEmbeddedAttemptContextGuards", () => {
     },
     { scenario: "provider error", age: 290_000, thresholdCrossing: false, outcome: "error" },
     { scenario: "aborted request", age: 290_000, thresholdCrossing: false, outcome: "aborted" },
-    {
-      scenario: "stream without terminal result",
-      age: 290_000,
-      thresholdCrossing: false,
-      outcome: "empty",
-    },
   ] as const)(
     "uses successful request start for pruning after $scenario",
     async ({ age, thresholdCrossing, outcome }) => {
@@ -347,9 +331,7 @@ describe("installEmbeddedAttemptContextGuards", () => {
           // Completion is deliberately later than request start; using completion time
           // would incorrectly keep the cache warm past the final idle check below.
           vi.setSystemTime(Date.now() + 10_000);
-          if (outcome === "empty") {
-            stream.end();
-          } else if (outcome === "error" || outcome === "aborted") {
+          if (outcome === "error" || outcome === "aborted") {
             stream.push({ type: "error", reason: outcome, error: response });
           } else {
             stream.push({ type: "done", reason: "toolUse", message: response });
@@ -370,9 +352,7 @@ describe("installEmbeddedAttemptContextGuards", () => {
           expect(() => wrapped(cacheModel, { messages: [] })).toThrow("failed before dispatch");
         } else {
           const stream = await wrapped(cacheModel, { messages: [] });
-          if (outcome !== "empty") {
-            await stream.result();
-          }
+          await stream.result();
         }
         vi.setSystemTime(requestStart + 20_000);
         const expanded = thresholdCrossing

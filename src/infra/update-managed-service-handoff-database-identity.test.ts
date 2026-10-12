@@ -7,26 +7,29 @@ import {
   captureManagedUpdateLeaseDatabaseIdentity,
   createManagedHandoffLeaseDatabase,
   prepareManagedHandoffLeaseDatabase,
-  prepareManagedHandoffLeaseDatabaseIdentity,
 } from "./update-managed-service-handoff-database.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.unstubAllEnvs());
 
-async function fixture() {
+function fixture() {
   const root = fs.realpathSync(dirs.make("handoff-identity-"));
   const directory = path.join(root, "private-tmp");
   const databasePath = path.join(directory, "managed-update-handoffs.sqlite");
-  const binding = await prepareManagedHandoffLeaseDatabaseIdentity(databasePath);
+  // Opening SQLite retains an identity descriptor that prevents Windows parent renames.
+  // These diagnostics need only a private file identity, not an admitted connection.
+  fs.mkdirSync(directory, { mode: 0o700 });
+  fs.writeFileSync(databasePath, "original", { mode: 0o600 });
+  const binding = captureManagedUpdateLeaseDatabaseIdentity(databasePath);
   return { root, directory, databasePath, binding };
 }
 
 it.each(["file", "parent directory", "path", "missing file", "missing parent"] as const)(
   "explains a changed %s without accepting or repairing it",
-  async (change) => {
+  (change) => {
     vi.stubEnv("OPENCLAW_PROFILE", "diagnostic-test");
     vi.stubEnv("OPENCLAW_CONTAINER_HINT", "");
-    const { root, directory, databasePath, binding } = await fixture();
+    const { root, directory, databasePath, binding } = fixture();
     const retained = path.join(root, "retained");
     const original = fs.readFileSync(databasePath);
     let detail: string;
@@ -69,7 +72,7 @@ it.each(["file", "parent directory", "path", "missing file", "missing parent"] a
 it.each(["prepare", "create"] as const)(
   "explains a different path at %s admission",
   async (owner) => {
-    const { root, binding } = await fixture();
+    const { root, binding } = fixture();
     const current = path.join(root, "other.sqlite");
     const expected = `path (recorded ${binding.databasePath}; current ${current})`;
     if (owner === "prepare") {

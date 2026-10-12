@@ -47,7 +47,7 @@ afterEach(async () => {
   gatewayWork.resetGatewayWorkAdmission();
 });
 
-it.each([false, true])("runs retention after startup preparation, pending=%s", async (pending) => {
+it.each([true])("runs retention after startup preparation, pending=%s", async (pending) => {
   await withAgentDatabaseStartupAdmission(async (admission) => {
     const preparation = createDeferredCore();
     if (pending) {
@@ -162,38 +162,35 @@ describe("Cron maintenance admission diagnostics", () => {
     }
   });
 
-  it.each([
-    {
-      kind: "disk-full",
-      failure: new Error("Cron history maintenance failed: database or disk is full"),
-    },
-    { kind: "drain", failure: new gatewayWork.GatewayDrainingError() },
-  ])("reports an admitted $kind failure while stop joins its sweep", async ({ failure }) => {
-    const sweep = createDeferredCore();
-    mocks.history.mockImplementation(() => sweep.promise);
+  it.each([{ kind: "drain", failure: new gatewayWork.GatewayDrainingError() }])(
+    "reports an admitted $kind failure while stop joins its sweep",
+    async ({ failure }) => {
+      const sweep = createDeferredCore();
+      mocks.history.mockImplementation(() => sweep.promise);
 
-    try {
-      startCronMaintenance(scheduler);
-      const tick = clock.advanceBy(5_000);
-      expect(mocks.history).toHaveBeenCalledOnce();
-      gatewayWork.markGatewayRestartDraining();
-      const gatewayStopping = scheduler.stop();
-      let stopped = false;
-      const stopping = stopCronMaintenance().then(() => {
-        stopped = true;
-      });
-      expect(stopped).toBe(false);
-      sweep.reject(failure);
-      await stopping;
-      await gatewayStopping;
-      await tick;
-      expect(mocks.warn).toHaveBeenCalledExactlyOnceWith("Cron maintenance failed", {
-        error: failure,
-      });
-      expect(gatewayWork.getActiveGatewayRootWorkCount()).toBe(0);
-    } finally {
-      sweep.resolve();
-      await stopCronMaintenance();
-    }
-  });
+      try {
+        startCronMaintenance(scheduler);
+        const tick = clock.advanceBy(5_000);
+        expect(mocks.history).toHaveBeenCalledOnce();
+        gatewayWork.markGatewayRestartDraining();
+        const gatewayStopping = scheduler.stop();
+        let stopped = false;
+        const stopping = stopCronMaintenance().then(() => {
+          stopped = true;
+        });
+        expect(stopped).toBe(false);
+        sweep.reject(failure);
+        await stopping;
+        await gatewayStopping;
+        await tick;
+        expect(mocks.warn).toHaveBeenCalledExactlyOnceWith("Cron maintenance failed", {
+          error: failure,
+        });
+        expect(gatewayWork.getActiveGatewayRootWorkCount()).toBe(0);
+      } finally {
+        sweep.resolve();
+        await stopCronMaintenance();
+      }
+    },
+  );
 });

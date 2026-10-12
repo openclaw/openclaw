@@ -441,3 +441,26 @@ describe("Teams native final text preparation", () => {
     ).toEqual([201, 403]);
   });
 });
+
+it("separates informative plan rows at the SDK HTTP boundary", async () => {
+  const scenario = "informative-plan-rows";
+  const { controller, firstAcknowledgement } = createLoopbackController(scenario, {
+    streaming: { mode: "progress", progress: { label: "Working", toolProgress: true } },
+  });
+  await controller.pushPlanProgress([
+    { step: "Check account", status: "completed" },
+    { step: "Search records", status: "in_progress" },
+  ]);
+  await firstAcknowledgement;
+  const update = requests.find((request) => request.scenario === scenario);
+  controller.preparePayload({ text: "Final answer\n\nSecond paragraph" });
+  await controller.finalize();
+  expect(update?.text).toContain("Check account");
+  expect(update?.text).toContain("Search records");
+  expect(update?.text).not.toMatch(/[\r\n]/u);
+  expect(update?.text).toContain(" · ");
+  expect(
+    requests.findLast((request) => request.scenario === scenario && request.type === "message")
+      ?.text,
+  ).toBe("Final answer\n\nSecond paragraph");
+});

@@ -9,7 +9,7 @@ import {
   isSubagentSessionKey,
   normalizeAgentRuntimeTools,
   resolveAttemptSpawnWorkspaceDir,
-  resolveModelAuthMode,
+  resolveModelAuthModeAsync,
   resolveSandboxContext,
   supportsModelTools,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
@@ -42,8 +42,10 @@ import {
 } from "./dynamic-tool-profile.js";
 import {
   resolveCodexNodeExecToolOverrides,
-  resolveCodexNativeExecutionPolicy,
+  prepareCodexNativeExecutionPolicyForRun,
+  resolveCodexNativeExecutionPolicyForRun,
   type CodexNativeExecutionPolicy,
+  type PreparedCodexNativeExecutionPolicy,
 } from "./native-execution-policy.js";
 import type { CodexSandboxPolicy, CodexTurnEnvironmentParams } from "./protocol.js";
 import { mapCodexAppServerRemoteWorkspacePath } from "./remote-workspace-path.js";
@@ -90,6 +92,7 @@ type DynamicToolBuildParams = {
   sandbox: OpenClawSandboxContext;
   sessionPermissionPolicy?: CodexEffectiveSessionPermissionPolicy;
   nativeToolSurfaceEnabled?: boolean;
+  nativeExecutionPolicy?: PreparedCodexNativeExecutionPolicy;
   nativeProviderWebSearchSupport?: CodexNativeWebSearchSupport;
   runAbortController: AbortController;
   nodeExecAvailability?: NodeExecAvailabilityRef;
@@ -168,11 +171,15 @@ export async function buildDynamicTools(
   const toolBuildStages = createStageTimingTracker();
   const modelHasVision = params.model.input?.includes("image") ?? false;
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, input.sessionAgentId);
-  const nativeExecutionPolicy = resolveCodexNativeExecutionPolicyForRun(params, {
-    agentId: input.policyAgentId,
-    runtimeSessionKey: input.sandboxSessionKey,
-    sandbox: input.sandbox,
-  });
+  const preparedExecution =
+    input.nativeExecutionPolicy ??
+    (await prepareCodexNativeExecutionPolicyForRun(params, {
+      agentId: input.policyAgentId,
+      runtimeSessionKey: input.sandboxSessionKey,
+      sandbox: input.sandbox,
+    }));
+  preparedExecution.assertCurrent();
+  const nativeExecutionPolicy = preparedExecution.policy;
   const webSearchPlan = resolveCodexWebSearchPlan({
     config: params.config,
     disableTools: params.disableTools,
@@ -252,7 +259,7 @@ export async function buildDynamicTools(
     modelApi: params.model.api,
     modelContextWindowTokens: params.model.contextWindow,
     delegationCapability: params.delegationCapability,
-    modelAuthMode: resolveModelAuthMode(
+    modelAuthMode: await resolveModelAuthModeAsync(
       params.model.provider,
       params.config,
       params.toolAuthProfileStore ?? params.authProfileStore,
@@ -487,6 +494,7 @@ export async function buildDynamicTools(
       },
     );
   }
+  preparedExecution.assertCurrent();
   return exposedTools;
 }
 export function shouldEnableCodexAppServerNativeToolSurface(
@@ -496,6 +504,7 @@ export function shouldEnableCodexAppServerNativeToolSurface(
     agentId?: string;
     runtimeSessionKey?: string;
     sandboxExecServerEnabled?: boolean;
+    nativeExecutionPolicy?: PreparedCodexNativeExecutionPolicy;
   } = {},
 ): boolean {
   if (
@@ -508,11 +517,14 @@ export function shouldEnableCodexAppServerNativeToolSurface(
     return false;
   }
   if (
-    !resolveCodexNativeExecutionPolicyForRun(params, {
-      agentId: options.agentId,
-      runtimeSessionKey: options.runtimeSessionKey,
-      sandbox,
-    }).nativeToolSurfaceAllowed
+    !(
+      options.nativeExecutionPolicy?.policy ??
+      resolveCodexNativeExecutionPolicyForRun(params, {
+        agentId: options.agentId,
+        runtimeSessionKey: options.runtimeSessionKey,
+        sandbox,
+      })
+    ).nativeToolSurfaceAllowed
   ) {
     return false;
   }
@@ -525,29 +537,6 @@ export function shouldEnableCodexAppServerNativeToolSurface(
       toolsAllow.some((name) => normalizeCodexDynamicToolName(name) === "*")) &&
     canCodexAppServerNativeToolSurfaceHonorSandbox(sandbox, options)
   );
-}
-function resolveCodexNativeExecutionPolicyForRun(
-  params: EmbeddedRunAttemptParams,
-  options: {
-    agentId?: string;
-    runtimeSessionKey?: string;
-    sandbox?: OpenClawSandboxContext;
-  } = {},
-): CodexNativeExecutionPolicy {
-  return resolveCodexNativeExecutionPolicy({
-    config: params.config,
-    sessionKey:
-      options.runtimeSessionKey?.trim() ||
-      params.sandboxSessionKey?.trim() ||
-      params.sessionKey?.trim() ||
-      params.sessionId,
-    sessionId: params.sessionId,
-    agentId: options.agentId,
-    execOverrides: params.execOverrides,
-    // A resolved null sandbox is absence; undefined still requests runtime discovery.
-    sandboxAvailable: options.sandbox === null ? false : options.sandbox?.enabled,
-    readRuntimeSessionEntry: true,
-  });
 }
 function canCodexAppServerNativeToolSurfaceHonorSandbox(
   sandbox: OpenClawSandboxContext | undefined,

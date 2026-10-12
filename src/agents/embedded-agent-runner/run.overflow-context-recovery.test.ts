@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
 import type { AssistantMessage } from "../../llm/types.js";
@@ -26,7 +27,7 @@ import { recoverEmbeddedRunOverflow } from "./run/overflow-context-recovery.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 import {
   clearEmbeddedSessionPromptStates,
-  getEmbeddedSessionPromptState,
+  retainEmbeddedSessionPromptState,
 } from "./session-prompt-state.js";
 import { createUsageAccumulator } from "./usage-accumulator.js";
 
@@ -153,10 +154,12 @@ function makeInput(overrides: RecoveryInputOverrides = {}): RecoveryInput {
     assertRecoveryActive: vi.fn(),
     // This leaf doubles orchestration; real admission and writer fencing have composed coverage.
     prepareRecoveryOwner: () => {
-      const assertActive = () => {
-        input.runParams.abortSignal?.throwIfAborted();
-        input.assertRecoveryActive();
-      };
+      const assertActive = composeSessionSourceAssertion([
+        () => {
+          input.runParams.abortSignal?.throwIfAborted();
+          input.assertRecoveryActive();
+        },
+      ]);
       assertActive();
       const session = input.getActiveSession();
       return {
@@ -181,7 +184,7 @@ function makeInput(overrides: RecoveryInputOverrides = {}): RecoveryInput {
     },
     prepareRecoverySession: async () => ({
       sessionManager: SessionManager.inMemory("/tmp/workspace"),
-      assertActive: vi.fn<() => void>(),
+      assertActive: composeSessionSourceAssertion([]),
       withSessionManagerRewriteLock: async <T>(operation: () => Promise<T> | T) =>
         await operation(),
     }),
@@ -267,10 +270,13 @@ describe("recoverEmbeddedRunOverflow", () => {
     mocks.warn.mockReset();
   });
 
-  it("uses the canonical assistant classifier when the text heuristic misses", async () => {
+  it.each([
+    "400 Your input exceeds the context window of this model",
+    '400 " Trying to keep the first 15857 tokens when context the overflows. However, the model is loaded with context length of only 4096 tokens, which is not enough. Try to load the model with a larger context length, or provide a shorter input. Error Data: n/a, Additional Data: n/a"',
+  ])("compacts and retries the classified assistant overflow: %s", async (errorMessage) => {
     const assistantOverflowCandidate = makeAssistantMessage({
       stopReason: "error",
-      errorMessage: "400 Your input exceeds the context window of this model",
+      errorMessage,
     });
     const result = await recoverEmbeddedRunOverflow(
       makeInput({ promptError: null, assistantOverflowCandidate }),
@@ -279,6 +285,21 @@ describe("recoverEmbeddedRunOverflow", () => {
     expect(result).toEqual({ action: "retry" });
     expect(mocks.compact).toHaveBeenCalledOnce();
     expect(mocks.warn).toHaveBeenCalledWith(expect.stringContaining("source=assistantError"));
+  });
+
+  it.each([
+    "400 Invalid 'reasoning_effort' value: 'off'. Supported values: none, minimal, low, medium, high, xhigh.",
+    "400 Failed to apply prompt template. The model is loaded with context length of only 4096 tokens.",
+  ])("does not compact an unrelated local-server rejection: %s", async (errorMessage) => {
+    const input = makeInput({
+      promptError: null,
+      assistantOverflowCandidate: makeAssistantMessage({ stopReason: "error", errorMessage }),
+      assistantErrorText: errorMessage,
+    });
+
+    expect(await recoverEmbeddedRunOverflow(input)).toEqual({ action: "none" });
+    expect(mocks.compact).not.toHaveBeenCalled();
+    expect(mocks.markProviderPromptRejected).not.toHaveBeenCalled();
   });
 
   it("does not compact a validation rejection naming context_length_exceeded", async () => {
@@ -368,8 +389,10 @@ describe("recoverEmbeddedRunOverflow", () => {
     "truncates the active projection after mixed preflight compaction (successor=%s)",
     async (adoptsSuccessor) => {
       let sessionId = "session-1";
-      getEmbeddedSessionPromptState(sessionId).toolResults.frozen.add("predecessor-only");
-      const successorProjection = getEmbeddedSessionPromptState("rotated-session").toolResults;
+      using predecessor = retainEmbeddedSessionPromptState(sessionId);
+      using successor = retainEmbeddedSessionPromptState("rotated-session");
+      predecessor.state.toolResults.frozen.add("predecessor-only");
+      const successorProjection = successor.state.toolResults;
       successorProjection.frozen.add("successor-only");
       mocks.truncateOversizedToolResults.mockReturnValueOnce({
         truncated: true,
@@ -503,7 +526,6 @@ describe("recoverEmbeddedRunOverflow", () => {
         sessionFile: "unused",
       },
       compactionReplayEnabled: false,
-      contextEngineAssemblySucceeded: false,
       contextEnginePromptAuthority: "assembled",
       contextTokenBudget: contextWindow,
       hookMessagesForCurrentPrompt: manager.buildSessionContext().messages,

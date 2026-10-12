@@ -179,7 +179,7 @@ into agent shell environments.
 ## Prereqs on the remote host
 
 1. Install the packaged OpenClaw CLI with `npm install -g openclaw@latest --allow-scripts=openclaw` (omit `--allow-scripts=openclaw` on npm 11.15 and earlier).
-2. Ensure `openclaw` is on PATH for non-interactive shells (symlink into `/usr/local/bin` or `/opt/homebrew/bin` if needed).
+2. Put `openclaw` on PATH for non-interactive shells (symlink into `/usr/local/bin` or `/opt/homebrew/bin` if needed).
 3. For SSH transport: set up key-based SSH auth. Tailscale IPs are recommended for stable reachability off-LAN.
 
 ## macOS app setup

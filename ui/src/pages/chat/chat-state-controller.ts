@@ -43,6 +43,7 @@ function transcriptSources(state: ChatPageHost): readonly unknown[] {
     state.chatMessages,
     state.chatToolMessages,
     state.chatStreamSegments,
+    state.chatReasoning,
     state.guardianNotices,
     state.realtimeTalkConversationState.entries,
   ];

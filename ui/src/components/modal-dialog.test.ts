@@ -11,10 +11,6 @@ import {
 } from "../test-helpers/modal-dialog.ts";
 import { OpenClawModalDialog } from "./modal-dialog.ts";
 
-vi.mock("../app/native-browser-host.ts", () => ({
-  hasNativeBrowserBridge: () => true,
-}));
-
 let container: HTMLDivElement;
 let restoreDialogPolyfill: () => void;
 
@@ -99,6 +95,8 @@ async function renderModal() {
 describe("openclaw-modal-dialog", () => {
   beforeEach(() => {
     restoreDialogPolyfill = installDialogPolyfill();
+    // A later module mock cannot replace a bridge already loaded by a sibling suite.
+    vi.stubGlobal("webkit", { messageHandlers: { openclawBrowser: { postMessage: vi.fn() } } });
     container = document.createElement("div");
     document.body.append(container);
   });
@@ -107,6 +105,7 @@ describe("openclaw-modal-dialog", () => {
     render(nothing, container);
     container.remove();
     restoreDialogPolyfill();
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
 
@@ -256,15 +255,7 @@ describe("openclaw-modal-dialog", () => {
         this: HTMLDialogElement,
       ) {
         showModal.call(this);
-        const video = container.querySelector<HTMLVideoElement>("video")!;
-        if (interaction === "pointer") {
-          video.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, composed: true }));
-        } else if (interaction === "keyboard") {
-          video.dispatchEvent(
-            new KeyboardEvent("keydown", { key: "Tab", bubbles: true, composed: true }),
-          );
-        }
-        video.focus();
+        container.querySelector<HTMLVideoElement>("video")!.focus();
       });
       render(
         html`<openclaw-modal-dialog label="Media"
@@ -272,11 +263,30 @@ describe("openclaw-modal-dialog", () => {
         ></openclaw-modal-dialog>`,
         container,
       );
-      const { modal, dialog } = await getRenderedModalDialog(container);
+      const modal = container.querySelector("openclaw-modal-dialog")!;
+      const interactAtOpening = () =>
+        atOpeningCommit(modal, () => {
+          if (interaction === "none") {
+            return;
+          }
+          const video = container.querySelector<HTMLVideoElement>("video")!;
+          // showModal runs before the host's open attribute is committed. User
+          // input can only target its slotted content once that content is usable.
+          video.dispatchEvent(
+            interaction === "pointer"
+              ? new PointerEvent("pointerdown", { bubbles: true, composed: true })
+              : new KeyboardEvent("keydown", { key: "Tab", bubbles: true, composed: true }),
+          );
+          video.focus();
+          expect(document.activeElement).toBe(video);
+        });
+      await interactAtOpening();
+      const { dialog } = await getRenderedModalDialog(container);
       if (reopened) {
         modal.hide();
         await vi.waitFor(() => expect(dialog.open).toBe(false));
         modal.show();
+        await interactAtOpening();
         await getRenderedModalDialog(container);
       }
       expect(document.activeElement).toBe(

@@ -43,6 +43,7 @@ async function withHeartbeatCron(
     await run({ ...context, events });
   } finally {
     context.cron.stop();
+    await context.cron.waitForIdle();
     await cleanup();
   }
 }
@@ -146,7 +147,7 @@ describe("heartbeat payload execution", () => {
     }
   });
 
-  it("settles an enqueued manual heartbeat run without its Cron lane self-blocking", async () => {
+  it("settles an enqueued manual heartbeat run without occupying the command lane", async () => {
     let observedWaitOwners: ReturnType<typeof listCronHeartbeatWaitOwners> | undefined;
     await withHeartbeatCron(
       {
@@ -166,12 +167,7 @@ describe("heartbeat payload execution", () => {
           status: "ok",
           completionStatus: "succeeded",
         });
-        expect(observedWaitOwners?.activeJobMarkers).toEqual([
-          expect.objectContaining({ jobId: job.id }),
-        ]);
-        expect(observedWaitOwners?.owningCronLaneTaskMarkers).toEqual([
-          expect.objectContaining({ lane: "cron" }),
-        ]);
+        expect(observedWaitOwners).toEqual([expect.objectContaining({ jobId: job.id })]);
       },
     );
   });

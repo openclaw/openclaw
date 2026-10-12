@@ -57,7 +57,7 @@ export function registerSlackChannelEvents(params: {
           channelId,
           channelName,
         });
-        const route = runtimeContext.resolveSlackSystemEventRoute({
+        const route = await runtimeContext.resolveSlackSystemEventRoute({
           channelId,
           channelType: "channel",
           eventScope,

@@ -141,7 +141,25 @@ suite.define(() => {
       );
 
       await gateway.emitGatewayEvent("chat.metadata.changed", {});
+      await expect
+        .poll(() => composer.locator("[data-chat-model-catalog-state]").textContent())
+        .toContain("Some models could not be refreshed");
+      const retryAfter = await gateway.deferNext("models.list");
       await composer.locator('[data-chat-model-select="true"]').click();
+      await gateway.waitForRequest("models.list", { after: retryAfter });
+      await composer.locator("[data-chat-model-refresh]").waitFor({ state: "visible" });
+      await captureControls(page, "pending-refresh");
+      expect(await effort.isVisible()).toBe(true);
+      expect(await effortPicker.getAttribute("aria-hidden")).toBe("false");
+      expect(await effortPicker.getAttribute("class")).not.toContain(
+        "chat-controls__effort-picker--reserved",
+      );
+      await effort.click();
+      const slider = composer.locator("[data-chat-thinking-slider]");
+      await slider.waitFor({ state: "visible" });
+      expect(await slider.isEnabled()).toBe(true);
+      await page.keyboard.press("Escape");
+      await gateway.resolveDeferred("models.list");
       await expect
         .poll(() => composer.locator("[data-chat-model-catalog-state]").textContent())
         .toContain("Some models could not be refreshed");

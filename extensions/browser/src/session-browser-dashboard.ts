@@ -17,7 +17,7 @@ import { getPwAiModule } from "./browser/pw-ai-module.js";
 import { browserNavigationPolicyForProfile } from "./browser/routes/agent.shared.js";
 import {
   getProfileLifecycle,
-  isProfileGenerationCurrent,
+  isProfileOperationCurrent,
 } from "./browser/server-context.lifecycle.js";
 import { startBrowserControlServiceFromConfig } from "./control-service.js";
 
@@ -66,8 +66,6 @@ async function createResource(
   const session = authority.retainSession();
   const controller = new AbortController();
   const key = keyFor(definition);
-  let definitionEpoch = 0;
-  let verifiedDefinitionEpoch = 0;
   let assertProfileCurrent: (() => void) | undefined;
   let removeProfileAbort: (() => void) | undefined;
   let closing: Promise<void> | undefined;
@@ -100,9 +98,6 @@ async function createResource(
       throw new Error("The isolated browser context is no longer available. Reopen the dashboard.");
     }
     assertProfileCurrent?.();
-    if (verifiedDefinitionEpoch !== definitionEpoch) {
-      throw new Error("The dashboard definition changed. Refresh the dashboard before continuing.");
-    }
   };
   const resource: SessionBrowserDashboard = {
     definition,
@@ -112,24 +107,16 @@ async function createResource(
     assertCurrent,
     assertDefinitionCurrent: async () => {
       session.assertCurrent();
-      const epoch = definitionEpoch;
       const current = await readBrowserDashboardDefinition(
         definition,
         getBrowserControlState()?.resolved.defaultProfile,
       );
       session.assertCurrent();
-      if (epoch !== definitionEpoch) {
-        throw new Error("The dashboard changed during verification. Retry the operation.");
-      }
       if (!sameBrowserDashboardDefinition(definition, current)) {
         await close();
         throw new Error("The dashboard was removed or replaced. Open its current definition.");
       }
-      verifiedDefinitionEpoch = epoch;
       assertCurrent();
-    },
-    definitionChanged: () => {
-      definitionEpoch += 1;
     },
     close,
   };
@@ -168,19 +155,18 @@ async function createResource(
         throw new Error("Browser profile is unavailable.");
       }
       const lifecycle = getProfileLifecycle(profile);
-      const generation = lifecycle.generation;
-      const configRevision = lifecycle.configRevision;
+      const profileSignal = lifecycle.controller.signal;
       assertProfileCurrent = () => {
         if (
           getBrowserControlState() !== state ||
           state.profiles.get(definition.profile) !== profile ||
-          !isProfileGenerationCurrent({ state, runtime: profile, generation, configRevision })
+          !isProfileOperationCurrent({ state, runtime: profile, signal: profileSignal })
         ) {
           throw new Error("The browser profile changed. Reopen the dashboard.");
         }
       };
-      lifecycle.controller.signal.addEventListener("abort", onAbort, { once: true });
-      removeProfileAbort = () => lifecycle.controller.signal.removeEventListener("abort", onAbort);
+      profileSignal.addEventListener("abort", onAbort, { once: true });
+      removeProfileAbort = () => profileSignal.removeEventListener("abort", onAbort);
       const playwright = await getPwAiModule({ mode: "strict" });
       authority.assertCurrent();
       assertProfileCurrent();

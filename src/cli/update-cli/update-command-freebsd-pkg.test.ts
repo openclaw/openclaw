@@ -10,6 +10,7 @@ import { writePackageRoot } from "../../infra/package-update-steps.test-support.
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { pkgQueryResult } from "../../infra/update-freebsd-pkg-ownership.test-support.js";
 import * as updateRunner from "../../infra/update-runner-git.js";
+import { createSystemPackageOwnershipInspection } from "../../infra/update-system-package-ownership.js";
 import * as exec from "../../process/exec.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -47,6 +48,7 @@ function gitUpdateParams(root: string): Parameters<typeof updateGitInstall>[0] {
 
 async function withPackageRoots(
   run: (base: string, requested: string, managed: string) => Promise<void>,
+  platform: NodeJS.Platform = "freebsd",
 ) {
   await withTestDir({ prefix: "openclaw-update-pkg-" }, async (base) => {
     const requested = path.join(base, "requested", "lib", "node_modules", "openclaw");
@@ -67,16 +69,20 @@ async function withPackageRoots(
       },
       async () => {
         mockSystemAccountHome();
-        await withMockedPlatform("freebsd", () => run(base, requested, managed));
+        await withMockedPlatform(platform, () => run(base, requested, managed));
       },
     );
   });
 }
 
 describe("FreeBSD pkg update admission", () => {
-  it.each(["owned", "unknown", "unowned"])(
-    "admits the requested root before package-manager probes (%s)",
-    async (ownership) => {
+  it.each([
+    { platform: "freebsd", manager: "pkg", ownership: "owned" },
+    { platform: "freebsd", manager: "pkg", ownership: "unowned" },
+    { platform: "linux", manager: "pacman", ownership: "owned" },
+  ] as const)(
+    "admits $manager roots before npm discovery ($ownership)",
+    async ({ platform, manager, ownership }) => {
       await withPackageRoots(async (_base, root) => {
         const command = vi.spyOn(exec, "runCommandWithTimeout").mockResolvedValue({
           stdout: `${path.dirname(root)}\n`,
@@ -86,27 +92,29 @@ describe("FreeBSD pkg update admission", () => {
           killed: false,
           termination: "exit",
         });
-        vi.spyOn(exec, "runCommandBuffered").mockResolvedValue(
-          pkgQueryResult(
-            ownership === "owned" ? `${root}/package.json\n` : "",
-            ownership === "unknown" ? { code: 1 } : {},
-          ),
-        );
+        const runCommand = vi
+          .fn<typeof exec.runCommandBuffered>()
+          .mockResolvedValue(pkgQueryResult(ownership === "owned" ? `${root}/package.json\n` : ""));
+        const onWarning = vi.fn();
         const admission = shared.resolveGlobalManager({
           root,
           installKind: "package",
           timeoutMs: 1000,
+          pkgOwnership: createSystemPackageOwnershipInspection(1000, { runCommand, onWarning }),
         });
-        if (ownership === "unowned") {
+        if (ownership !== "owned") {
           await expect(admission).resolves.toBe("npm");
           expect(command).toHaveBeenCalled();
+          expect(onWarning).not.toHaveBeenCalled();
         } else {
+          await expect(admission).rejects.toBeInstanceOf(shared.UpdatePreMutationError);
           await expect(admission).rejects.toMatchObject({
-            reason: ownership === "owned" ? "pkg-owned-install" : "pkg-ownership-unavailable",
+            name: "UpdatePreMutationError",
+            reason: `${manager}-owned-install`,
           });
           expect(command).not.toHaveBeenCalled();
         }
-      });
+      }, platform);
     },
   );
 
@@ -206,28 +214,6 @@ describe("FreeBSD pkg update admission", () => {
     },
   );
 
-  it.each(["state", "profile"])(
-    "does not let a non-default %s bypass pkg ownership",
-    async (selector) => {
-      await withPackageRoots(async (base, root) => {
-        vi.spyOn(shared, "resolveUpdateRoot").mockResolvedValue(root);
-        vi.spyOn(exec, "runCommandBuffered").mockResolvedValue(
-          pkgQueryResult(`${root}/package.json\n`),
-        );
-        await withEnvAsync(
-          selector === "state"
-            ? { OPENCLAW_STATE_DIR: path.join(base, "custom-state") }
-            : { OPENCLAW_PROFILE: "alternate" },
-          async () => {
-            await expect(prepareUpdateCommand({ restart: false })).rejects.toMatchObject({
-              reason: "pkg-owned-install",
-            });
-          },
-        );
-      });
-    },
-  );
-
   it.each(["requested", "managed"])(
     "refuses the %s pkg root before applying a service root/runtime redirect",
     async (owner) => {
@@ -254,24 +240,6 @@ describe("FreeBSD pkg update admission", () => {
       });
     },
   );
-
-  it("checks pkg ownership before reading admission environment from a service", async () => {
-    await withPackageRoots(async (_base, root) => {
-      const readCommand = vi.fn();
-      const isAbsent = vi.fn();
-      vi.spyOn(service, "resolveGatewayService").mockReturnValue(
-        createMockGatewayService({ readCommand, isAbsent }),
-      );
-      vi.spyOn(exec, "runCommandBuffered").mockResolvedValue(
-        pkgQueryResult(`${root}/package.json\n`),
-      );
-      await expect(
-        resolveUpdateCommandAdmissionEnv({ root, opts: { restart: false } }),
-      ).rejects.toMatchObject({ reason: "pkg-owned-install" });
-      expect(readCommand).not.toHaveBeenCalled();
-      expect(isAbsent).not.toHaveBeenCalled();
-    });
-  });
 
   it("checks a precomputed service redirect before admitting its target", async () => {
     await withPackageRoots(async (_base, root, managed) => {

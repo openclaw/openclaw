@@ -642,7 +642,7 @@ describe("backupVerifyCommand", () => {
       async (archivePath) => {
         const runtime = createTestRuntime();
         await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
-          /case-mangled canonical SQLite path.*State\/OpenClaw\.SQLITE/u,
+          /SQLite path with incorrect letter casing.*State\/OpenClaw\.SQLITE/u,
         );
       },
     );

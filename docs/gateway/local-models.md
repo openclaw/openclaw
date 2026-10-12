@@ -181,7 +181,7 @@ Custom/local provider entries trust their exact configured `baseUrl` origin for 
 
 Set `input: ["text", "image"]` on local or proxied vision models so image attachments get injected into agent turns. Interactive custom-provider onboarding infers common vision model IDs and only asks about unknown names. Non-interactive onboarding uses the same inference, with `--custom-image-input` / `--custom-text-input` to override it.
 
-Use `models.providers.<id>.timeoutSeconds` for slow local/remote model servers before raising `agents.defaults.timeoutSeconds`. The provider timeout covers connect, headers, body streaming, and the total guarded-fetch abort for model HTTP requests only. If the agent or run timeout is lower, raise that too. The provider timeout cannot extend the whole run.
+Use `models.providers.<id>.timeoutSeconds` for slow local/remote model servers before raising `agents.defaults.timeoutSeconds`. The provider timeout covers connect, headers, body streaming, and the total guarded-fetch abort for model HTTP requests only. If the agent or run-specific timeout is lower, raise that too: the provider timeout cannot extend the current model attempt's budget. Each configured fallback gets a fresh attempt budget.
 
 <Note>
 For custom OpenAI-compatible providers, a non-secret local marker such as `apiKey: "ollama-local"` is accepted when `baseUrl` resolves to loopback, a private LAN, `.local`, or a bare hostname. OpenClaw treats it as a valid local credential instead of reporting a missing key. Use a real value for any provider that accepts a public hostname.
@@ -283,6 +283,7 @@ If the model loads cleanly but full agent turns misbehave, check transport first
 ## Troubleshooting
 
 - **Gateway can't reach the proxy?** `curl http://127.0.0.1:1234/v1/models`.
+- **Provider hostname has both IPv4 and IPv6?** Guarded model requests retain every address that passes the configured SSRF policy. When Node's address-family autoselection is enabled, connections try IPv4 first and can fall back to IPv6 if IPv4 is unreachable. Single-address lookups still prefer IPv4; forbidden DNS answers still reject the request.
 - **LM Studio model unloaded?** Reload it. Cold start is a common "hanging" cause.
 - **Local server says `terminated`, `ECONNRESET`, or closes the stream mid-turn?** OpenClaw records a low-cardinality `model.call.error.failureKind` plus the OpenClaw process RSS/heap snapshot in diagnostics. For LM Studio/Ollama memory pressure, match that timestamp against the server log or a macOS crash/jetsam log to check whether the model server was killed.
 - **Context errors?** OpenClaw derives context-window preflight thresholds from the detected model window or the per-model `models.providers.<provider>.models[].contextTokens` cap. It warns below 20% with an **8k** floor. It hard-blocks below 10% with a **4k** floor. Lower that model entry's `contextTokens` or raise the server/model context limit.

@@ -268,10 +268,10 @@ async function runColdMutation(
           retained.claim.isCurrent()
         ) {
           assertAllowed();
-          // Restoration commits transcript rows only; a facts-less change would revoke sharing.
           sessionChanges.emit({
             storePath: retained.database.path,
             sessionKey: completed.result.sessionKey,
+            scope: "transcript",
             facts: { kind: "unchanged" },
           });
         }

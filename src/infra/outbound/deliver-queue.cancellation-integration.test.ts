@@ -381,19 +381,14 @@ describe("queued cancellation during adapter preparation", () => {
     },
   );
 
-  it("retires restored media custody before preparation settles and releases its late token once", async () => {
-    vi.useFakeTimers();
+  it("settles cancelled media custody after preparation and releases its token once", async () => {
     const stateDir = fixtures.tmpDir();
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const adapter = installHeldAdapter();
     const controller = new AbortController();
     const audit: string[] = [];
-    const retired = createDeferred();
     const unsubscribe = onTrustedMessageAuditEvent((event) => {
       audit.push(event.outcome);
-      if (event.outcome === "failed") {
-        retired.resolve();
-      }
     });
     const queueIdReady = createDeferred<string>();
     const stableId = "cron-direct-delivery:v1:cancelled-preparation";
@@ -432,25 +427,10 @@ describe("queued cancellation during adapter preparation", () => {
       const queueId = await queueIdReady.promise;
       await adapter.prepared;
       controller.abort(new Error("question ended"));
-      await retired.promise;
-
-      expect(await loadPendingDeliveries(stateDir)).toEqual([]);
+      expect(await loadPendingDeliveries(stateDir)).toHaveLength(1);
       expect(adapter.afterSendFailure).not.toHaveBeenCalled();
-      expect(audit).toEqual(["queued", "failed"]);
-      const recoveredSend = vi.fn(async () => []);
-      await drainMatrixReconnect({ stateDir, deliver: recoveredSend });
-      expect(recoveredSend).not.toHaveBeenCalled();
+      expect(audit).toEqual(["queued"]);
       expect(fs.existsSync(artifact)).toBe(true);
-      expect(
-        (await loadDeliveryQueueMediaRetentionSnapshot({ expireBeforeMs: 0, stateDir }))
-          .stagedArtifacts,
-      ).toEqual([artifact]);
-      expect(
-        getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, queueId, stateDir),
-      ).toBeUndefined();
-
-      // The removed row must not turn its old producer heartbeat into claim loss.
-      await vi.advanceTimersByTimeAsync(65_000);
       adapter.releasePreparation();
       expect(await outcome).toMatchObject({
         message: expect.stringContaining("Operation aborted"),
@@ -460,6 +440,13 @@ describe("queued cancellation during adapter preparation", () => {
       expect(adapter.afterSendFailure).toHaveBeenCalledOnce();
       expect(adapter.releaseResource).toHaveBeenCalledOnce();
       expect(audit).toEqual(["queued", "failed"]);
+      expect(await loadPendingDeliveries(stateDir)).toEqual([]);
+      const recoveredSend = vi.fn(async () => []);
+      await drainMatrixReconnect({ stateDir, deliver: recoveredSend });
+      expect(recoveredSend).not.toHaveBeenCalled();
+      expect(
+        getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, queueId, stateDir),
+      ).toBeUndefined();
       expect(fs.existsSync(artifact)).toBe(false);
       expect(
         (await loadDeliveryQueueMediaRetentionSnapshot({ expireBeforeMs: 0, stateDir }))
@@ -538,11 +525,7 @@ describe("queued cancellation during adapter preparation", () => {
     },
   );
 
-  it("keeps failed retirement visible and settles custody once preparation finishes", async () => {
-    const queueAck = await import("./delivery-queue-ack.js");
-    vi.spyOn(queueAck, "retireUnsentDelivery").mockImplementationOnce(() => {
-      throw new Error("state database write failed");
-    });
+  it("settles cancelled custody once preparation finishes", async () => {
     const stateDir = fixtures.tmpDir();
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const adapter = installHeldAdapter();

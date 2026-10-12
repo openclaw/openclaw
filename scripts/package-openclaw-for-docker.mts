@@ -71,20 +71,6 @@ type RunImpl = (
   cwd: string,
   options: RunOptions,
 ) => Promise<string>;
-type DocsMapLifecycle = {
-  preparePackageDocsMap: (cwd: string) => Promise<unknown>;
-  restorePackageDocsMap: (cwd: string) => Promise<unknown>;
-};
-type PackageManifestLifecycle = {
-  preparePackageManifest: (cwd: string) => Promise<unknown>;
-  restorePackageManifest: (cwd: string) => Promise<unknown>;
-};
-type PackageWorkerBundlePrepareLifecycle = {
-  preparePackagedWorkerBundle: (cwd: string) => Promise<unknown>;
-};
-type PackageWorkerBundleRestoreLifecycle = {
-  restorePackagedWorkerBundle: (cwd: string) => Promise<unknown>;
-};
 type PackageOptions = RunOptions & {
   bundlePlugins?: string[];
   allowUnreleasedChangelog?: unknown;
@@ -108,32 +94,11 @@ type PackageOptions = RunOptions & {
 };
 type MutableJsonRecord = Record<string, unknown>;
 
-function isDocsMapLifecycle(value: unknown): value is DocsMapLifecycle {
-  return (
-    isRecord(value) &&
-    typeof value.preparePackageDocsMap === "function" &&
-    typeof value.restorePackageDocsMap === "function"
-  );
-}
-
-function isPackageManifestLifecycle(value: unknown): value is PackageManifestLifecycle {
-  return (
-    isRecord(value) &&
-    typeof value.preparePackageManifest === "function" &&
-    typeof value.restorePackageManifest === "function"
-  );
-}
-
-function isPackageWorkerBundlePrepareLifecycle(
+function hasPackageLifecycleMethods<Method extends string>(
   value: unknown,
-): value is PackageWorkerBundlePrepareLifecycle {
-  return isRecord(value) && typeof value.preparePackagedWorkerBundle === "function";
-}
-
-function isPackageWorkerBundleRestoreLifecycle(
-  value: unknown,
-): value is PackageWorkerBundleRestoreLifecycle {
-  return isRecord(value) && typeof value.restorePackagedWorkerBundle === "function";
+  methods: Method[],
+): value is Record<Method, (cwd: string) => Promise<unknown>> {
+  return isRecord(value) && methods.every((method) => typeof value[method] === "function");
 }
 
 function hasErrorCode(error: unknown, code: string) {
@@ -828,10 +793,10 @@ async function restorePackageSourceArtifacts(
   await restoreDocsMap(sourceDir);
 }
 
-async function loadSourcePackageLifecycle<T>(
+async function loadSourcePackageLifecycle<Method extends string>(
   sourceDir: string,
   moduleName: string,
-  validate: (value: unknown) => value is T,
+  methods: Method[],
 ) {
   const modulePath = path.join(sourceDir, "scripts", moduleName);
   try {
@@ -843,7 +808,7 @@ async function loadSourcePackageLifecycle<T>(
     throw error;
   }
   const lifecycle: unknown = await import(pathToFileURL(modulePath).href);
-  if (!validate(lifecycle)) {
+  if (!hasPackageLifecycleMethods(lifecycle, methods)) {
     throw new Error(`source package lifecycle is invalid: ${modulePath}`);
   }
   return lifecycle;
@@ -872,7 +837,10 @@ export async function packOpenClawPackageForDocker(
   const sourceDocsMapLifecycle =
     packageOptions.prepareDocsMap && packageOptions.restoreDocsMap
       ? null
-      : await loadSourcePackageLifecycle(sourcePath, "package-docs-map.mjs", isDocsMapLifecycle);
+      : await loadSourcePackageLifecycle(sourcePath, "package-docs-map.mjs", [
+          "preparePackageDocsMap",
+          "restorePackageDocsMap",
+        ]);
   const prepareDocsMap =
     packageOptions.prepareDocsMap ??
     sourceDocsMapLifecycle?.preparePackageDocsMap ??
@@ -884,11 +852,10 @@ export async function packOpenClawPackageForDocker(
   const sourceManifestLifecycle =
     packageOptions.prepareManifest && packageOptions.restoreManifest
       ? null
-      : await loadSourcePackageLifecycle(
-          sourcePath,
-          "package-manifest.mjs",
-          isPackageManifestLifecycle,
-        );
+      : await loadSourcePackageLifecycle(sourcePath, "package-manifest.mjs", [
+          "preparePackageManifest",
+          "restorePackageManifest",
+        ]);
   const prepareManifest =
     packageOptions.prepareManifest ??
     sourceManifestLifecycle?.preparePackageManifest ??
@@ -899,18 +866,14 @@ export async function packOpenClawPackageForDocker(
     (async () => false);
   const sourceWorkerBundlePrepareLifecycle = packageOptions.prepareWorkerBundle
     ? null
-    : await loadSourcePackageLifecycle(
-        sourcePath,
-        "package-worker-bundle.mts",
-        isPackageWorkerBundlePrepareLifecycle,
-      );
+    : await loadSourcePackageLifecycle(sourcePath, "package-worker-bundle.mts", [
+        "preparePackagedWorkerBundle",
+      ]);
   const sourceWorkerBundleRestoreLifecycle = packageOptions.restoreWorkerBundle
     ? null
-    : await loadSourcePackageLifecycle(
-        sourcePath,
-        "package-worker-bundle-lifecycle.mjs",
-        isPackageWorkerBundleRestoreLifecycle,
-      );
+    : await loadSourcePackageLifecycle(sourcePath, "package-worker-bundle-lifecycle.mjs", [
+        "restorePackagedWorkerBundle",
+      ]);
   const prepareWorkerBundle =
     packageOptions.prepareWorkerBundle ??
     sourceWorkerBundlePrepareLifecycle?.preparePackagedWorkerBundle ??

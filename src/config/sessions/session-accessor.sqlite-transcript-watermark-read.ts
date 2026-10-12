@@ -7,6 +7,7 @@ import {
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import type { SessionTranscriptWatermark } from "./session-history-read.types.js";
+import { readTranscriptContextFacts } from "./session-transcript-context-facts.js";
 
 export type { SessionTranscriptWatermark } from "./session-history-read.types.js";
 
@@ -53,6 +54,10 @@ export function readSessionTranscriptHotWatermark(
   sessionId: string,
   options: { requireHot?: boolean } = {},
 ): SessionTranscriptWatermark {
+  const context = readTranscriptContextFacts(database, sessionId);
+  if (context?.cold === false) {
+    return { generation: context.version.generation, maxSeq: context.version.rawSeq };
+  }
   const row = hotWatermarkQuery(database.db)(sessionId);
   if (options.requireHot && row?.is_cold) {
     throw new SessionTranscriptColdError(sessionId);

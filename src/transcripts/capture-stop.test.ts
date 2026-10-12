@@ -450,7 +450,6 @@ it.each(["inspection", "prepared"] as const)(
       env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
     });
     let disabled: ReturnType<typeof prepareTranscriptCaptureDisable> | undefined;
-    let releaseReplacement: (() => void) | undefined;
     try {
       await withPluginRuntimeRegistryScope(registry, () =>
         agent.run(() =>
@@ -464,9 +463,7 @@ it.each(["inspection", "prepared"] as const)(
       agent.release();
       await releaseRegistry();
       expect(disposed).not.toHaveBeenCalled();
-      sibling.reserveReplacement()();
       expect(sibling.retainedWorkCount).toBe(0);
-      releaseReplacement = instance.reserveReplacement();
       expect(instance.retainedWorkCount).toBeGreaterThan(0);
       await request!.onUtterance({ text: "Speech after the agent turn finished" });
       disabled = prepareTranscriptCaptureDisable(stateDir);
@@ -483,7 +480,6 @@ it.each(["inspection", "prepared"] as const)(
       });
       expect((await store.readSession("retained-capture"))?.stoppedAt).toEqual(expect.any(String));
     } finally {
-      releaseReplacement?.();
       failStop = false;
       agent.release();
       disabled ??= prepareTranscriptCaptureDisable(stateDir);

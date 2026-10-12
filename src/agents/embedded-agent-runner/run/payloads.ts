@@ -25,6 +25,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { hasReplyPayloadContent } from "../../../interactive/payload.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { resolveRawAssistantAnswerText } from "../../../shared/assistant-answer-text.js";
+import { sanitizeAssistantVisibleText } from "../../../shared/text/assistant-visible-text.js";
 import { trimTextPreservingCode } from "../../../shared/text/text-projection.js";
 import { classifyOAuthRefreshFailure } from "../../auth-profiles/oauth-refresh-failure.js";
 import {
@@ -34,6 +35,7 @@ import {
   normalizeTextForComparison,
 } from "../../embedded-agent-helpers.js";
 import { SYNTHESIZED_TIMEOUT_ERROR_TEXT } from "../../embedded-agent-helpers/error-text.js";
+import { sanitizeUserFacingText } from "../../embedded-agent-helpers/sanitize-user-facing-text.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
@@ -44,7 +46,6 @@ import { isToolAuthoredSourceReplyForAssistant } from "../../embedded-agent-tool
 import {
   extractAssistantThinking,
   extractAssistantVisibleText,
-  sanitizeAssistantVisibleStreamText,
 } from "../../embedded-agent-utils.js";
 import { isTimeoutErrorMessage } from "../../failover/classify.js";
 import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
@@ -171,7 +172,9 @@ export function buildEmbeddedRunPayloads(params: {
       return;
     }
     const nonEmptyAssistantTexts = assistantTexts
-      .map((text) => sanitizeAssistantVisibleStreamText(text))
+      .map((text) =>
+        sanitizeUserFacingText(sanitizeAssistantVisibleText(text), { errorContext: false }),
+      )
       .filter((text) => text.trim().length > 0);
     const terminalAssistant =
       currentAssistant ?? (nonEmptyAssistantTexts.length === 1 ? undefined : lastAssistant);
@@ -299,10 +302,11 @@ export function buildEmbeddedRunPayloads(params: {
             fallbackAnswerDirectiveState.mediaUrls?.length)) ||
         storedDelivery?.tts?.text?.trim(),
       );
+      // An empty canonical terminal is still authoritative; accumulated text may precede tools.
       const answerDirectives =
         shouldUseCanonicalFinalAnswer || shouldPreferRawAnswerText
           ? [fallbackAnswerDirectiveState ?? parseReplyDirectives(fallbackAnswerSourceText)]
-          : nonEmptyAssistantTexts.length > 0
+          : !assistantForPayload && nonEmptyAssistantTexts.length > 0
             ? nonEmptyAssistantTexts.map((text) => parseReplyDirectives(text))
             : fallbackAnswerDirectiveState
               ? [fallbackAnswerDirectiveState]

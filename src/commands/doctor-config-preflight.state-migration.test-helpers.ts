@@ -11,16 +11,6 @@ export function makePreflightConfigSnapshot(config: Record<string, unknown>) {
   };
 }
 
-export function queueConfigSnapshot<T>(
-  reader: { mockResolvedValueOnce(snapshot: T): unknown },
-  snapshot: T,
-  count = 1,
-): void {
-  for (let index = 0; index < count; index += 1) {
-    reader.mockResolvedValueOnce(snapshot);
-  }
-}
-
 export type StateMigrationResult = {
   migrated: boolean;
   skipped: boolean;

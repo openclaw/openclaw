@@ -31,7 +31,7 @@ Doctor supports these postures:
 | Advisory JSON             | `openclaw doctor --json`                  | Read-only findings; exits successfully after producing a report.                      |
 | Repair                    | `openclaw doctor --fix`                   | Applies supported repairs, using prompts unless non-interactive repair is safe.       |
 | Lint                      | `openclaw doctor --lint [--json]`         | Read-only findings with threshold-based exit codes for CI gates.                      |
-| Shared SQLite maintenance | `openclaw doctor --state-sqlite compact`  | Explicitly checkpoints, compacts, and verifies the canonical shared state DB.         |
+| Shared SQLite maintenance | `openclaw doctor --state-sqlite compact`  | Explicitly checkpoints, compacts, and verifies the shared state DB.                   |
 | Session SQLite tools      | `openclaw doctor --session-sqlite <mode>` | Inspects or maintains SQLite sessions and explicitly imports legacy history.          |
 
 Use `openclaw doctor --json` when an operator or script wants the advisory Doctor report as JSON. It exits successfully after producing a report; inspect `ok` and `findings` for health state. Use explicit `openclaw doctor --lint --json` when CI should exit nonzero for findings at the selected severity threshold. Prefer `--fix` when a human operator wants Doctor to edit config or state.
@@ -126,6 +126,15 @@ conflicting input is retained and requires the manual action in the diagnostic.
 The updater uses this repair path before accepting the installed target.
 
 Update-time Doctor runs startup-required repairs before optional inspections.
+When the installed updater supports post-restart inspections, Doctor moves
+lint-backed, inspection-only checks out of the stopped Gateway window. The
+updater runs them after restart and saves their findings in the
+`post-activation doctor inspections` result step. Findings or an incomplete
+inspection remain advisory and do not fail an otherwise successful update.
+Repairs, migrations, readiness gates, and checks without equivalent lint
+coverage keep their existing ordering. Older installed updaters keep the
+inspections in their original Doctor pass.
+
 On large fleets it can defer auth and model diagnostics, plugin inspection,
 skills and workspace metadata, session-snapshot inspection, and advisory lint to
 reserve time for required repairs and update validation. Each deferred check
@@ -191,7 +200,7 @@ If migration or config repair cannot finish, Doctor leaves the stopped service
 stopped and reports an incomplete repair with exit code 1. When state requires
 manual recovery, the diagnosis names its path and the next action:
 
-- **Unsupported canonical workspace version:** use an OpenClaw build that supports
+- **Unsupported workspace version:** use an OpenClaw build that supports
   that version. Preserve the shared database unchanged.
 - **Unreadable or conflicting exec policy:** stop the Gateway and node hosts,
   then reconcile the named legacy file or interrupted claim with a verified copy

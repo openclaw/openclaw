@@ -1,4 +1,4 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
+import type { ReactiveControllerHost } from "lit";
 import { fetchControlUiResource, subscribeBrowserAuthRestored } from "../app/browser-http.ts";
 
 type AvatarRouteEntry = {
@@ -62,7 +62,7 @@ function releaseEntry(key: string, owner: symbol) {
   if (entry.consumers.size > 0 || entry.releaseTimer !== undefined) {
     return;
   }
-  // Lit can replace one route consumer with another in a later microtask. Finalize
+  // A view can replace one route consumer with another in a later microtask. Finalize
   // unowned routes on the next task so the shared request survives that DOM handoff.
   entry.releaseTimer = setTimeout(() => {
     entry.releaseTimer = undefined;
@@ -130,7 +130,7 @@ async function fetchAvatarRoute(
       if (retryDelayMs !== undefined && entry.retryAttempts < AUTHENTICATED_AVATAR_MAX_RETRIES) {
         entry.retryAttempts += 1;
         // The budget belongs to this persistent shared entry. Keeping an
-        // exhausted miss prevents Lit rerenders from minting a new poll loop.
+        // exhausted miss prevents view rerenders from minting a new poll loop.
         entry.retryTimer = setTimeout(() => {
           entry.retryTimer = undefined;
           if (sharedAvatarRoutes.get(key) !== entry || entry.consumers.size === 0) {
@@ -167,14 +167,14 @@ async function fetchAvatarRoute(
  * Resolves protected same-origin avatar routes to one browser-local blob shared by all views.
  * The owning view releases its reference on credential change or disconnect.
  */
-export class AuthenticatedAvatarRouteLoader implements ReactiveController {
+export class AuthenticatedAvatarRouteLoader {
   private readonly owner = Symbol("authenticated-avatar-route-owner");
   private keys = new Set<string>();
   private connected = false;
   private stopAuthRecovery?: () => void;
   private readonly onUpdate = () => {
     if (this.connected) {
-      this.host.requestUpdate();
+      this.changed();
     }
   };
   private readonly onAuthRestored = () => {
@@ -192,20 +192,28 @@ export class AuthenticatedAvatarRouteLoader implements ReactiveController {
     this.onUpdate();
   };
 
+  private readonly changed: () => void;
+
   constructor(
-    private readonly host: ReactiveControllerHost,
+    changed: (() => void) | ReactiveControllerHost,
     private readonly options: { retryUnavailable?: boolean } = {},
   ) {
-    host.addController(this);
+    this.changed = typeof changed === "function" ? changed : () => changed.requestUpdate();
+    if (typeof changed !== "function") {
+      changed.addController({
+        hostConnected: () => this.connect(),
+        hostDisconnected: () => this.disconnect(),
+      });
+    }
   }
 
-  hostConnected() {
+  connect() {
     this.connected = true;
     this.stopAuthRecovery ??= subscribeBrowserAuthRestored(this.onAuthRestored);
-    this.host.requestUpdate();
+    this.changed();
   }
 
-  hostDisconnected() {
+  disconnect() {
     this.connected = false;
     this.stopAuthRecovery?.();
     this.stopAuthRecovery = undefined;
@@ -241,7 +249,7 @@ export class AuthenticatedAvatarRouteLoader implements ReactiveController {
     if (!url.startsWith("/")) {
       return url;
     }
-    // Lit can finish a queued render after disconnect. That render must not
+    // A view can finish a queued render after disconnect. That render must not
     // reacquire a released route and keep an orphaned request or retry alive.
     if (!this.connected) {
       return null;

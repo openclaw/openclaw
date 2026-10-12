@@ -29,11 +29,11 @@ function placement(page: Page, label: string): Locator {
     .filter({
       has: page.locator(".settings-row__title", { hasText: label }),
     })
-    .locator("wa-switch");
+    .getByRole("switch");
 }
 
 async function checked(toggle: Locator): Promise<boolean> {
-  return toggle.evaluate((element) => "checked" in element && element.checked === true);
+  return toggle.isChecked();
 }
 
 async function openAppearance(page: Page) {

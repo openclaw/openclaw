@@ -375,8 +375,8 @@ describe("memory provenance through a real Gateway", () => {
           `Hidden QA fact: the project codename is ORBIT-9. ${EXPLICIT_OWNER_MARKER}\n`,
           "utf8",
         );
+        await activeGateway.runCli(["memory", "index", "--force", "--agent", "researcher"]);
       });
-      await activeGateway.runCli(["memory", "index", "--force", "--agent", "researcher"]);
 
       await sendAndWait({
         call: activeGateway.call.bind(activeGateway),

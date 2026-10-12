@@ -675,7 +675,6 @@ if (uiE2eSelection) {
 // Keep its browser-only contracts scoped to their interaction and style owners.
 const uiWebkitOwners = [
   "ui/vitest.config.ts",
-  "ui/test/webkit-expected-failures{,.setup}.ts",
   "ui/src/components/{web-awesome*,modal-dialog*,tooltip*,menu-*,overlay*,composer-menu*,dropdown-menu*,anchored-overlay*,textarea-token-anchor*,panel-tab-strip*,select-picker*,multi-select*,agent-select*}.{ts,tsx}",
   "ui/src/pages/chat/chat-composer*.{ts,tsx}",
   "ui/src/pages/chat/components/chat-{composer*,picker-overlay*,model-picker*,effort-picker*}.{ts,tsx}",
@@ -1121,6 +1120,13 @@ const compactReleaseMatrixRows =
   !releaseGate &&
   !ciQualification &&
   nodeRunnerBackend === "github";
+const shardRequiresTests = (shard, tests, fallback) =>
+  (shard.groups ?? [shard]).some((plan) => {
+    const patterns = plan.targets ?? plan.includePatterns;
+    return patterns
+      ? patterns.some((pattern) => tests.some((test) => matchesGlob(test, pattern)))
+      : fallback(plan);
+  });
 // The same capped matrix owns compact and plugin work; admit its longest rows first.
 const nodeTestShards = targetNodeTestShards
   .toSorted(
@@ -1164,11 +1170,7 @@ const nodeTestShards = targetNodeTestShards
       plan_concurrency: shard.planConcurrency,
       predicted_seconds: shard.predictedTestSeconds ?? shard.predictedSeconds,
       targets: shard.targets,
-      requires_go: (shard.groups ?? [shard]).some((plan) => {
-        const patterns = plan.targets ?? plan.includePatterns;
-        if (patterns) {
-          return patterns.some((pattern) => matchesGlob("test/scripts/docs-i18n.test.ts", pattern));
-        }
+      requires_go: shardRequiresTests(shard, ["test/scripts/docs-i18n.test.ts"], (plan) => {
         if (
           plan.configs?.length &&
           plan.configs.every((config) => knownToolingConfigs.has(config))
@@ -1179,35 +1181,28 @@ const nodeTestShards = targetNodeTestShards
         // current isolated and Docker catalogs exclude the Go owner.
         return (plan.shard_name ?? plan.shardName).startsWith("core-tooling");
       }),
-      requires_ripgrep: (shard.groups ?? [shard]).some((plan) => {
-        const patterns = plan.targets ?? plan.includePatterns;
-        if (patterns) {
-          return patterns.some((pattern) =>
-            [
-              "src/agents/sessions/agent-session-runtime-projection.test.ts",
-              "src/agents/sessions/tools/index.test.ts",
-              "src/agents/sessions/tools/grep.byte-path.test.ts",
-              "src/agents/filesystem-tools-output-contract.test.ts",
-              "test/scripts/check-database-worker-ratchet.test.ts",
-            ].some((test) => matchesGlob(test, pattern)),
-          );
-        }
-        return ["agentic-agents-support", "agentic-agents-core-runtime"].includes(
-          plan.shard_name ?? plan.shardName,
-        );
-      }),
-      requires_sandbox_image: (shard.groups ?? [shard]).some((plan) => {
-        const patterns = plan.targets ?? plan.includePatterns;
-        if (patterns) {
-          return patterns.some((pattern) =>
-            [
-              "test/e2e/qa-lab/runtime/agent-sandboxed-exec-behavior.e2e.test.ts",
-              "test/e2e/qa-lab/runtime/openclaw-sandbox-workspace-isolation.e2e.test.ts",
-            ].some((test) => matchesGlob(test, pattern)),
-          );
-        }
-        return plan.configs?.includes("test/vitest/vitest.e2e.config.ts") ?? false;
-      }),
+      requires_ripgrep: shardRequiresTests(
+        shard,
+        [
+          "src/agents/sessions/agent-session-runtime-projection.test.ts",
+          "src/agents/sessions/tools/index.test.ts",
+          "src/agents/sessions/tools/grep.byte-path.test.ts",
+          "src/agents/filesystem-tools-output-contract.test.ts",
+          "test/scripts/check-database-worker-ratchet.test.ts",
+        ],
+        (plan) =>
+          ["agentic-agents-support", "agentic-agents-core-runtime"].includes(
+            plan.shard_name ?? plan.shardName,
+          ),
+      ),
+      requires_sandbox_image: shardRequiresTests(
+        shard,
+        [
+          "test/e2e/qa-lab/runtime/agent-sandboxed-exec-behavior.e2e.test.ts",
+          "test/e2e/qa-lab/runtime/openclaw-sandbox-workspace-isolation.e2e.test.ts",
+        ],
+        (plan) => plan.configs?.includes("test/vitest/vitest.e2e.config.ts") ?? false,
+      ),
     };
     if (compactReleaseMatrixRows) {
       // The workflow treats absent feature flags as false and history as [].

@@ -104,7 +104,7 @@ describe("worker placement move destination owner", () => {
               store: { [SESSION_KEY]: entry },
             }),
             resolveCanonicalSessionEntryFromStoreKeys: () => entry,
-            resolveWorkerPlacementSessionRuntime: () => "codex",
+            resolveWorkerPlacementSessionRuntimeAsync: async () => "codex",
             resolveWorkerPlacementCapabilities: () => ({
               executionMode: "remote-exec",
               ...(supported ? { devicePlacement: DEVICE_REQUIREMENT } : {}),

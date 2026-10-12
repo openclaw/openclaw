@@ -62,8 +62,10 @@ vi.mock("../auth-profiles/order.js", () => ({
 vi.mock("../auth-profiles/session-override.js", () => ({
   clearSessionAuthProfileOverride: vi.fn(async () => undefined),
 }));
+// mock-isolation: Selection fixtures have no auth profiles and must not discover host accounts.
 vi.mock("../auth-profiles/store-runtime.js", () => ({
   ensureAuthProfileStore: () => ({ profiles: {} }),
+  ensureAuthProfileStoreAsync: () => ({ profiles: {} }),
 }));
 vi.mock("../harness/runtime-plugin.js", () => ({
   ensureSelectedAgentHarnessPlugin: vi.fn(async () => undefined),
@@ -110,11 +112,14 @@ vi.mock("../provider-auth-aliases.js", () => ({
 vi.mock("../session-runtime-compat.js", () => ({
   resolveSessionRuntimeOverrideForProvider: () => undefined,
 }));
-vi.mock("../thinking-runtime.js", () => ({
-  needsThinkHydration: () => false,
-  normalizeThinkingCatalogProviders: (catalog: unknown) => catalog,
-  resolveEffectiveAgentRuntime: () => undefined,
-}));
+vi.mock("../thinking-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../thinking-runtime.js")>();
+  return {
+    ...actual,
+    normalizeThinkingCatalogProviders: (catalog: unknown) => catalog,
+    resolveEffectiveAgentRuntime: () => undefined,
+  };
+});
 vi.mock("../../plugins/runtime.js", () => ({ requireActivePluginRegistry: () => ({}) }));
 vi.mock("../../sessions/agent-harness-session-key.js", () => ({
   isValidAgentHarnessSessionStoreEntry: () => false,

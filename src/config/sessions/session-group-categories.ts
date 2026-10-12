@@ -1,3 +1,7 @@
+import {
+  ensureSessionGroupCatalog,
+  readSessionGroupCatalog,
+} from "../../gateway/session-group-catalog.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
   openOpenClawAgentDatabase,
@@ -6,11 +10,10 @@ import {
 import { bindSessionEntryPublicationSource } from "./session-accessor.sqlite-entry-cache-publication.js";
 import { publishSessionEntryCacheCategoryUpdate } from "./session-accessor.sqlite-entry-cache.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
+import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
 import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
-import {
-  applySessionGroupCategoryMutation,
-  prepareSessionGroupCategoryMutation,
-} from "./session-group-categories.kernel.js";
+import { applySessionGroupCategoryMutation } from "./session-group-categories.kernel.js";
+import { readSessionGroupCategoryKeys } from "./session-group-categories.read.js";
 import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import { runSessionCollaborationWrite } from "./session-sharing-store.async.js";
 
@@ -23,6 +26,49 @@ export function updateSessionGroupCategoriesInWorker(params: {
 }): Promise<number> {
   const { scope, from, to, assertTargetCurrent } = params;
   const agentId = scope.agentId;
+  const memory = getSessionActorStorageBinding(scope);
+  if (memory) {
+    return (async () => {
+      if (to !== undefined) {
+        await ensureSessionGroupCatalog(scope.env ?? process.env);
+      }
+      const outcome = await memory.actor.storage!.mutate(
+        { type: "session.category.apply", input: { from, to } },
+        {
+          assertCurrent: () => memory.authority.assertCurrent(),
+          authorize(stage, facts, publication) {
+            if (
+              to !== undefined &&
+              !readSessionGroupCatalog(scope.env).groups.some((group) => group.name === to)
+            ) {
+              throw new Error(`unknown session group: ${to}`);
+            }
+            assertTargetCurrent?.({ agentId, sessionKey: facts.target.sessionKey });
+            memory.authority.authorize(stage, facts, publication);
+          },
+        },
+        {
+          committed({ value }) {
+            sessionChanges.emitBatch(
+              value.map(({ sessionKey, sessionId }) => ({
+                agentId,
+                storePath: memory.path,
+                sessionKey,
+                facts: { kind: "category" as const, sessionId, category: to?.trim() || null },
+              })),
+            );
+          },
+        },
+      );
+      if (outcome.kind === "rolled-back" || outcome.failure) {
+        const failure = outcome.kind === "rolled-back" ? outcome.error : outcome.failure!;
+        const error = new Error(failure.message);
+        error.name = failure.name;
+        throw error;
+      }
+      return outcome.value.length;
+    })();
+  }
   const incognito = scope.incognito ?? captureIncognitoSessionOperation(scope);
   if (incognito) {
     const { actor, authority } = incognito;
@@ -80,8 +126,8 @@ export function updateSessionGroupCategoriesInWorker(params: {
     (capturedScope) => {
       const options = toDatabaseOptions(resolveSqliteScope(capturedScope));
       const database = openOpenClawAgentDatabase(options);
-      const planned = prepareSessionGroupCategoryMutation(database, from);
-      keys = [...planned.keys()];
+      const planned = readSessionGroupCategoryKeys(database, from);
+      keys = planned;
       assertCurrent();
       return runOpenClawAgentWriteTransaction(
         (current) => {
@@ -89,6 +135,7 @@ export function updateSessionGroupCategoriesInWorker(params: {
           return applySessionGroupCategoryMutation(
             current,
             planned,
+            from,
             to,
             capturedScope.env ?? process.env,
           ).length;

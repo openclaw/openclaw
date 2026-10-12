@@ -1,17 +1,16 @@
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import { resolveFailureAlert } from "../service/failure-alerts.js";
 import type { CronJobPolicyContext } from "../service/state.js";
 import { applyJobResult } from "../service/timer-outcomes.js";
 import { ownsStreamSource } from "../stream-schedule.js";
-import type { CronRuntimeMutationContracts } from "./runtime-mutation.types.js";
-import {
-  createCronMutationLogger,
-  prepareCronRuntimeMutation,
-  retainCronRuntimeMutationOutcome,
-} from "./runtime-mutation.worker.js";
+import { createCronMutationLogger } from "./runtime-mutation.worker.js";
 import { mutateCronRuntimeRowsInDatabase } from "./runtime-rows.kernel.js";
-import type { CronRuntimeWorkerOperations } from "./runtime-worker.types.js";
+import type {
+  CronRuntimeMutationContracts,
+  CronRuntimeWorkerOperations,
+} from "./runtime-worker.types.js";
 
 export function mutateCronExternalStateInWorker(
   database: OpenClawStateDatabase,
@@ -25,13 +24,9 @@ export function mutateCronExternalStateInWorker(
         jobIds: new Set([input.jobId]),
         mutate({ jobs }) {
           const job = jobs.get(input.jobId);
-          const preparation = prepareCronRuntimeMutation("cron.mutateExternalState", input.nonce, {
-            id: input.jobId,
-            delivery: job?.delivery,
-            failureAlert: job?.failureAlert,
-          });
+          const policy = input.snapshot;
           const outcome: CronRuntimeMutationContracts["cron.mutateExternalState"]["outcome"] = {
-            nowMs: preparation.nowMs,
+            nowMs: policy.nowMs,
             notifications: [],
             logs: [],
           };
@@ -53,14 +48,17 @@ export function mutateCronExternalStateInWorker(
               Object.assign(job.state, change.statePatch);
               job.state.streamSourceIdentity = sourceIdentity;
               if (change.kind === "failure") {
-                const { nowMs, cronConfig, failureAlert } = preparation;
+                const { nowMs, cronConfig } = policy;
                 const state: CronJobPolicyContext = {
                   deps: {
                     nowMs: () => nowMs,
                     cronConfig,
                     log: createCronMutationLogger(outcome.logs),
                   },
-                  preparedFailureAlert: { jobId: input.jobId, value: failureAlert },
+                  preparedFailureAlert: {
+                    jobId: input.jobId,
+                    value: resolveFailureAlert({ deps: { cronConfig } }, job),
+                  },
                 };
                 job.state.consecutiveErrors = Math.max(job.state.consecutiveErrors ?? 0, 4);
                 applyJobResult(
@@ -100,12 +98,7 @@ export function mutateCronExternalStateInWorker(
           return { upsertJobIds: [job.id], value: outcome };
         },
       });
-      return retainCronRuntimeMutationOutcome(
-        "cron.mutateExternalState",
-        db,
-        input.nonce,
-        committed.value,
-      );
+      return { outcome: committed.value };
     },
     { database, path: database.path, env: getSqliteWorkerStateContext().environment },
     {

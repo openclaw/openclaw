@@ -26,8 +26,8 @@ import { resolveSystemMainSessionTarget, type SessionEntry } from "../config/ses
 import {
   applySessionEntryLifecycleMutation,
   listSessionEntriesCore,
-  replaceTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { SessionOrigin } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";

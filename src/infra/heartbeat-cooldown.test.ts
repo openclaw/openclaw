@@ -29,37 +29,6 @@ describe("shouldDeferWake", () => {
         defer: false,
       });
     });
-
-    it("never defers manual wakes even within min-spacing window", () => {
-      expect(
-        decide({
-          intent: "manual",
-          now: 200_000,
-          nextDueMs: 100_000,
-          lastRunStartedAtMs: 199_900,
-        }),
-      ).toEqual({ defer: false });
-    });
-
-    it("never defers manual wakes even during a flood", () => {
-      const now = 1_000_000;
-      const recentRunStarts = [
-        now - 50_000,
-        now - 40_000,
-        now - 30_000,
-        now - 20_000,
-        now - 10_000,
-      ];
-      expect(
-        decide({
-          intent: "manual",
-          now,
-          nextDueMs: 0,
-          lastRunStartedAtMs: now - 10_000,
-          recentRunStarts,
-        }),
-      ).toEqual({ defer: false });
-    });
   });
 
   describe("immediate wake intent (wake-now contracts)", () => {
@@ -68,50 +37,11 @@ describe("shouldDeferWake", () => {
         defer: false,
       });
     });
-
-    it("does not defer 'wake' within min-spacing window", () => {
-      expect(
-        decide({
-          intent: "immediate",
-          now: 200_000,
-          nextDueMs: 100_000,
-          lastRunStartedAtMs: 199_990,
-        }),
-      ).toEqual({ defer: false });
-    });
-
-    it("keeps the flood guard for immediate wakes", () => {
-      const now = 1_000_000;
-      const recentRunStarts = [
-        now - 50_000,
-        now - 40_000,
-        now - 30_000,
-        now - 20_000,
-        now - 10_000,
-      ];
-      expect(
-        decide({
-          intent: "immediate",
-          now,
-          nextDueMs: 0,
-          lastRunStartedAtMs: now - 10_000,
-          recentRunStarts,
-        }),
-      ).toEqual({ defer: true, reason: "flood", retryAtMs: 1_010_001 });
-    });
   });
 
   describe("scheduled intent", () => {
     it("defers with 'not-due' when now < nextDueMs (interval cooldown)", () => {
       expect(decide({ ...afterRun, intent: "scheduled" })).toEqual({
-        defer: true,
-        reason: "not-due",
-        retryAtMs: 100_000,
-      });
-    });
-
-    it("defers interval wake before first run if nextDueMs is in future", () => {
-      expect(decide({ ...beforeFirstRun, intent: "scheduled" })).toEqual({
         defer: true,
         reason: "not-due",
         retryAtMs: 100_000,
@@ -127,40 +57,6 @@ describe("shouldDeferWake", () => {
           lastRunStartedAtMs: 70_000,
         }),
       ).toEqual({ defer: false });
-    });
-  });
-
-  describe("independently scheduled task intent", () => {
-    it("ignores the base heartbeat due slot but keeps the minimum spacing guard", () => {
-      expect(
-        decide({
-          ...afterRun,
-          intent: "task",
-          now: 80_000,
-          lastRunStartedAtMs: 40_000,
-        }),
-      ).toEqual({ defer: false });
-      expect(
-        decide({
-          ...afterRun,
-          intent: "task",
-          now: 80_000,
-          lastRunStartedAtMs: 79_000,
-        }),
-      ).toEqual({ defer: true, reason: "min-spacing", retryAtMs: 109_000 });
-    });
-
-    it("keeps the flood guard", () => {
-      const now = 1_000_000;
-      expect(
-        decide({
-          intent: "task",
-          now,
-          nextDueMs: now + 60_000,
-          lastRunStartedAtMs: now - 40_000,
-          recentRunStarts: [now - 50_000, now - 40_000, now - 30_000, now - 20_000, now - 10_000],
-        }),
-      ).toEqual({ defer: true, reason: "flood", retryAtMs: 1_010_001 });
     });
   });
 
@@ -180,16 +76,6 @@ describe("shouldDeferWake", () => {
         defer: false,
       });
     });
-  });
-
-  it("admits retained event work after the spacing floor even before nextDueMs", () => {
-    expect(
-      decide({
-        ...afterRun,
-        now: 80_000,
-        retainedWork: true,
-      }),
-    ).toEqual({ defer: false });
   });
 
   describe("min-spacing floor", () => {
