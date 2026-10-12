@@ -108,7 +108,7 @@ describe("stale OAuth profile shadow doctor repair", () => {
       }),
     );
 
-    const hits = await scanStaleOAuthProfileShadows({
+    const { hits } = await scanStaleOAuthProfileShadows({
       cfg: {} satisfies OpenClawConfig,
       now,
     });
@@ -156,7 +156,7 @@ describe("stale OAuth profile shadow doctor repair", () => {
       ),
     );
 
-    const hits = await scanStaleOAuthProfileShadows({
+    const { hits } = await scanStaleOAuthProfileShadows({
       cfg: {} satisfies OpenClawConfig,
       now,
     });
@@ -204,7 +204,7 @@ describe("stale OAuth profile shadow doctor repair", () => {
       }),
     );
 
-    const hits = await scanStaleOAuthProfileShadows({
+    const { hits } = await scanStaleOAuthProfileShadows({
       cfg: {} satisfies OpenClawConfig,
       env: injectedEnv,
       now,
@@ -288,7 +288,7 @@ describe("stale OAuth profile shadow doctor repair", () => {
       }),
     );
 
-    const hits = await scanStaleOAuthProfileShadows({
+    const { hits } = await scanStaleOAuthProfileShadows({
       cfg: {} satisfies OpenClawConfig,
       now,
     });
@@ -398,6 +398,51 @@ describe("stale OAuth profile shadow doctor repair", () => {
 
     expect(removedProfileIds).toEqual([]);
     expect(store.profiles[profileId]).toBeDefined();
+  });
+
+  it("does not delete an OAuth profile when the legacy auth store is unreadable", async () => {
+    const profileId = "anthropic:default";
+    const now = Date.now();
+    const childAgentDir = path.join(stateDir, "agents", "telegram", "agent");
+    // Stale-shadow fixture: child credential expired, main credential fresher.
+    await writeRawAuthStore(
+      childAgentDir,
+      storeWith(profileId, {
+        access: "child-access",
+        refresh: "child-refresh",
+        expires: now - 60_000,
+        accountId: "acct-shared",
+      }),
+    );
+    saveAuthProfileStore(
+      storeWith(profileId, {
+        access: "main-access",
+        refresh: "main-refresh",
+        expires: now + 60 * 60 * 1000,
+        accountId: "acct-shared",
+      }),
+    );
+    // Corrupt the legacy file (interrupted write): it can no longer be parsed,
+    // so the doctor must not treat the missing sidecar ref as "no reference".
+    const authPath = resolveAuthStorePath(childAgentDir);
+    await fs.mkdir(path.dirname(authPath), { recursive: true });
+    await fs.writeFile(authPath, '{"version":1,"profiles":{"anthropic:default":{"ty', "utf8");
+
+    const { hits, warnings } = await scanStaleOAuthProfileShadows({
+      cfg: {} satisfies OpenClawConfig,
+      now,
+    });
+    const repair = await repairStaleOAuthProfileShadows({
+      cfg: {} satisfies OpenClawConfig,
+      now,
+    });
+
+    expect(hits).toEqual([]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("Cannot read the legacy auth profile store");
+    expect(repair.changes).toEqual([]);
+    expect(repair.warnings).toHaveLength(1);
+    expect(loadPersistedAuthProfileStore(childAgentDir)?.profiles[profileId]).toBeDefined();
   });
 
   it("does not recreate a child auth store that disappeared before repair", async () => {
