@@ -308,7 +308,7 @@ suite.define(() => {
                             id: "keyboard-command",
                             name: "exec",
                             arguments: {
-                              title: "Repair Leon authentication and target runs",
+                              title: "Retry failed benchmark targets",
                               code: "return true;",
                             },
                           },
@@ -319,8 +319,8 @@ suite.define(() => {
                             toolCallId: "keyboard-command",
                             kind: "tool",
                             name: "exec",
-                            title: "Exec Repair Leon authentication and target runs",
-                            meta: "Repair Leon authentication and target runs",
+                            title: "Exec Retry failed benchmark targets",
+                            meta: "Retry failed benchmark targets",
                             phase: "start",
                             status: "running",
                           },
@@ -449,8 +449,8 @@ suite.define(() => {
             toolCallId: "keyboard-command",
             kind: "tool",
             name: "exec",
-            title: "Exec Repair Leon authentication and target runs",
-            meta: "Repair Leon authentication and target runs",
+            title: "Exec Retry failed benchmark targets",
+            meta: "Retry failed benchmark targets",
             phase: "update",
             status: "running",
           },
@@ -459,7 +459,7 @@ suite.define(() => {
         await otherRow.locator(".chat-subagents__activity").waitFor();
         await expect
           .poll(() => otherRow.locator(".chat-subagents__activity").textContent())
-          .toBe("Repair Leon authentication and target runs");
+          .toBe("Retry failed benchmark targets");
         await expect
           .poll(() => otherRow.locator(".chat-subagents__calls").textContent())
           .toBe("1+ calls");

@@ -393,8 +393,8 @@ describe("Subagents panel data ownership", () => {
       name: "exec",
       phase: "update",
       status: "running",
-      title: "Exec Repair Leon authentication and target runs",
-      meta: "Repair Leon authentication and target runs",
+      title: "Exec Retry failed benchmark targets",
+      meta: "Retry failed benchmark targets",
     };
     const publish = (data: Record<string, unknown>) =>
       f.connection.publishEvent("agent", {
