@@ -79,7 +79,8 @@ const drainDownloads = vi.fn(async () => undefined);
 const disposeDownloads = vi.fn();
 const cleanupDialogAbort = vi.fn();
 
-vi.mock("./pw-session.js", () => ({
+vi.mock("./pw-session.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./pw-session.js")>()),
   assertNativePageNavigationSucceeded: vi.fn(async () => {}),
   assertPageNavigationCompletedSafely,
   beginActionDownloadCaptureOnPage: vi.fn(() => ({

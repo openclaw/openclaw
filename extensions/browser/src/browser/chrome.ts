@@ -14,7 +14,6 @@ import { ensurePortAvailable, type SsrFPolicy } from "openclaw/plugin-sdk/securi
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { CONFIG_DIR, sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { createBoundedUtf8Tail } from "./bounded-utf8-tail.js";
 import { hasChromeProxyControlArg, omitChromeProxyEnv } from "./browser-proxy-mode.js";
 import { assertManagedProxyAllowsCdpUrl } from "./cdp-proxy-bypass.js";
 import {
@@ -43,6 +42,8 @@ import {
 } from "./cdp.helpers.js";
 import {
   type ChromeCdpDiagnostic,
+  chromeLaunchHints,
+  createChromeLaunchStderrDiagnostics,
   diagnoseChromeCdp,
   formatChromeCdpDiagnostic,
   type ChromeVersion,
@@ -84,13 +85,7 @@ const CHROME_SINGLETON_LOCK_PATHS = [
   "SingletonSocket",
   "SingletonCookie",
 ] as const;
-const CHROME_SINGLETON_IN_USE_PATTERN = /profile appears to be in use by another chromium process/i;
-const CHROME_MISSING_DISPLAY_PATTERN = /missing x server|\$DISPLAY/i;
-const CHROME_REMOTE_DEBUGGING_BLOCKED_PATTERN =
-  /^DevTools remote debugging is disallowed by (?:the )?system admin\.?\s*$/m;
 const CHROME_GRACEFUL_CLOSE_COMMAND_TIMEOUT_MS = 500;
-const CHROME_LAUNCH_STDERR_TAIL_MAX_BYTES = 64 * 1024;
-const CHROME_STDERR_MARKER_SCAN_TAIL_CHARS = 256;
 const CHROME_HTTP_DISCOVERY_FAILURE_CODES = new Set([
   "ssrf_blocked",
   "http_unreachable",
@@ -104,49 +99,6 @@ const CHROME_EXECUTABLE_FAMILIES = {
   brave: /\b(brave browser|brave-browser|brave)\b/i,
   edge: /\b(microsoft edge|microsoft-edge|msedge)\b/i,
 };
-
-type ChromeLaunchStderrSignals = {
-  singletonInUse: boolean;
-  missingDisplay: boolean;
-  remoteDebuggingBlocked: boolean;
-};
-
-function createChromeLaunchStderrDiagnostics() {
-  const tail = createBoundedUtf8Tail(CHROME_LAUNCH_STDERR_TAIL_MAX_BYTES);
-  const signals: ChromeLaunchStderrSignals = {
-    singletonInUse: false,
-    missingDisplay: false,
-    remoteDebuggingBlocked: false,
-  };
-  let markerScanTail = "";
-
-  return {
-    append(chunk: Buffer | string) {
-      tail.append(chunk);
-      const chunkText = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk;
-      if (chunkText.length > 0) {
-        const scanText = `${markerScanTail}${chunkText}`;
-        signals.singletonInUse ||= CHROME_SINGLETON_IN_USE_PATTERN.test(scanText);
-        signals.missingDisplay ||= CHROME_MISSING_DISPLAY_PATTERN.test(scanText);
-        signals.remoteDebuggingBlocked ||= CHROME_REMOTE_DEBUGGING_BLOCKED_PATTERN.test(scanText);
-        markerScanTail = scanText.slice(-CHROME_STDERR_MARKER_SCAN_TAIL_CHARS);
-      }
-    },
-    toString() {
-      return tail.text();
-    },
-    signals(): ChromeLaunchStderrSignals {
-      return { ...signals };
-    },
-    clear() {
-      tail.clear();
-      signals.singletonInUse = false;
-      signals.missingDisplay = false;
-      signals.remoteDebuggingBlocked = false;
-      markerScanTail = "";
-    },
-  };
-}
 
 type ChromeSingletonLock =
   | { status: "missing" }
@@ -638,41 +590,6 @@ async function ensureManagedChromePortAvailable(
     }
   }
   await ensureProbeHostsAvailable();
-}
-
-function chromeLaunchHints(params: {
-  stderrOutput: string;
-  stderrSignals?: ChromeLaunchStderrSignals;
-  resolved: ResolvedBrowserConfig;
-  profile: ResolvedBrowserProfile;
-  launchOptions?: ManagedBrowserHeadlessOptions;
-}): string {
-  const hints: string[] = [];
-  if (process.platform === "linux" && !params.resolved.noSandbox) {
-    hints.push("If running in a container or as root, try setting browser.noSandbox: true.");
-  }
-  const headlessMode = resolveManagedBrowserHeadlessMode(
-    params.resolved,
-    params.profile,
-    params.launchOptions,
-  );
-  const missingDisplay =
-    params.stderrSignals?.missingDisplay ??
-    CHROME_MISSING_DISPLAY_PATTERN.test(params.stderrOutput);
-  if (missingDisplay && !headlessMode.headless) {
-    hints.push(
-      "No DISPLAY/X server was detected. Set OPENCLAW_BROWSER_HEADLESS=1, remove the headed override, start Xvfb, or run the Gateway in a desktop session.",
-    );
-  }
-  const singletonInUse =
-    params.stderrSignals?.singletonInUse ??
-    CHROME_SINGLETON_IN_USE_PATTERN.test(params.stderrOutput);
-  if (singletonInUse) {
-    hints.push(
-      `The Chromium profile "${params.profile.name}" is locked. Stop the existing browser or remove stale Singleton* lock files under ~/.openclaw/browser/${params.profile.name}/user-data.`,
-    );
-  }
-  return hints.length > 0 ? `\nHint: ${hints.join("\nHint: ")}` : "";
 }
 
 export type RunningChrome = {
