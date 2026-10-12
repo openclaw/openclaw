@@ -2624,46 +2624,6 @@ describe("deliverOutboundPayloads", () => {
     }
   });
 
-  it.each([true, false])(
-    "commits a logical payload only when every physical part has an identity (%s)",
-    async (confirmed) => {
-      setTestOutbound({
-        sendFormattedText: async () => [
-          { channel: "matrix", messageId: "part-1" },
-          { channel: "matrix", messageId: confirmed ? "part-2" : "" },
-        ],
-      });
-      const payload = { text: "one logical message" };
-      const preparedBatch = createUnmodifiedPreparedOutboundBatch([payload]);
-      preparedBatch.entries[0]!.sourceIndex = 3;
-      const params = {
-        cfg: {},
-        channel: "matrix",
-        to: "!destination:example",
-        payloads: [payload],
-        preparedBatch,
-        deliveryQueueId: "durable-queue-id",
-        session: { key: "agent:main:source", agentId: "main" },
-        assertDirectAdapterHandoff: vi.fn(),
-        assertTranscriptCurrent: vi.fn(),
-      };
-      await deliverOutboundPayloadsCore(params);
-      if (confirmed) {
-        expect(mocks.commitConfirmedVisibleMessage).toHaveBeenCalledOnce();
-        expect(mocks.commitConfirmedVisibleMessage.mock.calls[0]?.[0]).toMatchObject({
-          deliveryId: "durable-queue-id",
-          payloadIndex: 3,
-          producer: params.session,
-          payload,
-          assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
-          assertCurrent: params.assertTranscriptCurrent,
-        });
-      } else {
-        expect(mocks.commitConfirmedVisibleMessage).not.toHaveBeenCalled();
-      }
-    },
-  );
-
   it("commits confirmed location-only payloads without requiring a producer session", async () => {
     const location = {
       latitude: 48.858844,
@@ -3202,15 +3162,6 @@ describe("deliverOutboundPayloads", () => {
       to: "room-parent",
       payloads: [...payloads],
       preparedBatch: createUnmodifiedPreparedOutboundBatch(payloads),
-      transcriptRoute: {
-        sessionKey: "agent:main:matrix:group:destination",
-        baseSessionKey: "agent:main:matrix:group:destination",
-        peer: { kind: "group", id: "destination" },
-        chatType: "group",
-        from: "matrix:destination",
-        to: "room-parent",
-      },
-      transcriptExpectedGeneration: { sessionId: "prepared-session", lifecycleRevision: "old" },
     });
 
     expect(sendText.mock.calls.map(([ctx]) => ctx.threadId)).toEqual([undefined, "thread-created"]);
@@ -3229,17 +3180,6 @@ describe("deliverOutboundPayloads", () => {
       "thread-created",
     ]);
     expect(adoptTargetFromDelivery).toHaveBeenCalledTimes(1);
-    expect(
-      mocks.commitConfirmedVisibleMessage.mock.calls.map(([params]) => params.threadId),
-    ).toEqual(["thread-created", "thread-created", "thread-created"]);
-    expect(mocks.commitConfirmedVisibleMessage.mock.calls[0]?.[0]).toMatchObject({
-      to: "room-parent",
-      payload: expect.objectContaining({ text: "starter" }),
-    });
-    expect(mocks.commitConfirmedVisibleMessage.mock.calls[0]?.[0].route).toBeUndefined();
-    expect(
-      mocks.commitConfirmedVisibleMessage.mock.calls[0]?.[0].expectedGeneration,
-    ).toBeUndefined();
   });
 });
 

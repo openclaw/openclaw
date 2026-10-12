@@ -456,7 +456,7 @@ export async function resolveCurrentConversationByDelivery(
   scope: ConversationRegistryScope,
   address: { channel: string; accountId: string; target: string; threadId?: string },
 ): Promise<{ conversation?: ConversationRecord; ambiguous?: true }> {
-  const conversations = await selectConversationRowsInWorker(scope, {
+  const conversations = await readConversationsAsync(scope, {
     channel: address.channel,
     deliveryAddress: address,
     currentBindingOnly: true,
