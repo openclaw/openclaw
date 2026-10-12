@@ -203,6 +203,77 @@ export function readActivePathEntryRelationFromProjection(
   return readActiveTranscriptEntryIdentityInSnapshot(projection, entryId) ? "ancestor" : "off-path";
 }
 
+/**
+ * Point membership for one transcript entry: true on the active path, false when a
+ * rewind or branch switch cut it, undefined when that entry was never recorded.
+ * Indexed point reads only; nothing is decoded.
+ */
+export function readSessionTranscriptEntryActiveState(
+  scope: SessionTranscriptReadScope,
+  entryId: string,
+): boolean | undefined {
+  return withCurrentProjectionSnapshot(scope, (projection) => {
+    const db = getActiveTranscriptKysely(projection.database);
+    const identity = executeSqliteQueryTakeFirstSync(
+      projection.database.db,
+      db
+        .selectFrom("transcript_event_identities as identity")
+        .select("identity.seq")
+        .where("identity.session_id", "=", projection.resolved.sessionId)
+        .where("identity.event_id", "=", entryId)
+        .limit(1),
+    );
+    if (!identity) {
+      return undefined;
+    }
+    const active = executeSqliteQueryTakeFirstSync(
+      projection.database.db,
+      db
+        .selectFrom("session_transcript_active_events as active")
+        .select("active.event_seq")
+        .where("active.session_id", "=", projection.resolved.sessionId)
+        .where("active.event_seq", "=", identity.seq)
+        .limit(1),
+    );
+    return active !== undefined;
+  });
+}
+
+/**
+ * True only when this source-turn id is recorded and no longer on the active path.
+ * An identity that cannot be found returns false so the caller keeps the entry.
+ */
+export function readSessionTransportMessageInactiveState(
+  scope: SessionTranscriptReadScope,
+  params: { sourceTurnId: string },
+): boolean {
+  return withCurrentProjectionSnapshot(scope, (projection) => {
+    const db = getActiveTranscriptKysely(projection.database);
+    const identity = executeSqliteQueryTakeFirstSync(
+      projection.database.db,
+      db
+        .selectFrom("transcript_event_identities as identity")
+        .select("identity.seq")
+        .where("identity.session_id", "=", projection.resolved.sessionId)
+        .where("identity.message_idempotency_key", "=", params.sourceTurnId)
+        .limit(1),
+    );
+    if (!identity) {
+      return false;
+    }
+    const active = executeSqliteQueryTakeFirstSync(
+      projection.database.db,
+      db
+        .selectFrom("session_transcript_active_events as active")
+        .select("active.event_seq")
+        .where("active.session_id", "=", projection.resolved.sessionId)
+        .where("active.event_seq", "=", identity.seq)
+        .limit(1),
+    );
+    return active === undefined;
+  });
+}
+
 /** Reads a bounded context tail, preserving control facts but excluding display-only messages. */
 export function readRecentSessionTranscriptActiveEvents(
   scope: SessionTranscriptReadScope,

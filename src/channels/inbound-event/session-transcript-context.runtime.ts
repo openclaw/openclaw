@@ -1,6 +1,11 @@
 import { isSessionBoundaryCommandText } from "../../auto-reply/command-detection.js";
 import type { HistoryEntry } from "../../auto-reply/reply/history.types.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
+import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity.js";
+import {
+  isInactiveTranscriptEntry,
+  isInactiveTransportMessage,
+} from "../../config/sessions/transcript-inactive-identities.js";
 import { readRecentUserAssistantTextForSession } from "../../config/sessions/transcript.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { stripInlineDirectiveTagsForDelivery } from "../../utils/directive-tags.js";
@@ -98,6 +103,69 @@ function mergeableChatWindowEntries(ctx: FinalizedMsgContext) {
   );
 }
 
+type InactiveProbeScope = {
+  agentId?: string;
+  sessionKey: string;
+  storePath: string;
+};
+
+type TransportConversation = {
+  provider?: string;
+  accountId?: string;
+  conversationId?: string;
+};
+
+/** Cached window rows whose transcript turn a rewind or branch switch cut. */
+async function isInactiveBranchWindowMessage(
+  message: PromptMessage,
+  scope: InactiveProbeScope,
+  conversation: TransportConversation | undefined,
+): Promise<boolean> {
+  const transcriptId =
+    typeof message.session_transcript_id === "string" ? message.session_transcript_id.trim() : "";
+  if (transcriptId && (await isInactiveTranscriptEntry(scope, transcriptId))) {
+    return true;
+  }
+  const messageId = typeof message.message_id === "string" ? message.message_id.trim() : "";
+  // session: ids belong to transcript turns merged earlier, not the channel cache.
+  // Without the current conversation a cached id is not an established identity.
+  if (!messageId || messageId.startsWith("session:") || !conversation) {
+    return false;
+  }
+  return isInactiveTransportMessage(scope, { ...conversation, messageId });
+}
+
+async function pruneInactiveBranchWindowMessages(
+  params: InactiveProbeScope & { conversation?: TransportConversation },
+  windows: ReturnType<typeof mergeableChatWindowEntries>,
+): Promise<void> {
+  const scope = {
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+  };
+  for (const window of windows) {
+    if (!Array.isArray(window.payload.messages)) {
+      continue;
+    }
+    const retained: unknown[] = [];
+    for (const message of window.payload.messages) {
+      if (!message || typeof message !== "object" || Array.isArray(message)) {
+        retained.push(message);
+        continue;
+      }
+      if (
+        !(await isInactiveBranchWindowMessage(message as PromptMessage, scope, params.conversation))
+      ) {
+        retained.push(message);
+      }
+    }
+    if (retained.length !== window.payload.messages.length) {
+      window.payload = { ...window.payload, messages: retained };
+    }
+  }
+}
+
 /** Merges active canonical transcript turns into the prepared channel history in place. */
 export async function mergeSessionTranscriptContext(params: {
   agentId?: string;
@@ -123,6 +191,22 @@ export async function mergeSessionTranscriptContext(params: {
     throw new Error("Session transcript context requires an agent owner.");
   }
   const windows = mergeableChatWindowEntries(params.ctx);
+  const conversationIdentity = conversationIdentityFromMsgContext({ ctx: params.ctx });
+  await pruneInactiveBranchWindowMessages(
+    {
+      agentId,
+      conversation: conversationIdentity
+        ? {
+            provider: conversationIdentity.channel,
+            accountId: conversationIdentity.accountId,
+            conversationId: conversationIdentity.deliveryTarget,
+          }
+        : undefined,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    },
+    windows,
+  );
   const turns = await readRecentUserAssistantTextForSession({
     agentId,
     sessionKey: params.sessionKey,

@@ -49,7 +49,10 @@ import {
   buildTelegramReplyChain,
   createTelegramMessageCache,
 } from "./message-cache.js";
-import { resolveCompleteTelegramPromptContextProjectionIds } from "./prompt-context-projection.js";
+import {
+  resolveCompleteTelegramPromptContextProjectionIds,
+  resolveTelegramPromptContextTranscriptMessageId,
+} from "./prompt-context-projection.js";
 
 export type TelegramPromptContextMessageSelection = ReadonlyMap<string, "include" | "exclude">;
 
@@ -365,20 +368,26 @@ export function createTelegramMessageContextRuntime({
     ctx: TelegramContext,
     isReplyTarget: boolean | undefined,
     media?: TelegramMediaRef,
-  ) => ({
-    message_id: node.messageId,
-    thread_id: node.threadId,
-    sender: resolvePromptSender(node, ctx),
-    sender_id: node.senderId,
-    sender_username: node.senderUsername,
-    timestamp_ms: node.timestamp,
-    body: node.body,
-    media_type: media?.contentType ?? media?.kind ?? node.mediaType,
-    media_path: media?.path,
-    media_ref: media?.path ? undefined : node.mediaRef,
-    reply_to_id: node.replyToId,
-    is_reply_target: isReplyTarget === true ? true : undefined,
-  });
+  ) => {
+    const transcriptMessageId = resolveTelegramPromptContextTranscriptMessageId(
+      node.promptContextProjectionMarker,
+    );
+    return {
+      message_id: node.messageId,
+      thread_id: node.threadId,
+      sender: resolvePromptSender(node, ctx),
+      sender_id: node.senderId,
+      sender_username: node.senderUsername,
+      timestamp_ms: node.timestamp,
+      body: node.body,
+      media_type: media?.contentType ?? media?.kind ?? node.mediaType,
+      media_path: media?.path,
+      media_ref: media?.path ? undefined : node.mediaRef,
+      reply_to_id: node.replyToId,
+      is_reply_target: isReplyTarget === true ? true : undefined,
+      ...(transcriptMessageId ? { session_transcript_id: transcriptMessageId } : {}),
+    };
+  };
 
   const buildPromptContextForMessage = async (
     ctx: TelegramContext,
