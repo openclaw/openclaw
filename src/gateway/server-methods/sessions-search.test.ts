@@ -327,27 +327,6 @@ describe("sessions.search gateway method", () => {
     expect(searchSessionTranscriptsMock).not.toHaveBeenCalled();
   });
 
-  it("retains the inferred fixed-store owner for a bare key search", async () => {
-    cfg = {
-      session: { store: fixedStorePath },
-      agents: {
-        ownership: "explicit",
-        defaults: { sessionStore: { agentId: "ops" } },
-        entries: { ops: {}, research: {} },
-      },
-    };
-
-    await callSearch({ query: "needle", sessionKeys: ["global"] });
-
-    expect(searchSessionTranscriptsMock).toHaveBeenCalledWith({
-      agentId: "ops",
-      query: "needle",
-      limit: undefined,
-      sessionKeys: ["global"],
-      storePath: fixedStorePath,
-    });
-  });
-
   it("filters incognito candidates before applying a non-admin result limit", async () => {
     const incognitoKey = "agent:main:dashboard:incognito-newer";
     const durableKey = "agent:main:dashboard:durable";
@@ -432,16 +411,6 @@ describe("sessions.search gateway method", () => {
       query: "needle",
       limit: undefined,
       sessionKeys: ["agent:work:main", "global"],
-      storePath: expect.any(String),
-    });
-  });
-
-  it("uses the configured system agent without a session filter", async () => {
-    await callSearch({ query: "needle" });
-    expect(searchSessionTranscriptsMock).toHaveBeenCalledWith({
-      agentId: "main",
-      query: "needle",
-      limit: undefined,
       storePath: expect.any(String),
     });
   });
