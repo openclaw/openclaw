@@ -73,13 +73,20 @@ When configure starts from a provider auth choice, the default-model and model-p
 ## Memory section
 
 `openclaw configure --section memory` offers optional semantic memory search setup.
-Choose an available remote embedding provider and its default or an explicit model,
+Choose an available embedding provider and its default or an explicit model,
 then use existing credentials, enter a masked API key, or select a SecretRef.
+For local servers, choose **lmstudio** or **ollama** (including configured provider
+aliases). Start the server and download the embedding model first. Ollama supports
+models such as `bge-m3` and `nomic-embed-text`; LM Studio defaults to
+`text-embedding-nomic-embed-text-v1.5`. Choose **Use existing credentials / no key**
+when the server needs no authentication. The check allows time to load an
+already-downloaded model. Managed llama.cpp setup remains available through the
+[llama.cpp provider setup](/plugins/llama-cpp).
 Stored OAuth credentials are not a guarantee of embedding access: the selected
 account and model must pass a small synthetic embedding request before saving.
 Shell-only environment variables may not be available to the Gateway service.
 
-Skipping, a failed check, or declining to save preserves the current settings.
+Skipping, a failed check, or declining to save leaves the memory section unsaved.
 The flow does not download local models, create an index, or re-index memories.
 Existing per-agent overrides remain unchanged. A provider change drops the old
 memory endpoint, headers, and key so they cannot be sent to the new destination.

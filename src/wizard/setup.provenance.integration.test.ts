@@ -106,7 +106,7 @@ it.each([true, false])("preserves rebased provenance with consent %s", async (ac
       if (params.message === t("wizard.security.confirm")) {
         return securityConfirm(params);
       }
-      if (params.message === "Set up remote memory embeddings?") {
+      if (params.message === "Set up memory embeddings?") {
         return memoryConfirm(params);
       }
       throw new Error(`Unexpected confirmation: ${params.message}`);
@@ -174,7 +174,7 @@ it.each([true, false])("preserves rebased provenance with consent %s", async (ac
     );
     expect(memoryConfirm).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
-        message: "Set up remote memory embeddings?",
+        message: "Set up memory embeddings?",
         initialValue: false,
       }),
     );

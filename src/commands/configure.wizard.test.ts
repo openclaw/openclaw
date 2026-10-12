@@ -94,6 +94,18 @@ describe("runConfigureWizard", () => {
     expect(mocks.maybeInstallDaemon).not.toHaveBeenCalled();
   });
 
+  it.each([true, false])(
+    "does not write a skipped memory section (section flag: %s)",
+    async (flag) => {
+      setupBaseWizardState({ gateway: { mode: "local" } });
+      queueWizardPrompts({ select: ["local", "memory", "__continue"], confirm: [] });
+      await runConfigureWizard(flag ? { sections: ["memory"] } : {}, createRuntime());
+      expect(mocks.runMemorySetupFlow).toHaveBeenCalledOnce();
+      expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+      expect(mocks.clackOutro).toHaveBeenCalledWith("No configuration changes selected.");
+    },
+  );
+
   it("disables search when plugin policy leaves no available provider", async () => {
     mocks.resolveSearchProviderOptions.mockReturnValue([]);
     queueWizardPrompts({ select: [], confirm: [true, false] });

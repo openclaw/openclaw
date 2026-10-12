@@ -6,33 +6,28 @@ import type {
   EmbeddingProvider,
 } from "../plugins/embedding-provider-types.js";
 import { formatConcreteConfigPath } from "../shared/dot-path.js";
+import { withTimeout } from "../utils/with-timeout.js";
 import {
   WizardCancelledError,
   WizardNavigationError,
   type WizardPrompter,
 } from "../wizard/prompts.js";
 
-const PROBE_TIMEOUT_MS = 15_000;
+// Local HTTP providers may load an already-downloaded model before embedding.
+const PROBE_TIMEOUT_MS = 150_000;
 const CLOSE_TIMEOUT_MS = 1_000;
 
 type Search = NonNullable<NonNullable<OpenClawConfig["memory"]>["search"]>;
 type Remote = NonNullable<Search["remote"]>;
 
 async function closeProvider(provider: EmbeddingProvider): Promise<void> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    await Promise.race([
+    await withTimeout(
       Promise.resolve().then(() => provider.close?.()),
-      new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, CLOSE_TIMEOUT_MS);
-      }),
-    ]);
+      CLOSE_TIMEOUT_MS,
+    );
   } catch {
     // Cleanup cannot turn a failed readiness check into a surfaced provider error.
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
   }
 }
 
@@ -46,17 +41,8 @@ async function probeProvider(params: {
   remote?: Remote;
 }): Promise<boolean> {
   const controller = new AbortController();
-  let timedOut = false;
   let provider: EmbeddingProvider | null = null;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => {
-      timedOut = true;
-      controller.abort();
-      reject(new Error("embedding probe timed out"));
-    }, PROBE_TIMEOUT_MS);
-  });
-  try {
+  const check = async () => {
     const createOptions = {
       config: params.config,
       agentDir: params.agentDir,
@@ -68,36 +54,34 @@ async function probeProvider(params: {
       documentInputType: params.search.documentInputType,
       dimensions: params.search.outputDimensionality,
     };
-    const created = params.adapter.create({
+    const result = await params.adapter.create({
       ...createOptions,
       model: params.adapter.normalizeModel?.(createOptions) ?? createOptions.model,
     });
-    void created.then(
-      (result) => {
-        if (timedOut) {
-          if (result.provider) {
-            void closeProvider(result.provider);
-          }
-        }
-      },
-      () => {},
-    );
-    const result = await Promise.race([created, timeout]);
+    // Creation has no abort contract; release a late result without embedding.
+    if (controller.signal.aborted) {
+      if (result.provider) {
+        await closeProvider(result.provider);
+      }
+      return false;
+    }
     provider = result.provider;
     if (!provider) {
       return false;
     }
-    const vector = await Promise.race([
-      provider.embed("ping", { signal: controller.signal, inputType: "query" }),
-      timeout,
-    ]);
+    const vector = await provider.embed("ping", { signal: controller.signal, inputType: "query" });
     return Array.isArray(vector) && vector.length > 0 && vector.every(Number.isFinite);
+  };
+  try {
+    return await withTimeout(check(), PROBE_TIMEOUT_MS, {
+      createError: () => {
+        controller.abort();
+        return new Error("embedding probe timed out");
+      },
+    });
   } catch {
     return false;
   } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
     if (provider) {
       await closeProvider(provider);
     }
@@ -111,12 +95,10 @@ export async function runMemorySetupFlow(
   opts: { agentDir?: string; secretInputMode?: SecretInputMode } = {},
 ): Promise<OpenClawConfig> {
   await prompter.note(
-    "Embeddings add semantic memory search; without them, keyword search remains available. Stored OAuth eligibility depends on the account and model. This check will not index memory or download a model. Local embeddings use the manual memory-search setup docs.",
+    "Embeddings add semantic memory search. Choose a cloud provider or a running local Ollama/LM Studio server. This check sends only synthetic text, does not index memory or download models, and may load an already-downloaded model. Stored OAuth access depends on the account and model. Skipping keeps your current settings.",
     "Memory search",
   );
-  if (
-    !(await prompter.confirm({ message: "Set up remote memory embeddings?", initialValue: false }))
-  ) {
+  if (!(await prompter.confirm({ message: "Set up memory embeddings?", initialValue: false }))) {
     return config;
   }
 
@@ -140,13 +122,14 @@ export async function runMemorySetupFlow(
         ids.add(id);
       }
     }
+    ids.delete("local");
+    ids.delete("llama-cpp");
     for (const id of Object.keys(config.models?.providers ?? {})) {
-      if (resolveConfiguredGenericEmbeddingProviderId(id, config) === "openai-compatible") {
+      const owner = resolveConfiguredGenericEmbeddingProviderId(id, config);
+      if (owner && ids.has(owner)) {
         ids.add(id);
       }
     }
-    ids.delete("local");
-    ids.delete("llama-cpp");
     if (
       !config.models?.providers?.["openai-compatible"]?.baseUrl &&
       !(
@@ -166,14 +149,14 @@ export async function runMemorySetupFlow(
   }
   if (providerIds.length === 0) {
     await prompter.note(
-      "No remote embedding providers are available. Local embeddings use the manual memory-search setup docs.",
+      "No HTTP embedding providers are available. Check plugin configuration, or use the manual memory-search setup docs for managed local embeddings.",
       "Memory setup unchanged",
     );
     return config;
   }
   const previous = config.memory?.search;
   const selected = await prompter.select({
-    message: "Remote embedding provider",
+    message: "Embedding provider",
     options: providerIds.map((id) => ({ value: id, label: id })),
     initialValue:
       previous?.provider && providerIds.includes(previous.provider)
@@ -193,7 +176,7 @@ export async function runMemorySetupFlow(
   }
   if (!adapter || adapter.transport === "local") {
     await prompter.note(
-      "This provider is unavailable for remote setup. Use the manual memory-search setup docs for local embeddings.",
+      "This provider is unavailable for this setup flow. Use the manual memory-search setup docs for managed local embeddings.",
       "Memory setup unchanged",
     );
     return config;
@@ -224,8 +207,8 @@ export async function runMemorySetupFlow(
     options: [
       {
         value: "existing",
-        label: "Use existing credentials",
-        hint: "Saved memory key, provider auth, or environment",
+        label: "Use existing credentials / no key",
+        hint: "Saved key, provider auth, environment, or unauthenticated local server",
       },
       ...(opts.secretInputMode === "ref"
         ? []
@@ -297,10 +280,7 @@ export async function runMemorySetupFlow(
     );
     return config;
   }
-  let probeConfig: OpenClawConfig = {
-    ...config,
-    memory: { ...config.memory, search: { ...candidateSearch, remote: remoteForProbe } },
-  };
+  let probeConfig: OpenClawConfig;
   try {
     const { resolveSetupSecretInputString } = await import("../wizard/setup.secret-input.js");
     if (remoteForProbe.apiKey !== undefined) {
@@ -314,10 +294,12 @@ export async function runMemorySetupFlow(
     }
     remoteForProbe = { ...remoteForProbe, ...(probeKey ? { apiKey: probeKey } : {}) };
     probeConfig = {
-      ...probeConfig,
-      memory: { ...probeConfig.memory, search: { ...candidateSearch, remote: remoteForProbe } },
+      ...config,
+      memory: { ...config.memory, search: { ...candidateSearch, remote: remoteForProbe } },
     };
-    const configuredProviderId = adapter.authProviderId ?? selected;
+    const configuredProviderId = config.models?.providers?.[selected]
+      ? selected
+      : (adapter.authProviderId ?? selected);
     const configuredProvider = probeConfig.models?.providers?.[configuredProviderId];
     if (configuredProvider) {
       const [{ resolveCommandConfigWithSecrets }, { getMemoryEmbeddingCommandSecretTargetIds }] =
@@ -350,6 +332,9 @@ export async function runMemorySetupFlow(
     );
     return config;
   }
+  const progress = prompter.progress(
+    "Checking embedding readiness (local model loading can take two minutes)…",
+  );
   const ready = await probeProvider({
     adapter,
     config: probeConfig,
@@ -359,6 +344,7 @@ export async function runMemorySetupFlow(
     search: candidateSearch,
     remote: remoteForProbe,
   });
+  progress.stop(ready ? "Embedding check passed" : "Embedding check failed");
   if (!ready) {
     await prompter.note(
       "The selected embedding provider did not complete a small readiness check. Check its model, endpoint, and credentials, then try again.",

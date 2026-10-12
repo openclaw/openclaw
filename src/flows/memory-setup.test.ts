@@ -14,8 +14,7 @@ import { runMemorySetupFlow } from "./memory-setup.js";
 const mocks = vi.hoisted(() => ({
   snapshot: vi.fn(() => ({ index: { plugins: [] }, plugins: [] })),
   manifestIds: vi.fn(() => ["remote-a", "remote-b", "local"]),
-  registered: vi.fn(() => [] as Array<{ adapter: EmbeddingProviderAdapter }>),
-  alias: vi.fn(() => undefined as string | undefined),
+  alias: vi.fn((_id: string) => undefined as string | undefined),
   get: vi.fn((_id: string) => undefined as EmbeddingProviderAdapter | undefined),
   promptRef: vi.fn(),
   resolveRef: vi.fn(),
@@ -27,22 +26,18 @@ vi.mock("../plugins/manifest-contract-eligibility.js", () => ({
   loadManifestContractSnapshot: mocks.snapshot,
   listAvailableManifestContractValues: mocks.manifestIds,
 }));
-// mock-isolation: The test controls registered providers without reading the active plugin registry.
-vi.mock("../plugins/embedding-providers.js", () => ({
-  listRegisteredEmbeddingProviders: mocks.registered,
-}));
 vi.mock("../plugins/embedding-provider-config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/embedding-provider-config.js")>()),
   resolveConfiguredGenericEmbeddingProviderId: mocks.alias,
 }));
 // mock-isolation: Provider selection is fixture-owned and must not resolve the active plugin registry.
 vi.mock("../plugins/embedding-provider-runtime.js", () => ({ getEmbeddingProvider: mocks.get }));
-vi.mock("../plugins/provider-auth-ref.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../plugins/provider-auth-ref.js")>()),
+// mock-isolation: Secret prompts must not load operator auth stores or execute secret providers.
+vi.mock("../plugins/provider-auth-ref.js", () => ({
   promptSecretRefForSetup: mocks.promptRef,
 }));
-vi.mock("../wizard/setup.secret-input.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../wizard/setup.secret-input.js")>()),
+// mock-isolation: Existing credentials resolve from fixtures, without Gateway or secret-store access.
+vi.mock("../wizard/setup.secret-input.js", () => ({
   resolveSetupSecretInputString: mocks.resolveRef,
 }));
 // mock-isolation: Config resolution must not contact Gateway secret owners in this flow test.
@@ -88,7 +83,6 @@ beforeEach(() => {
   mocks.manifestIds.mockReturnValue(["remote-a", "remote-b", "local"]);
   mocks.get.mockImplementation((id) => adapter(id));
   mocks.alias.mockReturnValue(undefined);
-  mocks.registered.mockReturnValue([]);
   mocks.resolveCommand.mockImplementation(async ({ config }: { config: OpenClawConfig }) => ({
     effectiveConfig: config,
   }));
@@ -167,17 +161,6 @@ describe("memory setup", () => {
     expect(chosen.create).toHaveBeenCalledOnce();
   });
 
-  it("does not reintroduce a registered provider excluded by manifest policy", async () => {
-    mocks.registered.mockReturnValue([{ adapter: adapter("disabled-remote") }]);
-    mocks.manifestIds.mockReturnValue(["remote-a"]);
-    const prompt = prompter();
-    await runMemorySetupFlow({ plugins: { entries: { disabled: { enabled: false } } } }, prompt);
-    expect(prompt.select).toHaveBeenCalledWith(
-      expect.objectContaining({ options: [{ value: "remote-a", label: "remote-a" }] }),
-    );
-    expect(mocks.registered).not.toHaveBeenCalled();
-  });
-
   it("skips before catalog or provider runtime access and preserves identity", async () => {
     const config: OpenClawConfig = { memory: { search: { enabled: false } } };
     const result = await runMemorySetupFlow(config, prompter({ confirms: [false] }));
@@ -242,13 +225,31 @@ describe("memory setup", () => {
     expect(mocks.resolveRef).not.toHaveBeenCalled();
   });
 
-  it("lists enabled manifest remotes without selecting or activating local providers", async () => {
-    const prompts = prompter({ confirms: [true, false] });
-    await runMemorySetupFlow({}, prompts);
+  it("offers configured native aliases only for available HTTP embedding owners", async () => {
+    mocks.manifestIds.mockReturnValue(["ollama", "local"]);
+    const owners = new Map([
+      ["local-box", "ollama"],
+      ["disabled-box", "lmstudio"],
+      ["managed-box", "local"],
+    ]);
+    mocks.alias.mockImplementation((id) => owners.get(id));
+    const prompts = prompter({ selects: ["local-box", "existing"] });
+    await runMemorySetupFlow(
+      {
+        models: {
+          providers: Object.fromEntries(
+            ["local-box", "disabled-box", "managed-box"].map((id) => [
+              id,
+              { baseUrl: "http://localhost:11434", models: [] },
+            ]),
+          ),
+        },
+      },
+      prompts,
+    );
     expect(
       vi.mocked(prompts.select).mock.calls[0]?.[0].options.map((entry) => entry.value),
-    ).toEqual(["remote-a", "remote-b"]);
-    expect(mocks.get).toHaveBeenCalledWith("remote-a", expect.any(Object));
+    ).toEqual(["local-box", "ollama"]);
   });
 
   it("masks entered keys and keeps the probe credential separate from saved config", async () => {
@@ -296,62 +297,74 @@ describe("memory setup", () => {
       owner: "tenant.example",
       keyPath: 'models.providers["tenant.example"].apiKey',
     },
-  ])("resolves only $owner credentials for $selected", async ({ selected, owner, keyPath }) => {
-    const ref = { source: "env" as const, provider: "default", id: "MODEL_EMBED_KEY" };
-    const config: OpenClawConfig = {
-      models: {
-        providers: {
-          [owner]: {
-            api: "openai-completions",
-            baseUrl: "https://remote.example/v1",
-            apiKey: ref,
-            headers: { "X.Tenant.Key": "${MODEL_EMBED_HEADER}" },
-            models: [],
-          },
-        },
-      },
-    };
-    mocks.resolveCommand.mockImplementation(
-      async ({
-        config: draft,
-        allowedPaths,
-      }: {
-        config: OpenClawConfig;
-        allowedPaths: Set<string>;
-      }) => {
-        expect(allowedPaths).toEqual(
-          new Set([keyPath, keyPath.replace(/\.apiKey$/, '.headers["X.Tenant.Key"]')]),
-        );
-        return {
-          effectiveConfig: {
-            ...draft,
-            models: {
-              ...draft.models,
-              providers: {
-                ...draft.models?.providers,
-                [owner]: { ...draft.models?.providers?.[owner], apiKey: "probe-only-key" },
-              },
+    {
+      selected: "local-box",
+      owner: "local-box",
+      adapterOwner: "ollama",
+      keyPath: "models.providers.local-box.apiKey",
+    },
+  ])(
+    "resolves only $owner credentials for $selected",
+    async ({ selected, owner, adapterOwner, keyPath }) => {
+      const ref = { source: "env" as const, provider: "default", id: "MODEL_EMBED_KEY" };
+      const config: OpenClawConfig = {
+        models: {
+          providers: {
+            [owner]: {
+              api: "openai-completions",
+              baseUrl: "https://remote.example/v1",
+              apiKey: ref,
+              headers: { "X.Tenant.Key": "${MODEL_EMBED_HEADER}" },
+              models: [],
             },
           },
-        };
-      },
-    );
-    const chosen = { ...adapter(selected), authProviderId: owner };
-    mocks.get.mockReturnValue(chosen);
-    const result = await runMemorySetupFlow(config, prompter({ selects: [selected, "existing"] }));
-    expect(result.models?.providers?.[owner]?.apiKey).toEqual(ref);
-    expect(chosen.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: expect.objectContaining({
-          models: expect.objectContaining({
-            providers: expect.objectContaining({
-              [owner]: expect.objectContaining({ apiKey: "probe-only-key" }),
+        },
+      };
+      mocks.resolveCommand.mockImplementation(
+        async ({
+          config: draft,
+          allowedPaths,
+        }: {
+          config: OpenClawConfig;
+          allowedPaths: Set<string>;
+        }) => {
+          expect(allowedPaths).toEqual(
+            new Set([keyPath, keyPath.replace(/\.apiKey$/, '.headers["X.Tenant.Key"]')]),
+          );
+          return {
+            effectiveConfig: {
+              ...draft,
+              models: {
+                ...draft.models,
+                providers: {
+                  ...draft.models?.providers,
+                  [owner]: { ...draft.models?.providers?.[owner], apiKey: "probe-only-key" },
+                },
+              },
+            },
+          };
+        },
+      );
+      const chosen = { ...adapter(selected), authProviderId: adapterOwner ?? owner };
+      mocks.get.mockReturnValue(chosen);
+      const result = await runMemorySetupFlow(
+        config,
+        prompter({ selects: [selected, "existing"] }),
+      );
+      expect(result.models?.providers?.[owner]?.apiKey).toEqual(ref);
+      expect(chosen.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          config: expect.objectContaining({
+            models: expect.objectContaining({
+              providers: expect.objectContaining({
+                [owner]: expect.objectContaining({ apiKey: "probe-only-key" }),
+              }),
             }),
           }),
         }),
-      }),
-    );
-  });
+      );
+    },
+  );
 
   it("does not send old destination credentials or headers to a new provider", async () => {
     const chosen = adapter("remote-b");
@@ -453,7 +466,7 @@ describe("memory setup", () => {
     const config: OpenClawConfig = {};
     const running = runMemorySetupFlow(config, prompter());
     await started;
-    await vi.advanceTimersByTimeAsync(15_000);
+    await vi.advanceTimersByTimeAsync(150_000);
     expect(signal?.aborted).toBe(true);
     await vi.advanceTimersByTimeAsync(1_000);
     expect(await running).toBe(config);
@@ -481,7 +494,7 @@ describe("memory setup", () => {
     const config: OpenClawConfig = {};
     const running = runMemorySetupFlow(config, prompter());
     await started;
-    await vi.advanceTimersByTimeAsync(15_000);
+    await vi.advanceTimersByTimeAsync(150_000);
     expect(await running).toBe(config);
     finishCreate({
       provider: {

@@ -59,8 +59,8 @@ Docs: [Dashboard](/web/dashboard).
 ## Memory embeddings
 
 After a local AI connection is verified, guided onboarding offers a skippable
-memory embedding step. The classic wizard offers the same step. Choose a remote
-provider/model and verify a synthetic embedding before saving; no memory files
+memory embedding step. The classic wizard offers the same step. Choose a cloud
+provider or a local Ollama/LM Studio server and verify a synthetic embedding before saving; no memory files
 are sent by this check. Existing OAuth access is tested rather than assumed.
 Skipping does not disable memory or change an existing selection. You can return
 later with `openclaw configure --section memory`. See

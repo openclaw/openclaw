@@ -581,20 +581,13 @@ export async function runConfigureWizard(
 
       // Section flags retain their canonical setup order regardless of flag order;
       // the complete config is committed once before service or health effects.
-      for (const section of [
-        "workspace",
-        "model",
-        "memory",
-        "web",
-        "gateway",
-        "channels",
-        "plugins",
-        "skills",
-      ] as const) {
-        if (selectedSections.includes(section)) {
-          await sectionActions[section]();
-          hasPendingConfig = true;
+      for (const { value: section } of CONFIGURE_SECTION_OPTIONS) {
+        if (section === "daemon" || section === "health" || !selectedSections.includes(section)) {
+          continue;
         }
+        const before = nextConfig;
+        await sectionActions[section]();
+        hasPendingConfig ||= section !== "memory" || nextConfig !== before;
       }
 
       await persistPendingConfig();
@@ -626,10 +619,11 @@ export async function runConfigureWizard(
         if (choice === "daemon" || choice === "health") {
           await persistPendingConfig();
         }
+        const before = nextConfig;
         await sectionActions[choice]();
         if (choice !== "daemon" && choice !== "health") {
           // Interactive setup commits each section before showing another prompt.
-          hasPendingConfig = true;
+          hasPendingConfig ||= choice !== "memory" || nextConfig !== before;
           await persistPendingConfig();
         }
       }
