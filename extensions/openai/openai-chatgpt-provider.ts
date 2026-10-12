@@ -195,17 +195,26 @@ function resolveCodexForwardCompatModel(
     if (!catalogModel || catalogModel.contextWindow === undefined) {
       return undefined;
     }
+    const registeredModel = ctx.modelRegistry.find(PROVIDER_ID, trimmedModelId);
     return {
       ...catalogModel,
       contextWindow: catalogModel.contextWindow,
-      contextTokens:
-        lower === OPENAI_GPT_61_SOL_MODEL_ID
-          ? OPENAI_CODEX_GPT_61_SOL_CONTEXT_TOKENS
-          : catalogModel.contextTokens,
       input: catalogModel.input.filter(
         (item): item is "text" | "image" => item === "text" || item === "image",
       ),
-      ...ctx.modelRegistry.find(PROVIDER_ID, trimmedModelId),
+      ...registeredModel,
+      // Startup borrows Platform manifest rows; their API budget is not a subscription limit.
+      // Same-route registry rows retain authored and account-reported budgets, including 272k.
+      ...(lower === OPENAI_GPT_61_SOL_MODEL_ID
+        ? {
+            contextTokens:
+              registeredModel &&
+              (registeredModel.api === "openai-chatgpt-responses" ||
+                isOpenAICodexBaseUrl(registeredModel.baseUrl))
+                ? (registeredModel.contextTokens ?? OPENAI_CODEX_GPT_61_SOL_CONTEXT_TOKENS)
+                : OPENAI_CODEX_GPT_61_SOL_CONTEXT_TOKENS,
+          }
+        : {}),
       id: trimmedModelId,
       provider: PROVIDER_ID,
       api: "openai-chatgpt-responses",

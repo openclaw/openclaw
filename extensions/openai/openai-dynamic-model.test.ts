@@ -185,7 +185,7 @@ describe("OpenAI dynamic model capabilities", () => {
     });
   });
 
-  it.each([128_000, 700_000])(
+  it.each([128_000, 272_000, 700_000])(
     "preserves GPT-6.1 Sol subscription context override %s",
     (contextTokens) => {
       const exact: ProviderRuntimeModel = {
