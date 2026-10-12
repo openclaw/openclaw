@@ -71,7 +71,7 @@ Person hovercards keep their **Recent sessions** selection and order stable whil
 
 Sidebar live narration pauses while the browser tab is hidden and resumes from current activity when you return. The selected chat and pending outbox keep their separately owned subscriptions.
 
-Switching agents refreshes the sidebar's filtered session list immediately, even while the selected chat is still loading. Automatic startup and reconnect refreshes continue to wait for that chat to become ready.
+**My sessions** lists your sessions across configured agents, independently of the chat or workspace you are viewing. Other agent-scoped sidebar lists refresh immediately when you switch agents, even while the selected chat is still loading. Automatic startup and reconnect refreshes continue to wait for that chat to become ready.
 
 The sidebar’s **Unsent draft** pencil covers saved text, attachments, replies, and goals, including drafts saved in another tab or before a reload, without reopening the conversation. A newer edit or clear always replaces an older saved draft. Incognito conversations never show a saved-draft pencil. Outbox attention badges also count queued messages with attachments that need review once the connection finishes restoring.
 

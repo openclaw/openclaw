@@ -469,7 +469,7 @@ describe("AppSidebar initial managed-list hydration", () => {
       groups.resolve(emptyGroups);
       await vi.waitFor(() => expect(order).toContain("filtered:start"));
       expect(listQueries).toHaveLength(2);
-      expect(listQueries[1]).toMatchObject({ agentId: "main" });
+      expect(listQueries[1]?.agentId).toBe(filter === "involving-me" ? "main" : undefined);
       expect(matchesFilter(listQueries[1])).toBe(true);
 
       order.push("filtered:resolve");

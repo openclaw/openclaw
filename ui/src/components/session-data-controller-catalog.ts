@@ -36,6 +36,7 @@ import type {
 } from "./app-sidebar-session-types.ts";
 import {
   completePanelRefresh,
+  createPanelRefreshStatus,
   failPanelRefresh,
   type PanelRefreshStatus,
 } from "./panel-refresh-status.ts";
@@ -73,6 +74,29 @@ export interface SessionCatalogDataOwner {
   requestSessionDataUpdate(): void;
   refreshSessionCatalogs(): Promise<void>;
   sessionCatalogIdsWithoutVisibleRows(): readonly string[];
+}
+
+interface SessionCatalogResetOwner extends SessionCatalogDataOwner {
+  sessionScopeGeneration: number;
+  pendingCatalogArchives: ReadonlySet<string>;
+  sessionsLoading: boolean;
+}
+
+export function retireSessionCatalogData(owner: SessionCatalogResetOwner): void {
+  owner.sessionScopeGeneration += 1;
+  owner.pendingCatalogArchives = new Set();
+  owner.sessionsLoading = false;
+  owner.loadingMoreSessionCatalogIds = new Set();
+  owner.sessionCatalogLive.clear();
+}
+
+export function resetSessionCatalogConnection(owner: SessionCatalogResetOwner): void {
+  retireSessionCatalogData(owner);
+  owner.sessionCatalogRevision += 1;
+  owner.sessionCatalogs = [];
+  owner.sessionCatalogRefreshStatus = createPanelRefreshStatus();
+  owner.sessionCatalogPageDepths.clear();
+  owner.requestSessionDataUpdate();
 }
 
 /** A completed list RPC can still leave pending hosts or hidden discovery pages. */

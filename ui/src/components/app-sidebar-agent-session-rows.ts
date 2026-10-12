@@ -65,6 +65,7 @@ export function projectSidebarAgentSessionRows({
   resolveAttention: Parameters<typeof projectSessionTree>[0]["resolveAttention"];
 }): SidebarRecentSession[] {
   const grouped = result !== undefined;
+  const allAgents = grouped || host.sessionData.sessionsAgentId === null;
   const defaultAgentId = resolveUiDefaultAgentId({
     agentsList: host.sessionDataContext?.agents.state.agentsList,
     hello: host.sessionDataContext?.gateway.snapshot.hello,
@@ -87,7 +88,7 @@ export function projectSidebarAgentSessionRows({
   const visibilityOptions = {
     agentId: selected,
     defaultAgentId,
-    filterByAgent: !grouped,
+    filterByAgent: !allAgents,
     showCron: host.sessionsShowCron,
     showSystem: host.sessionsShowSystem,
     archivedFilter: host.sessionsStatusFilter,
@@ -110,7 +111,7 @@ export function projectSidebarAgentSessionRows({
     deletionState: (key, agentId) =>
       host.sessionDataContext?.sessions.deletionState(
         key,
-        grouped
+        allAgents
           ? resolveUiSessionRowAgentId(knownRows?.get(key) ?? { key }, defaultAgentId)
           : agentId,
       ),
@@ -127,7 +128,7 @@ export function projectSidebarAgentSessionRows({
   const isMainSession = (key: string) =>
     canonicalMainKeys.some((mainKey) => areUiSessionKeysEquivalent(key, mainKey));
   const rootRows =
-    !grouped && selected === routeAgentId && selected === loadedAgentId
+    !allAgents && selected === routeAgentId && selected === loadedAgentId
       ? navigationState.visibleSessionRows.flatMap((session) => {
           const row = rowsByKey.get(session.key);
           return row ? [row] : [];

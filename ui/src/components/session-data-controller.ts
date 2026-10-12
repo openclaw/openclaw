@@ -35,6 +35,8 @@ import {
   invalidateSessionCatalogs as invalidateSessionCatalogData,
   loadMoreSessionCatalog as loadMoreSessionCatalogData,
   refreshSessionCatalogs as refreshSessionCatalogData,
+  resetSessionCatalogConnection,
+  retireSessionCatalogData,
   resolveSessionCatalogAgentId,
   scheduleSessionCatalogRefresh,
   type SessionCatalogDataOwner,
@@ -247,7 +249,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     this.gatewayAvailable = false;
     this.agentSelectionSource = undefined;
     this.agentSelectionIntentRevision = undefined;
-    this.retireSessionCatalogData();
+    retireSessionCatalogData(this);
     this.scroll.dispose();
     this.lineage.disconnect();
     this.subscriptions.hostDisconnected();
@@ -266,23 +268,6 @@ export class SessionDataController implements ReactiveController, SessionCatalog
       this.context?.gateway.snapshot.selfUser?.id ?? null,
       this.context?.connectionBootstrap,
     );
-  }
-
-  retireSessionCatalogData(): void {
-    this.sessionScopeGeneration += 1;
-    this.pendingCatalogArchives = new Set();
-    this.sessionsLoading = false;
-    this.loadingMoreSessionCatalogIds = new Set();
-    this.sessionCatalogLive.clear();
-  }
-
-  resetSessionCatalogConnection(): void {
-    this.retireSessionCatalogData();
-    this.sessionCatalogRevision += 1;
-    this.sessionCatalogs = [];
-    this.sessionCatalogRefreshStatus = createPanelRefreshStatus();
-    this.sessionCatalogPageDepths.clear();
-    this.requestSessionDataUpdate();
   }
 
   synchronizeSessionScope(): void {
@@ -309,7 +294,10 @@ export class SessionDataController implements ReactiveController, SessionCatalog
 
     const previousAgentId = this.sessionScopeAgentId;
     const previousCatalogAgentId = this.sessionCatalogAgentId;
-    const agentChanged = previousAgentId !== null && previousAgentId !== nextAgentId;
+    const agentChanged =
+      previousAgentId !== null &&
+      previousAgentId !== nextAgentId &&
+      this.sessionListQuery(this.host.expandedAgentId()).agentId !== undefined;
     const catalogAgentChanged =
       previousCatalogAgentId !== null && previousCatalogAgentId !== nextCatalogAgentId;
     const ownsCurrentCanonicalList =
@@ -321,7 +309,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
 
     this.sessionScopeAgentId = nextAgentId;
     this.sessionCatalogAgentId = nextCatalogAgentId;
-    this.retireSessionCatalogData();
+    retireSessionCatalogData(this);
     this.sessionCatalogRevision += 1;
     this.sessionCatalogRefreshStatus = createPanelRefreshStatus();
 
@@ -490,9 +478,9 @@ export class SessionDataController implements ReactiveController, SessionCatalog
       if (sessionSourceChanged) {
         this.clearSessionCache();
       }
-      this.resetSessionCatalogConnection();
+      resetSessionCatalogConnection(this);
     } else {
-      this.retireSessionCatalogData();
+      retireSessionCatalogData(this);
     }
     if (connected && this.sessionsSource && hasSidebarListFilter(this.host)) {
       void this.scheduleSidebarSessions();
@@ -538,20 +526,13 @@ export class SessionDataController implements ReactiveController, SessionCatalog
         this.filteredSessionScope === scopeKey &&
         this.context?.sessions === sessions &&
         this.host.sidebarSessionStatusFilter() === query.archivedFilter &&
-        normalizeAgentId(this.host.expandedAgentId()) === normalizedAgentId,
+        this.sessionListQuery(this.host.expandedAgentId()).agentId === query.agentId,
     );
   }
 
   refreshSidebarSessions(affectedAgentId?: string): Promise<void> {
-    const agentId = this.host.expandedAgentId();
     this.bindFilteredSessions();
-    if (
-      affectedAgentId !== undefined &&
-      normalizeAgentId(affectedAgentId) !== normalizeAgentId(agentId)
-    ) {
-      return Promise.resolve();
-    }
-    return refreshSidebarSessionList(this, agentId);
+    return refreshSidebarSessionList(this, { affectedAgentId });
   }
 
   scheduleSidebarSessions(): Promise<void> {
@@ -560,7 +541,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   }
 
   loadMoreSidebarSessions(): Promise<void> {
-    return refreshSidebarSessionList(this, this.sessionsAgentId, true);
+    return refreshSidebarSessionList(this, { agentId: this.sessionsAgentId, append: true });
   }
 
   retireStaleChildSessions(revalidating: ReadonlySet<string>): void {
@@ -733,9 +714,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     this.requestSessionDataUpdate();
   }
 
-  discardEmptyChildSessionSnapshot(sessionKey: string): void {
-    discardEmptyChildSessionSnapshot(this, sessionKey);
-  }
+  discardEmptyChildSessionSnapshot = discardEmptyChildSessionSnapshot.bind(null, this);
 
   retryChildSessions(sessionKey: string): void {
     const retry = this.childSessionErrorsByParent.has(sessionKey);
