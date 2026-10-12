@@ -64,8 +64,9 @@ export interface FrvClient {
   ) => Promise<boolean>;
 }
 
-export type FrvConcreteClient = FrvClient &
-  Required<
+export type FrvConcreteClient = FrvClient & {
+  getRef: (fullRef: string, options?: FrvReadOptions) => Promise<Record<string, unknown>>;
+} & Required<
     Pick<
       FrvClient,
       | "cancelRun"
@@ -90,11 +91,26 @@ export function clearReleasePriority(
 export function watchRelease(
   parentRunId: string,
   client: Pick<
-    FrvClient,
-    "getAttemptJobs" | "getJobLog" | "getParentJobs" | "getRun" | "repository"
+    FrvConcreteClient,
+    | "getAttemptJobs"
+    | "getJobLog"
+    | "getParentJobs"
+    | "getRun"
+    | "repository"
+    | "getRef"
+    | "getReleaseEvidenceClient"
   >,
   options?: {
-    emit?: (event: { message: string; url?: string }) => void;
+    emit?: (event: {
+      message: string;
+      url?: string;
+      candidate?: {
+        sha: string | null;
+        ref: string | null;
+        tipSha: string | null;
+        state: "current" | "superseded" | "unknown";
+      };
+    }) => void;
     intervalMs?: number;
     once?: boolean;
     operationDeadline?: number;
