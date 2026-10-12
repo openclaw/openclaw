@@ -131,6 +131,17 @@ export async function withNodeWorkerTransferHttpRequest<T>(
     );
   }
   const transport = url.protocol === "https:" ? https : http;
+  // A blank fingerprint is a misconfiguration, not a pin: certificate validation
+  // may only be exchanged for a fingerprint that is actually verified below.
+  const tlsFingerprint = params.tlsFingerprint?.trim()
+    ? normalizeTlsFingerprint(params.tlsFingerprint)
+    : "";
+  if (params.tlsFingerprint?.trim() && !tlsFingerprint) {
+    throw new NodeWorkerTransferHttpError(
+      "invalid-tls-fingerprint",
+      "worker transfer gateway TLS fingerprint is invalid",
+    );
+  }
   const request = transport.request(url, {
     method: params.method,
     headers: {
@@ -139,7 +150,7 @@ export async function withNodeWorkerTransferHttpRequest<T>(
       ...(params.cloudflareAccess ? buildCloudflareAccessHeaders(params.cloudflareAccess) : {}),
     },
     signal: params.signal,
-    ...(url.protocol === "https:" && params.tlsFingerprint
+    ...(url.protocol === "https:" && tlsFingerprint
       ? { rejectUnauthorized: false, session: Buffer.alloc(0) }
       : {}),
   });
@@ -185,7 +196,7 @@ export async function withNodeWorkerTransferHttpRequest<T>(
   });
   const send = async () => {
     if (url.protocol === "https:") {
-      await waitForTlsPin(request, params.tlsFingerprint);
+      await waitForTlsPin(request, tlsFingerprint);
     }
     writerSignal.throwIfAborted();
     await params.writeBody?.(async (chunk) => {
