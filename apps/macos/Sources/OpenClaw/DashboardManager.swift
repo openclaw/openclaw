@@ -320,9 +320,8 @@ final class DashboardManager {
             guard self.endpointGeneration == generation else { return }
             for controller in currentControllers() {
                 controller.showFailure(
-                    title: "Dashboard unavailable",
-                    message: error.localizedDescription,
-                    detail: "Reconnect to the Gateway to verify its dashboard sign-in address.",
+                    error,
+                    url: url,
                     present: false)
             }
             return
@@ -575,10 +574,7 @@ final class DashboardManager {
         // Keep observing while the failure page is up so a recovered tunnel
         // swaps the window back to the live dashboard.
         self.observeEndpointChanges()
-        controller.showFailure(
-            title: "Dashboard unavailable",
-            message: message,
-            detail: "Open Connection or use Debug → Reset Remote Tunnel, then try again.")
+        controller.showFailure(error)
     }
 
     private func retireWindowPresentation() {

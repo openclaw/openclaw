@@ -23,6 +23,11 @@ Gateway and account changes still refresh hidden Dashboard windows. Saved web
 drafts recover within the same Gateway address and authenticated account; they
 are not copied to a different Gateway, account, or recreated SSH tunnel address.
 
+When a Gateway window in the Web experience can’t connect, **Gateway connection
+failed** offers **Connection settings** and **Copy prompt**. Paste the prompt into
+an agent chat to ask for help restoring the connection. It includes the address
+and error, with credentials removed from URLs.
+
 The native chat features below connect to the Gateway and default to the primary
 session for the selected agent (`main`, or `global` when `session.scope` is
 `global`). Quick Chat remains a native floating composer in either experience.
