@@ -1,3 +1,4 @@
+import { rm } from "node:fs/promises";
 import {
   asPositiveFiniteNumber,
   resolveIntegerOption,
@@ -319,6 +320,7 @@ async function spillWebFetchContent(
   wrapped: WebFetchWrappedContent,
   maxChars: number,
   sourceTruncated: boolean,
+  onSpillCreated: (filePath: string) => void,
 ): Promise<WebFetchWrappedContent> {
   if (!wrapped.truncated) {
     return sourceTruncated ? { ...wrapped, truncated: true } : wrapped;
@@ -331,6 +333,7 @@ async function spillWebFetchContent(
     "openclaw-web-fetch",
     wrapWebContent(content, "web_fetch"),
   );
+  onSpillCreated(spillPath);
   const spillCapped = value.length > WEB_FETCH_SPILL_MAX_CHARS;
   const isSpillTruncated = sourceTruncated || spillCapped;
   const spillNote = sourceTruncated
@@ -426,6 +429,7 @@ async function buildWebFetchPayload(params: {
   extractMode: ExtractMode;
   maxChars: number;
   tookMs: number;
+  onSpillCreated: (filePath: string) => void;
 }): Promise<Record<string, unknown>> {
   const payload = isRecord(params.payload) ? params.payload : {};
   let metadataTruncated = false;
@@ -470,6 +474,7 @@ async function buildWebFetchPayload(params: {
     wrapWebFetchContent(rawText, bodyMaxChars),
     bodyMaxChars,
     payload.truncated === true,
+    params.onSpillCreated,
   );
   const providerRawLength =
     resolveOptionalIntegerOption(payload.rawLength, { min: 0 }) ?? wrapped.rawLength;
@@ -554,17 +559,31 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
     return { ...cached.value, cached: true };
   }
 
-  // Preserve the direct fetch's rejection; replacing it with signal.reason would
-  // discard the transport's own error detail.
-  const payload = await fetchWebPayload(params);
-  // Publish only after guard release: cancellation or cleanup failure must not
-  // leave a successful cache entry for a call that never returned its content.
-  throwIfFetchAborted(params.signal);
-  writeCache(FETCH_CACHE, cacheKey, payload, params.cacheTtlMs);
-  return payload;
+  const unpublishedSpills = new Set<string>();
+  try {
+    const payload = await fetchWebPayload(params, (filePath) => unpublishedSpills.add(filePath));
+    // Publish only after guard release: cancellation or cleanup failure must not
+    // leave a successful cache entry for a call that never returned its content.
+    throwIfFetchAborted(params.signal);
+    writeCache(FETCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  } catch (error) {
+    for (const filePath of unpublishedSpills) {
+      try {
+        await rm(filePath, { force: true });
+      } catch (cleanupError) {
+        logWarn(`[web-fetch] failed to remove unpublished spill: ${String(cleanupError)}`);
+      }
+    }
+    // Preserve the fetch's own rejection, including transport error details.
+    throw error;
+  }
 }
 
-async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<string, unknown>> {
+async function fetchWebPayload(
+  params: WebFetchRuntimeParams,
+  onSpillCreated: (filePath: string) => void,
+): Promise<Record<string, unknown>> {
   const start = Date.now();
   async function fetchProviderPayload(urlToFetch: string): Promise<Record<string, unknown> | null> {
     const tookMs = Date.now() - start;
@@ -592,6 +611,7 @@ async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<st
       extractMode: params.extractMode,
       maxChars: params.maxChars,
       tookMs,
+      onSpillCreated,
     });
   }
 
@@ -745,6 +765,7 @@ async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<st
       extractMode: params.extractMode,
       maxChars: params.maxChars,
       tookMs: Date.now() - start,
+      onSpillCreated,
     });
   } finally {
     if (!res.bodyUsed) {
