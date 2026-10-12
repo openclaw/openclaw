@@ -630,6 +630,28 @@ describe("hosted creation transfers accepted child input", () => {
     },
   );
 
+  it("rejects revoked source authority after inherited invocation and parent closure", async () => {
+    await using fixture = await createHostedChildFixture(false, true);
+    const accepted = await fixture.send();
+    expect(accepted.runStarted).toBe(true);
+    await fixture.dispatchEntered;
+    const scope = fixture.scope();
+    expect(await listSessionPendingInputs(scope)).toMatchObject({
+      total: 1,
+      items: [{ state: "queued" }],
+    });
+    fixture.closeInvocation();
+    fixture.closeParent();
+    fixture.revokeSource();
+    await fixture.finish();
+    expect(fixture.provider).not.toHaveBeenCalled();
+    expect(userMessages(scope)).toEqual([]);
+    expect(await listSessionPendingInputs(scope)).toMatchObject({
+      total: 1,
+      items: [{ state: "interrupted" }],
+    });
+  });
+
   it.each(["source", "host", "signal", "gateway", "ACL", "lifecycle", "replacement"] as const)(
     "retains the original %s boundary after child ACK and parent closure",
     async (change) => {

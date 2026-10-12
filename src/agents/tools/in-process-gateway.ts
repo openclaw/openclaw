@@ -320,6 +320,16 @@ async function callAgentToolGatewayRequestBound<T>(
   const dispatchOptions = {
     prepareDispatchCurrent: request.prepareDispatchCurrent,
     forceSyntheticClient: true,
+    // Foreground tools retain their admitted run after the initiating RPC disconnects.
+    // Accepted child input instead retains its transferred source authority, not the parent run.
+    ...(assertCallerCurrent && !transfersCreatedInput
+      ? {
+          hasCurrentClientAuthority: () => {
+            assertCallerCurrent(method);
+            return true;
+          },
+        }
+      : {}),
     operatorRoleActor: { kind: "system" as const },
     ...(request.agentRunTracking ? { agentRunTracking: request.agentRunTracking } : {}),
     ...(request.agentToolCaller ? { agentToolCaller: request.agentToolCaller } : {}),

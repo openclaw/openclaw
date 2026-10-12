@@ -627,6 +627,71 @@ describe("built-in Gateway foreground authority", () => {
     mocks.callGatewayTool.mockReset();
   });
 
+  it("keeps an admitted tool call active after its initiating RPC closes", async () => {
+    // The downstream dispatcher otherwise inherits the closed transport's authority.
+    mocks.dispatch.mockImplementationOnce(async (method, _params, options) => {
+      if ((options.hasCurrentClientAuthority ?? (() => false))() === false) {
+        throw new Error(`Gateway client authority closed before dispatching ${method}.`);
+      }
+      return { ok: true };
+    });
+    await expect(
+      withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:caller",
+          operationalRunInstance: { instanceId: "caller-instance", runId: "caller-run" },
+          receiptAuthority: () => true,
+        },
+        () => callAgentToolGatewayRequest({ method: "computer.status", params: {} }),
+      ),
+    ).resolves.toEqual({ ok: true });
+  });
+
+  it.each(["revoked", "aborted"] as const)(
+    "rejects %s admission when the dispatcher checks client authority",
+    async (state) => {
+      let current = true;
+      const controller = new AbortController();
+      const effect = vi.fn();
+      mocks.dispatch.mockImplementationOnce(async (_method, _params, options) => {
+        if (state === "revoked") {
+          current = false;
+        } else {
+          controller.abort();
+        }
+        options.hasCurrentClientAuthority?.();
+        effect();
+        return { ok: true };
+      });
+      await expect(
+        withGatewayToolCallerIdentity(
+          {
+            agentId: "main",
+            sessionKey: "agent:main:caller",
+            operationalRunInstance: { instanceId: "caller-instance", runId: "caller-run" },
+            receiptAuthority: () => current,
+            approvalSignals: [controller.signal],
+          },
+          () => callAgentToolGatewayRequest({ method: "computer.status", params: {} }),
+        ),
+      ).rejects.toThrow(/authority.*no longer active/i);
+      expect(effect).not.toHaveBeenCalled();
+    },
+  );
+
+  it("retains closed transport rejection without an admitted caller", async () => {
+    mocks.dispatch.mockImplementationOnce(async (method, _params, options) => {
+      if ((options.hasCurrentClientAuthority ?? (() => false))() === false) {
+        throw new Error(`Gateway client authority closed before dispatching ${method}.`);
+      }
+      return { ok: true };
+    });
+    await expect(
+      callAgentToolGatewayRequest({ method: "computer.status", params: {} }),
+    ).rejects.toThrow("Gateway client authority closed before dispatching computer.status.");
+  });
+
   it.each(["dispatch", "commit"] as const)(
     "rejects retired caller authority before %s",
     async (boundary) => {
