@@ -648,6 +648,54 @@ match. Warm task workers still collect released payloads in place; critical
 pressure, cancellation, rotation, and shutdown retain their existing cleanup
 paths. No configuration setting is needed.
 
+## Expected worker footprint
+
+Worker isolates are part of the Gateway's steady resident memory. Size a container
+limit for the main isolate plus the workers below, not for either half alone.
+
+- **Prepared model catalog** — one worker, resident for the process lifetime
+  because it keeps a published catalog generation.
+- **Canonical database preflight** — up to two workers that validate agent
+  databases. This one is startup peak rather than steady state: the pool closes
+  when the startup validation run finishes.
+- **Transcript, archive, and reclamation** — one retained worker per database
+  path in use, plus retention work.
+- **Shared-state reads and lease heartbeat** — one or more workers for
+  shared-state reads and the lease-heartbeat loop.
+- **Channel ingress** — one worker per polling session, for accounts that poll
+  for updates instead of receiving webhooks.
+- **Task pools** (catalog page, code mode, disk budget, and similar) — zero up to
+  each pool's limit; idle slots retire on the pool's own idle timeout.
+
+These counts are structural, not fixed budgets: the heap each worker holds depends
+on the data it loaded, the number of agents, and the channels in use. The catalog,
+SQLite, history, transcript, and reclamation workers request a 512 MiB V8
+old-generation limit, which an explicit process-wide heap flag overrides; native
+and external allocations stay outside it.
+
+Idle collection returns unused heap to V8 while the worker stays alive, and each
+resident owner above holds its worker as long as it holds a published result.
+Owners keep reclaiming on their own schedules at warning level: task pools retire
+idle slots on the pool's idle timeout, and a retained reclamation worker exits
+after its 30-minute idle TTL. **Critical** memory pressure additionally retires
+idle workers through their cleanup owners; warning-level pressure events
+(`rss_threshold`, `heap_threshold`) are recorded without that pressure-driven
+retirement, so a worker whose owner has no idle-retirement path stays resident and
+a host that only ever reaches warning level may swap instead. Any retirement is
+followed by a rebuild on next use, so it trades resident memory for a slower first
+request.
+
+Measure the footprint on your own host instead of assuming a baseline:
+
+- `openclaw gateway call diagnostics.lanes --json` lists live pools: `workerPoolCount`
+  and `workerPools`, each with its allowlisted `script` and `workerCount`.
+- `diagnostic.memory.sample` events carry `memory.workerHeaps` with every tracked
+  direct-worker heap as `{script, heapUsed, heapTotal}`; a memory-pressure log
+  prints only the five largest entries, sorted by heap plus external bytes.
+- [Prometheus](/gateway/prometheus) exports the same bytes per worker script
+  (`openclaw_worker_heap_used_bytes`) plus worker start and retire counters.
+- `diagnostics.stability` and the sampling heap profile describe the main isolate.
+
 ## RPC response size and heap changes
 
 The [Prometheus exporter](/gateway/prometheus) records
