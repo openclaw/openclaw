@@ -645,7 +645,7 @@ describe("question dispatch ownership", () => {
           if (status === "cancelled") {
             fixture.manager.cancel(pending.id);
           } else {
-            fixture.clock.setTime(pending.expiresAtMs + 1);
+            fixture.clock.advanceMonotonicBy(pending.expiresAtMs + 1 - pending.createdAtMs);
             fixture.manager.get(pending.id);
           }
           expect(await question.run).toMatchObject({

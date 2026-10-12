@@ -91,6 +91,10 @@ export class GatewayScheduler {
     return this.clock.now();
   }
 
+  monotonicNow(): number {
+    return this.clock.monotonicNow();
+  }
+
   get nextWakeAtMs(): number | null {
     const nowMs = this.now();
     const elapsedMs = this.clock.monotonicNow();

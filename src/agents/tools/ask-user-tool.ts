@@ -160,7 +160,12 @@ export function reserveAskUserPromptDelivery(params: {
     questionId,
     sessionKey,
     questions: params.questions,
-    expiresAtMs: Date.now() + (params.timeoutSeconds ?? DEFAULT_ASK_USER_TIMEOUT_SECONDS) * 1_000,
+    // Monotonic deadline so wall-clock jumps (NTP correction, sleep/resume,
+    // manual changes) cannot stretch or shrink the question timeout. The
+    // remaining budget is consumed through setTimeout (monotonic); seeding with
+    // Date.now() would cross clock domains and let a rollback enlarge the wait.
+    expiresAtMs:
+      performance.now() + (params.timeoutSeconds ?? DEFAULT_ASK_USER_TIMEOUT_SECONDS) * 1_000,
     phase: { kind: "reserved" },
     waiters: new Set(),
   });
@@ -227,7 +232,7 @@ async function readAskUserQuestionStatusBeforeExpiry(
   expiresAtMs: number,
   gatewayCall: GatewayQuestionCall,
 ): Promise<AskUserPromptStatusRead> {
-  const remainingMs = expiresAtMs - Date.now();
+  const remainingMs = expiresAtMs - performance.now();
   if (remainingMs <= 0) {
     return { kind: "expired" };
   }
@@ -316,7 +321,7 @@ export async function isAskUserPromptPending(
     }
     // Keep the prompt private until Gateway state is authoritative again;
     // failing open could expose a stale question after remote terminalization.
-    const remainingMs = state.expiresAtMs - Date.now();
+    const remainingMs = state.expiresAtMs - performance.now();
     if (remainingMs <= 0) {
       return false;
     }
@@ -412,7 +417,7 @@ function createAskUserPromptDelivery(
     waiters: new Set(),
   };
   Object.assign(state, { sessionKey, questions });
-  state.expiresAtMs = Date.now() + timeoutSeconds * 1_000;
+  state.expiresAtMs = performance.now() + timeoutSeconds * 1_000;
   transitionAskUserQuestion(state, { kind: "registering" });
   askUserQuestions.set(questionId, state);
   const delivery = {

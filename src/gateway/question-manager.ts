@@ -89,6 +89,8 @@ type QuestionEntry = {
   committing?: boolean;
   commitUnknown?: boolean;
   retired?: boolean;
+  /** Monotonic expiry deadline for wall-clock-independent enforcement. */
+  expiresAtMonotonicMs: number;
 };
 
 /** Private entry identity. Never reselect a successor by its public question id. */
@@ -167,6 +169,7 @@ export class QuestionManager {
     if (expiresAtMs === undefined) {
       throw new Error("question expiry is unavailable");
     }
+    const expiresAtMonotonicMs = this.scheduler.monotonicNow() + timeoutMs;
     const id = params.id ?? randomUUID();
     if (this.entries.has(id)) {
       throw new QuestionManagerError(
@@ -190,11 +193,9 @@ export class QuestionManager {
       job: this.scheduler.schedule({
         id: `${this.scheduleId}:${id}`,
         delayMs: timeoutMs,
-        run: () => {
-          this.expire(id);
-          return this.drain();
-        },
+        run: () => this.expireScheduled(id),
       }),
+      expiresAtMonotonicMs,
       waiters: new Set(),
       onResolved: params.onResolved,
       sessionAccess: params.sessionAccess,
@@ -222,7 +223,10 @@ export class QuestionManager {
     if (!entry) {
       return null;
     }
-    if (entry.record.status === "pending" && entry.record.expiresAtMs <= this.scheduler.now()) {
+    if (
+      entry.record.status === "pending" &&
+      entry.expiresAtMonotonicMs <= this.scheduler.monotonicNow()
+    ) {
       this.expire(id);
     }
     this.refreshRequester(entry);
@@ -311,7 +315,7 @@ export class QuestionManager {
       !entry?.admissionContinuation ||
       entry.record !== record ||
       entry.record.status !== "pending" ||
-      entry.record.expiresAtMs <= this.scheduler.now()
+      entry.expiresAtMonotonicMs <= this.scheduler.monotonicNow()
     ) {
       return null;
     }
@@ -392,7 +396,7 @@ export class QuestionManager {
         entry.retired ||
         this.entries.get(id) !== entry ||
         entry.record.status !== "pending" ||
-        entry.record.expiresAtMs <= this.scheduler.now() ||
+        entry.expiresAtMonotonicMs <= this.scheduler.monotonicNow() ||
         active === false
       ) {
         throw new QuestionManagerError(
@@ -573,6 +577,40 @@ export class QuestionManager {
       QuestionManagerErrorCodes.INVALID_ANSWER,
       `question '${id}' ${reason}`,
     );
+  }
+
+  /** Scheduled wake expiry: re-check the monotonic deadline before expiring.
+   * A wall-clock forward jump can wake the scheduler early (remaining() takes
+   * min(wallDelay, monotonicDelay)); reschedule until the monotonic deadline
+   * actually passes so the question lifetime stays wall-clock-independent.
+   * The rearm happens before the committing guard so a wake that overlaps an
+   * in-flight resolveWithCommit() still leaves a future expiry armed if the
+   * commit rejects before the deadline (the scheduler removes this one-shot
+   * job before the callback runs). */
+  private expireScheduled(id: string): Promise<void> | void {
+    const entry = this.entries.get(id);
+    if (!entry || entry.record.status !== "pending") {
+      return this.drain();
+    }
+    const remainingMs = entry.expiresAtMonotonicMs - this.scheduler.monotonicNow();
+    if (remainingMs > 0) {
+      // Wall clock jumped forward; the monotonic deadline has not passed.
+      // Re-arm the scheduled wake for the remaining monotonic duration before
+      // applying the committing guard so the expiry job is never lost.
+      entry.job = this.scheduler.schedule({
+        id: `${this.scheduleId}:${id}`,
+        delayMs: remainingMs,
+        run: () => this.expireScheduled(id),
+      });
+      return this.drain();
+    }
+    // The monotonic deadline has passed. A committing entry owns the terminal
+    // fact at/after the deadline; its finally-block get() will settle expiry.
+    if (entry.committing) {
+      return this.drain();
+    }
+    this.expire(id);
+    return this.drain();
   }
 
   private expire(id: string): void {

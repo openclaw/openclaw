@@ -431,6 +431,10 @@ describe("draining Gateway completion ownership", () => {
     expect(getActiveGatewayRootWorkCount()).toBe(2);
     const suspension = closeAdmission("suspension");
     clock.setTime(original.expiresAtMs + 1);
+    // Also advance the monotonic deadline past the original timeout (the wall-time
+    // assignment above only moves the wall clock). This makes question.get() expire
+    // the original question synchronously without firing the scheduler wake.
+    clock.advanceMonotonicBy(original.expiresAtMs + 1 - original.createdAtMs);
     const handler = vi.fn<GatewayRequestHandler>();
     try {
       const response = await dispatch({
