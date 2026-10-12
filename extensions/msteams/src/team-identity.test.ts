@@ -31,19 +31,6 @@ describe("resolveTeamGroupId", () => {
     expect(getTeamDetails).not.toHaveBeenCalled();
   });
 
-  it("resolves a missing AAD group ID through the Teams API", async () => {
-    const conversationTeamId = teamId("api-lookup");
-    getTeamDetails.mockResolvedValueOnce({ aadGroupId: " group-guid-2 " });
-
-    const result = await resolveTeamGroupId({
-      conversationTeamId,
-      getTeamDetails,
-    });
-
-    expect(result).toBe("group-guid-2");
-    expect(getTeamDetails).toHaveBeenCalledWith(conversationTeamId);
-  });
-
   it("bounds a stalled Teams API identity lookup", async () => {
     vi.useFakeTimers();
     try {

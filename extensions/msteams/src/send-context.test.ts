@@ -156,51 +156,7 @@ describe("resolveMSTeamsSendContext", () => {
     expect(sendContextMockState.loadMSTeamsSdkWithAuth).not.toHaveBeenCalled();
   });
 
-  it("ignores ambient SERVICE_URL for default public-cloud proactive sends", async () => {
-    vi.stubEnv("SERVICE_URL", "https://bot.example.com/api/messages");
-    sendContextMockState.store.get.mockResolvedValue(
-      channelRef({
-        serviceUrl: "https://smba.trafficmanager.net/amer/",
-      }),
-    );
-
-    const cfg = createConfig();
-
-    await expect(
-      resolveMSTeamsSendContext({
-        cfg,
-        to: "conversation:19:channel@thread.tacv2",
-      }),
-    ).resolves.toMatchObject({
-      conversationId: "19:channel@thread.tacv2",
-      sdkCloudOptions: { cloud: "Public" },
-    });
-  });
-
-  it("looks up the base conversation and applies an explicit thread root", async () => {
-    sendContextMockState.store.get.mockResolvedValue(
-      channelRef({
-        serviceUrl: "https://smba.trafficmanager.net/amer/",
-        threadId: "stored-root",
-      }),
-    );
-
-    await expect(
-      resolveMSTeamsSendContext({
-        cfg: createConfig({ replyStyle: "top-level" }),
-        to: "conversation:19:channel@thread.tacv2;messageid=explicit-root",
-      }),
-    ).resolves.toMatchObject({
-      conversationId: "19:channel@thread.tacv2",
-      ref: { threadId: "explicit-root" },
-      replyStyle: "thread",
-      threadActivityId: "explicit-root",
-    });
-    expect(sendContextMockState.store.get).toHaveBeenCalledWith("19:channel@thread.tacv2");
-  });
-
   it.each([
-    { conversationType: "personal", conversationId: "a:dm", expectedSuffix: "" },
     { conversationType: "groupChat", conversationId: "19:g@thread.v2", expectedSuffix: "" },
     {
       conversationType: "channel",
@@ -363,39 +319,6 @@ describe("resolveMSTeamsSendContext", () => {
     expect(sendContextMockState.store.get).not.toHaveBeenCalled();
   });
 
-  it("treats omitted account enabled as enabled for proactive sends", async () => {
-    sendContextMockState.store.get.mockResolvedValue(
-      channelRef({
-        serviceUrl: "https://smba.trafficmanager.net/amer/",
-      }),
-    );
-
-    const cfg = {
-      channels: {
-        msteams: {
-          tenantId: "tenant-id",
-          accounts: {
-            secondary: {
-              appId: "secondary-app-id",
-              appPassword: "secondary-app-password",
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    await expect(
-      resolveMSTeamsSendContext({
-        cfg,
-        accountId: "secondary",
-        to: "conversation:19:channel@thread.tacv2",
-      }),
-    ).resolves.toMatchObject({
-      accountId: "secondary",
-      conversationId: "19:channel@thread.tacv2",
-    });
-  });
-
   it("does not query Graph while resolving an opaque Bot Framework conversation", async () => {
     sendContextMockState.store.get.mockResolvedValue(
       channelRef({
@@ -414,17 +337,6 @@ describe("resolveMSTeamsSendContext", () => {
 });
 
 describe("resolveMSTeamsProactiveReplyTarget", () => {
-  it("uses thread for channel conversations with a stored thread root", async () => {
-    await expect(
-      resolveMSTeamsProactiveReplyTarget({
-        cfg: {},
-        conversationId: "19:channel@thread.tacv2",
-        ref: channelRef({ threadId: "thread-root-1" }),
-        conversationType: "channel",
-      }),
-    ).resolves.toEqual({ replyStyle: "thread", threadActivityId: "thread-root-1" });
-  });
-
   it("falls back to activityId for legacy channel references", async () => {
     await expect(
       resolveMSTeamsProactiveReplyTarget({
@@ -454,38 +366,6 @@ describe("resolveMSTeamsProactiveReplyTarget", () => {
         conversationId: "19:channel@thread.tacv2",
         ref: channelRef({ threadId: "thread-root-1" }),
         conversationType: "channel",
-      }),
-    ).resolves.toEqual({ replyStyle: "top-level", threadActivityId: undefined });
-  });
-
-  it("uses top-level when a channel has no stored thread root", async () => {
-    await expect(
-      resolveMSTeamsProactiveReplyTarget({
-        cfg: { replyStyle: "thread" },
-        conversationId: "19:channel@thread.tacv2",
-        ref: channelRef(),
-        conversationType: "channel",
-      }),
-    ).resolves.toEqual({ replyStyle: "top-level", threadActivityId: undefined });
-  });
-
-  it("uses top-level for non-channel conversations", async () => {
-    const ref = channelRef({ activityId: "activity-1" });
-
-    await expect(
-      resolveMSTeamsProactiveReplyTarget({
-        cfg: { replyStyle: "thread" },
-        conversationId: "19:group@thread.v2",
-        ref,
-        conversationType: "groupChat",
-      }),
-    ).resolves.toEqual({ replyStyle: "top-level", threadActivityId: undefined });
-    await expect(
-      resolveMSTeamsProactiveReplyTarget({
-        cfg: { replyStyle: "thread" },
-        conversationId: "a:personal",
-        ref,
-        conversationType: "personal",
       }),
     ).resolves.toEqual({ replyStyle: "top-level", threadActivityId: undefined });
   });

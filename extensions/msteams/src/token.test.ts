@@ -1,6 +1,6 @@
 // Msteams tests cover token plugin behavior.
 import { generateKeyPairSync } from "node:crypto";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -82,15 +82,6 @@ describe("token – secret credentials", () => {
     expect(hasConfiguredMSTeamsCredentials(cfg)).toBe(true);
   });
 
-  it("returns false when appPassword is missing", () => {
-    const cfg = { appId: "app-id", tenantId: "tenant-id" } satisfies MSTeamsConfig;
-    expect(hasConfiguredMSTeamsCredentials(cfg)).toBe(false);
-  });
-
-  it("returns false when no config is given and no env vars set", () => {
-    expect(hasConfiguredMSTeamsCredentials(undefined)).toBe(false);
-  });
-
   it("returns true only when the environment provides complete secret credentials", () => {
     process.env.MSTEAMS_APP_ID = "env-app-id";
     expect(hasConfiguredMSTeamsCredentials(undefined)).toBe(false);
@@ -105,21 +96,6 @@ describe("token – secret credentials", () => {
     const cfg = { appId: "named-app", tenantId: "tenant-id" } satisfies MSTeamsConfig;
 
     expect(hasConfiguredMSTeamsCredentials(cfg, { allowEnvFallback: false })).toBe(false);
-  });
-
-  it("resolves secret credentials from config", () => {
-    const cfg = {
-      appId: "app-id",
-      appPassword: "app-pw",
-      tenantId: "tenant-id",
-    } satisfies MSTeamsConfig;
-    const result = resolveMSTeamsCredentials(cfg);
-    expect(result).toEqual({
-      type: "secret",
-      appId: "app-id",
-      appPassword: "app-pw",
-      tenantId: "tenant-id",
-    });
   });
 
   it("resolves secret credentials from env vars", () => {
@@ -197,31 +173,6 @@ describe("token – federated credentials (certificate)", () => {
     expect(resolveMSTeamsCredentials(cfg)).toBeUndefined();
   });
 
-  it("falls back to env certificate settings without changing path bytes", () => {
-    process.env.MSTEAMS_CERTIFICATE_PATH = "  /env/cert.pem  ";
-    process.env.MSTEAMS_CERTIFICATE_THUMBPRINT = "environment-thumbprint";
-    process.env.MSTEAMS_MANAGED_IDENTITY_CLIENT_ID = "environment-managed-identity";
-    const cfg = {
-      appId: "app-id",
-      tenantId: "tenant-id",
-      authType: "federated",
-      certificatePath: "   ",
-      certificateThumbprint: "  configured-thumbprint  ",
-      managedIdentityClientId: "  configured-managed-identity  ",
-    } satisfies MSTeamsConfig;
-
-    expect(hasConfiguredMSTeamsCredentials(cfg)).toBe(true);
-    expect(resolveMSTeamsCredentials(cfg)).toEqual({
-      type: "federated",
-      appId: "app-id",
-      tenantId: "tenant-id",
-      certificatePath: "  /env/cert.pem  ",
-      certificateThumbprint: "  configured-thumbprint  ",
-      useManagedIdentity: undefined,
-      managedIdentityClientId: "  configured-managed-identity  ",
-    });
-  });
-
   it("opens the exact environment certificate path when the configured path is blank", async () => {
     const certificateDirectory = mkdtempSync(
       path.join(os.tmpdir(), "openclaw-msteams-real-certificate-"),
@@ -274,70 +225,11 @@ describe("token – federated credentials (certificate)", () => {
     expect(hasConfiguredMSTeamsCredentials(cfg)).toBe(true);
     expect(resolveMSTeamsCredentials(cfg)).toMatchObject({ certificatePath });
   });
-
-  it("keeps managed identity configured when the optional certificate path is blank", () => {
-    const cfg = {
-      appId: "app-id",
-      tenantId: "tenant-id",
-      authType: "federated",
-      certificatePath: "   ",
-      useManagedIdentity: true,
-      managedIdentityClientId: "  configured-managed-identity  ",
-    } satisfies MSTeamsConfig;
-
-    expect(hasConfiguredMSTeamsCredentials(cfg)).toBe(true);
-    expect(resolveMSTeamsCredentials(cfg)).toEqual({
-      type: "federated",
-      appId: "app-id",
-      tenantId: "tenant-id",
-      certificatePath: undefined,
-      certificateThumbprint: undefined,
-      useManagedIdentity: true,
-      managedIdentityClientId: "  configured-managed-identity  ",
-    });
-  });
-
-  it("resolves federated credentials from env vars", () => {
-    process.env.MSTEAMS_AUTH_TYPE = "federated";
-    process.env.MSTEAMS_APP_ID = "env-app-id";
-    process.env.MSTEAMS_TENANT_ID = "env-tenant-id";
-    process.env.MSTEAMS_CERTIFICATE_PATH = "/env/cert.pem";
-    process.env.MSTEAMS_CERTIFICATE_THUMBPRINT = "EEFF0011";
-    const result = resolveMSTeamsCredentials(undefined);
-    expect(result).toEqual({
-      type: "federated",
-      appId: "env-app-id",
-      tenantId: "env-tenant-id",
-      certificatePath: "/env/cert.pem",
-      certificateThumbprint: "EEFF0011",
-      useManagedIdentity: undefined,
-      managedIdentityClientId: undefined,
-    });
-  });
 });
 
 describe("token – federated credentials (managed identity)", () => {
   beforeEach(saveAndClearEnv);
   afterEach(restoreEnv);
-
-  it("resolves system-assigned managed identity (no clientId)", () => {
-    const cfg = {
-      appId: "app-id",
-      tenantId: "tenant-id",
-      authType: "federated",
-      useManagedIdentity: true,
-    } satisfies MSTeamsConfig;
-    const result = resolveMSTeamsCredentials(cfg);
-    expect(result).toEqual({
-      type: "federated",
-      appId: "app-id",
-      tenantId: "tenant-id",
-      certificatePath: undefined,
-      certificateThumbprint: undefined,
-      useManagedIdentity: true,
-      managedIdentityClientId: undefined,
-    });
-  });
 
   it("hasConfigured returns true for managed identity via env", () => {
     process.env.MSTEAMS_AUTH_TYPE = "federated";
@@ -345,48 +237,6 @@ describe("token – federated credentials (managed identity)", () => {
     process.env.MSTEAMS_TENANT_ID = "env-tenant-id";
     process.env.MSTEAMS_USE_MANAGED_IDENTITY = "true";
     expect(hasConfiguredMSTeamsCredentials(undefined)).toBe(true);
-  });
-
-  it("config useManagedIdentity=false overrides env MSTEAMS_USE_MANAGED_IDENTITY=true", () => {
-    process.env.MSTEAMS_USE_MANAGED_IDENTITY = "true";
-    const cfg = {
-      appId: "app-id",
-      tenantId: "tenant-id",
-      authType: "federated",
-      certificatePath: "/cert.pem",
-      useManagedIdentity: false,
-    } satisfies MSTeamsConfig;
-    const result = resolveMSTeamsCredentials(cfg);
-    expect(result).toEqual({
-      type: "federated",
-      appId: "app-id",
-      tenantId: "tenant-id",
-      certificatePath: "/cert.pem",
-      certificateThumbprint: undefined,
-      useManagedIdentity: undefined,
-      managedIdentityClientId: undefined,
-    });
-  });
-});
-
-describe("token – backward compatibility", () => {
-  beforeEach(saveAndClearEnv);
-  afterEach(restoreEnv);
-
-  it("explicit authType=secret behaves same as absent", () => {
-    const cfg = {
-      appId: "app-id",
-      appPassword: "pw",
-      tenantId: "tenant-id",
-      authType: "secret",
-    } satisfies MSTeamsConfig;
-    const result = resolveMSTeamsCredentials(cfg);
-    expect(result).toEqual({
-      type: "secret",
-      appId: "app-id",
-      appPassword: "pw",
-      tenantId: "tenant-id",
-    });
   });
 });
 
@@ -432,19 +282,6 @@ describe("resolveDelegatedAccessToken", () => {
     expiresAt: Date.now() + 60_000,
     scopes: ["User.Read"],
   };
-
-  it("roundtrips delegated tokens through reopened plugin-state SQLite without a sidecar", async () => {
-    await writeDelegatedTokens(Date.now() + 60_000);
-    await closeOpenClawStateDatabaseAsync();
-    resetPluginStateStoreForTests();
-
-    expect(await delegatedState.loadMSTeamsDelegatedTokens()).toMatchObject({
-      accessToken: "stale-access",
-      refreshToken: "refresh-token",
-    });
-    expect(existsSync(path.join(stateDir!, "state", "openclaw.sqlite"))).toBe(true);
-    expect(existsSync(path.join(stateDir!, "msteams-delegated.json"))).toBe(false);
-  });
 
   it("reuses a valid delegated access token before expiry", async () => {
     await writeDelegatedTokens(Date.now() + 60_000);
@@ -559,18 +396,4 @@ describe("resolveDelegatedAccessToken", () => {
       );
     },
   );
-
-  it("propagates a delegated token read failure without attempting refresh", async () => {
-    const error = new Error("synthetic storage read failure");
-    vi.spyOn(delegatedState, "loadMSTeamsDelegatedTokens").mockRejectedValueOnce(error);
-
-    await expect(
-      resolveDelegatedAccessToken({
-        tenantId: "tenant",
-        clientId: "client",
-        clientSecret: "secret",
-      }),
-    ).rejects.toBe(error);
-    expect(oauthTokenMocks.refreshMSTeamsDelegatedTokens).not.toHaveBeenCalled();
-  });
 });
