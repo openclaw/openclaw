@@ -4,6 +4,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot as clearFixtureRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot as setFixtureRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createTestPluginServiceScheduler } from "../plugin-sdk/plugin-test-api.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -62,6 +66,8 @@ it("keeps successor sweeps and diary publication owned after another registratio
   };
   await state.writeConfig(config);
   setRuntimeConfigSnapshot(config, config);
+  // The host-owned runtime facade uses Vitest's config graph; SDK modules use the native graph.
+  setFixtureRuntimeConfigSnapshot(config, config);
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
   const load = () => {
     const subagent = {
@@ -183,6 +189,9 @@ it("keeps successor sweeps and diary publication owned after another registratio
     await Promise.all(stops.map((stop) => stop()));
     await Promise.all(instances.map((instance) => instance.dispose()));
     vi.useRealTimers();
-    await state.cleanup().finally(clearRuntimeConfigSnapshot);
+    await state.cleanup().finally(() => {
+      clearRuntimeConfigSnapshot();
+      clearFixtureRuntimeConfigSnapshot();
+    });
   }
 });
