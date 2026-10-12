@@ -4,6 +4,10 @@ import {
   seedSubagentRunForReadTest,
   resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { emitAgentEvent, emitAgentEventForRunContext } from "../../infra/agent-events.js";
 import {
   clearAgentRunContext,
@@ -24,6 +28,7 @@ vi.mock("../../status/status-plugin-health.runtime.js", () => ({
 
 describe("buildStatusReply execution observations", () => {
   beforeEach(async () => {
+    setRuntimeConfigSnapshot({});
     clearAgentHarnesses();
     await resetSubagentRegistryForTests({ persist: false });
   });
@@ -31,6 +36,7 @@ describe("buildStatusReply execution observations", () => {
   afterEach(async () => {
     clearAgentHarnesses();
     await resetSubagentRegistryForTests({ persist: false });
+    clearRuntimeConfigSnapshot();
   });
 
   it("shows canonical successor tool activity resuming after approval without changing counts", async () => {

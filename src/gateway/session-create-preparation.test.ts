@@ -393,7 +393,6 @@ describe("Gateway creation preparation", () => {
         using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         client.connect.scopes = ["operator.sessions.write"];
         const profileId = client.authenticatedUserProfile!.profileId;
-        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const cfg = rolePolicyConfig();
         const key = "agent:main:created-handoff";
         const generated = method === "generated-create";

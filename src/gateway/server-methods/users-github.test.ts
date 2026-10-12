@@ -1,6 +1,6 @@
 // Install synthetic OAuth and subprocess transport before RPC modules load.
 // oxfmt-ignore
-import { network, resetPersonalGitHubNetwork, tokens } from "./users-github.test-support.js";
+import { createPersonalGitHubTestClient, network, resetPersonalGitHubNetwork, tokens } from "./users-github.test-support.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { StatementSync } from "node:sqlite";
@@ -53,7 +53,7 @@ import { getUserProfileListItem } from "../../state/user-profile-list-item.test-
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { linkCanonicalUserProfileEmail } from "../../state/user-profile-writes.js";
 import { linkEmail, setUserProfileRole } from "../../state/user-profile-writes.worker.js";
-import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/user-profiles.js";
+import { ensureGatewayOwnerProfile } from "../../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
@@ -78,27 +78,8 @@ let alice: GatewayClient;
 let bob: GatewayClient;
 let profileCatalog: Awaited<ReturnType<typeof prepareUserProfileCatalog>>;
 
-function user(email: string, scopes = ["operator.read"]): GatewayClient {
-  const profile = ensureProfileForEmail(email);
-  const client: GatewayClient = {
-    connId: `connection-${profile.id}`,
-    authenticatedUserId: email,
-    authenticatedUserProfile: {
-      profileId: profile.id,
-      displayName: profile.displayName,
-      hasAvatar: false,
-      updatedAt: profile.updatedAt,
-    },
-    connect: {
-      role: "operator",
-      scopes,
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "test", mode: "test", version: "1", platform: "test" },
-    },
-  };
-  clients.add(client);
-  return client;
+function user(email: string, scopes = ["operator.read"]) {
+  return createPersonalGitHubTestClient(clients, email, scopes);
 }
 function owner(client = alice): string {
   return client.authenticatedUserProfile!.profileId;
@@ -684,7 +665,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
 
   it("does not let an older start overwrite a newer start or disconnected generation", async () => {
     const old = createDeferredCore<Awaited<ReturnType<typeof network.start>>>();
-    const entered = createDeferredCore<void>();
+    const entered = createDeferredCore();
     network.start.mockImplementationOnce(() => {
       entered.resolve();
       return old.promise;

@@ -6,7 +6,7 @@ import {
   AuthStorage as PublicAuthStorage,
   ModelRegistry as PublicModelRegistry,
 } from "openclaw/plugin-sdk/agent-sessions";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -35,6 +35,7 @@ import {
   assertAuthProfileMigrationReady,
   clearAuthProfileMigrationDiagnostics,
 } from "../auth-profiles/legacy-source-diagnostic.js";
+import { isPendingOAuthRefreshFence } from "../auth-profiles/oauth-refresh-marker.js";
 import { loadPersistedAuthProfileStore } from "../auth-profiles/persisted.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -45,6 +46,7 @@ import {
   writePersistedAuthProfileStateRaw,
   writePersistedAuthProfileStoreRaw,
 } from "../auth-profiles/sqlite.js";
+import * as authProfileStoreUpdate from "../auth-profiles/store-update.js";
 import { getAuthStorageOAuthProviderRegistry } from "./auth-storage-oauth-registry.js";
 import { AuthStorage, OAuthProviderConfiguredUnavailableError } from "./auth-storage.js";
 
@@ -635,9 +637,30 @@ describe("SQLite auth storage", () => {
     const ownerKey = left.getApiKey("test-oauth");
     try {
       await refreshEntered.promise;
+      const peerSelected = createDeferredCore();
+      const runUpdate = authProfileStoreUpdate.runAuthProfileStoreUpdate;
+      const observePeer = vi
+        .spyOn(authProfileStoreUpdate, "runAuthProfileStoreUpdate")
+        .mockImplementationOnce((params) => {
+          const selecting = runUpdate({
+            ...params,
+            update: (prepared, owner) => {
+              const credential = prepared.store.profiles["test-oauth:default"];
+              expect(credential?.type === "oauth" && isPendingOAuthRefreshFence(credential)).toBe(
+                true,
+              );
+              return params.update(prepared, owner);
+            },
+          });
+          void selecting.then(peerSelected.resolve, peerSelected.reject);
+          return selecting;
+        });
+      onTestFinished(() => observePeer.mockRestore());
       const peerKey = right.getApiKey("test-oauth");
-      await expect(peerKey).resolves.toBeUndefined();
+      void peerKey.catch(peerSelected.reject);
+      await peerSelected.promise;
       releaseRefresh.resolve();
+      await expect(peerKey).resolves.toBeUndefined();
       await expect(Promise.all([ownerKey, peerKey])).resolves.toEqual([
         "fake-fresh-access",
         undefined,
