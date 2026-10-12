@@ -264,6 +264,43 @@ describe("sessions.files host read boundary", () => {
     expect(hardlinked.file).toMatchObject({ content: "outside\n", missing: false });
   });
 
+  it("omits media-store identities from the authorized host listing", async () => {
+    const outsidePath = outsideFile();
+    fs.writeFileSync(outsidePath, "outside\n", "utf8");
+    const fixture = prepareHostFileRead(
+      { permissionMode: "full" },
+      { tools: { fs: { workspaceOnly: true } } },
+    );
+    mockVisibleMessages(
+      [
+        outsidePath,
+        "missing.txt",
+        "src/readme.md",
+        // An authorized host read skips the workspace filter; the media-store identity
+        // must still not surface as a phantom missing row.
+        "media://inbound/image---15547f7e.png",
+      ].map((filePath) => assistantToolCall("read", { path: filePath })),
+    );
+
+    const list = expectOkPayload(
+      await invoke("sessions.files.list", { sessionKey }, fixture.context, fixture.options),
+    );
+
+    expect(list.files).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: fs.realpathSync(outsidePath), missing: false }),
+        expect.objectContaining({ path: "missing.txt", missing: true }),
+        expect.objectContaining({ path: "src/readme.md", missing: false }),
+      ]),
+    );
+    expect(list.files).toHaveLength(3);
+    expect(list.files).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: "media://inbound/image---15547f7e.png" }),
+      ]),
+    );
+  });
+
   it("rechecks the file policy after reading before publishing host content", async () => {
     const outsidePath = outsideFile();
     fs.writeFileSync(outsidePath, "outside\n", "utf8");
