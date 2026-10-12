@@ -34,6 +34,7 @@ import {
   MAX_SNAPSHOT_ATTEMPTS,
   waitForSnapshotRetrySync,
 } from "./sqlite-snapshot-policy.js";
+import { renameStagedSnapshotFile } from "./sqlite-snapshot-rename.js";
 import {
   createSqliteSnapshotStagingDirectory,
   createSqliteSnapshotStagingDirectorySync,
@@ -282,7 +283,7 @@ function publishPreparedCopy(directory: string): PreparedSqliteReadOnlyLocation 
   for (const suffix of ["-wal", "-shm", "-journal", ""]) {
     const staged = `${location}.partial${suffix}`;
     if (fs.existsSync(staged)) {
-      fs.renameSync(staged, `${location}${suffix}`);
+      renameStagedSnapshotFile(staged, `${location}${suffix}`);
     }
   }
   return adoptPreparedLocation(location, directory);
@@ -367,7 +368,7 @@ function* createStableReadOnlyCopyInTempDirectory(
         );
       }
       fs.rmSync(snapshotPath, { force: true });
-      fs.renameSync(firstPath, snapshotPath);
+      renameStagedSnapshotFile(firstPath, snapshotPath);
     }
 
     if (readSourceJournalMode(pathname, expectedSourceIdentity) !== journalMode) {
