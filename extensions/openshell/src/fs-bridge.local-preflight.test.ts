@@ -45,6 +45,24 @@ it("keeps omitted read limits unlimited and explicit zero limits empty", async (
   );
 });
 
+it("preserves missing-path errors while wrapping other read failures", async () => {
+  await using workspace = await tempWorkspace({
+    rootDir: resolvePreferredOpenClawTmpDir(),
+    prefix: "openclaw-openshell-read-errors-",
+  });
+  const { bridge } = createBridge(workspace.dir);
+
+  await expect(bridge.readFile({ filePath: "missing.md" })).rejects.toMatchObject({
+    code: "not-found",
+  });
+
+  await fs.writeFile(path.join(workspace.dir, "nonempty.md"), "content");
+  await expect(bridge.readFile({ filePath: "nonempty.md", maxBytes: 0 })).rejects.toMatchObject({
+    message: expect.stringContaining("Sandbox boundary checks failed"),
+    cause: expect.objectContaining({ code: "too-large" }),
+  });
+});
+
 it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
   "rejects inaccessible local mirror parents before remote mutations",
   async () => {
