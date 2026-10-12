@@ -246,6 +246,16 @@ describe("buildAgentSystemPrompt", () => {
       ["`presentation` buttons/selects"],
       ["Inline buttons not enabled for slack", 'presentation={"blocks":[{"type":"buttons"'],
     ],
+    [
+      "leaves Mattermost button guidance to the plugin hints",
+      {
+        toolNames: ["message"],
+        runtimeInfo: { channel: "mattermost", capabilities: ["inlineButtons"] },
+        messageToolHints: ["- Mattermost owns this hint."],
+      },
+      ["- Mattermost owns this hint."],
+      ['"action":{"type":"callback"', "Inline buttons OFF for mattermost"],
+    ],
   ])("%s", expectPromptCase);
   it("advertises YouTube embeds only in full webchat prompts below the cache boundary", () => {
     const example = '[embed url="https://www.youtube.com/watch?v=VIDEO_ID" title="Video" /]';

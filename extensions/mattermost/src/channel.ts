@@ -50,6 +50,7 @@ import {
   sanitizeAssistantVisibleText,
 } from "openclaw/plugin-sdk/text-chunking";
 import { textResult } from "openclaw/plugin-sdk/tool-results";
+import { mattermostAgentPrompt } from "./agent-prompt.js";
 import { mattermostApprovalAuth } from "./approval-auth.js";
 import { normalizeMattermostAllowEntry as normalizeAllowEntry } from "./channel-config-shared.js";
 import {
@@ -634,6 +635,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
       blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
     },
     approvalCapability: mattermostApprovalAuth,
+    agentPrompt: mattermostAgentPrompt,
     doctor: mattermostDoctor,
     groups: {
       resolveRequireMention: resolveMattermostGroupRequireMention,
