@@ -4,6 +4,11 @@
 // message-tool.test-support.ts; the tool-assembly wiring assertion lives in
 // openclaw-tools.session-context.test.ts with the other run-identity checks.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
+import {
+  ErrorCodes,
+  GatewayErrorDetailCodes,
+} from "../../../packages/gateway-protocol/src/gateway-error-details.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { MessageActionResult } from "../../infra/outbound/message-action-contracts.js";
 import { resetDiagnosticSessionStateForTest } from "../../logging/diagnostic-session-state.js";
@@ -629,6 +634,115 @@ describe("per-turn send budget", () => {
       }
     },
   );
+
+  describe("Gateway queue custody", () => {
+    const sessionKey = "agent:test:imessage:direct:gw-queued";
+    const runId = "run-gw-queued";
+
+    function createQueuedTool() {
+      registerImessageGatewayDeliveryPlugin();
+      return createMessageTool({
+        currentChannelProvider: "imessage",
+        currentChannelId: currentChat,
+        agentId: "test",
+        agentAccountId: "primary",
+        agentSessionKey: sessionKey,
+        runId,
+        sourceReplyDeliveryMode: "message_tool_only",
+        runMessageAction: mocks.runMessageAction as never,
+        config: { tools: { message: { maxMessagesPerTurnPerTarget: 1 } } } as never,
+      });
+    }
+
+    function gatewayError(queued: boolean) {
+      return new GatewayClientRequestError({
+        code: ErrorCodes.UNAVAILABLE,
+        message: "connect ECONNREFUSED",
+        ...(queued ? { details: { code: GatewayErrorDetailCodes.OUTBOUND_DELIVERY_QUEUED } } : {}),
+      });
+    }
+
+    function sentKey(call: number) {
+      return (mocks.runMessageAction.mock.calls[call]?.[0] as RunMessageActionInput | undefined)
+        ?.params?.idempotencyKey;
+    }
+
+    function committedCount() {
+      return peekTurnSendCount({
+        sessionKey: buildTurnSendLedgerSessionKey("test", sessionKey)!,
+        runId,
+        targetKey: buildTurnSendTargetKey({
+          channel: "imessage",
+          accountId: "primary",
+          target: currentChat,
+        }),
+      });
+    }
+
+    it("keeps the hard-cap charge when the Gateway takes queue custody", async () => {
+      mocks.runMessageAction.mockReset();
+      mocks.runMessageAction.mockRejectedValue(gatewayError(true));
+      const tool = createQueuedTool();
+
+      const first = await tool.execute("call-queued-1", {
+        action: "send",
+        channel: "imessage",
+        message: "answer",
+      });
+      expect(first.details).toEqual({
+        status: "delivery_queued",
+        delivered: false,
+        message:
+          "Delivery is pending: connect ECONNREFUSED. The gateway owns retry or reconciliation; delivery is not yet confirmed. Do not resend it.",
+      });
+      expect(committedCount()).toBe(1);
+
+      // A reworded send is a distinct operation: the queued send still holds the only slot.
+      const distinct = await tool.execute("call-queued-2", {
+        action: "send",
+        channel: "imessage",
+        message: "reworded answer",
+      });
+      expect(distinct.details).toMatchObject({
+        status: "suppressed",
+        reason: "turn_send_budget_exhausted",
+      });
+      expect(mocks.runMessageAction).toHaveBeenCalledTimes(1);
+
+      // A same-content resend reuses the queued operation's idempotency key, so it is a
+      // replay the Gateway dedups: admitted past the cap and not counted again.
+      const replay = await tool.execute("call-queued-3", {
+        action: "send",
+        channel: "imessage",
+        message: "answer",
+      });
+      expect(replay.details).toMatchObject({ status: "delivery_queued", delivered: false });
+      expect(mocks.runMessageAction).toHaveBeenCalledTimes(2);
+      expect(sentKey(1)).toBe(sentKey(0));
+      expect(committedCount()).toBe(1);
+    });
+
+    it("releases the charge when the Gateway did not accept the send", async () => {
+      mocks.runMessageAction.mockReset();
+      mocks.runMessageAction.mockRejectedValueOnce(gatewayError(false));
+      const tool = createQueuedTool();
+
+      await expect(
+        tool.execute("call-unaccepted-1", { action: "send", channel: "imessage", message: "a" }),
+      ).rejects.toThrow("connect ECONNREFUSED");
+      expect(committedCount()).toBe(0);
+
+      stubSend();
+      const next = await tool.execute("call-unaccepted-2", {
+        action: "send",
+        channel: "imessage",
+        message: "b",
+      });
+      expect(next.details).not.toMatchObject({ status: "suppressed" });
+      expect(mocks.runMessageAction).toHaveBeenCalledTimes(1);
+      expect(committedCount()).toBe(1);
+    });
+  });
 
   it("disambiguates a duplicate model-emitted toolCallId into a distinct cap-blocked send, not an idempotent replay", async () => {
     // #119992 / PR #120491: distinct tool-call ids derive distinct idempotency keys, so a

@@ -127,8 +127,9 @@ export function resolveTurnSendBudgetContext(input: {
 /**
  * Per-turn send-budget controller for one message-tool invocation. Captures the ledger
  * reservation and the resolved config so the caller reserves once, then settles exactly
- * once against the same reservation: `release()` on failure/throw, `settleCompletedResult`
- * on completion. Inert (no reservation) when `budgetContext` is undefined.
+ * once against the same reservation: `settleCompletedResult` on completion,
+ * `settleQueuedDelivery` when the Gateway took queue custody, `release()` for any other
+ * failure/throw. Inert (no reservation) when `budgetContext` is undefined.
  */
 type MessageToolTurnSendBudget = {
   /**
@@ -138,6 +139,15 @@ type MessageToolTurnSendBudget = {
   readonly exhaustedResult: AgentToolResult<unknown> | undefined;
   /** Roll back the in-flight reservation when the send failed, threw, or did not land. */
   release(): void;
+  /**
+   * Settle a send the Gateway accepted into its durable delivery queue
+   * (OUTBOUND_DELIVERY_QUEUED). Recovery still delivers it, so it keeps its charge like a
+   * landed send: a distinct follow-up stays capped, while the committed operation id still
+   * admits a same-key replay. The charge is not refunded if delivery later dead-letters.
+   * Accepted edge case: if route detection did not mark the route as deduplicating, the
+   * commit carries no operation id and a same-key replay is cap-blocked (fails closed).
+   */
+  settleQueuedDelivery(response: AgentToolResult<unknown>): AgentToolResult<unknown>;
   /**
    * Settle a completed action: commit when it landed, or release when it did not, then
    * append the normalization notice and, once the target has received >= 2 messages this
@@ -166,6 +176,7 @@ function resolveNormalizationNotice(result: MessageActionResult): string | undef
 const INACTIVE_BUDGET: MessageToolTurnSendBudget = {
   exhaustedResult: undefined,
   release() {},
+  settleQueuedDelivery: (response) => response,
   settleCompletedResult(response, result) {
     return appendMessageToolNotices(response, resolveNormalizationNotice(result), undefined);
   },
@@ -208,6 +219,23 @@ export function prepareMessageToolTurnSendBudget(input: {
     operationId: routeDedupsCompletedOperation ? input.actionIdempotencyKey : undefined,
     chargeCap: !isMediaSendAction,
   });
+  // A `replay` reservation was deduped by the Gateway, so neither settlement touches it.
+  const release = () => {
+    if (reservation.status === "reserved") {
+      releaseTurnSend(reservation.reservation);
+    }
+  };
+  // Commits the charge and returns the soft-nudge text once the target has received >= 2
+  // sends this turn.
+  const commit = (): string | undefined => {
+    if (reservation.status !== "reserved") {
+      return undefined;
+    }
+    const sendCount = commitTurnSend(reservation.reservation);
+    return sendCount >= 2 && effectiveMessageTools?.turnSendNudge !== false
+      ? `You have already sent ${sendCount} messages to this target this turn; if this is a rewrite of the same reply, finalize now instead of sending another variant.`
+      : undefined;
+  };
   return {
     exhaustedResult:
       reservation.status === "exhausted"
@@ -217,24 +245,20 @@ export function prepareMessageToolTurnSendBudget(input: {
             message: `Blocked: reached this turn's configured limit of ${maxPerTurn} message(s) to this target (maxMessagesPerTurnPerTarget). Finalize your reply instead of sending another message.`,
           })
         : undefined,
-    release() {
-      if (reservation.status === "reserved") {
-        releaseTurnSend(reservation.reservation);
-      }
+    release,
+    settleQueuedDelivery(response) {
+      return appendMessageToolNotices(response, undefined, commit());
     },
     settleCompletedResult(response, result) {
-      let turnSendNotice: string | undefined;
-      if (reservation.status === "reserved") {
-        if (!didMessageActionLand(result)) {
-          releaseTurnSend(reservation.reservation);
-        } else {
-          const sendCount = commitTurnSend(reservation.reservation);
-          if (sendCount >= 2 && effectiveMessageTools?.turnSendNudge !== false) {
-            turnSendNotice = `You have already sent ${sendCount} messages to this target this turn; if this is a rewrite of the same reply, finalize now instead of sending another variant.`;
-          }
-        }
+      const landed = didMessageActionLand(result);
+      if (!landed) {
+        release();
       }
-      return appendMessageToolNotices(response, resolveNormalizationNotice(result), turnSendNotice);
+      return appendMessageToolNotices(
+        response,
+        resolveNormalizationNotice(result),
+        landed ? commit() : undefined,
+      );
     },
   };
 }
