@@ -27,7 +27,6 @@ import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { createTestRegistry } from "../../../test-utils/channel-plugins.js";
-import type {} from "../../embedded-agent-runner/runs.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
@@ -1502,7 +1501,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     // notification. It must never read as a missing visible reply, which is
     // what makes the wait manager re-announce while the child still works.
     expect(result.reason).not.toBe("visible_reply_missing");
-    expect(result.delivered === true || result.terminal === true).toBe(true);
+    expect(result.delivered || result.terminal).toBe(true);
   });
 
   it("reports requester-agent delivery failure even when output stayed visible", async () => {

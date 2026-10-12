@@ -176,7 +176,7 @@ describe("subagent run wait disposition", () => {
     entry.execution = { status: "queued" };
     const accepted: number[] = [];
     let attempts = 0;
-    let runsRef: Map<string, SubagentRunRecord>;
+    const runsRef: { current?: Map<string, SubagentRunRecord> } = {};
     // Mirrors the registry's real acceptance fence (subagent-registry.ts): the
     // observation is recorded before the announcement, and a later call whose
     // observedAt differs is rejected without notifying anyone. The row it is
@@ -189,7 +189,7 @@ describe("subagent run wait disposition", () => {
       // Not frozen: the live registry binds its gateway-context owner symbol
       // onto the published row, so a frozen replacement would break the next
       // wait rather than model one.
-      runsRef.set(next.runId, next);
+      runsRef.current?.set(next.runId, next);
       return next;
     };
     const reportSubagentWaitExpiry = vi.fn(
@@ -223,7 +223,7 @@ describe("subagent run wait disposition", () => {
       resolveSubagentSessionStartedAt: async () => entry.execution.startedAt,
     });
 
-    runsRef = runs;
+    runsRef.current = runs;
 
     await manager.waitForSubagentCompletion(RUN_ID, entry, 50);
     await expect.poll(() => reportSubagentWaitExpiry.mock.calls.length).toBe(2);

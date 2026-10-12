@@ -14,7 +14,6 @@ import {
   prepareSubagentKillSession,
   type SubagentKillSession,
 } from "./subagent-control-session.js";
-import {} from "./subagent-lifecycle-events.js";
 import { shouldDeferTerminalCleanupForUnconfirmedChild } from "./subagent-registry-cleanup.js";
 import {
   planTerminalCompletion,
@@ -31,7 +30,6 @@ import {
 import { completeTerminalEffects } from "./subagent-registry-terminal-effects.js";
 import type { SubagentCompletionRequest } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
-import {} from "./subagent-run-timeout.js";
 
 const browserCleanupLoader = createLazyImportLoader(
   () => import("../../../browser-lifecycle-cleanup.js"),

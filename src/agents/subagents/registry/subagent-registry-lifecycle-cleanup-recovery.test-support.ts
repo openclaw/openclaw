@@ -12,17 +12,15 @@ import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-adm
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { resolveSubagentRunDisposition } from "../subagent-terminal-outcome.js";
 import {
+  SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
-import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
 import { registerDeliveryRetryOwnerTests } from "./subagent-registry-lifecycle-cleanup.test-support.js";
 import { registerRequesterSettleRetirementTests } from "./subagent-registry-lifecycle-completion.test-support.js";
 import {
   createLifecycleControllerFixture,
   createRunEntry,
-} from "./subagent-registry-lifecycle-controller.test-support.js";
-import {
   readLifecycleRun,
   type RunEntryOverrides,
 } from "./subagent-registry-lifecycle-controller.test-support.js";

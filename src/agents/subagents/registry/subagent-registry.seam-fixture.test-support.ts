@@ -10,12 +10,12 @@ import type { SubagentRegistryHarness } from "../../subagent-test-fixtures.test-
 import type { createSubagentRegistryMockState } from "./subagent-registry.mock-state.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-export type SubagentRegistryMockState = ReturnType<typeof createSubagentRegistryMockState>;
+type SubagentRegistryMockState = ReturnType<typeof createSubagentRegistryMockState>;
 
-export type SubagentLifecycleTestEvent = Pick<AgentEventPayload, "runId" | "stream" | "data"> &
+type SubagentLifecycleTestEvent = Pick<AgentEventPayload, "runId" | "stream" | "data"> &
   Partial<AgentEventPayload>;
 
-export type ObservedTerminalSignal = {
+type ObservedTerminalSignal = {
   kind: string;
   summary?: string;
   outcome?: string;

@@ -606,7 +606,7 @@ describe("buildSubagentList", () => {
         outcome: { status: "timeout", timeoutDisposition: "child-unconfirmed" },
       },
     } satisfies SubagentRunRecord;
-    addSubagentRunForTests(unconfirmedRun);
+    await addSubagentRunForTests(unconfirmedRun);
 
     const list = await buildSubagentList({
       cfg: baseConfig,
@@ -624,7 +624,7 @@ describe("buildSubagentList", () => {
     // Anti-vacuity control: an OBSERVED timeout on the same shape still reads as
     // a finished timeout under "recent", so the change is scoped to the
     // unconfirmed disposition rather than hiding every timeout from the list.
-    resetSubagentRegistryForTests();
+    await resetSubagentRegistryForTests();
     const observedRun = {
       ...unconfirmedRun,
       runId: "run-wait-expired-observed",
@@ -634,7 +634,7 @@ describe("buildSubagentList", () => {
         outcome: { status: "timeout", timeoutDisposition: "child-stopped" },
       },
     } satisfies SubagentRunRecord;
-    addSubagentRunForTests(observedRun);
+    await addSubagentRunForTests(observedRun);
 
     const observedList = await buildSubagentList({
       cfg: baseConfig,
@@ -690,8 +690,8 @@ describe("buildSubagentList", () => {
       const sharedDir = path.join(testWorkspaceDir, "shared-tree");
       const runA = makeRun("shared-cwd-a", now);
       const runB = makeRun("shared-cwd-b", now);
-      addSubagentRunForTests(runA);
-      addSubagentRunForTests(runB);
+      await addSubagentRunForTests(runA);
+      await addSubagentRunForTests(runB);
       const storePath = path.join(testWorkspaceDir, "sessions-shared-cwd-pair.json");
       await seedSessionEntry(storePath, runA.childSessionKey, sharedDir);
       await seedSessionEntry(storePath, runB.childSessionKey, sharedDir);
@@ -721,7 +721,7 @@ describe("buildSubagentList", () => {
       const sharedDir = path.join(testWorkspaceDir, "shared-tree-trio");
       const runs = ["trio-a", "trio-b", "trio-c"].map((suffix) => makeRun(suffix, now));
       for (const run of runs) {
-        addSubagentRunForTests(run);
+        await addSubagentRunForTests(run);
       }
       const storePath = path.join(testWorkspaceDir, "sessions-shared-cwd-trio.json");
       for (const run of runs) {
@@ -752,8 +752,8 @@ describe("buildSubagentList", () => {
       const now = Date.now();
       const runA = makeRun("inherited-a", now);
       const runB = makeRun("inherited-b", now);
-      addSubagentRunForTests(runA);
-      addSubagentRunForTests(runB);
+      await addSubagentRunForTests(runA);
+      await addSubagentRunForTests(runB);
       const storePath = path.join(testWorkspaceDir, "sessions-shared-cwd-inherited.json");
       await seedSessionEntry(storePath, runA.childSessionKey);
       await seedSessionEntry(storePath, runB.childSessionKey);
@@ -772,8 +772,8 @@ describe("buildSubagentList", () => {
       const now = Date.now();
       const runA = makeRun("distinct-a", now);
       const runB = makeRun("distinct-b", now);
-      addSubagentRunForTests(runA);
-      addSubagentRunForTests(runB);
+      await addSubagentRunForTests(runA);
+      await addSubagentRunForTests(runB);
       const storePath = path.join(testWorkspaceDir, "sessions-shared-cwd-distinct.json");
       await seedSessionEntry(
         storePath,
@@ -806,8 +806,8 @@ describe("buildSubagentList", () => {
       await fs.symlink(realDir, linkDir, "dir");
       const runA = makeRun("alias-real", now);
       const runB = makeRun("alias-link", now);
-      addSubagentRunForTests(runA);
-      addSubagentRunForTests(runB);
+      await addSubagentRunForTests(runA);
+      await addSubagentRunForTests(runB);
       const storePath = path.join(testWorkspaceDir, "sessions-shared-cwd-alias.json");
       await seedSessionEntry(storePath, runA.childSessionKey, realDir);
       await seedSessionEntry(storePath, runB.childSessionKey, linkDir);
@@ -838,8 +838,8 @@ describe("buildSubagentList", () => {
       const missingDir = path.join(testWorkspaceDir, "missing-tree");
       const runA = makeRun("missing-a", now);
       const runB = makeRun("missing-b", now);
-      addSubagentRunForTests(runA);
-      addSubagentRunForTests(runB);
+      await addSubagentRunForTests(runA);
+      await addSubagentRunForTests(runB);
       const storePath = path.join(testWorkspaceDir, "sessions-shared-cwd-missing.json");
       await seedSessionEntry(storePath, runA.childSessionKey, missingDir);
       await seedSessionEntry(storePath, runB.childSessionKey, missingDir);
@@ -884,8 +884,8 @@ describe("buildSubagentList", () => {
         await seedSessionEntry(storePath, liveRun.childSessionKey, sharedDir);
         await seedSessionEntry(storePath, uncertainRun.childSessionKey, sharedDir);
         const cfg = { session: { store: storePath } } as OpenClawConfig;
-        addSubagentRunForTests(liveRun);
-        addSubagentRunForTests(uncertainRun);
+        await addSubagentRunForTests(liveRun);
+        await addSubagentRunForTests(uncertainRun);
 
         const uncertainList = await buildSubagentList({
           cfg,
@@ -908,9 +908,9 @@ describe("buildSubagentList", () => {
             outcome: { status: "ok" },
           },
         };
-        resetSubagentRegistryForTests();
-        addSubagentRunForTests(liveRun);
-        addSubagentRunForTests(completedRun);
+        await resetSubagentRegistryForTests();
+        await addSubagentRunForTests(liveRun);
+        await addSubagentRunForTests(completedRun);
         const completedList = await buildSubagentList({
           cfg,
           runs: [liveRun, completedRun],
@@ -927,8 +927,8 @@ describe("buildSubagentList", () => {
       const sharedDir = path.join(testWorkspaceDir, "shared-tree-ended");
       const runA = makeRun("ended-share-a", now, { ended: true });
       const runB = makeRun("ended-share-b", now, { ended: true });
-      addSubagentRunForTests(runA);
-      addSubagentRunForTests(runB);
+      await addSubagentRunForTests(runA);
+      await addSubagentRunForTests(runB);
       const storePath = path.join(testWorkspaceDir, "sessions-shared-cwd-ended.json");
       await seedSessionEntry(storePath, runA.childSessionKey, sharedDir);
       await seedSessionEntry(storePath, runB.childSessionKey, sharedDir);
@@ -958,7 +958,7 @@ describe("buildSubagentList", () => {
         makeRun(`max-children-${String(i).padStart(2, "0")}`, now),
       );
       for (const run of runs) {
-        addSubagentRunForTests(run);
+        await addSubagentRunForTests(run);
       }
       const storePath = path.join(testWorkspaceDir, "sessions-shared-cwd-max-children.json");
       for (const run of runs) {
@@ -1009,7 +1009,7 @@ describe("buildSubagentList", () => {
       const sharedRuns = ["long-a", "long-b"].map((suffix) => makeRun(suffix, now));
       const otherRuns = ["long-c", "long-d"].map((suffix) => makeRun(suffix, now));
       for (const run of [...sharedRuns, ...otherRuns]) {
-        addSubagentRunForTests(run);
+        await addSubagentRunForTests(run);
       }
       const storePath = path.join(testWorkspaceDir, "sessions-shared-cwd-long-path.json");
       for (const run of sharedRuns) {
@@ -1054,7 +1054,7 @@ describe("buildSubagentList", () => {
       }));
       const runs = groups.flatMap((group) => group.runs);
       for (const run of runs) {
-        addSubagentRunForTests(run);
+        await addSubagentRunForTests(run);
       }
       const storePath = path.join(testWorkspaceDir, "sessions-shared-cwd-many-groups.json");
       for (const group of groups) {
@@ -1087,8 +1087,8 @@ describe("buildSubagentList", () => {
       const sharedDir = path.join(testWorkspaceDir, "shared-tree-mixed");
       const liveRun = makeRun("mixed-live", now);
       const endedRun = makeRun("mixed-ended", now, { ended: true });
-      addSubagentRunForTests(liveRun);
-      addSubagentRunForTests(endedRun);
+      await addSubagentRunForTests(liveRun);
+      await addSubagentRunForTests(endedRun);
       const storePath = path.join(testWorkspaceDir, "sessions-shared-cwd-mixed.json");
       await seedSessionEntry(storePath, liveRun.childSessionKey, sharedDir);
       await seedSessionEntry(storePath, endedRun.childSessionKey, sharedDir);

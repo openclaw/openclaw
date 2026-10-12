@@ -112,10 +112,7 @@ import {
   settleRequesterTurn,
   waitForLifecycleState,
 } from "./subagent-registry-lifecycle.fixtures.test-support.js";
-import type {
-  SubagentLifecycleController,
-  SubagentLifecycleOptions,
-} from "./subagent-registry-lifecycle.js";
+import type { SubagentLifecycleOptions } from "./subagent-registry-lifecycle.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { settleRequesterTurnAfterSessionSpawns } from "./subagent-registry-requester-yield.js";
 import {
@@ -128,7 +125,6 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { settleSubagentRunFromSessionStore } from "./subagent-session-reconciliation.js";
 
 type LifecycleControllerParams = SubagentLifecycleOptions;
-type LifecycleController = SubagentLifecycleController;
 type RequesterSettleWakeParams = Parameters<
   LifecycleControllerParams["maybeWakeRequesterAfterAllChildrenSettled"]
 >[0];
