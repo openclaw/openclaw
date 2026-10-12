@@ -23,7 +23,6 @@ import type {
 import {
   captureNativeSessionWorkerDeletion,
   hasPreparedNativeSessionDeletion,
-  runPreparedSqliteSessionWrite,
   runSqliteSessionDeletionTransaction as runOpenClawAgentWriteTransaction,
 } from "./session-accessor.sqlite-deletion.js";
 import { assertSessionSubagentRunsCurrent } from "./session-accessor.sqlite-descendant-basis.js";
@@ -42,6 +41,7 @@ import {
   applySessionEntryMaintenance,
   finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort,
 } from "./session-accessor.sqlite-maintenance.js";
+import { runPreparedSqliteSessionWrite } from "./session-accessor.sqlite-prepared-write.js";
 import { commitProjectedSessionEntryLifecycleMutationInDatabase } from "./session-accessor.sqlite-projection-state.js";
 import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
 import { resolveSessionReclamationDatabaseOptions } from "./session-accessor.sqlite-reclamation.js";
